@@ -352,6 +352,7 @@ enum class SettingsSectionReset {
     ScreenshotShortcuts,
     GlobalMouse,
     OtherShortcuts,
+    GlobalPinToScreenShortcuts,
     GeneralSettings,
     HistoryPolicy,
     ScreenshotSettings,

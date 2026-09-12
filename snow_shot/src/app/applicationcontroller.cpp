@@ -432,6 +432,11 @@ class ApplicationController::Impl {
                 controller->startOrStopScreenRecordingAndCopy();
             }
             break;
+        case presentation::GlobalShortcutAction::OpenScreenRecordingFolder:
+            if (ScreenshotController* controller = ensureScreenshotController()) {
+                controller->openScreenRecordingFolder();
+            }
+            break;
         case presentation::GlobalShortcutAction::OpenCaptureHistory:
             ensureMainWindow().showScreenshotHistory();
             break;
