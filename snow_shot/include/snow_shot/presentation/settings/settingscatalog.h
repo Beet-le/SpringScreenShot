@@ -132,6 +132,7 @@ enum class SettingsSwitchBinding {
     ScreenRecordingCaptureToolbar,
     DisableHotkeysOnFocusedFullscreen,
     AutoStartAtBoot,
+    LaunchAsAdministrator,
 };
 
 struct SettingsSwitchDefinition {
@@ -258,6 +259,7 @@ struct SettingsLocalShortcutDefinition {
 };
 
 enum class SettingsActionBinding {
+    RestartAsAdministrator,
     ClearCaptureHistory,
     ClearThumbnailCache,
     ClearRecordingTemp,
