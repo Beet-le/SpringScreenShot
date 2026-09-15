@@ -76,6 +76,69 @@ QByteArray readBytes(const QString& path) {
     return file.readAll();
 }
 
+void stateUpdatesBeforeFirstFlushPreserveRestorableSources() {
+    for (int source = 0; source < 3; ++source) {
+        QTemporaryDir directory;
+        require(directory.isValid(), "temporary storage directory is unavailable");
+        const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        const QString group = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        auto record = recordWithId(id, patternedImage(QSize(29, 13), 3));
+        const QImage originalImage = record.image;
+        const QByteArray encoded = pngBytes(originalImage, 8);
+        if (source == 1) {
+            record.sourceKind = storage::PinnedWindowSourceKind::ClipboardText;
+            record.image = {};
+            record.originalText = QStringLiteral("Pinned text");
+            record.originalHtml = QStringLiteral("<b>Pinned text</b>");
+        } else if (source == 2) {
+            record.sourceKind = storage::PinnedWindowSourceKind::ClipboardImageFile;
+            record.originalFileName = QStringLiteral("original.png");
+            record.originalFilePath = QDir(directory.path()).filePath(record.originalFileName);
+            require(originalImage.save(record.originalFilePath), "save original file source");
+        }
+        {
+            storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+            require(repository
+                        .setGroups({{QStringLiteral("default"), QStringLiteral("Default"), true},
+                                    {group, QStringLiteral("Other"), false}},
+                                   QStringLiteral("default"))
+                        .success,
+                    "create inactive group");
+            if (source == 0) {
+                const auto prepared = storage::PreparedPngImage::fromBytes(
+                    originalImage.size(), std::make_shared<const QByteArray>(encoded));
+                require(prepared && repository.create(record, *prepared).success,
+                        "create resident prepared source");
+            } else {
+                require(repository.create(record).success, "create resident clipboard source");
+            }
+            record.canvasSession = QByteArrayLiteral("annotations");
+            record.recognitionResults = QByteArrayLiteral("recognition");
+            require(repository.updateState(record).success, "update state before first flush");
+            require(repository.setRecordGroup(id, group).success &&
+                        repository.setActiveGroup(group).success,
+                    "move pin into inactive group and activate it");
+            const auto beforeFlush = repository.loadRecord(id);
+            require(beforeFlush && beforeFlush->groupId == group &&
+                        beforeFlush->canvasSession == record.canvasSession &&
+                        beforeFlush->recognitionResults == record.recognitionResults &&
+                        (source == 1 ? beforeFlush->originalHtml == record.originalHtml
+                                     : samePixels(beforeFlush->image, originalImage)),
+                    "group activation must load source and state before first flush");
+            // Destruction flushes the same pending record as application shutdown.
+        }
+        storage::PinnedWindowRepository reopened(directory.path(), false);
+        const auto restored = reopened.loadRecord(id);
+        require(reopened.summaries().size() == 1 && reopened.activeGroupId() == group && restored &&
+                    restored->groupId == group && restored->canvasSession == record.canvasSession &&
+                    restored->recognitionResults == record.recognitionResults &&
+                    (source == 1 ? restored->originalText == record.originalText &&
+                                       restored->originalHtml == record.originalHtml
+                                 : samePixels(restored->image, originalImage)),
+                "restart must retain group count, source, annotations, and recognition");
+    }
+}
+
 void preparedSourceIsWrittenOnceAndStateUpdatesPreserveIt() {
     QTemporaryDir directory;
     require(directory.isValid(), "temporary storage directory is unavailable");
@@ -239,6 +302,69 @@ void removedRecordsPruneTheirPayloads() {
     require(!repository.loadRecord(id).has_value(), "the removed record is still served");
     require(!QFileInfo::exists(payloadFilePath(directory.path(), id)),
             "the removed record's payload survived on disk");
+}
+
+void specifiedGroupRemovalIsAtomicAndPersistent() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "temporary group-removal storage is unavailable");
+    const QString defaultId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString alphaRecordId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString betaRecordId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString alphaGroupId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString betaGroupId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString missingGroupId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+
+    storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+    require(repository
+                .setGroups({{QStringLiteral("default"), QStringLiteral("Default"), true},
+                            {alphaGroupId, QStringLiteral("Alpha"), false},
+                            {betaGroupId, QStringLiteral("Beta"), false}},
+                           betaGroupId)
+                .success,
+            "failed to seed removable groups");
+    auto defaultRecord = recordWithId(defaultId, patternedImage(QSize(8, 8), 1));
+    auto alphaRecord = recordWithId(alphaRecordId, patternedImage(QSize(8, 8), 2));
+    auto betaRecord = recordWithId(betaRecordId, patternedImage(QSize(8, 8), 3));
+    alphaRecord.groupId = alphaGroupId;
+    betaRecord.groupId = betaGroupId;
+    require(repository.upsert(defaultRecord).success && repository.upsert(alphaRecord).success &&
+                repository.upsert(betaRecord).success && repository.flush().success,
+            "failed to persist group-removal records");
+
+    require(repository.removeGroupAndRecords(QStringLiteral("default")).success,
+            "clearing Default should succeed");
+    require(repository.groups().size() == 3 && repository.activeGroupId() == betaGroupId &&
+                !repository.loadRecord(defaultId).has_value() &&
+                repository.loadRecord(alphaRecordId).has_value() &&
+                repository.loadRecord(betaRecordId).has_value(),
+            "clearing Default must preserve all groups, active selection, and unrelated records");
+
+    require(repository.removeGroupAndRecords(betaGroupId).success,
+            "deleting the active custom group should succeed");
+    require(
+        repository.groups().size() == 2 && repository.activeGroupId() == "default" &&
+            !repository.loadRecord(betaRecordId).has_value() &&
+            repository.loadRecord(alphaRecordId).has_value(),
+        "deleting an active custom group must remove only its records and fall back to Default");
+    require(!repository.removeGroupAndRecords(missingGroupId).success &&
+                repository.groups().size() == 2 && repository.loadRecord(alphaRecordId).has_value(),
+            "an unknown group must fail without partial mutation");
+    require(repository.flush().success, "failed to flush specified group removal");
+    require(!QFileInfo::exists(payloadFilePath(directory.path(), defaultId)) &&
+                !QFileInfo::exists(payloadFilePath(directory.path(), betaRecordId)) &&
+                QFileInfo::exists(payloadFilePath(directory.path(), alphaRecordId)),
+            "group removal must prune only the deleted records' payloads");
+
+    storage::PinnedWindowRepository restored(directory.path(), true, 30000);
+    require(restored.groups().size() == 2 && restored.activeGroupId() == "default" &&
+                restored.loadRecord(alphaRecordId).has_value() &&
+                !restored.loadRecord(defaultId).has_value() &&
+                !restored.loadRecord(betaRecordId).has_value(),
+            "specified group removal must survive a repository restart");
+    storage::PinnedWindowRepository readOnly(directory.path(), false, 30000);
+    require(!readOnly.removeGroupAndRecords(alphaGroupId).success &&
+                readOnly.groups().size() == 2 && readOnly.loadRecord(alphaRecordId).has_value(),
+            "read-only group removal must fail without changing repository state");
 }
 void recognitionVisibilityRoundTripsAndDefaultsToHidden() {
     QTemporaryDir directory;
@@ -459,11 +585,13 @@ void hideToTopRoundTripsAndRecoversLegacyMetadata() {
 
 int main(int argc, char* argv[]) {
     QCoreApplication application(argc, argv);
+    stateUpdatesBeforeFirstFlushPreserveRestorableSources();
     committedPayloadsAreServedFromDisk();
     preparedSourceIsWrittenOnceAndStateUpdatesPreserveIt();
     metadataOnlyUpdatesDoNotRewriteCommittedPayloads();
     changedPayloadsRecommitAndStayLazy();
     removedRecordsPruneTheirPayloads();
+    specifiedGroupRemovalIsAtomicAndPersistent();
     recognitionVisibilityRoundTripsAndDefaultsToHidden();
     clickThroughStateRoundTripsAndRecoversLegacyOrConflictingMetadata();
     thumbnailStateSurvivesRestartAndExit();
