@@ -480,6 +480,14 @@
     },
     {
       "variant": "outlined",
+      "symbol": "RecorderDelay",
+      "name": "recorder-delay",
+      "source": "../src/presentation/components/icons/resources/recorder-delay.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "RecordingClick",
       "name": "recording-click",
       "source": "../src/presentation/components/icons/resources/recording-click.svg",
@@ -651,6 +659,38 @@
       "symbol": "SelectionShadow",
       "name": "selection-shadow",
       "source": "../src/presentation/components/icons/resources/selection-shadow.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "SequenceNumberOutlinedCircle",
+      "name": "sequence-number-outlined-circle",
+      "source": "../src/presentation/components/icons/resources/sequence-number-outlined-circle.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "SequenceNumberOutlinedSquare",
+      "name": "sequence-number-outlined-square",
+      "source": "../src/presentation/components/icons/resources/sequence-number-outlined-square.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "SequenceNumberSolidCircle",
+      "name": "sequence-number-solid-circle",
+      "source": "../src/presentation/components/icons/resources/sequence-number-solid-circle.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "SequenceNumberSolidSquare",
+      "name": "sequence-number-solid-square",
+      "source": "../src/presentation/components/icons/resources/sequence-number-solid-square.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },

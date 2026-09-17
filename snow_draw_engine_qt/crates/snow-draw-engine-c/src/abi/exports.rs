@@ -770,6 +770,25 @@ mod session_tests {
     }
 
     #[test]
+    fn configured_runtime_creation_accepts_smart_erase_filter_defaults() {
+        unsafe {
+            let mut defaults: SnowStyleDefaults = snow_draw_engine::StyleDefaults::default().into();
+            defaults.rectangle_filter.filter_type = SnowFilterType::SmartErase;
+            defaults.pen_filter.filter_type = SnowFilterType::SmartErase;
+            let config = SnowRuntimeConfig {
+                style_defaults: &defaults,
+            };
+            let mut runtime = std::ptr::null_mut();
+            assert_eq!(
+                snow_runtime_create_with_config(&config, &mut runtime),
+                SnowError::Ok
+            );
+            assert!(!runtime.is_null());
+            snow_runtime_destroy(runtime);
+        }
+    }
+
+    #[test]
     fn configured_runtime_creation_rejects_invalid_raw_enum() {
         unsafe {
             let mut defaults = Box::<SnowStyleDefaults>::new_uninit();
@@ -785,6 +804,21 @@ mod session_tests {
             let mut runtime = std::ptr::null_mut();
             assert_eq!(
                 snow_runtime_create_with_config(&config, &mut runtime),
+                SnowError::InvalidArgument
+            );
+            assert!(runtime.is_null());
+
+            let mut serial_defaults = Box::<SnowStyleDefaults>::new_uninit();
+            let serial_defaults_ptr = serial_defaults.as_mut_ptr();
+            serial_defaults_ptr.write(snow_draw_engine::StyleDefaults::default().into());
+            std::ptr::addr_of_mut!((*serial_defaults_ptr).serial_number.serial_number_type)
+                .cast::<i32>()
+                .write_unaligned(99);
+            let serial_config = SnowRuntimeConfig {
+                style_defaults: serial_defaults_ptr,
+            };
+            assert_eq!(
+                snow_runtime_create_with_config(&serial_config, &mut runtime),
                 SnowError::InvalidArgument
             );
             assert!(runtime.is_null());

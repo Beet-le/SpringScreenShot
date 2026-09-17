@@ -14,36 +14,40 @@ pub enum SnowSceneDisplayItemKind {
     Filter = 8,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SnowTextHorizontalAlign {
-    Left = 0,
-    Center = 1,
-    Right = 2,
+snow_c_enum! {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum SnowTextHorizontalAlign {
+        Left = 0,
+        Center = 1,
+        Right = 2,
+    }
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SnowTextVerticalAlign {
-    Top = 0,
-    Center = 1,
-    Bottom = 2,
+snow_c_enum! {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum SnowTextVerticalAlign {
+        Top = 0,
+        Center = 1,
+        Bottom = 2,
+    }
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SnowFillStyle {
-    Line = 0,
-    CrossLine = 1,
-    Solid = 2,
+snow_c_enum! {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum SnowFillStyle {
+        Line = 0,
+        CrossLine = 1,
+        Solid = 2,
+    }
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SnowStrokeStyle {
-    Solid = 0,
-    Dashed = 1,
-    Dotted = 2,
+snow_c_enum! {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum SnowStrokeStyle {
+        Solid = 0,
+        Dashed = 1,
+        Dotted = 2,
+    }
 }
 
 #[repr(C)]
@@ -67,7 +71,7 @@ pub enum SnowBlendMode {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SnowFilterRenderSpec {
     pub filter_type: u32,
-    pub reserved0: u32,
+    pub render_phase: u32,
     pub strength: f64,
     pub mosaic_block_size: f64,
     pub blur_sigma: f64,
@@ -113,7 +117,8 @@ pub struct SnowSceneDisplayItem {
     pub stroke_style: SnowStrokeStyle,
     pub has_bound_text_element: u8,
     pub rect_shape: u8,
-    pub reserved2: [u8; 2],
+    pub serial_number_type: u8,
+    pub reserved2: [u8; 1],
     pub bound_text_element_generation: u32,
     pub arrow_text_bounds: [f64; 4],
     pub filter: SnowFilterRenderSpec,
@@ -263,7 +268,8 @@ impl Default for SnowSceneDisplayItem {
             stroke_style: SnowStrokeStyle::Solid,
             has_bound_text_element: 0,
             rect_shape: SnowDisplayRectShape::Rectangle as u8,
-            reserved2: [0; 2],
+            serial_number_type: SnowSerialNumberType::OutlinedCircle as u8,
+            reserved2: [0; 1],
             bound_text_element_generation: 0,
             arrow_text_bounds: [0.0; 4],
             filter: SnowFilterRenderSpec::default(),
@@ -331,9 +337,18 @@ mod tests {
     fn display_views_are_compact() {
         let scene_size = std::mem::size_of::<SnowSceneDisplayItem>();
         let overlay_size = std::mem::size_of::<SnowOverlayDisplayItem>();
-        assert!(
-            scene_size <= 320,
-            "scene display view is {scene_size} bytes"
+        assert_eq!(
+            scene_size, 328,
+            "scene display ABI layout must remain stable"
+        );
+        assert_eq!(
+            std::mem::align_of::<SnowSceneDisplayItem>(),
+            8,
+            "scene display ABI alignment must remain stable"
+        );
+        assert_eq!(
+            std::mem::offset_of!(SnowSceneDisplayItem, serial_number_type),
+            std::mem::offset_of!(SnowSceneDisplayItem, rect_shape) + 1
         );
         assert!(
             overlay_size <= 384,

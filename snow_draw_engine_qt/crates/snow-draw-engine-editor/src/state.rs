@@ -433,13 +433,25 @@ impl EditorState {
     pub(crate) fn with_style_defaults(default_styles: &EditorStyleDefaults) -> Self {
         let default_filter = FilterData {
             filter_type: default_styles.rectangle_filter.filter_type,
-            strength: default_styles.rectangle_filter.strength,
+            strength: if default_styles.rectangle_filter.filter_type
+                == snow_draw_engine_document::CanvasFilterType::SmartErase
+            {
+                0.5
+            } else {
+                default_styles.rectangle_filter.strength
+            },
             opacity: default_styles.rectangle_filter.opacity,
             ..FilterData::default()
         };
         let default_pen_filter = PenFilterData {
             filter_type: default_styles.pen_filter.filter_type,
-            strength: default_styles.rectangle_filter.strength,
+            strength: if default_styles.pen_filter.filter_type
+                == snow_draw_engine_document::CanvasFilterType::SmartErase
+            {
+                0.5
+            } else {
+                default_styles.rectangle_filter.strength
+            },
             opacity: default_styles.pen_filter.opacity,
             stroke_width: default_styles.pen_filter.stroke_width,
             ..PenFilterData::default()
@@ -460,6 +472,7 @@ impl EditorState {
         };
         let default_serial_number = SerialNumberData {
             number: default_styles.serial_number.number,
+            serial_number_type: default_styles.serial_number.serial_number_type,
             color: default_styles.serial_number.color,
             fill: default_styles.serial_number.fill,
             fill_style: default_styles.serial_number.fill_style,

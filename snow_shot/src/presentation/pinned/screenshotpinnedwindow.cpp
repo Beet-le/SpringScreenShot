@@ -44,6 +44,9 @@
 #include "widgets/button.h"
 #include "widgets/context_menu.h"
 #include "widgets/message.h"
+#include "widgets/slider.h"
+#include "../tools/screenshottoolpalettebuttons.h"
+#include "snow_shot/presentation/components/icons/iconrenderutils.h"
 
 #include <QActionGroup>
 #include <QApplication>
@@ -331,6 +334,7 @@ bool paintFirstFrameSynchronously() {
 
 [[maybe_unused]] constexpr const char* kPinnedTranslations[] = {
     QT_TRANSLATE_NOOP("ScreenshotPinnedWindow", "Enable drawing mode"),
+    QT_TRANSLATE_NOOP("ScreenshotPinnedWindow", "Move window"),
     QT_TRANSLATE_NOOP("ScreenshotPinnedWindow", "Exit click-through mode"),
     QT_TRANSLATE_NOOP("ScreenshotPinnedWindow", "Close"),
     QT_TRANSLATE_NOOP("ScreenshotPinnedWindow", "Save as file"),
@@ -630,6 +634,80 @@ class PinnedBorderFrame final : public QFrame {
     }
 };
 
+QColor pinnedControlBackground(const QWidget* widget) {
+    const auto theme = adqt::theme::ThemeManager::instance().resolveTheme(widget);
+    return theme.colorBgMask.isValid() ? theme.colorBgMask : QColor(0, 0, 0, 115);
+}
+
+class PinnedOpacityEditor final : public QWidget {
+  public:
+    explicit PinnedOpacityEditor(int value) {
+        setObjectName(QStringLiteral("screenshotPinnedClickThroughOpacityEditor"));
+        setFixedSize(screenshot_pinned_click_through::kOpacityEditorWidth,
+                     screenshot_pinned_click_through::kControlHeight);
+        auto* layout = new QHBoxLayout(this);
+        layout->setContentsMargins(12, 4, 12, 4);
+        layout->setSpacing(8);
+        layout->setAlignment(Qt::AlignCenter);
+        ScreenshotToolPaletteSliderEditorConfig config;
+        config.iconObjectName = QStringLiteral("screenshotPinnedClickThroughOpacityIcon");
+        config.sliderObjectName = QStringLiteral("screenshotPinnedClickThroughOpacitySlider");
+        config.accessibleName =
+            QString::fromUtf8(QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Opacity"));
+        config.sliderTooltip =
+            QString::fromUtf8(QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Adjust opacity"));
+        config.iconRef = custom_outlined_icons::Opacity();
+        config.initialValue = value;
+        config.baseIconSize = 18;
+        config.baseSliderWidth = 96;
+        m_editor = createScreenshotToolPaletteSliderEditor(layout, this, config, {24, 18, 1.0});
+        adqt::widgets::AdSlider::ComponentTokens tokens;
+        tokens.railBg = QColor(255, 255, 255, 80);
+        tokens.railHoverBg = QColor(255, 255, 255, 110);
+        tokens.trackBg = QColor(Qt::white);
+        tokens.trackHoverBg = QColor(Qt::white);
+        tokens.handleColor = QColor(Qt::white);
+        tokens.handleActiveColor = QColor(Qt::white);
+        tokens.handleActiveOutlineColor = QColor(255, 255, 255, 90);
+        m_editor.slider->setComponentTokens(tokens);
+        refreshIcon();
+        connect(&adqt::theme::ThemeManager::instance(), &adqt::theme::ThemeManager::themeChanged,
+                this, [this] { update(); });
+    }
+
+    adqt::widgets::AdSlider* slider() const {
+        return m_editor.slider;
+    }
+
+  protected:
+    bool event(QEvent* event) override {
+        const bool result = QWidget::event(event);
+        if (event->type() == QEvent::DevicePixelRatioChange) {
+            refreshIcon();
+        } else if (event->type() == QEvent::LanguageChange) {
+            retranslateScreenshotToolPalette(this);
+        }
+        return result;
+    }
+
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(pinnedControlBackground(this));
+        painter.drawRoundedRect(rect(), height() / 2.0, height() / 2.0);
+    }
+
+  private:
+    void refreshIcon() {
+        if (m_editor.icon != nullptr) {
+            m_editor.icon->setPixmap(snow_shot::presentation::icons::renderTintedIconPixmap(
+                m_editor.iconRef, QSize(18, 18), devicePixelRatioF(), Qt::white));
+        }
+    }
+    ScreenshotToolPaletteSliderEditor m_editor;
+};
+
 class PinnedControlButton final : public adqt::widgets::AdButton {
   public:
     enum class Intent : std::uint8_t { Edit, Close };
@@ -640,7 +718,7 @@ class PinnedControlButton final : public adqt::widgets::AdButton {
   protected:
     void paintEvent(QPaintEvent* event) override {
         const auto theme = adqt::theme::ThemeManager::instance().resolveTheme(this);
-        QColor background = theme.colorBgMask.isValid() ? theme.colorBgMask : QColor(0, 0, 0, 115);
+        QColor background = pinnedControlBackground(this);
         if (isDown()) {
             background =
                 m_intent == Intent::Close ? theme.colorErrorActive : theme.colorPrimaryActive;
@@ -1309,6 +1387,7 @@ snow_shot::storage::PinnedWindowRecord ScreenshotPinnedWindow::persistenceRecord
     }
     record.scalePercent = m_scalePercent;
     record.opacityPercent = m_opacityPercent;
+    record.clickThroughOpacityPercent = m_clickThroughOpacityPercent;
     record.imageTransform = m_imageTransform;
     record.quarterTurns = m_quarterTurns;
     record.thumbnailMode = m_thumbnailMode;
@@ -1338,6 +1417,11 @@ snow_shot::storage::PinnedWindowRecord ScreenshotPinnedWindow::persistenceSnapsh
 }
 
 void ScreenshotPinnedWindow::restorePersistentState(const Config& config) {
+    const int clickThroughPercent = config.persistedClickThroughOpacityPercent;
+    m_clickThroughOpacityPercent =
+        config.restorePersistentState && clickThroughPercent >= 0 && clickThroughPercent <= 100
+            ? clickThroughPercent
+            : 50;
     if (!config.restorePersistentState) {
         return;
     }
@@ -1346,7 +1430,7 @@ void ScreenshotPinnedWindow::restorePersistentState(const Config& config) {
     m_hideToTop->setAccentIndex(config.persistedHideToTopAccentIndex);
     m_opacityPercent =
         qBound(config.persistedHideToTopMode ? 25 : 1, config.persistedOpacityPercent, 100);
-    setWindowOpacity(m_opacityPercent / 100.0);
+    applyEffectiveOpacity();
     m_imageTransform = config.persistedImageTransform;
     m_quarterTurns = qBound(0, config.persistedQuarterTurns, 3);
     m_thumbnailMode = config.persistedThumbnailMode;
@@ -1386,6 +1470,12 @@ bool ScreenshotPinnedWindow::event(QEvent* event) {
         m_pointerInside = false;
         if (m_clickThroughExitButton != nullptr) {
             m_clickThroughExitButton->hide();
+            if (m_clickThroughMoveButton != nullptr) {
+                m_clickThroughMoveButton->hide();
+            }
+            if (m_clickThroughOpacityEditor != nullptr) {
+                m_clickThroughOpacityEditor->hide();
+            }
         }
     }
     const bool windowActivationChanged =
@@ -1965,7 +2055,9 @@ void ScreenshotPinnedWindow::retranslateUi() {
 
     updateWidget(m_editButton);
     updateWidget(m_closeButton);
+    updateWidget(m_clickThroughMoveButton.get());
     updateWidget(m_clickThroughExitButton.get());
+    retranslateScreenshotToolPalette(m_clickThroughOpacityEditor.get());
 
     if (m_contextMenu != nullptr) {
         for (QAction* action : m_contextMenu->findChildren<QAction*>()) {
@@ -2249,7 +2341,7 @@ bool ScreenshotPinnedWindow::present(const Config& config,
     SNOW_SHOT_PIN_PERF_MILESTONE("window.pinned_toolbar_deferred");
     // Recognition availability is derived from the recognition pointers, and the
     // lazily constructed feature is only reachable through the provider, so it
-    // must be resolved here — before anything can ask whether recognition is
+    // must be resolved here â€” before anything can ask whether recognition is
     // possible, not only once a recognition action has been triggered.
     ensureRecognitionProviders();
     // Cached recognition results arrive with the config, while the deferred
@@ -2369,6 +2461,43 @@ bool ScreenshotPinnedWindow::eventFilter(QObject* watched, QEvent* event) {
         (handleOpacityWheel(watched, static_cast<QWheelEvent*>(event)) ||
          handleScaleWheel(watched, static_cast<QWheelEvent*>(event)))) {
         return true;
+    }
+    if (watched == m_clickThroughMoveButton.get()) {
+        if (event->type() == QEvent::Hide || event->type() == QEvent::UngrabMouse) {
+            m_clickThroughDragOrigin.reset();
+        }
+        if (m_clickThroughActive &&
+            (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseMove ||
+             event->type() == QEvent::MouseButtonRelease)) {
+            auto* mouse = static_cast<QMouseEvent*>(event);
+            const QPoint physicalPosition =
+                (mouse->spontaneous() ? physicalCursorPosition() : std::nullopt)
+                    .value_or(nativePositionForWindowPosition(
+                                  mapFromGlobal(mouse->globalPosition().toPoint()))
+                                  .toPoint());
+            if (event->type() == QEvent::MouseButtonPress && mouse->button() == Qt::LeftButton) {
+                m_clickThroughDragOrigin = physicalPosition;
+                m_clickThroughDragGeometry = currentNativeGeometry();
+                return true;
+            }
+            if (m_clickThroughDragOrigin.has_value() &&
+                (event->type() == QEvent::MouseMove || mouse->button() == Qt::LeftButton)) {
+                if (mouse->buttons().testFlag(Qt::LeftButton) ||
+                    event->type() == QEvent::MouseButtonRelease) {
+                    const QRect target = m_clickThroughDragGeometry.translated(
+                        physicalPosition - *m_clickThroughDragOrigin);
+                    if (applyWindowGeometry(target, GeometryMutation::Move)) {
+                        static_cast<void>(updateClickThroughExitButtonGeometry());
+                        schedulePersistence();
+                    }
+                }
+                if (event->type() == QEvent::MouseButtonRelease ||
+                    !mouse->buttons().testFlag(Qt::LeftButton)) {
+                    m_clickThroughDragOrigin.reset();
+                }
+                return true;
+            }
+        }
     }
     const bool watchedControls =
         watched == m_controlsPanel || watched == m_editButton || watched == m_closeButton;
@@ -4589,7 +4718,7 @@ void ScreenshotPinnedWindow::copyCurrentViewport() {
     scaledStyle.shadowWidth = qRound(scaledStyle.shadowWidth * surfaceScale);
     ScreenshotPinnedViewportExportSource request{
         std::move(documentSession), m_transformedImage, m_backgroundCanvasRect,
-        contentPixelSize,           scaledStyle,
+        contentPixelSize,           scaledStyle,        m_runtime.smartEraseSnapshot(),
     };
     invalidatePendingCopy();
     auto artifact = std::make_shared<ScreenshotExportArtifact>(
@@ -4700,8 +4829,11 @@ std::shared_ptr<ScreenshotExportArtifact> ScreenshotPinnedWindow::fileSaveArtifa
                 ScreenshotExportSource::fromRecognitionImage(std::move(*snapshot)));
     }
     ScreenshotPinnedViewportExportSource request{m_runtime.serializeDocumentSession(),
-                                                 m_transformedImage, m_backgroundCanvasRect,
-                                                 m_transformedImage.size(), style};
+                                                 m_transformedImage,
+                                                 m_backgroundCanvasRect,
+                                                 m_transformedImage.size(),
+                                                 style,
+                                                 m_runtime.smartEraseSnapshot()};
     return std::make_shared<ScreenshotExportArtifact>(
         ScreenshotExportSource::fromPinnedViewport(std::move(request)));
 }
@@ -5509,16 +5641,35 @@ void ScreenshotPinnedWindow::setOpacityPercent(int percent) {
     }
     const bool changed = percent != m_opacityPercent;
     m_opacityPercent = percent;
-    if (hideToTopActive()) {
-        m_hideToTop->refreshOpacity();
-    } else {
-        setWindowOpacity(percent / 100.0);
-    }
+    applyEffectiveOpacity();
     schedulePersistence();
     refreshContextMenu();
     if (changed) {
         showOpacityReadout();
     }
+}
+
+void ScreenshotPinnedWindow::applyEffectiveOpacity() {
+    if (hideToTopActive()) {
+        m_hideToTop->refreshOpacity();
+    } else {
+        setWindowOpacity((m_clickThroughActive ? m_clickThroughOpacityPercent : m_opacityPercent) /
+                         100.0);
+    }
+}
+
+void ScreenshotPinnedWindow::setClickThroughOpacityPercent(int percent) {
+    if (percent < 0 || percent > 100 || percent == m_clickThroughOpacityPercent) {
+        return;
+    }
+    m_clickThroughOpacityPercent = percent;
+    if (m_clickThroughOpacitySlider != nullptr) {
+        const QSignalBlocker blocker(m_clickThroughOpacitySlider);
+        m_clickThroughOpacitySlider->setValue(percent);
+        m_clickThroughOpacitySlider->setAccessibleDescription(QStringLiteral("%1%").arg(percent));
+    }
+    applyEffectiveOpacity();
+    schedulePersistence();
 }
 
 QRect ScreenshotPinnedWindow::intendedNativeGeometry() const {
@@ -5584,6 +5735,40 @@ bool ScreenshotPinnedWindow::ensureClickThroughExitButton() {
         return false;
     }
     button->windowHandle()->setTransientParent(windowHandle());
+    auto moveButton = std::unique_ptr<adqt::widgets::AdButton>(
+        createControlButton(nullptr, "Move window", custom_outlined_icons::ToolMove(),
+                            PinnedControlButton::Intent::Edit));
+    moveButton->setObjectName(QStringLiteral("screenshotPinnedClickThroughMoveButton"));
+    moveButton->setWindowFlags(button->windowFlags());
+    moveButton->setAttribute(Qt::WA_TranslucentBackground, true);
+    moveButton->setAttribute(Qt::WA_NoSystemBackground, true);
+    moveButton->setAttribute(Qt::WA_ShowWithoutActivating, true);
+    moveButton->setAttribute(Qt::WA_AlwaysShowToolTips, true);
+    moveButton->setFocusPolicy(Qt::NoFocus);
+    moveButton->setCursor(Qt::SizeAllCursor);
+    moveButton->installEventFilter(this);
+    moveButton->winId();
+    if (moveButton->windowHandle() == nullptr) {
+        return false;
+    }
+    moveButton->windowHandle()->setTransientParent(windowHandle());
+    auto editor = std::make_unique<PinnedOpacityEditor>(m_clickThroughOpacityPercent);
+    editor->setWindowFlags(button->windowFlags());
+    editor->setAttribute(Qt::WA_TranslucentBackground, true);
+    editor->setAttribute(Qt::WA_NoSystemBackground, true);
+    editor->setAttribute(Qt::WA_ShowWithoutActivating, true);
+    editor->setAttribute(Qt::WA_AlwaysShowToolTips, true);
+    editor->setFocusPolicy(Qt::NoFocus);
+    editor->winId();
+    if (editor->windowHandle() == nullptr) {
+        return false;
+    }
+    editor->windowHandle()->setTransientParent(windowHandle());
+    m_clickThroughOpacitySlider = editor->slider();
+    connect(m_clickThroughOpacitySlider, &adqt::widgets::AdSlider::valueChanged, this,
+            [this](double value) { setClickThroughOpacityPercent(qRound(value)); });
+    m_clickThroughOpacityEditor = std::move(editor);
+    m_clickThroughMoveButton = std::move(moveButton);
     m_clickThroughExitButton = std::move(button);
     return true;
 }
@@ -5625,36 +5810,57 @@ bool ScreenshotPinnedWindow::updateClickThroughExitButtonGeometry() {
         return false;
     }
     const QRect physicalBounds = ScreenshotGeometryMapper::physicalRectForScreen(*screen);
-    const QRect buttonGeometry = screenshot_pinned_click_through::exitButtonGeometry(
+    const auto geometry = screenshot_pinned_click_through::controlsGeometry(
         pinnedGeometry, physicalBounds, screen->devicePixelRatio());
-    if (!buttonGeometry.isValid() || buttonGeometry.isEmpty()) {
+    if (geometry.exitButton.isEmpty() || geometry.opacityEditor.isEmpty() ||
+        m_clickThroughOpacityEditor == nullptr || m_clickThroughMoveButton == nullptr) {
         return false;
     }
 
     setClickThroughScreen(screen);
-    m_clickThroughExitButton->setScreen(screen);
-    const QRect logicalGeometry =
-        ScreenshotGeometryMapper::logicalRectForPhysicalRect(buttonGeometry, screen);
-    if (!logicalGeometry.isValid() || logicalGeometry.isEmpty()) {
-        return false;
-    }
-    m_clickThroughExitButton->move(logicalGeometry.topLeft());
-    if (!m_clickThroughExitButton->isVisible()) {
-        m_clickThroughExitButton->show();
-    }
-    if (QWindow* handle = m_clickThroughExitButton->windowHandle()) {
-        handle->setTransientParent(windowHandle());
-    } else {
-        return false;
-    }
-#if defined(Q_OS_WIN) || defined(_WIN32)
-    if (QGuiApplication::platformName() == QStringLiteral("windows") &&
-        !native::applyClientGeometry(m_clickThroughExitButton->internalWinId(), buttonGeometry)) {
-        return false;
-    }
-#endif
-    m_clickThroughExitButton->raise();
-    return m_clickThroughExitButton->isVisible();
+    const auto placeControl = [this, screen](QWidget* control, const QRect& physicalGeometry) {
+        const QRect logicalGeometry =
+            ScreenshotGeometryMapper::logicalRectForPhysicalRect(physicalGeometry, screen);
+        if (!logicalGeometry.isValid() || logicalGeometry.isEmpty()) {
+            return false;
+        }
+        QWindow* controlHandle = control->windowHandle();
+        if (controlHandle == nullptr) {
+            return false;
+        }
+        const QRect bounds = screen->geometry();
+        if (bounds.width() < control->width() || bounds.height() < control->height()) {
+            return false;
+        }
+        const QPoint position(
+            qBound(bounds.left(), logicalGeometry.left(), bounds.right() - control->width() + 1),
+            qBound(bounds.top(), logicalGeometry.top(), bounds.bottom() - control->height() + 1));
+        // UpdateRequest also reconciles placement. Repositioning and raising an
+        // unchanged tool can invalidate the image beneath it when screen-edge
+        // clamping makes them overlap, feeding more repaints into this path.
+        if (control->isVisible() && controlHandle->screen() == screen &&
+            controlHandle->transientParent() == windowHandle() && control->pos() == position) {
+            return true;
+        }
+        control->setScreen(screen);
+        // Qt's layered backing store republishes the native position from its
+        // logical geometry on every paint. A separate SetWindowPos correction
+        // would fight that rounding at fractional DPI (for example, 150%).
+        control->move(position);
+        if (!control->isVisible()) {
+            control->show();
+        }
+        if (QWindow* handle = control->windowHandle()) {
+            handle->setTransientParent(windowHandle());
+        } else {
+            return false;
+        }
+        control->raise();
+        return control->isVisible();
+    };
+    return placeControl(m_clickThroughOpacityEditor.get(), geometry.opacityEditor) &&
+           placeControl(m_clickThroughMoveButton.get(), geometry.moveButton) &&
+           placeControl(m_clickThroughExitButton.get(), geometry.exitButton);
 }
 
 bool ScreenshotPinnedWindow::setClickThroughMode(bool enabled) {
@@ -5670,8 +5876,15 @@ bool ScreenshotPinnedWindow::setClickThroughMode(bool enabled) {
         setAttribute(Qt::WA_TransparentForMouseEvents, false);
         setAttribute(Qt::WA_ShowWithoutActivating, false);
         m_clickThroughActive = false;
+        applyEffectiveOpacity();
         if (m_clickThroughExitButton != nullptr) {
             m_clickThroughExitButton->hide();
+            if (m_clickThroughMoveButton != nullptr) {
+                m_clickThroughMoveButton->hide();
+            }
+            if (m_clickThroughOpacityEditor != nullptr) {
+                m_clickThroughOpacityEditor->hide();
+            }
         }
         setClickThroughScreen(nullptr);
         refreshContextMenu();
@@ -5695,6 +5908,7 @@ bool ScreenshotPinnedWindow::setClickThroughMode(bool enabled) {
     finishWindowMove();
     clearWindowDragCursor();
     m_clickThroughActive = true;
+    applyEffectiveOpacity();
     updateControlsGeometry();
 
     const auto rollback = [this]() {
@@ -5702,8 +5916,15 @@ bool ScreenshotPinnedWindow::setClickThroughMode(bool enabled) {
         setAttribute(Qt::WA_TransparentForMouseEvents, false);
         setAttribute(Qt::WA_ShowWithoutActivating, false);
         m_clickThroughActive = false;
+        applyEffectiveOpacity();
         if (m_clickThroughExitButton != nullptr) {
             m_clickThroughExitButton->hide();
+            if (m_clickThroughMoveButton != nullptr) {
+                m_clickThroughMoveButton->hide();
+            }
+            if (m_clickThroughOpacityEditor != nullptr) {
+                m_clickThroughOpacityEditor->hide();
+            }
         }
         setClickThroughScreen(nullptr);
         refreshContextMenu();
@@ -5736,6 +5957,7 @@ void ScreenshotPinnedWindow::shutdownClickThrough() {
     setAttribute(Qt::WA_TransparentForMouseEvents, false);
     setAttribute(Qt::WA_ShowWithoutActivating, false);
     m_clickThroughActive = false;
+    applyEffectiveOpacity();
     setClickThroughScreen(nullptr);
     if (m_clickThroughExitButton != nullptr) {
         m_clickThroughExitButton->hide();
@@ -5743,6 +5965,16 @@ void ScreenshotPinnedWindow::shutdownClickThrough() {
             m_clickThroughExitButton->windowHandle()->setTransientParent(nullptr);
         }
         m_clickThroughExitButton.reset();
+    }
+    m_clickThroughMoveButton.reset();
+    m_clickThroughDragOrigin.reset();
+    m_clickThroughOpacitySlider = nullptr;
+    if (m_clickThroughOpacityEditor != nullptr) {
+        m_clickThroughOpacityEditor->hide();
+        if (m_clickThroughOpacityEditor->windowHandle() != nullptr) {
+            m_clickThroughOpacityEditor->windowHandle()->setTransientParent(nullptr);
+        }
+        m_clickThroughOpacityEditor.reset();
     }
     if (m_clickThroughAction != nullptr) {
         const QSignalBlocker blocker(m_clickThroughAction);

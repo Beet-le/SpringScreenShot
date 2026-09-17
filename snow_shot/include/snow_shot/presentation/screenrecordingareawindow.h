@@ -15,6 +15,10 @@ class QShowEvent;
 class SnowCanvasRuntime;
 class SnowCanvasWidget;
 
+namespace snow_shot::presentation::recording {
+class RecordingCountdownOverlay;
+}
+
 class ScreenRecordingAreaWindow final : public QWidget {
     Q_OBJECT
 
@@ -35,6 +39,10 @@ class ScreenRecordingAreaWindow final : public QWidget {
     [[nodiscard]] InputMode inputMode() const;
     void setDrawingBlocked(bool blocked);
     [[nodiscard]] bool drawingBlocked() const;
+    void startCountdown(int seconds);
+    void updateCountdown(qint64 remainingMilliseconds);
+    void clearCountdown();
+    [[nodiscard]] bool countdownActive() const;
     [[nodiscard]] QColor inputSurfaceColor() const;
     [[nodiscard]] SnowCanvasWidget* canvas() const;
     [[nodiscard]] QRect canvasGeometry() const;
@@ -74,6 +82,7 @@ class ScreenRecordingAreaWindow final : public QWidget {
     void synchronizeWindowGeometry();
     void scheduleGeometrySynchronization();
     void layoutSelection();
+    void layoutCountdownOverlay();
 
     QRectF m_frameRect;
     QRectF m_selectionRect;
@@ -89,6 +98,7 @@ class ScreenRecordingAreaWindow final : public QWidget {
     QMarginsF m_physicalInsets;
     std::unique_ptr<SnowCanvasRuntime> m_canvasRuntime;
     SnowCanvasWidget* m_canvas = nullptr;
+    snow_shot::presentation::recording::RecordingCountdownOverlay* m_countdownOverlay = nullptr;
 };
 
 #endif // SNOW_SHOT_PRESENTATION_SCREENRECORDINGAREAWINDOW_H

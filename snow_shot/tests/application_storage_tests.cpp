@@ -253,6 +253,8 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
             defaultValue("screenshot/double_click_action").toString() == QStringLiteral("copy") &&
             defaultValue("screenshot/middle_mouse_button_action").toString() ==
                 QStringLiteral("pin") &&
+            defaultValue("screenshot/selection_resize_mode").toString() ==
+                QStringLiteral("follow_mouse_movement") &&
             defaultValue("screenshot_shortcuts/quick_save").toArray() ==
                 structuredShortcuts(QJsonArray{QStringLiteral("Ctrl+Shift+S")}) &&
             defaultValue("screenshot_shortcuts/save_as_file").toArray() ==
@@ -426,7 +428,7 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
              .valid,
         "drawing-tool lists must reject non-array values");
 
-    for (const int frameRate : {10, 15, 24, 30, 60, 120, 83}) {
+    for (const int frameRate : {5, 10, 15, 24, 30, 60, 120, 83}) {
         require(storage::ConfigurationSchema::normalize(
                     QStringLiteral("screen_recording/frame_rate"), frameRate)
                     .valid,
@@ -438,7 +440,7 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
                      .valid,
                 "unadvertised video frame rates must be rejected");
     }
-    for (const int frameRate : {10, 15, 24}) {
+    for (const int frameRate : {5, 10, 15, 24}) {
         require(storage::ConfigurationSchema::normalize(
                     QStringLiteral("screen_recording/animated_image_frame_rate"), frameRate)
                     .valid,

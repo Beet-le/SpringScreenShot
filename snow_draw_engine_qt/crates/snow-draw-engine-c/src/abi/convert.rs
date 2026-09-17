@@ -10,9 +10,9 @@ use snow_draw_engine::{
     FilterStyle, GridConfig, HistoryState, InputEvent, InteractionOutput, KeyCode, KeyEvent,
     KeyEventType, Modifiers, Point, PointerButton, PointerButtons, PointerCaptureCommand,
     PointerDevice, PointerEvent, PointerEventType, RectangleShapeStyle, RuntimeConfig,
-    SerialNumberStyle, ShapeKind, ShapeStyle, SnapConfig, SpotlightConfig, StrokeStyle,
-    StyleDefaults, StyleToolbarSource, TextElementInfo, TextHorizontalAlign, TextLayoutOverride,
-    TextLayoutSize, TextStyle, TextVerticalAlign, Vector2, WatermarkConfig,
+    SerialNumberStyle, SerialNumberType, ShapeKind, ShapeStyle, SnapConfig, SpotlightConfig,
+    StrokeStyle, StyleDefaults, StyleToolbarSource, TextElementInfo, TextHorizontalAlign,
+    TextLayoutOverride, TextLayoutSize, TextStyle, TextVerticalAlign, Vector2, WatermarkConfig,
     WatermarkTemplateApplicationTime, WheelDeltaKind, WheelEvent, ZoomFocus, normalize_font_family,
 };
 
@@ -623,6 +623,7 @@ impl From<SnowFilterStyle> for FilterStyle {
                 SnowFilterType::Grayscale => CanvasFilterType::Grayscale,
                 SnowFilterType::Inversion => CanvasFilterType::Inversion,
                 SnowFilterType::Emboss => CanvasFilterType::Emboss,
+                SnowFilterType::SmartErase => CanvasFilterType::SmartErase,
             },
             strength: value.strength,
             opacity: value.opacity,
@@ -640,6 +641,7 @@ impl From<FilterStyle> for SnowFilterStyle {
                 CanvasFilterType::Grayscale => SnowFilterType::Grayscale,
                 CanvasFilterType::Inversion => SnowFilterType::Inversion,
                 CanvasFilterType::Emboss => SnowFilterType::Emboss,
+                CanvasFilterType::SmartErase => SnowFilterType::SmartErase,
             },
             strength: value.strength,
             opacity: value.opacity,
@@ -757,6 +759,12 @@ impl From<SnowSerialNumberStyle> for SerialNumberStyle {
     fn from(value: SnowSerialNumberStyle) -> Self {
         Self {
             number: value.number.max(0),
+            serial_number_type: match value.serial_number_type {
+                SnowSerialNumberType::OutlinedCircle => SerialNumberType::OutlinedCircle,
+                SnowSerialNumberType::SolidCircle => SerialNumberType::SolidCircle,
+                SnowSerialNumberType::OutlinedSquare => SerialNumberType::OutlinedSquare,
+                SnowSerialNumberType::SolidSquare => SerialNumberType::SolidSquare,
+            },
             color: value.color.into(),
             fill: value.fill.into(),
             fill_style: snow_fill_style_to_rust(value.fill_style),
@@ -773,6 +781,12 @@ impl From<SerialNumberStyle> for SnowSerialNumberStyle {
     fn from(value: SerialNumberStyle) -> Self {
         let mut out = Self {
             number: value.number.max(0),
+            serial_number_type: match value.serial_number_type {
+                SerialNumberType::OutlinedCircle => SnowSerialNumberType::OutlinedCircle,
+                SerialNumberType::SolidCircle => SnowSerialNumberType::SolidCircle,
+                SerialNumberType::OutlinedSquare => SnowSerialNumberType::OutlinedSquare,
+                SerialNumberType::SolidSquare => SnowSerialNumberType::SolidSquare,
+            },
             color: value.color.into(),
             fill: value.fill.into(),
             fill_style: match value.fill_style {
@@ -784,7 +798,6 @@ impl From<SerialNumberStyle> for SnowSerialNumberStyle {
             stroke_width: value.stroke_width,
             stroke_style: snow_stroke_style_from_rust(value.stroke_style),
             opacity: value.opacity,
-            reserved0: [0; 4],
             font_family_utf8_len: 0,
             font_family_truncated: 0,
             reserved1: [0; 3],
@@ -837,9 +850,9 @@ fn strict_string_from_c_char_field<const N: usize>(
     string_from_c_char_field(bytes, len).ok_or(SnowError::InvalidArgument)
 }
 
-unsafe fn raw_c_enum_in_range<T>(value: *const T, first: i32, last: i32) -> bool {
+unsafe fn raw_c_enum_is_valid<E: crate::abi::raw_enum::SnowRawEnum>(value: *const E) -> bool {
     let raw = unsafe { std::ptr::read_unaligned(value.cast::<i32>()) };
-    (first..=last).contains(&raw)
+    E::from_raw(raw).is_some()
 }
 
 unsafe fn runtime_style_default_enums_are_valid(defaults: *const SnowStyleDefaults) -> bool {
@@ -853,37 +866,29 @@ unsafe fn runtime_style_default_enums_are_valid(defaults: *const SnowStyleDefaul
     ];
     for shape in shapes {
         if !unsafe {
-            raw_c_enum_in_range(std::ptr::addr_of!((*shape).fill_style), 0, 2)
-                && raw_c_enum_in_range(std::ptr::addr_of!((*shape).start_arrowhead), 0, 14)
-                && raw_c_enum_in_range(std::ptr::addr_of!((*shape).end_arrowhead), 0, 14)
-                && raw_c_enum_in_range(std::ptr::addr_of!((*shape).stroke_style), 0, 2)
-                && raw_c_enum_in_range(std::ptr::addr_of!((*shape).arrow_type), 0, 2)
-                && raw_c_enum_in_range(std::ptr::addr_of!((*shape).highlight_shape), 0, 1)
-                && raw_c_enum_in_range(std::ptr::addr_of!((*shape).shape), 0, 2)
+            raw_c_enum_is_valid(std::ptr::addr_of!((*shape).fill_style))
+                && raw_c_enum_is_valid(std::ptr::addr_of!((*shape).start_arrowhead))
+                && raw_c_enum_is_valid(std::ptr::addr_of!((*shape).end_arrowhead))
+                && raw_c_enum_is_valid(std::ptr::addr_of!((*shape).stroke_style))
+                && raw_c_enum_is_valid(std::ptr::addr_of!((*shape).arrow_type))
+                && raw_c_enum_is_valid(std::ptr::addr_of!((*shape).highlight_shape))
+                && raw_c_enum_is_valid(std::ptr::addr_of!((*shape).shape))
         } {
             return false;
         }
     }
 
     unsafe {
-        raw_c_enum_in_range(
-            std::ptr::addr_of!((*defaults).rectangle_filter.filter_type),
-            0,
-            4,
-        ) && raw_c_enum_in_range(std::ptr::addr_of!((*defaults).pen_filter.filter_type), 0, 4)
-            && raw_c_enum_in_range(std::ptr::addr_of!((*defaults).text.fill_style), 0, 2)
-            && raw_c_enum_in_range(std::ptr::addr_of!((*defaults).text.horizontal_align), 0, 2)
-            && raw_c_enum_in_range(std::ptr::addr_of!((*defaults).text.vertical_align), 0, 2)
-            && raw_c_enum_in_range(
-                std::ptr::addr_of!((*defaults).serial_number.fill_style),
-                0,
-                2,
-            )
-            && raw_c_enum_in_range(
-                std::ptr::addr_of!((*defaults).serial_number.stroke_style),
-                0,
-                2,
-            )
+        raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).rectangle_filter.filter_type))
+            && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).pen_filter.filter_type))
+            && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).text.fill_style))
+            && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).text.horizontal_align))
+            && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).text.vertical_align))
+            && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).serial_number.fill_style))
+            && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).serial_number.stroke_style))
+            && raw_c_enum_is_valid(std::ptr::addr_of!(
+                (*defaults).serial_number.serial_number_type
+            ))
     }
 }
 
@@ -954,6 +959,12 @@ pub(crate) fn runtime_config_from_c(
                 },
                 serial_number: SerialNumberStyle {
                     number: defaults.serial_number.number,
+                    serial_number_type: match defaults.serial_number.serial_number_type {
+                        SnowSerialNumberType::OutlinedCircle => SerialNumberType::OutlinedCircle,
+                        SnowSerialNumberType::SolidCircle => SerialNumberType::SolidCircle,
+                        SnowSerialNumberType::OutlinedSquare => SerialNumberType::OutlinedSquare,
+                        SnowSerialNumberType::SolidSquare => SerialNumberType::SolidSquare,
+                    },
                     color: defaults.serial_number.color.into(),
                     fill: defaults.serial_number.fill.into(),
                     fill_style: snow_fill_style_to_rust(defaults.serial_number.fill_style),
@@ -1465,6 +1476,7 @@ mod tests {
 
         let serial_style: SnowSerialNumberStyle = SerialNumberStyle {
             number: 1,
+            serial_number_type: SerialNumberType::OutlinedCircle,
             color: ColorRgba8::default(),
             fill: ColorRgba8::default(),
             fill_style: FillStyle::Solid,
@@ -1527,6 +1539,7 @@ mod tests {
         expected.editor.pen_filter.stroke_width = 10.0;
         expected.editor.text.font_family = Some("C Text Font".to_owned());
         expected.editor.serial_number.font_family = Some("C Serial Font".to_owned());
+        expected.editor.serial_number.serial_number_type = SerialNumberType::SolidSquare;
         expected.watermark.text = "C watermark".to_owned();
         expected.watermark.template_value = "  {text} {YYYY-MM-DD_HH-mm-ss}  ".to_owned();
         expected.watermark.template_application_time = Some(WatermarkTemplateApplicationTime {
@@ -1550,12 +1563,37 @@ mod tests {
         assert_eq!(c_defaults.pen_filter.filter_type, SnowFilterType::Emboss);
         assert_eq!(c_defaults.text.font_family_truncated, 0);
         assert_eq!(c_defaults.serial_number.font_family_truncated, 0);
+        assert_eq!(
+            c_defaults.serial_number.serial_number_type,
+            SnowSerialNumberType::SolidSquare
+        );
         let c_config = SnowRuntimeConfig {
             style_defaults: &c_defaults,
         };
         let converted = runtime_config_from_c(Some(&c_config)).unwrap();
 
         assert_eq!(converted.style_defaults, expected);
+    }
+
+    #[test]
+    fn runtime_style_defaults_accept_smart_erase_filter_types() {
+        let mut c_defaults: SnowStyleDefaults = StyleDefaults::default().into();
+        c_defaults.rectangle_filter.filter_type = SnowFilterType::SmartErase;
+        c_defaults.pen_filter.filter_type = SnowFilterType::SmartErase;
+        let c_config = SnowRuntimeConfig {
+            style_defaults: &c_defaults,
+        };
+
+        let converted = runtime_config_from_c(Some(&c_config)).unwrap();
+
+        assert_eq!(
+            converted.style_defaults.editor.rectangle_filter.filter_type,
+            CanvasFilterType::SmartErase
+        );
+        assert_eq!(
+            converted.style_defaults.editor.pen_filter.filter_type,
+            CanvasFilterType::SmartErase
+        );
     }
 
     #[test]

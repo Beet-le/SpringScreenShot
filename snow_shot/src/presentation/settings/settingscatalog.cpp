@@ -832,6 +832,23 @@ SettingsItemDefinition screenshotMiddleClickActionItem() {
         SettingsSelectBinding::ScreenshotMiddleClickAction, screenshotPointerActionOptions());
 }
 
+SettingsItemDefinition selectionResizeModeItem() {
+    return fixedSelectItem(
+        QStringLiteral("screenshot.selection-resize-mode"),
+        QT_TRANSLATE_NOOP("SettingsCatalog", "Selection resize mode"),
+        QT_TRANSLATE_NOOP(
+            "SettingsCatalog",
+            "Choose how the dragged selection border follows the mouse while resizing"),
+        QStringLiteral("screenshot/selection_resize_mode"),
+        SettingsSelectBinding::ScreenshotSelectionResizeMode,
+        {
+            {QStringLiteral("follow_mouse_movement"),
+             settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Follow mouse movement"))},
+            {QStringLiteral("follow_mouse_position"),
+             settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Follow mouse position"))},
+        });
+}
+
 SettingsItemDefinition screenshotRestoreOriginalScreenColorsItem() {
     return switchItem(
         QStringLiteral("screenshot.restore-original-screen-colors"),
@@ -1123,7 +1140,8 @@ QVector<SettingsOptionDefinition> frameRateOptions(std::initializer_list<int> fr
             : frameRate == 30  ? settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "30"))
             : frameRate == 24  ? settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "24"))
             : frameRate == 15  ? settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "15"))
-                               : settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "10"));
+            : frameRate == 10  ? settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "10"))
+                               : settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "5"));
     }
     return options;
 }
@@ -1142,7 +1160,7 @@ QVector<SettingsItemDefinition> screenRecordingItems() {
                         QT_TRANSLATE_NOOP("SettingsCatalog", "Set the screen recording frame rate"),
                         QStringLiteral("screen_recording/frame_rate"),
                         SettingsSelectBinding::ScreenRecordingFrameRate,
-                        frameRateOptions({10, 15, 24, 30, 60, 120, 83})),
+                        frameRateOptions({5, 10, 15, 24, 30, 60, 120, 83})),
         fixedSelectItem(QStringLiteral("screen-recording.animated-image-clarity"),
                         QT_TRANSLATE_NOOP("SettingsCatalog", "Animated image clarity"),
                         QT_TRANSLATE_NOOP("SettingsCatalog",
@@ -1154,7 +1172,7 @@ QVector<SettingsItemDefinition> screenRecordingItems() {
             QT_TRANSLATE_NOOP("SettingsCatalog", "Animated image frame rate"),
             QT_TRANSLATE_NOOP("SettingsCatalog", "Set the frame rate of exported animated images"),
             QStringLiteral("screen_recording/animated_image_frame_rate"),
-            SettingsSelectBinding::AnimatedImageFrameRate, frameRateOptions({10, 15, 24})),
+            SettingsSelectBinding::AnimatedImageFrameRate, frameRateOptions({5, 10, 15, 24})),
         switchItem(QStringLiteral("screen-recording.loop-animated-images"),
                    QT_TRANSLATE_NOOP("SettingsCatalog", "Loop Animated Images"),
                    QT_TRANSLATE_NOOP("SettingsCatalog",
@@ -1805,7 +1823,7 @@ QVector<SettingsPageDefinition> builtInPages() {
                     settingsText(
                         QT_TRANSLATE_NOOP("SettingsCatalog", "Screenshot selection behavior")),
                     SettingsSectionReset::ScreenshotSettings,
-                    {smartSelectionItem(), screenshotOcrActionItem(),
+                    {smartSelectionItem(), selectionResizeModeItem(), screenshotOcrActionItem(),
                      screenshotDoubleClickActionItem(), screenshotMiddleClickActionItem(),
                      screenshotAutoSaveAfterCopyItem(), screenshotCopyFileItem(),
                      screenshotSaveAsFileDialogItem(), screenshotShutterSoundNotificationItem()},
@@ -2915,6 +2933,9 @@ QStringList SettingsCatalog::validationErrors() const {
                         break;
                     case SettingsSelectBinding::TranslationLayoutProcessing:
                         expectedKey = QStringLiteral("screenshot_translation/layout_processing");
+                        break;
+                    case SettingsSelectBinding::ScreenshotSelectionResizeMode:
+                        expectedKey = QStringLiteral("screenshot/selection_resize_mode");
                         break;
                     }
                     if (schemaEntry == nullptr ||

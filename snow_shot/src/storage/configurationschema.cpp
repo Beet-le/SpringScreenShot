@@ -351,6 +351,8 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
       QStringLiteral("veryslow"), QStringLiteral("placebo")}},
     {QStringLiteral("screen_recording/capture_toolbar_in_recording"), true,
      ConfigurationValueKind::Boolean},
+    {QStringLiteral("screen_recording/start_delay_seconds"), 0, ConfigurationValueKind::Integer,
+     ConfigurationIntegerRange{0, 10, 1}},
     {QStringLiteral("screen_recording/video_save_directory"),
      defaultOutputDirectory(QStandardPaths::MoviesLocation), ConfigurationValueKind::String},
     {QStringLiteral("screen_recording/video_filename_format"),
@@ -865,6 +867,11 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      std::nullopt,
      {QStringLiteral("copy"), QStringLiteral("save"), QStringLiteral("quick_save"),
       QStringLiteral("pin"), QStringLiteral("none")}},
+    {QStringLiteral("screenshot/selection_resize_mode"),
+     QStringLiteral("follow_mouse_movement"),
+     ConfigurationValueKind::String,
+     std::nullopt,
+     {QStringLiteral("follow_mouse_movement"), QStringLiteral("follow_mouse_position")}},
     {QStringLiteral("screenshot/auto_save_after_copy"), false, ConfigurationValueKind::Boolean},
     {QStringLiteral("screenshot/copy_image_file_to_clipboard"), false,
      ConfigurationValueKind::Boolean},
@@ -903,7 +910,7 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      {QStringLiteral("auto"), QStringLiteral("dxgi"), QStringLiteral("wgc"),
       QStringLiteral("gdi")}},
     {QStringLiteral("screenshot/window_element_api"),
-     QStringLiteral("msaa"),
+     QStringLiteral("uia"),
      ConfigurationValueKind::String,
      std::nullopt,
      {QStringLiteral("msaa"), QStringLiteral("uia")}},
@@ -1533,10 +1540,10 @@ ConfigurationNormalization ConfigurationSchema::normalize(const QString& key,
         return normalizeAllowedStringList(*schemaEntry, value);
     }
     if (key == QStringLiteral("screen_recording/frame_rate")) {
-        return normalizeAllowedInteger(value, {10, 15, 24, 30, 60, 120, 83});
+        return normalizeAllowedInteger(value, {5, 10, 15, 24, 30, 60, 120, 83});
     }
     if (key == QStringLiteral("screen_recording/animated_image_frame_rate")) {
-        return normalizeAllowedInteger(value, {10, 15, 24});
+        return normalizeAllowedInteger(value, {5, 10, 15, 24});
     }
     switch (schemaEntry->valueKind) {
     case ConfigurationValueKind::Boolean:

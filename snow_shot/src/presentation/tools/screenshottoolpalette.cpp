@@ -77,6 +77,7 @@ constexpr int kRecordingSettingsColorPickerWidth = 154;
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Grayscale"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Inversion"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Emboss"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Smart Erase"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Filter intensity"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Adjust filter intensity"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Opacity"),
@@ -152,6 +153,7 @@ constexpr int TOOLBAR_ITEM_SPACING = 8;
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Mouse click color transparent"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Show cursor in recording"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Show keystrokes in recording"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Delay recording (scroll to adjust)"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Copy recording"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Animated recording formats do not contain audio"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Unavailable while recording"),
@@ -238,7 +240,8 @@ bool hasSelectedCanvasElements(const SnowCanvasStyleToolbarState& state) {
 }
 
 bool filterTypeSupportsIntensity(SnowCanvasFilterType type) {
-    return type != SnowCanvasFilterType::Grayscale && type != SnowCanvasFilterType::Inversion;
+    return type != SnowCanvasFilterType::Grayscale && type != SnowCanvasFilterType::Inversion &&
+           type != SnowCanvasFilterType::SmartErase;
 }
 
 bool toolUsesActionToolbar(ScreenshotToolPalette::Tool tool) {
@@ -1750,6 +1753,28 @@ int ScreenshotToolPalette::recordingMouseTrailDurationMs() const {
     return m_recordingMouseTrailDurationMs;
 }
 
+void ScreenshotToolPalette::setRecordingStartDelaySeconds(int seconds) {
+    seconds = std::clamp(seconds, 0, 10);
+    m_recordingStartDelaySeconds = seconds;
+    if (m_recordDelayButton != nullptr) {
+        m_recordDelayButton->setValue(seconds);
+    }
+}
+
+int ScreenshotToolPalette::recordingStartDelaySeconds() const {
+    return m_recordingStartDelaySeconds;
+}
+
+bool ScreenshotToolPalette::stepRecordingStartDelay(int direction) {
+    const int next = std::clamp(m_recordingStartDelaySeconds + (direction > 0 ? 1 : -1), 0, 10);
+    if (next == m_recordingStartDelaySeconds) {
+        return false;
+    }
+    setRecordingStartDelaySeconds(next);
+    emit recordingStartDelaySecondsChanged(next);
+    return true;
+}
+
 void ScreenshotToolPalette::setRecordingSettingsOwnerWindow(QWidget* owner) {
     m_recordSettingsOwnerWindow = owner;
 }
@@ -2113,8 +2138,9 @@ void ScreenshotToolPalette::setStyleToolbarState(const SnowCanvasStyleToolbarSta
             (mixedChanged & SnowCanvasFilterStylePropertyStrokeWidth) != 0;
         const bool mixedType = (state.filterStyleMixed & SnowCanvasFilterStylePropertyType) != 0;
         if (intensitySlider != nullptr) {
-            intensitySlider->setEnabled(mixedType ||
-                                        filterTypeSupportsIntensity(state.filterStyle.type));
+            intensitySlider->setEnabled(
+                (state.filterStyleMixed & SnowCanvasFilterStyleMixedContainsSmartErase) == 0 &&
+                (mixedType || filterTypeSupportsIntensity(state.filterStyle.type)));
         }
         FilterEditor& editor = activeFilterEditor;
         updateFilterIntensityIcon(editor);
@@ -2712,6 +2738,13 @@ void ScreenshotToolPalette::applyScaledToolbarMetrics() {
                                                   "Show keystrokes in recording",
                                                   styleButtonMetrics(m_physicalScale));
     }
+    if (m_recordDelayButton != nullptr) {
+        configureScreenshotToolPaletteRecordingDelayEditor(m_recordDelayButton,
+                                                           styleButtonMetrics(m_physicalScale));
+        // Text-style buttons keep a font-derived height; pin it again after
+        // the shared metrics pass so the export row stays single-height.
+        m_recordDelayButton->setFixedHeight(scaledMetric(STYLE_BUTTON_SIZE));
+    }
 
     for (QFrame* separator : std::as_const(m_styleSeparatorFrames)) {
         const bool selectionSeparator = separator != nullptr && m_selectActionPanel != nullptr &&
@@ -3000,11 +3033,27 @@ void ScreenshotToolPalette::installWheelFilters(QObject* receiver, QWidget* scop
 
 bool ScreenshotToolPalette::handleToolbarWheel(QWheelEvent* event) {
     const int deltaY = wheelVerticalDelta(event);
-    if (deltaY == 0 || (!m_styleToolbarTargetVisible && !m_actionToolbarTargetVisible)) {
+    if (deltaY == 0) {
+        return false;
+    }
+    const int direction = deltaY > 0 ? 1 : -1;
+    // The delay editor lives on the export settings sub-toolbar, which is
+    // available regardless of the active tool, so it is hit-tested before the
+    // style/action toolbar visibility gate below.
+    if (m_recordDelayButton != nullptr && m_recordDelayButton->isEnabled() &&
+        m_recordDelayButton->isVisible() &&
+        m_recordDelayButton->rect().contains(
+            m_recordDelayButton->mapFromGlobal(event->globalPosition().toPoint()))) {
+        if (stepRecordingStartDelay(direction)) {
+            event->accept();
+            return true;
+        }
+        return false;
+    }
+    if (!m_styleToolbarTargetVisible && !m_actionToolbarTargetVisible) {
         return false;
     }
 
-    const int direction = deltaY > 0 ? 1 : -1;
     if (m_activeTool == Tool::Select) {
         if (!stepSelectionOpacity(direction)) {
             return false;
@@ -4780,7 +4829,9 @@ void ScreenshotToolPalette::refreshFilterEditorState(FilterEditor& editor, bool 
             QStringLiteral("%1%").arg(editor.intensitySlider->value()));
         editor.intensitySlider->setProperty("mixed",
                                             (mixed & SnowCanvasFilterStylePropertyStrength) != 0);
-        editor.intensitySlider->setEnabled(mixedType || filterTypeSupportsIntensity(style.type));
+        editor.intensitySlider->setEnabled((mixed & SnowCanvasFilterStyleMixedContainsSmartErase) ==
+                                               0 &&
+                                           (mixedType || filterTypeSupportsIntensity(style.type)));
     }
     updateFilterIntensityIcon(editor);
     if (refreshWidth && editor.tool == Tool::PenFilter) {
@@ -4892,6 +4943,7 @@ ScreenshotToolPalette::createFilterEditor(const FilterEditorConfig& config) {
     };
 
     ScreenshotToolPaletteFilterFamilyConfig familyConfig;
+    familyConfig.allowSmartErase = tool != Tool::AutoFilter;
     familyConfig.controlsObjectName = config.controlsObjectName;
     familyConfig.typeSelectObjectName = config.typeSelectObjectName;
     familyConfig.intensityIconObjectName = config.intensityIconObjectName;
@@ -5104,6 +5156,24 @@ void ScreenshotToolPalette::createRecordingExportSettingsToolbar() {
     m_recordKeyboardButton->setObjectName(QStringLiteral("screenRecordingShowKeyboard"));
     layout->addWidget(m_recordKeyboardButton);
     addSeparator(QStringLiteral("screenRecordingExportSettingsSeparator"));
+    m_recordDelayButton = createScreenshotToolPaletteRecordingDelayEditor(
+        m_recordExportSettingsPanel, "Delay recording (scroll to adjust)",
+        custom_outlined_icons::RecorderDelay(), m_recordingStartDelaySeconds,
+        styleButtonMetrics(m_physicalScale));
+    m_recordDelayButton->setObjectName(QStringLiteral("screenRecordingStartDelaySeconds"));
+    layout->addWidget(m_recordDelayButton);
+    // Text-style buttons do not derive their height from the shared metrics;
+    // pin it so the export row stays a single control height (see the Settings
+    // button below).
+    m_recordDelayButton->setFixedHeight(scaledMetric(STYLE_BUTTON_SIZE));
+    connect(m_recordDelayButton, &adqt::widgets::AdButton::clicked, this, [this]() {
+        // Mirror the corner radius editor: clicking restores the default delay.
+        if (m_recordingStartDelaySeconds == 0) {
+            return;
+        }
+        setRecordingStartDelaySeconds(0);
+        emit recordingStartDelaySecondsChanged(m_recordingStartDelaySeconds);
+    });
     m_recordSettingsButton = createScreenshotToolPaletteStyleActionButton(
         m_recordExportSettingsPanel, "Settings", outlined_icons::Setting(),
         styleButtonMetrics(m_physicalScale));
@@ -6804,8 +6874,11 @@ void ScreenshotToolPalette::updateRecordingControls() {
     if (m_recordStartButton != nullptr) {
         m_recordStartButton->setVisible(idle);
         m_recordStartButton->setEnabled(idle && !busy);
-        m_recordStartButton->setBusy(m_recordingSession.busyOperation() ==
-                                     RecordingBusyOperation::Starting);
+        // Both the delayed-start countdown and the backend start itself keep
+        // Start disabled; both report progress through its loading spinner.
+        const auto operation = m_recordingSession.busyOperation();
+        m_recordStartButton->setBusy(operation == RecordingBusyOperation::Starting ||
+                                     operation == RecordingBusyOperation::CountingDown);
     }
     if (m_recordStopButton != nullptr) {
         m_recordStopButton->setVisible(active);
@@ -6876,7 +6949,9 @@ void ScreenshotToolPalette::updateRecordingControls() {
             animatedFormat ? tr("Animated recording formats do not contain audio") : QString());
     }
     if (m_recordCloseButton != nullptr) {
-        m_recordCloseButton->setEnabled(!busy);
+        // A pending countdown is pure UI state; closing may always cancel it.
+        m_recordCloseButton->setEnabled(!busy || m_recordingSession.busyOperation() ==
+                                                     RecordingBusyOperation::CountingDown);
     }
     if (m_recordCopyButton != nullptr) {
         const bool copyEnabled = active && !busy;

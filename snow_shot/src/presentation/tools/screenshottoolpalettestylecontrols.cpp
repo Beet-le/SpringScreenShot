@@ -95,6 +95,7 @@ constexpr char kRoleEndArrowhead[] = "end-arrowhead";
 constexpr char kRoleTextAlignment[] = "text-alignment";
 constexpr char kRoleTextStroke[] = "text-stroke";
 constexpr char kRoleSerialValue[] = "serial-value";
+constexpr char kRoleSerialType[] = "serial-type";
 constexpr char kRoleFilterMode[] = "filter-mode";
 constexpr char kRoleFilterType[] = "filter-type";
 constexpr char kRoleFilterIntensity[] = "filter-intensity";
@@ -123,8 +124,10 @@ constexpr char kSignatureArrowhead[] = "icon-options:arrowhead";
 constexpr char kSignatureTextAlignment[] = "icon-options:text-align";
 constexpr char kSignatureTextStroke[] = "width-color:text-stroke";
 constexpr char kSignatureSerialValue[] = "serial-value";
+constexpr char kSignatureSerialType[] = "radio:serial-type";
 constexpr char kSignatureFilterMode[] = "radio:filter-mode";
 constexpr char kSignatureFilterType[] = "select:filter-types";
+constexpr char kSignatureAutoFilterType[] = "select:auto-filter-types";
 constexpr char kSignatureFilterIntensity[] = "slider:filter-intensity";
 constexpr char kSignatureWatermarkText[] = "line-edit:watermark";
 constexpr char kSignatureWatermarkFont[] = "font:watermark-presets";
@@ -154,7 +157,8 @@ QVector<QByteArray> styleEditorRoles(ScreenshotToolPalette::Tool tool) {
         return {kRoleForegroundColor, kRoleTextFont, "text-alignment",
                 "text-stroke",        kRoleTextFill, kRoleCornerRadius};
     case Tool::SerialNumber:
-        return {kRoleForegroundColor, "serial-value", kRoleTextFont, kRoleTextFill};
+        return {kRoleForegroundColor, kRoleSerialType, "serial-value", kRoleTextFont,
+                kRoleTextFill};
     case Tool::AutoFilter:
     case Tool::RectangleFilter:
         return {"filter-mode", "filter-type", "filter-intensity"};
@@ -465,6 +469,7 @@ void finalizeRawEditorRoot(QWidget* root) {
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Grayscale"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Inversion"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Emboss"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Smart Erase"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Filter intensity"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Adjust filter intensity"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Pen filter"),
@@ -1126,11 +1131,16 @@ void ScreenshotToolPaletteStyleControls::stageDestinationStyleEditors(
         break;
     case Tool::SerialNumber:
         stageComponent(kRoleForegroundColor, kSignatureForegroundColor, m_serialNumberColorEditor);
+        stageWidget(kRoleSerialType, kSignatureSerialType);
         stageWidget(kRoleSerialValue, kSignatureSerialValue);
         stageComponent(kRoleTextFont, kSignatureTextFont, m_serialNumberFontEditor);
         stageComponent(kRoleTextFill, kSignatureTextFill, m_serialNumberFillEditor);
         break;
     case Tool::AutoFilter:
+        stageWidget(kRoleFilterMode, kSignatureFilterMode);
+        stageWidget(kRoleFilterType, kSignatureAutoFilterType);
+        stageWidget(kRoleFilterIntensity, kSignatureFilterIntensity);
+        break;
     case Tool::RectangleFilter:
         stageWidget(kRoleFilterMode, kSignatureFilterMode);
         stageWidget(kRoleFilterType, kSignatureFilterType);
@@ -2071,6 +2081,61 @@ QWidget* ScreenshotToolPaletteStyleControls::buildSerialNumberFamily(
     if (host.addGroupSeparator) {
         host.addGroupSeparator(layout);
     }
+
+    ScreenshotToolPaletteRadioEditorConfig serialNumberTypeConfig;
+    serialNumberTypeConfig.objectName = QStringLiteral("screenshotSerialNumberTypeButtonGroup");
+    serialNumberTypeConfig.options = {
+        {static_cast<int>(SnowCanvasSerialNumberType::OutlinedCircle),
+         ScreenshotToolPaletteTranslationText(
+             QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Outlined circle")),
+         custom_outlined_icons::SequenceNumberOutlinedCircle()},
+        {static_cast<int>(SnowCanvasSerialNumberType::SolidCircle),
+         ScreenshotToolPaletteTranslationText(
+             QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Solid circle")),
+         custom_outlined_icons::SequenceNumberSolidCircle()},
+        {static_cast<int>(SnowCanvasSerialNumberType::OutlinedSquare),
+         ScreenshotToolPaletteTranslationText(
+             QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Outlined square")),
+         custom_outlined_icons::SequenceNumberOutlinedSquare()},
+        {static_cast<int>(SnowCanvasSerialNumberType::SolidSquare),
+         ScreenshotToolPaletteTranslationText(
+             QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Solid square")),
+         custom_outlined_icons::SequenceNumberSolidSquare()},
+    };
+    serialNumberTypeConfig.initialId = static_cast<int>(m_state.m_serialNumberStyle.type);
+    m_serialNumberTypeControlsContainer =
+        takeReusableWidget(kRoleSerialType, kSignatureSerialType, layout, controls);
+    if (m_serialNumberTypeControlsContainer == nullptr) {
+        const ScreenshotToolPaletteRadioEditor typeEditor =
+            createScreenshotToolPaletteRadioEditor(controls, serialNumberTypeConfig, metrics);
+        m_serialNumberTypeControlsContainer = typeEditor.container;
+        m_serialNumberTypeButtonGroup = typeEditor.group;
+        layout->addWidget(m_serialNumberTypeControlsContainer);
+    } else {
+        m_serialNumberTypeButtonGroup =
+            m_serialNumberTypeControlsContainer->findChild<adqt::widgets::AdRadioButtonGroup*>();
+    }
+    m_serialNumberTypeControlsContainer->setObjectName(serialNumberTypeConfig.objectName);
+    m_serialNumberTypeControlsContainer->setProperty("screenshotStyleEditorRoot", true);
+    m_serialNumberTypeControlsContainer->setProperty("screenshotStyleEditorRole", kRoleSerialType);
+    m_serialNumberTypeControlsContainer->setProperty("screenshotStyleEditorSignature",
+                                                     kSignatureSerialType);
+    configureScreenshotToolPaletteTooltip(m_serialNumberTypeControlsContainer,
+                                          ScreenshotToolPaletteTranslationText(QT_TRANSLATE_NOOP(
+                                              "ScreenshotToolPalette", "Sequence number type")));
+    QObject::connect(m_serialNumberTypeButtonGroup,
+                     &adqt::widgets::AdRadioButtonGroup::checkedIdChanged, controls,
+                     [this](int id) {
+                         if (id >= static_cast<int>(SnowCanvasSerialNumberType::OutlinedCircle) &&
+                             id <= static_cast<int>(SnowCanvasSerialNumberType::SolidSquare)) {
+                             setSerialNumberType(static_cast<SnowCanvasSerialNumberType>(id));
+                         }
+                     });
+
+    if (host.addGroupSeparator) {
+        host.addGroupSeparator(layout);
+    }
+
     m_serialNumberEditor = qobject_cast<adqt::widgets::AdLineEdit*>(
         takeReusableWidget(kRoleSerialValue, kSignatureSerialValue, layout, controls));
     if (m_serialNumberEditor == nullptr) {
@@ -2504,6 +2569,8 @@ ScreenshotToolPaletteFilterFamilyResult ScreenshotToolPaletteStyleControls::buil
     const ScreenshotToolPaletteFilterCallbacks& callbacks, QWidget* panel,
     const ScreenshotToolPaletteStyleFamilyHost& host,
     const ScreenshotToolPaletteButtonMetrics& metrics) {
+    const char* typeSignature =
+        config.allowSmartErase ? kSignatureFilterType : kSignatureAutoFilterType;
     ScreenshotToolPaletteFilterFamilyResult result;
     if (panel == nullptr) {
         return result;
@@ -2543,15 +2610,11 @@ ScreenshotToolPaletteFilterFamilyResult ScreenshotToolPaletteStyleControls::buil
     typeSelectConfig.tooltip = QStringLiteral("Filter type");
     typeSelectConfig.placeholder = QStringLiteral("Filter type");
     result.typeSelect = dynamic_cast<adqt::widgets::AdSelect*>(
-        takeReusableWidget("filter-type", kSignatureFilterType, layout, result.controls));
+        takeReusableWidget("filter-type", typeSignature, layout, result.controls));
     if (result.typeSelect == nullptr) {
         const ScreenshotToolPaletteSelectEditor typeSelectEditor =
             createScreenshotToolPaletteSelectEditor(result.controls, typeSelectConfig, metrics);
         result.typeSelect = typeSelectEditor.select;
-        result.typeSelect->setSortComparator([](const adqt::widgets::AdSelect::Option& lhs,
-                                                const adqt::widgets::AdSelect::Option& rhs) {
-            return lhs.value.toInt() < rhs.value.toInt();
-        });
         auto* typeModel = new QStandardItemModel(result.typeSelect);
         const auto appendFilterType = [typeModel](const char* source, int value) {
             const ScreenshotToolPaletteTranslationText text(source);
@@ -2560,8 +2623,13 @@ ScreenshotToolPaletteFilterFamilyResult ScreenshotToolPaletteStyleControls::buil
             item->setData(value, adqt::widgets::AdSelect::DefaultValueRole);
             typeModel->appendRow(item);
         };
+        // Rows are appended in display order: with no sort comparator the popup
+        // keeps model order, so Smart Erase (ABI value 5) follows Gaussian blur
+        // instead of trailing the enum-ordinal sequence.
         appendFilterType("Mosaic", 0);
         appendFilterType("Gaussian blur", 1);
+        if (config.allowSmartErase)
+            appendFilterType("Smart Erase", 5);
         appendFilterType("Grayscale", 2);
         appendFilterType("Inversion", 3);
         appendFilterType("Emboss", 4);
@@ -2578,7 +2646,7 @@ ScreenshotToolPaletteFilterFamilyResult ScreenshotToolPaletteStyleControls::buil
     result.typeSelect->setPlaceholder(QStringLiteral("Filter type"));
     result.typeSelect->setProperty("screenshotStyleEditorRoot", true);
     result.typeSelect->setProperty("screenshotStyleEditorRole", "filter-type");
-    result.typeSelect->setProperty("screenshotStyleEditorSignature", kSignatureFilterType);
+    result.typeSelect->setProperty("screenshotStyleEditorSignature", typeSignature);
 
     if (host.addGroupSeparator) {
         host.addGroupSeparator(layout);
@@ -2946,6 +3014,23 @@ void ScreenshotToolPaletteStyleControls::registerSerialNumberEntries() {
                                                    mixed(SnowCanvasSerialNumberStyleMixedColor));
              }
          }},
+        {SerialNumberTypeRefresh,
+         [this, mixed]() {
+             SNOW_SHOT_TOOLBAR_PERF_COUNTER("style.serial_number.type_refresh");
+             const bool typeMixed = mixed(SnowCanvasSerialNumberStyleMixedType);
+             if (m_serialNumberTypeButtonGroup != nullptr) {
+                 const QSignalBlocker blocker(m_serialNumberTypeButtonGroup);
+                 m_serialNumberTypeButtonGroup->setCheckedId(
+                     typeMixed ? -1 : static_cast<int>(m_state.m_serialNumberStyle.type));
+             }
+             if (m_serialNumberFillEditor != nullptr &&
+                 m_serialNumberFillEditor->rootWidget() != nullptr) {
+                 const bool solid =
+                     m_state.m_serialNumberStyle.type == SnowCanvasSerialNumberType::SolidCircle ||
+                     m_state.m_serialNumberStyle.type == SnowCanvasSerialNumberType::SolidSquare;
+                 m_serialNumberFillEditor->rootWidget()->setEnabled(typeMixed || !solid);
+             }
+         }},
         {SerialNumberFillRefresh,
          [this, mixed]() {
              SNOW_SHOT_TOOLBAR_PERF_COUNTER("style.serial_number.fill_refresh");
@@ -3136,6 +3221,8 @@ void ScreenshotToolPaletteStyleControls::releaseControlBindings() {
     m_textCornerRadiusEditor = nullptr;
     m_textAlignmentEditor.reset();
     m_serialNumberColorEditor.reset();
+    m_serialNumberTypeControlsContainer = nullptr;
+    m_serialNumberTypeButtonGroup = nullptr;
     m_serialNumberFillEditor.reset();
     m_serialNumberEditor = nullptr;
     m_serialNumberFontEditor.reset();
@@ -3226,6 +3313,8 @@ void ScreenshotToolPaletteStyleControls::discardBindingsExcept(int destinationTo
         m_textCornerRadiusEditor = nullptr;
     }
     if (!keepSerialNumber) {
+        m_serialNumberTypeControlsContainer = nullptr;
+        m_serialNumberTypeButtonGroup = nullptr;
         m_serialNumberEditor = nullptr;
     }
     if (!keepWatermark) {
@@ -4616,6 +4705,19 @@ void ScreenshotToolPaletteStyleControls::setSerialNumberColor(const QColor& colo
         });
 }
 
+void ScreenshotToolPaletteStyleControls::setSerialNumberType(SnowCanvasSerialNumberType type) {
+    commitSerialNumberProperty(
+        SnowCanvasSerialNumberStyleMixedType,
+        [type](SnowCanvasSerialNumberStyle& style, SnowCanvasSerialNumberStyle& creation) {
+            if (style.type == type && creation.type == type) {
+                return false;
+            }
+            style.type = type;
+            creation.type = type;
+            return true;
+        });
+}
+
 void ScreenshotToolPaletteStyleControls::setSerialNumberFillColor(const QColor& color) {
     commitSerialNumberProperty(
         SnowCanvasSerialNumberStyleMixedFill,
@@ -4736,6 +4838,9 @@ void ScreenshotToolPaletteStyleControls::setStyleToolbarState(
             if (m_state.m_serialNumberStyle.color != displayedStyle.color ||
                 (mixedChanged & SnowCanvasSerialNumberStyleMixedColor) != 0)
                 groups |= SerialNumberColorRefresh;
+            if (m_state.m_serialNumberStyle.type != displayedStyle.type ||
+                (mixedChanged & SnowCanvasSerialNumberStyleMixedType) != 0)
+                groups |= SerialNumberTypeRefresh;
             if (m_state.m_serialNumberStyle.fill != displayedStyle.fill ||
                 m_state.m_serialNumberStyle.fillStyle != displayedStyle.fillStyle ||
                 (mixedChanged & (SnowCanvasSerialNumberStyleMixedFill |

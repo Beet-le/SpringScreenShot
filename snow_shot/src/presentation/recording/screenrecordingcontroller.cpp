@@ -47,6 +47,7 @@
 
 namespace {
 constexpr int kDurationTickMilliseconds = 100;
+constexpr int kCountdownTickMilliseconds = 16;
 
 struct DirectRecordingSettings {
     SnowRecordingOutputFormat format = SNOW_RECORDING_OUTPUT_FORMAT_MP4;
@@ -269,6 +270,7 @@ struct ScreenRecordingController::Impl {
         mouseClickColor = settings.mouseClickColor();
         showCursor = settings.showCursor();
         showKeyboard = settings.showKeyboard();
+        startDelaySeconds = settings.startDelaySeconds();
         durationTimer.setInterval(kDurationTickMilliseconds);
         durationTimer.setTimerType(Qt::PreciseTimer);
         QObject::connect(&durationTimer, &QTimer::timeout, &owner, [this]() {
@@ -286,12 +288,18 @@ struct ScreenRecordingController::Impl {
                          [this]() { pollFinalization(); });
         startPollTimer.setInterval(50);
         QObject::connect(&startPollTimer, &QTimer::timeout, &owner, [this]() { pollStart(); });
+        // The countdown shares one clock with the overlay digits: every tick
+        // pushes the same elapsed reading that decides when recording starts.
+        countdownTimer.setInterval(kCountdownTickMilliseconds);
+        countdownTimer.setTimerType(Qt::PreciseTimer);
+        QObject::connect(&countdownTimer, &QTimer::timeout, &owner, [this]() { tickCountdown(); });
     }
 
     ~Impl() {
         durationTimer.stop();
         finalizationPollTimer.stop();
         startPollTimer.stop();
+        countdownTimer.stop();
         if (startFuture.valid()) {
             startFuture.wait();
             // A session that finished starting while the controller was being
@@ -458,6 +466,11 @@ struct ScreenRecordingController::Impl {
                              outputFormat = format;
                              snow_shot::storage::RecordingSettings().setOutputFormat(format);
                              syncPreview();
+                         });
+        QObject::connect(palette, &ScreenshotToolPalette::recordingStartDelaySecondsChanged,
+                         uiSession->connections.get(), [this](int seconds) {
+                             startDelaySeconds = seconds;
+                             snow_shot::storage::RecordingSettings().setStartDelaySeconds(seconds);
                          });
         QObject::connect(palette, &ScreenshotToolPalette::recordingMouseTrailDurationMsChanged,
                          uiSession->connections.get(), [this](int value) {
@@ -639,6 +652,14 @@ struct ScreenRecordingController::Impl {
     void cancelPendingStart() {
         ++startGeneration;
         startScheduled = false;
+        countdownTimer.stop();
+        if (sessionStatus.busyOperation() ==
+            ScreenshotToolPalette::RecordingBusyOperation::CountingDown) {
+            if (areaWindow != nullptr) {
+                areaWindow->clearCountdown();
+            }
+            sessionStatus = ScreenshotToolPalette::RecordingSessionStatus::idle();
+        }
     }
 
     void start() {
@@ -646,6 +667,51 @@ struct ScreenRecordingController::Impl {
             sessionStatus.busy() || startScheduled || recordingSession != nullptr) {
             return;
         }
+        if (startDelaySeconds > 0) {
+            beginCountdown();
+            return;
+        }
+        scheduleStart();
+    }
+
+    void beginCountdown() {
+        const int seconds = std::clamp(startDelaySeconds, 1, 10);
+        sessionStatus = ScreenshotToolPalette::RecordingSessionStatus::countingDown();
+        // The busy status stops the motion preview and blocks recording-area
+        // interactions before the countdown overlay appears.
+        syncUi();
+        // One clock drives both the overlay and the actual start, so the
+        // displayed seconds can never drift away from the recording start.
+        countdownTotalMilliseconds = static_cast<qint64>(seconds) * 1000;
+        countdownElapsed.start();
+        if (areaWindow != nullptr) {
+            areaWindow->startCountdown(seconds);
+        }
+        countdownTimer.start();
+    }
+
+    void tickCountdown() {
+        if (sessionStatus.busyOperation() !=
+            ScreenshotToolPalette::RecordingBusyOperation::CountingDown) {
+            countdownTimer.stop();
+            return;
+        }
+        const qint64 remaining = countdownTotalMilliseconds - countdownElapsed.elapsed();
+        if (remaining > 0) {
+            if (areaWindow != nullptr) {
+                areaWindow->updateCountdown(remaining);
+            }
+            return;
+        }
+        countdownTimer.stop();
+        if (areaWindow != nullptr) {
+            areaWindow->clearCountdown();
+        }
+        sessionStatus = ScreenshotToolPalette::RecordingSessionStatus::idle();
+        scheduleStart();
+    }
+
+    void scheduleStart() {
         startScheduled = true;
         syncPreview();
         uiSession->preview->stopAndClear(true);
@@ -1005,6 +1071,7 @@ struct ScreenRecordingController::Impl {
             palette->setRecordingKeyboardBackgroundColor(keyboardBackgroundColor);
             palette->setRecordingKeyboardForegroundColor(keyboardForegroundColor);
             palette->setRecordingMouseClickColor(mouseClickColor);
+            palette->setRecordingStartDelaySeconds(startDelaySeconds);
             palette->setRecordingCursorVisible(showCursor);
             palette->setRecordingKeyboardVisible(showKeyboard);
         }
@@ -1035,6 +1102,9 @@ struct ScreenRecordingController::Impl {
     QTimer durationTimer;
     QTimer finalizationPollTimer;
     QTimer startPollTimer;
+    QTimer countdownTimer;
+    QElapsedTimer countdownElapsed;
+    qint64 countdownTotalMilliseconds = 0;
     std::future<std::pair<bool, QString>> finalizationFuture;
     std::future<StartAttemptResult> startFuture;
     ScreenshotToolPalette::RecordingSessionStatus sessionStatus =
@@ -1044,6 +1114,7 @@ struct ScreenRecordingController::Impl {
     bool microphoneEnabled = false;
     bool systemAudioEnabled = true;
     QString outputFormat = QStringLiteral("mp4");
+    int startDelaySeconds = 0;
     int mouseTrailDurationMs = 500;
     int keyboardSize = 64;
     QColor keyboardBackgroundColor{0, 0, 0, 204};

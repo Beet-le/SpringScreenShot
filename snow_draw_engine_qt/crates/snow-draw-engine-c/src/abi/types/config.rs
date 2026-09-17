@@ -68,15 +68,28 @@ impl SnowStyleToolbarSource {
     pub const SelectedFilter: Self = Self::SelectedRectangleFilter;
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum SnowFilterType {
-    #[default]
-    Mosaic = 0,
-    GaussianBlur = 1,
-    Grayscale = 2,
-    Inversion = 3,
-    Emboss = 4,
+snow_c_enum! {
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub enum SnowFilterType {
+        #[default]
+        Mosaic = 0,
+        GaussianBlur = 1,
+        Grayscale = 2,
+        Inversion = 3,
+        Emboss = 4,
+        SmartErase = 5,
+    }
+}
+
+snow_c_enum! {
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub enum SnowSerialNumberType {
+        #[default]
+        OutlinedCircle = 0,
+        SolidCircle = 1,
+        OutlinedSquare = 2,
+        SolidSquare = 3,
+    }
 }
 
 #[repr(C)]
@@ -182,21 +195,23 @@ impl Default for SnowWatermarkConfig {
     }
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum SnowHighlightShape {
-    #[default]
-    Rectangle = 0,
-    Ellipse = 1,
+snow_c_enum! {
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub enum SnowHighlightShape {
+        #[default]
+        Rectangle = 0,
+        Ellipse = 1,
+    }
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum SnowRectangleShape {
-    #[default]
-    Rectangle = 0,
-    Ellipse = 1,
-    Diamond = 2,
+snow_c_enum! {
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub enum SnowRectangleShape {
+        #[default]
+        Rectangle = 0,
+        Ellipse = 1,
+        Diamond = 2,
+    }
 }
 
 #[repr(C)]
@@ -270,6 +285,16 @@ mod spotlight_abi_tests {
         assert_eq!(std::mem::size_of::<SnowSpotlightConfig>(), 16);
         assert_eq!(std::mem::offset_of!(SnowSpotlightConfig, color), 0);
         assert_eq!(std::mem::offset_of!(SnowSpotlightConfig, opacity), 8);
+        assert_eq!(SnowSerialNumberType::OutlinedCircle as i32, 0);
+        assert_eq!(SnowSerialNumberType::SolidCircle as i32, 1);
+        assert_eq!(SnowSerialNumberType::OutlinedSquare as i32, 2);
+        assert_eq!(SnowSerialNumberType::SolidSquare as i32, 3);
+        assert_eq!(std::mem::size_of::<SnowSerialNumberStyle>(), 200);
+        assert_eq!(std::mem::align_of::<SnowSerialNumberStyle>(), 8);
+        assert_eq!(
+            std::mem::offset_of!(SnowSerialNumberStyle, serial_number_type),
+            56
+        );
     }
 }
 
@@ -284,7 +309,7 @@ pub struct SnowSerialNumberStyle {
     pub stroke_width: f64,
     pub stroke_style: SnowStrokeStyle,
     pub opacity: f64,
-    pub reserved0: [u8; 4],
+    pub serial_number_type: SnowSerialNumberType,
     pub font_family_utf8_len: u32,
     pub font_family_truncated: u8,
     pub reserved1: [u8; 3],
@@ -510,7 +535,7 @@ impl Default for SnowSerialNumberStyle {
             stroke_width: 0.0,
             stroke_style: SnowStrokeStyle::Solid,
             opacity: 1.0,
-            reserved0: [0; 4],
+            serial_number_type: SnowSerialNumberType::OutlinedCircle,
             font_family_utf8_len: 0,
             font_family_truncated: 0,
             reserved1: [0; 3],

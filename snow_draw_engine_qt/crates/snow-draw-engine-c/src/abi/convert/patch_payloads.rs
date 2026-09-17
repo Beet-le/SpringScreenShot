@@ -222,12 +222,14 @@ pub(crate) fn snow_scene_display_item_from_rust(
             out.stroke_width = item.stroke_width;
             out.is_free_draw = u8::from(item.is_pen_filter);
             out.opacity = item.opacity;
+            out.filter.render_phase = item.filter.render_phase;
             out.filter.filter_type = match item.filter.filter_type {
                 snow_draw_engine::DisplayFilterType::Mosaic => 0,
                 snow_draw_engine::DisplayFilterType::GaussianBlur => 1,
                 snow_draw_engine::DisplayFilterType::Grayscale => 2,
                 snow_draw_engine::DisplayFilterType::Inversion => 3,
                 snow_draw_engine::DisplayFilterType::Emboss => 4,
+                snow_draw_engine::DisplayFilterType::SmartErase => 5,
             };
             out.filter.strength = item.filter.strength;
             out.filter.mosaic_block_size = item.filter.mosaic_block_size;
@@ -324,11 +326,13 @@ pub(crate) fn snow_scene_display_item_from_rust(
             out.stroke = item.color.into();
             out.text_color = item.color.into();
             out.stroke_width = item.stroke_width;
+            out.corner_radii = item.corner_radii.into();
             out.font_size = item.font_size;
             out.opacity = item.opacity;
             out.serial_number = item.number;
             out.fill_style = snow_fill_style_from_rust(item.fill_style);
             out.stroke_style = snow_stroke_style_from_rust(item.stroke_style);
+            out.serial_number_type = item.serial_number_type as u8;
             converted.font_family_utf8 = utf8_bytes(item.font_family.as_deref());
             out.font_family_utf8_len = converted.font_family_utf8.len() as u32;
             encode_bound_text_id(out, item.bound_text_id);
@@ -600,7 +604,7 @@ mod tests {
 
     #[test]
     fn compact_display_views_stay_below_the_abi_size_budget() {
-        assert!(std::mem::size_of::<SnowSceneDisplayItem>() <= 320);
+        assert_eq!(std::mem::size_of::<SnowSceneDisplayItem>(), 328);
         assert!(std::mem::size_of::<SnowOverlayDisplayItem>() <= 384);
     }
 

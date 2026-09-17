@@ -19,7 +19,6 @@
 #include <QProcessEnvironment>
 #include <QCoreApplication>
 #include <QThreadPool>
-#include <QUuid>
 
 #include <algorithm>
 #include <array>

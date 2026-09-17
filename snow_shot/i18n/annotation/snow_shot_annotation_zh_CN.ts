@@ -180,6 +180,10 @@
             <translation>默认</translation>
         </message>
         <message>
+            <source>Delay recording (scroll to adjust)</source>
+            <translation>延迟录制（滚动调整）</translation>
+        </message>
+        <message>
             <source>Delete</source>
             <translation>删除</translation>
         </message>
@@ -488,6 +492,14 @@
             <translation>打开录制文件夹</translation>
         </message>
         <message>
+            <source>Outlined circle</source>
+            <translation>轮廓圆形</translation>
+        </message>
+        <message>
+            <source>Outlined square</source>
+            <translation>轮廓方形</translation>
+        </message>
+        <message>
             <source>Pause recording</source>
             <translation>暂停录制</translation>
         </message>
@@ -652,6 +664,10 @@
             <translation>序号字号 %1 像素</translation>
         </message>
         <message>
+            <source>Sequence number type</source>
+            <translation>序号类型</translation>
+        </message>
+        <message>
             <source>Serial number</source>
             <translation>序号</translation>
         </message>
@@ -672,8 +688,16 @@
             <translation>在录制中显示按键</translation>
         </message>
         <message>
+            <source>Smart Erase</source>
+            <translation>智能擦除</translation>
+        </message>
+        <message>
             <source>Solid arrow stroke</source>
             <translation>实线箭头描边</translation>
+        </message>
+        <message>
+            <source>Solid circle</source>
+            <translation>实心圆形</translation>
         </message>
         <message>
             <source>Solid fill</source>
@@ -682,6 +706,10 @@
         <message>
             <source>Solid sequence number fill</source>
             <translation>纯色序号填充</translation>
+        </message>
+        <message>
+            <source>Solid square</source>
+            <translation>实心方形</translation>
         </message>
         <message>
             <source>Solid stroke</source>

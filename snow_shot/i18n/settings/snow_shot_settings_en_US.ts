@@ -565,6 +565,10 @@
             <translation>4K</translation>
         </message>
         <message>
+            <source>5</source>
+            <translation>5</translation>
+        </message>
+        <message>
             <source>60</source>
             <translation>60</translation>
         </message>
@@ -803,6 +807,10 @@
         <message>
             <source>Choose how the area behind recognized text is filled</source>
             <translation>Choose how the area behind recognized text is filled</translation>
+        </message>
+        <message>
+            <source>Choose how the dragged selection border follows the mouse while resizing</source>
+            <translation>Choose how the dragged selection border follows the mouse while resizing</translation>
         </message>
         <message>
             <source>Choose the OCR model version and size to balance recognition speed and accuracy</source>
@@ -1291,6 +1299,14 @@
         <message>
             <source>Focused window</source>
             <translation>Focused window</translation>
+        </message>
+        <message>
+            <source>Follow mouse movement</source>
+            <translation>Follow mouse movement</translation>
+        </message>
+        <message>
+            <source>Follow mouse position</source>
+            <translation>Follow mouse position</translation>
         </message>
         <message>
             <source>Follow system</source>
@@ -2107,6 +2123,10 @@
         <message>
             <source>Selection mask color</source>
             <translation>Selection mask color</translation>
+        </message>
+        <message>
+            <source>Selection resize mode</source>
+            <translation>Selection resize mode</translation>
         </message>
         <message>
             <source>Serial number</source>

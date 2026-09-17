@@ -507,6 +507,14 @@ bool ScreenshotSettings::setMiddleMouseButtonAction(const QString& action) const
     return cache().setValue(QStringLiteral("screenshot/middle_mouse_button_action"), action);
 }
 
+QString ScreenshotSettings::selectionResizeMode() const {
+    return cache().value(QStringLiteral("screenshot/selection_resize_mode")).toString();
+}
+
+bool ScreenshotSettings::setSelectionResizeMode(const QString& mode) const {
+    return cache().setValue(QStringLiteral("screenshot/selection_resize_mode"), mode);
+}
+
 bool ScreenshotSettings::autoSaveAfterCopy() const {
     return cache().value(QStringLiteral("screenshot/auto_save_after_copy")).toBool();
 }
@@ -1165,6 +1173,14 @@ int RecordingSettings::mouseTrailDurationMs() const {
 
 bool RecordingSettings::setMouseTrailDurationMs(int duration) const {
     return cache().setValue(QStringLiteral("screen_recording/mouse_trail_duration_ms"), duration);
+}
+
+int RecordingSettings::startDelaySeconds() const {
+    return cache().value(QStringLiteral("screen_recording/start_delay_seconds")).toInt();
+}
+
+bool RecordingSettings::setStartDelaySeconds(int seconds) const {
+    return cache().setValue(QStringLiteral("screen_recording/start_delay_seconds"), seconds);
 }
 
 int RecordingSettings::keyboardSize() const {

@@ -213,10 +213,16 @@ if(NOT TARGET snow_selected_text_c)
     endif()
 endif()
 
-# zxing-cpp backs the in-process barcode recognition service (QR, DataMatrix,
-# Aztec, PDF417 and 1D symbologies); text recognition lives in the standalone
-# OCR process.
-find_package(ZXing CONFIG REQUIRED)
+# OpenCV's contrib wechat_qrcode module backs in-process QR recognition and
+# objdetect's cv::barcode detector covers EAN/UPC 1-D symbologies; text
+# recognition lives in the standalone OCR process. Pin the config package to
+# the manifest-installed copy: the Rust OpenCV crates export a user-level
+# OpenCV_DIR that would otherwise shadow it.
+set(OpenCV_DIR "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/share/opencv4" CACHE PATH
+    "OpenCV package configuration directory" FORCE)
+find_package(OpenCV CONFIG REQUIRED)
+include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/FetchSnowShotQrModels.cmake")
+snow_shot_fetch_qr_models(SNOW_SHOT_QR_MODELS_DIR)
 # ONNX Runtime backs the standalone OCR process: static release builds link
 # its closure into snow-ocr-process.exe, dynamic builds stage its DLL.
 find_package(onnxruntime CONFIG REQUIRED)
@@ -1125,6 +1131,8 @@ set(PROJECT_CXX_SOURCES
     src/presentation/toolbar/screenshottoolbarwindow.cpp
     src/presentation/recording/screenrecordingareawindow.cpp
     src/presentation/recording/screenrecordingcontroller.cpp
+    src/presentation/recording/recordingcountdownoverlay.cpp
+    src/presentation/recording/recordingcountdownoverlay.h
         src/presentation/recording/recordingeffectpreview.cpp
         src/presentation/recording/recordingeffectpreview.h
         src/presentation/recording/recordingeffectstyle.h
@@ -1907,8 +1915,10 @@ if(SNOW_SHOT_BUILD_TESTS)
     )
     add_test(NAME snow-shot-window-element-api-tests
              COMMAND snow-shot-window-element-api-tests)
+    add_test(NAME snow-shot-selector-phased-tests
+             COMMAND snow-shot-window-element-api-tests --selector-only)
     snow_shot_import_offscreen_platform(snow-shot-window-element-api-tests)
-    set_tests_properties(snow-shot-window-element-api-tests PROPERTIES
+    set_tests_properties(snow-shot-window-element-api-tests snow-shot-selector-phased-tests PROPERTIES
         ENVIRONMENT
             "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION
@@ -2261,6 +2271,7 @@ if(SNOW_SHOT_BUILD_TESTS)
 
     add_executable(snow-shot-capture-workflow-tests
         tests/screenshot_capture_workflow_tests.cpp
+        src/presentation/selector/screenshotselectorworkflow.cpp
         include/snow_shot/presentation/screenshotcapturedisplaymodelreconciler.h
         include/snow_shot/presentation/screenshotcapturestate.h
         include/snow_shot/presentation/screenshotcaptureworkflow.h
@@ -3011,6 +3022,18 @@ if(SNOW_SHOT_BUILD_TESTS)
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
+    add_executable(snow-shot-selection-resize-mode-settings-tests
+        tests/selection_resize_mode_settings_tests.cpp
+        src/presentation/services/screenshotclipboardservice.cpp)
+    target_link_libraries(snow-shot-selection-resize-mode-settings-tests PRIVATE
+        snow_shot_settings snow_shot_image_codec)
+    snow_shot_import_offscreen_platform(snow-shot-selection-resize-mode-settings-tests)
+    add_test(NAME snow-shot-selection-resize-mode-settings-tests
+             COMMAND snow-shot-selection-resize-mode-settings-tests)
+    set_tests_properties(snow-shot-selection-resize-mode-settings-tests PROPERTIES
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
     add_executable(snow-shot-file-pin-batch-tests
         tests/screenshot_file_pin_batch_tests.cpp
         src/platform/windows/selectedfiles.cpp
@@ -3648,6 +3671,8 @@ if(SNOW_SHOT_BUILD_TESTS)
         src/presentation/recording/screenrecordingtoolbarwindow.cpp
         src/presentation/recording/screenrecordingshortcutcontroller.cpp
         src/presentation/recording/screenrecordinggeometry.cpp
+        src/presentation/recording/recordingcountdownoverlay.cpp
+        src/presentation/recording/recordingcountdownoverlay.h
         include/snow_shot/presentation/screenshottoolpalette.h
         include/snow_shot/presentation/screenshottoolpalettehost.h
         include/snow_shot/presentation/styles/thememanager.h
@@ -4131,6 +4156,8 @@ if(SNOW_SHOT_BUILD_TESTS)
         src/presentation/recording/screenrecordingareawindow.cpp
         src/presentation/recording/screenrecordingtoolbarwindow.cpp
         src/presentation/recording/screenrecordinggeometry.cpp
+        src/presentation/recording/recordingcountdownoverlay.cpp
+        src/presentation/recording/recordingcountdownoverlay.h
         src/presentation/tools/screenshotfloatingtoolpalettewindow.cpp
         src/presentation/tools/screenshotfloatingtoolpalettenative.cpp
         src/presentation/tools/screenshottoolpalettehost.cpp
@@ -4236,6 +4263,8 @@ if(SNOW_SHOT_BUILD_TESTS)
         src/presentation/core/screenshotgeometry.cpp
         src/presentation/recording/screenrecordingareawindow.cpp
         src/presentation/recording/screenrecordinggeometry.cpp
+        src/presentation/recording/recordingcountdownoverlay.cpp
+        src/presentation/recording/recordingcountdownoverlay.h
     )
     target_include_directories(snow-shot-screen-recording-area-window-tests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
@@ -4560,7 +4589,8 @@ if(SNOW_SHOT_BUILD_TESTS)
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
     )
     target_link_libraries(snow-shot-qr-recognition-service-tests PRIVATE
-        ZXing::ZXing
+        opencv_wechat_qrcode
+        opencv_objdetect
         Qt6::Core
         Qt6::Gui
     )
@@ -5233,7 +5263,8 @@ target_link_libraries(
         snow_ui_selector_c
         snow_visual_region_detector_c
         snow_stitch_images_c
-        ZXing::ZXing
+        opencv_wechat_qrcode
+        opencv_objdetect
         Qt6::Widgets
         Qt6::Svg
         Qt6::Network
@@ -5261,6 +5292,68 @@ if(WIN32 AND SNOW_SHOT_BUILD_BENCHMARKS)
         USES_TERMINAL
         VERBATIM
     )
+
+    # A standalone selector archive avoids pulling the recording/FFmpeg umbrella
+    # into this focused benchmark and matches the preserved baseline archive.
+    set(_uia_phased_lib "${CMAKE_BINARY_DIR}/selector-cargo/x86_64-pc-windows-msvc/release/snow_ui_selector_c.lib")
+    file(GLOB_RECURSE _uia_selector_sources CONFIGURE_DEPENDS
+        "${SNOW_SHOT_CAPTURE_CRATES_DIR}/crates/snow-ui-selector/src/*.rs"
+        "${SNOW_SHOT_CAPTURE_CRATES_DIR}/crates/snow-ui-selector-c/src/*.rs")
+    add_custom_command(OUTPUT "${_uia_phased_lib}"
+        COMMAND "${CMAKE_COMMAND}" -E env "CARGO_TARGET_DIR=${CMAKE_BINARY_DIR}/selector-cargo"
+            "RUSTFLAGS=-C target-feature=+crt-static"
+            "${CARGO_EXECUTABLE}" build --locked --release --target x86_64-pc-windows-msvc
+            --manifest-path "${SNOW_SHOT_CAPTURE_CRATES_DIR}/Cargo.toml" -p snow-ui-selector-c
+        DEPENDS ${_uia_selector_sources}
+            "${SNOW_SHOT_CAPTURE_CRATES_DIR}/Cargo.lock"
+            "${SNOW_SHOT_CAPTURE_CRATES_DIR}/Cargo.toml"
+            "${SNOW_SHOT_CAPTURE_CRATES_DIR}/crates/snow-ui-selector/Cargo.toml"
+            "${SNOW_SHOT_CAPTURE_CRATES_DIR}/crates/snow-ui-selector-c/Cargo.toml"
+        VERBATIM)
+    add_custom_target(snow-shot-selector-phased-rust DEPENDS "${_uia_phased_lib}")
+    add_executable(snow-shot-selector-phased-performance-benchmark
+        tests/screenshot_selector_phased_performance_benchmark.cpp
+        include/snow_shot/presentation/screenshotselectorcoordinator.h
+        src/presentation/selector/screenshotselectorcoordinator.cpp
+        src/presentation/selector/screenshotselectorserviceclient.cpp
+        src/presentation/core/screenshotintelligentselectionmodel.cpp
+        src/presentation/services/screenshotclipboardservice.cpp
+    )
+    target_include_directories(snow-shot-selector-phased-performance-benchmark PRIVATE
+        "${SNOW_SHOT_CAPTURE_CRATES_DIR}/crates/snow-ui-selector-c/include")
+    target_link_libraries(snow-shot-selector-phased-performance-benchmark PRIVATE
+        snow_shot_settings "${_uia_phased_lib}" Qt6::Widgets
+        user32 userenv ole32 oleaut32 oleacc gdi32 dwmapi ntdll ws2_32 bcrypt advapi32)
+    add_dependencies(snow-shot-selector-phased-performance-benchmark snow-shot-selector-phased-rust)
+    qt_import_plugins(snow-shot-selector-phased-performance-benchmark INCLUDE Qt6::QWindowsIntegrationPlugin)
+
+    set(SNOW_SHOT_UIA_BASELINE_DIR "" CACHE PATH "Preserved pre-refactor selector sources and standalone Rust workspace for comparison.")
+    if(SNOW_SHOT_UIA_BASELINE_DIR)
+        set(_uia_baseline_lib "${SNOW_SHOT_UIA_BASELINE_DIR}/target/x86_64-pc-windows-msvc/release/snow_ui_selector_c.lib")
+        add_custom_command(OUTPUT "${_uia_baseline_lib}"
+            COMMAND "${CMAKE_COMMAND}" -E env "CARGO_TARGET_DIR=${SNOW_SHOT_UIA_BASELINE_DIR}/target"
+                "RUSTFLAGS=-C target-feature=+crt-static"
+                "${CARGO_EXECUTABLE}" build --offline --release --target x86_64-pc-windows-msvc
+                --manifest-path "${SNOW_SHOT_UIA_BASELINE_DIR}/Cargo.toml" -p snow-ui-selector-c
+            VERBATIM)
+        add_custom_target(snow-shot-selector-baseline-rust DEPENDS "${_uia_baseline_lib}")
+        add_executable(snow-shot-selector-baseline-performance-benchmark
+            tests/screenshot_selector_phased_performance_benchmark.cpp
+            "${SNOW_SHOT_UIA_BASELINE_DIR}/snow_shot/include/snow_shot/presentation/screenshotselectorcoordinator.h"
+            "${SNOW_SHOT_UIA_BASELINE_DIR}/snow_shot/src/presentation/selector/screenshotselectorcoordinator.cpp"
+            "${SNOW_SHOT_UIA_BASELINE_DIR}/snow_shot/src/presentation/selector/screenshotselectorserviceclient.cpp"
+            src/presentation/core/screenshotintelligentselectionmodel.cpp
+            src/presentation/services/screenshotclipboardservice.cpp)
+        target_compile_definitions(snow-shot-selector-baseline-performance-benchmark PRIVATE SNOW_UIA_LEGACY_BENCHMARK)
+        target_include_directories(snow-shot-selector-baseline-performance-benchmark BEFORE PRIVATE
+            "${SNOW_SHOT_UIA_BASELINE_DIR}/snow_shot/include"
+            "${SNOW_SHOT_UIA_BASELINE_DIR}/crates/snow-ui-selector-c/include")
+        target_link_libraries(snow-shot-selector-baseline-performance-benchmark PRIVATE
+            snow_shot_settings "${_uia_baseline_lib}" Qt6::Widgets
+            user32 userenv ole32 oleaut32 oleacc gdi32 dwmapi ntdll ws2_32 bcrypt advapi32)
+        add_dependencies(snow-shot-selector-baseline-performance-benchmark snow-shot-selector-baseline-rust)
+        qt_import_plugins(snow-shot-selector-baseline-performance-benchmark INCLUDE Qt6::QWindowsIntegrationPlugin)
+    endif()
 
     # Not registered with CTest: this generates final-container fixtures through
     # the streaming encoder used by direct recording and reports Release metrics.
@@ -5475,6 +5568,26 @@ foreach(_ocr_process_host_target IN ITEMS snow_shot snow-shot-ocr-recognition-se
     endif()
 endforeach()
 unset(_ocr_process_host_target)
+
+# The in-process barcode recognition service loads the pinned WeChat QR
+# models at runtime; stage them next to every host that links the service.
+foreach(_qr_host_target IN ITEMS snow_shot snow-shot-qr-recognition-service-tests)
+    if(TARGET ${_qr_host_target})
+        add_custom_command(TARGET ${_qr_host_target} POST_BUILD
+            COMMAND "${CMAKE_COMMAND}" -E make_directory
+                "$<TARGET_FILE_DIR:${_qr_host_target}>/assets/qrcode"
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "${SNOW_SHOT_QR_MODELS_DIR}/detect.prototxt"
+                "${SNOW_SHOT_QR_MODELS_DIR}/detect.caffemodel"
+                "${SNOW_SHOT_QR_MODELS_DIR}/sr.prototxt"
+                "${SNOW_SHOT_QR_MODELS_DIR}/sr.caffemodel"
+                "$<TARGET_FILE_DIR:${_qr_host_target}>/assets/qrcode"
+            COMMENT "Staging WeChat QR models for ${_qr_host_target}"
+            VERBATIM
+        )
+    endif()
+endforeach()
+unset(_qr_host_target)
 
 if(SNOW_SHOT_ENABLE_AGGRESSIVE_RELEASE_OPTIMIZATION OR SNOW_SHOT_RELEASE_STATIC)
     snow_apply_release_options(snow_shot)
@@ -5779,6 +5892,16 @@ if(WIN32)
         DESTINATION ${CMAKE_INSTALL_BINDIR}
     )
 endif()
+
+# WeChat QR models for the in-process barcode recognition service; the runtime
+# resolves them relative to the executable as assets/qrcode.
+install(FILES
+    "${SNOW_SHOT_QR_MODELS_DIR}/detect.prototxt"
+    "${SNOW_SHOT_QR_MODELS_DIR}/detect.caffemodel"
+    "${SNOW_SHOT_QR_MODELS_DIR}/sr.prototxt"
+    "${SNOW_SHOT_QR_MODELS_DIR}/sr.caffemodel"
+    DESTINATION "${CMAKE_INSTALL_BINDIR}/assets/qrcode"
+)
 
 if(WIN32 AND NOT SNOW_SHOT_RELEASE_STATIC)
     if(SNOW_SHOT_FFMPEG_RUNTIME_FILES)

@@ -1021,17 +1021,17 @@ void externalSelectionSupportsHeldShortcuts() {
         handler.setExternalDragActive(true);
         handler.beginExternalSelectionDrag(QPointF(100, 100));
         handler.updateExternalSelectionDrag(QPointF(160, 140));
-        require(selection.normalizedSelection() == QRectF(100, 100, 60, 40),
+        require(selection.normalizedSelection() == QRectF(100, 100, 61, 41),
                 "external drag must initialize a shared marquee");
         require(dispatchShortcut(window, Qt::Key_Space, modifiers),
                 "external selection must accept Space with the activation modifier still held");
         handler.updateExternalSelectionDrag(QPointF(180, 170));
-        require(selection.normalizedSelection() == QRectF(120, 130, 60, 40),
+        require(selection.normalizedSelection() == QRectF(120, 130, 61, 41),
                 "Space must translate the external selection without resizing it");
         require(dispatchShortcutRelease(window, Qt::Key_Space, modifiers),
                 "Space release must restore the external marquee");
         handler.updateExternalSelectionDrag(QPointF(200, 180));
-        require(selection.normalizedSelection() == QRectF(120, 130, 80, 50),
+        require(selection.normalizedSelection() == QRectF(120, 130, 81, 51),
                 "resumed external resizing must retain the translated anchor");
         require(dispatchShortcut(window, Qt::Key_Shift, Qt::ShiftModifier | modifiers),
                 "external selection must accept the aspect ratio shortcut");
@@ -1052,10 +1052,10 @@ void externalSelectionSupportsHeldShortcuts() {
     require(dispatchShortcut(window, Qt::Key_Space), "early Space must be accepted");
     handler.updateExternalSelectionDrag(QPointF(160, 140));
     handler.updateExternalSelectionDrag(QPointF(100, 100));
-    require(selection.normalizedSelection() == QRectF(40, 60, 60, 40),
+    require(selection.normalizedSelection() == QRectF(40, 60, 61, 41),
             "moving back to the original press must preserve a nonempty selection");
     handler.updateExternalSelectionDrag(QPointF(-100, -100));
-    require(selection.normalizedSelection() == QRectF(0, 0, 60, 40),
+    require(selection.normalizedSelection() == QRectF(0, 0, 61, 41),
             "external translation must clamp at canvas bounds without resizing");
     static_cast<void>(dispatchShortcutRelease(window, Qt::Key_Space));
     handler.setExternalDragActive(false);
@@ -1064,7 +1064,7 @@ void externalSelectionSupportsHeldShortcuts() {
     handler.setExternalDragActive(true);
     handler.beginExternalSelectionDrag(QPointF(10, 10));
     handler.updateExternalSelectionDrag(QPointF(80, 50));
-    require(selection.normalizedSelection() == QRectF(10, 10, 70, 40),
+    require(selection.normalizedSelection() == QRectF(10, 10, 71, 41),
             "completed external gestures must not leak held shortcut state into the next drag");
     handler.setExternalDragActive(false);
 }
@@ -1123,7 +1123,7 @@ void manualSelectionUsesSharedMarqueeTransaction() {
 
     handler.handleMouseMove(nullptr, QPointF(70, 80));
     handler.handleMouseRelease(nullptr, QPointF(70, 80));
-    require(selection.normalizedSelection() == QRectF(50, 50, 20, 30),
+    require(selection.normalizedSelection() == QRectF(50, 50, 21, 31),
             "the shared marquee transaction produced the wrong selection");
     require(interaction.movingSelection() && !interaction.dragging() &&
                 captureState.sessionState == ScreenshotSessionState::Editing &&
@@ -1388,6 +1388,51 @@ void recognitionAndScrollingToolsResizeSelectionBorder() {
     require(selection.normalizedSelection() == QRectF(10, 10, 30, 20) && pauseCount == 1 &&
                 resumeCount == 1 && interaction.scrollingCapture(),
             "scrolling capture must pause during resize and restart with the new selection");
+}
+
+void selectionResizeModeAdjustsGrabOffsetAtPress() {
+    struct DragResult {
+        QRectF pressed;
+        QRectF released;
+    };
+    auto dragRightBorder = []() -> DragResult {
+        ScreenshotCaptureState captureState;
+        captureState.sessionState = ScreenshotSessionState::Editing;
+        ScreenshotDisplaySession displays;
+        ScreenshotGeometryMapper geometry;
+        ScreenshotSelectionModel selection;
+        selection.setSelectionRect(QRectF(10, 10, 20, 20));
+        ScreenshotIntelligentSelectionModel intelligent;
+        ScreenshotInteractionState interaction;
+        interaction.confirmSelection();
+        ScreenshotOverlayInputHandler handler({captureState, interaction, selection, intelligent,
+                                               geometry, displays,
+                                               ScreenshotOverlayInputActions()});
+
+        handler.handleMousePress(nullptr, QPointF(34, 20));
+        const QRectF pressed = selection.normalizedSelection();
+        handler.handleMouseMove(nullptr, QPointF(40, 20));
+        handler.handleMouseRelease(nullptr, QPointF(40, 20));
+        return {pressed, selection.normalizedSelection()};
+    };
+
+    require(storage::ScreenshotSettings().setSelectionResizeMode(
+                QStringLiteral("follow_mouse_position")),
+            "failed to enable the follow-position selection resize mode");
+    const auto positionFollow = dragRightBorder();
+    require(positionFollow.pressed == QRectF(10, 10, 25, 20),
+            "follow-position resize must adjust the selection by the grab offset at press");
+    require(positionFollow.released == QRectF(10, 10, 31, 20),
+            "follow-position resize must keep the dragged border on the pointer cell");
+
+    require(storage::ScreenshotSettings().setSelectionResizeMode(
+                QStringLiteral("follow_mouse_movement")),
+            "failed to restore the follow-movement selection resize mode");
+    const auto movementFollow = dragRightBorder();
+    require(movementFollow.pressed == QRectF(10, 10, 20, 20),
+            "follow-movement resize must not adjust the selection at press");
+    require(movementFollow.released == QRectF(10, 10, 26, 20),
+            "follow-movement resize must keep the press-time grab offset on the dragged border");
 }
 
 void completionGesturesRequireAConfirmedSelectionAndSupportedTool() {
@@ -2635,6 +2680,7 @@ int main(int argc, char** argv) {
     moveToolModificationLeavesConfirmedStageUntilRelease();
     nonMoveToolPermanentlySwitchesForSelectionResize();
     recognitionAndScrollingToolsResizeSelectionBorder();
+    selectionResizeModeAdjustsGrabOffsetAtPress();
     completionGesturesRequireAConfirmedSelectionAndSupportedTool();
     externalSelectionSupportsHeldShortcuts();
     colorCopyEndsCaptureOnlyAfterSuccessfulCopy();

@@ -332,6 +332,7 @@ pub enum CanvasFilterType {
     Grayscale,
     Inversion,
     Emboss = 4,
+    SmartErase = 5,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -624,6 +625,26 @@ pub enum FillStyle {
     Solid,
 }
 
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SerialNumberType {
+    #[default]
+    OutlinedCircle = 0,
+    SolidCircle = 1,
+    OutlinedSquare = 2,
+    SolidSquare = 3,
+}
+
+impl SerialNumberType {
+    pub fn is_square(self) -> bool {
+        matches!(self, Self::OutlinedSquare | Self::SolidSquare)
+    }
+
+    pub fn is_solid(self) -> bool {
+        matches!(self, Self::SolidCircle | Self::SolidSquare)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TextData {
     pub center: Point<f64>,
@@ -651,6 +672,8 @@ pub struct SerialNumberData {
     pub diameter: f64,
     pub rotation: f64,
     pub number: i64,
+    #[serde(default, rename = "type")]
+    pub serial_number_type: SerialNumberType,
     pub color: ColorRgba8,
     pub fill: ColorRgba8,
     pub fill_style: FillStyle,
@@ -820,7 +843,32 @@ pub struct Document {
     pub(crate) auto_filter_regions: Option<crate::AutoFilterRegionRecord>,
 }
 
+impl ElementData {
+    pub fn is_smart_erase(&self) -> bool {
+        match self {
+            Self::Filter(f) => f.filter_type == CanvasFilterType::SmartErase,
+            Self::PenFilter(f) => f.filter_type == CanvasFilterType::SmartErase,
+            _ => false,
+        }
+    }
+
+    pub fn normalize_smart_erase(&mut self) {
+        match self {
+            Self::Filter(f) if f.filter_type == CanvasFilterType::SmartErase => f.strength = 0.5,
+            Self::PenFilter(f) if f.filter_type == CanvasFilterType::SmartErase => f.strength = 0.5,
+            _ => {}
+        }
+    }
+}
+
 impl Document {
+    pub fn normalize_filter_invariants(&mut self) {
+        for element in self.slots.iter_mut().flatten() {
+            element.data.normalize_smart_erase();
+        }
+        self.normalize_auto_filter_order(&mut DocumentDelta::default());
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -1173,6 +1221,20 @@ impl Document {
         }
 
         let mut inverse = Vec::with_capacity(transaction.operations.len());
+        // Type conversion changes fixed-layer membership. Its inverse must restore
+        // the previous ordinary layer position as well as the previous type.
+        let previous_order = transaction
+            .operations
+            .iter()
+            .any(|operation| {
+                if let Operation::UpdateElementData { id, data } = operation {
+                    self.element(*id)
+                        .is_ok_and(|element| element.data.is_smart_erase() != data.is_smart_erase())
+                } else {
+                    false
+                }
+            })
+            .then(|| self.paint_order.clone());
         let mut changes = DocumentDelta::default();
         let start_revision = self.revision;
         let start_next_index = self.next_index;
@@ -1209,6 +1271,12 @@ impl Document {
         }
         self.normalize_auto_filter_order(&mut changes);
         inverse.reverse();
+        if let Some(ids) = previous_order.filter(|ids| !ids.is_empty()) {
+            inverse.push(Operation::ReorderElements {
+                ids,
+                paint_index: 0,
+            });
+        }
         self.revision.0 = self.revision.0.wrapping_add(1);
         let document_revision = self.revision;
 
@@ -1336,6 +1404,28 @@ impl Document {
         operation: &Operation,
         changes: &mut ChangeSet,
     ) -> Result<Operation, ErrorCode> {
+        let mut normalized;
+        let operation = match operation {
+            Operation::InsertElement { data, .. } | Operation::UpdateElementData { data, .. }
+                if data.is_smart_erase() =>
+            {
+                normalized = operation.clone();
+                match &mut normalized {
+                    Operation::InsertElement { data, .. }
+                    | Operation::UpdateElementData { data, .. } => data.normalize_smart_erase(),
+                    _ => unreachable!(),
+                }
+                &normalized
+            }
+            Operation::RestoreElement { element, .. } if element.data.is_smart_erase() => {
+                normalized = operation.clone();
+                if let Operation::RestoreElement { element, .. } = &mut normalized {
+                    element.data.normalize_smart_erase();
+                }
+                &normalized
+            }
+            _ => operation,
+        };
         match operation {
             Operation::UpdateAutoFilterRegions { record } => {
                 if let Some(record) = record {
