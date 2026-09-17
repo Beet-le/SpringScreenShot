@@ -191,9 +191,9 @@ void builtInCatalogIsCompleteAndValid() {
     }
     require(sectionCount == 38, "catalog must contain thirty-eight sections");
 #ifdef Q_OS_MACOS
-    require(itemCount == 159, "the macOS catalog omits DirectML acceleration");
+    require(itemCount == 160, "the macOS catalog omits DirectML acceleration");
 #else
-    require(itemCount == 160, "catalog must contain one hundred sixty items");
+    require(itemCount == 161, "catalog must contain one hundred sixty-one items");
 #endif
     require(foundUpdates, "catalog must contain the update mode item");
     const auto* pinnedEditor =
@@ -737,15 +737,16 @@ void builtInCatalogIsCompleteAndValid() {
          "screenshot_shortcuts/next_screenshot_history"},
         {10, "screenshot-shortcut.select_previously_selected_area",
          "screenshot_shortcuts/select_previously_selected_area"},
-        {11, "screenshot-shortcut.copy_color", "screenshot_shortcuts/copy_color"},
-        {12, "screenshot-shortcut.pin_to_screen", "screenshot_shortcuts/pin_to_screen"},
-        {13, "screenshot-shortcut.video_recording", "screenshot_shortcuts/video_recording"},
-        {14, "screenshot-shortcut.scrolling_screenshot",
+        {11, "screenshot-shortcut.recapture", "screenshot_shortcuts/recapture"},
+        {12, "screenshot-shortcut.copy_color", "screenshot_shortcuts/copy_color"},
+        {13, "screenshot-shortcut.pin_to_screen", "screenshot_shortcuts/pin_to_screen"},
+        {14, "screenshot-shortcut.video_recording", "screenshot_shortcuts/video_recording"},
+        {15, "screenshot-shortcut.scrolling_screenshot",
          "screenshot_shortcuts/scrolling_screenshot"},
-        {15, "screenshot-shortcut.quick_save", "screenshot_shortcuts/quick_save"},
-        {16, "screenshot-shortcut.save_as_file", "screenshot_shortcuts/save_as_file"},
-        {17, "screenshot-shortcut.cancel_screenshot", "screenshot_shortcuts/cancel_screenshot"},
-        {18, "screenshot-shortcut.copy_to_clipboard", "screenshot_shortcuts/copy_to_clipboard"},
+        {16, "screenshot-shortcut.quick_save", "screenshot_shortcuts/quick_save"},
+        {17, "screenshot-shortcut.save_as_file", "screenshot_shortcuts/save_as_file"},
+        {18, "screenshot-shortcut.cancel_screenshot", "screenshot_shortcuts/cancel_screenshot"},
+        {19, "screenshot-shortcut.copy_to_clipboard", "screenshot_shortcuts/copy_to_clipboard"},
     };
     bool newScreenshotShortcutContractsMatch = screenshotShortcuts != nullptr;
     for (const ScreenshotShortcutContract& contract : newScreenshotShortcutContracts) {
@@ -759,7 +760,7 @@ void builtInCatalogIsCompleteAndValid() {
     require(
         applicationShortcutsPage != nullptr && applicationShortcutsPage->sections.size() == 5 &&
             everyHotkeySectionUsesTwoColumns && screenshotShortcuts != nullptr &&
-            screenshotShortcuts->items.size() == 19 &&
+            screenshotShortcuts->items.size() == 20 &&
             screenshotShortcuts->itemLayout == settings::SettingsSectionItemLayout::TwoColumnGrid &&
             screenshotShortcuts->items.constFirst().id ==
                 QStringLiteral("screenshot-shortcut.move_tool") &&
@@ -777,19 +778,20 @@ void builtInCatalogIsCompleteAndValid() {
                 QStringLiteral("Next screenshot history") &&
             screenshotShortcuts->items.at(10).title.translated() ==
                 QStringLiteral("Select previously selected area") &&
-            screenshotShortcuts->items.at(11).title.translated() == QStringLiteral("Copy color") &&
-            screenshotShortcuts->items.at(12).title.translated() ==
-                QStringLiteral("Pin to screen") &&
+            screenshotShortcuts->items.at(11).title.translated() == QStringLiteral("Recapture") &&
+            screenshotShortcuts->items.at(12).title.translated() == QStringLiteral("Copy color") &&
             screenshotShortcuts->items.at(13).title.translated() ==
-                QStringLiteral("Video recording") &&
+                QStringLiteral("Pin to screen") &&
             screenshotShortcuts->items.at(14).title.translated() ==
+                QStringLiteral("Video recording") &&
+            screenshotShortcuts->items.at(15).title.translated() ==
                 QStringLiteral("Scrolling screenshot") &&
-            screenshotShortcuts->items.at(15).title.translated() == QStringLiteral("Quick save") &&
-            screenshotShortcuts->items.at(16).title.translated() ==
-                QStringLiteral("Save as file") &&
+            screenshotShortcuts->items.at(16).title.translated() == QStringLiteral("Quick save") &&
             screenshotShortcuts->items.at(17).title.translated() ==
-                QStringLiteral("Cancel screenshot") &&
+                QStringLiteral("Save as file") &&
             screenshotShortcuts->items.at(18).title.translated() ==
+                QStringLiteral("Cancel screenshot") &&
+            screenshotShortcuts->items.at(19).title.translated() ==
                 QStringLiteral("Copy to clipboard") &&
             newScreenshotShortcutContractsMatch &&
             std::get<settings::SettingsLocalShortcutDefinition>(
@@ -1451,9 +1453,9 @@ void invalidCatalogReportsAllConformanceErrors() {
 void searchIndexIsGeneratedAndRanked() {
     settings::SettingsSearchIndex index(settings::builtInSettingsRegistry());
 #ifdef Q_OS_MACOS
-    constexpr qsizetype expectedNodes = 209;
-#else
     constexpr qsizetype expectedNodes = 210;
+#else
+    constexpr qsizetype expectedNodes = 211;
 #endif
     require(index.entries().size() == expectedNodes &&
                 index.search(QString()).size() == expectedNodes,

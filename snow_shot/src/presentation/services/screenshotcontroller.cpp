@@ -9,6 +9,7 @@
 #include "snow_shot/shortcuts/shortcutdisplayservice.h"
 
 #include "snow_shot/platform/physicalcursor.h"
+#include "snow_shot/platform/windows/windowchrome.h"
 #include "snow_shot/presentation/screenshotcaptureruntimeadapter.h"
 #include "snow_shot/presentation/screenshotcapturestate.h"
 #include "snow_shot/presentation/screenshotcaptureworkflow.h"
@@ -65,6 +66,8 @@
 #include "snow_shot/presentation/windowshortcutmanager.h"
 #include "../pinned/screenshotpintoperfinstrumentation.h"
 #include "../recording/screenshotrecordingworkflow.h"
+#include "../capture/windowcaptureexclusion.h"
+#include "../capture/windowinputtransparency.h"
 
 #include "snow_draw_engine_qt/snow_canvas_runtime.h"
 #include "snow_draw_engine_qt/snow_canvas_widget.h"
@@ -74,6 +77,7 @@
 #include <QCoreApplication>
 #include <QCursor>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QGuiApplication>
@@ -110,6 +114,8 @@ namespace {
 constexpr auto kCopyMessageKey = "screenshot-copy";
 constexpr auto kSaveMessageKey = "screenshot-save";
 constexpr auto kPinClipboardMessageKey = "screenshot-pin-clipboard";
+constexpr int kRecaptureHideTimeoutMs = 1000;
+constexpr int kRecaptureHidePollIntervalMs = 10;
 
 template <typename Function> class ScopeExit final {
   public:
@@ -308,9 +314,16 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     void setCanvasColorSamplingShortcutScope(bool enabled);
     void clearCanvasColorSampling();
     [[nodiscard]] bool moveCursorOnePixel(snow_shot::platform::PhysicalCursorDirection direction);
+    [[nodiscard]] bool canRecapture() const;
+    void prepareRecaptureWindows(quint64 generation);
+    void waitForRecaptureWindowsHidden(quint64 generation);
+    void beginRecaptureCapture(quint64 generation);
+    void finishRecapture(bool succeeded, bool reportFailure);
+    void restoreRecaptureWindows();
 
     void undoCanvasEdit() override;
     void redoCanvasEdit() override;
+    void requestRecapture() override;
     void setMoveTool() override;
     void setSelectTool() override;
     void setShapeTool() override;
@@ -474,6 +487,15 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     QPointer<adqt::widgets::AdColorPicker> m_canvasColorSamplingTarget;
     QMetaObject::Connection m_canvasColorSamplingDestroyedConnection;
     bool m_canvasColorSamplingCursorOverridden = false;
+    std::unique_ptr<snow_shot::presentation::WindowCaptureExclusion> m_recaptureExclusion;
+    std::unique_ptr<snow_shot::presentation::WindowInputTransparency> m_recaptureInputTransparency;
+#if defined(Q_OS_WIN) || defined(_WIN32)
+    std::unique_ptr<snow_shot::platform::windows::CursorRefresh> m_recaptureCursorRefresh;
+#endif
+    QVector<QPointer<QWidget>> m_recaptureHiddenWindows;
+    QElapsedTimer m_recaptureHideTimer;
+    quint64 m_recaptureGeneration = 0;
+    bool m_recaptureBusy = false;
     QString m_pendingHistoryEditRecordId;
     quint64 m_imageExportGeneration = 0;
     QSet<quint64> m_activeImageExports;
@@ -1278,6 +1300,9 @@ void ScreenshotController::Impl::createCaptureWorkflow() {
             []() { return snow_shot::storage::ScreenshotSettings().restoreOriginalScreenColors(); },
             []() { return snow_shot::storage::ScreenshotSettings().captureCursor(); },
             [this]() { return m_selectionSettings->selectionTarget(); },
+            [this](bool succeeded, const QString& errorMessage) {
+                finishRecapture(succeeded, !succeeded && !errorMessage.isEmpty());
+            },
         });
 }
 
@@ -1476,6 +1501,7 @@ void ScreenshotController::Impl::createOverlayInputPipeline() {
         [this](ScreenshotIntelligentSelectionTarget target) {
             m_selectionSettings->setSelectionTarget(target);
         },
+        [this]() { return canRecapture(); },
     };
     m_overlayInputHandler =
         std::make_unique<ScreenshotOverlayInputHandler>(ScreenshotOverlayInputHandlerContext{
@@ -1530,6 +1556,215 @@ bool ScreenshotController::Impl::moveCursorOnePixel(
     }
     m_colorPickerController->updateAfterCursorMove(result.position.value(), context);
     return true;
+}
+
+bool ScreenshotController::Impl::canRecapture() const {
+    if (m_recaptureBusy || m_captureWorkflow == nullptr ||
+        m_captureWorkflow->recaptureInProgress() ||
+        m_captureState.sessionState != ScreenshotSessionState::Editing ||
+        m_captureState.captureInProgress || !m_interaction.moveToolActive() ||
+        m_interaction.dragging() || m_interaction.scrollingCapture()) {
+        return false;
+    }
+    if (snow_shot::presentation::WindowShortcutManager::focusAcceptsTextInput(
+            QApplication::focusWidget())) {
+        return false;
+    }
+    bool textEditing = false;
+    m_displaySession.forEachOverlay([&textEditing](qsizetype, ScreenshotOverlayWindow* overlay) {
+        if (overlay != nullptr && overlay->canvas() != nullptr &&
+            overlay->canvas()->hasActiveTextEditing()) {
+            textEditing = true;
+        }
+    });
+    return !textEditing;
+}
+
+void ScreenshotController::Impl::requestRecapture() {
+    if (!canRecapture()) {
+        return;
+    }
+
+    m_recaptureBusy = true;
+    const quint64 generation = ++m_recaptureGeneration;
+    if (ScreenshotToolbarWindow* toolbar = m_overlayCoordinator->toolbar()) {
+        toolbar->setRecaptureBusy(true);
+    }
+#if defined(Q_OS_WIN) || defined(_WIN32)
+    if (snow_shot::storage::ScreenshotSettings().captureCursor()) {
+        m_recaptureCursorRefresh =
+            std::make_unique<snow_shot::platform::windows::CursorRefresh>(&owner);
+    }
+#endif
+    prepareRecaptureWindows(generation);
+}
+
+void ScreenshotController::Impl::prepareRecaptureWindows(quint64 generation) {
+    if (!m_recaptureBusy || generation != m_recaptureGeneration) {
+        return;
+    }
+
+    QVector<QWidget*> visibleWindows;
+    m_displaySession.forEachOverlay([&visibleWindows](qsizetype, ScreenshotOverlayWindow* overlay) {
+        if (overlay != nullptr && overlay->isVisible() && !visibleWindows.contains(overlay)) {
+            visibleWindows.push_back(overlay);
+        }
+    });
+    if (ScreenshotToolbarWindow* toolbar = m_overlayCoordinator->toolbar();
+        toolbar != nullptr && toolbar->isVisible() && !visibleWindows.contains(toolbar)) {
+        visibleWindows.push_back(toolbar);
+    }
+
+#if defined(Q_OS_WIN) || defined(_WIN32)
+    if (snow_shot::platform::windows::supportsWindowCaptureExclusion()) {
+        m_recaptureExclusion = std::make_unique<snow_shot::presentation::WindowCaptureExclusion>(
+            snow_shot::platform::windows::setWindowExcludedFromCapture);
+        m_recaptureInputTransparency =
+            std::make_unique<snow_shot::presentation::WindowInputTransparency>(
+                snow_shot::platform::windows::setWindowInputTransparent);
+        bool excludedAll = true;
+        for (QWidget* window : std::as_const(visibleWindows)) {
+            if (!m_recaptureExclusion->exclude(window) ||
+                !m_recaptureInputTransparency->enable(window)) {
+                excludedAll = false;
+                break;
+            }
+        }
+        if (excludedAll) {
+            beginRecaptureCapture(generation);
+            return;
+        }
+        m_recaptureExclusion->restore();
+        m_recaptureExclusion.reset();
+        m_recaptureInputTransparency.reset();
+    }
+#endif
+
+    m_recaptureHiddenWindows.clear();
+    m_recaptureHiddenWindows.reserve(visibleWindows.size());
+    for (QWidget* window : std::as_const(visibleWindows)) {
+        m_recaptureHiddenWindows.push_back(window);
+        window->hide();
+    }
+    m_recaptureHideTimer.start();
+    QTimer::singleShot(0, &owner,
+                       [this, generation]() { waitForRecaptureWindowsHidden(generation); });
+}
+
+void ScreenshotController::Impl::waitForRecaptureWindowsHidden(quint64 generation) {
+    if (!m_recaptureBusy || generation != m_recaptureGeneration) {
+        return;
+    }
+
+    bool hidden = true;
+    for (const QPointer<QWidget>& window : std::as_const(m_recaptureHiddenWindows)) {
+        if (window.isNull()) {
+            continue;
+        }
+        bool nativeVisible = false;
+#if defined(Q_OS_WIN) || defined(_WIN32)
+        nativeVisible = snow_shot::platform::windows::isNativeWindowVisible(window.data());
+#endif
+        if (window->isVisible() || nativeVisible) {
+            hidden = false;
+            break;
+        }
+    }
+
+    if (hidden) {
+#if defined(Q_OS_WIN) || defined(_WIN32)
+        if (!snow_shot::platform::windows::flushWindowComposition()) {
+            finishRecapture(false, true);
+            return;
+        }
+#endif
+        beginRecaptureCapture(generation);
+        return;
+    }
+    if (m_recaptureHideTimer.hasExpired(kRecaptureHideTimeoutMs)) {
+        finishRecapture(false, true);
+        return;
+    }
+    QTimer::singleShot(kRecaptureHidePollIntervalMs, &owner,
+                       [this, generation]() { waitForRecaptureWindowsHidden(generation); });
+}
+
+void ScreenshotController::Impl::beginRecaptureCapture(quint64 generation) {
+    if (!m_recaptureBusy || generation != m_recaptureGeneration || m_captureWorkflow == nullptr) {
+        finishRecapture(false, false);
+        return;
+    }
+#if defined(Q_OS_WIN) || defined(_WIN32)
+    if (m_recaptureCursorRefresh != nullptr) {
+        m_recaptureCursorRefresh->refresh([this, generation](bool ready) {
+            if (!m_recaptureBusy || generation != m_recaptureGeneration) {
+                return;
+            }
+            if (!ready || !m_captureWorkflow->startRecapture()) {
+                finishRecapture(false, true);
+            }
+        });
+        return;
+    }
+#endif
+    if (!m_captureWorkflow->startRecapture()) {
+        finishRecapture(false, false);
+    }
+}
+
+void ScreenshotController::Impl::restoreRecaptureWindows() {
+#if defined(Q_OS_WIN) || defined(_WIN32)
+    m_recaptureCursorRefresh.reset();
+    const bool inputSurfacesChanged =
+        m_recaptureInputTransparency != nullptr || !m_recaptureHiddenWindows.isEmpty();
+#endif
+    m_recaptureInputTransparency.reset();
+    if (m_recaptureExclusion != nullptr) {
+        m_recaptureExclusion->restore();
+        m_recaptureExclusion.reset();
+    }
+    for (const QPointer<QWidget>& window : std::as_const(m_recaptureHiddenWindows)) {
+        if (!window.isNull()) {
+            window->show();
+        }
+    }
+    m_recaptureHiddenWindows.clear();
+#if defined(Q_OS_WIN) || defined(_WIN32)
+    if (inputSurfacesChanged && !snow_shot::platform::windows::refreshCursorUnderPointer()) {
+        qWarning("Could not refresh the cursor after restoring recapture windows");
+    }
+#endif
+}
+
+void ScreenshotController::Impl::finishRecapture(bool succeeded, bool reportFailure) {
+    if (!m_recaptureBusy) {
+        return;
+    }
+    ++m_recaptureGeneration;
+    restoreRecaptureWindows();
+    m_recaptureBusy = false;
+    if (ScreenshotToolbarWindow* toolbar =
+            m_overlayCoordinator != nullptr ? m_overlayCoordinator->toolbar() : nullptr) {
+        toolbar->setRecaptureBusy(false);
+    }
+
+    if (succeeded) {
+        ++m_captureEpoch;
+        invalidateRecognitionSession();
+        if (m_autoFilterController != nullptr) {
+            m_autoFilterController->resetSession();
+        }
+        if (m_historyService != nullptr) {
+            m_historyService->resetCaptureNavigation();
+        }
+        return;
+    }
+    if (reportFailure && m_messages != nullptr &&
+        m_captureState.sessionState == ScreenshotSessionState::Editing) {
+        m_messages->error(
+            QStringLiteral("recapture"),
+            QCoreApplication::translate("ScreenshotController", "Could not recapture the screen"));
+    }
 }
 
 void ScreenshotController::Impl::createToolbarCommands() {
@@ -3987,6 +4222,7 @@ void ScreenshotController::Impl::handleSelectionConfirmed() {
 }
 
 void ScreenshotController::Impl::shutdown() {
+    finishRecapture(false, false);
     if (auto cancel = std::exchange(m_cancelSaveDialog, {}))
         cancel();
     clearCanvasColorSampling();
