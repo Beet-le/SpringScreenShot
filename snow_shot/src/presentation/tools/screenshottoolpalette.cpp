@@ -77,6 +77,7 @@ constexpr int kRecordingSettingsColorPickerWidth = 154;
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Grayscale"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Inversion"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Emboss"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Smart Erase"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Filter intensity"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Adjust filter intensity"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Opacity"),
@@ -239,7 +240,8 @@ bool hasSelectedCanvasElements(const SnowCanvasStyleToolbarState& state) {
 }
 
 bool filterTypeSupportsIntensity(SnowCanvasFilterType type) {
-    return type != SnowCanvasFilterType::Grayscale && type != SnowCanvasFilterType::Inversion;
+    return type != SnowCanvasFilterType::Grayscale && type != SnowCanvasFilterType::Inversion &&
+           type != SnowCanvasFilterType::SmartErase;
 }
 
 bool toolUsesActionToolbar(ScreenshotToolPalette::Tool tool) {
@@ -2136,8 +2138,9 @@ void ScreenshotToolPalette::setStyleToolbarState(const SnowCanvasStyleToolbarSta
             (mixedChanged & SnowCanvasFilterStylePropertyStrokeWidth) != 0;
         const bool mixedType = (state.filterStyleMixed & SnowCanvasFilterStylePropertyType) != 0;
         if (intensitySlider != nullptr) {
-            intensitySlider->setEnabled(mixedType ||
-                                        filterTypeSupportsIntensity(state.filterStyle.type));
+            intensitySlider->setEnabled(
+                (state.filterStyleMixed & SnowCanvasFilterStyleMixedContainsSmartErase) == 0 &&
+                (mixedType || filterTypeSupportsIntensity(state.filterStyle.type)));
         }
         FilterEditor& editor = activeFilterEditor;
         updateFilterIntensityIcon(editor);
@@ -4826,7 +4829,9 @@ void ScreenshotToolPalette::refreshFilterEditorState(FilterEditor& editor, bool 
             QStringLiteral("%1%").arg(editor.intensitySlider->value()));
         editor.intensitySlider->setProperty("mixed",
                                             (mixed & SnowCanvasFilterStylePropertyStrength) != 0);
-        editor.intensitySlider->setEnabled(mixedType || filterTypeSupportsIntensity(style.type));
+        editor.intensitySlider->setEnabled((mixed & SnowCanvasFilterStyleMixedContainsSmartErase) ==
+                                               0 &&
+                                           (mixedType || filterTypeSupportsIntensity(style.type)));
     }
     updateFilterIntensityIcon(editor);
     if (refreshWidth && editor.tool == Tool::PenFilter) {
@@ -4938,6 +4943,7 @@ ScreenshotToolPalette::createFilterEditor(const FilterEditorConfig& config) {
     };
 
     ScreenshotToolPaletteFilterFamilyConfig familyConfig;
+    familyConfig.allowSmartErase = tool != Tool::AutoFilter;
     familyConfig.controlsObjectName = config.controlsObjectName;
     familyConfig.typeSelectObjectName = config.typeSelectObjectName;
     familyConfig.intensityIconObjectName = config.intensityIconObjectName;
