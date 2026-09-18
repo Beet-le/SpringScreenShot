@@ -25,6 +25,7 @@ const QStringList kDrawingToolbarItemIds = {
     QStringLiteral("text"),      QStringLiteral("serial-number"), QStringLiteral("filter"),
     QStringLiteral("eraser"),    QStringLiteral("watermark"),
 };
+const QStringList kLastDrawingToolIds = QStringList{QStringLiteral("")} + kDrawingToolbarItemIds;
 
 const QStringList kActionToolbarItemIds = {
     QStringLiteral("barcode-recognition"),  QStringLiteral("table-recognition"),
@@ -368,6 +369,7 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
       QStringLiteral("pen-highlight"), QStringLiteral("spotlight"),
       QStringLiteral("rectangle-filter"), QStringLiteral("pen-filter"), QStringLiteral("text"),
       QStringLiteral("serial-number"), QStringLiteral("eraser"), QStringLiteral("watermark")}},
+    {QStringLiteral("drawing/remember_last_used_tool"), false, ConfigurationValueKind::Boolean},
     {QStringLiteral("drawing/shape_style"), QJsonObject(), ConfigurationValueKind::Structured},
     {QStringLiteral("drawing/arrow_style"), QJsonObject(), ConfigurationValueKind::Structured},
     {QStringLiteral("drawing/line_style"), QJsonObject(), ConfigurationValueKind::Structured},
@@ -736,6 +738,8 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      ConfigurationValueKind::String,
      std::nullopt,
      {QStringLiteral("rectangle-highlight"), QStringLiteral("pen-highlight")}},
+    {QStringLiteral("screenshot_toolbar/last_drawing_tool"), QString(),
+     ConfigurationValueKind::String, std::nullopt, kLastDrawingToolIds},
     {QStringLiteral("screenshot_toolbar/layout"),
      defaultToolbarLayout(defaultDrawingToolbarPositions()), ConfigurationValueKind::Structured},
     {QStringLiteral("pin_to_screen/action_tools_layout"),

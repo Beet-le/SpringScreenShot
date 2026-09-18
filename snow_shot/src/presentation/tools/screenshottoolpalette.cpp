@@ -3528,7 +3528,7 @@ void ScreenshotToolPalette::clearDrawingToolGroups() {
 void ScreenshotToolPalette::activateDrawingTool(Tool tool) {
     // Toolbar activations express user intent; reflective canvas synchronization
     // must not rewrite the remembered drawing modes.
-    rememberDrawingMode(tool);
+    recordUserDrawingToolIntent(tool);
     setActiveTool(tool);
     switch (tool) {
     case Tool::Move:
@@ -3677,6 +3677,33 @@ void ScreenshotToolPalette::rememberDrawingMode(Tool tool) {
         m_lastFilterTool = tool;
         static_cast<void>(settings.setLastFilterTool(filterToolSetting(tool)));
     }
+}
+
+void ScreenshotToolPalette::rememberLastUsedDrawingTool(Tool tool) {
+    const QString itemId = drawingToolItemId(tool);
+    if (itemId.isEmpty()) {
+        return;
+    }
+    // Like the remembered highlight/filter modes, the last used tool must
+    // outlive this palette: capture sessions rebuild the toolbar and pin edit
+    // sessions recreate it, so the memory lives in the persisted settings.
+    const toolbar_settings::ScreenshotToolbarSettings settings;
+    if (settings.lastDrawingTool() != itemId) {
+        static_cast<void>(settings.setLastDrawingTool(itemId));
+    }
+}
+
+void ScreenshotToolPalette::recordUserDrawingToolIntent(Tool tool) {
+    rememberDrawingMode(tool);
+    rememberLastUsedDrawingTool(tool);
+}
+
+bool ScreenshotToolPalette::drawingToolCanBeActivated(Tool tool) const {
+    if (drawingToolItemId(tool).isEmpty() || isRecordingUnavailableTool(tool)) {
+        return false;
+    }
+    adqt::widgets::AdButton* button = drawingToolEntryButton(tool);
+    return button != nullptr && button->isEnabled();
 }
 
 bool ScreenshotToolPalette::activateToolFromToolbar(Tool tool, bool toggleVisibleButton) {
@@ -4809,6 +4836,27 @@ bool ScreenshotToolPalette::activateToolShortcut(Tool tool) {
                               : activateActionTool(actionId, false);
 }
 
+bool ScreenshotToolPalette::activateRememberedDrawingTool() {
+    if (!toolbar_settings::DrawingSettings().rememberLastUsedTool()) {
+        return false;
+    }
+    const QString itemId = toolbar_settings::ScreenshotToolbarSettings().lastDrawingTool();
+    const toolbar_layout::Descriptor* descriptor =
+        itemId.isEmpty() ? nullptr : toolbar_layout::descriptor(itemId);
+    if (descriptor == nullptr) {
+        return false;
+    }
+    const Tool tool = rememberedDrawingMode(drawingToolFromItem(descriptor->item));
+    if (!drawingToolCanBeActivated(tool)) {
+        return false;
+    }
+    if (m_activeTool.has_value() && *m_activeTool == tool) {
+        return true;
+    }
+    activateDrawingTool(tool);
+    return true;
+}
+
 bool ScreenshotToolPalette::activateScreenshotShortcut(const QString& actionId) {
     if (actionId == QStringLiteral("move_tool")) {
         return activateToolShortcut(Tool::Move);
@@ -5008,7 +5056,7 @@ QWidget* ScreenshotToolPalette::createStyleModeSelector(
         createScreenshotToolPaletteRadioEditor(parent, config, styleButtonMetrics(m_physicalScale));
     connect(editor.group, &QButtonGroup::idClicked, this, [this](int id) {
         const Tool tool = static_cast<Tool>(id);
-        rememberDrawingMode(tool);
+        recordUserDrawingToolIntent(tool);
         setActiveTool(tool);
         switch (tool) {
         case Tool::RectangleHighlight:
