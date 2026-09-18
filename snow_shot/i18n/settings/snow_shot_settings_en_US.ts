@@ -1461,6 +1461,10 @@
             <translation>JPEG XL</translation>
         </message>
         <message>
+            <source>Jump to Translation Page</source>
+            <translation>Jump to Translation Page</translation>
+        </message>
+        <message>
             <source>Keep records permanently</source>
             <translation>Keep records permanently</translation>
         </message>
@@ -2231,6 +2235,10 @@
         <message>
             <source>Shortcut keys for screenshot tools and cursor movement</source>
             <translation>Shortcut keys for screenshot tools and cursor movement</translation>
+        </message>
+        <message>
+            <source>Show a button in the text recognition toolbar that sends recognized text to the Translation page.</source>
+            <translation>Show a button in the text recognition toolbar that sends recognized text to the Translation page.</translation>
         </message>
         <message>
             <source>Show main interface</source>

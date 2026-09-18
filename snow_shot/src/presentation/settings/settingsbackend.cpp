@@ -429,6 +429,8 @@ bool BuiltInSettingsBackend::switchValue(SettingsSwitchBinding binding) const {
         return storage::ExtendedFeaturesSettings().standaloneTranslationWindow();
     case SettingsSwitchBinding::TranslationPageEnabled:
         return storage::ExtendedFeaturesSettings().translationPageEnabled();
+    case SettingsSwitchBinding::JumpToTranslationPage:
+        return storage::ExtendedFeaturesSettings().jumpToTranslationPage();
     case SettingsSwitchBinding::OriginalImageTranslation:
         return storage::ScreenshotTranslationSettings().originalImageTranslationEnabled();
     case SettingsSwitchBinding::LoopAnimatedImages:
@@ -468,7 +470,8 @@ bool BuiltInSettingsBackend::switchEnabled(SettingsSwitchBinding binding) const 
             .launchEnabled;
     if (binding == SettingsSwitchBinding::OcrModelHotStart)
         return switchValue(SettingsSwitchBinding::OcrResidentProcess);
-    if (binding == SettingsSwitchBinding::StandaloneTranslationWindow) {
+    if (binding == SettingsSwitchBinding::StandaloneTranslationWindow ||
+        binding == SettingsSwitchBinding::JumpToTranslationPage) {
         return storage::ExtendedFeaturesSettings().translationPageEnabled();
     }
     if (binding == SettingsSwitchBinding::AutoStartAtBoot) {
@@ -550,6 +553,10 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     if (binding == SettingsSwitchBinding::TranslationPageEnabled) {
         return storage::ExtendedFeaturesSettings().setTranslationPageEnabled(value);
     }
+    if (binding == SettingsSwitchBinding::JumpToTranslationPage) {
+        return switchEnabled(binding) &&
+               storage::ExtendedFeaturesSettings().setJumpToTranslationPage(value);
+    }
     if (binding == SettingsSwitchBinding::OriginalImageTranslation) {
         return storage::ScreenshotTranslationSettings().setOriginalImageTranslationEnabled(value);
     }
@@ -607,6 +614,7 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     case SettingsSwitchBinding::PinAutomaticTextRecognition:
     case SettingsSwitchBinding::PinAutoResizeWindow:
     case SettingsSwitchBinding::TranslationPageEnabled:
+    case SettingsSwitchBinding::JumpToTranslationPage:
     case SettingsSwitchBinding::StandaloneTranslationWindow:
     case SettingsSwitchBinding::OriginalImageTranslation:
     case SettingsSwitchBinding::LoopAnimatedImages:

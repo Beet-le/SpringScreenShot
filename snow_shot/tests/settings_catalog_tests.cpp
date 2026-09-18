@@ -116,6 +116,22 @@ void builtInCatalogIsCompleteAndValid() {
                      translationToggle->configurationKey)
                      .toBool(true),
             "extended translation page exposes a persisted default-off toggle");
+    const auto* jumpToggle =
+        catalog.item({QStringLiteral("extended-features"), QStringLiteral("translation"),
+                      QStringLiteral("extended-features.jump-to-translation-page")});
+    const auto* extendedTranslation =
+        catalog.section(QStringLiteral("extended-features"), QStringLiteral("translation"));
+    require(jumpToggle != nullptr && extendedTranslation != nullptr &&
+                extendedTranslation->items.size() == 3 &&
+                extendedTranslation->items.at(1).id == jumpToggle->id &&
+                jumpToggle->title.translated() == QStringLiteral("Jump to Translation Page") &&
+                jumpToggle->configurationKey ==
+                    QStringLiteral("extended_features/jump_to_translation_page") &&
+                std::get<settings::SettingsSwitchDefinition>(jumpToggle->payload).binding ==
+                    settings::SettingsSwitchBinding::JumpToTranslationPage &&
+                !snow_shot::storage::ConfigurationSchema::defaultValue(jumpToggle->configurationKey)
+                     .toBool(true),
+            "OCR translation jump exposes an ordered persisted default-off switch");
     const auto* standaloneToggle =
         catalog.item({QStringLiteral("extended-features"), QStringLiteral("translation"),
                       QStringLiteral("extended-features.standalone-translation-window")});

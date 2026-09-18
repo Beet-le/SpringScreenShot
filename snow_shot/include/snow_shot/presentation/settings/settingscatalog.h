@@ -129,6 +129,7 @@ enum class SettingsSwitchBinding {
     PinAutoResizeWindow,
     OriginalImageTranslation,
     TranslationPageEnabled,
+    JumpToTranslationPage,
     StandaloneTranslationWindow,
     LoopAnimatedImages,
     ScreenRecordingCaptureToolbar,
