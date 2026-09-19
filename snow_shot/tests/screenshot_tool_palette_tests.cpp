@@ -3061,6 +3061,8 @@ void mainToolbarGroupPopoversRecreateTheirOptions() {
     actionOptions.actionToolsLayout = snow_shot::storage::ScreenshotToolbarLayout{
         {{QStringLiteral("barcode-recognition"), QStringLiteral("table-recognition")}}, {}};
     ScreenshotToolPalette actionPalette(actionOptions);
+    actionPalette.show();
+    QCoreApplication::processEvents();
     auto* actionTrigger = actionPalette.findChild<adqt::widgets::AdButton*>(
         QStringLiteral("screenshotTableQrButton"));
     adqt::widgets::AdPopover* actionPopover = popoverForTrigger(actionTrigger);
