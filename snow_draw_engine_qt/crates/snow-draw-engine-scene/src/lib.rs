@@ -33,10 +33,10 @@ use snow_draw_engine_display::{
     ViewportPatch, full_surface_dirty_region,
 };
 use snow_draw_engine_document::{
-    ArrowData, ElementData, ElementId, FillStyle, RectangleData, SerialNumberData, TextData,
-    TextHorizontalAlign, TextVerticalAlign, arrow_bounds, arrow_is_degenerate,
+    ArrowData, ElementData, ElementId, FillStyle, RectangleData, SerialNumberData,
+    SerialPaintGeometry, TextData, TextPaintGeometry, arrow_bounds, arrow_is_degenerate,
     arrowhead_render_primitives, filter_bounds, resolve_serial_number_stroke_width,
-    resolve_serial_number_text_connection, serial_number_bounds, serial_number_with_selection_rect,
+    resolve_serial_paint_text_connection, serial_number_bounds, serial_number_with_selection_rect,
     text_bounds,
 };
 use snow_draw_engine_editor::{
@@ -1361,7 +1361,7 @@ mod tests {
     use super::*;
     use snow_draw_engine_core::{Camera, PathCommand, PathGeometry, SurfaceSize};
     use snow_draw_engine_document::{
-        ElementMeta, Transaction, WatermarkConfig, WatermarkTemplateApplicationTime,
+        ElementMeta, TextLayoutSize, Transaction, WatermarkConfig, WatermarkTemplateApplicationTime,
     };
 
     fn frame_view() -> FrameView {
@@ -1392,8 +1392,7 @@ mod tests {
         };
         let text = TextData {
             center: text_center,
-            width: 40.0,
-            height: 20.0,
+            layout: TextLayoutSize::new(40.0, 20.0),
             ..TextData::default()
         };
         let mut transaction = Transaction::new("setup bound serial");

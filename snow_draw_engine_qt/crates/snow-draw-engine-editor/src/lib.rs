@@ -5,6 +5,7 @@ mod arrow_text;
 mod auto_filter_workflow;
 pub use arrow_text::ArrowTextLayoutRequest;
 mod creation_workflow;
+pub use creation_workflow::SerialNumberLabelLayoutRequest;
 mod defaults;
 mod document_ops;
 mod edit_workflow;
@@ -58,7 +59,7 @@ pub use session::{
 };
 pub use state::DocumentSyncSnapshot;
 pub use text::{
-    SerialNumberStyle, TextCommitTarget, TextDraftCommit, TextLayoutOverride, TextPreviewFontSize,
+    SerialNumberStyle, TextCommitTarget, TextDraftCommit, TextLayoutOverride, TextPreviewPaint,
     TextResizeMeasurementRequest, TextStyle,
 };
 
@@ -73,7 +74,7 @@ use snow_draw_engine_core::{
 };
 use snow_draw_engine_document::{
     ArrowData, DEFAULT_ARROW_MAX_COORDINATE, ElementId, ElementKind, PenFilterData, RectangleData,
-    RectangleElementKind, SerialNumberData, TextData, TextLayoutSize, Transaction, arrow_bounds,
+    RectangleElementKind, SerialNumberData, TextData, Transaction, arrow_bounds,
     arrow_length as document_arrow_length, normalize_corner_radii, validate_arrow, validate_filter,
     validate_rectangle, validate_serial_number, validate_text, validate_text_layout_size,
 };
@@ -291,6 +292,7 @@ impl Editor {
     }
 
     fn cancel_interaction(&mut self) {
+        self.state.pending_text_edit = None;
         self.state.auto_filter = Default::default();
         self.bump_overlay_state_revision();
         let had_selection_edit = matches!(
@@ -298,6 +300,7 @@ impl Editor {
             InteractionState::PendingSelectionMove(_)
                 | InteractionState::EditingSelection(_)
                 | InteractionState::EditingArrow(_)
+                | InteractionState::CreatingSerialNumber(_)
         );
         self.state.interaction = InteractionState::Idle;
         if had_selection_edit {
@@ -365,6 +368,7 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use snow_draw_engine_document::TextLayoutSize;
 
     fn selected_editor(active_tool: ActiveTool) -> Editor {
         let mut editor = Editor::new(EngineConfig::default()).unwrap();
@@ -611,8 +615,7 @@ mod tests {
             text: "unchanged".to_owned(),
             ..TextData::default()
         };
-        text.width = 120.0;
-        text.height = 30.0;
+        text.layout = TextLayoutSize::new(120.0, 30.0);
 
         let mut transaction = Transaction::new("insert text");
         transaction.insert_text(id, snow_draw_engine_document::ElementMeta::default(), text);
@@ -622,15 +625,7 @@ mod tests {
         editor.select_element(&document, id).unwrap();
 
         let command = editor
-            .update_text_element(
-                &document,
-                id,
-                "unchanged",
-                TextLayoutSize {
-                    width: 120.0,
-                    height: 30.0,
-                },
-            )
+            .update_text_element(&document, id, "unchanged", TextLayoutSize::new(120.0, 30.0))
             .unwrap();
 
         assert!(command.is_none());

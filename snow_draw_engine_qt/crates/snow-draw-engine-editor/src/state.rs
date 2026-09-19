@@ -123,7 +123,10 @@ pub(crate) struct CreatePenFilterState {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct CreateSerialNumberState {
     pub(crate) pointer_id: u32,
-    pub(crate) preview: SerialNumberData,
+    pub(crate) serial_id: ElementId,
+    pub(crate) start_view_position: Point<f64>,
+    pub(crate) text: Option<(ElementId, TextData)>,
+    pub(crate) label_measured: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -415,6 +418,7 @@ pub(crate) struct EditorState {
     pub(crate) ui: UiState,
     pub(crate) interaction: InteractionState,
     pub(crate) active_text_draft: Option<ActiveTextDraftPresentation>,
+    pub(crate) pending_text_edit: Option<ElementId>,
     pub(crate) arrow_text_measurements: Vec<crate::arrow_text::ArrowTextMeasurement>,
     pub(crate) default_rectangle_shape_style: RectangleShapeStyle,
     pub(crate) default_arrow_style: ArrowStyle,
@@ -500,6 +504,7 @@ impl EditorState {
             ui: UiState::default(),
             interaction: InteractionState::default(),
             active_text_draft: None,
+            pending_text_edit: None,
             arrow_text_measurements: Vec::new(),
             default_rectangle_shape_style: default_styles.rectangle,
             default_arrow_style: default_styles.arrow,
