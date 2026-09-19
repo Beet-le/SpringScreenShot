@@ -94,24 +94,12 @@ class ShortcutRegistrationSuspensionGuard final : public QObject {
         resume();
     }
 
-    void watch(QObject* object) {
-        object->installEventFilter(this);
-    }
-
     void resume() {
         if (!m_token.has_value() || !m_resume) {
             return;
         }
         m_resume(*m_token);
         m_token.reset();
-    }
-
-  protected:
-    bool eventFilter(QObject* watched, QEvent* event) override {
-        if (event->type() == QEvent::Hide || event->type() == QEvent::Close) {
-            QMetaObject::invokeMethod(this, [this] { resume(); }, Qt::QueuedConnection);
-        }
-        return QObject::eventFilter(watched, event);
     }
 
   private:
@@ -1083,8 +1071,9 @@ void ShortcutKeyRow::openShortcutConfigDialog() {
     }
     auto* const suspensionGuard =
         new ShortcutRegistrationSuspensionGuard(suspension, m_resumeGlobalShortcuts, modal);
-    suspensionGuard->watch(modal);
-    suspensionGuard->watch(content);
+    // Logical modal closure owns the registration lifetime. Widget Hide
+    // events are presentation details and can occur transiently while the
+    // modal opens, so they must never resume native shortcuts.
     connect(modal, &adqt::widgets::AdModal::openChanged, suspensionGuard,
             [suspensionGuard](bool open) {
                 if (!open) {

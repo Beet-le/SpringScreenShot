@@ -357,6 +357,7 @@ class ScreenshotPinnedWindow final : public QWidget {
     std::unique_ptr<snow_shot::presentation::PinnedWindowPlatform> m_platform;
     bool m_platformReconciliationPending = false;
     bool m_platformApplying = false;
+    bool m_nativeRestoreInFlight = false;
     std::optional<snow_shot::storage::PinnedWindowPlacement> m_platformPlacement;
     std::optional<snow_shot::storage::PinnedWindowPlacement> m_interactionPlacement;
     QPointF m_interactionPointer;

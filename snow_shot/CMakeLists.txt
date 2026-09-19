@@ -1396,6 +1396,7 @@ if(SNOW_SHOT_BUILD_TESTS)
             snow_shot_global_mouse Qt6::Widgets)
         add_test(NAME snow-shot-global-shortcut-manager-tests
             COMMAND snow-shot-global-shortcut-manager-tests)
+
         set_tests_properties(snow-shot-global-shortcut-manager-tests PROPERTIES
             LABELS "unit;${_snow_shot_shortcut_platform_label}" TIMEOUT 60)
         add_test(NAME snow-shot-global-shortcut-native-smoke-tests
@@ -3158,6 +3159,9 @@ if(SNOW_SHOT_BUILD_TESTS)
         NAME snow-shot-pinned-window-tests
         COMMAND snow-shot-pinned-window-tests
     )
+    set_tests_properties(snow-shot-pinned-window-tests PROPERTIES
+        LABELS "interactive;e2e;windows" RUN_SERIAL TRUE TIMEOUT 180
+        ENVIRONMENT "QT_QPA_PLATFORM=windows")
     snow_shot_import_offscreen_platform(snow-shot-pinned-window-tests)
     add_test(NAME snow-shot-file-pin-presentation-tests
         COMMAND snow-shot-pinned-window-tests --file-pin-batch-only)
@@ -3186,7 +3190,7 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_test(NAME snow-shot-pinned-click-through-native-tests
         COMMAND snow-shot-pinned-window-tests --click-through-native-only -platform windows)
     set_tests_properties(snow-shot-pinned-click-through-native-tests PROPERTIES
-        LABELS "unit;windows" RUN_SERIAL TRUE TIMEOUT 60)
+        LABELS "interactive;e2e;windows" RUN_SERIAL TRUE TIMEOUT 60)
     add_test(NAME snow-shot-pinned-shortcut-display-tests
         COMMAND snow-shot-pinned-window-tests --shortcut-display-only -platform offscreen)
     set_tests_properties(snow-shot-pinned-shortcut-display-tests PROPERTIES LABELS "unit")
@@ -3392,6 +3396,10 @@ if(SNOW_SHOT_BUILD_TESTS)
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(snow-shot-clipboard-content-tests PROPERTIES
         RUN_SERIAL TRUE
+        # The live snapshot exercises an in-process mime provider that hides
+        # the Qt image format; only the offscreen clipboard keeps that
+        # in-process semantics, the native OS clipboard drops the payload.
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )
@@ -4083,7 +4091,10 @@ if(SNOW_SHOT_BUILD_TESTS)
         endforeach()
     endif()
     set_tests_properties(snow-shot-screen-recording-shortcut-tests PROPERTIES
-        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        # The shortcut gating asserts real keyboard focus ownership, which the
+        # non-activating floating toolbar only supports on a native platform.
+        LABELS "interactive;e2e;windows" RUN_SERIAL TRUE TIMEOUT 60
+        ENVIRONMENT "QT_QPA_PLATFORM=windows"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )
 
@@ -5197,6 +5208,7 @@ if(SNOW_SHOT_BUILD_TESTS)
             User32
             Userenv
             Ntdll
+            Ws2_32
         )
         add_dependencies(snow-shot-scrolling-thumbnail-uia-e2e-test snow_shot)
         add_test(
@@ -5972,26 +5984,34 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/SnowShotUpdateUiTests.cmake")
 
 if(WIN32)
     # These DLLs are consumed by the standalone OCR process that is staged
-    # next to each host target, not by snow_shot itself. DirectML is
-    # delay-loaded by the statically linked ONNX Runtime; onnxruntime.dll is
-    # only needed when the process links it dynamically.
+    # next to each host target, not by snow_shot itself. Static ONNX Runtime
+    # delay-loads DirectML; dynamic builds derive the complete non-system DLL
+    # closure from onnxruntime.dll instead of copying its entire bin directory.
     foreach(_ocr_runtime_target IN ITEMS snow_shot snow-shot-ocr-recognition-service-tests)
         if(TARGET ${_ocr_runtime_target})
-            add_custom_command(TARGET ${_ocr_runtime_target} POST_BUILD
-                COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-                    "$<IF:$<CONFIG:Debug>,${SNOW_SHOT_DIRECTML_RUNTIME_DLL_DEBUG},${SNOW_SHOT_DIRECTML_RUNTIME_DLL_RELEASE}>"
-                    "$<TARGET_FILE_DIR:${_ocr_runtime_target}>/DirectML.dll"
-                COMMENT "Staging DirectML for ${_ocr_runtime_target}"
-                VERBATIM
-            )
-            if(NOT SNOW_SHOT_OCR_STATIC_ONNXRUNTIME)
+            if(SNOW_SHOT_OCR_STATIC_ONNXRUNTIME)
                 add_custom_command(TARGET ${_ocr_runtime_target} POST_BUILD
                     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-                        "$<TARGET_FILE:onnxruntime::onnxruntime>"
-                        "$<TARGET_FILE_DIR:${_ocr_runtime_target}>/onnxruntime.dll"
-                    COMMENT "Staging dynamic ONNX Runtime for ${_ocr_runtime_target}"
+                        "$<IF:$<CONFIG:Debug>,${SNOW_SHOT_DIRECTML_RUNTIME_DLL_DEBUG},${SNOW_SHOT_DIRECTML_RUNTIME_DLL_RELEASE}>"
+                        "$<TARGET_FILE_DIR:${_ocr_runtime_target}>/DirectML.dll"
+                    COMMENT "Staging DirectML for ${_ocr_runtime_target}"
                     VERBATIM
                 )
+            else()
+                # Resolve only the DLLs actually imported by ONNX Runtime and
+                # its companions. This keeps unrelated vcpkg DLLs out of the
+                # application directory and fails the build on a broken closure.
+                _snow_shot_onnxruntime_link_items(_snow_shot_onnxruntime_dll_items)
+                add_custom_command(TARGET ${_ocr_runtime_target} POST_BUILD
+                    COMMAND "${CMAKE_COMMAND}"
+                        "-DCOPY_FROM=${_snow_shot_onnxruntime_dll_items}"
+                        "-DCOPY_DIR=$<TARGET_FILE_DIR:onnxruntime::onnxruntime>"
+                        "-DCOPY_TO=$<TARGET_FILE_DIR:${_ocr_runtime_target}>"
+                        -P "${CMAKE_CURRENT_SOURCE_DIR}/scripts/copy_runtime_dlls.cmake"
+                    COMMENT "Staging dynamic ONNX Runtime closure for ${_ocr_runtime_target}"
+                    VERBATIM
+                )
+                unset(_snow_shot_onnxruntime_dll_items)
             endif()
         endif()
     endforeach()

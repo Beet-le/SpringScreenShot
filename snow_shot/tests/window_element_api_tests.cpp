@@ -195,6 +195,18 @@ void toolbarLayoutSectionResetsRemainIndependent() {
         backend.toolbarLayout(storage::ScreenshotToolbarLayoutKind::DrawingTools);
     const auto defaultActionLayout =
         backend.toolbarLayout(storage::ScreenshotToolbarLayoutKind::ActionTools);
+    const storage::ScreenshotToolbarLayout expectedDefaultActionLayout{
+        {{QStringLiteral("convert-to-html"), QStringLiteral("convert-to-markdown"),
+          QStringLiteral("barcode-recognition"), QStringLiteral("table-recognition")},
+         {QStringLiteral("record-screen")},
+         {QStringLiteral("pin-to-screen")},
+         {QStringLiteral("text-recognition")},
+         {QStringLiteral("text-translation")},
+         {QStringLiteral("scrolling-screenshot")},
+         {QStringLiteral("quick-save"), QStringLiteral("save-as-file")}},
+        {}};
+    require(defaultActionLayout == expectedDefaultActionLayout,
+            "the default action layout must include conversions and quick-save");
     const storage::ScreenshotToolbarLayout drawingLayout{
         {{QStringLiteral("watermark")}},
         {QStringLiteral("shape"), QStringLiteral("arrow"), QStringLiteral("line"),
@@ -202,9 +214,13 @@ void toolbarLayoutSectionResetsRemainIndependent() {
          QStringLiteral("text"), QStringLiteral("serial-number"), QStringLiteral("filter"),
          QStringLiteral("eraser")},
     };
+    // The custom arrangement still lists every default action (including the
+    // conversions and quick-save) so normalization cannot append anything and
+    // the persisted layout compares equal to what was applied.
     const storage::ScreenshotToolbarLayout actionLayout{
-        {{QStringLiteral("save-as-file")}},
-        {QStringLiteral("barcode-recognition"), QStringLiteral("table-recognition"),
+        {{QStringLiteral("quick-save"), QStringLiteral("save-as-file")}},
+        {QStringLiteral("convert-to-html"), QStringLiteral("convert-to-markdown"),
+         QStringLiteral("barcode-recognition"), QStringLiteral("table-recognition"),
          QStringLiteral("record-screen"), QStringLiteral("pin-to-screen"),
          QStringLiteral("text-recognition"), QStringLiteral("text-translation"),
          QStringLiteral("scrolling-screenshot")},

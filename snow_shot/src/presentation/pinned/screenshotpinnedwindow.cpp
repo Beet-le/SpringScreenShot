@@ -1699,14 +1699,12 @@ bool ScreenshotPinnedWindow::present(const Config& requestedConfig,
         finishPresentation(false);
         return false;
     }
-    if (config.enableEditing) {
-        if (m_editButton != nullptr) {
-            m_editButton->hide();
-        }
-    } else if (m_editButton != nullptr) {
+    if (m_editButton != nullptr) {
         m_editButton->hide();
-        m_canvas->setInteractionEnabled(false);
     }
+    // Canvas input is enabled only after the edit controller selects an
+    // interactive drawing tool. This also resets reused presentation state.
+    m_canvas->setInteractionEnabled(false);
 
     m_screenshotRenderer->setImageSource(m_imageSource);
     if (config.restorePersistentState && !m_imageTransform.isIdentity() &&
@@ -3149,7 +3147,11 @@ void ScreenshotPinnedWindow::finishDeferredPresentationSetup(quint64 generation)
     configureRecognitionTarget();
     updateRecognitionContentGeometry();
     if (m_canvas != nullptr) {
-        m_canvas->setInteractionEnabled(m_editingEnabled && !m_ocrMode);
+        if (m_editController != nullptr) {
+            m_editController->syncCanvasInteractionState();
+        } else {
+            m_canvas->setInteractionEnabled(false);
+        }
     }
     if (m_editingEnabled && m_editButton != nullptr) {
         m_editButton->show();
@@ -3397,7 +3399,7 @@ void ScreenshotPinnedWindow::setEditMode(bool enabled) {
         m_drawingAction->setChecked(enabled);
     }
     if (enabled && m_ocrMode) {
-        m_canvas->setInteractionEnabled(false);
+        m_editController->syncCanvasInteractionState();
         if (m_recognitionContent != nullptr) {
             m_recognitionContent->setFocus(Qt::OtherFocusReason);
         }
@@ -3665,8 +3667,11 @@ void ScreenshotPinnedWindow::configureRecognitionSession() {
                 }
                 if (m_canvas != nullptr) {
                     m_canvas->setCanvasContentVisible(!active);
-                    m_canvas->setInteractionEnabled(!active && m_editController != nullptr &&
-                                                    m_editController->editMode());
+                    if (m_editController != nullptr) {
+                        m_editController->syncCanvasInteractionState();
+                    } else {
+                        m_canvas->setInteractionEnabled(false);
+                    }
                     if (active && !wasHiddenSelection) {
                         m_canvas->setFocus(Qt::OtherFocusReason);
                     } else {
@@ -5709,9 +5714,16 @@ bool ScreenshotPinnedWindow::reconcilePassiveNativeGeometry() {
 }
 
 bool ScreenshotPinnedWindow::restoreCommittedNativeGeometry(bool closeOnFailure) {
-    if (m_nativeGeometryController == nullptr) {
+    // The Windows platform implementation drives SetWindowPos, which delivers
+    // WM_WINDOWPOSCHANGED synchronously; that handler re-enters this restore
+    // while the geometry still does not match. Bail out of the nested call so
+    // the controller state is never mutated re-entrantly and the outer call
+    // finishes (and schedules its close-on-failure) instead of recursing.
+    if (m_nativeGeometryController == nullptr || m_nativeRestoreInFlight) {
         return false;
     }
+    m_nativeRestoreInFlight = true;
+    const auto restoreGuard = qScopeGuard([this]() { m_nativeRestoreInFlight = false; });
 
     m_nativeGeometryController->prepareRollback();
     const QRect committed = m_nativeGeometryController->targetGeometry();

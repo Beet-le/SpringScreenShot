@@ -3022,8 +3022,10 @@ void pinnedAsyncPresentationDefersContent(SnowCanvasRuntime&) {
         };
     QImage placeholder(QSize(160, 96), QImage::Format_ARGB32_Premultiplied);
     placeholder.fill(Qt::transparent);
+    ScreenshotPinnedWindow::Config successfulConfig = makeConfig(placeholder, successLoader);
+    successfulConfig.enableEditing = true;
     require(successfulWindow->present(
-                makeConfig(placeholder, successLoader),
+                successfulConfig,
                 [&successCompletionCount, &successCompletionValue](bool succeeded, QImage image) {
                     ++successCompletionCount;
                     successCompletionValue = succeeded && !image.isNull();
@@ -3039,11 +3041,18 @@ void pinnedAsyncPresentationDefersContent(SnowCanvasRuntime&) {
             "the pinned canvas should stay transparent until materialization completes");
     require(static_cast<bool>(successLoad),
             "the pinned image loader should start after the shell is shown");
+    ScreenshotPinnedWindowTestAccess::editSelectionOffscreen(*successfulWindow, true);
+    auto* successEditController = successfulWindow->findChild<ScreenshotPinnedEditController*>();
+    require(successEditController != nullptr, "deferred pin editing must create its controller");
+    successEditController->activateResizeWindowTool();
+    require(successEditController->resizeWindowToolActive() && !successCanvas->interactionEnabled(),
+            "Resize window must disable canvas interaction before materialization");
     successLoad(expectedImage);
     QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
     require(successCanvas->canvasContentVisible() && successCompletionCount == 1 &&
-                successCompletionValue,
-            "successful pinned materialization should reveal content exactly once");
+                successCompletionValue && successEditController->resizeWindowToolActive() &&
+                !successCanvas->interactionEnabled(),
+            "materialization must reveal content without overriding Resize window interaction");
     const QImage loadedFrame = renderWidget(*successCanvas);
     require(loadedFrame.pixelColor(loadedFrame.rect().center()).alpha() > 0,
             "the pinned canvas should render materialized content");
@@ -4127,6 +4136,14 @@ void pinnedMiddleClickActions() {
         require(drawing != nullptr, "drawing action missing");
         drawing->setChecked(true);
         waitForUi(50);
+        // Entering drawing mode starts on the Resize window tool, where window
+        // gestures stay enabled by design; switch to the Select drawing tool
+        // so the canvas owns the input, as a user drawing would.
+        QKeyEvent selectPress(QEvent::KeyPress, Qt::Key_M, Qt::NoModifier);
+        QCoreApplication::sendEvent(canvas, &selectPress);
+        QKeyEvent selectRelease(QEvent::KeyRelease, Qt::Key_M, Qt::NoModifier);
+        QCoreApplication::sendEvent(canvas, &selectRelease);
+        waitForUi(50);
         press(canvas);
         require(!thumbnail->isChecked(), "drawing mode must not dispatch middle-click actions");
         drawing->setChecked(false);
@@ -4443,6 +4460,14 @@ void pinnedDoubleClickActions() {
     auto* drawing = window->findChild<QAction*>(QStringLiteral("screenshotPinnedDrawingAction"));
     require(drawing != nullptr, "drawing action missing");
     drawing->setChecked(true);
+    waitForUi(50);
+    // Entering drawing mode starts on the Resize window tool, where window
+    // gestures stay enabled by design; switch to the Select drawing tool so
+    // the canvas owns the input, as a user drawing would.
+    QKeyEvent selectPress(QEvent::KeyPress, Qt::Key_M, Qt::NoModifier);
+    QCoreApplication::sendEvent(canvas, &selectPress);
+    QKeyEvent selectRelease(QEvent::KeyRelease, Qt::Key_M, Qt::NoModifier);
+    QCoreApplication::sendEvent(canvas, &selectRelease);
     waitForUi(50);
     send(canvas, canvas->rect().center());
     require(!thumbnail->isChecked(), "drawing input must not trigger the double-click action");
@@ -6969,11 +6994,16 @@ void pinnedClickThroughNative() {
     require(SendInput(1, &clicks[0], sizeof(INPUT)) == 1, "press native move control");
     waitForUi(40);
     setSystemCursorPosition(moveStart + moveDelta);
-    waitForUi(80);
+    const QRect movedGeometry = pinnedGeometry.translated(moveDelta);
+    QElapsedTimer moveDelivery;
+    moveDelivery.start();
+    while (window.currentNativeGeometry() != movedGeometry && moveDelivery.elapsed() < 750) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        QThread::msleep(1);
+    }
     require(SendInput(1, &clicks[1], sizeof(INPUT)) == 1, "release native move control");
     waitForUi(40);
-    require(window.currentNativeGeometry() == pinnedGeometry.translated(moveDelta) &&
-                GetForegroundWindow() == lowerHwnd &&
+    require(window.currentNativeGeometry() == movedGeometry && GetForegroundWindow() == lowerHwnd &&
                 (GetWindowLongPtrW(pinnedHwnd, GWL_EXSTYLE) & transparentStyles) ==
                     transparentStyles,
             "native drag must move the pin while retaining passthrough and foreground focus");
@@ -7528,9 +7558,13 @@ void pinnedDrawingShortcutsToggleActiveTool() {
     require(reset != nullptr && reset->isEnabled(),
             "pinned canvas reset should be enabled without selection");
     reset->click();
+    // Reset deletes every element as a single undoable action, so the canvas
+    // becomes empty while the deletion itself stays available for undo.
     require(canvas->canvasHistoryState().canUndo && !canvas->canvasHistoryState().canRedo,
-            "pinned reset should clear the document as an undoable operation");
-    require(canvas->undo(), "pinned reset must allow recovering the cleared drawing");
+            "pinned reset should stay undoable as a single action");
+    require(canvas->undo(), "pinned reset undo should restore the annotation");
+    require(canvas->canvasHistoryState().canRedo,
+            "undoing the pinned reset should expose the deletion for redo");
     window->close();
     require(processUntilDeleted(guardedWindow, 2000), "shortcut test pin should close");
 }

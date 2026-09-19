@@ -163,6 +163,10 @@ bool usesCustomPalette(const QWidget* widget) {
   }
   const auto& themeManager = adqt::theme::ThemeManager::instance();
   for (const QWidget* current = widget; current; current = current->parentWidget()) {
+    // resolve(current) rebuilds the palette from the theme with the widget's
+    // own palette as the base, so palettes the theme manager applied itself
+    // (scope overrides) compare equal, while any role a caller customized
+    // differs because buildPalette overwrites every standard role.
     if (current->testAttribute(Qt::WA_SetPalette) &&
         current->palette() != themeManager.resolve(current).palette) {
       return true;
@@ -307,7 +311,15 @@ AdDivider::AdDivider(QWidget* parent) : QFrame(parent) {
 
 AdDivider::AdDivider(const QString& text, QWidget* parent) : AdDivider(parent) { setText(text); }
 
-AdDivider::~AdDivider() = default;
+AdDivider::~AdDivider() {
+  // QObject destroys child widgets from its base destructor, after every
+  // AdDivider member has already been destroyed. Disconnect the child's
+  // destroyed callback while the derived object is still intact so it cannot
+  // observe or publish partially destructed divider state.
+  if (contentDestroyedConnection_) {
+    disconnect(contentDestroyedConnection_);
+  }
+}
 
 AdDivider::Orientation AdDivider::orientation() const { return orientation_; }
 
@@ -779,7 +791,10 @@ void AdDivider::attachContentWidget(QWidget* widget) {
       return;
     }
     contentWidget_.clear();
-    contentDestroyedConnection_ = {};
+    // Never reset contentDestroyedConnection_ from inside this lambda: it can
+    // run while the divider's own members are already destroyed (a child dies
+    // during ~QObject), and the connection is unlinked automatically once its
+    // sender finishes dying.
     updateAccessibleText();
     refreshAfterStateChange();
     emit contentWidgetChanged(nullptr);

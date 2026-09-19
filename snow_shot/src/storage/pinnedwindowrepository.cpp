@@ -2,6 +2,7 @@
 
 #include "snowimageqtcodec.h"
 #include "snow_shot/storage/storagelogging.h"
+#include "pinnedwindowstorageconstants_p.h"
 
 #include <QBuffer>
 #include <QDir>
@@ -33,7 +34,6 @@ constexpr int kMaximumRecords = 128;
 constexpr int kMaximumGroups = PinnedWindowRepository::maximumGroupCount();
 constexpr qint64 kMaximumImageBytes = 256LL * 1024LL * 1024LL;
 constexpr qint64 kMaximumPayloadBytes = 32LL * 1024LL * 1024LL;
-constexpr auto kDirectoryName = "pinned_windows_v2";
 constexpr auto kManifestName = "index.json";
 
 QString sourceKindToString(PinnedWindowSourceKind kind) {
@@ -906,7 +906,8 @@ struct PinnedWindowRepository::Impl final {
 PinnedWindowRepository::PinnedWindowRepository(QString configurationDirectory, bool writeAvailable,
                                                int debounceMilliseconds)
     : m_impl(std::make_unique<Impl>()) {
-    m_impl->root = QDir(configurationDirectory).filePath(QString::fromLatin1(kDirectoryName));
+    m_impl->root = QDir(configurationDirectory)
+                       .filePath(QString::fromLatin1(pinned_window_storage::kDirectoryName));
     m_impl->writeAvailable = writeAvailable && !configurationDirectory.isEmpty();
     m_impl->debounceMilliseconds = std::clamp(debounceMilliseconds, 0, 30000);
     if (!configurationDirectory.isEmpty()) {
