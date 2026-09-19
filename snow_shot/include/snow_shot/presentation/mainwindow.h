@@ -36,6 +36,7 @@ class MainWindow : public QMainWindow {
     void showAndActivate();
     void showInterfaceSettings();
     void showFunctionSettings();
+    void showAppPermissions(const QString& permissionId = {});
     void showScreenshotHistory();
     void showTranslation(const QString& text);
 
@@ -60,6 +61,9 @@ class MainWindow : public QMainWindow {
     void applyTheme(const snow_shot::presentation::styles::ThemeColorScheme& scheme);
     void syncTitleBarBottomShadowGeometry();
     void setupDwmShadow();
+#ifdef Q_OS_MACOS
+    void setupNativeTitleBar();
+#endif
     SnowShotApiClient* m_translationClient = nullptr;
     TitleBarWidget* m_titleBar = nullptr;
     SidebarWidget* m_sidebar = nullptr;

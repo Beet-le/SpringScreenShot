@@ -309,6 +309,10 @@ so every moment on screen can be expressed clearly and shared easily.</translati
             <source>Failed to retrieve selected text</source>
             <translation>Failed to retrieve selected text</translation>
         </message>
+        <message>
+            <source>Grant the required permission to continue</source>
+            <translation>Grant the required permission to continue</translation>
+        </message>
     </context>
     <context>
         <name>QObject</name>
@@ -423,6 +427,10 @@ so every moment on screen can be expressed clearly and shared easily.</translati
     </context>
     <context>
         <name>SectionHeaderWidget</name>
+        <message>
+            <source>Refresh</source>
+            <translation>Refresh</translation>
+        </message>
         <message>
             <source>Reset</source>
             <translation>Reset</translation>
@@ -552,8 +560,16 @@ so every moment on screen can be expressed clearly and shared easily.</translati
             <translation>Close</translation>
         </message>
         <message>
+            <source>Maximize</source>
+            <translation>Maximize</translation>
+        </message>
+        <message>
             <source>Minimize</source>
             <translation>Minimize</translation>
+        </message>
+        <message>
+            <source>Restore</source>
+            <translation>Restore</translation>
         </message>
     </context>
     <context>

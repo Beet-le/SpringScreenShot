@@ -24,8 +24,28 @@ set_target_properties(snow_shot PROPERTIES
     MACOSX_BUNDLE_BUNDLE_NAME "Snow Shot"
     MACOSX_BUNDLE_BUNDLE_VERSION "${SNOW_SHOT_VERSION_NUMERIC}"
     MACOSX_BUNDLE_SHORT_VERSION_STRING "${SNOW_SHOT_VERSION_NUMERIC}"
+    MACOSX_BUNDLE_ICON_FILE "snow-shot.icns"
     INSTALL_RPATH "@executable_path/../Frameworks"
     INSTALL_RPATH_USE_LINK_PATH TRUE)
+
+set(_snow_macos_icon_artwork
+    "${CMAKE_CURRENT_LIST_DIR}/../snow_shot/resources/app-icon.svg")
+set(_snow_macos_icon "${CMAKE_CURRENT_BINARY_DIR}/macos/snow-shot.icns")
+add_custom_command(
+    OUTPUT "${_snow_macos_icon}"
+    COMMAND "${CMAKE_COMMAND}"
+        -DSNOW_MACOS_ICON_ARTWORK=${_snow_macos_icon_artwork}
+        -DSNOW_MACOS_ICON_OUTPUT=${_snow_macos_icon}
+        -P "${CMAKE_CURRENT_LIST_DIR}/GenerateMacOSIcon.cmake"
+    DEPENDS
+        "${_snow_macos_icon_artwork}"
+        "${CMAKE_CURRENT_LIST_DIR}/GenerateMacOSIcon.cmake"
+    COMMENT "Generating the Snow Shot macOS application icon"
+    VERBATIM)
+set_source_files_properties("${_snow_macos_icon}" PROPERTIES
+    GENERATED TRUE
+    MACOSX_PACKAGE_LOCATION Resources)
+target_sources(snow_shot PRIVATE "${_snow_macos_icon}")
 if(TARGET snow_shot_image_codec_backend)
     set_target_properties(snow_shot_image_codec_backend PROPERTIES
         INSTALL_RPATH "@loader_path" INSTALL_RPATH_USE_LINK_PATH TRUE)
@@ -76,6 +96,11 @@ find_file(SNOW_QT_OFFSCREEN_PLUGIN NAMES libqoffscreen.dylib
 install(FILES "${SNOW_QT_OFFSCREEN_PLUGIN}"
     DESTINATION "snow_shot.app/Contents/PlugIns/platforms" COMPONENT SnowShot)
 find_program(SNOW_MACDEPLOYQT NAMES macdeployqt HINTS "${_snow_qt_bin}" REQUIRED)
+set(SNOW_MACOS_CODESIGN_IDENTITY "-" CACHE STRING
+    "Code-signing certificate name or SHA-1; '-' uses ad-hoc signing (permissions may reset after rebuilds)")
+if(SNOW_MACOS_CODESIGN_IDENTITY STREQUAL "")
+    message(FATAL_ERROR "SNOW_MACOS_CODESIGN_IDENTITY must be a certificate identity or '-'")
+endif()
 configure_file("${CMAKE_CURRENT_LIST_DIR}/DeploySnowShotMacOS.cmake.in"
     "${CMAKE_CURRENT_BINARY_DIR}/DeploySnowShotMacOS.cmake" @ONLY)
 install(SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/DeploySnowShotMacOS.cmake" COMPONENT SnowShot)

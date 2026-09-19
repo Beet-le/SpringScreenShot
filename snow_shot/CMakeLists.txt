@@ -858,9 +858,27 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_test(NAME snow-shot-administrator-launch-tests COMMAND snow-shot-administrator-launch-tests)
     set_tests_properties(snow-shot-administrator-launch-tests PROPERTIES LABELS "unit;windows" TIMEOUT 30)
 endif()
+add_library(snow_shot_permissions STATIC
+    include/snow_shot/presentation/apppermissionservice.h
+    src/presentation/services/apppermissionservice.cpp)
+target_include_directories(snow_shot_permissions PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(snow_shot_permissions PUBLIC Qt6::Widgets snow_shot_shortcuts)
+if(APPLE)
+    target_sources(snow_shot_permissions PRIVATE src/platform/macos/apppermissionbackend.mm)
+    target_link_libraries(snow_shot_permissions PRIVATE
+        "-framework AppKit"
+        "-framework ApplicationServices"
+        "-framework AVFoundation")
+endif()
 add_library(snow_shot_settings STATIC ${SNOW_SHOT_SETTINGS_SOURCES}
-    src/presentation/components/smartselectionpermissionwidget.cpp
-    include/snow_shot/presentation/components/smartselectionpermissionwidget.h)
+    include/snow_shot/presentation/permissionguidecontroller.h
+    include/snow_shot/presentation/components/permissionguidewidget.h
+    src/presentation/services/permissionguidecontroller.cpp
+    src/presentation/components/permissionguidewidget.cpp)
+if(APPLE)
+    target_sources(snow_shot_settings PRIVATE src/platform/macos/permissionguideplatform.mm)
+endif()
+target_link_libraries(snow_shot_settings PUBLIC snow_shot_permissions)
 qt_add_resources(snow_shot_settings "snow_shot_about_assets"
     PREFIX "/snow_shot/about"
     BASE "resources/about"
@@ -2077,20 +2095,38 @@ if(SNOW_SHOT_BUILD_TESTS)
     )
     snow_shot_import_offscreen_platform(snow-shot-global-mouse-page-tests)
 
-    add_executable(snow-shot-smart-selection-permission-tests
-        tests/smart_selection_permission_tests.cpp
-        src/presentation/components/smartselectionpermissionwidget.cpp)
-    target_include_directories(snow-shot-smart-selection-permission-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
-    target_link_libraries(snow-shot-smart-selection-permission-tests PRIVATE ant_design_qt Qt6::Widgets)
-    if(APPLE)
-        target_link_libraries(snow-shot-smart-selection-permission-tests PRIVATE "-framework ApplicationServices")
-    endif()
-    add_test(NAME snow-shot-smart-selection-permission-tests COMMAND snow-shot-smart-selection-permission-tests)
-    set_tests_properties(snow-shot-smart-selection-permission-tests PROPERTIES
-        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
-    snow_shot_import_offscreen_platform(snow-shot-smart-selection-permission-tests)
+    add_executable(snow-shot-permission-guide-tests tests/permission_guide_tests.cpp
+        src/presentation/services/screenshotclipboardservice.cpp)
+    target_link_libraries(snow-shot-permission-guide-tests PRIVATE snow_shot_settings)
+    snow_shot_add_translations(snow-shot-permission-guide-tests)
+    add_test(NAME snow-shot-permission-guide-tests COMMAND snow-shot-permission-guide-tests)
+    set_tests_properties(snow-shot-permission-guide-tests PROPERTIES
+        LABELS "unit" TIMEOUT 60 ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
+    snow_shot_import_offscreen_platform(snow-shot-permission-guide-tests)
+
+    add_executable(snow-shot-app-permissions-tests tests/app_permissions_tests.cpp
+        src/app/featureavailability.cpp
+        src/presentation/services/screenshotclipboardservice.cpp)
+    target_link_libraries(snow-shot-app-permissions-tests PRIVATE snow_shot_settings)
+    add_test(NAME snow-shot-app-permissions-tests COMMAND snow-shot-app-permissions-tests)
+    set_tests_properties(snow-shot-app-permissions-tests PROPERTIES
+        LABELS "unit" ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
+    snow_shot_import_offscreen_platform(snow-shot-app-permissions-tests)
 
     if(APPLE)
+        add_executable(snow-shot-macos-permission-guide-tests MACOSX_BUNDLE
+            tests/macos_permission_guide_tests.mm
+            src/presentation/services/screenshotclipboardservice.cpp)
+        target_link_libraries(snow-shot-macos-permission-guide-tests PRIVATE
+            snow_shot_settings "-framework AppKit")
+        snow_shot_add_translations(snow-shot-macos-permission-guide-tests)
+        set_target_properties(snow-shot-macos-permission-guide-tests PROPERTIES
+            MACOSX_BUNDLE_GUI_IDENTIFIER "com.snowshot.tests.permission-guide"
+            MACOSX_BUNDLE_BUNDLE_NAME "Snow Shot Permission Guide")
+        add_test(NAME snow-shot-macos-permission-guide-tests
+            COMMAND snow-shot-macos-permission-guide-tests)
+        set_tests_properties(snow-shot-macos-permission-guide-tests PROPERTIES
+            LABELS "interactive;macos" TIMEOUT 30 RUN_SERIAL TRUE)
         add_executable(snow-shot-macos-smart-selection-smoke
             tests/macos_smart_selection_smoke_test.mm
             src/platform/macos/windowcaptureexclusion.mm)
@@ -5359,6 +5395,19 @@ function(snow_shot_configure_scrolling_replay_target target)
     set_target_properties(${target} PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-bin")
 endfunction()
+
+if(APPLE AND SNOW_SHOT_BUILD_BENCHMARKS)
+    add_executable(snow-shot-permission-guide-benchmark MACOSX_BUNDLE
+        tests/macos_permission_guide_tests.mm
+        src/presentation/services/screenshotclipboardservice.cpp)
+    target_compile_definitions(snow-shot-permission-guide-benchmark PRIVATE
+        SNOW_PERMISSION_GUIDE_BENCHMARK=1)
+    target_link_libraries(snow-shot-permission-guide-benchmark PRIVATE
+        snow_shot_settings "-framework AppKit")
+    set_target_properties(snow-shot-permission-guide-benchmark PROPERTIES
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.snowshot.tests.permission-guide-benchmark"
+        MACOSX_BUNDLE_BUNDLE_NAME "Snow Shot Permission Guide Benchmark")
+endif()
 
 if(SNOW_SHOT_BUILD_BENCHMARKS)
     add_executable(snow-shot-ocr-background-performance-benchmark
