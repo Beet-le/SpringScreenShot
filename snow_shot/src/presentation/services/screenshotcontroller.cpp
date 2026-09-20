@@ -1629,7 +1629,9 @@ bool ScreenshotController::Impl::moveCursorOnePixel(
         }
         return true;
     }
-    m_colorPickerController->updateAfterCursorMove(result.position.value(), context);
+    // A silent native warp dispatches input synchronously and may change the selection.
+    m_colorPickerController->updateAfterCursorMove(
+        result.position.value(), m_presentationServices->colorPickerContext());
     return true;
 }
 

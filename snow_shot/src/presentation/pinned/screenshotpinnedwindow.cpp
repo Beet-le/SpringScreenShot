@@ -5995,7 +5995,7 @@ bool ScreenshotPinnedWindow::moveCursorOnePixel(
         return true;
     }
 
-    if (m_interactionPlacement) {
+    if (!result.mouseMoveDispatched && m_interactionPlacement) {
         if (const auto desktop = m_platform->pointerPosition())
             updateControlledInteraction(*desktop);
     }
