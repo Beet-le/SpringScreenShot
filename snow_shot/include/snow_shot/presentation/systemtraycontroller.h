@@ -52,7 +52,7 @@ class SystemTrayController final : public QObject {
                             const shortcuts::ShortcutBindingList& shortcuts);
     void setMenuOptions(const QStringList& options);
     [[nodiscard]] QStringList menuOptions() const;
-    [[nodiscard]] bool globalHotkeysDisabled() const;
+    void setGlobalHotkeysDisabled(bool disabled);
 
   signals:
     void screenshotRequested();
@@ -60,7 +60,6 @@ class SystemTrayController final : public QObject {
     void openFunctionSettingsRequested();
     void openAboutRequested();
     void quickActionRequested(snow_shot::presentation::GlobalShortcutAction action);
-    void globalHotkeysDisabledChanged(bool disabled);
     void exitRequested();
 
   private:
