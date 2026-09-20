@@ -159,6 +159,11 @@ pub struct SnowCaptureDirectRecordingConfig {
     keyboard_size: u32,
     loop_animated_images: u32,
     exclusions: SnowCaptureExclusions,
+    mouse_highlight_rgba: u32,
+    record_mouse_clicks: u32,
+    keyboard_font_family_utf8: *const c_char,
+    keyboard_cjk_font_family_utf8: *const c_char,
+    keyboard_font_weight: u32,
 }
 
 #[repr(C)]
@@ -168,7 +173,7 @@ struct SnowCaptureDirectRecordingConfigHeader {
     struct_size: u32,
 }
 
-pub const DIRECT_RECORDING_CONFIG_VERSION: u32 = 6;
+pub const DIRECT_RECORDING_CONFIG_VERSION: u32 = 8;
 const DIRECT_RECORDING_CONFIG_V4_FIELDS_SIZE: usize =
     std::mem::offset_of!(SnowCaptureDirectRecordingConfig, loop_animated_images);
 const DIRECT_RECORDING_CONFIG_V4_SIZE: u32 = (DIRECT_RECORDING_CONFIG_V4_FIELDS_SIZE
@@ -192,6 +197,13 @@ fn direct_config_size(version: u32) -> Result<u32, String> {
         2 | 3 => Ok(std::mem::offset_of!(SnowCaptureDirectRecordingConfig, keyboard_size) as u32),
         4 => Ok(DIRECT_RECORDING_CONFIG_V4_SIZE),
         5 => Ok(DIRECT_RECORDING_CONFIG_V5_SIZE),
+        6 => {
+            Ok(std::mem::offset_of!(SnowCaptureDirectRecordingConfig, mouse_highlight_rgba) as u32)
+        }
+        7 => Ok(
+            std::mem::offset_of!(SnowCaptureDirectRecordingConfig, keyboard_font_family_utf8)
+                as u32,
+        ),
         DIRECT_RECORDING_CONFIG_VERSION => Ok(DIRECT_RECORDING_CONFIG_SIZE),
         _ => Err(format!(
             "unsupported direct recording config version: {version}"
@@ -510,13 +522,14 @@ fn parse_keyboard_config(
         return Ok(None);
     }
     if config.show_keyboard > 1
+        || (config.version >= 7 && config.record_mouse_clicks > 1)
         || (config.version == 2 && config.mouse_trail_duration_ms != 0)
         || (config.version >= 4 && !(32..=128).contains(&config.keyboard_size))
         || config.keyboard_label_count > 256
     {
         return Err("invalid keyboard recording options".into());
     }
-    if config.show_keyboard == 0 {
+    if config.show_keyboard == 0 && (config.version < 7 || config.record_mouse_clicks == 0) {
         return Ok(None);
     }
     if config.keyboard_label_count != 0 && config.keyboard_labels.is_null() {
@@ -525,7 +538,7 @@ fn parse_keyboard_config(
     let mut labels = std::collections::BTreeMap::new();
     for index in 0..config.keyboard_label_count as usize {
         let label = unsafe { std::ptr::read_unaligned(config.keyboard_labels.add(index)) };
-        if label.key_code > 255
+        if (label.key_code > 255 && !(0x200..=0x204).contains(&label.key_code))
             || label.utf8_len == 0
             || label.utf8_len > 128
             || label.utf8.is_null()
@@ -545,6 +558,22 @@ fn parse_keyboard_config(
         }
     }
     Ok(Some(snow_screen_recorder::KeyboardOverlayConfig {
+        font: if config.version >= 8 && !config.keyboard_font_family_utf8.is_null() {
+            if config.keyboard_cjk_font_family_utf8.is_null() {
+                return Err("missing keyboard CJK font family".into());
+            }
+            Some(snow_screen_recorder::KeyboardOverlayFont::new(
+                unsafe { CStr::from_ptr(config.keyboard_font_family_utf8) }
+                    .to_str()
+                    .map_err(|e| e.to_string())?,
+                unsafe { CStr::from_ptr(config.keyboard_cjk_font_family_utf8) }
+                    .to_str()
+                    .map_err(|e| e.to_string())?,
+                config.keyboard_font_weight,
+            )?)
+        } else {
+            None
+        },
         keycap_size: if config.version < 4 {
             64
         } else {
@@ -660,6 +689,13 @@ fn parse_direct_recording_config(
             u64::from(config.mouse_trail_duration_ms)
         },
         mouse_click_rgba: packed_rgba(config.mouse_click_rgba),
+        mouse_highlight_rgba: if config.version >= 7 {
+            packed_rgba(config.mouse_highlight_rgba)
+        } else {
+            [0; 4]
+        },
+        record_mouse_clicks: config.version >= 7 && config.record_mouse_clicks != 0,
+        show_keyboard: config.show_keyboard != 0,
         excluded_windows,
         excluded_processes,
     };
@@ -1099,15 +1135,49 @@ pub extern "C" fn snow_recording_last_error_message() -> *const c_char {
 mod tests {
     use super::*;
     #[test]
+    fn keyboard_font_is_owned_validated_and_legacy_compatible() {
+        let mut raw = direct_config(c"font.mp4");
+        raw.show_keyboard = 1;
+        let family = CString::new("Courier New").unwrap();
+        let cjk = CString::new("Microsoft JhengHei UI").unwrap();
+        raw.keyboard_font_family_utf8 = family.as_ptr();
+        raw.keyboard_cjk_font_family_utf8 = cjk.as_ptr();
+        raw.keyboard_font_weight = 700;
+        let parsed = parse_keyboard_config(&raw).unwrap().unwrap();
+        drop(family);
+        drop(cjk);
+        let font = parsed.font.unwrap();
+        assert_eq!(font.family, "Courier New");
+        assert_eq!(font.cjk_family, "Microsoft JhengHei UI");
+        assert_eq!(font.weight, 700);
+        raw.keyboard_font_family_utf8 = c"Segoe UI".as_ptr();
+        raw.keyboard_cjk_font_family_utf8 = c"Microsoft YaHei UI".as_ptr();
+        raw.keyboard_font_weight = 1000;
+        assert!(parse_keyboard_config(&raw).is_err());
+        raw.keyboard_font_weight = 400;
+        raw.keyboard_cjk_font_family_utf8 = std::ptr::null();
+        assert!(parse_keyboard_config(&raw).is_err());
+        raw.version = 7;
+        raw.struct_size = direct_config_size(7).unwrap();
+        assert!(
+            (parse_keyboard_config(&raw).unwrap().unwrap())
+                .font
+                .is_none()
+        );
+    }
+
+    #[test]
     fn direct_recording_exclusion_abi_layout() {
-        assert_eq!(DIRECT_RECORDING_CONFIG_VERSION, 6);
+        assert_eq!(DIRECT_RECORDING_CONFIG_VERSION, 8);
         assert_eq!(
             std::mem::offset_of!(SnowCaptureDirectRecordingConfig, exclusions),
             192
         );
-        assert_eq!(DIRECT_RECORDING_CONFIG_SIZE, 224);
+        assert_eq!(DIRECT_RECORDING_CONFIG_SIZE, 256);
+        assert_eq!(direct_config_size(7).unwrap(), 232);
+        assert_eq!(direct_config_size(6).unwrap(), 224);
         assert_eq!(DIRECT_RECORDING_CONFIG_V5_SIZE, 192);
-        for version in [5, 6, 7] {
+        for version in [5, 6, 7, 8] {
             let header = SnowCaptureDirectRecordingConfigHeader {
                 version,
                 struct_size: 8,
@@ -1379,6 +1449,24 @@ mod tests {
             64
         );
     }
+    #[test]
+    fn mouse_config_round_trips_and_legacy_callers_default_off() {
+        let output = CString::new("mouse.mp4").unwrap();
+        let mut raw = direct_config(&output);
+        raw.record_mouse_clicks = 1;
+        raw.mouse_highlight_rgba = 0xffff0080;
+        let parsed = parse_direct_recording_config(&raw).unwrap();
+        assert!(parsed.record_mouse_clicks && parsed.keyboard.is_some() && !parsed.show_keyboard);
+        assert_eq!(parsed.mouse_highlight_rgba, [255, 255, 0, 128]);
+        raw.record_mouse_clicks = 2;
+        assert!(parse_direct_recording_config(&raw).is_err());
+        raw.version = 6;
+        raw.struct_size = direct_config_size(6).unwrap();
+        let legacy = unsafe { read_direct_recording_config(&raw) }.unwrap();
+        let parsed = parse_direct_recording_config(&legacy).unwrap();
+        assert!(!parsed.record_mouse_clicks && parsed.keyboard.is_none());
+        assert_eq!(parsed.mouse_highlight_rgba, [0; 4]);
+    }
     fn direct_config(output: &CStr) -> SnowCaptureDirectRecordingConfig {
         SnowCaptureDirectRecordingConfig {
             exclusions: Default::default(),
@@ -1404,6 +1492,11 @@ mod tests {
             reserved0: 0,
             mouse_trail_rgba: 0x11223344,
             mouse_click_rgba: 0xAABBCC80,
+            mouse_highlight_rgba: 0,
+            record_mouse_clicks: 0,
+            keyboard_font_family_utf8: std::ptr::null(),
+            keyboard_cjk_font_family_utf8: std::ptr::null(),
+            keyboard_font_weight: 0,
             reserved: [0; 64],
             show_keyboard: 0,
             keyboard_background_rgba: 0,

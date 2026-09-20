@@ -17,11 +17,37 @@ const MAX_CACHE_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeyboardOverlayConfig {
+    pub font: Option<KeyboardOverlayFont>,
     pub keycap_size: u32,
     pub background_rgba: [u8; 4],
     pub text_rgba: [u8; 4],
     pub border_rgba: [u8; 4],
     pub labels: BTreeMap<u16, String>,
+}
+
+/// Application-resolved UI families and OpenType weight (1..=999).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeyboardOverlayFont {
+    pub family: String,
+    pub cjk_family: String,
+    pub weight: u32,
+}
+
+impl KeyboardOverlayFont {
+    pub fn new(family: &str, cjk_family: &str, weight: u32) -> Result<Self, String> {
+        if !(1..=999).contains(&weight)
+            || [family, cjk_family].iter().any(|name| {
+                name.trim().is_empty() || name.len() > 256 || name.chars().any(char::is_control)
+            })
+        {
+            return Err("invalid keyboard font family or weight".into());
+        }
+        Ok(Self {
+            family: family.into(),
+            cjk_family: cjk_family.into(),
+            weight,
+        })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -484,6 +510,87 @@ mod tests {
             modifiers: mods.iter().map(|key| (*key, format!("{key}"))).collect(),
         }
     }
+    #[test]
+    fn mouse_and_keyboard_holds_share_a_chord_and_release_independently() {
+        let mut model = KeyboardModel::default();
+        let key = |key, down, at_ms| KeyEvent {
+            at_ms,
+            key,
+            down,
+            label: format!("{key}"),
+            modifiers: vec![],
+        };
+        model.event(key(65, true, 0));
+        model.event(key(0x200, true, 10));
+        assert_eq!(model.rows.len(), 1);
+        assert_eq!(model.rows[0].keys.len(), 2);
+        model.event(key(65, false, 20));
+        assert!(model.rows[0].released.is_none());
+        model.event(key(0x200, false, 30));
+        assert_eq!(model.rows[0].released, Some(30));
+    }
+
+    #[test]
+    fn mouse_buttons_share_hold_release_and_fade_without_colliding_with_keys() {
+        use crate::mouse_hook::{MouseClickObservation, ObservedMouseButton};
+        let style = KeyboardOverlayConfig {
+            font: None,
+            keycap_size: 64,
+            background_rgba: [0; 4],
+            text_rgba: [255; 4],
+            border_rgba: [0; 4],
+            labels: [(0x11, "Ctrl".into()), (0x203, "Side four".into())].into(),
+        };
+        for button in [
+            ObservedMouseButton::Left,
+            ObservedMouseButton::Right,
+            ObservedMouseButton::Middle,
+            ObservedMouseButton::Button4,
+            ObservedMouseButton::Button5,
+        ] {
+            let mut model = KeyboardModel::default();
+            let mut observation = MouseClickObservation {
+                at: std::time::Instant::now(),
+                x: 0,
+                y: 0,
+                button,
+                down: true,
+                modifiers: [true, false, false, false],
+            };
+            let mut default_style = style.clone();
+            default_style.labels.clear();
+            assert!(
+                observation
+                    .event(0, &default_style, true)
+                    .modifiers
+                    .iter()
+                    .all(|(_, label)| !label.is_empty())
+            );
+            let event = observation.event(10, &style, false);
+            assert!(event.key >= 0x200 && event.modifiers.is_empty());
+            model.event(event.clone());
+            model.event(event);
+            assert_eq!(model.rows.len(), 1);
+            assert_eq!(model.rows[0].keys.len(), 1);
+            assert!(model.rows[0].released.is_none());
+            assert_eq!(
+                observation.event(20, &style, true).modifiers,
+                [(0x11, "Ctrl".into())]
+            );
+            observation.down = false;
+            model.event(observation.event(100, &style, false));
+            assert_eq!(model.rows[0].released, Some(100));
+            assert_eq!(model.rows[0].opacity(100 + HOLD_MS), 1.0);
+            assert_eq!(model.rows[0].opacity(100 + HOLD_MS + FADE_MS), 0.0);
+            observation.down = true;
+            model.event(observation.event(200, &style, false));
+            assert_eq!(model.rows.len(), 2, "double clicks remain distinct");
+            model.reset(300);
+            assert!(model.held.is_empty());
+            assert!(model.rows.iter().all(|row| row.released.is_some()));
+        }
+    }
+
     #[test]
     fn shortcuts_are_combined_but_successive_actions_are_separate() {
         let mut m = KeyboardModel::default();

@@ -14,7 +14,7 @@ typedef struct SnowRecordingEffectsKeyLabel {
     const char* label_utf8;
 } SnowRecordingEffectsKeyLabel;
 
-#define SNOW_RECORDING_EFFECTS_CONFIG_VERSION 3u
+#define SNOW_RECORDING_EFFECTS_CONFIG_VERSION 5u
 typedef struct SnowRecordingEffectsConfig {
     uint32_t version;
     uint32_t struct_size;
@@ -31,6 +31,15 @@ typedef struct SnowRecordingEffectsConfig {
     uint64_t generation;
     /* Version 3: keycap height in pixels (32..128). */
     uint32_t keyboard_size;
+    uint32_t reserved_v3;
+    /* Version 4: live alpha approximation of the saved multiply highlight. */
+    uint32_t highlight_rgba;
+    uint32_t record_mouse_clicks;
+    /* Version 5: optional application font; strings are copied during configuration.
+       Null family selects the system UI font. Weight uses OpenType values (1..999). */
+    const char* keyboard_font_family_utf8;
+    const char* keyboard_cjk_font_family_utf8;
+    uint32_t keyboard_font_weight;
 } SnowRecordingEffectsConfig;
 
 typedef struct SnowRecordingEffectsTile {
