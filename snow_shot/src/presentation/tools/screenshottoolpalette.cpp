@@ -831,6 +831,7 @@ ScreenshotToolPalette::ScreenshotToolPalette(const Options& options, QWidget* pa
 }
 
 ScreenshotToolPalette::~ScreenshotToolPalette() {
+    finishScrollingSelectionMove();
     m_destroying = true;
     m_styleControls->clearTextStylePopupInteractions();
     for (const DrawingToolGroup& group : std::as_const(m_drawingToolGroups)) {
@@ -1240,6 +1241,7 @@ bool ScreenshotToolPalette::setSecondaryToolbarVisibility(bool actionToolbarVisi
     if (m_selectActionLayout != nullptr) {
         m_selectActionLayout->invalidate();
         m_selectActionPanel->updateGeometry();
+        applyCumulativeStyleLayoutMetrics(m_scrollingRecognitionControls);
         applyCumulativeStyleLayoutMetrics(m_selectActionPanel);
     }
     // Visibility changes which secondary row participates in the root layout.
@@ -1716,10 +1718,13 @@ std::optional<ScreenshotToolPalette::Tool> ScreenshotToolPalette::activeTool() c
 }
 
 void ScreenshotToolPalette::setScrollingScreenshotMode(bool enabled) {
+    if (!enabled)
+        finishScrollingSelectionMove();
     if (m_scrollingScreenshotMode == enabled) {
         return;
     }
     m_scrollingScreenshotMode = enabled;
+    updateScrollingRecognitionButtons();
     if (m_scrollingAutoScroll) {
         m_scrollingAutoScroll = false;
         updateScrollingRecognitionButtons();
@@ -2079,6 +2084,7 @@ void ScreenshotToolPalette::setOcrEnabled(bool enabled) {
 }
 
 void ScreenshotToolPalette::setScrollingRecognitionMode(ScreenshotScrollingRecognitionMode mode) {
+    finishScrollingSelectionMove();
     if (m_scrollingRecognitionMode == mode) {
         updateScrollingRecognitionButtons();
         return;
@@ -2093,6 +2099,14 @@ ScreenshotScrollingRecognitionMode ScreenshotToolPalette::scrollingRecognitionMo
 }
 
 void ScreenshotToolPalette::updateScrollingRecognitionButtons() {
+    if (m_scrollingMoveHorizontalButton)
+        m_scrollingMoveHorizontalButton->setEnabled(
+            m_scrollingScreenshotMode &&
+            m_scrollingRecognitionMode == ScreenshotScrollingRecognitionMode::Horizontal);
+    if (m_scrollingMoveVerticalButton)
+        m_scrollingMoveVerticalButton->setEnabled(m_scrollingScreenshotMode &&
+                                                  m_scrollingRecognitionMode ==
+                                                      ScreenshotScrollingRecognitionMode::Vertical);
     setScreenshotToolPaletteButtonActive(m_scrollingAutoScrollButton, m_scrollingAutoScroll);
     const auto updateButton = [this](adqt::widgets::AdButton* button,
                                      ScreenshotScrollingRecognitionMode mode) {
@@ -2864,7 +2878,8 @@ void ScreenshotToolPalette::applyScaledToolbarMetrics() {
             configureScreenshotToolPaletteSelectEditor(editor, metrics);
         }
         for (adqt::widgets::AdButton* button :
-             {m_scrollingVerticalButton, m_scrollingHorizontalButton}) {
+             {m_scrollingVerticalButton, m_scrollingHorizontalButton,
+              m_scrollingMoveHorizontalButton, m_scrollingMoveVerticalButton}) {
             configureScreenshotToolPaletteStyleButton(button, nullptr, metrics);
         }
         if (m_scrollingRecognitionControls != nullptr &&
@@ -2972,6 +2987,7 @@ void ScreenshotToolPalette::applyScaledToolbarMetrics() {
                                   QSizePolicy::Fixed, QSizePolicy::Minimum);
         }
     }
+    applyCumulativeStyleLayoutMetrics(m_scrollingRecognitionControls);
     applyCumulativeStyleLayoutMetrics(m_selectActionPanel);
 
     for (QFrame* panel : m_panelFrames) {
@@ -3331,7 +3347,58 @@ bool ScreenshotToolPalette::handleToolbarWheel(QWheelEvent* event) {
     return true;
 }
 
+void ScreenshotToolPalette::finishScrollingSelectionMove() {
+    if (!m_scrollingMoveButton)
+        return;
+    const auto button = m_scrollingMoveButton;
+    m_scrollingMoveButton.clear();
+    button->setDown(false);
+    if (QWidget::mouseGrabber() == button)
+        button->releaseMouse();
+    emit scrollingSelectionMoveFinished();
+}
+
 bool ScreenshotToolPalette::eventFilter(QObject* watched, QEvent* event) {
+    if (event && watched &&
+        (watched == m_scrollingMoveHorizontalButton || watched == m_scrollingMoveVerticalButton)) {
+        auto* button = static_cast<adqt::widgets::AdButton*>(watched);
+        if (event->type() == QEvent::MouseButtonPress && button->isEnabled()) {
+            auto* mouse = static_cast<QMouseEvent*>(event);
+            if (mouse->button() == Qt::LeftButton) {
+                finishScrollingSelectionMove();
+                m_scrollingMoveButton = button;
+                button->setDown(true);
+                button->grabMouse();
+                emit scrollingSelectionMoveStarted(
+                    button == m_scrollingMoveHorizontalButton
+                        ? ScreenshotScrollingRecognitionMode::Horizontal
+                        : ScreenshotScrollingRecognitionMode::Vertical,
+                    mouse->globalPosition().toPoint());
+                return true;
+            }
+        }
+        if (m_scrollingMoveButton == button) {
+            if (event->type() == QEvent::MouseMove) {
+                auto* mouse = static_cast<QMouseEvent*>(event);
+                if (!(mouse->buttons() & Qt::LeftButton))
+                    finishScrollingSelectionMove();
+                else
+                    emit scrollingSelectionMoveUpdated(mouse->globalPosition().toPoint());
+                return true;
+            }
+            if (event->type() == QEvent::MouseButtonRelease &&
+                static_cast<QMouseEvent*>(event)->button() == Qt::LeftButton) {
+                emit scrollingSelectionMoveUpdated(
+                    static_cast<QMouseEvent*>(event)->globalPosition().toPoint());
+                finishScrollingSelectionMove();
+                return true;
+            }
+            if (event->type() == QEvent::UngrabMouse || event->type() == QEvent::Hide ||
+                event->type() == QEvent::WindowDeactivate || event->type() == QEvent::Destroy ||
+                (event->type() == QEvent::EnabledChange && !button->isEnabled()))
+                finishScrollingSelectionMove();
+        }
+    }
     if (m_options.recordingDrawingMode && event != nullptr && event->type() == QEvent::KeyPress) {
         auto* key = static_cast<QKeyEvent*>(event);
         if (key->key() == Qt::Key_Escape && !key->isAutoRepeat()) {
@@ -6040,6 +6107,9 @@ void ScreenshotToolPalette::clearSecondaryResourceBindings() {
     m_tableResetButton = nullptr;
     m_textFormattingSelect = nullptr;
     m_textPunctuationSelect = nullptr;
+    finishScrollingSelectionMove();
+    m_scrollingMoveHorizontalButton = nullptr;
+    m_scrollingMoveVerticalButton = nullptr;
     m_scrollingRecognitionControls = nullptr;
     m_scrollingAutoScrollButton = nullptr;
     m_scrollingVerticalButton = nullptr;
@@ -6701,6 +6771,7 @@ void ScreenshotToolPalette::createScrollingRecognitionActionFamily() {
     m_scrollingRecognitionControls->setObjectName(
         QStringLiteral("screenshotScrollingRecognitionMode"));
     auto* layout = new QHBoxLayout(m_scrollingRecognitionControls);
+    m_styleControlLayouts.push_back(layout);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
     m_scrollingVerticalButton = createScreenshotToolPaletteStyleActionButton(
@@ -6726,11 +6797,36 @@ void ScreenshotToolPalette::createScrollingRecognitionActionFamily() {
     layout->addWidget(m_scrollingVerticalButton);
     addStyleToolbarSpacing(layout, STYLE_ITEM_SPACING);
     layout->addWidget(m_scrollingHorizontalButton);
+    addStyleToolbarSpacing(layout, STYLE_GROUP_SPACING * 2);
+    auto* movementSeparator = createStyleToolbarSeparator(m_scrollingRecognitionControls);
+    movementSeparator->setObjectName(QStringLiteral("screenshotScrollingMovementSeparator"));
+    layout->addWidget(movementSeparator);
+    addStyleToolbarSpacing(layout, STYLE_GROUP_SPACING * 2);
+    m_scrollingMoveHorizontalButton = createScreenshotToolPaletteStyleActionButton(
+        m_scrollingRecognitionControls,
+        QT_TR_NOOP("Move selection horizontally (press and hold to drag)"),
+        custom_outlined_icons::MoveSelectionHorizontal(), actionButtonMetrics(m_physicalScale));
+    m_scrollingMoveVerticalButton = createScreenshotToolPaletteStyleActionButton(
+        m_scrollingRecognitionControls,
+        QT_TR_NOOP("Move selection vertically (press and hold to drag)"),
+        custom_outlined_icons::MoveSelectionVertical(), actionButtonMetrics(m_physicalScale));
+    m_scrollingMoveHorizontalButton->setObjectName(
+        QStringLiteral("screenshotScrollingMoveHorizontalButton"));
+    m_scrollingMoveVerticalButton->setObjectName(
+        QStringLiteral("screenshotScrollingMoveVerticalButton"));
+    for (auto* button : {m_scrollingMoveHorizontalButton, m_scrollingMoveVerticalButton}) {
+        button->installEventFilter(this);
+        button->setCursor(button == m_scrollingMoveHorizontalButton ? Qt::SizeHorCursor
+                                                                    : Qt::SizeVerCursor);
+    }
+    layout->addWidget(m_scrollingMoveHorizontalButton);
+    addStyleToolbarSpacing(layout, STYLE_ITEM_SPACING);
+    layout->addWidget(m_scrollingMoveVerticalButton);
     m_selectActionLayout->addWidget(m_scrollingRecognitionControls);
     stampScreenshotToolbarReferenceWidth(m_scrollingRecognitionControls,
-                                         actionButtonMetrics(1.0).buttonSize * 3 +
-                                             STYLE_GROUP_SPACING * 4 + STYLE_ITEM_SPACING +
-                                             TOOLBAR_SEPARATOR_WIDTH);
+                                         actionButtonMetrics(1.0).buttonSize * 5 +
+                                             STYLE_GROUP_SPACING * 8 + STYLE_ITEM_SPACING * 2 +
+                                             TOOLBAR_SEPARATOR_WIDTH * 2);
     connect(m_scrollingAutoScrollButton, &adqt::widgets::AdButton::clicked, this, [this]() {
         m_scrollingAutoScroll = !m_scrollingAutoScroll;
         updateScrollingRecognitionButtons();
