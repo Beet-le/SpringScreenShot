@@ -11,8 +11,15 @@
       "name": "application-icon",
       "source": "app-icon.svg",
       "colorModel": "fullColor",
-      "fit": "contain",
-      "allowEmbeddedDataImages": true
+      "fit": "contain"
+    },
+    {
+      "variant": "app",
+      "symbol": "ApplicationTitleBarIcon",
+      "name": "application-title-bar-icon",
+      "source": "app-icon-titlebar.svg",
+      "colorModel": "fullColor",
+      "fit": "contain"
     },
     {
       "variant": "brand",
