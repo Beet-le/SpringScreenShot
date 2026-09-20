@@ -638,14 +638,18 @@ int main(int argc, char* argv[]) {
                         snow_shot::presentation::GlobalShortcutAction::ToggleGlobalHotkeys} &&
                 hotkeyToggleMenuAction->isChecked(),
             "the hotkey toggle tray entry should dispatch its command and check its state");
-    controller.setGlobalHotkeysDisabled(false);
-    controller.setGlobalHotkeysDisabled(true);
+    controller.setQuickActionChecked(
+        snow_shot::presentation::GlobalShortcutAction::ToggleGlobalHotkeys, false);
+    controller.setQuickActionChecked(
+        snow_shot::presentation::GlobalShortcutAction::ToggleGlobalHotkeys, true);
     require(hotkeyToggleMenuAction->isChecked() && quickActions.size() == 2,
             "the manager-driven check sync must never redispatch the command");
-    controller.setGlobalHotkeysDisabled(false);
+    controller.setQuickActionChecked(
+        snow_shot::presentation::GlobalShortcutAction::ToggleGlobalHotkeys, false);
     require(!hotkeyToggleMenuAction->isChecked() && quickActions.size() == 2,
             "the manager-driven check sync must mirror the enabled state");
-    controller.setGlobalHotkeysDisabled(true);
+    controller.setQuickActionChecked(
+        snow_shot::presentation::GlobalShortcutAction::ToggleGlobalHotkeys, true);
     controller.setMenuOptions({QStringLiteral("quick.screenshot"), QStringLiteral("tray.exit")});
     const QList<QAction*> compactVisibleActions = visibleActions();
     require(compactVisibleActions.size() == 3 && compactVisibleActions.at(1)->isSeparator() &&
@@ -658,6 +662,32 @@ int main(int argc, char* argv[]) {
     require(windowGroupMenuAction->isVisible() && hotkeyToggleMenuAction->isVisible() &&
                 !hotkeyToggleMenuAction->isChecked(),
             "restoring the defaults should bring the window group submenu back");
+
+    const QString fullscreenToggleId =
+        QStringLiteral("quick.toggle-disable-on-focused-fullscreen-window");
+    controller.setMenuOptions({fullscreenToggleId, QStringLiteral("tray.exit")});
+    QAction* fullscreenToggleMenuAction = actionForId(fullscreenToggleId);
+    require(fullscreenToggleMenuAction != nullptr && fullscreenToggleMenuAction->isCheckable() &&
+                !fullscreenToggleMenuAction->isChecked(),
+            "the fullscreen suppression tray entry should be a checkable view of the setting");
+    controller.setQuickActionChecked(
+        snow_shot::presentation::GlobalShortcutAction::ToggleDisableOnFocusedFullscreenWindow,
+        true);
+    require(fullscreenToggleMenuAction->isChecked() && quickActions.size() == 3,
+            "the store-driven check sync must mirror suppression without redispatching");
+    fullscreenToggleMenuAction->trigger();
+    require(quickActions.size() == 4 && quickActions.last() ==
+                                            snow_shot::presentation::GlobalShortcutAction::
+                                                ToggleDisableOnFocusedFullscreenWindow,
+            "clicking the fullscreen suppression entry should dispatch its quick action");
+    controller.setQuickActionChecked(
+        snow_shot::presentation::GlobalShortcutAction::ToggleDisableOnFocusedFullscreenWindow,
+        false);
+    require(!fullscreenToggleMenuAction->isChecked(),
+            "clearing fullscreen suppression should uncheck the tray entry");
+    controller.setMenuOptions(defaultMenuOptions);
+    require(!fullscreenToggleMenuAction->isVisible() && quickActions.size() == 4,
+            "hiding the fullscreen suppression entry must not redispatch its quick action");
     require(groupManager.setActiveGroup(QStringLiteral("default")),
             "the default group should be activatable for the localized title check");
 

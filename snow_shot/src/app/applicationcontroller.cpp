@@ -54,6 +54,8 @@ const QString kTrayLeftClickActionKey = QStringLiteral("tray/left_click_action")
 const QString kTrayMiddleClickActionKey = QStringLiteral("tray/middle_click_action");
 const QString kTrayMenuOptionsKey = QStringLiteral("tray/menu_options");
 const QString kScreenshotDelaySecondsKey = QStringLiteral("screenshot/delay_seconds");
+const QString kFullscreenSuppressionKey =
+    QStringLiteral("global_shortcuts/disable_on_focused_fullscreen_window");
 const QString kOcrModelTypeKey = QStringLiteral("text_recognition/model_type");
 const QString kOcrDirectMlKey = QStringLiteral("text_recognition/direct_ml_acceleration");
 
@@ -131,7 +133,10 @@ class ApplicationController::Impl {
                          });
         QObject::connect(&globalShortcutManager,
                          &presentation::GlobalShortcutManager::globalHotkeysEnabledChanged, &q,
-                         [this](bool enabled) { systemTray.setGlobalHotkeysDisabled(!enabled); });
+                         [this](bool enabled) {
+                             systemTray.setQuickActionChecked(
+                                 presentation::GlobalShortcutAction::ToggleGlobalHotkeys, !enabled);
+                         });
         QObject::connect(&app, &QCoreApplication::aboutToQuit, &systemTray,
                          &presentation::SystemTrayController::hide);
         QObject::connect(&app, &QCoreApplication::aboutToQuit, &globalMouseManager,
@@ -282,6 +287,8 @@ class ApplicationController::Impl {
         applyRuntimeConfiguration(configuration.value(kTrayMenuOptionsKey), kTrayMenuOptionsKey);
         applyRuntimeConfiguration(configuration.value(kScreenshotDelaySecondsKey),
                                   kScreenshotDelaySecondsKey);
+        applyRuntimeConfiguration(configuration.value(kFullscreenSuppressionKey),
+                                  kFullscreenSuppressionKey);
         QObject::connect(&configuration, &storage::ConfigurationStore::valueChanged, &q,
                          [this](const QString& key, const QJsonValue& value) {
                              applyRuntimeConfiguration(value, key);
@@ -441,6 +448,10 @@ class ApplicationController::Impl {
             systemTray.setMenuOptions(stringList(value));
         } else if (key == kScreenshotDelaySecondsKey) {
             systemTray.setScreenshotDelaySeconds(value.toInt(3));
+        } else if (key == kFullscreenSuppressionKey) {
+            systemTray.setQuickActionChecked(
+                presentation::GlobalShortcutAction::ToggleDisableOnFocusedFullscreenWindow,
+                value.toBool());
         } else if (key == kOcrModelTypeKey || key == kOcrDirectMlKey ||
                    key == QStringLiteral("text_recognition/resident_process") ||
                    key == QStringLiteral("text_recognition/model_hot_start")) {
@@ -612,6 +623,12 @@ class ApplicationController::Impl {
             globalShortcutManager.setGlobalHotkeysEnabled(
                 !globalShortcutManager.globalHotkeysEnabled());
             break;
+        case presentation::GlobalShortcutAction::ToggleDisableOnFocusedFullscreenWindow: {
+            storage::GlobalShortcutSettings shortcutSettings;
+            shortcutSettings.setDisableOnFocusedFullscreenWindow(
+                !shortcutSettings.disableOnFocusedFullscreenWindow());
+            break;
+        }
         }
     }
 

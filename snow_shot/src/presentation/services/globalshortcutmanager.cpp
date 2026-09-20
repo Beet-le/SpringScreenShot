@@ -22,7 +22,7 @@ namespace {
 constexpr int MAX_SHORTCUTS_PER_ACTION = 2;
 constexpr int FIRST_REGISTRATION_ID = 0x2200;
 constexpr int LAST_REGISTRATION_ID = 0xBFFF;
-constexpr std::size_t ACTION_COUNT = 17;
+constexpr std::size_t ACTION_COUNT = 18;
 
 constexpr std::array<GlobalShortcutAction, ACTION_COUNT> ALL_ACTIONS = {
     GlobalShortcutAction::Screenshot,
@@ -42,6 +42,7 @@ constexpr std::array<GlobalShortcutAction, ACTION_COUNT> ALL_ACTIONS = {
     GlobalShortcutAction::TranslateSelectedText,
     GlobalShortcutAction::PinSelectedFiles,
     GlobalShortcutAction::ToggleGlobalHotkeys,
+    GlobalShortcutAction::ToggleDisableOnFocusedFullscreenWindow,
 };
 
 std::size_t actionIndex(GlobalShortcutAction action) {
@@ -155,6 +156,8 @@ shortcuts::ShortcutBindingList persistedShortcuts(const storage::ShortcutSetting
         return settings.translateSelectedText();
     case GlobalShortcutAction::ToggleGlobalHotkeys:
         return settings.toggleGlobalHotkeys();
+    case GlobalShortcutAction::ToggleDisableOnFocusedFullscreenWindow:
+        return settings.toggleDisableOnFocusedFullscreenWindow();
     }
     return {};
 }
@@ -196,6 +199,8 @@ bool persistShortcuts(const storage::ShortcutSettings& settings, GlobalShortcutA
         return settings.setTranslateSelectedText(bindings);
     case GlobalShortcutAction::ToggleGlobalHotkeys:
         return settings.setToggleGlobalHotkeys(bindings);
+    case GlobalShortcutAction::ToggleDisableOnFocusedFullscreenWindow:
+        return settings.setToggleDisableOnFocusedFullscreenWindow(bindings);
     }
     return false;
 }
@@ -234,18 +239,21 @@ class GlobalShortcutManager::Impl {
         m_backend->setActivationHandler([this](int registrationId) {
             const QString activeKey = m_registrationKeysById.value(registrationId);
             const auto active = m_activeRegistrations.constFind(activeKey);
-            // The toggle shortcut must stay usable while global hotkeys are
-            // disabled so the disabled state can always be undone by keyboard.
-            if (active == m_activeRegistrations.cend() ||
-                (!m_globalHotkeysEnabled &&
-                 active->action != GlobalShortcutAction::ToggleGlobalHotkeys) ||
+            if (active == m_activeRegistrations.cend()) {
+                return;
+            }
+            // Gate-control shortcuts must stay usable under both the session
+            // disablement and fullscreen suppression so either can be undone
+            // from the keyboard.
+            const bool gateControl = controlsGlobalHotkeyGates(active->action);
+            if ((!m_globalHotkeysEnabled && !gateControl) ||
                 (active->action == GlobalShortcutAction::TranslateSelectedText &&
                  !storage::ExtendedFeaturesSettings().translationPageEnabled())) {
                 return;
             }
-            const bool suppress =
-                storage::GlobalShortcutSettings().disableOnFocusedFullscreenWindow();
-            if (!suppress || !m_focusedFullscreenDetector || !m_focusedFullscreenDetector()) {
+            if (gateControl ||
+                !storage::GlobalShortcutSettings().disableOnFocusedFullscreenWindow() ||
+                !m_focusedFullscreenDetector || !m_focusedFullscreenDetector()) {
                 emit q.activated(active->action);
             }
         });
