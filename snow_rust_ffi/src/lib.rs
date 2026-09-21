@@ -19,6 +19,7 @@ pub mod stitch_images {
     pub use snow_stitch_images_c::*;
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 pub mod ui_selector {
     pub use snow_ui_selector_c::*;
 }

@@ -31,7 +31,8 @@ class ScreenshotSelectionToolbarWidget final : public QWidget {
     void prepareForDisplay();
     void prewarm();
     void setSelectionState(const QRect& selection, bool aspectRatioLocked, int cornerRadius,
-                           int shadowWidth, DisplayMode displayMode = DisplayMode::Full);
+                           int shadowWidth, DisplayMode displayMode = DisplayMode::Full,
+                           QSize outputPixels = {});
     QSize contentSizeHint() const;
     bool containsInteractiveGlobalPoint(const QPoint& globalPosition) const;
     void moveContentTo(const QPoint& position);
@@ -80,6 +81,10 @@ class ScreenshotSelectionToolbarWidget final : public QWidget {
     QLabel* m_xLabel = nullptr;
     QLabel* m_yLabel = nullptr;
     QLabel* m_widthLabel = nullptr;
+    QLabel* m_sizeUnitLabel = nullptr;
+    QList<QLabel*> m_canvasUnitLabels;
+    // Nonempty for point-backed canvases; preview dimensions are capture pixels.
+    QSize m_outputPixels;
     QLabel* m_heightLabel = nullptr;
     QLabel* m_radiusLabel = nullptr;
     QLabel* m_shadowLabel = nullptr;

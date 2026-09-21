@@ -121,6 +121,7 @@ enum class SettingsSwitchBinding {
     ScreenshotCaptureCursor,
     ScreenshotCaptureUiInScrollingScreenshot,
     ScreenshotShutterSoundNotification,
+    ScreenshotConfirmBeforeExitingViaShortcut,
     ScreenshotRestoreOriginalScreenColors,
     ScreenshotCopyImageFileToClipboard,
     SaveRecognitionResultAsImage,
@@ -128,12 +129,14 @@ enum class SettingsSwitchBinding {
     PinAutoResizeWindow,
     OriginalImageTranslation,
     TranslationPageEnabled,
+    JumpToTranslationPage,
     StandaloneTranslationWindow,
     LoopAnimatedImages,
     ScreenRecordingCaptureToolbar,
     DisableHotkeysOnFocusedFullscreen,
     AutoStartAtBoot,
     LaunchAsAdministrator,
+    DrawingRememberLastUsedTool,
 };
 
 struct SettingsSwitchDefinition {
@@ -174,6 +177,7 @@ struct SettingsSliderDefinition {
 
 enum class SettingsColorBinding {
     ThemePrimaryColor,
+    SelectionBorderColor,
     SelectionMaskColor,
     CursorGuideLineColor,
     MonitorCenterGuideLineColor,
@@ -244,6 +248,11 @@ struct SettingsShortcutActionDefinition {
     SettingsCommand command;
     std::function<adqt::icons::IconRef()> iconFactory;
     SettingsShortcutAdjustment adjustment = SettingsShortcutAdjustment::None;
+    // Overrides the item title on tray menu entries when valid, so the tray can
+    // keep a historical label while the settings page shows a longer one.
+    TranslatableText trayLabel;
+    // Marks the tray menu entry as checkable so it can mirror runtime state.
+    bool trayCheckable = false;
 };
 
 enum class SettingsLocalShortcutScope {
@@ -265,6 +274,8 @@ enum class SettingsActionBinding {
     ClearThumbnailCache,
     ClearRecordingTemp,
     CopyTodayLog,
+    ExportConfiguration,
+    ImportConfiguration,
 };
 
 enum class SettingsActionAccent {
@@ -279,15 +290,26 @@ struct SettingsConfirmationDefinition {
     TranslatableText rejectText;
 };
 
+struct SettingsActionFileOpenDefinition {
+    TranslatableText dialogTitle;
+    TranslatableText fileFilter;
+};
+
 struct SettingsActionDefinition {
     SettingsActionBinding binding = SettingsActionBinding::ClearCaptureHistory;
     TranslatableText buttonText;
     SettingsActionAccent accent = SettingsActionAccent::Neutral;
     std::function<adqt::icons::IconRef()> iconFactory;
     std::optional<SettingsConfirmationDefinition> confirmation;
+    std::optional<SettingsActionFileOpenDefinition> fileOpen;
+    std::optional<TranslatableText> successMessage;
 };
 
 enum class SettingsCustomRenderer {
+    PermissionScreenRecording,
+    PermissionAccessibility,
+    PermissionInputMonitoring,
+    PermissionMicrophone,
     CustomAiModels,
     StorageStatus,
     DrawingToolbarEditor,
@@ -306,7 +328,6 @@ struct SettingsCustomDefinition {
 
 enum class SettingsTrayMenuOptionKind {
     QuickAction,
-    DisableGlobalHotkeys,
     ShowMainWindow,
     Exit,
     WindowGrouping,
@@ -318,6 +339,7 @@ struct SettingsTrayMenuOptionDefinition {
     SettingsTrayMenuOptionKind kind = SettingsTrayMenuOptionKind::QuickAction;
     GlobalShortcutAction shortcutAction = GlobalShortcutAction::Screenshot;
     std::function<adqt::icons::IconRef()> iconFactory;
+    bool checkable = false;
 };
 
 struct SettingsTrayMenuGroupDefinition {

@@ -246,6 +246,13 @@ void pipelineTest(ScreenshotScrollingRecognitionMode mode) {
             if (received < 3) {
                 if (received == 1) {
                     pipeline->pause(2);
+                    // A release immediately followed by another press must invalidate
+                    // the queued resume before it can recreate a capture source.
+                    pipeline->resume(2, viewport, []() -> std::unique_ptr<ScrollingFrameSource> {
+                        require(false, "superseded resume created a source during dragging");
+                        return {};
+                    });
+                    pipeline->pause(2);
                     state = std::make_shared<ManualState>();
                     pipeline->resume(2, viewport,
                                      [state]() { return std::make_unique<ManualSource>(state); });
@@ -287,6 +294,63 @@ void pipelineTest(ScreenshotScrollingRecognitionMode mode) {
     thumbnail.render(&painted);
     require(imageChecksum(painted) != blank, "offscreen thumbnail paint is blank");
     require(!parent.isVisible(), "offscreen parent became visible");
+}
+
+void pauseWithDispatchedFramePreservesPreview() {
+    auto state = std::make_shared<ManualState>();
+    const QImage frame = fixture().copy(0, 0, 400, 400);
+    state->push(frame);
+    QEventLoop loop;
+    QWidget host;
+    ScreenshotScrollingThumbnailWidget thumbnail(host);
+    int delivered = 0;
+    QString error;
+    QImage snapshot;
+    ScreenshotScrollingPipeline pipeline(
+        [&](ScrollingPipelineFrame result) {
+            ++delivered;
+            thumbnail.setStitchedImage(result.previewImage, result.sourceSize, result.change,
+                                       result.addedRows, result.previewReplaced,
+                                       result.replacedPreviewRows);
+        },
+        [&](quint64, QString value) {
+            error = value;
+            loop.quit();
+        });
+    pipeline.begin(19, frame.size(), ScreenshotScrollingRecognitionMode::Vertical,
+                   [state] { return std::make_unique<ManualSource>(state); });
+    {
+        std::unique_lock lock(state->mutex);
+        require(state->wake.wait_for(lock, std::chrono::seconds(5),
+                                     [&] { return state->receiveCalls >= 2; }),
+                "source must publish a frame before the pause race");
+    }
+    // sendPostedEvents processes the capture notification already queued at entry,
+    // dispatching the worker. Its newly posted result stays queued until below.
+    QCoreApplication::sendPostedEvents(&pipeline, QEvent::MetaCall);
+    require(delivered == 0 && !pipeline.idle(), "frame must be in flight at pause");
+    pipeline.pause(19);
+    {
+        std::unique_lock lock(state->mutex);
+        require(state->wake.wait_for(lock, std::chrono::seconds(5), [&] { return state->stopped; }),
+                "pause must stop the native source");
+    }
+    state->push(fixture().copy(0, 25, 400, 400));
+    require(pipeline.requestSnapshot(30, 370, &loop,
+                                     [&](ScreenshotScrollingSnapshot value) {
+                                         snapshot = value.materialize();
+                                         loop.quit();
+                                     }),
+            "paused snapshot must remain available");
+    QTimer timeout;
+    timeout.setSingleShot(true);
+    QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+    timeout.start(5000);
+    loop.exec();
+    require(error.isEmpty() && delivered == 1 && !thumbnail.previewImageForTesting().isNull(),
+            "committed frame must update the preview while paused");
+    require(snapshot == frame.copy(0, 30, 400, 340),
+            "pause must preserve the trimmed result and reject later source frames");
 }
 
 void overloadTest() {
@@ -439,7 +503,8 @@ void pipelineDiagnosticsTest() {
             }
             if (step <= 3) {
                 event.kind = ScrollingSourceEvent::Kind::Frame;
-                event.frame.image = QImage(step == 1 ? 31 : 32, 32, QImage::Format_RGBA8888);
+                event.frame.image =
+                    QImage(32, 32, step == 1 ? QImage::Format_RGB32 : QImage::Format_RGBA8888);
                 event.frame.image.fill(Qt::white);
                 event.frame.duplicate = step == 2;
                 ++step;
@@ -468,7 +533,7 @@ void pipelineDiagnosticsTest() {
     };
     QTemporaryDir directory;
     DiagnosticsOptions options;
-    options.directories = {directory.path()};
+    options.directories = {QDir(directory.path()).canonicalPath()};
     options.enableCrashCapture = false;
     options.installMessageHandler = false;
     options.mirrorToConsole = false;
@@ -527,6 +592,34 @@ void pipelineDiagnosticsTest() {
     service.shutdown();
 }
 
+#ifdef Q_OS_MACOS
+void viewportReconfigurationTest() {
+    for (auto mode : {ScreenshotScrollingRecognitionMode::Vertical,
+                      ScreenshotScrollingRecognitionMode::Horizontal}) {
+        auto source = std::make_shared<ManualState>();
+        source->push(fixture().copy(0, 0, 200, 200));
+        QEventLoop loop;
+        QTimer timeout;
+        timeout.setSingleShot(true);
+        QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+        bool failed = false;
+        ScreenshotScrollingPipeline pipeline(
+            [](ScrollingPipelineFrame) {
+                require(false, "changed-scale frame reached the stitcher");
+            },
+            [&](quint64 generation, QString error) {
+                failed = generation == 7 && !error.isEmpty();
+                loop.quit();
+            });
+        pipeline.begin(7, QSize(400, 400), mode,
+                       [source] { return std::make_unique<ManualSource>(source); });
+        timeout.start(5000);
+        loop.exec();
+        require(failed, "scale-only reconfiguration must stop the scrolling session");
+    }
+}
+#endif
+
 void sourceFailureTest() {
     QEventLoop loop;
     QTimer timeout;
@@ -561,9 +654,13 @@ int main(int argc, char** argv) {
         pipelineTest(ScreenshotScrollingRecognitionMode::Vertical);
         std::cerr << "vertical pipeline passed\n";
         pipelineTest(ScreenshotScrollingRecognitionMode::Horizontal);
+        pauseWithDispatchedFramePreservesPreview();
         overloadTest();
         replaySourceTest();
         sourceFailureTest();
+#ifdef Q_OS_MACOS
+        viewportReconfigurationTest();
+#endif
         pipelineDiagnosticsTest();
         std::cout << "scrolling image replay tests passed\n";
         return 0;

@@ -11,6 +11,14 @@
             <source>The capture returned an invalid image</source>
             <translation>The capture returned an invalid image</translation>
         </message>
+        <message>
+            <source>The captured display geometry is invalid</source>
+            <translation>The captured display geometry is invalid</translation>
+        </message>
+        <message>
+            <source>The captured window geometry is invalid</source>
+            <translation>The captured window geometry is invalid</translation>
+        </message>
     </context>
     <context>
         <name>ScreenshotAutoFilterController</name>
@@ -26,12 +34,40 @@
             <translation>Automatic screenshot saving failed: %1</translation>
         </message>
         <message>
+            <source>Cancel</source>
+            <translation>Cancel</translation>
+        </message>
+        <message>
+            <source>Could not recapture the screen</source>
+            <translation>Could not recapture the screen</translation>
+        </message>
+        <message>
+            <source>Exit</source>
+            <translation>Exit</translation>
+        </message>
+        <message>
+            <source>Exit screenshot?</source>
+            <translation>Exit screenshot?</translation>
+        </message>
+        <message>
             <source>No recognized result is available to copy</source>
             <translation>No recognized result is available to copy</translation>
         </message>
         <message>
             <source>Save screenshot</source>
             <translation>Save screenshot</translation>
+        </message>
+        <message>
+            <source>Scrolling capture stopped because the display configuration changed. Select the region again.</source>
+            <translation>Scrolling capture stopped because the display configuration changed. Select the region again.</translation>
+        </message>
+        <message>
+            <source>Scrolling capture stopped. Check screen permissions and display settings, then try again.</source>
+            <translation>Scrolling capture stopped. Check screen permissions and display settings, then try again.</translation>
+        </message>
+        <message>
+            <source>Smart selection is using window mode. Enable Accessibility access in Screenshot settings to select window elements.</source>
+            <translation>Smart selection is using window mode. Enable Accessibility access in Screenshot settings to select window elements.</translation>
         </message>
         <message>
             <source>The clipboard content could not be pinned</source>
@@ -85,6 +121,10 @@
             <source>The scrolling screenshot could not be prepared</source>
             <translation>The scrolling screenshot could not be prepared</translation>
         </message>
+        <message>
+            <source>Your current screenshot will be discarded.</source>
+            <translation>Your current screenshot will be discarded.</translation>
+        </message>
     </context>
     <context>
         <name>ScreenshotOverlayWindow</name>
@@ -136,6 +176,10 @@
             <translation>Height</translation>
         </message>
         <message>
+            <source>Height (points)</source>
+            <translation>Height (points)</translation>
+        </message>
+        <message>
             <source>Lock aspect ratio</source>
             <translation>Lock aspect ratio</translation>
         </message>
@@ -183,6 +227,10 @@
             <source>Width</source>
             <translation>Width</translation>
         </message>
+        <message>
+            <source>Width (points)</source>
+            <translation>Width (points)</translation>
+        </message>
     </context>
     <context>
         <name>ScreenshotSelectionResizeWorkflow</name>
@@ -218,6 +266,10 @@
             <translation>Pixels</translation>
         </message>
         <message>
+            <source>Points</source>
+            <translation>Points</translation>
+        </message>
+        <message>
             <source>Shadow width</source>
             <translation>Shadow width</translation>
         </message>
@@ -232,6 +284,14 @@
         <message>
             <source>Y coordinate</source>
             <translation>Y coordinate</translation>
+        </message>
+        <message>
+            <source>pt</source>
+            <translation>pt</translation>
+        </message>
+        <message>
+            <source>px</source>
+            <translation>px</translation>
         </message>
     </context>
     <context>

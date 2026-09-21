@@ -113,6 +113,25 @@
         </message>
     </context>
     <context>
+        <name>AppPermissions</name>
+        <message>
+            <source>Accessibility</source>
+            <translation>Accessibility</translation>
+        </message>
+        <message>
+            <source>Input Monitoring</source>
+            <translation>Input Monitoring</translation>
+        </message>
+        <message>
+            <source>Microphone</source>
+            <translation>Microphone</translation>
+        </message>
+        <message>
+            <source>Screen &amp; System Audio Recording</source>
+            <translation>Screen &amp; System Audio Recording</translation>
+        </message>
+    </context>
+    <context>
         <name>CustomAiModelsSettingsWidget</name>
         <message>
             <source>%1 (Copy %2)</source>
@@ -341,8 +360,16 @@
             <translation>Cancel</translation>
         </message>
         <message>
+            <source>Command</source>
+            <translation>Command</translation>
+        </message>
+        <message>
             <source>Configure mouse combination for %1</source>
             <translation>Configure mouse combination for %1</translation>
+        </message>
+        <message>
+            <source>Control</source>
+            <translation>Control</translation>
         </message>
         <message>
             <source>Ctrl</source>
@@ -351,6 +378,10 @@
         <message>
             <source>Left-button drag</source>
             <translation>Left-button drag</translation>
+        </message>
+        <message>
+            <source>Middle-button drag</source>
+            <translation>Middle-button drag</translation>
         </message>
         <message>
             <source>Mouse button</source>
@@ -367,6 +398,10 @@
         <message>
             <source>OK</source>
             <translation>OK</translation>
+        </message>
+        <message>
+            <source>Option</source>
+            <translation>Option</translation>
         </message>
         <message>
             <source>Right-button drag</source>
@@ -401,12 +436,59 @@
             <translation>Unset</translation>
         </message>
         <message>
-            <source>Wheel drag</source>
-            <translation>Wheel drag</translation>
-        </message>
-        <message>
             <source>Windows</source>
             <translation>Windows</translation>
+        </message>
+    </context>
+    <context>
+        <name>PermissionGuide</name>
+        <message>
+            <source>Close guidance</source>
+            <translation>Close guidance</translation>
+        </message>
+        <message>
+            <source>Drag %1 to System Settings</source>
+            <translation>Drag %1 to System Settings</translation>
+        </message>
+        <message>
+            <source>Drag ‘%1’ into the permissions list above. If it is already listed, turn it on.</source>
+            <translation>Drag ‘%1’ into the permissions list above. If it is already listed, turn it on.</translation>
+        </message>
+        <message>
+            <source>Drag ‘%1’ into the permissions list in System Settings. If it is already listed, turn it on.</source>
+            <translation>Drag ‘%1’ into the permissions list in System Settings. If it is already listed, turn it on.</translation>
+        </message>
+        <message>
+            <source>Microphone access is unavailable. Open the installed application and try again.</source>
+            <translation>Microphone access is unavailable. Open the installed application and try again.</translation>
+        </message>
+        <message>
+            <source>Open the installed application to add it to the permissions list.</source>
+            <translation>Open the installed application to add it to the permissions list.</translation>
+        </message>
+        <message>
+            <source>Permission setup</source>
+            <translation>Permission setup</translation>
+        </message>
+        <message>
+            <source>Request Access</source>
+            <translation>Request Access</translation>
+        </message>
+        <message>
+            <source>Request microphone access, then allow it in the macOS prompt.</source>
+            <translation>Request microphone access, then allow it in the macOS prompt.</translation>
+        </message>
+        <message>
+            <source>Requesting…</source>
+            <translation>Requesting…</translation>
+        </message>
+        <message>
+            <source>This permission is restricted by your Mac's administrator.</source>
+            <translation>This permission is restricted by your Mac's administrator.</translation>
+        </message>
+        <message>
+            <source>Turn on microphone access for ‘%1’ in System Settings.</source>
+            <translation>Turn on microphone access for ‘%1’ in System Settings.</translation>
         </message>
     </context>
     <context>
@@ -513,6 +595,10 @@
             <source>The clipboard is unavailable.</source>
             <translation>The clipboard is unavailable.</translation>
         </message>
+        <message>
+            <source>The configuration could not be imported.</source>
+            <translation>The configuration could not be imported.</translation>
+        </message>
     </context>
     <context>
         <name>SettingsCatalog</name>
@@ -617,12 +703,20 @@
             <translation>Above normal</translation>
         </message>
         <message>
+            <source>Accessibility</source>
+            <translation>Accessibility</translation>
+        </message>
+        <message>
             <source>Active window</source>
             <translation>Active window</translation>
         </message>
         <message>
             <source>Age</source>
             <translation>Age</translation>
+        </message>
+        <message>
+            <source>All current application settings will be replaced by the archive's values. Some changes take effect after the app restarts.</source>
+            <translation>All current application settings will be replaced by the archive's values. Some changes take effect after the app restarts.</translation>
         </message>
         <message>
             <source>All screenshot history will be removed</source>
@@ -653,6 +747,10 @@
             <translation>Animated image frame rate</translation>
         </message>
         <message>
+            <source>App Permissions</source>
+            <translation>App Permissions</translation>
+        </message>
+        <message>
             <source>App-wide storage usage breakdown, location, mode, and latest errors</source>
             <translation>App-wide storage usage breakdown, location, mode, and latest errors</translation>
         </message>
@@ -679,6 +777,10 @@
         <message>
             <source>Arrow</source>
             <translation>Arrow</translation>
+        </message>
+        <message>
+            <source>Ask for confirmation when using the Cancel screenshot shortcut.</source>
+            <translation>Ask for confirmation when using the Cancel screenshot shortcut.</translation>
         </message>
         <message>
             <source>Auto</source>
@@ -717,8 +819,16 @@
             <translation>BMP</translation>
         </message>
         <message>
+            <source>Back up and restore application settings</source>
+            <translation>Back up and restore application settings</translation>
+        </message>
+        <message>
             <source>Background Fill</source>
             <translation>Background Fill</translation>
+        </message>
+        <message>
+            <source>Backup settings</source>
+            <translation>Backup settings</translation>
         </message>
         <message>
             <source>Balance encoding speed against compression efficiency</source>
@@ -779,6 +889,10 @@
         <message>
             <source>Capture every monitor and copy the monitor under the pointer</source>
             <translation>Capture every monitor and copy the monitor under the pointer</translation>
+        </message>
+        <message>
+            <source>Capture screenshots and record your screen and system audio.</source>
+            <translation>Capture screenshots and record your screen and system audio.</translation>
         </message>
         <message>
             <source>Capture selected text and open it in Translation</source>
@@ -873,16 +987,16 @@
             <translation>Choose the video encoder</translation>
         </message>
         <message>
-            <source>Choose what clicking the tray icon with the scroll wheel does</source>
-            <translation>Choose what clicking the tray icon with the scroll wheel does</translation>
-        </message>
-        <message>
             <source>Choose what happens automatically when text recognition completes</source>
             <translation>Choose what happens automatically when text recognition completes</translation>
         </message>
         <message>
             <source>Choose what left-clicking the tray icon does</source>
             <translation>Choose what left-clicking the tray icon does</translation>
+        </message>
+        <message>
+            <source>Choose what middle-clicking the tray icon does</source>
+            <translation>Choose what middle-clicking the tray icon does</translation>
         </message>
         <message>
             <source>Choose when recognized text can be selected on pinned screenshots.</source>
@@ -961,6 +1075,18 @@
             <translation>Color picker display mode</translation>
         </message>
         <message>
+            <source>Configuration</source>
+            <translation>Configuration</translation>
+        </message>
+        <message>
+            <source>Configuration exported to the clipboard.</source>
+            <translation>Configuration exported to the clipboard.</translation>
+        </message>
+        <message>
+            <source>Configuration imported.</source>
+            <translation>Configuration imported.</translation>
+        </message>
+        <message>
             <source>Configure application process behavior</source>
             <translation>Configure application process behavior</translation>
         </message>
@@ -997,8 +1123,16 @@
             <translation>Configure the screenshot, pinned, and recording toolbars</translation>
         </message>
         <message>
+            <source>Confirm before exiting screenshot via shortcut</source>
+            <translation>Confirm before exiting screenshot via shortcut</translation>
+        </message>
+        <message>
             <source>Control when the screenshot color picker is visible</source>
             <translation>Control when the screenshot color picker is visible</translation>
+        </message>
+        <message>
+            <source>Copy all application settings as a zip archive to the clipboard</source>
+            <translation>Copy all application settings as a zip archive to the clipboard</translation>
         </message>
         <message>
             <source>Copy color</source>
@@ -1145,6 +1279,14 @@
             <translation>Disable global hotkeys</translation>
         </message>
         <message>
+            <source>Disable hotkeys in fullscreen windows</source>
+            <translation>Disable hotkeys in fullscreen windows</translation>
+        </message>
+        <message>
+            <source>Disable/Enable global hotkeys</source>
+            <translation>Disable/Enable global hotkeys</translation>
+        </message>
+        <message>
             <source>Disk limit</source>
             <translation>Disk limit</translation>
         </message>
@@ -1257,8 +1399,20 @@
             <translation>Exit</translation>
         </message>
         <message>
+            <source>Export</source>
+            <translation>Export</translation>
+        </message>
+        <message>
+            <source>Export configuration</source>
+            <translation>Export configuration</translation>
+        </message>
+        <message>
             <source>Export recording</source>
             <translation>Export recording</translation>
+        </message>
+        <message>
+            <source>Export settings</source>
+            <translation>Export settings</translation>
         </message>
         <message>
             <source>Extended Features Settings</source>
@@ -1319,6 +1473,10 @@
         <message>
             <source>Full screen</source>
             <translation>Full screen</translation>
+        </message>
+        <message>
+            <source>Fullscreen suppression</source>
+            <translation>Fullscreen suppression</translation>
         </message>
         <message>
             <source>Function settings</source>
@@ -1421,6 +1579,22 @@
             <translation>Image size</translation>
         </message>
         <message>
+            <source>Import</source>
+            <translation>Import</translation>
+        </message>
+        <message>
+            <source>Import configuration</source>
+            <translation>Import configuration</translation>
+        </message>
+        <message>
+            <source>Import configuration?</source>
+            <translation>Import configuration?</translation>
+        </message>
+        <message>
+            <source>Import settings</source>
+            <translation>Import settings</translation>
+        </message>
+        <message>
             <source>Include the displayed text recognition or original-image translation result when saving an image.</source>
             <translation>Include the displayed text recognition or original-image translation result when saving an image.</translation>
         </message>
@@ -1437,6 +1611,10 @@
             <translation>Include the screenshot window and its toolbar in the stitched scrolling screenshot.</translation>
         </message>
         <message>
+            <source>Input Monitoring</source>
+            <translation>Input Monitoring</translation>
+        </message>
+        <message>
             <source>Interface settings</source>
             <translation>Interface settings</translation>
         </message>
@@ -1451,6 +1629,10 @@
         <message>
             <source>JPEG XL</source>
             <translation>JPEG XL</translation>
+        </message>
+        <message>
+            <source>Jump to Translation Page</source>
+            <translation>Jump to Translation Page</translation>
         </message>
         <message>
             <source>Keep records permanently</source>
@@ -1475,6 +1657,10 @@
         <message>
             <source>Language</source>
             <translation>Language</translation>
+        </message>
+        <message>
+            <source>Last used tool</source>
+            <translation>Last used tool</translation>
         </message>
         <message>
             <source>Launch as administrator</source>
@@ -1521,6 +1707,10 @@
             <translation>Magnifier visibility</translation>
         </message>
         <message>
+            <source>Manage macOS permissions for Snow Shot</source>
+            <translation>Manage macOS permissions for Snow Shot</translation>
+        </message>
+        <message>
             <source>Manual</source>
             <translation>Manual</translation>
         </message>
@@ -1563,6 +1753,10 @@
         <message>
             <source>Menu options</source>
             <translation>Menu options</translation>
+        </message>
+        <message>
+            <source>Microphone</source>
+            <translation>Microphone</translation>
         </message>
         <message>
             <source>Middle Mouse Button Action</source>
@@ -1681,6 +1875,10 @@
             <translation>OpenAI-compatible Chat Completions</translation>
         </message>
         <message>
+            <source>Optional. Record your microphone when microphone audio is enabled for recording.</source>
+            <translation>Optional. Record your microphone when microphone audio is enabled for recording.</translation>
+        </message>
+        <message>
             <source>Original</source>
             <translation>Original</translation>
         </message>
@@ -1727,6 +1925,10 @@
         <message>
             <source>Permanently remove all saved screenshots</source>
             <translation>Permanently remove all saved screenshots</translation>
+        </message>
+        <message>
+            <source>Permission status and access</source>
+            <translation>Permission status and access</translation>
         </message>
         <message>
             <source>Persistent screenshot history</source>
@@ -1845,6 +2047,14 @@
             <translation>Real-time</translation>
         </message>
         <message>
+            <source>Recapture</source>
+            <translation>Recapture</translation>
+        </message>
+        <message>
+            <source>Recognize global mouse gestures while you use other apps.</source>
+            <translation>Recognize global mouse gestures while you use other apps.</translation>
+        </message>
+        <message>
             <source>Recognize text</source>
             <translation>Recognize text</translation>
         </message>
@@ -1897,6 +2107,10 @@
             <translation>Redo</translation>
         </message>
         <message>
+            <source>Remember last used tool</source>
+            <translation>Remember last used tool</translation>
+        </message>
+        <message>
             <source>Remove cached screenshot-history thumbnails</source>
             <translation>Remove cached screenshot-history thumbnails</translation>
         </message>
@@ -1941,8 +2155,16 @@
             <translation>Restart as administrator</translation>
         </message>
         <message>
+            <source>Restore application settings from a configuration archive</source>
+            <translation>Restore application settings from a configuration archive</translation>
+        </message>
+        <message>
             <source>Restore original screen colors</source>
             <translation>Restore original screen colors</translation>
+        </message>
+        <message>
+            <source>Restore settings</source>
+            <translation>Restore settings</translation>
         </message>
         <message>
             <source>Retention period</source>
@@ -1979,6 +2201,10 @@
         <message>
             <source>Scale recordings that exceed the selected maximum resolution</source>
             <translation>Scale recordings that exceed the selected maximum resolution</translation>
+        </message>
+        <message>
+            <source>Screen &amp; System Audio Recording</source>
+            <translation>Screen &amp; System Audio Recording</translation>
         </message>
         <message>
             <source>Screen capture</source>
@@ -2077,10 +2303,6 @@
             <translation>Screenshots</translation>
         </message>
         <message>
-            <source>Scroll-wheel click action</source>
-            <translation>Scroll-wheel click action</translation>
-        </message>
-        <message>
             <source>Scrolling screenshot</source>
             <translation>Scrolling screenshot</translation>
         </message>
@@ -2121,6 +2343,10 @@
             <translation>Selection animation</translation>
         </message>
         <message>
+            <source>Selection border color</source>
+            <translation>Selection border color</translation>
+        </message>
+        <message>
             <source>Selection mask color</source>
             <translation>Selection mask color</translation>
         </message>
@@ -2139,6 +2365,10 @@
         <message>
             <source>Set the border color of pinned screenshots while they have focus</source>
             <translation>Set the border color of pinned screenshots while they have focus</translation>
+        </message>
+        <message>
+            <source>Set the border color of the screenshot selection</source>
+            <translation>Set the border color of the screenshot selection</translation>
         </message>
         <message>
             <source>Set the color and opacity outside the screenshot selection</source>
@@ -2219,6 +2449,10 @@
         <message>
             <source>Shortcut keys for screenshot tools and cursor movement</source>
             <translation>Shortcut keys for screenshot tools and cursor movement</translation>
+        </message>
+        <message>
+            <source>Show a button in the text recognition toolbar that sends recognized text to the Translation page.</source>
+            <translation>Show a button in the text recognition toolbar that sends recognized text to the Translation page.</translation>
         </message>
         <message>
             <source>Show main interface</source>
@@ -2321,6 +2555,10 @@
             <translation>Start a screen recording, or stop and copy the current recording</translation>
         </message>
         <message>
+            <source>Start new screenshot sessions and pin drawing mode with the last used drawing tool instead of the move tool</source>
+            <translation>Start new screenshot sessions and pin drawing mode with the last used drawing tool instead of the move tool</translation>
+        </message>
+        <message>
             <source>Start/pause/resume recording</source>
             <translation>Start/pause/resume recording</translation>
         </message>
@@ -2421,6 +2659,10 @@
             <translation>Thumbnail mode</translation>
         </message>
         <message>
+            <source>Toggle hotkeys</source>
+            <translation>Toggle hotkeys</translation>
+        </message>
+        <message>
             <source>Tool positions</source>
             <translation>Tool positions</translation>
         </message>
@@ -2477,6 +2719,14 @@
             <translation>Tray menu</translation>
         </message>
         <message>
+            <source>Turn every global hotkey off or back on; this shortcut stays active while global hotkeys are disabled</source>
+            <translation>Turn every global hotkey off or back on; this shortcut stays active while global hotkeys are disabled</translation>
+        </message>
+        <message>
+            <source>Turn off or back on the suppression of global hotkeys while the focused window is fullscreen; this shortcut stays active while fullscreen suppression is enabled</source>
+            <translation>Turn off or back on the suppression of global hotkeys while the focused window is fullscreen; this shortcut stays active while fullscreen suppression is enabled</translation>
+        </message>
+        <message>
             <source>UIA</source>
             <translation>UIA</translation>
         </message>
@@ -2499,6 +2749,10 @@
         <message>
             <source>Use DirectML for GPU-accelerated text recognition when available</source>
             <translation>Use DirectML for GPU-accelerated text recognition when available</translation>
+        </message>
+        <message>
+            <source>Use global mouse gestures, select individual window elements, and translate selected text.</source>
+            <translation>Use global mouse gestures, select individual window elements, and translate selected text.</translation>
         </message>
         <message>
             <source>Use system proxy</source>
@@ -2555,6 +2809,61 @@
         <message>
             <source>Write the screenshot to a file and copy that file to the clipboard</source>
             <translation>Write the screenshot to a file and copy that file to the clipboard</translation>
+        </message>
+        <message>
+            <source>Zip archives (*.zip);;All files (*.*)</source>
+            <translation>Zip archives (*.zip);;All files (*.*)</translation>
+        </message>
+    </context>
+    <context>
+        <name>SettingsPageWidget</name>
+        <message>
+            <source>, </source>
+            <translation>, </translation>
+        </message>
+        <message>
+            <source>Authorized</source>
+            <translation>Authorized</translation>
+        </message>
+        <message>
+            <source>Checking…</source>
+            <translation>Checking…</translation>
+        </message>
+        <message>
+            <source>Could not open System Settings. Open System Settings &gt; Privacy &amp; Security &gt; %1.</source>
+            <translation>Could not open System Settings. Open System Settings &gt; Privacy &amp; Security &gt; %1.</translation>
+        </message>
+        <message>
+            <source>Global mouse actions need access to: %1.</source>
+            <translation>Global mouse actions need access to: %1.</translation>
+        </message>
+        <message>
+            <source>Go to Settings</source>
+            <translation>Go to Settings</translation>
+        </message>
+        <message>
+            <source>Permissions needed</source>
+            <translation>Permissions needed</translation>
+        </message>
+        <message>
+            <source>Review permissions</source>
+            <translation>Review permissions</translation>
+        </message>
+        <message>
+            <source>To use %1, review access to: %2.</source>
+            <translation>To use %1, review access to: %2.</translation>
+        </message>
+        <message>
+            <source>microphone recording</source>
+            <translation>microphone recording</translation>
+        </message>
+        <message>
+            <source>screenshots and screen recording</source>
+            <translation>screenshots and screen recording</translation>
+        </message>
+        <message>
+            <source>selected-text translation</source>
+            <translation>selected-text translation</translation>
         </message>
     </context>
     <context>
@@ -2822,8 +3131,55 @@ Unavailable: %2</translation>
     <context>
         <name>snow_shot::presentation::GlobalMouseManager</name>
         <message>
+            <source>Allow Snow Shot in System Settings &gt; Privacy &amp; Security &gt; Accessibility to use global mouse gestures.</source>
+            <translation>Allow Snow Shot in System Settings &gt; Privacy &amp; Security &gt; Accessibility to use global mouse gestures.</translation>
+        </message>
+        <message>
+            <source>Allow Snow Shot in System Settings &gt; Privacy &amp; Security &gt; Input Monitoring to use global mouse gestures.</source>
+            <translation>Allow Snow Shot in System Settings &gt; Privacy &amp; Security &gt; Input Monitoring to use global mouse gestures.</translation>
+        </message>
+        <message>
+            <source>Checking global mouse permissions...</source>
+            <translation>Checking global mouse permissions...</translation>
+        </message>
+        <message>
+            <source>Global mouse gestures are paused while this session is inactive.</source>
+            <translation>Global mouse gestures are paused while this session is inactive.</translation>
+        </message>
+        <message>
+            <source>Global mouse gestures are ready.</source>
+            <translation>Global mouse gestures are ready.</translation>
+        </message>
+        <message>
             <source>Global mouse input is unavailable (error %1).</source>
             <translation>Global mouse input is unavailable (error %1).</translation>
+        </message>
+        <message>
+            <source>Global mouse input is unavailable. Check permissions and retry.</source>
+            <translation>Global mouse input is unavailable. Check permissions and retry.</translation>
+        </message>
+    </context>
+    <context>
+        <name>snow_shot::storage::ConfigurationArchive</name>
+        <message>
+            <source>The configuration archive contains no compatible settings.</source>
+            <translation>The configuration archive contains no compatible settings.</translation>
+        </message>
+        <message>
+            <source>The configuration archive could not be created.</source>
+            <translation>The configuration archive could not be created.</translation>
+        </message>
+        <message>
+            <source>The configuration archive was created by a newer version of Snow Shot.</source>
+            <translation>The configuration archive was created by a newer version of Snow Shot.</translation>
+        </message>
+        <message>
+            <source>The file is not a Snow Shot configuration archive.</source>
+            <translation>The file is not a Snow Shot configuration archive.</translation>
+        </message>
+        <message>
+            <source>The file is not a valid configuration archive.</source>
+            <translation>The file is not a valid configuration archive.</translation>
         </message>
     </context>
     <context>

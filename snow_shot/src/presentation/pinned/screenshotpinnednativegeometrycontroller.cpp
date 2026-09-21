@@ -46,6 +46,14 @@ QRect ScreenshotPinnedNativeGeometryController::targetGeometry() const {
     return m_targetGeometry;
 }
 
+QRect ScreenshotPinnedNativeGeometryController::authoritativeGeometry() const {
+    if (m_phase == Phase::Stable || m_phase == Phase::Closing ||
+        (hasInteractiveTransaction() && !m_acceptedInteractiveGeometry)) {
+        return m_committedGeometry;
+    }
+    return m_targetGeometry;
+}
+
 bool ScreenshotPinnedNativeGeometryController::hasInteractiveTransaction() const {
     return m_phase == Phase::MovePending || m_phase == Phase::Moving ||
            m_phase == Phase::ResizePending || m_phase == Phase::Resizing;
@@ -220,6 +228,16 @@ bool ScreenshotPinnedNativeGeometryController::beginProgrammatic(const QRect& ta
     return true;
 }
 
+bool ScreenshotPinnedNativeGeometryController::acceptAppliedGeometry(const QRect& actual,
+                                                                     bool allowPlatformAdjustment) {
+    if (!validGeometry(actual) || (m_phase != Phase::Programmatic && m_phase != Phase::DpiChanging))
+        return false;
+    if (!allowPlatformAdjustment && actual != m_targetGeometry)
+        return false;
+    m_targetGeometry = actual;
+    return true;
+}
+
 QRect ScreenshotPinnedNativeGeometryController::finishInteractiveTarget() const {
     if (!hasInteractiveTransaction()) {
         return m_targetGeometry;
@@ -272,4 +290,16 @@ void ScreenshotPinnedNativeGeometryController::resetTransaction() {
     m_origin = Origin::InitialPlacement;
     m_acceptedInteractiveGeometry = false;
     m_dpiChanged = false;
+}
+
+bool ScreenshotPinnedNativeGeometryController::acceptInteractiveGeometry(const QRect& geometry) {
+    if (!hasInteractiveTransaction() || !validGeometry(geometry))
+        return false;
+    m_targetGeometry = geometry;
+    m_acceptedInteractiveGeometry = true;
+    if (m_phase == Phase::MovePending)
+        m_phase = Phase::Moving;
+    if (m_phase == Phase::ResizePending)
+        m_phase = Phase::Resizing;
+    return true;
 }

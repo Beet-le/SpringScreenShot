@@ -22,7 +22,7 @@ namespace {
 constexpr int MAX_SHORTCUTS_PER_ACTION = 2;
 constexpr int FIRST_REGISTRATION_ID = 0x2200;
 constexpr int LAST_REGISTRATION_ID = 0xBFFF;
-constexpr std::size_t ACTION_COUNT = 16;
+constexpr std::size_t ACTION_COUNT = 18;
 
 constexpr std::array<GlobalShortcutAction, ACTION_COUNT> ALL_ACTIONS = {
     GlobalShortcutAction::Screenshot,
@@ -41,13 +41,15 @@ constexpr std::array<GlobalShortcutAction, ACTION_COUNT> ALL_ACTIONS = {
     GlobalShortcutAction::PinClipboardContent,
     GlobalShortcutAction::TranslateSelectedText,
     GlobalShortcutAction::PinSelectedFiles,
+    GlobalShortcutAction::ToggleGlobalHotkeys,
+    GlobalShortcutAction::ToggleDisableOnFocusedFullscreenWindow,
 };
 
-int actionIndex(GlobalShortcutAction action) {
+std::size_t actionIndex(GlobalShortcutAction action) {
     const auto found = std::find(ALL_ACTIONS.cbegin(), ALL_ACTIONS.cend(), action);
     return found == ALL_ACTIONS.cend()
                ? 0
-               : static_cast<int>(std::distance(ALL_ACTIONS.cbegin(), found));
+               : static_cast<std::size_t>(std::distance(ALL_ACTIONS.cbegin(), found));
 }
 
 shortcuts::ShortcutBindingList canonicalBindings(const shortcuts::ShortcutBindingList& bindings) {
@@ -152,6 +154,10 @@ shortcuts::ShortcutBindingList persistedShortcuts(const storage::ShortcutSetting
         return settings.pinSelectedFiles();
     case GlobalShortcutAction::TranslateSelectedText:
         return settings.translateSelectedText();
+    case GlobalShortcutAction::ToggleGlobalHotkeys:
+        return settings.toggleGlobalHotkeys();
+    case GlobalShortcutAction::ToggleDisableOnFocusedFullscreenWindow:
+        return settings.toggleDisableOnFocusedFullscreenWindow();
     }
     return {};
 }
@@ -191,6 +197,10 @@ bool persistShortcuts(const storage::ShortcutSettings& settings, GlobalShortcutA
         return settings.setPinSelectedFiles(bindings);
     case GlobalShortcutAction::TranslateSelectedText:
         return settings.setTranslateSelectedText(bindings);
+    case GlobalShortcutAction::ToggleGlobalHotkeys:
+        return settings.setToggleGlobalHotkeys(bindings);
+    case GlobalShortcutAction::ToggleDisableOnFocusedFullscreenWindow:
+        return settings.setToggleDisableOnFocusedFullscreenWindow(bindings);
     }
     return false;
 }
@@ -229,14 +239,21 @@ class GlobalShortcutManager::Impl {
         m_backend->setActivationHandler([this](int registrationId) {
             const QString activeKey = m_registrationKeysById.value(registrationId);
             const auto active = m_activeRegistrations.constFind(activeKey);
-            if (active == m_activeRegistrations.cend() || !m_globalHotkeysEnabled ||
+            if (active == m_activeRegistrations.cend()) {
+                return;
+            }
+            // Gate-control shortcuts must stay usable under both the session
+            // disablement and fullscreen suppression so either can be undone
+            // from the keyboard.
+            const bool gateControl = controlsGlobalHotkeyGates(active->action);
+            if ((!m_globalHotkeysEnabled && !gateControl) ||
                 (active->action == GlobalShortcutAction::TranslateSelectedText &&
                  !storage::ExtendedFeaturesSettings().translationPageEnabled())) {
                 return;
             }
-            const bool suppress =
-                storage::GlobalShortcutSettings().disableOnFocusedFullscreenWindow();
-            if (!suppress || !m_focusedFullscreenDetector || !m_focusedFullscreenDetector()) {
+            if (gateControl ||
+                !storage::GlobalShortcutSettings().disableOnFocusedFullscreenWindow() ||
+                !m_focusedFullscreenDetector || !m_focusedFullscreenDetector()) {
                 emit q.activated(active->action);
             }
         });
@@ -300,10 +317,17 @@ class GlobalShortcutManager::Impl {
                 if (action == *owner) {
                     continue;
                 }
-                const auto& configured = m_shortcuts[actionIndex(action)];
-                if (std::any_of(configured.cbegin(), configured.cend(),
+                // Runtime ownership is per binding, not per action. A
+                // partially registered action can contain both a live binding
+                // and a failed one; only the live binding may veto another
+                // action. Registration states remain intact while recorders
+                // temporarily suspend the native backend, so this also keeps
+                // validation stable throughout editing.
+                const auto& state = m_states[actionIndex(action)];
+                if (std::any_of(state.bindings.cbegin(), state.bindings.cend(),
                                 [&binding](const auto& existing) {
-                                    return shortcuts::bindingsConflict(existing, binding);
+                                    return existing.registered &&
+                                           shortcuts::bindingsConflict(existing.binding, binding);
                                 })) {
                     return invalidValidation(binding, GlobalShortcutFailureReason::AlreadyInUse);
                 }
@@ -440,7 +464,7 @@ class GlobalShortcutManager::Impl {
         }
 
         for (GlobalShortcutAction action : ALL_ACTIONS) {
-            const int index = actionIndex(action);
+            const std::size_t index = actionIndex(action);
             const bool changed = !statesEqual(m_states[index], nextStates[index]);
             m_states[index] = nextStates[index];
             if (changed) {
@@ -507,7 +531,15 @@ void GlobalShortcutManager::resumeRegistrations(RegistrationSuspensionHandle han
 }
 
 void GlobalShortcutManager::setGlobalHotkeysEnabled(bool enabled) {
+    if (m_impl->m_globalHotkeysEnabled == enabled) {
+        return;
+    }
     m_impl->m_globalHotkeysEnabled = enabled;
+    emit globalHotkeysEnabledChanged(enabled);
+}
+
+bool GlobalShortcutManager::globalHotkeysEnabled() const {
+    return m_impl->m_globalHotkeysEnabled;
 }
 
 } // namespace snow_shot::presentation

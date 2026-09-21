@@ -1,3 +1,4 @@
+#include "snow_shot/platform/windowcaptureexclusion.h"
 #include "snow_shot/presentation/screenshotoverlaycoordinator.h"
 
 #include "snow_shot/presentation/screenshotdisplaysession.h"
@@ -111,15 +112,7 @@ bool ScreenshotOverlayCoordinator::preparePreCaptureOverlayWindows(
             continue;
         }
 
-        const QRect physicalRect = ScreenshotGeometryMapper::physicalRectForScreen(*screen);
-        display.stableId.clear();
-        display.name = screen->name();
-        display.logicalRect = screen->geometry();
-        display.physicalRect = physicalRect;
-        display.canvasRect = physicalRect;
-        display.screen = screen;
-        display.image = QImage();
-        display.active = true;
+        display = ScreenshotGeometryMapper::preCaptureDisplayModel(*screen);
 
         ScreenshotOverlayWindow* overlay =
             displaySession.ensureOverlayAt(index, [this](ScreenshotOverlayWindow* existingOverlay) {
@@ -262,6 +255,13 @@ void ScreenshotOverlayCoordinator::updateOverlayCursors(
     m_canvasPresenter.updateOverlayCursors(displaySession, selecting, dragging);
 }
 
+void ScreenshotOverlayCoordinator::setSelectionBorderColor(
+    const ScreenshotDisplaySession& displaySession, const QColor& color) const {
+    displaySession.forEachOverlay([&color](qsizetype, ScreenshotOverlayWindow* overlay) {
+        overlay->setScreenshotSelectionBorderColor(color);
+    });
+}
+
 void ScreenshotOverlayCoordinator::setSelectionMaskColor(
     const ScreenshotDisplaySession& displaySession, const QColor& color) const {
     displaySession.forEachOverlay([&color](qsizetype, ScreenshotOverlayWindow* overlay) {
@@ -375,6 +375,11 @@ void ScreenshotOverlayCoordinator::createTextForSelectedSerialNumber(
 void ScreenshotOverlayCoordinator::reorderSelectedElements(
     const ScreenshotDisplaySession& displaySession, SnowCanvasSelectionOrder order) {
     m_canvasPresenter.reorderSelectedElements(displaySession, order);
+}
+
+void ScreenshotOverlayCoordinator::alignSelectedElements(
+    const ScreenshotDisplaySession& displaySession, SnowCanvasSelectionAlignment alignment) {
+    m_canvasPresenter.alignSelectedElements(displaySession, alignment);
 }
 
 void ScreenshotOverlayCoordinator::setSelectedElementsOpacity(
@@ -549,7 +554,12 @@ ScreenshotOverlayCoordinator::excludedHwnds(const ScreenshotDisplaySession& disp
         // native surface was deliberately retired at the end of a capture.
         const WId id = widget->internalWinId();
         if (id != 0) {
+#ifdef Q_OS_MACOS
+            if (const auto windowId = snow_shot::platform::captureWindowId(widget))
+                hwnds.push_back(*windowId);
+#else
             hwnds.push_back(static_cast<std::uintptr_t>(id));
+#endif
         }
     };
 

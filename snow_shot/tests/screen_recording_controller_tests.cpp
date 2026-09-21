@@ -1,3 +1,4 @@
+#include <QFontDatabase>
 #include "recording_effect_test_source.h"
 #include "../src/presentation/recording/recordingeffectstyle.h"
 #include "../src/presentation/recording/recordingeffectgeometry.h"
@@ -21,8 +22,10 @@
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/settingsadapters.h"
 #include "snow_capture.h"
+#include "snow_shot/platform/windowcaptureexclusion.h"
 #include "snow_recording.h"
 #include "widgets/button.h"
+#include "widgets/dpi_stable_window_controller.h"
 
 #include <QApplication>
 #include <QDir>
@@ -38,6 +41,9 @@
 #include <QMessageBox>
 #include "widgets/color_picker.h"
 #include <future>
+#ifdef Q_OS_MACOS
+#include "macos_capture_exclusion_probe.h"
+#endif
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
 #include <dwmapi.h>
@@ -67,11 +73,15 @@ std::unique_ptr<RecordingEffectsSource> testEffectsSource() {
 SnowRecordingSession session;
 std::atomic<int> starts = 0;
 SnowCaptureDirectRecordingConfig lastDirectConfig{};
+QByteArray lastKeyboardFontFamily;
+QByteArray lastKeyboardCjkFontFamily;
+std::vector<uint32_t> lastExcludedWindows;
 std::atomic<int> exports = 0;
 std::shared_future<void> exportGate;
 std::promise<void>* exportEntered = nullptr;
 std::atomic<bool> failExport = false;
 std::atomic<bool> failStart = false;
+std::atomic<bool> failStartOperation = false;
 std::atomic<int> destroyedSessions = 0;
 void require(bool condition, const char* message) {
     if (!condition) {
@@ -306,6 +316,25 @@ void recordingToolbarReconcilesFrameBeforeShowing() {
     toolbar.placeForPhysicalRegion(region);
     toolbar.showAndActivate();
     QCoreApplication::processEvents();
+#if defined(Q_OS_MACOS)
+    require(toolbar.findChild<adqt::widgets::AdDpiStableWindowController*>() == nullptr &&
+                qFuzzyCompare(toolbar.paletteHost()->physicalScale(), 1.0),
+            "macOS recording toolbar must use native logical sizing");
+    require(toolbar.testAttribute(Qt::WA_MacAlwaysShowToolWindow) &&
+                !toolbar.windowHandle()->flags().testFlag(Qt::WindowDoesNotAcceptFocus),
+            "macOS recording toolbar must remain visible and allow activation");
+    for (const QString& size : {QStringLiteral("small"), QStringLiteral("normal")}) {
+        require(snow_shot::storage::ScreenshotUiSettings().setToolbarSize(size),
+                "recording toolbar size setting must be writable");
+        toolbar.prepareForDisplay();
+        const qreal scale = size == QStringLiteral("small") ? 0.8 : 1.0;
+        require(qFuzzyCompare(toolbar.paletteHost()->physicalScale(), scale),
+                "recording toolbar must apply only the configured size multiplier");
+        const QRegion panels = toolbar.paletteHost()->interactiveHostRegion();
+        require(!toolbar.mask().isEmpty() && (panels - toolbar.mask()).isEmpty(),
+                "recording export settings and drawing rows must be included in the mask");
+    }
+#endif
     toolbar.hide();
     const QSize expected = toolbar.windowSizeHint();
     const QPoint anchor = toolbar.contentPosition();
@@ -411,6 +440,10 @@ void recordingSecondaryPanelsStayOnScreen() {
         if (occupied.width() <= bounds.width()) {
             require(bounds.contains(occupied), message);
         }
+#if defined(Q_OS_MACOS)
+        require((toolbar.paletteHost()->interactiveHostRegion() - toolbar.mask()).isEmpty(),
+                "changing recording panels must update the macOS window mask");
+#endif
     };
     const auto requireAnchored = [&]() {
         const QPoint position = toolbar.contentPosition();
@@ -650,6 +683,36 @@ void effectsPreviewLifecycle() {
     require(state->active, "a fresh activation must recover after preview failure");
 }
 
+void recordingKeyboardFontFollowsApplication() {
+    const QFont original = QApplication::font();
+    ScreenRecordingAreaWindow area;
+    area.setPhysicalRegion(QRect(32, 32, 320, 240));
+    auto state = std::make_shared<RecordingEffectTestState>();
+    RecordingEffectPreview preview(area, std::make_unique<RecordingEffectTestSource>(state));
+    preview.configure(area.physicalRegion(), QSize(320, 240), Qt::transparent, Qt::transparent,
+                      true);
+    preview.setEligible(true);
+    area.show();
+    pumpPreview();
+    require(state->keyboardFontFamily == QFontInfo(original).family().toUtf8() &&
+                state->keyboardFontWeight == static_cast<uint32_t>(original.weight()) &&
+                state->keyboardCjkFontFamily == QByteArray("Snow Recording Test Han"),
+            "preview must receive the application's resolved UI font and Chinese fallback");
+    const quint64 generation = state->generation;
+    QFont changed = original;
+    changed.setFamily(QStringLiteral("Snow Recording Test Mono"));
+    changed.setWeight(QFont::Bold);
+    QApplication::setFont(changed);
+    pumpPreview();
+    require(state->generation > generation &&
+                state->keyboardFontFamily == QFontInfo(changed).family().toUtf8() &&
+                state->keyboardCjkFontFamily == QByteArray("Snow Recording Test Han") &&
+                state->keyboardFontWeight == static_cast<uint32_t>(QFont::Bold),
+            "an open preview must follow application font changes");
+    QApplication::setFont(original);
+    pumpPreview();
+}
+
 // The window clears itself fully before painting the border, so a zero-alpha
 // input surface needs no second fill. Skipping it must not change the pixels
 // the compositor sees in any input mode.
@@ -746,6 +809,24 @@ void controllerPreviewTransitions() {
                 RecordingSettings().keyboardBackgroundColor() == QColor(40, 80, 120, 128) &&
                 RecordingSettings().keyboardForegroundColor() == QColor(240, 230, 220, 200),
             "controller edits must persist with color alpha");
+    palette()->recordingMouseHighlightEnabledChanged(true);
+    palette()->recordingMouseHighlightColorChanged(QColor(255, 255, 0, 128));
+    palette()->recordingRecordMouseClicksChanged(true);
+    palette()->recordingKeyboardVisibleChanged(false);
+    palette()->recordingCursorVisibleChanged(true);
+    pumpPreview();
+    require(state->highlight == 0xffff0080 && state->recordMouseClicks && !state->showKeyboard,
+            "highlight and click-only recording must reach preview independently");
+    palette()->recordingCursorVisibleChanged(false);
+    pumpPreview();
+    require(
+        state->highlight == 0 && state->recordMouseClicks &&
+            RecordingSettings().mouseHighlightEnabled(),
+        "hiding cursor suppresses highlight without forgetting preference or hiding click keycaps");
+    palette()->recordingMouseHighlightEnabledChanged(false);
+    palette()->recordingRecordMouseClicksChanged(false);
+    palette()->recordingCursorVisibleChanged(true);
+    pumpPreview();
     ScreenRecordingAreaWindow* area = nullptr;
     for (QWidget* widget : QApplication::topLevelWidgets()) {
         if (auto* candidate = qobject_cast<ScreenRecordingAreaWindow*>(widget);
@@ -821,6 +902,76 @@ void controllerPreviewTransitions() {
     RecordingSettings().setMouseTrailDurationMs(500);
     RecordingSettings().setKeyboardBackgroundColor(QColor(0, 0, 0, 204));
     RecordingSettings().setKeyboardForegroundColor(Qt::white);
+}
+
+void recordingCaptureExclusionWiring() {
+    using snow_shot::storage::RecordingSettings;
+    QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
+    require(RecordingSettings().setStartDelaySeconds(0), "disable countdown");
+    for (bool captureToolbar : {false, true}) {
+        require(RecordingSettings().setCaptureToolbarInRecording(captureToolbar),
+                "set toolbar capture preference");
+        for (int failure : {0, 1, 2}) {
+            const bool fail = failure != 0;
+            ErrorObserver observer;
+            qApp->installEventFilter(&observer);
+            ScreenRecordingController controller(testEffectsSource);
+            controller.open({40, 40, 320, 240});
+            QWidget* toolbar = palette()->window();
+            const auto id = snow_shot::platform::captureWindowId(toolbar);
+#ifdef Q_OS_MACOS
+            const auto sharingMatches = macosCaptureSharingProbe(toolbar);
+#endif
+            failStart = failure == 1;
+            failStartOperation = failure == 2;
+            controller.startRecording();
+            if (fail) {
+                QElapsedTimer deadline;
+                deadline.start();
+                while (observer.shown == 0 && deadline.elapsed() < 3000) {
+                    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+                    QThread::msleep(5);
+                }
+                require(observer.shown > 0, "failed start is reported after cleanup");
+            } else {
+                waitForRecording(controller);
+            }
+            const std::vector<uint32_t> expected =
+                !captureToolbar && id ? std::vector<uint32_t>{*id} : std::vector<uint32_t>{};
+            require(lastExcludedWindows == expected,
+                    "recording creation owns exactly the configured toolbar exclusion");
+            require(toolbar->isVisible(), "toolbar remains visible on success and failure");
+#ifdef Q_OS_MACOS
+            require(sharingMatches(!captureToolbar && !fail),
+                    "recording start applies sharing policy and failure restores it");
+#endif
+            if (!fail) {
+                palette()->recordingStopRequested();
+                waitForIdle(controller);
+            }
+#ifdef Q_OS_MACOS
+            require(sharingMatches(false), "recording stop restores the original sharing policy");
+#endif
+            palette()->recordingCloseRequested();
+            failStart = false;
+            failStartOperation = false;
+            qApp->removeEventFilter(&observer);
+        }
+    }
+#ifdef Q_OS_MACOS
+    require(RecordingSettings().setCaptureToolbarInRecording(false), "exclude toolbar");
+    std::function<bool(bool)> sharingMatches;
+    {
+        ScreenRecordingController controller(testEffectsSource);
+        controller.open({40, 40, 320, 240});
+        sharingMatches = macosCaptureSharingProbe(palette()->window());
+        controller.startRecording();
+        waitForRecording(controller);
+        require(sharingMatches(true), "active toolbar is excluded before destruction");
+    }
+    require(sharingMatches(false), "controller destruction restores native sharing");
+#endif
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 }
 
 void delayCountdownBlocksTheStartUntilItElapses() {
@@ -1217,11 +1368,18 @@ int nativeEffectsPreviewCapture() {
 extern "C" {
 SnowRecordingResult
 snow_recording_session_create_direct(const SnowCaptureDirectRecordingConfig* config,
-                                             SnowRecordingSession** result) {
+                                     SnowRecordingSession** result) {
     // Session creation runs on the controller's worker thread: only plain data
     // may be touched here. The preview label invariant is asserted on the GUI
     // thread by controllerPreviewTransitions instead.
     lastDirectConfig = *config;
+    lastKeyboardFontFamily = config->keyboard_font_family_utf8;
+    lastKeyboardCjkFontFamily = config->keyboard_cjk_font_family_utf8;
+    lastExcludedWindows.clear();
+    if (config->exclusions.window_count != 0) {
+        lastExcludedWindows.assign(config->exclusions.windows,
+                                   config->exclusions.windows + config->exclusions.window_count);
+    }
     for (const auto& weak : effectSources) {
         if (const auto source = weak.lock()) {
             require(!source->active, "native creation must follow preview observer shutdown");
@@ -1239,7 +1397,7 @@ void snow_recording_session_destroy(SnowRecordingSession*) {
 }
 uint8_t snow_recording_session_start(SnowRecordingSession*) {
     ++starts;
-    return 1;
+    return failStartOperation ? 0 : 1;
 }
 uint8_t snow_recording_session_pause(SnowRecordingSession*) {
     return 1;
@@ -1261,8 +1419,7 @@ SnowRecordingResult snow_recording_session_stop(SnowRecordingSession*) {
     ++exports;
     return failure ? SNOW_RECORDING_RESULT_INVALID_ARGUMENT : SNOW_RECORDING_RESULT_OK;
 }
-uint8_t snow_recording_session_state(const SnowRecordingSession*,
-                                             SnowRecordingState* state) {
+uint8_t snow_recording_session_state(const SnowRecordingSession*, SnowRecordingState* state) {
     *state = SNOW_RECORDING_STATE_RUNNING;
     return 1;
 }
@@ -1280,6 +1437,7 @@ int main(int argc, char** argv) {
     RecordingEffectsBenchmarkApplication app(argc, argv);
 #else
     QApplication app(argc, argv);
+
 #endif
     QTemporaryDir temporary;
     require(temporary.isValid(), "temporary storage must exist");
@@ -1329,6 +1487,20 @@ int main(int argc, char** argv) {
         return result;
     }
 #endif
+    // The offscreen plugin may have no system font database. These original
+    // fixtures exercise real font resolution without requiring language packs.
+    for (const auto* name : {"SnowRecordingTestSans-Regular.ttf", "SnowRecordingTestSans-Bold.ttf",
+                             "SnowRecordingTestMono-Regular.ttf", "SnowRecordingTestMono-Bold.ttf",
+                             "SnowRecordingTestHan-Regular.ttf", "SnowRecordingTestHan-Bold.ttf"}) {
+        require(QFontDatabase::addApplicationFont(QStringLiteral(":/recording-test-fonts/") +
+                                                  QString::fromLatin1(name)) >= 0,
+                "load offscreen recording font");
+    }
+    QFont testFont(QStringLiteral("Snow Recording Test Sans"));
+    testFont.setWeight(QFont::Normal);
+    QApplication::setFont(testFont);
+    QFontDatabase::setApplicationFallbackFontFamilies(QChar::Script_Han,
+                                                      {QStringLiteral("Snow Recording Test Han")});
     if (app.arguments().contains(QStringLiteral("--effects-preview-only"))) {
         class KeyTranslator : public QTranslator {
           public:
@@ -1349,11 +1521,17 @@ int main(int argc, char** argv) {
                     localized.text.contains(QByteArray("Num 0")),
                 "key legends must use English names");
         app.removeTranslator(&translator);
+        recordingKeyboardFontFollowsApplication();
         effectsPreviewLifecycle();
         areaWindowPaintsInputSurfaceOnlyWhenItIsVisible();
         previewIgnoresEventsOtherThanDialogVisibility();
         recordingKeyboardColorsFollowBackground();
         controllerPreviewTransitions();
+        ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (app.arguments().contains(QStringLiteral("--capture-exclusion-only"))) {
+        recordingCaptureExclusionWiring();
         ApplicationStorage::instance().shutdown();
         return 0;
     }
@@ -1475,6 +1653,11 @@ int main(int argc, char** argv) {
         controller.startRecording();
         waitForRecording(controller);
         require(starts == 1 && controller.isRecording(), "a fresh request must start exactly once");
+        const RecordingKeyboardFont expectedFont;
+        require(lastKeyboardFontFamily == expectedFont.family &&
+                    lastKeyboardCjkFontFamily == expectedFont.cjkFamily &&
+                    lastDirectConfig.keyboard_font_weight == expectedFont.weight,
+                "saved recordings must receive the same application font as the preview");
         require(lastDirectConfig.loop_animated_images == 1, "recordings must default to looping");
         require(snow_shot::storage::RecordingSettings().setLoopAnimatedImages(false),
                 "disable looping for subsequent recordings");

@@ -59,7 +59,7 @@ storage::PinnedWindowRecord recordWithId(const QString& id, const QImage& image)
 }
 
 QString payloadFilePath(const QString& root, const QString& id) {
-    return QDir(root).filePath(QStringLiteral("pinned_windows/pins/%1/source.png").arg(id));
+    return QDir(root).filePath(QStringLiteral("pinned_windows_v2/pins/%1/source.png").arg(id));
 }
 
 QByteArray pngBytes(const QImage& image, int compression) {
@@ -372,7 +372,7 @@ void recognitionVisibilityRoundTripsAndDefaultsToHidden() {
     const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
     auto record = recordWithId(id, patternedImage(QSize(8, 8), 3));
     const QString manifest =
-        QDir(directory.path()).filePath(QStringLiteral("pinned_windows/index.json"));
+        QDir(directory.path()).filePath(QStringLiteral("pinned_windows_v2/index.json"));
     {
         storage::PinnedWindowRepository repository(directory.path());
         record.recognitionVisible = true;
@@ -429,7 +429,7 @@ void clickThroughStateRoundTripsAndRecoversLegacyOrConflictingMetadata() {
     record.hideToTopHandleNativeGeometry = QRect(record.nativeGeometry.topLeft(), QSize(30, 6));
     record.hideToTopAccentIndex = 0;
     const QString manifest =
-        QDir(directory.path()).filePath(QStringLiteral("pinned_windows/index.json"));
+        QDir(directory.path()).filePath(QStringLiteral("pinned_windows_v2/index.json"));
     {
         storage::PinnedWindowRepository repository(directory.path());
         require(repository.upsert(record).success && repository.flush().success,
@@ -527,6 +527,51 @@ void clickThroughStateRoundTripsAndRecoversLegacyOrConflictingMetadata() {
                 "opacity endpoints and recovered defaults must survive another round trip");
     }
 }
+void alwaysOnTopStateRoundTripsAndDefaultsToEnabledForLegacyRecords() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "temporary always-on-top storage is unavailable");
+    const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    auto record = recordWithId(id, patternedImage(QSize(200, 100), 5));
+    record.alwaysOnTop = false;
+    const QString manifest =
+        QDir(directory.path()).filePath(QStringLiteral("pinned_windows/index.json"));
+    {
+        storage::PinnedWindowRepository repository(directory.path());
+        require(repository.upsert(record).success && repository.flush().success,
+                "the always-on-top opt-out must be committed to disk");
+        const auto demoted = repository.loadRecord(id);
+        require(demoted.has_value() && !demoted->alwaysOnTop,
+                "the always-on-top opt-out must survive payload demotion");
+        record.alwaysOnTop = true;
+        require(repository.updateState(record).success && repository.flush().success,
+                "re-enabling always-on-top must update persisted metadata");
+    }
+    {
+        storage::PinnedWindowRepository repository(directory.path());
+        const auto loaded = repository.loadRecord(id);
+        require(loaded.has_value() && loaded->alwaysOnTop,
+                "always-on-top state must survive repository recreation");
+    }
+
+    // Records saved before the preference existed only ever floated above
+    // everything, so a missing key must restore as enabled.
+    auto root = QJsonDocument::fromJson(readBytes(manifest)).object();
+    auto records = root.value(QStringLiteral("records")).toArray();
+    auto item = records.at(0).toObject();
+    item.remove(QStringLiteral("always_on_top"));
+    records.replace(0, item);
+    root.insert(QStringLiteral("records"), records);
+    QFile file(manifest);
+    require(file.open(QIODevice::WriteOnly | QIODevice::Truncate),
+            "open always-on-top legacy fixture");
+    const QByteArray bytes = QJsonDocument(root).toJson();
+    require(file.write(bytes) == bytes.size(), "write always-on-top legacy fixture");
+    file.close();
+    storage::PinnedWindowRepository repository(directory.path());
+    const auto loaded = repository.loadRecord(id);
+    require(loaded.has_value() && loaded->alwaysOnTop,
+            "legacy records must restore with always-on-top enabled");
+}
 void thumbnailStateSurvivesRestartAndExit() {
     QTemporaryDir directory;
     require(directory.isValid(), "temporary thumbnail storage is unavailable");
@@ -591,7 +636,7 @@ void hideToTopRoundTripsAndRecoversLegacyMetadata() {
                 "exit must persist while retaining the assigned color");
     }
     const QString manifest =
-        QDir(directory.path()).filePath(QStringLiteral("pinned_windows/index.json"));
+        QDir(directory.path()).filePath(QStringLiteral("pinned_windows_v2/index.json"));
     const auto original = QJsonDocument::fromJson(readBytes(manifest)).object();
     for (int scenario = 0; scenario < 3; ++scenario) {
         auto root = original;
@@ -620,10 +665,44 @@ void hideToTopRoundTripsAndRecoversLegacyMetadata() {
                 "legacy and malformed hide metadata must retain a recoverable normal window");
     }
 }
+
+void precisePlacementAndPreviousVersionIsolation() {
+    QTemporaryDir directory;
+    const QString oldDirectory = QDir(directory.path()).filePath(QStringLiteral("pinned_windows"));
+    require(QDir().mkpath(oldDirectory), "create previous-version fixture");
+    const QString oldIndex = QDir(oldDirectory).filePath(QStringLiteral("index.json"));
+    QFile oldFile(oldIndex);
+    require(oldFile.open(QIODevice::WriteOnly), "write previous-version fixture");
+    const QByteArray oldBytes = QByteArrayLiteral("{\"format_version\":1,\"records\":[]}");
+    oldFile.write(oldBytes);
+    oldFile.close();
+    const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    auto record = recordWithId(id, patternedImage(QSize(321, 181), 9));
+    record.placement = {QStringLiteral("Retina"), QStringLiteral("display-serial"),
+                        QPointF(-10.5, 38.5), QSize(321, 181)};
+    record.preThumbnailPlacement = {QStringLiteral("External"), QStringLiteral("external-serial"),
+                                    QPointF(40.25, 60.75), QSize(800, 450)};
+    record.hideToTopPlacement = {QStringLiteral("Retina"), QStringLiteral("display-serial"),
+                                 QPointF(10.5, 38), QSize(60, 12)};
+    {
+        storage::PinnedWindowRepository repository(directory.path());
+        require(repository.upsert(record).success && repository.flush().success,
+                "save precise placement");
+    }
+    storage::PinnedWindowRepository restored(directory.path());
+    const auto loaded = restored.loadRecord(id);
+    require(loaded && loaded->placement == record.placement &&
+                loaded->preThumbnailPlacement == record.preThumbnailPlacement &&
+                loaded->hideToTopPlacement == record.hideToTopPlacement,
+            "all placement states must retain display identity and fractional point positions");
+    require(readBytes(oldIndex) == oldBytes,
+            "version two must not modify or reinterpret previous-version storage");
+}
 } // namespace
 
 int main(int argc, char* argv[]) {
     QCoreApplication application(argc, argv);
+    precisePlacementAndPreviousVersionIsolation();
     stateUpdatesBeforeFirstFlushPreserveRestorableSources();
     committedPayloadsAreServedFromDisk();
     preparedSourceIsWrittenOnceAndStateUpdatesPreserveIt();
@@ -633,6 +712,7 @@ int main(int argc, char* argv[]) {
     specifiedGroupRemovalIsAtomicAndPersistent();
     recognitionVisibilityRoundTripsAndDefaultsToHidden();
     clickThroughStateRoundTripsAndRecoversLegacyOrConflictingMetadata();
+    alwaysOnTopStateRoundTripsAndDefaultsToEnabledForLegacyRecords();
     thumbnailStateSurvivesRestartAndExit();
     hideToTopRoundTripsAndRecoversLegacyMetadata();
     return 0;

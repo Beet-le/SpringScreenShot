@@ -230,6 +230,9 @@ ScreenshotRecognitionWindow::ScreenshotRecognitionWindow(
     m_shortcutManager->addScopeWindow(this);
     setObjectName(QStringLiteral("screenshotRecognitionWindow"));
     if (m_presentationMode == PresentationMode::TopLevelWindow) {
+        // This is an exact selection overlay, not a floating panel. Cocoa otherwise
+        // shadows every nontransparent pixel, outlining Message's painted shadow.
+        setWindowFlag(Qt::NoDropShadowWindowHint);
         setAttribute(Qt::WA_TranslucentBackground, true);
     }
     setAutoFillBackground(false);
@@ -296,6 +299,11 @@ bool ScreenshotRecognitionWindow::present(const Config& config) {
             }
         }
     }
+    // The selection owns this surface's size. Native edge resizing must not
+    // intercept the mouse events used to resize the screenshot selection.
+    if (m_presentationMode == PresentationMode::TopLevelWindow) {
+        setFixedSize(config.geometry.size());
+    }
     setGeometry(config.geometry);
     show();
     if (m_presentationMode == PresentationMode::TopLevelWindow) {
@@ -317,6 +325,9 @@ bool ScreenshotRecognitionWindow::updateSelectionGeometry(const QRect& geometry,
         return false;
     }
     m_canvasSelection = canvasSelection.normalized();
+    if (m_presentationMode == PresentationMode::TopLevelWindow) {
+        setFixedSize(geometry.size());
+    }
     setGeometry(geometry);
     synchronizeTextLayer();
     update();
@@ -810,6 +821,9 @@ void ScreenshotRecognitionWindow::showQrContents(const QStringList& contents) {
     }
     cursor.movePosition(QTextCursor::Start);
     m_qrBrowser->setTextCursor(cursor);
+    // Present the decoded payload fully selected so a plain Ctrl+C copies
+    // every payload without requiring a manual Select All first.
+    m_qrBrowser->selectAll();
     m_stack->setCurrentWidget(m_qrBrowser);
     m_qrBrowser->setFocus(Qt::OtherFocusReason);
 }

@@ -1,8 +1,11 @@
 #include "snow_shot/presentation/screenshotqrrecognitionservice.h"
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QEventLoop>
+#include <QFile>
 #include <QImage>
+#include <QTemporaryDir>
 #include <QTimer>
 #include <QThread>
 
@@ -106,9 +109,9 @@ QImage eanFixture() {
 
     std::string modules = "101";
     const std::string_view parity = kParityPatterns[kDigits[0] - '0'];
-    for (int index = 1; index <= 6; ++index) {
+    for (std::size_t index = 1; index <= 6; ++index) {
         const std::string_view code = kLeftCodes[kDigits[index] - '0'];
-        if (parity[static_cast<std::size_t>(index - 1)] == 'L') {
+        if (parity[index - 1] == 'L') {
             modules.append(code.begin(), code.end());
         } else {
             // The G code for a digit is the reverse of its right-half code.
@@ -117,7 +120,7 @@ QImage eanFixture() {
         }
     }
     modules += "01010";
-    for (int index = 7; index <= 12; ++index) {
+    for (std::size_t index = 7; index <= 12; ++index) {
         modules.append(kRightCodes[kDigits[index] - '0'].begin(),
                        kRightCodes[kDigits[index] - '0'].end());
     }
@@ -198,6 +201,34 @@ void oneDimensionalBarcodeDecodesTheSelectedImage() {
             "the detector should decode the embedded EAN-13 payload");
 }
 
+void unicodeModelsDirectoryStillLoadsAndDecodes() {
+    // Non-ASCII install directories used to break the WeChat model loading
+    // because OpenCV resolved the paths through narrow-character APIs; the
+    // service now reads the files itself and constructs the detector from
+    // memory.
+    const QDir stagedModels(
+        QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("assets/qrcode")));
+    QTemporaryDir unicodeDirectory(QDir::tempPath() + QStringLiteral("/snow 二维码模型-XXXXXX"));
+    require(unicodeDirectory.isValid(), "a unicode temporary directory must be available");
+    const QStringList modelNames = {QStringLiteral("detect.prototxt"),
+                                    QStringLiteral("detect.caffemodel"),
+                                    QStringLiteral("sr.prototxt"), QStringLiteral("sr.caffemodel")};
+    for (const QString& name : modelNames) {
+        const QString stagedPath = stagedModels.filePath(name);
+        const QString unicodePath = QDir(unicodeDirectory.path()).filePath(name);
+        require(QFile::copy(stagedPath, unicodePath),
+                "the WeChat QR models should be staged into the unicode directory");
+    }
+
+    ScreenshotQrRecognitionService service(nullptr, unicodeDirectory.path());
+    const ScreenshotQrRecognitionResult output =
+        recognize(service, qrFixture(),
+                  "unicode-directory QR recognition should complete within the test timeout");
+    require(output.error.isEmpty(), "the WeChat QR models should load from a unicode directory");
+    require(output.contents == QStringList{QString::fromLatin1(kPayload)},
+            "the QR detector should decode with models loaded from a unicode directory");
+}
+
 void queuedRequestsReuseNoPersistentWorker() {
     ScreenshotQrRecognitionService service;
     QObject receiver;
@@ -259,6 +290,7 @@ int main(int argc, char** argv) {
     defaultDetectorDecodesTheSelectedImage();
     oneDimensionalBarcodeDecodesTheSelectedImage();
     oversizedScreenshotIsBoundedAndStillDecoded();
+    unicodeModelsDirectoryStillLoadsAndDecodes();
     queuedRequestsReuseNoPersistentWorker();
     destroyingReceiverCancelsQueuedCompletion();
     return 0;

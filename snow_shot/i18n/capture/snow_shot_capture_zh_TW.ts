@@ -11,6 +11,14 @@
             <source>The capture returned an invalid image</source>
             <translation>擷取傳回了無效影像</translation>
         </message>
+        <message>
+            <source>The captured display geometry is invalid</source>
+            <translation>擷取的顯示器幾何資訊無效</translation>
+        </message>
+        <message>
+            <source>The captured window geometry is invalid</source>
+            <translation>擷取的視窗幾何資訊無效</translation>
+        </message>
     </context>
     <context>
         <name>ScreenshotAutoFilterController</name>
@@ -26,12 +34,40 @@
             <translation>自動儲存截圖失敗：%1</translation>
         </message>
         <message>
+            <source>Cancel</source>
+            <translation>取消</translation>
+        </message>
+        <message>
+            <source>Could not recapture the screen</source>
+            <translation>無法重新擷取螢幕</translation>
+        </message>
+        <message>
+            <source>Exit</source>
+            <translation>結束</translation>
+        </message>
+        <message>
+            <source>Exit screenshot?</source>
+            <translation>結束截圖？</translation>
+        </message>
+        <message>
             <source>No recognized result is available to copy</source>
             <translation>沒有可複製的辨識結果</translation>
         </message>
         <message>
             <source>Save screenshot</source>
             <translation>儲存截圖</translation>
+        </message>
+        <message>
+            <source>Scrolling capture stopped because the display configuration changed. Select the region again.</source>
+            <translation>顯示器設定已變更，捲動截圖已停止。請重新選取區域。</translation>
+        </message>
+        <message>
+            <source>Scrolling capture stopped. Check screen permissions and display settings, then try again.</source>
+            <translation>捲動截圖已停止。請檢查螢幕錄製權限和顯示器設定，然後重試。</translation>
+        </message>
+        <message>
+            <source>Smart selection is using window mode. Enable Accessibility access in Screenshot settings to select window elements.</source>
+            <translation>智慧選取正在使用視窗模式。請在螢幕擷取設定中啟用輔助使用權限，以選取視窗元素。</translation>
         </message>
         <message>
             <source>The clipboard content could not be pinned</source>
@@ -85,6 +121,10 @@
             <source>The scrolling screenshot could not be prepared</source>
             <translation>無法準備滾動截圖</translation>
         </message>
+        <message>
+            <source>Your current screenshot will be discarded.</source>
+            <translation>目前的截圖將被捨棄。</translation>
+        </message>
     </context>
     <context>
         <name>ScreenshotOverlayWindow</name>
@@ -136,6 +176,10 @@
             <translation>高度</translation>
         </message>
         <message>
+            <source>Height (points)</source>
+            <translation>高度（點）</translation>
+        </message>
+        <message>
             <source>Lock aspect ratio</source>
             <translation>鎖定長寬比</translation>
         </message>
@@ -183,6 +227,10 @@
             <source>Width</source>
             <translation>寬度</translation>
         </message>
+        <message>
+            <source>Width (points)</source>
+            <translation>寬度（點）</translation>
+        </message>
     </context>
     <context>
         <name>ScreenshotSelectionResizeWorkflow</name>
@@ -218,6 +266,10 @@
             <translation>像素</translation>
         </message>
         <message>
+            <source>Points</source>
+            <translation>點</translation>
+        </message>
+        <message>
             <source>Shadow width</source>
             <translation>陰影寬度</translation>
         </message>
@@ -232,6 +284,14 @@
         <message>
             <source>Y coordinate</source>
             <translation> Y 座標</translation>
+        </message>
+        <message>
+            <source>pt</source>
+            <translation>pt</translation>
+        </message>
+        <message>
+            <source>px</source>
+            <translation>px</translation>
         </message>
     </context>
     <context>

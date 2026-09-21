@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use snow_draw_engine_core::{ErrorCode, Point};
+use snow_draw_engine_core::{DrawRect, ErrorCode, Point};
 use snow_draw_engine_document::{
     ElementData, ElementId, ElementMeta, TextLayoutSize, Transaction,
     serial_number_with_label_style, serial_number_with_selection_rect, text_hit_test,
@@ -11,14 +11,17 @@ use snow_draw_engine_document::{
 use snow_draw_engine_model::DocumentModel;
 
 use crate::{
-    ActiveTool, ApplyTransactionCommand, Editor, EditorCommand, SelectionRectState,
-    SerialNumberTextOperation, TextDraftCommit, TextLayoutOverride,
-    geometry::element_hit_tolerance,
+    ActiveTool, ApplyTransactionCommand, Editor, EditorCommand, SelectionArrowState,
+    SelectionRectState, SerialNumberTextOperation, TextDraftCommit, TextLayoutOverride,
+    geometry::{
+        element_hit_tolerance, rotated_rectangle_aabb, selection_bounds_from_selection,
+        selection_bounds_to_draw_rect,
+    },
     polyline_simplification::simplify_pen_filter_geometry,
     state::ResizeHandle,
     style::stepped_font_size,
     text::{
-        SerialNumberTextCreationRequest, TextSelectionResizeHandle,
+        MeasuredTextResize, SerialNumberTextCreationRequest, TextSelectionResizeHandle,
         create_serial_number_text_creation_plan, text_layout_override_size,
         text_with_committed_draft, text_with_selection_rect, text_with_style_attributes,
     },
@@ -30,7 +33,7 @@ pub(crate) fn append_selection_element_update(
     preview: SelectionRectState,
     resize_handle: Option<ResizeHandle>,
     single_text_resize: bool,
-    single_text_resize_font_size: Option<f64>,
+    measured_resize: Option<MeasuredTextResize>,
 ) -> Result<(), ErrorCode> {
     if document.rectangle(preview.id).is_ok() {
         validate_rectangle(&preview.rect)?;
@@ -97,7 +100,7 @@ pub(crate) fn append_selection_element_update(
                 y_sign: handle.y_sign(),
             }),
             single_text_resize,
-            single_text_resize_font_size,
+            measured_resize,
         );
         validate_text(&updated)?;
         if *text != updated {
@@ -120,6 +123,7 @@ pub(crate) fn next_serial_number(document: &DocumentModel) -> i64 {
         .paint_order()
         .iter()
         .filter_map(|id| document.serial_number(*id).ok())
+        .filter(|serial| serial.serial_number_type.supports_number())
         .map(|serial| serial.number.max(0))
         .max()
         .unwrap_or(0)
@@ -219,6 +223,346 @@ pub(crate) fn duplicate_id_map(
     map
 }
 
+pub(crate) fn duplicate_selection_transaction(
+    document: &DocumentModel,
+    selected_ids: &[ElementId],
+    offset: Point<f64>,
+) -> Result<(Transaction, Vec<ElementId>), ErrorCode> {
+    let ids = expanded_duplicate_ids(document, selected_ids);
+    if ids.is_empty() {
+        return Ok((Transaction::new("duplicate selection"), Vec::new()));
+    }
+    let id_map = duplicate_id_map(document, &ids);
+    let mut transaction = Transaction::new("duplicate selection");
+    let mut next_selection = Vec::new();
+    for id in ids {
+        let Some(new_id) = id_map.get(&id).copied() else {
+            continue;
+        };
+        let element = document.element(id)?;
+        match &element.data {
+            ElementData::Rectangle(rect) => {
+                let mut duplicate = *rect;
+                duplicate.center.x += offset.x;
+                duplicate.center.y += offset.y;
+                validate_rectangle(&duplicate)?;
+                transaction.insert_rectangle(new_id, element.meta, duplicate);
+            }
+            ElementData::Filter(filter) => {
+                let mut duplicate = *filter;
+                duplicate.center.x += offset.x;
+                duplicate.center.y += offset.y;
+                validate_filter(&duplicate)?;
+                transaction.insert_filter(new_id, element.meta, duplicate);
+            }
+            ElementData::PenFilter(filter) => {
+                let mut duplicate = filter.clone();
+                duplicate.x += offset.x;
+                duplicate.y += offset.y;
+                simplify_pen_filter_geometry(&mut duplicate);
+                validate_pen_filter(&duplicate)?;
+                transaction.insert_pen_filter(new_id, element.meta, duplicate);
+            }
+            ElementData::Arrow(arrow) => {
+                let mut duplicate = arrow.clone();
+                duplicate.text_element_id = arrow
+                    .text_element_id
+                    .and_then(|text_id| id_map.get(&text_id).copied());
+                duplicate.x += offset.x;
+                duplicate.y += offset.y;
+                validate_arrow(&duplicate)?;
+                transaction.insert_arrow(new_id, element.meta, duplicate);
+            }
+            ElementData::FreeDraw(free_draw) => {
+                let mut duplicate = free_draw.clone();
+                duplicate.x += offset.x;
+                duplicate.y += offset.y;
+                validate_free_draw(&duplicate)?;
+                transaction.insert_free_draw(new_id, element.meta, duplicate);
+            }
+            ElementData::Text(text) => {
+                let mut duplicate = text.clone();
+                duplicate.center.x += offset.x;
+                duplicate.center.y += offset.y;
+                validate_text(&duplicate)?;
+                transaction.insert_text(new_id, element.meta, duplicate);
+            }
+            ElementData::SerialNumber(serial) => {
+                let mut duplicate = serial.clone();
+                duplicate.center.x += offset.x;
+                duplicate.center.y += offset.y;
+                duplicate.text_element_id = document
+                    .bound_text_id_for_serial_number(id)
+                    .and_then(|text_id| id_map.get(&text_id).copied());
+                validate_serial_number(&duplicate)?;
+                transaction.insert_serial_number(new_id, element.meta, duplicate);
+            }
+        }
+        if selected_ids.contains(&id) {
+            next_selection.push(new_id);
+        }
+    }
+    Ok((transaction, next_selection))
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AlignAxis {
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AlignEdge {
+    Start,
+    Center,
+    End,
+}
+
+#[derive(Clone, Copy)]
+enum SelectionAlignment {
+    Align { axis: AlignAxis, edge: AlignEdge },
+    Distribute { axis: AlignAxis },
+}
+
+impl SelectionAlignment {
+    fn from_mode(mode: u32) -> Option<Self> {
+        match mode {
+            0 => Some(Self::Align {
+                axis: AlignAxis::Horizontal,
+                edge: AlignEdge::Start,
+            }),
+            1 => Some(Self::Align {
+                axis: AlignAxis::Horizontal,
+                edge: AlignEdge::Center,
+            }),
+            2 => Some(Self::Align {
+                axis: AlignAxis::Horizontal,
+                edge: AlignEdge::End,
+            }),
+            3 => Some(Self::Align {
+                axis: AlignAxis::Vertical,
+                edge: AlignEdge::Start,
+            }),
+            4 => Some(Self::Align {
+                axis: AlignAxis::Vertical,
+                edge: AlignEdge::Center,
+            }),
+            5 => Some(Self::Align {
+                axis: AlignAxis::Vertical,
+                edge: AlignEdge::End,
+            }),
+            6 => Some(Self::Distribute {
+                axis: AlignAxis::Horizontal,
+            }),
+            7 => Some(Self::Distribute {
+                axis: AlignAxis::Vertical,
+            }),
+            _ => None,
+        }
+    }
+
+    fn axis(self) -> AlignAxis {
+        match self {
+            Self::Align { axis, .. } | Self::Distribute { axis } => axis,
+        }
+    }
+
+    fn minimum_units(self) -> usize {
+        match self {
+            Self::Align { .. } => 2,
+            Self::Distribute { .. } => 3,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct AlignAxisSpan {
+    start: f64,
+    end: f64,
+}
+
+impl AlignAxisSpan {
+    fn new(bounds: DrawRect, axis: AlignAxis) -> Self {
+        match axis {
+            AlignAxis::Horizontal => Self {
+                start: bounds.min_x,
+                end: bounds.max_x,
+            },
+            AlignAxis::Vertical => Self {
+                start: bounds.min_y,
+                end: bounds.max_y,
+            },
+        }
+    }
+
+    fn mid(self) -> f64 {
+        f64::midpoint(self.start, self.end)
+    }
+
+    fn extent(self) -> f64 {
+        self.end - self.start
+    }
+}
+
+fn align_delta(value: f64, axis: AlignAxis) -> Point<f64> {
+    match axis {
+        AlignAxis::Horizontal => Point::new(value, 0.0),
+        AlignAxis::Vertical => Point::new(0.0, value),
+    }
+}
+
+// Bound label texts travel with their owner, so an owner plus its label forms
+// one alignment unit, matching how Excalidraw groups bound text into the
+// aligned group.
+fn align_unit_owners(
+    document: &DocumentModel,
+    selected: &[ElementId],
+) -> (Vec<ElementId>, HashMap<ElementId, ElementId>) {
+    let mut label_owner = HashMap::new();
+    for id in selected {
+        if let Some(label_id) = document.bound_text_id_for_arrow(*id) {
+            label_owner.insert(label_id, *id);
+        }
+        if let Some(label_id) = document.bound_text_id_for_serial_number(*id) {
+            label_owner.insert(label_id, *id);
+        }
+    }
+    let mut units = Vec::with_capacity(selected.len());
+    for id in selected {
+        let owner = label_owner.get(id).copied().unwrap_or(*id);
+        if !units.contains(&owner) {
+            units.push(owner);
+        }
+    }
+    (units, label_owner)
+}
+
+fn align_unit_bounds(document: &DocumentModel, id: ElementId) -> Option<DrawRect> {
+    let mut bounds = if let Ok(arrow) = document.arrow(id) {
+        selection_bounds_to_draw_rect(&selection_bounds_from_selection(
+            &[],
+            &[SelectionArrowState {
+                id,
+                arrow: arrow.clone(),
+            }],
+        )?)
+    } else {
+        rotated_rectangle_aabb(&document.element_rect_proxy(id)?)
+    };
+    let label_id = document
+        .bound_text_id_for_arrow(id)
+        .or_else(|| document.bound_text_id_for_serial_number(id));
+    if let Some(label_id) = label_id
+        && let Some(rect) = document.element_rect_proxy(label_id)
+    {
+        let label_bounds = rotated_rectangle_aabb(&rect);
+        bounds.min_x = bounds.min_x.min(label_bounds.min_x);
+        bounds.min_y = bounds.min_y.min(label_bounds.min_y);
+        bounds.max_x = bounds.max_x.max(label_bounds.max_x);
+        bounds.max_y = bounds.max_y.max(label_bounds.max_y);
+    }
+    Some(bounds)
+}
+
+fn alignment_deltas(
+    alignment: SelectionAlignment,
+    units: &[(ElementId, DrawRect)],
+    reference: DrawRect,
+) -> HashMap<ElementId, Point<f64>> {
+    let axis = alignment.axis();
+    let reference_span = AlignAxisSpan::new(reference, axis);
+    let mut deltas = HashMap::with_capacity(units.len());
+    match alignment {
+        SelectionAlignment::Align { edge, .. } => {
+            for (id, bounds) in units {
+                let span = AlignAxisSpan::new(*bounds, axis);
+                let (target, current) = match edge {
+                    AlignEdge::Start => (reference_span.start, span.start),
+                    AlignEdge::Center => (reference_span.mid(), span.mid()),
+                    AlignEdge::End => (reference_span.end, span.end),
+                };
+                deltas.insert(*id, align_delta(target - current, axis));
+            }
+        }
+        SelectionAlignment::Distribute { .. } => {
+            let mut order: Vec<usize> = (0..units.len()).collect();
+            order.sort_by(|left, right| {
+                AlignAxisSpan::new(units[*left].1, axis)
+                    .mid()
+                    .total_cmp(&AlignAxisSpan::new(units[*right].1, axis).mid())
+            });
+            let spans: Vec<AlignAxisSpan> = order
+                .iter()
+                .map(|index| AlignAxisSpan::new(units[*index].1, axis))
+                .collect();
+            let span_total: f64 = spans.iter().map(|span| span.extent()).sum();
+            let step = (reference_span.extent() - span_total) / (spans.len() - 1) as f64;
+            if step < 0.0 {
+                // The units cannot fit without overlap, so distribute by
+                // centers with the outermost units pinned, matching Excalidraw.
+                let index0 = spans
+                    .iter()
+                    .position(|span| span.start == reference_span.start);
+                let index1 = spans.iter().position(|span| span.end == reference_span.end);
+                if let (Some(index0), Some(index1)) = (index0, index1) {
+                    let center_step =
+                        (spans[index1].mid() - spans[index0].mid()) / (spans.len() - 1) as f64;
+                    let mut position = spans[index0].mid();
+                    for index in 0..spans.len() {
+                        if index != index0 && index != index1 {
+                            position += center_step;
+                            deltas.insert(
+                                units[order[index]].0,
+                                align_delta(position - spans[index].mid(), axis),
+                            );
+                        }
+                    }
+                }
+                return deltas;
+            }
+            let mut position = reference_span.start;
+            for index in 0..spans.len() {
+                deltas.insert(
+                    units[order[index]].0,
+                    align_delta(position - spans[index].start, axis),
+                );
+                position += step + spans[index].extent();
+            }
+        }
+    }
+    deltas
+}
+
+fn append_bound_label_alignment(
+    transaction: &mut Transaction,
+    document: &DocumentModel,
+    owner: ElementId,
+    delta: Point<f64>,
+) -> Result<(), ErrorCode> {
+    if delta.x == 0.0 && delta.y == 0.0 {
+        return Ok(());
+    }
+    let Some(label_id) = document
+        .bound_text_id_for_arrow(owner)
+        .or_else(|| document.bound_text_id_for_serial_number(owner))
+    else {
+        return Ok(());
+    };
+    let Some(mut rect) = document.element_rect_proxy(label_id) else {
+        return Ok(());
+    };
+    rect.center.x += delta.x;
+    rect.center.y += delta.y;
+    append_selection_element_update(
+        transaction,
+        document,
+        SelectionRectState { id: label_id, rect },
+        None,
+        false,
+        None,
+    )
+}
+
 impl Editor {
     pub fn hit_text_at(&self, document: &DocumentModel, point: Point<f64>) -> Option<ElementId> {
         let active_text = self.active_text_draft_existing_id().and_then(|id| {
@@ -257,6 +601,12 @@ impl Editor {
 
     pub fn selected_ids(&self) -> Vec<ElementId> {
         self.state.selection.ids.clone()
+    }
+
+    pub fn selected_element_count(&self, document: &DocumentModel) -> usize {
+        align_unit_owners(document, &self.state.selection.ids)
+            .0
+            .len()
     }
 
     pub fn select_element(
@@ -424,80 +774,8 @@ impl Editor {
             return Ok(None);
         }
         let history_undo_snapshot = self.capture_document_sync_snapshot(document);
-        let ids = expanded_duplicate_ids(document, &self.state.selection.ids);
-        if ids.is_empty() {
-            return Ok(None);
-        }
-        let id_map = duplicate_id_map(document, &ids);
-        let mut transaction = Transaction::new("duplicate selection");
-        let mut next_selection = Vec::new();
-        for id in ids {
-            let Some(new_id) = id_map.get(&id).copied() else {
-                continue;
-            };
-            let element = document.element(id)?;
-            match &element.data {
-                ElementData::Rectangle(rect) => {
-                    let mut duplicate = *rect;
-                    duplicate.center.x += offset.x;
-                    duplicate.center.y += offset.y;
-                    validate_rectangle(&duplicate)?;
-                    transaction.insert_rectangle(new_id, element.meta, duplicate);
-                }
-                ElementData::Filter(filter) => {
-                    let mut duplicate = *filter;
-                    duplicate.center.x += offset.x;
-                    duplicate.center.y += offset.y;
-                    validate_filter(&duplicate)?;
-                    transaction.insert_filter(new_id, element.meta, duplicate);
-                }
-                ElementData::PenFilter(filter) => {
-                    let mut duplicate = filter.clone();
-                    duplicate.x += offset.x;
-                    duplicate.y += offset.y;
-                    simplify_pen_filter_geometry(&mut duplicate);
-                    validate_pen_filter(&duplicate)?;
-                    transaction.insert_pen_filter(new_id, element.meta, duplicate);
-                }
-                ElementData::Arrow(arrow) => {
-                    let mut duplicate = arrow.clone();
-                    duplicate.text_element_id = arrow
-                        .text_element_id
-                        .and_then(|text_id| id_map.get(&text_id).copied());
-                    duplicate.x += offset.x;
-                    duplicate.y += offset.y;
-                    validate_arrow(&duplicate)?;
-                    transaction.insert_arrow(new_id, element.meta, duplicate);
-                }
-                ElementData::FreeDraw(free_draw) => {
-                    let mut duplicate = free_draw.clone();
-                    duplicate.x += offset.x;
-                    duplicate.y += offset.y;
-                    validate_free_draw(&duplicate)?;
-                    transaction.insert_free_draw(new_id, element.meta, duplicate);
-                }
-                ElementData::Text(text) => {
-                    let mut duplicate = text.clone();
-                    duplicate.center.x += offset.x;
-                    duplicate.center.y += offset.y;
-                    validate_text(&duplicate)?;
-                    transaction.insert_text(new_id, element.meta, duplicate);
-                }
-                ElementData::SerialNumber(serial) => {
-                    let mut duplicate = serial.clone();
-                    duplicate.center.x += offset.x;
-                    duplicate.center.y += offset.y;
-                    duplicate.text_element_id = document
-                        .bound_text_id_for_serial_number(id)
-                        .and_then(|text_id| id_map.get(&text_id).copied());
-                    validate_serial_number(&duplicate)?;
-                    transaction.insert_serial_number(new_id, element.meta, duplicate);
-                }
-            }
-            if self.state.selection.contains(id) {
-                next_selection.push(new_id);
-            }
-        }
+        let (transaction, next_selection) =
+            duplicate_selection_transaction(document, &self.state.selection.ids, offset)?;
         if transaction.is_empty() {
             return Ok(None);
         }
@@ -563,6 +841,110 @@ impl Editor {
         transaction.reorder_elements(order, 0);
         Ok(Some(EditorCommand::ApplyTransaction(
             ApplyTransactionCommand::new(transaction),
+        )))
+    }
+
+    pub fn align_selected(
+        &mut self,
+        document: &DocumentModel,
+        alignment: u32,
+    ) -> Result<Option<EditorCommand>, ErrorCode> {
+        let Some(alignment) = SelectionAlignment::from_mode(alignment) else {
+            return Err(ErrorCode::InvalidArgument);
+        };
+        let selected = self.state.selection.ids.clone();
+        let (units, label_owner) = align_unit_owners(document, &selected);
+        if units.len() < alignment.minimum_units() {
+            return Ok(None);
+        }
+        let mut unit_bounds: Vec<(ElementId, DrawRect)> = Vec::with_capacity(units.len());
+        for id in &units {
+            let Some(bounds) = align_unit_bounds(document, *id) else {
+                return Ok(None);
+            };
+            unit_bounds.push((*id, bounds));
+        }
+        let mut reference = unit_bounds[0].1;
+        for (_, bounds) in &unit_bounds[1..] {
+            reference.min_x = reference.min_x.min(bounds.min_x);
+            reference.min_y = reference.min_y.min(bounds.min_y);
+            reference.max_x = reference.max_x.max(bounds.max_x);
+            reference.max_y = reference.max_y.max(bounds.max_y);
+        }
+        let deltas = alignment_deltas(alignment, &unit_bounds, reference);
+        let history_undo_snapshot = self.capture_document_sync_snapshot(document);
+        let mut transaction = Transaction::new("align selection");
+        let mut next_elements: Vec<SelectionRectState> = Vec::with_capacity(selected.len());
+        let mut next_arrows: Vec<SelectionArrowState> = Vec::new();
+        for id in &selected {
+            let owner = label_owner.get(id).copied().unwrap_or(*id);
+            let delta = deltas.get(&owner).copied().unwrap_or(Point::new(0.0, 0.0));
+            if let Ok(arrow) = document.arrow(*id) {
+                let mut updated = arrow.clone();
+                updated.x += delta.x;
+                updated.y += delta.y;
+                if *arrow != updated {
+                    validate_arrow(&updated)?;
+                    transaction.update_arrow(*id, updated.clone());
+                }
+                next_arrows.push(SelectionArrowState {
+                    id: *id,
+                    arrow: updated,
+                });
+                append_bound_label_alignment(&mut transaction, document, *id, delta)?;
+                continue;
+            }
+            let Some(mut rect) = document.element_rect_proxy(*id) else {
+                continue;
+            };
+            rect.center.x += delta.x;
+            rect.center.y += delta.y;
+            next_elements.push(SelectionRectState { id: *id, rect });
+            // A selected label rides along with its owner's update; an
+            // unselected one is appended by the owner instead.
+            if !label_owner.contains_key(id) {
+                if delta.x != 0.0 || delta.y != 0.0 {
+                    append_selection_element_update(
+                        &mut transaction,
+                        document,
+                        SelectionRectState { id: *id, rect },
+                        None,
+                        false,
+                        None,
+                    )?;
+                }
+                append_bound_label_alignment(&mut transaction, document, *id, delta)?;
+            }
+        }
+        // Arrows bound to moved bindables but not part of the selection follow
+        // the new geometry.
+        let selected_arrow_ids: Vec<ElementId> = next_arrows.iter().map(|state| state.id).collect();
+        for (arrow_id, arrow, reorder_targets) in self
+            .recompute_bound_arrows(document, &next_elements)
+            .into_iter()
+            .filter(|(arrow_id, _, _)| !selected_arrow_ids.contains(arrow_id))
+        {
+            transaction.update_arrow(arrow_id, arrow);
+            self.append_arrow_reorder_targets(
+                &mut transaction,
+                document,
+                arrow_id,
+                &reorder_targets,
+            );
+        }
+        if transaction.is_empty() {
+            return Ok(None);
+        }
+        let next_bounds = self.arrow_text_selection_bounds(
+            document,
+            selection_bounds_from_selection(&next_elements, &next_arrows),
+            &next_arrows,
+        );
+        self.state.selection.elements = next_elements;
+        self.state.selection.arrows = next_arrows;
+        self.state.selection.bounds = next_bounds;
+        Ok(Some(EditorCommand::ApplyTransaction(
+            ApplyTransactionCommand::with_history_undo_snapshot(transaction, history_undo_snapshot),
         )))
     }
 
@@ -680,6 +1062,9 @@ impl Editor {
             let Ok(current) = document.serial_number(id) else {
                 continue;
             };
+            if !current.serial_number_type.supports_number() {
+                continue;
+            }
             let next_number = if delta < 0 {
                 current.number.saturating_sub(delta.saturating_abs()).max(0)
             } else {
@@ -811,6 +1196,55 @@ mod tests {
         ArrowData, CanvasFilterType, ElementData, ElementMeta, FreeDrawData, Operation,
         PenFilterData, RectangleData, SerialNumberData, TextData,
     };
+
+    #[test]
+    fn circles_do_not_consume_or_adjust_sequence_numbers() {
+        let mut document = DocumentModel::new();
+        let mut editor = Editor::new(EngineConfig::default()).unwrap();
+        let numbered_id = insert_serial_number(
+            &mut document,
+            SerialNumberData {
+                number: 5,
+                ..SerialNumberData::default()
+            },
+        );
+        editor.state.default_serial_number.serial_number_type =
+            snow_draw_engine_document::SerialNumberType::Circle;
+        editor.state.default_serial_number.number = 6;
+        let preview = editor
+            .serial_number_creation_preview(&document, Point::new(40.0, 50.0))
+            .unwrap();
+        assert_eq!(preview.diameter, 12.0);
+        let circle_id = editor
+            .queue_serial_number_creation(&document, preview)
+            .unwrap();
+        apply_editor_command(&mut document, editor.pending_command.take().unwrap());
+        assert_eq!(editor.state.default_serial_number.number, 6);
+        assert_eq!(next_serial_number(&document), 6);
+        editor.set_selection_state(vec![circle_id], Some(circle_id));
+        assert!(
+            editor
+                .adjust_selected_serial_numbers(&document, 1)
+                .unwrap()
+                .is_none()
+        );
+        let original_circle = document.serial_number(circle_id).unwrap().clone();
+        editor.set_selection_state(vec![numbered_id, circle_id], Some(numbered_id));
+        let command = editor
+            .adjust_selected_serial_numbers(&document, 1)
+            .unwrap()
+            .unwrap();
+        apply_editor_command(&mut document, command);
+        assert_eq!(document.serial_number(numbered_id).unwrap().number, 6);
+        assert_eq!(document.serial_number(circle_id).unwrap(), &original_circle);
+        editor.state.default_serial_number.serial_number_type =
+            snow_draw_engine_document::SerialNumberType::OutlinedCircle;
+        let numbered = editor
+            .serial_number_creation_preview(&document, Point::default())
+            .unwrap();
+        assert_eq!(numbered.number, 7);
+        assert!(numbered.diameter > 12.0);
+    }
 
     fn apply_editor_command(document: &mut DocumentModel, command: EditorCommand) {
         let EditorCommand::ApplyTransaction(command) = command else {
@@ -1006,20 +1440,18 @@ mod tests {
             &mut document,
             TextData {
                 center: Point::new(0.0, 0.0),
-                width: 40.0,
-                height: 20.0,
                 text: "committed".to_owned(),
                 auto_resize: false,
+                layout: TextLayoutSize::new(40.0, 20.0),
                 ..TextData::default()
             },
         );
         let mut editor = Editor::new(EngineConfig::default()).unwrap();
         let draft_text = TextData {
             center: Point::new(160.0, 0.0),
-            width: 60.0,
-            height: 30.0,
             text: "draft".to_owned(),
             auto_resize: false,
+            layout: TextLayoutSize::new(60.0, 30.0),
             ..document.text(id).unwrap().clone()
         };
 
@@ -1244,8 +1676,7 @@ mod tests {
             &mut document,
             TextData {
                 text: "old".to_owned(),
-                width: 80.0,
-                height: 24.0,
+                layout: TextLayoutSize::new(80.0, 24.0),
                 ..TextData::default()
             },
         );
@@ -1281,10 +1712,7 @@ mod tests {
                     TextCommitTarget::Existing(id),
                     Point::new(10.0, 20.0),
                     "new",
-                    TextLayoutSize {
-                        width: 120.0,
-                        height: 48.0,
-                    },
+                    TextLayoutSize::new(120.0, 48.0),
                     style.clone(),
                     false,
                     true,
@@ -1312,8 +1740,8 @@ mod tests {
         assert_eq!(updated.text, "new");
         assert_eq!(updated.center, Point::new(10.0, 20.0));
         assert_eq!(updated.rotation, 0.75);
-        assert_eq!(updated.width, 120.0);
-        assert_eq!(updated.height, 48.0);
+        assert_eq!(updated.width(), 120.0);
+        assert_eq!(updated.height(), 48.0);
         assert_eq!(updated.font_size, style.font_size);
         assert_eq!(updated.color, style.color);
         assert_eq!(updated.font_family, style.font_family);
@@ -1348,10 +1776,7 @@ mod tests {
                     TextCommitTarget::New,
                     Point::new(45.0, 67.0),
                     "created",
-                    TextLayoutSize {
-                        width: 180.0,
-                        height: 64.0,
-                    },
+                    TextLayoutSize::new(180.0, 64.0),
                     style.clone(),
                     true,
                     true,
@@ -1372,8 +1797,8 @@ mod tests {
         };
         assert_eq!(created.text, "created");
         assert_eq!(created.center, Point::new(45.0, 67.0));
-        assert_eq!(created.width, 180.0);
-        assert_eq!(created.height, 64.0);
+        assert_eq!(created.width(), 180.0);
+        assert_eq!(created.height(), 64.0);
         assert_eq!(created.font_size, style.font_size);
         assert_eq!(created.color, style.color);
         assert_eq!(created.font_family, style.font_family);
@@ -1394,8 +1819,7 @@ mod tests {
             &mut document,
             TextData {
                 text: "bound".to_owned(),
-                width: 80.0,
-                height: 24.0,
+                layout: TextLayoutSize::new(80.0, 24.0),
                 ..TextData::default()
             },
         );
@@ -1416,10 +1840,7 @@ mod tests {
                     TextCommitTarget::Existing(text_id),
                     Point::new(0.0, 0.0),
                     "   ",
-                    TextLayoutSize {
-                        width: 1.0,
-                        height: 1.0,
-                    },
+                    TextLayoutSize::new(1.0, 1.0),
                     text_style(
                         12.0,
                         ColorRgba8 {
@@ -1462,8 +1883,7 @@ mod tests {
             &mut document,
             TextData {
                 text: "bound".to_owned(),
-                width: 80.0,
-                height: 24.0,
+                layout: TextLayoutSize::new(80.0, 24.0),
                 ..TextData::default()
             },
         );
@@ -1540,8 +1960,7 @@ mod tests {
             TextData {
                 center: Point::new(100.0, 0.0),
                 text: "bound".to_owned(),
-                width: 80.0,
-                height: 24.0,
+                layout: TextLayoutSize::new(80.0, 24.0),
                 ..TextData::default()
             },
         );
@@ -1640,8 +2059,7 @@ mod tests {
             &mut document,
             TextData {
                 text: "old".to_owned(),
-                width: 80.0,
-                height: 24.0,
+                layout: TextLayoutSize::new(80.0, 24.0),
                 ..TextData::default()
             },
         );
@@ -1664,10 +2082,7 @@ mod tests {
                     TextCommitTarget::Existing(id),
                     Point::new(10.0, 20.0),
                     "new",
-                    TextLayoutSize {
-                        width: 120.0,
-                        height: 48.0,
-                    },
+                    TextLayoutSize::new(120.0, 48.0),
                     style,
                     false,
                     false,
@@ -1677,5 +2092,333 @@ mod tests {
 
         assert!(command.is_some());
         assert_eq!(editor.state.default_text, default_before);
+    }
+
+    fn rectangle_at(center: Point<f64>, width: f64, height: f64, rotation: f64) -> RectangleData {
+        RectangleData {
+            center,
+            width,
+            height,
+            rotation,
+            ..rectangle_with_colors(ColorRgba8::default(), ColorRgba8::default())
+        }
+    }
+
+    #[test]
+    fn align_selected_aligns_two_rectangles_left() {
+        let mut document = DocumentModel::new();
+        let left_id = insert_rectangle(
+            &mut document,
+            rectangle_at(Point::new(100.0, 50.0), 80.0, 60.0, 0.0),
+        );
+        let right_id = insert_rectangle(
+            &mut document,
+            rectangle_at(Point::new(300.0, 150.0), 40.0, 30.0, 0.0),
+        );
+        let mut editor = Editor::new(EngineConfig::default()).unwrap();
+        editor.set_selection_state(vec![left_id, right_id], Some(left_id));
+
+        let command = editor
+            .align_selected(&document, 0)
+            .unwrap()
+            .expect("two rectangles should align left");
+        apply_editor_command(&mut document, command);
+
+        let left = document.rectangle(left_id).unwrap();
+        let right = document.rectangle(right_id).unwrap();
+        assert_eq!(left.center, Point::new(100.0, 50.0));
+        assert_eq!(right.center, Point::new(80.0, 150.0));
+    }
+
+    #[test]
+    fn align_selected_centers_two_rectangles_vertically() {
+        let mut document = DocumentModel::new();
+        let first_id = insert_rectangle(
+            &mut document,
+            rectangle_at(Point::new(100.0, 50.0), 80.0, 60.0, 0.0),
+        );
+        let second_id = insert_rectangle(
+            &mut document,
+            rectangle_at(Point::new(300.0, 150.0), 40.0, 30.0, 0.0),
+        );
+        let mut editor = Editor::new(EngineConfig::default()).unwrap();
+        editor.set_selection_state(vec![first_id, second_id], Some(first_id));
+
+        let command = editor
+            .align_selected(&document, 4)
+            .unwrap()
+            .expect("two rectangles should center vertically");
+        apply_editor_command(&mut document, command);
+
+        let first = document.rectangle(first_id).unwrap();
+        let second = document.rectangle(second_id).unwrap();
+        assert_eq!(first.center, Point::new(100.0, 92.5));
+        assert_eq!(second.center, Point::new(300.0, 92.5));
+    }
+
+    #[test]
+    fn align_selected_rotated_rectangle_uses_rotated_bounds() {
+        let mut document = DocumentModel::new();
+        let rotated_id = insert_rectangle(
+            &mut document,
+            rectangle_at(
+                Point::new(200.0, 100.0),
+                80.0,
+                20.0,
+                std::f64::consts::FRAC_PI_2,
+            ),
+        );
+        let flat_id = insert_rectangle(
+            &mut document,
+            rectangle_at(Point::new(400.0, 100.0), 40.0, 30.0, 0.0),
+        );
+        let mut editor = Editor::new(EngineConfig::default()).unwrap();
+        editor.set_selection_state(vec![rotated_id, flat_id], Some(rotated_id));
+
+        let command = editor
+            .align_selected(&document, 0)
+            .unwrap()
+            .expect("rotated selection should align");
+        apply_editor_command(&mut document, command);
+
+        // The rotated rectangle spans [190, 210] and the flat one [380, 420],
+        // so the flat one moves to start at the rotated one's axis-aligned edge.
+        let flat = document.rectangle(flat_id).unwrap();
+        assert_eq!(flat.center, Point::new(210.0, 100.0));
+    }
+
+    #[test]
+    fn align_selected_requires_two_units() {
+        let mut document = DocumentModel::new();
+        let id = insert_rectangle(
+            &mut document,
+            rectangle_at(Point::new(100.0, 50.0), 80.0, 60.0, 0.0),
+        );
+        let mut editor = Editor::new(EngineConfig::default()).unwrap();
+        editor.select_element(&document, id).unwrap();
+
+        assert!(editor.align_selected(&document, 0).unwrap().is_none());
+    }
+
+    #[test]
+    fn align_selected_invalid_mode_is_rejected() {
+        let mut document = DocumentModel::new();
+        let first_id = insert_rectangle(
+            &mut document,
+            rectangle_at(Point::new(100.0, 50.0), 80.0, 60.0, 0.0),
+        );
+        let second_id = insert_rectangle(
+            &mut document,
+            rectangle_at(Point::new(300.0, 150.0), 40.0, 30.0, 0.0),
+        );
+        let mut editor = Editor::new(EngineConfig::default()).unwrap();
+        editor.set_selection_state(vec![first_id, second_id], Some(first_id));
+
+        assert!(editor.align_selected(&document, 8).is_err());
+    }
+
+    #[test]
+    fn align_selected_translates_arrows_by_origin() {
+        let mut document = DocumentModel::new();
+        let arrow = ArrowData::from_global_points(
+            &[Point::new(300.0, 10.0), Point::new(380.0, 50.0)],
+            ColorRgba8::default(),
+            2.0,
+            snow_draw_engine_document::StrokeStyle::Solid,
+            snow_draw_engine_core::arrow::ArrowType::Straight,
+            None,
+            None,
+        )
+        .unwrap();
+        let arrow_id = insert_arrow(&mut document, arrow);
+        let rectangle_id = insert_rectangle(
+            &mut document,
+            rectangle_at(Point::new(50.0, 60.0), 80.0, 60.0, 0.0),
+        );
+        let mut editor = Editor::new(EngineConfig::default()).unwrap();
+        editor.set_selection_state(vec![rectangle_id, arrow_id], Some(rectangle_id));
+
+        let command = editor
+            .align_selected(&document, 5)
+            .unwrap()
+            .expect("rectangle and arrow should align bottom");
+        apply_editor_command(&mut document, command);
+
+        let updated = document.arrow(arrow_id).unwrap();
+        let original = document.rectangle(rectangle_id).unwrap();
+        let arrow_bottom = updated.y + updated.height;
+        let rectangle_bottom = original.center.y + original.height / 2.0;
+        assert!(
+            (arrow_bottom - rectangle_bottom).abs() <= 1e-6,
+            "arrow bottom {arrow_bottom} should match rectangle bottom {rectangle_bottom}"
+        );
+    }
+
+    #[test]
+    fn align_selected_moves_serial_number_bound_text_as_one_unit() {
+        let mut document = DocumentModel::new();
+        let text_id = insert_text(
+            &mut document,
+            TextData {
+                center: Point::new(100.0, 0.0),
+                text: "bound".to_owned(),
+                layout: TextLayoutSize::new(80.0, 24.0),
+                ..TextData::default()
+            },
+        );
+        let serial_id = insert_serial_number(
+            &mut document,
+            SerialNumberData {
+                center: Point::new(0.0, 0.0),
+                text_element_id: Some(text_id),
+                ..SerialNumberData::default()
+            },
+        );
+        let other_id = insert_rectangle(
+            &mut document,
+            rectangle_at(Point::new(0.0, 200.0), 40.0, 30.0, 0.0),
+        );
+        let mut editor = Editor::new(EngineConfig::default()).unwrap();
+        // A marquee selection can contain the bound label text; the serial and
+        // its label must still behave as one alignment unit.
+        editor.set_selection_state(vec![serial_id, text_id, other_id], Some(other_id));
+
+        let command = editor
+            .align_selected(&document, 5)
+            .unwrap()
+            .expect("serial unit and rectangle should align bottom");
+        apply_editor_command(&mut document, command);
+
+        let serial = document.serial_number(serial_id).unwrap();
+        let text = document.text(text_id).unwrap();
+        let other = document.rectangle(other_id).unwrap();
+        let serial_bottom = serial.center.y + serial.diameter / 2.0;
+        let text_bottom = text.center.y + text.layout.height() / 2.0;
+        let unit_bottom = serial_bottom.max(text_bottom);
+        let other_bottom = other.center.y + other.height / 2.0;
+        assert!(
+            (unit_bottom - other_bottom).abs() <= 1e-6,
+            "serial unit bottom {unit_bottom} should match rectangle bottom {other_bottom}"
+        );
+        // The label keeps its offset relative to the serial number.
+        assert_eq!(text.center.x - serial.center.x, 100.0);
+    }
+
+    #[test]
+    fn distribute_selected_spaces_three_rectangles_evenly() {
+        let mut document = DocumentModel::new();
+        let first_id = insert_rectangle(
+            &mut document,
+            rectangle_at(Point::new(50.0, 0.0), 40.0, 20.0, 0.0),
+        );
+        let second_id = insert_rectangle(
+            &mut document,
+            rectangle_at(Point::new(150.0, 0.0), 40.0, 20.0, 0.0),
+        );
+        let third_id = insert_rectangle(
+            &mut document,
+            rectangle_at(Point::new(550.0, 0.0), 60.0, 20.0, 0.0),
+        );
+        let mut editor = Editor::new(EngineConfig::default()).unwrap();
+        editor.set_selection_state(vec![first_id, second_id, third_id], Some(first_id));
+
+        let command = editor
+            .align_selected(&document, 6)
+            .unwrap()
+            .expect("three rectangles should distribute horizontally");
+        apply_editor_command(&mut document, command);
+
+        let first = document.rectangle(first_id).unwrap();
+        let second = document.rectangle(second_id).unwrap();
+        let third = document.rectangle(third_id).unwrap();
+        // Extent 550 minus total width 140 leaves two gaps of 205.
+        assert_eq!(first.center, Point::new(50.0, 0.0));
+        assert_eq!(second.center, Point::new(295.0, 0.0));
+        assert_eq!(third.center, Point::new(550.0, 0.0));
+        let gap_one = (second.center.x - second.width / 2.0) - (first.center.x + first.width / 2.0);
+        let gap_two = (third.center.x - third.width / 2.0) - (second.center.x + second.width / 2.0);
+        assert!((gap_one - gap_two).abs() <= 1e-6);
+    }
+
+    #[test]
+    fn distribute_selected_requires_three_units() {
+        let mut document = DocumentModel::new();
+        let first_id = insert_rectangle(
+            &mut document,
+            rectangle_at(Point::new(50.0, 0.0), 40.0, 20.0, 0.0),
+        );
+        let second_id = insert_rectangle(
+            &mut document,
+            rectangle_at(Point::new(150.0, 0.0), 40.0, 20.0, 0.0),
+        );
+        let mut editor = Editor::new(EngineConfig::default()).unwrap();
+        editor.set_selection_state(vec![first_id, second_id], Some(first_id));
+
+        assert!(editor.align_selected(&document, 6).unwrap().is_none());
+    }
+
+    #[test]
+    fn align_selected_transaction_is_undoable() {
+        let mut document = DocumentModel::new();
+        let first_id = insert_rectangle(
+            &mut document,
+            rectangle_at(Point::new(100.0, 50.0), 80.0, 60.0, 0.0),
+        );
+        let second_id = insert_rectangle(
+            &mut document,
+            rectangle_at(Point::new(300.0, 150.0), 40.0, 30.0, 0.0),
+        );
+        let mut editor = Editor::new(EngineConfig::default()).unwrap();
+        editor.set_selection_state(vec![first_id, second_id], Some(first_id));
+
+        let command = editor
+            .align_selected(&document, 0)
+            .unwrap()
+            .expect("two rectangles should align left");
+        let EditorCommand::ApplyTransaction(command) = command else {
+            panic!("expected transaction command");
+        };
+        assert_eq!(command.transaction.label(), "align selection");
+        let result = document.apply_transaction(command.transaction).unwrap();
+        document.apply_transaction(result.inverse).unwrap();
+
+        assert_eq!(
+            document.rectangle(first_id).unwrap().center,
+            Point::new(100.0, 50.0)
+        );
+        assert_eq!(
+            document.rectangle(second_id).unwrap().center,
+            Point::new(300.0, 150.0)
+        );
+    }
+
+    #[test]
+    fn selected_element_count_collapses_bound_labels() {
+        let mut document = DocumentModel::new();
+        let text_id = insert_text(
+            &mut document,
+            TextData {
+                center: Point::new(100.0, 0.0),
+                text: "bound".to_owned(),
+                layout: TextLayoutSize::new(80.0, 24.0),
+                ..TextData::default()
+            },
+        );
+        let serial_id = insert_serial_number(
+            &mut document,
+            SerialNumberData {
+                center: Point::new(0.0, 0.0),
+                text_element_id: Some(text_id),
+                ..SerialNumberData::default()
+            },
+        );
+        let other_id = insert_rectangle(
+            &mut document,
+            rectangle_at(Point::new(0.0, 200.0), 40.0, 30.0, 0.0),
+        );
+        let mut editor = Editor::new(EngineConfig::default()).unwrap();
+        editor.set_selection_state(vec![serial_id, text_id, other_id], Some(other_id));
+
+        assert_eq!(editor.selected_element_count(&document), 2);
     }
 }

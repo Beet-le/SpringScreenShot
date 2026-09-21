@@ -1,3 +1,4 @@
+#include "snow_shot/presentation/globalmousetypes.h"
 #include "snow_shot/presentation/settings/settingsruntimesession.h"
 
 #include "antd_icons.h"
@@ -53,6 +54,8 @@ QString globalMouseFieldId(settings::SettingsGlobalMouseAction action) {
         return QStringLiteral("global-mouse.screenshot-save");
     case settings::SettingsGlobalMouseAction::ScreenshotQuickSave:
         return QStringLiteral("global-mouse.screenshot-quick-save");
+    case settings::SettingsGlobalMouseAction::ScreenRecording:
+        return QStringLiteral("global-mouse.screen-recording");
     }
     return {};
 }
@@ -283,7 +286,12 @@ class FakeSettingsBackend final : public settings::SettingsBackend {
         return {true, false};
     }
 
-    bool triggerAction(settings::SettingsActionBinding) override {
+    bool triggerAction(settings::SettingsActionBinding binding,
+                       const QString& filePath = {}) override {
+        if (binding == settings::SettingsActionBinding::ImportConfiguration) {
+            m_importConfigurationPaths.push_back(filePath);
+            return m_importConfigurationAccepted;
+        }
         return true;
     }
 
@@ -297,6 +305,14 @@ class FakeSettingsBackend final : public settings::SettingsBackend {
 
     int refreshCount() const {
         return m_refreshCount;
+    }
+
+    const QStringList& importConfigurationPaths() const {
+        return m_importConfigurationPaths;
+    }
+
+    void setImportConfigurationAccepted(bool accepted) {
+        m_importConfigurationAccepted = accepted;
     }
 
     void setAppUsage(const storage::AppStorageUsage& usage) {
@@ -489,6 +505,8 @@ class FakeSettingsBackend final : public settings::SettingsBackend {
     bool m_resetAccepted = true;
     bool m_resetHistoryPending = false;
     int m_refreshCount = 0;
+    QStringList m_importConfigurationPaths;
+    bool m_importConfigurationAccepted = true;
 };
 
 settings::SettingsRegistry
@@ -1202,12 +1220,17 @@ void globalMouseCombinationsUseTypedStateAndRejectDuplicates() {
                            Action::ScreenshotOcr,       Action::ScreenshotTranslation,
                            Action::ScreenshotQuickSave, Action::ScreenshotSave};
     const Combination combinations[]{
-        {{QStringLiteral("windows")}, QStringLiteral("left_drag")},
-        {{QStringLiteral("ctrl")}, QStringLiteral("right_drag")},
-        {{QStringLiteral("alt")}, QStringLiteral("wheel_drag")},
+        {{snow_shot::presentation::globalMouseActivationKeys().at(0)}, QStringLiteral("left_drag")},
+        {{snow_shot::presentation::globalMouseActivationKeys().at(1)},
+         QStringLiteral("right_drag")},
+        {{snow_shot::presentation::globalMouseActivationKeys().at(2)},
+         QStringLiteral("wheel_drag")},
         {{QStringLiteral("shift")}, QStringLiteral("side_button_1_drag")},
-        {{QStringLiteral("windows")}, QStringLiteral("side_button_2_drag")},
-        {{QStringLiteral("ctrl"), QStringLiteral("alt")}, QStringLiteral("left_drag")},
+        {{snow_shot::presentation::globalMouseActivationKeys().at(0)},
+         QStringLiteral("side_button_2_drag")},
+        {{snow_shot::presentation::globalMouseActivationKeys().at(1),
+          snow_shot::presentation::globalMouseActivationKeys().at(2)},
+         QStringLiteral("left_drag")},
     };
 
     const settings::SettingsRegistry& registry = settings::builtInSettingsRegistry();
@@ -1228,13 +1251,15 @@ void globalMouseCombinationsUseTypedStateAndRejectDuplicates() {
             "a duplicate global mouse combination must be rejected before persistence");
     require(session.globalMouseCombinationAvailable(actions[1], Combination{}),
             "Unset must always remain available to every global mouse action");
-    const Combination multi{{QStringLiteral("shift"), QStringLiteral("ctrl")},
-                            QStringLiteral("left_drag")};
+    const Combination multi{
+        {QStringLiteral("shift"), snow_shot::presentation::globalMouseActivationKeys().at(1)},
+        QStringLiteral("left_drag")};
     require(session.applyGlobalMouseCombination(actions[0], multi),
             "multiple activation keys must use typed settings state");
     require(!session.globalMouseCombinationAvailable(
-                actions[1],
-                {{QStringLiteral("ctrl"), QStringLiteral("shift")}, QStringLiteral("left_drag")}),
+                actions[1], {{snow_shot::presentation::globalMouseActivationKeys().at(1),
+                              QStringLiteral("shift")},
+                             QStringLiteral("left_drag")}),
             "selection order must not bypass duplicate-combination validation");
     require(!session.globalMouseCombinationAvailable(actions[1], {{}, QStringLiteral("left_drag")}),
             "a global binding must require at least one activation key");
@@ -1244,7 +1269,8 @@ void globalMouseCombinationsUseTypedStateAndRejectDuplicates() {
                 "each global mouse action must accept an independent unique combination");
     }
     backend.setMode(globalMouseFieldId(actions[0]), WriteMode::Reject);
-    const Combination rejected{{QStringLiteral("ctrl")}, QStringLiteral("wheel_drag")};
+    const Combination rejected{{snow_shot::presentation::globalMouseActivationKeys().at(1)},
+                               QStringLiteral("wheel_drag")};
     require(!session.applyGlobalMouseCombination(actions[0], rejected),
             "backend persistence failures must reject a global mouse write");
     const settings::SettingsFieldState rejectedState =
@@ -1352,8 +1378,31 @@ void categoryResetFailuresRetainAcceptedValues() {
     }
 }
 
+void configurationImportsDelegateToBackend() {
+    FakeSettingsBackend backend;
+    settings::SettingsRuntimeSession session(testRegistry(), backend);
+
+    require(session.triggerAction(settings::SettingsActionBinding::ImportConfiguration,
+                                  QStringLiteral("C:/exports/configuration.zip")),
+            "accepted configuration imports must report success");
+    require(backend.importConfigurationPaths() ==
+                QStringList{QStringLiteral("C:/exports/configuration.zip")},
+            "the session must forward the archive path to the backend unchanged");
+
+    backend.setImportConfigurationAccepted(false);
+    require(!session.triggerAction(settings::SettingsActionBinding::ImportConfiguration,
+                                   QStringLiteral("C:/missing.zip")),
+            "rejected configuration imports must report failure to the caller");
+    require(backend.importConfigurationPaths().size() == 2,
+            "every configuration import attempt must reach the backend");
+}
+
 int main(int argc, char** argv) {
     QCoreApplication application(argc, argv);
+    if (application.arguments().contains(QStringLiteral("--global-mouse-only"))) {
+        globalMouseCombinationsUseTypedStateAndRejectDuplicates();
+        return 0;
+    }
     customModelsPreserveAcceptedStateOnRejectedWrites();
     categoryResetFailuresRetainAcceptedValues();
     initialStateAndNoOp();
@@ -1375,5 +1424,6 @@ int main(int argc, char** argv) {
     rejectedResetRetainsStateAndErrorUntilDiscarded();
     auxiliaryIntegerValuesRemainReactiveWithoutSyntheticFields();
     globalMouseCombinationsUseTypedStateAndRejectDuplicates();
+    configurationImportsDelegateToBackend();
     return 0;
 }

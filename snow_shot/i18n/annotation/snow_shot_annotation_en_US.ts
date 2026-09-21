@@ -24,6 +24,18 @@
             <translation>Adjust opacity</translation>
         </message>
         <message>
+            <source>Align bottom</source>
+            <translation>Align bottom</translation>
+        </message>
+        <message>
+            <source>Align left</source>
+            <translation>Align left</translation>
+        </message>
+        <message>
+            <source>Align right</source>
+            <translation>Align right</translation>
+        </message>
+        <message>
             <source>Align text center</source>
             <translation>Align text center</translation>
         </message>
@@ -34,6 +46,10 @@
         <message>
             <source>Align text right</source>
             <translation>Align text right</translation>
+        </message>
+        <message>
+            <source>Align top</source>
+            <translation>Align top</translation>
         </message>
         <message>
             <source>Animated recording formats do not contain audio</source>
@@ -90,6 +106,22 @@
         <message>
             <source>Cancel screenshot</source>
             <translation>Cancel screenshot</translation>
+        </message>
+        <message>
+            <source>Capture cursor</source>
+            <translation>Capture cursor</translation>
+        </message>
+        <message>
+            <source>Center horizontally</source>
+            <translation>Center horizontally</translation>
+        </message>
+        <message>
+            <source>Center vertically</source>
+            <translation>Center vertically</translation>
+        </message>
+        <message>
+            <source>Circle</source>
+            <translation>Circle</translation>
         </message>
         <message>
             <source>Close recording</source>
@@ -168,6 +200,10 @@
             <translation>Curved arrow</translation>
         </message>
         <message>
+            <source>Curved line</source>
+            <translation>Curved line</translation>
+        </message>
+        <message>
             <source>Dashed arrow stroke</source>
             <translation>Dashed arrow stroke</translation>
         </message>
@@ -202,6 +238,14 @@
         <message>
             <source>Diamond</source>
             <translation>Diamond</translation>
+        </message>
+        <message>
+            <source>Distribute horizontally</source>
+            <translation>Distribute horizontally</translation>
+        </message>
+        <message>
+            <source>Distribute vertically</source>
+            <translation>Distribute vertically</translation>
         </message>
         <message>
             <source>Dotted arrow stroke</source>
@@ -396,6 +440,10 @@
             <translation>Inversion</translation>
         </message>
         <message>
+            <source>Jump to Translation Page</source>
+            <translation>Jump to Translation Page</translation>
+        </message>
+        <message>
             <source>Keep line breaks</source>
             <translation>Keep line breaks</translation>
         </message>
@@ -468,6 +516,18 @@
             <translation>Mouse click color transparent</translation>
         </message>
         <message>
+            <source>Mouse highlight</source>
+            <translation>Mouse highlight</translation>
+        </message>
+        <message>
+            <source>Mouse highlight color</source>
+            <translation>Mouse highlight color</translation>
+        </message>
+        <message>
+            <source>Mouse highlight preview</source>
+            <translation>Mouse highlight preview</translation>
+        </message>
+        <message>
             <source>Mouse trail color</source>
             <translation>Mouse trail color</translation>
         </message>
@@ -478,6 +538,14 @@
         <message>
             <source>Mouse trail color transparent</source>
             <translation>Mouse trail color transparent</translation>
+        </message>
+        <message>
+            <source>Move selection horizontally (press and hold to drag)</source>
+            <translation>Move selection horizontally (press and hold to drag)</translation>
+        </message>
+        <message>
+            <source>Move selection vertically (press and hold to drag)</source>
+            <translation>Move selection vertically (press and hold to drag)</translation>
         </message>
         <message>
             <source>No templates yet</source>
@@ -556,8 +624,16 @@
             <translation>Quick save</translation>
         </message>
         <message>
+            <source>Recapture</source>
+            <translation>Recapture</translation>
+        </message>
+        <message>
             <source>Record microphone</source>
             <translation>Record microphone</translation>
+        </message>
+        <message>
+            <source>Record mouse clicks</source>
+            <translation>Record mouse clicks</translation>
         </message>
         <message>
             <source>Record screen</source>
@@ -794,6 +870,10 @@
         <message>
             <source>Straight arrow</source>
             <translation>Straight arrow</translation>
+        </message>
+        <message>
+            <source>Straight line</source>
+            <translation>Straight line</translation>
         </message>
         <message>
             <source>Stroke color</source>

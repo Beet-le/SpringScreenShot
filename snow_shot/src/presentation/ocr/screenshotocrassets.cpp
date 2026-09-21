@@ -1,4 +1,5 @@
 #include "snow_shot/presentation/screenshotocrassets.h"
+#include "snow_shot/platform/minizippath.h"
 
 #include <QCryptographicHash>
 #include <QCoreApplication>
@@ -11,6 +12,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLockFile>
 #include <QNetworkAccessManager>
 #include <QNetworkProxy>
 #include <QNetworkReply>
@@ -38,7 +40,11 @@
 namespace {
 constexpr auto kManifestName = "asset-manifest.json";
 constexpr auto kRuntimeVersion = "1.0.7";
+#if defined(Q_OS_MACOS) && defined(Q_PROCESSOR_ARM_64)
+constexpr auto kPlatform = "macos-arm64";
+#else
 constexpr auto kPlatform = "windows-x64";
+#endif
 constexpr auto kInterruptedError = "OCR asset preparation was interrupted";
 constexpr int kShutdownJoinTimeoutMs = 10'000;
 
@@ -68,6 +74,8 @@ struct ModelDescriptor {
 };
 
 struct Descriptor {
+    bool bundled = false;
+    QString executable;
     QString runtimeVersion;
     QString platform;
     FileDescriptor runtimeArchive;
@@ -245,9 +253,16 @@ std::optional<Descriptor> loadDescriptor(const QString& root, QString* error) {
     Descriptor result;
     result.runtimeVersion = runtime.value(QStringLiteral("version")).toString();
     result.platform = runtime.value(QStringLiteral("platform")).toString();
+#if defined(Q_OS_MACOS) && defined(Q_PROCESSOR_ARM_64)
+    result.bundled = true;
+#endif
+    result.executable =
+        result.bundled
+            ? QStringLiteral("snow-ocr-process")
+            : QStringLiteral("snow-ocr-process-%1-windows-x64.exe").arg(result.runtimeVersion);
     const auto defaultModel =
         parseModelType(rootObject.value(QStringLiteral("default_model")).toString());
-    if (rootObject.value(QStringLiteral("schema")).toInt() != 2 ||
+    if (rootObject.value(QStringLiteral("schema")).toInt() != (result.bundled ? 3 : 2) ||
         result.runtimeVersion != QString::fromLatin1(kRuntimeVersion) ||
         result.platform != QString::fromLatin1(kPlatform) || !defaultModel.has_value() ||
         *defaultModel != ScreenshotOcrModelType::Small) {
@@ -256,10 +271,21 @@ std::optional<Descriptor> loadDescriptor(const QString& root, QString* error) {
         return std::nullopt;
     }
     result.defaultModel = *defaultModel;
-    auto archive = parseFile(runtime.value(QStringLiteral("archive")).toObject(), true, error);
-    if (!archive.has_value())
-        return std::nullopt;
-    result.runtimeArchive = std::move(*archive);
+    if (result.bundled) {
+        if (runtime.value(QStringLiteral("delivery")).toString() != QStringLiteral("bundled") ||
+            runtime.value(QStringLiteral("protocol")).toInt() != 3 ||
+            runtime.value(QStringLiteral("executable")).toString() != result.executable ||
+            runtime.contains(QStringLiteral("archive"))) {
+            if (error != nullptr)
+                *error = QStringLiteral("incompatible bundled OCR runtime");
+            return std::nullopt;
+        }
+    } else {
+        auto archive = parseFile(runtime.value(QStringLiteral("archive")).toObject(), true, error);
+        if (!archive.has_value())
+            return std::nullopt;
+        result.runtimeArchive = std::move(*archive);
+    }
     const auto parseFiles = [&](const QJsonArray& values, bool requireUrl,
                                 QList<FileDescriptor>* destination) {
         for (const QJsonValue& value : values) {
@@ -279,20 +305,20 @@ std::optional<Descriptor> loadDescriptor(const QString& root, QString* error) {
     };
     if (!parseFiles(runtime.value(QStringLiteral("files")).toArray(), false,
                     &result.runtimeFiles) ||
-        result.runtimeFiles.size() != 3) {
+        result.runtimeFiles.size() != (result.bundled ? 2 : 3)) {
         if (error != nullptr && error->isEmpty())
             *error = QStringLiteral("incomplete OCR asset manifest");
         return std::nullopt;
     }
-    const QString expectedProcess =
-        QStringLiteral("snow-ocr-process-%1-windows-x64.exe").arg(result.runtimeVersion);
     const auto contains = [](const QList<FileDescriptor>& files, const QString& name) {
         return std::any_of(files.cbegin(), files.cend(),
                            [&](const auto& item) { return item.name == name; });
     };
-    if (!contains(result.runtimeFiles, expectedProcess) ||
-        !contains(result.runtimeFiles, QStringLiteral("DirectML.dll")) ||
-        !contains(result.runtimeFiles, QStringLiteral("runtime-manifest.json"))) {
+    if (!contains(result.runtimeFiles, result.executable) ||
+        (result.bundled
+             ? !contains(result.runtimeFiles, QStringLiteral("libonnxruntime.dylib"))
+             : (!contains(result.runtimeFiles, QStringLiteral("DirectML.dll")) ||
+                !contains(result.runtimeFiles, QStringLiteral("runtime-manifest.json"))))) {
         if (error != nullptr)
             *error = QStringLiteral("OCR asset manifest has unexpected contents");
         return std::nullopt;
@@ -357,6 +383,8 @@ const ModelDescriptor* modelDescriptor(const Descriptor& descriptor, ScreenshotO
 }
 
 QString runtimeDirectory(const QString& root, const Descriptor& descriptor) {
+    if (descriptor.bundled)
+        return root;
     return QDir(root).filePath(
         QStringLiteral("runtimes/%1/%2").arg(descriptor.runtimeVersion, descriptor.platform));
 }
@@ -392,6 +420,27 @@ bool validateComponent(const QString& directory, const QList<FileDescriptor>& fi
     return filesValid && (!requireMarker || validateCompletionMarker(directory, component, error));
 }
 
+bool validateBundledRuntime(const QString& directory, const Descriptor& descriptor,
+                            QString* error) {
+    if (!validateComponent(directory, descriptor.runtimeFiles, descriptor.runtimeVersion, false,
+                           error) ||
+        !QFileInfo(QDir(directory).filePath(descriptor.executable)).isExecutable()) {
+        return false;
+    }
+    // The ARM64 bundle contract uses thin, little-endian Mach-O files. Check
+    // both binaries before launching, rather than relying on Rosetta or dyld.
+    for (const auto& item : descriptor.runtimeFiles) {
+        QFile file(QDir(directory).filePath(item.name));
+        if (!file.open(QIODevice::ReadOnly))
+            return false;
+        const QByteArray header = file.read(32);
+        if (header.size() != 32 || header.first(8) != QByteArray::fromHex("cffaedfe0c000001")) {
+            return false;
+        }
+    }
+    return true;
+}
+
 ScreenshotOcrResolvedAssets resolved(const QString& runtimeRoot, const QString& modelRoot,
                                      const QString& stateRoot, const Descriptor& descriptor,
                                      const ModelDescriptor& model, bool offline) {
@@ -400,9 +449,7 @@ ScreenshotOcrResolvedAssets resolved(const QString& runtimeRoot, const QString& 
     result.modelId = model.id;
     result.runtimeVersion = descriptor.runtimeVersion;
     result.runtimeDirectory = runtimeDirectory(runtimeRoot, descriptor);
-    result.processPath = QDir(result.runtimeDirectory)
-                             .filePath(QStringLiteral("snow-ocr-process-%1-windows-x64.exe")
-                                           .arg(descriptor.runtimeVersion));
+    result.processPath = QDir(result.runtimeDirectory).filePath(descriptor.executable);
     const QString models = modelDirectory(modelRoot, model);
     result.detectorModelPath = QDir(models).filePath(model.detector);
     result.recognizerModelPath = QDir(models).filePath(model.recognizer);
@@ -476,8 +523,23 @@ class CacheLock {
             }
         }
 #else
-        Q_UNUSED(path);
-        m_locked = true;
+        if (!QDir().mkpath(path))
+            return;
+        m_lock = std::make_unique<QLockFile>(QDir(path).filePath(QStringLiteral(".assets.lock")));
+        // A long download must not make a live owner's lock stale. QLockFile
+        // still recovers locks whose owning process has exited.
+        m_lock->setStaleLockTime(0);
+        QElapsedTimer deadline;
+        deadline.start();
+        while (!interruptionRequested() && deadline.elapsed() < 120000) {
+            if (m_lock->tryLock(0)) {
+                m_locked = true;
+                break;
+            }
+            if (m_lock->error() != QLockFile::LockFailedError)
+                break;
+            QThread::msleep(50);
+        }
 #endif
     }
     ~CacheLock() {
@@ -495,6 +557,8 @@ class CacheLock {
   private:
 #ifdef Q_OS_WIN
     HANDLE m_handle = nullptr;
+#else
+    std::unique_ptr<QLockFile> m_lock;
 #endif
     bool m_locked = false;
 };
@@ -616,7 +680,7 @@ bool download(QNetworkAccessManager* manager, const FileDescriptor& descriptor,
 bool extractRuntime(const QString& archive, const QString& staging,
                     const QList<FileDescriptor>& allowlist, QString* error) {
     void* reader = mz_zip_reader_create();
-    const QByteArray archivePath = QFile::encodeName(archive);
+    const QByteArray archivePath = snow_shot::platform::minizipPath(archive);
     if (reader == nullptr || mz_zip_reader_open_file(reader, archivePath.constData()) != MZ_OK) {
         if (error != nullptr)
             *error = QStringLiteral("could not open OCR runtime archive");
@@ -868,22 +932,40 @@ class ScreenshotOcrAssets::Impl final {
         if (cancelled())
             return false;
         auto descriptor = loadDescriptor(options.offlineRoot, error);
-        if (!descriptor.has_value())
+        if (!descriptor.has_value()) {
+#if defined(Q_OS_MACOS) && defined(Q_PROCESSOR_ARM_64)
+            *error = QStringLiteral("bundled_runtime_invalid");
+#endif
             return false;
+        }
         const ModelDescriptor* model = modelDescriptor(*descriptor, options.modelType);
         if (model == nullptr) {
             *error = QStringLiteral("selected OCR model is unavailable");
             return false;
         }
         QString validationError;
-        const bool offlineRuntime = validateComponent(
-            runtimeDirectory(options.offlineRoot, *descriptor), descriptor->runtimeFiles,
-            descriptor->runtimeVersion, true, &validationError);
+        const QString offlineRuntimeRoot =
+            descriptor->bundled
+                ? (options.bundledRuntimeRoot.isEmpty()
+                       ? QDir::cleanPath(
+                             QDir(options.offlineRoot).absoluteFilePath(QStringLiteral("../..")))
+                       : options.bundledRuntimeRoot)
+                : options.offlineRoot;
+        const bool offlineRuntime =
+            descriptor->bundled
+                ? validateBundledRuntime(offlineRuntimeRoot, *descriptor, &validationError)
+                : validateComponent(runtimeDirectory(offlineRuntimeRoot, *descriptor),
+                                    descriptor->runtimeFiles, descriptor->runtimeVersion, true,
+                                    &validationError);
+        if (descriptor->bundled && !offlineRuntime) {
+            *error = QStringLiteral("bundled_runtime_invalid");
+            return false;
+        }
         const bool offlineModel =
             validateComponent(modelDirectory(options.offlineRoot, *model), model->files, model->id,
                               true, &validationError);
         if (offlineRuntime && offlineModel) {
-            *assets = resolved(options.offlineRoot, options.offlineRoot, options.cacheRoot,
+            *assets = resolved(offlineRuntimeRoot, options.offlineRoot, options.cacheRoot,
                                *descriptor, *model, true);
             const QString writableState =
                 QDir(options.cacheRoot)
@@ -906,7 +988,8 @@ class ScreenshotOcrAssets::Impl final {
             *error = QStringLiteral("timed out waiting for OCR component storage");
             return false;
         }
-        bool cachedRuntime = validateComponent(runtimeDirectory(options.cacheRoot, *descriptor),
+        bool cachedRuntime = !descriptor->bundled &&
+                             validateComponent(runtimeDirectory(options.cacheRoot, *descriptor),
                                                descriptor->runtimeFiles, descriptor->runtimeVersion,
                                                true, &validationError);
         bool cachedModel = validateComponent(modelDirectory(options.cacheRoot, *model),
@@ -944,7 +1027,7 @@ class ScreenshotOcrAssets::Impl final {
             return false;
         if (cancelled())
             return false;
-        const QString runtimeRoot = offlineRuntime ? options.offlineRoot : options.cacheRoot;
+        const QString runtimeRoot = offlineRuntime ? offlineRuntimeRoot : options.cacheRoot;
         const QString modelRoot = offlineModel ? options.offlineRoot : options.cacheRoot;
         const auto result =
             resolved(runtimeRoot, modelRoot, options.cacheRoot, *descriptor, *model, false);

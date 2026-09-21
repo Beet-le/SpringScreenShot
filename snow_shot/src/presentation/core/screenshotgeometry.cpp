@@ -4,11 +4,49 @@
 
 #include <QGuiApplication>
 #include <QScreen>
+#ifdef Q_OS_MACOS
+#include <QtGui/qscreen_platform.h>
+#import <AppKit/AppKit.h>
+#endif
 #include <QtGlobal>
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
+
+ScreenshotSelectionRenderSpec
+screenshotSelectionRenderSpec(const ScreenshotDisplaySession& displays, const QRect& selection) {
+    ScreenshotSelectionRenderSpec spec;
+    spec.canvasRect = selection;
+    if (selection.isEmpty())
+        return spec;
+    bool intersects = false;
+    bool valid = true;
+    displays.forEachImageSource([&](qsizetype, const CapturedDisplayModel& display) {
+        const QRectF source = ScreenshotGeometryMapper::displayImageSourceCanvasRect(display);
+        if (display.image.isNull() || !source.intersects(QRectF(selection)))
+            return;
+        intersects = true;
+        if (display.canvasUsesPoints) {
+            if (!std::isfinite(display.backingScale) || display.backingScale <= 0) {
+                valid = false;
+                return;
+            }
+            spec.scale = std::max(spec.scale, display.backingScale);
+        }
+    });
+    const double width = std::ceil(selection.width() * spec.scale);
+    const double height = std::ceil(selection.height() * spec.scale);
+    if (!valid || !intersects || !std::isfinite(width) || !std::isfinite(height) || width < 1 ||
+        height < 1 || width > std::numeric_limits<int>::max() / 4 ||
+        height > std::numeric_limits<int>::max() ||
+        width * height > static_cast<double>(std::numeric_limits<qsizetype>::max() / 4))
+        return spec;
+    spec.pixelSize = QSize(static_cast<int>(width), static_cast<int>(height));
+    spec.canvasToImage.scale(spec.scale, spec.scale);
+    spec.canvasToImage.translate(-selection.x(), -selection.y());
+    return spec;
+}
 
 namespace {
 // Keep adaptive pinned-image sizing within the canvas engine's camera range.
@@ -257,11 +295,28 @@ void rebuildDisplayGeometry(ScreenshotDisplaySession& displaySession, QPoint& ca
             return;
         }
 
-        display.canvasRect = display.physicalRect.translated(-canvasOrigin);
-        display.screen =
-            ScreenshotGeometryMapper::screenForCaptureDisplay(display.name, display.physicalRect);
-        display.logicalRect = ScreenshotGeometryMapper::logicalRectForPhysicalRect(
-            display.physicalRect, display.screen);
+        if (display.canvasUsesPoints && !display.capturedLogicalRect.isEmpty()) {
+            display.logicalRect = display.capturedLogicalRect;
+            display.canvasRect = display.logicalRect.translated(-canvasOrigin);
+#ifdef Q_OS_MACOS
+            display.screen = nullptr;
+            for (QScreen* screen : QGuiApplication::screens()) {
+                auto* native = screen->nativeInterface<QNativeInterface::QCocoaScreen>();
+                if (native &&
+                    [[[native->nativeScreen() deviceDescription] objectForKey:@"NSScreenNumber"]
+                        unsignedIntValue] == display.nativeDisplayId) {
+                    display.screen = screen;
+                    break;
+                }
+            }
+#endif
+        } else {
+            display.canvasRect = display.physicalRect.translated(-canvasOrigin);
+            display.screen = ScreenshotGeometryMapper::screenForCaptureDisplay(
+                display.name, display.physicalRect);
+            display.logicalRect = ScreenshotGeometryMapper::logicalRectForPhysicalRect(
+                display.physicalRect, display.screen);
+        }
 
         const ScreenshotHalfOpenRect canvasRect =
             ScreenshotHalfOpenRect::fromRect(display.canvasRect);
@@ -512,6 +567,23 @@ canvasPositionForPhysicalPointInDisplaySession(const ScreenshotDisplaySession& d
 }
 } // namespace
 
+const CapturedDisplayModel*
+ScreenshotGeometryMapper::displayForLogicalPoint(const ScreenshotDisplaySession& displays,
+                                                 const QPointF& point) const {
+    const CapturedDisplayModel* found = nullptr;
+    displays.forEachActiveDisplay([&](qsizetype, const CapturedDisplayModel& display) {
+        if (!found && ScreenshotHalfOpenRect::fromRect(display.logicalRect).contains(point))
+            found = &display;
+    });
+    return found;
+}
+
+QPointF
+ScreenshotGeometryMapper::canvasPositionForPhysicalPoint(const CapturedDisplayModel& display,
+                                                         const QPointF& point) const {
+    return DisplayCoordinateTransform(display).physicalToCanvas(point);
+}
+
 QPointF ScreenshotGeometryMapper::canvasPositionForPhysicalPoint(
     const ScreenshotDisplaySession& displaySession, const QPointF& point) const {
     return canvasPositionForPhysicalPointInDisplaySession(displaySession, point);
@@ -519,7 +591,7 @@ QPointF ScreenshotGeometryMapper::canvasPositionForPhysicalPoint(
 
 namespace {
 QRectF canvasRectForPhysicalRectInDisplaySession(const ScreenshotDisplaySession& displaySession,
-                                                 const QRectF& rect) {
+                                                 const QRectF& rect, const QString& displayId) {
     const ScreenshotHalfOpenRect target = ScreenshotHalfOpenRect::fromRectF(rect);
     if (target.isEmpty()) {
         return {};
@@ -527,6 +599,8 @@ QRectF canvasRectForPhysicalRectInDisplaySession(const ScreenshotDisplaySession&
 
     ScreenshotHalfOpenRect canvasRect;
     displaySession.forEachActiveDisplay([&](qsizetype, const CapturedDisplayModel& display) {
+        if (!displayId.isEmpty() && display.stableId != displayId && display.name != displayId)
+            return;
         const ScreenshotHalfOpenRect physicalDisplay =
             ScreenshotHalfOpenRect::fromRect(display.physicalRect);
         const ScreenshotHalfOpenRect intersection = target.intersected(physicalDisplay);
@@ -545,8 +619,9 @@ QRectF canvasRectForPhysicalRectInDisplaySession(const ScreenshotDisplaySession&
 
 QRectF
 ScreenshotGeometryMapper::canvasRectForPhysicalRect(const ScreenshotDisplaySession& displaySession,
-                                                    const QRectF& rect) const {
-    return canvasRectForPhysicalRectInDisplaySession(displaySession, rect);
+                                                    const QRectF& rect,
+                                                    const QString& displayId) const {
+    return canvasRectForPhysicalRectInDisplaySession(displaySession, rect, displayId);
 }
 
 namespace {
@@ -668,6 +743,31 @@ ScreenshotGeometryMapper::displayPlacementGeometry(const CapturedDisplayModel* d
     geometry.valid = geometry.logicalBounds.isValid() && !geometry.logicalBounds.isEmpty() &&
                      geometry.physicalBounds.isValid() && !geometry.physicalBounds.isEmpty();
     return geometry;
+}
+
+CapturedDisplayModel ScreenshotGeometryMapper::preCaptureDisplayModel(QScreen& screen) {
+    CapturedDisplayModel display;
+    display.name = screen.name();
+    display.logicalRect = screen.geometry();
+    display.physicalRect = physicalRectForScreen(screen);
+    display.canvasRect = display.physicalRect;
+    display.screen = &screen;
+    display.active = true;
+#ifdef Q_OS_MACOS
+    // Selection can finish before image acquisition. Use the same display identity
+    // and point-based canvas as the captured frame from the start of the session.
+    auto* native = screen.nativeInterface<QNativeInterface::QCocoaScreen>();
+    if (native) {
+        display.nativeDisplayId = [[[native->nativeScreen() deviceDescription]
+            objectForKey:@"NSScreenNumber"] unsignedIntValue];
+        display.stableId = QStringLiteral("display:%1").arg(display.nativeDisplayId);
+        display.capturedLogicalRect = display.logicalRect;
+        display.backingScale = screen.devicePixelRatio();
+        display.canvasUsesPoints = true;
+        display.canvasRect = display.logicalRect;
+    }
+#endif
+    return display;
 }
 
 QRect ScreenshotGeometryMapper::physicalRectForScreen(const QScreen& screen) {

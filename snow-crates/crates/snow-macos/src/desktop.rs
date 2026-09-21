@@ -64,6 +64,9 @@ impl DesktopConfig {
         if self.cancellation.is_canceled() {
             return Err(MacError::Canceled);
         }
+        if self.excluded_windows.len() > 4096 || self.excluded_processes.len() > 4096 {
+            return Err(geometry("capture exclusions exceed 4096 entries"));
+        }
         support.native_format(self.dynamic_range)?;
         if !support.metal_composition {
             return Err(MacError::Unsupported(
@@ -300,6 +303,10 @@ impl DesktopSession {
             return Err(MacError::Canceled);
         }
         config.validate(crate::capabilities::CaptureSupport::current())?;
+        config.excluded_windows.sort_unstable();
+        config.excluded_windows.dedup();
+        config.excluded_processes.sort_unstable();
+        config.excluded_processes.dedup();
         let topology = topology()?;
         let plan = Plan::resolve(&config)?;
         // Primary is resolved once. Removing it must never silently retarget.
@@ -322,6 +329,19 @@ impl DesktopSession {
             failure: None,
             inspected_at: Instant::now(),
         })
+    }
+    /// Replace the cancellation token between one-shot operations. Streams must be stopped.
+    pub fn set_snapshot_cancellation(&mut self, token: crate::CancellationToken) {
+        debug_assert!(self.streams.is_empty());
+        self.config.cancellation = token;
+        // A new user request may follow a permission grant. Do not retry within
+        // the failed request, but allow the next snapshot to check access again.
+        if matches!(
+            self.failure,
+            Some(MacError::Canceled | MacError::PermissionDenied)
+        ) {
+            self.failure = None;
+        }
     }
     pub fn transform(&self) -> DesktopTransform {
         self.plan.transform

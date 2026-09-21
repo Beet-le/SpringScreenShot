@@ -155,7 +155,8 @@ typedef enum SnowSerialNumberType {
     SNOW_SERIAL_NUMBER_TYPE_OUTLINED_CIRCLE = 0,
     SNOW_SERIAL_NUMBER_TYPE_SOLID_CIRCLE = 1,
     SNOW_SERIAL_NUMBER_TYPE_OUTLINED_SQUARE = 2,
-    SNOW_SERIAL_NUMBER_TYPE_SOLID_SQUARE = 3
+    SNOW_SERIAL_NUMBER_TYPE_SOLID_SQUARE = 3,
+    SNOW_SERIAL_NUMBER_TYPE_CIRCLE = 4
 } SnowSerialNumberType;
 
 #ifdef __cplusplus
@@ -238,7 +239,9 @@ typedef enum SnowCursorStyle {
     SNOW_CURSOR_STYLE_NOT_ALLOWED = 9,
     SNOW_CURSOR_STYLE_TEXT = 10,
     SNOW_CURSOR_STYLE_CORNER_RADIUS = 11,
-    SNOW_CURSOR_STYLE_HIDDEN = 12
+    SNOW_CURSOR_STYLE_HIDDEN = 12,
+    SNOW_CURSOR_STYLE_STROKE = 13,
+    SNOW_CURSOR_STYLE_ERASER = 14
 } SnowCursorStyle;
 
 typedef enum SnowSceneDisplayItemKind {
@@ -359,7 +362,8 @@ typedef enum SnowOverlayRectKind {
     SNOW_OVERLAY_RECT_ARROW_SEGMENT_HANDLE = 10,
     SNOW_OVERLAY_RECT_TEXT_ACTUAL_FRAME = 11,
     SNOW_OVERLAY_RECT_TEXT_HOVER_UNDERLINE = 12,
-    SNOW_OVERLAY_RECT_ERASER_CURSOR = 13
+    SNOW_OVERLAY_RECT_ERASER_CURSOR = 13,
+    SNOW_OVERLAY_RECT_BINDING_HIGHLIGHT = 14
 } SnowOverlayRectKind;
 
 typedef enum SnowSnapGuideKind {
@@ -470,6 +474,11 @@ typedef enum SnowShapeKind {
 #define SNOW_SHAPE_STYLE_PROPERTY_LINE                                                             \
     (SNOW_SHAPE_STYLE_PROPERTY_FILL | SNOW_SHAPE_STYLE_PROPERTY_FILL_STYLE |                       \
      SNOW_SHAPE_STYLE_PROPERTY_STROKE | SNOW_SHAPE_STYLE_PROPERTY_STROKE_WIDTH |                   \
+     SNOW_SHAPE_STYLE_PROPERTY_STROKE_STYLE | SNOW_SHAPE_STYLE_PROPERTY_ARROW_TYPE |               \
+     SNOW_SHAPE_STYLE_PROPERTY_OPACITY)
+#define SNOW_SHAPE_STYLE_PROPERTY_FREE_DRAW                                                        \
+    (SNOW_SHAPE_STYLE_PROPERTY_FILL | SNOW_SHAPE_STYLE_PROPERTY_FILL_STYLE |                       \
+     SNOW_SHAPE_STYLE_PROPERTY_STROKE | SNOW_SHAPE_STYLE_PROPERTY_STROKE_WIDTH |                   \
      SNOW_SHAPE_STYLE_PROPERTY_STROKE_STYLE | SNOW_SHAPE_STYLE_PROPERTY_OPACITY)
 
 typedef struct SnowRectangleShapeStyle {
@@ -527,7 +536,7 @@ typedef struct SnowSerialNumberStyle {
 
 typedef struct SnowStyleToolbarState {
     SnowStyleToolbarSource source;
-    uint32_t reserved0;
+    uint32_t selected_element_count;
     SnowShapeStyle shape_style;
     SnowTextStyle text_style;
     SnowSerialNumberStyle serial_number_style;
@@ -627,6 +636,12 @@ typedef struct SnowTextLayoutSize {
     double width;
     /* Exact host-renderer measured text height. */
     double height;
+    /* Measured painted ink width (widest line); 0 means "not measured" and
+       consumers fall back to width. */
+    double content_width;
+    /* Measured painted ink height; 0 means "not measured" and consumers fall
+       back to height. */
+    double content_height;
 } SnowTextLayoutSize;
 
 typedef struct SnowTextLayoutOverride {
@@ -671,6 +686,9 @@ typedef struct SnowActiveTextDraftPresentation {
     double width;
     double height;
     double rotation;
+    /* Painted ink box of the draft preview; 0 means "not measured". */
+    double content_width;
+    double content_height;
     const char* text_utf8;
     uint32_t text_utf8_len;
     uint32_t reserved1;
@@ -714,6 +732,17 @@ typedef struct SnowArrowTextLayoutResult {
     SnowTextLayoutSize size;
 } SnowArrowTextLayoutResult;
 
+/* Pending host measurement for the empty label attached by an active serial
+   number drag; measure the empty draft for this font and apply the result. */
+typedef struct SnowSerialLabelLayoutRequest {
+    SnowElementId text_id;
+    double font_size;
+    uint32_t font_family_utf8_len;
+    uint8_t font_family_truncated;
+    uint8_t reserved0[3];
+    char font_family_utf8[SNOW_FONT_FAMILY_UTF8_CAPACITY];
+} SnowSerialLabelLayoutRequest;
+
 uint32_t snow_runtime_arrow_text_count(SnowRuntime runtime);
 SnowError snow_viewport_get_arrow_text_layout_requests(SnowRuntime runtime, SnowViewport viewport,
                                                        SnowArrowTextLayoutRequest* out_items,
@@ -722,6 +751,13 @@ SnowError snow_viewport_apply_arrow_text_layouts_ex(SnowRuntime runtime, SnowVie
                                                     const SnowArrowTextLayoutResult* layouts,
                                                     uint32_t count,
                                                     SnowChangedViewportList* out_changed_viewports);
+SnowError snow_viewport_get_serial_label_layout_request(SnowRuntime runtime, SnowViewport viewport,
+                                                        SnowSerialLabelLayoutRequest* out_request,
+                                                        uint8_t* out_has_request);
+SnowError
+snow_viewport_apply_serial_label_layout_ex(SnowRuntime runtime, SnowViewport viewport,
+                                           SnowElementId text_id, SnowTextLayoutSize layout,
+                                           SnowChangedViewportList* out_changed_viewports);
 
 typedef struct SnowPointerEvent {
     uint32_t pointer_id;
@@ -933,6 +969,15 @@ typedef struct SnowArrowPathCommand {
  * SnowPatchHandle that returned this item remains alive. A pointer may be
  * null only when its corresponding count or UTF-8 length is zero.
  */
+/* Filter runs use stable uncropped identities; start/count index the resulting scene.
+   Replacement flag 0 retains the plan; 1 replaces it (including an empty plan). */
+typedef struct SnowSceneRenderRun {
+    SnowElementId source_pass;
+    SnowElementId effect_run;
+    uint32_t start;
+    uint32_t count;
+} SnowSceneRenderRun;
+
 typedef struct SnowFilterRenderSpec {
     uint32_t filter_type;
     uint32_t render_phase;
@@ -943,6 +988,35 @@ typedef struct SnowFilterRenderSpec {
 } SnowFilterRenderSpec;
 
 SnowFilterRenderSpec snow_filter_render_spec_resolve(uint32_t filter_type, double strength);
+
+typedef struct SnowTextPaintOutset {
+    double x;
+    double y;
+} SnowTextPaintOutset;
+
+/* Conservative document-space ink bounds of a text item: the aligned content
+   box expanded by the fill padding and the text stroke halo. Dirty regions and
+   visibility culling must consume this instead of reconstructing the
+   arithmetic. */
+typedef struct SnowTextPaintBounds {
+    double min_x;
+    double min_y;
+    double max_x;
+    double max_y;
+} SnowTextPaintBounds;
+
+typedef struct SnowSerialTextConnection {
+    double start_x;
+    double start_y;
+    double end_x;
+    double end_y;
+    double baseline_start_x;
+    double baseline_start_y;
+    double baseline_end_x;
+    double baseline_end_y;
+    uint8_t has_baseline;
+    uint8_t reserved[7];
+} SnowSerialTextConnection;
 
 typedef struct SnowSceneDisplayItem {
     SnowSceneDisplayItemKind kind;
@@ -973,6 +1047,11 @@ typedef struct SnowSceneDisplayItem {
     const SnowArrowheadPrimitive* arrowhead_primitives;
     double font_size;
     double opacity;
+    /* Text items: painted ink box (widest line x laid-out height), resolved to
+       at least the item size. Serial connectors anchor to this box aligned
+       inside the item rectangle, never to the wrap rectangle. */
+    double content_width;
+    double content_height;
     int64_t serial_number;
     uint32_t text_utf8_len;
     SnowTextHorizontalAlign text_horizontal_align;
@@ -991,6 +1070,18 @@ typedef struct SnowSceneDisplayItem {
     uint32_t font_family_utf8_len;
     const char* font_family_utf8;
 } SnowSceneDisplayItem;
+
+/* Conservative ink (fill padding plus text stroke halo) for dirty regions. */
+SnowTextPaintOutset snow_scene_text_paint_outset(const SnowSceneDisplayItem* item);
+/* Fill-pill padding only. The host text painter must consume this instead of
+   measuring its own padding so the painted edge matches the dirty regions. */
+SnowTextPaintOutset snow_scene_text_fill_outset(const SnowSceneDisplayItem* item);
+/* Conservative document-space ink bounds (aligned content box + fill padding +
+   stroke halo) for dirty regions and culling. */
+SnowTextPaintBounds snow_scene_text_paint_bounds(const SnowSceneDisplayItem* item);
+uint8_t snow_scene_resolve_serial_text_connection(const SnowSceneDisplayItem* serial,
+                                                  const SnowSceneDisplayItem* text,
+                                                  SnowSerialTextConnection* out_connection);
 
 /* Pointer fields follow the same SnowPatchHandle lifetime as scene items. */
 /* The visitor borrows each item for the duration of the call and must not reenter runtime. */
@@ -1237,6 +1328,10 @@ SnowError snow_viewport_reorder_selected_ex(SnowRuntime runtime, SnowViewport vi
                                             uint32_t action,
                                             SnowChangedViewportList* out_changed_viewports);
 
+SnowError snow_viewport_align_selected_ex(SnowRuntime runtime, SnowViewport viewport,
+                                          uint32_t alignment,
+                                          SnowChangedViewportList* out_changed_viewports);
+
 SnowError snow_viewport_set_selected_opacity_ex(SnowRuntime runtime, SnowViewport viewport,
                                                 double opacity,
                                                 SnowChangedViewportList* out_changed_viewports);
@@ -1251,6 +1346,13 @@ snow_viewport_create_serial_number_text_ex(SnowRuntime runtime, SnowViewport vie
                                            double measured_width, double measured_height,
                                            SnowElementId* out_text_id, uint8_t* out_has_text_id,
                                            SnowChangedViewportList* out_changed_viewports);
+
+SnowError snow_viewport_take_text_edit_request(SnowRuntime runtime, SnowViewport viewport,
+                                               SnowElementId* out_text_id,
+                                               uint8_t* out_has_text_id);
+
+SnowError snow_viewport_take_new_text_draft_request(SnowRuntime runtime, SnowViewport viewport,
+                                                    uint8_t* out_requested);
 
 SnowError snow_viewport_process_input_ex(SnowRuntime runtime, SnowViewport viewport,
                                          const SnowInputEvent* event,
@@ -1311,6 +1413,10 @@ SnowError snow_patch_get_spotlight_ops(SnowPatchHandle patch, const SnowPatchOp*
                                        uint32_t* out_count);
 
 /* Returned items and all nested pointer fields borrow from `patch`. */
+SnowError snow_patch_get_scene_render_plan(SnowPatchHandle patch, uint8_t* out_replace,
+                                           const SnowSceneRenderRun** out_runs,
+                                           uint32_t* out_count);
+
 SnowError snow_patch_get_scene_items(SnowPatchHandle patch, const SnowSceneDisplayItem** out_items,
                                      uint32_t* out_count);
 

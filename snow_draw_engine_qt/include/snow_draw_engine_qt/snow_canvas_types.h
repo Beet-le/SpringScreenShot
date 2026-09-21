@@ -97,6 +97,7 @@ enum class SnowCanvasSerialNumberType : quint32 {
     SolidCircle = 1,
     OutlinedSquare = 2,
     SolidSquare = 3,
+    Circle = 4,
 };
 
 enum SnowCanvasShapeStyleMixedFlag : quint32 {
@@ -119,6 +120,17 @@ enum class SnowCanvasSelectionOrder {
     SendBackward = 1,
     BringForward = 2,
     BringToFront = 3,
+};
+
+enum class SnowCanvasSelectionAlignment {
+    AlignLeft = 0,
+    AlignCenterHorizontally = 1,
+    AlignRight = 2,
+    AlignTop = 3,
+    AlignCenterVertically = 4,
+    AlignBottom = 5,
+    DistributeHorizontally = 6,
+    DistributeVertically = 7,
 };
 
 enum SnowCanvasShapeStyleProperty : quint32 {
@@ -472,11 +484,12 @@ inline bool operator!=(const SnowCanvasStyleDefaults& lhs, const SnowCanvasStyle
 
 struct SnowCanvasRuntimeConfig {
     std::optional<SnowCanvasStyleDefaults> styleDefaults;
-    QSet<SnowCanvasTool> quickSelectionDisabledTools;
+    QSet<SnowCanvasTool> quickSelectionDisabledTools{};
 };
 
 struct SnowCanvasStyleToolbarState {
     SnowCanvasStyleToolbarSource source = SnowCanvasStyleToolbarSource::DefaultRectangle;
+    quint32 selectedElementCount = 0;
     SnowCanvasShapeStyle shapeStyle;
     SnowCanvasTextStyle textStyle;
     SnowCanvasSerialNumberStyle serialNumberStyle;
@@ -491,6 +504,7 @@ struct SnowCanvasStyleToolbarState {
 inline bool operator==(const SnowCanvasStyleToolbarState& lhs,
                        const SnowCanvasStyleToolbarState& rhs) {
     return lhs.canEditArrowText == rhs.canEditArrowText && lhs.source == rhs.source &&
+           lhs.selectedElementCount == rhs.selectedElementCount &&
            lhs.shapeStyle == rhs.shapeStyle && lhs.textStyle == rhs.textStyle &&
            lhs.serialNumberStyle == rhs.serialNumberStyle &&
            lhs.textStyleMixed == rhs.textStyleMixed &&

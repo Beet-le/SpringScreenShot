@@ -184,6 +184,8 @@ impl From<CaptureOptions> for CaptureSessionConfig {
 }
 
 pub(crate) struct CaptureSessionBuilder {
+    excluded_windows: Arc<[u32]>,
+    excluded_processes: Arc<[i32]>,
     target: Option<CaptureTarget>,
     backend_override: Option<Arc<dyn CaptureBackend>>,
     config: CaptureSessionConfig,
@@ -193,6 +195,8 @@ impl CaptureSessionBuilder {
     pub(crate) fn new() -> Self {
         Self {
             target: None,
+            excluded_windows: Default::default(),
+            excluded_processes: Default::default(),
             backend_override: None,
             config: CaptureSessionConfig::default(),
         }
@@ -216,6 +220,8 @@ impl CaptureSessionBuilder {
     }
 
     pub(crate) fn with_options(mut self, options: CaptureOptions) -> Self {
+        self.excluded_windows = options.excluded_windows.clone();
+        self.excluded_processes = options.excluded_processes.clone();
         self.config = options.into();
         self
     }
@@ -227,6 +233,7 @@ impl CaptureSessionBuilder {
             target,
             backend_override,
             config,
+            ..
         } = self;
         let target = target.ok_or_else(|| {
             CaptureError::InvalidConfig(
@@ -246,6 +253,22 @@ impl CaptureSessionBuilder {
     }
 
     fn build_uncached(self) -> CaptureResult<CaptureSession> {
+        if self.excluded_windows.len() > crate::exclusions::MAX_EXCLUSIONS
+            || self.excluded_processes.len() > crate::exclusions::MAX_EXCLUSIONS
+        {
+            return Err(CaptureError::InvalidConfig(
+                "capture exclusions exceed 4096 entries".into(),
+            ));
+        }
+        if matches!(self.target, Some(CaptureTarget::Window(_)))
+            && (!self.excluded_windows.is_empty() || !self.excluded_processes.is_empty())
+        {
+            return Err(CaptureError::InvalidConfig(
+                "window capture does not support exclusion filters".into(),
+            ));
+        }
+        let excluded_windows = self.excluded_windows.clone();
+        let excluded_processes = self.excluded_processes.clone();
         let (target, backend, config) = self.resolve_backend_and_config()?;
         if config.mode == CaptureMode::Continuous {
             crate::convert::warmup();
@@ -257,6 +280,8 @@ impl CaptureSessionBuilder {
                 capture_retry_count: config.capture_retry_count,
                 workload: config.mode,
                 output_pixel_format: config.output_pixel_format,
+                excluded_windows,
+                excluded_processes,
                 #[cfg(feature = "stage-timing")]
                 record_stage_timings: config.record_stage_timings,
             },
@@ -961,6 +986,43 @@ impl CaptureSession {
         let mut frame = Frame::empty();
         self.capture_once_into(&mut frame)?;
         Ok(frame)
+    }
+
+    /// Snapshot policy with native cursor embedding and per-request cancellation.
+    /// Existing Windows capture metadata remains available for explicit compositing.
+    pub fn capture_snapshot(
+        &mut self,
+        include_cursor: bool,
+        cancellation: snow_core::cancellation::CancellationToken,
+    ) -> CaptureResult<Frame> {
+        if cancellation.is_canceled() {
+            self.release_idle_resources();
+            return Err(CaptureError::Canceled);
+        }
+        if let Some(native) = &mut self.native {
+            native.set_cancellation(cancellation.clone());
+        }
+        let result = if include_cursor {
+            self.capture_with_cursor(None).map(|(frame, _)| frame)
+        } else {
+            self.capture_frame(None)
+        };
+        // Native snapshots are already prepared. Re-enumerating after releasing
+        // them would delay cancellation and could reject a valid captured frame
+        // after its target moves or disappears.
+        let reset = if self.native.is_some() {
+            self.release_idle_resources();
+            Ok(())
+        } else {
+            self.reset_to_prepared()
+        };
+        if cancellation.is_canceled() {
+            return Err(CaptureError::Canceled);
+        }
+        match (result, reset) {
+            (Ok(frame), Ok(())) => Ok(frame),
+            (Err(error), _) | (_, Err(error)) => Err(error),
+        }
     }
 
     /// Capture one frame, release all snapshot capture-time resources, and
@@ -1716,6 +1778,42 @@ mod tests {
     use std::time::Instant;
 
     #[test]
+    fn invalid_exclusions_fail_before_backend_creation() {
+        for options in [
+            CaptureOptions {
+                excluded_windows: vec![7].into(),
+                ..Default::default()
+            },
+            CaptureOptions {
+                excluded_processes: vec![42].into(),
+                ..Default::default()
+            },
+        ] {
+            let result = CaptureSessionBuilder::new()
+                .target(CaptureTarget::Window(WindowId::from_windows_handle(1)))
+                .with_options(options)
+                .build();
+            assert!(matches!(result, Err(CaptureError::InvalidConfig(_))));
+        }
+        for options in [
+            CaptureOptions {
+                excluded_windows: vec![7; 4097].into(),
+                ..Default::default()
+            },
+            CaptureOptions {
+                excluded_processes: vec![42; 4097].into(),
+                ..Default::default()
+            },
+        ] {
+            let result = CaptureSessionBuilder::new()
+                .target(CaptureTarget::PrimaryMonitor)
+                .with_options(options)
+                .build();
+            assert!(matches!(result, Err(CaptureError::InvalidConfig(_))));
+        }
+    }
+
+    #[test]
     fn aggregate_damage_is_cleared_when_any_changed_source_is_inexact() {
         let mut aggregate = Vec::new();
         let mut exact_damage = true;
@@ -2314,6 +2412,32 @@ mod tests {
             virtual_width: width,
             virtual_height: height,
         }
+    }
+
+    #[test]
+    fn snapshot_cancellation_and_failure_release_resources_and_allow_next_request()
+    -> CaptureResult<()> {
+        let state = Arc::new(Mutex::new(LifecycleState::default()));
+        let mut session = lifecycle_session(Arc::clone(&state))?;
+        let canceled = snow_core::cancellation::CancellationToken::default();
+        canceled.cancel();
+        assert!(matches!(
+            session.capture_snapshot(false, canceled),
+            Err(CaptureError::Canceled)
+        ));
+        assert_eq!(state.lock().unwrap().capture_calls, 0);
+        for include_cursor in [false, true] {
+            let frame = session.capture_snapshot(include_cursor, Default::default())?;
+            assert_eq!(frame.dimensions(), (4, 4));
+            assert_eq!(session.active_capture_access_count(), 0);
+            assert!(session.monitor_output_cache_is_empty());
+        }
+        state.lock().unwrap().fail_capture = true;
+        assert!(session.capture_snapshot(false, Default::default()).is_err());
+        assert_eq!(session.active_capture_access_count(), 0);
+        state.lock().unwrap().fail_capture = false;
+        assert!(session.capture_snapshot(false, Default::default()).is_ok());
+        Ok(())
     }
 
     #[test]

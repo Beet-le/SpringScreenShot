@@ -5,6 +5,7 @@
 #include "snow_shot/presentation/screenshotscrollingtypes.h"
 
 #include <QString>
+#include <QPoint>
 
 namespace adqt::widgets {
 class AdColorPicker;
@@ -16,6 +17,7 @@ class ScreenshotToolbarCommandSink {
 
     virtual void undoCanvasEdit() {}
     virtual void redoCanvasEdit() {}
+    virtual void requestRecapture() {}
     virtual void setMoveTool() = 0;
     virtual void setSelectTool() = 0;
     virtual void setShapeTool() = 0;
@@ -62,6 +64,7 @@ class ScreenshotToolbarCommandSink {
     virtual void toggleTextTranslation() {
         beginTextTranslation();
     }
+    virtual void jumpToTranslationPage() {}
     virtual void resetTextEditing() {}
     virtual void openTextTranslationSettings() {}
     virtual void applyTextFormatting(const QString&) {}
@@ -69,6 +72,9 @@ class ScreenshotToolbarCommandSink {
     virtual void startScrollingScreenshot() = 0;
     virtual void setScrollingScreenshotRecognitionMode(ScreenshotScrollingRecognitionMode) {}
     virtual void setScrollingScreenshotAutoScroll(bool) {}
+    virtual void beginScrollingSelectionMove(ScreenshotScrollingRecognitionMode, QPoint) {}
+    virtual void updateScrollingSelectionMove(QPoint) {}
+    virtual void endScrollingSelectionMove() {}
     virtual void pinSelectionToScreen() = 0;
     virtual void saveSelectionToFile() {}
     virtual void quickSaveSelection() {}
@@ -83,6 +89,7 @@ class ScreenshotToolbarCommandSink {
     virtual void incrementSelectedSerialNumbers() = 0;
     virtual void createTextForSelectedSerialNumber() = 0;
     virtual void reorderSelectedElements(SnowCanvasSelectionOrder) {}
+    virtual void alignSelectedElements(SnowCanvasSelectionAlignment) {}
     virtual void setSelectedElementsOpacity(qreal) {}
     virtual void duplicateSelectedElements() {}
     virtual void deleteSelectedElements() {}

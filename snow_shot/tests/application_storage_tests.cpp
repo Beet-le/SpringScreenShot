@@ -1,3 +1,4 @@
+#include "snow_shot/presentation/globalmousetypes.h"
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/configurationschema.h"
 #include "snow_shot/storage/configurationstore.h"
@@ -167,6 +168,8 @@ void defaultsAndTypedRoundTrip() {
                 screenshotUi.value(QStringLiteral("toolbar_size")).toString() ==
                     QStringLiteral("normal") &&
                 screenshotUi.value(QStringLiteral("selection_transition_animation")).toBool() &&
+                screenshotUi.value(QStringLiteral("selection_border_color")).toString() ==
+                    QStringLiteral("#4096FFFF") &&
                 screenshotUi.value(QStringLiteral("selection_mask_color")).toString() ==
                     QStringLiteral("#00000080") &&
                 screenshotUi.value(QStringLiteral("shortcut_hint_opacity")).toInt() == 100 &&
@@ -231,6 +234,7 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
             !defaultValue("text_recognition/resident_process").toBool() &&
             !defaultValue("text_recognition/model_hot_start").toBool() &&
             !defaultValue("global_shortcuts/disable_on_focused_fullscreen_window").toBool() &&
+            !defaultValue("extended_features/jump_to_translation_page").toBool() &&
 #ifdef Q_OS_MACOS
             defaultValue("global_shortcuts/screenshot").toArray() ==
                 QJsonArray{shortcutObject(QStringLiteral("Meta+Shift+1"), 18)} &&
@@ -308,11 +312,11 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
                     QStringLiteral("quick.screenshot"), QStringLiteral("quick.screenshot-delay"),
                     QStringLiteral("quick.screenshot-fixed"),
                     QStringLiteral("quick.screenshot-ocr"), QStringLiteral("quick.screenshot-copy"),
-                    QStringLiteral("quick.screen-record"),
                     QStringLiteral("quick.pin-clipboard-content"),
-                    QStringLiteral("tray.window-grouping"),
-                    QStringLiteral("tray.disable-shortcut-functions"),
-                    QStringLiteral("tray.show-main-window"), QStringLiteral("tray.exit")},
+                    QStringLiteral("quick.screen-record"),
+                    QStringLiteral("quick.toggle-global-hotkeys"),
+                    QStringLiteral("tray.window-grouping"), QStringLiteral("tray.show-main-window"),
+                    QStringLiteral("tray.exit")},
         "new settings defaults do not match the requested contract");
 
     const QMap<QString, QJsonArray> drawingShortcutDefaults{
@@ -353,6 +357,7 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
         {QStringLiteral("previous_screenshot_history"), QJsonArray{QStringLiteral(",")}},
         {QStringLiteral("next_screenshot_history"), QJsonArray{QStringLiteral(".")}},
         {QStringLiteral("select_previously_selected_area"), QJsonArray{QStringLiteral("R")}},
+        {QStringLiteral("recapture"), QJsonArray{QStringLiteral("Alt+R")}},
         {QStringLiteral("copy_color"), QJsonArray{QStringLiteral("C")}},
         {QStringLiteral("table_recognition"), QJsonArray{QStringLiteral("Ctrl+X")}},
         {QStringLiteral("qr_code_recognition"), QJsonArray{QStringLiteral("Ctrl+Q")}},
@@ -427,6 +432,28 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
              QStringLiteral("drawing/quick_selection_disabled_tools"), QStringLiteral("free-draw"))
              .valid,
         "drawing-tool lists must reject non-array values");
+
+    const auto migratedTrayOptions = storage::ConfigurationSchema::normalize(
+        QStringLiteral("tray/menu_options"),
+        QJsonArray{QStringLiteral("quick.screenshot"),
+                   QStringLiteral("tray.disable-shortcut-functions"),
+                   QStringLiteral("quick.toggle-global-hotkeys"), QStringLiteral("tray.exit")});
+    require(
+        migratedTrayOptions.valid && migratedTrayOptions.changed &&
+            migratedTrayOptions.value.toArray() ==
+                QJsonArray{QStringLiteral("quick.screenshot"),
+                           QStringLiteral("quick.toggle-global-hotkeys"),
+                           QStringLiteral("tray.exit")},
+        "legacy tray hotkey commands must rename in place without duplicating the quick action");
+    const auto stableTrayOptions = storage::ConfigurationSchema::normalize(
+        QStringLiteral("tray/menu_options"),
+        storage::ConfigurationSchema::defaultValue(QStringLiteral("tray/menu_options")).toArray());
+    require(stableTrayOptions.valid && !stableTrayOptions.changed,
+            "current tray menu defaults must normalize without changes");
+    require(!storage::ConfigurationSchema::normalize(QStringLiteral("tray/menu_options"),
+                                                     QStringLiteral("quick.screenshot"))
+                 .valid,
+            "tray menu options must reject non-array values");
 
     for (const int frameRate : {5, 10, 15, 24, 30, 60, 120, 83}) {
         require(storage::ConfigurationSchema::normalize(
@@ -531,8 +558,10 @@ void globalMouseCombinationSchemaIsStrictAndPersistent() {
         QStringLiteral("global_mouse/screenshot_save"),
         QStringLiteral("global_mouse/screenshot_quick_save"),
     };
-    const QStringList activationKeys{QStringLiteral("windows"), QStringLiteral("ctrl"),
-                                     QStringLiteral("alt"), QStringLiteral("shift")};
+    const QStringList activationKeys{snow_shot::presentation::globalMouseActivationKeys().at(0),
+                                     snow_shot::presentation::globalMouseActivationKeys().at(1),
+                                     snow_shot::presentation::globalMouseActivationKeys().at(2),
+                                     QStringLiteral("shift")};
     const QStringList mouseButtons{
         QStringLiteral("left_drag"),          QStringLiteral("right_drag"),
         QStringLiteral("wheel_drag"),         QStringLiteral("side_button_1_drag"),
@@ -547,11 +576,13 @@ void globalMouseCombinationSchemaIsStrictAndPersistent() {
             : key.endsWith(QStringLiteral("screenshot_fixed")) ? QStringLiteral("wheel_drag")
             : key.endsWith(QStringLiteral("screenshot_ocr"))   ? QStringLiteral("right_drag")
                                                                : QString();
-        const QJsonObject expected = button.isEmpty()
-                                         ? QJsonObject{}
-                                         : QJsonObject{{QStringLiteral("activation_key"),
-                                                        QJsonArray{QStringLiteral("windows")}},
-                                                       {QStringLiteral("mouse_button"), button}};
+        const QJsonObject expected =
+            button.isEmpty()
+                ? QJsonObject{}
+                : QJsonObject{
+                      {QStringLiteral("activation_key"),
+                       QJsonArray{snow_shot::presentation::globalMouseActivationKeys().at(0)}},
+                      {QStringLiteral("mouse_button"), button}};
         require(entry->defaultValue == expected,
                 "copy, pin, and OCR must default to Windows plus left, middle, and right drag");
         const auto unset = storage::ConfigurationSchema::normalize(key, QJsonObject());
@@ -571,35 +602,54 @@ void globalMouseCombinationSchemaIsStrictAndPersistent() {
     }
 
     const QString key = keys.constFirst();
+#ifdef Q_OS_MACOS
+    for (const auto* oldName : {"windows", "ctrl", "alt"}) {
+        require(
+            !storage::ConfigurationSchema::normalize(
+                 key, QJsonObject{{QStringLiteral("activation_key"), QString::fromLatin1(oldName)},
+                                  {QStringLiteral("mouse_button"), QStringLiteral("left_drag")}})
+                 .valid,
+            "macOS must reject Windows-oriented modifier names instead of silently remapping");
+    }
+#endif
     const QJsonObject multi{
         {QStringLiteral("activation_key"),
-         QJsonArray{QStringLiteral("shift"), QStringLiteral("ctrl"), QStringLiteral("ctrl")}},
+         QJsonArray{QStringLiteral("shift"),
+                    snow_shot::presentation::globalMouseActivationKeys().at(1),
+                    snow_shot::presentation::globalMouseActivationKeys().at(1)}},
         {QStringLiteral("mouse_button"), QStringLiteral("left_drag")}};
     const auto normalizedMulti = storage::ConfigurationSchema::normalize(key, multi);
     require(normalizedMulti.valid && normalizedMulti.changed &&
                 normalizedMulti.value.toObject().value(QStringLiteral("activation_key")) ==
-                    QJsonArray{QStringLiteral("ctrl"), QStringLiteral("shift")},
+                    QJsonArray{snow_shot::presentation::globalMouseActivationKeys().at(1),
+                               QStringLiteral("shift")},
             "multiple activation keys must normalize as a sorted unique set");
     const QVector<QJsonValue> malformed{
         QStringLiteral("windows+left_drag"),
-        QJsonArray{QStringLiteral("windows"), QStringLiteral("left_drag")},
-        QJsonObject{{QStringLiteral("activation_key"), QStringLiteral("windows")}},
+        QJsonArray{snow_shot::presentation::globalMouseActivationKeys().at(0),
+                   QStringLiteral("left_drag")},
+        QJsonObject{{QStringLiteral("activation_key"),
+                     snow_shot::presentation::globalMouseActivationKeys().at(0)}},
         QJsonObject{{QStringLiteral("mouse_button"), QStringLiteral("left_drag")}},
         QJsonObject{{QStringLiteral("activation_key"), QStringLiteral("meta")},
                     {QStringLiteral("mouse_button"), QStringLiteral("left_drag")}},
-        QJsonObject{{QStringLiteral("activation_key"), QStringLiteral("windows")},
+        QJsonObject{{QStringLiteral("activation_key"),
+                     snow_shot::presentation::globalMouseActivationKeys().at(0)},
                     {QStringLiteral("mouse_button"), QStringLiteral("middle_drag")}},
-        QJsonObject{{QStringLiteral("activation_key"), QStringLiteral("windows")},
+        QJsonObject{{QStringLiteral("activation_key"),
+                     snow_shot::presentation::globalMouseActivationKeys().at(0)},
                     {QStringLiteral("mouse_button"), QStringLiteral("left_drag")},
                     {QStringLiteral("extra"), true}},
         QJsonObject{{QStringLiteral("activation_key"), 1},
                     {QStringLiteral("mouse_button"), QStringLiteral("left_drag")}},
         QJsonObject{{QStringLiteral("activation_key"), QJsonArray{}},
                     {QStringLiteral("mouse_button"), QStringLiteral("left_drag")}},
-        QJsonObject{{QStringLiteral("activation_key"), QJsonArray{QStringLiteral("ctrl"), 1}},
+        QJsonObject{{QStringLiteral("activation_key"),
+                     QJsonArray{snow_shot::presentation::globalMouseActivationKeys().at(1), 1}},
                     {QStringLiteral("mouse_button"), QStringLiteral("left_drag")}},
         QJsonObject{{QStringLiteral("activation_key"),
-                     QJsonArray{QStringLiteral("ctrl"), QStringLiteral("bad")}},
+                     QJsonArray{snow_shot::presentation::globalMouseActivationKeys().at(1),
+                                QStringLiteral("bad")}},
                     {QStringLiteral("mouse_button"), QStringLiteral("left_drag")}},
     };
     for (const QJsonValue& value : malformed) {
@@ -613,7 +663,8 @@ void globalMouseCombinationSchemaIsStrictAndPersistent() {
         QDir(roundTripDirectory.path()).filePath(QStringLiteral("config.json"));
     const QJsonObject savedCombination{
         {QStringLiteral("activation_key"),
-         QJsonArray{QStringLiteral("ctrl"), QStringLiteral("shift")}},
+         QJsonArray{snow_shot::presentation::globalMouseActivationKeys().at(1),
+                    QStringLiteral("shift")}},
         {QStringLiteral("mouse_button"), QStringLiteral("side_button_2_drag")},
     };
     {
@@ -1059,6 +1110,20 @@ void settingsAdaptersRoundTripAndRejectInvalidValues() {
     static_cast<void>(initialize(executable, temporary.path()));
     require(system.launchAsAdministrator(),
             "elevated startup preference must survive storage restart");
+    const storage::ExtendedFeaturesSettings extendedFeatures;
+    require(!extendedFeatures.translationPageEnabled() &&
+                !extendedFeatures.jumpToTranslationPage() &&
+                extendedFeatures.setTranslationPageEnabled(true) &&
+                extendedFeatures.setJumpToTranslationPage(true) &&
+                applicationStorage.flushNow().success,
+            "extended translation settings must default off and persist through typed adapters");
+    applicationStorage.shutdown();
+    static_cast<void>(initialize(executable, temporary.path()));
+    require(extendedFeatures.translationPageEnabled() && extendedFeatures.jumpToTranslationPage(),
+            "extended translation settings must survive storage restart");
+    require(extendedFeatures.setJumpToTranslationPage(false) &&
+                extendedFeatures.setTranslationPageEnabled(false),
+            "extended translation settings must restore both default values");
     require(system.setAutoStartAtBoot(false) && !system.launchAsAdministrator() &&
                 !system.setLaunchAsAdministrator(true),
             "disabling auto-start must reset and gate administrator launch");
@@ -1248,6 +1313,19 @@ void settingsAdaptersRoundTripAndRejectInvalidValues() {
                 recording.encoder() == QStringLiteral("h264"),
             "recording adapters must reject unadvertised values atomically");
 
+    require(!recording.mouseHighlightEnabled() && !recording.recordMouseClicks() &&
+                recording.mouseHighlightColor() == QColor(255, 255, 0, 128),
+            "new mouse recording settings default off with soft yellow");
+    require(recording.setMouseHighlightEnabled(true) && recording.setRecordMouseClicks(true) &&
+                recording.setMouseHighlightColor(QColor(12, 34, 56, 78)),
+            "mouse recording settings save");
+    const storage::RecordingSettings reloadedRecording;
+    require(reloadedRecording.mouseHighlightEnabled() && reloadedRecording.recordMouseClicks() &&
+                reloadedRecording.mouseHighlightColor() == QColor(12, 34, 56, 78),
+            "mouse recording settings persist across adapter instances");
+    require(!recording.setMouseHighlightColor(QColor()) &&
+                recording.mouseHighlightColor() == QColor(12, 34, 56, 78),
+            "invalid highlight color is rejected atomically");
     const storage::TraySettings tray;
     const storage::NetworkSettings network;
     const storage::GlobalShortcutSettings globalShortcuts;
@@ -1279,7 +1357,7 @@ void settingsAdaptersRoundTripAndRejectInvalidValues() {
     const storage::ScreenshotShortcutSettings screenshotShortcuts;
     const shortcuts::ShortcutBindingMap screenshotDefaults = screenshotShortcuts.allShortcuts();
     require(
-        screenshotDefaults.size() == 25 &&
+        screenshotDefaults.size() == 26 &&
             portable(screenshotShortcuts.moveTool()) ==
                 QStringList{QStringLiteral("M"), QStringLiteral("Ctrl+E")} &&
             portable(screenshotShortcuts.moveCursorUp()) ==
@@ -1302,6 +1380,7 @@ void settingsAdaptersRoundTripAndRejectInvalidValues() {
                 QStringList{QStringLiteral(".")} &&
             portable(screenshotShortcuts.selectPreviouslySelectedArea()) ==
                 QStringList{QStringLiteral("R")} &&
+            portable(screenshotShortcuts.recapture()) == QStringList{QStringLiteral("Alt+R")} &&
             portable(screenshotShortcuts.copyColor()) == QStringList{QStringLiteral("C")} &&
             portable(screenshotDefaults.value(QStringLiteral("pin_to_screen"))) ==
                 QStringList{QStringLiteral("Ctrl+F")} &&
@@ -1331,7 +1410,11 @@ void settingsAdaptersRoundTripAndRejectInvalidValues() {
                 portable(screenshotShortcuts.moveTool()) == QStringList{QStringLiteral("Alt+M")} &&
                 screenshotShortcuts.setMoveCursorUp({QStringLiteral("Ctrl+Alt+Up")}) &&
                 portable(screenshotShortcuts.moveCursorUp()) ==
-                    QStringList{QStringLiteral("Ctrl+Alt+Up")},
+                    QStringList{QStringLiteral("Ctrl+Alt+Up")} &&
+                screenshotShortcuts.setShortcuts(QStringLiteral("recapture"),
+                                                 {QStringLiteral("Ctrl+Alt+R")}) &&
+                portable(screenshotShortcuts.recapture()) ==
+                    QStringList{QStringLiteral("Ctrl+Alt+R")},
             "screenshot shortcuts must round-trip through the typed adapter");
     require(screenshotShortcuts.setMoveCursorRight({QStringLiteral("1")}) &&
                 portable(screenshotShortcuts.moveCursorRight()) == QStringList{QStringLiteral("1")},
@@ -1721,7 +1804,7 @@ void appUsageScanAndCacheCleanup() {
     setLastModified(activeRecording, QDateTime::currentDateTime().addSecs(3600));
     writeBytes(QDir(root).filePath(QStringLiteral("capture_history/records/dummy/display.png")),
                QByteArray(200, 'x'));
-    writeBytes(QDir(root).filePath(QStringLiteral("pinned_windows/index.json")),
+    writeBytes(QDir(root).filePath(QStringLiteral("pinned_windows_v2/index.json")),
                QByteArray(30, 'x'));
     writeBytes(QDir(root).filePath(QStringLiteral("assets/ocr/model.bin")), QByteArray(150, 'x'));
 
@@ -1819,6 +1902,37 @@ void invalidTrayClickSettingsUseIndependentDefaults() {
             "invalid persisted click actions must be repaired to their independent defaults");
 }
 
+void legacyTrayHotkeyCommandMigratesToQuickAction() {
+    QTemporaryDir temporary;
+    require(temporary.isValid(), "failed to create tray menu migration directory");
+    const QString config = temporary.filePath(QStringLiteral("config.json"));
+    writeBytes(
+        config,
+        QByteArrayLiteral(
+            R"({"storage":{"schema_version":2},"tray":{"menu_options":["quick.screenshot","tray.window-grouping","tray.disable-shortcut-functions","tray.exit"]}})"));
+    const QJsonArray migratedOptions{
+        QStringLiteral("quick.screenshot"), QStringLiteral("tray.window-grouping"),
+        QStringLiteral("quick.toggle-global-hotkeys"), QStringLiteral("tray.exit")};
+    {
+        storage::ConfigurationStore store(config, true, true, 60000);
+        require(store.value(QStringLiteral("tray/menu_options")).toArray() == migratedOptions &&
+                    store.isDirty() && store.flushNow().success,
+                "the legacy tray hotkey command must migrate in place to the toggle quick action");
+    }
+    QFile persisted(config);
+    require(persisted.open(QIODevice::ReadOnly), "the migrated config must be readable");
+    const QJsonObject persistedRoot = QJsonDocument::fromJson(persisted.readAll()).object();
+    persisted.close();
+    require(persistedRoot.value(QStringLiteral("tray"))
+                    .toObject()
+                    .value(QStringLiteral("menu_options"))
+                    .toArray() == migratedOptions,
+            "the rename must be written back so it is not re-derived on every load");
+    storage::ConfigurationStore reloaded(config, true, true, 60000);
+    require(reloaded.value(QStringLiteral("tray/menu_options")).toArray() == migratedOptions,
+            "the migrated tray menu must survive a storage reload");
+}
+
 void trayClickSettingsSurviveRestart() {
     QTemporaryDir temporary;
     require(temporary.isValid(), "temporary tray settings directory");
@@ -1896,6 +2010,10 @@ void watermarkTemplateSettingsRepairAndSurviveRestart() {
 
 int main(int argc, char** argv) {
     QCoreApplication application(argc, argv);
+    if (application.arguments().contains(QStringLiteral("--global-mouse-only"))) {
+        globalMouseCombinationSchemaIsStrictAndPersistent();
+        return 0;
+    }
     QCoreApplication::setOrganizationName(QStringLiteral("SnowShotTests"));
     QCoreApplication::setApplicationName(QStringLiteral("storage-tests"));
     if (application.arguments().contains(QStringLiteral("--quit-lifetime-only"))) {
@@ -1928,6 +2046,7 @@ int main(int argc, char** argv) {
     obsoleteClickThroughShortcutIsIgnored();
     shortcutSchemaMigrationAndPhysicalMetadataRoundTrip();
     invalidTrayClickSettingsUseIndependentDefaults();
+    legacyTrayHotkeyCommandMigratesToQuickAction();
     trayClickSettingsSurviveRestart();
     watermarkTemplateSettingsRepairAndSurviveRestart();
     globalMouseCombinationSchemaIsStrictAndPersistent();

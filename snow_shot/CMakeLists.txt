@@ -1,3 +1,7 @@
+if(APPLE)
+    set_source_files_properties(src/presentation/core/screenshotgeometry.cpp PROPERTIES LANGUAGE OBJCXX)
+endif()
+
 cmake_minimum_required(VERSION 3.30)
 
 project(snow_shot VERSION ${SNOW_SHOT_VERSION_NUMERIC} LANGUAGES CXX)
@@ -16,6 +20,18 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_OBJCXX_STANDARD 20)
 set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
 set(CMAKE_OBJCXX_EXTENSIONS OFF)
+
+set(SNOW_PINNED_PLATFORM_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/presentation/pinned/pinnedwindowplatform.cpp)
+if(WIN32)
+    list(APPEND SNOW_PINNED_PLATFORM_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/windows/pinnedwindowevents.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/windows/pinnedwindownative.cpp)
+endif()
+if(APPLE)
+    list(APPEND SNOW_PINNED_PLATFORM_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/platform/macos/pinnedwindowplatform.mm)
+endif()
 
 option(SNOW_SHOT_ENABLE_STRICT_COMPILE "Enable strict compiler warnings and treat warnings as errors." ON)
 option(SNOW_SHOT_BUILD_TESTS "Build Snow Shot test executables." OFF)
@@ -55,6 +71,11 @@ set(_snow_shot_static_qt_plugins
     # The full-color application icon embeds SVG images. QtSvg renders the
     # outer document, but QImageReader needs this plugin for those images.
     Qt6::QSvgPlugin
+    # The --update-probe startup path switches QT_QPA_PLATFORM to "offscreen"
+    # before constructing QApplication. Static Qt registers platform plugins
+    # at link time, so the release binary must import it here or the packaged
+    # startup probe blocks forever on the missing-plugin dialog.
+    Qt6::QOffscreenIntegrationPlugin
 )
 
 if(SNOW_SHOT_QT_STATIC)
@@ -101,13 +122,10 @@ if(NOT DEFINED SNOW_SHOT_API_BASE_URL OR SNOW_SHOT_API_BASE_URL STREQUAL "")
             "Snow Shot API base URL." FORCE)
     endif()
 endif()
-if(WIN32)
-    find_package(Qt6GuiPrivate 6.11.1 EXACT REQUIRED CONFIG
-        PATHS "${Qt6_DIR}/.."
-        NO_DEFAULT_PATH
-    )
-endif()
-
+find_package(Qt6GuiPrivate 6.11.1 EXACT REQUIRED CONFIG
+    PATHS "${Qt6_DIR}/.."
+    NO_DEFAULT_PATH
+)
 set(SNOW_SHOT_DRAW_ENGINE_QT_DIR
     "${SNOW_DRAW_ENGINE_SOURCE_DIR}"
     CACHE PATH
@@ -175,6 +193,12 @@ if(NOT TARGET snow_capture_c)
             snow_stitch_images_c
         STRIP_MSVC_DIRECTIVES
     )
+endif()
+
+# Selector framework requirements travel with the Rust static library on both Apple targets.
+if(APPLE)
+    target_link_libraries(snow_ui_selector_c INTERFACE
+        "-framework ApplicationServices" "-framework CoreFoundation" "-framework CoreGraphics")
 endif()
 
 if(NOT TARGET snow_recording_c)
@@ -325,6 +349,11 @@ if(SNOW_SHOT_OCR_STATIC_ONNXRUNTIME)
     set(SNOW_SHOT_OCR_PROCESS_NO_DEFAULT_FEATURES NO_DEFAULT_FEATURES)
     set(SNOW_SHOT_OCR_PROCESS_ENVIRONMENT
         "SNOW_ONNXRUNTIME_LINK_FILE=${CMAKE_CURRENT_BINARY_DIR}/generated/snow-ocr-process-onnxruntime-$<CONFIG>.rsp")
+endif()
+
+if(APPLE)
+    set(SNOW_SHOT_OCR_PROCESS_NO_DEFAULT_FEATURES NO_DEFAULT_FEATURES)
+    set(SNOW_SHOT_OCR_PROCESS_FEATURES dynamic-onnx-runtime)
 endif()
 
 if(WIN32)
@@ -598,9 +627,11 @@ set(SNOW_SHOT_STORAGE_SOURCES
     include/snow_shot/storage/appstorageusage.h
     include/snow_shot/storage/capturehistoryrepository.h
     include/snow_shot/storage/capturehistorytypes.h
+    include/snow_shot/storage/configurationarchive.h
     include/snow_shot/storage/configurationstore.h
     include/snow_shot/storage/configurationschema.h
     include/snow_shot/storage/persistedselectioncodec.h
+    include/snow_shot/storage/persistedwindowgeometry.h
     include/snow_shot/storage/pinnedwindowrepository.h
     include/snow_shot/storage/pinnedwindowtypes.h
     include/snow_shot/storage/settingsadapters.h
@@ -610,9 +641,11 @@ set(SNOW_SHOT_STORAGE_SOURCES
     src/storage/applicationstorage.cpp
     src/storage/capturehistorypolicy_p.h
     src/storage/capturehistoryrepository.cpp
+    src/storage/configurationarchive.cpp
     src/storage/configurationstore.cpp
     src/storage/configurationschema.cpp
     src/storage/persistedselectioncodec.cpp
+    src/storage/persistedwindowgeometry.cpp
     src/storage/pinnedwindowrepository.cpp
     src/storage/preparedpngimage.cpp
     src/storage/settingsadapters.cpp
@@ -639,11 +672,18 @@ endif()
 
 add_library(snow_shot_storage STATIC ${SNOW_SHOT_STORAGE_SOURCES})
 snow_enable_unity_build(snow_shot_storage)
+# Repository implementations have independent anonymous-namespace helpers.
+set_source_files_properties(
+    src/storage/capturehistoryrepository.cpp
+    src/storage/pinnedwindowrepository.cpp
+    src/storage/configurationschema.cpp
+    PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 target_include_directories(snow_shot_storage PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(snow_shot_storage PUBLIC
     snow_shot_diagnostics
     snow_shot_image_codec
     snow_shot_shortcuts
+    MINIZIP::minizip-ng
     Qt6::Core
     Qt6::Gui
 )
@@ -723,6 +763,8 @@ set(SNOW_SHOT_SETTINGS_SOURCES
     src/presentation/services/selectedtexttranslationcoordinator.cpp
     include/snow_shot/presentation/components/standalonetranslationwindow.h
     src/presentation/components/standalonetranslationwindow.cpp
+    include/snow_shot/presentation/windowgeometrymemory.h
+    src/presentation/windowgeometrymemory.cpp
     include/snow_shot/presentation/components/translationpagewidget.h
     src/presentation/components/translationpagewidget.cpp
     include/snow_shot/presentation/components/aboutpagewidget.h
@@ -810,8 +852,6 @@ endif()
 unset(_snow_shot_history_source)
 unset(_snow_shot_history_global_pool_call)
 add_library(snow_shot_administrator STATIC
-    include/snow_shot/platform/windows/privilegedlocalserver.h
-    src/platform/windows/privilegedlocalserver.cpp
     src/platform/windows/autostartregistration.cpp
     src/platform/windows/administratorlaunch.cpp)
 target_include_directories(snow_shot_administrator PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -825,7 +865,27 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_test(NAME snow-shot-administrator-launch-tests COMMAND snow-shot-administrator-launch-tests)
     set_tests_properties(snow-shot-administrator-launch-tests PROPERTIES LABELS "unit;windows" TIMEOUT 30)
 endif()
-add_library(snow_shot_settings STATIC ${SNOW_SHOT_SETTINGS_SOURCES})
+add_library(snow_shot_permissions STATIC
+    include/snow_shot/presentation/apppermissionservice.h
+    src/presentation/services/apppermissionservice.cpp)
+target_include_directories(snow_shot_permissions PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(snow_shot_permissions PUBLIC Qt6::Widgets snow_shot_shortcuts)
+if(APPLE)
+    target_sources(snow_shot_permissions PRIVATE src/platform/macos/apppermissionbackend.mm)
+    target_link_libraries(snow_shot_permissions PRIVATE
+        "-framework AppKit"
+        "-framework ApplicationServices"
+        "-framework AVFoundation")
+endif()
+add_library(snow_shot_settings STATIC ${SNOW_SHOT_SETTINGS_SOURCES}
+    include/snow_shot/presentation/permissionguidecontroller.h
+    include/snow_shot/presentation/components/permissionguidewidget.h
+    src/presentation/services/permissionguidecontroller.cpp
+    src/presentation/components/permissionguidewidget.cpp)
+if(APPLE)
+    target_sources(snow_shot_settings PRIVATE src/platform/macos/permissionguideplatform.mm)
+endif()
+target_link_libraries(snow_shot_settings PUBLIC snow_shot_permissions)
 qt_add_resources(snow_shot_settings "snow_shot_about_assets"
     PREFIX "/snow_shot/about"
     BASE "resources/about"
@@ -842,16 +902,32 @@ add_library(snow_shot_global_mouse STATIC
     include/snow_shot/presentation/globalmousetypes.h
     src/presentation/services/globalmousemanager.cpp
     src/presentation/services/globalmousegesture.cpp
-    src/platform/windows/globalmousebackend.cpp
+    src/platform/globalmousebackend.cpp
 )
 target_include_directories(snow_shot_global_mouse PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(snow_shot_global_mouse PUBLIC snow_shot_storage Qt6::Gui)
 if(WIN32)
+    target_sources(snow_shot_global_mouse PRIVATE
+        src/platform/windows/globalmousebackend.cpp
+        src/platform/windows/globalmousebackend_p.h)
     target_link_libraries(snow_shot_global_mouse PRIVATE dwmapi user32)
 endif()
 if(APPLE)
+    enable_language(OBJCXX)
+    target_sources(snow_shot_global_mouse PRIVATE
+        src/platform/macos/globalmousebackend.mm
+        src/platform/macos/globalmouseinput.cpp
+        src/platform/macos/globalmousebackend_p.h)
     find_library(SNOW_SHOT_APPKIT_FRAMEWORK NAMES AppKit REQUIRED)
+    find_library(SNOW_SHOT_APPLICATION_SERVICES_FRAMEWORK NAMES ApplicationServices REQUIRED)
+    find_library(SNOW_SHOT_CORE_FOUNDATION_FRAMEWORK NAMES CoreFoundation REQUIRED)
     find_library(SNOW_SHOT_CORE_GRAPHICS_FRAMEWORK NAMES CoreGraphics REQUIRED)
+    target_link_libraries(snow_shot_global_mouse PRIVATE
+        "${SNOW_SHOT_CARBON_FRAMEWORK}"
+        "${SNOW_SHOT_APPKIT_FRAMEWORK}"
+        "${SNOW_SHOT_APPLICATION_SERVICES_FRAMEWORK}"
+        "${SNOW_SHOT_CORE_FOUNDATION_FRAMEWORK}"
+        "${SNOW_SHOT_CORE_GRAPHICS_FRAMEWORK}")
     target_link_libraries(snow_shot_settings PRIVATE
         "${SNOW_SHOT_CARBON_FRAMEWORK}"
         "${SNOW_SHOT_APPKIT_FRAMEWORK}"
@@ -859,6 +935,11 @@ if(APPLE)
 endif()
 target_link_libraries(snow_shot_settings PRIVATE snow_shot_global_mouse)
 snow_enable_unity_build(snow_shot_settings)
+set_source_files_properties(
+    src/presentation/styles/thememanager.cpp
+    src/presentation/components/shortcutkeyrow.cpp
+    src/platform/macos/globalshortcutbackend.cpp
+    PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 target_include_directories(snow_shot_settings PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(snow_shot_settings PUBLIC
     snow_shot_translation
@@ -873,6 +954,7 @@ if(WIN32)
 endif()
 
 set(PROJECT_HEADERS
+    include/snow_shot/app/featureavailability.h
     include/snow_shot/presentation/directcapturecontroller.h
     include/snow_shot/presentation/directcaptureworkflow.h
     include/snow_shot/presentation/directcapturehistory.h
@@ -883,6 +965,7 @@ set(PROJECT_HEADERS
     include/snow_shot/platform/windows/autostartregistration.h
     include/snow_shot/platform/windows/focusedfullscreenwindow.h
     include/snow_shot/platform/windows/windowchrome.h
+    include/snow_shot/platform/windowcaptureexclusion.h
     include/snow_shot/platform/physicalcursor.h
     include/snow_shot/presentation/components/aspectratiolockbutton.h
     include/snow_shot/presentation/components/contentcardwidget.h
@@ -908,6 +991,8 @@ set(PROJECT_HEADERS
     include/snow_shot/presentation/screenshotcolorpickercontroller.h
     include/snow_shot/presentation/screenshotcolorpickerwidget.h
     include/snow_shot/presentation/screenshotcontroller.h
+    include/snow_shot/presentation/screenshotdialogowner.h
+    include/snow_shot/presentation/screenshotshortcutexitconfirmation.h
     include/snow_shot/presentation/pinnedwindowgroupmanager.h
     include/snow_shot/presentation/globalshortcuttypes.h
     include/snow_shot/presentation/screenshotdefaultstyles.h
@@ -987,6 +1072,7 @@ set(PROJECT_HEADERS
     include/snow_shot/presentation/screenshotuipreferences.h
     include/snow_shot/presentation/screenrecordingareawindow.h
     include/snow_shot/presentation/screenrecordingcontroller.h
+    include/snow_shot/presentation/screenrecordingfolder.h
     include/snow_shot/presentation/screenrecordingshortcutcontroller.h
     include/snow_shot/presentation/screenrecordingtoolbarwindow.h
     include/snow_shot/presentation/styles/mainwindowcomponenttoken.h
@@ -1004,10 +1090,12 @@ set(PROJECT_CXX_SOURCES
     src/presentation/capture/directcapturehistory.cpp
     src/presentation/capture/camerashuttersound.cpp
     src/app/applicationcontroller.cpp
+    src/app/featureavailability.cpp
     src/app/main.cpp
     src/app/singleinstancecoordinator.cpp
     src/platform/physicalcursor.cpp
     src/platform/windows/windowchrome.cpp
+    src/platform/windows/windowcursorrefresh.h
     src/platform/windows/scrollinput.cpp
     src/presentation/components/contentcardwidget.cpp
     src/presentation/components/maincontentheaderwidget.cpp
@@ -1024,6 +1112,7 @@ set(PROJECT_CXX_SOURCES
     src/presentation/capture/screenshotglobalmousedrag.cpp
     src/presentation/capture/adaptivescrollingcapturecadence.h
     src/presentation/capture/windowcaptureexclusion.h
+    src/presentation/capture/windowinputtransparency.h
     src/presentation/capture/latestbridgemailbox.h
     src/presentation/capture/screenshotscrollingcapturecontroller.cpp
     src/presentation/capture/screenshotscrollingpipeline.cpp
@@ -1037,6 +1126,7 @@ set(PROJECT_CXX_SOURCES
     src/presentation/services/screenshotclipboardservice.cpp
     src/presentation/services/screenshotcolorpickerwidget.cpp
     src/presentation/services/screenshotcontroller.cpp
+    src/presentation/services/screenshotshortcutexitconfirmation.cpp
     src/presentation/services/screenshotexportcoordinator.cpp
     src/presentation/services/screenshotmessageservice.cpp
     src/presentation/services/screenshothistoryservice.cpp
@@ -1072,7 +1162,8 @@ set(PROJECT_CXX_SOURCES
     src/presentation/pinned/screenshotpinnednativegeometrycontroller.h
     src/presentation/pinned/screenshotpinnedclickthroughgeometry.cpp
     src/presentation/pinned/screenshotpinnedclickthroughgeometry.h
-    src/presentation/pinned/screenshotpinnedwindownative.cpp
+    src/presentation/pinned/screenshotpinnedinteraction.cpp
+    ${SNOW_PINNED_PLATFORM_SOURCES}
     src/presentation/pinned/screenshotpinnededitcontroller.cpp
     src/presentation/pinned/screenshotpinnedresizegeometry.cpp
     src/presentation/pinned/screenshotpinnedrestoregeometry.cpp
@@ -1131,6 +1222,7 @@ set(PROJECT_CXX_SOURCES
     src/presentation/toolbar/screenshottoolbarwindow.cpp
     src/presentation/recording/screenrecordingareawindow.cpp
     src/presentation/recording/screenrecordingcontroller.cpp
+    src/presentation/recording/screenrecordingfolder.cpp
     src/presentation/recording/recordingcountdownoverlay.cpp
     src/presentation/recording/recordingcountdownoverlay.h
         src/presentation/recording/recordingeffectpreview.cpp
@@ -1140,11 +1232,19 @@ set(PROJECT_CXX_SOURCES
     src/presentation/recording/screenrecordinggeometry.cpp
     src/presentation/recording/screenrecordingtoolbarwindow.cpp
 )
+if(APPLE)
+    list(APPEND PROJECT_CXX_SOURCES
+        src/platform/macos/applicationactivation.mm
+        src/platform/macos/systemtraymenu.mm
+        src/platform/macos/screenshotnative.mm
+        src/platform/macos/windowcaptureexclusion.mm)
+    list(APPEND PROJECT_HEADERS include/snow_shot/platform/macos/applicationactivation.h)
+endif()
 
 if(MSVC)
     set_source_files_properties(src/presentation/services/screenshotclipboarddibdecoder_avx2.cpp
         PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i.86)$")
     set_source_files_properties(src/presentation/services/screenshotclipboarddibdecoder_avx2.cpp
         PROPERTIES COMPILE_OPTIONS "-mavx2")
 endif()
@@ -1206,6 +1306,15 @@ endif()
 if(MSVC)
     target_compile_options(snow_shot PRIVATE $<$<CONFIG:Release>:/Z7>)
     target_link_options(snow_shot PRIVATE $<$<CONFIG:Release>:/DEBUG:FULL>)
+endif()
+
+if(APPLE)
+    target_sources(snow_shot PRIVATE src/platform/macos/camerashuttersound.mm)
+    target_link_libraries(snow_shot PRIVATE "-framework AVFoundation" "-framework Foundation" objc)
+    qt_add_resources(snow_shot "snow_shot_shutter_audio"
+        PREFIX "/snow-shot"
+        BASE "resources"
+        FILES "${SNOW_SHOT_CAMERA_SHUTTER_AUDIO_SOURCE}")
 endif()
 
 if(EXISTS "${SNOW_SHOT_CAMERA_SHUTTER_AUDIO_SOURCE}")
@@ -1321,6 +1430,7 @@ if(SNOW_SHOT_BUILD_TESTS)
             snow_shot_global_mouse Qt6::Widgets)
         add_test(NAME snow-shot-global-shortcut-manager-tests
             COMMAND snow-shot-global-shortcut-manager-tests)
+
         set_tests_properties(snow-shot-global-shortcut-manager-tests PROPERTIES
             LABELS "unit;${_snow_shot_shortcut_platform_label}" TIMEOUT 60)
         add_test(NAME snow-shot-global-shortcut-native-smoke-tests
@@ -1347,6 +1457,12 @@ if(SNOW_SHOT_BUILD_TESTS)
             "${SNOW_SHOT_CORE_GRAPHICS_FRAMEWORK}")
     endif()
     add_test(NAME snow-shot-global-mouse-tests COMMAND snow-shot-global-mouse-tests)
+    add_test(NAME snow-shot-global-mouse-storage-tests
+        COMMAND snow-shot-application-storage-tests --global-mouse-only)
+    add_test(NAME snow-shot-global-mouse-settings-runtime-tests
+        COMMAND snow-shot-settings-runtime-session-tests --global-mouse-only)
+    set_tests_properties(snow-shot-global-mouse-storage-tests
+        snow-shot-global-mouse-settings-runtime-tests PROPERTIES LABELS "unit" TIMEOUT 60)
     set_tests_properties(snow-shot-global-mouse-tests PROPERTIES
         LABELS "unit" TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     snow_shot_import_offscreen_platform(snow-shot-global-mouse-tests)
@@ -1356,6 +1472,16 @@ if(SNOW_SHOT_BUILD_TESTS)
             COMMAND snow-shot-global-mouse-tests --native-hook-smoke)
         set_tests_properties(snow-shot-global-mouse-native-smoke-tests PROPERTIES
             LABELS "interactive;windows" TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=windows")
+    elseif(APPLE)
+        add_executable(snow-shot-macos-global-mouse-tests tests/macos_global_mouse_tests.mm)
+        target_link_libraries(snow-shot-macos-global-mouse-tests PRIVATE snow_shot_global_mouse Qt6::Widgets)
+        add_test(NAME snow-shot-macos-global-mouse-tests COMMAND snow-shot-macos-global-mouse-tests)
+        set_tests_properties(snow-shot-macos-global-mouse-tests PROPERTIES
+            LABELS "unit;macos" TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+        add_test(NAME snow-shot-global-mouse-native-smoke-tests
+            COMMAND snow-shot-macos-global-mouse-tests --native-hook-smoke)
+        set_tests_properties(snow-shot-global-mouse-native-smoke-tests PROPERTIES
+            LABELS "interactive;macos" TIMEOUT 30 SKIP_RETURN_CODE 77 ENVIRONMENT "QT_QPA_PLATFORM=cocoa")
     endif()
 
     add_executable(snow-shot-diagnostics-tests tests/diagnostics_tests.cpp)
@@ -1501,6 +1627,41 @@ if(SNOW_SHOT_BUILD_TESTS)
         )
     endif()
 
+    add_executable(snow-shot-configuration-transfer-widget-tests
+        tests/configuration_transfer_widget_tests.cpp
+        src/presentation/services/screenshotclipboardservice.cpp
+    )
+    target_include_directories(snow-shot-configuration-transfer-widget-tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    )
+    target_link_libraries(snow-shot-configuration-transfer-widget-tests PRIVATE
+        snow_shot_image_codec
+        snow_shot_settings
+        snow_shot_settings_catalog
+        snow_shot_storage
+        ant_design_qt
+        Qt6::Widgets
+    )
+    add_test(
+        NAME snow-shot-configuration-transfer-widget-tests
+        COMMAND snow-shot-configuration-transfer-widget-tests
+    )
+    if(WIN32)
+        set_tests_properties(snow-shot-configuration-transfer-widget-tests PROPERTIES
+            ENVIRONMENT
+                "QT_QPA_PLATFORM=windows;QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::QWindowsIntegrationPlugin>"
+            ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+        )
+    else()
+        set_tests_properties(snow-shot-configuration-transfer-widget-tests PROPERTIES
+            ENVIRONMENT
+                "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+            ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+        )
+    endif()
+
     add_executable(snow-shot-screenshot-history-page-tests
         tests/screenshot_history_page_tests.cpp
         src/presentation/services/screenshotclipboardservice.cpp
@@ -1523,6 +1684,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )
+    snow_shot_add_translations(snow-shot-screenshot-history-page-tests)
     snow_shot_import_offscreen_platform(snow-shot-screenshot-history-page-tests)
 
     add_executable(snow-shot-single-instance-coordinator-tests
@@ -1618,7 +1780,11 @@ if(SNOW_SHOT_BUILD_TESTS)
     target_include_directories(snow-shot-physical-cursor-tests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
     )
-    target_link_libraries(snow-shot-physical-cursor-tests PRIVATE Qt6::Core)
+    target_link_libraries(snow-shot-physical-cursor-tests PRIVATE Qt6::Widgets)
+    snow_shot_import_offscreen_platform(snow-shot-physical-cursor-tests)
+    if(APPLE)
+        target_link_libraries(snow-shot-physical-cursor-tests PRIVATE "-framework CoreGraphics")
+    endif()
     if(WIN32)
         target_compile_definitions(snow-shot-physical-cursor-tests PRIVATE NOMINMAX)
         target_link_libraries(snow-shot-physical-cursor-tests PRIVATE user32)
@@ -1648,6 +1814,29 @@ if(SNOW_SHOT_BUILD_TESTS)
                 "QT_QPA_PLATFORM=windows;QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::QWindowsIntegrationPlugin>"
             ENVIRONMENT_MODIFICATION
                 "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+        )
+
+        add_executable(snow-shot-window-cursor-refresh-tests
+            tests/window_cursor_refresh_tests.cpp
+            src/platform/windows/windowchrome.cpp
+            src/platform/windows/windowcursorrefresh.h
+        )
+        target_compile_definitions(snow-shot-window-cursor-refresh-tests PRIVATE NOMINMAX)
+        target_include_directories(snow-shot-window-cursor-refresh-tests PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/include"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        )
+        target_link_libraries(snow-shot-window-cursor-refresh-tests PRIVATE
+            Qt6::Widgets dwmapi user32
+        )
+        snow_shot_import_offscreen_platform(snow-shot-window-cursor-refresh-tests)
+        add_test(NAME snow-shot-window-cursor-refresh-tests
+                 COMMAND snow-shot-window-cursor-refresh-tests)
+        set_tests_properties(snow-shot-window-cursor-refresh-tests PROPERTIES
+            ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+            TIMEOUT 20
+            LABELS "unit;windows"
         )
     endif()
 
@@ -1702,6 +1891,11 @@ if(SNOW_SHOT_BUILD_TESTS)
         src/presentation/services/screenshotclipboardservice.cpp
         src/platform/windows/windowchrome.cpp
     )
+    if(APPLE)
+        target_sources(snow-shot-about-page-tests PRIVATE
+            src/platform/macos/applicationactivation.mm)
+        target_link_libraries(snow-shot-about-page-tests PRIVATE "-framework AppKit")
+    endif()
     target_link_libraries(snow-shot-about-page-tests PRIVATE
         snow_shot_settings
         snow_shot_image_codec
@@ -1729,11 +1923,33 @@ if(SNOW_SHOT_BUILD_TESTS)
     )
     target_link_libraries(snow-shot-main-window-font-tests PRIVATE
         snow_shot_settings snow_shot_image_codec snow_shot_updates)
+    if(APPLE)
+        target_link_libraries(snow-shot-main-window-font-tests PRIVATE "-framework AppKit")
+    endif()
     snow_shot_import_offscreen_platform(snow-shot-main-window-font-tests)
     add_test(NAME snow-shot-main-window-font-tests COMMAND snow-shot-main-window-font-tests)
     set_tests_properties(snow-shot-main-window-font-tests PROPERTIES
         LABELS "unit"
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT};QT_SCALE_FACTOR=1.5"
+    )
+
+    get_target_property(_window_geometry_memory_sources snow-shot-about-page-tests SOURCES)
+    list(REMOVE_ITEM _window_geometry_memory_sources tests/about_page_tests.cpp)
+    add_executable(snow-shot-window-geometry-memory-tests
+        tests/window_geometry_memory_tests.cpp
+        ${_window_geometry_memory_sources}
+    )
+    target_link_libraries(snow-shot-window-geometry-memory-tests PRIVATE
+        snow_shot_settings snow_shot_image_codec snow_shot_updates)
+    if(APPLE)
+        target_link_libraries(snow-shot-window-geometry-memory-tests PRIVATE "-framework AppKit")
+    endif()
+    snow_shot_import_offscreen_platform(snow-shot-window-geometry-memory-tests)
+    add_test(NAME snow-shot-window-geometry-memory-tests
+             COMMAND snow-shot-window-geometry-memory-tests)
+    set_tests_properties(snow-shot-window-geometry-memory-tests PROPERTIES
+        LABELS "unit"
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
     )
 
     add_executable(snow-shot-settings-catalog-tests
@@ -1848,6 +2064,25 @@ if(SNOW_SHOT_BUILD_TESTS)
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )
 
+    add_executable(snow-shot-configuration-archive-tests
+        tests/configuration_archive_tests.cpp
+    )
+    target_include_directories(snow-shot-configuration-archive-tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    )
+    target_link_libraries(snow-shot-configuration-archive-tests PRIVATE
+        snow_shot_storage
+        Qt6::Core
+        Qt6::Gui
+    )
+    add_test(NAME snow-shot-configuration-archive-tests
+             COMMAND snow-shot-configuration-archive-tests)
+    set_tests_properties(snow-shot-configuration-archive-tests PROPERTIES
+        LABELS "unit"
+        ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+    )
+
     add_executable(snow-shot-button-border-tests
         tests/button_border_tests.cpp
         src/presentation/styles/buttonborder.cpp
@@ -1878,6 +2113,51 @@ if(SNOW_SHOT_BUILD_TESTS)
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )
     snow_shot_import_offscreen_platform(snow-shot-global-mouse-page-tests)
+
+    add_executable(snow-shot-permission-guide-tests tests/permission_guide_tests.cpp
+        src/presentation/services/screenshotclipboardservice.cpp)
+    target_link_libraries(snow-shot-permission-guide-tests PRIVATE snow_shot_settings)
+    snow_shot_add_translations(snow-shot-permission-guide-tests)
+    add_test(NAME snow-shot-permission-guide-tests COMMAND snow-shot-permission-guide-tests)
+    set_tests_properties(snow-shot-permission-guide-tests PROPERTIES
+        LABELS "unit" TIMEOUT 60 ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
+    snow_shot_import_offscreen_platform(snow-shot-permission-guide-tests)
+
+    add_executable(snow-shot-app-permissions-tests tests/app_permissions_tests.cpp
+        src/app/featureavailability.cpp
+        src/presentation/services/screenshotclipboardservice.cpp)
+    target_link_libraries(snow-shot-app-permissions-tests PRIVATE snow_shot_settings)
+    add_test(NAME snow-shot-app-permissions-tests COMMAND snow-shot-app-permissions-tests)
+    set_tests_properties(snow-shot-app-permissions-tests PROPERTIES
+        LABELS "unit" ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
+    snow_shot_import_offscreen_platform(snow-shot-app-permissions-tests)
+
+    if(APPLE)
+        add_executable(snow-shot-macos-permission-guide-tests MACOSX_BUNDLE
+            tests/macos_permission_guide_tests.mm
+            src/presentation/services/screenshotclipboardservice.cpp)
+        target_link_libraries(snow-shot-macos-permission-guide-tests PRIVATE
+            snow_shot_settings "-framework AppKit")
+        snow_shot_add_translations(snow-shot-macos-permission-guide-tests)
+        set_target_properties(snow-shot-macos-permission-guide-tests PROPERTIES
+            MACOSX_BUNDLE_GUI_IDENTIFIER "com.snowshot.tests.permission-guide"
+            MACOSX_BUNDLE_BUNDLE_NAME "Snow Shot Permission Guide")
+        add_test(NAME snow-shot-macos-permission-guide-tests
+            COMMAND snow-shot-macos-permission-guide-tests)
+        set_tests_properties(snow-shot-macos-permission-guide-tests PROPERTIES
+            LABELS "interactive;macos" TIMEOUT 30 RUN_SERIAL TRUE)
+        add_executable(snow-shot-macos-smart-selection-smoke
+            tests/macos_smart_selection_smoke_test.mm
+            src/platform/macos/windowcaptureexclusion.mm)
+        target_include_directories(snow-shot-macos-smart-selection-smoke PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/include"
+            "${SNOW_SHOT_CAPTURE_CRATES_DIR}/crates/snow-ui-selector-c/include")
+        target_link_libraries(snow-shot-macos-smart-selection-smoke PRIVATE
+            snow_ui_selector_c Qt6::Widgets "-framework AppKit")
+        add_test(NAME snow-shot-macos-smart-selection-smoke COMMAND snow-shot-macos-smart-selection-smoke)
+        set_tests_properties(snow-shot-macos-smart-selection-smoke PROPERTIES
+            LABELS "interactive;macos" SKIP_RETURN_CODE 77 TIMEOUT 30 RUN_SERIAL TRUE)
+    endif()
 
     add_executable(snow-shot-selector-policy-tests
         tests/screenshot_selector_policy_tests.cpp
@@ -1913,12 +2193,22 @@ if(SNOW_SHOT_BUILD_TESTS)
         snow_shot_settings
         Qt6::Widgets
     )
+    if(APPLE)
+        target_link_libraries(snow-shot-window-element-api-tests PRIVATE "-framework CoreGraphics")
+    endif()
     add_test(NAME snow-shot-window-element-api-tests
              COMMAND snow-shot-window-element-api-tests)
     add_test(NAME snow-shot-selector-phased-tests
              COMMAND snow-shot-window-element-api-tests --selector-only)
+    add_test(NAME snow-shot-shortcut-exit-confirmation-settings-tests
+             COMMAND snow-shot-window-element-api-tests
+                     --shortcut-exit-confirmation-settings-only)
     snow_shot_import_offscreen_platform(snow-shot-window-element-api-tests)
-    set_tests_properties(snow-shot-window-element-api-tests snow-shot-selector-phased-tests PROPERTIES
+    set_tests_properties(
+        snow-shot-window-element-api-tests
+        snow-shot-selector-phased-tests
+        snow-shot-shortcut-exit-confirmation-settings-tests
+        PROPERTIES
         ENVIRONMENT
             "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION
@@ -1975,6 +2265,17 @@ if(SNOW_SHOT_BUILD_TESTS)
         )
     endif()
 
+    if(APPLE)
+        target_sources(snow-shot-system-tray-controller-tests PRIVATE
+            src/platform/macos/systemtraymenu.mm
+            tests/system_tray_menu_native_tests.mm)
+        target_link_libraries(snow-shot-system-tray-controller-tests PRIVATE "-framework AppKit")
+        add_test(NAME snow-shot-system-tray-menu-native-tests
+            COMMAND snow-shot-system-tray-controller-tests --native-menu -platform cocoa)
+        set_tests_properties(snow-shot-system-tray-menu-native-tests PROPERTIES
+            LABELS "interactive;macos" RUN_SERIAL TRUE TIMEOUT 30)
+    endif()
+
     add_executable(snow-shot-pinned-window-group-tests
         tests/pinned_window_group_tests.cpp
         include/snow_shot/presentation/pinnedwindowgroupmanager.h
@@ -2001,6 +2302,20 @@ if(SNOW_SHOT_BUILD_TESTS)
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )
 
+    if(APPLE)
+        find_package(Qt6 REQUIRED COMPONENTS Test)
+        add_executable(snow-shot-action-popup-native-tests tests/action_popup_menu_native_tests.mm)
+        target_include_directories(snow-shot-action-popup-native-tests PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/include")
+        target_link_libraries(snow-shot-action-popup-native-tests PRIVATE
+            ant_design_qt Qt6::Test "-framework AppKit")
+        add_test(NAME snow-shot-action-popup-native-tests COMMAND snow-shot-action-popup-native-tests)
+        set_tests_properties(snow-shot-action-popup-native-tests PROPERTIES
+            LABELS "interactive"
+            ENVIRONMENT "QT_QPA_PLATFORM=cocoa"
+            TIMEOUT 20)
+    endif()
+
     add_executable(snow-shot-context-menu-rendering-tests
         tests/context_menu_rendering_tests.cpp
     )
@@ -2008,6 +2323,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         ant_design_qt
         Qt6::Widgets
     )
+    snow_shot_import_offscreen_platform(snow-shot-context-menu-rendering-tests)
     add_test(
         NAME snow-shot-context-menu-rendering-tests
         COMMAND snow-shot-context-menu-rendering-tests
@@ -2215,6 +2531,25 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_test(NAME snow-shot-direct-capture-workflow-tests
         COMMAND snow-shot-direct-capture-workflow-tests)
 
+    if(APPLE)
+        add_executable(snow-shot-camera-shutter-sound-tests
+            tests/camera_shutter_sound_tests.mm
+            src/presentation/capture/camerashuttersound.cpp
+            src/platform/macos/camerashuttersound.mm)
+        target_include_directories(snow-shot-camera-shutter-sound-tests PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/presentation/capture")
+        target_link_libraries(snow-shot-camera-shutter-sound-tests PRIVATE
+            Qt6::Core "-framework AVFoundation" "-framework Foundation" objc)
+        qt_add_resources(snow-shot-camera-shutter-sound-tests "snow_shot_shutter_audio_tests"
+            PREFIX "/snow-shot"
+            BASE "resources"
+            FILES "${SNOW_SHOT_CAMERA_SHUTTER_AUDIO_SOURCE}")
+        add_test(NAME snow-shot-camera-shutter-sound-tests
+            COMMAND snow-shot-camera-shutter-sound-tests)
+        set_tests_properties(snow-shot-camera-shutter-sound-tests PROPERTIES
+            LABELS "unit" TIMEOUT 30)
+    endif()
+
     add_executable(snow-shot-direct-capture-frame-tests tests/direct_capture_frame_tests.cpp)
     target_include_directories(snow-shot-direct-capture-frame-tests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/presentation/capture"
@@ -2268,6 +2603,44 @@ if(SNOW_SHOT_BUILD_TESTS)
         "${SNOW_SHOT_CAPTURE_CRATES_DIR}/crates/snow-recording-c/include")
     target_link_libraries(snow-shot-capture-worker-tests PRIVATE snow_shot_storage Qt6::Gui)
     add_test(NAME snow-shot-capture-worker-tests COMMAND snow-shot-capture-worker-tests)
+
+    if(WIN32)
+        add_executable(snow-shot-recapture-cursor-native-e2e-test
+            tests/recapture_cursor_native_e2e_test.cpp
+            include/snow_shot/presentation/screenshotcapturecoordinator.h
+            src/presentation/capture/screenshotcapturecoordinator.cpp
+            src/presentation/capture/screenshotcaptureworker.cpp
+            src/presentation/capture/screenshotcapturepolicy.cpp
+            src/platform/windows/windowchrome.cpp)
+        target_compile_definitions(snow-shot-recapture-cursor-native-e2e-test PRIVATE NOMINMAX)
+        target_include_directories(snow-shot-recapture-cursor-native-e2e-test PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/include"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/presentation/capture"
+            "${SNOW_SHOT_CAPTURE_CRATES_DIR}/crates/snow-capture-c/include")
+        target_link_libraries(snow-shot-recapture-cursor-native-e2e-test PRIVATE
+            snow_shot_storage Qt6::Widgets snow_capture_c PkgConfig::SNOW_SHOT_FFMPEG
+            d3d11 dxgi dxguid dwmapi gdi32 ole32 oleaut32 runtimeobject
+            user32 userenv winmm windowsapp ws2_32 advapi32 bcrypt psapi)
+        add_test(NAME snow-shot-recapture-cursor-native-e2e-test
+                 COMMAND snow-shot-recapture-cursor-native-e2e-test --run-native)
+        add_test(NAME snow-shot-recapture-cursor-movement-native-e2e-test
+                 COMMAND snow-shot-recapture-cursor-native-e2e-test --run-native --move-during-refresh)
+        add_test(NAME snow-shot-recapture-cursor-snapshot-native-e2e-test
+                 COMMAND snow-shot-recapture-cursor-native-e2e-test --run-native --change-after-ready)
+        add_test(NAME snow-shot-recapture-class-cursor-native-e2e-test
+                 COMMAND snow-shot-recapture-cursor-native-e2e-test --run-native --native-target)
+        add_test(NAME snow-shot-recapture-cursor-hidden-native-e2e-test
+                 COMMAND snow-shot-recapture-cursor-native-e2e-test --run-native --hide-overlay)
+        set_tests_properties(snow-shot-recapture-cursor-native-e2e-test
+            snow-shot-recapture-cursor-movement-native-e2e-test
+            snow-shot-recapture-cursor-snapshot-native-e2e-test
+            snow-shot-recapture-class-cursor-native-e2e-test
+            snow-shot-recapture-cursor-hidden-native-e2e-test PROPERTIES
+            LABELS "interactive;e2e;windows"
+            RUN_SERIAL TRUE
+            TIMEOUT 60
+            ENVIRONMENT "QT_QPA_PLATFORM=windows")
+    endif()
 
     add_executable(snow-shot-capture-workflow-tests
         tests/screenshot_capture_workflow_tests.cpp
@@ -2392,7 +2765,11 @@ if(SNOW_SHOT_BUILD_TESTS)
     target_include_directories(snow-shot-selection-export-workflow-tests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
     )
-    target_link_libraries(snow-shot-selection-export-workflow-tests PRIVATE snow_shot_image_codec Qt6::Gui)
+    target_link_libraries(snow-shot-selection-export-workflow-tests PRIVATE
+        snow_shot_diagnostics
+        snow_shot_image_codec
+        Qt6::Gui
+    )
     if(WIN32)
         target_link_libraries(snow-shot-selection-export-workflow-tests PRIVATE user32)
     endif()
@@ -2435,10 +2812,12 @@ if(SNOW_SHOT_BUILD_TESTS)
         include/snow_shot/presentation/screenshotinteractionstate.h
         include/snow_shot/presentation/screenshotoverlayinputhandler.h
         include/snow_shot/presentation/screenshotoverlayshortcutcontroller.h
+        include/snow_shot/presentation/screenshotshortcutexitconfirmation.h
         include/snow_shot/presentation/screenshotselectiongeometry.h
         include/snow_shot/presentation/screenshotselectionmodel.h
         include/snow_shot/presentation/screenshotselectionparams.h
         src/presentation/services/screenshothistoryservice.cpp
+        src/presentation/services/screenshotshortcutexitconfirmation.cpp
         src/presentation/core/screenshotgeometry.cpp
         src/presentation/core/screenshotintelligentselectionmodel.cpp
         src/presentation/core/screenshotinteractionstate.cpp
@@ -2454,6 +2833,7 @@ if(SNOW_SHOT_BUILD_TESTS)
     target_link_libraries(snow-shot-screenshot-history-tests PRIVATE
         snow_draw_engine_qt_canvas
         snow_shot_window_shortcuts
+        ant_design_qt
         Qt6::Widgets
     )
     add_test(
@@ -2557,6 +2937,13 @@ if(SNOW_SHOT_BUILD_TESTS)
         tests/scrolling_capture_cadence_tests.cpp
         src/presentation/capture/adaptivescrollingcapturecadence.h
     )
+    add_executable(snow-shot-scrolling-selection-movement-tests
+        tests/scrolling_selection_movement_tests.cpp)
+    target_include_directories(snow-shot-scrolling-selection-movement-tests PRIVATE include src)
+    target_link_libraries(snow-shot-scrolling-selection-movement-tests PRIVATE Qt6::Core Qt6::Gui)
+    add_test(NAME snow-shot-scrolling-selection-movement-tests
+        COMMAND snow-shot-scrolling-selection-movement-tests)
+
     add_executable(snow-shot-scrolling-auto-scroll-tests
         tests/scrolling_auto_scroll_tests.cpp
         src/platform/windows/scrollinput.cpp
@@ -2715,6 +3102,15 @@ if(SNOW_SHOT_BUILD_TESTS)
         )
     endif()
 
+    add_executable(snow-shot-pinned-geometry-mapping-tests
+        tests/screenshot_pinned_geometry_mapping_tests.cpp)
+    target_include_directories(snow-shot-pinned-geometry-mapping-tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/presentation/pinned")
+    target_link_libraries(snow-shot-pinned-geometry-mapping-tests PRIVATE Qt6::Core)
+    add_test(NAME snow-shot-pinned-geometry-mapping-tests COMMAND snow-shot-pinned-geometry-mapping-tests)
+    set_tests_properties(snow-shot-pinned-geometry-mapping-tests PROPERTIES
+        LABELS "unit" SNOW_TEST_CROSS_PLATFORM TRUE)
+
     add_executable(snow-shot-pinned-resize-geometry-tests
         tests/screenshot_pinned_resize_geometry_tests.cpp
         src/presentation/pinned/screenshotpinnedresizegeometry.cpp
@@ -2829,7 +3225,8 @@ if(SNOW_SHOT_BUILD_TESTS)
         src/presentation/pinned/screenshotpinnedhidetotopcontroller.cpp
         src/presentation/pinned/screenshotpinnedwindow.cpp
         src/presentation/services/pinnedwindowgroupmanager.cpp
-        src/presentation/pinned/screenshotpinnedwindownative.cpp
+        src/presentation/pinned/screenshotpinnedinteraction.cpp
+        ${SNOW_PINNED_PLATFORM_SOURCES}
         src/presentation/services/languagemanager.cpp
         src/presentation/styles/buttonborder.cpp
         src/presentation/styles/themecolorscheme.cpp
@@ -2876,6 +3273,9 @@ if(SNOW_SHOT_BUILD_TESTS)
         NAME snow-shot-pinned-window-tests
         COMMAND snow-shot-pinned-window-tests
     )
+    set_tests_properties(snow-shot-pinned-window-tests PROPERTIES
+        LABELS "interactive;e2e;windows" RUN_SERIAL TRUE TIMEOUT 180
+        ENVIRONMENT "QT_QPA_PLATFORM=windows")
     snow_shot_import_offscreen_platform(snow-shot-pinned-window-tests)
     add_test(NAME snow-shot-file-pin-presentation-tests
         COMMAND snow-shot-pinned-window-tests --file-pin-batch-only)
@@ -2893,10 +3293,18 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-pinned-window-tests --click-through-only -platform offscreen)
     set_tests_properties(snow-shot-pinned-click-through-tests PROPERTIES LABELS "unit"
         RUN_SERIAL TRUE TIMEOUT 60)
+    add_test(NAME snow-shot-pinned-always-on-top-tests
+        COMMAND snow-shot-pinned-window-tests --always-on-top-only -platform offscreen)
+    set_tests_properties(snow-shot-pinned-always-on-top-tests PROPERTIES LABELS "unit"
+        RUN_SERIAL TRUE TIMEOUT 60)
+    add_test(NAME snow-shot-pinned-remembered-drawing-tool-tests
+        COMMAND snow-shot-pinned-window-tests --remembered-drawing-tool-only -platform offscreen)
+    set_tests_properties(snow-shot-pinned-remembered-drawing-tool-tests PROPERTIES LABELS "unit"
+        RUN_SERIAL TRUE TIMEOUT 60)
     add_test(NAME snow-shot-pinned-click-through-native-tests
         COMMAND snow-shot-pinned-window-tests --click-through-native-only -platform windows)
     set_tests_properties(snow-shot-pinned-click-through-native-tests PROPERTIES
-        LABELS "unit;windows" RUN_SERIAL TRUE TIMEOUT 60)
+        LABELS "interactive;e2e;windows" RUN_SERIAL TRUE TIMEOUT 60)
     add_test(NAME snow-shot-pinned-shortcut-display-tests
         COMMAND snow-shot-pinned-window-tests --shortcut-display-only -platform offscreen)
     set_tests_properties(snow-shot-pinned-shortcut-display-tests PROPERTIES LABELS "unit")
@@ -3034,6 +3442,18 @@ if(SNOW_SHOT_BUILD_TESTS)
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
+    add_executable(snow-shot-remember-last-used-tool-settings-tests
+        tests/remember_last_used_tool_settings_tests.cpp
+        src/presentation/services/screenshotclipboardservice.cpp)
+    target_link_libraries(snow-shot-remember-last-used-tool-settings-tests PRIVATE
+        snow_shot_settings snow_shot_image_codec)
+    snow_shot_import_offscreen_platform(snow-shot-remember-last-used-tool-settings-tests)
+    add_test(NAME snow-shot-remember-last-used-tool-settings-tests
+             COMMAND snow-shot-remember-last-used-tool-settings-tests)
+    set_tests_properties(snow-shot-remember-last-used-tool-settings-tests PROPERTIES
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
     add_executable(snow-shot-file-pin-batch-tests
         tests/screenshot_file_pin_batch_tests.cpp
         src/platform/windows/selectedfiles.cpp
@@ -3090,6 +3510,10 @@ if(SNOW_SHOT_BUILD_TESTS)
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(snow-shot-clipboard-content-tests PROPERTIES
         RUN_SERIAL TRUE
+        # The live snapshot exercises an in-process mime provider that hides
+        # the Qt image format; only the offscreen clipboard keeps that
+        # in-process semantics, the native OS clipboard drops the payload.
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )
@@ -3125,6 +3549,12 @@ if(SNOW_SHOT_BUILD_TESTS)
     )
     add_test(NAME snow-shot-pinned-content-replacement-tests
         COMMAND snow-shot-pinned-window-tests --content-replacement-only -platform offscreen)
+    add_test(NAME snow-shot-pinned-file-drop-tests
+        COMMAND snow-shot-pinned-window-tests --file-drop-only -platform offscreen)
+    set_tests_properties(snow-shot-pinned-file-drop-tests PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+        LABELS "unit" TIMEOUT 90)
     set_tests_properties(snow-shot-pinned-content-replacement-tests PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
@@ -3325,6 +3755,16 @@ if(SNOW_SHOT_BUILD_TESTS)
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-export-dialog-workflow-tests
         COMMAND snow-shot-export-dialog-workflow-tests)
+    add_test(NAME snow-shot-export-dialog-shortcut-tests
+        COMMAND snow-shot-export-dialog-workflow-tests --shortcuts)
+    # These tests drive QWidget events synchronously. Cocoa menu tracking has its
+    # own event loop and is exercised by snow-shot-action-popup-native-tests.
+    set_tests_properties(
+        snow-shot-export-dialog-workflow-tests snow-shot-export-dialog-shortcut-tests
+        PROPERTIES ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
+    set_tests_properties(snow-shot-export-dialog-shortcut-tests PROPERTIES
+        TIMEOUT 30
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-save-format-tests
         COMMAND snow-shot-export-dialog-workflow-tests --remember-format)
     set_tests_properties(snow-shot-save-format-tests PROPERTIES
@@ -3394,8 +3834,12 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_test(NAME snow-shot-pinned-recognition-save-tests
         COMMAND snow-shot-pinned-window-tests --recognition-save-only -platform offscreen)
     set_tests_properties(snow-shot-pinned-recognition-save-tests PROPERTIES LABELS "unit" TIMEOUT 90)
+    add_test(NAME snow-shot-pinned-opacity-export-tests
+        COMMAND snow-shot-pinned-window-tests --opacity-export-only -platform offscreen)
+    set_tests_properties(snow-shot-pinned-opacity-export-tests PROPERTIES
+        LABELS "unit" TIMEOUT 90)
     add_test(NAME snow-shot-pinned-quick-save-tests
-        COMMAND snow-shot-pinned-window-tests --quick-save-only -platform windows)
+        COMMAND snow-shot-pinned-window-tests --quick-save-only -platform $<IF:$<PLATFORM_ID:Darwin>,offscreen,windows>)
     set_tests_properties(snow-shot-pinned-quick-save-tests PROPERTIES LABELS "unit;windows")
     add_test(NAME snow-shot-quick-save-toolbar-tests
         COMMAND snow-shot-screenshot-tool-palette-tests --quick-save-only -platform offscreen)
@@ -3445,6 +3889,15 @@ if(SNOW_SHOT_BUILD_TESTS)
         NAME snow-shot-screenshot-tool-palette-tests
         COMMAND snow-shot-screenshot-tool-palette-tests
     )
+    add_test(NAME snow-shot-scrolling-toolbar-tests
+        COMMAND snow-shot-screenshot-tool-palette-tests --scrolling-only -platform offscreen)
+    set_tests_properties(snow-shot-scrolling-toolbar-tests PROPERTIES LABELS "unit"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    add_test(NAME snow-shot-screenshot-tool-palette-remembered-drawing-tool-tests
+        COMMAND snow-shot-screenshot-tool-palette-tests --remembered-drawing-tool-only
+            -platform offscreen)
+    set_tests_properties(snow-shot-screenshot-tool-palette-remembered-drawing-tool-tests
+        PROPERTIES LABELS "unit" TIMEOUT 60)
     add_test(NAME snow-shot-spotlight-wheel-tests
         COMMAND snow-shot-screenshot-tool-palette-tests --spotlight-wheel-only -platform offscreen)
     set_tests_properties(snow-shot-spotlight-wheel-tests PROPERTIES LABELS "unit" TIMEOUT 60)
@@ -3455,6 +3908,12 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_test(NAME snow-shot-toolbar-popup-recovery-tests
         COMMAND snow-shot-screenshot-tool-palette-tests --popup-recovery-only -platform offscreen)
     set_tests_properties(snow-shot-toolbar-popup-recovery-tests PROPERTIES LABELS "unit" TIMEOUT 60
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    add_test(NAME snow-shot-toolbar-popover-lifecycle-tests
+        COMMAND snow-shot-screenshot-tool-palette-tests --popover-lifecycle-only
+            -platform offscreen)
+    set_tests_properties(snow-shot-toolbar-popover-lifecycle-tests PROPERTIES LABELS "unit"
+        TIMEOUT 90
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(
         NAME snow-shot-screenshot-action-toolbar-layout-tests
@@ -3495,6 +3954,7 @@ if(SNOW_SHOT_BUILD_TESTS)
     )
     set_tests_properties(
         snow-shot-screenshot-tool-palette-tests
+        snow-shot-screenshot-tool-palette-remembered-drawing-tool-tests
         snow-shot-screenshot-action-toolbar-layout-tests
         snow-shot-screenshot-tool-shortcut-toggle-tests
         snow-shot-screenshot-shortcut-tooltip-tests
@@ -3546,6 +4006,53 @@ if(SNOW_SHOT_BUILD_TESTS)
                 "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         )
     endif()
+
+    add_executable(snow-shot-screenshot-toolbar-remembered-tool-tests
+        tests/screenshot_toolbar_remembered_tool_tests.cpp
+        include/snow_shot/presentation/screenshotfloatingtoolpalettewindow.h
+        include/snow_shot/presentation/screenshottoolbarwindow.h
+        include/snow_shot/presentation/screenshottoolpalette.h
+        include/snow_shot/presentation/screenshottoolpalettehost.h
+        include/snow_shot/presentation/styles/thememanager.h
+        src/presentation/components/icons/snowshoticons.cpp
+        src/presentation/core/screenshotgeometry.cpp
+        src/presentation/core/screenshotcanvastoolstyles.cpp
+        src/presentation/tools/screenshotfloatingtoolpalettenative.cpp
+        src/presentation/tools/screenshotfloatingtoolpalettewindow.cpp
+        src/presentation/tools/screenshottoolbarmainpanel.cpp
+        src/presentation/tools/screenshottoolpalettebuttons.cpp
+        src/presentation/tools/screenshottoolpalettehost.cpp
+        src/presentation/tools/screenshottoolpalettestylecontrols.cpp
+        src/presentation/tools/screenshottoolpalettestylecomponents.cpp
+        src/presentation/tools/screenshottoolpalettestylemodel.cpp
+        src/presentation/tools/screenshottoolpalettestylepresets.cpp
+        src/presentation/tools/screenshottoolpalette.cpp
+        src/presentation/toolbar/screenshottoolbarwindow.cpp
+        src/presentation/styles/thememanager.cpp
+        src/presentation/styles/themecolorscheme.cpp
+    )
+    target_include_directories(snow-shot-screenshot-toolbar-remembered-tool-tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    )
+    target_link_libraries(snow-shot-screenshot-toolbar-remembered-tool-tests PRIVATE
+        adqt_icon_core
+        ant_design_icons_qt
+        ant_design_qt
+        Qt6::Widgets
+        snow_draw_engine_qt_canvas
+        snow_shot_storage
+    )
+    if(WIN32)
+        target_link_libraries(snow-shot-screenshot-toolbar-remembered-tool-tests PRIVATE comctl32)
+    endif()
+    snow_shot_import_offscreen_platform(snow-shot-screenshot-toolbar-remembered-tool-tests)
+    add_test(NAME snow-shot-screenshot-toolbar-remembered-tool-tests
+        COMMAND snow-shot-screenshot-toolbar-remembered-tool-tests)
+    set_tests_properties(snow-shot-screenshot-toolbar-remembered-tool-tests PROPERTIES
+        RUN_SERIAL TRUE
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+    )
 
     if(WIN32)
         add_executable(snow-shot-screenshot-toolbar-fill-color-hover-tests
@@ -3728,7 +4235,10 @@ if(SNOW_SHOT_BUILD_TESTS)
         endforeach()
     endif()
     set_tests_properties(snow-shot-screen-recording-shortcut-tests PROPERTIES
-        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        # The shortcut gating asserts real keyboard focus ownership, which the
+        # non-activating floating toolbar only supports on a native platform.
+        LABELS "interactive;e2e;windows" RUN_SERIAL TRUE TIMEOUT 60
+        ENVIRONMENT "QT_QPA_PLATFORM=windows"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )
 
@@ -3774,16 +4284,48 @@ if(SNOW_SHOT_BUILD_TESTS)
             comctl32
         )
     endif()
+    if(APPLE)
+        target_sources(snow-shot-floating-toolbar-drag-tests PRIVATE
+            ../cmake/test-support/macos_native_input.mm
+            src/platform/macos/screenshotnative.mm)
+        target_link_libraries(snow-shot-floating-toolbar-drag-tests PRIVATE "-framework AppKit")
+        target_include_directories(snow-shot-floating-toolbar-drag-tests PRIVATE ../cmake/test-support)
+        add_test(NAME snow-shot-macos-toolbar-shadow-input-tests
+            COMMAND snow-shot-floating-toolbar-drag-tests --macos-shadow-input-only -platform cocoa)
+        set_tests_properties(snow-shot-macos-toolbar-shadow-input-tests PROPERTIES
+            LABELS "interactive;macos" SNOW_TEST_CROSS_PLATFORM TRUE RUN_SERIAL TRUE TIMEOUT 60)
+    endif()
     snow_shot_import_offscreen_platform(snow-shot-floating-toolbar-drag-tests)
+    add_test(NAME snow-shot-border-cursor-tool-restoration-tests
+        COMMAND snow-shot-floating-toolbar-drag-tests --border-cursor-only -platform offscreen)
+    set_tests_properties(snow-shot-border-cursor-tool-restoration-tests PROPERTIES LABELS "unit")
     add_test(NAME snow-shot-interrupted-toolbar-drag-tests
         COMMAND snow-shot-floating-toolbar-drag-tests --interrupted-drag-only -platform offscreen)
     set_tests_properties(snow-shot-interrupted-toolbar-drag-tests PROPERTIES LABELS "unit")
-    add_test(NAME snow-shot-floating-toolbar-dpi-frame-reconcile-tests
-        COMMAND snow-shot-floating-toolbar-drag-tests --dpi-frame-reconcile-only)
-    set_tests_properties(snow-shot-floating-toolbar-dpi-frame-reconcile-tests PROPERTIES
-        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
-        ENVIRONMENT_MODIFICATION
-            "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    if(NOT APPLE)
+        add_test(NAME snow-shot-floating-toolbar-dpi-frame-reconcile-tests
+            COMMAND snow-shot-floating-toolbar-drag-tests --dpi-frame-reconcile-only)
+        set_tests_properties(snow-shot-floating-toolbar-dpi-frame-reconcile-tests PROPERTIES
+            ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+            ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+    if(APPLE)
+        foreach(_toolbar_dpr IN ITEMS 1 2)
+            add_test(NAME snow-shot-macos-toolbar-logical-${_toolbar_dpr}x-tests
+                COMMAND snow-shot-floating-toolbar-drag-tests --macos-logical-only)
+            set_tests_properties(snow-shot-macos-toolbar-logical-${_toolbar_dpr}x-tests PROPERTIES
+                LABELS "unit;macos" SNOW_TEST_CROSS_PLATFORM TRUE TIMEOUT 60
+                ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT};QT_SCALE_FACTOR=${_toolbar_dpr}")
+        endforeach()
+        add_test(NAME snow-shot-macos-toolbar-native-tests
+            COMMAND snow-shot-floating-toolbar-drag-tests --macos-logical-only -platform cocoa)
+        add_test(NAME snow-shot-macos-toolbar-focus-tests
+            COMMAND snow-shot-floating-toolbar-drag-tests --keyboard-focus-only -platform cocoa)
+        set_tests_properties(snow-shot-macos-toolbar-native-tests snow-shot-macos-toolbar-focus-tests
+            PROPERTIES LABELS "interactive;macos" SNOW_TEST_CROSS_PLATFORM TRUE
+            RUN_SERIAL TRUE TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=cocoa")
+    endif()
     if(WIN32)
         add_test(NAME snow-shot-floating-toolbar-capture-screen-switch-tests
             COMMAND snow-shot-floating-toolbar-drag-tests --capture-screen-switch-only)
@@ -3844,6 +4386,16 @@ if(SNOW_SHOT_BUILD_TESTS)
     )
     set_tests_properties(snow-shot-screenshot-selection-reset-command-tests PROPERTIES
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+    )
+    add_test(
+        NAME snow-shot-jump-to-translation-page-toolbar-tests
+        COMMAND snow-shot-floating-toolbar-drag-tests --jump-to-translation-page-only
+            -platform offscreen
+    )
+    set_tests_properties(snow-shot-jump-to-translation-page-toolbar-tests PROPERTIES
+        LABELS "unit"
         ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )
@@ -4119,9 +4671,27 @@ if(SNOW_SHOT_BUILD_TESTS)
         LABELS "unit;windows"
     )
 
+    if(APPLE)
+        add_executable(snow-shot-macos-window-capture-exclusion-tests
+            tests/macos_window_capture_exclusion_tests.mm
+            src/platform/macos/windowcaptureexclusion.mm)
+        target_include_directories(snow-shot-macos-window-capture-exclusion-tests PRIVATE
+            include src "${SNOW_SHOT_CAPTURE_CRATES_DIR}/crates/snow-capture-c/include")
+        target_link_libraries(snow-shot-macos-window-capture-exclusion-tests PRIVATE
+            Qt6::Widgets snow_capture_c "${SNOW_SHOT_APPKIT_FRAMEWORK}")
+        add_test(NAME snow-shot-macos-window-capture-exclusion-tests
+            COMMAND snow-shot-macos-window-capture-exclusion-tests -platform cocoa)
+        add_test(NAME snow-shot-macos-window-capture-exclusion-pixels-tests
+            COMMAND snow-shot-macos-window-capture-exclusion-tests -platform cocoa --pixels)
+        set_tests_properties(snow-shot-macos-window-capture-exclusion-tests
+            snow-shot-macos-window-capture-exclusion-pixels-tests PROPERTIES
+            LABELS "interactive;macos" RUN_SERIAL TRUE TIMEOUT 60 SKIP_RETURN_CODE 77)
+    endif()
+
     add_executable(snow-shot-window-capture-exclusion-tests
         tests/window_capture_exclusion_tests.cpp
         src/presentation/capture/windowcaptureexclusion.h
+        src/presentation/capture/windowinputtransparency.h
     )
     target_include_directories(snow-shot-window-capture-exclusion-tests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
@@ -4137,17 +4707,41 @@ if(SNOW_SHOT_BUILD_TESTS)
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )
 
+    add_executable(snow-shot-scrolling-capture-exclusion-tests
+        tests/scrolling_capture_exclusion_tests.cpp
+        src/presentation/capture/screenshotscrollingpipeline.cpp
+        src/presentation/capture/screenshotscrollingnativesource.cpp)
+    target_include_directories(snow-shot-scrolling-capture-exclusion-tests PRIVATE
+        include src "${SNOW_SHOT_CAPTURE_CRATES_DIR}/crates/snow-capture-c/include"
+        "${SNOW_SHOT_CAPTURE_CRATES_DIR}/crates/snow-stitch-images-c/include")
+    target_link_libraries(snow-shot-scrolling-capture-exclusion-tests PRIVATE
+        Qt6::Widgets snow_stitch_images_c snow_shot_diagnostics)
+    foreach(_capture_test_function IN ITEMS stream_create_region stream_receive stream_stop
+            stream_destroy stream_stats stream_set_target_fps stream_frame_info
+            stream_frame_release last_error_message)
+        target_compile_definitions(snow-shot-scrolling-capture-exclusion-tests PRIVATE
+            "snow_capture_${_capture_test_function}=snow_test_capture_${_capture_test_function}")
+    endforeach()
+    snow_shot_import_offscreen_platform(snow-shot-scrolling-capture-exclusion-tests)
+    add_test(NAME snow-shot-scrolling-capture-exclusion-tests
+        COMMAND snow-shot-scrolling-capture-exclusion-tests -platform offscreen)
+    set_tests_properties(snow-shot-scrolling-capture-exclusion-tests PROPERTIES
+        LABELS "unit" TIMEOUT 60
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
     get_target_property(_recording_test_sources snow-shot-screenshot-tool-palette-tests SOURCES)
     list(FILTER _recording_test_sources EXCLUDE REGEX "tests/screenshot_tool_palette_tests.cpp$")
     add_executable(snow-shot-screen-recording-controller-tests
         ${_recording_test_sources}
         tests/screen_recording_controller_tests.cpp
         include/snow_shot/presentation/screenrecordingcontroller.h
+        include/snow_shot/presentation/screenrecordingfolder.h
         include/snow_shot/presentation/screenrecordingareawindow.h
         include/snow_shot/presentation/screenrecordingtoolbarwindow.h
         include/snow_shot/presentation/screenshotfloatingtoolpalettewindow.h
         include/snow_shot/presentation/screenshottoolpalettehost.h
         src/presentation/recording/screenrecordingcontroller.cpp
+        src/presentation/recording/screenrecordingfolder.cpp
         src/presentation/recording/recordingeffectpreview.cpp
         src/presentation/recording/recordingeffectpreview.h
         src/presentation/recording/recordingeffectstyle.h
@@ -4173,7 +4767,15 @@ if(SNOW_SHOT_BUILD_TESTS)
     target_link_libraries(snow-shot-screen-recording-controller-tests PRIVATE
         adqt_icon_core ant_design_icons_qt ant_design_qt snow_draw_engine_qt_canvas
         snow_shot_storage snow_shot_image_codec snow_shot_window_shortcuts Qt6::Widgets snow_recording_effects_c snow_capture_c)
+    if(APPLE)
+        target_sources(snow-shot-screen-recording-controller-tests PRIVATE
+            src/platform/macos/windowcaptureexclusion.mm
+            tests/macos_capture_exclusion_probe.mm)
+        target_link_libraries(snow-shot-screen-recording-controller-tests PRIVATE "${SNOW_SHOT_APPKIT_FRAMEWORK}")
+    endif()
     target_compile_definitions(snow-shot-screen-recording-controller-tests PRIVATE SNOW_SHOT_TEST_HOOKS=1)
+    target_sources(snow-shot-screen-recording-controller-tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/../test-support/fonts/recording_test_fonts.qrc")
     # Override only the test executable: exercise the real controller without
     # opening capture devices, recording the desktop, or exporting media.
     foreach(_operation create_direct destroy start pause resume stop state)
@@ -4214,6 +4816,16 @@ if(SNOW_SHOT_BUILD_TESTS)
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
         LABELS "unit" RUN_SERIAL TRUE TIMEOUT 60)
+    add_test(NAME snow-shot-recording-capture-exclusion-tests
+        COMMAND snow-shot-screen-recording-controller-tests --capture-exclusion-only)
+    set_tests_properties(snow-shot-recording-capture-exclusion-tests PROPERTIES
+        LABELS "unit" RUN_SERIAL TRUE TIMEOUT 60 ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
+    if(APPLE)
+        add_test(NAME snow-shot-macos-recording-capture-exclusion-tests
+            COMMAND snow-shot-screen-recording-controller-tests --capture-exclusion-only -platform cocoa)
+        set_tests_properties(snow-shot-macos-recording-capture-exclusion-tests PROPERTIES
+            LABELS "interactive;macos" RUN_SERIAL TRUE TIMEOUT 60)
+    endif()
     snow_shot_import_offscreen_platform(snow-shot-screen-recording-controller-tests)
     set_tests_properties(snow-shot-screen-recording-controller-tests PROPERTIES
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
@@ -4373,6 +4985,15 @@ if(SNOW_SHOT_BUILD_TESTS)
         )
     endif()
     snow_shot_import_offscreen_platform(snow-shot-recognition-window-tests)
+    if(APPLE)
+        set_source_files_properties(tests/screenshot_recognition_window_tests.cpp
+            PROPERTIES LANGUAGE OBJCXX)
+        target_link_libraries(snow-shot-recognition-window-tests PRIVATE "-framework AppKit")
+    endif()
+    add_test(NAME snow-shot-recognition-message-shadow-tests
+        COMMAND snow-shot-recognition-window-tests --message-shadow-only -platform offscreen)
+    set_tests_properties(snow-shot-recognition-message-shadow-tests PROPERTIES
+        LABELS "unit" TIMEOUT 60)
     add_test(NAME snow-shot-recognition-context-menu-tests
         COMMAND snow-shot-recognition-window-tests --context-menu-only -platform offscreen)
     set_tests_properties(snow-shot-recognition-context-menu-tests PROPERTIES
@@ -4416,6 +5037,9 @@ if(SNOW_SHOT_BUILD_TESTS)
     )
     target_compile_definitions(snow-shot-ocr-recognition-service-tests PRIVATE
         SNOW_TEST_OCR_EXECUTABLE="$<TARGET_FILE:snow_ocr_process>")
+    if(SNOW_SHOT_BUILD_BENCHMARKS AND CMAKE_BUILD_TYPE STREQUAL "Release")
+        target_compile_definitions(snow-shot-ocr-recognition-service-tests PRIVATE SNOW_TEST_OCR_PERFORMANCE=1)
+    endif()
     target_link_libraries(snow-shot-ocr-recognition-service-tests PRIVATE
         snow_shot_diagnostics
         snow_draw_engine_qt_canvas
@@ -4454,6 +5078,15 @@ if(SNOW_SHOT_BUILD_TESTS)
     )
     add_test(NAME snow-shot-ocr-process-lifecycle-tests
         COMMAND snow-shot-ocr-recognition-service-tests --process-lifecycle)
+    add_executable(snow-shot-ocr-assets-tests
+        tests/screenshot_ocr_assets_tests.cpp
+        include/snow_shot/presentation/screenshotocrassets.h
+        src/presentation/ocr/screenshotocrassets.cpp)
+    target_include_directories(snow-shot-ocr-assets-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+    target_link_libraries(snow-shot-ocr-assets-tests PRIVATE Qt6::Core Qt6::Network MINIZIP::minizip-ng)
+    add_test(NAME snow-shot-ocr-assets-tests COMMAND snow-shot-ocr-assets-tests)
+    set_tests_properties(snow-shot-ocr-assets-tests PROPERTIES TIMEOUT 60 LABELS "unit"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-ocr-managed-runtime-tests
         COMMAND snow-shot-ocr-recognition-service-tests --managed-runtime-only)
     add_test(NAME snow-shot-ocr-managed-directml-runtime-tests
@@ -4462,6 +5095,10 @@ if(SNOW_SHOT_BUILD_TESTS)
         snow-shot-ocr-managed-directml-runtime-tests PROPERTIES
         TIMEOUT 60 LABELS "unit;windows"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    if(APPLE)
+        set_tests_properties(snow-shot-ocr-managed-runtime-tests PROPERTIES LABELS "unit")
+        set_tests_properties(snow-shot-ocr-directml-recognition-service-tests PROPERTIES LABELS "unit;windows")
+    endif()
     set_tests_properties(snow-shot-ocr-process-lifecycle-tests PROPERTIES TIMEOUT 30
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_dependencies(snow-shot-ocr-recognition-service-tests snow_ocr_process)
@@ -4740,6 +5377,7 @@ if(SNOW_SHOT_BUILD_TESTS)
             User32
             Userenv
             Ntdll
+            Ws2_32
         )
         add_dependencies(snow-shot-scrolling-thumbnail-uia-e2e-test snow_shot)
         add_test(
@@ -4818,6 +5456,7 @@ if(SNOW_SHOT_BUILD_TESTS)
             snow-shot-recognition-window-tests
             snow-shot-recognition-session-controller-tests
             snow-shot-storage-status-widget-tests
+            snow-shot-configuration-transfer-widget-tests
         )
             snow_shot_import_offscreen_platform(${_offscreen_qpa_test_target})
         endforeach()
@@ -4890,6 +5529,19 @@ function(snow_shot_configure_scrolling_replay_target target)
     set_target_properties(${target} PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-bin")
 endfunction()
+
+if(APPLE AND SNOW_SHOT_BUILD_BENCHMARKS)
+    add_executable(snow-shot-permission-guide-benchmark MACOSX_BUNDLE
+        tests/macos_permission_guide_tests.mm
+        src/presentation/services/screenshotclipboardservice.cpp)
+    target_compile_definitions(snow-shot-permission-guide-benchmark PRIVATE
+        SNOW_PERMISSION_GUIDE_BENCHMARK=1)
+    target_link_libraries(snow-shot-permission-guide-benchmark PRIVATE
+        snow_shot_settings "-framework AppKit")
+    set_target_properties(snow-shot-permission-guide-benchmark PROPERTIES
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.snowshot.tests.permission-guide-benchmark"
+        MACOSX_BUNDLE_BUNDLE_NAME "Snow Shot Permission Guide Benchmark")
+endif()
 
 if(SNOW_SHOT_BUILD_BENCHMARKS)
     add_executable(snow-shot-ocr-background-performance-benchmark
@@ -5031,6 +5683,7 @@ if(WIN32 AND SNOW_SHOT_BUILD_BENCHMARKS)
         tests/screenshot_history_performance_benchmark.cpp
         include/snow_shot/presentation/components/contentcardwidget.h
         src/presentation/components/contentcardwidget.cpp
+        src/presentation/services/screenshotclipboardservice.cpp
     )
     target_compile_definitions(snow-shot-history-performance-benchmark PRIVATE
         NOMINMAX
@@ -5047,6 +5700,11 @@ if(WIN32 AND SNOW_SHOT_BUILD_BENCHMARKS)
         Qt6::Widgets
         Psapi
     )
+    if(WIN32)
+        target_link_libraries(snow-shot-history-performance-benchmark PRIVATE
+            PkgConfig::SNOW_SHOT_FFMPEG
+        )
+    endif()
 
     # This executable deliberately is not registered with CTest. It publishes
     # generated images through the real Windows clipboard for explicit Release
@@ -5171,7 +5829,8 @@ if(WIN32 AND SNOW_SHOT_BUILD_BENCHMARKS)
         src/presentation/pinned/screenshotpinnedhidetotopcontroller.cpp
         src/presentation/pinned/screenshotpinnedwindow.cpp
         src/presentation/services/pinnedwindowgroupmanager.cpp
-        src/presentation/pinned/screenshotpinnedwindownative.cpp
+        src/presentation/pinned/screenshotpinnedinteraction.cpp
+        ${SNOW_PINNED_PLATFORM_SOURCES}
         src/presentation/services/languagemanager.cpp
         src/presentation/styles/buttonborder.cpp
         src/presentation/styles/themecolorscheme.cpp
@@ -5287,7 +5946,7 @@ if(WIN32 AND SNOW_SHOT_BUILD_BENCHMARKS)
             "CARGO_TARGET_DIR=${SNOW_RUST_CARGO_TARGET_DIR}"
             "${CARGO_EXECUTABLE}" build --locked --release
             --target x86_64-pc-windows-msvc
-            --package snow-ui-selector --example hit_bench
+            --package snow-ui-selector --example hit_bench --features windows-examples
         WORKING_DIRECTORY "${SNOW_SHOT_CAPTURE_CRATES_DIR}"
         USES_TERMINAL
         VERBATIM
@@ -5513,26 +6172,34 @@ include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/SnowShotUpdateUiTests.cmake")
 
 if(WIN32)
     # These DLLs are consumed by the standalone OCR process that is staged
-    # next to each host target, not by snow_shot itself. DirectML is
-    # delay-loaded by the statically linked ONNX Runtime; onnxruntime.dll is
-    # only needed when the process links it dynamically.
+    # next to each host target, not by snow_shot itself. Static ONNX Runtime
+    # delay-loads DirectML; dynamic builds derive the complete non-system DLL
+    # closure from onnxruntime.dll instead of copying its entire bin directory.
     foreach(_ocr_runtime_target IN ITEMS snow_shot snow-shot-ocr-recognition-service-tests)
         if(TARGET ${_ocr_runtime_target})
-            add_custom_command(TARGET ${_ocr_runtime_target} POST_BUILD
-                COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-                    "$<IF:$<CONFIG:Debug>,${SNOW_SHOT_DIRECTML_RUNTIME_DLL_DEBUG},${SNOW_SHOT_DIRECTML_RUNTIME_DLL_RELEASE}>"
-                    "$<TARGET_FILE_DIR:${_ocr_runtime_target}>/DirectML.dll"
-                COMMENT "Staging DirectML for ${_ocr_runtime_target}"
-                VERBATIM
-            )
-            if(NOT SNOW_SHOT_OCR_STATIC_ONNXRUNTIME)
+            if(SNOW_SHOT_OCR_STATIC_ONNXRUNTIME)
                 add_custom_command(TARGET ${_ocr_runtime_target} POST_BUILD
                     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-                        "$<TARGET_FILE:onnxruntime::onnxruntime>"
-                        "$<TARGET_FILE_DIR:${_ocr_runtime_target}>/onnxruntime.dll"
-                    COMMENT "Staging dynamic ONNX Runtime for ${_ocr_runtime_target}"
+                        "$<IF:$<CONFIG:Debug>,${SNOW_SHOT_DIRECTML_RUNTIME_DLL_DEBUG},${SNOW_SHOT_DIRECTML_RUNTIME_DLL_RELEASE}>"
+                        "$<TARGET_FILE_DIR:${_ocr_runtime_target}>/DirectML.dll"
+                    COMMENT "Staging DirectML for ${_ocr_runtime_target}"
                     VERBATIM
                 )
+            else()
+                # Resolve only the DLLs actually imported by ONNX Runtime and
+                # its companions. This keeps unrelated vcpkg DLLs out of the
+                # application directory and fails the build on a broken closure.
+                _snow_shot_onnxruntime_link_items(_snow_shot_onnxruntime_dll_items)
+                add_custom_command(TARGET ${_ocr_runtime_target} POST_BUILD
+                    COMMAND "${CMAKE_COMMAND}"
+                        "-DCOPY_FROM=${_snow_shot_onnxruntime_dll_items}"
+                        "-DCOPY_DIR=$<TARGET_FILE_DIR:onnxruntime::onnxruntime>"
+                        "-DCOPY_TO=$<TARGET_FILE_DIR:${_ocr_runtime_target}>"
+                        -P "${CMAKE_CURRENT_SOURCE_DIR}/scripts/copy_runtime_dlls.cmake"
+                    COMMENT "Staging dynamic ONNX Runtime closure for ${_ocr_runtime_target}"
+                    VERBATIM
+                )
+                unset(_snow_shot_onnxruntime_dll_items)
             endif()
         endif()
     endforeach()
@@ -5650,6 +6317,10 @@ if(WIN32)
     )
     set(ENV{PKG_CONFIG_PATH} "${_SNOW_SHOT_SAVED_PKG_CONFIG_PATH}")
     unset(_SNOW_SHOT_SAVED_PKG_CONFIG_PATH)
+    # Canvas-only consumers also reach recording symbols in the bundled archive.
+    if(TARGET snow_shot_rust_ffi_bundle)
+        target_link_libraries(snow_shot_rust_ffi_bundle INTERFACE PkgConfig::SNOW_SHOT_FFMPEG)
+    endif()
     target_link_libraries(snow_shot PRIVATE PkgConfig::SNOW_SHOT_FFMPEG)
     if(TARGET snow-shot-screen-recording-controller-tests)
         target_link_libraries(snow-shot-screen-recording-controller-tests PRIVATE PkgConfig::SNOW_SHOT_FFMPEG)
@@ -5761,7 +6432,9 @@ if(SNOW_SHOT_ENABLE_STRICT_COMPILE)
             -Wconversion
             -Wdouble-promotion
             -Wextra-semi
-            -Wfloat-equal
+            # Exact comparisons are required by geometry/cache ordering. Qt event
+            # switches intentionally handle subsets, while -Wall still diagnoses
+            # missing enum cases in switches without a default handler.
             -Wformat=2
             -Wimplicit-fallthrough
             -Wmissing-declarations
@@ -5772,8 +6445,6 @@ if(SNOW_SHOT_ENABLE_STRICT_COMPILE)
             -Wredundant-decls
             -Wshadow
             -Wsign-conversion
-            -Wswitch-default
-            -Wswitch-enum
             -Wundef
             -Wunreachable-code
             -Wzero-as-null-pointer-constant
@@ -5839,12 +6510,18 @@ if(WIN32 AND NOT SNOW_SHOT_IMAGE_CODEC_BACKEND_STATIC)
 endif()
 
 include(GNUInstallDirs)
+if(APPLE)
+    set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME SnowShot)
+    set(CMAKE_INSTALL_BINDIR "snow_shot.app/Contents/MacOS")
+    set(CMAKE_INSTALL_LIBDIR "snow_shot.app/Contents/Frameworks")
+    set(CMAKE_INSTALL_DATADIR "snow_shot.app/Contents/Resources")
+endif()
 install(TARGETS snow_shot
     BUNDLE DESTINATION .
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
-install(FILES "$<TARGET_FILE:snow_ocr_process>"
+install(PROGRAMS "$<TARGET_FILE:snow_ocr_process>"
     DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 if(EXISTS "${SNOW_SHOT_CAMERA_SHUTTER_AUDIO_SOURCE}")
@@ -6107,3 +6784,225 @@ if(SNOW_SHOT_BUILD_TESTS)
     set_tests_properties(snow-shot-auto-filter-pinned-tests PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen" LABELS "unit;windows" TIMEOUT 60)
 endif()
+
+if(SNOW_SHOT_BUILD_TESTS)
+    # These toolbar cases exercise Qt behavior on both Cocoa and Windows. Opt
+    # them out of the repository's legacy name-based Windows label heuristic.
+    set_tests_properties(
+        snow-shot-pinned-toolbar-parity-tests
+        snow-shot-pinned-toolbar-layout-tests
+        snow-shot-interrupted-toolbar-drag-tests
+        snow-shot-floating-toolbar-keyboard-focus-tests
+        snow-shot-floating-toolbar-action-layout-tests
+        snow-shot-floating-toolbar-recording-hit-test-tests
+        snow-shot-toolbar-popup-recovery-tests
+        snow-shot-toolbar-color-input-tests
+        snow-shot-toolbar-shared-controls-tests
+        snow-shot-screen-recording-toolbar-tests
+        PROPERTIES SNOW_TEST_CROSS_PLATFORM TRUE)
+    if(APPLE)
+        set_tests_properties(snow-shot-pinned-toolbar-parity-tests
+            snow-shot-pinned-toolbar-layout-tests PROPERTIES
+            ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
+    endif()
+endif()
+
+if(APPLE)
+    include(SnowShotMacOS)
+endif()
+
+if(SNOW_SHOT_BUILD_TESTS)
+    add_executable(snow-shot-pinned-placement-tests tests/pinned_placement_tests.cpp
+        src/presentation/pinned/screenshotpinnednativegeometrycontroller.cpp
+        src/presentation/pinned/screenshotpinnedresizegeometry.cpp)
+    target_include_directories(snow-shot-pinned-placement-tests PRIVATE include src)
+    target_link_libraries(snow-shot-pinned-placement-tests PRIVATE Qt6::Gui)
+    add_test(NAME snow-shot-pinned-placement-tests COMMAND snow-shot-pinned-placement-tests)
+    add_test(NAME snow-shot-pinned-controlled-interaction-tests
+        COMMAND snow-shot-pinned-window-tests --controlled-interaction-only -platform offscreen)
+    set_tests_properties(snow-shot-pinned-controlled-interaction-tests PROPERTIES
+        LABELS unit RUN_SERIAL TRUE TIMEOUT 60 SNOW_TEST_CROSS_PLATFORM TRUE)
+    set_tests_properties(snow-shot-pinned-movement-shortcut-tests PROPERTIES
+        SNOW_TEST_CROSS_PLATFORM TRUE)
+endif()
+
+if(APPLE AND SNOW_SHOT_BUILD_TESTS)
+    add_executable(snow-shot-macos-shell-policy-tests
+        tests/macos_shell_policy_tests.cpp
+        include/snow_shot/app/featureavailability.h
+        src/app/featureavailability.cpp)
+    target_include_directories(snow-shot-macos-shell-policy-tests PRIVATE include)
+    target_link_libraries(snow-shot-macos-shell-policy-tests PRIVATE Qt6::Core)
+    add_test(NAME snow-shot-macos-shell-policy-tests
+        COMMAND snow-shot-macos-shell-policy-tests)
+    set_tests_properties(snow-shot-macos-shell-policy-tests PROPERTIES
+        LABELS "unit;macos" TIMEOUT 30)
+
+    add_executable(snow-shot-macos-shell-native-tests
+        tests/macos_shell_native_tests.mm
+        include/snow_shot/platform/macos/applicationactivation.h
+        src/platform/macos/applicationactivation.mm)
+    target_include_directories(snow-shot-macos-shell-native-tests PRIVATE include)
+    target_compile_definitions(snow-shot-macos-shell-native-tests PRIVATE
+        SNOW_SHOT_MACOS_INFO_PLIST="${CMAKE_CURRENT_SOURCE_DIR}/packaging/macos/Info.plist.in")
+    target_link_libraries(snow-shot-macos-shell-native-tests PRIVATE
+        Qt6::Widgets "-framework AppKit")
+    add_test(NAME snow-shot-macos-shell-native-tests
+        COMMAND snow-shot-macos-shell-native-tests -platform cocoa)
+    set_tests_properties(snow-shot-macos-shell-native-tests PROPERTIES
+        LABELS "unit;macos" RUN_SERIAL TRUE TIMEOUT 30)
+
+    add_executable(snow-shot-macos-pinned-window-tests
+        tests/macos_pinned_window_tests.mm
+        ${SNOW_PINNED_PLATFORM_SOURCES}
+        src/presentation/services/mousereleaseactioncontroller.cpp)
+    set_target_properties(snow-shot-macos-pinned-window-tests PROPERTIES
+        MACOSX_BUNDLE TRUE MACOSX_BUNDLE_GUI_IDENTIFIER "top.snowshot.tests.pinned")
+    target_include_directories(snow-shot-macos-pinned-window-tests PRIVATE include src)
+    target_link_libraries(snow-shot-macos-pinned-window-tests PRIVATE Qt6::Widgets
+        "-framework AppKit" "-framework CoreGraphics")
+    add_test(NAME snow-shot-macos-pinned-window-tests
+        COMMAND snow-shot-macos-pinned-window-tests -platform cocoa)
+    add_test(NAME snow-shot-macos-pinned-focus-tests
+        COMMAND snow-shot-macos-pinned-window-tests --focus -platform cocoa)
+    add_test(NAME snow-shot-macos-pinned-delivery-tests
+        COMMAND snow-shot-macos-pinned-window-tests --delivery -platform cocoa)
+    set_tests_properties(snow-shot-macos-pinned-window-tests snow-shot-macos-pinned-focus-tests snow-shot-macos-pinned-delivery-tests
+        PROPERTIES LABELS "interactive;macos" SNOW_TEST_CROSS_PLATFORM TRUE RUN_SERIAL TRUE TIMEOUT 60 SKIP_RETURN_CODE 77)
+endif()
+
+if(SNOW_SHOT_BUILD_TESTS)
+    set_tests_properties(snow-shot-pinned-window-repository-tests snow-shot-pinned-window-group-tests
+        PROPERTIES SNOW_TEST_CROSS_PLATFORM TRUE)
+endif()
+
+if(APPLE AND SNOW_SHOT_BUILD_TESTS)
+    # Shared behavior fixtures synthesize Qt input. Real Cocoa delivery and
+    # native window policy are covered by the serial interactive targets above.
+    set_tests_properties(${_snow_shot_pinned_window_test_names}
+        snow-shot-pinned-save-dialog-tests
+        snow-shot-pinned-hidden-text-selection-restore-tests
+        PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" SNOW_TEST_CROSS_PLATFORM TRUE)
+endif()
+
+if(SNOW_SHOT_BUILD_TESTS)
+    add_test(NAME snow-shot-pinned-physical-authority-tests
+        COMMAND snow-shot-pinned-window-tests --physical-authority-only -platform offscreen)
+    set_tests_properties(snow-shot-pinned-physical-authority-tests PROPERTIES
+        LABELS unit SNOW_TEST_CROSS_PLATFORM TRUE RUN_SERIAL TRUE TIMEOUT 60
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
+endif()
+
+if(WIN32 AND SNOW_SHOT_BUILD_TESTS)
+    # Qt does not activate a screen-factor override of 1 by itself. Use an
+    # explicit 2x screen factor and a global multiplier to test exact DPRs,
+    # independently of the host monitor's configured scale.
+    set(_pin_dprs 1.0 1.25 1.5 1.75 2.0)
+    set(_pin_factors 0.5 0.625 0.75 0.875 1.0)
+    foreach(_pin_scale _pin_factor IN ZIP_LISTS _pin_dprs _pin_factors)
+        add_test(NAME snow-shot-pinned-pixel-alignment-${_pin_scale}-tests
+            COMMAND snow-shot-pinned-window-tests --pixel-alignment-only -platform windows)
+        set_tests_properties(snow-shot-pinned-pixel-alignment-${_pin_scale}-tests PROPERTIES
+            LABELS "unit;windows" RUN_SERIAL TRUE TIMEOUT 90
+            ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_SCREEN_SCALE_FACTORS=2;QT_SCALE_FACTOR=${_pin_factor};SNOW_PIN_TEST_DPR=${_pin_scale}")
+    endforeach()
+endif()
+
+if(APPLE AND SNOW_SHOT_BUILD_TESTS)
+    add_test(NAME snow-shot-pinned-pixel-alignment-tests
+        COMMAND snow-shot-pinned-window-tests --pixel-alignment-only -platform offscreen)
+    set_tests_properties(snow-shot-pinned-pixel-alignment-tests PROPERTIES
+        LABELS unit SNOW_TEST_CROSS_PLATFORM TRUE ENVIRONMENT "QT_SCALE_FACTOR=2" RUN_SERIAL TRUE)
+    add_test(NAME snow-shot-macos-pinned-pixel-alignment-tests
+        COMMAND snow-shot-pinned-window-tests --pixel-alignment-only -platform cocoa)
+    set_tests_properties(snow-shot-macos-pinned-pixel-alignment-tests PROPERTIES
+        LABELS "interactive;macos" SNOW_TEST_CROSS_PLATFORM TRUE RUN_SERIAL TRUE TIMEOUT 60)
+endif()
+
+if(SNOW_SHOT_BUILD_TESTS)
+    set_tests_properties(snow-shot-pinned-recognition-context-menu-tests
+        snow-shot-image-conversion-pinned-tests snow-shot-auto-filter-pinned-tests
+        PROPERTIES SNOW_TEST_CROSS_PLATFORM TRUE LABELS unit)
+    if(APPLE)
+        set_tests_properties(snow-shot-image-conversion-pinned-tests
+            snow-shot-pinned-quick-save-tests
+            PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" SNOW_TEST_CROSS_PLATFORM TRUE LABELS unit)
+    endif()
+endif()
+
+if(SNOW_SHOT_BUILD_TESTS)
+    add_executable(snow-shot-selection-render-tests
+        tests/screenshot_selection_render_tests.cpp
+        src/presentation/core/screenshotgeometry.cpp
+        src/presentation/services/screenshotsourceimagecomposer.cpp)
+    target_include_directories(snow-shot-selection-render-tests PRIVATE include
+        "${SNOW_SHOT_CAPTURE_CRATES_DIR}/crates/snow-capture-c/include")
+    target_link_libraries(snow-shot-selection-render-tests PRIVATE Qt6::Widgets)
+    snow_shot_import_offscreen_platform(snow-shot-selection-render-tests)
+    add_test(NAME snow-shot-selection-render-tests COMMAND snow-shot-selection-render-tests)
+    set_tests_properties(snow-shot-selection-render-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" LABELS "unit")
+endif()
+
+if(APPLE)
+    get_property(_screenshot_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(_target IN LISTS _screenshot_targets)
+        get_target_property(_sources ${_target} SOURCES)
+        if(_sources MATCHES "screenshotscrollingcapturecontroller.cpp|directcapturecontroller.cpp|screenshotoverlaywindow.cpp")
+            if(NOT _sources MATCHES "platform/macos/screenshotnative.mm")
+                target_sources(${_target} PRIVATE src/platform/macos/screenshotnative.mm)
+            endif()
+            target_link_libraries(${_target} PRIVATE "-framework AppKit" "-framework ApplicationServices")
+        endif()
+    endforeach()
+endif()
+
+if(APPLE AND SNOW_SHOT_BUILD_TESTS)
+    add_executable(snow-shot-macos-screenshot-window-target-tests
+        tests/macos_screenshot_window_target_tests.mm)
+    target_link_libraries(snow-shot-macos-screenshot-window-target-tests PRIVATE Qt6::Core
+        "-framework Foundation" "-framework CoreGraphics")
+    add_test(NAME snow-shot-macos-screenshot-window-target-tests
+        COMMAND snow-shot-macos-screenshot-window-target-tests)
+    set_tests_properties(snow-shot-macos-screenshot-window-target-tests PROPERTIES LABELS "unit;macos")
+
+    add_executable(snow-shot-macos-screenshot-native-smoke
+        tests/macos_screenshot_native_smoke.mm
+        src/presentation/capture/directcapturenative.cpp
+        src/platform/macos/screenshotnative.mm
+        src/presentation/core/screenshotgeometry.cpp
+        src/presentation/services/screenshotsourceimagecomposer.cpp)
+    target_include_directories(snow-shot-macos-screenshot-native-smoke PRIVATE include
+        "${SNOW_SHOT_CAPTURE_CRATES_DIR}/crates/snow-capture-c/include")
+    target_link_libraries(snow-shot-macos-screenshot-native-smoke PRIVATE Qt6::Widgets snow_capture_c
+        "-framework AppKit" "-framework ApplicationServices")
+    add_test(NAME snow-shot-macos-screenshot-native-smoke COMMAND snow-shot-macos-screenshot-native-smoke)
+    set_tests_properties(snow-shot-macos-screenshot-native-smoke PROPERTIES LABELS "interactive;macos" SKIP_RETURN_CODE 77 TIMEOUT 60)
+endif()
+
+if(APPLE AND SNOW_SHOT_BUILD_TESTS)
+    add_executable(snow-shot-macos-overlay-initialization-tests
+        tests/macos_overlay_initialization_tests.mm
+        src/platform/macos/screenshotnative.mm
+        src/presentation/core/screenshotgeometry.cpp)
+    target_include_directories(snow-shot-macos-overlay-initialization-tests PRIVATE include)
+    target_link_libraries(snow-shot-macos-overlay-initialization-tests PRIVATE ant_design_qt Qt6::Widgets
+        "-framework AppKit" "-framework ApplicationServices")
+    add_test(NAME snow-shot-macos-overlay-initialization-tests
+        COMMAND snow-shot-macos-overlay-initialization-tests)
+    set_tests_properties(snow-shot-macos-overlay-initialization-tests PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" LABELS "unit;macos")
+    add_test(NAME snow-shot-macos-screenshot-stacking-native-tests
+        COMMAND snow-shot-macos-overlay-initialization-tests -platform cocoa)
+    set_tests_properties(snow-shot-macos-screenshot-stacking-native-tests PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=cocoa" LABELS "interactive;macos"
+        RUN_SERIAL TRUE TIMEOUT 60)
+endif()
+
+# Physical cursor warps enter Qt's platform input path so Qt's pointer state and
+# widget grabs remain consistent with subsequent native mouse events.
+foreach(_cursor_host IN ITEMS snow_shot snow-shot-physical-cursor-tests
+        snow-shot-pinned-window-tests snow-shot-file-pin-batch-performance-benchmark)
+    if(TARGET ${_cursor_host})
+        target_link_libraries(${_cursor_host} PRIVATE Qt6::GuiPrivate)
+    endif()
+endforeach()

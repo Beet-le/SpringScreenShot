@@ -940,6 +940,7 @@ fn run_sample(
         ExportFormat::Mp4,
     );
     let keyboard = scenario.keyboard_overlay.then(|| KeyboardOverlayConfig {
+        font: None,
         keycap_size: 64,
         background_rgba: KEYBOARD_BACKGROUND_RGBA,
         text_rgba: KEYBOARD_TEXT_RGBA,
@@ -952,6 +953,11 @@ fn run_sample(
         options.duration_seconds
     };
     let config = DirectRecordingConfig {
+        mouse_highlight_rgba: [0; 4],
+        record_mouse_clicks: false,
+        show_keyboard: true,
+        excluded_windows: Default::default(),
+        excluded_processes: Default::default(),
         loop_animated_images: true,
         region,
         capture_backend: options.backend,

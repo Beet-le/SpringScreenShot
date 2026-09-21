@@ -25,6 +25,9 @@ namespace snow_canvas_renderer {
 
 struct FilterRenderDiagnostics {
     bool usedFilterPath = false;
+    std::size_t executionPlanBuildCount = 0;
+    std::size_t dependencyItemVisits = 0;
+    std::uint64_t planningNanoseconds = 0;
     std::size_t exposedPixelCount = 0;
     std::size_t totalWorkingPixelCount = 0;
     std::size_t peakWorkingPixelCount = 0;
@@ -102,7 +105,7 @@ struct SceneRenderRequest {
     const SnowCanvasRenderContext* backgroundContext = nullptr;
     const SnowCanvasDisplayCache* displayCache = nullptr;
     snow_canvas_filter_render::RenderWorkspace* workspace = nullptr;
-    snow_canvas_filter_render::ExecutionOptions execution;
+    snow_canvas_filter_render::ExecutionOptions execution{};
     FilterRenderDiagnostics* diagnostics = nullptr;
     const void* cacheNamespace = nullptr;
     snow_canvas_pen_mask::PenMaskAtlas* penMaskAtlas = nullptr;
@@ -110,9 +113,11 @@ struct SceneRenderRequest {
     // Direct renderer callers keep the uncached path by leaving this disabled.
     bool enableFilterTileCache = false;
     std::uint64_t filterTileContentKey = 0;
-    QPoint filterTileCoordinate;
+    QPoint filterTileCoordinate{};
     bool clearBackgroundEnabled = true;
-    SnowCanvasSmartEraseSnapshot smartErase;
+    SnowCanvasSmartEraseSnapshot smartErase{};
+    const SceneExecutionPlan* executionPlan = nullptr;
+    const std::vector<SnowSceneRenderRun>* renderPlan = nullptr;
 };
 
 QColor toQColor(const SnowColorRgba8& color);

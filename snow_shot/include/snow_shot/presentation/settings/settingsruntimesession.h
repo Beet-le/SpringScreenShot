@@ -137,14 +137,32 @@ class SettingsRuntimeSession final : public QObject {
     globalMouseCombinationAvailable(SettingsGlobalMouseAction action,
                                     const SettingsGlobalMouseCombination& combination) const;
     [[nodiscard]] SettingsActionState actionState(SettingsActionBinding binding) const;
-    [[nodiscard]] bool triggerAction(SettingsActionBinding binding);
+    [[nodiscard]] bool triggerAction(SettingsActionBinding binding, const QString& filePath = {});
     [[nodiscard]] CustomAiModels customAiModels() const;
     bool applyCustomAiModels(const CustomAiModels& models);
     [[nodiscard]] storage::StorageStatus storageStatus() const;
     void refreshStorageStatus();
     void refreshStorageStatusIfStale();
 
+    AppPermissionService* appPermissions() const {
+        return m_backend.appPermissions();
+    }
+
+    GlobalMousePermissionState globalMousePermissionState() const {
+        return m_backend.globalMousePermissionState();
+    }
+    void requestGlobalMousePermission() {
+        m_backend.requestGlobalMousePermission();
+    }
+    void openGlobalMousePermissionSettings() {
+        m_backend.openGlobalMousePermissionSettings();
+    }
+    void refreshGlobalMousePermission() {
+        m_backend.refreshGlobalMousePermission();
+    }
+
   signals:
+    void globalMousePermissionChanged();
     void operationMessage(const QString& message, bool warning);
     void fieldChanged(const QString& fieldId,
                       const snow_shot::presentation::settings::SettingsFieldState& state);

@@ -211,7 +211,8 @@ Result<JpegInfo> scaled_info(void* handle, JpegInfo info, const DecodeOptions& o
         if (width <= 0 || height <= 0 || width > static_cast<int>(*options.maximum_extent) ||
             height > static_cast<int>(*options.maximum_extent))
             continue;
-        const std::uint64_t pixels = static_cast<std::uint64_t>(width) * height;
+        const std::uint64_t pixels =
+            static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(height);
         if (!selected || pixels > selected_pixels) {
             selected = &factors[index];
             selected_pixels = pixels;
@@ -873,13 +874,14 @@ Result<EncodedArtifactReceipt> JpegCodec::encode_raster_to_sink(const RasterSour
                     const unsigned int opacity = pixel[3];
                     for (std::size_t channel = 0; channel < 3; ++channel) {
                         if (plane.format.alpha == AlphaMode::premultiplied) {
-                            pixel[channel] = static_cast<std::uint8_t>(
-                                (std::min)(255U, static_cast<unsigned int>(pixel[channel]) + 255U -
-                                                     opacity));
+                            // Premultiplied samples already carry the black
+                            // background's contribution and pass through.
                         } else {
+                            // JPEG has no alpha channel: composite straight
+                            // alpha onto black, matching the viewer's dark
+                            // canvas instead of a white matte.
                             pixel[channel] = static_cast<std::uint8_t>(
-                                (static_cast<unsigned int>(pixel[channel]) * opacity +
-                                 255U * (255U - opacity) + 127U) /
+                                (static_cast<unsigned int>(pixel[channel]) * opacity + 127U) /
                                 255U);
                         }
                     }
@@ -985,8 +987,10 @@ Result<EncodedArtifactReceipt> JpegCodec::encode_raster_to_sink(const RasterSour
         const JDIMENSION luma_row = context->compressor.next_scanline;
         for (std::size_t index = 0; index < plane_count; ++index) {
             const PlaneDescriptor& plane = frame.layout.planes[index];
-            const std::uint32_t first_row = static_cast<std::uint32_t>(
-                (static_cast<std::uint64_t>(luma_row) * vertical_factors[index]) / y_vertical);
+            const std::uint32_t first_row =
+                static_cast<std::uint32_t>((static_cast<std::uint64_t>(luma_row) *
+                                            static_cast<std::uint64_t>(vertical_factors[index])) /
+                                           static_cast<std::uint64_t>(y_vertical));
             const std::uint32_t line_count =
                 static_cast<std::uint32_t>(vertical_factors[index] * DCTSIZE);
             const std::uint32_t available =

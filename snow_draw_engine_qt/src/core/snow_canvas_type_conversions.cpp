@@ -213,6 +213,8 @@ SnowShapeKind toEngineShapeKind(SnowCanvasShapeKind kind) {
 
 SnowCanvasArrowhead toCanvasArrowhead(SnowArrowhead arrowhead) {
     switch (arrowhead) {
+    case SNOW_ARROWHEAD_SQUARE:
+    case SNOW_ARROWHEAD_INVERTED_TRIANGLE:
     case SNOW_ARROWHEAD_NONE:
         return SnowCanvasArrowhead::None;
     case SNOW_ARROWHEAD_ARROW:
@@ -526,6 +528,7 @@ SnowSerialNumberStyle toEngineSerialNumberStyle(const SnowCanvasSerialNumberStyl
 SnowCanvasStyleToolbarState toCanvasStyleToolbarState(const SnowStyleToolbarState& state) {
     return SnowCanvasStyleToolbarState{
         toCanvasStyleToolbarSource(state.source),
+        state.selected_element_count,
         toCanvasShapeStyle(state.shape_style),
         toCanvasTextStyle(state.text_style),
         toCanvasSerialNumberStyle(state.serial_number_style),
@@ -684,7 +687,7 @@ bool toEngineStyleDefaults(const SnowCanvasStyleDefaults& defaults,
         !enumInRange(defaults.serialNumber.strokeStyle, SnowCanvasStrokeStyle::Solid,
                      SnowCanvasStrokeStyle::Dotted) ||
         !enumInRange(defaults.serialNumber.type, SnowCanvasSerialNumberType::OutlinedCircle,
-                     SnowCanvasSerialNumberType::SolidSquare)) {
+                     SnowCanvasSerialNumberType::Circle)) {
         return false;
     }
 

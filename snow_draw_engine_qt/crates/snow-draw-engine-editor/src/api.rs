@@ -10,7 +10,7 @@ use snow_draw_engine_document::{
 };
 use std::sync::Arc;
 
-use crate::text::{SerialNumberStyle, TextPreviewFontSize, TextStyle};
+use crate::text::{SerialNumberStyle, TextPreviewPaint, TextStyle};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ActiveTool {
@@ -42,6 +42,24 @@ impl ActiveTool {
 
     pub(crate) const fn uses_stroke_cursor(self) -> bool {
         matches!(self, Self::FreeDraw | Self::PenHighlight | Self::PenFilter)
+    }
+
+    pub(crate) const fn is_filter(self) -> bool {
+        match self {
+            Self::RectangleFilter | Self::PenFilter | Self::AutoFilter => true,
+            Self::Select
+            | Self::Shape
+            | Self::Arrow
+            | Self::Line
+            | Self::FreeDraw
+            | Self::RectangleHighlight
+            | Self::PenHighlight
+            | Self::Watermark
+            | Self::Eraser
+            | Self::Text
+            | Self::SerialNumber
+            | Self::Spotlight => false,
+        }
     }
 }
 
@@ -187,6 +205,13 @@ pub const SHAPE_STYLE_PROPERTY_LINE: u32 = SHAPE_STYLE_PROPERTY_FILL
     | SHAPE_STYLE_PROPERTY_STROKE
     | SHAPE_STYLE_PROPERTY_STROKE_WIDTH
     | SHAPE_STYLE_PROPERTY_STROKE_STYLE
+    | SHAPE_STYLE_PROPERTY_ARROW_TYPE
+    | SHAPE_STYLE_PROPERTY_OPACITY;
+pub const SHAPE_STYLE_PROPERTY_FREE_DRAW: u32 = SHAPE_STYLE_PROPERTY_FILL
+    | SHAPE_STYLE_PROPERTY_FILL_STYLE
+    | SHAPE_STYLE_PROPERTY_STROKE
+    | SHAPE_STYLE_PROPERTY_STROKE_WIDTH
+    | SHAPE_STYLE_PROPERTY_STROKE_STYLE
     | SHAPE_STYLE_PROPERTY_OPACITY;
 pub const SHAPE_STYLE_PROPERTY_ALL: u32 = SHAPE_STYLE_PROPERTY_RECTANGLE
     | SHAPE_STYLE_PROPERTY_ARROW
@@ -200,7 +225,7 @@ impl ShapeKind {
             Self::Rectangle => SHAPE_STYLE_PROPERTY_RECTANGLE,
             Self::Arrow => SHAPE_STYLE_PROPERTY_ARROW,
             Self::Line => SHAPE_STYLE_PROPERTY_LINE,
-            Self::FreeDraw => SHAPE_STYLE_PROPERTY_LINE,
+            Self::FreeDraw => SHAPE_STYLE_PROPERTY_FREE_DRAW,
             Self::RectangleHighlight => {
                 SHAPE_STYLE_PROPERTY_FILL
                     | SHAPE_STYLE_PROPERTY_STROKE
@@ -264,6 +289,7 @@ pub struct HistoryState {
 #[derive(Clone, Debug, PartialEq)]
 pub struct StyleToolbarState {
     pub source: StyleToolbarSource,
+    pub selected_element_count: u32,
     pub shape_style: ShapeStyle,
     pub text_style: TextStyle,
     pub serial_number_style: SerialNumberStyle,
@@ -291,13 +317,6 @@ pub struct EditorViewState {
     pub surface: SurfaceSize,
     pub camera: Camera,
     pub clear_color: ColorRgba8,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct EditorStrokeCursor {
-    pub position: Point<f64>,
-    pub stroke_width: f64,
-    pub stroke_color: Option<ColorRgba8>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -330,14 +349,33 @@ pub enum ElementCreationPreview {
     SerialNumber(SerialNumberData),
 }
 
+/// Lower zoom bound for sizing binding-highlight strokes and midpoint dots,
+/// keeping them readable on screen instead of shrinking with the camera.
+pub const MIN_BINDING_HIGHLIGHT_ZOOM: f64 = 0.25;
+
+/// Hover feedback for the bindable an arrow endpoint/focus drag would attach to.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BindingHighlightPresentation {
+    /// Outline geometry of the bindable in canvas coordinates.
+    pub rect: RectangleData,
+    /// Screen-constant highlight stroke width in canvas units (already zoom-divided).
+    pub stroke_width: f64,
+    /// Side midpoint the drag currently snaps to, if any.
+    pub mid_point: Option<Point<f64>>,
+    /// Remaining side midpoints rendered as proximity hints.
+    pub near_mid_points: Vec<Point<f64>>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct EditorPresentationState {
+    /// Additive, uncommitted copies. Uses the same transaction builder as duplication.
+    pub duplicate_preview: Option<snow_draw_engine_document::Transaction>,
     pub creation_preview: Option<ElementCreationPreview>,
     pub active_text_draft: Option<ActiveTextDraftPresentation>,
     pub arrow_text_previews: Vec<(ElementId, TextData)>,
     pub preview_arrows: Vec<SelectionArrowState>,
     pub preview_elements: Vec<SelectionRectState>,
-    pub preview_text_font_sizes: Vec<TextPreviewFontSize>,
+    pub preview_text_paints: Vec<TextPreviewPaint>,
     pub auto_filter_highlights: Vec<RectangleData>,
     pub marquee: Option<RectangleData>,
     pub marquee_candidate_elements: Vec<SelectionRectState>,
@@ -356,8 +394,7 @@ pub struct EditorPresentationState {
     pub selected_single_arrow: Option<ArrowData>,
     pub arrow_handles: Vec<ArrowHandleState>,
     pub snap_guides: Vec<SnapGuide>,
-    pub eraser_cursor: Option<Point<f64>>,
-    pub stroke_cursor: Option<EditorStrokeCursor>,
+    pub binding_highlight: Option<BindingHighlightPresentation>,
 }
 
 /// Whether the generic selection frame and its controls apply to these members.
@@ -474,8 +511,8 @@ impl ActiveTextDraftPresentation {
             rectangle_kind: snow_draw_engine_document::RectangleElementKind::Rectangle,
             highlight_shape: snow_draw_engine_document::HighlightShape::Rectangle,
             center: self.text.center,
-            width: self.text.width,
-            height: self.text.height,
+            width: self.text.width(),
+            height: self.text.height(),
             rotation: self.text.rotation,
             fill: self.text.fill,
             fill_style: self.text.fill_style,
@@ -490,8 +527,7 @@ impl ActiveTextDraftPresentation {
     pub fn with_rect(&self, rect: RectangleData) -> Self {
         let mut next = self.clone();
         next.text.center = rect.center;
-        next.text.width = rect.width;
-        next.text.height = rect.height;
+        next.text.layout = next.text.layout.with_wrap(rect.width, rect.height);
         next.text.rotation = rect.rotation;
         next.text.corner_radii = rect.corner_radii;
         next

@@ -2,9 +2,24 @@ use super::*;
 use snow_draw_engine_core::arrow::{ArrowEndpointEdge, EngineContext};
 pub(crate) use snow_draw_engine_document::{
     ArrowEndpointDragOptions, ArrowFocusDragOptions, compute_arrow_endpoint_drag,
-    compute_arrow_focus_drag, drag_elbow_arrow_segment, preview_elbow_arrow_endpoint_binding,
-    recompute_arrow_after_bindable_change, visible_arrow_focus_points,
+    compute_arrow_focus_drag, drag_elbow_arrow_segment, recompute_arrow_after_bindable_change,
+    visible_arrow_focus_points,
 };
+use snow_draw_engine_interaction::Modifiers;
+
+pub(crate) fn arrow_endpoint_drag_options(
+    modifiers: Modifiers,
+    finalize: bool,
+) -> ArrowEndpointDragOptions {
+    ArrowEndpointDragOptions {
+        alt_key: modifiers.alt,
+        finalize,
+        // The endpoint strategy ignores this for elbowed arrows (matching
+        // Excalidraw); it still gates midpoint snapping and the midpoint
+        // suggestion for both types.
+        angle_locked: modifiers.shift,
+    }
+}
 
 // Keep these interaction constants in sync with Excalidraw's common constants.
 pub(crate) const MINIMUM_ARROW_SIZE_PX: f64 = 20.0;
@@ -489,7 +504,7 @@ mod tests {
             ColorRgba8::default(),
             2.0,
             StrokeStyle::Dotted,
-            ArrowType::Curve,
+            ArrowType::Straight,
             None,
             None,
         )
@@ -524,7 +539,7 @@ mod tests {
             rotated.fill_style,
             snow_draw_engine_document::FillStyle::Line
         );
-        assert_eq!(rotated.arrow_type, ArrowType::Curve);
+        assert_eq!(rotated.arrow_type, ArrowType::Straight);
         assert_eq!(rotated.start_arrowhead, None);
         assert_eq!(rotated.end_arrowhead, None);
     }

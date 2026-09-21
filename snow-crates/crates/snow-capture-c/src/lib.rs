@@ -1,17 +1,17 @@
 #![allow(clippy::missing_safety_doc)]
 
+mod frame_geometry;
+
+use snow_capture::exclusions::SnowCaptureExclusions;
 use std::cell::RefCell;
 use std::ffi::{CStr, CString, c_char};
 use std::ptr;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-    mpsc,
-};
+use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use snow_capture::color_effect::ColorCorrection;
+use snow_capture::cursor_snapshot::ScreenshotCursorSnapshot;
 use snow_capture::frame::{CaptureEvent, CapturePixelFormat, CapturedFrame, Frame};
 use snow_capture::{
     CaptureOptions, CaptureRegion, CaptureSession, CaptureStream, CaptureStreamConfig,
@@ -19,6 +19,7 @@ use snow_capture::{
     WindowId,
     backend::{AutoBackendPolicy, CaptureBackendKind},
 };
+use snow_core::cancellation::CancellationToken;
 use snow_core::error::RecvTimeoutError;
 
 pub struct SnowCaptureDesktopSessionImpl {
@@ -57,15 +58,65 @@ pub struct SnowCaptureMonitorSessionConfig {
     capture_retry_count: usize,
     pixel_format: u8,
     reserved: [u8; 31],
+    pub exclusions: SnowCaptureExclusions,
 }
 
 pub struct SnowCaptureCancellationTokenImpl {
-    canceled: Arc<AtomicBool>,
+    canceled: CancellationToken,
 }
 
 pub struct SnowCaptureScreenshotResultImpl {
     frames: Vec<SnapshotFrame>,
     focused_window: Option<SnapshotWindowFrame>,
+}
+
+pub struct SnowCaptureCursorSnapshotImpl {
+    snapshot: ScreenshotCursorSnapshot,
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn snow_capture_cursor_snapshot_create() -> *mut SnowCaptureCursorSnapshotImpl {
+    match ScreenshotCursorSnapshot::capture() {
+        Ok(snapshot) => Box::into_raw(Box::new(SnowCaptureCursorSnapshotImpl { snapshot })),
+        Err(error) => {
+            set_last_error(error.to_string());
+            ptr::null_mut()
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn snow_capture_cursor_snapshot_destroy(
+    snapshot: *mut SnowCaptureCursorSnapshotImpl,
+) {
+    if !snapshot.is_null() {
+        drop(unsafe { Box::from_raw(snapshot) });
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn snow_capture_screenshot_result_composite_cursor(
+    result: *mut SnowCaptureScreenshotResultImpl,
+    snapshot: *const SnowCaptureCursorSnapshotImpl,
+) -> u8 {
+    let (Some(result), Some(snapshot)) = (unsafe { result.as_mut() }, unsafe { snapshot.as_ref() })
+    else {
+        set_last_error("screenshot result and cursor snapshot must not be null");
+        return 0;
+    };
+    for display in &mut result.frames {
+        snapshot.snapshot.composite(
+            Arc::make_mut(&mut display.frame),
+            display.entry.x,
+            display.entry.y,
+        );
+    }
+    if let Some(window) = &mut result.focused_window {
+        snapshot
+            .snapshot
+            .composite(Arc::make_mut(&mut window.frame), window.x, window.y);
+    }
+    1
 }
 
 pub struct SnowCaptureFrameLeaseImpl {
@@ -79,6 +130,7 @@ pub struct SnowCaptureDesktopSessionConfig {
     capture_backend: u8,
     pixel_format: u8,
     reserved: [u8; 29],
+    pub exclusions: SnowCaptureExclusions,
 }
 
 #[repr(C)]
@@ -119,6 +171,7 @@ pub struct SnowCaptureRegionSessionConfig {
     pub capture_backend: u8,
     pub pixel_format: u8,
     pub reserved: [u8; 29],
+    pub exclusions: SnowCaptureExclusions,
 }
 
 #[repr(C)]
@@ -212,6 +265,7 @@ pub struct SnowCaptureStreamConfig {
     pub include_cursor: u8,
     pub restore_original_colors: u8,
     pub reserved: [u8; 26],
+    pub exclusions: SnowCaptureExclusions,
 }
 
 #[repr(C)]
@@ -286,7 +340,12 @@ struct SnapshotWindowFrame {
 
 enum WorkerCommand {
     Prepare(mpsc::Sender<Result<(), String>>),
-    Capture(mpsc::Sender<Result<Frame, String>>, ColorCorrection, bool),
+    Capture(
+        mpsc::Sender<Result<Frame, String>>,
+        ColorCorrection,
+        bool,
+        CancellationToken,
+    ),
     ResetToPrepared(mpsc::Sender<Result<(), String>>),
     ActiveCaptureAccessCount(mpsc::Sender<Result<usize, String>>),
     Stop,
@@ -299,7 +358,7 @@ const SCREENSHOT_REQUEST_RESTORE_ORIGINAL_COLORS: u32 = 1 << 1;
 const SCREENSHOT_REQUEST_INCLUDE_CURSOR: u32 = 1 << 2;
 pub const WINDOW_FRAME_INFO_VERSION: u32 = 1;
 const WINDOW_FRAME_INFO_SIZE: u32 = std::mem::size_of::<SnowCaptureWindowFrameInfo>() as u32;
-pub const STREAM_CONFIG_VERSION: u32 = 1;
+pub const STREAM_CONFIG_VERSION: u32 = 2;
 const STREAM_CONFIG_SIZE: u32 = std::mem::size_of::<SnowCaptureStreamConfig>() as u32;
 pub const STREAM_FRAME_INFO_VERSION: u32 = 1;
 const STREAM_FRAME_INFO_SIZE: u32 = std::mem::size_of::<SnowCaptureStreamFrameInfo>() as u32;
@@ -448,40 +507,66 @@ fn capture_backend_value(kind: CaptureBackendKind) -> u8 {
 // The struct update stays load-bearing when snow-capture is built with its
 // optional `stage-timing` feature, which adds a field this literal omits.
 #[allow(clippy::needless_update)]
+fn platform_tuning(
+    options: snow_capture::tuning::windows::WindowsCaptureOptions,
+) -> snow_capture::BackendTuning {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = options;
+        snow_capture::BackendTuning::Default
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        snow_capture::BackendTuning::Windows(options)
+    }
+}
+
+#[allow(clippy::needless_update)] // Optional stage-timing adds another field.
 fn default_options(
     config: *const SnowCaptureDesktopSessionConfig,
 ) -> Result<(CaptureOptions, CaptureBackendKind), String> {
-    let (capture_retry_count, wgc_update_mode, capture_backend, output_pixel_format) =
-        if config.is_null() {
-            (
-                1,
-                WgcUpdateMode::Auto,
-                CaptureBackendKind::Auto,
-                CapturePixelFormat::Rgba8,
-            )
-        } else {
-            let config = unsafe { &*config };
-            (
-                config.capture_retry_count.max(1),
-                parse_wgc_update_mode(config.wgc_update_mode)?,
-                parse_capture_backend(config.capture_backend)?,
-                parse_pixel_format(config.pixel_format)?,
-            )
-        };
+    let (
+        capture_retry_count,
+        wgc_update_mode,
+        capture_backend,
+        output_pixel_format,
+        excluded_windows,
+        excluded_processes,
+    ) = if config.is_null() {
+        (
+            1,
+            WgcUpdateMode::Auto,
+            CaptureBackendKind::Auto,
+            CapturePixelFormat::Rgba8,
+            Arc::from(Vec::<u32>::new()),
+            Arc::from(Vec::<i32>::new()),
+        )
+    } else {
+        let config = unsafe { &*config };
+        let (excluded_windows, excluded_processes) = unsafe { config.exclusions.to_owned()? };
+        (
+            config.capture_retry_count.max(1),
+            parse_wgc_update_mode(config.wgc_update_mode)?,
+            parse_capture_backend(config.capture_backend)?,
+            parse_pixel_format(config.pixel_format)?,
+            excluded_windows,
+            excluded_processes,
+        )
+    };
 
     Ok((
         CaptureOptions {
-            backend_tuning: snow_capture::tuning::BackendTuning::Windows(
-                snow_capture::tuning::windows::WindowsCaptureOptions {
-                    gpu_hdr_conversion: true,
-                    hdr_tonemap_lut: true,
-                    wgc_update_mode,
-                    ..Default::default()
-                },
-            ),
+            backend_tuning: platform_tuning(snow_capture::tuning::windows::WindowsCaptureOptions {
+                gpu_hdr_conversion: true,
+                hdr_tonemap_lut: true,
+                wgc_update_mode,
+                ..Default::default()
+            }),
             capture_retry_count,
             workload: CaptureWorkload::Snapshot,
             output_pixel_format,
+            excluded_windows,
+            excluded_processes,
             // Keeps the literal valid whether or not snow-capture was built
             // with its optional `stage-timing` instrumentation feature.
             ..Default::default()
@@ -507,14 +592,12 @@ fn snapshot_options(
     output_pixel_format: CapturePixelFormat,
 ) -> Result<CaptureOptions, String> {
     Ok(CaptureOptions {
-        backend_tuning: snow_capture::tuning::BackendTuning::Windows(
-            snow_capture::tuning::windows::WindowsCaptureOptions {
-                gpu_hdr_conversion: true,
-                hdr_tonemap_lut: true,
-                wgc_update_mode: parse_wgc_update_mode(wgc_update_mode)?,
-                ..Default::default()
-            },
-        ),
+        backend_tuning: platform_tuning(snow_capture::tuning::windows::WindowsCaptureOptions {
+            gpu_hdr_conversion: true,
+            hdr_tonemap_lut: true,
+            wgc_update_mode: parse_wgc_update_mode(wgc_update_mode)?,
+            ..Default::default()
+        }),
         capture_retry_count: capture_retry_count.max(1),
         workload: CaptureWorkload::Snapshot,
         output_pixel_format,
@@ -522,6 +605,16 @@ fn snapshot_options(
         // with its optional `stage-timing` instrumentation feature.
         ..Default::default()
     })
+}
+
+unsafe fn apply_exclusions(
+    mut options: CaptureOptions,
+    exclusions: SnowCaptureExclusions,
+) -> Result<CaptureOptions, String> {
+    let (windows, processes) = unsafe { exclusions.to_owned() }?;
+    options.excluded_windows = windows;
+    options.excluded_processes = processes;
+    Ok(options)
 }
 
 fn build_monitor_entries(system: &CaptureSystem) -> Result<Vec<MonitorEntry>, String> {
@@ -572,11 +665,11 @@ impl MonitorWorker {
                             };
                             let _ = reply.send(result);
                         }
-                        WorkerCommand::Capture(reply, correction, include_cursor) => {
+                        WorkerCommand::Capture(reply, correction, include_cursor, cancellation) => {
                             let result = match session.as_mut() {
                                 Ok(session) => {
                                     session.set_windows_color_correction(correction);
-                                    match session.capture_once() {
+                                    match session.capture_snapshot(include_cursor, cancellation) {
                                         Ok(mut frame)
                                             if session.active_capture_access_count() == 0 =>
                                         {
@@ -646,10 +739,16 @@ impl MonitorWorker {
         &self,
         correction: ColorCorrection,
         include_cursor: bool,
+        cancellation: CancellationToken,
     ) -> Result<mpsc::Receiver<Result<Frame, String>>, String> {
         let (tx, rx) = mpsc::channel();
         self.tx
-            .send(WorkerCommand::Capture(tx, correction, include_cursor))
+            .send(WorkerCommand::Capture(
+                tx,
+                correction,
+                include_cursor,
+                cancellation,
+            ))
             .map_err(|_| "capture worker is not running".to_owned())?;
         Ok(rx)
     }
@@ -714,7 +813,7 @@ fn reconcile_workers(
             retained.push(unmatched.swap_remove(index));
             retained_updates.push(entry);
         } else {
-            match MonitorWorker::start(session.system.clone(), session.options, entry) {
+            match MonitorWorker::start(session.system.clone(), session.options.clone(), entry) {
                 Ok(worker) => created.push(worker),
                 Err(error) => {
                     for worker in created.drain(..) {
@@ -788,6 +887,7 @@ fn rebuild_workers(session: &mut SnowCaptureDesktopSessionImpl) -> Result<(), St
     reconcile_workers(session, entries)
 }
 
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 fn same_monitor_layout(left: &[MonitorEntry], right: &[MonitorEntry]) -> bool {
     left.len() == right.len()
         && left.iter().all(|candidate| {
@@ -806,11 +906,12 @@ fn capture_all_frames(
     session: &mut SnowCaptureDesktopSessionImpl,
     correction: ColorCorrection,
     include_cursor: bool,
+    cancellation: CancellationToken,
 ) -> Result<Vec<SnapshotFrame>, String> {
     let mut receivers = Vec::with_capacity(session.workers.len());
     let mut first_error = None;
     for worker in &session.workers {
-        match worker.request_capture(correction, include_cursor) {
+        match worker.request_capture(correction, include_cursor, cancellation.clone()) {
             Ok(receiver) => receivers.push((worker.entry.clone(), receiver)),
             Err(error) => {
                 if first_error.is_none() {
@@ -853,8 +954,16 @@ fn capture_all_frames_with_layout_retry(
     session: &mut SnowCaptureDesktopSessionImpl,
     correction: ColorCorrection,
     include_cursor: bool,
+    cancellation: CancellationToken,
 ) -> Result<Vec<SnapshotFrame>, String> {
-    match capture_all_frames(session, correction, include_cursor) {
+    // ScreenCaptureKit refreshes its plan per snapshot. Never retry a permission
+    // failure or cancellation by re-enumerating the desktop.
+    #[cfg(target_os = "macos")]
+    {
+        capture_all_frames(session, correction, include_cursor, cancellation)
+    }
+    #[cfg(not(target_os = "macos"))]
+    match capture_all_frames(session, correction, include_cursor, cancellation.clone()) {
         Ok(frames) => Ok(frames),
         Err(first_error) => {
             if let Err(refresh_error) = session.system.refresh_display_configuration() {
@@ -879,9 +988,11 @@ fn capture_all_frames_with_layout_retry(
                     "{first_error}; layout refresh failed: {refresh_error}"
                 ));
             }
-            capture_all_frames(session, correction, include_cursor).map_err(|retry_error| {
-                format!("{first_error}; retry after layout refresh failed: {retry_error}")
-            })
+            capture_all_frames(session, correction, include_cursor, cancellation.clone()).map_err(
+                |retry_error| {
+                    format!("{first_error}; retry after layout refresh failed: {retry_error}")
+                },
+            )
         }
     }
 }
@@ -973,6 +1084,7 @@ pub unsafe extern "C" fn snow_capture_monitor_session_create(
             0,
             parse_pixel_format(config.pixel_format)?,
         )?;
+        let options = unsafe { apply_exclusions(options, config.exclusions)? };
         let system = CaptureSystem::builder()
             .build()
             .map_err(|error| error.to_string())?;
@@ -1075,7 +1187,23 @@ fn backend_kind_ptr(session: &SnowCaptureDesktopSessionImpl) -> *const c_char {
         "dxgi" => c"dxgi".as_ptr(),
         "wgc" => c"wgc".as_ptr(),
         "gdi" => c"gdi".as_ptr(),
+        "sck" => c"sck".as_ptr(),
         _ => c"unknown".as_ptr(),
+    }
+}
+
+fn native_window_id(value: isize) -> Result<WindowId, String> {
+    #[cfg(target_os = "macos")]
+    {
+        u32::try_from(value)
+            .ok()
+            .filter(|id| *id != 0)
+            .map(WindowId::from_macos_id)
+            .ok_or_else(|| "invalid macOS window ID".into())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(WindowId::from_windows_handle(value))
     }
 }
 
@@ -1083,25 +1211,18 @@ fn capture_window_snapshot(
     hwnd: isize,
     options: CaptureOptions,
     include_cursor: bool,
+    cancellation: CancellationToken,
 ) -> Result<SnapshotWindowFrame, String> {
     let system = CaptureSystem::builder()
         .with_backend_kind(CaptureBackendKind::Auto)
         .build()
         .map_err(|error| error.to_string())?;
     let mut session = system
-        .open_session(
-            CaptureTarget::Window(WindowId::from_windows_handle(hwnd)),
-            options,
-        )
+        .open_session(CaptureTarget::Window(native_window_id(hwnd)?), options)
         .map_err(|error| error.to_string())?;
-    let capture_result = session.capture_once();
-    let mut frame = match capture_result {
-        Ok(frame) => frame,
-        Err(error) => {
-            let _ = session.reset_to_prepared();
-            return Err(error.to_string());
-        }
-    };
+    let mut frame = session
+        .capture_snapshot(include_cursor, cancellation)
+        .map_err(|error| error.to_string())?;
     if session.active_capture_access_count() != 0 {
         let _ = session.reset_to_prepared();
         return Err("capture access remained active after focused-window capture".to_owned());
@@ -1109,12 +1230,20 @@ fn capture_window_snapshot(
     if include_cursor {
         frame.composite_attached_cursor();
     }
-    let target = session
-        .target_info_for_backend(frame.metadata().backend_kind())
-        .map_err(|error| error.to_string())?;
+    let (x, y) = if let Some(transform) = frame.metadata().capture_transform() {
+        (
+            transform.source.x.round() as i32,
+            transform.source.y.round() as i32,
+        )
+    } else {
+        let target = session
+            .target_info_for_backend(frame.metadata().backend_kind())
+            .map_err(|error| error.to_string())?;
+        (target.origin_x, target.origin_y)
+    };
     Ok(SnapshotWindowFrame {
-        x: target.origin_x,
-        y: target.origin_y,
+        x,
+        y,
         frame: Arc::new(frame),
     })
 }
@@ -1376,7 +1505,7 @@ pub extern "C" fn snow_capture_cancellation_token_create() -> *mut SnowCaptureCa
 {
     clear_last_error();
     Box::into_raw(Box::new(SnowCaptureCancellationTokenImpl {
-        canceled: Arc::new(AtomicBool::new(false)),
+        canceled: CancellationToken::default(),
     }))
 }
 
@@ -1385,7 +1514,7 @@ pub unsafe extern "C" fn snow_capture_cancellation_token_cancel(
     token: *mut SnowCaptureCancellationTokenImpl,
 ) {
     if !token.is_null() {
-        unsafe { &*token }.canceled.store(true, Ordering::Release);
+        unsafe { &*token }.canceled.cancel();
     }
 }
 
@@ -1419,14 +1548,21 @@ pub unsafe extern "C" fn snow_capture_desktop_session_capture(
     } else {
         Some(unsafe { &*request.cancellation_token }.canceled.clone())
     };
-    let is_canceled = || {
-        canceled
-            .as_ref()
-            .is_some_and(|state| state.load(Ordering::Acquire))
-    };
+    let is_canceled = || canceled.as_ref().is_some_and(|state| state.is_canceled());
     if is_canceled() {
         set_last_error("screenshot capture canceled");
         return ptr::null_mut();
+    }
+
+    if session.workers.is_empty() {
+        if let Err(error) = rebuild_workers(session) {
+            set_last_error(error);
+            return ptr::null_mut();
+        }
+        if session.workers.is_empty() {
+            set_last_error("no active displays are available");
+            return ptr::null_mut();
+        }
     }
 
     if !session.prepared && snow_capture_desktop_session_prepare(session as *mut _) == 0 {
@@ -1449,29 +1585,26 @@ pub unsafe extern "C" fn snow_capture_desktop_session_capture(
     let focused_window_worker = if request.focused_window != 0 {
         let hwnd = request.focused_window;
         let options = CaptureOptions {
-            backend_tuning: snow_capture::tuning::BackendTuning::Windows(
-                snow_capture::tuning::windows::WindowsCaptureOptions {
-                    color_correction: correction,
-                    ..session.options.backend_tuning.windows_or_default()
-                },
-            ),
-            ..session.options
+            backend_tuning: platform_tuning(snow_capture::tuning::windows::WindowsCaptureOptions {
+                color_correction: correction,
+                ..session.options.backend_tuning.windows_or_default()
+            }),
+            ..session.options.clone()
         };
         let canceled = canceled.clone();
         match thread::Builder::new()
             .name("snow-capture-window-once".to_owned())
             .spawn(move || {
-                if canceled
-                    .as_ref()
-                    .is_some_and(|state| state.load(Ordering::Acquire))
-                {
+                if canceled.as_ref().is_some_and(|state| state.is_canceled()) {
                     return Err("screenshot capture canceled".to_owned());
                 }
-                let result = capture_window_snapshot(hwnd, options, include_cursor);
-                if canceled
-                    .as_ref()
-                    .is_some_and(|state| state.load(Ordering::Acquire))
-                {
+                let result = capture_window_snapshot(
+                    hwnd,
+                    options,
+                    include_cursor,
+                    canceled.clone().unwrap_or_default(),
+                );
+                if canceled.as_ref().is_some_and(|state| state.is_canceled()) {
                     return Err("screenshot capture canceled".to_owned());
                 }
                 result
@@ -1486,7 +1619,12 @@ pub unsafe extern "C" fn snow_capture_desktop_session_capture(
         None
     };
 
-    let frames_result = capture_all_frames_with_layout_retry(session, correction, include_cursor);
+    let frames_result = capture_all_frames_with_layout_retry(
+        session,
+        correction,
+        include_cursor,
+        canceled.clone().unwrap_or_default(),
+    );
     let focused_window_result = focused_window_worker.map(|worker| {
         worker
             .join()
@@ -1556,6 +1694,13 @@ pub unsafe extern "C" fn snow_capture_region_session_create(
         config.wgc_update_mode,
         output_pixel_format,
     ) {
+        Ok(options) => options,
+        Err(error) => {
+            set_last_error(error);
+            return ptr::null_mut();
+        }
+    };
+    let options = match unsafe { apply_exclusions(options, config.exclusions) } {
         Ok(options) => options,
         Err(error) => {
             set_last_error(error);
@@ -1723,18 +1868,16 @@ fn stream_capture_options(
     wgc_update_mode: WgcUpdateMode,
 ) -> CaptureOptions {
     CaptureOptions {
-        backend_tuning: snow_capture::tuning::BackendTuning::Windows(
-            snow_capture::tuning::windows::WindowsCaptureOptions {
-                color_correction: if config.restore_original_colors != 0 {
-                    ColorCorrection::snapshot_current()
-                } else {
-                    ColorCorrection::Disabled
-                },
-                gpu_hdr_conversion: true,
-                hdr_tonemap_lut: true,
-                wgc_update_mode,
+        backend_tuning: platform_tuning(snow_capture::tuning::windows::WindowsCaptureOptions {
+            color_correction: if config.restore_original_colors != 0 {
+                ColorCorrection::snapshot_current()
+            } else {
+                ColorCorrection::Disabled
             },
-        ),
+            gpu_hdr_conversion: true,
+            hdr_tonemap_lut: true,
+            wgc_update_mode,
+        }),
         capture_retry_count: config.capture_retry_count.max(1),
         workload: CaptureWorkload::Continuous,
         output_pixel_format,
@@ -1781,6 +1924,18 @@ pub unsafe extern "C" fn snow_capture_stream_create_region(
             return ptr::null_mut();
         }
     };
+    let options = match unsafe {
+        apply_exclusions(
+            stream_capture_options(config, output_pixel_format, wgc_update_mode),
+            config.exclusions,
+        )
+    } {
+        Ok(options) => options,
+        Err(error) => {
+            set_last_error(error);
+            return ptr::null_mut();
+        }
+    };
     let system = match CaptureSystem::builder()
         .with_backend_kind(capture_backend)
         .build()
@@ -1791,7 +1946,6 @@ pub unsafe extern "C" fn snow_capture_stream_create_region(
             return ptr::null_mut();
         }
     };
-    let options = stream_capture_options(config, output_pixel_format, wgc_update_mode);
     let session = match system.open_session(CaptureTarget::Region(region), options) {
         Ok(session) => session,
         Err(error) => {
@@ -2060,7 +2214,14 @@ pub unsafe extern "C" fn snow_capture_window_session_create(
             return ptr::null_mut();
         }
     };
-    let target = CaptureTarget::Window(WindowId::from_windows_handle(config.hwnd));
+    let id = match native_window_id(config.hwnd) {
+        Ok(id) => id,
+        Err(error) => {
+            set_last_error(error);
+            return ptr::null_mut();
+        }
+    };
+    let target = CaptureTarget::Window(id);
     let session = match system.open_session(target, options) {
         Ok(session) => session,
         Err(error) => {
@@ -2315,6 +2476,21 @@ pub extern "C" fn snow_capture_last_error_message() -> *const c_char {
     LAST_ERROR.with(|slot| slot.borrow().as_ptr())
 }
 
+pub struct SnowCaptureStreamImpl {
+    stream: CaptureStream,
+    origin_x: i32,
+    origin_y: i32,
+}
+
+pub struct SnowCaptureStreamFrameImpl {
+    frame: CapturedFrame,
+    origin_x: i32,
+    origin_y: i32,
+}
+
+#[cfg(target_os = "macos")]
+pub mod macos;
+
 #[cfg(test)]
 mod tests {
 
@@ -2345,6 +2521,87 @@ mod tests {
     }
 
     #[test]
+    fn desktop_and_stream_exclusions_are_owned_and_validated() {
+        let mut windows = [9, 7, 9];
+        let processes = [5, 3, 5];
+        let mut config: SnowCaptureDesktopSessionConfig = unsafe { std::mem::zeroed() };
+        config.exclusions = SnowCaptureExclusions {
+            windows: windows.as_ptr(),
+            window_count: 3,
+            processes: processes.as_ptr(),
+            process_count: 3,
+        };
+        let (options, _) = default_options(&config).unwrap();
+        let stream_options =
+            unsafe { apply_exclusions(CaptureOptions::default(), config.exclusions) }.unwrap();
+        windows[0] = 20;
+        assert_eq!(&*options.excluded_windows, &[7, 9]);
+        assert_eq!(&*options.excluded_processes, &[3, 5]);
+        assert_eq!(stream_options.excluded_windows, options.excluded_windows);
+        assert_eq!(windows[0], 20);
+        config.exclusions.windows = std::ptr::null();
+        assert!(default_options(&config).is_err());
+        assert!(unsafe { apply_exclusions(CaptureOptions::default(), config.exclusions) }.is_err());
+        #[cfg(target_os = "macos")]
+        assert!(matches!(
+            options.backend_tuning,
+            snow_capture::BackendTuning::Default
+        ));
+    }
+
+    #[test]
+    fn every_capture_entry_point_rejects_invalid_exclusions_before_capture() {
+        for exclusions in [
+            SnowCaptureExclusions {
+                window_count: 1,
+                ..Default::default()
+            },
+            SnowCaptureExclusions {
+                process_count: 1,
+                ..Default::default()
+            },
+            SnowCaptureExclusions {
+                windows: std::ptr::dangling(),
+                window_count: 4097,
+                ..Default::default()
+            },
+            SnowCaptureExclusions {
+                processes: std::ptr::dangling(),
+                process_count: 4097,
+                ..Default::default()
+            },
+        ] {
+            let mut desktop: SnowCaptureDesktopSessionConfig = unsafe { std::mem::zeroed() };
+            desktop.exclusions = exclusions;
+            assert!(snow_capture_desktop_session_create(&desktop).is_null());
+            let mut monitor: SnowCaptureMonitorSessionConfig = unsafe { std::mem::zeroed() };
+            monitor.device_name_utf8 = c"test-display".as_ptr();
+            monitor.exclusions = exclusions;
+            assert!(unsafe { snow_capture_monitor_session_create(&monitor) }.is_null());
+            let mut region: SnowCaptureRegionSessionConfig = unsafe { std::mem::zeroed() };
+            region.width = 64;
+            region.height = 64;
+            region.exclusions = exclusions;
+            assert!(unsafe { snow_capture_region_session_create(&region) }.is_null());
+            let mut stream: SnowCaptureStreamConfig = unsafe { std::mem::zeroed() };
+            stream.version = STREAM_CONFIG_VERSION;
+            stream.struct_size = STREAM_CONFIG_SIZE;
+            stream.width = 64;
+            stream.height = 64;
+            stream.buffer_depth = 1;
+            stream.max_consecutive_errors = 1;
+            stream.exclusions = exclusions;
+            assert!(unsafe { snow_capture_stream_create_region(&stream) }.is_null());
+            assert!(
+                unsafe { CStr::from_ptr(snow_capture_last_error_message()) }
+                    .to_str()
+                    .unwrap()
+                    .contains("exclusion")
+            );
+        }
+    }
+
+    #[test]
     fn null_screenshot_result_info_fails() {
         let mut info = SnowCaptureFrameInfo {
             stable_id: ptr::null(),
@@ -2365,6 +2622,25 @@ mod tests {
         let ok = unsafe { snow_capture_screenshot_result_display_info(ptr::null(), 0, &mut info) };
         assert_eq!(ok, 0);
         assert!(!snow_capture_last_error_message().is_null());
+    }
+
+    #[test]
+    fn cursor_snapshot_null_arguments_fail_without_modifying_results() {
+        unsafe {
+            snow_capture_cursor_snapshot_destroy(ptr::null_mut());
+            assert_eq!(
+                snow_capture_screenshot_result_composite_cursor(ptr::null_mut(), ptr::null()),
+                0
+            );
+            let result = test_result();
+            let before = (&*result).frames[0].frame.as_bytes().to_vec();
+            assert_eq!(
+                snow_capture_screenshot_result_composite_cursor(result, ptr::null()),
+                0
+            );
+            assert_eq!((&*result).frames[0].frame.as_bytes(), before);
+            snow_capture_screenshot_result_destroy(result);
+        }
     }
 
     #[test]
@@ -2439,6 +2715,7 @@ mod tests {
         assert!(unsafe { snow_capture_region_session_create(ptr::null()) }.is_null());
 
         let config = SnowCaptureRegionSessionConfig {
+            exclusions: Default::default(),
             x: 0,
             y: 0,
             width: 0,
@@ -2456,6 +2733,7 @@ mod tests {
     fn monitor_session_rejects_missing_names_without_opening_capture() {
         assert!(unsafe { snow_capture_monitor_session_create(ptr::null()) }.is_null());
         let mut config = SnowCaptureMonitorSessionConfig {
+            exclusions: Default::default(),
             device_name_utf8: ptr::null(),
             capture_retry_count: 1,
             pixel_format: 0,
@@ -2619,7 +2897,7 @@ mod tests {
         );
         assert_eq!(
             std::mem::size_of::<SnowCaptureStreamConfig>(),
-            std::mem::size_of::<usize>() + 72
+            std::mem::size_of::<usize>() * 5 + 72
         );
         assert_eq!(std::mem::size_of::<SnowCaptureStreamEvent>(), 40 + 32);
         assert_eq!(
@@ -2639,6 +2917,7 @@ mod tests {
     #[test]
     fn stream_config_validation_checks_version_size_and_dimensions() {
         let valid = SnowCaptureStreamConfig {
+            exclusions: Default::default(),
             version: STREAM_CONFIG_VERSION,
             struct_size: STREAM_CONFIG_SIZE,
             x: 0,
@@ -2669,6 +2948,7 @@ mod tests {
             options.backend_tuning.windows_or_default().color_correction,
             ColorCorrection::Disabled
         );
+        #[cfg(windows)]
         for restore_original_colors in [1, u8::MAX] {
             let options = stream_capture_options(
                 SnowCaptureStreamConfig {
@@ -2768,6 +3048,7 @@ mod tests {
     #[test]
     fn desktop_config_selects_wgc() {
         let config = SnowCaptureDesktopSessionConfig {
+            exclusions: Default::default(),
             capture_retry_count: 2,
             wgc_update_mode: 1,
             capture_backend: 2,
@@ -2778,6 +3059,7 @@ mod tests {
         let (options, backend) = default_options(&raw const config).unwrap();
 
         assert_eq!(options.capture_retry_count, 2);
+        #[cfg(windows)]
         assert_eq!(
             options.backend_tuning.windows_or_default().wgc_update_mode,
             WgcUpdateMode::CompleteOnly
@@ -2815,11 +3097,49 @@ mod tests {
     }
 
     #[test]
-    fn capture_config_extensions_reuse_reserved_bytes_without_growing_configs() {
+    fn capture_config_exclusion_layouts() {
         let pointer_sized_prefix = std::mem::size_of::<usize>();
         assert_eq!(
-            std::mem::size_of::<SnowCaptureDesktopSessionConfig>(),
+            std::mem::size_of::<SnowCaptureExclusions>(),
+            pointer_sized_prefix * 4
+        );
+        assert_eq!(std::mem::offset_of!(SnowCaptureExclusions, windows), 0);
+        assert_eq!(
+            std::mem::offset_of!(SnowCaptureExclusions, window_count),
+            pointer_sized_prefix
+        );
+        assert_eq!(
+            std::mem::offset_of!(SnowCaptureExclusions, processes),
+            pointer_sized_prefix * 2
+        );
+        assert_eq!(
+            std::mem::offset_of!(SnowCaptureExclusions, process_count),
+            pointer_sized_prefix * 3
+        );
+        assert_eq!(
+            std::mem::offset_of!(SnowCaptureDesktopSessionConfig, exclusions),
             pointer_sized_prefix + 32
+        );
+        assert_eq!(
+            std::mem::offset_of!(SnowCaptureMonitorSessionConfig, exclusions),
+            pointer_sized_prefix * 2 + 32
+        );
+        assert_eq!(
+            std::mem::size_of::<SnowCaptureMonitorSessionConfig>(),
+            pointer_sized_prefix * 6 + 32
+        );
+        assert_eq!(
+            std::mem::offset_of!(SnowCaptureRegionSessionConfig, exclusions),
+            16 + pointer_sized_prefix + 32
+        );
+        assert_eq!(
+            std::mem::offset_of!(SnowCaptureStreamConfig, exclusions),
+            pointer_sized_prefix + 72
+        );
+        assert_eq!(STREAM_CONFIG_VERSION, 2);
+        assert_eq!(
+            std::mem::size_of::<SnowCaptureDesktopSessionConfig>(),
+            pointer_sized_prefix * 5 + 32
         );
         assert_eq!(
             std::mem::size_of::<SnowCaptureWindowSessionConfig>(),
@@ -2827,7 +3147,7 @@ mod tests {
         );
         assert_eq!(
             std::mem::size_of::<SnowCaptureRegionSessionConfig>(),
-            16 + pointer_sized_prefix + 32
+            16 + pointer_sized_prefix * 5 + 32
         );
         assert_eq!(
             std::mem::size_of::<SnowCaptureDesktopSessionState>(),
@@ -2849,7 +3169,7 @@ mod tests {
 
     #[test]
     fn versioned_screenshot_abi_has_expected_layout() {
-        assert_eq!(std::mem::size_of::<SnowCaptureStreamConfig>(), 80);
+        assert_eq!(std::mem::size_of::<SnowCaptureStreamConfig>(), 112);
         assert_eq!(
             std::mem::offset_of!(SnowCaptureStreamConfig, restore_original_colors),
             std::mem::offset_of!(SnowCaptureStreamConfig, include_cursor) + 1
@@ -2923,7 +3243,7 @@ mod tests {
             );
         });
         cancel.join().expect("cancel thread should complete");
-        assert!(state.load(Ordering::Acquire));
+        assert!(state.is_canceled());
         unsafe { snow_capture_cancellation_token_destroy(token) };
     }
 
@@ -2984,21 +3304,6 @@ mod tests {
         ));
     }
 }
-
-pub struct SnowCaptureStreamImpl {
-    stream: CaptureStream,
-    origin_x: i32,
-    origin_y: i32,
-}
-
-pub struct SnowCaptureStreamFrameImpl {
-    frame: CapturedFrame,
-    origin_x: i32,
-    origin_y: i32,
-}
-
-#[cfg(target_os = "macos")]
-pub mod macos;
 
 #[cfg(all(test, target_os = "macos"))]
 #[test]

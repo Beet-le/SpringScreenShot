@@ -2,6 +2,7 @@
 #include "snow_shot/presentation/screenshotgeometry.h"
 #include "snow_shot/presentation/screenshotselectionmodel.h"
 #include "../src/presentation/toolbar/screenshottoolbarplacement.h"
+#include "../src/presentation/capture/scrollingselectionmovement.h"
 
 #include <QRectF>
 
@@ -119,6 +120,28 @@ void unlockedResizeCanChangeAspectRatio() {
                                        QRectF(0.0, 0.0, 800.0, 600.0), kMinimumSelectionSize);
     require(resized.width() == 250.0 && resized.height() == 100.0,
             "unlocked resize should continue to change dimensions independently");
+}
+
+void persistedAspectRatioLockConstrainsNewMarquee() {
+    ScreenshotSelectionModel selection;
+    require(selection.setAspectRatioLockEnabled(true, kMinimumSelectionSize) &&
+                selection.aspectRatioLocked(),
+            "the aspect-ratio lock should be enabled before a selection exists");
+    selection.setSelectionStartEnd(QPointF(40.0, 50.0), QPointF(40.0, 50.0));
+    selection.beginMoveDrag(QPointF(40.0, 50.0));
+
+    const QRectF marquee =
+        selection.selectionRectForDrag(ScreenshotSelectionDragMode::Marquee, QPointF(160.0, 90.0),
+                                       QRectF(0.0, 0.0, 800.0, 600.0), kMinimumSelectionSize);
+    require(std::abs(marquee.width() - marquee.height()) < kComparisonTolerance,
+            "a persisted aspect-ratio lock should constrain a new marquee to a square");
+
+    selection.setSelectionRect(marquee);
+    require(selection.setAspectRatioLockEnabled(true, kMinimumSelectionSize),
+            "confirming the marquee should derive its concrete aspect ratio");
+    selection.clearSelection();
+    require(selection.aspectRatioLocked(),
+            "clearing a selection should preserve the enabled aspect-ratio preference");
 }
 
 void grabAdjustmentSnapsOnlyTheDraggedEdgesToThePressPosition() {
@@ -468,6 +491,37 @@ CapturedDisplayModel syntheticDisplay(const QRect& physicalRect, const QRect& ca
     return display;
 }
 
+void globalMouseDesktopPointsMapAcrossMixedScaleDisplays() {
+    ScreenshotDisplaySession displays;
+    auto left = syntheticDisplay(QRect(-2400, -400, 2400, 1800), QRect(0, 0, 2400, 1800));
+    left.logicalRect = QRect(-1200, -200, 1200, 900);
+    displays.appendDisplay(left);
+    auto right = syntheticDisplay(QRect(0, 0, 1920, 1080), QRect(2400, 400, 1920, 1080));
+    right.logicalRect = QRect(0, 0, 1920, 1080);
+    displays.appendDisplay(right);
+    ScreenshotGeometryMapper geometry;
+    const auto begin = geometry.physicalPositionForLogicalPoint(displays, QPointF(-1100.5, -100.5));
+    const auto finish = geometry.physicalPositionForLogicalPoint(displays, QPoint(300, 200));
+    require(begin == QPoint(-2201, -201) && finish == QPoint(300, 200),
+            "Quartz desktop points must map independently on Retina and non-Retina displays");
+    require(
+        geometry.canvasPositionForPhysicalPoint(displays, begin) == QPointF(199, 199) &&
+            geometry.canvasPositionForPhysicalPoint(displays, finish) == QPointF(2700, 600),
+        "cross-display global drags must preserve capture pixel endpoints and negative origins");
+    require(geometry.physicalPositionForLogicalPoint(displays, QPoint(0, 50)) == QPoint(0, 50),
+            "the logical shared edge belongs to the adjacent display without double scaling");
+    snow_shot::capture_detail::ScrollingSelectionMovement movement;
+    require(movement.begin(ScreenshotScrollingRecognitionMode::Horizontal,
+                           ScreenshotScrollingRecognitionMode::Horizontal,
+                           QRect(199, 199, 600, 400), begin),
+            "begin mixed-DPI scrolling movement");
+    require(movement.update(finish, QRect(0, 0, 4320, 1800)) == QRect(2700, 199, 600, 400),
+            "scrolling movement must cross mixed-DPI displays without scaling or off-axis drift");
+    ScreenshotDisplaySession empty;
+    require(geometry.physicalPositionForLogicalPoint(empty, QPoint(-10, 20)) == QPoint(-10, 20),
+            "coordinate conversion must have a stable fallback before display capture is ready");
+}
+
 void physicalPointMappingUsesHalfOpenMonitorBounds() {
     ScreenshotDisplaySession displays;
     displays.appendDisplay(syntheticDisplay(QRect(0, 0, 100, 100), QRect(0, 0, 100, 100)));
@@ -480,6 +534,28 @@ void physicalPointMappingUsesHalfOpenMonitorBounds() {
             "the shared monitor edge must belong to the next half-open display");
     require(geometry.displayForPhysicalPoint(displays, QPointF(300, 50)) == nullptr,
             "a pointer on the exclusive right edge must not select a monitor");
+}
+
+void selectorDisplayIdentityPreventsMixedScaleCrossMapping() {
+    ScreenshotDisplaySession displays;
+    auto first = syntheticDisplay(QRect(0, 0, 200, 200), QRect(0, 0, 100, 100));
+    first.stableId = QStringLiteral("display:1");
+    first.canvasRect = QRect(0, 0, 200, 200);
+    auto second = syntheticDisplay(QRect(100, 0, 100, 100), QRect(100, 0, 100, 100));
+    second.stableId = QStringLiteral("display:2");
+    second.canvasRect = QRect(200, 0, 100, 100);
+    displays.appendDisplay(first);
+    displays.appendDisplay(second);
+    ScreenshotGeometryMapper geometry;
+    const QRectF rect(120, 20, 20, 20);
+    require(geometry.canvasRectForPhysicalRect(displays, rect, QStringLiteral("display:1")) == rect,
+            "Retina selector output must remain on the queried display");
+    require(geometry.canvasRectForPhysicalRect(displays, rect, QStringLiteral("display:2")) ==
+                QRectF(220, 20, 20, 20),
+            "secondary display output must map using its own canvas origin");
+    require(
+        geometry.canvasRectForPhysicalRect(displays, rect, QStringLiteral("display:3")).isEmpty(),
+        "obsolete display output must not select a different monitor");
 }
 
 void physicalWindowRectIsClippedAndMappedAcrossMonitors() {
@@ -563,6 +639,7 @@ int main() {
     lockedResizeAllowsFlippingAcrossOppositeEdges();
     lockedCornerResizeCanFlipBothAxes();
     unlockedResizeCanChangeAspectRatio();
+    persistedAspectRatioLockConstrainsNewMarquee();
     grabAdjustmentSnapsOnlyTheDraggedEdgesToThePressPosition();
     grabAdjustmentRespectsBoundsAndMinimumSize();
     positionFollowDragTracksThePointerAfterGrabAdjustment();
@@ -578,8 +655,10 @@ int main() {
     pointerSeededSelectionsAddressWholePointerCells();
     lockedMovementFollowResizeKeepsTheExactRatioOnWholePixels();
     selectionShadowDefaultsToRequestedColor();
+    globalMouseDesktopPointsMapAcrossMixedScaleDisplays();
     physicalPointMappingUsesHalfOpenMonitorBounds();
     physicalWindowRectIsClippedAndMappedAcrossMonitors();
+    selectorDisplayIdentityPreventsMixedScaleCrossMapping();
     dragAnchorDoesNotReplaceTheActualCursorPosition();
     return 0;
 }

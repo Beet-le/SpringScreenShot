@@ -1,6 +1,8 @@
 #include "snow_shot/presentation/components/settingspagewidget.h"
 
 #include "snow_shot/presentation/components/pagecontainerwidget.h"
+#include "snow_shot/presentation/apppermissionservice.h"
+#include "widgets/alert.h"
 #include "snow_shot/presentation/components/globalmouserow.h"
 #include "snow_shot/presentation/components/pathinput.h"
 #include "snow_shot/presentation/components/sectionheaderwidget.h"
@@ -29,23 +31,30 @@
 #include "widgets/switch.h"
 
 #include <QAbstractButton>
+#include "snow_shot/presentation/globalmousemanager.h"
 #include <QEvent>
 #include <QFileDialog>
 #include <QGridLayout>
 #include <QHash>
+#include <QHideEvent>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
 #include <QPointer>
+
 #include <QScrollBar>
 #include <QSignalBlocker>
 #include <QScopedValueRollback>
+#include <QShowEvent>
 #include <QStyle>
 #include <QSizePolicy>
 #include <QTimer>
+
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <functional>
+#include <optional>
 #include <type_traits>
 #include <utility>
 
@@ -58,6 +67,30 @@ adqt::widgets::AdSelect::Option selectOption(const QVariant& value, const QStrin
     result.value = value;
     result.label = label;
     return result;
+}
+
+std::optional<snow_shot::presentation::AppPermission>
+permissionForRenderer(settings::SettingsCustomRenderer renderer) {
+    using Permission = snow_shot::presentation::AppPermission;
+    using Renderer = settings::SettingsCustomRenderer;
+    switch (renderer) {
+    case Renderer::PermissionScreenRecording:
+        return Permission::ScreenRecording;
+    case Renderer::PermissionAccessibility:
+        return Permission::Accessibility;
+    case Renderer::PermissionInputMonitoring:
+        return Permission::InputMonitoring;
+    case Renderer::PermissionMicrophone:
+        return Permission::Microphone;
+    case Renderer::CustomAiModels:
+    case Renderer::StorageStatus:
+    case Renderer::DrawingToolbarEditor:
+    case Renderer::ScreenshotToolbarEditor:
+    case Renderer::PinnedToolbarEditor:
+    case Renderer::TrayMenuOptions:
+        return std::nullopt;
+    }
+    return std::nullopt;
 }
 
 } // namespace
@@ -87,6 +120,8 @@ class SettingsPageWidget::Impl {
         ShortcutKeyRow* shortcutControl = nullptr;
         GlobalMouseRow* globalMouseControl = nullptr;
         adqt::widgets::AdButton* actionControl = nullptr;
+        adqt::widgets::AdButton* permissionControl = nullptr;
+        std::optional<snow_shot::presentation::AppPermission> permission;
         SettingsCustomWidget* customControl = nullptr;
         QPointer<adqt::widgets::AdModal> modal;
     };
@@ -155,6 +190,43 @@ class SettingsPageWidget::Impl {
         contentLayout = pageContainer->contentLayout();
         contentLayout->setSpacing(0);
 
+#ifdef Q_OS_MACOS
+        if (page->id == QStringLiteral("global-mouse") ||
+            page->id == QStringLiteral("global-hotkeys")) {
+            const QMargins margins = contentLayout->contentsMargins();
+            contentTopMarginWithoutPermissionBanner = margins.top();
+            permissionBanner = new adqt::widgets::AdAlert(contentWidget);
+            permissionBanner->setObjectName(QStringLiteral("appPermissionsAlert"));
+            permissionBanner->setSeverity(adqt::widgets::AdAlert::Severity::Warning);
+            permissionBanner->setIconMode(adqt::widgets::AdAlert::IconMode::Visible);
+            permissionBanner->setAnimated(false);
+            permissionButton = new adqt::widgets::AdButton(permissionBanner);
+            permissionBanner->setActionsWidget(permissionButton);
+            connect(permissionButton, &QAbstractButton::clicked, &q, [this] {
+                auto* service = runtimeSession.appPermissions();
+                if (!service)
+                    return;
+                const auto missing = relevantMissingPermissions();
+                settings::SettingsCommand command;
+                command.kind = settings::SettingsCommandKind::Navigate;
+                command.location = {
+                    QStringLiteral("app-permissions"), QStringLiteral("permissions"),
+                    missing.isEmpty() ? QString()
+                                      : snow_shot::presentation::appPermissionId(missing.first())};
+                emit q.commandRequested(command);
+            });
+            if (auto* service = runtimeSession.appPermissions())
+                connect(service, &snow_shot::presentation::AppPermissionService::changed, &q,
+                        [this] { syncMousePermission(); });
+            connect(&runtimeSession,
+                    &settings::SettingsRuntimeSession::globalMousePermissionChanged, &q,
+                    [this] { syncValues(); });
+            connect(&runtimeSession, &settings::SettingsRuntimeSession::fieldChanged, &q,
+                    [this] { syncMousePermission(); });
+            contentLayout->addWidget(permissionBanner);
+        }
+#endif
+
         if (pagePlan != nullptr) {
             for (const settings::SettingsSectionPlan& sectionPlan : pagePlan->sectionPlans) {
                 Q_ASSERT(sectionPlan.sectionIndex >= 0 &&
@@ -194,9 +266,20 @@ class SettingsPageWidget::Impl {
             QStringLiteral("settings-section"),
             QStringLiteral("%1-%2").arg(page->id, sectionDefinition.id)));
         runtimeSection.header->setResetVisible(reset != settings::SettingsSectionReset::None);
+#ifdef Q_OS_MACOS
+        if (page->id == QStringLiteral("app-permissions")) {
+            runtimeSection.header->setTrailingAction(SectionHeaderWidget::TrailingAction::Refresh);
+            connect(runtimeSection.header, &SectionHeaderWidget::refreshRequested, &q, [this] {
+                if (auto* service = runtimeSession.appPermissions()) {
+                    service->refresh();
+                }
+            });
+        }
+#endif
         contentLayout->addWidget(runtimeSection.header);
+
         sections.push_back(runtimeSection);
-        sectionIndexes.insert(sectionDefinition.id, sections.size() - 1);
+        sectionIndexes.insert(sectionDefinition.id, static_cast<int>(sections.size()) - 1);
 
         auto* list = new QWidget(contentWidget);
         list->setObjectName(settings::generatedObjectName(
@@ -727,6 +810,46 @@ class SettingsPageWidget::Impl {
                     connect(control, &QAbstractButton::clicked, &q,
                             [this, itemId = definition.id]() { triggerAction(itemId); });
                 } else if constexpr (std::is_same_v<Payload, settings::SettingsCustomDefinition>) {
+                    if (const auto permission = permissionForRenderer(payload.renderer);
+                        permission.has_value()) {
+                        auto* control = new adqt::widgets::AdButton(list);
+                        control->setButtonStyle(adqt::widgets::AdButton::ButtonStyle::Outline);
+                        control->setSizeClass(adqt::widgets::AdButton::SizeClass::Medium);
+                        control->setObjectName(
+                            QStringLiteral("appPermission-%1-settings")
+                                .arg(snow_shot::presentation::appPermissionId(permission.value())));
+                        runtime.permissionControl = control;
+                        runtime.permission = permission;
+                        runtime.anchor = settings_ui::createSettingItemRow(
+                            list, colorScheme.metricAlias, &runtime.title, &runtime.description,
+                            control,
+                            settings::generatedObjectName(QStringLiteral("settings-item"),
+                                                          definition.id));
+                        runtime.anchor->setFocusPolicy(Qt::StrongFocus);
+                        runtime.focusTarget = runtime.anchor;
+                        addItemWidget(runtime.anchor);
+                        connect(
+                            control, &QAbstractButton::clicked, &q,
+                            [this, permission = permission.value()] {
+                                auto* service = runtimeSession.appPermissions();
+                                if (service == nullptr ||
+                                    service->snapshot().status(permission) ==
+                                        snow_shot::presentation::AppPermissionStatus::Checking ||
+                                    service->snapshot().granted(permission)) {
+                                    return;
+                                }
+                                if (!service->openSettings(permission)) {
+                                    adqt::widgets::AdMessage::Request request;
+                                    request.content =
+                                        q.tr("Could not open System Settings. Open System "
+                                             "Settings > Privacy & Security > %1.")
+                                            .arg(snow_shot::presentation::appPermissionName(
+                                                permission));
+                                    adqt::widgets::AdMessageService::error(std::move(request), &q);
+                                }
+                            });
+                        return;
+                    }
                     auto* control = createSettingsCustomWidget(payload.renderer, registry,
                                                                definition, runtimeSession, list);
                     Q_ASSERT(control != nullptr);
@@ -753,7 +876,7 @@ class SettingsPageWidget::Impl {
             runtime.anchor->setProperty("settingsProviderId", descriptor->providerId);
         }
         items.push_back(runtime);
-        itemIndexes.insert(definition.id, items.size() - 1);
+        itemIndexes.insert(definition.id, static_cast<int>(items.size()) - 1);
     }
 
     void connectServices() {
@@ -768,6 +891,29 @@ class SettingsPageWidget::Impl {
                              else
                                  adqt::widgets::AdMessageService::error(std::move(request), &q);
                          });
+        QObject::connect(
+            &runtimeSession, &settings::SettingsRuntimeSession::actionFinished, &q,
+            [this](settings::SettingsActionBinding action, bool success, const QString& error) {
+                Q_UNUSED(error);
+                if (!q.isVisible() || !success)
+                    return;
+                for (const RuntimeItem& item : items) {
+                    if (item.definition == nullptr)
+                        continue;
+                    const auto* definition =
+                        std::get_if<settings::SettingsActionDefinition>(&item.definition->payload);
+                    if (definition == nullptr || definition->binding != action ||
+                        !definition->successMessage.has_value()) {
+                        continue;
+                    }
+                    adqt::widgets::AdMessage::Request request;
+                    request.key =
+                        QStringLiteral("settings-action-success-%1").arg(static_cast<int>(action));
+                    request.content = definition->successMessage->translated();
+                    adqt::widgets::AdMessageService::success(std::move(request), &q);
+                    return;
+                }
+            });
         auto& themeManager = snow_shot::presentation::styles::ThemeManager::instance();
         QObject::connect(&themeManager,
                          &snow_shot::presentation::styles::ThemeManager::themeChanged, &q,
@@ -832,6 +978,14 @@ class SettingsPageWidget::Impl {
                     item->multiSelect->setOptions(values);
                 }
             });
+#ifdef Q_OS_MACOS
+        if (page != nullptr && page->id == QStringLiteral("app-permissions")) {
+            if (auto* service = runtimeSession.appPermissions()) {
+                QObject::connect(service, &snow_shot::presentation::AppPermissionService::changed,
+                                 &q, [this] { syncPermissionButtons(); });
+            }
+        }
+#endif
         QObject::connect(&runtimeSession, &settings::SettingsRuntimeSession::storageStateChanged,
                          &q, [this](const snow_shot::storage::StorageStatus& status) {
                              for (RuntimeSection& section : sections) {
@@ -899,18 +1053,34 @@ class SettingsPageWidget::Impl {
         if (action == nullptr) {
             return;
         }
-        if (!action->confirmation.has_value()) {
-            if (!runtimeSession.triggerAction(action->binding)) {
+        QString filePath;
+        if (action->fileOpen.has_value()) {
+            filePath =
+                QFileDialog::getOpenFileName(&q, action->fileOpen->dialogTitle.translated(),
+                                             QString(), action->fileOpen->fileFilter.translated());
+            if (filePath.isEmpty()) {
+                return;
+            }
+        }
+        const auto runAction = [this, binding = action->binding, filePath]() {
+            if (!runtimeSession.triggerAction(binding, filePath)) {
                 syncValues();
             }
+        };
+        if (!action->confirmation.has_value()) {
+            runAction();
             return;
         }
+        confirmItemAction(*item, *action->confirmation, runAction);
+    }
 
-        const settings::SettingsConfirmationDefinition& confirmation = *action->confirmation;
+    void confirmItemAction(RuntimeItem& item,
+                           const settings::SettingsConfirmationDefinition& confirmation,
+                           const std::function<void()>& acceptedAction) {
         auto* modal = new adqt::widgets::AdModal(&q);
-        item->modal = modal;
+        item.modal = modal;
         modal->setObjectName(
-            settings::generatedObjectName(QStringLiteral("settings-modal"), item->definition->id));
+            settings::generatedObjectName(QStringLiteral("settings-modal"), item.definition->id));
         modal->setMode(adqt::widgets::AdModal::Mode::Window);
         modal->setOwnerWindow(q.window());
         modal->setPreset(adqt::widgets::AdModal::Preset::Confirm);
@@ -921,14 +1091,9 @@ class SettingsPageWidget::Impl {
         modal->setAcceptAccentRole(adqt::widgets::AdButton::AccentRole::Danger);
         modal->setStandardButtons(adqt::widgets::AdModal::StandardButton::Ok |
                                   adqt::widgets::AdModal::StandardButton::Cancel);
-        QObject::connect(modal, &adqt::widgets::AdModal::accepted, &q,
-                         [this, binding = action->binding]() {
-                             if (!runtimeSession.triggerAction(binding)) {
-                                 syncValues();
-                             }
-                         });
+        QObject::connect(modal, &adqt::widgets::AdModal::accepted, &q, acceptedAction);
         QObject::connect(modal, &adqt::widgets::AdModal::finished, &q,
-                         [this, itemId](adqt::widgets::AdModal::DialogCode) {
+                         [this, itemId = item.definition->id](adqt::widgets::AdModal::DialogCode) {
                              RuntimeItem* finishedItem = runtimeItem(itemId);
                              if (finishedItem != nullptr && finishedItem->modal != nullptr) {
                                  finishedItem->modal->deleteLater();
@@ -1060,7 +1225,8 @@ class SettingsPageWidget::Impl {
                     std::get_if<settings::SettingsRadioDefinition>(&runtime.definition->payload);
                 if (definition != nullptr) {
                     const QVariant current = runtimeSession.radioValue(definition->binding);
-                    runtime.radioGroup->setCheckedId(runtime.radioValues.indexOf(current));
+                    runtime.radioGroup->setCheckedId(
+                        static_cast<int>(runtime.radioValues.indexOf(current)));
                 }
                 for (adqt::widgets::AdRadio* button : std::as_const(runtime.radioButtons)) {
                     button->setEnabled(fieldEnabled);
@@ -1149,7 +1315,102 @@ class SettingsPageWidget::Impl {
                         runtime.description->setText(state.hint);
                 }
             }
+            if (runtime.permissionControl != nullptr) {
+                syncPermissionButton(runtime);
+            }
         }
+    }
+
+    void syncPermissionButton(RuntimeItem& runtime) {
+        if (runtime.permissionControl == nullptr || !runtime.permission.has_value()) {
+            return;
+        }
+        auto* service = runtimeSession.appPermissions();
+        const auto permission = runtime.permission.value();
+        const auto status = service != nullptr
+                                ? service->snapshot().status(permission)
+                                : snow_shot::presentation::AppPermissionStatus::Error;
+        const bool checking = status == snow_shot::presentation::AppPermissionStatus::Checking;
+        const bool granted = status == snow_shot::presentation::AppPermissionStatus::Granted;
+        auto* button = runtime.permissionControl;
+        if (checking) {
+            button->setText(q.tr("Checking…"));
+            button->setAccentRole(adqt::widgets::AdButton::AccentRole::Neutral);
+        } else if (granted) {
+            button->setText(q.tr("Authorized"));
+            button->setAccentRole(adqt::widgets::AdButton::AccentRole::Success);
+        } else {
+            button->setText(q.tr("Go to Settings"));
+            button->setAccentRole(permission == snow_shot::presentation::AppPermission::Microphone
+                                      ? adqt::widgets::AdButton::AccentRole::Orange
+                                      : adqt::widgets::AdButton::AccentRole::Danger);
+        }
+        const bool actionable = service != nullptr && !checking && !granted;
+        button->setAttribute(Qt::WA_TransparentForMouseEvents, !actionable);
+        button->setFocusPolicy(actionable ? Qt::TabFocus : Qt::NoFocus);
+        button->setAccessibleName(button->text() + QStringLiteral(": ") +
+                                  runtime.definition->title.translated());
+        button->setAccessibleDescription(runtime.definition->description.translated());
+    }
+
+    void syncPermissionButtons() {
+        for (RuntimeItem& runtime : items) {
+            syncPermissionButton(runtime);
+        }
+    }
+
+    void observePermissionPage(bool visible) {
+#ifdef Q_OS_MACOS
+        if (page != nullptr && page->id == QStringLiteral("app-permissions")) {
+            if (auto* service = runtimeSession.appPermissions()) {
+                service->observe(&q, visible);
+            }
+        }
+#else
+        Q_UNUSED(visible);
+#endif
+    }
+
+    snow_shot::presentation::AppPermissions relevantMissingPermissions() const {
+        auto* service = runtimeSession.appPermissions();
+        return service
+                   ? service->missing(snow_shot::presentation::pagePermissions(
+                         page->id == QStringLiteral("global-mouse"), service->microphoneEnabled(),
+                         runtimeSession.switchValue(
+                             settings::SettingsSwitchBinding::TranslationPageEnabled)))
+                   : snow_shot::presentation::AppPermissions{};
+    }
+    void syncMousePermission() {
+        if (!permissionBanner)
+            return;
+        const auto missing = relevantMissingPermissions();
+        const bool bannerVisible = !missing.isEmpty();
+        const QMargins margins = contentLayout->contentsMargins();
+        contentLayout->setContentsMargins(margins.left(),
+                                          bannerVisible ? colorScheme.metricAlias.paddingLG
+                                                        : contentTopMarginWithoutPermissionBanner,
+                                          margins.right(), margins.bottom());
+        QStringList names;
+        for (auto permission : missing)
+            names.append(snow_shot::presentation::appPermissionName(permission));
+        permissionBanner->setText(q.tr("Permissions needed"));
+        if (page->id == QStringLiteral("global-mouse")) {
+            permissionBanner->setInformativeText(
+                q.tr("Global mouse actions need access to: %1.").arg(names.join(q.tr(", "))));
+        } else {
+            QStringList actions;
+            using Permission = snow_shot::presentation::AppPermission;
+            if (missing.contains(Permission::ScreenRecording))
+                actions.append(q.tr("screenshots and screen recording"));
+            if (missing.contains(Permission::Accessibility))
+                actions.append(q.tr("selected-text translation"));
+            if (missing.contains(Permission::Microphone))
+                actions.append(q.tr("microphone recording"));
+            permissionBanner->setInformativeText(
+                q.tr("To use %1, review access to: %2.")
+                    .arg(actions.join(q.tr(", ")), names.join(q.tr(", "))));
+        }
+        permissionBanner->setVisible(bannerVisible);
     }
 
     void syncValues() {
@@ -1280,6 +1541,11 @@ class SettingsPageWidget::Impl {
                 runtime.customControl->retranslateUi();
             }
         }
+        if (permissionButton) {
+            permissionButton->setText(q.tr("Review permissions"));
+            permissionButton->setAccessibleName(permissionButton->text());
+            syncMousePermission();
+        }
         syncValues();
         requestVisibleSectionSync();
     }
@@ -1339,7 +1605,7 @@ class SettingsPageWidget::Impl {
         int activeIndex = 0;
         if (scrollBar->maximum() > scrollBar->minimum() &&
             scrollBar->value() >= scrollBar->maximum()) {
-            activeIndex = sections.size() - 1;
+            activeIndex = static_cast<int>(sections.size()) - 1;
         } else {
             const int activationLine = scrollBar->value() + sectionViewportInset() + 1;
             for (int index = 1; index < sections.size(); ++index) {
@@ -1389,13 +1655,15 @@ class SettingsPageWidget::Impl {
         QWidget* target = nullptr;
         QWidget* focus = nullptr;
         RuntimeSection* targetSection = nullptr;
-        if (!location.itemId.isEmpty()) {
+        const bool pageLevelNavigation =
+            requested.sectionId.isEmpty() && requested.itemId.isEmpty();
+        if (!pageLevelNavigation && !location.itemId.isEmpty()) {
             if (RuntimeItem* item = runtimeItem(location.itemId)) {
                 target = item->anchor;
                 focus = item->focusTarget;
             }
         }
-        if (target == nullptr) {
+        if (!pageLevelNavigation && target == nullptr) {
             targetSection = runtimeSection(location.sectionId);
             if (targetSection != nullptr) {
                 target = targetSection->header;
@@ -1403,7 +1671,10 @@ class SettingsPageWidget::Impl {
         }
         const bool previousSuppression = suppressVisibleSectionTracking;
         suppressVisibleSectionTracking = true;
-        if (target != nullptr) {
+        if (pageLevelNavigation) {
+            QScrollBar* scrollBar = scrollArea->verticalScrollBar();
+            scrollBar->setValue(scrollBar->minimum());
+        } else if (target != nullptr) {
             if (targetSection != nullptr) {
                 scrollToSection(*targetSection);
             } else {
@@ -1440,6 +1711,9 @@ class SettingsPageWidget::Impl {
     bool suppressVisibleSectionTracking = false;
     bool synchronizingValues = false;
     bool visibleSectionSyncPending = false;
+    QPointer<adqt::widgets::AdAlert> permissionBanner;
+    int contentTopMarginWithoutPermissionBanner = 0;
+    QPointer<adqt::widgets::AdButton> permissionButton;
 };
 
 SettingsPageWidget::SettingsPageWidget(
@@ -1473,4 +1747,14 @@ void SettingsPageWidget::changeEvent(QEvent* event) {
     if (event->type() == QEvent::LanguageChange) {
         retranslateUi();
     }
+}
+
+void SettingsPageWidget::showEvent(QShowEvent* event) {
+    QWidget::showEvent(event);
+    m_impl->observePermissionPage(true);
+}
+
+void SettingsPageWidget::hideEvent(QHideEvent* event) {
+    m_impl->observePermissionPage(false);
+    QWidget::hideEvent(event);
 }

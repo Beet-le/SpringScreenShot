@@ -32,7 +32,7 @@ constexpr qint64 kMaximumCanvasBytes = 16 * kMiB;
 constexpr qint64 kMaximumPixelsPerImage = 64'000'000;
 constexpr qint64 kMaximumPixelsPerRecord = 128'000'000;
 constexpr int kMaximumDisplays = 32;
-constexpr int kIndexVersion = 1;
+constexpr int kIndexVersion = 2;
 // Bounds arithmetic on persisted sizes without consulting payload files.
 constexpr qint64 kMaximumStoredBytes = 1LL << 40;
 
@@ -119,6 +119,20 @@ QJsonObject recordJson(const StoredRecord& stored) {
             object.insert(QStringLiteral("source_canvas_origin"),
                           QJsonObject{{QStringLiteral("x"), display.sourceCanvasOrigin->x()},
                                       {QStringLiteral("y"), display.sourceCanvasOrigin->y()}});
+        }
+        if (display.sourceCanvasRect.has_value()) {
+            const QRect rect = *display.sourceCanvasRect;
+            object.insert(QStringLiteral("source_canvas_rect"),
+                          QJsonObject{{QStringLiteral("x"), rect.x()},
+                                      {QStringLiteral("y"), rect.y()},
+                                      {QStringLiteral("width"), rect.width()},
+                                      {QStringLiteral("height"), rect.height()}});
+            object.insert(QStringLiteral("backing_scale"), display.backingScale);
+            object.insert(QStringLiteral("native_display_id"),
+                          static_cast<qint64>(display.nativeDisplayId));
+            object.insert(QStringLiteral("canvas_space"), display.canvasUsesPoints
+                                                              ? QStringLiteral("points")
+                                                              : QStringLiteral("pixels"));
         }
         displays.append(object);
     }
@@ -254,6 +268,37 @@ bool parseRecord(const QJsonObject& object, StoredRecord* stored) {
             }
             image.sourceCanvasOrigin = QPoint(static_cast<int>(originX), static_cast<int>(originY));
         }
+        const QJsonValue sourceRect = display.value(QStringLiteral("source_canvas_rect"));
+        if (!sourceRect.isUndefined()) {
+            const QJsonObject rect = sourceRect.toObject();
+            qint64 rx = 0, ry = 0, rw = 0, rh = 0;
+            const QString space = display.value(QStringLiteral("canvas_space")).toString();
+            if (!sourceRect.isObject() ||
+                (space != QStringLiteral("points") && space != QStringLiteral("pixels")) ||
+                !integer(rect.value(QStringLiteral("width")), 1, std::numeric_limits<int>::max(),
+                         &rw) ||
+                !integer(rect.value(QStringLiteral("height")), 1, std::numeric_limits<int>::max(),
+                         &rh) ||
+                !integer(rect.value(QStringLiteral("x")), std::numeric_limits<int>::min(),
+                         std::numeric_limits<int>::max() - rw, &rx) ||
+                !integer(rect.value(QStringLiteral("y")), std::numeric_limits<int>::min(),
+                         std::numeric_limits<int>::max() - rh, &ry))
+                return false;
+            image.sourceCanvasRect = QRect(static_cast<int>(rx), static_cast<int>(ry),
+                                           static_cast<int>(rw), static_cast<int>(rh));
+            image.canvasUsesPoints = space == QStringLiteral("points");
+            qint64 nativeId = 0;
+            if (display.contains(QStringLiteral("native_display_id")) &&
+                !integer(display.value(QStringLiteral("native_display_id")), 0,
+                         std::numeric_limits<quint32>::max(), &nativeId))
+                return false;
+            image.nativeDisplayId = static_cast<quint32>(nativeId);
+            image.backingScale = display.value(QStringLiteral("backing_scale"))
+                                     .toDouble(std::max(image.imageSize.width() / double(rw),
+                                                        image.imageSize.height() / double(rh)));
+            if (!std::isfinite(image.backingScale) || image.backingScale <= 0)
+                return false;
+        }
         record.displays.append(image);
         stored->displayFileNames.append(file);
         bytes += image.encodedBytes;
@@ -375,6 +420,28 @@ bool encodeDraft(const CaptureHistoryDraft& draft, qint64 quota, EncodedDraft* r
                  std::numeric_limits<int>::max())) {
             return false;
         }
+        if (display.canvasUsesPoints &&
+            (!display.sourceCanvasRect || display.sourceCanvasRect->isEmpty()))
+            return false;
+        if (display.sourceCanvasRect && (display.sourceCanvasRect->isEmpty() ||
+                                         static_cast<qint64>(display.sourceCanvasRect->x()) +
+                                                 display.sourceCanvasRect->width() >
+                                             std::numeric_limits<int>::max() ||
+                                         static_cast<qint64>(display.sourceCanvasRect->y()) +
+                                                 display.sourceCanvasRect->height() >
+                                             std::numeric_limits<int>::max()))
+            return false;
+        const qreal backingScale =
+            !display.sourceCanvasRect ? 0.0
+            : display.backingScale > 0
+                ? display.backingScale
+                : (display.canvasUsesPoints
+                       ? std::max(display.image.width() / double(display.sourceCanvasRect->width()),
+                                  display.image.height() /
+                                      double(display.sourceCanvasRect->height()))
+                       : 1.0);
+        if (!std::isfinite(backingScale) || (display.sourceCanvasRect && backingScale <= 0))
+            return false;
         const QString name = QStringLiteral("display_%1.png").arg(i);
         const qint64 bytes = addImage(display.image.size(), name, [&]() {
             return snow_shot::image_codec::encodePng(display.image);
@@ -383,7 +450,8 @@ bool encodeDraft(const CaptureHistoryDraft& draft, qint64 quota, EncodedDraft* r
             return false;
         stored.displayFileNames.append(name);
         record.displays.append({display.stableId, display.name, display.image.size(), bytes,
-                                display.sourceCanvasOrigin});
+                                display.sourceCanvasOrigin, display.sourceCanvasRect,
+                                display.canvasUsesPoints, backingScale, display.nativeDisplayId});
     }
     return record.totalBytes <= quota;
 }
@@ -564,9 +632,16 @@ class CaptureHistoryRepositoryImpl final : public CaptureHistoryRepository {
     }
 
     std::shared_future<StorageResult> remove(const QString& id) override {
+        return removeMany({id});
+    }
+
+    std::shared_future<StorageResult> removeMany(QVector<QString> ids) override {
+        if (ids.isEmpty()) {
+            return readyFuture(StorageResult::ok());
+        }
         Command command;
         command.kind = Kind::Remove;
-        command.id = id;
+        command.ids = std::move(ids);
         return submit(std::move(command));
     }
 
@@ -598,7 +673,7 @@ class CaptureHistoryRepositoryImpl final : public CaptureHistoryRepository {
         CaptureHistoryDraft draft;
         CaptureHistoryRecord record;
         CaptureHistoryPolicy policy;
-        QString id;
+        QVector<QString> ids;
         QString reason;
         std::shared_ptr<std::promise<CaptureHistoryPublishResult>> publication;
         std::shared_ptr<std::promise<StorageResult>> completion;
@@ -705,7 +780,8 @@ class CaptureHistoryRepositoryImpl final : public CaptureHistoryRepository {
         const QJsonDocument document = QJsonDocument::fromJson(bytes);
         const QJsonObject object = document.object();
         if (file.error() != QFileDevice::NoError || !document.isObject() ||
-            object.value(QStringLiteral("format_version")).toInteger() != kIndexVersion ||
+            (object.value(QStringLiteral("format_version")).toInteger() != kIndexVersion &&
+             object.value(QStringLiteral("format_version")).toInteger() != 1) ||
             !object.value(QStringLiteral("records")).isArray() ||
             !object.value(QStringLiteral("pending_deletions")).isArray()) {
             indexFailed();
@@ -858,17 +934,25 @@ class CaptureHistoryRepositoryImpl final : public CaptureHistoryRepository {
         return {StorageResult::ok(), encoded.stored.record};
     }
 
-    StorageResult removeNow(const QString& id) {
+    StorageResult removeManyNow(const QVector<QString>& ids) {
         Snapshot next = snapshot();
-        const auto found = std::find_if(next.records.begin(), next.records.end(),
-                                        [&](const auto& record) { return record.record.id == id; });
-        if (found != next.records.end()) {
-            next.pendingDeletions.insert(id, found->record.totalBytes);
-            next.records.erase(found);
-            if (!commit(std::move(next)))
-                return StorageResult::failure(lastError());
-            changed();
+        const QSet<QString> requested(ids.cbegin(), ids.cend());
+        bool removed = false;
+        for (auto iterator = next.records.begin(); iterator != next.records.end();) {
+            if (!requested.contains(iterator->record.id)) {
+                ++iterator;
+                continue;
+            }
+            next.pendingDeletions.insert(iterator->record.id, iterator->record.totalBytes);
+            iterator = next.records.erase(iterator);
+            removed = true;
         }
+        if (!removed) {
+            return StorageResult::ok();
+        }
+        if (!commit(std::move(next)))
+            return StorageResult::failure(lastError());
+        changed();
         return cleanup() ? StorageResult::ok() : StorageResult::failure(lastError());
     }
 
@@ -1008,7 +1092,7 @@ class CaptureHistoryRepositoryImpl final : public CaptureHistoryRepository {
                     command.publication->set_value(publishNow(command.draft));
                     break;
                 case Kind::Remove:
-                    result = removeNow(command.id);
+                    result = removeManyNow(command.ids);
                     break;
                 case Kind::Clear:
                     result = clearNow();
@@ -1019,7 +1103,7 @@ class CaptureHistoryRepositoryImpl final : public CaptureHistoryRepository {
                 case Kind::ReadFailure:
                     if (find(command.record)) {
                         fail(command.reason);
-                        result = removeNow(command.record.id);
+                        result = removeManyNow({command.record.id});
                     }
                     break;
                 case Kind::Policy: {

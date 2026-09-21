@@ -8,6 +8,15 @@ impl Editor {
         policy
     }
 
+    /// Whether a press on empty canvas is currently spent on deselecting an
+    /// existing selection instead of beginning the active tool's creation
+    /// workflow. The empty-canvas press handler is the only caller: host
+    /// layers follow the resulting interaction (including
+    /// `pending_new_text_draft`) rather than re-asking this question.
+    pub fn empty_canvas_press_deselects_first(&self) -> bool {
+        self.tool_policy().empty_canvas_action.starts_creation() && !self.state.selection.is_empty()
+    }
+
     pub(crate) fn tool_policy_for(active_tool: ActiveTool) -> ToolPolicy {
         match active_tool {
             ActiveTool::Select => ToolPolicy {
@@ -112,7 +121,7 @@ impl Editor {
                 clear_selection_on_activate: false,
                 empty_canvas_action: ToolEmptyCanvasAction::MarqueeSelect,
                 allow_shift_toggle: false,
-                default_cursor: CursorStyle::Hidden,
+                default_cursor: CursorStyle::Eraser,
             },
             ActiveTool::Text => ToolPolicy {
                 selection_scope: ToolSelectionScope::TextOnly,

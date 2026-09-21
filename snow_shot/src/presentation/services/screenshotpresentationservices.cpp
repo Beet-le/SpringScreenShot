@@ -43,10 +43,14 @@ void ScreenshotPresentationServices::showSelectionToolbar() {
 }
 
 void ScreenshotPresentationServices::moveToolbar() {
+    if (m_selectionMovementActive)
+        return;
     m_context.toolbarPresenter.moveToolbar(toolbarPresentationState());
 }
 
 void ScreenshotPresentationServices::repositionToolbarForContentChange() {
+    if (m_selectionMovementActive)
+        return;
     m_context.toolbarPresenter.repositionForContentChange(toolbarPresentationState());
 }
 
@@ -66,6 +70,8 @@ void ScreenshotPresentationServices::setSelectionToolbarHovered(bool hovered) {
 void ScreenshotPresentationServices::setUiPreferences(const ScreenshotUiPreferences& preferences) {
     m_uiPreferences = preferences.normalized();
     m_smartSelectionTransition.setEnabled(m_uiPreferences.selectionTransitionAnimationEnabled);
+    m_context.overlayCoordinator.setSelectionBorderColor(m_context.displaySession,
+                                                         m_uiPreferences.selectionBorderColor);
     m_context.overlayCoordinator.setSelectionMaskColor(m_context.displaySession,
                                                        m_uiPreferences.selectionMaskColor);
     m_context.overlayCoordinator.setColorPickerCenterGuideLineColor(
@@ -90,12 +96,17 @@ void ScreenshotPresentationServices::reloadConfiguredShortcuts() {
     m_configuredShortcuts = snow_shot::storage::ScreenshotShortcutSettings().allShortcuts();
 }
 
+void ScreenshotPresentationServices::setSelectionMovementActive(bool active) {
+    m_selectionMovementActive = active;
+}
+
 void ScreenshotPresentationServices::updateOverlayState() {
     const bool smartFraming = m_context.interaction.intelligentSelecting();
     const ScreenshotToolbarPresentationState toolbarState = toolbarPresentationState();
     {
         SNOW_SHOT_CAPTURE_PERF_SCOPE("overlay.toolbar_state_update");
-        m_context.toolbarPresenter.updateSelectionToolbarState(toolbarState, !smartFraming);
+        if (!m_selectionMovementActive)
+            m_context.toolbarPresenter.updateSelectionToolbarState(toolbarState, !smartFraming);
     }
     bool selectionChanged = false;
     {
@@ -124,6 +135,8 @@ void ScreenshotPresentationServices::presentSelectionFrame(const QRectF& selecti
 }
 
 void ScreenshotPresentationServices::presentOverlayState(const QRectF& selection) const {
+    m_context.overlayCoordinator.setSelectionBorderColor(m_context.displaySession,
+                                                         m_uiPreferences.selectionBorderColor);
     m_context.overlayCoordinator.setSelectionMaskColor(m_context.displaySession,
                                                        m_uiPreferences.selectionMaskColor);
     {

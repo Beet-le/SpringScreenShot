@@ -41,8 +41,8 @@ void deliver(const Submission& submission, SnowUiSelectorPhase phase = SNOW_UI_S
     event.phase = phase;
     event.reason = reason;
     event.ok = 1;
-    event.rects = rects;
-    event.count = 2;
+    event.rects = reason == SNOW_UI_SELECTOR_PERMISSION_REQUIRED ? rects + 1 : rects;
+    event.count = reason == SNOW_UI_SELECTOR_PERMISSION_REQUIRED ? 1 : 2;
     submission.service->event(&event, submission.service->userdata);
     // Prove callbacks copy borrowed rectangles before queued delivery.
     rects[0].right = 1;
@@ -136,6 +136,33 @@ void shutterSoundSettingsPersistAndReset(const QString& configurationPath) {
     require(!invalid.valid, "shutter preference must reject nonboolean values");
 }
 
+void shortcutExitConfirmationSettingsPersistAndReset(const QString& configurationPath) {
+    snow_shot::presentation::GlobalShortcutManager shortcuts;
+    settings::BuiltInSettingsBackend backend(shortcuts);
+    constexpr auto binding =
+        settings::SettingsSwitchBinding::ScreenshotConfirmBeforeExitingViaShortcut;
+    require(!backend.switchValue(binding), "shortcut exit confirmation must default to disabled");
+    require(backend.applySwitchValue(binding, true) && backend.switchValue(binding) &&
+                storage::ScreenshotSettings().confirmBeforeExitingViaShortcut(),
+            "shortcut exit confirmation must be enabled through the settings backend");
+    require(storage::ApplicationStorage::instance().configuration().flushNow().success,
+            "shortcut exit confirmation preference must be flushable");
+    storage::ConfigurationStore reloaded(configurationPath, true, true, 60000);
+    require(
+        reloaded.value(QStringLiteral("screenshot/confirm_before_exiting_via_shortcut")).toBool(),
+        "enabled shortcut exit confirmation must survive a configuration reload");
+    require(backend.resetSection(settings::SettingsSectionReset::ScreenshotCapture) &&
+                backend.switchValue(binding),
+            "system screenshot reset must preserve shortcut exit confirmation");
+    require(backend.resetSection(settings::SettingsSectionReset::ScreenshotSettings) &&
+                !backend.switchValue(binding),
+            "function screenshot reset must disable shortcut exit confirmation");
+    const auto invalid = storage::ConfigurationSchema::normalize(
+        QStringLiteral("screenshot/confirm_before_exiting_via_shortcut"),
+        QStringLiteral("enabled"));
+    require(!invalid.valid, "shortcut exit confirmation preference must reject nonboolean values");
+}
+
 void ownUiCapturePreferencesPersistAndReset() {
     snow_shot::presentation::GlobalShortcutManager shortcuts;
     settings::BuiltInSettingsBackend backend(shortcuts);
@@ -164,6 +191,22 @@ void ownUiCapturePreferencesPersistAndReset() {
 void toolbarLayoutSectionResetsRemainIndependent() {
     snow_shot::presentation::GlobalShortcutManager shortcuts;
     settings::BuiltInSettingsBackend backend(shortcuts);
+    const auto defaultDrawingLayout =
+        backend.toolbarLayout(storage::ScreenshotToolbarLayoutKind::DrawingTools);
+    const auto defaultActionLayout =
+        backend.toolbarLayout(storage::ScreenshotToolbarLayoutKind::ActionTools);
+    const storage::ScreenshotToolbarLayout expectedDefaultActionLayout{
+        {{QStringLiteral("convert-to-html"), QStringLiteral("convert-to-markdown"),
+          QStringLiteral("barcode-recognition"), QStringLiteral("table-recognition")},
+         {QStringLiteral("record-screen")},
+         {QStringLiteral("pin-to-screen")},
+         {QStringLiteral("text-recognition")},
+         {QStringLiteral("text-translation")},
+         {QStringLiteral("scrolling-screenshot")},
+         {QStringLiteral("quick-save"), QStringLiteral("save-as-file")}},
+        {}};
+    require(defaultActionLayout == expectedDefaultActionLayout,
+            "the default action layout must include conversions and quick-save");
     const storage::ScreenshotToolbarLayout drawingLayout{
         {{QStringLiteral("watermark")}},
         {QStringLiteral("shape"), QStringLiteral("arrow"), QStringLiteral("line"),
@@ -171,9 +214,13 @@ void toolbarLayoutSectionResetsRemainIndependent() {
          QStringLiteral("text"), QStringLiteral("serial-number"), QStringLiteral("filter"),
          QStringLiteral("eraser")},
     };
+    // The custom arrangement still lists every default action (including the
+    // conversions and quick-save) so normalization cannot append anything and
+    // the persisted layout compares equal to what was applied.
     const storage::ScreenshotToolbarLayout actionLayout{
-        {{QStringLiteral("save-as-file")}},
-        {QStringLiteral("barcode-recognition"), QStringLiteral("table-recognition"),
+        {{QStringLiteral("quick-save"), QStringLiteral("save-as-file")}},
+        {QStringLiteral("convert-to-html"), QStringLiteral("convert-to-markdown"),
+         QStringLiteral("barcode-recognition"), QStringLiteral("table-recognition"),
          QStringLiteral("record-screen"), QStringLiteral("pin-to-screen"),
          QStringLiteral("text-recognition"), QStringLiteral("text-translation"),
          QStringLiteral("scrolling-screenshot")},
@@ -183,42 +230,27 @@ void toolbarLayoutSectionResetsRemainIndependent() {
                 backend.applyToolbarLayout(storage::ScreenshotToolbarLayoutKind::ActionTools,
                                            actionLayout),
             "toolbar reset fixture must persist independent layouts");
+    const auto savedActionLayout =
+        backend.toolbarLayout(storage::ScreenshotToolbarLayoutKind::ActionTools);
 
     require(backend.resetSection(settings::SettingsSectionReset::ScreenshotInterfaceSettings) &&
                 backend.toolbarLayout(storage::ScreenshotToolbarLayoutKind::DrawingTools) ==
                     drawingLayout &&
                 backend.toolbarLayout(storage::ScreenshotToolbarLayoutKind::ActionTools) ==
-                    storage::ScreenshotToolbarLayout{{{QStringLiteral("barcode-recognition"),
-                                                       QStringLiteral("table-recognition")},
-                                                      {QStringLiteral("record-screen")},
-                                                      {QStringLiteral("pin-to-screen")},
-                                                      {QStringLiteral("text-recognition")},
-                                                      {QStringLiteral("text-translation")},
-                                                      {QStringLiteral("scrolling-screenshot")},
-                                                      {QStringLiteral("save-as-file")}},
-                                                     {}},
+                    defaultActionLayout,
             "Screenshot Interface reset must restore only the screenshot action layout");
 
     require(backend.applyToolbarLayout(storage::ScreenshotToolbarLayoutKind::ActionTools,
                                        actionLayout) &&
                 backend.resetSection(settings::SettingsSectionReset::DrawingToolbar) &&
                 backend.toolbarLayout(storage::ScreenshotToolbarLayoutKind::ActionTools) ==
-                    actionLayout &&
+                    savedActionLayout &&
                 backend.toolbarLayout(storage::ScreenshotToolbarLayoutKind::DrawingTools) ==
-                    storage::ScreenshotToolbarLayout{
-                        {{QStringLiteral("shape")},
-                         {QStringLiteral("line"), QStringLiteral("arrow")},
-                         {QStringLiteral("free-draw")},
-                         {QStringLiteral("spotlight"), QStringLiteral("highlighter")},
-                         {QStringLiteral("text")},
-                         {QStringLiteral("serial-number")},
-                         {QStringLiteral("filter")},
-                         {QStringLiteral("eraser")},
-                         {QStringLiteral("watermark")}},
-                        {}},
+                    defaultDrawingLayout,
             "Drawing reset must restore only the drawing toolbar layout");
 }
 
+#ifndef Q_OS_MACOS
 void changedApiRefreshesServiceAndRejectsOldResults() {
     ScreenshotSelectorCoordinator coordinator;
     const QVector<std::uintptr_t> exclusions{123, 456};
@@ -290,6 +322,8 @@ void apiChangesDuringRefreshAndWhileIdle() {
             "the next capture must use the API selected while idle");
     QCoreApplication::sendPostedEvents();
 }
+
+#endif
 
 void phasedSchedulingPreservesLatestPendingAndInitialCadence() {
     setApi(QStringLiteral("uia"));
@@ -406,7 +440,89 @@ void phasedSchedulingPreservesLatestPendingAndInitialCadence() {
     automaticReply = true;
 }
 
+void permissionFallbackIsAppliedAndWarningIsThrottled() {
+    automaticReply = false;
+    submissions.clear();
+    ScreenshotSelectorCoordinator coordinator;
+    int warnings = 0, applied = 0;
+    QObject::connect(&coordinator, &ScreenshotSelectorCoordinator::accessibilityPermissionRequired,
+                     &coordinator, [&] { ++warnings; });
+    QObject::connect(&coordinator, &ScreenshotSelectorCoordinator::initialResultReady, &coordinator,
+                     [&](bool ok, const QVector<QRectF>& rects) {
+                         require(ok && rects == QVector<QRectF>{QRectF(0, 0, 100, 100)},
+                                 "permission fallback must contain only the selected window");
+                         ++applied;
+                     });
+    require(coordinator.startRefresh({}), "permission fixture refresh failed");
+    QCoreApplication::sendPostedEvents();
+    const qsizetype before = refinements.size();
+    for (int i = 0; i < 3; ++i) {
+        require(coordinator.requestHitTest(QPoint(i + 1, 20),
+                                           ScreenshotSelectorHitTestMode::WindowSubElement),
+                "permission fixture query failed");
+        deliver(submissions.last(), SNOW_UI_SELECTOR_INITIAL, SNOW_UI_SELECTOR_PERMISSION_REQUIRED);
+        QCoreApplication::sendPostedEvents();
+    }
+    require(applied == 3 && warnings == 1 && refinements.size() == before,
+            "permission fallback must apply on every hover, warn once, and never refine");
+    coordinator.releaseCache();
+    require(coordinator.startRefresh({}), "next capture refresh failed");
+    QCoreApplication::sendPostedEvents();
+    require(
+        coordinator.requestHitTest(QPoint(5, 20), ScreenshotSelectorHitTestMode::WindowSubElement),
+        "next capture query failed");
+    deliver(submissions.last(), SNOW_UI_SELECTOR_INITIAL, SNOW_UI_SELECTOR_PERMISSION_REQUIRED);
+    QCoreApplication::sendPostedEvents();
+    require(warnings == 2, "a new capture may show the permission warning again");
+    automaticReply = true;
+}
+
+void permissionRevocationDuringRefinementAppliesFallback() {
+    automaticReply = false;
+    qint64 now = 0;
+    ScreenshotSelectorCoordinator coordinator(nullptr, [&] { return now; });
+    int warnings = 0, fallbacks = 0;
+    QObject::connect(&coordinator, &ScreenshotSelectorCoordinator::accessibilityPermissionRequired,
+                     &coordinator, [&] { ++warnings; });
+    QObject::connect(&coordinator, &ScreenshotSelectorCoordinator::refinementReady, &coordinator,
+                     [&](const QVector<QRectF>& rects, quint32 displayId, bool permissionRequired) {
+                         require(permissionRequired &&
+                                     rects == QVector<QRectF>{QRectF(0, 0, 100, 100)} &&
+                                     displayId == submissions.last().query.display_id,
+                                 "refinement must carry permission fallback and display identity");
+                         ++fallbacks;
+                     });
+    require(coordinator.startRefresh({}), "revocation fixture refresh failed");
+    QCoreApplication::sendPostedEvents();
+    require(
+        coordinator.requestHitTest(QPoint(10, 20), ScreenshotSelectorHitTestMode::WindowSubElement),
+        "revocation fixture query failed");
+    now = 100;
+    deliver(submissions.last());
+    QCoreApplication::sendPostedEvents();
+    deliver(submissions.last(), SNOW_UI_SELECTOR_FINISHED, SNOW_UI_SELECTOR_PERMISSION_REQUIRED);
+    QCoreApplication::sendPostedEvents();
+    require(warnings == 1 && fallbacks == 1,
+            "revoked permission must warn and apply window fallback");
+    automaticReply = true;
+}
+
 void diagnosticEnvironmentOverridesRemainAvailable() {
+#ifdef Q_OS_MACOS
+    qputenv("SNOW_SHOT_SELECTOR_BACKEND", "msaa");
+    qputenv("SNOW_SHOT_UI_SELECTOR_BACKEND", "uia");
+    ScreenshotSelectorCoordinator coordinator;
+    require(coordinator.startRefresh({}) &&
+                currentBackend == SNOW_UI_SELECTOR_BACKEND_ACCESSIBILITY,
+            "macOS must ignore Windows diagnostic overrides");
+    QCoreApplication::sendPostedEvents();
+    const int before = refreshed;
+    setApi(QStringLiteral("msaa"));
+    require(refreshed == before && coordinator.ready(),
+            "legacy settings must not disturb macOS selection");
+    qunsetenv("SNOW_SHOT_SELECTOR_BACKEND");
+    qunsetenv("SNOW_SHOT_UI_SELECTOR_BACKEND");
+#else
     setApi(QStringLiteral("uia"));
     qputenv("SNOW_SHOT_UI_SELECTOR_BACKEND", "msaa");
     {
@@ -422,6 +538,7 @@ void diagnosticEnvironmentOverridesRemainAvailable() {
     }
     qunsetenv("SNOW_SHOT_SELECTOR_BACKEND");
     qunsetenv("SNOW_SHOT_UI_SELECTOR_BACKEND");
+#endif
 }
 } // namespace
 
@@ -483,16 +600,29 @@ int main(int argc, char** argv) {
         applicationStorage.initialize({temporary.filePath(QStringLiteral("bin")),
                                        temporary.filePath(QStringLiteral("data")), 60000}));
     const bool selectorOnly = application.arguments().contains(QStringLiteral("--selector-only"));
+    if (application.arguments().contains(
+            QStringLiteral("--shortcut-exit-confirmation-settings-only"))) {
+        shortcutExitConfirmationSettingsPersistAndReset(
+            temporary.filePath(QStringLiteral("data/config.json")));
+        applicationStorage.shutdown();
+        return 0;
+    }
     if (!selectorOnly) {
         settingsPersistAndResetToUia(temporary.filePath(QStringLiteral("data/config.json")));
         shutterSoundSettingsPersistAndReset(temporary.filePath(QStringLiteral("data/config.json")));
+        shortcutExitConfirmationSettingsPersistAndReset(
+            temporary.filePath(QStringLiteral("data/config.json")));
         ownUiCapturePreferencesPersistAndReset();
         toolbarLayoutSectionResetsRemainIndependent();
     }
+#ifndef Q_OS_MACOS
     changedApiRefreshesServiceAndRejectsOldResults();
     apiChangesDuringRefreshAndWhileIdle();
+#endif
     diagnosticEnvironmentOverridesRemainAvailable();
     phasedSchedulingPreservesLatestPendingAndInitialCadence();
+    permissionFallbackIsAppliedAndWarningIsThrottled();
+    permissionRevocationDuringRefinementAppliesFallback();
     require(created == destroyed, "selector leaked a native service");
     applicationStorage.shutdown();
     return 0;

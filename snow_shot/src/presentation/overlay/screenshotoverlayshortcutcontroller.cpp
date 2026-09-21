@@ -153,6 +153,7 @@ struct ScreenshotOverlayShortcutController::Impl {
             QStringLiteral("previous_screenshot_history"),
             QStringLiteral("next_screenshot_history"),
             QStringLiteral("select_previously_selected_area"),
+            QStringLiteral("recapture"),
             QStringLiteral("copy_color"),
             QStringLiteral("table_recognition"),
             QStringLiteral("qr_code_recognition"),
@@ -205,14 +206,22 @@ struct ScreenshotOverlayShortcutController::Impl {
                            actions.localShortcutInputAllowed();
                 }
                 if (actionId == QStringLiteral("keep_selection_width_and_height_consistent")) {
+                    // Includes intelligent selection so the key can be held in
+                    // advance, before the pointer drag creates a selection.
                     return (interaction.movingSelection() || interaction.modifyingSelection() ||
-                            interaction.manualSelecting() || interaction.editing()) &&
+                            interaction.manualSelecting() || interaction.editing() ||
+                            interaction.intelligentSelecting()) &&
                            !recognitionTool(interaction.activeTool()) &&
                            actions.localShortcutInputAllowed();
                 }
                 if (actionId == QStringLiteral("select_previously_selected_area")) {
                     return interaction.moveToolActive() && !interaction.dragging() &&
                            !interaction.scrollingCapture() && actions.localShortcutInputAllowed();
+                }
+                if (actionId == QStringLiteral("recapture")) {
+                    return interaction.moveToolActive() && !interaction.dragging() &&
+                           !interaction.scrollingCapture() && actions.localShortcutInputAllowed() &&
+                           actions.recaptureAvailable();
                 }
                 if (actionId == QStringLiteral("copy_color")) {
                     return interaction.moveToolActive() && actions.localShortcutInputAllowed();
@@ -281,6 +290,9 @@ struct ScreenshotOverlayShortcutController::Impl {
                     }
                     actions.cancelCapture();
                     return true;
+                }
+                if (actionId == QStringLiteral("cancel_screenshot")) {
+                    return actions.cancelCaptureViaShortcut();
                 }
                 return actions.activateScreenshotShortcut(actionId);
             };

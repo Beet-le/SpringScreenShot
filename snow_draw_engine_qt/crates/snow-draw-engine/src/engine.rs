@@ -18,6 +18,10 @@ use snow_draw_engine_scene::{DocumentSceneCache, ViewportComposer};
 #[cfg(test)]
 mod auto_filter_tests;
 mod document_commands;
+#[cfg(test)]
+mod duplicate_drag_tests;
+#[cfg(test)]
+mod filter_snap_tests;
 mod input;
 mod mutations;
 mod text_commands;
@@ -254,6 +258,7 @@ impl Engine {
         self.ensure_viewport(id)?;
         Ok(StyleToolbarState {
             source: self.editor.style_toolbar_source(&self.model),
+            selected_element_count: self.editor.selected_element_count(&self.model) as u32,
             shape_style: self.editor.shape_style(&self.model),
             text_style: self.editor.text_style(&self.model),
             serial_number_style: self.editor.serial_number_style(&self.model),
@@ -752,3 +757,7 @@ impl Engine {
         snow_draw_engine_scene::smart_erase_items(&self.model, &presentation)
     }
 }
+
+#[cfg(test)]
+#[path = "engine/serial_number_drag_tests.rs"]
+mod serial_number_drag_tests;

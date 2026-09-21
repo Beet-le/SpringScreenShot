@@ -1,6 +1,7 @@
 #include "snow_canvas_smart_erase.h"
 
 #include <QCoreApplication>
+#include <QCommandLineParser>
 #include <QPainter>
 #include <algorithm>
 #include <atomic>
@@ -9,6 +10,7 @@
 
 namespace {
 int failures = 0;
+snow_canvas_smart_erase::ReconstructionOptions testOptions;
 void require(bool condition, const char* message) {
     if (!condition) {
         std::cerr << message << '\n';
@@ -30,8 +32,8 @@ SnowCanvasSceneItem rectangle(QRect bounds) {
 
 QImage erase(const QImage& source, const SnowCanvasSceneItem& item) {
     std::atomic_bool cancelled{false};
-    const auto result = snow_canvas_smart_erase::reconstruct(
-        item, {{source, QRectF(source.rect()), {}}}, cancelled);
+    const auto result = snow_canvas_smart_erase::reconstructWithOptions(
+        item, {{source, QRectF(source.rect()), {}}}, cancelled, testOptions);
     require(result.success && !result.filled.isNull(), "quality fixture must reconstruct");
     QImage output = source.copy();
     QPainter painter(&output);
@@ -241,15 +243,316 @@ void textureDiversity() {
     require(squared / count - std::pow(sum / count, 2) > 40,
             "patch voting must retain texture instead of averaging it into a smooth surface");
 }
+
+void optimizedSearchAndVoting() {
+    using namespace snow_canvas_smart_erase;
+    for (int scenario = 0; scenario < 4; ++scenario) {
+        QImage source(320, 260, QImage::Format_ARGB32);
+        for (int y = 0; y < source.height(); ++y) {
+            for (int x = 0; x < source.width(); ++x) {
+                const unsigned hash =
+                    static_cast<unsigned>(x) * 73856093U ^ static_cast<unsigned>(y) * 19349663U;
+                const int noise = static_cast<int>((hash ^ (hash >> 13)) % 25U) - 12;
+                source.setPixel(
+                    x, y,
+                    x + y < 280
+                        ? qRgba(65 + noise, 100 + noise, 170 + noise, scenario == 3 ? 170 : 255)
+                        : qRgba(170 + noise, 150 + noise, 50 + noise, scenario == 3 ? 170 : 255));
+            }
+        }
+        const QImage clean = source;
+        const QRectF canvas = scenario == 3 ? QRectF(-13.25, 7.5, 256, 208) : QRectF(source.rect());
+        auto item = rectangle(scenario == 1 ? QRect(0, 50, 80, 120) : QRect(40, 40, 240, 180));
+        if (scenario == 2) {
+            item.is_free_draw = 1;
+            item.stroke_width = 8;
+            const SnowArrowPoint points[]{{25, 25}, {155, 205}, {290, 45}};
+            item.setArrowPoints(points, 3);
+        }
+        if (scenario == 3) {
+            item.center_x = canvas.center().x();
+            item.center_y = canvas.center().y();
+            item.width = 130;
+            item.height = 95;
+            item.rotation = 0.35;
+        }
+        {
+            QPainter painter(&source);
+            painter.scale(source.width() / canvas.width(), source.height() / canvas.height());
+            painter.translate(-canvas.x(), -canvas.y());
+            painter.fillPath(path(item), Qt::black);
+        }
+        const QList<SnowCanvasBaseImageSource> sources{{source, canvas, {}}};
+        std::atomic_bool cancelled{false};
+        auto options = testOptions;
+        options.earlyRejection = false;
+        options.parallelVoting = false;
+        const auto exhaustive = reconstructWithOptions(item, sources, cancelled, options);
+        options.earlyRejection = true;
+        ReconstructionDiagnostics diagnostics;
+        const auto bounded =
+            reconstructWithOptions(item, sources, cancelled, options, &diagnostics);
+        require(exhaustive.success && bounded.success && !bounded.filled.isNull(),
+                "edge, sparse, large and fractional fixtures must reconstruct");
+        require(diagnostics.path == ReconstructionDiagnostics::Path::Patches,
+                "optimization fixtures must exercise general patch search");
+        require(exhaustive.filled == bounded.filled,
+                "early rejection must preserve exhaustive candidate scoring results");
+        options.parallelVoting = true;
+        const auto parallel = reconstructWithOptions(item, sources, cancelled, options);
+        require(parallel.success && parallel.filled == bounded.filled,
+                "two-stripe voting must be byte-identical to serial voting");
+        if (bounded.filled.isNull())
+            continue;
+        QImage mask(bounded.filled.size(), QImage::Format_Grayscale8);
+        mask.fill(0);
+        {
+            QPainter painter(&mask);
+            painter.setRenderHint(QPainter::Antialiasing);
+            painter.scale(mask.width() / bounded.canvasRect.width(),
+                          mask.height() / bounded.canvasRect.height());
+            painter.translate(-bounded.canvasRect.x(), -bounded.canvasRect.y());
+            painter.fillPath(path(item), Qt::white);
+        }
+        bool knownPreserved = true, alphaPreserved = true;
+        for (int y = 0; y < mask.height(); ++y) {
+            for (int x = 0; x < mask.width(); ++x) {
+                const auto before = bounded.original.pixel(x, y),
+                           after = bounded.filled.pixel(x, y);
+                if (!mask.constScanLine(y)[x])
+                    knownPreserved = knownPreserved && before == after;
+                alphaPreserved = alphaPreserved && qAlpha(before) == qAlpha(after);
+            }
+        }
+        if (scenario <= 1) {
+            int wrong = 0, checked = 0;
+            for (int y = 0; y < mask.height(); ++y) {
+                for (int x = 0; x < mask.width(); ++x) {
+                    if (!mask.constScanLine(y)[x])
+                        continue;
+                    const int sx = qRound(bounded.canvasRect.x()) + x;
+                    const int sy = qRound(bounded.canvasRect.y()) + y;
+                    if (std::abs(sx + sy - 280) < 12)
+                        continue;
+                    wrong +=
+                        std::abs(qRed(bounded.filled.pixel(x, y)) - qRed(clean.pixel(sx, sy))) > 40
+                            ? 1
+                            : 0;
+                    ++checked;
+                }
+            }
+            require(wrong < checked / 50,
+                    "large and source-edge holes must retain the diagonal background boundary");
+        }
+        require(knownPreserved && alphaPreserved,
+                "reused voting buffers must preserve every known pixel and alpha value");
+        require(!diagnostics.levels.empty(), "patch diagnostics must expose actual levels");
+        for (std::size_t i = 0; i < diagnostics.levels.size(); ++i) {
+            const int expected = i == 0                               ? options.coarsePasses
+                                 : i + 1 == diagnostics.levels.size() ? options.finePasses
+                                                                      : options.intermediatePasses;
+            require(diagnostics.levels[i].passes == expected,
+                    "coarsest budget takes precedence for single-level reconstruction");
+        }
+        cancelled = true;
+        require(!reconstructWithOptions(item, sources, cancelled, options).success,
+                "cancelled optimized reconstruction must not publish a result");
+    }
+    // A small nonperiodic source cannot form another pyramid level. Its only
+    // level must keep the coarsest budget even when fine passes are reduced.
+    auto small = bandedBackground(false).copy(20, 20, 48, 40);
+    const auto smallItem = rectangle(QRect(20, 16, 8, 8));
+    {
+        QPainter painter(&small);
+        painter.fillPath(path(smallItem), Qt::black);
+    }
+    std::atomic_bool cancelled{false};
+    ReconstructionDiagnostics diagnostics;
+    const auto result = reconstructWithOptions(smallItem, {{small, QRectF(small.rect()), {}}},
+                                               cancelled, testOptions, &diagnostics);
+    require(result.success && diagnostics.path == ReconstructionDiagnostics::Path::Patches &&
+                diagnostics.levels.size() == 1,
+            "small textured source must exercise single-level patch reconstruction");
+    if (diagnostics.levels.size() == 1)
+        require(diagnostics.levels.front().passes == testOptions.coarsePasses,
+                "single-level patch reconstruction must retain the coarsest pass budget");
+}
+void croppedReconstruction() {
+    using namespace snow_canvas_smart_erase;
+    bool sawCrop = false, sawOddLevel = false;
+    for (int scenario = 0; scenario < 5; ++scenario) {
+        QImage clean(643, 489, QImage::Format_ARGB32);
+        for (int y = 0; y < clean.height(); ++y) {
+            for (int x = 0; x < clean.width(); ++x) {
+                const unsigned hash =
+                    static_cast<unsigned>(x) * 73856093U ^ static_cast<unsigned>(y) * 19349663U;
+                const int noise = static_cast<int>((hash ^ (hash >> 13)) % 25U) - 12;
+                clean.setPixel(x, y,
+                               x + y < 560 ? qRgba(65 + noise, 100 + noise, 170 + noise, 173)
+                                           : qRgba(170 + noise, 150 + noise, 50 + noise, 173));
+            }
+        }
+        const double scale = scenario == 2 ? 2.0 : scenario == 3 ? 1.25 : 1.0;
+        const QRectF canvas(-13.25, 7.5, clean.width() / scale, clean.height() / scale);
+        auto item = rectangle(QRect(100, 80, 301, 211));
+        item.center_x = canvas.center().x();
+        item.center_y = canvas.center().y();
+        if (scenario == 1)
+            item.center_x = canvas.left() + item.width / 2;
+        if (scenario == 2) {
+            item.is_free_draw = 1;
+            item.stroke_width = 8;
+            const SnowArrowPoint points[]{{15, 25}, {275, 195}, {25, 195}, {275, 25}};
+            item.setArrowPoints(points, 4);
+        }
+        if (scenario == 3)
+            item.rotation = 0.35;
+        const auto sourcesFor = [&](QColor erased) {
+            QImage source = clean.copy();
+            QPainter painter(&source);
+            painter.scale(scale, scale);
+            painter.translate(-canvas.x(), -canvas.y());
+            painter.setCompositionMode(QPainter::CompositionMode_Source);
+            painter.fillPath(path(item), erased);
+            painter.end();
+            if (scenario == 4) {
+                const double half = canvas.width() / 2;
+                return QList<SnowCanvasBaseImageSource>{
+                    {source, canvas,
+                     QRectF(canvas.left(), canvas.top(), half - 5, canvas.height())},
+                    {source, canvas,
+                     QRectF(canvas.left() + half + 5, canvas.top(), half - 5, canvas.height())}};
+            }
+            return QList<SnowCanvasBaseImageSource>{{source, canvas, {}}};
+        };
+        auto options = ReconstructionOptions::reference();
+        options.cropContext = true;
+        options.parallelVoting = false;
+        std::atomic_bool cancelled{false};
+        ReconstructionDiagnostics diagnostics;
+        const auto sources = sourcesFor(QColor(20, 30, 40, 173));
+        const auto actual = reconstructWithOptions(item, sources, cancelled, options, &diagnostics);
+        require(actual.success && !actual.filled.isNull(), "cropped geometry must reconstruct");
+        if (!actual.success || actual.filled.isNull())
+            continue;
+        auto referenceOptions = options;
+        referenceOptions.cropContext = false;
+        const auto reference = reconstructWithOptions(item, sources, cancelled, referenceOptions);
+        require(
+            reference.success && actual.canvasRect == reference.canvasRect &&
+                actual.original == reference.original &&
+                actual.filled.size() == reference.filled.size(),
+            "cropping must preserve source mapping, native output resolution and original crop");
+        sawCrop = sawCrop || diagnostics.croppedSize.width() < diagnostics.workingSize.width() ||
+                  diagnostics.croppedSize.height() < diagnostics.workingSize.height();
+        for (const auto& level : diagnostics.levels)
+            sawOddLevel =
+                sawOddLevel || level.size.width() % 2 != 0 || level.size.height() % 2 != 0;
+        const auto again = reconstructWithOptions(item, sources, cancelled, options);
+        require(actual.filled == again.filled, "cropped reconstruction must be deterministic");
+        const auto recolored =
+            reconstructWithOptions(item, sourcesFor(QColor(240, 15, 200, 173)), cancelled, options);
+        require(actual.filled == recolored.filled,
+                "cropped donors must exclude the erased object's colors at every level");
+        QImage mask(actual.filled.size(), QImage::Format_Grayscale8);
+        mask.fill(0);
+        {
+            QPainter painter(&mask);
+            painter.setRenderHint(QPainter::Antialiasing);
+            painter.scale(mask.width() / actual.canvasRect.width(),
+                          mask.height() / actual.canvasRect.height());
+            painter.translate(-actual.canvasRect.x(), -actual.canvasRect.y());
+            painter.fillPath(path(item), Qt::white);
+        }
+        bool knownPreserved = true, alphaPreserved = true;
+        for (int y = 0; y < mask.height(); ++y) {
+            for (int x = 0; x < mask.width(); ++x) {
+                const QRgb before = actual.original.pixel(x, y), after = actual.filled.pixel(x, y);
+                if (!mask.constScanLine(y)[x] || qAlpha(before) == 0)
+                    knownPreserved = knownPreserved && before == after;
+                alphaPreserved = alphaPreserved && qAlpha(before) == qAlpha(after);
+            }
+        }
+        require(knownPreserved && alphaPreserved,
+                "cropped output must preserve known pixels, coverage gaps and alpha");
+        if (scenario == 0) {
+            int wrong = 0, checked = 0;
+            for (int y = 0; y < mask.height(); ++y) {
+                for (int x = 0; x < mask.width(); ++x) {
+                    if (!mask.constScanLine(y)[x])
+                        continue;
+                    const int sx = qRound(actual.canvasRect.x() - canvas.x()) + x;
+                    const int sy = qRound(actual.canvasRect.y() - canvas.y()) + y;
+                    if (std::abs(sx + sy - 560) < 16)
+                        continue;
+                    wrong +=
+                        std::abs(qRed(actual.filled.pixel(x, y)) - qRed(clean.pixel(sx, sy))) > 40
+                            ? 1
+                            : 0;
+                    ++checked;
+                }
+            }
+            require(checked > 0 && wrong < checked / 50,
+                    "large cropped holes must retain the diagonal background boundary");
+        }
+        options.parallelVoting = true;
+        const auto parallel = reconstructWithOptions(item, sources, cancelled, options);
+        require(parallel.filled == actual.filled,
+                "cropped parallel voting must match serial voting");
+        options.earlyRejection = false;
+        const auto exhaustive = reconstructWithOptions(item, sources, cancelled, options);
+        require(exhaustive.filled == actual.filled,
+                "cropped early rejection must match exhaustive candidate scoring");
+        bool enteredRefinement = false;
+        int startedLevels = 0;
+        diagnostics.levelStarted = [&](const LevelDiagnostics&) {
+            if (++startedLevels == 2) {
+                enteredRefinement = true;
+                cancelled = true;
+            }
+        };
+        require(!reconstructWithOptions(item, sources, cancelled, options, &diagnostics).success &&
+                    enteredRefinement,
+                "cancellation at refinement must not publish a partial result");
+    }
+    require(sawCrop, "cropped fixtures must reduce the working region");
+    require(sawOddLevel, "cropped fixtures must exercise odd pyramid dimensions");
+}
 } // namespace
 
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
+    QCommandLineParser parser;
+    parser.addOption({QStringLiteral("schedule"), QStringLiteral("Internal pass schedule."),
+                      QStringLiteral("passes")});
+    parser.addOption({QStringLiteral("policy"), QStringLiteral("Internal reconstruction policy."),
+                      QStringLiteral("policy"), QStringLiteral("default")});
+    parser.process(app);
+    const auto policy = parser.value(QStringLiteral("policy"));
+    if (!QStringList{QStringLiteral("default"), QStringLiteral("reference"), QStringLiteral("crop")}
+             .contains(policy))
+        return 2;
+    if (policy == QStringLiteral("reference"))
+        testOptions = snow_canvas_smart_erase::ReconstructionOptions::reference();
+    else if (policy == QStringLiteral("crop"))
+        testOptions.cropContext = true;
+    const QString schedule = parser.value(QStringLiteral("schedule"));
+    if (!schedule.isEmpty()) {
+        if (!QStringList{QStringLiteral("532"), QStringLiteral("533"), QStringLiteral("544"),
+                         QStringLiteral("555")}
+                 .contains(schedule))
+            return 2;
+        testOptions.coarsePasses = schedule[0].digitValue();
+        testOptions.intermediatePasses = schedule[1].digitValue();
+        testOptions.finePasses = schedule[2].digitValue();
+    }
     smoothSurfaces();
     localTextureAndStructure();
     diagonalStructure();
     verifiedRepetitionAndSourceEdges();
     textureDiversity();
+    optimizedSearchAndVoting();
+    croppedReconstruction();
     std::cout << "Smart Erase quality failures: " << failures << '\n';
     return failures ? 1 : 0;
 }

@@ -113,6 +113,25 @@
         </message>
     </context>
     <context>
+        <name>AppPermissions</name>
+        <message>
+            <source>Accessibility</source>
+            <translation>辅助功能</translation>
+        </message>
+        <message>
+            <source>Input Monitoring</source>
+            <translation>输入监控</translation>
+        </message>
+        <message>
+            <source>Microphone</source>
+            <translation>麦克风</translation>
+        </message>
+        <message>
+            <source>Screen &amp; System Audio Recording</source>
+            <translation>屏幕与系统音频录制</translation>
+        </message>
+    </context>
+    <context>
         <name>CustomAiModelsSettingsWidget</name>
         <message>
             <source>%1 (Copy %2)</source>
@@ -341,8 +360,16 @@
             <translation>取消</translation>
         </message>
         <message>
+            <source>Command</source>
+            <translation>Command</translation>
+        </message>
+        <message>
             <source>Configure mouse combination for %1</source>
             <translation>为%1配置鼠标组合</translation>
+        </message>
+        <message>
+            <source>Control</source>
+            <translation>控制</translation>
         </message>
         <message>
             <source>Ctrl</source>
@@ -351,6 +378,10 @@
         <message>
             <source>Left-button drag</source>
             <translation>左键拖动</translation>
+        </message>
+        <message>
+            <source>Middle-button drag</source>
+            <translation>中键拖动</translation>
         </message>
         <message>
             <source>Mouse button</source>
@@ -367,6 +398,10 @@
         <message>
             <source>OK</source>
             <translation>确定</translation>
+        </message>
+        <message>
+            <source>Option</source>
+            <translation>选项</translation>
         </message>
         <message>
             <source>Right-button drag</source>
@@ -401,12 +436,59 @@
             <translation>未设置</translation>
         </message>
         <message>
-            <source>Wheel drag</source>
-            <translation>滚轮拖动</translation>
-        </message>
-        <message>
             <source>Windows</source>
             <translation>Windows</translation>
+        </message>
+    </context>
+    <context>
+        <name>PermissionGuide</name>
+        <message>
+            <source>Close guidance</source>
+            <translation>关闭引导</translation>
+        </message>
+        <message>
+            <source>Drag %1 to System Settings</source>
+            <translation>将 %1 拖到系统设置</translation>
+        </message>
+        <message>
+            <source>Drag ‘%1’ into the permissions list above. If it is already listed, turn it on.</source>
+            <translation>将“%1”拖到上方的权限列表中；若已在列表中，请开启权限。</translation>
+        </message>
+        <message>
+            <source>Drag ‘%1’ into the permissions list in System Settings. If it is already listed, turn it on.</source>
+            <translation>将“%1”拖到系统设置的权限列表中；若已在列表中，请开启权限。</translation>
+        </message>
+        <message>
+            <source>Microphone access is unavailable. Open the installed application and try again.</source>
+            <translation>麦克风访问不可用。请打开已安装的应用后重试。</translation>
+        </message>
+        <message>
+            <source>Open the installed application to add it to the permissions list.</source>
+            <translation>请打开已安装的应用，以将其添加到权限列表。</translation>
+        </message>
+        <message>
+            <source>Permission setup</source>
+            <translation>权限设置</translation>
+        </message>
+        <message>
+            <source>Request Access</source>
+            <translation>请求权限</translation>
+        </message>
+        <message>
+            <source>Request microphone access, then allow it in the macOS prompt.</source>
+            <translation>请求麦克风权限，然后在 macOS 提示中选择允许。</translation>
+        </message>
+        <message>
+            <source>Requesting…</source>
+            <translation>正在请求…</translation>
+        </message>
+        <message>
+            <source>This permission is restricted by your Mac's administrator.</source>
+            <translation>此权限受到 Mac 管理员的限制。</translation>
+        </message>
+        <message>
+            <source>Turn on microphone access for ‘%1’ in System Settings.</source>
+            <translation>在系统设置中开启“%1”的麦克风权限。</translation>
         </message>
     </context>
     <context>
@@ -513,6 +595,10 @@
             <source>The clipboard is unavailable.</source>
             <translation>剪贴板不可用。</translation>
         </message>
+        <message>
+            <source>The configuration could not be imported.</source>
+            <translation>无法导入配置。</translation>
+        </message>
     </context>
     <context>
         <name>SettingsCatalog</name>
@@ -617,12 +703,20 @@
             <translation>高于正常</translation>
         </message>
         <message>
+            <source>Accessibility</source>
+            <translation>辅助功能</translation>
+        </message>
+        <message>
             <source>Active window</source>
             <translation>活动窗口</translation>
         </message>
         <message>
             <source>Age</source>
             <translation>期限</translation>
+        </message>
+        <message>
+            <source>All current application settings will be replaced by the archive's values. Some changes take effect after the app restarts.</source>
+            <translation>当前所有应用设置都将被压缩包中的值替换。部分更改将在应用重启后生效。</translation>
         </message>
         <message>
             <source>All screenshot history will be removed</source>
@@ -653,6 +747,10 @@
             <translation>动图帧率</translation>
         </message>
         <message>
+            <source>App Permissions</source>
+            <translation>应用权限</translation>
+        </message>
+        <message>
             <source>App-wide storage usage breakdown, location, mode, and latest errors</source>
             <translation>整个应用的存储用量明细、位置、模式和最近错误</translation>
         </message>
@@ -679,6 +777,10 @@
         <message>
             <source>Arrow</source>
             <translation>箭头</translation>
+        </message>
+        <message>
+            <source>Ask for confirmation when using the Cancel screenshot shortcut.</source>
+            <translation>使用“取消截图”快捷键时请求确认。</translation>
         </message>
         <message>
             <source>Auto</source>
@@ -717,8 +819,16 @@
             <translation>BMP</translation>
         </message>
         <message>
+            <source>Back up and restore application settings</source>
+            <translation>备份和恢复应用设置</translation>
+        </message>
+        <message>
             <source>Background Fill</source>
             <translation>背景填充</translation>
+        </message>
+        <message>
+            <source>Backup settings</source>
+            <translation>备份设置</translation>
         </message>
         <message>
             <source>Balance encoding speed against compression efficiency</source>
@@ -779,6 +889,10 @@
         <message>
             <source>Capture every monitor and copy the monitor under the pointer</source>
             <translation>截取所有显示器并复制指针所在显示器</translation>
+        </message>
+        <message>
+            <source>Capture screenshots and record your screen and system audio.</source>
+            <translation>截取屏幕，以及录制屏幕和系统音频。</translation>
         </message>
         <message>
             <source>Capture selected text and open it in Translation</source>
@@ -873,16 +987,16 @@
             <translation>选择视频编码器</translation>
         </message>
         <message>
-            <source>Choose what clicking the tray icon with the scroll wheel does</source>
-            <translation>选择使用滚轮点击托盘图标时执行的操作</translation>
-        </message>
-        <message>
             <source>Choose what happens automatically when text recognition completes</source>
             <translation>选择文本识别完成后自动执行的操作</translation>
         </message>
         <message>
             <source>Choose what left-clicking the tray icon does</source>
             <translation>选择左键单击托盘图标时执行的操作</translation>
+        </message>
+        <message>
+            <source>Choose what middle-clicking the tray icon does</source>
+            <translation>选择中键单击托盘图标时执行的操作</translation>
         </message>
         <message>
             <source>Choose when recognized text can be selected on pinned screenshots.</source>
@@ -961,6 +1075,18 @@
             <translation>颜色拾取器显示模式</translation>
         </message>
         <message>
+            <source>Configuration</source>
+            <translation>配置</translation>
+        </message>
+        <message>
+            <source>Configuration exported to the clipboard.</source>
+            <translation>配置已导出到剪贴板。</translation>
+        </message>
+        <message>
+            <source>Configuration imported.</source>
+            <translation>配置已导入。</translation>
+        </message>
+        <message>
             <source>Configure application process behavior</source>
             <translation>配置应用程序进程行为</translation>
         </message>
@@ -997,8 +1123,16 @@
             <translation>配置截图、固定到屏幕和屏幕录制工具栏</translation>
         </message>
         <message>
+            <source>Confirm before exiting screenshot via shortcut</source>
+            <translation>使用快捷键退出截图前确认</translation>
+        </message>
+        <message>
             <source>Control when the screenshot color picker is visible</source>
             <translation>控制截图颜色拾取器何时显示</translation>
+        </message>
+        <message>
+            <source>Copy all application settings as a zip archive to the clipboard</source>
+            <translation>将全部应用设置打包为 zip 压缩包并复制到剪贴板</translation>
         </message>
         <message>
             <source>Copy color</source>
@@ -1145,6 +1279,14 @@
             <translation>禁用全局快捷键</translation>
         </message>
         <message>
+            <source>Disable hotkeys in fullscreen windows</source>
+            <translation>在全屏窗口中禁用快捷键</translation>
+        </message>
+        <message>
+            <source>Disable/Enable global hotkeys</source>
+            <translation>禁用/启用全局快捷键</translation>
+        </message>
+        <message>
             <source>Disk limit</source>
             <translation>磁盘限制</translation>
         </message>
@@ -1257,8 +1399,20 @@
             <translation>退出</translation>
         </message>
         <message>
+            <source>Export</source>
+            <translation>导出</translation>
+        </message>
+        <message>
+            <source>Export configuration</source>
+            <translation>导出配置</translation>
+        </message>
+        <message>
             <source>Export recording</source>
             <translation>导出录屏</translation>
+        </message>
+        <message>
+            <source>Export settings</source>
+            <translation>导出设置</translation>
         </message>
         <message>
             <source>Extended Features Settings</source>
@@ -1319,6 +1473,10 @@
         <message>
             <source>Full screen</source>
             <translation>全屏</translation>
+        </message>
+        <message>
+            <source>Fullscreen suppression</source>
+            <translation>全屏抑制</translation>
         </message>
         <message>
             <source>Function settings</source>
@@ -1421,6 +1579,22 @@
             <translation>图像大小</translation>
         </message>
         <message>
+            <source>Import</source>
+            <translation>导入</translation>
+        </message>
+        <message>
+            <source>Import configuration</source>
+            <translation>导入配置</translation>
+        </message>
+        <message>
+            <source>Import configuration?</source>
+            <translation>导入配置？</translation>
+        </message>
+        <message>
+            <source>Import settings</source>
+            <translation>导入设置</translation>
+        </message>
+        <message>
             <source>Include the displayed text recognition or original-image translation result when saving an image.</source>
             <translation>保存图片时包含当前显示的文字识别或原图翻译结果。</translation>
         </message>
@@ -1437,6 +1611,10 @@
             <translation>在拼接后的滚动截图中包含截图窗口及其工具栏。</translation>
         </message>
         <message>
+            <source>Input Monitoring</source>
+            <translation>输入监控</translation>
+        </message>
+        <message>
             <source>Interface settings</source>
             <translation>界面设置</translation>
         </message>
@@ -1451,6 +1629,10 @@
         <message>
             <source>JPEG XL</source>
             <translation>JPEG XL</translation>
+        </message>
+        <message>
+            <source>Jump to Translation Page</source>
+            <translation>跳转到翻译页面</translation>
         </message>
         <message>
             <source>Keep records permanently</source>
@@ -1475,6 +1657,10 @@
         <message>
             <source>Language</source>
             <translation>语言</translation>
+        </message>
+        <message>
+            <source>Last used tool</source>
+            <translation>上次使用的工具</translation>
         </message>
         <message>
             <source>Launch as administrator</source>
@@ -1521,6 +1707,10 @@
             <translation>放大镜可见性</translation>
         </message>
         <message>
+            <source>Manage macOS permissions for Snow Shot</source>
+            <translation>管理 Snow Shot 的 macOS 权限</translation>
+        </message>
+        <message>
             <source>Manual</source>
             <translation>手动</translation>
         </message>
@@ -1563,6 +1753,10 @@
         <message>
             <source>Menu options</source>
             <translation>菜单选项</translation>
+        </message>
+        <message>
+            <source>Microphone</source>
+            <translation>麦克风</translation>
         </message>
         <message>
             <source>Middle Mouse Button Action</source>
@@ -1681,6 +1875,10 @@
             <translation>兼容 OpenAI 的 Chat Completions</translation>
         </message>
         <message>
+            <source>Optional. Record your microphone when microphone audio is enabled for recording.</source>
+            <translation>可选。启用录制麦克风音频时，用于录制麦克风声音。</translation>
+        </message>
+        <message>
             <source>Original</source>
             <translation>原始</translation>
         </message>
@@ -1727,6 +1925,10 @@
         <message>
             <source>Permanently remove all saved screenshots</source>
             <translation>永久移除所有已保存的截图</translation>
+        </message>
+        <message>
+            <source>Permission status and access</source>
+            <translation>权限状态与授权</translation>
         </message>
         <message>
             <source>Persistent screenshot history</source>
@@ -1845,6 +2047,14 @@
             <translation>实时</translation>
         </message>
         <message>
+            <source>Recapture</source>
+            <translation>重新截图</translation>
+        </message>
+        <message>
+            <source>Recognize global mouse gestures while you use other apps.</source>
+            <translation>在使用其他应用时识别全局鼠标手势。</translation>
+        </message>
+        <message>
             <source>Recognize text</source>
             <translation>文本识别</translation>
         </message>
@@ -1897,6 +2107,10 @@
             <translation>重做</translation>
         </message>
         <message>
+            <source>Remember last used tool</source>
+            <translation>记住上次使用的工具</translation>
+        </message>
+        <message>
             <source>Remove cached screenshot-history thumbnails</source>
             <translation>删除已缓存的截图历史缩略图</translation>
         </message>
@@ -1941,8 +2155,16 @@
             <translation>以管理员身份重启</translation>
         </message>
         <message>
+            <source>Restore application settings from a configuration archive</source>
+            <translation>从配置压缩包恢复应用设置</translation>
+        </message>
+        <message>
             <source>Restore original screen colors</source>
             <translation>还原屏幕原始颜色</translation>
+        </message>
+        <message>
+            <source>Restore settings</source>
+            <translation>恢复设置</translation>
         </message>
         <message>
             <source>Retention period</source>
@@ -1979,6 +2201,10 @@
         <message>
             <source>Scale recordings that exceed the selected maximum resolution</source>
             <translation>缩放超过所选最大分辨率的录制屏幕</translation>
+        </message>
+        <message>
+            <source>Screen &amp; System Audio Recording</source>
+            <translation>屏幕与系统音频录制</translation>
         </message>
         <message>
             <source>Screen capture</source>
@@ -2077,10 +2303,6 @@
             <translation>截图</translation>
         </message>
         <message>
-            <source>Scroll-wheel click action</source>
-            <translation>滚轮点击操作</translation>
-        </message>
-        <message>
             <source>Scrolling screenshot</source>
             <translation>滚动截图</translation>
         </message>
@@ -2121,6 +2343,10 @@
             <translation>选区动画</translation>
         </message>
         <message>
+            <source>Selection border color</source>
+            <translation>选区边框颜色</translation>
+        </message>
+        <message>
             <source>Selection mask color</source>
             <translation>选区遮罩颜色</translation>
         </message>
@@ -2139,6 +2365,10 @@
         <message>
             <source>Set the border color of pinned screenshots while they have focus</source>
             <translation>设置固定截图获得焦点时的边框颜色</translation>
+        </message>
+        <message>
+            <source>Set the border color of the screenshot selection</source>
+            <translation>设置截图选区的边框颜色</translation>
         </message>
         <message>
             <source>Set the color and opacity outside the screenshot selection</source>
@@ -2219,6 +2449,10 @@
         <message>
             <source>Shortcut keys for screenshot tools and cursor movement</source>
             <translation>截图工具和光标移动的快捷键</translation>
+        </message>
+        <message>
+            <source>Show a button in the text recognition toolbar that sends recognized text to the Translation page.</source>
+            <translation>在文本识别工具栏中显示一个按钮，将识别出的文本发送到翻译页面。</translation>
         </message>
         <message>
             <source>Show main interface</source>
@@ -2321,6 +2555,10 @@
             <translation>开始屏幕录制，或停止并复制当前录制内容</translation>
         </message>
         <message>
+            <source>Start new screenshot sessions and pin drawing mode with the last used drawing tool instead of the move tool</source>
+            <translation>开始新的截图会话或进入贴图绘制模式时，自动启用上次使用的绘图工具，而不是移动工具</translation>
+        </message>
+        <message>
             <source>Start/pause/resume recording</source>
             <translation>开始/暂停/继续录屏</translation>
         </message>
@@ -2421,6 +2659,10 @@
             <translation>缩略图模式</translation>
         </message>
         <message>
+            <source>Toggle hotkeys</source>
+            <translation>切换快捷键</translation>
+        </message>
+        <message>
             <source>Tool positions</source>
             <translation>工具位置</translation>
         </message>
@@ -2477,6 +2719,14 @@
             <translation>托盘菜单</translation>
         </message>
         <message>
+            <source>Turn every global hotkey off or back on; this shortcut stays active while global hotkeys are disabled</source>
+            <translation>关闭或重新开启所有全局快捷键；即使全局快捷键已被禁用，此快捷键仍然有效</translation>
+        </message>
+        <message>
+            <source>Turn off or back on the suppression of global hotkeys while the focused window is fullscreen; this shortcut stays active while fullscreen suppression is enabled</source>
+            <translation>关闭或重新开启焦点窗口全屏时对全局快捷键的抑制；即使全屏抑制已生效，此快捷键仍然有效</translation>
+        </message>
+        <message>
             <source>UIA</source>
             <translation>UIA</translation>
         </message>
@@ -2499,6 +2749,10 @@
         <message>
             <source>Use DirectML for GPU-accelerated text recognition when available</source>
             <translation>可用时使用 DirectML 通过 GPU 加速文本识别</translation>
+        </message>
+        <message>
+            <source>Use global mouse gestures, select individual window elements, and translate selected text.</source>
+            <translation>使用全局鼠标手势、选择窗口内的单个元素，以及翻译选中的文本。</translation>
         </message>
         <message>
             <source>Use system proxy</source>
@@ -2555,6 +2809,61 @@
         <message>
             <source>Write the screenshot to a file and copy that file to the clipboard</source>
             <translation>将截图写入文件并将该文件复制到剪贴板</translation>
+        </message>
+        <message>
+            <source>Zip archives (*.zip);;All files (*.*)</source>
+            <translation>Zip 压缩包 (*.zip);;所有文件 (*.*)</translation>
+        </message>
+    </context>
+    <context>
+        <name>SettingsPageWidget</name>
+        <message>
+            <source>, </source>
+            <translation>、</translation>
+        </message>
+        <message>
+            <source>Authorized</source>
+            <translation>已授权</translation>
+        </message>
+        <message>
+            <source>Checking…</source>
+            <translation>正在检查…</translation>
+        </message>
+        <message>
+            <source>Could not open System Settings. Open System Settings &gt; Privacy &amp; Security &gt; %1.</source>
+            <translation>无法打开系统设置。请前往“系统设置 &gt; 隐私与安全性 &gt; %1”。</translation>
+        </message>
+        <message>
+            <source>Global mouse actions need access to: %1.</source>
+            <translation>全局鼠标操作需要以下权限：%1。</translation>
+        </message>
+        <message>
+            <source>Go to Settings</source>
+            <translation>前往设置</translation>
+        </message>
+        <message>
+            <source>Permissions needed</source>
+            <translation>需要授权</translation>
+        </message>
+        <message>
+            <source>Review permissions</source>
+            <translation>查看权限</translation>
+        </message>
+        <message>
+            <source>To use %1, review access to: %2.</source>
+            <translation>要使用%1，请检查以下权限：%2。</translation>
+        </message>
+        <message>
+            <source>microphone recording</source>
+            <translation>麦克风录音</translation>
+        </message>
+        <message>
+            <source>screenshots and screen recording</source>
+            <translation>截图和屏幕录制</translation>
+        </message>
+        <message>
+            <source>selected-text translation</source>
+            <translation>选中文本翻译</translation>
         </message>
     </context>
     <context>
@@ -2822,8 +3131,55 @@ Unavailable: %2</source>
     <context>
         <name>snow_shot::presentation::GlobalMouseManager</name>
         <message>
+            <source>Allow Snow Shot in System Settings &gt; Privacy &amp; Security &gt; Accessibility to use global mouse gestures.</source>
+            <translation>请在“系统设置 &gt; 隐私与安全性 &gt; 辅助功能”中允许 Snow Shot，以使用全局鼠标手势。</translation>
+        </message>
+        <message>
+            <source>Allow Snow Shot in System Settings &gt; Privacy &amp; Security &gt; Input Monitoring to use global mouse gestures.</source>
+            <translation>请在“系统设置 &gt; 隐私与安全性 &gt; 输入监控”中允许 Snow Shot，以使用全局鼠标手势。</translation>
+        </message>
+        <message>
+            <source>Checking global mouse permissions...</source>
+            <translation>正在检查全局鼠标权限…</translation>
+        </message>
+        <message>
+            <source>Global mouse gestures are paused while this session is inactive.</source>
+            <translation>当前会话处于非活动状态，全局鼠标手势已暂停。</translation>
+        </message>
+        <message>
+            <source>Global mouse gestures are ready.</source>
+            <translation>全局鼠标手势已就绪。</translation>
+        </message>
+        <message>
             <source>Global mouse input is unavailable (error %1).</source>
             <translation>全局鼠标输入不可用（错误 %1）。</translation>
+        </message>
+        <message>
+            <source>Global mouse input is unavailable. Check permissions and retry.</source>
+            <translation>全局鼠标输入不可用。请检查权限后重试。</translation>
+        </message>
+    </context>
+    <context>
+        <name>snow_shot::storage::ConfigurationArchive</name>
+        <message>
+            <source>The configuration archive contains no compatible settings.</source>
+            <translation>该配置压缩包不包含兼容的设置。</translation>
+        </message>
+        <message>
+            <source>The configuration archive could not be created.</source>
+            <translation>无法创建配置压缩包。</translation>
+        </message>
+        <message>
+            <source>The configuration archive was created by a newer version of Snow Shot.</source>
+            <translation>该配置压缩包由更新版本的 Snow Shot 创建。</translation>
+        </message>
+        <message>
+            <source>The file is not a Snow Shot configuration archive.</source>
+            <translation>该文件不是 Snow Shot 配置压缩包。</translation>
+        </message>
+        <message>
+            <source>The file is not a valid configuration archive.</source>
+            <translation>该文件不是有效的配置压缩包。</translation>
         </message>
     </context>
     <context>

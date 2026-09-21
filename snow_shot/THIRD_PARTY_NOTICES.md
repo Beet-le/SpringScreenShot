@@ -26,6 +26,12 @@ fix. Cargo retrieves their source and original license files from that fork.
 The release collector includes the selected Rust FFI and static OCR-worker
 dependency graphs, including these Git dependencies.
 
+The GPL-3.0-only `snow-shot-updater` sidecar is implemented in Rust and is
+distributed as part of Snow Shot. Its resolved normal and build dependency
+graph—including Tokio, Reqwest with native platform TLS, Serde, RSA/SHA-256,
+SemVer, ZIP/Deflate, and Microsoft windows-rs—is collected into the same
+versioned notice bundle from its independently locked Cargo package.
+
 The optional PP-OCRv4 and PP-OCRv5 detector/recognizer models and dictionaries
 are redistributed from RapidAI/RapidOCR's ModelScope release `v3.9.2`, whose
 model card declares Apache License 2.0:
@@ -61,6 +67,12 @@ and the existing objc2 framework bindings (Zlib OR Apache-2.0 OR MIT) for
 Accessibility and pasteboard interoperability. Their resolved notices are
 included in the generated Rust dependency bundle. Apple system frameworks are
 provided by macOS and are not redistributed.
+
+Smart selection (`snow-ui-selector` and `snow-ui-selector-c`) uses the same
+accessibility-sys, core-foundation, and core-foundation-sys dependencies
+(MIT OR Apache-2.0) for macOS Accessibility and Quartz window snapshots.
+ApplicationServices, CoreFoundation, and CoreGraphics are system frameworks and
+are not redistributed. Windows selection continues to use Microsoft windows-rs.
 
 Mouse and keyboard effect rendering and its C bridge (`snow-recording-effects`
 and `snow-recording-effects-c`) are Apache-2.0 code under `snow-crates/`. They

@@ -91,13 +91,17 @@ target_link_libraries(snow_draw_engine_qt_canvas
         opencv_imgproc
         adqt::icons
         snow_draw_engine_c
+)
+if(WIN32)
+    target_link_libraries(snow_draw_engine_qt_canvas PRIVATE
         advapi32
         bcrypt
         ntdll
         shell32
         userenv
         ws2_32
-)
+    )
+endif()
 target_precompile_headers(snow_draw_engine_qt_canvas PRIVATE
     <algorithm>
     <memory>
@@ -118,6 +122,11 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_DEMO)
 endif()
 
 if(SNOW_DRAW_ENGINE_QT_BUILD_BENCHMARKS)
+    snow_add_rust_executable(snow-scene-order-benchmark
+        PACKAGE snow-draw-engine-scene
+        MANIFEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}"
+        OUTPUT_NAME snow-scene-order-benchmark
+    )
     add_executable(snow-canvas-smart-erase-benchmark
         tests/snow_canvas_smart_erase_benchmark.cpp
         src/rendering/snow_canvas_smart_erase_algorithm.cpp
@@ -129,7 +138,7 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_BENCHMARKS)
         "${CMAKE_CURRENT_SOURCE_DIR}/crates/snow-draw-engine-c/include"
     )
     target_link_libraries(snow-canvas-smart-erase-benchmark PRIVATE
-        Qt6::Widgets opencv_core opencv_imgproc
+        snow_draw_engine_c Qt6::Widgets opencv_core opencv_imgproc
     )
     add_executable(snow-canvas-rectangle-benchmark
         tests/snow_canvas_rectangle_benchmark.cpp
@@ -224,6 +233,45 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
     qt_import_plugins(snow-canvas-arrow-text-tests INCLUDE Qt6::QOffscreenIntegrationPlugin)
     add_test(NAME snow-canvas-arrow-text-tests COMMAND snow-canvas-arrow-text-tests)
     set_tests_properties(snow-canvas-arrow-text-tests PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        LABELS "unit"
+    )
+
+    add_executable(snow-canvas-serial-number-drag-tests tests/snow_canvas_serial_number_drag_tests.cpp)
+    target_include_directories(snow-canvas-serial-number-drag-tests PRIVATE
+        ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
+        "${CMAKE_CURRENT_SOURCE_DIR}/crates/snow-draw-engine-c/include"
+    )
+    target_link_libraries(snow-canvas-serial-number-drag-tests PRIVATE snow_draw_engine_qt_canvas)
+    qt_import_plugins(snow-canvas-serial-number-drag-tests INCLUDE Qt6::QOffscreenIntegrationPlugin)
+    add_test(NAME snow-canvas-serial-number-drag-tests COMMAND snow-canvas-serial-number-drag-tests)
+    set_tests_properties(snow-canvas-serial-number-drag-tests PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        LABELS "unit"
+    )
+
+    add_executable(snow-canvas-duplicate-drag-tests tests/snow_canvas_duplicate_drag_tests.cpp)
+    target_include_directories(snow-canvas-duplicate-drag-tests PRIVATE
+        ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
+        "${CMAKE_CURRENT_SOURCE_DIR}/crates/snow-draw-engine-c/include"
+    )
+    target_link_libraries(snow-canvas-duplicate-drag-tests PRIVATE snow_draw_engine_qt_canvas)
+    qt_import_plugins(snow-canvas-duplicate-drag-tests INCLUDE Qt6::QOffscreenIntegrationPlugin)
+    add_test(NAME snow-canvas-duplicate-drag-tests COMMAND snow-canvas-duplicate-drag-tests)
+    set_tests_properties(snow-canvas-duplicate-drag-tests PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        LABELS "unit"
+    )
+
+    add_executable(snow-canvas-align-tests tests/snow_canvas_align_tests.cpp)
+    target_include_directories(snow-canvas-align-tests PRIVATE
+        ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
+        "${CMAKE_CURRENT_SOURCE_DIR}/crates/snow-draw-engine-c/include"
+    )
+    target_link_libraries(snow-canvas-align-tests PRIVATE snow_draw_engine_qt_canvas)
+    qt_import_plugins(snow-canvas-align-tests INCLUDE Qt6::QOffscreenIntegrationPlugin)
+    add_test(NAME snow-canvas-align-tests COMMAND snow-canvas-align-tests)
+    set_tests_properties(snow-canvas-align-tests PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
         LABELS "unit"
     )
@@ -326,7 +374,9 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
         include ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
         "${CMAKE_CURRENT_SOURCE_DIR}/crates/snow-draw-engine-c/include")
     target_link_libraries(snow-canvas-smart-erase-quality-tests PRIVATE
-        Qt6::Widgets opencv_core opencv_imgproc)
+        # snow_canvas_render_geometry resolves text paint bounds through the
+        # engine's C ABI, so the Rust static library must be linked in.
+        snow_draw_engine_c Qt6::Widgets opencv_core opencv_imgproc)
     add_test(NAME snow-canvas-smart-erase-quality-tests COMMAND snow-canvas-smart-erase-quality-tests)
     set_tests_properties(snow-canvas-smart-erase-quality-tests PROPERTIES TIMEOUT 180 LABELS unit
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:opencv_core>")
@@ -363,6 +413,7 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
     target_link_libraries(snow-canvas-spotlight-render-tests PRIVATE
         snow_draw_engine_qt_canvas
     )
+    snow_shot_import_offscreen_platform(snow-canvas-spotlight-render-tests)
     add_test(
         NAME snow-canvas-spotlight-render-tests
         COMMAND snow-canvas-spotlight-render-tests

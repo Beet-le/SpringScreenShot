@@ -7,12 +7,27 @@
 #include <QPointF>
 #include <QRect>
 #include <QRectF>
+#include <QString>
 #include <QSize>
 #include <QtGlobal>
 #include <QVector>
+#include <QTransform>
 
 class QScreen;
 class ScreenshotDisplaySession;
+
+struct ScreenshotSelectionRenderSpec {
+    QRect canvasRect;
+    QSize pixelSize;
+    qreal scale = 1.0;
+    QTransform canvasToImage;
+    [[nodiscard]] bool isValid() const {
+        return !pixelSize.isEmpty();
+    }
+};
+
+[[nodiscard]] ScreenshotSelectionRenderSpec
+screenshotSelectionRenderSpec(const ScreenshotDisplaySession& displays, const QRect& selection);
 
 struct ScreenshotHalfOpenRect {
     double left = 0.0;
@@ -112,6 +127,11 @@ class ScreenshotGeometryMapper final {
     displayForPhysicalPoint(const ScreenshotDisplaySession& displaySession,
                             const QPointF& point) const;
     [[nodiscard]] const CapturedDisplayModel*
+    displayForLogicalPoint(const ScreenshotDisplaySession& displaySession,
+                           const QPointF& point) const;
+    [[nodiscard]] QPointF canvasPositionForPhysicalPoint(const CapturedDisplayModel& display,
+                                                         const QPointF& point) const;
+    [[nodiscard]] const CapturedDisplayModel*
     displayForCanvasPoint(const ScreenshotDisplaySession& displaySession,
                           const QPointF& point) const;
     [[nodiscard]] const CapturedDisplayModel*
@@ -132,7 +152,8 @@ class ScreenshotGeometryMapper final {
     canvasPositionForPhysicalPoint(const ScreenshotDisplaySession& displaySession,
                                    const QPointF& point) const;
     [[nodiscard]] QRectF canvasRectForPhysicalRect(const ScreenshotDisplaySession& displaySession,
-                                                   const QRectF& rect) const;
+                                                   const QRectF& rect,
+                                                   const QString& displayId = {}) const;
     [[nodiscard]] QPoint
     physicalPositionForLogicalPoint(const ScreenshotDisplaySession& displaySession,
                                     const QPointF& point) const;
@@ -148,6 +169,7 @@ class ScreenshotGeometryMapper final {
     [[nodiscard]] static ScreenshotDisplayPlacementGeometry
     displayPlacementGeometry(const CapturedDisplayModel* display,
                              const QRect& fallbackLogicalBounds = QRect());
+    [[nodiscard]] static CapturedDisplayModel preCaptureDisplayModel(QScreen& screen);
     [[nodiscard]] static QRect physicalRectForScreen(const QScreen& screen);
     [[nodiscard]] static QRectF logicalRectFForPhysicalRect(const QRect& rect,
                                                             const QScreen* screen);

@@ -90,6 +90,53 @@ QJsonObject firstRecord(const QString& root) {
         .toObject();
 }
 
+void pointGeometryRoundTripsAndLegacyIndexRemainsReadable() {
+    QTemporaryDir temporary;
+    const auto now = QDateTime::currentDateTimeUtc();
+    auto draft = draftAt(now);
+    draft.displays.front().sourceCanvasRect = QRect(-10, 20, 10, 6);
+    draft.displays.front().backingScale = 2.0;
+    draft.displays.front().nativeDisplayId = 42;
+    draft.displays.front().canvasUsesPoints = true;
+    storage::CaptureHistoryRecord published;
+    {
+        auto repository = storage::makeCaptureHistoryRepository(temporary.path());
+        const auto result = repository->publish(draft).get();
+        require(result.storage.success, "point geometry publication failed");
+        published = result.record;
+    }
+    {
+        auto repository = storage::makeCaptureHistoryRepository(temporary.path());
+        require(repository->records().size() == 1 && repository->records().front() == published &&
+                    repository->records().front().displays.front().nativeDisplayId == 42 &&
+                    repository->records().front().displays.front().backingScale == 2.0 &&
+                    repository->records().front().displays.front().sourceCanvasRect ==
+                        QRect(-10, 20, 10, 6) &&
+                    repository->records().front().displays.front().canvasUsesPoints,
+                "point geometry was not persisted");
+    }
+    QJsonObject index = readObject(indexPath(temporary.path()));
+    index.insert(QStringLiteral("format_version"), 1);
+    auto records = index.value(QStringLiteral("records")).toArray();
+    auto record = records[0].toObject();
+    auto images = record.value(QStringLiteral("displays")).toArray();
+    auto image = images[0].toObject();
+    image.remove(QStringLiteral("source_canvas_rect"));
+    image.remove(QStringLiteral("canvas_space"));
+    images[0] = image;
+    record.insert(QStringLiteral("displays"), images);
+    records[0] = record;
+    index.insert(QStringLiteral("records"), records);
+    QFile file(indexPath(temporary.path()));
+    require(file.open(QIODevice::WriteOnly), "legacy index write failed");
+    file.write(QJsonDocument(index).toJson());
+    file.close();
+    auto repository = storage::makeCaptureHistoryRepository(temporary.path());
+    require(repository->records().size() == 1 &&
+                !repository->records().front().displays.front().canvasUsesPoints,
+            "legacy pixel-space history was rejected");
+}
+
 void sourceCanvasOriginsRoundTripAndRejectInvalidCoordinates() {
     const auto now = QDateTime::currentDateTimeUtc();
     for (const auto origin :
@@ -168,7 +215,7 @@ void publicationAndRecovery() {
         const QJsonObject manifest = firstRecord(temporary.path());
         require(readObject(indexPath(temporary.path()))
                             .value(QStringLiteral("format_version"))
-                            .toInt() == 1 &&
+                            .toInt() == 2 &&
                     manifest.value(QStringLiteral("id")).toString() == published.id &&
                     manifest.value(QStringLiteral("source")).toString() ==
                         QStringLiteral("pinned_to_screen") &&
@@ -625,7 +672,7 @@ void startupExpiresAgeButDoesNotEnforceCapacity() {
     options.policy.retentionDays = 365;
     {
         auto writer = storage::makeCaptureHistoryRepository(temporary.path(), options);
-        for (const auto date : {now.addDays(-8), now.addDays(-7), now}) {
+        for (const auto& date : {now.addDays(-8), now.addDays(-7), now}) {
             require(writer->publish(draftAt(date)).get().storage.success,
                     "failed to publish retention fixture");
         }
@@ -643,6 +690,77 @@ void startupExpiresAgeButDoesNotEnforceCapacity() {
     auto readOnly = storage::makeCaptureHistoryRepository(temporary.path(), options);
     require(readOnly->records().size() == 2 && !readOnly->requestClear().get().success,
             "read-only repository modified history");
+}
+
+void batchRemovalCommitsAndNotifiesOnce() {
+    QTemporaryDir temporary;
+    std::atomic_int indexWrites{0};
+    std::atomic_int recordChanges{0};
+    storage::CaptureHistoryRepositoryOptions options;
+    options.operationObserved = [&](storage::CaptureHistoryOperation operation) {
+        if (operation == storage::CaptureHistoryOperation::IndexWrite) {
+            ++indexWrites;
+        }
+    };
+    options.callbacks.recordsChanged = [&]() { ++recordChanges; };
+    auto repository = storage::makeCaptureHistoryRepository(temporary.path(), options);
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    QVector<storage::CaptureHistoryRecord> published;
+    for (int index = 0; index < 4; ++index) {
+        const auto result = repository->publish(draftAt(now.addSecs(-index))).get();
+        require(result.storage.success, "failed to publish batch-removal fixture");
+        published.push_back(result.record);
+    }
+    const auto payloadPath = [&](const QString& id) {
+        return QDir(temporary.path())
+            .filePath(QStringLiteral("capture_history/records/%1").arg(id));
+    };
+    indexWrites = 0;
+    recordChanges = 0;
+
+    const QString unknownId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const auto result =
+        repository->removeMany({published[0].id, published[2].id, published[0].id, unknownId})
+            .get();
+    require(result.success, "batch removal failed");
+    const QVector<storage::CaptureHistoryRecord> remaining = repository->records();
+    require(remaining.size() == 2 && remaining[0].id == published[1].id &&
+                remaining[1].id == published[3].id,
+            "batch removal did not retain exactly the unselected records");
+    require(repository->usage().entryCount == 2 && recordChanges.load() == 1,
+            "batch removal did not update usage and notify exactly once");
+    require(indexWrites.load() == 2,
+            "batch removal must use one state commit and one payload-cleanup commit");
+    require(!QFileInfo::exists(payloadPath(published[0].id)) &&
+                !QFileInfo::exists(payloadPath(published[2].id)) &&
+                QFileInfo::exists(payloadPath(published[1].id)) &&
+                QFileInfo::exists(payloadPath(published[3].id)),
+            "batch removal did not clean only the selected payload directories");
+
+    indexWrites = 0;
+    recordChanges = 0;
+    require(repository->removeMany({}).get().success &&
+                repository->removeMany({unknownId, unknownId}).get().success,
+            "empty and unknown-only removal batches must be successful no-ops");
+    require(indexWrites.load() == 0 && recordChanges.load() == 0,
+            "no-op removal batches must not write or notify");
+
+    repository.reset();
+    storage::CaptureHistoryRepositoryOptions readOnlyOptions;
+    readOnlyOptions.writeAvailable = false;
+    auto readOnly =
+        storage::makeCaptureHistoryRepository(temporary.path(), std::move(readOnlyOptions));
+    require(readOnly->records().size() == 2 &&
+                !readOnly->removeMany({published[1].id}).get().success &&
+                readOnly->records().size() == 2,
+            "read-only batch removal modified persisted history");
+    readOnly.reset();
+
+    repository = storage::makeCaptureHistoryRepository(temporary.path());
+    require(repository->remove(published[1].id).get().success &&
+                repository->records().size() == 1 &&
+                repository->records().first().id == published[3].id,
+            "single removal no longer follows the shared batch path");
 }
 
 void permanentHistoryBypassesLimitsAndAllowsManualDeletion() {
@@ -717,6 +835,7 @@ void clearCancelsQueuedPublicationsAndShutdownDrains() {
 
 int main(int argc, char** argv) {
     QCoreApplication application(argc, argv);
+    pointGeometryRoundTripsAndLegacyIndexRemainsReadable();
     sourceCanvasOriginsRoundTripAndRejectInvalidCoordinates();
     publicationAndRecovery();
     preparedResultBytesAreCommittedWithoutReplacement();
@@ -732,6 +851,7 @@ int main(int argc, char** argv) {
     failedCommitPreservesPublishedHistory();
     pendingDeletionResumesWithoutScanningOrphans();
     startupExpiresAgeButDoesNotEnforceCapacity();
+    batchRemovalCommitsAndNotifiesOnce();
     permanentHistoryBypassesLimitsAndAllowsManualDeletion();
     clearCancelsQueuedPublicationsAndShutdownDrains();
     return 0;

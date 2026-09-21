@@ -38,8 +38,8 @@ struct ScreenshotRecognitionTarget {
     QString key;
     QImage image;
     QRectF canvasRect;
-    std::shared_ptr<QTextDocument> formattedTextDocument;
-    QString formattedPlainText;
+    std::shared_ptr<QTextDocument> formattedTextDocument{};
+    QString formattedPlainText{};
 
     [[nodiscard]] bool isValid() const {
         return !key.isEmpty() && !image.isNull() && canvasRect.isValid() && !canvasRect.isEmpty();
@@ -141,6 +141,7 @@ class ScreenshotRecognitionSessionController final : public QObject {
     [[nodiscard]] bool originalImageVisible() const;
     [[nodiscard]] bool hasTextResult() const;
     [[nodiscard]] QString textDraft() const;
+    [[nodiscard]] QString sourceTextDraft() const;
     [[nodiscard]] QString originalText() const;
     [[nodiscard]] std::unique_ptr<QMimeData> recognitionClipboardMimeData(
         const ScreenshotOcrPresentation* displayedPresentation = nullptr) const;

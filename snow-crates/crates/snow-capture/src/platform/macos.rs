@@ -133,12 +133,26 @@ impl CaptureBackend for MacBackend {
         )?))
     }
 }
-fn native_config(target: &CaptureTarget) -> CaptureResult<DesktopConfig> {
+fn native_config(target: &CaptureTarget, options: &CaptureOptions) -> CaptureResult<DesktopConfig> {
+    if options.excluded_windows.len() > crate::exclusions::MAX_EXCLUSIONS
+        || options.excluded_processes.len() > crate::exclusions::MAX_EXCLUSIONS
+    {
+        return Err(CaptureError::InvalidConfig(
+            "capture exclusions exceed 4096 entries".into(),
+        ));
+    }
+    if matches!(target, CaptureTarget::Window(_))
+        && (!options.excluded_windows.is_empty() || !options.excluded_processes.is_empty())
+    {
+        return Err(CaptureError::InvalidConfig(
+            "window capture does not support exclusion filters".into(),
+        ));
+    }
     let native_id = |id| {
         u32::try_from(id)
             .map_err(|_| CaptureError::InvalidConfig("invalid macOS target identifier".into()))
     };
-    Ok(DesktopConfig::new(match target {
+    let mut config = DesktopConfig::new(match target {
         CaptureTarget::PrimaryMonitor => DesktopTarget::PrimaryDisplay,
         CaptureTarget::Monitor(id) => {
             DesktopTarget::Display(MacDisplayId(native_id(id.raw_handle())?))
@@ -151,10 +165,19 @@ fn native_config(target: &CaptureTarget) -> CaptureResult<DesktopConfig> {
             width: f64::from(region.width),
             height: f64::from(region.height),
         }),
-    }))
+    });
+    config.excluded_windows = options.excluded_windows.iter().copied().collect();
+    config.excluded_processes = options.excluded_processes.iter().copied().collect();
+    config.excluded_windows.sort_unstable();
+    config.excluded_windows.dedup();
+    config.excluded_processes.sort_unstable();
+    config.excluded_processes.dedup();
+    Ok(config)
 }
 fn target_info(target: &CaptureTarget) -> CaptureResult<CaptureTargetInfo> {
-    let transform = snow_macos::desktop::inspect(&native_config(target)?).map_err(map_error)?;
+    let transform =
+        snow_macos::desktop::inspect(&native_config(target, &CaptureOptions::default())?)
+            .map_err(map_error)?;
     Ok(CaptureTargetInfo {
         origin_x: transform.source.x.round() as i32,
         origin_y: transform.source.y.round() as i32,
@@ -178,7 +201,7 @@ impl MacCapturer {
                 "Windows capture tuning is unavailable on macOS".into(),
             ));
         }
-        let session = DesktopSession::new(native_config(&target)?).map_err(map_error)?;
+        let session = DesktopSession::new(native_config(&target, &options)?).map_err(map_error)?;
         let transform = session.transform();
         Ok(Self {
             session,
@@ -189,6 +212,9 @@ impl MacCapturer {
     }
 }
 impl MonitorCapturer for MacCapturer {
+    fn set_cancellation(&mut self, token: snow_core::cancellation::CancellationToken) {
+        self.session.set_snapshot_cancellation(token);
+    }
     fn set_cursor_visible(&mut self, visible: bool) -> CaptureResult<()> {
         self.session
             .set_cursor(if visible {
@@ -239,7 +265,7 @@ impl MonitorCapturer for MacCapturer {
             cpu.size.height,
             self.options.output_pixel_format,
         )?;
-        frame.as_mut_bytes().copy_from_slice(&cpu.bytes);
+        copy_cpu_pixels(cpu, &mut frame)?;
         frame.metadata = Default::default();
         if self.options.output_pixel_format == CapturePixelFormat::Rgba8 {
             snow_media::convert::swap_red_blue(frame.as_mut_bytes());
@@ -274,9 +300,91 @@ impl MonitorCapturer for MacCapturer {
     }
 }
 
+fn copy_cpu_pixels(cpu: &snow_media::CpuFrame, frame: &mut Frame) -> CaptureResult<()> {
+    let [plane] = cpu.planes.as_slice() else {
+        return Err(CaptureError::BufferOverflow);
+    };
+    let row_bytes = (frame.width() as usize)
+        .checked_mul(4)
+        .ok_or(CaptureError::BufferOverflow)?;
+    if plane.width != frame.width() as usize
+        || plane.row_bytes != row_bytes
+        || plane.height != frame.height() as usize
+        || plane.stride < row_bytes
+        || cpu.plane_bytes(0).is_none()
+    {
+        return Err(CaptureError::BufferOverflow);
+    }
+    for (row, destination) in frame.as_mut_bytes().chunks_exact_mut(row_bytes).enumerate() {
+        let offset = plane.offset + row * plane.stride;
+        destination.copy_from_slice(&cpu.bytes[offset..offset + row_bytes]);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tuning_tests {
     use super::*;
+    #[test]
+    fn padded_cpu_frame_is_copied_without_padding_and_bad_layouts_are_rejected() {
+        let mut cpu = snow_media::CpuFrame {
+            size: snow_media::geometry::PixelSize::new(1, 2).unwrap(),
+            format: snow_media::PixelFormat::Bgra8,
+            color: snow_media::ColorDescription::SRGB,
+            planes: vec![snow_media::PlaneLayout {
+                offset: 1,
+                width: 1,
+                height: 2,
+                stride: 5,
+                row_bytes: 4,
+            }],
+            bytes: std::sync::Arc::from([99, 10, 20, 30, 40, 98, 50, 60, 70, 80]),
+        };
+        let mut frame = Frame::from_rgba8(1, 2, vec![0; 8]).unwrap();
+        copy_cpu_pixels(&cpu, &mut frame).unwrap();
+        assert_eq!(frame.as_bytes(), &[10, 20, 30, 40, 50, 60, 70, 80]);
+        cpu.planes[0].offset = 2;
+        assert!(matches!(
+            copy_cpu_pixels(&cpu, &mut frame),
+            Err(CaptureError::BufferOverflow)
+        ));
+        cpu.planes[0].offset = usize::MAX;
+        assert!(copy_cpu_pixels(&cpu, &mut frame).is_err());
+        cpu.planes[0].offset = 1;
+        cpu.planes[0].stride = 3;
+        assert!(copy_cpu_pixels(&cpu, &mut frame).is_err());
+    }
+    #[test]
+    fn snapshot_and_continuous_filters_reach_native_configs() {
+        for workload in [CaptureWorkload::Snapshot, CaptureWorkload::Continuous] {
+            let options = CaptureOptions {
+                workload,
+                excluded_windows: vec![9, 7, 9].into(),
+                excluded_processes: vec![5, 3, 5].into(),
+                ..Default::default()
+            };
+            for target in [
+                CaptureTarget::PrimaryMonitor,
+                CaptureTarget::Region(crate::CaptureRegion::new(0, 0, 64, 64).unwrap()),
+            ] {
+                let config = native_config(&target, &options).unwrap();
+                assert_eq!(config.excluded_windows, [7, 9]);
+                assert_eq!(config.excluded_processes, [3, 5]);
+            }
+            assert!(
+                native_config(
+                    &CaptureTarget::Window(WindowId::from_macos_id(42)),
+                    &options
+                )
+                .is_err()
+            );
+        }
+        let options = CaptureOptions {
+            excluded_windows: vec![1; 4097].into(),
+            ..Default::default()
+        };
+        assert!(native_config(&CaptureTarget::PrimaryMonitor, &options).is_err());
+    }
     #[test]
     fn explicit_windows_tuning_fails_before_native_acquisition() {
         let result = MacCapturer::new(

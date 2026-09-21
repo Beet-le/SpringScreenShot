@@ -1,6 +1,9 @@
 #include "snow_shot/presentation/mainwindow.h"
 
 #include "snow_shot/platform/windows/windowchrome.h"
+#ifdef Q_OS_MACOS
+#include "snow_shot/platform/macos/applicationactivation.h"
+#endif
 #include "snow_shot/presentation/components/contentcardwidget.h"
 #include "snow_shot/presentation/components/maincontentheaderwidget.h"
 #include "snow_shot/presentation/components/sidebarwidget.h"
@@ -11,6 +14,7 @@
 #include "snow_shot/presentation/styles/themecolorscheme.h"
 #include "widgets/message.h"
 
+#include <QCloseEvent>
 #include <QEvent>
 #include <QFont>
 #include <QHBoxLayout>
@@ -19,6 +23,7 @@
 #include <QPainter>
 #include <QPalette>
 #include <QPoint>
+#include <QResizeEvent>
 #include <QScopedValueRollback>
 #include <QStatusBar>
 #include <QAbstractButton>
@@ -63,7 +68,11 @@ MainWindow::MainWindow(const snow_shot::presentation::settings::SettingsRegistry
                        snow_shot::presentation::settings::SettingsRuntimeSession& runtimeSession,
                        QWidget* parent, SnowShotApiClient* translationClient)
     : QMainWindow(parent), m_translationClient(translationClient), m_settingsRegistry(registry),
-      m_runtimeSession(runtimeSession) {
+      m_runtimeSession(runtimeSession), m_geometryMemory(this) {
+#ifdef Q_OS_MACOS
+    setWindowFlags(windowFlags() | Qt::ExpandedClientAreaHint | Qt::NoTitleBarBackgroundHint);
+    setAttribute(Qt::WA_LayoutOnEntireRect);
+#endif
     setObjectName(QStringLiteral("snowShotMainWindow"));
     setAccessibleName(QStringLiteral("SnowShot"));
     setWindowTitle(QStringLiteral("SnowShot"));
@@ -71,6 +80,7 @@ MainWindow::MainWindow(const snow_shot::presentation::settings::SettingsRegistry
     setMinimumSize(MAIN_WINDOW_MIN_WIDTH, MAIN_WINDOW_MIN_HEIGHT);
     setMouseTracking(true);
     setAttribute(Qt::WA_DeleteOnClose);
+    m_geometryMemory.restoreMainWindow(QSize(MAIN_WINDOW_MIN_WIDTH, MAIN_WINDOW_MIN_HEIGHT));
 
     // DirectWrite's default hinting can retain grid fitting even at fractional DPI.
     // Let all main-interface labels inherit smooth outlines before setting their sizes.
@@ -90,13 +100,29 @@ MainWindow::MainWindow(const snow_shot::presentation::settings::SettingsRegistry
     applyTheme(themeManager.themeColorScheme());
 }
 
+void MainWindow::closeEvent(QCloseEvent* event) {
+    QMainWindow::closeEvent(event);
+    if (event->isAccepted()) {
+        m_geometryMemory.captureAcceptedClose();
+    }
+}
+
 bool MainWindow::event(QEvent* event) {
     const bool handled = QMainWindow::event(event);
 
 #ifdef Q_OS_WIN
+    if (event->type() == QEvent::WindowStateChange && m_titleBar != nullptr) {
+        m_titleBar->setMaximized(isMaximized());
+    }
+
     // The DWM frame extension belongs to the HWND, which Qt recreates after close().
     if (event->type() == QEvent::WinIdChange && internalWinId() != 0) {
         setupDwmShadow();
+    }
+#elif defined(Q_OS_MACOS)
+    if (event->type() == QEvent::WinIdChange || event->type() == QEvent::Show ||
+        event->type() == QEvent::WindowStateChange) {
+        setupNativeTitleBar();
     }
 #endif
 
@@ -115,6 +141,9 @@ void MainWindow::changeEvent(QEvent* event) {
 void MainWindow::resizeEvent(QResizeEvent* event) {
     QMainWindow::resizeEvent(event);
     syncTitleBarBottomShadowGeometry();
+#ifdef Q_OS_MACOS
+    setupNativeTitleBar();
+#endif
 }
 
 void MainWindow::setupDwmShadow() {
@@ -122,6 +151,14 @@ void MainWindow::setupDwmShadow() {
     snow_shot::platform::windows::setupDwmShadow(this);
 #endif
 }
+
+#ifdef Q_OS_MACOS
+void MainWindow::setupNativeTitleBar() {
+    if (m_titleBar != nullptr) {
+        snow_shot::platform::macos::configureMainWindowTitleBar(this, m_titleBar->height());
+    }
+}
+#endif
 
 #ifdef Q_OS_WIN
 bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr* result) {
@@ -140,18 +177,28 @@ void MainWindow::buildUi() {
     root->setAutoFillBackground(true);
     setCentralWidget(root);
 
-    m_titleBarBottomShadow = new TitleBarBottomShadowWidget(root);
-    m_titleBarBottomShadow->hide();
-
     auto* rootLayout = new QVBoxLayout(root);
     rootLayout->setContentsMargins(0, 0, 0, 0);
     rootLayout->setSpacing(0);
 
+    m_titleBarBottomShadow = new TitleBarBottomShadowWidget(root);
+    m_titleBarBottomShadow->setObjectName(QStringLiteral("titleBarBottomShadow"));
+    m_titleBarBottomShadow->hide();
+
     auto* titleBar = new TitleBarWidget(metric, root);
     rootLayout->addWidget(titleBar, 0);
 
+#ifndef Q_OS_MACOS
     connect(titleBar->minimizeButton(), &QAbstractButton::clicked, this, &QWidget::showMinimized);
+    connect(titleBar->maximizeButton(), &QAbstractButton::clicked, this, [this]() {
+        if (isMaximized()) {
+            showNormal();
+        } else {
+            showMaximized();
+        }
+    });
     connect(titleBar->closeButton(), &QAbstractButton::clicked, this, &QWidget::close);
+#endif
     m_titleBar = titleBar;
 
     auto* body = new QWidget(root);
@@ -223,6 +270,23 @@ void MainWindow::buildUi() {
     m_contentHeader->setCurrentSection(m_contentCard->currentLocation().sectionId);
 }
 
+void MainWindow::showAppPermissions(const QString& permissionId) {
+#ifdef Q_OS_MACOS
+    if (m_contentCard)
+        m_contentCard->navigateTo(
+            {QStringLiteral("app-permissions"), QStringLiteral("permissions"), permissionId});
+#else
+    Q_UNUSED(permissionId);
+#endif
+    showAndActivate();
+#ifdef Q_OS_MACOS
+    adqt::widgets::AdMessage::Request request;
+    request.key = QStringLiteral("main-app-permission-required");
+    request.content = tr("Grant the required permission to continue");
+    adqt::widgets::AdMessageService::warning(std::move(request), this);
+#endif
+}
+
 void MainWindow::showFunctionSettings() {
     if (m_contentCard != nullptr) {
         m_contentCard->showFunctionSettings();
@@ -236,6 +300,13 @@ void MainWindow::showInterfaceSettings() {
     }
 
     showAndActivate();
+}
+
+void MainWindow::showAbout() {
+    showAndActivate();
+    if (m_contentCard != nullptr) {
+        m_contentCard->navigateTo({QStringLiteral("about"), {}, {}});
+    }
 }
 
 void MainWindow::showTranslation(const QString& text) {
@@ -268,6 +339,9 @@ void MainWindow::showAndActivate() {
     activateWindow();
 #ifdef Q_OS_WIN
     snow_shot::platform::windows::bringWindowToForeground(this);
+#elif defined(Q_OS_MACOS)
+    snow_shot::platform::macos::activateWindow(this);
+    setupNativeTitleBar();
 #endif
 }
 

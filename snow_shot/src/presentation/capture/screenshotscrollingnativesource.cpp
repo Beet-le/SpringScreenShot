@@ -56,6 +56,13 @@ class NativeScrollingSource final : public ScrollingFrameSource {
                 event.frame);
             break;
         }
+#ifdef Q_OS_MACOS
+        case SNOW_CAPTURE_STREAM_EVENT_RESOLUTION_CHANGED:
+            result.kind = ScrollingSourceEvent::Kind::Error;
+            result.error =
+                QStringLiteral("display reconfiguration invalidated the scrolling viewport");
+            break;
+#endif
         case SNOW_CAPTURE_STREAM_EVENT_FRAMES_DROPPED:
             result.kind = ScrollingSourceEvent::Kind::Dropped;
             break;
@@ -96,8 +103,9 @@ class NativeScrollingSource final : public ScrollingFrameSource {
 } // namespace
 
 ScrollingSourceFactory nativeScrollingSource(QRect selection, bool restoreOriginalColors,
+                                             const QVector<std::uint32_t>& excludedWindowIds,
                                              quint64 generation) {
-    return [selection, restoreOriginalColors,
+    return [selection, restoreOriginalColors, excludedWindowIds,
             generation]() -> std::unique_ptr<ScrollingFrameSource> {
         if (selection.isEmpty())
             return {};
@@ -120,6 +128,8 @@ ScrollingSourceFactory nativeScrollingSource(QRect selection, bool restoreOrigin
         config.adaptive_fps = 1;
         config.include_cursor = 0;
         config.restore_original_colors = restoreOriginalColors ? 1 : 0;
+        config.exclusions.windows = excludedWindowIds.constData();
+        config.exclusions.window_count = static_cast<size_t>(excludedWindowIds.size());
         logScrollingEvent("scrolling.native_create", generation,
                           {{QStringLiteral("physical_selection"), scrollingRect(selection)},
                            {QStringLiteral("backend"), static_cast<int>(config.capture_backend)},

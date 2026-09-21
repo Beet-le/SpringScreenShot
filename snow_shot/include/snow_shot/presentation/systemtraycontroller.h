@@ -33,7 +33,9 @@ class SystemTrayController final : public QObject {
     void show();
     void hide();
     void showCaptureMessage(const QString& message, bool warning);
+    void showWarningMessage(const QString& title, const QString& message);
     void showUpdateMessage(const QString& message);
+    [[nodiscard]] bool canShowMessages() const;
     void setEnabled(bool enabled);
     [[nodiscard]] bool isEnabled() const;
     void setIconSelection(const QString& selection);
@@ -50,14 +52,14 @@ class SystemTrayController final : public QObject {
                             const shortcuts::ShortcutBindingList& shortcuts);
     void setMenuOptions(const QStringList& options);
     [[nodiscard]] QStringList menuOptions() const;
-    [[nodiscard]] bool globalHotkeysDisabled() const;
+    void setQuickActionChecked(GlobalShortcutAction action, bool checked);
 
   signals:
     void screenshotRequested();
     void showMainWindowRequested();
     void openFunctionSettingsRequested();
+    void openAboutRequested();
     void quickActionRequested(snow_shot::presentation::GlobalShortcutAction action);
-    void globalHotkeysDisabledChanged(bool disabled);
     void exitRequested();
 
   private:

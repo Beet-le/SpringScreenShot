@@ -99,6 +99,8 @@ SettingsRuntimeSession::SettingsRuntimeSession(const SettingsRegistry& registry,
             emit shortcutStateChanged(action, shortcutState(action));
         },
         Qt::QueuedConnection);
+    connect(&m_backend, &SettingsBackend::globalMousePermissionChanged, this,
+            &SettingsRuntimeSession::globalMousePermissionChanged);
     refreshAll();
 }
 
@@ -470,7 +472,7 @@ void SettingsRuntimeSession::forgetRetiredTarget(const SettingsFieldDescriptor& 
         return;
     }
     QVector<RetiredWrite>& writes = found.value();
-    for (int index = writes.size() - 1; index >= 0; --index) {
+    for (qsizetype index = writes.size() - 1; index >= 0; --index) {
         if (matchesValue(descriptor, writes.at(index).target, target)) {
             writes.removeAt(index);
         }
@@ -494,7 +496,7 @@ bool SettingsRuntimeSession::suppressRetiredCompletion(const SettingsFieldDescri
     // current value. A transition away from it is observable evidence that a
     // later matching update is a new external change, not another notification
     // for the old completion.
-    for (int index = writes.size() - 1; index >= 0; --index) {
+    for (qsizetype index = writes.size() - 1; index >= 0; --index) {
         if (writes.at(index).completionObserved &&
             !matchesValue(descriptor, writes.at(index).target, external)) {
             writes.removeAt(index);
@@ -506,7 +508,7 @@ bool SettingsRuntimeSession::suppressRetiredCompletion(const SettingsFieldDescri
     if (!backendPending && (activeWrite == nullptr || activeSettled)) {
         // No retired request remains in flight. Unobserved targets that do not
         // match the backend can no longer produce a stale completion.
-        for (int index = writes.size() - 1; index >= 0; --index) {
+        for (qsizetype index = writes.size() - 1; index >= 0; --index) {
             if (!writes.at(index).completionObserved &&
                 !matchesValue(descriptor, writes.at(index).target, external)) {
                 writes.removeAt(index);
@@ -906,6 +908,11 @@ QVariant SettingsRuntimeSession::readValue(const SettingsFieldDescriptor& descri
                 return QVariantList{state.enabled, state.busy};
             } else if constexpr (std::is_same_v<Payload, SettingsCustomDefinition>) {
                 switch (payload.renderer) {
+                case SettingsCustomRenderer::PermissionScreenRecording:
+                case SettingsCustomRenderer::PermissionAccessibility:
+                case SettingsCustomRenderer::PermissionInputMonitoring:
+                case SettingsCustomRenderer::PermissionMicrophone:
+                    return {};
                 case SettingsCustomRenderer::DrawingToolbarEditor:
                     return QVariant::fromValue(m_backend.toolbarLayout(
                         storage::ScreenshotToolbarLayoutKind::DrawingTools));
@@ -971,6 +978,11 @@ bool SettingsRuntimeSession::writeValue(const SettingsFieldDescriptor& descripto
                     payload.action, value.value<SettingsGlobalMouseCombination>());
             } else if constexpr (std::is_same_v<Payload, SettingsCustomDefinition>) {
                 switch (payload.renderer) {
+                case SettingsCustomRenderer::PermissionScreenRecording:
+                case SettingsCustomRenderer::PermissionAccessibility:
+                case SettingsCustomRenderer::PermissionInputMonitoring:
+                case SettingsCustomRenderer::PermissionMicrophone:
+                    return {};
                 case SettingsCustomRenderer::PinnedToolbarEditor:
                     return value.canConvert<storage::ScreenshotToolbarLayout>() &&
                            m_backend.applyToolbarLayout(
@@ -1079,7 +1091,12 @@ bool SettingsRuntimeSession::isReadOnly(const SettingsFieldDescriptor& descripto
         return true;
     }
     if (const auto* custom = std::get_if<SettingsCustomDefinition>(&descriptor.definition->payload);
-        custom != nullptr && custom->renderer == SettingsCustomRenderer::StorageStatus) {
+        custom != nullptr &&
+        (custom->renderer == SettingsCustomRenderer::StorageStatus ||
+         custom->renderer == SettingsCustomRenderer::PermissionScreenRecording ||
+         custom->renderer == SettingsCustomRenderer::PermissionAccessibility ||
+         custom->renderer == SettingsCustomRenderer::PermissionInputMonitoring ||
+         custom->renderer == SettingsCustomRenderer::PermissionMicrophone)) {
         return true;
     }
     return false;
@@ -1424,8 +1441,8 @@ SettingsActionState SettingsRuntimeSession::actionState(SettingsActionBinding bi
     return m_backend.actionState(binding);
 }
 
-bool SettingsRuntimeSession::triggerAction(SettingsActionBinding binding) {
-    return m_backend.triggerAction(binding);
+bool SettingsRuntimeSession::triggerAction(SettingsActionBinding binding, const QString& filePath) {
+    return m_backend.triggerAction(binding, filePath);
 }
 
 CustomAiModels SettingsRuntimeSession::customAiModels() const {

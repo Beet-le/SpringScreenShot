@@ -8,6 +8,9 @@
 #include "snow_shot/presentation/screenshotscrollingthumbnailwidget.h"
 #include "snow_draw_engine_qt/snow_canvas_widget.h"
 #include <QEvent>
+#ifdef Q_OS_MACOS
+#include "snow_shot/platform/screenshotnative.h"
+#endif
 #include <QGuiApplication>
 #include "../capture/screenshotscrollingdiagnostics.h"
 #include <QKeyEvent>
@@ -105,9 +108,20 @@ void ScreenshotOverlayWindow::setScreenshotImage(QImage image, const QRectF& can
     }
 }
 
+void ScreenshotOverlayWindow::setScreenshotImageSource(ScreenshotImageSource source) {
+    if (m_screenshotRenderer)
+        m_screenshotRenderer->setImageSource(std::move(source));
+}
+
 void ScreenshotOverlayWindow::setScreenshotMaskVisible(bool visible) {
     if (m_screenshotRenderer != nullptr) {
         m_screenshotRenderer->setMaskVisible(visible);
+    }
+}
+
+void ScreenshotOverlayWindow::setScreenshotSelectionBorderColor(const QColor& color) {
+    if (m_screenshotRenderer != nullptr) {
+        m_screenshotRenderer->setSelectionBorderColor(color);
     }
 }
 
@@ -375,6 +389,11 @@ void ScreenshotOverlayWindow::updateScrollingThumbnail(const QImage& previewImag
     layoutScrollingThumbnail();
 }
 
+void ScreenshotOverlayWindow::reanchorScrollingThumbnail(const QRect& localSelection) {
+    m_scrollingThumbnailAnchor = localSelection;
+    layoutScrollingThumbnail();
+}
+
 void ScreenshotOverlayWindow::clearScrollingThumbnail() {
     m_scrollingThumbnailSessionActive = false;
     m_scrollingThumbnailAnchor = {};
@@ -472,6 +491,13 @@ void ScreenshotOverlayWindow::initializeScreenshotSurface() {
 }
 
 bool ScreenshotOverlayWindow::event(QEvent* event) {
+#ifdef Q_OS_MACOS
+    if (event != nullptr && event->type() == QEvent::Show) {
+        const bool handled = QWidget::event(event);
+        snow_shot::platform::configureScreenshotOverlayWindow(this);
+        return handled;
+    }
+#endif
     if (event == nullptr || event->type() != QEvent::UpdateRequest) {
         return QWidget::event(event);
     }

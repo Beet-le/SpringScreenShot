@@ -468,6 +468,12 @@ void renderingCopyAndPersistence() {
                 !browser->toPlainText().contains(QStringLiteral("**bold**")) &&
                 browser->toPlainText().contains(QStringLiteral("int n = 42;")),
             "Markdown preview renders structure and preserves fenced code");
+#if defined(Q_OS_WIN)
+    // Only Windows configures a themed app font for this suite; the preview document
+    // must carry the theme's unhinted outline policy either way.
+    require(browser->document()->defaultFont().hintingPreference() == QFont::PreferNoHinting,
+            "conversion previews must render unhinted outlines");
+#endif
     require(view.copyToClipboard() && QApplication::clipboard()->text() == markdown,
             "copy without selection preserves exact Markdown source");
     QTextCursor cursor(browser->document());
@@ -761,7 +767,10 @@ void conversionToolbarMigration() {
                                                         QStringLiteral("table-recognition"),
                                                         QStringLiteral("convert-to-markdown"),
                                                         QStringLiteral("convert-to-html")} &&
-                migrated.hidden == original.hidden,
+                // quick-save always mirrors save-as-file: hiding the manual
+                // save hides its companion too.
+                migrated.hidden ==
+                    QStringList{QStringLiteral("save-as-file"), QStringLiteral("quick-save")},
             "older layouts gain conversions inside recognition without rearranging other tools");
     const storage::ScreenshotToolbarSettings settings;
     settings.setLayout(storage::ScreenshotToolbarLayoutKind::ActionTools, original);
@@ -813,7 +822,9 @@ void conversionToolbarMigration() {
     qrHidden.hidden.push_back(QStringLiteral("barcode-recognition"));
     auto tableGroup = migrated;
     tableGroup.positions[1].removeAll(QStringLiteral("barcode-recognition"));
-    tableGroup.hidden.push_back(QStringLiteral("barcode-recognition"));
+    // The migration preserves the input's hidden order and appends the
+    // quick-save companion last, so barcode-recognition slots in before it.
+    tableGroup.hidden.insert(1, QStringLiteral("barcode-recognition"));
     verify(qrHidden, tableGroup);
     auto recognitionHidden = defaults;
     recognitionHidden.positions.removeFirst();

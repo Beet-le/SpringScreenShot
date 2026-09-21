@@ -2,6 +2,7 @@
 #define SNOW_SHOT_PLATFORM_PHYSICALCURSOR_H
 
 #include <QPoint>
+#include <QPointF>
 
 #include <functional>
 #include <optional>
@@ -27,6 +28,7 @@ enum class PhysicalCursorMoveStatus {
 struct PhysicalCursorMoveResult {
     PhysicalCursorMoveStatus status = PhysicalCursorMoveStatus::Unsupported;
     std::optional<QPoint> position;
+    bool mouseMoveDispatched = false;
 
     [[nodiscard]] bool commandApplied() const noexcept {
         return status == PhysicalCursorMoveStatus::Applied ||
@@ -38,6 +40,9 @@ struct PhysicalCursorAccess {
     bool supported = false;
     std::function<std::optional<QPoint>()> readPosition;
     std::function<bool(const QPoint&)> writePosition;
+    std::function<std::optional<QPointF>()> readLogicalPosition = {};
+    // Cursor warps on macOS do not generate native mouse movement events.
+    bool generatesMouseMoveEvents = true;
 };
 
 class PhysicalCursor final {
@@ -46,7 +51,9 @@ class PhysicalCursor final {
     explicit PhysicalCursor(PhysicalCursorAccess access);
 
     [[nodiscard]] bool isSupported() const noexcept;
+    [[nodiscard]] bool canRead() const noexcept;
     [[nodiscard]] std::optional<QPoint> position() const;
+    [[nodiscard]] std::optional<QPointF> logicalPosition() const;
     [[nodiscard]] PhysicalCursorMoveResult moveOnePixel(PhysicalCursorDirection direction) const;
 
   private:

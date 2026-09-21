@@ -11,14 +11,69 @@
       "name": "application-icon",
       "source": "app-icon.svg",
       "colorModel": "fullColor",
-      "fit": "contain",
-      "allowEmbeddedDataImages": true
+      "fit": "contain"
+    },
+    {
+      "variant": "app",
+      "symbol": "ApplicationTitleBarIcon",
+      "name": "application-title-bar-icon",
+      "source": "app-icon-titlebar.svg",
+      "colorModel": "fullColor",
+      "fit": "contain"
     },
     {
       "variant": "brand",
       "symbol": "SnowShotLogo",
       "name": "snow-shot-logo",
       "source": "../src/presentation/components/icons/resources/snow-shot-logo.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "AlignBottom",
+      "name": "align-bottom",
+      "source": "../src/presentation/components/icons/resources/align-bottom.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "AlignCenterHorizontal",
+      "name": "align-center-horizontal",
+      "source": "../src/presentation/components/icons/resources/align-center-horizontal.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "AlignCenterVertical",
+      "name": "align-center-vertical",
+      "source": "../src/presentation/components/icons/resources/align-center-vertical.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "AlignLeft",
+      "name": "align-left",
+      "source": "../src/presentation/components/icons/resources/align-left.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "AlignRight",
+      "name": "align-right",
+      "source": "../src/presentation/components/icons/resources/align-right.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "AlignTop",
+      "name": "align-top",
+      "source": "../src/presentation/components/icons/resources/align-top.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },
@@ -304,6 +359,22 @@
     },
     {
       "variant": "outlined",
+      "symbol": "DistributeHorizontal",
+      "name": "distribute-horizontal",
+      "source": "../src/presentation/components/icons/resources/distribute-horizontal.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "DistributeVertical",
+      "name": "distribute-vertical",
+      "source": "../src/presentation/components/icons/resources/distribute-vertical.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "Duplicate",
       "name": "duplicate",
       "source": "../src/presentation/components/icons/resources/duplicate.svg",
@@ -315,6 +386,14 @@
       "symbol": "Exit",
       "name": "exit",
       "source": "../src/presentation/components/icons/resources/exit.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "ExportConfiguration",
+      "name": "export-configuration",
+      "source": "../src/presentation/components/icons/resources/export-configuration.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },
@@ -392,6 +471,22 @@
     },
     {
       "variant": "outlined",
+      "symbol": "ImportConfiguration",
+      "name": "import-configuration",
+      "source": "../src/presentation/components/icons/resources/import-configuration.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "JumpTranslate",
+      "name": "jump-translate",
+      "source": "../src/presentation/components/icons/resources/jump-translate.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "Keyboard",
       "name": "keyboard",
       "source": "../src/presentation/components/icons/resources/keyboard.svg",
@@ -403,6 +498,22 @@
       "symbol": "LaserPointer",
       "name": "laser-pointer",
       "source": "../src/presentation/components/icons/resources/laser-pointer.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "LineTypeCurved",
+      "name": "line-type-curved",
+      "source": "../src/presentation/components/icons/resources/line-type-curved.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "LineTypeStraight",
+      "name": "line-type-straight",
+      "source": "../src/presentation/components/icons/resources/line-type-straight.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },
@@ -427,6 +538,22 @@
       "symbol": "Mouse",
       "name": "mouse",
       "source": "../src/presentation/components/icons/resources/mouse.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "MoveSelectionHorizontal",
+      "name": "move-selection-horizontal",
+      "source": "../src/presentation/components/icons/resources/move-selection-horizontal.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "MoveSelectionVertical",
+      "name": "move-selection-vertical",
+      "source": "../src/presentation/components/icons/resources/move-selection-vertical.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },
@@ -560,6 +687,14 @@
     },
     {
       "variant": "outlined",
+      "symbol": "RefreshCapture",
+      "name": "refresh-capture",
+      "source": "../src/presentation/components/icons/resources/refresh-capture.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "Save",
       "name": "save",
       "source": "../src/presentation/components/icons/resources/save.svg",
@@ -659,6 +794,14 @@
       "symbol": "SelectionShadow",
       "name": "selection-shadow",
       "source": "../src/presentation/components/icons/resources/selection-shadow.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "SequenceNumberCircle",
+      "name": "sequence-number-circle",
+      "source": "../src/presentation/components/icons/resources/sequence-number-circle.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },

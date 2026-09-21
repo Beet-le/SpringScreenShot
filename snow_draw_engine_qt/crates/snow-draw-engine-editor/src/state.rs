@@ -1,8 +1,8 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use snow_draw_engine_core::{ErrorCode, Point, SnapGuide, arrow::ArrowEndpointEdge};
 use snow_draw_engine_document::{
-    ArrowData, ElementId, ElementKind, FilterData, PenFilterData, RectangleData, SerialNumberData,
-    TextData,
+    ArrowData, ArrowSuggestedBinding, ElementId, ElementKind, FilterData, PenFilterData,
+    RectangleData, SerialNumberData, TextData,
 };
 use snow_draw_engine_interaction::CursorStyle;
 use snow_draw_engine_model::DocumentModel;
@@ -13,6 +13,7 @@ use super::{
     RectangleShapeStyle, SelectionArrowState, SelectionBounds, SelectionRectState, ShapeStyle,
 };
 use crate::defaults::EditorStyleDefaults;
+use crate::style::normalized_line_arrow_type;
 use crate::text::TextResizeLayoutOverride;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,6 +45,24 @@ pub(crate) enum ToolEmptyCanvasAction {
     CreatePenFilter,
     CreateText,
     CreateSerialNumber,
+}
+
+impl ToolEmptyCanvasAction {
+    /// A press on blank canvas spends itself on deselecting an existing
+    /// selection before any creation workflow may begin.
+    pub(crate) fn starts_creation(self) -> bool {
+        match self {
+            Self::Configure | Self::MarqueeSelect => false,
+            Self::CreateRectangle
+            | Self::CreateArrow
+            | Self::CreateFreeDraw
+            | Self::CreateHighlight
+            | Self::CreatePenHighlight
+            | Self::CreatePenFilter
+            | Self::CreateText
+            | Self::CreateSerialNumber => true,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,13 +111,13 @@ pub(crate) struct CreateArrowState {
     pub(crate) committed_points: Vec<Point<f64>>,
     pub(crate) press_view_position: Point<f64>,
     pub(crate) phase: ArrowCreationPhase,
+    pub(crate) suggested_binding: Option<ArrowSuggestedBinding>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct EraserState {
     pub(crate) active_pointers: HashMap<u32, Point<f64>>,
     pub(crate) pending_ids: Vec<ElementId>,
-    pub(crate) cursor_canvas_position: Option<Point<f64>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -122,7 +141,10 @@ pub(crate) struct CreatePenFilterState {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct CreateSerialNumberState {
     pub(crate) pointer_id: u32,
-    pub(crate) preview: SerialNumberData,
+    pub(crate) serial_id: ElementId,
+    pub(crate) start_view_position: Point<f64>,
+    pub(crate) text: Option<(ElementId, TextData)>,
+    pub(crate) label_measured: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -192,6 +214,7 @@ pub(crate) enum SelectionEditMode {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct EditSelectionState {
+    pub(crate) duplicate: bool,
     pub(crate) pointer_id: u32,
     pub(crate) original_elements: Vec<SelectionRectState>,
     pub(crate) preview_elements: Vec<SelectionRectState>,
@@ -225,6 +248,7 @@ pub(crate) struct BeginSelectionInteractionRequest {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PendingSelectionMoveState {
+    pub(crate) duplicate: bool,
     pub(crate) pointer_id: u32,
     pub(crate) original_elements: Vec<SelectionRectState>,
     pub(crate) original_arrows: Vec<SelectionArrowState>,
@@ -269,6 +293,7 @@ pub(crate) struct EditArrowState {
     pub(crate) mode: ArrowEditMode,
     pub(crate) start_canvas_position: Point<f64>,
     pub(crate) drag_offset: Point<f64>,
+    pub(crate) suggested_binding: Option<ArrowSuggestedBinding>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -381,6 +406,10 @@ impl SelectionState {
     }
 }
 
+// The arrow edit state carries the original and preview arrow payloads; the
+// size difference to the other variants is intentional and the state is
+// short-lived, so keep it inline instead of boxing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) enum InteractionState {
     #[default]
@@ -407,6 +436,8 @@ pub(crate) struct EditorState {
     pub(crate) ui: UiState,
     pub(crate) interaction: InteractionState,
     pub(crate) active_text_draft: Option<ActiveTextDraftPresentation>,
+    pub(crate) pending_text_edit: Option<ElementId>,
+    pub(crate) pending_new_text_draft: bool,
     pub(crate) arrow_text_measurements: Vec<crate::arrow_text::ArrowTextMeasurement>,
     pub(crate) default_rectangle_shape_style: RectangleShapeStyle,
     pub(crate) default_arrow_style: ArrowStyle,
@@ -420,7 +451,7 @@ pub(crate) struct EditorState {
     pub(crate) default_text: TextData,
     pub(crate) default_serial_number: SerialNumberData,
     pub(crate) eraser: EraserState,
-    pub(crate) stroke_cursor_canvas_position: Option<Point<f64>>,
+    pub(crate) stroke_cursor_active: bool,
 }
 
 impl Default for EditorState {
@@ -492,10 +523,15 @@ impl EditorState {
             ui: UiState::default(),
             interaction: InteractionState::default(),
             active_text_draft: None,
+            pending_text_edit: None,
+            pending_new_text_draft: false,
             arrow_text_measurements: Vec::new(),
             default_rectangle_shape_style: default_styles.rectangle,
             default_arrow_style: default_styles.arrow,
-            default_line_style: default_styles.line,
+            default_line_style: ShapeStyle {
+                arrow_type: normalized_line_arrow_type(default_styles.line.arrow_type),
+                ..default_styles.line
+            },
             default_free_draw_style: default_styles.free_draw,
             default_rectangle_highlight_style: default_styles.rectangle_highlight,
             default_pen_highlight_style: default_styles.pen_highlight,
@@ -505,7 +541,7 @@ impl EditorState {
             default_text,
             default_serial_number,
             eraser: EraserState::default(),
-            stroke_cursor_canvas_position: None,
+            stroke_cursor_active: false,
         }
     }
 }

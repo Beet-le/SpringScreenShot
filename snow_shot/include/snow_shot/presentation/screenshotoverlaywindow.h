@@ -27,6 +27,8 @@ class ScreenshotOverlayEventSink;
 class ScreenshotOverlayFramePresenter;
 class ScreenshotScrollingThumbnailWidget;
 
+struct ScreenshotImageSource;
+
 class ScreenshotOverlayWindow final : public QWidget {
     Q_OBJECT
 
@@ -37,7 +39,9 @@ class ScreenshotOverlayWindow final : public QWidget {
 
     SnowCanvasWidget* canvas() const;
     void setScreenshotImage(QImage image, const QRectF& canvasRect);
+    void setScreenshotImageSource(ScreenshotImageSource source);
     void setScreenshotMaskVisible(bool visible);
+    void setScreenshotSelectionBorderColor(const QColor& color);
     void setScreenshotMaskColor(const QColor& color);
     void setScreenshotGuideLines(const QPointF& cursorPosition, const QColor& cursorColor,
                                  const QColor& monitorCenterColor);
@@ -68,6 +72,7 @@ class ScreenshotOverlayWindow final : public QWidget {
     void updateScrollingThumbnail(const QImage& previewImage, const QSize& sourceSize,
                                   ScreenshotScrollingStitchChange change, int addedRows,
                                   bool replacePreview = false, int replacedPreviewRows = 0);
+    void reanchorScrollingThumbnail(const QRect& localSelection);
     void clearScrollingThumbnail();
     [[nodiscard]] ScreenshotScrollingTrimRange scrollingThumbnailTrim() const;
 #if defined(SNOW_SHOT_BENCH_INTERNALS)

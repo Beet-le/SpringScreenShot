@@ -964,7 +964,8 @@ void AdButton::paintEvent(QPaintEvent* event) {
       painter.drawText(layout.textRect.left() + firstWidth + spacingPx, baseline,
                        QString(layout.text.at(1)));
     } else {
-      painter.drawText(layout.textRect, Qt::AlignLeft | Qt::AlignVCenter | textFlags, layout.text);
+      painter.drawText(layout.textRect,
+                       static_cast<int>(Qt::AlignLeft | Qt::AlignVCenter) | textFlags, layout.text);
     }
   }
 
@@ -980,7 +981,7 @@ QSize AdButton::sizeHint() const {
   const detail::ButtonVisualStyle style = resolvedStyle();
 
   const QString textToMeasure = option.text;
-  const quint64 fallbackIconKey = QAbstractButton::icon().cacheKey();
+  const quint64 fallbackIconKey = static_cast<quint64>(QAbstractButton::icon().cacheKey());
   const bool hasMenu = option.features.testFlag(QStyleOptionButton::HasMenu);
   if (d_->sizeHintCacheValid && d_->sizeHintStyleRevision == d_->resolvedStyleRevision &&
       d_->sizeHintText == textToMeasure && iconRefsEqual(d_->sizeHintIconRef, d_->iconRef) &&
@@ -1132,8 +1133,9 @@ void AdButton::mousePressEvent(QMouseEvent* event) {
   }
   d_->focusVisible = false;
   updateInteractionFocusOverlay();
+  const QPointer<AdButton> lifetime(this);
   QPushButton::mousePressEvent(event);
-  bumpSegmentZOrder();
+  if (lifetime) bumpSegmentZOrder();
 }
 
 void AdButton::mouseReleaseEvent(QMouseEvent* event) {
@@ -1143,7 +1145,10 @@ void AdButton::mouseReleaseEvent(QMouseEvent* event) {
   }
   const bool shouldTriggerWave =
       event && event->button() == Qt::LeftButton && isDown() && hitButton(mouseEventPos(event));
+  // Activation callbacks (including nested modal loops) may destroy this button.
+  const QPointer<AdButton> lifetime(this);
   QPushButton::mouseReleaseEvent(event);
+  if (!lifetime) return;
   if (shouldTriggerWave && isEnabled() && !interactionBlocked()) {
     triggerInteractionWaveOverlay();
   }
@@ -1195,7 +1200,9 @@ void AdButton::keyReleaseEvent(QKeyEvent* event) {
     d_->enterPressed = false;
     setDown(false);
     if (triggerClick) {
+      const QPointer<AdButton> lifetime(this);
       click();
+      if (!lifetime) return;
       triggerInteractionWaveOverlay();
     }
     event->accept();
@@ -1203,7 +1210,9 @@ void AdButton::keyReleaseEvent(QKeyEvent* event) {
     return;
   }
 
+  const QPointer<AdButton> lifetime(this);
   QPushButton::keyReleaseEvent(event);
+  if (!lifetime) return;
   if (activationKey && !event->isAutoRepeat() && isEnabled() && !interactionBlocked()) {
     triggerInteractionWaveOverlay();
   }
@@ -1212,7 +1221,10 @@ void AdButton::keyReleaseEvent(QKeyEvent* event) {
 bool AdButton::hitButton(const QPoint& pos) const {
   const Shape visualShape = effectiveShape(renderText());
   if (visualShape != Shape::Circle) {
-    return QPushButton::hitButton(pos);
+    // AdButton paints its own surface across the widget, independent of the
+    // platform style. QPushButton uses the native SE_PushButtonBevel instead,
+    // which leaves visibly painted edges unclickable on macOS.
+    return rect().contains(pos);
   }
 
   const detail::ButtonVisualStyle style = resolvedStyle();
@@ -1343,7 +1355,7 @@ detail::ButtonVisualStyle AdButton::resolvedStyle() const {
   const detail::ButtonStyleInput input = buildStyleInput();
   const auto& themeManager = adqt::theme::ThemeManager::instance();
   const quint64 themeRevision = themeManager.themeRevision();
-  const quint64 paletteKey = palette().cacheKey();
+  const quint64 paletteKey = static_cast<quint64>(palette().cacheKey());
   if (d_->resolvedStyleCache.has_value() && d_->resolvedStyleThemeRevision == themeRevision &&
       d_->resolvedStylePaletteKey == paletteKey &&
       buttonStyleInputsEqual(d_->resolvedStyleInput, input)) {

@@ -249,6 +249,7 @@ SnowCanvasStyleDefaults customStyleDefaults() {
         shape->opacity = 0.75;
         width += 1.0;
     }
+    defaults.line.arrowType = SnowCanvasArrowType::Straight;
     defaults.rectangleFilter = {
         SnowCanvasFilterType::GaussianBlur,
         0.41,
@@ -268,7 +269,7 @@ SnowCanvasStyleDefaults customStyleDefaults() {
     defaults.text.fontFamily = QStringLiteral("Qt Text Font");
     defaults.serialNumber.color = ink;
     defaults.serialNumber.fill = transparent;
-    defaults.serialNumber.type = SnowCanvasSerialNumberType::OutlinedSquare;
+    defaults.serialNumber.type = SnowCanvasSerialNumberType::Circle;
     defaults.serialNumber.fontSize = 25.0;
     defaults.serialNumber.fontFamily = QStringLiteral("Qt Serial Font");
     defaults.watermark.color = ink;
@@ -327,9 +328,34 @@ void configuredRuntimeProfileFollowsRestoreAndResetLifecycle() {
     require(toolbarState(runtime, viewport, SNOW_ACTIVE_TOOL_LINE).shape_style.stroke_width ==
                 defaults.line.strokeWidth,
             "line should expose its configured creation style");
+    require(toolbarState(runtime, viewport, SNOW_ACTIVE_TOOL_LINE).shape_style.arrow_type ==
+                SNOW_ARROW_TYPE_STRAIGHT,
+            "line should expose its configured straight type");
     require(toolbarState(runtime, viewport, SNOW_ACTIVE_TOOL_FREE_DRAW).shape_style.stroke_width ==
                 defaults.freeDraw.strokeWidth,
             "free draw should expose its configured creation style");
+
+    SnowShapeStyle editedLine = toolbarState(runtime, viewport, SNOW_ACTIVE_TOOL_LINE).shape_style;
+    editedLine.arrow_type = SNOW_ARROW_TYPE_ELBOW;
+    SnowChangedViewportList lineChanged = nullptr;
+    require(snow_viewport_set_shape_style_patch_ex(snow_canvas_runtime::Access::handle(runtime),
+                                                   viewport, &editedLine,
+                                                   SNOW_SHAPE_STYLE_PROPERTY_ARROW_TYPE,
+                                                   SNOW_SHAPE_KIND_LINE, &lineChanged) == SNOW_OK,
+            "line arrow-type patches should be accepted");
+    snow_changed_viewports_destroy(lineChanged);
+    require(toolbarState(runtime, viewport, SNOW_ACTIVE_TOOL_LINE).shape_style.arrow_type ==
+                SNOW_ARROW_TYPE_CURVE,
+            "unsupported elbow line patches should normalize to curve");
+
+    SnowShapeStyle editedFreeDraw =
+        toolbarState(runtime, viewport, SNOW_ACTIVE_TOOL_FREE_DRAW).shape_style;
+    editedFreeDraw.arrow_type = SNOW_ARROW_TYPE_STRAIGHT;
+    require(snow_viewport_set_shape_style_patch_ex(
+                snow_canvas_runtime::Access::handle(runtime), viewport, &editedFreeDraw,
+                SNOW_SHAPE_STYLE_PROPERTY_ARROW_TYPE, SNOW_SHAPE_KIND_FREE_DRAW,
+                nullptr) == SNOW_ERROR_INVALID_ARGUMENT,
+            "free draw should reject the line-only arrow-type property");
     require(toolbarState(runtime, viewport, SNOW_ACTIVE_TOOL_RECTANGLE_HIGHLIGHT)
                     .shape_style.stroke_width == defaults.rectangleHighlight.strokeWidth,
             "rectangle highlight should expose its configured creation style");
@@ -351,7 +377,7 @@ void configuredRuntimeProfileFollowsRestoreAndResetLifecycle() {
         toolbarState(runtime, viewport, SNOW_ACTIVE_TOOL_SERIAL_NUMBER).serial_number_style;
     require(serialNumberStyle.font_size == defaults.serialNumber.fontSize,
             "sequence numbers should expose their configured creation style");
-    require(serialNumberStyle.serial_number_type == SNOW_SERIAL_NUMBER_TYPE_OUTLINED_SQUARE,
+    require(serialNumberStyle.serial_number_type == SNOW_SERIAL_NUMBER_TYPE_CIRCLE,
             "sequence numbers should expose their configured creation type");
 
     SnowShapeStyle edited = toolbarState(runtime, viewport, SNOW_ACTIVE_TOOL_SHAPE).shape_style;
@@ -403,6 +429,18 @@ void configuredRuntimeProfileFollowsRestoreAndResetLifecycle() {
     require(toolbarState(runtime, viewport, SNOW_ACTIVE_TOOL_SHAPE).shape_style.stroke_width ==
                 defaults.rectangle.strokeWidth,
             "configured runtime reset should restore the immutable profile");
+
+    SnowCanvasStyleDefaults elbowLineDefaults = defaults;
+    elbowLineDefaults.line.arrowType = SnowCanvasArrowType::Elbow;
+    SnowCanvasRuntimeConfig elbowLineConfig;
+    elbowLineConfig.styleDefaults = elbowLineDefaults;
+    SnowCanvasRuntime elbowLineRuntime(elbowLineConfig);
+    require(elbowLineRuntime.isValid(),
+            "a configured runtime should accept and normalize an elbow Line default");
+    SnowViewport elbowLineViewport = createViewport(elbowLineRuntime);
+    require(toolbarState(elbowLineRuntime, elbowLineViewport, SNOW_ACTIVE_TOOL_LINE)
+                    .shape_style.arrow_type == SNOW_ARROW_TYPE_CURVE,
+            "an unsupported elbow Line default should normalize to curve");
 
     SnowCanvasStyleDefaults invalid = defaults;
     invalid.text.fill = QColor();

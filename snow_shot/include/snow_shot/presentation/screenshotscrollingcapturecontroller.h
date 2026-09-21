@@ -24,6 +24,7 @@ struct ScreenshotScrollingCaptureControllerContext {
     // When enabled the overlay and the screenshot toolbar stay capturable, so
     // they appear in the stitched scrolling screenshot.
     std::function<bool()> captureUiInScrollingScreenshot = []() { return false; };
+    std::function<void()> captureFailed = {};
 };
 
 class ScreenshotScrollingCaptureController final : public QObject {
@@ -43,6 +44,11 @@ class ScreenshotScrollingCaptureController final : public QObject {
     [[nodiscard]] bool active() const;
     void setExportPaused(bool paused);
     void setAutoScroll(bool enabled);
+    [[nodiscard]] bool beginSelectionMove(ScreenshotScrollingRecognitionMode axis,
+                                          QPoint physicalPointer);
+    void updateSelectionMove(QPoint physicalPointer);
+    void endSelectionMove();
+    [[nodiscard]] bool movingSelection() const;
     [[nodiscard]] QSize trimmedSize() const;
     [[nodiscard]] bool requestTrimmedSnapshot(SnapshotResultCallback callback);
     void detachPendingResultRequest();

@@ -251,7 +251,7 @@ class SaveContent final : public QWidget {
         m_closed = true;
         ++m_generation;
         if (m_menu)
-            m_menu->hide();
+            m_menu->dismissPopup();
         m_job.cancel();
         cancelDecode();
         m_saveJob.cancel();
@@ -392,7 +392,7 @@ class SaveContent final : public QWidget {
         m_height->setToolTip(tr("Height"));
         m_sizeLabel->setText(tr("Size"));
         m_sizeUnit->setAccessibleName(tr("Size unit"));
-        m_sizeUnit->setOptionLabel(0, tr("Pixels"));
+        m_sizeUnit->setOptionLabel(0, tr("px"));
         m_sizeUnit->setOptionLabel(1, tr("Percentage"));
         updateSizeLabelTheme();
         updateOutputDescriptionTheme();

@@ -33,7 +33,7 @@ struct CommitTextRequest {
     double centerY = 0.0;
     const char* utf8Data = nullptr;
     std::uint32_t utf8Len = 0;
-    SnowTextLayoutSize measuredLayout{1.0, 1.0};
+    SnowTextLayoutSize measuredLayout{1.0, 1.0, 0.0, 0.0};
     SnowTextStyle style{};
     bool autoResize = false;
     bool updateDefaultStyle = false;
@@ -50,6 +50,8 @@ struct ActiveTextDraftPresentationRequest {
     double width = 1.0;
     double height = 1.0;
     double rotation = 0.0;
+    double contentWidth = 0.0;
+    double contentHeight = 0.0;
     const char* utf8Data = nullptr;
     std::uint32_t utf8Len = 0;
     SnowTextStyle style{};
@@ -81,6 +83,7 @@ MutationResult deleteAllElements(SnowRuntime runtime, SnowViewport viewport);
 MutationResult duplicateSelected(SnowRuntime runtime, SnowViewport viewport, double offsetX,
                                  double offsetY);
 MutationResult reorderSelected(SnowRuntime runtime, SnowViewport viewport, std::uint32_t action);
+MutationResult alignSelected(SnowRuntime runtime, SnowViewport viewport, std::uint32_t alignment);
 MutationResult setSelectedOpacity(SnowRuntime runtime, SnowViewport viewport, double opacity);
 MutationResult adjustSelectedSerialNumbers(SnowRuntime runtime, SnowViewport viewport,
                                            std::int64_t delta);

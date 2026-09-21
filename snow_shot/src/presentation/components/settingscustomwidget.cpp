@@ -590,7 +590,7 @@ class ToolbarHiddenDropZone final : public QFrame {
                 return index;
             }
         }
-        return m_buttons.size();
+        return static_cast<int>(m_buttons.size());
     }
 
     DropHandler m_dropHandler;
@@ -1133,6 +1133,11 @@ SettingsCustomWidget* createSettingsCustomWidget(
     snow_shot::presentation::settings::SettingsRuntimeSession& runtimeSession, QWidget* parent) {
     using snow_shot::presentation::settings::SettingsCustomRenderer;
     switch (renderer) {
+    case SettingsCustomRenderer::PermissionScreenRecording:
+    case SettingsCustomRenderer::PermissionAccessibility:
+    case SettingsCustomRenderer::PermissionInputMonitoring:
+    case SettingsCustomRenderer::PermissionMicrophone:
+        return nullptr;
     case SettingsCustomRenderer::CustomAiModels:
         return new CustomAiModelsSettingsWidget(runtimeSession, parent);
     case SettingsCustomRenderer::StorageStatus:

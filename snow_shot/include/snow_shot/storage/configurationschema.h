@@ -29,8 +29,8 @@ struct ConfigurationSchemaEntry {
     QString key;
     QJsonValue defaultValue;
     ConfigurationValueKind valueKind = ConfigurationValueKind::Structured;
-    std::optional<ConfigurationIntegerRange> integerRange;
-    QStringList allowedStringValues;
+    std::optional<ConfigurationIntegerRange> integerRange = std::nullopt;
+    QStringList allowedStringValues{};
     int maximumListItems = -1;
 };
 
@@ -48,6 +48,9 @@ class ConfigurationSchema final {
     [[nodiscard]] static QJsonValue defaultValue(const QString& key);
     [[nodiscard]] static ConfigurationNormalization normalize(const QString& key,
                                                               const QJsonValue& value);
+    // Accepts a JSON number that is a finite integer in [1, INT_MAX].
+    [[nodiscard]] static bool parseIntegerVersion(const QJsonValue& value, int* version);
+    [[nodiscard]] static int currentVersion();
     [[nodiscard]] static QJsonObject completeDefaultDocument();
 };
 } // namespace snow_shot::storage

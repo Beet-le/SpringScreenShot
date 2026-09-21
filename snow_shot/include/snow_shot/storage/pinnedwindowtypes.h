@@ -1,6 +1,7 @@
 #ifndef SNOW_SHOT_STORAGE_PINNEDWINDOWTYPES_H
 #define SNOW_SHOT_STORAGE_PINNEDWINDOWTYPES_H
 
+#include "pinnedwindowplacement.h"
 #include <QByteArray>
 #include <QDateTime>
 #include <QImage>
@@ -38,6 +39,10 @@ struct PinnedWindowRecord final {
     QRectF contentCanvasRect;
     QRectF surfaceCanvasRect;
     QSize initialPhysicalSize;
+    PinnedWindowPlacement placement;
+    PinnedWindowPlacement preThumbnailPlacement;
+    PinnedWindowPlacement hideToTopPlacement;
+    // Display-scoped pixel snapshots used by image/geometry controllers.
     QRect nativeGeometry;
     QString screenName;
     QString screenSerial;
@@ -59,6 +64,7 @@ struct PinnedWindowRecord final {
     int hideToTopAccentIndex = -1;
     bool thumbnailMode = false;
     bool clickThroughMode = false;
+    bool alwaysOnTop = true;
     QRect preThumbnailNativeGeometry;
     QByteArray resultStyle;
     QByteArray canvasSession;

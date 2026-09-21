@@ -14,6 +14,19 @@ typedef struct SnowCaptureMonitorSessionImpl SnowCaptureMonitorSession;
 typedef struct SnowCaptureFrameLeaseImpl SnowCaptureFrameLease;
 typedef struct SnowCaptureCancellationTokenImpl SnowCaptureCancellationToken;
 typedef struct SnowCaptureScreenshotResultImpl SnowCaptureScreenshotResult;
+typedef struct SnowCaptureCursorSnapshotImpl SnowCaptureCursorSnapshot;
+
+/* Copies the current global cursor, including its pixels, hotspot, physical position and
+ * visibility. Immutable and safe to share across capture threads. Null reports a sampling error;
+ * a hidden cursor is a valid snapshot. */
+SnowCaptureCursorSnapshot* snow_capture_cursor_snapshot_create(void);
+void snow_capture_cursor_snapshot_destroy(SnowCaptureCursorSnapshot* snapshot);
+/* Apply once to a result captured WITHOUT INCLUDE_CURSOR, before publishing image leases.
+ * Uses this exact snapshot for every display, never the backend's cached cursor metadata.
+ * Existing leases remain immutable. Returns 1 on success, including a hidden/out-of-frame cursor.
+ */
+uint8_t snow_capture_screenshot_result_composite_cursor(SnowCaptureScreenshotResult* result,
+                                                        const SnowCaptureCursorSnapshot* snapshot);
 typedef struct SnowCaptureStreamImpl SnowCaptureStream;
 typedef struct SnowCaptureStreamFrameImpl SnowCaptureStreamFrame;
 
@@ -36,6 +49,21 @@ typedef enum SnowCapturePixelFormat {
     SNOW_CAPTURE_PIXEL_FORMAT_BGRA8 = 1,
 } SnowCapturePixelFormat;
 
+/* Shared by capture and recording. Lists are copied and deduplicated during creation,
+ * limited to 4096 entries each, and use macOS WindowServer IDs / process IDs.
+ * Nonempty lists require non-null pointers. Filters are fixed for the session's
+ * lifetime and apply to display/region captures; independent window captures
+ * reject filters. Windows continues to use native display affinity. */
+#ifndef SNOW_CAPTURE_EXCLUSIONS_DEFINED
+#define SNOW_CAPTURE_EXCLUSIONS_DEFINED
+typedef struct SnowCaptureExclusions {
+    const uint32_t* windows;
+    size_t window_count;
+    const int32_t* processes;
+    size_t process_count;
+} SnowCaptureExclusions;
+#endif
+
 typedef struct SnowCaptureDesktopSessionConfig {
     size_t capture_retry_count;
     uint8_t wgc_update_mode;
@@ -44,6 +72,7 @@ typedef struct SnowCaptureDesktopSessionConfig {
     uint8_t capture_backend;
     uint8_t pixel_format;
     uint8_t reserved[29];
+    SnowCaptureExclusions exclusions;
 } SnowCaptureDesktopSessionConfig;
 
 typedef struct SnowCaptureDesktopSessionState {
@@ -71,6 +100,29 @@ typedef struct SnowCaptureFrameInfo {
     size_t rgba_len;
 } SnowCaptureFrameInfo;
 
+/* Geometry belongs to the captured frame, not a later desktop enumeration.
+ * coordinate_space: 0 = desktop pixels (Windows), 1 = desktop points (macOS).
+ * width/height here describe desktop geometry; FrameInfo dimensions are pixels. */
+#define SNOW_CAPTURE_FRAME_GEOMETRY_VERSION 1
+typedef struct SnowCaptureFrameGeometry {
+    uint32_t version;
+    uint32_t struct_size;
+    uint32_t coordinate_space;
+    uint32_t display_id;
+    double x;
+    double y;
+    double width;
+    double height;
+    double backing_scale;
+} SnowCaptureFrameGeometry;
+
+uint8_t snow_capture_screenshot_result_display_geometry(const SnowCaptureScreenshotResult* result,
+                                                        size_t index,
+                                                        SnowCaptureFrameGeometry* geometry);
+uint8_t
+snow_capture_screenshot_result_focused_window_geometry(const SnowCaptureScreenshotResult* result,
+                                                       SnowCaptureFrameGeometry* geometry);
+
 /* A single monitor identified by its native device name (for example \\.\DISPLAY1).
  * Uses DXGI, WGC, then GDI on eligible failures, independently of desktop sessions. */
 typedef struct SnowCaptureMonitorSessionConfig {
@@ -78,6 +130,7 @@ typedef struct SnowCaptureMonitorSessionConfig {
     size_t capture_retry_count;
     uint8_t pixel_format;
     uint8_t reserved[31];
+    SnowCaptureExclusions exclusions;
 } SnowCaptureMonitorSessionConfig;
 
 SnowCaptureMonitorSession*
@@ -99,6 +152,7 @@ typedef struct SnowCaptureRegionSessionConfig {
     uint8_t capture_backend;
     uint8_t pixel_format;
     uint8_t reserved[29];
+    SnowCaptureExclusions exclusions;
 } SnowCaptureRegionSessionConfig;
 
 typedef struct SnowCaptureRegionFrameInfo {
@@ -112,7 +166,7 @@ typedef struct SnowCaptureRegionFrameInfo {
     size_t rgba_len;
 } SnowCaptureRegionFrameInfo;
 
-#define SNOW_CAPTURE_STREAM_CONFIG_VERSION 1u
+#define SNOW_CAPTURE_STREAM_CONFIG_VERSION 2u
 #define SNOW_CAPTURE_STREAM_FRAME_INFO_VERSION 1u
 
 typedef enum SnowCaptureStreamEventKind {
@@ -148,6 +202,7 @@ typedef struct SnowCaptureStreamConfig {
        The effect is sampled once when the stream is created. */
     uint8_t restore_original_colors;
     uint8_t reserved[26];
+    SnowCaptureExclusions exclusions;
 } SnowCaptureStreamConfig;
 
 typedef struct SnowCaptureStreamEvent {

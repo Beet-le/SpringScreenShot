@@ -11,6 +11,7 @@
 #include <QByteArray>
 #include <QDateTime>
 #include <QPoint>
+#include <QPointer>
 #include <QSet>
 #include <QVector>
 
@@ -21,6 +22,7 @@
 class QBoxLayout;
 class QFrame;
 class QLabel;
+class QListView;
 class QObject;
 class QSpacerItem;
 class QWidget;
@@ -187,7 +189,11 @@ class ScreenshotToolPaletteStyleControls final {
     void restoreStyleEditors(int tool, QWidget* controls);
     void prepareStyleReconcile(int sourceTool, int destinationTool, QWidget* sourceControls);
     void stageDestinationStyleEditors(int destinationTool, QWidget* destinationControls);
-    void stageExternalStyleEditorWidget(const char* role, const char* signature, QWidget* widget);
+    // Stages a style editor widget built outside this module. The widget must
+    // carry the role and signature tags assigned by its builder; staging keeps
+    // that identity instead of re-specifying it, so a pooled editor can never
+    // be published under a signature that does not match its variant.
+    void stageExternalStyleEditorWidget(QWidget* widget);
     void finishStyleReconcile(int destinationTool);
     void discardBindingsExcept(int destinationTool, QWidget* destinationControls);
     [[nodiscard]] ScreenshotToolPaletteStyleReconcileStats lastReconcileStats() const;
@@ -351,6 +357,7 @@ class ScreenshotToolPaletteStyleControls final {
     void setArrowStrokeColor(const QColor& color);
     void setArrowStrokeStyle(SnowCanvasStrokeStyle strokeStyle);
     void setArrowType(SnowCanvasArrowType arrowType);
+    void setLineType(SnowCanvasArrowType arrowType);
     void setArrowhead(bool start, SnowCanvasArrowhead arrowhead);
     void setTextColor(const QColor& color);
     void setTextFontSize(double fontSize);
@@ -462,6 +469,7 @@ class ScreenshotToolPaletteStyleControls final {
     std::unique_ptr<ScreenshotToolPaletteColorEditor> m_highlightColorEditor;
     std::unique_ptr<ScreenshotToolPaletteColorEditor> m_spotlightColorEditor;
     adqt::widgets::AdRadioButtonGroup* m_shapeButtonGroup = nullptr;
+    adqt::widgets::AdRadioButtonGroup* m_lineTypeButtonGroup = nullptr;
     std::unique_ptr<ScreenshotToolPaletteWidthColorEditor> m_highlightStrokeEditor;
     std::unique_ptr<ScreenshotToolPaletteColorEditor> m_penHighlightColorEditor;
     std::unique_ptr<ScreenshotToolPaletteNumericPresetEditor> m_penHighlightStrokeWidthEditor;
@@ -488,6 +496,7 @@ class ScreenshotToolPaletteStyleControls final {
     adqt::widgets::AdLineEdit* m_watermarkTextEdit = nullptr;
     std::unique_ptr<ScreenshotToolPaletteFontEditor> m_watermarkFontEditor;
     adqt::widgets::AdSelect* m_watermarkTemplateSelect = nullptr;
+    QPointer<QListView> m_watermarkTemplateView;
     QLabel* m_watermarkTemplateEmptyLabel = nullptr;
     adqt::widgets::AdButton* m_watermarkTemplateAddButton = nullptr;
     adqt::widgets::AdModal* m_createWatermarkTemplateModal = nullptr;

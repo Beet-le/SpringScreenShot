@@ -54,6 +54,8 @@ SnowActiveTextDraftPresentation ActiveTextDraftPresentationRequest::toAbi() cons
     draft.width = width;
     draft.height = height;
     draft.rotation = rotation;
+    draft.content_width = contentWidth;
+    draft.content_height = contentHeight;
     draft.text_utf8 = utf8Data;
     draft.text_utf8_len = utf8Len;
     draft.style = style;
@@ -147,6 +149,16 @@ MutationResult reorderSelected(SnowRuntime runtime, SnowViewport viewport, std::
     }
     result.success = snow_viewport_reorder_selected_ex(
                          runtime, viewport, action, result.changedViewports.outParam()) == SNOW_OK;
+    return result;
+}
+
+MutationResult alignSelected(SnowRuntime runtime, SnowViewport viewport, std::uint32_t alignment) {
+    MutationResult result;
+    if (!hasViewport(runtime, viewport)) {
+        return result;
+    }
+    result.success = snow_viewport_align_selected_ex(runtime, viewport, alignment,
+                                                     result.changedViewports.outParam()) == SNOW_OK;
     return result;
 }
 

@@ -24,6 +24,18 @@
             <translation>调整透明度</translation>
         </message>
         <message>
+            <source>Align bottom</source>
+            <translation>底对齐</translation>
+        </message>
+        <message>
+            <source>Align left</source>
+            <translation>左对齐</translation>
+        </message>
+        <message>
+            <source>Align right</source>
+            <translation>右对齐</translation>
+        </message>
+        <message>
             <source>Align text center</source>
             <translation>文本居中对齐</translation>
         </message>
@@ -34,6 +46,10 @@
         <message>
             <source>Align text right</source>
             <translation>文本右对齐</translation>
+        </message>
+        <message>
+            <source>Align top</source>
+            <translation>顶对齐</translation>
         </message>
         <message>
             <source>Animated recording formats do not contain audio</source>
@@ -90,6 +106,22 @@
         <message>
             <source>Cancel screenshot</source>
             <translation>取消截图</translation>
+        </message>
+        <message>
+            <source>Capture cursor</source>
+            <translation>捕获光标</translation>
+        </message>
+        <message>
+            <source>Center horizontally</source>
+            <translation>水平居中</translation>
+        </message>
+        <message>
+            <source>Center vertically</source>
+            <translation>垂直居中</translation>
+        </message>
+        <message>
+            <source>Circle</source>
+            <translation>圆形</translation>
         </message>
         <message>
             <source>Close recording</source>
@@ -168,6 +200,10 @@
             <translation>曲线箭头</translation>
         </message>
         <message>
+            <source>Curved line</source>
+            <translation>曲线</translation>
+        </message>
+        <message>
             <source>Dashed arrow stroke</source>
             <translation>虚线箭头描边</translation>
         </message>
@@ -202,6 +238,14 @@
         <message>
             <source>Diamond</source>
             <translation>菱形</translation>
+        </message>
+        <message>
+            <source>Distribute horizontally</source>
+            <translation>水平分布</translation>
+        </message>
+        <message>
+            <source>Distribute vertically</source>
+            <translation>垂直分布</translation>
         </message>
         <message>
             <source>Dotted arrow stroke</source>
@@ -396,6 +440,10 @@
             <translation>反相</translation>
         </message>
         <message>
+            <source>Jump to Translation Page</source>
+            <translation>跳转到翻译页面</translation>
+        </message>
+        <message>
             <source>Keep line breaks</source>
             <translation>保留换行</translation>
         </message>
@@ -468,6 +516,18 @@
             <translation>鼠标点击颜色 透明</translation>
         </message>
         <message>
+            <source>Mouse highlight</source>
+            <translation>鼠标高亮</translation>
+        </message>
+        <message>
+            <source>Mouse highlight color</source>
+            <translation>鼠标高亮颜色</translation>
+        </message>
+        <message>
+            <source>Mouse highlight preview</source>
+            <translation>鼠标高亮预览</translation>
+        </message>
+        <message>
             <source>Mouse trail color</source>
             <translation>鼠标轨迹颜色</translation>
         </message>
@@ -478,6 +538,14 @@
         <message>
             <source>Mouse trail color transparent</source>
             <translation>鼠标轨迹颜色 透明</translation>
+        </message>
+        <message>
+            <source>Move selection horizontally (press and hold to drag)</source>
+            <translation>水平移动选区（按住并拖动）</translation>
+        </message>
+        <message>
+            <source>Move selection vertically (press and hold to drag)</source>
+            <translation>垂直移动选区（按住并拖动）</translation>
         </message>
         <message>
             <source>No templates yet</source>
@@ -556,8 +624,16 @@
             <translation>快速保存</translation>
         </message>
         <message>
+            <source>Recapture</source>
+            <translation>重新截图</translation>
+        </message>
+        <message>
             <source>Record microphone</source>
             <translation>录制麦克风</translation>
+        </message>
+        <message>
+            <source>Record mouse clicks</source>
+            <translation>记录鼠标点击</translation>
         </message>
         <message>
             <source>Record screen</source>
@@ -794,6 +870,10 @@
         <message>
             <source>Straight arrow</source>
             <translation>直线箭头</translation>
+        </message>
+        <message>
+            <source>Straight line</source>
+            <translation>直线</translation>
         </message>
         <message>
             <source>Stroke color</source>

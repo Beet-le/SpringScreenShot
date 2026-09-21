@@ -32,7 +32,6 @@
 #include <utility>
 
 namespace {
-constexpr auto kRecognitionMessageKey = "screenshot-recognition-session";
 
 std::shared_ptr<ScreenshotOcrPresentation>
 copyTextPresentation(const std::shared_ptr<ScreenshotOcrPresentation>& presentation) {
@@ -1158,6 +1157,12 @@ QString ScreenshotRecognitionSessionController::textDraft() const {
     return session != nullptr ? session->text() : QString{};
 }
 
+QString ScreenshotRecognitionSessionController::sourceTextDraft() const {
+    const QString key = m_editingKey.isEmpty() ? m_textCacheKey : m_editingKey;
+    const auto session = m_textCache.value(key).editingSession;
+    return session != nullptr ? session->text() : QString{};
+}
+
 QString ScreenshotRecognitionSessionController::originalText() const {
     const QString key = m_editingKey.isEmpty() ? m_textCacheKey : m_editingKey;
     const auto session = m_textCache.value(key).editingSession;
@@ -1845,6 +1850,9 @@ void ScreenshotRecognitionSessionController::handleRecognitionProviderDestroyed(
         reportOverlayTranslationFailure();
     }
     switch (mode) {
+    case Mode::Markdown:
+    case Mode::Html:
+        return;
     case Mode::Text:
         requestWasPending = m_textRequestToken != 0;
         m_textRequestToken = 0;

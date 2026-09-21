@@ -8,101 +8,6 @@ pub(crate) fn compose_overlay_items(
     let mut items = Vec::new();
     let zoom = frame_view.camera.zoom;
 
-    if let Some(position) = presentation.eraser_cursor
-        && zoom.is_finite()
-        && zoom > 0.0
-    {
-        items.push(OverlayDisplayItem::Rectangle(UiRectangleDisplayItem {
-            kind: UiShapeKind::EraserCursor,
-            center_x: position.x,
-            center_y: position.y,
-            width: 16.0 / zoom,
-            height: 16.0 / zoom,
-            rotation: 0.0,
-            fill: ColorRgba8 {
-                r: 0xff,
-                g: 0xff,
-                b: 0xff,
-                a: 20,
-            },
-            fill_style: DisplayFillStyle::Solid,
-            stroke: ColorRgba8 {
-                r: 0,
-                g: 0,
-                b: 0,
-                a: 140,
-            },
-            stroke_width: 1.5 / zoom,
-            corner_radii: CornerRadii::default(),
-        }));
-    }
-
-    if let Some(cursor) = presentation.stroke_cursor
-        && zoom.is_finite()
-        && zoom > 0.0
-        && cursor.stroke_width.is_finite()
-        && cursor.stroke_width > 0.0
-    {
-        let outline_color = ColorRgba8 {
-            r: 0,
-            g: 0,
-            b: 0,
-            a: 140,
-        };
-        items.push(OverlayDisplayItem::Rectangle(UiRectangleDisplayItem {
-            kind: UiShapeKind::EraserCursor,
-            center_x: cursor.position.x,
-            center_y: cursor.position.y,
-            width: cursor.stroke_width,
-            height: cursor.stroke_width,
-            rotation: 0.0,
-            fill: cursor.stroke_color.unwrap_or(ColorRgba8 {
-                r: 0xff,
-                g: 0xff,
-                b: 0xff,
-                a: 20,
-            }),
-            fill_style: DisplayFillStyle::Solid,
-            stroke: outline_color,
-            stroke_width: 1.5 / zoom,
-            corner_radii: CornerRadii::default(),
-        }));
-        {
-            let color = cursor.stroke_color.unwrap_or(outline_color);
-            let arm_outline_color = stroke_cursor_arm_outline_color(color);
-            let inner = cursor.stroke_width / 2.0 + 4.0 / zoom;
-            let outer = inner + 6.0 / zoom;
-            for (dx, dy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)] {
-                let points = vec![
-                    [
-                        cursor.position.x + dx * inner,
-                        cursor.position.y + dy * inner,
-                    ],
-                    [
-                        cursor.position.x + dx * outer,
-                        cursor.position.y + dy * outer,
-                    ],
-                ];
-                items.push(OverlayDisplayItem::FocusConnection(
-                    UiFocusConnectionDisplayItem {
-                        points: points.clone(),
-                        stroke: arm_outline_color,
-                        stroke_width: 2.0 / zoom,
-                        ..UiFocusConnectionDisplayItem::default()
-                    },
-                ));
-                items.push(OverlayDisplayItem::FocusConnection(
-                    UiFocusConnectionDisplayItem {
-                        points,
-                        stroke: color,
-                        stroke_width: 1.0 / zoom,
-                        ..UiFocusConnectionDisplayItem::default()
-                    },
-                ));
-            }
-        }
-    }
-
     for element in &presentation.marquee_candidate_elements {
         items.push(OverlayDisplayItem::Rectangle(ui_rect_item(
             UiShapeKind::SelectionCandidateFrame,
@@ -225,23 +130,24 @@ pub(crate) fn compose_overlay_items(
         )));
     }
 
+    if let Some(highlight) = presentation.binding_highlight.as_ref() {
+        items.push(OverlayDisplayItem::Rectangle(
+            binding_highlight_outline_item(highlight),
+        ));
+        for near_mid_point in &highlight.near_mid_points {
+            items.push(OverlayDisplayItem::Rectangle(
+                binding_near_midpoint_dot_item(*near_mid_point, zoom),
+            ));
+        }
+        if let Some(mid_point) = highlight.mid_point {
+            items.push(OverlayDisplayItem::Rectangle(
+                binding_snapped_midpoint_dot_item(mid_point, zoom),
+            ));
+        }
+    }
+
     items.retain(|item| overlay_item_visible(item, frame_view));
     items
-}
-
-// The crosshair arms take the brush color, which can sit close to the canvas
-// background. Ring them with a halo that contrasts with the arm color so the
-// cursor stays distinguishable.
-fn stroke_cursor_arm_outline_color(color: ColorRgba8) -> ColorRgba8 {
-    let luminance =
-        0.299 * f64::from(color.r) + 0.587 * f64::from(color.g) + 0.114 * f64::from(color.b);
-    let channel = if luminance > 128.0 { 0x00 } else { 0xff };
-    ColorRgba8 {
-        r: channel,
-        g: channel,
-        b: channel,
-        a: 140,
-    }
 }
 
 struct SelectionOverlayRequest<'a> {
@@ -420,6 +326,7 @@ mod tests {
     use super::*;
     use snow_draw_engine_core::{Camera, SurfaceSize};
     use snow_draw_engine_document::FreeDrawData;
+    use snow_draw_engine_editor::BindingHighlightPresentation;
 
     fn element_id(index: u32) -> ElementId {
         ElementId {
@@ -719,159 +626,6 @@ mod tests {
     }
 
     #[test]
-    fn eraser_cursor_has_a_stable_sixteen_pixel_view_size() {
-        let presentation = EditorPresentationState {
-            eraser_cursor: Some(Point::new(12.0, 34.0)),
-            ..EditorPresentationState::default()
-        };
-        let mut view = frame_view();
-        view.camera.zoom = 2.0;
-
-        let items = compose_overlay_items(SnapConfig::default(), &presentation, view);
-        let cursor = overlay_rect(&items, 0);
-
-        assert_eq!(cursor.kind, UiShapeKind::EraserCursor);
-        assert_eq!((cursor.center_x, cursor.center_y), (12.0, 34.0));
-        assert_eq!((cursor.width, cursor.height), (8.0, 8.0));
-        assert_eq!(cursor.stroke_width, 0.75);
-        assert_eq!(cursor.fill.a, 20);
-        assert_eq!(cursor.stroke.a, 140);
-    }
-
-    #[test]
-    fn pen_filter_cursor_uses_the_canvas_space_stroke_width() {
-        let presentation = EditorPresentationState {
-            stroke_cursor: Some(snow_draw_engine_editor::EditorStrokeCursor {
-                position: Point::new(12.0, 34.0),
-                stroke_width: 30.0,
-                stroke_color: None,
-            }),
-            ..EditorPresentationState::default()
-        };
-        let mut view = frame_view();
-        view.camera.zoom = 2.0;
-
-        let items = compose_overlay_items(SnapConfig::default(), &presentation, view);
-        let cursor = overlay_rect(&items, 0);
-
-        assert_eq!(cursor.kind, UiShapeKind::EraserCursor);
-        assert_eq!((cursor.center_x, cursor.center_y), (12.0, 34.0));
-        assert_eq!((cursor.width, cursor.height), (30.0, 30.0));
-        assert_eq!(cursor.stroke_width, 0.75);
-        assert_eq!(cursor.fill.a, 20);
-        assert_eq!(cursor.stroke.a, 140);
-        assert_eq!(items.len(), 9);
-        for (pair, (dx, dy)) in
-            items[1..]
-                .chunks_exact(2)
-                .zip([(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0)])
-        {
-            let OverlayDisplayItem::FocusConnection(halo) = &pair[0] else {
-                panic!("expected crosshair arm outline")
-            };
-            let OverlayDisplayItem::FocusConnection(arm) = &pair[1] else {
-                panic!("expected crosshair arm")
-            };
-            assert_eq!(
-                halo.stroke,
-                ColorRgba8 {
-                    r: 0xff,
-                    g: 0xff,
-                    b: 0xff,
-                    a: 140,
-                }
-            );
-            assert_eq!(halo.stroke_width, 1.0);
-            assert_eq!(halo.points, arm.points);
-            assert_eq!(arm.stroke, cursor.stroke);
-            assert_eq!(arm.stroke_width, 0.5);
-            assert_eq!(
-                arm.points,
-                vec![
-                    [12.0 + dx * 17.0, 34.0 + dy * 17.0],
-                    [12.0 + dx * 20.0, 34.0 + dy * 20.0],
-                ]
-            );
-        }
-    }
-
-    #[test]
-    fn brush_cursor_has_colored_fill_and_four_zoom_stable_crosshair_arms() {
-        let dark_color = ColorRgba8 {
-            r: 230,
-            g: 20,
-            b: 40,
-            a: 255,
-        };
-        let light_color = ColorRgba8 {
-            r: 240,
-            g: 230,
-            b: 40,
-            a: 255,
-        };
-        let white_halo = ColorRgba8 {
-            r: 0xff,
-            g: 0xff,
-            b: 0xff,
-            a: 140,
-        };
-        let black_halo = ColorRgba8 {
-            r: 0,
-            g: 0,
-            b: 0,
-            a: 140,
-        };
-        for (color, halo_color) in [(dark_color, white_halo), (light_color, black_halo)] {
-            for zoom in [0.5, 1.0, 2.0] {
-                let presentation = EditorPresentationState {
-                    stroke_cursor: Some(snow_draw_engine_editor::EditorStrokeCursor {
-                        position: Point::new(12.0, 34.0),
-                        stroke_width: 10.0,
-                        stroke_color: Some(color),
-                    }),
-                    ..EditorPresentationState::default()
-                };
-                let mut view = frame_view();
-                view.camera.zoom = zoom;
-                let items = compose_overlay_items(SnapConfig::default(), &presentation, view);
-                assert_eq!(items.len(), 9);
-                assert_eq!(overlay_rect(&items, 0).fill, color);
-                for (pair, (dx, dy)) in items[1..].chunks_exact(2).zip([
-                    (1.0, 0.0),
-                    (-1.0, 0.0),
-                    (0.0, 1.0),
-                    (0.0, -1.0),
-                ]) {
-                    let OverlayDisplayItem::FocusConnection(halo) = &pair[0] else {
-                        panic!("expected crosshair arm outline")
-                    };
-                    let OverlayDisplayItem::FocusConnection(arm) = &pair[1] else {
-                        panic!("expected crosshair arm")
-                    };
-                    assert_eq!(halo.stroke, halo_color);
-                    assert_eq!(halo.stroke_width * zoom, 2.0);
-                    assert_eq!(halo.points, arm.points);
-                    assert_eq!(arm.stroke, color);
-                    assert_eq!(arm.stroke_width * zoom, 1.0);
-                    assert_eq!(
-                        arm.points,
-                        vec![
-                            [
-                                12.0 + dx * (5.0 + 4.0 / zoom),
-                                34.0 + dy * (5.0 + 4.0 / zoom)
-                            ],
-                            [
-                                12.0 + dx * (5.0 + 10.0 / zoom),
-                                34.0 + dy * (5.0 + 10.0 / zoom)
-                            ],
-                        ]
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
     fn two_point_selected_arrow_hides_selection_box_and_keeps_endpoint_handles() {
         let arrow = ArrowData::from_global_points(
             &[Point::new(-40.0, -20.0), Point::new(40.0, 20.0)],
@@ -1118,5 +872,50 @@ mod tests {
         assert_eq!(rect_frame.kind, UiShapeKind::SelectionCandidateFrame);
         assert_eq!(rect_frame.width, 88.0);
         assert_eq!(rect_frame.height, 28.0);
+    }
+
+    #[test]
+    fn binding_highlight_composes_outline_and_midpoint_dot() {
+        let mut highlighted = rect(100.0, 80.0);
+        highlighted.center = Point::new(10.0, 20.0);
+        highlighted.stroke_width = 2.0;
+        let presentation = EditorPresentationState {
+            binding_highlight: Some(BindingHighlightPresentation {
+                rect: highlighted,
+                stroke_width: 2.0,
+                mid_point: Some(Point::new(60.0, 20.0)),
+                near_mid_points: vec![Point::new(-40.0, 20.0), Point::new(10.0, -20.0)],
+            }),
+            ..EditorPresentationState::default()
+        };
+
+        let items = compose_overlay_items(SnapConfig::default(), &presentation, frame_view());
+        assert_eq!(items.len(), 4);
+
+        let outline = overlay_rect(&items, 0);
+        assert_eq!(outline.kind, UiShapeKind::BindingHighlight);
+        assert_eq!(outline.center_x, 10.0);
+        assert_eq!(outline.center_y, 20.0);
+        assert_eq!(outline.width, 100.0);
+        assert_eq!(outline.height, 80.0);
+        assert_eq!(outline.stroke_width, 2.0);
+
+        let first_near = overlay_rect(&items, 1);
+        assert_eq!(first_near.center_x, -40.0);
+        assert_eq!(first_near.center_y, 20.0);
+        assert_eq!(first_near.fill, BINDING_NEAR_MIDPOINT_COLOR);
+
+        let second_near = overlay_rect(&items, 2);
+        assert_eq!(second_near.center_x, 10.0);
+        assert_eq!(second_near.center_y, -20.0);
+        assert_eq!(second_near.fill, BINDING_NEAR_MIDPOINT_COLOR);
+
+        let dot = overlay_rect(&items, 3);
+        assert_eq!(dot.kind, UiShapeKind::BindingHighlight);
+        assert_eq!(dot.center_x, 60.0);
+        assert_eq!(dot.center_y, 20.0);
+        assert_eq!(dot.width, 8.0);
+        assert_eq!(dot.height, 8.0);
+        assert_eq!(dot.fill, BINDING_HIGHLIGHT_COLOR);
     }
 }

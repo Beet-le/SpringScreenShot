@@ -23,9 +23,6 @@ QPoint globalMousePosition(const QMouseEvent* event) {
     return event->globalPosition().toPoint();
 }
 
-QRect expandedForShadow(const QRect& rect, const QMargins& margins) {
-    return rect.adjusted(-margins.left(), -margins.top(), margins.right(), margins.bottom());
-}
 } // namespace
 
 ScreenshotToolPaletteHost::ScreenshotToolPaletteHost(const ScreenshotToolPalette::Options& options,
@@ -117,6 +114,17 @@ ScreenshotToolbarPlacementSnapshot ScreenshotToolPaletteHost::placementSnapshot(
 }
 
 QRegion ScreenshotToolPaletteHost::interactiveHostRegion() const {
+    return panelHostRegion(true);
+}
+
+QRegion ScreenshotToolPaletteHost::surfaceHostRegion() const {
+    return panelHostRegion(false);
+}
+
+QRegion ScreenshotToolPaletteHost::panelHostRegion(bool rounded) const {
+#if !defined(Q_OS_MACOS)
+    Q_UNUSED(rounded);
+#endif
     if (m_palette == nullptr) {
         return QRegion(QRect(QPoint(0, 0), size()));
     }
@@ -131,6 +139,14 @@ QRegion ScreenshotToolPaletteHost::interactiveHostRegion() const {
         const QRect panelRect =
             panel->geometry().translated(m_palette->pos()).intersected(hostBounds);
         if (!panelRect.isEmpty()) {
+#if defined(Q_OS_MACOS)
+            if (const auto* surface = dynamic_cast<const ScreenshotToolbarPanel*>(panel);
+                rounded && surface != nullptr) {
+                const QRegion body(surface->surfacePath().toFillPolygon().toPolygon());
+                region += body.translated(panel->pos() + m_palette->pos()).intersected(hostBounds);
+                return;
+            }
+#endif
             region += QRegion(panelRect);
         }
     };

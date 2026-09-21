@@ -2,6 +2,7 @@
 #define SNOW_SHOT_PRESENTATION_SETTINGS_SETTINGSBACKEND_H
 
 #include "snow_shot/presentation/globalshortcuttypes.h"
+#include "snow_shot/presentation/apppermissionservice.h"
 #include "snow_shot/presentation/settings/settingscatalog.h"
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/settingsadapters.h"
@@ -12,11 +13,12 @@
 
 namespace snow_shot::presentation {
 class GlobalShortcutManager;
+class GlobalMouseManager;
 namespace settings {
 
 struct SettingsRuntimeOption {
     QVariant value;
-    QString label;
+    QString label{};
 
     friend bool operator==(const SettingsRuntimeOption& first,
                            const SettingsRuntimeOption& second) {
@@ -31,8 +33,8 @@ struct SettingsRuntimeOption {
 struct SettingsActionState {
     bool enabled = false;
     bool busy = false;
-    QString label;
-    QString hint;
+    QString label{};
+    QString hint{};
     bool successAccent = false;
 };
 
@@ -137,8 +139,20 @@ class SettingsBackend : public QObject {
         return false;
     }
 
+    virtual AppPermissionService* appPermissions() const {
+        return nullptr;
+    }
+
+    virtual GlobalMousePermissionState globalMousePermissionState() const {
+        return {GlobalMousePermissionState::Status::Ready, true, true, true};
+    }
+    virtual void requestGlobalMousePermission() {}
+    virtual void openGlobalMousePermissionSettings() {}
+    virtual void refreshGlobalMousePermission() {}
+
     [[nodiscard]] virtual SettingsActionState actionState(SettingsActionBinding binding) const = 0;
-    [[nodiscard]] virtual bool triggerAction(SettingsActionBinding binding) = 0;
+    [[nodiscard]] virtual bool triggerAction(SettingsActionBinding binding,
+                                             const QString& filePath = {}) = 0;
     [[nodiscard]] virtual storage::StorageStatus storageStatus() const = 0;
     virtual void refreshStorageStatus() {}
     // Show-event path; backends may throttle repeated refreshes.  Defaults to
@@ -159,6 +173,7 @@ class SettingsBackend : public QObject {
   signals:
     void operationMessage(const QString& message, bool warning);
     void synchronized();
+    void globalMousePermissionChanged();
     void actionFinished(snow_shot::presentation::settings::SettingsActionBinding action,
                         bool success, const QString& error);
     void
@@ -170,7 +185,16 @@ class BuiltInSettingsBackend final : public SettingsBackend {
   public:
     explicit BuiltInSettingsBackend(
         ::snow_shot::presentation::GlobalShortcutManager& shortcutManager,
-        QObject* parent = nullptr);
+        QObject* parent = nullptr, GlobalMouseManager* mouseManager = nullptr,
+        AppPermissionService* permissions = nullptr);
+    AppPermissionService* appPermissions() const override {
+        return m_permissions;
+    }
+
+    GlobalMousePermissionState globalMousePermissionState() const override;
+    void requestGlobalMousePermission() override;
+    void openGlobalMousePermissionSettings() override;
+    void refreshGlobalMousePermission() override;
 
     [[nodiscard]] QVariant selectValue(SettingsSelectBinding binding) const override;
     [[nodiscard]] QVector<SettingsRuntimeOption>
@@ -229,7 +253,8 @@ class BuiltInSettingsBackend final : public SettingsBackend {
     applyGlobalMouseCombination(SettingsGlobalMouseAction action,
                                 const SettingsGlobalMouseCombination& combination) override;
     [[nodiscard]] SettingsActionState actionState(SettingsActionBinding binding) const override;
-    [[nodiscard]] bool triggerAction(SettingsActionBinding binding) override;
+    [[nodiscard]] bool triggerAction(SettingsActionBinding binding,
+                                     const QString& filePath = {}) override;
     [[nodiscard]] CustomAiModels customAiModels() const override;
     bool applyCustomAiModels(const CustomAiModels& models) override;
     [[nodiscard]] storage::StorageStatus storageStatus() const override;
@@ -239,7 +264,10 @@ class BuiltInSettingsBackend final : public SettingsBackend {
 
   private:
     ::snow_shot::presentation::GlobalShortcutManager& m_shortcutManager;
+    AppPermissionService* m_permissions = nullptr;
+    GlobalMouseManager* m_mouseManager = nullptr;
     bool m_copyLogBusy = false;
+    bool m_configurationBusy = false;
 };
 
 } // namespace settings

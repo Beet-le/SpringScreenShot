@@ -20,15 +20,22 @@
 #include <QImage>
 #include <QLineEdit>
 #include <QMenu>
+#include <QPalette>
 #include <QPushButton>
+#include <QSet>
 #include <QString>
 #include <QSystemTrayIcon>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QUuid>
 #include <QWidget>
 
 #include <cstdlib>
 #include <iostream>
+
+#ifdef Q_OS_MACOS
+int runNativeSystemTrayMenuTests(snow_shot::presentation::SystemTrayController& controller);
+#endif
 
 namespace {
 void require(bool condition, const char* message) {
@@ -61,6 +68,20 @@ void requireBalloon(const QSystemTrayIcon* trayIcon, const QString& title, const
             reason);
 }
 
+#ifdef Q_OS_MACOS
+bool containsOpaqueColor(const QImage& image, const QColor& color) {
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            const QColor pixel = image.pixelColor(x, y);
+            if (pixel.alpha() == 255 && pixel.rgb() == color.rgb()) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+#endif
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -79,10 +100,26 @@ int main(int argc, char* argv[]) {
             "English should be available from the English catalog");
 
     snow_shot::presentation::SystemTrayController controller;
+#ifdef Q_OS_MACOS
+    if (application.arguments().contains(QStringLiteral("--native-menu"))) {
+        int result = 1;
+        QTimer::singleShot(0, &application, [&]() {
+            result = runNativeSystemTrayMenuTests(controller);
+            application.exit(result);
+        });
+        application.exec();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return result;
+    }
+#endif
     auto* trayIcon =
         controller.findChild<QSystemTrayIcon*>(QStringLiteral("snowShotSystemTrayIcon"));
     require(trayIcon != nullptr, "the controller should own a system tray icon");
     require(!trayIcon->icon().isNull(), "the bundled tray icon should load");
+#ifdef Q_OS_MACOS
+    require(trayIcon->icon().isMask(),
+            "bundled macOS tray icons must use native template rendering");
+#endif
     require(trayIcon->toolTip() == QStringLiteral("SnowShot"),
             "the tray tooltip should be SnowShot");
     controller.show();
@@ -114,10 +151,15 @@ int main(int argc, char* argv[]) {
     requireBalloon(trayIcon, QStringLiteral("Capture"), QStringLiteral("Capture timed out"),
                    QSystemTrayIcon::Warning,
                    "a capture warning balloon must stay titled Capture with a warning icon");
+    controller.showWarningMessage(QStringLiteral("Feature unavailable"),
+                                  QStringLiteral("Screenshot is unavailable"));
+    requireBalloon(trayIcon, QStringLiteral("Feature unavailable"),
+                   QStringLiteral("Screenshot is unavailable"), QSystemTrayIcon::Warning,
+                   "a general tray warning must preserve its title and warning severity");
     controller.setEnabled(false);
     controller.showUpdateMessage(QStringLiteral("Ignored while disabled"));
-    requireBalloon(trayIcon, QStringLiteral("Capture"), QStringLiteral("Capture timed out"),
-                   QSystemTrayIcon::Warning,
+    requireBalloon(trayIcon, QStringLiteral("Feature unavailable"),
+                   QStringLiteral("Screenshot is unavailable"), QSystemTrayIcon::Warning,
                    "a disabled tray must not replace the last balloon with an update notice");
     controller.setEnabled(true);
 
@@ -144,6 +186,10 @@ int main(int argc, char* argv[]) {
     customImage.fill(QColor(242, 17, 137));
     require(customImage.save(customIconPath), "the custom tray icon fixture should be writable");
     controller.setCustomIconPath(customIconPath);
+#ifdef Q_OS_MACOS
+    require(!trayIcon->icon().isMask(),
+            "custom macOS tray icons must preserve their original colors");
+#endif
     require(controller.customIconPath() == customIconPath &&
                 trayIcon->icon().pixmap(QSize(64, 64)).toImage().pixelColor(32, 32) ==
                     QColor(242, 17, 137),
@@ -238,7 +284,19 @@ int main(int argc, char* argv[]) {
                 QStringLiteral(":/snow-shot/app-icons/snow-shot-tray-light.png"),
             "a readable custom image outside PNG and ICO should use the bundled fallback");
 
+#ifdef Q_OS_MACOS
+    require(trayIcon->contextMenu() == nullptr,
+            "macOS must not attach a native menu that also opens on left-click");
+    adqt::widgets::AdContextMenu* menu = nullptr;
+    for (QWidget* widget : QApplication::topLevelWidgets()) {
+        if (widget->objectName() == QStringLiteral("systemTrayMenu")) {
+            menu = dynamic_cast<adqt::widgets::AdContextMenu*>(widget);
+            break;
+        }
+    }
+#else
     auto* menu = dynamic_cast<adqt::widgets::AdContextMenu*>(trayIcon->contextMenu());
+#endif
     require(menu != nullptr, "the tray should use the Ant Design context menu");
     require(menu->minimumWidth() == 300,
             "tray context menu should retain its 300-pixel minimum width");
@@ -307,34 +365,49 @@ int main(int argc, char* argv[]) {
     auto* screenshotMenuAction = actionForId(QStringLiteral("quick.screenshot"));
     auto* delayedScreenshotMenuAction = actionForId(QStringLiteral("quick.screenshot-delay"));
     auto* recordingToggleMenuAction = actionForId(QStringLiteral("quick.screen-record-copy"));
-    auto* disableMenuAction = actionForId(QStringLiteral("tray.disable-shortcut-functions"));
+    auto* hotkeyToggleMenuAction = actionForId(QStringLiteral("quick.toggle-global-hotkeys"));
     auto* showMainWindowMenuAction = actionForId(QStringLiteral("tray.show-main-window"));
     auto* exitMenuAction = actionForId(QStringLiteral("tray.exit"));
     auto* windowGroupMenuAction =
         actionForObjectName(QStringLiteral("systemTrayWindowGroupAction"));
-    require(controller.menuOptions() == defaultMenuOptions && defaultVisibleActions.size() == 14 &&
-                screenshotMenuAction != nullptr && screenshotMenuAction->isVisible() &&
-                delayedScreenshotMenuAction != nullptr &&
-                delayedScreenshotMenuAction->isVisible() && recordingToggleMenuAction != nullptr &&
-                !recordingToggleMenuAction->isVisible() && !screenshotMenuAction->icon().isNull() &&
-                disableMenuAction != nullptr && disableMenuAction->isVisible() &&
-                disableMenuAction->isCheckable() && !disableMenuAction->isChecked() &&
-                showMainWindowMenuAction != nullptr && showMainWindowMenuAction->isVisible() &&
-                !showMainWindowMenuAction->icon().isNull() && exitMenuAction != nullptr &&
-                exitMenuAction->isVisible() && !exitMenuAction->icon().isNull() &&
-                windowGroupMenuAction != nullptr && windowGroupMenuAction->isVisible() &&
-                actionForId(QStringLiteral("tray.window-grouping")) == windowGroupMenuAction &&
-                defaultVisibleActions.contains(disableMenuAction) &&
-                defaultVisibleActions.contains(showMainWindowMenuAction) &&
-                defaultVisibleActions.indexOf(windowGroupMenuAction) ==
-                    defaultVisibleActions.indexOf(disableMenuAction) - 1,
-            "the tray menu should expose the eleven default options in four catalog groups");
+    const QStringList normalizedDefaultMenuOptions = controller.menuOptions();
+    require(
+        QSet<QString>(normalizedDefaultMenuOptions.cbegin(), normalizedDefaultMenuOptions.cend()) ==
+                QSet<QString>(defaultMenuOptions.cbegin(), defaultMenuOptions.cend()) &&
+            defaultVisibleActions.size() == 15 && screenshotMenuAction != nullptr &&
+            screenshotMenuAction->isVisible() && delayedScreenshotMenuAction != nullptr &&
+            delayedScreenshotMenuAction->isVisible() && recordingToggleMenuAction != nullptr &&
+            !recordingToggleMenuAction->isVisible() && !screenshotMenuAction->icon().isNull() &&
+            hotkeyToggleMenuAction != nullptr && hotkeyToggleMenuAction->isVisible() &&
+            hotkeyToggleMenuAction->isCheckable() && !hotkeyToggleMenuAction->isChecked() &&
+            showMainWindowMenuAction != nullptr && showMainWindowMenuAction->isVisible() &&
+            !showMainWindowMenuAction->icon().isNull() && exitMenuAction != nullptr &&
+            exitMenuAction->isVisible() && !exitMenuAction->icon().isNull() &&
+            windowGroupMenuAction != nullptr && windowGroupMenuAction->isVisible() &&
+            actionForId(QStringLiteral("tray.window-grouping")) == windowGroupMenuAction &&
+            defaultVisibleActions.contains(hotkeyToggleMenuAction) &&
+            defaultVisibleActions.contains(showMainWindowMenuAction) &&
+            defaultVisibleActions.indexOf(windowGroupMenuAction) ==
+                defaultVisibleActions.indexOf(showMainWindowMenuAction) - 1,
+        "the tray menu should expose the eleven default options in five catalog groups");
     requireActionText(screenshotMenuAction, QStringLiteral("Screenshot"),
                       "Screenshot should use its catalog label");
+#ifdef Q_OS_MACOS
+    const QImage screenshotMenuIcon =
+        screenshotMenuAction->icon().pixmap(QSize(32, 32), QIcon::Normal).toImage();
+    require(containsOpaqueColor(screenshotMenuIcon,
+                                menu->palette().color(QPalette::Active, QPalette::Text)) &&
+                containsOpaqueColor(screenshotMenuIcon, QColor(QStringLiteral("#9254de"))) &&
+                !containsOpaqueColor(screenshotMenuIcon, QColor(QStringLiteral("#1677ff"))),
+            "the native screenshot menu icon must use menu foreground with only its fixed purple "
+            "accent");
+#endif
     requireActionText(delayedScreenshotMenuAction, QStringLiteral("Delay 3s to execute"),
                       "Delayed screenshot should use the canonical shortcut title");
     requireActionText(recordingToggleMenuAction, QStringLiteral("Record/Copy Video"),
                       "Recording toggle should use the canonical shortcut title");
+    requireActionText(hotkeyToggleMenuAction, QStringLiteral("Disable global hotkeys"),
+                      "the hotkey toggle should keep the historical tray label");
     const QStringList displayCases{
         QStringLiteral("+"),     QStringLiteral("Shift++"),        QStringLiteral("Num+1"),
         QStringLiteral("Num++"), QStringLiteral("Shift+Shift"),    QStringLiteral("Period"),
@@ -492,11 +565,17 @@ int main(int argc, char* argv[]) {
     }
     require(trayGroupCreated, "accepting the tray New Group dialog should create the group");
 
+#ifdef Q_OS_MACOS
+    // A synthetic Qt activation has no NSStatusBarButton to present a native menu.
+    // Real status-item presentation and placement are covered by the Cocoa fixture.
+    trayIcon->activated(QSystemTrayIcon::Context);
+    require(trayIcon->contextMenu() == nullptr && !menu->isPopupVisible(),
+            "a context signal without a native status-item event must not open a detached popup");
+#endif
+
     int screenshotRequests = 0;
     int showMainWindowRequests = 0;
     int exitRequests = 0;
-    int disableChanges = 0;
-    bool shortcutsDisabled = false;
     QVector<snow_shot::presentation::GlobalShortcutAction> quickActions;
     QObject::connect(&controller,
                      &snow_shot::presentation::SystemTrayController::screenshotRequested,
@@ -511,17 +590,15 @@ int main(int argc, char* argv[]) {
                      [&quickActions](snow_shot::presentation::GlobalShortcutAction action) {
                          quickActions.push_back(action);
                      });
-    QObject::connect(&controller,
-                     &snow_shot::presentation::SystemTrayController::globalHotkeysDisabledChanged,
-                     [&disableChanges, &shortcutsDisabled](bool disabled) {
-                         ++disableChanges;
-                         shortcutsDisabled = disabled;
-                     });
 
     int functionSettingsRequests = 0;
     QObject::connect(&controller,
                      &snow_shot::presentation::SystemTrayController::openFunctionSettingsRequested,
                      [&functionSettingsRequests]() { ++functionSettingsRequests; });
+    int aboutRequests = 0;
+    QObject::connect(&controller,
+                     &snow_shot::presentation::SystemTrayController::openAboutRequested,
+                     [&aboutRequests]() { ++aboutRequests; });
     require(controller.middleClickAction() == QStringLiteral("screenshot_fixed"),
             "middle click must default to capture and pin");
     const QStringList clickActions{QStringLiteral("screenshot"), QStringLiteral("show_main_window"),
@@ -538,6 +615,7 @@ int main(int argc, char* argv[]) {
             screenshotRequests = showMainWindowRequests = functionSettingsRequests = 0;
             quickActions.clear();
             trayIcon->activated(reason);
+            require(!menu->isPopupVisible(), "tray click actions must not open the context menu");
             require(screenshotRequests == (action == QStringLiteral("screenshot") ? 1 : 0) &&
                         showMainWindowRequests ==
                             (action == QStringLiteral("show_main_window") ? 1 : 0) &&
@@ -562,6 +640,7 @@ int main(int argc, char* argv[]) {
             "invalid middle click must fall back to capture and pin");
     trayIcon->activated(QSystemTrayIcon::Trigger);
     trayIcon->activated(QSystemTrayIcon::Context);
+    menu->dismissPopup();
     trayIcon->activated(QSystemTrayIcon::DoubleClick);
     trayIcon->activated(QSystemTrayIcon::MiddleClick);
     trayIcon->activated(QSystemTrayIcon::Unknown);
@@ -583,6 +662,28 @@ int main(int argc, char* argv[]) {
     require(controller.leftClickAction() == QStringLiteral("screenshot"),
             "an unsupported tray left-click action should fall back to Screenshot");
 
+    const int screenshotRequestsBeforeMessageClicks = screenshotRequests;
+    const int showMainWindowRequestsBeforeMessageClicks = showMainWindowRequests;
+    const int functionSettingsRequestsBeforeMessageClicks = functionSettingsRequests;
+    controller.showUpdateMessage(QStringLiteral("An update is ready."));
+    trayIcon->messageClicked();
+    require(aboutRequests == 1 && screenshotRequests == screenshotRequestsBeforeMessageClicks &&
+                showMainWindowRequests == showMainWindowRequestsBeforeMessageClicks &&
+                functionSettingsRequests == functionSettingsRequestsBeforeMessageClicks,
+            "clicking an update balloon must request only the About page");
+    controller.showCaptureMessage(QStringLiteral("Capture failed"), false);
+    controller.showWarningMessage(QStringLiteral("Feature unavailable"),
+                                  QStringLiteral("Screenshot is unavailable"));
+    trayIcon->messageClicked();
+    require(aboutRequests == 1,
+            "capture and warning balloon clicks must not request the About page");
+    controller.setEnabled(false);
+    controller.showUpdateMessage(QStringLiteral("Ignored while disabled"));
+    trayIcon->messageClicked();
+    controller.setEnabled(true);
+    require(aboutRequests == 1,
+            "a balloon suppressed while the tray is disabled must stay unclickable");
+
     screenshotMenuAction->trigger();
     showMainWindowMenuAction->trigger();
     exitMenuAction->trigger();
@@ -594,18 +695,63 @@ int main(int argc, char* argv[]) {
             "Show main interface should emit the dedicated tray request");
     require(exitRequests == 1, "the Exit action should emit its request");
 
-    disableMenuAction->trigger();
-    require(controller.globalHotkeysDisabled() && disableChanges == 1 && shortcutsDisabled,
-            "the disable command should expose its checked session state");
+    hotkeyToggleMenuAction->trigger();
+    require(quickActions ==
+                    QVector<snow_shot::presentation::GlobalShortcutAction>{
+                        snow_shot::presentation::GlobalShortcutAction::Screenshot,
+                        snow_shot::presentation::GlobalShortcutAction::ToggleGlobalHotkeys} &&
+                hotkeyToggleMenuAction->isChecked(),
+            "the hotkey toggle tray entry should dispatch its command and check its state");
+    controller.setQuickActionChecked(
+        snow_shot::presentation::GlobalShortcutAction::ToggleGlobalHotkeys, false);
+    controller.setQuickActionChecked(
+        snow_shot::presentation::GlobalShortcutAction::ToggleGlobalHotkeys, true);
+    require(hotkeyToggleMenuAction->isChecked() && quickActions.size() == 2,
+            "the manager-driven check sync must never redispatch the command");
+    controller.setQuickActionChecked(
+        snow_shot::presentation::GlobalShortcutAction::ToggleGlobalHotkeys, false);
+    require(!hotkeyToggleMenuAction->isChecked() && quickActions.size() == 2,
+            "the manager-driven check sync must mirror the enabled state");
+    controller.setQuickActionChecked(
+        snow_shot::presentation::GlobalShortcutAction::ToggleGlobalHotkeys, true);
     controller.setMenuOptions({QStringLiteral("quick.screenshot"), QStringLiteral("tray.exit")});
     const QList<QAction*> compactVisibleActions = visibleActions();
-    require(!controller.globalHotkeysDisabled() && disableChanges == 2 && !shortcutsDisabled &&
-                compactVisibleActions.size() == 3 && compactVisibleActions.at(1)->isSeparator() &&
-                !windowGroupMenuAction->isVisible(),
-            "hiding the disable command should re-enable shortcuts and collapse empty groups");
+    require(compactVisibleActions.size() == 3 && compactVisibleActions.at(1)->isSeparator() &&
+                !windowGroupMenuAction->isVisible() && !hotkeyToggleMenuAction->isVisible() &&
+                !hotkeyToggleMenuAction->isChecked() && quickActions.size() == 3 &&
+                quickActions.last() ==
+                    snow_shot::presentation::GlobalShortcutAction::ToggleGlobalHotkeys,
+            "hiding the checked toggle should re-enable hotkeys and collapse empty groups");
     controller.setMenuOptions(defaultMenuOptions);
-    require(windowGroupMenuAction->isVisible(),
+    require(windowGroupMenuAction->isVisible() && hotkeyToggleMenuAction->isVisible() &&
+                !hotkeyToggleMenuAction->isChecked(),
             "restoring the defaults should bring the window group submenu back");
+
+    const QString fullscreenToggleId =
+        QStringLiteral("quick.toggle-disable-on-focused-fullscreen-window");
+    controller.setMenuOptions({fullscreenToggleId, QStringLiteral("tray.exit")});
+    QAction* fullscreenToggleMenuAction = actionForId(fullscreenToggleId);
+    require(fullscreenToggleMenuAction != nullptr && fullscreenToggleMenuAction->isCheckable() &&
+                !fullscreenToggleMenuAction->isChecked(),
+            "the fullscreen suppression tray entry should be a checkable view of the setting");
+    controller.setQuickActionChecked(
+        snow_shot::presentation::GlobalShortcutAction::ToggleDisableOnFocusedFullscreenWindow,
+        true);
+    require(fullscreenToggleMenuAction->isChecked() && quickActions.size() == 3,
+            "the store-driven check sync must mirror suppression without redispatching");
+    fullscreenToggleMenuAction->trigger();
+    require(quickActions.size() == 4 && quickActions.last() ==
+                                            snow_shot::presentation::GlobalShortcutAction::
+                                                ToggleDisableOnFocusedFullscreenWindow,
+            "clicking the fullscreen suppression entry should dispatch its quick action");
+    controller.setQuickActionChecked(
+        snow_shot::presentation::GlobalShortcutAction::ToggleDisableOnFocusedFullscreenWindow,
+        false);
+    require(!fullscreenToggleMenuAction->isChecked(),
+            "clearing fullscreen suppression should uncheck the tray entry");
+    controller.setMenuOptions(defaultMenuOptions);
+    require(!fullscreenToggleMenuAction->isVisible() && quickActions.size() == 4,
+            "hiding the fullscreen suppression entry must not redispatch its quick action");
     require(groupManager.setActiveGroup(QStringLiteral("default")),
             "the default group should be activatable for the localized title check");
 
@@ -631,7 +777,7 @@ int main(int argc, char* argv[]) {
         "Simplified Chinese recording text should equal the canonical shortcut title");
     requireActionText(showMainWindowMenuAction, QStringLiteral("\u663e\u793a\u4e3b\u754c\u9762"),
                       "Show main interface should translate to Simplified Chinese");
-    requireActionText(disableMenuAction,
+    requireActionText(hotkeyToggleMenuAction,
                       QStringLiteral("\u7981\u7528\u5168\u5c40\u5feb\u6377\u952e"),
                       "Disable global hotkeys should translate to Simplified Chinese");
     requireActionText(exitMenuAction, QStringLiteral("\u9000\u51fa"),
@@ -687,7 +833,7 @@ int main(int argc, char* argv[]) {
         "Traditional Chinese recording text should equal the canonical shortcut title");
     requireActionText(showMainWindowMenuAction, QStringLiteral("\u986f\u793a\u4e3b\u4ecb\u9762"),
                       "Show main interface should translate to Traditional Chinese");
-    requireActionText(disableMenuAction,
+    requireActionText(hotkeyToggleMenuAction,
                       QStringLiteral("\u505c\u7528\u5168\u57df\u5feb\u901f\u9375"),
                       "Disable global hotkeys should translate to Traditional Chinese");
     requireActionText(exitMenuAction, QStringLiteral("\u7d50\u675f"),

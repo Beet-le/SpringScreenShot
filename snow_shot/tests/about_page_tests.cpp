@@ -27,6 +27,7 @@
 #include <QFileInfo>
 #include <QImage>
 #include <QFontDatabase>
+#include <QJsonObject>
 #include <QLabel>
 #include <QKeyEvent>
 #include <QPointer>
@@ -570,9 +571,21 @@ void traySettingsAndFunctionNavigation() {
                 sidebar->currentRoute() == QStringLiteral("/settings/functionSettings"),
             "function settings action must show a hidden window and navigate from another page");
     window.hide();
+    window.showAbout();
+    flushEvents();
+    require(window.isVisible() && card->currentLocation().pageId == QStringLiteral("about") &&
+                card->currentLocation().sectionId.isEmpty() &&
+                sidebar->currentRoute() == QStringLiteral("/about"),
+            "about navigation must show a hidden window and leave the settings pages");
+    window.hide();
 }
 
 void mainNavigationSearchThemesAndLanguages() {
+    // Earlier suites in this binary close windows, which now persists their
+    // geometry; this suite asserts layout at the default window size.
+    require(snow_shot::storage::ApplicationStorage::instance().configuration().setValue(
+                QStringLiteral("interface/main_window_geometry"), QJsonObject()),
+            "clear remembered main window geometry");
     snow_shot::update::UpdateService updates({}, qApp);
     const_cast<snow_shot::update::UpdateStatus&>(updates.status()).state =
         snow_shot::update::UpdateState::Idle;

@@ -26,7 +26,14 @@ enum class GlobalShortcutAction {
     PinClipboardContent,
     TranslateSelectedText,
     PinSelectedFiles,
+    ToggleGlobalHotkeys,
+    ToggleDisableOnFocusedFullscreenWindow,
 };
+
+[[nodiscard]] constexpr bool controlsGlobalHotkeyGates(GlobalShortcutAction action) {
+    return action == GlobalShortcutAction::ToggleGlobalHotkeys ||
+           action == GlobalShortcutAction::ToggleDisableOnFocusedFullscreenWindow;
+}
 
 enum class GlobalShortcutStatus {
     Unset,

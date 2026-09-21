@@ -8,6 +8,10 @@
 
 #include "snow_shot/presentation/components/icons/snowshoticons.h"
 
+#ifdef Q_OS_MACOS
+#include "snow_shot/platform/macos/systemtraymenu.h"
+#endif
+
 #include "antd_icons.h"
 #include "widgets/context_menu.h"
 
@@ -70,6 +74,10 @@ QString normalizedClickAction(const QString& action, const char* defaultAction) 
                ? action
                : QString::fromLatin1(defaultAction);
 }
+
+// Balloons share one QSystemTrayIcon, so messageClicked only reports that some
+// balloon was clicked; routing follows the kind shown last.
+enum class BalloonKind { None, Capture, Warning, Update };
 
 class TrayImageCache final {
   public:
@@ -232,15 +240,34 @@ class SystemTrayController::Impl {
         retranslateUi();
         setMenuOptions({});
 
+        // Cocoa opens an attached menu on left-click too. Handle Context explicitly there.
+#ifndef Q_OS_MACOS
         trayIcon->setContextMenu(menu.get());
+#endif
         QObject::connect(trayIcon, &QSystemTrayIcon::activated, &q,
                          [this](QSystemTrayIcon::ActivationReason reason) {
+#ifdef Q_OS_MACOS
+                             // AppKit/Qt emits another activation when our attached menu starts
+                             // tracking. It is presentation, not another user click.
+                             if (trayIcon->contextMenu()) {
+                                 return;
+                             }
+#endif
                              if (reason == QSystemTrayIcon::Trigger) {
                                  dispatchClickAction(leftClickAction);
                              } else if (reason == QSystemTrayIcon::MiddleClick) {
                                  dispatchClickAction(middleClickAction);
+#ifdef Q_OS_MACOS
+                             } else if (reason == QSystemTrayIcon::Context) {
+                                 platform::macos::showSystemTrayMenu(trayIcon, menu.get());
+#endif
                              }
                          });
+        QObject::connect(trayIcon, &QSystemTrayIcon::messageClicked, &q, [this]() {
+            if (lastBalloonKind == BalloonKind::Update) {
+                emit q.openAboutRequested();
+            }
+        });
         QObject::connect(&LanguageManager::instance(), &LanguageManager::languageChanged, &q,
                          [this](const QString&, const QLocale&) { retranslateUi(); });
         QObject::connect(&shortcuts::ShortcutDisplayService::instance(),
@@ -269,10 +296,11 @@ class SystemTrayController::Impl {
     }
 
     void showBalloon(const QString& title, const QString& message,
-                     QSystemTrayIcon::MessageIcon icon) {
+                     QSystemTrayIcon::MessageIcon icon, BalloonKind kind) {
         if (!enabled) {
             return;
         }
+        lastBalloonKind = kind;
         trayIcon->setProperty("lastBalloonTitle", title);
         trayIcon->setProperty("lastBalloonMessage", message);
         trayIcon->setProperty("lastBalloonIcon", static_cast<int>(icon));
@@ -309,13 +337,12 @@ class SystemTrayController::Impl {
                                      [this, shortcutAction = option.shortcutAction]() {
                                          emit q.quickActionRequested(shortcutAction);
                                      });
-                    break;
-                case settings::SettingsTrayMenuOptionKind::DisableGlobalHotkeys:
-                    disableGlobalHotkeysAction = action;
-                    action->setCheckable(true);
-                    QObject::connect(action, &QAction::toggled, &q, [this](bool checked) {
-                        emit q.globalHotkeysDisabledChanged(checked);
-                    });
+                    if (option.checkable) {
+                        // The checkmark is a view of owner state; nothing
+                        // listens to toggled() here.
+                        action->setCheckable(true);
+                        checkableQuickActions.insert(option.shortcutAction, action);
+                    }
                     break;
                 case settings::SettingsTrayMenuOptionKind::ShowMainWindow:
                     QObject::connect(action, &QAction::triggered, &q,
@@ -342,11 +369,9 @@ class SystemTrayController::Impl {
             groupMenuAction->setData(windowGroupingOptionId);
             actions.insert(windowGroupingOptionId, groupMenuAction);
         }
-        // Window grouping sits above the disable command so pinned windows can
-        // be re-grouped without scrolling past the global-hotkey switches.
-        if (disableGlobalHotkeysAction != nullptr) {
-            menu->insertAction(disableGlobalHotkeysAction, groupMenuAction);
-        } else if (showMainWindow != nullptr) {
+        // Window grouping sits above the window commands so pinned windows
+        // can be re-grouped without scrolling past them.
+        if (showMainWindow != nullptr) {
             menu->insertAction(showMainWindow, groupMenuAction);
         }
         QObject::connect(groupMenu, &QMenu::aboutToShow, &q, [this]() { rebuildGroupMenu(); });
@@ -487,18 +512,26 @@ class SystemTrayController::Impl {
             priorGroupVisible = priorGroupVisible || visibleGroups.at(groupIndex);
         }
 
-        if (disableGlobalHotkeysAction != nullptr && !disableGlobalHotkeysAction->isVisible() &&
-            disableGlobalHotkeysAction->isChecked()) {
-            disableGlobalHotkeysAction->setChecked(false);
+        // Session latches must not leave the user without a way back: hiding a
+        // checked ToggleGlobalHotkeys re-enables through the same quick action.
+        // Persisted checkables such as fullscreen suppression must not be
+        // flipped by menu visibility.
+        if (QAction* toggleAction =
+                checkableQuickActions.value(GlobalShortcutAction::ToggleGlobalHotkeys);
+            toggleAction != nullptr && !toggleAction->isVisible() && toggleAction->isChecked()) {
+            toggleAction->setChecked(false);
+            emit q.quickActionRequested(GlobalShortcutAction::ToggleGlobalHotkeys);
         }
     }
 
     void updateIcon() {
         QIcon icon = iconCache.load(customIconPath);
         QString resolvedSource = customIconPath;
+        [[maybe_unused]] bool bundled = false;
         if (icon.isNull()) {
             resolvedSource = bundledIconResource(iconSelection);
             icon = QIcon(resolvedSource);
+            bundled = !icon.isNull();
         }
         if (icon.isNull()) {
             resolvedSource = QStringLiteral("application-window-icon");
@@ -508,6 +541,9 @@ class SystemTrayController::Impl {
             resolvedSource = QCoreApplication::applicationFilePath();
             icon = QIcon(QCoreApplication::applicationFilePath());
         }
+#ifdef Q_OS_MACOS
+        icon.setIsMask(bundled);
+#endif
         trayIcon->setIcon(icon);
         trayIcon->setProperty("resolvedIconSource", resolvedSource);
         trayIcon->setProperty("customIconCacheHits",
@@ -532,15 +568,16 @@ class SystemTrayController::Impl {
     QAction* groupMenuAction = nullptr;
     QHash<QString, QAction*> actions;
     QHash<GlobalShortcutAction, shortcuts::ShortcutBindingList> shortcutBindings;
+    QHash<GlobalShortcutAction, QAction*> checkableQuickActions;
     QVector<QAction*> separatorsBeforeGroup;
     TrayImageCache iconCache;
-    QAction* disableGlobalHotkeysAction = nullptr;
     QStringList menuOptions;
     QString iconSelection = QString::fromLatin1(DEFAULT_TRAY_ICON);
     QString customIconPath;
     QString leftClickAction = QString::fromLatin1(DEFAULT_LEFT_CLICK_ACTION);
     QString middleClickAction = QString::fromLatin1(DEFAULT_MIDDLE_CLICK_ACTION);
     int screenshotDelaySeconds = 3;
+    BalloonKind lastBalloonKind = BalloonKind::None;
     bool enabled = true;
 };
 
@@ -592,11 +629,20 @@ void SystemTrayController::hide() {
 
 void SystemTrayController::showCaptureMessage(const QString& message, bool warning) {
     m_impl->showBalloon(tr("Capture"), message,
-                        warning ? QSystemTrayIcon::Warning : QSystemTrayIcon::Critical);
+                        warning ? QSystemTrayIcon::Warning : QSystemTrayIcon::Critical,
+                        BalloonKind::Capture);
+}
+
+void SystemTrayController::showWarningMessage(const QString& title, const QString& message) {
+    m_impl->showBalloon(title, message, QSystemTrayIcon::Warning, BalloonKind::Warning);
 }
 
 void SystemTrayController::showUpdateMessage(const QString& message) {
-    m_impl->showBalloon(tr("Update"), message, QSystemTrayIcon::Information);
+    m_impl->showBalloon(tr("Update"), message, QSystemTrayIcon::Information, BalloonKind::Update);
+}
+
+bool SystemTrayController::canShowMessages() const {
+    return m_impl->enabled && QSystemTrayIcon::isSystemTrayAvailable();
 }
 
 void SystemTrayController::setEnabled(bool enabled) {
@@ -690,8 +736,11 @@ QStringList SystemTrayController::menuOptions() const {
     return m_impl->menuOptions;
 }
 
-bool SystemTrayController::globalHotkeysDisabled() const {
-    return m_impl->disableGlobalHotkeysAction != nullptr &&
-           m_impl->disableGlobalHotkeysAction->isChecked();
+void SystemTrayController::setQuickActionChecked(GlobalShortcutAction action, bool checked) {
+    // Pure view update: owners announce changes; the checkmark only mirrors
+    // them, so this must not dispatch anything.
+    if (QAction* trayAction = m_impl->checkableQuickActions.value(action)) {
+        trayAction->setChecked(checked);
+    }
 }
 } // namespace snow_shot::presentation

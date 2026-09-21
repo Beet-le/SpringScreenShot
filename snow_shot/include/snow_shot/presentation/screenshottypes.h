@@ -9,9 +9,11 @@
 #include <QVector>
 
 #include <optional>
+#include <memory>
 
 class QScreen;
 class ScreenshotOverlayWindow;
+struct SnowCaptureCursorSnapshotImpl;
 
 enum class ScreenshotSessionState {
     IdleCold,
@@ -41,6 +43,12 @@ enum class ScreenshotCaptureBackend {
     Dxgi = 1,
     WindowsGraphicsCapture = 2,
     Gdi = 3,
+    ScreenCaptureKit = 4,
+};
+
+enum class ScreenshotCapturePurpose {
+    Initial,
+    Recapture,
 };
 
 struct ScreenshotCaptureRequest {
@@ -48,6 +56,9 @@ struct ScreenshotCaptureRequest {
     bool refreshLayout = false;
     bool restoreOriginalScreenColors = false;
     bool captureCursor = false;
+    ScreenshotCapturePurpose purpose = ScreenshotCapturePurpose::Initial;
+    // Owned before worker dispatch; native snapshot data is immutable.
+    std::shared_ptr<SnowCaptureCursorSnapshotImpl> cursorSnapshot;
 };
 
 struct ScreenshotDisplayPresentationState {
@@ -65,6 +76,12 @@ struct CapturedDisplayModel {
     QImage image;
     bool active = false;
     ScreenshotCaptureBackend backend = ScreenshotCaptureBackend::Auto;
+    // Desktop points and image pixels are independent on macOS. physicalRect
+    // remains the per-display pixel coordinate contract used by native selectors.
+    QRect capturedLogicalRect;
+    quint32 nativeDisplayId = 0;
+    qreal backingScale = 1.0;
+    bool canvasUsesPoints = false;
 };
 
 struct ScreenshotCaptureResult {
@@ -72,6 +89,7 @@ struct ScreenshotCaptureResult {
     QVector<CapturedDisplayModel> displays;
     QString errorMessage;
     bool succeeded = false;
+    ScreenshotCapturePurpose purpose = ScreenshotCapturePurpose::Initial;
 };
 
 #endif // SNOW_SHOT_PRESENTATION_SCREENSHOTTYPES_H

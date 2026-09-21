@@ -69,23 +69,24 @@
 
 namespace {
 
-std::optional<QCursor> baselineCursorForCanvasTool(SnowCanvasTool tool) {
+std::optional<SnowCursorStyle> baselineCursorForCanvasTool(SnowCanvasTool tool) {
     switch (tool) {
     case SnowCanvasTool::Shape:
     case SnowCanvasTool::Arrow:
     case SnowCanvasTool::Line:
-    case SnowCanvasTool::FreeDraw:
     case SnowCanvasTool::RectangleHighlight:
     case SnowCanvasTool::RectangleFilter:
-    case SnowCanvasTool::PenHighlight:
-    case SnowCanvasTool::PenFilter:
     case SnowCanvasTool::Spotlight:
     case SnowCanvasTool::SerialNumber:
-        return QCursor(Qt::CrossCursor);
+        return SNOW_CURSOR_STYLE_CROSSHAIR;
+    case SnowCanvasTool::FreeDraw:
+    case SnowCanvasTool::PenHighlight:
+    case SnowCanvasTool::PenFilter:
+        return SNOW_CURSOR_STYLE_STROKE;
     case SnowCanvasTool::Eraser:
-        return QCursor(Qt::BlankCursor);
+        return SNOW_CURSOR_STYLE_ERASER;
     case SnowCanvasTool::Text:
-        return QCursor(Qt::IBeamCursor);
+        return SNOW_CURSOR_STYLE_TEXT;
     case SnowCanvasTool::Select:
     case SnowCanvasTool::Watermark:
     default:
@@ -136,37 +137,6 @@ std::uint64_t sceneCacheContentKey(const SceneDisplayInfo& sceneInfo,
     hashCombine(static_cast<std::size_t>(widgetSize.width()));
     hashCombine(static_cast<std::size_t>(widgetSize.height()));
     return static_cast<std::uint64_t>(key);
-}
-
-QRect filterAffectedViewRect(QRect affected, const SnowCanvasDisplayCache& cache,
-                             const QRect& viewport) {
-    const SceneDisplayInfo& displayInfo = cache.sceneInfo();
-    const double zoom = qMax(0.0, displayInfo.camera_zoom);
-    const SnowCanvasSceneItem* items = cache.sceneItems();
-    for (std::uint32_t index = 0; items != nullptr && index < cache.sceneItemCount();) {
-        if (items[index].kind != SNOW_SCENE_DISPLAY_ITEM_FILTER) {
-            ++index;
-            continue;
-        }
-        const QRect entering = affected;
-        while (index < cache.sceneItemCount() &&
-               items[index].kind == SNOW_SCENE_DISPLAY_ITEM_FILTER) {
-            const SnowCanvasSceneItem& filter = items[index++];
-            if (filter.opacity <= 0.0) {
-                continue;
-            }
-            const double radius = qMax(0.0, filter.filter.sampling_radius) * zoom;
-            const QRect filterBounds = snow_canvas_render_geometry::alignedRectForBounds(
-                snow_canvas_render_geometry::sceneItemBounds(displayInfo, filter));
-            const QRect propagated =
-                entering.adjusted(-qCeil(radius), -qCeil(radius), qCeil(radius), qCeil(radius))
-                    .intersected(filterBounds);
-            if (!propagated.isEmpty()) {
-                affected = affected.united(propagated);
-            }
-        }
-    }
-    return affected.intersected(viewport);
 }
 
 bool isPointerInput(const SnowInputEvent& input, SnowPointerEventType eventType) {
@@ -317,6 +287,17 @@ void accept(QKeyEvent& event) {
     event.accept();
 }
 
+bool hitsSelectedText(SnowRuntime runtime, SnowViewport viewport, const QPointF& canvasPoint) {
+    SnowElementId id{};
+    std::uint8_t hit = 0;
+    std::uint8_t selected = 0;
+    return snow_viewport_hit_text(runtime, viewport, canvasPoint.x(), canvasPoint.y(), &id, &hit) ==
+               SNOW_OK &&
+           hit != 0 &&
+           snow_viewport_is_element_selected(runtime, viewport, id, &selected) == SNOW_OK &&
+           selected != 0;
+}
+
 } // namespace
 
 struct SnowCanvasWidget::Impl : public snow_canvas_runtime::Client {
@@ -358,6 +339,9 @@ struct SnowCanvasWidget::Impl : public snow_canvas_runtime::Client {
     bool setCanvasTool(SnowCanvasTool tool);
     void setCursorForLayer(SnowCanvasCursorLayer layer, const QCursor& cursor);
     void clearCursorForLayer(SnowCanvasCursorLayer layer);
+    void refreshCursorDevicePixelRatio() {
+        cursorController.refreshDevicePixelRatio();
+    }
     SnowCanvasStyleToolbarState canvasStyleToolbarState() const;
     SnowCanvasSerialNumberToolbarState serialNumberToolbarState() const;
     SnowCanvasWatermarkConfig canvasWatermarkConfig() const;
@@ -423,6 +407,7 @@ struct SnowCanvasWidget::Impl : public snow_canvas_runtime::Client {
     bool clearDocument();
     bool duplicateSelected(const QPointF& offset);
     bool reorderSelected(SnowCanvasSelectionOrder order);
+    bool alignSelected(SnowCanvasSelectionAlignment alignment);
     bool setSelectedOpacity(double opacity);
     bool adjustSelectedSerialNumbers(qint64 delta);
     bool createSerialNumberText();
@@ -457,6 +442,10 @@ struct SnowCanvasWidget::Impl : public snow_canvas_runtime::Client {
     bool handleEnter(QEnterEvent* event);
     bool handleLeave(QEvent* event);
     bool handleWheel(QWheelEvent* event);
+    enum class FontWheelTarget { Text, SerialNumber };
+    FontWheelTarget fontWheelTarget() const;
+    bool stepSerialNumberFontSize(bool increase);
+    bool stepTextFontSize(bool increase);
     bool handleKeyPress(QKeyEvent* event);
     bool handleKeyRelease(QKeyEvent* event);
     bool handleInputMethodEvent(QInputMethodEvent* event);
@@ -486,6 +475,7 @@ struct SnowCanvasWidget::Impl : public snow_canvas_runtime::Client {
     bool applyPairedMutationResult(const snow_canvas_commands::PairedMutationResult& result);
     void emitChangedStateSignals(const snow_canvas_state::Changes& changes);
     void applyCanvasToolCursor(SnowCanvasTool tool);
+    void refreshToolCursorStyle();
     void refocusWidget();
 
     SnowCanvasWidget& widget;
@@ -1617,6 +1607,16 @@ bool SnowCanvasWidget::reorderSelected(SnowCanvasSelectionOrder order) {
     return m_impl->reorderSelected(order);
 }
 
+bool SnowCanvasWidget::Impl::alignSelected(SnowCanvasSelectionAlignment alignment) {
+    return applyMutationResult(snow_canvas_commands::alignSelected(
+        runtimeBinding.engine(), runtimeBinding.viewportHandle(),
+        static_cast<std::uint32_t>(alignment)));
+}
+
+bool SnowCanvasWidget::alignSelected(SnowCanvasSelectionAlignment alignment) {
+    return m_impl->alignSelected(alignment);
+}
+
 bool SnowCanvasWidget::Impl::setSelectedOpacity(double opacity) {
     return applyMutationResult(snow_canvas_commands::setSelectedOpacity(
         runtimeBinding.engine(), runtimeBinding.viewportHandle(), opacity));
@@ -1638,17 +1638,25 @@ bool SnowCanvasWidget::adjustSelectedSerialNumbers(qint64 delta) {
 
 bool SnowCanvasWidget::Impl::createSerialNumberText() {
     const SnowStyleToolbarState& styleState = displayState.snapshot().styleToolbarState;
-    SnowCanvasWidgetTextInteraction::SerialTextCreationResult result =
+    snow_canvas_commands::CreateSerialNumberTextResult createResult =
         textInteraction.createSerialNumberText(
-            runtimeBinding.engine(), runtimeBinding.viewportHandle(), displayState.displayCache(),
-            styleState.text_style, styleState.serial_number_style);
-    if (!result.success) {
+            runtimeBinding.engine(), runtimeBinding.viewportHandle(), styleState.text_style,
+            styleState.serial_number_style);
+    if (!createResult.success) {
         return false;
     }
 
-    syncChangedViewports(result.firstChangedViewports.get());
-    syncChangedViewports(result.secondChangedViewports.get());
-    if (result.shouldRefocus) {
+    // The editor session must begin from the label's styled scene item, the
+    // same authority the serial drag's release path uses. Sync the creation
+    // into the display cache first; beginning before the sync leaves the
+    // editor a style-less preview whose commit strips the label's fill,
+    // color, and stroke.
+    syncChangedViewports(createResult.changedViewports.get());
+    SnowCanvasWidgetTextInteraction::BeginResult beginResult =
+        textInteraction.beginCreatedText(runtimeBinding.engine(), runtimeBinding.viewportHandle(),
+                                         createResult, displayState.displayCache());
+    syncChangedViewports(beginResult.firstChangedViewports.get());
+    if (beginResult.started) {
         refocusWidget();
     }
     return true;
@@ -1905,6 +1913,7 @@ void SnowCanvasWidget::Impl::refreshStateFromEngine(bool emitSignals) {
         return;
     }
 
+    refreshToolCursorStyle();
     if (emitSignals) {
         emitChangedStateSignals(changes);
     }
@@ -1935,6 +1944,7 @@ void SnowCanvasWidget::Impl::syncAfterEngineMutation(bool emitSignals) {
         });
 
     const SnowCanvasDisplayCache& cache = displayState.displayCache();
+    refreshToolCursorStyle();
     if (cache.patchCursor().scene_revision != previousSceneRevision) {
         // Paint events can coalesce patches, so consume each patch's dirty region
         // before the next display-cache sync replaces it.
@@ -1955,6 +1965,9 @@ void SnowCanvasWidget::Impl::syncChangedViewports(SnowChangedViewportList change
     const auto labels =
         textInteraction.measureArrowText(runtimeBinding.engine(), runtimeBinding.viewportHandle());
     runtimeBinding.syncChangedViewports(labels.changedViewports.get());
+    const auto serialLabels = textInteraction.measureSerialLabelLayout(
+        runtimeBinding.engine(), runtimeBinding.viewportHandle());
+    runtimeBinding.syncChangedViewports(serialLabels.changedViewports.get());
     runtimeBinding.syncChangedViewports(changedViewports);
 }
 
@@ -1999,10 +2012,22 @@ void SnowCanvasWidget::Impl::emitChangedStateSignals(const snow_canvas_state::Ch
     }
 }
 
+void SnowCanvasWidget::Impl::refreshToolCursorStyle() {
+    const auto& cursorStyle = displayState.snapshot().styleToolbarState;
+    const bool filterCursor = displayState.snapshot().activeTool == SNOW_ACTIVE_TOOL_PEN_FILTER;
+    const auto& stroke = cursorStyle.shape_style.stroke;
+    cursorController.configureStrokeCursor(
+        (filterCursor ? cursorStyle.filter_style.stroke_width
+                      : cursorStyle.shape_style.stroke_width) *
+            displayState.displayCache().sceneInfo().camera_zoom,
+        filterCursor ? std::nullopt
+                     : std::optional<QColor>(QColor(stroke.r, stroke.g, stroke.b, stroke.a)));
+}
+
 void SnowCanvasWidget::Impl::applyCanvasToolCursor(SnowCanvasTool tool) {
-    const std::optional<QCursor> cursor = baselineCursorForCanvasTool(tool);
+    const auto cursor = baselineCursorForCanvasTool(tool);
     if (cursor.has_value()) {
-        cursorController.setCursor(SnowCanvasCursorLayer::CanvasTool, *cursor);
+        cursorController.setEngineCursor(*cursor);
         return;
     }
     cursorController.clearCursor(SnowCanvasCursorLayer::CanvasTool);
@@ -2185,6 +2210,14 @@ void SnowCanvasWidget::paintEvent(QPaintEvent* event) {
     m_impl->paintEvent(event);
 }
 
+bool SnowCanvasWidget::event(QEvent* event) {
+    const bool handled = QWidget::event(event);
+    if (m_impl && event->type() == QEvent::DevicePixelRatioChange) {
+        m_impl->refreshCursorDevicePixelRatio();
+    }
+    return handled;
+}
+
 bool SnowCanvasWidget::eventFilter(QObject* watched, QEvent* event) {
     return QWidget::eventFilter(watched, event);
 }
@@ -2199,17 +2232,18 @@ bool SnowCanvasWidget::Impl::handleMousePress(QMouseEvent* event) {
     const bool textEditorActive = textInteraction.isActive();
     const bool pointerInsideTextEditor =
         textInteraction.editorContains(displayState.displayCache(), event->position());
-    if (textInteraction.handleEditorMousePress(event, displayState.displayCache(), widget.font())) {
-        return true;
-    }
-    const bool pointerOverTextEditorSelectionInteraction =
-        textInteraction.selectionInteractionContains(displayState.displayCache(),
-                                                     event->position());
+    const auto selectionTarget = snow_canvas_widget_selection_hit_testing::selectionInteractionAt(
+        displayState.displayCache(), event->position());
+    using snow_canvas_widget_selection_hit_testing::SelectionInteractionTarget;
     const bool pointerOverSelectionInteraction =
-        pointerOverTextEditorSelectionInteraction ||
-        (!textEditorActive &&
-         snow_canvas_widget_selection_hit_testing::pointerHitsSelectionInteraction(
-             displayState.displayCache(), event->position()));
+        selectionTarget != SelectionInteractionTarget::None &&
+        (!textEditorActive || textInteraction.hasSelectionInteraction());
+    const bool pointerHitsSelectedText =
+        snow_canvas_widget_pointer_flow::isSelectedTextCopyGesture(event->button(),
+                                                                   event->modifiers()) &&
+        selectionTarget != SelectionInteractionTarget::Handle &&
+        hitsSelectedText(runtimeBinding.engine(), runtimeBinding.viewportHandle(),
+                         widget.canvasToViewTransform().inverted().map(event->position()));
     const snow_canvas_widget_pointer_flow::PressPlan plan =
         snow_canvas_widget_pointer_flow::planPress(snow_canvas_widget_pointer_flow::PressRequest{
             true,
@@ -2221,7 +2255,13 @@ bool SnowCanvasWidget::Impl::handleMousePress(QMouseEvent* event) {
             pointerOverSelectionInteraction,
             suppressNextTextToolCreate,
             restoredSelectionForNextTextToolPress,
+            pointerHitsSelectedText,
+            selectionTarget,
         });
+    if (plan.shouldHandleEditorPress) {
+        return textInteraction.handleEditorMousePress(event, displayState.displayCache(),
+                                                      widget.font());
+    }
     if (!plan.shouldFocusWidget) {
         return false;
     }
@@ -2232,16 +2272,22 @@ bool SnowCanvasWidget::Impl::handleMousePress(QMouseEvent* event) {
     bool canDispatchAfterTextCommit = true;
     if (plan.shouldCommitTextEditor) {
         const SnowCanvasWidgetTextInteraction::CommitResult commitResult =
-            commitText(true, pointerOverSelectionInteraction);
+            commitText(true, plan.shouldRestoreSelectionOnCommit);
         if (plan.dispatchAfterCommitRequiresRestoredSelection) {
             canDispatchAfterTextCommit = commitResult.restoredExistingSelection ||
                                          plan.suppressedTextCreateRestoredSelection;
         }
     }
 
-    if (plan.shouldBeginText && beginText(event->position(), plan.allowCreateText)) {
-        event->accept();
-        return true;
+    if (plan.shouldBeginText) {
+        if (plan.allowCreateText && beginArrowText(event->position(), false)) {
+            event->accept();
+            return true;
+        }
+        if (beginText(event->position(), false)) {
+            event->accept();
+            return true;
+        }
     }
     if (plan.shouldBeginSelectedText && !pointerOverSelectionInteraction &&
         beginSelectedText(event->position(), canvasTool() == SnowCanvasTool::SerialNumber)) {
@@ -2263,8 +2309,18 @@ bool SnowCanvasWidget::Impl::handleMousePress(QMouseEvent* event) {
         event->accept();
         return true;
     }
-    return dispatchInput(event,
-                         snow_canvas_input::makePointerInput(*event, SNOW_POINTER_EVENT_DOWN));
+    const bool handled =
+        dispatchInput(event, snow_canvas_input::makePointerInput(*event, SNOW_POINTER_EVENT_DOWN));
+    if (handled && plan.shouldBeginText && plan.allowCreateText) {
+        const SnowTextStyle textStyle = displayState.snapshot().styleToolbarState.text_style;
+        SnowCanvasWidgetTextInteraction::BeginResult draft =
+            textInteraction.beginRequestedNewTextDraft(
+                runtimeBinding.engine(), runtimeBinding.viewportHandle(),
+                displayState.displayCache(), event->position(), textStyle);
+        syncChangedViewports(draft.firstChangedViewports.get());
+        syncChangedViewports(draft.secondChangedViewports.get());
+    }
+    return handled;
 }
 
 void SnowCanvasWidget::mousePressEvent(QMouseEvent* event) {
@@ -2432,7 +2488,18 @@ bool SnowCanvasWidget::Impl::handleMouseRelease(QMouseEvent* event) {
     }
     flushLiveStrokeMoves();
     flushEraserMove();
-    return dispatchInput(event, snow_canvas_input::makePointerInput(*event, SNOW_POINTER_EVENT_UP));
+    const bool handled =
+        dispatchInput(event, snow_canvas_input::makePointerInput(*event, SNOW_POINTER_EVENT_UP));
+    if (handled && event->button() == Qt::LeftButton) {
+        auto result = textInteraction.beginRequestedTextEdit(
+            runtimeBinding.engine(), runtimeBinding.viewportHandle(), displayState.displayCache());
+        syncChangedViewports(result.firstChangedViewports.get());
+        if (result.started) {
+            refocusWidget();
+            emit widget.styleToolbarStateChanged();
+        }
+    }
+    return handled;
 }
 
 void SnowCanvasWidget::mouseReleaseEvent(QMouseEvent* event) {
@@ -2514,51 +2581,24 @@ bool SnowCanvasWidget::Impl::handleWheel(QWheelEvent* event) {
         return false;
     }
 
-    if (canvasTool() == SnowCanvasTool::SerialNumber) {
-        const snow_canvas_text_editor_input::FontSizeWheelPlan plan =
-            snow_canvas_text_editor_input::planFontSizeWheel(
-                snow_canvas_text_editor_input::FontSizeWheelRequest{
-                    true,
-                    canvasTool(),
-                    event->modifiers(),
-                    event->pixelDelta().y(),
-                    event->angleDelta().y(),
-                });
-        if (plan.matchedToolWheel) {
-            if (!plan.shouldStepFontSize) {
-                return false;
-            }
-
-            SnowSerialNumberStyle style =
-                displayState.snapshot().styleToolbarState.serial_number_style;
-            const double nextFontSize =
-                snow_canvas_text_measurement::steppedFontSize(style.font_size, plan.increase);
-            if (std::abs(nextFontSize - style.font_size) <=
-                std::numeric_limits<double>::epsilon()) {
-                return true;
-            }
-
-            style.font_size = nextFontSize;
-            return applyMutationResult(snow_canvas_commands::setSerialNumberStyle(
-                runtimeBinding.engine(), runtimeBinding.viewportHandle(), style));
-        }
-    }
-
-    SnowCanvasWidgetTextInteraction::WheelFontSizeResult textWheelResult =
-        textInteraction.handleFontSizeWheel(
-            runtimeBinding.engine(), runtimeBinding.viewportHandle(), displayState.displayCache(),
-            displayState.snapshot().styleToolbarState.text_style, canvasTool(), event);
-    if (textWheelResult.matchedToolWheel) {
-        if (!textWheelResult.handled) {
+    const snow_canvas_text_editor_input::FontSizeWheelPlan plan =
+        snow_canvas_text_editor_input::planFontSizeWheel(
+            snow_canvas_text_editor_input::FontSizeWheelRequest{
+                true,
+                canvasTool(),
+                event->modifiers(),
+                event->pixelDelta().y(),
+                event->angleDelta().y(),
+            });
+    if (plan.matchedToolWheel) {
+        if (!plan.shouldStepFontSize) {
             return false;
         }
-
-        syncChangedViewports(textWheelResult.changedViewports.get());
-        if (textWheelResult.toolbarStateChanged) {
-            emit widget.styleToolbarStateChanged();
-        }
-        return true;
+        return fontWheelTarget() == FontWheelTarget::SerialNumber
+                   ? stepSerialNumberFontSize(plan.increase)
+                   : stepTextFontSize(plan.increase);
     }
+
     if (!wheelZoomEnabled()) {
         event->accept();
         return true;
@@ -2571,6 +2611,56 @@ void SnowCanvasWidget::wheelEvent(QWheelEvent* event) {
         return;
     }
     QWidget::wheelEvent(event);
+}
+
+// Font-size wheel steps follow the style toolbar source so the wheel and the
+// toolbar agree: an active text draft, selected text, or selected serial
+// badges. With no text or badge selected, that source is the active tool's
+// default style. Other selected kinds fall back to the active font tool.
+SnowCanvasWidget::Impl::FontWheelTarget SnowCanvasWidget::Impl::fontWheelTarget() const {
+    if (textInteraction.isActive()) {
+        return FontWheelTarget::Text;
+    }
+    switch (displayState.snapshot().styleToolbarState.source) {
+    case SNOW_STYLE_TOOLBAR_SOURCE_SELECTED_TEXT:
+    case SNOW_STYLE_TOOLBAR_SOURCE_DEFAULT_TEXT:
+        return FontWheelTarget::Text;
+    case SNOW_STYLE_TOOLBAR_SOURCE_SELECTED_SERIAL_NUMBER:
+    case SNOW_STYLE_TOOLBAR_SOURCE_DEFAULT_SERIAL_NUMBER:
+        return FontWheelTarget::SerialNumber;
+    default:
+        break;
+    }
+    return canvasTool() == SnowCanvasTool::SerialNumber ? FontWheelTarget::SerialNumber
+                                                        : FontWheelTarget::Text;
+}
+
+bool SnowCanvasWidget::Impl::stepSerialNumberFontSize(bool increase) {
+    SnowSerialNumberStyle style = displayState.snapshot().styleToolbarState.serial_number_style;
+    const double nextFontSize =
+        snow_canvas_text_measurement::steppedFontSize(style.font_size, increase);
+    if (std::abs(nextFontSize - style.font_size) <= std::numeric_limits<double>::epsilon()) {
+        return true;
+    }
+
+    style.font_size = nextFontSize;
+    return applyMutationResult(snow_canvas_commands::setSerialNumberStyle(
+        runtimeBinding.engine(), runtimeBinding.viewportHandle(), style));
+}
+
+bool SnowCanvasWidget::Impl::stepTextFontSize(bool increase) {
+    SnowCanvasWidgetTextInteraction::StyleChangeResult result = textInteraction.stepFontSize(
+        runtimeBinding.engine(), runtimeBinding.viewportHandle(), displayState.displayCache(),
+        displayState.snapshot().styleToolbarState.text_style, increase);
+    if (!result.success) {
+        return false;
+    }
+
+    syncChangedViewports(result.changedViewports.get());
+    if (result.toolbarStateChanged) {
+        emit widget.styleToolbarStateChanged();
+    }
+    return true;
 }
 
 bool SnowCanvasWidget::Impl::handleKeyPress(QKeyEvent* event) {

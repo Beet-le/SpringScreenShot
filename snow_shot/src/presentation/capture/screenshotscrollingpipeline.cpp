@@ -511,6 +511,16 @@ class ScreenshotScrollingCaptureProducer final : public QObject {
         const auto trace = source.trace;
         SNOW_SCROLL_TRACE(trace, trace->record(scrolling_perf::Stage::SourceQueueWait,
                                                scrolling_perf::now() - trace->publishedAt));
+#ifdef Q_OS_MACOS
+        // The selected backing scale is fixed for the entire stitching session.
+        // Never silently discard frames after a native display reconfiguration.
+        if (!source.image.isNull() && source.image.size() != m_viewport) {
+            result.fatalError = true;
+            result.errorMessage =
+                QStringLiteral("scrolling viewport changed after display reconfiguration");
+            return;
+        }
+#endif
         const auto expected = static_cast<std::size_t>(m_viewport.width()) *
                               static_cast<std::size_t>(m_viewport.height()) * 4U;
         const bool valid = !source.image.isNull() && source.image.size() == m_viewport &&
@@ -699,10 +709,8 @@ struct ScreenshotScrollingPipeline::Impl {
             return;
         }
         busy = false;
-        if (!active) {
-            SNOW_SCROLL_TRACE(result.trace, result.trace->disposition = "cancelled");
-            return;
-        }
+        // A dispatched frame already changed the stitcher. Publish its result even
+        // while paused, so the preview and trim coordinates stay in sync.
         if (++processedFrames == 1 || result.fatalError) {
             logScrollingEvent("scrolling.stitch_result", generation,
                               {{QStringLiteral("count"), processedFrames},
@@ -741,6 +749,7 @@ struct ScreenshotScrollingPipeline::Impl {
     ScreenshotScrollingCaptureProducer* producer = nullptr;
     ScreenshotScrollingCaptureWorker* worker = nullptr;
     quint64 generation = 0;
+    quint64 controlRevision = 0;
     bool active = false;
     bool busy = false;
     qint64 processedFrames = 0;
@@ -761,9 +770,16 @@ void ScreenshotScrollingPipeline::begin(quint64 generation, QSize viewport,
         m_impl->worker,
         [target = m_impl->worker, generation, mode]() { target->begin(generation, mode); },
         Qt::QueuedConnection);
-    resume(generation, viewport, std::move(source), cadence);
+    m_impl->active = true;
+    QMetaObject::invokeMethod(
+        m_impl->producer,
+        [target = m_impl->producer, generation, viewport, source = std::move(source), cadence]() {
+            target->begin(generation, viewport, source, cadence);
+        },
+        Qt::QueuedConnection);
 }
 void ScreenshotScrollingPipeline::reset(quint64 generation) {
+    ++m_impl->controlRevision;
     m_impl->active = false;
     m_impl->generation = generation;
     m_impl->busy = false;
@@ -777,6 +793,7 @@ void ScreenshotScrollingPipeline::reset(quint64 generation) {
         Qt::QueuedConnection);
 }
 void ScreenshotScrollingPipeline::pause(quint64 generation) {
+    ++m_impl->controlRevision;
     m_impl->active = false;
     m_impl->mailbox->reset(generation);
     QMetaObject::invokeMethod(
@@ -786,15 +803,47 @@ void ScreenshotScrollingPipeline::pause(quint64 generation) {
 void ScreenshotScrollingPipeline::resume(quint64 generation, QSize viewport,
                                          ScrollingSourceFactory source,
                                          AdaptiveScrollingCaptureCadence::Config cadence) {
-    m_impl->active = true;
+    const auto revision = ++m_impl->controlRevision;
+    m_impl->active = false;
     m_impl->generation = generation;
+    const QPointer<ScreenshotScrollingPipeline> receiver(this);
+    // Producer ordering ensures the previous source has stopped. Worker ordering
+    // then delivers all committed stitch results before reopening frame acceptance.
     QMetaObject::invokeMethod(
         m_impl->producer,
-        [target = m_impl->producer, generation, viewport, source = std::move(source), cadence]() {
-            target->begin(generation, viewport, source, cadence);
+        [receiver, generation, viewport, source = std::move(source), cadence, revision]() mutable {
+            if (!receiver)
+                return;
+            QMetaObject::invokeMethod(
+                receiver->m_impl->worker,
+                [receiver, generation, viewport, source = std::move(source), cadence,
+                 revision]() mutable {
+                    if (!receiver)
+                        return;
+                    QMetaObject::invokeMethod(
+                        receiver,
+                        [receiver, generation, viewport, source = std::move(source), cadence,
+                         revision]() mutable {
+                            if (!receiver || receiver->m_impl->controlRevision != revision)
+                                return;
+                            auto* impl = receiver->m_impl.get();
+                            impl->mailbox->reset(generation);
+                            impl->active = true;
+                            QMetaObject::invokeMethod(
+                                impl->producer,
+                                [target = impl->producer, generation, viewport,
+                                 source = std::move(source), cadence]() {
+                                    target->begin(generation, viewport, source, cadence);
+                                },
+                                Qt::QueuedConnection);
+                        },
+                        Qt::QueuedConnection);
+                },
+                Qt::QueuedConnection);
         },
         Qt::QueuedConnection);
 }
+
 bool ScreenshotScrollingPipeline::idle() const {
     return !m_impl->busy && m_impl->mailbox->pendingDepth() == 0;
 }

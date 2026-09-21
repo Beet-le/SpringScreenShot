@@ -88,7 +88,19 @@ typedef struct SnowRecordingExportConfig {
     uint8_t reserved[32];
 } SnowRecordingExportConfig;
 
-#define SNOW_CAPTURE_DIRECT_RECORDING_CONFIG_VERSION 5u
+#ifndef SNOW_CAPTURE_EXCLUSIONS_DEFINED
+#define SNOW_CAPTURE_EXCLUSIONS_DEFINED
+/* macOS WindowServer IDs / process IDs. Nonempty lists require non-null pointers.
+ * Each list is limited to 4096 entries, copied and deduplicated during creation. */
+typedef struct SnowCaptureExclusions {
+    const uint32_t* windows;
+    size_t window_count;
+    const int32_t* processes;
+    size_t process_count;
+} SnowCaptureExclusions;
+#endif
+
+#define SNOW_CAPTURE_DIRECT_RECORDING_CONFIG_VERSION 8u
 
 /* Strings are bounded UTF-8 key names, copied during session creation. */
 typedef struct SnowCaptureKeyboardLabel {
@@ -135,27 +147,34 @@ typedef struct SnowCaptureDirectRecordingConfig {
     uint32_t keyboard_size;
     /* Version 5: 0 plays once, 1 loops infinitely. Older versions loop infinitely. */
     uint32_t loop_animated_images;
+    /* Version 6: fixed exclusion filters for this recording, including pauses. */
+    SnowCaptureExclusions exclusions;
+    /* Version 7: multiply highlight and independent mouse input keycaps. */
+    uint32_t mouse_highlight_rgba;
+    uint32_t record_mouse_clicks;
+    /* Version 8: optional application font; strings are copied during configuration.
+       Null family selects the system UI font. Weight uses OpenType values (1..999). */
+    const char* keyboard_font_family_utf8;
+    const char* keyboard_cjk_font_family_utf8;
+    uint32_t keyboard_font_weight;
 } SnowCaptureDirectRecordingConfig;
 
-SnowRecordingSession*
-snow_recording_session_create(const SnowRecordingConfig* config);
+SnowRecordingSession* snow_recording_session_create(const SnowRecordingConfig* config);
 /* Pure output sizing shared by recording and effects preview. Zero maximums mean uncapped. */
-int32_t snow_recording_output_dimensions(uint32_t width, uint32_t height,
-                                                 uint32_t maximum_width, uint32_t maximum_height,
-                                                 uint32_t format, uint32_t* output_width,
-                                                 uint32_t* output_height);
+int32_t snow_recording_output_dimensions(uint32_t width, uint32_t height, uint32_t maximum_width,
+                                         uint32_t maximum_height, uint32_t format,
+                                         uint32_t* output_width, uint32_t* output_height);
 
 SnowRecordingResult
 snow_recording_session_create_direct(const SnowCaptureDirectRecordingConfig* config,
-                                             SnowRecordingSession** out_session);
+                                     SnowRecordingSession** out_session);
 void snow_recording_session_destroy(SnowRecordingSession* session);
 uint8_t snow_recording_session_start(SnowRecordingSession* session);
 uint8_t snow_recording_session_pause(SnowRecordingSession* session);
 uint8_t snow_recording_session_resume(SnowRecordingSession* session);
 uint8_t snow_recording_session_state(const SnowRecordingSession* session,
-                                             SnowRecordingState* out_state);
-uint8_t
-snow_recording_session_stop_and_export(SnowRecordingSession* session,
+                                     SnowRecordingState* out_state);
+uint8_t snow_recording_session_stop_and_export(SnowRecordingSession* session,
                                                const SnowRecordingExportConfig* config);
 SnowRecordingResult snow_recording_session_stop(SnowRecordingSession* session);
 /* Disposable one-second native-GPU diagnostic using the regular direct recording
@@ -164,7 +183,7 @@ SnowRecordingResult snow_recording_session_stop(SnowRecordingSession* session);
  * GPU capture and require successful software recovery; otherwise use 0.
  * Existing config layouts are unchanged. */
 SnowRecordingResult snow_recording_gpu_probe(const SnowCaptureDirectRecordingConfig* config,
-                                                   uint32_t recover);
+                                             uint32_t recover);
 /* Live recording sessions created and not yet destroyed; for leak diagnostics in tests. */
 size_t snow_recording_session_live_count(void);
 

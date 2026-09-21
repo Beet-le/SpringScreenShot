@@ -44,7 +44,7 @@ bool hasSamePixels(const QImage& actual, const QImage& expected) {
 
 class ExportFixture final {
   public:
-    ExportFixture()
+    explicit ExportFixture(bool points = false)
         : m_runtime(
               SnowCanvasRuntimeConfig{snow_shot::presentation::screenshotCanvasStyleDefaults()}) {
         CapturedDisplayModel display;
@@ -57,6 +57,12 @@ class ExportFixture final {
         display.image = patternedImage(display.physicalRect.size(), 3);
         display.screen = QGuiApplication::primaryScreen();
         display.active = true;
+        if (points) {
+            display.canvasUsesPoints = true;
+            display.capturedLogicalRect = QRect(0, 0, 40, 30);
+            display.imageSourceCanvasRect = display.capturedLogicalRect;
+            display.backingScale = 2;
+        }
         m_displays.appendDisplay(std::move(display));
         m_geometry.rebuild(m_displays);
 
@@ -213,6 +219,56 @@ void selectionClipboardPreservesEffects() {
     }
 }
 
+void pinnedSelectionPreservesFiltersAfterUndoRedo() {
+    for (const auto tool : {SnowCanvasTool::RectangleFilter, SnowCanvasTool::PenFilter}) {
+        for (const auto type : {SnowCanvasFilterType::Mosaic, SnowCanvasFilterType::GaussianBlur,
+                                SnowCanvasFilterType::Grayscale, SnowCanvasFilterType::Inversion,
+                                SnowCanvasFilterType::Emboss, SnowCanvasFilterType::SmartErase}) {
+            ExportFixture fixture;
+            require(fixture.isValid(), "filter export fixture could not initialize");
+            SnowCanvasWidget canvas(fixture.runtime());
+            canvas.resize(fixture.displaySnapshot().size());
+            canvas.show();
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+            require(canvas.setViewportCamera(40.0, 30.0, 1.0), "filter camera setup failed");
+            require(canvas.setCanvasTool(tool), "filter tool setup failed");
+            SnowCanvasFilterStyle filter;
+            filter.type = type;
+            filter.strength = 0.7;
+            require(canvas.setCanvasFilterStyle(filter, SnowCanvasFilterStylePropertyType |
+                                                            SnowCanvasFilterStylePropertyStrength),
+                    "filter style setup failed");
+            QMouseEvent press(QEvent::MouseButtonPress, QPointF(15, 10),
+                              canvas.mapToGlobal(QPoint(15, 10)), Qt::LeftButton, Qt::LeftButton,
+                              Qt::NoModifier);
+            QMouseEvent move(QEvent::MouseMove, QPointF(65, 45), canvas.mapToGlobal(QPoint(65, 45)),
+                             Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            QMouseEvent release(QEvent::MouseButtonRelease, QPointF(65, 45),
+                                canvas.mapToGlobal(QPoint(65, 45)), Qt::LeftButton, Qt::NoButton,
+                                Qt::NoModifier);
+            QCoreApplication::sendEvent(&canvas, &press);
+            QCoreApplication::sendEvent(&canvas, &move);
+            QCoreApplication::sendEvent(&canvas, &release);
+            require(canvas.canvasHistoryState().canUndo, "filter drawing did not commit");
+            require(canvas.undo() && canvas.redo(), "filter undo/redo failed");
+
+            const QRect selection(10, 5, 60, 45);
+            const QList<CanvasExportSource> sources{
+                {fixture.displaySnapshot(), QRectF(0, 0, 80, 60)}};
+            const QImage expected =
+                fixture.runtime().renderToImage(selection, selection.size(), sources);
+            require(!expected.isNull(), "filter reference image is unavailable");
+            const auto request = fixture.service().preparePinnedSelection(selection, {});
+            require(request.has_value(), "filter pin request was not prepared");
+            bool success = false;
+            const QImage pinned =
+                waitForPinnedResult(fixture.service(), *request, nullptr, &success);
+            require(success && hasSamePixels(pinned, expected),
+                    "filter pin worker did not preserve the live document pixels");
+        }
+    }
+}
+
 void pinnedSelectionMaterializesCompositedImage() {
     ExportFixture fixture;
     require(fixture.isValid(), "export fixture could not initialize the canvas runtime");
@@ -289,13 +345,66 @@ void pinnedSelectionMaterializesCompositedImage() {
                 materialized->resultStyle.shadowWidth == style.shadowWidth,
             "pinned selection request lost its result style metadata");
 }
+void pointSelectionRetainsBackingPixelsAndScalesEffects() {
+    ExportFixture fixture(true);
+    const QRect selection(0, 0, 40, 30);
+    const auto copied = waitForResult(
+        [&](QObject* receiver, auto callback) {
+            return fixture.service().requestSelectionClipboard(selection, {}, receiver,
+                                                               std::move(callback));
+        },
+        [](ScreenshotSelectionClipboardResult result) {
+            require(QImage::fromData(result.payload.pngBytes()).size() == QSize(80, 60),
+                    "PNG lost backing resolution");
+            return result.image;
+        });
+    require(hasSamePixels(copied, fixture.displaySnapshot()),
+            "point-space clipboard resampled native Retina pixels");
+    SnowCanvasWidget canvas(fixture.runtime());
+    canvas.resize(40, 30);
+    canvas.show();
+    QCoreApplication::processEvents();
+    require(canvas.setViewportCamera(20, 15, 1), "point annotation viewport");
+    require(canvas.setCanvasTool(SnowCanvasTool::Shape), "point annotation tool");
+    QMouseEvent press(QEvent::MouseButtonPress, QPointF(3, 3), canvas.mapToGlobal(QPoint(3, 3)),
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent move(QEvent::MouseMove, QPointF(12, 12), canvas.mapToGlobal(QPoint(12, 12)),
+                     Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QMouseEvent release(QEvent::MouseButtonRelease, QPointF(12, 12),
+                        canvas.mapToGlobal(QPoint(12, 12)), Qt::LeftButton, Qt::NoButton,
+                        Qt::NoModifier);
+    QCoreApplication::sendEvent(&canvas, &press);
+    QCoreApplication::sendEvent(&canvas, &move);
+    QCoreApplication::sendEvent(&canvas, &release);
+    const auto annotated = waitForResult(
+        [&](QObject* receiver, auto callback) {
+            return fixture.service().requestSelectionResult(selection, {}, receiver,
+                                                            std::move(callback));
+        },
+        [](QImage image) { return image; });
+    require(annotated.size() == copied.size() && !hasSamePixels(annotated, copied),
+            "annotation not rendered");
+    require(hasSamePixels(annotated.copy(60, 40, 16, 16), copied.copy(60, 40, 16, 16)),
+            "annotations downsampled the screenshot background");
+    const auto styled = waitForResult(
+        [&](QObject* receiver, auto callback) {
+            return fixture.service().requestSelectionResult(selection, {3, 2, Qt::black}, receiver,
+                                                            std::move(callback));
+        },
+        [](QImage image) { return image; });
+    require(
+        hasSamePixels(styled, ScreenshotResultCompositor::compose(annotated, {6, 4, Qt::black})),
+        "effects did not follow output scale");
+}
 } // namespace
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
+    pointSelectionRetainsBackingPixelsAndScalesEffects();
     styledClipboardResultRetainsPngTransparency();
     selectionClipboardPreservesEffects();
     pinnedSelectionMaterializesCompositedImage();
+    pinnedSelectionPreservesFiltersAfterUndoRedo();
     std::cout << "All screenshot export service tests passed\n";
     return EXIT_SUCCESS;
 }

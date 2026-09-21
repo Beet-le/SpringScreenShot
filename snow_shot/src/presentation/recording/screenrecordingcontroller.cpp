@@ -19,9 +19,13 @@
 #include "../capture/windowcaptureexclusion.h"
 #include "snow_shot/storage/settingsadapters.h"
 #include "snow_shot/presentation/styles/themecolorscheme.h"
+#include "snow_shot/presentation/screenrecordingfolder.h"
 
+#if defined(Q_OS_WIN) || defined(_WIN32) || defined(Q_OS_MACOS)
+#include "snow_shot/platform/windowcaptureexclusion.h"
 #if defined(Q_OS_WIN) || defined(_WIN32)
 #include "snow_shot/platform/windows/windowchrome.h"
+#endif
 #endif
 
 #include "snow_capture.h"
@@ -30,14 +34,11 @@
 
 #include <QApplication>
 #include <QClipboard>
-#include <QDesktopServices>
 #include <QDir>
 #include <QFileInfo>
 #include <QMessageBox>
 #include <QMimeData>
-#include <QStandardPaths>
 #include <QTimer>
-#include <QUrl>
 
 #include <chrono>
 #include <cstdint>
@@ -126,49 +127,6 @@ DirectRecordingSettings directRecordingSettings(const QString& outputFormat,
     return result;
 }
 
-QStringList defaultRecordingDirectories() {
-    QStringList directories;
-    for (QStandardPaths::StandardLocation location :
-         {QStandardPaths::MoviesLocation, QStandardPaths::DocumentsLocation}) {
-        const QString directory = QStandardPaths::writableLocation(location);
-        if (directory.isEmpty()) {
-            continue;
-        }
-        if (!directories.contains(directory, Qt::CaseInsensitive)) {
-            directories.push_back(directory);
-        }
-    }
-    return directories;
-}
-
-QStringList recordingDirectories() {
-    QStringList directories;
-    const QString configured =
-        QDir::cleanPath(snow_shot::storage::RecordingSettings().videoSaveDirectory().trimmed());
-    const QFileInfo configuredInfo(configured);
-    if (!configured.isEmpty() && configuredInfo.isDir() && configuredInfo.isWritable()) {
-        directories.push_back(configured);
-    }
-    for (const QString& fallback : defaultRecordingDirectories()) {
-        if (!directories.contains(fallback, Qt::CaseInsensitive)) {
-            directories.push_back(fallback);
-        }
-    }
-    return directories;
-}
-
-QString recordingDirectory() {
-    const QStringList directories = recordingDirectories();
-    for (const QString& candidate : directories) {
-        QDir directory(candidate);
-        if ((directory.exists() || directory.mkpath(QStringLiteral("."))) &&
-            QFileInfo(directory.absolutePath()).isWritable()) {
-            return directory.absolutePath();
-        }
-    }
-    return directories.isEmpty() ? QString() : directories.constFirst();
-}
-
 // Runs on the start worker thread: only touches the filesystem, never storage or UI.
 QString chooseRecordingOutputPath(const QStringList& directories, const QString& baseName,
                                   const QString& extension) {
@@ -197,8 +155,7 @@ struct RecordingSessionDeleter {
         snow_recording_session_destroy(session);
     }
 };
-using RecordingSessionHandle =
-    std::unique_ptr<SnowRecordingSession, RecordingSessionDeleter>;
+using RecordingSessionHandle = std::unique_ptr<SnowRecordingSession, RecordingSessionDeleter>;
 
 struct StartAttemptResult {
     RecordingSessionHandle session;
@@ -268,6 +225,9 @@ struct ScreenRecordingController::Impl {
         keyboardBackgroundColor = settings.keyboardBackgroundColor();
         keyboardForegroundColor = settings.keyboardForegroundColor();
         mouseClickColor = settings.mouseClickColor();
+        mouseHighlightEnabled = settings.mouseHighlightEnabled();
+        recordMouseClicks = settings.recordMouseClicks();
+        mouseHighlightColor = settings.mouseHighlightColor();
         showCursor = settings.showCursor();
         showKeyboard = settings.showKeyboard();
         startDelaySeconds = settings.startDelaySeconds();
@@ -311,7 +271,7 @@ struct ScreenRecordingController::Impl {
         }
         if (finalizationFuture.valid()) {
             finalizationFuture.wait();
-            finalizationFuture.get();
+            static_cast<void>(finalizationFuture.get());
         }
         recordingSession.reset();
         destroyUi();
@@ -510,10 +470,30 @@ struct ScreenRecordingController::Impl {
                              snow_shot::storage::RecordingSettings().setShowKeyboard(visible);
                              syncUi();
                          });
+        QObject::connect(palette, &ScreenshotToolPalette::recordingMouseHighlightEnabledChanged,
+                         uiSession->connections.get(), [this](bool value) {
+                             mouseHighlightEnabled = value;
+                             snow_shot::storage::RecordingSettings().setMouseHighlightEnabled(
+                                 value);
+                             syncPreview();
+                         });
+        QObject::connect(palette, &ScreenshotToolPalette::recordingRecordMouseClicksChanged,
+                         uiSession->connections.get(), [this](bool value) {
+                             recordMouseClicks = value;
+                             snow_shot::storage::RecordingSettings().setRecordMouseClicks(value);
+                             syncPreview();
+                         });
+        QObject::connect(palette, &ScreenshotToolPalette::recordingMouseHighlightColorChanged,
+                         uiSession->connections.get(), [this](const QColor& value) {
+                             mouseHighlightColor = value;
+                             snow_shot::storage::RecordingSettings().setMouseHighlightColor(value);
+                             syncPreview();
+                         });
         QObject::connect(palette, &ScreenshotToolPalette::recordingCursorVisibleChanged,
                          uiSession->connections.get(), [this](bool visible) {
                              showCursor = visible;
                              snow_shot::storage::RecordingSettings().setShowCursor(visible);
+                             syncPreview();
                          });
     }
 
@@ -740,8 +720,15 @@ struct ScreenRecordingController::Impl {
             sessionMouseClickColor = mouseClickColor;
             sessionShowCursor = showCursor;
             const bool audioSupported = outputFormat == QStringLiteral("mp4");
+            const RecordingKeyboardFont keyboardFont;
             const RecordingKeyboardTheme keyboardTheme(keyboardBackgroundColor,
                                                        keyboardForegroundColor);
+            QVector<std::uint32_t> excludedWindowIds;
+            if (!settings.captureToolbarInRecording()) {
+                excludeToolbarFromCapture();
+                excludedWindowIds =
+                    captureExclusion.windowIds(snow_shot::platform::captureWindowId);
+            }
             SnowCaptureDirectRecordingConfig config{
                 SNOW_CAPTURE_DIRECT_RECORDING_CONFIG_VERSION,
                 sizeof(SnowCaptureDirectRecordingConfig),
@@ -779,24 +766,26 @@ struct ScreenRecordingController::Impl {
                 static_cast<uint32_t>(mouseTrailDurationMs),
                 static_cast<uint32_t>(keyboardSize),
                 static_cast<uint32_t>(settings.loopAnimatedImages()),
+                {},
+                mouseHighlightEnabled ? packedRgba(mouseHighlightColor) : 0u,
+                static_cast<uint32_t>(recordMouseClicks),
+                nullptr,
+                nullptr,
+                0u,
             };
-            // Exclude before the worker starts capturing so no frame can ever
-            // contain the toolbar; a failed start restores visibility.
-            if (!settings.captureToolbarInRecording()) {
-                excludeToolbarFromCapture();
-            }
             const QString baseName =
                 ScreenshotImageFileService::suggestedBaseName(settings.videoFilenameFormat());
-            const QStringList directories = recordingDirectories();
+            const QStringList directories =
+                snow_shot::presentation::recording::screenRecordingDirectories();
             const QString extension = sessionOutputSettings.extension;
-            const bool keyboard = showKeyboard;
+            const bool keyboard = showKeyboard || recordMouseClicks;
             // Session creation blocks on capture, audio, hooks, and encoder
             // initialization; keep it off the GUI thread so the busy state can
             // paint. The FFI error string is thread-local, so it is read here.
             startFuture = std::async(
                 std::launch::async,
-                [config, directories, baseName, extension,
-                 keyboard]() mutable -> StartAttemptResult {
+                [config, excludedWindowIds, directories, baseName, extension, keyboard,
+                 keyboardFont]() mutable -> StartAttemptResult {
                     StartAttemptResult result;
                     result.outputPath = chooseRecordingOutputPath(directories, baseName, extension);
                     if (result.outputPath.isEmpty()) {
@@ -808,9 +797,12 @@ struct ScreenRecordingController::Impl {
                     const QByteArray outputUtf8 =
                         QDir::toNativeSeparators(result.outputPath).toUtf8();
                     const RecordingKeyboardLabels labels(keyboard);
+                    keyboardFont.applyTo(config);
                     config.output_file_utf8 = outputUtf8.constData();
                     config.keyboard_labels = labels.entries.constData();
                     config.keyboard_label_count = static_cast<uint32_t>(labels.entries.size());
+                    config.exclusions.windows = excludedWindowIds.constData();
+                    config.exclusions.window_count = static_cast<size_t>(excludedWindowIds.size());
                     SnowRecordingSession* created = nullptr;
                     const SnowRecordingResult createResult =
                         snow_recording_session_create_direct(&config, &created);
@@ -844,6 +836,7 @@ struct ScreenRecordingController::Impl {
                 stop(false);
                 return;
             }
+            result.session.reset();
             restoreToolbarCaptureVisibility();
             sessionStatus = ScreenshotToolPalette::RecordingSessionStatus::idle();
             if (!result.error.isEmpty()) {
@@ -852,6 +845,7 @@ struct ScreenRecordingController::Impl {
             return;
         }
         if (result.session == nullptr || !result.error.isEmpty()) {
+            result.session.reset();
             restoreToolbarCaptureVisibility();
             sessionStatus = ScreenshotToolPalette::RecordingSessionStatus::idle();
             syncUi();
@@ -981,9 +975,7 @@ struct ScreenRecordingController::Impl {
     }
 
     void openFolder() {
-        QDir directory(recordingDirectory());
-        directory.mkpath(QStringLiteral("."));
-        QDesktopServices::openUrl(QUrl::fromLocalFile(directory.absolutePath()));
+        static_cast<void>(snow_shot::presentation::recording::openScreenRecordingFolder());
     }
 
     void close() {
@@ -1012,9 +1004,9 @@ struct ScreenRecordingController::Impl {
         retiring->deleteLater();
     }
 
-    void excludeToolbarFromCapture() {
+    bool excludeToolbarFromCapture() {
         restoreToolbarCaptureVisibility();
-        captureExclusion.exclude(toolbarWindow);
+        return captureExclusion.exclude(toolbarWindow);
     }
 
     void restoreToolbarCaptureVisibility() {
@@ -1035,19 +1027,21 @@ struct ScreenRecordingController::Impl {
         const auto output = directRecordingSettings(outputFormat, captureRegion.size());
         uint32_t width = 0;
         uint32_t height = 0;
-        if (snow_recording_output_dimensions(
-                static_cast<uint32_t>(captureRegion.width()),
-                static_cast<uint32_t>(captureRegion.height()),
-                static_cast<uint32_t>(output.maximumSize.width()),
-                static_cast<uint32_t>(output.maximumSize.height()),
-                static_cast<uint32_t>(output.format), &width, &height) == 0) {
+        if (snow_recording_output_dimensions(static_cast<uint32_t>(captureRegion.width()),
+                                             static_cast<uint32_t>(captureRegion.height()),
+                                             static_cast<uint32_t>(output.maximumSize.width()),
+                                             static_cast<uint32_t>(output.maximumSize.height()),
+                                             static_cast<uint32_t>(output.format), &width,
+                                             &height) == 0) {
             uiSession->preview->setEligible(false);
             return;
         }
         uiSession->preview->configure(
             captureRegion, QSize(static_cast<int>(width), static_cast<int>(height)),
             mouseTrailColor, mouseClickColor, showKeyboard, mouseTrailDurationMs,
-            keyboardBackgroundColor, keyboardForegroundColor, keyboardSize);
+            keyboardBackgroundColor, keyboardForegroundColor, keyboardSize,
+            mouseHighlightEnabled && showCursor ? mouseHighlightColor : QColor(0, 0, 0, 0),
+            recordMouseClicks);
         uiSession->preview->setEligible(true);
     }
 
@@ -1071,6 +1065,9 @@ struct ScreenRecordingController::Impl {
             palette->setRecordingKeyboardBackgroundColor(keyboardBackgroundColor);
             palette->setRecordingKeyboardForegroundColor(keyboardForegroundColor);
             palette->setRecordingMouseClickColor(mouseClickColor);
+            palette->setRecordingMouseHighlightEnabled(mouseHighlightEnabled);
+            palette->setRecordingRecordMouseClicks(recordMouseClicks);
+            palette->setRecordingMouseHighlightColor(mouseHighlightColor);
             palette->setRecordingStartDelaySeconds(startDelaySeconds);
             palette->setRecordingCursorVisible(showCursor);
             palette->setRecordingKeyboardVisible(showKeyboard);
@@ -1121,6 +1118,9 @@ struct ScreenRecordingController::Impl {
     QColor keyboardForegroundColor{Qt::white};
     QColor mouseTrailColor{0, 0, 0, 0};
     QColor mouseClickColor{0, 0, 0, 0};
+    bool mouseHighlightEnabled = false;
+    bool recordMouseClicks = false;
+    QColor mouseHighlightColor{255, 255, 0, 128};
     bool showCursor = true;
     bool showKeyboard = false;
     DirectRecordingSettings sessionOutputSettings;
@@ -1140,8 +1140,8 @@ struct ScreenRecordingController::Impl {
     bool startScheduled = false;
     quint64 startGeneration = 0;
     snow_shot::presentation::WindowCaptureExclusion captureExclusion{
-#if defined(Q_OS_WIN) || defined(_WIN32)
-        snow_shot::platform::windows::setWindowExcludedFromCapture
+#if defined(Q_OS_WIN) || defined(_WIN32) || defined(Q_OS_MACOS)
+        snow_shot::platform::setWindowExcludedFromCapture
 #endif
     };
 };

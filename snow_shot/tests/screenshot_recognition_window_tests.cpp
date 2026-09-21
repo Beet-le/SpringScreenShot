@@ -8,6 +8,7 @@
 #include "theme/theme_manager.h"
 #include "widgets/context_menu.h"
 #include "widgets/input_text_edit.h"
+#include "widgets/message.h"
 #include "widgets/scroll_area.h"
 #include "widgets/spin.h"
 
@@ -40,6 +41,7 @@
 #include <QTextEdit>
 #include <QTextFragment>
 #include <QTimer>
+#include <QThread>
 #include <QUrl>
 #include <QWindow>
 
@@ -49,6 +51,10 @@
 #include <iostream>
 #include <functional>
 #include <utility>
+
+#ifdef Q_OS_MACOS
+#import <AppKit/AppKit.h>
+#endif
 
 #if defined(Q_OS_WIN) || defined(_WIN32)
 #include <qt_windows.h>
@@ -371,6 +377,21 @@ void recognitionWindowCanExtendBeyondItsDpiScreen() {
             "cross-screen recognition geometry must not be clipped by an overlay parent");
     require(window.windowHandle() != nullptr && window.windowHandle()->screen() == screen,
             "a cross-screen recognition window should retain the selection screen's DPI");
+    require(window.minimumSize() == crossScreenSelection.size() &&
+                window.maximumSize() == crossScreenSelection.size(),
+            "recognition surfaces must disable native edge resizing");
+    const QRect updatedSelection(crossScreenSelection.topLeft(), QSize(180, 90));
+    require(window.updateSelectionGeometry(updatedSelection, QRectF(0, 0, 180, 90)),
+            "selection resizing must still update a fixed recognition surface");
+    require(window.geometry() == updatedSelection &&
+                window.minimumSize() == updatedSelection.size() &&
+                window.maximumSize() == updatedSelection.size(),
+            "recognition size constraints must follow selection changes");
+    window.hide();
+    require(window.present({screen, &overlayHost, crossScreenSelection, QRectF(0, 0, 240, 120)}),
+            "a pooled recognition surface must accept a new selection size");
+    require(window.geometry() == crossScreenSelection,
+            "reopening must replace the previous fixed size");
     window.hide();
 }
 
@@ -404,6 +425,52 @@ HWND windowAtPhysicalPoint(const POINT& point) {
 }
 
 #endif
+
+void recognitionMessageUsesOnlyItsPaintedShadow() {
+    auto& themes = adqt::theme::ThemeManager::instance();
+    const auto originalTheme = themes.config();
+    auto theme = originalTheme;
+    theme.motion = false;
+    themes.setConfig(theme);
+
+    ScreenshotRecognitionWindow window({});
+    const QRect geometry(80, 80, 480, 240);
+    const ScreenshotRecognitionWindow::Config config{QGuiApplication::primaryScreen(), nullptr,
+                                                     geometry,
+                                                     QRectF(QPointF(), QSizeF(geometry.size()))};
+    for (int presentation = 0; presentation < 2; ++presentation) {
+        require(window.present(config), "the recognition message owner should be presented");
+#ifdef Q_OS_MACOS
+        if (QGuiApplication::platformName() == QStringLiteral("cocoa")) {
+            NSWindow* nativeWindow = reinterpret_cast<NSView*>(window.winId()).window;
+            require(nativeWindow != nil && !nativeWindow.hasShadow,
+                    "Cocoa must not add an outline around painted message shadow pixels");
+        }
+#endif
+        require(window.windowFlags().testFlag(Qt::NoDropShadowWindowHint),
+                "the transparent recognition surface must not shadow the message's shadow");
+        // The recognition surface deliberately retains a nearly transparent fill
+        // for Windows hit testing; preserve that background while adding the message.
+        const QImage background = window.grab().toImage().convertToFormat(QImage::Format_ARGB32);
+        adqt::widgets::AdMessage messages(&window);
+        auto* message = messages.loading(QStringLiteral("Recognizing text"), 0);
+        require(message != nullptr, "the recognition surface should display a loading message");
+        QApplication::processEvents();
+        const QImage image = window.grab().toImage().convertToFormat(QImage::Format_ARGB32);
+        bool hasPaintedShadow = false;
+        for (int y = 0; y < image.height(); ++y) {
+            for (int x = 0; x < image.width(); ++x) {
+                const int alpha = qAlpha(image.pixel(x, y));
+                hasPaintedShadow |= alpha > qAlpha(background.pixel(x, y)) && alpha < 255;
+            }
+        }
+        require(hasPaintedShadow, "disabling the native shadow must preserve the painted shadow");
+        require(image.pixel(0, 0) == background.pixel(0, 0),
+                "the recognition surface background should be preserved outside the message");
+        window.hide();
+    }
+    themes.setConfig(originalTheme);
+}
 
 void recognitionWindowUsesOrdinaryQtWindowBehavior() {
     QScreen* screen = QGuiApplication::primaryScreen();
@@ -1165,6 +1232,10 @@ void qrContentsUseStrictRichTextLinksAndPreserveOrder() {
             "QR payloads should be rendered as escaped text in recognition order");
     require(QApplication::focusWidget() == browser,
             "QR results should focus their read-only selection surface");
+    const QTextCursor presentedSelection = browser->textCursor();
+    require(presentedSelection.hasSelection() &&
+                presentedSelection.selectedText() == contents.join(QChar(0x2029)),
+            "QR results should present every payload selected for a plain copy");
 
     QKeyEvent sessionShortcutEvent(QEvent::KeyPress, Qt::Key_P, Qt::NoModifier);
     QApplication::sendEvent(browser, &sessionShortcutEvent);
@@ -1176,8 +1247,7 @@ void qrContentsUseStrictRichTextLinksAndPreserveOrder() {
     require(copyAll.isAccepted() && lowerPriorityCopyCalls == 0 &&
                 QGuiApplication::clipboard()->text() == contents.join(QLatin1Char('\n')) &&
                 recognitionCopyCalls == 1,
-            "Ctrl+C should copy all QR result text when no selection is active and end the "
-            "screenshot");
+            "Ctrl+C should copy the presented QR selection and end the screenshot");
     require(qobject_cast<adqt::widgets::AdScrollBar*>(browser->verticalScrollBar()) != nullptr,
             "QR contents should use the themed vertical scrollbar");
 
@@ -1301,8 +1371,8 @@ void imageSnapshotTracksOnlyOriginalImageAndOwnsItsResult() {
 }
 void defaultSelectionResizeActionsDeclineInteraction() {
     // Both empty and partial aggregates are used by embedded recognition hosts.
-    for (const auto& actions :
-         {ScreenshotRecognitionWindowActions{}, ScreenshotRecognitionWindowActions{[]() {}}}) {
+    for (const auto& actions : {ScreenshotRecognitionWindowActions{},
+                                ScreenshotRecognitionWindowActions{.handleCancel = []() {}}}) {
         for (const QPointF& point : {QPointF(), QPointF(19.5, -42.0)}) {
             require(actions.selectionResizeDragMode(point) == ScreenshotSelectionDragMode::None,
                     "an unwired recognition surface must expose no resize handle");
@@ -1812,9 +1882,25 @@ void tableClipboardPreservesLargeValuesForWholeTableAndSelection() {
             QStringLiteral("Value\tOther\n") + value + QStringLiteral("\t42")));
     ScreenshotTableEditor editor;
     editor.setSession(session);
-    require(editor.copySelectionToClipboard(), "whole-table copy should succeed");
-    const QMimeData* mime = QApplication::clipboard()->mimeData();
-    require(mime != nullptr && mime->hasHtml() && mime->hasText() &&
+    // The OS clipboard is a shared resource: after the rapid writes of the
+    // earlier tests the clipboard history service can hold it briefly
+    // (CLIPBRD_E_CANT_OPEN), so publishing needs bounded retries before the
+    // payload can be judged.
+    const auto publishAndRead = [&editor]() -> const QMimeData* {
+        for (int attempt = 0; attempt < 40; ++attempt) {
+            const bool issued = editor.copySelectionToClipboard();
+            QCoreApplication::processEvents();
+            const QMimeData* mime = QApplication::clipboard()->mimeData();
+            if (issued && mime != nullptr && mime->hasHtml() && mime->hasText()) {
+                return mime;
+            }
+            QThread::msleep(50);
+        }
+        return nullptr;
+    };
+    const QMimeData* mime = publishAndRead();
+    require(mime != nullptr, "whole-table copy should publish its clipboard payload");
+    require(mime->hasHtml() && mime->hasText() &&
                 mime->text() ==
                     QStringLiteral("Value\tOther\n'") + value + QStringLiteral("\t42") &&
                 ScreenshotTableDocument::fromHtml(mime->html()).toPlainText() == mime->text() &&
@@ -1823,9 +1909,9 @@ void tableClipboardPreservesLargeValuesForWholeTableAndSelection() {
 
     const QModelIndex index = editor.model()->index(1, 0);
     editor.selectionModel()->select(index, QItemSelectionModel::ClearAndSelect);
-    require(editor.copySelectionToClipboard(), "selected-cell copy should succeed");
-    mime = QApplication::clipboard()->mimeData();
-    require(mime != nullptr && mime->text() == QLatin1Char('\'') + value &&
+    mime = publishAndRead();
+    require(mime != nullptr, "selected-cell copy should publish its clipboard payload");
+    require(mime->text() == QLatin1Char('\'') + value &&
                 ScreenshotTableDocument::fromHtml(mime->html()).cellText(0, 0) == mime->text(),
             "selected-cell copy should retain every digit and the spreadsheet HTML payload");
     editor.setCurrentIndex(editor.model()->index(1, 1));
@@ -1839,6 +1925,10 @@ void tableClipboardPreservesLargeValuesForWholeTableAndSelection() {
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     QApplication::setQuitOnLastWindowClosed(false);
+    if (application.arguments().contains(QStringLiteral("--message-shadow-only"))) {
+        recognitionMessageUsesOnlyItsPaintedShadow();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--table-clipboard-only"))) {
         tableClipboardPreservesLargeValuesForWholeTableAndSelection();
         return 0;
@@ -1865,6 +1955,7 @@ int main(int argc, char** argv) {
     selectionOnlyTextLayerPaintsOnlyHighlights();
     embeddedRecognitionWindowPreservesParentSurfaceWithVisibleTextLayer();
     recognitionWindowCanExtendBeyondItsDpiScreen();
+    recognitionMessageUsesOnlyItsPaintedShadow();
     recognitionWindowUsesOrdinaryQtWindowBehavior();
     shortRecognitionWindowPreservesExactSelectionGeometryAcrossModes();
     formattedClipboardTextUsesASelectableQtDocument();

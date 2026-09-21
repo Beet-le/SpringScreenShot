@@ -309,6 +309,10 @@ so every moment on screen can be expressed clearly and shared easily.</translati
             <source>Failed to retrieve selected text</source>
             <translation>Failed to retrieve selected text</translation>
         </message>
+        <message>
+            <source>Grant the required permission to continue</source>
+            <translation>Grant the required permission to continue</translation>
+        </message>
     </context>
     <context>
         <name>QObject</name>
@@ -423,6 +427,10 @@ so every moment on screen can be expressed clearly and shared easily.</translati
     </context>
     <context>
         <name>SectionHeaderWidget</name>
+        <message>
+            <source>Refresh</source>
+            <translation>Refresh</translation>
+        </message>
         <message>
             <source>Reset</source>
             <translation>Reset</translation>
@@ -552,8 +560,16 @@ so every moment on screen can be expressed clearly and shared easily.</translati
             <translation>Close</translation>
         </message>
         <message>
+            <source>Maximize</source>
+            <translation>Maximize</translation>
+        </message>
+        <message>
             <source>Minimize</source>
             <translation>Minimize</translation>
+        </message>
+        <message>
+            <source>Restore</source>
+            <translation>Restore</translation>
         </message>
     </context>
     <context>
@@ -563,12 +579,28 @@ so every moment on screen can be expressed clearly and shared easily.</translati
             <translation>An update is ready. Open About to restart and update Snow Shot.</translation>
         </message>
         <message>
+            <source>Feature unavailable</source>
+            <translation>Feature unavailable</translation>
+        </message>
+        <message>
             <source>Finish capturing, recording, or exporting before updating.</source>
             <translation>Finish capturing, recording, or exporting before updating.</translation>
         </message>
         <message>
+            <source>Pin to screen is not available on macOS yet.</source>
+            <translation>Pin to screen is not available on macOS yet.</translation>
+        </message>
+        <message>
             <source>Restart and update</source>
             <translation>Restart and update</translation>
+        </message>
+        <message>
+            <source>Screen recording is not available on macOS yet.</source>
+            <translation>Screen recording is not available on macOS yet.</translation>
+        </message>
+        <message>
+            <source>Screenshot is not available on macOS yet.</source>
+            <translation>Screenshot is not available on macOS yet.</translation>
         </message>
         <message>
             <source>Snow Shot will close and restart to install the update. Continue?</source>

@@ -54,12 +54,16 @@ class ScreenshotPinnedNativeGeometryController final {
     [[nodiscard]] Phase phase() const;
     [[nodiscard]] QRect committedGeometry() const;
     [[nodiscard]] QRect targetGeometry() const;
+    // The target is authoritative only once a transaction has accepted it.
+    // Native observations and rounded QWidget geometry do not enter this accessor.
+    [[nodiscard]] QRect authoritativeGeometry() const;
     [[nodiscard]] bool hasInteractiveTransaction() const;
     [[nodiscard]] bool hasAcceptedInteractiveGeometry() const;
 
     [[nodiscard]] bool beginMove(const QPoint& nativeCursorPosition);
     [[nodiscard]] bool beginResize(screenshot_pinned_resize_geometry::DragHandle handle);
     void cancelPendingInteraction();
+    [[nodiscard]] bool acceptInteractiveGeometry(const QRect& geometry);
 
     [[nodiscard]] QRect constrainWindowPos(const QRect& proposed, bool moveRequested,
                                            bool sizeRequested) const;
@@ -75,6 +79,10 @@ class ScreenshotPinnedNativeGeometryController final {
                                       const std::optional<QPoint>& nativeCursorPosition);
 
     [[nodiscard]] bool beginProgrammatic(const QRect& target, Origin origin);
+    // AppKit may adjust display-relative placement while retaining pixel extent.
+    // Windows applications must match the requested physical rectangle exactly.
+    [[nodiscard]] bool acceptAppliedGeometry(const QRect& actual,
+                                             bool allowPlatformAdjustment = false);
     [[nodiscard]] QRect finishInteractiveTarget() const;
     [[nodiscard]] GeometryChange commitTarget(bool transactionFinished = true);
     void prepareRollback();

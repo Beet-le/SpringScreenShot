@@ -7,14 +7,18 @@
 #include "snow_shot/presentation/screenshotoverlaywindow.h"
 #include "snow_shot/presentation/screenshottoolbarwindow.h"
 
+#if defined(Q_OS_WIN) || defined(_WIN32) || defined(Q_OS_MACOS)
+#include "snow_shot/platform/windowcaptureexclusion.h"
 #if defined(Q_OS_WIN) || defined(_WIN32)
 #include "snow_shot/platform/windows/windowchrome.h"
 #include <qt_windows.h>
 #endif
+#endif
 
 #include "adaptivescrollingcapturecadence.h"
 #include "screenshotscrollingautoscroller.h"
-#include "snow_shot/platform/windows/scrollinput.h"
+#include "scrollingselectionmovement.h"
+#include "snow_shot/platform/screenshotnative.h"
 #include "screenshotscrollingpipeline.h"
 #include "screenshotscrollingdiagnostics.h"
 #include <QElapsedTimer>
@@ -59,7 +63,7 @@ struct ScreenshotScrollingCaptureController::Impl {
         : owner(ownerValue), context(contextValue) {
         previewWatchdog.setSingleShot(true);
         QObject::connect(&previewWatchdog, &QTimer::timeout, &owner, [this] {
-            if (active && !exportPaused && !previewReceived) {
+            if (active && !exportPaused && !movement.active() && !previewReceived) {
                 logScrollingEvent(
                     "scrolling.preview_timeout", generation,
                     {{QStringLiteral("duration_ms"), previewClock.elapsed()},
@@ -102,7 +106,6 @@ struct ScreenshotScrollingCaptureController::Impl {
 
     ~Impl() {
         stop(false);
-        shutdownWorker();
     }
 
     bool start(QRect selection, ScreenshotScrollingRecognitionMode requestedMode) {
@@ -142,6 +145,10 @@ struct ScreenshotScrollingCaptureController::Impl {
             return false;
         }
 
+        const auto renderSpec = screenshotSelectionRenderSpec(context.displaySession, selection);
+        if (!renderSpec.isValid())
+            return false;
+        viewportPixelSize = renderSpec.pixelSize;
         canvasSelection = selection;
         restoreOriginalColors = context.restoreOriginalScreenColors();
         mode = requestedMode;
@@ -173,15 +180,16 @@ struct ScreenshotScrollingCaptureController::Impl {
         logPreparation();
         logScrollingEvent("scrolling.prepared", generation);
         const quint64 requestGeneration = generation;
-        const QRect requestSelection = canvasSelection;
         const QRect requestPhysicalSelection =
             canvasSelection.translated(context.geometry.canvasOrigin());
         autoScroller.start(requestPhysicalSelection, mode);
         const AdaptiveScrollCadence::Config requestCadenceConfig = cadenceConfig;
-        pipeline->begin(
-            requestGeneration, requestSelection.size(), mode,
-            nativeScrollingSource(requestPhysicalSelection, restoreOriginalColors, generation),
-            requestCadenceConfig);
+        pipeline->begin(requestGeneration, viewportPixelSize, mode,
+                        nativeScrollingSource(requestPhysicalSelection, restoreOriginalColors,
+                                              exclusionWindowIds, generation),
+                        requestCadenceConfig);
+        if (exportPaused)
+            updatePausedState();
         return true;
     }
 
@@ -204,12 +212,14 @@ struct ScreenshotScrollingCaptureController::Impl {
         // A direction change invalidates the axis-specific capture and stitch state, but the
         // selection, overlay presentation, and window exclusion must remain active. Advancing
         // the generation drops work from the previous axis without briefly restoring the canvas.
+        movement.end();
         mode = requestedMode;
         ++generation;
         watchPreview();
         logScrollingEvent("scrolling.mode_changed", generation,
                           {{QStringLiteral("mode"), static_cast<int>(mode)}});
         autoScroller.setMode(mode);
+        autoScroller.setPaused(exportPaused);
         pendingResultRequestId.reset();
         if (pipeline)
             pipeline->reset(generation);
@@ -220,7 +230,6 @@ struct ScreenshotScrollingCaptureController::Impl {
         cachedSnapshotGeneration = 0;
 
         const quint64 requestGeneration = generation;
-        const QRect requestSelection = canvasSelection;
         const QRect requestPhysicalSelection =
             canvasSelection.translated(context.geometry.canvasOrigin());
         const AdaptiveScrollCadence::Config requestCadenceConfig = cadenceConfig;
@@ -229,10 +238,12 @@ struct ScreenshotScrollingCaptureController::Impl {
         thumbnailHost->beginScrollingThumbnail(
             logicalSelection.translated(-thumbnailHost->geometry().topLeft()), mode);
 
-        pipeline->begin(
-            requestGeneration, requestSelection.size(), mode,
-            nativeScrollingSource(requestPhysicalSelection, restoreOriginalColors, generation),
-            requestCadenceConfig);
+        pipeline->begin(requestGeneration, viewportPixelSize, mode,
+                        nativeScrollingSource(requestPhysicalSelection, restoreOriginalColors,
+                                              exclusionWindowIds, generation),
+                        requestCadenceConfig);
+        if (exportPaused)
+            updatePausedState();
         return true;
     }
 
@@ -252,6 +263,7 @@ struct ScreenshotScrollingCaptureController::Impl {
                  {QStringLiteral("restore_presentation"), restoreScreenshotPresentation}});
         }
         active = false;
+        movement.end();
         exportPaused = false;
         ++generation;
         pendingResultRequestId.reset();
@@ -273,13 +285,13 @@ struct ScreenshotScrollingCaptureController::Impl {
         } else if (thumbnailHost != nullptr) {
             thumbnailHost->clearScrollingThumbnail();
         }
-        restoreScrollingWindowsCaptureVisibility();
         thumbnailHost = nullptr;
 
         // Scrolling workers are session-scoped.  Tear them down after invalidating all
         // in-flight work so the stitch session and its native resources are released between
         // captures; the next start() recreates them on demand.
         shutdownWorker();
+        restoreScrollingWindowsCaptureVisibility();
     }
 
     void detachPendingResultRequest() {
@@ -290,7 +302,7 @@ struct ScreenshotScrollingCaptureController::Impl {
     }
 
     bool excludeScrollingWindowsFromCapture(ScreenshotOverlayWindow* overlay) {
-#if defined(Q_OS_WIN) || defined(_WIN32)
+#if defined(Q_OS_WIN) || defined(_WIN32) || defined(Q_OS_MACOS)
         ScreenshotToolbarWindow* const toolbar = context.overlayCoordinator.toolbar();
         if (context.captureUiInScrollingScreenshot() ||
             QCoreApplication::arguments().contains(QStringLiteral("--e2e-allow-overlay-capture"))) {
@@ -301,6 +313,7 @@ struct ScreenshotScrollingCaptureController::Impl {
         }
         captureExclusion.exclude(overlay);
         captureExclusion.exclude(toolbar);
+        exclusionWindowIds = captureExclusion.windowIds(snow_shot::platform::captureWindowId);
 #else
         Q_UNUSED(overlay);
 #endif
@@ -309,6 +322,7 @@ struct ScreenshotScrollingCaptureController::Impl {
 
     void restoreScrollingWindowsCaptureVisibility() {
         captureExclusion.restore();
+        exclusionWindowIds.clear();
     }
 
     void ensureWorker() {
@@ -336,10 +350,22 @@ struct ScreenshotScrollingCaptureController::Impl {
         ++generation;
         pendingResultRequestId.reset();
         pipeline->reset(generation);
+        // Leave the pipeline's error callback before destroying it. stop() joins
+        // capture before restoring native sharing policies, including failed starts.
+        QMetaObject::invokeMethod(
+            &owner,
+            [this, failedGeneration = generation]() {
+                if (active && generation == failedGeneration) {
+                    stop(true);
+                    if (context.captureFailed)
+                        context.captureFailed();
+                }
+            },
+            Qt::QueuedConnection);
     }
 
     void handleFrame(ScrollingPipelineFrame result) {
-        if (!active || exportPaused || result.generation != generation)
+        if (!active || result.generation != generation)
             return;
         if (result.fatalError) {
             handleCaptureError(result.generation, QStringLiteral("scrolling stitching failed"));
@@ -446,12 +472,50 @@ struct ScreenshotScrollingCaptureController::Impl {
         return invoked;
     }
 
+    bool beginSelectionMove(ScreenshotScrollingRecognitionMode axis, QPoint pointer) {
+        if (!active || exportPaused || !movement.begin(axis, mode, canvasSelection, pointer))
+            return false;
+        updatePausedState();
+        return true;
+    }
+
+    void updateSelectionMove(QPoint pointer) {
+        if (!active || !movement.active())
+            return;
+        canvasSelection = movement.update(pointer, context.geometry.canvasBounds().toAlignedRect());
+        context.overlayCoordinator.setScrollingCaptureMode(context.displaySession, canvasSelection,
+                                                           true);
+        autoScroller.setSelection(canvasSelection.translated(context.geometry.canvasOrigin()));
+        context.displaySession.forEachActiveOverlay([this](qsizetype,
+                                                           const CapturedDisplayModel& display,
+                                                           ScreenshotOverlayWindow* overlay) {
+            if (overlay == thumbnailHost) {
+                thumbnailHost->reanchorScrollingThumbnail(
+                    logicalSelectionRect(context.geometry, display, canvasSelection)
+                        .translated(-thumbnailHost->geometry().topLeft()));
+            }
+        });
+    }
+
+    void endSelectionMove() {
+        if (!movement.active())
+            return;
+        movement.end();
+        if (active)
+            updatePausedState();
+    }
+
     void setExportPaused(bool paused) {
         if (!active || exportPaused == paused)
             return;
         exportPaused = paused;
         logScrollingEvent("scrolling.export_pause", generation,
                           {{QStringLiteral("status"), paused}});
+        updatePausedState();
+    }
+
+    void updatePausedState() {
+        const bool paused = exportPaused || movement.active();
         if (paused)
             previewWatchdog.stop();
         else if (!previewReceived)
@@ -461,29 +525,38 @@ struct ScreenshotScrollingCaptureController::Impl {
             pipeline->pause(generation);
         } else {
             pipeline->resume(
-                generation, canvasSelection.size(),
+                generation, viewportPixelSize,
                 nativeScrollingSource(canvasSelection.translated(context.geometry.canvasOrigin()),
-                                      restoreOriginalColors, generation),
+                                      restoreOriginalColors, exclusionWindowIds, generation),
                 cadenceConfig);
         }
     }
 
+    snow_shot::capture_detail::ScrollingSelectionMovement movement;
     ScreenshotScrollingCaptureController& owner;
     snow_shot::capture_detail::ScreenshotScrollingAutoScroller autoScroller{
         [this](const QRect& selection, const QPoint& delta) {
-            const auto result =
-                snow_shot::platform::windows::sendScrollingWheelStep(selection, delta);
+            if (!snow_shot::platform::screenshotScrollPermission()) {
+                autoScroller.setEnabled(false);
+                return;
+            }
+            const auto result = snow_shot::platform::sendScreenshotScroll(selection, delta);
+#ifdef Q_OS_MACOS
+            if (result.status != snow_shot::platform::ScrollInputResult::Status::Posted) {
+                handleCaptureError(generation, QStringLiteral("automatic scroll dispatch failed"));
+            }
+#endif
             const int status = static_cast<int>(result.status);
             if (status != lastScrollStatus || result.error != lastScrollError) {
                 lastScrollStatus = status;
                 lastScrollError = result.error;
-                logScrollingEvent(
-                    "scrolling.wheel_dispatch", generation,
-                    {{QStringLiteral("status"), status},
-                     {QStringLiteral("code"), static_cast<qint64>(result.error)}},
-                    result.status == snow_shot::platform::windows::ScrollInputResult::Status::Posted
-                        ? QtInfoMsg
-                        : QtWarningMsg);
+                logScrollingEvent("scrolling.wheel_dispatch", generation,
+                                  {{QStringLiteral("status"), status},
+                                   {QStringLiteral("code"), static_cast<qint64>(result.error)}},
+                                  result.status ==
+                                          snow_shot::platform::ScrollInputResult::Status::Posted
+                                      ? QtInfoMsg
+                                      : QtWarningMsg);
             }
         }};
     int lastScrollStatus = -1;
@@ -497,13 +570,20 @@ struct ScreenshotScrollingCaptureController::Impl {
     bool restoreOriginalColors = false;
     std::unique_ptr<ScreenshotScrollingPipeline> pipeline;
     QPointer<ScreenshotOverlayWindow> thumbnailHost;
+    QVector<std::uint32_t> exclusionWindowIds;
     snow_shot::presentation::WindowCaptureExclusion captureExclusion{
-#if defined(Q_OS_WIN) || defined(_WIN32)
+#if defined(Q_OS_WIN) || defined(_WIN32) || defined(Q_OS_MACOS)
         [this](QWidget* window, bool excluded) {
+#if defined(Q_OS_WIN) || defined(_WIN32)
             SetLastError(ERROR_SUCCESS);
             const bool succeeded =
-                snow_shot::platform::windows::setWindowExcludedFromCapture(window, excluded);
+                snow_shot::platform::setWindowExcludedFromCapture(window, excluded);
             const DWORD error = succeeded ? ERROR_SUCCESS : GetLastError();
+#else
+            const bool succeeded =
+                snow_shot::platform::setWindowExcludedFromCapture(window, excluded);
+            const qint64 error = 0;
+#endif
             logScrollingEvent("scrolling.window_exclusion", exclusionGeneration,
                               {{QStringLiteral("status"), excluded},
                                {QStringLiteral("outcome"),
@@ -523,6 +603,7 @@ struct ScreenshotScrollingCaptureController::Impl {
     std::optional<quint64> pendingResultRequestId;
     QSet<quint64> detachedResultRequestIds;
     QRect canvasSelection;
+    QSize viewportPixelSize;
     quint64 generation = 0;
     quint64 nextResultRequestId = 0;
     bool active = false;
@@ -589,4 +670,18 @@ void ScreenshotScrollingCaptureController::detachPendingResultRequest() {
 
 QRect ScreenshotScrollingCaptureController::canvasSelection() const {
     return m_impl->canvasSelection;
+}
+
+bool ScreenshotScrollingCaptureController::beginSelectionMove(
+    ScreenshotScrollingRecognitionMode axis, QPoint physicalPointer) {
+    return m_impl->beginSelectionMove(axis, physicalPointer);
+}
+void ScreenshotScrollingCaptureController::updateSelectionMove(QPoint physicalPointer) {
+    m_impl->updateSelectionMove(physicalPointer);
+}
+void ScreenshotScrollingCaptureController::endSelectionMove() {
+    m_impl->endSelectionMove();
+}
+bool ScreenshotScrollingCaptureController::movingSelection() const {
+    return m_impl->movement.active();
 }

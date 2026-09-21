@@ -71,6 +71,7 @@ const QStringList& screenshotShortcutActionIds() {
         QStringLiteral("previous_screenshot_history"),
         QStringLiteral("next_screenshot_history"),
         QStringLiteral("select_previously_selected_area"),
+        QStringLiteral("recapture"),
         QStringLiteral("copy_color"),
         QStringLiteral("table_recognition"),
         QStringLiteral("qr_code_recognition"),
@@ -272,6 +273,27 @@ bool InterfaceSettings::setSidebarCollapsed(bool collapsed) const {
     return cache().setValue(QStringLiteral("interface/sidebar_collapsed"), collapsed);
 }
 
+std::optional<PersistedWindowGeometry> WindowMemorySettings::mainWindowGeometry() const {
+    return parseWindowGeometry(
+        cache().value(QStringLiteral("interface/main_window_geometry")).toObject());
+}
+
+bool WindowMemorySettings::setMainWindowGeometry(const QRect& normalGeometry,
+                                                 bool maximized) const {
+    return cache().setValue(QStringLiteral("interface/main_window_geometry"),
+                            windowGeometryToJson(normalGeometry, maximized));
+}
+
+std::optional<QSize> WindowMemorySettings::translationWindowSize() const {
+    return parseWindowSize(
+        cache().value(QStringLiteral("interface/translation_window_size")).toObject());
+}
+
+bool WindowMemorySettings::setTranslationWindowSize(const QSize& size) const {
+    return cache().setValue(QStringLiteral("interface/translation_window_size"),
+                            windowSizeToJson(size));
+}
+
 shortcuts::ShortcutBindingList ShortcutSettings::screenshot() const {
     return shortcutValue(QStringLiteral("global_shortcuts/screenshot"));
 }
@@ -381,10 +403,38 @@ bool ShortcutSettings::setOpenSettings(const shortcuts::ShortcutBindingList& bin
     return setShortcutValue(QStringLiteral("global_shortcuts/open_settings"), bindings);
 }
 
+shortcuts::ShortcutBindingList ShortcutSettings::toggleGlobalHotkeys() const {
+    return shortcutValue(QStringLiteral("global_shortcuts/toggle_global_hotkeys"));
+}
+
+bool ShortcutSettings::setToggleGlobalHotkeys(
+    const shortcuts::ShortcutBindingList& bindings) const {
+    return setShortcutValue(QStringLiteral("global_shortcuts/toggle_global_hotkeys"), bindings);
+}
+
+shortcuts::ShortcutBindingList ShortcutSettings::toggleDisableOnFocusedFullscreenWindow() const {
+    return shortcutValue(
+        QStringLiteral("global_shortcuts/toggle_disable_on_focused_fullscreen_window"));
+}
+
+bool ShortcutSettings::setToggleDisableOnFocusedFullscreenWindow(
+    const shortcuts::ShortcutBindingList& bindings) const {
+    return setShortcutValue(
+        QStringLiteral("global_shortcuts/toggle_disable_on_focused_fullscreen_window"), bindings);
+}
+
 bool ExtendedFeaturesSettings::translationPageEnabled() const {
     return cache()
         .value(QStringLiteral("extended_features/translation_page_enabled"))
         .toBool(false);
+}
+
+bool ExtendedFeaturesSettings::jumpToTranslationPage() const {
+    return cache().value(QStringLiteral("extended_features/jump_to_translation_page")).toBool();
+}
+
+bool ExtendedFeaturesSettings::setJumpToTranslationPage(bool enabled) const {
+    return cache().setValue(QStringLiteral("extended_features/jump_to_translation_page"), enabled);
 }
 
 bool ExtendedFeaturesSettings::standaloneTranslationWindow() const {
@@ -445,6 +495,15 @@ bool ScreenshotSettings::shutterSoundNotification() const {
 
 bool ScreenshotSettings::setShutterSoundNotification(bool enabled) const {
     return cache().setValue(QStringLiteral("screenshot/shutter_sound_notification"), enabled);
+}
+
+bool ScreenshotSettings::confirmBeforeExitingViaShortcut() const {
+    return cache().value(QStringLiteral("screenshot/confirm_before_exiting_via_shortcut")).toBool();
+}
+
+bool ScreenshotSettings::setConfirmBeforeExitingViaShortcut(bool enabled) const {
+    return cache().setValue(QStringLiteral("screenshot/confirm_before_exiting_via_shortcut"),
+                            enabled);
 }
 
 bool ScreenshotSettings::captureCursor() const {
@@ -630,6 +689,14 @@ bool DrawingSettings::setQuickSelectionDisabledTools(const QStringList& tools) c
                             stringArray(tools));
 }
 
+bool DrawingSettings::rememberLastUsedTool() const {
+    return cache().value(QStringLiteral("drawing/remember_last_used_tool")).toBool();
+}
+
+bool DrawingSettings::setRememberLastUsedTool(bool enabled) const {
+    return cache().setValue(QStringLiteral("drawing/remember_last_used_tool"), enabled);
+}
+
 shortcuts::ShortcutBindingList ScreenshotShortcutSettings::moveTool() const {
     return shortcuts(QStringLiteral("move_tool"));
 }
@@ -693,6 +760,10 @@ shortcuts::ShortcutBindingList ScreenshotShortcutSettings::nextScreenshotHistory
 
 shortcuts::ShortcutBindingList ScreenshotShortcutSettings::selectPreviouslySelectedArea() const {
     return shortcuts(QStringLiteral("select_previously_selected_area"));
+}
+
+shortcuts::ShortcutBindingList ScreenshotShortcutSettings::recapture() const {
+    return shortcuts(QStringLiteral("recapture"));
 }
 
 shortcuts::ShortcutBindingList ScreenshotShortcutSettings::copyColor() const {
@@ -1061,6 +1132,14 @@ bool ScreenshotUiSettings::setColorPickerFormat(const QString& format) const {
     return cache().setValue(QStringLiteral("screenshot_ui/color_picker_format"), format);
 }
 
+QColor ScreenshotUiSettings::selectionBorderColor() const {
+    return colorValue(QStringLiteral("screenshot_ui/selection_border_color"));
+}
+
+bool ScreenshotUiSettings::setSelectionBorderColor(const QColor& color) const {
+    return setColorValue(QStringLiteral("screenshot_ui/selection_border_color"), color);
+}
+
 QColor ScreenshotUiSettings::selectionMaskColor() const {
     return colorValue(QStringLiteral("screenshot_ui/selection_mask_color"));
 }
@@ -1231,6 +1310,25 @@ bool RecordingSettings::setShowKeyboard(bool show) const {
     return cache().setValue(QStringLiteral("screen_recording/show_keyboard"), show);
 }
 
+bool RecordingSettings::mouseHighlightEnabled() const {
+    return cache().value(QStringLiteral("screen_recording/mouse_highlight_enabled")).toBool();
+}
+bool RecordingSettings::setMouseHighlightEnabled(bool enabled) const {
+    return cache().setValue(QStringLiteral("screen_recording/mouse_highlight_enabled"), enabled);
+}
+bool RecordingSettings::recordMouseClicks() const {
+    return cache().value(QStringLiteral("screen_recording/record_mouse_clicks")).toBool();
+}
+bool RecordingSettings::setRecordMouseClicks(bool enabled) const {
+    return cache().setValue(QStringLiteral("screen_recording/record_mouse_clicks"), enabled);
+}
+QColor RecordingSettings::mouseHighlightColor() const {
+    return colorValue(QStringLiteral("screen_recording/mouse_highlight_color"));
+}
+bool RecordingSettings::setMouseHighlightColor(const QColor& color) const {
+    return setColorValue(QStringLiteral("screen_recording/mouse_highlight_color"), color);
+}
+
 bool RecordingSettings::showCursor() const {
     return cache().value(QStringLiteral("screen_recording/show_cursor")).toBool();
 }
@@ -1286,6 +1384,30 @@ QString ScreenshotToolbarSettings::tableQrTool() const {
 
 bool ScreenshotToolbarSettings::setTableQrTool(const QString& tool) const {
     return cache().setValue(QStringLiteral("screenshot_toolbar/table_qr_tool"), tool);
+}
+
+QString ScreenshotToolbarSettings::lastFilterTool() const {
+    return cache().value(QStringLiteral("screenshot_toolbar/last_filter_tool")).toString();
+}
+
+bool ScreenshotToolbarSettings::setLastFilterTool(const QString& tool) const {
+    return cache().setValue(QStringLiteral("screenshot_toolbar/last_filter_tool"), tool);
+}
+
+QString ScreenshotToolbarSettings::lastHighlightTool() const {
+    return cache().value(QStringLiteral("screenshot_toolbar/last_highlight_tool")).toString();
+}
+
+bool ScreenshotToolbarSettings::setLastHighlightTool(const QString& tool) const {
+    return cache().setValue(QStringLiteral("screenshot_toolbar/last_highlight_tool"), tool);
+}
+
+QString ScreenshotToolbarSettings::lastDrawingTool() const {
+    return cache().value(QStringLiteral("screenshot_toolbar/last_drawing_tool")).toString();
+}
+
+bool ScreenshotToolbarSettings::setLastDrawingTool(const QString& tool) const {
+    return cache().setValue(QStringLiteral("screenshot_toolbar/last_drawing_tool"), tool);
 }
 
 namespace {

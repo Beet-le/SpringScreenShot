@@ -405,6 +405,11 @@ pub struct TextDisplayItem {
     pub width: f64,
     pub height: f64,
     pub rotation: f64,
+    /// Painted ink size (widest line × laid-out height), always resolved to at
+    /// least the item size. Serial connectors derive their anchor box from
+    /// this, aligned inside the item rectangle, never from the wrap rectangle.
+    pub content_width: f64,
+    pub content_height: f64,
     pub text: String,
     pub color: ColorRgba8,
     pub font_size: f64,
@@ -426,6 +431,7 @@ pub enum DisplaySerialNumberType {
     SolidCircle = 1,
     OutlinedSquare = 2,
     SolidSquare = 3,
+    Circle = 4,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -522,6 +528,8 @@ impl Default for TextDisplayItem {
             width: 0.0,
             height: 0.0,
             rotation: 0.0,
+            content_width: 0.0,
+            content_height: 0.0,
             text: String::new(),
             color: ColorRgba8::default(),
             font_size: 0.0,
@@ -597,6 +605,7 @@ pub enum UiShapeKind {
     ArrowFocusHandle,
     ArrowSegmentHandle,
     EraserCursor,
+    BindingHighlight,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -790,14 +799,40 @@ impl<T> Default for LayerPatch<T> {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ViewportPatch {
     pub frame_view: FrameView,
     pub decoration: DecorationPatch,
     pub scene: LayerPatch<SceneDisplayItem>,
+    /// Complete replacement, indexed into the resulting scene, not patch payload items.
+    /// None retains the previous plan; Some(empty) clears it.
+    pub scene_render_plan: Option<Vec<SceneRenderRun>>,
     pub pen_filter_geometry_ops: Vec<PenFilterGeometryPatch>,
     pub path_geometry_ops: Vec<PathGeometryPatch>,
     pub overlay: LayerPatch<OverlayDisplayItem>,
+}
+
+impl Default for ViewportPatch {
+    fn default() -> Self {
+        Self {
+            frame_view: FrameView::default(),
+            decoration: DecorationPatch::default(),
+            scene: LayerPatch::default(),
+            scene_render_plan: Some(Vec::new()),
+            pen_filter_geometry_ops: Vec::new(),
+            path_geometry_ops: Vec::new(),
+            overlay: LayerPatch::default(),
+        }
+    }
+}
+
+/// An ordered, homogeneous effect run. Identities are assigned before culling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SceneRenderRun {
+    pub source_pass: DisplayItemId,
+    pub effect_run: DisplayItemId,
+    pub start: u32,
+    pub count: u32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
