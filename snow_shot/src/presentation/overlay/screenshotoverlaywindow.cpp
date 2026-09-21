@@ -608,6 +608,7 @@ void ScreenshotOverlayWindow::paintEvent(QPaintEvent* event) {
 void ScreenshotOverlayWindow::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
     layoutScrollingThumbnail();
+    updateWindowMask();
 }
 
 void ScreenshotOverlayWindow::layoutScrollingThumbnail() {
@@ -676,6 +677,12 @@ void ScreenshotOverlayWindow::updateWindowMask() {
             interactiveRegion += QRegion(m_scrollingThumbnail->geometry());
         }
     }
+#ifdef Q_OS_MACOS
+    // An empty visual mask can mean either no hole or a full-display hole.
+    // Keep the native input region explicit, including overlapping preview controls.
+    snow_shot::platform::setScreenshotInputPassThroughRegion(
+        this, QRegion(hole).subtracted(interactiveRegion));
+#endif
     if (m_windowMaskInitialized && interactiveRegion == m_appliedWindowMask) {
         return;
     }
