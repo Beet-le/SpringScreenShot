@@ -31,6 +31,24 @@ class MacOSBundleMetadata(unittest.TestCase):
                          {native_languages[language] for language in catalog_languages})
         self.assertEqual(plist['CFBundleDevelopmentRegion'], native_languages['en_US'])
 
+    def test_pkg_config_apple_framework_options_are_removed_as_pairs(self):
+        module = ROOT / 'cmake/SnowPkgConfigAppleFrameworks.cmake'
+        managed_cmake = ROOT / '.tools/macos-dev/bin/cmake'
+        cmake = str(managed_cmake) if managed_cmake.is_file() else shutil.which('cmake')
+        self.assertIsNotNone(cmake, 'CMake is required for the framework option contract test')
+        with tempfile.TemporaryDirectory(prefix='snow cmake test ') as directory:
+            script = Path(directory) / 'test.cmake'
+            script.write_text(f'''include([[{module.as_posix()}]])
+snow_strip_pkg_config_apple_framework_options(result
+    -pthread -framework VideoToolbox -framework CoreMedia -Wl,-dead_strip)
+if(NOT result STREQUAL "-pthread;-Wl,-dead_strip")
+    message(FATAL_ERROR "Unexpected sanitized options: ${{result}}")
+endif()
+''')
+            result = subprocess.run([cmake, '-P', str(script)], text=True,
+                                    capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
 
 class MacOSBuildScripts(unittest.TestCase):
     def setUp(self):
@@ -122,6 +140,8 @@ if name == 'openssl':
         stamp.parent.mkdir(parents=True)
         stamp.write_text(json.dumps({"SchemaVersion": 1, "QtVersion": "6.11.1",
                                      "Architecture": "arm64", "Configuration": "Release",
+                                     "DeploymentTarget": "14.0",
+                                     "Dup3": False,
                                      "Ltcg": True, "SystemPng": True, "SystemZlib": True}))
         (self.root / "Qt kit/share/snow-apps/qt-licenses").mkdir()
         self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}",
@@ -183,11 +203,24 @@ if name == 'openssl':
         self.assertIn('x86_64-apple-darwin', rustup)
 
     def test_package_builds_before_cpack(self):
+        stale = self.root / 'build/snow-shot-macos-arm64-release/stale-bundle-file'
+        stale.parent.mkdir(parents=True)
+        stale.touch()
         calls = self.run_script("package-snow-shot.sh")
         build = next(i for i, c in enumerate(calls) if '--build' in c)
         pack = next(i for i, c in enumerate(calls) if c[0] == 'cpack')
         self.assertLess(build, pack)
         self.assertEqual(calls[pack], ['cpack', '--preset', 'package-snow-shot-macos-arm64-release'])
+        self.assertFalse(stale.exists())
+
+    def test_arm_assembler_objects_keep_the_macos_deployment_target(self):
+        x264 = (ROOT / 'cmake/vcpkg-overlay-ports/x264/portfile.cmake').read_text()
+        x265 = (ROOT / 'cmake/vcpkg-overlay-ports/x265/portfile.cmake').read_text()
+        x265_patch = (ROOT / 'cmake/vcpkg-overlay-ports/x265/'
+                      'macos-arm64-deployment-target.patch').read_text()
+        self.assertIn('--extra-asflags=-mmacosx-version-min=', x264)
+        self.assertIn('macos-arm64-deployment-target.patch', x265)
+        self.assertIn('-mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}', x265_patch)
 
     def test_package_rejects_nonrelease(self):
         calls = self.run_script("package-snow-shot.sh", "snow-shot-macos-arm64-debug", success=False)
@@ -252,13 +285,26 @@ if name == 'openssl':
         stamp = prefix / 'share/snow-apps/static-qt-build.json'
         stamp.write_text(json.dumps({
             'SchemaVersion': 1, 'QtVersion': '6.11.1', 'Architecture': 'arm64',
-            'Configuration': 'Release', 'DependencyFingerprint': fingerprint,
+            'Configuration': 'Release', 'DeploymentTarget': '14.0',
+            'Dup3': False,
+            'DependencyFingerprint': fingerprint,
             'Ltcg': True, 'SystemPng': True, 'SystemZlib': True,
         }, indent=2))
         calls = self.run_script('build-static-qt.sh', '--install-prefix', str(prefix),
                                 '--dependency-prefix', str(dependencies))
         self.assertFalse(any(call[0] == 'cmake' for call in calls))
         self.assertIn('Validated static Qt 6.11.1 (arm64)', self.last_result.stdout)
+
+    def test_static_qt_builder_supports_command_line_tools_without_full_xcode(self):
+        builder = (ROOT / 'scripts/build-static-qt.sh').read_text()
+        self.assertIn('if ! xcodebuild -version >/dev/null 2>&1; then', builder)
+        self.assertIn('xcrun --show-sdk-path', builder)
+        self.assertIn('qt_apple_options+=(-DQT_NO_XCODE_MIN_VERSION_CHECK=ON)', builder)
+        self.assertIn('"${qt_apple_options[@]}"', builder)
+        self.assertIn('qt_deployment_target=14.0', builder)
+        self.assertIn('-DCMAKE_OSX_DEPLOYMENT_TARGET="$qt_deployment_target"', builder)
+        self.assertIn('-DFEATURE_dup3=OFF', builder)
+        self.assertIn("'FEATURE_dup3:BOOL=OFF' 'QT_FEATURE_dup3:INTERNAL=OFF'", builder)
 
     def test_launch_bundle_with_arguments(self):
         app = self.root / 'build/snow-shot-macos-arm64-debug/snow_shot/snow_shot.app'
