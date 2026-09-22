@@ -17,6 +17,66 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class MacOSBundleMetadata(unittest.TestCase):
+    def test_dmg_instructions_cover_all_bundle_languages(self):
+        resources = ROOT / 'snow_shot/packaging/macos'
+        plist = plistlib.loads((resources / 'Info.plist.in').read_bytes())
+        background = ET.parse(resources / 'dmg-background.svg').getroot()
+        language_key = '{http://www.w3.org/XML/1998/namespace}lang'
+        groups = {element.attrib[language_key]: element
+                  for element in background.iter('{http://www.w3.org/2000/svg}g')
+                  if language_key in element.attrib}
+        self.assertEqual(set(groups), set(plist['CFBundleLocalizations']))
+        for language, group in groups.items():
+            with self.subTest(language=language):
+                lines = [element.text for element in group]
+                self.assertEqual(len(lines), 2, 'Both install and launch instructions are required')
+                self.assertTrue(all(line and 'Snow Shot' in line for line in lines))
+        self.assertIn('应用程序', ''.join(groups['zh-Hans'].itertext()))
+        self.assertIn('應用程式', ''.join(groups['zh-Hant'].itertext()))
+
+    def test_product_metadata_and_native_translations(self):
+        resources = ROOT / 'snow_shot/packaging/macos'
+        plist = plistlib.loads((resources / 'Info.plist.in').read_bytes())
+        self.assertEqual(plist['CFBundleInfoDictionaryVersion'], '6.0')
+        self.assertEqual(plist['CFBundleName'], 'Snow Shot')
+        self.assertEqual(plist['CFBundleDisplayName'], 'Snow Shot')
+        self.assertEqual(plist['CFBundleIdentifier'], 'com.snowshot.snow_shot')
+        self.assertEqual(plist['LSApplicationCategoryType'], 'public.app-category.productivity')
+        self.assertEqual(plist['NSHumanReadableCopyright'], '${SNOW_SHOT_COPYRIGHT}')
+        for language in plist['CFBundleLocalizations']:
+            strings = (resources / (language + '.lproj') / 'InfoPlist.strings').read_text()
+            for key in ('CFBundleName', 'CFBundleDisplayName', 'NSAppleEventsUsageDescription',
+                        'NSMicrophoneUsageDescription', 'NSAudioCaptureUsageDescription'):
+                self.assertIn('"' + key + '" = "', strings)
+        main = (ROOT / 'snow_shot/src/app/main.cpp').read_text()
+        self.assertIn('setApplicationDisplayName(', main)
+        self.assertIn('QString applicationName = QStringLiteral("snow_shot")', main)
+
+    def test_dmg_staging_preserves_bundle_contents(self):
+        cmake = ROOT / '.tools/macos-dev/bin/cmake'
+        cmake = str(cmake) if cmake.is_file() else shutil.which('cmake')
+        self.assertIsNotNone(cmake)
+        with tempfile.TemporaryDirectory(prefix='snow dmg staging ') as directory:
+            stage = Path(directory)
+            bundle = stage / 'snow_shot.app'
+            files = {'Contents/Info.plist': b'plist',
+                     'Contents/MacOS/snow_shot': b'executable',
+                     'Contents/_CodeSignature/CodeResources': b'signature'}
+            for name, content in files.items():
+                path = bundle / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+            binary = bundle / 'Contents/MacOS/snow_shot'
+            binary.chmod(0o755)
+            result = subprocess.run([cmake, '-DCPACK_TEMPORARY_DIRECTORY=' + str(stage),
+                                     '-P', str(ROOT / 'cmake/PrepareSnowShotMacOSDmg.cmake')],
+                                    text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(bundle.exists())
+            for name, content in files.items():
+                self.assertEqual((stage / 'Snow Shot.app' / name).read_bytes(), content)
+            self.assertTrue(os.access(stage / 'Snow Shot.app/Contents/MacOS/snow_shot', os.X_OK))
+
     def test_finder_automation_has_usage_description(self):
         plist = plistlib.loads((ROOT / 'snow_shot/packaging/macos/Info.plist.in').read_bytes())
         self.assertEqual(plist['NSAppleEventsUsageDescription'],
@@ -581,6 +641,27 @@ class MacOSBundle(unittest.TestCase):
             self.assertEqual(len(list(out.glob("*.dmg.sha256"))), 1)
             dmg = next(out.glob("*.dmg"))
             run("codesign", "--verify", "--strict", str(dmg))
+            mount = Path(temp) / "mounted"
+            mount.mkdir()
+            run("hdiutil", "attach", "-readonly", "-nobrowse", "-noautoopen",
+                "-mountpoint", str(mount), str(dmg))
+            try:
+                packaged = mount / "Snow Shot.app"
+                self.assertTrue(packaged.is_dir())
+                self.assertFalse((mount / "snow_shot.app").exists())
+                self.assertEqual(os.readlink(mount / "Applications"), "/Applications")
+                self.assertTrue((mount / ".background/background.png").is_file())
+                self.assertTrue((mount / ".DS_Store").is_file())
+                metadata = plistlib.loads((packaged / "Contents/Info.plist").read_bytes())
+                self.assertEqual(metadata['CFBundleDisplayName'], 'Snow Shot')
+                self.assertEqual(metadata['NSHumanReadableCopyright'],
+                                 'Copyright (C) 2025-2026 mg-chao')
+                for language in metadata['CFBundleLocalizations']:
+                    self.assertTrue((packaged / 'Contents/Resources' /
+                                     (language + '.lproj') / 'InfoPlist.strings').is_file())
+                run("codesign", "--verify", "--deep", "--strict", str(packaged))
+            finally:
+                run("hdiutil", "detach", str(mount))
             import hashlib
             checksum = dmg.with_suffix(".dmg.sha256").read_text().split()[0]
             self.assertEqual(checksum, hashlib.sha256(dmg.read_bytes()).hexdigest())

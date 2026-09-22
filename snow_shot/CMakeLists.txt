@@ -6953,6 +6953,9 @@ if(SNOW_SHOT_BUILD_TESTS)
 endif()
 
 if(APPLE AND SNOW_SHOT_BUILD_TESTS)
+    add_test(NAME snow-shot-macos-startup-tests COMMAND snow_shot --startup-probe)
+    set_tests_properties(snow-shot-macos-startup-tests PROPERTIES
+        LABELS "unit;macos" TIMEOUT 30)
     add_executable(snow-shot-macos-shell-policy-tests
         tests/macos_shell_policy_tests.cpp
         include/snow_shot/app/featureavailability.h

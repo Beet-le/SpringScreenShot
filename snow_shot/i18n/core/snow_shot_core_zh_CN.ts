@@ -584,7 +584,7 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         </message>
         <message>
             <source>Could not pin selected files</source>
-            <translation>无法将选中的文件贴到屏幕</translation>
+            <translation>无法将选中的文件固定到屏幕</translation>
         </message>
         <message>
             <source>Feature unavailable</source>

@@ -10,6 +10,18 @@ set(CPACK_PACKAGE_CHECKSUM SHA256)
 set(CPACK_GENERATOR DragNDrop)
 set(CPACK_DMG_VOLUME_NAME "Snow Shot")
 set(CPACK_DMG_FORMAT UDZO)
+set(CPACK_DMG_DISABLE_APPLICATIONS_SYMLINK OFF)
+set(_snow_dmg_assets "${CMAKE_CURRENT_LIST_DIR}/../snow_shot/packaging/macos")
+set(CPACK_DMG_BACKGROUND_IMAGE "${CMAKE_CURRENT_BINARY_DIR}/macos/dmg-background.png")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/macos")
+# Regenerate the native PNG when the artwork changes.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${_snow_dmg_assets}/dmg-background.svg")
+execute_process(COMMAND /usr/bin/sips -s format png
+    "${_snow_dmg_assets}/dmg-background.svg" --out "${CPACK_DMG_BACKGROUND_IMAGE}"
+    OUTPUT_QUIET COMMAND_ERROR_IS_FATAL ANY)
+set(CPACK_DMG_DS_STORE_SETUP_SCRIPT "${_snow_dmg_assets}/dmg-layout.applescript")
+set(CPACK_PRE_BUILD_SCRIPTS "${CMAKE_CURRENT_LIST_DIR}/PrepareSnowShotMacOSDmg.cmake")
 set(CPACK_POST_BUILD_SCRIPTS "${CMAKE_CURRENT_LIST_DIR}/SignSnowShotMacOSDmg.cmake")
 # Do not ship SDK headers, static archives or other projects' install rules.
 set(CPACK_INSTALL_CMAKE_PROJECTS "${CMAKE_BINARY_DIR};${CMAKE_PROJECT_NAME};SnowShot;/")

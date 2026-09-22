@@ -19,7 +19,9 @@ bash install-snow-shot-macos.sh --lang en
 ```
 
 The installer verifies the downloaded package, creates or reuses a local signing
-identity, gracefully closes Snow Shot, and replaces `/Applications/snow_shot.app`.
+identity, gracefully closes Snow Shot, and installs `/Applications/Snow Shot.app`.
+Existing `/Applications/snow_shot.app` installations migrate to the new name,
+with the old path restored if installation fails.
 It asks for administrator access only when installation requires it. Do not run
 the whole command as root; an invocation through `sudo` hands execution back to
 the desktop user. Existing app data and preferences are preserved. Failed
@@ -44,7 +46,7 @@ bash install-snow-shot-macos.sh --lang zh-CN
 ```
 
 脚本会自动识别芯片架构，优先从官网下载安装包，失败时尝试 GitHub Releases，
-验证后安装到 `/Applications/snow_shot.app`。仅在替换应用需要管理员权限时请求密码，
+验证后安装到 `/Applications/Snow Shot.app`（已有旧路径安装会迁移到新名称）。仅在替换应用需要管理员权限时请求密码，
 无需在命令前添加 `sudo`。首次创建签名身份时，系统可能要求确认钥匙串访问或代码签名信任。
 首次安装或从旧签名迁移后，仍需按系统提示授予屏幕录制和辅助功能权限。
 以后请继续使用此脚本更新，以复用本地签名身份；跨 macOS 版本的权限保留尚未完成实机验证，
@@ -52,7 +54,7 @@ bash install-snow-shot-macos.sh --lang zh-CN
 
 本地安装使用 `--dmg "/路径/安装包.dmg"`，并将对应的 `.dmg.sha256` 放在同一目录。
 `--no-launch` 表示安装后不启动应用。失败时请根据诊断信息重试；若显示恢复目录，
-请保留该目录中的 `previous.app`，并先恢复到 `/Applications/snow_shot.app`。
+请保留该目录中的 `previous.app`，并先恢复到安装器提示的安装路径。
 
 ### 繁體中文安裝說明
 
@@ -64,13 +66,13 @@ bash install-snow-shot-macos.sh --lang zh-TW
 
 不需要 Homebrew、Python、Xcode 或 Apple 開發者會員。指令碼會自動辨識晶片架構，
 優先從官網下載，失敗時改用 GitHub Releases，驗證後安裝到
-`/Applications/snow_shot.app`。不必加上 `sudo`；需要管理員權限時才會要求密碼。
+`/Applications/Snow Shot.app`（既有舊路徑安裝會遷移至新名稱）。不必加上 `sudo`；需要管理員權限時才會要求密碼。
 首次建立簽署身分時，系統可能要求確認鑰匙圈存取或程式碼簽署信任。首次安裝或從舊簽署遷移後，
 請依系統提示授予螢幕錄製和輔助使用權限。之後請繼續使用此指令碼更新，以保留本機簽署身分；
 跨 macOS 版本的權限保留尚未完成實機驗證，系統仍可能要求授權。
 本機安裝使用 `--dmg "/路徑/安裝套件.dmg"`，並提供同目錄的 `.dmg.sha256`。
 `--no-launch` 可略過啟動。若還原失敗，請保留顯示的目錄，先將其中的 `previous.app`
-還原到 `/Applications/snow_shot.app` 再重試。
+還原到安裝程式提示的安裝路徑再重試。
 
 ### Installer publishing contract
 
@@ -92,10 +94,30 @@ and requires exactly one matching architecture DMG and checksum asset. Pre-relea
 and draft assets are not selected. Checksums detect corruption; they are downloaded
 over HTTPS from the same release source, not a separate publisher-signature system.
 
-The DMG must contain `snow_shot.app` at its root, with bundle ID
+The DMG contains `Snow Shot.app` at its root (the installer also accepts legacy
+`snow_shot.app` packages), with bundle ID
 `com.snowshot.snow_shot`, executable `snow_shot`, a minimum macOS version, and a
 valid bundle signature (ad-hoc is supported). Publishing these assets and this
 installer remains a separate release operation. Nothing is uploaded by the script.
+
+### DMG installation window
+
+The release DMG opens a branded Finder window with Snow Shot on the left, an
+Applications shortcut on the right, and drag-to-install instructions in English,
+Simplified Chinese, and Traditional Chinese. Finder backgrounds are static images,
+so all three languages appear together rather than selecting the packaging
+machine’s language. Native privacy prompts use macOS language selection. Drag the
+app to Applications, eject the image, and open Snow Shot from Applications.
+The bundle includes its icon, full release version, copyright, Productivity
+category, supported languages, and localized macOS privacy prompts. The internal
+executable and settings identifier remain `snow_shot`.
+
+Packaging uses Finder through AppleScript to save the disk image layout. Run it
+in a logged-in macOS desktop session; macOS may request permission for the
+packaging terminal to control Finder. Deployment and ad-hoc signing happen before
+the packaging hook renames the distributable bundle. Development build/run paths
+remain unchanged. Developer ID signing and notarization are still separate release
+steps.
 
 ### Signing identity, recovery, and qualification
 

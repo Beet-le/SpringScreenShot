@@ -2015,7 +2015,7 @@
         </message>
         <message>
             <source>Pin selected image files from Finder or the desktop to the screen</source>
-            <translation>將 Finder 或桌面中所選的圖片檔案貼到螢幕</translation>
+            <translation>將 Finder 或桌面中所選的圖片檔案固定到螢幕</translation>
         </message>
         <message>
             <source>Pin selection</source>
@@ -2623,7 +2623,7 @@
         </message>
         <message>
             <source>Start new screenshot sessions and pin drawing mode with the last used drawing tool instead of the move tool</source>
-            <translation>開始新的截圖作業或進入貼圖繪製模式時，自動啟用上次使用的繪圖工具，而不是移動工具</translation>
+            <translation>開始新的截圖作業或進入固定到螢幕繪製模式時，自動啟用上次使用的繪圖工具，而不是移動工具</translation>
         </message>
         <message>
             <source>Start/pause/resume recording</source>
