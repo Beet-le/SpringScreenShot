@@ -170,7 +170,7 @@ class ScreenshotExportWorker final : public QObject {
     ScreenshotSelectionClipboardResult prepareSelectionClipboard(
         const QByteArray& documentSession, const SnowCanvasSmartEraseSnapshot& smartErase,
         const QRect& selection, const ScreenshotResultStyle& style,
-        const QList<CanvasExportSource>& sources, const ScreenshotSelectionRenderSpec& spec = {}) {
+        const QList<CanvasExportSource>& sources, const ScreenshotSelectionRenderSpec& spec) {
         ScreenshotSelectionClipboardResult result;
         result.image =
             renderSelection(documentSession, smartErase, selection, style, sources, spec);

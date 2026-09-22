@@ -219,9 +219,11 @@ QSize encoderLimits(ScreenshotImageFileFormat format) {
             int(qMin(height, uint32_t(std::numeric_limits<int>::max() / 4)))};
 }
 ScreenshotSaveExportOptions normalizedOptions(ScreenshotSaveExportOptions options) {
-    const bool supportsQuality = options.format != ScreenshotImageFileFormat::Png &&
-                                 options.format != ScreenshotImageFileFormat::Bmp;
-    options.quality = supportsQuality ? qBound(1, options.quality, 100) : 100;
+    options.quality = ScreenshotImageFileService::supportsQuality(options.format)
+                          ? qBound(0, options.quality, 100)
+                          : 100;
+    if (!ScreenshotImageFileService::supportsCompressionLevel(options.format))
+        options.compressionLevel = ScreenshotCompressionLevel::Low;
     if (options.format != ScreenshotImageFileFormat::Pdf) {
         options.pdfPageSize = ScreenshotPdfPageSize::PortraitA4;
         options.pdfTitle.clear();
@@ -264,7 +266,8 @@ std::shared_ptr<PreparedPixels> preparePixels(const Source& source, QSize size,
 std::shared_ptr<Encoded> render(std::shared_ptr<PreparedPixels> pixels,
                                 const ScreenshotSaveExportOptions& options,
                                 const ScreenshotExportCancellation& cancellation, QString* error,
-                                std::shared_ptr<screenshot_pdf::Payload> cachedPdf) {
+                                std::shared_ptr<screenshot_pdf::Payload> cachedPdf,
+                                snow_shot::storage::PreparedPngImage cachedPng) {
     if (!pixels || !pixels->rows.isValid() || pixels->size != options.size ||
         cancellation.isCancellationRequested()) {
         return {};
@@ -290,6 +293,15 @@ std::shared_ptr<Encoded> render(std::shared_ptr<PreparedPixels> pixels,
         *error = output.errorString();
         return {};
     }
+    if (options.format == ScreenshotImageFileFormat::Png && cachedPng.isValid() &&
+        cachedPng.pixelSize() == options.size) {
+        if (output.write(cachedPng.bytes()) != cachedPng.bytes().size() || !output.flush()) {
+            *error = output.errorString();
+            return {};
+        }
+        result->codecResult.roundTrip = snow::image::PixelRoundTrip::exact;
+        return cancellation.isCancellationRequested() ? nullptr : result;
+    }
     ScreenshotImageRowSource rows = withCancellation(result->pixels->rows, cancellation);
     if (options.format == ScreenshotImageFileFormat::Pdf) {
         if (cachedPdf && cachedPdf->size == options.size &&
@@ -313,8 +325,9 @@ std::shared_ptr<Encoded> render(std::shared_ptr<PreparedPixels> pixels,
                                             : snow::image::PixelRoundTrip::codec_artifact;
         return result;
     }
-    snow::image::EncodeOptions encodeOptions =
-        ScreenshotImageFileService::encodeOptions(result->options.format, result->options.quality);
+    snow::image::EncodeOptions encodeOptions = ScreenshotImageFileService::encodeOptions(
+        result->options.format,
+        ScreenshotImageEncodingOptions{result->options.quality, result->options.compressionLevel});
     encodeOptions.verified_alpha_content = result->pixels->alphaContent;
     if (!snow_shot::image_codec::encodeToDevice(
             rows, &output, ScreenshotImageFileService::snowImageFormat(result->options.format),

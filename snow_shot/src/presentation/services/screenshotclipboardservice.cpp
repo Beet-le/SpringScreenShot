@@ -399,7 +399,7 @@ ScreenshotClipboardService::prepare(const ScreenshotImageRowSource& source,
     }
     ScreenshotClipboardPayload payload;
     payload.m_pngBytes =
-        canonicalPng.isEmpty() ? snow_shot::image_codec::encodePng(source) : canonicalPng;
+        canonicalPng.isEmpty() ? snow_shot::image_codec::encodePng(source, 0) : canonicalPng;
     SNOW_SHOT_CLIPBOARD_PERF_COUNTER("clipboard.png_encoded", canonicalPng.isEmpty() ? 1 : 0);
     if (payload.m_pngBytes.isEmpty())
         return {};

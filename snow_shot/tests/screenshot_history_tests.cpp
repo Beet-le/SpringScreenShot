@@ -137,19 +137,21 @@ void directImagesPersistWithoutTouchingTheEditor(
     DirectCaptureRequest request;
     request.target = target;
     request.requestedAt = QDateTime::currentDateTimeUtc();
+    request.compressionLevel = ScreenshotCompressionLevel::High;
     QImage image = solidImage(physicalBounds.size(), qRgb(24, 50, 70));
     image.setPixel(5, 5, qRgb(210, 90, 30));
     DirectCaptureFrame frame{image, physicalBounds, QStringLiteral("target:123"), 2, {}};
-    frame.canonicalPng = snow_shot::image_codec::encodePng(image);
+    const QByteArray png = snow_shot::image_codec::encodePng(image, 9);
     frame.displays.push_back({image, physicalBounds, frame.identity, frame.identity});
     QString id;
     {
         auto repository = storage::makeCaptureHistoryRepository(root);
-        auto draft = directCaptureHistoryDraft(request, frame);
-        require(draft.preparedResultImage.has_value() &&
-                    draft.preparedResultImage->bytes().constData() ==
-                        frame.canonicalPng.constData(),
-                "direct capture history did not reuse the clipboard PNG");
+        auto draft = directCaptureHistoryDraft(
+            request, frame, storage::PreparedPngImage::fromBytes(image.size(), png));
+        require(draft.pngCompressionLevel == 9 && draft.preparedResultImage.has_value() &&
+                    draft.preparedResultImage->bytes().constData() == png.constData(),
+                "direct capture history did not retain compression or reuse the configured PNG "
+                "encoding");
         // Preserve coverage for image-only records written before desktop retention was restored.
         draft.contentKind = storage::CaptureHistoryContentKind::Image;
         draft.canvasBounds = physicalBounds;
