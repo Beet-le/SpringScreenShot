@@ -2210,8 +2210,8 @@
             <translation>重新啟動</translation>
         </message>
         <message>
-            <source>Restart Snow Shot with administrator privileges</source>
-            <translation>以系統管理員權限重新啟動 Snow Shot</translation>
+            <source>Restart SpringScreenShot with administrator privileges</source>
+            <translation>以系統管理員權限重新啟動 SpringScreenShot</translation>
         </message>
         <message>
             <source>Restart as administrator</source>
@@ -2602,16 +2602,16 @@
             <translation>獨立翻譯視窗</translation>
         </message>
         <message>
-            <source>Start Snow Shot in the background when Windows starts</source>
-            <translation>Windows 啟動時在背景啟動 Snow Shot</translation>
+            <source>Start SpringScreenShot in the background when Windows starts</source>
+            <translation>Windows 啟動時在背景啟動 SpringScreenShot</translation>
         </message>
         <message>
-            <source>Start Snow Shot in the background when you log in.</source>
-            <translation>登入時在背景啟動 Snow Shot。</translation>
+            <source>Start SpringScreenShot in the background when you log in.</source>
+            <translation>登入時在背景啟動 SpringScreenShot。</translation>
         </message>
         <message>
-            <source>Start Snow Shot with administrator privileges when you sign in</source>
-            <translation>登入時以系統管理員權限啟動 Snow Shot</translation>
+            <source>Start SpringScreenShot with administrator privileges when you sign in</source>
+            <translation>登入時以系統管理員權限啟動 SpringScreenShot</translation>
         </message>
         <message>
             <source>Start a screen recording from a confirmed selection</source>

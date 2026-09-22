@@ -2260,7 +2260,7 @@ int main(int argc, char** argv) {
                            QStringLiteral("system.login-item-settings")});
     require(login && QString::fromUtf8(login->title.source) == u"Launch at login" &&
                 QString::fromUtf8(login->description.source) ==
-                    u"Start Snow Shot in the background when you log in." &&
+                    u"Start SpringScreenShot in the background when you log in." &&
                 login->configurationKey == u"system/auto_start_at_boot",
             "macOS login setting preserves its binding with native wording");
     require(loginSettings &&

@@ -2210,8 +2210,8 @@
             <translation>Restart</translation>
         </message>
         <message>
-            <source>Restart Snow Shot with administrator privileges</source>
-            <translation>Restart Snow Shot with administrator privileges</translation>
+            <source>Restart SpringScreenShot with administrator privileges</source>
+            <translation>Restart SpringScreenShot with administrator privileges</translation>
         </message>
         <message>
             <source>Restart as administrator</source>
@@ -2602,16 +2602,16 @@
             <translation>Standalone Translation Window</translation>
         </message>
         <message>
-            <source>Start Snow Shot in the background when Windows starts</source>
-            <translation>Start Snow Shot in the background when Windows starts</translation>
+            <source>Start SpringScreenShot in the background when Windows starts</source>
+            <translation>Start SpringScreenShot in the background when Windows starts</translation>
         </message>
         <message>
-            <source>Start Snow Shot in the background when you log in.</source>
-            <translation>Start Snow Shot in the background when you log in.</translation>
+            <source>Start SpringScreenShot in the background when you log in.</source>
+            <translation>Start SpringScreenShot in the background when you log in.</translation>
         </message>
         <message>
-            <source>Start Snow Shot with administrator privileges when you sign in</source>
-            <translation>Start Snow Shot with administrator privileges when you sign in</translation>
+            <source>Start SpringScreenShot with administrator privileges when you sign in</source>
+            <translation>Start SpringScreenShot with administrator privileges when you sign in</translation>
         </message>
         <message>
             <source>Start a screen recording from a confirmed selection</source>

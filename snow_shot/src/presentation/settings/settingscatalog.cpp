@@ -1325,7 +1325,7 @@ SettingsItemDefinition launchAsAdministratorItem() {
         QStringLiteral("system.launch-as-administrator"),
         QT_TRANSLATE_NOOP("SettingsCatalog", "Launch as administrator"),
         QT_TRANSLATE_NOOP("SettingsCatalog",
-                          "Start Snow Shot with administrator privileges when you sign in"),
+                          "Start SpringScreenShot with administrator privileges when you sign in"),
         QStringLiteral("system/launch_as_administrator"),
         SettingsSwitchBinding::LaunchAsAdministrator);
 }
@@ -1337,7 +1337,7 @@ SettingsItemDefinition restartAsAdministratorItem() {
     return {QStringLiteral("system.restart-as-administrator"),
             settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Restart as administrator")),
             settingsText(QT_TRANSLATE_NOOP("SettingsCatalog",
-                                           "Restart Snow Shot with administrator privileges")),
+                                           "Restart SpringScreenShot with administrator privileges")),
             {},
             {},
             payload};
@@ -1363,11 +1363,11 @@ SettingsItemDefinition autoStartItem() {
         QStringLiteral("system.auto-start-at-boot"),
 #ifdef Q_OS_MACOS
         QT_TRANSLATE_NOOP("SettingsCatalog", "Launch at login"),
-        QT_TRANSLATE_NOOP("SettingsCatalog", "Start Snow Shot in the background when you log in."),
+        QT_TRANSLATE_NOOP("SettingsCatalog", "Start SpringScreenShot in the background when you log in."),
 #else
         QT_TRANSLATE_NOOP("SettingsCatalog", "Auto start at boot"),
         QT_TRANSLATE_NOOP("SettingsCatalog",
-                          "Start Snow Shot in the background when Windows starts"),
+                          "Start SpringScreenShot in the background when Windows starts"),
 #endif
         QStringLiteral("system/auto_start_at_boot"), SettingsSwitchBinding::AutoStartAtBoot);
 }

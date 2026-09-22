@@ -67,7 +67,7 @@ ScreenshotImageFileSaveResult writeAtomically(const QString& outputPath, Encoder
 } // namespace
 
 QString ScreenshotImageFileService::suggestedBaseName(const QDateTime& timestamp) {
-    return suggestedBaseName(QStringLiteral("SnowShot_{YYYY-MM-DD_HH-mm-ss}"), timestamp);
+    return suggestedBaseName(QStringLiteral("SpringScreenShot_{YYYY-MM-DD_HH-mm-ss}"), timestamp);
 }
 
 QString ScreenshotImageFileService::suggestedBaseName(const QString& filenameFormat,
@@ -433,7 +433,7 @@ ScreenshotImageFileService::write(const ScreenshotImageRowSource& source, const 
 ScreenshotImageFileSaveResult ScreenshotImageFileService::saveAutomatically(
     const QImage& image, const QStringList& candidateDirectories, const QDateTime& timestamp) {
     return saveAutomatically(image, candidateDirectories, ScreenshotImageFileFormat::Png,
-                             QStringLiteral("SnowShot_{YYYY-MM-DD_HH-mm-ss}"), timestamp);
+                             QStringLiteral("SpringScreenShot_{YYYY-MM-DD_HH-mm-ss}"), timestamp);
 }
 
 ScreenshotImageFileSaveResult ScreenshotImageFileService::saveAutomatically(

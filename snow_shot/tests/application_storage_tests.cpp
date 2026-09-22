@@ -270,9 +270,9 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
             defaultValue("screenshot/last_manual_save_directory").toString().isEmpty() &&
             defaultValue("screenshot/image_format").toString() == QStringLiteral("png") &&
             defaultValue("screenshot/manual_save_filename_format").toString() ==
-                QStringLiteral("SnowShot_{YYYY-MM-DD_HH-mm-ss}") &&
+                QStringLiteral("SpringScreenShot_{YYYY-MM-DD_HH-mm-ss}") &&
             defaultValue("screenshot/auto_save_filename_format").toString() ==
-                QStringLiteral("SnowShot_{YYYY-MM-DD_HH-mm-ss}") &&
+                QStringLiteral("SpringScreenShot_{YYYY-MM-DD_HH-mm-ss}") &&
             defaultValue("drawing/quick_selection_disabled_tools").toArray() ==
                 QJsonArray{QStringLiteral("free-draw"), QStringLiteral("pen-filter")} &&
             defaultValue("pin_to_screen/mouse_wheel_zoom_mode").toString() ==
@@ -303,7 +303,7 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
             defaultValue("screen_recording/video_save_directory").toString() ==
                 systemSaveDirectory(QStandardPaths::MoviesLocation) &&
             defaultValue("screen_recording/video_filename_format").toString() ==
-                QStringLiteral("SnowShot_Video_{YYYY-MM-DD_HH-mm-ss}") &&
+                QStringLiteral("SpringScreenShot_Video_{YYYY-MM-DD_HH-mm-ss}") &&
             defaultValue("tray/left_click_action").toString() == QStringLiteral("screenshot") &&
             defaultValue("tray/middle_click_action").toString() ==
                 QStringLiteral("screenshot_fixed") &&
@@ -1169,9 +1169,9 @@ void settingsAdaptersRoundTripAndRejectInvalidValues() {
                 !screenshot.copyImageFileToClipboard() &&
                 screenshot.imageFormat() == QStringLiteral("png") &&
                 screenshot.manualSaveFilenameFormat() ==
-                    QStringLiteral("SnowShot_{YYYY-MM-DD_HH-mm-ss}") &&
+                    QStringLiteral("SpringScreenShot_{YYYY-MM-DD_HH-mm-ss}") &&
                 screenshot.autoSaveFilenameFormat() ==
-                    QStringLiteral("SnowShot_{YYYY-MM-DD_HH-mm-ss}") &&
+                    QStringLiteral("SpringScreenShot_{YYYY-MM-DD_HH-mm-ss}") &&
                 screenshot.lastManualSaveDirectory().isEmpty() &&
                 screenshot.imageSaveDirectory() ==
                     systemSaveDirectory(QStandardPaths::PicturesLocation),
@@ -1261,7 +1261,7 @@ void settingsAdaptersRoundTripAndRejectInvalidValues() {
                 recording.videoSaveDirectory() ==
                     systemSaveDirectory(QStandardPaths::MoviesLocation) &&
                 recording.videoFilenameFormat() ==
-                    QStringLiteral("SnowShot_Video_{YYYY-MM-DD_HH-mm-ss}"),
+                    QStringLiteral("SpringScreenShot_Video_{YYYY-MM-DD_HH-mm-ss}"),
             "recording adapters must expose requested defaults");
     require(
         recording.setScreenRecordingClarity(QStringLiteral("2k")) && recording.setFrameRate(83) &&

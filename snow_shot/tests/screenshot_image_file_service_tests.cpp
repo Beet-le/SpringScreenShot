@@ -78,15 +78,15 @@ void namingAndFormatSelection() {
 
     const QDateTime timestamp(QDate(2026, 8, 14), QTime(9, 7, 6), QTimeZone::UTC);
     require(ScreenshotImageFileService::suggestedBaseName(timestamp) ==
-                QStringLiteral("SnowShot_2026-08-14_09-07-06"),
+                QStringLiteral("SpringScreenShot_2026-08-14_09-07-06"),
             "automatic screenshot names must use the documented timestamp format");
     require(ScreenshotImageFileService::suggestedBaseName(
                 QStringLiteral("Capture_{yyyyMMdd}_{HHmmss}_{zzz}"), timestamp) ==
                 QStringLiteral("Capture_20260814_090706_000"),
             "filename formats must expand arbitrary date-time patterns inside braces");
     require(ScreenshotImageFileService::suggestedBaseName(
-                QStringLiteral("SnowShot_{YYYY-MM-DD_HH-mm-ss}"), timestamp) ==
-                QStringLiteral("SnowShot_2026-08-14_09-07-06"),
+                QStringLiteral("SpringScreenShot_{YYYY-MM-DD_HH-mm-ss}"), timestamp) ==
+                QStringLiteral("SpringScreenShot_2026-08-14_09-07-06"),
             "documented uppercase date tokens must map to Qt date-time fields");
     require(ScreenshotImageFileService::extension(ScreenshotImageFileFormat::Jpeg) ==
                 QStringLiteral("jpg"),

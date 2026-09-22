@@ -27,7 +27,7 @@
 namespace {
 using namespace std::chrono_literals;
 
-constexpr wchar_t kMainWindowName[] = L"SnowShot";
+constexpr wchar_t kMainWindowName[] = L"SpringScreenShot";
 constexpr wchar_t kScreenshotControlAutomationIdSuffix[] = L".settings-item-quick-screenshot";
 constexpr wchar_t kScrollingScreenshotControlAutomationIdSuffix[] =
     L".screenshotScrollingScreenshotButton";

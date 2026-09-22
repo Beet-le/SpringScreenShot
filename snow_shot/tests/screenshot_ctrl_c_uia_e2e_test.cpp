@@ -31,11 +31,11 @@ using namespace std::chrono_literals;
 // only drops the hotkey-triggered capture on a later attempt.
 //
 // The hotkey binding is seeded into the isolated e2e storage instance before
-// the application starts: <APPDATA>/SnowShot/snow_shot-e2e-<pid>/config.json.
+// the application starts: <APPDATA>/SpringScreenShot/Spring_ScreenShot-e2e-<pid>/config.json.
 // F24 is used so the seeded binding cannot collide with the hotkeys of a
 // real snow_shot instance running on the same machine.
 
-constexpr wchar_t kMainWindowName[] = L"SnowShot";
+constexpr wchar_t kMainWindowName[] = L"SpringScreenShot";
 constexpr wchar_t kToolbarButtonAutomationIdSuffix[] = L".screenshotScrollingScreenshotButton";
 
 constexpr LONG kSelectionLeft = 64;
@@ -189,13 +189,13 @@ void require(bool condition, const char* message) {
 }
 
 // The e2e instance id isolates the application's storage under
-// %APPDATA%/SnowShot/snow_shot-e2e-<test pid>/, so the hotkey binding can be
+// %APPDATA%/SpringScreenShot/Spring_ScreenShot-e2e-<test pid>/, so the hotkey binding can be
 // seeded without touching the user's real configuration.
 [[nodiscard]] std::wstring e2eStorageDirectory() {
     wchar_t appData[MAX_PATH]{};
     require(GetEnvironmentVariableW(L"APPDATA", appData, MAX_PATH) != 0,
             "could not resolve the APPDATA directory for the e2e configuration");
-    return std::wstring(appData) + L"\\SnowShot\\snow_shot-e2e-" +
+    return std::wstring(appData) + L"\\SpringScreenShot\\Spring_ScreenShot-e2e-" +
            std::to_wstring(GetCurrentProcessId());
 }
 
@@ -204,7 +204,7 @@ void writeSeededConfiguration(const std::wstring& storageDirectory) {
         storageDirectory.substr(0, storageDirectory.rfind(L'\\'));
     require(CreateDirectoryW(snowShotDirectory.c_str(), nullptr) != FALSE ||
                 GetLastError() == ERROR_ALREADY_EXISTS,
-            "could not create the SnowShot configuration directory");
+            "could not create the SpringScreenShot configuration directory");
     require(CreateDirectoryW(storageDirectory.c_str(), nullptr) != FALSE ||
                 GetLastError() == ERROR_ALREADY_EXISTS,
             "could not create the e2e configuration directory");

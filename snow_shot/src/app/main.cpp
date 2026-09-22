@@ -76,8 +76,8 @@ std::optional<bool> updateTransactionPending(const QString& helperPath, const QS
 } // namespace
 
 int main(int argc, char* argv[]) {
-    QCoreApplication::setOrganizationName(QStringLiteral("SnowShot"));
-    QString applicationName = QStringLiteral("snow_shot");
+    QCoreApplication::setOrganizationName(QStringLiteral("SpringScreenShot"));
+    QString applicationName = QStringLiteral("Spring_ScreenShot");
     QString e2eInstanceId;
     bool e2eCaptureEnabled = false;
     for (int index = 1; index < argc; ++index) {
@@ -335,7 +335,7 @@ int main(int argc, char* argv[]) {
             .filePath(QStringLiteral("logs")));
     diagnosticsOptions.directories.append(
         QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation))
-            .filePath(QStringLiteral("SnowShot/%1/logs").arg(applicationName)));
+            .filePath(QStringLiteral("SpringScreenShot/%1/logs").arg(applicationName)));
     diagnosticsOptions.handlerPath =
         QDir(selectedStorage.executableDirectory).filePath(QStringLiteral("crashpad_handler.exe"));
     diagnosticsOptions.version = QStringLiteral(SNOW_DIAGNOSTICS_VERSION);

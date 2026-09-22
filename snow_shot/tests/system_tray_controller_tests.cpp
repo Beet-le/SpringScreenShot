@@ -122,8 +122,8 @@ int main(int argc, char* argv[]) {
     require(trayIcon->icon().isMask(),
             "bundled macOS tray icons must use native template rendering");
 #endif
-    require(trayIcon->toolTip() == QStringLiteral("SnowShot"),
-            "the tray tooltip should be SnowShot");
+    require(trayIcon->toolTip() == QStringLiteral("SpringScreenShot"),
+            "the tray tooltip should be SpringScreenShot");
     controller.show();
     require(trayIcon->isVisible(), "show should make the tray icon visible");
     controller.setEnabled(false);
