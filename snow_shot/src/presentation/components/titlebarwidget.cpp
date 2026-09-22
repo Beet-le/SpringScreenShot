@@ -191,7 +191,7 @@ class WindowControlButton final : public QAbstractButton {
         const QRectF box(inset, inset, extent - stroke, extent - stroke);
         switch (m_kind) {
         case WindowButtonKind::Minimize:
-            painter.fillRect(QRectF(0, (extent - stroke) / 2, extent, stroke), foreground);
+            painter.fillRect(QRectF(0, (extent - stroke) / 2.0, extent, stroke), foreground);
             break;
         case WindowButtonKind::Maximize:
             painter.setRenderHint(QPainter::Antialiasing);

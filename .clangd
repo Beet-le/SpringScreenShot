@@ -1,0 +1,52 @@
+# clangd configuration for the Snow Apps workspace.
+#
+# The Windows build uses the "Visual Studio 18 2026" CMake generator, which
+# cannot export a compile database (CMAKE_EXPORT_COMPILE_COMMANDS is ignored).
+# Without compile_commands.json, clangd falls back to default flags: a pre-C++17
+# standard and no project include paths. That produces cascading false errors
+# such as "file not found", "Unknown type name 'QWidget'" and "Nested namespace
+# definition is a C++17 extension" even though the code compiles fine.
+#
+# These flags mirror the CMake include paths (snow_shot, ant_design_qt,
+# snow_image, Qt 6.11.1 and the repository-managed vcpkg tree) and pin C++20 so
+# the IDE resolves the same headers the real build sees.
+#
+# Paths are machine-specific (Qt / vcpkg locations). If your Qt or vcpkg live
+# elsewhere, adjust the -I entries below to match your SNOW_QT_ROOT install.
+#
+# NOTE: no `If: PathMatch` filter here on purpose. The flags must apply to
+# headers (.h) as well as sources (.cpp); clangd analyses an opened header with
+# these flags, so restricting them to *.cpp would leave every .h unresolved.
+CompileFlags:
+  Add:
+    - -std=c++20
+    - -DUNICODE
+    - -D_UNICODE
+    - -DNOMINMAX
+    # snow_shot application headers (snow_shot/... prefix).
+    - -Id:/SnowShot/snow-apps/snow_shot/include
+    # snow_image public headers.
+    - -Id:/SnowShot/snow-apps/snow_image/include
+    # ant_design_qt package headers (widgets/..., icon_renderer.h, antd_icons.h).
+    - -Id:/SnowShot/snow-apps/ant_design_qt/packages/ant_design_qt/src
+    - -Id:/SnowShot/snow-apps/ant_design_qt/packages/ant_design_icons_qt/src
+    - -Id:/SnowShot/snow-apps/ant_design_qt/packages/adqt_icon_core/src
+    # Qt 6.11.1 MSVC modules used by the project.
+    - -ID:/Qt/6.11.1/msvc2022_64/include
+    - -ID:/Qt/6.11.1/msvc2022_64/include/QtCore
+    - -ID:/Qt/6.11.1/msvc2022_64/include/QtGui
+    - -ID:/Qt/6.11.1/msvc2022_64/include/QtWidgets
+    - -ID:/Qt/6.11.1/msvc2022_64/include/QtSvg
+    - -ID:/Qt/6.11.1/msvc2022_64/include/QtNetwork
+    - -ID:/Qt/6.11.1/msvc2022_64/include/QtConcurrent
+    # Repository-managed vcpkg dependencies (dynamic triplet).
+    - -Id:/SnowShot/snow-apps/.tools/vcpkg/installed/dynamic/include
+  Remove:
+    - /GL
+    - /permissive-
+    - /Zc:preprocessor
+Diagnostics:
+  # Qt/qglobal platform macros and generated ui_*.h headers are only fully
+  # available during a real CMake build; do not surface missing-include noise.
+  Suppress:
+    - pp_file_not_found
