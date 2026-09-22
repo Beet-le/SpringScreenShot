@@ -60,6 +60,10 @@
             <translation>箭頭</translation>
         </message>
         <message>
+            <source>Arrow shaft type</source>
+            <translation>箭桿類型</translation>
+        </message>
+        <message>
             <source>Arrow stroke color</source>
             <translation>箭頭筆畫色彩</translation>
         </message>
@@ -318,6 +322,10 @@
         <message>
             <source>End arrowhead dot</source>
             <translation>末端箭頭 圓點</translation>
+        </message>
+        <message>
+            <source>End arrowhead indented triangle</source>
+            <translation>末端箭頭 內凹三角形</translation>
         </message>
         <message>
             <source>End arrowhead none</source>
@@ -608,6 +616,10 @@
             <translation>釘選到螢幕</translation>
         </message>
         <message>
+            <source>Plain shaft</source>
+            <translation>普通箭桿</translation>
+        </message>
+        <message>
             <source>Please enter a template name</source>
             <translation>請輸入範本名稱</translation>
         </message>
@@ -764,6 +776,10 @@
             <translation>在錄製中顯示按鍵</translation>
         </message>
         <message>
+            <source>Show original image</source>
+            <translation>顯示原圖</translation>
+        </message>
+        <message>
             <source>Smart Erase</source>
             <translation>智慧擦除</translation>
         </message>
@@ -844,6 +860,10 @@
             <translation>起始箭頭 圓點</translation>
         </message>
         <message>
+            <source>Start arrowhead indented triangle</source>
+            <translation>起始箭頭 內凹三角形</translation>
+        </message>
+        <message>
             <source>Start arrowhead none</source>
             <translation>起始箭頭 無</translation>
         </message>
@@ -890,6 +910,14 @@
         <message>
             <source>Table recognition</source>
             <translation>表格辨識</translation>
+        </message>
+        <message>
+            <source>Tapered shaft</source>
+            <translation>漸寬箭桿</translation>
+        </message>
+        <message>
+            <source>Tapered shafts support standard, triangle, triangle outline, and indented triangle arrowheads.</source>
+            <translation>漸寬箭桿支援標準、三角形、空心三角形和內凹三角形箭頭。</translation>
         </message>
         <message>
             <source>Template</source>

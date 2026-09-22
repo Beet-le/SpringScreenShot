@@ -195,6 +195,20 @@ void builtInCatalogIsCompleteAndValid() {
                 }
                 if (item.configurationKey == QStringLiteral("updates/mode")) {
                     const auto& select = std::get<settings::SettingsSelectDefinition>(item.payload);
+#ifdef Q_OS_MACOS
+                    require(select.binding == settings::SettingsSelectBinding::UpdateMode &&
+                                select.options.size() == 2 &&
+                                select.options[0].value == QStringLiteral("manual") &&
+                                select.options[1].value == QStringLiteral("check") &&
+                                storage::ConfigurationSchema::defaultValue(item.configurationKey) ==
+                                    QStringLiteral("check"),
+                            "macOS exposes only manual and automatic checks");
+                    const auto migrated = storage::ConfigurationSchema::normalize(
+                        item.configurationKey, QStringLiteral("download"));
+                    require(migrated.valid && migrated.changed &&
+                                migrated.value == QStringLiteral("check"),
+                            "legacy automatic download migrates to check");
+#else
                     require(
                         select.binding == settings::SettingsSelectBinding::UpdateMode &&
                             select.options.size() == 3 &&
@@ -204,6 +218,7 @@ void builtInCatalogIsCompleteAndValid() {
                             storage::ConfigurationSchema::defaultValue(item.configurationKey) ==
                                 QStringLiteral("download"),
                         "update policy exposes all three modes with automatic download default");
+#endif
                     foundUpdates = true;
                 }
             }
@@ -211,7 +226,8 @@ void builtInCatalogIsCompleteAndValid() {
     }
 #ifdef Q_OS_MACOS
     require(sectionCount == 40, "macOS adds one permissions section");
-    require(itemCount == 168, "macOS omits Windows-only choices and the tray middle-click setting");
+    require(itemCount == 167, "macOS adds login settings and omits administrator controls, "
+                              "Windows-only choices, and tray middle-click");
 #else
     require(sectionCount == 39, "catalog must contain thirty-nine sections");
     require(itemCount == 169, "catalog must contain one hundred sixty-nine items");
@@ -2235,6 +2251,29 @@ void emptyRegistryBuilderIsExplicitlyInvalid() {
 int main(int argc, char** argv) {
     QCoreApplication application(argc, argv);
     const auto adminCatalog = settings::buildBuiltInSettingsCatalog();
+#ifdef Q_OS_MACOS
+    const auto* login =
+        adminCatalog.item({QStringLiteral("system-settings"), QStringLiteral("system-general"),
+                           QStringLiteral("system.auto-start-at-boot")});
+    const auto* loginSettings =
+        adminCatalog.item({QStringLiteral("system-settings"), QStringLiteral("system-general"),
+                           QStringLiteral("system.login-item-settings")});
+    require(login && QString::fromUtf8(login->title.source) == u"Launch at login" &&
+                QString::fromUtf8(login->description.source) ==
+                    u"Start Snow Shot in the background when you log in." &&
+                login->configurationKey == u"system/auto_start_at_boot",
+            "macOS login setting preserves its binding with native wording");
+    require(loginSettings &&
+                std::get<settings::SettingsActionDefinition>(loginSettings->payload).binding ==
+                    settings::SettingsActionBinding::OpenLoginItemSettings,
+            "macOS exposes the native login settings action");
+    require(
+        adminCatalog.item({QStringLiteral("system-settings"), QStringLiteral("system-general"),
+                           QStringLiteral("system.launch-as-administrator")}) == nullptr &&
+            adminCatalog.item({QStringLiteral("system-settings"), QStringLiteral("system-general"),
+                               QStringLiteral("system.restart-as-administrator")}) == nullptr,
+        "macOS must omit Windows-only administrator controls");
+#else
     bool foundAdministratorControls = false;
     for (const auto& page : adminCatalog.pages()) {
         for (const auto& section : page.sections) {
@@ -2254,6 +2293,7 @@ int main(int argc, char** argv) {
     }
     require(foundAdministratorControls,
             "administrator controls must exist in the settings catalog");
+#endif
     builtInCatalogIsCompleteAndValid();
     globalMouseSettingsHaveStableContracts();
     globalHotkeyShortcutsHaveStableContracts();

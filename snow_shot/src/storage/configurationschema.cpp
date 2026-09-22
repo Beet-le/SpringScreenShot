@@ -126,11 +126,19 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
       QStringLiteral("real_time")}},
     {QStringLiteral("system/auto_start_at_boot"), true, ConfigurationValueKind::Boolean},
     {QStringLiteral("system/launch_as_administrator"), false, ConfigurationValueKind::Boolean},
+#ifdef Q_OS_MACOS
+    {QStringLiteral("updates/mode"),
+     QStringLiteral("check"),
+     ConfigurationValueKind::String,
+     std::nullopt,
+     {QStringLiteral("manual"), QStringLiteral("check")}},
+#else
     {QStringLiteral("updates/mode"),
      QStringLiteral("download"),
      ConfigurationValueKind::String,
      std::nullopt,
      {QStringLiteral("manual"), QStringLiteral("check"), QStringLiteral("download")}},
+#endif
     {QStringLiteral("network/proxy"),
      QStringLiteral("none"),
      ConfigurationValueKind::String,
@@ -1046,11 +1054,11 @@ QVector<ConfigurationSchemaEntry> buildEntries() {
     };
     // Portable Meta maps to the physical Control key on Apple platforms.
     replaceDefault(QStringLiteral("global_shortcuts/screenshot"),
-                   macGlobalShortcutDefault(QStringLiteral("Meta+Shift+1"), 18));
+                   macGlobalShortcutDefault(QStringLiteral("Meta+1"), 18));
     replaceDefault(QStringLiteral("global_shortcuts/screenshot_copy"),
-                   macGlobalShortcutDefault(QStringLiteral("Meta+Shift+2"), 19));
+                   macGlobalShortcutDefault(QStringLiteral("Meta+2"), 19));
     replaceDefault(QStringLiteral("global_shortcuts/pin_clipboard_content"),
-                   macGlobalShortcutDefault(QStringLiteral("Meta+Shift+3"), 20));
+                   macGlobalShortcutDefault(QStringLiteral("Meta+3"), 20));
 #endif
     return result;
 }
@@ -1569,6 +1577,11 @@ ConfigurationNormalization ConfigurationSchema::normalize(const QString& key,
     if (schemaEntry == nullptr) {
         return {};
     }
+#ifdef Q_OS_MACOS
+    if (key == u"updates/mode" && value.toString() == u"download") {
+        return {QStringLiteral("check"), true, true};
+    }
+#endif
     if (key == QStringLiteral("api_configuration/custom_models")) {
         bool valid = false;
         const auto models = customAiModelsFromJson(value, &valid);

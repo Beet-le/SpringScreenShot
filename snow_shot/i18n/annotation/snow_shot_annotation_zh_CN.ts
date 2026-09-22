@@ -60,6 +60,10 @@
             <translation>箭头</translation>
         </message>
         <message>
+            <source>Arrow shaft type</source>
+            <translation>箭杆类型</translation>
+        </message>
+        <message>
             <source>Arrow stroke color</source>
             <translation>箭头描边颜色</translation>
         </message>
@@ -318,6 +322,10 @@
         <message>
             <source>End arrowhead dot</source>
             <translation>末端箭头 圆点</translation>
+        </message>
+        <message>
+            <source>End arrowhead indented triangle</source>
+            <translation>末端箭头 内凹三角形</translation>
         </message>
         <message>
             <source>End arrowhead none</source>
@@ -608,6 +616,10 @@
             <translation>固定到屏幕</translation>
         </message>
         <message>
+            <source>Plain shaft</source>
+            <translation>普通箭杆</translation>
+        </message>
+        <message>
             <source>Please enter a template name</source>
             <translation>请输入模板名称</translation>
         </message>
@@ -764,6 +776,10 @@
             <translation>在录制中显示按键</translation>
         </message>
         <message>
+            <source>Show original image</source>
+            <translation>显示原图</translation>
+        </message>
+        <message>
             <source>Smart Erase</source>
             <translation>智能擦除</translation>
         </message>
@@ -844,6 +860,10 @@
             <translation>起始箭头 圆点</translation>
         </message>
         <message>
+            <source>Start arrowhead indented triangle</source>
+            <translation>起始箭头 内凹三角形</translation>
+        </message>
+        <message>
             <source>Start arrowhead none</source>
             <translation>起始箭头 无</translation>
         </message>
@@ -890,6 +910,14 @@
         <message>
             <source>Table recognition</source>
             <translation>表格识别</translation>
+        </message>
+        <message>
+            <source>Tapered shaft</source>
+            <translation>渐宽箭杆</translation>
+        </message>
+        <message>
+            <source>Tapered shafts support standard, triangle, triangle outline, and indented triangle arrowheads.</source>
+            <translation>渐宽箭杆支持标准、三角形、空心三角形和内凹三角形箭头。</translation>
         </message>
         <message>
             <source>Template</source>

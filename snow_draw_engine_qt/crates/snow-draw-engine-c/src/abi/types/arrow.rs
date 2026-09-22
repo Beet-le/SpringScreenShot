@@ -47,6 +47,7 @@ snow_c_enum! {
         CrowfootOneOrMany = 12,
         Square = 13,
         InvertedTriangle = 14,
+        IndentedTriangle = 15,
     }
 }
 
@@ -95,4 +96,12 @@ pub enum SnowArrowheadDashMode {
     Inherit = 0,
     Solid = 1,
     DottedCap = 2,
+}
+
+snow_c_enum! {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum SnowArrowShaftType {
+        Plain = 0,
+        Tapered = 1,
+    }
 }

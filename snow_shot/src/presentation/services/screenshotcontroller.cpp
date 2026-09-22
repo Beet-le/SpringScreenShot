@@ -1,7 +1,12 @@
+#include "snow_shot/presentation/pinnedgeometry.h"
 #include "snow_shot/presentation/screenshotautofiltercontroller.h"
 #include "snow_shot/presentation/screenshotsourceimagecomposer.h"
 #include "snow_shot/presentation/screenshotcontroller.h"
 #include "snow_shot/platform/screenshotnative.h"
+#ifdef Q_OS_MACOS
+#include "snow_shot/platform/macos/recapturefocus.h"
+#include "snow_shot/platform/macos/applicationactivation.h"
+#endif
 #include "snow_shot/presentation/screenshotglobalmousedrag.h"
 #include "snow_shot/presentation/pinnedwindowgroupmanager.h"
 #include "snow_shot/network/snowshotapiclient.h"
@@ -10,6 +15,7 @@
 #include "snow_shot/shortcuts/shortcutdisplayservice.h"
 
 #include "snow_shot/platform/physicalcursor.h"
+#include "snow_shot/platform/windowcaptureexclusion.h"
 #include "snow_shot/platform/windows/windowchrome.h"
 #include "snow_shot/presentation/screenshotcaptureruntimeadapter.h"
 #include "snow_shot/presentation/screenshotcapturestate.h"
@@ -21,7 +27,7 @@
 #include "snow_shot/presentation/screenshotfilepinbatch.h"
 #include "snow_shot/presentation/screenshotcolorpickercontroller.h"
 #include "snow_shot/presentation/screenshotdisplayconfigurationobserver.h"
-#include "snow_shot/platform/windows/selectedfiles.h"
+#include "snow_shot/platform/selectedfiles.h"
 #include "snow_shot/presentation/screenshotdefaultstyles.h"
 #include "snow_shot/presentation/screenshotcanvastoolstyles.h"
 #include "snow_shot/presentation/screenshotdisplaysession.h"
@@ -324,7 +330,8 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     [[nodiscard]] bool canRecapture() const;
     void prepareRecaptureWindows(quint64 generation);
     void waitForRecaptureWindowsHidden(quint64 generation);
-    void beginRecaptureCapture(quint64 generation);
+    void beginRecaptureCapture(quint64 generation,
+                               const QVector<std::uint32_t>& excludedWindowIds = {});
     void finishRecapture(bool succeeded, bool reportFailure);
     void restoreRecaptureWindows();
 
@@ -368,6 +375,7 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     void mergeTableSelection() override;
     void splitTableSelection() override;
     void resetTable() override;
+    void setShowOriginalImage(bool show) override;
     void toggleTextEditing() override;
     void toggleTextTranslation() override;
     void jumpToTranslationPage() override;
@@ -385,7 +393,7 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     QPoint scrollingMovePhysicalPointer(QPoint position) const;
     void pinSelectionToScreen() override;
     void pinClipboardContentToScreen();
-    void pinSelectedFilesToScreen(snow_shot::platform::windows::SelectedFileTarget target);
+    void pinSelectedFilesToScreen(snow_shot::platform::SelectedFileTarget target);
     void cancelContentPin();
     ScreenshotFilePinBatch::Present filePinPresenter(QScreen* screen);
     void restorePinnedWindows();
@@ -508,6 +516,10 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
 #if defined(Q_OS_WIN) || defined(_WIN32)
     std::unique_ptr<snow_shot::platform::windows::CursorRefresh> m_recaptureCursorRefresh;
 #endif
+#ifdef Q_OS_MACOS
+    std::unique_ptr<snow_shot::platform::macos::RecaptureFocus> m_recaptureFocus;
+    QPointer<ScreenshotOverlayWindow> m_recaptureKeyboardOwner;
+#endif
     QVector<QPointer<QWidget>> m_recaptureHiddenWindows;
     QElapsedTimer m_recaptureHideTimer;
     quint64 m_recaptureGeneration = 0;
@@ -544,6 +556,7 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     ScreenshotIntelligentSelectionModel m_intelligentSelection;
     QSet<SnowCanvasTool> m_quickSelectionDisabledTools;
     ScreenshotUiPreferences m_uiPreferences;
+    std::function<bool(bool, bool, bool)> m_recordingPermissionCheck;
     std::unique_ptr<ScreenRecordingController> m_screenRecordingController;
     bool m_constructingRecognitionFeature = false;
     bool m_constructingScrollingFeature = false;
@@ -1092,6 +1105,7 @@ bool ScreenshotController::Impl::ensureRecordingFeature() {
     }
     const QScopedValueRollback<bool> constructingGuard(m_constructingRecordingFeature, true);
     m_screenRecordingController = std::make_unique<ScreenRecordingController>(&owner);
+    m_screenRecordingController->setPermissionCheck(m_recordingPermissionCheck);
     return m_screenRecordingController != nullptr;
 }
 
@@ -1630,8 +1644,8 @@ bool ScreenshotController::Impl::moveCursorOnePixel(
         return true;
     }
     // A silent native warp dispatches input synchronously and may change the selection.
-    m_colorPickerController->updateAfterCursorMove(
-        result.position.value(), m_presentationServices->colorPickerContext());
+    m_colorPickerController->updateAfterCursorMove(result.position.value(),
+                                                   m_presentationServices->colorPickerContext());
     return true;
 }
 
@@ -1692,6 +1706,36 @@ void ScreenshotController::Impl::prepareRecaptureWindows(quint64 generation) {
         visibleWindows.push_back(toolbar);
     }
 
+#ifdef Q_OS_MACOS
+    // ScreenCaptureKit filters explicit window IDs while the editing UI stays visible.
+    // NSWindow sharingType alone does not exclude windows from ScreenCaptureKit.
+    QVector<std::uint32_t> excludedWindowIds;
+    excludedWindowIds.reserve(visibleWindows.size());
+    for (QWidget* window : std::as_const(visibleWindows)) {
+        const auto windowId = snow_shot::platform::captureWindowId(window);
+        if (!windowId) {
+            finishRecapture(false, true);
+            return;
+        }
+        excludedWindowIds.push_back(*windowId);
+    }
+    m_recaptureKeyboardOwner = keyboardOwnerOverlay();
+    if (snow_shot::storage::ScreenshotSettings().captureCursor()) {
+        m_recaptureFocus = snow_shot::platform::macos::createRecaptureFocus(visibleWindows);
+        m_recaptureFocus->prepare([this, generation, excludedWindowIds](bool ready) {
+            if (!m_recaptureBusy || generation != m_recaptureGeneration)
+                return;
+            if (!ready) {
+                finishRecapture(false, true);
+                return;
+            }
+            beginRecaptureCapture(generation, excludedWindowIds);
+        });
+    } else {
+        beginRecaptureCapture(generation, excludedWindowIds);
+    }
+#else
+
 #if defined(Q_OS_WIN) || defined(_WIN32)
     if (snow_shot::platform::windows::supportsWindowCaptureExclusion()) {
         m_recaptureExclusion = std::make_unique<snow_shot::presentation::WindowCaptureExclusion>(
@@ -1726,6 +1770,7 @@ void ScreenshotController::Impl::prepareRecaptureWindows(quint64 generation) {
     m_recaptureHideTimer.start();
     QTimer::singleShot(0, &owner,
                        [this, generation]() { waitForRecaptureWindowsHidden(generation); });
+#endif
 }
 
 void ScreenshotController::Impl::waitForRecaptureWindowsHidden(quint64 generation) {
@@ -1766,7 +1811,8 @@ void ScreenshotController::Impl::waitForRecaptureWindowsHidden(quint64 generatio
                        [this, generation]() { waitForRecaptureWindowsHidden(generation); });
 }
 
-void ScreenshotController::Impl::beginRecaptureCapture(quint64 generation) {
+void ScreenshotController::Impl::beginRecaptureCapture(
+    quint64 generation, const QVector<std::uint32_t>& excludedWindowIds) {
     if (!m_recaptureBusy || generation != m_recaptureGeneration || m_captureWorkflow == nullptr) {
         finishRecapture(false, false);
         return;
@@ -1784,12 +1830,22 @@ void ScreenshotController::Impl::beginRecaptureCapture(quint64 generation) {
         return;
     }
 #endif
-    if (!m_captureWorkflow->startRecapture()) {
+    if (!m_captureWorkflow->startRecapture(excludedWindowIds)) {
         finishRecapture(false, false);
     }
 }
 
 void ScreenshotController::Impl::restoreRecaptureWindows() {
+#ifdef Q_OS_MACOS
+    m_recaptureFocus.reset();
+    const QPointer<ScreenshotOverlayWindow> keyboardOwner = m_recaptureKeyboardOwner;
+    m_recaptureKeyboardOwner.clear();
+    if (keyboardOwner && keyboardOwner->isVisible() &&
+        m_captureState.sessionState == ScreenshotSessionState::Editing) {
+        snow_shot::platform::macos::activateWindow(keyboardOwner);
+        restoreKeyboardOwnerQueued(keyboardOwner);
+    }
+#endif
 #if defined(Q_OS_WIN) || defined(_WIN32)
     m_recaptureCursorRefresh.reset();
     const bool inputSurfacesChanged =
@@ -1900,12 +1956,11 @@ void ScreenshotController::Impl::connectSelectorSignals() {
                          if (!m_globalMouseDrag.active())
                              m_selectorWorkflow->handleInitialResult(ok, hitRects, displayId);
                      });
-    QObject::connect(
-        m_selectorCoordinator, &ScreenshotSelectorCoordinator::refinementReady, &owner,
-        [this](const QVector<QRectF>& rects, quint32 displayId, bool permissionRequired) {
-            if (!m_globalMouseDrag.active())
-                m_selectorWorkflow->handleRefinement(rects, displayId, permissionRequired);
-        });
+    QObject::connect(m_selectorCoordinator, &ScreenshotSelectorCoordinator::refinementReady, &owner,
+                     [this](const QVector<QRectF>& rects, quint32 displayId, bool replacePath) {
+                         if (!m_globalMouseDrag.active())
+                             m_selectorWorkflow->handleRefinement(rects, displayId, replacePath);
+                     });
     QObject::connect(m_selectorCoordinator, &ScreenshotSelectorCoordinator::targetChanged, &owner,
                      [this]() { m_selectorWorkflow->handleTargetChanged(); });
 }
@@ -2195,6 +2250,12 @@ void ScreenshotController::Impl::resetTable() {
     }
 }
 
+void ScreenshotController::Impl::setShowOriginalImage(bool show) {
+    if (m_ocrController != nullptr) {
+        m_ocrController->setShowOriginalImage(show);
+    }
+}
+
 void ScreenshotController::Impl::toggleTextEditing() {
     if (m_ocrController == nullptr) {
         return;
@@ -2467,14 +2528,21 @@ void ScreenshotController::Impl::pinSelectionToScreen() {
         SNOW_SHOT_PIN_PERF_MILESTONE("controller.export_scheduled");
         // The detached snapshot owns the shared source used by presentation and both
         // persistence subscribers.
+        const qreal sourceScale =
+            snow_shot::presentation::kPinnedGeometryUnits ==
+                    snow_shot::presentation::PinnedGeometryUnits::LogicalPixels
+                ? m_scrollingCaptureController->sourceScale()
+                : 1.;
+        const QSize windowSize(std::max(1, qRound(sourceSize.width() / sourceScale)),
+                               std::max(1, qRound(sourceSize.height() / sourceScale)));
         const ScreenshotPinnedImageFit fit =
             autoResizeWindow
                 ? ScreenshotGeometryMapper::fitImageToAvailableGeometry(
-                      sourceSize, display->screen->availableGeometry(), display->screen->geometry(),
-                      ScreenshotGeometryMapper::physicalRectForScreen(*display->screen), 16)
+                      windowSize, display->screen->availableGeometry(), display->screen->geometry(),
+                      snow_shot::presentation::pinnedScreenGeometry(*display->screen), 16)
                 : ScreenshotGeometryMapper::centerImageAtFullResolution(
-                      sourceSize, display->screen->availableGeometry(), display->screen->geometry(),
-                      ScreenshotGeometryMapper::physicalRectForScreen(*display->screen));
+                      windowSize, display->screen->availableGeometry(), display->screen->geometry(),
+                      snow_shot::presentation::pinnedScreenGeometry(*display->screen));
         if (!fit.valid || targetScreen == nullptr || m_selectionExportUiServices == nullptr) {
             SNOW_SHOT_PIN_PERF_FINISH(false);
             if (imageExportNotificationCurrent(*exportGeneration)) {
@@ -2512,7 +2580,7 @@ void ScreenshotController::Impl::pinSelectionToScreen() {
                 const bool presented =
                     receiver->m_impl->m_selectionExportUiServices != nullptr &&
                     receiver->m_impl->m_selectionExportUiServices->presentPinnedImageArtifact(
-                        artifact, targetScreen, fit.nativeGeometry, fit.fullResolutionSize,
+                        artifact, targetScreen, fit.nativeGeometry, fit.initialWindowSize,
                         [receiver, artifact, historyCandidate, generation](bool success,
                                                                            QImage) mutable {
                             SNOW_SHOT_PIN_PERF_MILESTONE("controller.presentation_complete");
@@ -2757,17 +2825,23 @@ ScreenshotFilePinBatch::Present ScreenshotController::Impl::filePinPresenter(QSc
         const auto fit =
             autoResizeWindow
                 ? ScreenshotGeometryMapper::fitImageToAvailableGeometry(
-                      decoded.image.size(), guardedScreen->availableGeometry(),
-                      guardedScreen->geometry(),
-                      ScreenshotGeometryMapper::physicalRectForScreen(*guardedScreen), 16)
+                      snow_shot::presentation::pinnedImageWindowSize(
+                          decoded.image, decoded.isFormattedText()
+                                             ? decoded.formattedTextDevicePixelRatio
+                                             : guardedScreen->devicePixelRatio()),
+                      guardedScreen->availableGeometry(), guardedScreen->geometry(),
+                      snow_shot::presentation::pinnedScreenGeometry(*guardedScreen), 16)
                 : ScreenshotGeometryMapper::centerImageAtFullResolution(
-                      decoded.image.size(), guardedScreen->availableGeometry(),
-                      guardedScreen->geometry(),
-                      ScreenshotGeometryMapper::physicalRectForScreen(*guardedScreen));
+                      snow_shot::presentation::pinnedImageWindowSize(
+                          decoded.image, decoded.isFormattedText()
+                                             ? decoded.formattedTextDevicePixelRatio
+                                             : guardedScreen->devicePixelRatio()),
+                      guardedScreen->availableGeometry(), guardedScreen->geometry(),
+                      snow_shot::presentation::pinnedScreenGeometry(*guardedScreen));
         auto* services = receiver->m_impl->m_selectionExportUiServices.get();
         if (fit.valid && services != nullptr) {
             static_cast<void>(services->presentPinnedImage(
-                decoded.image, guardedScreen, fit.nativeGeometry, fit.fullResolutionSize, {}, {},
+                decoded.image, guardedScreen, fit.nativeGeometry, fit.initialWindowSize, {}, {},
                 1.0, std::move(decoded.originalContent)));
         }
         return true;
@@ -2775,17 +2849,46 @@ ScreenshotFilePinBatch::Present ScreenshotController::Impl::filePinPresenter(QSc
 }
 
 void ScreenshotController::Impl::pinSelectedFilesToScreen(
-    snow_shot::platform::windows::SelectedFileTarget target) {
+    snow_shot::platform::SelectedFileTarget target) {
     cancelContentPin();
     QScreen* screen = QGuiApplication::screenAt(QCursor::pos());
     if (screen == nullptr) {
         screen = QGuiApplication::primaryScreen();
     }
-    if (screen == nullptr || target.window == 0 || !ensureExportFeature()) {
+    const auto backend = snow_shot::platform::createSelectedFileBackend();
+    if (screen == nullptr || !ensureExportFeature()) {
         return;
     }
-    m_filePinBatch.startSelection(snow_shot::platform::windows::createSelectedFileBackend(), target,
-                                  filePinPresenter(screen));
+    const auto failure = [this](snow_shot::platform::SelectedFileError error) {
+        using Error = snow_shot::platform::SelectedFileError;
+        QString message;
+        switch (error) {
+        case Error::None:
+            return;
+        case Error::PermissionDenied:
+            message = owner.tr("Allow Snow Shot to access Finder in System Settings > Privacy & "
+                               "Security > Automation, then try again.");
+            break;
+        case Error::Timeout:
+            message =
+                owner.tr("Finder took too long to return the selected files. Please try again.");
+            break;
+        case Error::Unavailable:
+            message = owner.tr("Finder is unavailable. Open Finder and try again.");
+            break;
+        case Error::QueryFailed:
+            message = owner.tr("Could not read the selected files from Finder. Please try again.");
+            break;
+        }
+        emit owner.selectedFilePinFailed(message);
+    };
+    if (!backend->isValidTarget(target)) {
+#ifdef Q_OS_MACOS
+        failure(snow_shot::platform::SelectedFileError::Unavailable);
+#endif
+        return;
+    }
+    m_filePinBatch.startSelection(backend, target, filePinPresenter(screen), failure);
     if (m_selectionExportUiServices != nullptr) {
         // Built after submitting so shell construction overlaps the batch's
         // worker-side snapshot and first decode instead of delaying the first
@@ -2867,13 +2970,17 @@ void ScreenshotController::Impl::pinClipboardContentToScreen() {
     // runs asynchronously. Encoded, file-backed, and text payloads continue
     // through the decode-first path below because their size is not known yet.
     if (clipboardFastPath) {
+        const QSize windowSize = snapshot->nativeDib.has_value()
+                                     ? nativeSize
+                                     : snow_shot::presentation::pinnedImageWindowSize(
+                                           snapshot->detachedImage, screen->devicePixelRatio());
         const ScreenshotPinnedImageFit fit =
             autoResizeWindow ? ScreenshotGeometryMapper::fitImageToAvailableGeometry(
-                                   nativeSize, screen->availableGeometry(), screen->geometry(),
-                                   ScreenshotGeometryMapper::physicalRectForScreen(*screen), 16)
+                                   windowSize, screen->availableGeometry(), screen->geometry(),
+                                   snow_shot::presentation::pinnedScreenGeometry(*screen), 16)
                              : ScreenshotGeometryMapper::centerImageAtFullResolution(
-                                   nativeSize, screen->availableGeometry(), screen->geometry(),
-                                   ScreenshotGeometryMapper::physicalRectForScreen(*screen));
+                                   windowSize, screen->availableGeometry(), screen->geometry(),
+                                   snow_shot::presentation::pinnedScreenGeometry(*screen));
         SNOW_SHOT_PIN_PERF_MILESTONE("clipboard.fit_computed");
         const QPointer<ScreenshotController> receiver(&owner);
         const QPointer<QScreen> guardedScreen(screen);
@@ -2935,7 +3042,7 @@ void ScreenshotController::Impl::pinClipboardContentToScreen() {
             fit.valid && m_selectionExportUiServices != nullptr &&
             m_selectionExportUiServices->presentPinnedImage(
                 nativeSnapshot ? QImage{} : snapshot->detachedImage, screen, fit.nativeGeometry,
-                fit.fullResolutionSize, {}, {}, 1.0, {}, imageLoader,
+                fit.initialWindowSize, {}, {}, 1.0, {}, imageLoader,
                 [receiver, generation](bool success, QImage) {
                     SNOW_SHOT_PIN_PERF_MILESTONE("controller.presentation_complete");
                     SNOW_SHOT_PIN_PERF_FINISH(success);
@@ -3006,17 +3113,23 @@ void ScreenshotController::Impl::pinClipboardContentToScreen() {
             const ScreenshotPinnedImageFit fit =
                 autoResizeWindow
                     ? ScreenshotGeometryMapper::fitImageToAvailableGeometry(
-                          decoded.image.size(), guardedScreen->availableGeometry(),
-                          guardedScreen->geometry(),
-                          ScreenshotGeometryMapper::physicalRectForScreen(*guardedScreen), 16)
+                          snow_shot::presentation::pinnedImageWindowSize(
+                              decoded.image, decoded.isFormattedText()
+                                                 ? decoded.formattedTextDevicePixelRatio
+                                                 : guardedScreen->devicePixelRatio()),
+                          guardedScreen->availableGeometry(), guardedScreen->geometry(),
+                          snow_shot::presentation::pinnedScreenGeometry(*guardedScreen), 16)
                     : ScreenshotGeometryMapper::centerImageAtFullResolution(
-                          decoded.image.size(), guardedScreen->availableGeometry(),
-                          guardedScreen->geometry(),
-                          ScreenshotGeometryMapper::physicalRectForScreen(*guardedScreen));
+                          snow_shot::presentation::pinnedImageWindowSize(
+                              decoded.image, decoded.isFormattedText()
+                                                 ? decoded.formattedTextDevicePixelRatio
+                                                 : guardedScreen->devicePixelRatio()),
+                          guardedScreen->availableGeometry(), guardedScreen->geometry(),
+                          snow_shot::presentation::pinnedScreenGeometry(*guardedScreen));
             SNOW_SHOT_PIN_PERF_MILESTONE("clipboard.fit_computed");
             if (!fit.valid || receiver->m_impl->m_selectionExportUiServices == nullptr ||
                 !receiver->m_impl->m_selectionExportUiServices->presentPinnedImage(
-                    decoded.image, guardedScreen, fit.nativeGeometry, fit.fullResolutionSize,
+                    decoded.image, guardedScreen, fit.nativeGeometry, fit.initialWindowSize,
                     std::move(decoded.formattedDocument), decoded.plainText,
                     decoded.formattedTextDevicePixelRatio, std::move(decoded.originalContent), {},
                     [](bool success, QImage) {
@@ -3902,8 +4015,8 @@ void ScreenshotController::Impl::startScreenRecording() {
                  m_historyService->resetCaptureNavigation();
              }
          },
-         [this](const QRect& physicalRegion) {
-             m_screenRecordingController->open(physicalRegion);
+         [this](const QRect& recordingRegion) {
+             m_screenRecordingController->open(recordingRegion);
          }});
 }
 
@@ -4400,6 +4513,9 @@ void ScreenshotController::Impl::handleSelectionConfirmed() {
 }
 
 void ScreenshotController::Impl::shutdown() {
+#ifdef Q_OS_MACOS
+    m_recaptureKeyboardOwner.clear();
+#endif
     finishRecapture(false, false);
     if (auto cancel = std::exchange(m_cancelSaveDialog, {}))
         cancel();
@@ -4616,6 +4732,13 @@ void ScreenshotController::captureAndCopySelection() {
     static_cast<void>(m_impl->beginCapture(Impl::PendingSelectionAction::Copy));
 }
 
+void ScreenshotController::setRecordingPermissionCheck(
+    std::function<bool(bool, bool, bool)> check) {
+    m_impl->m_recordingPermissionCheck = std::move(check);
+    if (m_impl->m_screenRecordingController)
+        m_impl->m_screenRecordingController->setPermissionCheck(m_impl->m_recordingPermissionCheck);
+}
+
 void ScreenshotController::captureAndStartScreenRecording() {
     static_cast<void>(m_impl->beginCapture(Impl::PendingSelectionAction::StartVideo));
 }
@@ -4650,12 +4773,11 @@ void ScreenshotController::pinClipboardContentToScreen() {
 }
 
 void ScreenshotController::pinSelectedFilesToScreen() {
-    pinSelectedFilesToScreen(
-        snow_shot::platform::windows::createSelectedFileBackend()->captureTarget());
+    pinSelectedFilesToScreen(snow_shot::platform::createSelectedFileBackend()->captureTarget());
 }
 
 void ScreenshotController::pinSelectedFilesToScreen(
-    snow_shot::platform::windows::SelectedFileTarget target) {
+    snow_shot::platform::SelectedFileTarget target) {
     m_impl->pinSelectedFilesToScreen(target);
 }
 

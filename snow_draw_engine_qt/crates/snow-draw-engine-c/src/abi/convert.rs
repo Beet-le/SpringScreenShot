@@ -166,6 +166,7 @@ pub(crate) fn snow_arrowhead_from_rust(value: Option<Arrowhead>) -> SnowArrowhea
         Some(Arrowhead::Dot) => SnowArrowhead::Dot,
         Some(Arrowhead::Circle) => SnowArrowhead::Circle,
         Some(Arrowhead::CircleOutline) => SnowArrowhead::CircleOutline,
+        Some(Arrowhead::IndentedTriangle) => SnowArrowhead::IndentedTriangle,
         Some(Arrowhead::Triangle) => SnowArrowhead::Triangle,
         Some(Arrowhead::TriangleOutline) => SnowArrowhead::TriangleOutline,
         Some(Arrowhead::Diamond) => SnowArrowhead::Diamond,
@@ -186,6 +187,7 @@ pub(crate) fn snow_arrowhead_to_rust(value: SnowArrowhead) -> Option<Arrowhead> 
         SnowArrowhead::Dot => Some(Arrowhead::Dot),
         SnowArrowhead::Circle => Some(Arrowhead::Circle),
         SnowArrowhead::CircleOutline => Some(Arrowhead::CircleOutline),
+        SnowArrowhead::IndentedTriangle => Some(Arrowhead::IndentedTriangle),
         SnowArrowhead::Triangle => Some(Arrowhead::Triangle),
         SnowArrowhead::TriangleOutline => Some(Arrowhead::TriangleOutline),
         SnowArrowhead::Diamond => Some(Arrowhead::Diamond),
@@ -211,6 +213,23 @@ pub(crate) fn snow_stroke_style_to_rust(value: SnowStrokeStyle) -> StrokeStyle {
         SnowStrokeStyle::Solid => StrokeStyle::Solid,
         SnowStrokeStyle::Dashed => StrokeStyle::Dashed,
         SnowStrokeStyle::Dotted => StrokeStyle::Dotted,
+    }
+}
+
+pub(crate) fn snow_arrow_shaft_type_from_rust(
+    value: snow_draw_engine_core::arrow::ArrowShaftType,
+) -> SnowArrowShaftType {
+    match value {
+        snow_draw_engine_core::arrow::ArrowShaftType::Plain => SnowArrowShaftType::Plain,
+        snow_draw_engine_core::arrow::ArrowShaftType::Tapered => SnowArrowShaftType::Tapered,
+    }
+}
+pub(crate) fn snow_arrow_shaft_type_to_rust(
+    value: SnowArrowShaftType,
+) -> snow_draw_engine_core::arrow::ArrowShaftType {
+    match value {
+        SnowArrowShaftType::Plain => snow_draw_engine_core::arrow::ArrowShaftType::Plain,
+        SnowArrowShaftType::Tapered => snow_draw_engine_core::arrow::ArrowShaftType::Tapered,
     }
 }
 
@@ -602,6 +621,7 @@ impl From<SnowShapeStyle> for ShapeStyle {
             end_arrowhead: snow_arrowhead_to_rust(value.end_arrowhead),
             stroke_style: snow_stroke_style_to_rust(value.stroke_style),
             arrow_type: snow_arrow_type_to_rust(value.arrow_type),
+            arrow_shaft_type: snow_arrow_shaft_type_to_rust(value.arrow_shaft_type),
             opacity: value.opacity,
             highlight_shape: match value.highlight_shape {
                 SnowHighlightShape::Rectangle => snow_draw_engine::HighlightShape::Rectangle,
@@ -688,6 +708,7 @@ impl From<SnowArrowStyle> for snow_draw_engine::ArrowStyle {
             end_arrowhead: snow_arrowhead_to_rust(value.end_arrowhead),
             stroke_style: snow_stroke_style_to_rust(value.stroke_style),
             arrow_type: snow_arrow_type_to_rust(value.arrow_type),
+            arrow_shaft_type: snow_arrow_shaft_type_to_rust(value.arrow_shaft_type),
         }
     }
 }
@@ -701,6 +722,7 @@ impl From<snow_draw_engine::ArrowStyle> for SnowArrowStyle {
             end_arrowhead: snow_arrowhead_from_rust(value.end_arrowhead),
             stroke_style: snow_stroke_style_from_rust(value.stroke_style),
             arrow_type: snow_arrow_type_from_rust(value.arrow_type),
+            arrow_shaft_type: snow_arrow_shaft_type_from_rust(value.arrow_shaft_type),
             reserved0: [0; 4],
         }
     }
@@ -833,6 +855,7 @@ impl From<ShapeStyle> for SnowShapeStyle {
             end_arrowhead: snow_arrowhead_from_rust(value.end_arrowhead),
             stroke_style: snow_stroke_style_from_rust(value.stroke_style),
             arrow_type: snow_arrow_type_from_rust(value.arrow_type),
+            arrow_shaft_type: snow_arrow_shaft_type_from_rust(value.arrow_shaft_type),
             opacity: value.opacity,
             highlight_shape: match value.highlight_shape {
                 snow_draw_engine::HighlightShape::Rectangle => SnowHighlightShape::Rectangle,
@@ -879,6 +902,7 @@ unsafe fn runtime_style_default_enums_are_valid(defaults: *const SnowStyleDefaul
                 && raw_c_enum_is_valid(std::ptr::addr_of!((*shape).end_arrowhead))
                 && raw_c_enum_is_valid(std::ptr::addr_of!((*shape).stroke_style))
                 && raw_c_enum_is_valid(std::ptr::addr_of!((*shape).arrow_type))
+                && raw_c_enum_is_valid(std::ptr::addr_of!((*shape).arrow_shaft_type))
                 && raw_c_enum_is_valid(std::ptr::addr_of!((*shape).highlight_shape))
                 && raw_c_enum_is_valid(std::ptr::addr_of!((*shape).shape))
         } {
@@ -1039,6 +1063,7 @@ impl From<StyleDefaults> for SnowStyleDefaults {
             end_arrowhead: snow_arrowhead_from_rust(arrow.end_arrowhead),
             stroke_style: snow_stroke_style_from_rust(arrow.stroke_style),
             arrow_type: snow_arrow_type_from_rust(arrow.arrow_type),
+            arrow_shaft_type: snow_arrow_shaft_type_from_rust(arrow.arrow_shaft_type),
             ..SnowShapeStyle::default()
         };
         Self {
@@ -1389,6 +1414,8 @@ mod tests {
     #[test]
     fn reference_arrowheads_round_trip_through_c_abi() {
         for (rust, c) in [
+            (Arrowhead::IndentedTriangle, SnowArrowhead::IndentedTriangle),
+            (Arrowhead::Triangle, SnowArrowhead::Triangle),
             (Arrowhead::Square, SnowArrowhead::Square),
             (Arrowhead::InvertedTriangle, SnowArrowhead::InvertedTriangle),
         ] {

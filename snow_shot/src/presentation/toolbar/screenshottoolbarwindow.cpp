@@ -37,19 +37,12 @@ ScreenshotToolPalette::Options screenshotToolbarOptions() {
     options.showTableTool = true;
     options.showQrTool = true;
     options.showImageConversionTools = true;
-#ifdef Q_OS_MACOS
-    options.showScreenRecordButton = false;
-#else
     options.showScreenRecordButton = true;
-#endif
     options.showScrollingScreenshotTool = true;
     options.showSaveButton = true;
     options.separatorBeforeShape = true;
-    options.actions =
-#ifndef Q_OS_MACOS
-        ScreenshotToolPalette::PinAction |
-#endif
-        ScreenshotToolPalette::CancelAction | ScreenshotToolPalette::CopyAction;
+    options.actions = ScreenshotToolPalette::PinAction | ScreenshotToolPalette::CancelAction |
+                      ScreenshotToolPalette::CopyAction;
     options.styleDefaults = snow_shot::presentation::screenshotCanvasStyleDefaults();
     return options;
 }
@@ -194,6 +187,8 @@ void ScreenshotToolbarWindow::connectToolCommands(ScreenshotToolPalette& toolPal
         m_commands.setQrTool();
         setActiveToolAndReposition(ScreenshotToolPalette::Tool::Qr);
     });
+    connect(&toolPalette, &ScreenshotToolPalette::showOriginalImageRequested, this,
+            [this](bool show) { m_commands.setShowOriginalImage(show); });
     connect(&toolPalette, &ScreenshotToolPalette::textEditRequested, this,
             [this]() { m_commands.toggleTextEditing(); });
     connect(&toolPalette, &ScreenshotToolPalette::textTranslateRequested, this,
@@ -452,7 +447,8 @@ void ScreenshotToolbarWindow::resetForNewCapture() {
     resetPhysicalSizeInvariant();
     if (ScreenshotToolPaletteHost* host = paletteHost()) {
         const QSignalBlocker blocker(host);
-        host->setPhysicalScale(paletteScaleMultiplier());
+        host->setScaleContext(adqt::widgets::AdControlScaleContext::fromDprsAndContentScale(
+            1.0, 1.0, paletteScaleMultiplier()));
         host->setShadowMargins(ScreenshotToolPaletteHost::defaultShadowMargins());
         setStyleToolbarAboveMain(false);
         host->setStyleToolbarVisible(false);
@@ -561,6 +557,12 @@ void ScreenshotToolbarWindow::setTableEditingState(bool available, bool canUndo,
     if (ScreenshotToolPalette* toolPalette = palette()) {
         toolPalette->setTableEditingState(available, canUndo, canRedo, canMerge, canSplit,
                                           canReset);
+    }
+}
+
+void ScreenshotToolbarWindow::setShowOriginalImage(bool show) {
+    if (auto* toolPalette = palette()) {
+        toolPalette->setShowOriginalImage(show);
     }
 }
 

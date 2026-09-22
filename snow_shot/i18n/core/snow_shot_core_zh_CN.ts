@@ -82,6 +82,10 @@ so every moment on screen can be expressed clearly and shared easily.</source>
             <translation>发现更多功能与使用方式</translation>
         </message>
         <message>
+            <source>Download from website</source>
+            <translation>前往官网下载</translation>
+        </message>
+        <message>
             <source>Download update</source>
             <translation>下载更新</translation>
         </message>
@@ -579,6 +583,10 @@ so every moment on screen can be expressed clearly and shared easily.</source>
             <translation>更新已准备就绪。请打开“关于”页面，重启并更新 Snow Shot。</translation>
         </message>
         <message>
+            <source>Could not pin selected files</source>
+            <translation>无法将选中的文件贴到屏幕</translation>
+        </message>
+        <message>
             <source>Feature unavailable</source>
             <translation>功能暂不可用</translation>
         </message>
@@ -587,20 +595,8 @@ so every moment on screen can be expressed clearly and shared easily.</source>
             <translation>请先完成截图、录屏或导出，再进行更新。</translation>
         </message>
         <message>
-            <source>Pin to screen is not available on macOS yet.</source>
-            <translation>固定到屏幕功能暂不支持 macOS。</translation>
-        </message>
-        <message>
             <source>Restart and update</source>
             <translation>重启并更新</translation>
-        </message>
-        <message>
-            <source>Screen recording is not available on macOS yet.</source>
-            <translation>屏幕录制功能暂不支持 macOS。</translation>
-        </message>
-        <message>
-            <source>Screenshot is not available on macOS yet.</source>
-            <translation>截图功能暂不支持 macOS。</translation>
         </message>
         <message>
             <source>Snow Shot will close and restart to install the update. Continue?</source>

@@ -60,6 +60,10 @@
             <translation>Arrow</translation>
         </message>
         <message>
+            <source>Arrow shaft type</source>
+            <translation>Arrow shaft type</translation>
+        </message>
+        <message>
             <source>Arrow stroke color</source>
             <translation>Arrow stroke color</translation>
         </message>
@@ -318,6 +322,10 @@
         <message>
             <source>End arrowhead dot</source>
             <translation>End arrowhead dot</translation>
+        </message>
+        <message>
+            <source>End arrowhead indented triangle</source>
+            <translation>End arrowhead indented triangle</translation>
         </message>
         <message>
             <source>End arrowhead none</source>
@@ -608,6 +616,10 @@
             <translation>Pin to screen</translation>
         </message>
         <message>
+            <source>Plain shaft</source>
+            <translation>Plain shaft</translation>
+        </message>
+        <message>
             <source>Please enter a template name</source>
             <translation>Please enter a template name</translation>
         </message>
@@ -764,6 +776,10 @@
             <translation>Show keystrokes in recording</translation>
         </message>
         <message>
+            <source>Show original image</source>
+            <translation>Show original image</translation>
+        </message>
+        <message>
             <source>Smart Erase</source>
             <translation>Smart Erase</translation>
         </message>
@@ -844,6 +860,10 @@
             <translation>Start arrowhead dot</translation>
         </message>
         <message>
+            <source>Start arrowhead indented triangle</source>
+            <translation>Start arrowhead indented triangle</translation>
+        </message>
+        <message>
             <source>Start arrowhead none</source>
             <translation>Start arrowhead none</translation>
         </message>
@@ -890,6 +910,14 @@
         <message>
             <source>Table recognition</source>
             <translation>Table recognition</translation>
+        </message>
+        <message>
+            <source>Tapered shaft</source>
+            <translation>Tapered shaft</translation>
+        </message>
+        <message>
+            <source>Tapered shafts support standard, triangle, triangle outline, and indented triangle arrowheads.</source>
+            <translation>Tapered shafts support standard, triangle, triangle outline, and indented triangle arrowheads.</translation>
         </message>
         <message>
             <source>Template</source>

@@ -8,16 +8,16 @@ Priorities: data preservation and authenticity > recovery > testability > mainta
 | U1 | One SemVer feed, signed metadata, no automatic downgrade | update contract tests |
 | U2 | Background check/download; explicit restart; preserve active work | update service and About tests |
 | U3 | Apply only verified owned files; journal, probe, recover | update transaction tests |
-| R1 | Five fixed-name packages; root latest-version.txt published last | release publisher tests |
+| R1 | Windows packages plus configured macOS DMG/installer; root latest-version.txt published last | release publisher tests |
 | R2 | Private local keys/SSH settings; allowlisted, reversible deployment | signing and publisher tests |
 
 The first updater release is `1.0.0-beta`. Binaries without an updater require one manual
 installation/replacement. This release introduces no user-data migration, delta patches,
-additional channels, macOS updater, or OCR model-host deployment.
+additional channels, macOS in-app installation, or OCR model-host deployment.
 
 ## Release contract
 
-The application consumes `/latest-version.json`, not the unsigned text file. The root
+The Windows updater consumes `/latest-version.json`, not the unsigned text file. The root
 `/latest-version.txt` remains the compatibility endpoint for older clients and the website;
 there is deliberately no `/setup/latest-version.txt` requirement.
 
@@ -28,11 +28,14 @@ The publisher changes only these public paths, in this order:
 3. `setup/snow-shot_windows-x64-portable.zip`
 4. `setup/snow-shot_windows-x64-offline-update.zip`
 5. `setup/snow-shot_windows-x64-online-update.zip`
-6. `setup/SHA256SUMS`
-7. `latest-version.json`
-8. `latest-version.txt`
+6. `setup/snow-shot_macos-arm64.dmg` (when the Mac host is configured)
+7. `setup/snow-shot_macos-arm64.dmg.sha256` (when configured)
+8. `setup/install-snow-shot-macos.sh` (when configured)
+9. `setup/SHA256SUMS`
+10. `latest-version.json`
+11. `latest-version.txt`
 
-Other setup files, including older Windows and macOS downloads, are untouched. Local build
+Other setup files, including older versioned Windows and macOS downloads, are untouched. Local build
 artifacts and GitHub assets keep versions in their names; public website URLs do not.
 
 The JSON envelope is `{schema:1,keyId,payload,signature}`. `payload` and `signature` are
@@ -117,6 +120,66 @@ known-hosts files, private signing-key path, public HTTPS origin, and web root t
 Never put the IP, credentials, private signing key, or local wrapper in Git. SSH uses strict
 host-key checking; enroll and verify a new server's fingerprint out of band first.
 
+### Coordinated Windows and macOS packaging
+
+Add `MacHost`, `MacUser`, and `MacProjectDirectory` to the ignored local settings.
+`MacPort` defaults to 22; `MacIdentityFile` and `MacKnownHostsFile` are optional and
+independent of the production server's SSH credentials. If omitted, OpenSSH uses
+the local SSH config/agent and default known-hosts file. The project path must be
+an absolute POSIX path without spaces, shell metacharacters, or `..`.
+
+With a Mac host configured, the normal publish command starts an SSH packaging job
+alongside Windows packaging, then waits for both. The current macOS target is native
+Apple Silicon (`snow-shot-macos-arm64-release`). The Mac must already have the
+documented release toolchain, audited static Qt, and repository dependencies.
+Provisioning dependencies is separate from a release.
+
+The workflow builds the existing Mac checkout. It does **not** pull, reset, stash,
+or overwrite source files. Prepare both checkouts before release and set the same
+new `SNOW_SHOT_VERSION` in each. Uncommitted work is supported and recorded: the
+Mac worker checks the source version, captures HEAD and a fingerprint of tracked
+changes/untracked non-ignored files, and rejects source edits made during packaging.
+It takes an exclusive `artifacts/.macos-release.lock`, runs the audited package
+script, verifies CPack's checksum, `hdiutil verify`, and the DMG code signature,
+then copies the result into an immutable transaction directory for transfer.
+After an interrupted SSH session, confirm no packaging process remains before
+manually removing a stale empty lock directory.
+
+The Windows client verifies the downloaded DMG size and SHA-256, writes a checksum
+using the public filename, and stages the standalone installer with LF line endings
+and no BOM. Logs and a source receipt are kept under
+`artifacts/publish-<id>/setup/macos-build.{log,json}`; these are not public uploads.
+Remote transaction copies remain under `artifacts/remote-release-<id>` for diagnosis
+and may be removed after a completed release when no transfer is using them.
+
+`-SkipBuild` reuses packages on **both** platforms. On the Mac it requires the source
+receipt from a previous successful coordinated build and an identical source
+fingerprint/DMG hash. It does not repackage. `-AuditOnly` still builds unless combined
+with `-SkipBuild`; it performs verification but does not stage or publish to production.
+`-WhatIf` is the preview command with no build or SSH side effects.
+
+The DMG, checksum, and script join the same staged transaction, public HTTPS checks,
+and rollback journal as Windows. The signed Windows updater envelope stays exactly
+the same schema and still lists only its five Windows packages. Once the macOS files
+are published, the server refuses Windows-only publishing to avoid advancing the
+shared version without a matching Mac package. Older rollback journals retain their
+original Windows-only scope. A release version cannot be reused to add or change
+files: the first combined release must use a new version on both platforms.
+
+The site's English and Chinese download pages offer the installer at
+`https://snowshot.top/setup/install-snow-shot-macos.sh`, using HTTPS-only download
+followed by `bash` only if the download succeeds. Deploy the site option only after
+the first combined release makes that script and the DMG/checksum available.
+Website deployment is separate from the release publisher.
+
+Focused workflow checks (no builds, SSH, or production mutations):
+
+```powershell
+python scripts/test-snow-shot-publisher.py
+python scripts/test-remote-macos-release.py
+pwsh -NoProfile -File scripts/test-remote-macos-release.ps1
+```
+
 Run the packaging entry point's static-dependency preflight before a manual application
 build. If it rejects a stale dependency prefix after syncing main, restore the checked-in
 overlay contract with `scripts/bootstrap.ps1 -VcpkgVariants Static` and rebuild; do not edit
@@ -169,7 +232,7 @@ reconstruct those exact PDBs.
 Files are uploaded into a private transaction directory beside the web root. The server
 uses a lock, verifies every upload, keeps durable backups, promotes individual files by
 atomic replacement, and publishes signed metadata and text last. Public HTTPS verification
-downloads all eight files and checks size/hash before commit. Promotion is not a single
+downloads every allowlisted file and checks size/hash before commit. Promotion is not a single
 atomic replacement of the entire website directory: a client racing publication may see a
 temporary hash mismatch and must retry metadata. Signature and hash checks prevent applying
 mixed payloads.
@@ -291,3 +354,25 @@ download cache cleanup retains only the currently accepted release's ZIP/partial
   The matching external PDB is 33,771,520 bytes (32.207 MiB) and passes RSDS GUID/age checks.
 - Both native macOS architecture/package jobs remain platform release gates. Cross-account UAC
   and physical power-loss behavior likewise require dedicated runtime validation.
+
+## macOS version checks
+
+macOS offers only **Manual** and **Check automatically**, defaulting to automatic checks.
+Legacy `download` settings normalize to `check`, including when restoring settings. Resetting
+settings restores the platform default. Automatic checks start 30 seconds after launch and
+repeat 24 hours after completion; manual checks remain available in About. Switching to manual
+stops the schedule and cancels an active background check.
+
+The macOS Qt service fetches `/latest-version.txt` from the configured API base URL over HTTPS,
+respects the network proxy setting, limits responses to 4 KiB, and times out after 30 seconds.
+It compares strict SemVer precedence (including prereleases and ignoring build metadata).
+This website compatibility endpoint is unsigned; it only supplies version display text and
+never supplies an executable, installation instructions, or a navigation URL. Publish the
+matching macOS installation packages before announcing a shared version on this endpoint.
+
+A newer version discovered automatically shows a nonmodal notice with **Download from website**
+and **Later**, once per version per session. The browser opens only on the user's download
+action, using the configured official website URL. About retains the available version and
+same website action. Background failures stay quiet; manual failures display a retry action.
+macOS does not build or bundle the Windows updater helper and never downloads or installs an
+update in-app. The Windows signed-metadata and installation flow is unchanged.

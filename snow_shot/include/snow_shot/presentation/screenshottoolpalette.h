@@ -2,6 +2,7 @@
 #define SNOW_SHOT_PRESENTATION_SCREENSHOTTOOLPALETTE_H
 
 #include "icon_core.h"
+#include "widgets/control_scale.h"
 #include "snow_draw_engine_qt/snow_canvas_types.h"
 #include "snow_shot/presentation/screenshotdefaultstyles.h"
 #include "snow_shot/presentation/screenshotgeometry.h"
@@ -55,7 +56,8 @@ class ScreenshotToolPaletteStyleControls;
 class ScreenshotToolbarMainPanel;
 class IconNumericValuePreviewButton;
 
-class ScreenshotToolPalette final : public QWidget {
+class ScreenshotToolPalette final : public QWidget,
+                                    public adqt::widgets::AdControlScaleParticipant {
     Q_OBJECT
 
   public:
@@ -281,6 +283,10 @@ class ScreenshotToolPalette final : public QWidget {
     [[nodiscard]] SnowCanvasStyleDefaults creationStyleDefaults() const;
     bool setShadowMargins(const QMargins& margins);
     bool setPhysicalScale(qreal scale);
+    bool setScaleContext(const adqt::widgets::AdControlScaleContext& context);
+    void prepareControlScale(const adqt::widgets::AdControlScaleContext& context) override;
+    void commitControlScale(const adqt::widgets::AdControlScaleContext& context) override;
+    void finishControlScale(const adqt::widgets::AdControlScaleContext& context) override;
     qreal physicalScale() const;
     void setToolbarLayout(const snow_shot::storage::ScreenshotToolbarLayout& layout);
     void setActionToolsLayout(const snow_shot::storage::ScreenshotToolbarLayout& layout);
@@ -371,6 +377,7 @@ class ScreenshotToolPalette final : public QWidget {
     void setImageConversionBusy(bool markdownBusy, bool htmlBusy);
     void setTableEditingState(bool available, bool canUndo, bool canRedo, bool canMerge,
                               bool canSplit, bool canReset);
+    void setShowOriginalImage(bool show);
     void setTextEditingState(bool available, bool editing, bool canUndo = false,
                              bool canRedo = false);
     void setTextTranslationState(bool available, bool translating, bool streaming,
@@ -436,6 +443,7 @@ class ScreenshotToolPalette final : public QWidget {
     void tableMergeRequested();
     void tableSplitRequested();
     void tableResetRequested();
+    void showOriginalImageRequested(bool show);
     void textEditRequested();
     void textTranslateRequested();
     void jumpToTranslationPageRequested();
@@ -529,6 +537,7 @@ class ScreenshotToolPalette final : public QWidget {
     void createSecondaryToolbarShell();
     void createMoveActionFamily();
     void createSelectionActionFamily();
+    void createShowOriginalImageButton();
     void createTextRecognitionActionFamily();
     void createTableRecognitionActionFamily();
     void createImageConversionActionFamily();
@@ -796,6 +805,9 @@ class ScreenshotToolPalette final : public QWidget {
     QVector<adqt::widgets::AdButton*> m_tableQrOptionButtons;
     QVector<int> m_tableQrOptionValues;
     Tool m_tableQrEntryTool = Tool::Table;
+    bool m_showOriginalImage = false;
+    adqt::widgets::AdButton* m_showOriginalImageButton = nullptr;
+    QSpacerItem* m_showOriginalImageSpacing = nullptr;
     adqt::widgets::AdButton* m_textEditButton = nullptr;
     adqt::widgets::AdButton* m_textTranslateButton = nullptr;
     adqt::widgets::AdButton* m_jumpToTranslationPageButton = nullptr;
@@ -886,6 +898,8 @@ class ScreenshotToolPalette final : public QWidget {
     QMargins m_shadowMargins;
     QHash<QWidget*, quint64> m_styleMetricRevisions;
     quint64 m_metricProfileRevision = 1;
+    adqt::widgets::AdControlScaleScope* m_scaleScope = nullptr;
+    bool m_scaleCommitActive = false;
     qreal m_physicalScale = 1.0;
     qreal m_selectionOpacity = 1.0;
     bool m_selectionOpacityMixed = false;

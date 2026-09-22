@@ -9,6 +9,7 @@
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
+#include <QPainterPathStroker>
 #include <QRegion>
 #include <QWheelEvent>
 
@@ -140,10 +141,19 @@ QRegion ScreenshotToolPaletteHost::panelHostRegion(bool rounded) const {
             panel->geometry().translated(m_palette->pos()).intersected(hostBounds);
         if (!panelRect.isEmpty()) {
 #if defined(Q_OS_MACOS)
-            if (const auto* surface = dynamic_cast<const ScreenshotToolbarPanel*>(panel);
-                rounded && surface != nullptr) {
-                const QRegion body(surface->surfacePath().toFillPolygon().toPolygon());
-                region += body.translated(panel->pos() + m_palette->pos()).intersected(hostBounds);
+            if (const auto* surface = dynamic_cast<const ScreenshotToolbarPanel*>(panel)) {
+                QPainterPath path = surface->surfacePath();
+                if (!rounded) {
+                    // Expand the curve before rounding it to a QRegion: reserve
+                    // one logical pixel for edge coverage and half a pixel for
+                    // polygon-coordinate rounding. Expanding the rounded region
+                    // instead can still clip fractional-DPR antialiasing.
+                    QPainterPathStroker coverage;
+                    coverage.setWidth(3.0);
+                    path = path.united(coverage.createStroke(path));
+                }
+                const QRegion body(path.toFillPolygon().toPolygon());
+                region += body.translated(panel->pos() + m_palette->pos()).intersected(panelRect);
                 return;
             }
 #endif
@@ -227,15 +237,10 @@ qreal ScreenshotToolPaletteHost::physicalScale() const {
     return m_palette != nullptr ? m_palette->physicalScale() : 1.0;
 }
 
-void ScreenshotToolPaletteHost::commitDpiScale(qreal scale, const QMargins& shadowMargins) {
-    if (m_palette == nullptr) {
-        return;
-    }
-
-    m_palette->setShadowMargins(shadowMargins);
-    m_palette->setPhysicalScale(scale);
-    m_palette->prepareForDisplay();
-    syncHostSize();
+void ScreenshotToolPaletteHost::setScaleContext(
+    const adqt::widgets::AdControlScaleContext& context) {
+    if (m_palette != nullptr && m_palette->setScaleContext(context))
+        syncHostSize();
 }
 
 void ScreenshotToolPaletteHost::setFrameSize(const QSize& frameSize, bool anchorToBottom) {

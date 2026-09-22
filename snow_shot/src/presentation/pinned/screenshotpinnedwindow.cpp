@@ -1,3 +1,4 @@
+#include "snow_shot/presentation/pinnedgeometry.h"
 #include "snow_shot/presentation/canvasstatusreadout.h"
 #include "snow_shot/presentation/screenshotpinnedwindow.h"
 #include "screenshotpinnedhidetotopcontroller.h"
@@ -554,7 +555,11 @@ class PinnedBorderFrame final : public QFrame {
         QRect deviceRect = ScreenshotPinnedGeometryMapping::roundedDeviceRect(mappedExtent);
         if (const auto* root = qobject_cast<ScreenshotPinnedWindow*>(window());
             root != nullptr && root->internalWinId() != 0) {
-            const QRect client = root->currentNativeGeometry();
+            QRect client = root->currentNativeGeometry();
+            if (pinned_platform::kPinnedGeometryUnits ==
+                pinned_platform::PinnedGeometryUnits::LogicalPixels)
+                client.setSize(QSize(qRound(client.width() * devicePixelRatioF()),
+                                     qRound(client.height() * devicePixelRatioF())));
             if (client.isValid() && !client.isEmpty()) {
                 const ScreenshotPinnedGeometryMapping mapping(client, size(), devicePixelRatioF());
                 deviceRect = mapping.clippedDeviceRect(mappedExtent);
@@ -781,7 +786,9 @@ ScreenshotPinnedWindow::ScreenshotPinnedWindow(QWidget* parent)
       m_physicalCursor(std::make_unique<snow_shot::platform::PhysicalCursor>()), m_exportArtifact(),
       m_nativeGeometryController(std::make_unique<ScreenshotPinnedNativeGeometryController>()) {
     m_platform->setResizeInteractionState(&m_systemSizingActive);
-    m_platform->environmentChanged = [this] { reconcilePlatformEnvironment(); };
+    m_platform->environmentChanged = [this](bool layoutChanged) {
+        reconcilePlatformEnvironment(layoutChanged);
+    };
     livePinnedWindows().push_back(QPointer<ScreenshotPinnedWindow>(this));
     setWindowFlags(Qt::FramelessWindowHint | Qt::Tool | Qt::WindowStaysOnTopHint);
     setAttribute(Qt::WA_DeleteOnClose, true);
@@ -847,7 +854,7 @@ ScreenshotPinnedWindow::ScreenshotPinnedWindow(QWidget* parent)
         this, ScreenshotPinnedHideToTopController::Hooks{
                   [this] { return authoritativeNativeGeometry(); },
                   [this] {
-                      const QRect frame = m_platform->framePixelGeometry();
+                      const QRect frame = m_platform->frameGeometry();
                       return frame.isValid() ? frame : currentNativeGeometry();
                   },
                   [this](const QRect& geometry) {
@@ -887,7 +894,7 @@ ScreenshotPinnedWindow::ScreenshotPinnedWindow(QWidget* parent)
                           return std::nullopt;
                       return screen()->geometry().topLeft() +
                              ((*pointer - QPointF(screen()->geometry().topLeft())) *
-                              screen()->devicePixelRatio())
+                              pinned_platform::pinnedGeometryScale(screen()->devicePixelRatio()))
                                  .toPoint();
                   },
                   [this](const QPoint& position) { showContextMenu(position); },
@@ -1328,7 +1335,7 @@ snow_shot::storage::PinnedWindowRecord ScreenshotPinnedWindow::persistenceRecord
     record.canvasSourceRect = m_canvasSourceRect;
     record.contentCanvasRect = m_backgroundCanvasRect;
     record.surfaceCanvasRect = m_resultSurfaceCanvasRect;
-    record.initialPhysicalSize = m_initialPhysicalSize;
+    record.initialWindowSize = m_initialWindowSize;
     record.nativeGeometry =
         hideToTopActive() ? m_hideToTop->shownGeometry() : intendedNativeGeometry();
     record.hideToTopMode = hideToTopActive();
@@ -1338,7 +1345,7 @@ snow_shot::storage::PinnedWindowRecord ScreenshotPinnedWindow::persistenceRecord
         record.screenName = current->name();
         record.screenSerial = current->serialNumber();
         record.screenLogicalGeometry = current->geometry();
-        record.screenPhysicalGeometry = ScreenshotGeometryMapper::physicalRectForScreen(*current);
+        record.screenWindowGeometry = snow_shot::presentation::pinnedScreenGeometry(*current);
         record.screenDpi = current->devicePixelRatio();
         record.placement =
             (!m_platform->usesControlledInteraction() || hideToTopActive() || m_geometryAnimating)
@@ -1360,6 +1367,7 @@ snow_shot::storage::PinnedWindowRecord ScreenshotPinnedWindow::persistenceRecord
     record.thumbnailMode = m_thumbnailMode;
     record.clickThroughMode = m_clickThroughActive;
     record.alwaysOnTop = m_alwaysOnTop;
+    record.showBorder = m_showBorder;
     record.preThumbnailNativeGeometry = m_preThumbnailNativeGeometry;
     record.resultStyle = serializeResultStyle(m_resultStyle);
     record.canvasSession = m_runtime.serializeDocumentSession();
@@ -1397,6 +1405,10 @@ void ScreenshotPinnedWindow::restorePersistentState(const Config& config) {
     // the window flags the platform window is created with.
     m_alwaysOnTop = config.persistedAlwaysOnTop;
     applyStaysOnTopFlag(this, m_alwaysOnTop, m_platform.get());
+    m_showBorder = config.persistedShowBorder;
+    if (m_borderFrame != nullptr) {
+        m_borderFrame->setVisible(m_showBorder);
+    }
     // The scale value is not restored state: it derives from the restored
     // physical geometry alone, so the monitor DPI never influences it.
     m_hideToTop->setAccentIndex(config.persistedHideToTopAccentIndex);
@@ -1592,7 +1604,7 @@ bool ScreenshotPinnedWindow::present(const Config& requestedConfig,
         config.screen = pinned_platform::pinnedDisplay(config.placement, config.screen);
         if (config.screen)
             config.nativeGeometry =
-                pinned_platform::pinnedPixelRect(config.placement, *config.screen);
+                pinned_platform::pinnedWindowRect(config.placement, *config.screen);
     }
 
     SNOW_SHOT_PIN_PERF_SCOPE("window.present");
@@ -1637,7 +1649,7 @@ bool ScreenshotPinnedWindow::present(const Config& requestedConfig,
     }
 #else
     const QRect logicalGeometry =
-        ScreenshotGeometryMapper::logicalRectForPhysicalRect(config.nativeGeometry, config.screen);
+        snow_shot::presentation::pinnedLogicalRect(config.nativeGeometry, config.screen);
     if (!logicalGeometry.isValid() || logicalGeometry.isEmpty()) {
         qWarning("Pinned window presentation failed: stage=logical_geometry");
         return false;
@@ -1744,16 +1756,15 @@ bool ScreenshotPinnedWindow::present(const Config& requestedConfig,
     if (m_recognitionResults.text.has_value()) {
         m_recognitionResults.text->filteredImage = {};
     }
-    m_initialPhysicalSize =
-        config.fullResolutionScaleBasis.isValid() && !config.fullResolutionScaleBasis.isEmpty()
-            ? config.fullResolutionScaleBasis
-            : config.nativeGeometry.size();
+    m_initialWindowSize = config.initialWindowSize.isValid() && !config.initialWindowSize.isEmpty()
+                              ? config.initialWindowSize
+                              : config.nativeGeometry.size();
     restorePersistentState(config);
-    // The scale value is the exact ratio encoded by physical pixels. Whole
+    // The scale value is the exact ratio encoded by window geometry. Whole
     // percent rounding belongs only to UI display and wheel-level navigation.
     // A window restored in thumbnail mode reports the scale of the geometry it
     // will return to, which the thumbnail rectangle itself does not encode.
-    const QSize scaleBaseline = orientedInitialPhysicalSize();
+    const QSize scaleBaseline = orientedInitialWindowSize();
     const int scaleEncodingWidth = m_thumbnailMode && m_preThumbnailNativeGeometry.isValid() &&
                                            !m_preThumbnailNativeGeometry.isEmpty()
                                        ? m_preThumbnailNativeGeometry.width()
@@ -1935,7 +1946,7 @@ QRect ScreenshotPinnedWindow::currentNativeGeometry() const {
 }
 
 QRect ScreenshotPinnedWindow::observedNativeGeometry() const {
-    return m_platform ? m_platform->pixelGeometry() : QRect();
+    return m_platform ? m_platform->windowGeometry() : QRect();
 }
 
 QRect ScreenshotPinnedWindow::authoritativeNativeGeometry() const {
@@ -2364,6 +2375,7 @@ void ScreenshotPinnedWindow::createUi() {
     applyRuntimeBorderColor();
     updatePinnedBorderGeometry(*m_borderFrame, rect());
     m_borderFrame->raise();
+    m_borderFrame->setVisible(m_showBorder);
 
     m_scaleLabel = new CanvasStatusReadout(this);
     m_scaleLabel->setObjectName(QStringLiteral("screenshotPinnedScaleLabel"));
@@ -2447,44 +2459,7 @@ void ScreenshotPinnedWindow::createContextMenu() {
     setActionTranslationSource(processMenu->menuAction(), "Process image");
     processMenu->setObjectName(QStringLiteral("screenshotPinnedProcessImageMenu"));
     processMenu->menuAction()->setObjectName(QStringLiteral("screenshotPinnedProcessImageMenu"));
-    QAction* rotateClockwise =
-        processMenu->addItem(tr("Rotate clockwise"), outlined_icons::RotateRight());
-    setActionTranslationSource(rotateClockwise, "Rotate clockwise");
-    connect(rotateClockwise, &QAction::triggered, this, [this]() {
-        QTransform operation;
-        operation.rotate(90.0);
-        applyImageOperation(operation, 1);
-    });
-    QAction* rotateCounterClockwise =
-        processMenu->addItem(tr("Rotate counterclockwise"), outlined_icons::RotateLeft());
-    setActionTranslationSource(rotateCounterClockwise, "Rotate counterclockwise");
-    connect(rotateCounterClockwise, &QAction::triggered, this, [this]() {
-        QTransform operation;
-        operation.rotate(-90.0);
-        applyImageOperation(operation, -1);
-    });
-    QAction* flipHorizontal = processMenu->addItem(tr("Flip horizontally"), outlined_icons::Swap());
-    setActionTranslationSource(flipHorizontal, "Flip horizontally");
-    connect(flipHorizontal, &QAction::triggered, this, [this]() {
-        QTransform operation;
-        operation.scale(-1.0, 1.0);
-        applyImageOperation(operation);
-    });
-    QAction* flipVertical =
-        processMenu->addItem(tr("Flip vertically"), custom_outlined_icons::FlipVertical());
-    setActionTranslationSource(flipVertical, "Flip vertically");
-    connect(flipVertical, &QAction::triggered, this, [this]() {
-        QTransform operation;
-        operation.scale(1.0, -1.0);
-        applyImageOperation(operation);
-    });
-    processMenu->addSeparator();
-    QAction* resetTransform = processMenu->addItem(tr("Reset transform"), outlined_icons::Reload());
-    setActionTranslationSource(resetTransform, "Reset transform");
-    connect(resetTransform, &QAction::triggered, this,
-            &ScreenshotPinnedWindow::resetImageTransform);
-
-    auto* opacityMenu = m_contextMenu->addSubMenu(tr("Opacity"), outlined_icons::BgColors());
+    auto* opacityMenu = processMenu->addSubMenu(tr("Opacity"), outlined_icons::BgColors());
     setActionTranslationSource(opacityMenu->menuAction(), "Opacity");
     opacityMenu->setObjectName(QStringLiteral("screenshotPinnedOpacityMenu"));
     m_opacityActions = new QActionGroup(opacityMenu);
@@ -2505,7 +2480,7 @@ void ScreenshotPinnedWindow::createContextMenu() {
     m_opacityReadoutAction->setObjectName(QStringLiteral("screenshotPinnedOpacityReadoutAction"));
     m_opacityReadoutAction->setEnabled(false);
 
-    auto* scaleMenu = m_contextMenu->addSubMenu(tr("Scale"), outlined_icons::Percentage());
+    auto* scaleMenu = processMenu->addSubMenu(tr("Scale"), outlined_icons::Percentage());
     setActionTranslationSource(scaleMenu->menuAction(), "Scale");
     scaleMenu->setObjectName(QStringLiteral("screenshotPinnedScaleMenu"));
     m_scaleMenuAction = scaleMenu->menuAction();
@@ -2526,6 +2501,49 @@ void ScreenshotPinnedWindow::createContextMenu() {
     m_scaleReadoutAction = scaleMenu->addItem(tr("Current: %1%").arg(qRound(m_scalePercent)));
     m_scaleReadoutAction->setObjectName(QStringLiteral("screenshotPinnedScaleReadoutAction"));
     m_scaleReadoutAction->setEnabled(false);
+
+    processMenu->addSeparator();
+    QAction* rotateClockwise =
+        processMenu->addItem(tr("Rotate clockwise"), outlined_icons::RotateRight());
+    setActionTranslationSource(rotateClockwise, "Rotate clockwise");
+    rotateClockwise->setObjectName(QStringLiteral("screenshotPinnedRotateClockwiseAction"));
+    connect(rotateClockwise, &QAction::triggered, this, [this]() {
+        QTransform operation;
+        operation.rotate(90.0);
+        applyImageOperation(operation, 1);
+    });
+    QAction* rotateCounterClockwise =
+        processMenu->addItem(tr("Rotate counterclockwise"), outlined_icons::RotateLeft());
+    setActionTranslationSource(rotateCounterClockwise, "Rotate counterclockwise");
+    rotateCounterClockwise->setObjectName(
+        QStringLiteral("screenshotPinnedRotateCounterClockwiseAction"));
+    connect(rotateCounterClockwise, &QAction::triggered, this, [this]() {
+        QTransform operation;
+        operation.rotate(-90.0);
+        applyImageOperation(operation, -1);
+    });
+    QAction* flipHorizontal = processMenu->addItem(tr("Flip horizontally"), outlined_icons::Swap());
+    setActionTranslationSource(flipHorizontal, "Flip horizontally");
+    flipHorizontal->setObjectName(QStringLiteral("screenshotPinnedFlipHorizontalAction"));
+    connect(flipHorizontal, &QAction::triggered, this, [this]() {
+        QTransform operation;
+        operation.scale(-1.0, 1.0);
+        applyImageOperation(operation);
+    });
+    QAction* flipVertical =
+        processMenu->addItem(tr("Flip vertically"), custom_outlined_icons::FlipVertical());
+    setActionTranslationSource(flipVertical, "Flip vertically");
+    flipVertical->setObjectName(QStringLiteral("screenshotPinnedFlipVerticalAction"));
+    connect(flipVertical, &QAction::triggered, this, [this]() {
+        QTransform operation;
+        operation.scale(1.0, -1.0);
+        applyImageOperation(operation);
+    });
+    QAction* resetTransform = processMenu->addItem(tr("Reset transform"), outlined_icons::Reload());
+    setActionTranslationSource(resetTransform, "Reset transform");
+    resetTransform->setObjectName(QStringLiteral("screenshotPinnedResetTransformAction"));
+    connect(resetTransform, &QAction::triggered, this,
+            &ScreenshotPinnedWindow::resetImageTransform);
 
     m_contextMenu->addSeparator();
 
@@ -2557,44 +2575,29 @@ void ScreenshotPinnedWindow::createContextMenu() {
     connect(m_clickThroughAction, &QAction::triggered, this,
             &ScreenshotPinnedWindow::toggleClickThrough);
 
-    m_alwaysOnTopAction = m_contextMenu->addItem(tr("Always on Top"), outlined_icons::ToTop());
+    auto* windowManagementMenu =
+        m_contextMenu->addSubMenu(tr("Window Management"), outlined_icons::Apartment());
+    setActionTranslationSource(windowManagementMenu->menuAction(), "Window Management");
+    windowManagementMenu->setObjectName(QStringLiteral("screenshotPinnedWindowManagementMenu"));
+    windowManagementMenu->menuAction()->setObjectName(
+        QStringLiteral("screenshotPinnedWindowManagementAction"));
+    m_alwaysOnTopAction =
+        windowManagementMenu->addItem(tr("Always on Top"), outlined_icons::ToTop());
     setActionTranslationSource(m_alwaysOnTopAction, "Always on Top");
     m_alwaysOnTopAction->setObjectName(QStringLiteral("screenshotPinnedAlwaysOnTopAction"));
     m_alwaysOnTopAction->setCheckable(true);
     connect(m_alwaysOnTopAction, &QAction::triggered, this,
             &ScreenshotPinnedWindow::toggleAlwaysOnTop);
-
-    auto* focusMenu = m_contextMenu->addSubMenu(tr("Focus mode"), outlined_icons::Eye());
-    setActionTranslationSource(focusMenu->menuAction(), "Focus mode");
-    focusMenu->setObjectName(QStringLiteral("screenshotPinnedFocusMenu"));
-    QAction* showAllWindows = focusMenu->addItem(tr("Show all windows"), outlined_icons::Expand());
-    setActionTranslationSource(showAllWindows, "Show all windows");
-    connect(showAllWindows, &QAction::triggered, this,
-            &ScreenshotPinnedWindow::showAllPinnedWindows);
-    QAction* hideOtherWindows =
-        focusMenu->addItem(tr("Hide other windows"), outlined_icons::EyeInvisible());
-    setActionTranslationSource(hideOtherWindows, "Hide other windows");
-    connect(hideOtherWindows, &QAction::triggered, this,
-            &ScreenshotPinnedWindow::hideOtherPinnedWindows);
-    QAction* closeOtherWindows =
-        focusMenu->addItem(tr("Close other windows"), outlined_icons::Close());
-    setActionTranslationSource(closeOtherWindows, "Close other windows");
-    connect(closeOtherWindows, &QAction::triggered, this,
-            &ScreenshotPinnedWindow::closeOtherPinnedWindows);
-    QAction* closeAll = focusMenu->addItem(tr("Close all windows"), outlined_icons::CloseCircle());
-    setActionTranslationSource(closeAll, "Close all windows");
-    focusMenu->setActionDanger(closeAll);
-    connect(closeAll, &QAction::triggered, this, &ScreenshotPinnedWindow::closeAllPinnedWindows);
-
-    m_contextMenu->addSeparator();
-    m_showMainInterfaceAction =
-        m_contextMenu->addItem(tr("Show main interface"), custom_outlined_icons::Window());
-    setActionTranslationSource(m_showMainInterfaceAction, "Show main interface");
-    m_showMainInterfaceAction->setObjectName(
-        QStringLiteral("screenshotPinnedShowMainInterfaceAction"));
-    connect(m_showMainInterfaceAction, &QAction::triggered, this,
-            &ScreenshotPinnedWindow::showMainWindowRequested);
-    auto* loadMenu = m_contextMenu->addSubMenu(tr("Load new content"), outlined_icons::Reload());
+    m_showBorderAction =
+        windowManagementMenu->addItem(tr("Show border"), outlined_icons::BorderOuter());
+    setActionTranslationSource(m_showBorderAction, "Show border");
+    m_showBorderAction->setObjectName(QStringLiteral("screenshotPinnedShowBorderAction"));
+    m_showBorderAction->setCheckable(true);
+    connect(m_showBorderAction, &QAction::triggered, this,
+            &ScreenshotPinnedWindow::toggleShowBorder);
+    windowManagementMenu->addSeparator();
+    auto* loadMenu =
+        windowManagementMenu->addSubMenu(tr("Load new content"), outlined_icons::Reload());
     loadMenu->setObjectName(QStringLiteral("screenshotPinnedLoadContentMenu"));
     m_loadContentAction = loadMenu->menuAction();
     setActionTranslationSource(m_loadContentAction, "Load new content");
@@ -2609,6 +2612,40 @@ void ScreenshotPinnedWindow::createContextMenu() {
     loadClipboard->setObjectName(QStringLiteral("screenshotPinnedLoadClipboardAction"));
     connect(loadClipboard, &QAction::triggered, this,
             &ScreenshotPinnedWindow::loadClipboardContent);
+    windowManagementMenu->addSeparator();
+    QAction* showAllWindows =
+        windowManagementMenu->addItem(tr("Show all windows"), outlined_icons::Expand());
+    setActionTranslationSource(showAllWindows, "Show all windows");
+    showAllWindows->setObjectName(QStringLiteral("screenshotPinnedShowAllWindowsAction"));
+    connect(showAllWindows, &QAction::triggered, this,
+            &ScreenshotPinnedWindow::showAllPinnedWindows);
+    QAction* hideOtherWindows =
+        windowManagementMenu->addItem(tr("Hide other windows"), outlined_icons::EyeInvisible());
+    setActionTranslationSource(hideOtherWindows, "Hide other windows");
+    hideOtherWindows->setObjectName(QStringLiteral("screenshotPinnedHideOtherWindowsAction"));
+    connect(hideOtherWindows, &QAction::triggered, this,
+            &ScreenshotPinnedWindow::hideOtherPinnedWindows);
+    QAction* closeOtherWindows =
+        windowManagementMenu->addItem(tr("Close other windows"), outlined_icons::Close());
+    setActionTranslationSource(closeOtherWindows, "Close other windows");
+    closeOtherWindows->setObjectName(QStringLiteral("screenshotPinnedCloseOtherWindowsAction"));
+    connect(closeOtherWindows, &QAction::triggered, this,
+            &ScreenshotPinnedWindow::closeOtherPinnedWindows);
+    QAction* closeAll =
+        windowManagementMenu->addItem(tr("Close all windows"), outlined_icons::CloseCircle());
+    setActionTranslationSource(closeAll, "Close all windows");
+    closeAll->setObjectName(QStringLiteral("screenshotPinnedCloseAllWindowsAction"));
+    windowManagementMenu->setActionDanger(closeAll);
+    connect(closeAll, &QAction::triggered, this, &ScreenshotPinnedWindow::closeAllPinnedWindows);
+
+    m_contextMenu->addSeparator();
+    m_showMainInterfaceAction =
+        m_contextMenu->addItem(tr("Show main interface"), custom_outlined_icons::Window());
+    setActionTranslationSource(m_showMainInterfaceAction, "Show main interface");
+    m_showMainInterfaceAction->setObjectName(
+        QStringLiteral("screenshotPinnedShowMainInterfaceAction"));
+    connect(m_showMainInterfaceAction, &QAction::triggered, this,
+            &ScreenshotPinnedWindow::showMainWindowRequested);
 
     m_closeAction = m_contextMenu->addItem(tr("Close"), outlined_icons::Close());
     setActionTranslationSource(m_closeAction, "Close");
@@ -2640,7 +2677,7 @@ void ScreenshotPinnedWindow::updateShowMainInterfaceAction() {
     const bool containsAction = m_contextMenu->actions().contains(m_showMainInterfaceAction);
     const bool shouldShowFallback = !configuredTrayEnabled() || !trayMenuShowsMainInterface();
     if (shouldShowFallback && !containsAction) {
-        m_contextMenu->insertAction(m_loadContentAction, m_showMainInterfaceAction);
+        m_contextMenu->insertAction(m_closeAction, m_showMainInterfaceAction);
     } else if (!shouldShowFallback && containsAction) {
         m_contextMenu->removeAction(m_showMainInterfaceAction);
     }
@@ -2688,6 +2725,10 @@ void ScreenshotPinnedWindow::refreshContextMenu() {
         const QSignalBlocker blocker(m_alwaysOnTopAction);
         m_alwaysOnTopAction->setChecked(m_alwaysOnTop);
     }
+    if (m_showBorderAction != nullptr) {
+        const QSignalBlocker blocker(m_showBorderAction);
+        m_showBorderAction->setChecked(m_showBorder);
+    }
     if (m_thumbnailAction != nullptr) {
         m_thumbnailAction->setChecked(m_thumbnailMode);
     }
@@ -2701,7 +2742,7 @@ void ScreenshotPinnedWindow::refreshContextMenu() {
     }
     if (m_scaleActions != nullptr) {
         for (QAction* action : m_scaleActions->actions()) {
-            // The stored percent derives from integer physical widths, so a
+            // The stored percent derives from integer window widths, so a
             // displayed level can differ from it by pixel rounding.
             action->setChecked(qAbs(action->data().toDouble() - m_scalePercent) < 0.5);
         }
@@ -2840,8 +2881,8 @@ void ScreenshotPinnedWindow::updateCanvasViewport() {
     }
 
     const QRect nativeGeometry = currentNativeGeometry();
-    const qreal devicePixelRatio =
-        m_canvas->devicePixelRatioF() > 0.0 ? m_canvas->devicePixelRatioF() : 1.0;
+    const qreal devicePixelRatio = pinned_platform::pinnedGeometryScale(
+        m_canvas->devicePixelRatioF() > 0.0 ? m_canvas->devicePixelRatioF() : 1.0);
     if (!m_platform->usesControlledInteraction() && nativeGeometry.isValid() &&
         nativeGeometry == authoritativeNativeGeometry() && !m_synchronizingViewportGeometry) {
         const ScreenshotPinnedGeometryMapping clientMapping(nativeGeometry, size(),
@@ -2862,13 +2903,13 @@ void ScreenshotPinnedWindow::updateCanvasViewport() {
     // intermediate dimensions.
     if (m_borderFrame)
         updatePinnedBorderGeometry(*m_borderFrame, rect());
-    const QSize physicalViewport = nativeGeometry.isValid() && !nativeGeometry.isEmpty()
-                                       ? nativeGeometry.size()
-                                       : QSize(qRound(m_canvas->width() * devicePixelRatio),
-                                               qRound(m_canvas->height() * devicePixelRatio));
+    const QSize windowViewport = nativeGeometry.isValid() && !nativeGeometry.isEmpty()
+                                     ? nativeGeometry.size()
+                                     : QSize(qRound(m_canvas->width() * devicePixelRatio),
+                                             qRound(m_canvas->height() * devicePixelRatio));
     m_screenshotRenderer->setImageViewportPhysicalSize({});
-    const ScreenshotPinnedGeometryMapping mapping(QRect(QPoint(), physicalViewport),
-                                                  m_canvas->size(), devicePixelRatio);
+    const ScreenshotPinnedGeometryMapping mapping(QRect(QPoint(), windowViewport), m_canvas->size(),
+                                                  devicePixelRatio);
     m_viewportZoom = mapping.viewportZoom(m_resultSurfaceCanvasRect.size());
     m_viewportCenter = m_resultSurfaceCanvasRect.center();
     // The camera centers on the integer QWidget extent. Offset it to the
@@ -3400,6 +3441,11 @@ void ScreenshotPinnedWindow::configureEditToolbar(
     connect(toolbar, &ScreenshotToolPalette::imageConversionSettingsRequested, this,
             [this]() { m_recognitionSession->openImageConversionSettings(); });
 
+    connect(toolbar, &ScreenshotToolPalette::showOriginalImageRequested, this, [this](bool show) {
+        if (m_recognitionSession != nullptr) {
+            m_recognitionSession->setShowOriginalImage(show);
+        }
+    });
     connect(toolbar, &ScreenshotToolPalette::textEditRequested, this,
             &ScreenshotPinnedWindow::handleTextEditingRequested);
     connect(toolbar, &ScreenshotToolPalette::textTranslateRequested, this,
@@ -3418,24 +3464,8 @@ void ScreenshotPinnedWindow::configureEditToolbar(
             &ScreenshotPinnedWindow::handleTableSplitRequested);
     connect(toolbar, &ScreenshotToolPalette::tableResetRequested, this,
             &ScreenshotPinnedWindow::handleTableResetRequested);
-    const auto leaveRecognition = [this]() { deactivateRecognition(); };
-    connect(toolbar, &ScreenshotToolPalette::moveRequested, this, leaveRecognition);
-    connect(toolbar, &ScreenshotToolPalette::selectRequested, this, leaveRecognition);
-    connect(toolbar, &ScreenshotToolPalette::shapeRequested, this, leaveRecognition);
-    connect(toolbar, &ScreenshotToolPalette::arrowRequested, this, leaveRecognition);
-    connect(toolbar, &ScreenshotToolPalette::lineRequested, this, leaveRecognition);
-    connect(toolbar, &ScreenshotToolPalette::freeDrawRequested, this, leaveRecognition);
-    connect(toolbar, &ScreenshotToolPalette::highlightRequested, this, leaveRecognition);
-    connect(toolbar, &ScreenshotToolPalette::penHighlightRequested, this, leaveRecognition);
-    connect(toolbar, &ScreenshotToolPalette::spotlightRequested, this, leaveRecognition);
-    connect(toolbar, &ScreenshotToolPalette::eraserRequested, this, leaveRecognition);
-    connect(toolbar, &ScreenshotToolPalette::filterRequested, this, leaveRecognition);
-    connect(toolbar, &ScreenshotToolPalette::rectangleFilterRequested, this, leaveRecognition);
-    connect(toolbar, &ScreenshotToolPalette::penFilterRequested, this, leaveRecognition);
-    connect(toolbar, &ScreenshotToolPalette::watermarkRequested, this, leaveRecognition);
-    connect(toolbar, &ScreenshotToolPalette::textRequested, this, leaveRecognition);
-    connect(toolbar, &ScreenshotToolPalette::serialNumberRequested, this, leaveRecognition);
-    connect(toolbar, &ScreenshotToolPalette::confirmRequested, this, leaveRecognition);
+    connect(toolbar, &ScreenshotToolPalette::confirmRequested, this,
+            [this]() { deactivateRecognition(); });
 
     updateRecognitionToolbarState();
 }
@@ -3801,7 +3831,7 @@ void ScreenshotPinnedWindow::configureRecognitionSession() {
                                        ScreenshotRecognitionSessionController::Mode::Html)) {
                             host->setActiveTool(ScreenshotToolPalette::Tool::Html);
                         } else if (controller->editMode()) {
-                            controller->restoreDrawingToolState();
+                            controller->recognitionDeactivated();
                         } else {
                             host->clearActiveTool();
                         }
@@ -3923,6 +3953,16 @@ void ScreenshotPinnedWindow::configureRecognitionSession() {
                         palette->setImageConversionBusy(
                             busy && format == SnowShotImageConversionFormat::Markdown,
                             busy && format == SnowShotImageConversionFormat::Html);
+                    }
+                }
+            },
+            [this](bool show) {
+                if (m_screenshotRenderer != nullptr) {
+                    m_screenshotRenderer->setOcrVisible(!show);
+                }
+                if (m_editController != nullptr && m_editController->toolbarWindow() != nullptr) {
+                    if (auto* palette = m_editController->toolbarWindow()->palette()) {
+                        palette->setShowOriginalImage(show);
                     }
                 }
             },
@@ -4216,13 +4256,21 @@ void ScreenshotPinnedWindow::copyCurrentViewport() {
     if (m_resultSurfaceCanvasRect.isEmpty()) {
         return;
     }
-    const QSize physicalViewport = currentNativeGeometry().size();
-    const double surfaceScale = m_thumbnailMode
-                                    ? std::min(static_cast<double>(physicalViewport.width()) /
-                                                   m_resultSurfaceCanvasRect.width(),
-                                               static_cast<double>(physicalViewport.height()) /
-                                                   m_resultSurfaceCanvasRect.height())
-                                    : m_scalePercent / 100.0;
+    const bool logical = pinned_platform::kPinnedGeometryUnits ==
+                         pinned_platform::PinnedGeometryUnits::LogicalPixels;
+    double surfaceScale = m_scalePercent / 100.0;
+    if (m_thumbnailMode) {
+        // Copy Current Viewport exports the displayed thumbnail, including its
+        // backing resolution, independently of the saved expansion scale.
+        const QSizeF rasterViewport =
+            QSizeF(currentNativeGeometry().size()) * (logical ? devicePixelRatioF() : 1.0);
+        surfaceScale = std::min(rasterViewport.width() / m_resultSurfaceCanvasRect.width(),
+                                rasterViewport.height() / m_resultSurfaceCanvasRect.height());
+    } else if (logical) {
+        // Normal pins retain the source detail at the user's chosen zoom.
+        surfaceScale *= std::min(m_transformedImage.width() / m_backgroundCanvasRect.width(),
+                                 m_transformedImage.height() / m_backgroundCanvasRect.height());
+    }
     if (!(surfaceScale > 0.0)) {
         return;
     }
@@ -4563,6 +4611,9 @@ bool ScreenshotPinnedWindow::replaceContent(ScreenshotClipboardContent content) 
         !m_firstContentFramePublished) {
         return false;
     }
+    const QSize replacementWindowSize = pinned_platform::pinnedImageWindowSize(
+        content.image,
+        content.isFormattedText() ? content.formattedTextDevicePixelRatio : devicePixelRatioF());
     content.image.setDevicePixelRatio(1.0);
     const QTransform transform = normalizedImageTransform(m_imageTransform, content.image.size());
     QImage transformed = ScreenshotResultCompositor::normalizeImage(
@@ -4574,13 +4625,21 @@ bool ScreenshotPinnedWindow::replaceContent(ScreenshotClipboardContent content) 
     QRectF sourceRect = m_canvasSourceRect;
     QRectF backgroundRect = m_backgroundCanvasRect;
     QRectF surfaceRect = m_resultSurfaceCanvasRect;
-    QSize initialSize = m_initialPhysicalSize;
+    QSize initialSize = m_initialWindowSize;
     QRect expandedGeometry =
         m_thumbnailMode ? m_preThumbnailNativeGeometry : authoritativeNativeGeometry();
-    const bool sizeChanged = content.image.size() != m_originalImage.size();
+    const bool logicalGeometry = pinned_platform::kPinnedGeometryUnits ==
+                                 pinned_platform::PinnedGeometryUnits::LogicalPixels;
+    const bool sizeChanged = content.image.size() != m_originalImage.size() ||
+                             (logicalGeometry && replacementWindowSize != initialSize);
     if (sizeChanged) {
-        const qreal scaleX = sourceRect.width() / m_originalImage.width();
-        const qreal scaleY = sourceRect.height() / m_originalImage.height();
+        const qreal scaleX = logicalGeometry ? sourceRect.width() * replacementWindowSize.width() /
+                                                   initialSize.width() / content.image.width()
+                                             : sourceRect.width() / m_originalImage.width();
+        const qreal scaleY = logicalGeometry
+                                 ? sourceRect.height() * replacementWindowSize.height() /
+                                       initialSize.height() / content.image.height()
+                                 : sourceRect.height() / m_originalImage.height();
         sourceRect.setSize(QSizeF(content.image.width() * scaleX, content.image.height() * scaleY));
         backgroundRect.setSize(QSizeF(transformed.width() * scaleX, transformed.height() * scaleY));
         surfaceRect = backgroundRect.adjusted(
@@ -4588,7 +4647,7 @@ bool ScreenshotPinnedWindow::replaceContent(ScreenshotClipboardContent content) 
             m_resultSurfaceCanvasRect.top() - m_backgroundCanvasRect.top(),
             m_resultSurfaceCanvasRect.right() - m_backgroundCanvasRect.right(),
             m_resultSurfaceCanvasRect.bottom() - m_backgroundCanvasRect.bottom());
-        const QSize oldOriented = orientedInitialPhysicalSize();
+        const QSize oldOriented = orientedInitialWindowSize();
         QSize orientedSize(std::max(1, qRound(oldOriented.width() * surfaceRect.width() /
                                               m_resultSurfaceCanvasRect.width())),
                            std::max(1, qRound(oldOriented.height() * surfaceRect.height() /
@@ -4645,7 +4704,7 @@ bool ScreenshotPinnedWindow::replaceContent(ScreenshotClipboardContent content) 
     m_canvasSourceRect = sourceRect;
     m_backgroundCanvasRect = backgroundRect;
     m_resultSurfaceCanvasRect = surfaceRect;
-    m_initialPhysicalSize = initialSize;
+    m_initialWindowSize = initialSize;
     if (sizeChanged) {
         m_preserveScaleForSettledGeometry = true;
         if (m_thumbnailMode) {
@@ -4879,7 +4938,7 @@ void ScreenshotPinnedWindow::applyImageOperation(const QTransform& operation,
     rebuildTransformedImage();
 
     if (quarterTurnDelta != 0) {
-        QSize nativeSize = orientedInitialPhysicalSize();
+        QSize nativeSize = orientedInitialWindowSize();
         nativeSize = QSize(std::max(1, qRound(nativeSize.width() * m_scalePercent / 100.0)),
                            std::max(1, qRound(nativeSize.height() * m_scalePercent / 100.0)));
         QRect nativeTarget(QPoint(), nativeSize);
@@ -4920,8 +4979,8 @@ void ScreenshotPinnedWindow::resetImageTransform() {
     rebuildTransformedImage();
     if (dimensionsChange) {
         QSize nativeSize(
-            std::max(1, qRound(m_initialPhysicalSize.width() * m_scalePercent / 100.0)),
-            std::max(1, qRound(m_initialPhysicalSize.height() * m_scalePercent / 100.0)));
+            std::max(1, qRound(m_initialWindowSize.width() * m_scalePercent / 100.0)),
+            std::max(1, qRound(m_initialWindowSize.height() * m_scalePercent / 100.0)));
         QRect nativeTarget(QPoint(), nativeSize);
         if (hideToTopActive()) {
             nativeTarget.moveTopLeft(nativeTopLeft);
@@ -4975,7 +5034,7 @@ void ScreenshotPinnedWindow::applyScale(int percent) {
         return;
     }
     restoreFromThumbnailImmediately();
-    QSize nativeSize = orientedInitialPhysicalSize();
+    QSize nativeSize = orientedInitialWindowSize();
     nativeSize = QSize(std::max(1, qRound(nativeSize.width() * percent / 100.0)),
                        std::max(1, qRound(nativeSize.height() * percent / 100.0)));
     const QRect currentGeometry = authoritativeNativeGeometry();
@@ -5010,7 +5069,7 @@ void ScreenshotPinnedWindow::applyWheelScale(double percent, const QPointF& nati
         return;
     }
 
-    QSize nativeSize = orientedInitialPhysicalSize();
+    QSize nativeSize = orientedInitialWindowSize();
     nativeSize = QSize(std::max(1, qRound(nativeSize.width() * percent / 100.0)),
                        std::max(1, qRound(nativeSize.height() * percent / 100.0)));
     const resize_geometry::ScaleAnchor anchor =
@@ -5033,6 +5092,25 @@ void ScreenshotPinnedWindow::applyWheelScale(double percent, const QPointF& nati
         m_editController->updatePlacement();
     }
     refreshContextMenu();
+}
+
+void ScreenshotPinnedWindow::applyWheelScaleSteps(int steps, const QPointF& nativeCursor) {
+    if (steps == 0) {
+        return;
+    }
+
+    // Wheel scaling moves between fixed ten-percent levels. Keep arbitrary
+    // values produced by native resizing or pinch gestures, but use the next
+    // level in the direction of travel instead of adding ten to that value.
+    const int displayedScalePercent = qRound(m_scalePercent);
+    const double level = steps > 0 ? std::floor(displayedScalePercent / kWheelScaleStep)
+                                   : std::ceil(displayedScalePercent / kWheelScaleStep);
+    const int targetPercent =
+        qBound(kMinimumScalePercent, qRound(level * kWheelScaleStep + steps * kWheelScaleStep),
+               kMaximumScalePercent);
+    if (targetPercent != displayedScalePercent) {
+        applyWheelScale(targetPercent, nativeCursor);
+    }
 }
 
 bool ScreenshotPinnedWindow::handleOpacityWheel(QObject* watched, QWheelEvent* event) {
@@ -5098,23 +5176,12 @@ bool ScreenshotPinnedWindow::handleScaleWheel(QObject* watched, QWheelEvent* eve
 
     const QPointF windowPosition = windowPositionForEvent(watched, event->position());
     const QPointF nativeCursor = nativePositionForWindowPosition(windowPosition);
-    // Wheel scaling moves between fixed ten-percent levels. Keep arbitrary
-    // values produced by native resizing, but use the next level in the
-    // direction of travel instead of adding ten to the current value.
-    const int displayedScalePercent = qRound(m_scalePercent);
-    const double level = steps > 0 ? std::floor(displayedScalePercent / kWheelScaleStep)
-                                   : std::ceil(displayedScalePercent / kWheelScaleStep);
-    const int targetPercent =
-        qBound(kMinimumScalePercent, qRound(level * kWheelScaleStep + steps * kWheelScaleStep),
-               kMaximumScalePercent);
-    if (targetPercent != displayedScalePercent) {
-        applyWheelScale(targetPercent, nativeCursor);
-    }
+    applyWheelScaleSteps(steps, nativeCursor);
     return true;
 }
 
-QSize ScreenshotPinnedWindow::orientedInitialPhysicalSize() const {
-    QSize size = m_initialPhysicalSize;
+QSize ScreenshotPinnedWindow::orientedInitialWindowSize() const {
+    QSize size = m_initialWindowSize;
     if ((m_quarterTurns % 2) != 0) {
         size.transpose();
     }
@@ -5126,8 +5193,7 @@ QRect ScreenshotPinnedWindow::logicalRectForNativeRect(const QRect& nativeRect) 
     if (targetScreen == nullptr) {
         targetScreen = QGuiApplication::screenAt(frameGeometry().center());
     }
-    const QRect logical =
-        ScreenshotGeometryMapper::logicalRectForPhysicalRect(nativeRect, targetScreen);
+    const QRect logical = snow_shot::presentation::pinnedLogicalRect(nativeRect, targetScreen);
     return logical.isValid() && !logical.isEmpty() ? logical : nativeRect;
 }
 
@@ -5193,7 +5259,7 @@ void ScreenshotPinnedWindow::adoptSettledNativeScale() {
         return;
     }
     const QRect nativeGeometry = authoritativeNativeGeometry();
-    const QSize baseline = orientedInitialPhysicalSize();
+    const QSize baseline = orientedInitialWindowSize();
     if (!nativeGeometry.isValid() || nativeGeometry.isEmpty() || baseline.width() <= 0) {
         return;
     }
@@ -5405,7 +5471,8 @@ bool ScreenshotPinnedWindow::updateClickThroughExitButtonGeometry() {
     }
     const QRect physicalBounds = screenshot_pinned_hide_to_top::screenGeometry(screen).workArea;
     const auto geometry = screenshot_pinned_click_through::controlsGeometry(
-        pinnedGeometry, physicalBounds, screen->devicePixelRatio());
+        pinnedGeometry, physicalBounds,
+        pinned_platform::pinnedGeometryScale(screen->devicePixelRatio()));
     if (geometry.exitButton.isEmpty() || geometry.opacityEditor.isEmpty() ||
         m_clickThroughOpacityEditor == nullptr || m_clickThroughMoveButton == nullptr) {
         return false;
@@ -5414,7 +5481,7 @@ bool ScreenshotPinnedWindow::updateClickThroughExitButtonGeometry() {
     setClickThroughScreen(screen);
     const auto placeControl = [this, screen](QWidget* control, const QRect& physicalGeometry) {
         const QRect logicalGeometry =
-            ScreenshotGeometryMapper::logicalRectForPhysicalRect(physicalGeometry, screen);
+            snow_shot::presentation::pinnedLogicalRect(physicalGeometry, screen);
         if (!logicalGeometry.isValid() || logicalGeometry.isEmpty()) {
             return false;
         }
@@ -5580,6 +5647,23 @@ void ScreenshotPinnedWindow::toggleAlwaysOnTop() {
     setAlwaysOnTop(!m_alwaysOnTop);
 }
 
+void ScreenshotPinnedWindow::setShowBorder(bool enabled) {
+    if (enabled == m_showBorder) {
+        refreshContextMenu();
+        return;
+    }
+    m_showBorder = enabled;
+    if (m_borderFrame != nullptr) {
+        m_borderFrame->setVisible(enabled);
+    }
+    refreshContextMenu();
+    schedulePersistence();
+}
+
+void ScreenshotPinnedWindow::toggleShowBorder() {
+    setShowBorder(!m_showBorder);
+}
+
 void ScreenshotPinnedWindow::shutdownClickThrough() {
     if (internalWinId() != 0) {
         static_cast<void>(m_platform->setInputTransparent(false));
@@ -5646,7 +5730,10 @@ void ScreenshotPinnedWindow::setThumbnailMode(bool enabled, bool animate) {
             m_preThumbnailPlacement =
                 pinned_platform::pinnedPlacement(m_preThumbnailNativeGeometry, *screen());
         QScreen* targetScreen = screen();
-        const qreal scale = targetScreen != nullptr ? targetScreen->devicePixelRatio() : 1.0;
+        const qreal scale =
+            targetScreen != nullptr
+                ? pinned_platform::pinnedGeometryScale(targetScreen->devicePixelRatio())
+                : 1.0;
         const int nativeThumbnailSize = std::max(1, qRound(kThumbnailSize * scale));
         const QPointF nativeCursor = physicalCursorPosition().value_or(
             nativePositionForWindowPosition(mapFromGlobal(QCursor::pos())).toPoint());
@@ -5789,7 +5876,7 @@ bool ScreenshotPinnedWindow::applyAndVerifyNativeGeometry(const QRect& target,
         return false;
     const QScopedValueRollback<bool> guard(m_platformApplying, true);
     using Update = pinned_platform::PinnedWindowPlatform::GeometryUpdate;
-    if (!m_platform->applyPixelGeometry(
+    if (!m_platform->applyGeometry(
             target, screen(), discardContents ? Update::DiscardContents : Update::PreserveContents))
         return false;
     const QRect actual = observedNativeGeometry();
@@ -5855,7 +5942,7 @@ bool ScreenshotPinnedWindow::reconcilePassiveNativeGeometry() {
             !m_platformPlacement || !screen() || m_platformReconciliationPending)
             return false;
         const auto actual = m_platform->placement();
-        if (actual && actual->pixelSize == m_platformPlacement->pixelSize &&
+        if (actual && actual->windowSize == m_platformPlacement->windowSize &&
             QLineF(actual->position, m_platformPlacement->position).length() < .01)
             return false;
         m_platformApplying = true;
@@ -5864,7 +5951,7 @@ bool ScreenshotPinnedWindow::reconcilePassiveNativeGeometry() {
         if (restored) {
             m_platformPlacement = m_platform->placement();
             if (m_nativeGeometryController->beginProgrammatic(
-                    m_platform->pixelGeometry(),
+                    m_platform->windowGeometry(),
                     ScreenshotPinnedNativeGeometryController::Origin::Restoration))
                 static_cast<void>(m_nativeGeometryController->commitTarget());
         }
@@ -5881,7 +5968,7 @@ bool ScreenshotPinnedWindow::reconcilePassiveNativeGeometry() {
          !m_nativeGeometryController->hasAcceptedInteractiveGeometry());
     const QRect target = m_nativeGeometryController->targetGeometry();
     if (!passive || !target.isValid() || target.isEmpty() ||
-        m_platform->pixelGeometry() == target) {
+        m_platform->windowGeometry() == target) {
         return false;
     }
 
@@ -5999,7 +6086,8 @@ std::optional<QPoint> ScreenshotPinnedWindow::physicalCursorPosition() const {
         if (!desktop)
             return std::nullopt;
         return screen()->geometry().topLeft() +
-               ((*desktop - QPointF(screen()->geometry().topLeft())) * screen()->devicePixelRatio())
+               ((*desktop - QPointF(screen()->geometry().topLeft())) *
+                pinned_platform::pinnedGeometryScale(screen()->devicePixelRatio()))
                    .toPoint();
     }
     return m_physicalCursor != nullptr ? m_physicalCursor->position() : std::nullopt;
@@ -6015,8 +6103,18 @@ bool ScreenshotPinnedWindow::moveCursorOnePixel(
     if (!cursorMovementEnabled() || m_physicalCursor == nullptr) {
         return false;
     }
-    const snow_shot::platform::PhysicalCursorMoveResult result =
-        m_physicalCursor->moveOnePixel(direction);
+    int physicalStep = 1;
+    const bool logical = pinned_platform::kPinnedGeometryUnits ==
+                         pinned_platform::PinnedGeometryUnits::LogicalPixels;
+    if (logical) {
+        const auto desktop = m_platform->pointerPosition();
+        QScreen* pointerScreen = desktop ? pinned_platform::pinnedDisplayAt(*desktop) : screen();
+        if (pointerScreen)
+            physicalStep = std::max(1, qRound(pointerScreen->devicePixelRatio()));
+    }
+    auto result = m_physicalCursor->movePixels(direction, physicalStep);
+    if (logical && result.commandApplied())
+        result.position = physicalCursorPosition();
     if (!result.commandApplied()) {
         return false;
     }

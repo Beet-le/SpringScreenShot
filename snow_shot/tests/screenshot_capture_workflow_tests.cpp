@@ -863,6 +863,18 @@ void phasedSelectionPreservesUserIntent() {
 }
 
 void intelligentSelectionTargetsPreserveElementPathBehavior() {
+#ifdef Q_OS_MACOS
+    {
+        ScreenshotIntelligentSelectionModel model;
+        const QRectF window(0, 0, 100, 100), pane(0, 0, 80, 80), text(10, 10, 20, 20);
+        model.beginCaptureSession(true);
+        require(model.applyCanvasHitPath({text, window}, window, 1), "initial AX path failed");
+        require(model.selectIndex(1), "explicit AX window selection failed");
+        require(model.applyCanvasRefinementPath({text, pane, window}, window, 1) &&
+                    model.currentSelection() == window,
+                "new AX containers must preserve an explicitly chosen enclosing frame");
+    }
+#endif
     ScreenshotIntelligentSelectionModel selection;
     const QRectF nestedElement(30, 30, 20, 10);
     const QRectF childElement(20, 20, 60, 40);
@@ -1269,11 +1281,15 @@ void recapturePreservesEditingStateAndRollsBackFailures() {
     };
     ScreenshotCaptureWorkflow workflow(context);
 
-    require(workflow.startRecapture() && workflow.recaptureInProgress() &&
+    QVector<std::uint32_t> excludedWindowIds{101, 202};
+    require(workflow.startRecapture(excludedWindowIds) && workflow.recaptureInProgress() &&
                 runtime.lastCaptureRequest.purpose == ScreenshotCapturePurpose::Recapture &&
                 runtime.lastCaptureRequest.captureCursor &&
                 runtime.lastCaptureRequest.refreshLayout,
             "recapture must dispatch a distinct request with the current cursor setting");
+    excludedWindowIds.clear();
+    require(runtime.lastCaptureRequest.excludedWindowIds == QVector<std::uint32_t>{101, 202},
+            "recapture must own both overlay and toolbar exclusions after dispatch");
     const QRect selectionBefore = selection.pixelSelection();
     const ScreenshotCaptureMode modeBefore = interaction.mode();
     CapturedDisplayModel replacement = original;
@@ -1289,7 +1305,8 @@ void recapturePreservesEditingStateAndRollsBackFailures() {
             "successful recapture must preserve selection, interaction, and canvas state");
 
     captureCursor = false;
-    require(workflow.startRecapture() && !runtime.lastCaptureRequest.captureCursor,
+    require(workflow.startRecapture() && !runtime.lastCaptureRequest.captureCursor &&
+                runtime.lastCaptureRequest.excludedWindowIds.isEmpty(),
             "each recapture must read the latest cursor setting");
     ScreenshotCaptureResult failed;
     failed.requestId = runtime.lastCaptureRequest.requestId;

@@ -499,17 +499,25 @@ SettingsItemDefinition updateModeItem() {
         {QStringLiteral("manual"), settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Manual"))},
         {QStringLiteral("check"),
          settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Check automatically"))},
+#ifndef Q_OS_MACOS
         {QStringLiteral("download"),
          settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Download automatically"))},
+#endif
     };
-    return {
-        QStringLiteral("updates.mode"),
-        settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Updates")),
-        settingsText(QT_TRANSLATE_NOOP(
-            "SettingsCatalog", "Download new versions automatically and ask before restarting")),
-        {settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Software updates"))},
-        QStringLiteral("updates/mode"),
-        payload};
+    return {QStringLiteral("updates.mode"),
+            settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Updates")),
+#ifdef Q_OS_MACOS
+            settingsText(QT_TRANSLATE_NOOP(
+                "SettingsCatalog",
+                "Check for new versions and download updates from the official website")),
+#else
+            settingsText(
+                QT_TRANSLATE_NOOP("SettingsCatalog",
+                                  "Download new versions automatically and ask before restarting")),
+#endif
+            {settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Software updates"))},
+            QStringLiteral("updates/mode"),
+            payload};
 }
 
 #ifndef Q_OS_MACOS
@@ -651,9 +659,14 @@ SettingsItemDefinition pinSelectedFilesItem() {
     return quickActionItem(
         QStringLiteral("quick.pin-selected-files"),
         QT_TRANSLATE_NOOP("SettingsCatalog", "Pin Selected Files to Screen"),
+#ifdef Q_OS_MACOS
+        QT_TRANSLATE_NOOP("SettingsCatalog",
+                          "Pin selected image files from Finder or the desktop to the screen"),
+#else
         QT_TRANSLATE_NOOP(
             "SettingsCatalog",
             "Pin selected image files from File Explorer or the desktop to the screen"),
+#endif
         {}, GlobalShortcutAction::PinSelectedFiles,
         QStringLiteral("global_shortcuts/pin_selected_files"),
         []() { return custom_outlined_icons::Select(); });
@@ -1306,6 +1319,7 @@ SettingsItemDefinition fullscreenHotkeySuppressionItem() {
         SettingsSwitchBinding::DisableHotkeysOnFocusedFullscreen);
 }
 
+#ifndef Q_OS_MACOS
 SettingsItemDefinition launchAsAdministratorItem() {
     return switchItem(
         QStringLiteral("system.launch-as-administrator"),
@@ -1328,13 +1342,34 @@ SettingsItemDefinition restartAsAdministratorItem() {
             {},
             payload};
 }
+#endif
+#ifdef Q_OS_MACOS
+SettingsItemDefinition loginItemSettingsItem() {
+    SettingsActionDefinition payload;
+    payload.binding = SettingsActionBinding::OpenLoginItemSettings;
+    payload.iconFactory = [] { return outlined_icons::Setting(); };
+    payload.buttonText = settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Open"));
+    return {QStringLiteral("system.login-item-settings"),
+            settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Open Login Items Settings")),
+            settingsText(QT_TRANSLATE_NOOP(
+                "SettingsCatalog", "Manage Snow Shot's login permission in macOS System Settings")),
+            {},
+            {},
+            payload};
+}
+#endif
 SettingsItemDefinition autoStartItem() {
-    return switchItem(QStringLiteral("system.auto-start-at-boot"),
-                      QT_TRANSLATE_NOOP("SettingsCatalog", "Auto start at boot"),
-                      QT_TRANSLATE_NOOP("SettingsCatalog",
-                                        "Start Snow Shot in the background when Windows starts"),
-                      QStringLiteral("system/auto_start_at_boot"),
-                      SettingsSwitchBinding::AutoStartAtBoot);
+    return switchItem(
+        QStringLiteral("system.auto-start-at-boot"),
+#ifdef Q_OS_MACOS
+        QT_TRANSLATE_NOOP("SettingsCatalog", "Launch at login"),
+        QT_TRANSLATE_NOOP("SettingsCatalog", "Start Snow Shot in the background when you log in."),
+#else
+        QT_TRANSLATE_NOOP("SettingsCatalog", "Auto start at boot"),
+        QT_TRANSLATE_NOOP("SettingsCatalog",
+                          "Start Snow Shot in the background when Windows starts"),
+#endif
+        QStringLiteral("system/auto_start_at_boot"), SettingsSwitchBinding::AutoStartAtBoot);
 }
 
 SettingsItemDefinition localShortcutItem(SettingsLocalShortcutScope scope,
@@ -2296,7 +2331,12 @@ QVector<SettingsPageDefinition> builtInPages() {
                     settingsText(QT_TRANSLATE_NOOP("SettingsCatalog",
                                                    "General system integration settings")),
                     SettingsSectionReset::SystemGeneral,
-                    {autoStartItem(), launchAsAdministratorItem(), restartAsAdministratorItem(),
+                    {autoStartItem(),
+#ifdef Q_OS_MACOS
+                     loginItemSettingsItem(),
+#else
+                     launchAsAdministratorItem(), restartAsAdministratorItem(),
+#endif
                      updateModeItem()},
                 },
                 {

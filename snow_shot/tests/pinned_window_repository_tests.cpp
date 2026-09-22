@@ -50,7 +50,7 @@ storage::PinnedWindowRecord recordWithId(const QString& id, const QImage& image)
     value.canvasSourceRect = QRectF(0, 0, 2, 2);
     value.contentCanvasRect = QRectF(0, 0, 2, 2);
     value.surfaceCanvasRect = QRectF(0, 0, 2, 2);
-    value.initialPhysicalSize = image.size();
+    value.initialWindowSize = image.size();
     value.screenDpi = 1.0;
     value.firstCreationTextDpi = 1.0;
     value.scalePercent = 100.0;
@@ -534,7 +534,7 @@ void alwaysOnTopStateRoundTripsAndDefaultsToEnabledForLegacyRecords() {
     auto record = recordWithId(id, patternedImage(QSize(200, 100), 5));
     record.alwaysOnTop = false;
     const QString manifest =
-        QDir(directory.path()).filePath(QStringLiteral("pinned_windows/index.json"));
+        QDir(directory.path()).filePath(QStringLiteral("pinned_windows_v2/index.json"));
     {
         storage::PinnedWindowRepository repository(directory.path());
         require(repository.upsert(record).success && repository.flush().success,
@@ -571,6 +571,51 @@ void alwaysOnTopStateRoundTripsAndDefaultsToEnabledForLegacyRecords() {
     const auto loaded = repository.loadRecord(id);
     require(loaded.has_value() && loaded->alwaysOnTop,
             "legacy records must restore with always-on-top enabled");
+}
+void showBorderStateRoundTripsAndDefaultsToEnabledForLegacyRecords() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "temporary show border storage is unavailable");
+    const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    auto record = recordWithId(id, patternedImage(QSize(200, 100), 5));
+    record.showBorder = false;
+    const QString manifest =
+        QDir(directory.path()).filePath(QStringLiteral("pinned_windows_v2/index.json"));
+    {
+        storage::PinnedWindowRepository repository(directory.path());
+        require(repository.upsert(record).success && repository.flush().success,
+                "the show border opt-out must be committed to disk");
+        const auto demoted = repository.loadRecord(id);
+        require(demoted.has_value() && !demoted->showBorder,
+                "the show border opt-out must survive payload demotion");
+        record.showBorder = true;
+        require(repository.updateState(record).success && repository.flush().success,
+                "re-enabling the border must update persisted metadata");
+    }
+    {
+        storage::PinnedWindowRepository repository(directory.path());
+        const auto loaded = repository.loadRecord(id);
+        require(loaded.has_value() && loaded->showBorder,
+                "show border state must survive repository recreation");
+    }
+
+    // Records saved before the preference existed always rendered their rim,
+    // so a missing key must restore with the border visible.
+    auto root = QJsonDocument::fromJson(readBytes(manifest)).object();
+    auto records = root.value(QStringLiteral("records")).toArray();
+    auto item = records.at(0).toObject();
+    item.remove(QStringLiteral("show_border"));
+    records.replace(0, item);
+    root.insert(QStringLiteral("records"), records);
+    QFile file(manifest);
+    require(file.open(QIODevice::WriteOnly | QIODevice::Truncate),
+            "open show border legacy fixture");
+    const QByteArray bytes = QJsonDocument(root).toJson();
+    require(file.write(bytes) == bytes.size(), "write show border legacy fixture");
+    file.close();
+    storage::PinnedWindowRepository repository(directory.path());
+    const auto loaded = repository.loadRecord(id);
+    require(loaded.has_value() && loaded->showBorder,
+            "legacy records must restore with the border visible");
 }
 void thumbnailStateSurvivesRestartAndExit() {
     QTemporaryDir directory;
@@ -678,6 +723,8 @@ void precisePlacementAndPreviousVersionIsolation() {
     oldFile.close();
     const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
     auto record = recordWithId(id, patternedImage(QSize(321, 181), 9));
+    record.initialWindowSize = QSize(301, 201);
+    record.screenDpi = 2.;
     record.placement = {QStringLiteral("Retina"), QStringLiteral("display-serial"),
                         QPointF(-10.5, 38.5), QSize(321, 181)};
     record.preThumbnailPlacement = {QStringLiteral("External"), QStringLiteral("external-serial"),
@@ -693,7 +740,10 @@ void precisePlacementAndPreviousVersionIsolation() {
     const auto loaded = restored.loadRecord(id);
     require(loaded && loaded->placement == record.placement &&
                 loaded->preThumbnailPlacement == record.preThumbnailPlacement &&
-                loaded->hideToTopPlacement == record.hideToTopPlacement,
+                loaded->hideToTopPlacement == record.hideToTopPlacement &&
+                loaded->initialWindowSize == record.initialWindowSize &&
+                loaded->image.size() == record.image.size() &&
+                loaded->placement.units == storage::kPinnedGeometryUnits,
             "all placement states must retain display identity and fractional point positions");
     require(readBytes(oldIndex) == oldBytes,
             "version two must not modify or reinterpret previous-version storage");
@@ -713,6 +763,7 @@ int main(int argc, char* argv[]) {
     recognitionVisibilityRoundTripsAndDefaultsToHidden();
     clickThroughStateRoundTripsAndRecoversLegacyOrConflictingMetadata();
     alwaysOnTopStateRoundTripsAndDefaultsToEnabledForLegacyRecords();
+    showBorderStateRoundTripsAndDefaultsToEnabledForLegacyRecords();
     thumbnailStateSurvivesRestartAndExit();
     hideToTopRoundTripsAndRecoversLegacyMetadata();
     return 0;

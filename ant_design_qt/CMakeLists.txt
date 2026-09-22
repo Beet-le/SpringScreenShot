@@ -60,11 +60,21 @@ if(APPLE)
     # Consumers finalize Qt executables in sibling directories, so this static
     # library's private link dependency must remain visible there as well.
     find_package(Qt6 REQUIRED COMPONENTS GuiPrivate GLOBAL)
+    # This repair uses QAccessibleCache's private destruction slot. Do not
+    # silently disable it on upgrades: review the upstream fix and run the
+    # accessibility regression before changing the validated version here.
+    if(NOT Qt6Gui_VERSION VERSION_EQUAL "6.11.1")
+        message(WARNING
+            "AdQt macOS accessibility compatibility was validated with Qt 6.11.1; "
+            "review widgets/platform_compatibility.cpp and run "
+            "adqt-widget-accessibility-repair-tests with Qt ${Qt6Gui_VERSION}.")
+    endif()
     enable_language(OBJCXX)
     target_sources(ant_design_qt PRIVATE
         packages/ant_design_qt/src/widgets/context_menu_mac.mm
         packages/ant_design_qt/src/widgets/modal_mac.mm
-        packages/ant_design_qt/src/widgets/detail/window_surface_mac.mm)
+        packages/ant_design_qt/src/widgets/detail/window_surface_mac.mm
+        packages/ant_design_qt/src/widgets/detail/top_level_popup_window_mac.mm)
     # QPlatformMenu keeps Cocoa's modal ownership and mouse-release cleanup in Qt.
     target_link_libraries(ant_design_qt PRIVATE Qt6::GuiPrivate "-framework AppKit")
 endif()
@@ -147,6 +157,16 @@ if(ADQT_BUILD_TESTS)
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
         TIMEOUT 30)
     if(APPLE)
+        add_executable(adqt-popup-stacking-native-tests tests/popup_stacking_native_tests.mm)
+        target_link_libraries(adqt-popup-stacking-native-tests PRIVATE
+            adqt::widgets Qt6::Widgets "-framework AppKit")
+        add_test(NAME adqt-popup-ownership-tests COMMAND adqt-popup-stacking-native-tests)
+        set_tests_properties(adqt-popup-ownership-tests PROPERTIES
+            LABELS "unit" ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+        add_test(NAME adqt-popup-stacking-native-tests COMMAND adqt-popup-stacking-native-tests)
+        set_tests_properties(adqt-popup-stacking-native-tests PROPERTIES
+            LABELS "interactive" ENVIRONMENT "QT_QPA_PLATFORM=cocoa"
+            RUN_SERIAL TRUE TIMEOUT 30)
         add_executable(adqt-context-menu-native-tests tests/context_menu_native_tests.mm)
         target_link_libraries(adqt-context-menu-native-tests PRIVATE
             adqt::widgets Qt6::Test "-framework AppKit")
@@ -402,12 +422,22 @@ if(ADQT_BUILD_TESTS)
         packages/ant_design_qt/tests/theme_typography_tests.cpp)
     target_link_libraries(adqt-theme-typography-tests PRIVATE adqt::widgets Qt6::Widgets)
     if(TARGET Qt6::QOffscreenIntegrationPlugin)
-        target_link_libraries(adqt-theme-typography-tests PRIVATE Qt6::QOffscreenIntegrationPlugin)
+        # Qt imports static plugins; shared plugins are loaded at runtime.
         qt_import_plugins(adqt-theme-typography-tests INCLUDE Qt6::QOffscreenIntegrationPlugin)
     endif()
     add_test(NAME adqt-theme-typography-tests COMMAND adqt-theme-typography-tests)
     set_tests_properties(adqt-theme-typography-tests PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+    if(APPLE)
+        add_executable(adqt-widget-accessibility-repair-tests
+            packages/ant_design_qt/tests/widget_accessibility_repair_tests.mm)
+        target_link_libraries(adqt-widget-accessibility-repair-tests PRIVATE adqt::widgets Qt6::Widgets)
+        add_test(NAME adqt-widget-accessibility-repair-tests
+            COMMAND adqt-widget-accessibility-repair-tests)
+        set_tests_properties(adqt-widget-accessibility-repair-tests PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    endif()
 
     add_executable(adqt-divider-tests packages/ant_design_qt/tests/tst_divider.cpp)
     set_target_properties(adqt-divider-tests PROPERTIES AUTOMOC ON)

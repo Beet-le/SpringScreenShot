@@ -28,6 +28,20 @@ pub struct PreviewConfig {
 }
 
 impl PreviewConfig {
+    fn keyboard_output(&self) -> (u32, u32) {
+        // Native macOS recording composes keycaps in the final pixel canvas while
+        // the observed desktop region is expressed in points. Windows observes a
+        // physical-pixel region, so that region is the matching preview canvas.
+        #[cfg(target_os = "macos")]
+        {
+            self.output
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            (self.region.2, self.region.3)
+        }
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if !(100..=2000).contains(&self.trail_duration_ms) {
             return Err("trail duration must be between 100 and 2000 ms".into());
@@ -52,8 +66,9 @@ pub struct PreviewFrame {
     pub error: Option<String>,
 }
 
-/// Mouse tiles use export coordinates; keyboard tiles use physical capture pixels.
-/// Keeping these destinations separate prevents export scaling from resizing keycaps.
+/// Mouse tiles use export coordinates. Keyboard tiles use the coordinate space in which native
+/// recording composes keycaps: export pixels on macOS and physical capture pixels elsewhere.
+/// Keeping these destinations separate prevents export scaling from resizing Windows keycaps.
 #[derive(Default)]
 pub struct PreviewLayers {
     pub mouse: Vec<Tile>,
@@ -89,7 +104,7 @@ impl EffectsPreview {
     pub fn new(config: PreviewConfig, rasterizer: Option<Box<dyn KeycapRasterizer>>) -> Self {
         let output = config.output;
         let trail = LaserTrail::new(config.trail_duration_ms);
-        let keyboard_output = (config.region.2, config.region.3);
+        let keyboard_output = config.keyboard_output();
         let keycap_size = config
             .keyboard
             .as_ref()
@@ -238,6 +253,13 @@ impl PreviewSession {
         notify: Arc<dyn Fn() + Send + Sync>,
     ) -> Result<Self, String> {
         config.validate()?;
+        // Initialize on the caller before spawning the preview worker: stop()
+        // may join that worker from the main thread, so key translation cannot
+        // synchronously dispatch back to the host.
+        #[cfg(target_os = "macos")]
+        if config.show_keyboard {
+            snow_macos::text::prepare_keyboard_layout();
+        }
         let (sender, receiver) = bounded(1);
         let pending = receiver.clone();
         let latest = Arc::new(Mutex::new(None));
@@ -255,6 +277,12 @@ impl PreviewSession {
     }
     pub fn configure(&self, config: PreviewConfig) -> Result<(), String> {
         config.validate()?;
+        // Enabling keyboard display on an existing preview has the same
+        // initialization contract as starting one with keyboard display enabled.
+        #[cfg(target_os = "macos")]
+        if config.show_keyboard {
+            snow_macos::text::prepare_keyboard_layout();
+        }
         // Keep only the newest configuration; rapid color/geometry updates never block Qt.
         let command = Command::Configure(config);
         match self.sender.try_send(command) {
@@ -358,7 +386,7 @@ fn run(
                         revision,
                         output: config.output,
                         tiles: vec![],
-                        keyboard_output: (config.region.2, config.region.3),
+                        keyboard_output: config.keyboard_output(),
                         keyboard_tiles: vec![],
                         error: Some(error),
                     },
@@ -442,7 +470,7 @@ fn run(
                         revision,
                         output: config.output,
                         tiles: tiles.mouse,
-                        keyboard_output: (config.region.2, config.region.3),
+                        keyboard_output: config.keyboard_output(),
                         keyboard_tiles: tiles.keyboard,
                         error,
                     },
@@ -592,7 +620,7 @@ mod tests {
         }
     }
     #[test]
-    fn preview_keycaps_stay_64_physical_pixels_independent_of_capture_and_export_size() {
+    fn preview_keycaps_match_native_composition_coordinates() {
         struct FixedSquare;
         impl KeycapRasterizer for FixedSquare {
             fn rasterize(&mut self, _: &str, scale: f32) -> Result<Keycap, String> {
@@ -611,6 +639,10 @@ mod tests {
                 config.output = output;
                 let mut preview = EffectsPreview::new(config, Some(Box::new(FixedSquare)));
                 preview.keyboard.as_mut().unwrap().model.event(key(0, true));
+                #[cfg(target_os = "macos")]
+                assert_eq!(preview.config.keyboard_output(), output);
+                #[cfg(not(target_os = "macos"))]
+                assert_eq!(preview.config.keyboard_output(), capture);
                 let frame = preview.render(200).unwrap();
                 assert!(frame.mouse.is_empty());
                 let mut count = 0;
@@ -620,7 +652,10 @@ mod tests {
                         if pixel[3] != 0 {
                             let x = tile.x + index as u32 % TILE_SIZE;
                             let y = tile.y + index as u32 / TILE_SIZE;
-                            assert!(x < capture.0 && y < capture.1);
+                            assert!(
+                                x < preview.config.keyboard_output().0
+                                    && y < preview.config.keyboard_output().1
+                            );
                             left = left.min(x);
                             top = top.min(y);
                             right = right.max(x);

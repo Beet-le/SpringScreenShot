@@ -1,3 +1,5 @@
+#include "snow_shot/presentation/pinnedgeometry.h"
+#include "snow_shot/presentation/screenshotwheelinput.h"
 #include "snow_shot/presentation/screenshotpinnedwindow.h"
 #include "pinnedwindowplatform.h"
 #include "screenshotpinnednativegeometrycontroller.h"
@@ -17,10 +19,16 @@
 #include <QWindow>
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace platform = snow_shot::presentation;
 namespace resize_geometry = screenshot_pinned_resize_geometry;
 namespace {
+constexpr int kPreciseWheelZoomStepDelta = 100;
+constexpr int kAngleWheelZoomStepDelta = 120;
+// Wheels without scroll phases need an idle boundary for a new immediate step.
+constexpr quint64 kWheelZoomBurstIntervalMs = 250;
+
 std::optional<int> resizeHandle(const QPointF& p, const QSize& size) {
     constexpr qreal margin = 6;
     if (!QRectF(QPointF(), QSizeF(size)).contains(p))
@@ -66,9 +74,12 @@ Qt::CursorShape resizeCursor(int handle) {
 }
 } // namespace
 
-void ScreenshotPinnedWindow::reconcilePlatformEnvironment() {
+void ScreenshotPinnedWindow::reconcilePlatformEnvironment(bool layoutChanged) {
     if (!m_platform || !m_platform->usesControlledInteraction() || !m_presented || m_closing ||
-        m_platformApplying || m_platformReconciliationPending)
+        m_platformApplying)
+        return;
+    m_platformRecoveryPending = m_platformRecoveryPending || layoutChanged;
+    if (m_platformReconciliationPending)
         return;
     m_platformReconciliationPending = true;
     QTimer::singleShot(0, this, [this] {
@@ -87,11 +98,13 @@ void ScreenshotPinnedWindow::reconcilePlatformEnvironment() {
                 return;
             endControlledInteraction(false);
         }
+        const bool recover = std::exchange(m_platformRecoveryPending, false);
         auto placement = *m_platformPlacement;
         QScreen* target = platform::pinnedDisplay(placement, screen());
         if (!target)
             return;
-        placement = platform::recoverPinnedPlacement(placement, *target);
+        if (recover)
+            placement = platform::recoverPinnedPlacement(placement, *target);
         m_platformApplying = true;
         const bool applied = m_platform->applyStablePlacement(placement, target);
         m_platformApplying = false;
@@ -102,12 +115,13 @@ void ScreenshotPinnedWindow::reconcilePlatformEnvironment() {
             return;
         target = platform::pinnedDisplay(*m_platformPlacement, target);
         if (m_preThumbnailPlacement.isValid()) {
-            m_preThumbnailPlacement =
-                platform::recoverPinnedPlacement(m_preThumbnailPlacement, *target);
-            m_preThumbnailNativeGeometry =
-                platform::pinnedPixelRect(m_preThumbnailPlacement, *target);
+            if (recover)
+                m_preThumbnailPlacement =
+                    platform::recoverPinnedPlacement(m_preThumbnailPlacement, *target);
+            m_preThumbnailNativeGeometry = platform::pinnedWindowRect(
+                m_preThumbnailPlacement, *platform::pinnedDisplay(m_preThumbnailPlacement, target));
         }
-        const QRect targetRect = platform::pinnedPixelRect(*m_platformPlacement, *target);
+        const QRect targetRect = platform::pinnedWindowRect(*m_platformPlacement, *target);
         if (m_nativeGeometryController->beginProgrammatic(
                 targetRect, ScreenshotPinnedNativeGeometryController::Origin::DpiTransition)) {
             static_cast<void>(m_nativeGeometryController->commitTarget());
@@ -135,7 +149,7 @@ bool ScreenshotPinnedWindow::beginControlledInteraction(const QPointF& desktopPo
     if (handle ? !interactiveResizingEnabled() : (!windowDragEnabled() && !m_clickThroughActive))
         return false;
     exitHideToTop();
-    const QRect pixels = platform::pinnedPixelRect(*placement, *screen());
+    const QRect pixels = platform::pinnedWindowRect(*placement, *screen());
     const bool begun =
         handle ? m_nativeGeometryController->beginResize(resize_geometry::DragHandle(*handle))
                : m_nativeGeometryController->beginMove(pixels.topLeft());
@@ -148,9 +162,9 @@ bool ScreenshotPinnedWindow::beginControlledInteraction(const QPointF& desktopPo
     m_interactionPlacement = placement;
     m_interactionResizeHandle = handle;
     m_interactionPointer = desktopPosition;
-    m_interactionAnchorPixels =
+    m_interactionAnchor =
         (desktopPosition - platform::pinnedDesktopRect(*placement, *screen()).topLeft()) *
-        screen()->devicePixelRatio();
+        platform::pinnedGeometryScale(screen()->devicePixelRatio());
     m_systemSizingActive = handle.has_value();
     m_windowDragActive = !handle.has_value();
     if (m_editController) {
@@ -180,13 +194,14 @@ void ScreenshotPinnedWindow::updateControlledInteraction(const QPointF& desktopP
             target = underPointer;
         placement =
             platform::pinnedPlacementAtPointer(placement, platform::pinnedDisplayGeometry(*target),
-                                               desktopPosition, m_interactionAnchorPixels);
+                                               desktopPosition, m_interactionAnchor);
     } else {
         QScreen* originScreen = platform::pinnedDisplay(placement, screen());
-        const QRect origin = platform::pinnedPixelRect(placement, *originScreen);
+        const QRect origin = platform::pinnedWindowRect(placement, *originScreen);
         QRect proposed = origin;
-        const QPoint delta =
-            ((desktopPosition - m_interactionPointer) * originScreen->devicePixelRatio()).toPoint();
+        const QPoint delta = ((desktopPosition - m_interactionPointer) *
+                              platform::pinnedGeometryScale(originScreen->devicePixelRatio()))
+                                 .toPoint();
         using H = resize_geometry::DragHandle;
         const H handle = H(*m_interactionResizeHandle);
         if (handle == H::Left || handle == H::TopLeft || handle == H::BottomLeft)
@@ -198,8 +213,8 @@ void ScreenshotPinnedWindow::updateControlledInteraction(const QPointF& desktopP
         if (handle == H::Bottom || handle == H::BottomLeft || handle == H::BottomRight)
             proposed.setBottom(origin.bottom() + delta.y());
         QRect resized;
-        if (!resize_geometry::proportionalResizeRect(
-                proposed, origin, orientedInitialPhysicalSize(), handle, .1, 5., &resized))
+        if (!resize_geometry::proportionalResizeRect(proposed, origin, orientedInitialWindowSize(),
+                                                     handle, .1, 5., &resized))
             return;
         target = originScreen;
         placement = platform::pinnedPlacement(resized, *target);
@@ -207,7 +222,8 @@ void ScreenshotPinnedWindow::updateControlledInteraction(const QPointF& desktopP
     placement.displayName = target->name();
     placement.displaySerial = target->serialNumber();
     bool settled = false;
-    for (int attempt = 0; attempt < 3; ++attempt) {
+    const int attempts = placement.units == platform::PinnedGeometryUnits::LogicalPixels ? 1 : 3;
+    for (int attempt = 0; attempt < attempts; ++attempt) {
         m_platformApplying = true;
         const bool applied = m_platform->applyPlacement(placement, target);
         m_platformApplying = false;
@@ -217,14 +233,14 @@ void ScreenshotPinnedWindow::updateControlledInteraction(const QPointF& desktopP
         if (!m_platformPlacement)
             break;
         target = platform::pinnedDisplay(*m_platformPlacement, target);
-        if (m_platformPlacement->pixelSize == placement.pixelSize) {
+        if (m_platformPlacement->windowSize == placement.windowSize) {
             settled = true;
             break;
         }
         if (!m_interactionResizeHandle) {
-            placement = platform::pinnedPlacementAtPointer(
-                *m_interactionPlacement, platform::pinnedDisplayGeometry(*target), desktopPosition,
-                m_interactionAnchorPixels);
+            placement = platform::pinnedPlacementAtPointer(*m_interactionPlacement,
+                                                           platform::pinnedDisplayGeometry(*target),
+                                                           desktopPosition, m_interactionAnchor);
         } else {
             placement.displayName = target->name();
             placement.displaySerial = target->serialNumber();
@@ -236,10 +252,10 @@ void ScreenshotPinnedWindow::updateControlledInteraction(const QPointF& desktopP
         return;
     }
     static_cast<void>(m_nativeGeometryController->acceptInteractiveGeometry(
-        platform::pinnedPixelRect(*m_platformPlacement, *target)));
+        platform::pinnedWindowRect(*m_platformPlacement, *target)));
     if (m_systemSizingActive)
-        setEffectiveScale(100. * m_platformPlacement->pixelSize.width() /
-                              std::max(1, orientedInitialPhysicalSize().width()),
+        setEffectiveScale(100. * m_platformPlacement->windowSize.width() /
+                              std::max(1, orientedInitialWindowSize().width()),
                           true);
     updateCanvasViewport();
     if (m_clickThroughActive)
@@ -281,6 +297,8 @@ void ScreenshotPinnedWindow::endControlledInteraction(bool cancel) {
     if (!m_closing) {
         updateCanvasViewport();
         adoptSettledNativeScale();
+        if (m_platformRecoveryPending)
+            reconcilePlatformEnvironment();
         schedulePersistence();
     }
 }
@@ -310,6 +328,13 @@ bool ScreenshotPinnedWindow::handleControlledPointer(QObject* watched, QEvent* e
         }
         if (event->type() == QEvent::MouseMove || event->type() == QEvent::MouseButtonRelease) {
             auto* mouse = static_cast<QMouseEvent*>(event);
+            // A release can be lost during input/session interruption. The next
+            // move's button state ends ownership; its hover position is not a
+            // drag target. Actual release events still apply their final position.
+            if (event->type() == QEvent::MouseMove && !mouse->buttons().testFlag(Qt::LeftButton)) {
+                endControlledInteraction(true);
+                return false;
+            }
             if (event->type() == QEvent::MouseButtonRelease && mouse->button() != Qt::LeftButton)
                 return false;
             updateControlledInteraction(mouse->globalPosition());
@@ -342,7 +367,10 @@ bool ScreenshotPinnedWindow::handleControlledPointer(QObject* watched, QEvent* e
 }
 
 void ScreenshotPinnedWindow::resetPinnedGestures() {
-    m_scrollZoom = 0;
+    m_scrollWheelRemainder = 0;
+    m_scrollWheelDirection = 0;
+    m_scrollWheelStepDelta = 0;
+    m_scrollWheelTimestamp = 0;
     m_scrollOpacity = 0;
     m_pinchActive = false;
 }
@@ -386,31 +414,50 @@ bool ScreenshotPinnedWindow::handlePinnedGesture(QObject* watched, QEvent* event
     auto* wheel = static_cast<QWheelEvent*>(event);
     if (wheel->phase() == Qt::ScrollMomentum || m_pinchActive)
         return true;
-    if (wheel->phase() == Qt::ScrollBegin) {
-        m_scrollZoom = m_scalePercent;
-        m_scrollOpacity = m_opacityPercent;
-    }
+    if (wheel->phase() == Qt::ScrollBegin)
+        resetPinnedGestures();
     if (wheel->phase() == Qt::ScrollEnd) {
-        m_scrollZoom = 0;
-        m_scrollOpacity = 0;
+        resetPinnedGestures();
+        wheel->accept();
         return true;
     }
-    if (wheel->pixelDelta().isNull()) {
-        resetPinnedGestures();
-        return false;
-    }
+    const bool precise = platform::usesPreciseWheelDelta(*wheel);
+    const int delta = precise ? wheel->pixelDelta().y() : wheel->angleDelta().y();
     if (wheel->modifiers().testFlag(Qt::ControlModifier)) {
+        m_scrollWheelRemainder = 0;
+        m_scrollWheelDirection = 0;
+        if (!precise) {
+            m_scrollOpacity = 0;
+            return false;
+        }
         if (m_scrollOpacity == 0)
             m_scrollOpacity = m_opacityPercent;
-        m_scrollOpacity =
-            std::clamp(m_scrollOpacity + wheel->pixelDelta().y() * 5. / 120., 25., 100.);
+        m_scrollOpacity = std::clamp(m_scrollOpacity + delta * 5. / 120., 25., 100.);
         setOpacityPercent(qRound(m_scrollOpacity));
-    } else {
-        if (m_scrollZoom == 0)
-            m_scrollZoom = m_scalePercent;
-        m_scrollZoom = std::clamp(m_scrollZoom + wheel->pixelDelta().y() * 10. / 120., 10., 500.);
-        applyWheelScale(m_scrollZoom, nativePositionForWindowPosition(
-                                          windowPositionForEvent(watched, wheel->position())));
+    } else if (delta != 0) {
+        m_scrollOpacity = 0;
+        const int stepDelta = precise ? kPreciseWheelZoomStepDelta : kAngleWheelZoomStepDelta;
+        const int direction = delta > 0 ? 1 : -1;
+        const quint64 timestamp = wheel->timestamp();
+        const bool newBurst = wheel->phase() == Qt::NoScrollPhase &&
+                              timestamp > m_scrollWheelTimestamp &&
+                              timestamp - m_scrollWheelTimestamp >= kWheelZoomBurstIntervalMs;
+        if (direction != m_scrollWheelDirection || stepDelta != m_scrollWheelStepDelta ||
+            newBurst) {
+            // Advance on the first point, then once per full step of continued movement.
+            // Keeping this credit in the accumulator makes event coalescing irrelevant.
+            m_scrollWheelRemainder = direction * (stepDelta - 1);
+        }
+        m_scrollWheelDirection = direction;
+        m_scrollWheelStepDelta = stepDelta;
+        m_scrollWheelTimestamp = timestamp;
+        const qint64 accumulated = qint64(m_scrollWheelRemainder) + delta;
+        const int steps = int(accumulated / stepDelta);
+        m_scrollWheelRemainder = int(accumulated % stepDelta);
+        if (steps != 0) {
+            applyWheelScaleSteps(steps, nativePositionForWindowPosition(
+                                            windowPositionForEvent(watched, wheel->position())));
+        }
     }
     wheel->accept();
     return true;

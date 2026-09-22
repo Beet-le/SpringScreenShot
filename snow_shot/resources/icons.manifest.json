@@ -87,6 +87,22 @@
     },
     {
       "variant": "outlined",
+      "symbol": "ArrowShaftPlain",
+      "name": "arrow-shaft-plain",
+      "source": "../src/presentation/components/icons/resources/arrow-shaft-plain.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "ArrowShaftTapered",
+      "name": "arrow-shaft-tapered",
+      "source": "../src/presentation/components/icons/resources/arrow-shaft-tapered.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "ArrowTypeCurved",
       "name": "arrow-type-curved",
       "source": "../src/presentation/components/icons/resources/arrow-type-curved.svg",
@@ -250,6 +266,22 @@
       "symbol": "ArrowheadDotStart",
       "name": "arrowhead-dot-start",
       "source": "../src/presentation/components/icons/resources/arrowhead-dot-start.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "ArrowheadIndentedTriangle",
+      "name": "arrowhead-indented-triangle",
+      "source": "../src/presentation/components/icons/resources/arrowhead-indented-triangle.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "ArrowheadIndentedTriangleStart",
+      "name": "arrowhead-indented-triangle-start",
+      "source": "../src/presentation/components/icons/resources/arrowhead-indented-triangle-start.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },

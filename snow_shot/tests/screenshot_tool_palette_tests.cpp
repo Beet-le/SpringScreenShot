@@ -75,6 +75,7 @@
 #include "widgets/slider.h"
 #include "widgets/tooltip.h"
 
+#include <tuple>
 #include <algorithm>
 #include <cstddef>
 #include <cstdlib>
@@ -122,10 +123,16 @@ void translucentColorSwatchesShowCheckerboardUnderlay() {
             snow_shot::presentation::createScreenshotToolPaletteColorPickerTrigger(
                 &drawingPicker, QString(), Qt::transparent, metrics,
                 ColorPickerTrigger::Preview::Fill);
+        adqt::widgets::AdControlScaleScope triggerScope(drawingTrigger);
+        const auto context =
+            adqt::widgets::AdControlScaleContext::fromDprsAndContentScale(1.0, 1.0, scale);
+        triggerScope.publishScale(context);
         const QImage triggerImage = renderButton(*drawingTrigger);
         for (const bool summary : {false, true}) {
             std::unique_ptr<ColorSwatchButton> button(createScreenshotToolPaletteColorButton(
                 nullptr, nullptr, Qt::red, summary, true, metrics));
+            adqt::widgets::AdControlScaleScope buttonScope(button.get());
+            buttonScope.publishScale(context);
             for (const int alpha : {128, 254, 255, 0}) {
                 const QColor color(255, 0, 0, alpha);
                 button->setSwatchColor(color);
@@ -940,6 +947,9 @@ void recordingExportSettingsAndDrawingAvailabilityFollowSessionState() {
         std::unique_ptr<ColorSwatchButton> reference(createScreenshotToolPaletteColorButton(
             trigger->parentWidget(), nullptr, picker->value().solidColor, true, true,
             {28, 18, scale}));
+        // Reference metrics are configured by the factory; content scaling is
+        // now applied by the same context used for the live toolbar control.
+        reference->commitControlScale(adqt::widgets::controlScaleContextFor(trigger));
         require(renderButton(*trigger) == renderButton(*reference),
                 "export triggers should render RGBA colors exactly like drawing summary swatches");
     };
@@ -4684,7 +4694,57 @@ void scrollingScreenshotExposesAxisRecognitionModes() {
             "each new scrolling screenshot session should reset to vertical recognition");
 }
 
-void imageConversionToolsExposeOnlySettings() {
+void originalImageToggleLeadsRecognitionActions() {
+    using Tool = ScreenshotToolPalette::Tool;
+    ScreenshotToolPalette::Options options;
+    options.showSelectTool = true;
+    options.showOcrTool = true;
+    options.showQrTool = true;
+    options.showTableTool = true;
+    options.showImageConversionTools = true;
+    ScreenshotToolPalette palette(options);
+    palette.show();
+    int requests = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::showOriginalImageRequested, &palette,
+                     [&](bool show) {
+                         ++requests;
+                         palette.setShowOriginalImage(show);
+                     });
+    for (const auto tool :
+         {Tool::Qr, Tool::Ocr, Tool::Markdown, Tool::Table, Tool::Html, Tool::Qr}) {
+        palette.setShowOriginalImage(false);
+        palette.setActiveTool(tool);
+        QCoreApplication::processEvents();
+        auto* button = palette.findChild<adqt::widgets::AdButton*>(
+            QStringLiteral("screenshotShowOriginalImageButton"));
+        require(button && button->isVisible() && button->isEnabled() &&
+                    palette.actionToolbarVisible(),
+                "every recognition tool exposes original-image toggle");
+        require(palette.actionPanel()->layout()->itemAt(0)->widget() == button,
+                "original-image toggle remains first after lazy toolbar creation");
+        require(button->accentRole() == adqt::widgets::AdButton::AccentRole::Neutral,
+                "original-image toggle starts inactive");
+        require(adqt::icons::describeIcon(button->iconRef()).key ==
+                    adqt::icons::describeIcon(adqt::icons::antd::outlined::Eye()).key,
+                "original-image toggle uses Ant Design outlined Eye");
+        require(button->accessibleName() == QStringLiteral("Show original image"),
+                "original-image toggle has an accessible label");
+        button->click();
+        require(button->accentRole() == adqt::widgets::AdButton::AccentRole::Primary,
+                "activation uses the shared selected appearance");
+        button->click();
+        require(button->accentRole() == adqt::widgets::AdButton::AccentRole::Neutral,
+                "a second click restores inactive appearance");
+    }
+    require(requests == 12, "each toggle click dispatches exactly one request");
+    palette.setActiveTool(Tool::Select);
+    auto* button = palette.findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotShowOriginalImageButton"));
+    require(button == nullptr || !button->isVisible(),
+            "selection toolbar does not show the toggle");
+}
+
+void imageConversionToolsExposeRecognitionActions() {
     require(snow_shot::storage::ScreenshotToolbarSettings().setTableQrTool(QStringLiteral("qr")),
             "recognition group fixture starts with the remembered barcode entry");
     ScreenshotToolPalette::Options options;
@@ -4780,8 +4840,10 @@ void imageConversionToolsExposeOnlySettings() {
         QStringLiteral("screenshotImageConversionSettingsButton"));
     require(settings && !settings->isHidden(), "conversion activation exposes Settings");
     for (auto* button : palette.actionPanel()->findChildren<adqt::widgets::AdButton*>()) {
-        require(button == settings || button->isHidden(),
-                "conversion sub-toolbar contains only Settings");
+        require(button == settings ||
+                    button->objectName() == QStringLiteral("screenshotShowOriginalImageButton") ||
+                    button->isHidden(),
+                "conversion sub-toolbar contains original-image toggle and Settings");
     }
     settings->click();
     require(settingsRequests == 1, "Settings routes to conversion settings");
@@ -4795,7 +4857,7 @@ void imageConversionToolsExposeOnlySettings() {
                 !settings->isHidden() && !group->busy() &&
                 group->accessibleName() == QStringLiteral("Convert to HTML") &&
                 adqt::icons::describeIcon(group->iconRef()).key.name == QStringLiteral("html"),
-            "HTML switches format and retains the Settings-only sub-toolbar");
+            "HTML switches format and retains the conversion sub-toolbar");
     const QString snapshots = qEnvironmentVariable("SNOW_SHOT_CONVERSION_SNAPSHOTS");
     if (!snapshots.isEmpty()) {
         require(QDir().mkpath(snapshots), "create conversion toolbar snapshot directory");
@@ -4825,6 +4887,10 @@ void imageConversionToolsExposeOnlySettings() {
     require(language.setLanguage(QStringLiteral("zh_CN")),
             "load Simplified Chinese toolbar labels");
     QCoreApplication::processEvents();
+    require(palette.findChild<adqt::widgets::AdButton*>(
+                       QStringLiteral("screenshotShowOriginalImageButton"))
+                    ->accessibleName() == QStringLiteral("显示原图"),
+            "original-image button retranslates to Simplified Chinese");
     require(markdown->accessibleName() == QStringLiteral("转换为 Markdown") &&
                 html->accessibleName() == QStringLiteral("转换为 HTML") &&
                 group->accessibleName() == QStringLiteral("转换为 HTML") &&
@@ -4833,6 +4899,10 @@ void imageConversionToolsExposeOnlySettings() {
     require(language.setLanguage(QStringLiteral("zh_TW")),
             "load Traditional Chinese toolbar labels");
     QCoreApplication::processEvents();
+    require(palette.findChild<adqt::widgets::AdButton*>(
+                       QStringLiteral("screenshotShowOriginalImageButton"))
+                    ->accessibleName() == QStringLiteral("顯示原圖"),
+            "original-image button retranslates to Traditional Chinese");
     require(markdown->accessibleName() == QStringLiteral("轉換為 Markdown") &&
                 html->accessibleName() == QStringLiteral("轉換為 HTML") &&
                 group->accessibleName() == QStringLiteral("轉換為 HTML") &&
@@ -7637,6 +7707,14 @@ void arrowStyleControlsExposeAndEmitAllStyleProperties() {
                 arrowLayout->indexOf(separators.at(1)) < arrowLayout->indexOf(arrowTypeControls),
             "arrow stroke width should remain between color and arrow type");
 
+    QWidget* shaftControl = controlWithAccessibleName(palette, "Arrow shaft type");
+    QWidget* shaftRoot = styleEditorRoot(arrowControls, "arrow-shaft-type");
+    require(shaftControl != nullptr && shaftRoot != nullptr, "shaft editor should be present");
+    require(arrowLayout->indexOf(styleEditorRoot(arrowControls, "start-arrowhead")) <
+                    arrowLayout->indexOf(shaftRoot) &&
+                arrowLayout->indexOf(shaftRoot) <
+                    arrowLayout->indexOf(styleEditorRoot(arrowControls, "end-arrowhead")),
+            "shaft editor must be between the endpoint editors");
     int arrowPopoverOptionSpacing = -1;
     for (QWidget* trigger : {
              startArrowheadControl,
@@ -7714,6 +7792,47 @@ void arrowStyleControlsExposeAndEmitAllStyleProperties() {
             "start arrowhead should update");
     require(emittedStyle.endArrowhead == SnowCanvasArrowhead::DiamondOutline,
             "end arrowhead should update");
+
+    clickPopoverStyleControl(showPopoverForTrigger(shaftControl), "Tapered shaft");
+    require(emittedStyle.arrowShaftType == SnowCanvasArrowShaftType::Tapered,
+            "shaft editor should emit the tapered preference even for an unsupported head");
+    clickPopoverStyleControl(showPopoverForTrigger(endArrowheadControl), "End arrowhead triangle");
+    require(emittedStyle.arrowShaftType == SnowCanvasArrowShaftType::Tapered,
+            "supported head must retain the tapered preference");
+    clickPopoverStyleControl(showPopoverForTrigger(shaftControl), "Plain shaft");
+    require(emittedStyle.arrowShaftType == SnowCanvasArrowShaftType::Plain,
+            "plain shaft must be selectable");
+    for (const auto& [trigger, label, triangleLabel] : {
+             std::tuple{startArrowheadControl, "Start arrowhead indented triangle",
+                        "Start arrowhead triangle"},
+             std::tuple{endArrowheadControl, "End arrowhead indented triangle",
+                        "End arrowhead triangle"},
+         }) {
+        auto* popover = showPopoverForTrigger(trigger);
+        auto* content = popover->contentWidget();
+        adqt::widgets::AdButton* indented = nullptr;
+        adqt::widgets::AdButton* triangle = nullptr;
+        for (auto* button : content->findChildren<adqt::widgets::AdButton*>()) {
+            if (button->toolTip() == QString::fromLatin1(label)) {
+                indented = button;
+            }
+            if (button->toolTip() == QString::fromLatin1(triangleLabel)) {
+                triangle = button;
+            }
+        }
+        require(indented != nullptr && triangle != nullptr, "both triangle options should exist");
+        require(indented->geometry().top() == triangle->geometry().top() &&
+                    indented->geometry().right() < triangle->geometry().left(),
+                "indented triangle should sit immediately left of the filled triangle");
+        clickPopoverStyleControl(popover, label);
+        showPopoverForTrigger(trigger);
+        require(indented->buttonStyle() == adqt::widgets::AdButton::ButtonStyle::Tonal,
+                "reopening the picker should retain the indented triangle selection");
+    }
+    require(styleChangeCount == 11 &&
+                emittedStyle.startArrowhead == SnowCanvasArrowhead::IndentedTriangle &&
+                emittedStyle.endArrowhead == SnowCanvasArrowhead::IndentedTriangle,
+            "both indented endpoints should emit exactly once and preserve each other");
 }
 
 void lineStyleControlsExposeStraightAndCurveTypes() {
@@ -7848,6 +7967,8 @@ void arrowheadOptionsRetranslateInPlace() {
     auto* popover = showPopoverForTrigger(startTrigger);
     auto* noneOption = popoverButtonWithTooltip(popover, "Start arrowhead none");
     require(noneOption != nullptr, "English arrowhead option should be present");
+    auto* indentedOption = popoverButtonWithTooltip(popover, "Start arrowhead indented triangle");
+    require(indentedOption != nullptr, "indented triangle should have an English tooltip");
     auto* standardOption = popoverButtonWithTooltip(popover, "Start arrowhead standard");
     require(standardOption != nullptr &&
                 adqt::icons::describeIcon(standardOption->iconRef()).key.name ==
@@ -7860,6 +7981,15 @@ void arrowheadOptionsRetranslateInPlace() {
                                         QStringLiteral("arrowhead-standard"),
             "end arrowhead options should use the right-facing asset");
     endPopover->hide();
+    QWidget* shaftTrigger = controlWithAccessibleName(palette, "Arrow shaft type");
+    require(shaftTrigger != nullptr, "shaft trigger must be available");
+    auto* shaftPopover = showPopoverForTrigger(shaftTrigger);
+    auto* taperedOption = popoverButtonWithTooltip(shaftPopover, "Tapered shaft");
+    require(taperedOption != nullptr &&
+                adqt::icons::describeIcon(taperedOption->iconRef()).key.name ==
+                    QStringLiteral("arrow-shaft-tapered"),
+            "tapered shaft uses its hand-drawn asset");
+    shaftPopover->hide();
     popover = showPopoverForTrigger(startTrigger);
 
     require(languageManager.setLanguage(QStringLiteral("zh_CN")),
@@ -7869,6 +7999,11 @@ void arrowheadOptionsRetranslateInPlace() {
             "arrowhead trigger should retranslate to Simplified Chinese");
     require(noneOption->toolTip() == QStringLiteral("\u8d77\u59cb\u7bad\u5934 \u65e0"),
             "open arrowhead option should retranslate to Simplified Chinese");
+    require(shaftTrigger->accessibleName() == QStringLiteral("箭杆类型") &&
+                taperedOption->toolTip() == QStringLiteral("渐宽箭杆"),
+            "shaft editor must retranslate to Simplified Chinese");
+    require(indentedOption->toolTip() == QStringLiteral("起始箭头 内凹三角形"),
+            "indented triangle should retranslate to Simplified Chinese");
 
     require(languageManager.setLanguage(QStringLiteral("zh_TW")),
             "Traditional Chinese should load for arrowhead retranslation");
@@ -7877,6 +8012,11 @@ void arrowheadOptionsRetranslateInPlace() {
             "arrowhead trigger should retranslate to Traditional Chinese");
     require(noneOption->toolTip() == QStringLiteral("\u8d77\u59cb\u7bad\u982d \u7121"),
             "open arrowhead option should retranslate to Traditional Chinese");
+    require(shaftTrigger->accessibleName() == QStringLiteral("箭桿類型") &&
+                taperedOption->toolTip() == QStringLiteral("漸寬箭桿"),
+            "shaft editor must retranslate to Traditional Chinese");
+    require(indentedOption->toolTip() == QStringLiteral("起始箭頭 內凹三角形"),
+            "indented triangle should retranslate to Traditional Chinese");
 
     require(languageManager.setLanguage(QStringLiteral("en_US")),
             "English should be restorable after arrowhead retranslation");
@@ -7902,7 +8042,8 @@ void selectedArrowMixedPropertiesResolveIndependently() {
     state.shapeStyleMixed =
         SnowCanvasShapeStylePropertyStrokeWidth | SnowCanvasShapeStylePropertyStrokeColor |
         SnowCanvasShapeStylePropertyStrokeStyle | SnowCanvasShapeStylePropertyStartArrowhead |
-        SnowCanvasShapeStylePropertyEndArrowhead | SnowCanvasShapeStylePropertyArrowType;
+        SnowCanvasShapeStylePropertyEndArrowhead | SnowCanvasShapeStylePropertyArrowType |
+        SnowCanvasShapeStylePropertyArrowShaftType;
     palette.setStyleToolbarState(state);
 
     requireControlInactive(palette, "Arrow stroke width 4",
@@ -7926,6 +8067,8 @@ void selectedArrowMixedPropertiesResolveIndependently() {
     require(startArrowheadControl != nullptr, "start arrowhead control should be present");
     require(endArrowheadControl != nullptr, "end arrowhead control should be present");
 
+    auto* shaftPopover =
+        showPopoverForTrigger(controlWithAccessibleName(palette, "Arrow shaft type"));
     adqt::widgets::AdPopover* startArrowheadPopover = showPopoverForTrigger(startArrowheadControl);
     adqt::widgets::AdPopover* endArrowheadPopover = showPopoverForTrigger(endArrowheadControl);
     require(arrowTypeGroup->checkedId() == -1 && !elbowArrowType->isChecked(),
@@ -7933,6 +8076,7 @@ void selectedArrowMixedPropertiesResolveIndependently() {
     for (const auto& option : {
              std::pair{startArrowheadPopover, "Start arrowhead triangle"},
              std::pair{endArrowheadPopover, "End arrowhead diamond"},
+             std::pair{shaftPopover, "Plain shaft"},
          }) {
         adqt::widgets::AdButton* button = popoverButtonWithTooltip(option.first, option.second);
         require(button != nullptr, "mixed arrow option should be present");
@@ -7965,6 +8109,7 @@ void selectedArrowMixedPropertiesResolveIndependently() {
     for (const auto& option : {
              std::pair{startArrowheadPopover, "Start arrowhead triangle"},
              std::pair{endArrowheadPopover, "End arrowhead diamond"},
+             std::pair{shaftPopover, "Plain shaft"},
          }) {
         adqt::widgets::AdButton* button = popoverButtonWithTooltip(option.first, option.second);
         require(button != nullptr, "mixed arrowhead option should be present");
@@ -7980,6 +8125,10 @@ void selectedArrowMixedPropertiesResolveIndependently() {
         popover->hide();
     }
     QCoreApplication::processEvents();
+    clickPopoverStyleControl(shaftPopover, "Tapered shaft");
+    require(emittedProperties == SnowCanvasShapeStylePropertyArrowShaftType &&
+                styleChangeCount == 2,
+            "resolving mixed shafts emits only the shaft property once");
 }
 
 void styleToolbarWidthTracksTheActiveTool() {
@@ -9296,8 +9445,8 @@ void configurationDrivenStyleEditorsShareStructuralContracts() {
     QLayout* alignmentLayout = popoverForTrigger(textAlignment)->contentWidget()->layout();
     require(
         qobject_cast<QGridLayout*>(startLayout) != nullptr &&
-            qobject_cast<QGridLayout*>(endLayout) != nullptr && startLayout->count() == 13 &&
-            endLayout->count() == 13 && qobject_cast<QHBoxLayout*>(alignmentLayout) != nullptr &&
+            qobject_cast<QGridLayout*>(endLayout) != nullptr && startLayout->count() == 14 &&
+            endLayout->count() == 14 && qobject_cast<QHBoxLayout*>(alignmentLayout) != nullptr &&
             alignmentLayout->count() == 3 && startLayout->spacing() == alignmentLayout->spacing(),
         "icon-option configuration should preserve arrow grids and the alignment row");
 
@@ -9776,11 +9925,8 @@ void popupColorEditorButtonsKeepPopupScaleAfterToolbarDpiCommit() {
     const QSize strokeHint = strokeStyle->sizeHint();
     const QSize fillHint = fillPreset->sizeHint();
 
-    adqt::widgets::AdControlScaleScope scope(&palette);
-    require(scope.publishScale(1.5, 1.0),
-            "toolbar control scale should publish a mixed-DPI transition");
-    require(palette.setPhysicalScale(1.5),
-            "toolbar physical scale should follow the mixed-DPI transition");
+    require(palette.setScaleContext(adqt::widgets::AdControlScaleContext::fromDprs(1.5, 1.0)),
+            "toolbar should publish one mixed-DPI context to its layout and controls");
 
     require(strokeStyle->font() == strokeFont && strokeStyle->iconSize() == strokeIconSize &&
                 strokeStyle->sizeHint() == strokeHint,
@@ -10393,6 +10539,29 @@ void familiesHydratedAfterScaleKeepTheSamePhysicalSize() {
     }
 }
 
+void secondaryRowsDoNotDriftAcrossScaleRoundTrips() {
+    for (auto tool : {ScreenshotToolPalette::Tool::Select, ScreenshotToolPalette::Tool::Shape}) {
+        ScreenshotToolPalette palette(ScreenshotToolPalette::Options{});
+        palette.setActiveTool(tool);
+        static_cast<void>(palette.contentSizeHint());
+        QCoreApplication::processEvents();
+        QWidget* panel = tool == ScreenshotToolPalette::Tool::Select ? palette.actionPanel()
+                                                                     : palette.stylePanel();
+        const QSize initial = panel->size();
+        for (qreal scale : {1.5, 1.0 / 1.5, 1.0}) {
+            palette.setPhysicalScale(scale);
+            static_cast<void>(palette.contentSizeHint());
+            QCoreApplication::processEvents();
+        }
+        if (panel->size() != initial) {
+            std::cerr << "row round trip " << static_cast<int>(tool) << " initial "
+                      << initial.width() << 'x' << initial.height() << " final " << panel->width()
+                      << 'x' << panel->height() << '\\n';
+        }
+        require(panel->size() == initial, "secondary row accumulated geometry drift");
+    }
+}
+
 void physicalScaleDefersHiddenStyleGroupGeometry() {
     ScreenshotToolPalette::Options options;
     options.showShapeTool = true;
@@ -10969,6 +11138,8 @@ void canvasToolStylesPersistIndependentlyWithoutGlobalStyles() {
     styles.rectangle.strokeWidth = 3.0;
     styles.arrow.stroke = QColor(5, 6, 7, 8);
     styles.arrow.strokeWidth = 4.0;
+    styles.arrow.startArrowhead = SnowCanvasArrowhead::IndentedTriangle;
+    styles.arrow.endArrowhead = SnowCanvasArrowhead::IndentedTriangle;
     styles.line.strokeWidth = 5.0;
     styles.line.arrowType = SnowCanvasArrowType::Straight;
     styles.freeDraw.strokeWidth = 6.0;
@@ -11610,6 +11781,11 @@ int main(int argc, char** argv) {
     require(QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/segoeui.ttf")) >= 0,
             "the font editor tests require a system TrueType font");
 #endif
+    if (application.arguments().contains(QStringLiteral("--original-image-only"))) {
+        originalImageToggleLeadsRecognitionActions();
+        imageConversionToolsExposeRecognitionActions();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--remembered-drawing-tool-only"))) {
         rememberedDrawingModesPersistAcrossPaletteInstances();
         rememberedDrawingToolRecordedAndRestored();
@@ -11692,7 +11868,10 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--arrow-icons-only"))) {
+        arrowStyleControlsExposeAndEmitAllStyleProperties();
         arrowheadOptionsRetranslateInPlace();
+        selectedArrowMixedPropertiesResolveIndependently();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--dynamic-i18n-only"))) {
@@ -11707,6 +11886,7 @@ int main(int argc, char** argv) {
         translucentColorSwatchesShowCheckerboardUnderlay();
         configurationDrivenStyleEditorsShareStructuralContracts();
         mixedColorsKeepUniformStyleButtonsActive();
+        secondaryRowsDoNotDriftAcrossScaleRoundTrips();
         toolbarScalingDoesNotRelayoutPopupContent();
         popupColorEditorButtonsKeepPopupScaleAfterToolbarDpiCommit();
         familiesHydratedAfterScaleKeepTheSamePhysicalSize();
@@ -11716,6 +11896,17 @@ int main(int argc, char** argv) {
     if (application.arguments().contains(QStringLiteral("--canvas-style-persistence-only"))) {
         screenshotProductStyleProfileIsComplete();
         canvasToolStylesPersistIndependentlyWithoutGlobalStyles();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (QApplication::arguments().contains(QStringLiteral("--dpi-scaling-only"))) {
+        secondaryRowsDoNotDriftAcrossScaleRoundTrips();
+        toolbarScalingDoesNotRelayoutPopupContent();
+        popupColorEditorButtonsKeepPopupScaleAfterToolbarDpiCommit();
+        familiesHydratedAfterScaleKeepTheSamePhysicalSize();
+        physicalScaleDefersHiddenStyleGroupGeometry();
+        watermarkControlsFollowPhysicalScale();
+        styleToolbarRowSpacingFollowsPhysicalScale();
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
@@ -11751,7 +11942,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--image-conversion-only"))) {
-        imageConversionToolsExposeOnlySettings();
+        imageConversionToolsExposeRecognitionActions();
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }

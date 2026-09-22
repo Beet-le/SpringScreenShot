@@ -2,10 +2,16 @@
 #define SNOW_SHOT_PLATFORM_SCREENSHOTNATIVE_H
 #include "snow_shot/platform/windows/scrollinput.h"
 class QWidget;
+class QRegion;
 namespace snow_shot::platform {
 using ScrollInputResult = windows::ScrollInputResult;
 #ifdef Q_OS_MACOS
+// Give Qt exclusive drag ownership, including after native surface recreation.
+void configureControlledWindowDragging(QWidget* widget);
 void configureScreenshotOverlayWindow(QWidget* widget);
+void configureScreenshotRecognitionWindow(QWidget* widget);
+// Cocoa masks clip drawing, but do not route input to windows underneath.
+void setScreenshotInputPassThroughRegion(QWidget* widget, const QRegion& region);
 void configureScreenshotToolbarWindow(QWidget* widget);
 quint32 screenshotDisplayAtCursor();
 quint32 screenshotFocusedWindow();

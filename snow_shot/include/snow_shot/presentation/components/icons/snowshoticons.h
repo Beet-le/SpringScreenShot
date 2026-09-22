@@ -29,6 +29,8 @@ AlignCenterHorizontal(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef AlignRight(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef AlignTop(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef Angle(const adqt::icons::IconColors& colors = {});
+[[nodiscard]] adqt::icons::IconRef ArrowShaftPlain(const adqt::icons::IconColors& colors = {});
+[[nodiscard]] adqt::icons::IconRef ArrowShaftTapered(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ArrowTypeCurved(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ArrowTypeElbow(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ArrowTypeStraight(const adqt::icons::IconColors& colors = {});
@@ -60,6 +62,10 @@ ArrowheadDiamondOutlineStart(const adqt::icons::IconColors& colors = {});
 ArrowheadDiamondStart(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ArrowheadDot(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ArrowheadDotStart(const adqt::icons::IconColors& colors = {});
+[[nodiscard]] adqt::icons::IconRef
+ArrowheadIndentedTriangle(const adqt::icons::IconColors& colors = {});
+[[nodiscard]] adqt::icons::IconRef
+ArrowheadIndentedTriangleStart(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ArrowheadNone(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ArrowheadNoneStart(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ArrowheadStandard(const adqt::icons::IconColors& colors = {});

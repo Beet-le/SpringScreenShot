@@ -51,11 +51,7 @@ FeatureFamily featureFamilyFor(presentation::settings::SettingsGlobalMouseAction
 
 bool isFeatureAvailable(FeatureFamily feature) {
     (void)feature;
-#ifdef Q_OS_MACOS
-    return feature == FeatureFamily::Screenshot;
-#else
     return true;
-#endif
 }
 
 FeatureGate::FeatureGate(UnavailableHandler unavailableHandler)
