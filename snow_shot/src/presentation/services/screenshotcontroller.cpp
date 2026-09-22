@@ -667,8 +667,9 @@ void ScreenshotController::Impl::updateSmartSelectionSettingForCurrentSession(bo
             m_selection.clearSelection();
         }
         if (m_selectorWorkflow != nullptr) {
-            static_cast<void>(m_selectorWorkflow->updateSelectionAt(
-                m_geometry.physicalPositionForLogicalPoint(m_displaySession, QCursor::pos())));
+            static_cast<void>(
+                m_selectorWorkflow->updateSelectionAt(m_geometry.physicalPositionForLogicalPoint(
+                    m_displaySession, m_displaySession.logicalCursorPosition())));
         }
     }
     if (m_presentationServices != nullptr) {
@@ -770,7 +771,8 @@ void ScreenshotController::Impl::createHistoryService() {
                     return;
                 }
                 static_cast<void>(m_selectorWorkflow->updateSelectionAt(
-                    m_geometry.physicalPositionForLogicalPoint(m_displaySession, QCursor::pos())));
+                    m_geometry.physicalPositionForLogicalPoint(
+                        m_displaySession, m_displaySession.logicalCursorPosition())));
             },
             [this](const ScreenshotSelectionParams& selection) {
                 if (m_selectionSettings != nullptr) {
@@ -782,7 +784,7 @@ void ScreenshotController::Impl::createHistoryService() {
 }
 
 ScreenshotOverlayWindow* ScreenshotController::Impl::overlayUnderCursor() const {
-    const QPoint cursorPosition = QCursor::pos();
+    const QPoint cursorPosition = m_displaySession.logicalCursorPosition();
     ScreenshotOverlayWindow* result = nullptr;
     m_displaySession.forEachActiveOverlay(
         [&result, &cursorPosition](qsizetype, const CapturedDisplayModel& display,
@@ -1420,7 +1422,8 @@ void ScreenshotController::Impl::handleCapturePresented() {
         return;
     }
     if (ensureExportFeature() && m_selectionExportUiServices != nullptr) {
-        QScreen* screen = QGuiApplication::screenAt(QCursor::pos());
+        const auto* invocationDisplay = m_displaySession.startupDisplay();
+        QScreen* screen = invocationDisplay ? invocationDisplay->screen.data() : nullptr;
         if (screen == nullptr) {
             screen = QGuiApplication::primaryScreen();
         }
@@ -1602,6 +1605,10 @@ void ScreenshotController::Impl::createOverlayInputPipeline() {
         },
         [this]() { return canRecapture(); },
         [this]() { return requestCancelCaptureViaShortcut(); },
+    };
+    actions.requestUiSelectorHitTestOnDisplay = [this](const QPoint& point, quint32 displayId) {
+        if (m_selectorWorkflow)
+            static_cast<void>(m_selectorWorkflow->requestHitTest(point, displayId));
     };
     m_overlayInputHandler =
         std::make_unique<ScreenshotOverlayInputHandler>(ScreenshotOverlayInputHandlerContext{
