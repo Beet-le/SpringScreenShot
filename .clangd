@@ -31,6 +31,20 @@ CompileFlags:
     - -Id:/SnowShot/snow-apps/ant_design_qt/packages/ant_design_qt/src
     - -Id:/SnowShot/snow-apps/ant_design_qt/packages/ant_design_icons_qt/src
     - -Id:/SnowShot/snow-apps/ant_design_qt/packages/adqt_icon_core/src
+    # snow_shot target-internal headers that tests include by half-bare path
+    # (e.g. "presentation/capture/windowcaptureexclusion.h", "captureframeimage.h",
+    # "snowimageqtcodec.h"); the real build provides these via per-target
+    # target_include_directories.
+    - -Id:/SnowShot/snow-apps/snow_shot/src
+    - -Id:/SnowShot/snow-apps/snow_shot/src/image
+    - -Id:/SnowShot/snow-apps/snow_shot/src/presentation
+    - -Id:/SnowShot/snow-apps/snow_shot/src/presentation/capture
+    - -Id:/SnowShot/snow-apps/snow_shot/src/presentation/pinned
+    # Rust FFI C headers consumed by main.cpp (snow_capture.h, snow_recording.h)
+    # and diagnosticsbridge.h used for the crash handler panic hook.
+    - -Id:/SnowShot/snow-apps/snow-crates/crates/snow-capture-c/include
+    - -Id:/SnowShot/snow-apps/snow-crates/crates/snow-recording-c/include
+    - -Id:/SnowShot/snow-apps/snow-crates/crates/snow-ocr-process/native
     # Qt 6.11.1 MSVC modules used by the project.
     - -ID:/Qt/6.11.1/msvc2022_64/include
     - -ID:/Qt/6.11.1/msvc2022_64/include/QtCore
@@ -41,6 +55,13 @@ CompileFlags:
     - -ID:/Qt/6.11.1/msvc2022_64/include/QtConcurrent
     # Repository-managed vcpkg dependencies (dynamic triplet).
     - -Id:/SnowShot/snow-apps/.tools/vcpkg/installed/dynamic/include
+    # CMake-time -D defines injected via target_compile_definitions. clangd has
+    # no compile_commands.json here (VS generator), so mirror them literally;
+    # QStringLiteral(SNOW_DIAGNOSTICS_VERSION) etc. needs the value to be a
+    # string literal, hence the embedded quotes.
+    - '-DSNOW_DIAGNOSTICS_VERSION="0.0.0-dev"'
+    - '-DSNOW_DIAGNOSTICS_REVISION="unknown"'
+    - '-DSNOW_DIAGNOSTICS_BUILD="Debug"'
   Remove:
     - /GL
     - /permissive-
@@ -48,5 +69,10 @@ CompileFlags:
 Diagnostics:
   # Qt/qglobal platform macros and generated ui_*.h headers are only fully
   # available during a real CMake build; do not surface missing-include noise.
+  # module_odr_violation_function is clang's C++20 modules ODR check; without a
+  # real build system feeding clangd a module graph, it fires spuriously on
+  # Qt/ADQT inline operators (e.g. operator& for QFlags) that appear in more
+  # than one TU. It does not affect the actual MSVC build.
   Suppress:
     - pp_file_not_found
+    - module_odr_violation_function

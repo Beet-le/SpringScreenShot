@@ -647,13 +647,6 @@ void traySettingsAndFunctionNavigation() {
                 sidebar->currentRoute() == QStringLiteral("/settings/functionSettings"),
             "function settings action must show a hidden window and navigate from another page");
     window.hide();
-    window.showAbout();
-    flushEvents();
-    require(window.isVisible() && card->currentLocation().pageId == QStringLiteral("about") &&
-                card->currentLocation().sectionId.isEmpty() &&
-                sidebar->currentRoute() == QStringLiteral("/about"),
-            "about navigation must show a hidden window and leave the settings pages");
-    window.hide();
 }
 
 void mainNavigationSearchThemesAndLanguages() {
@@ -662,21 +655,10 @@ void mainNavigationSearchThemesAndLanguages() {
     require(snow_shot::storage::ApplicationStorage::instance().configuration().setValue(
                 QStringLiteral("interface/main_window_geometry"), QJsonObject()),
             "clear remembered main window geometry");
-    snow_shot::update::UpdateService updates({}, qApp);
-    const_cast<snow_shot::update::UpdateStatus&>(updates.status()).state =
-        snow_shot::update::UpdateState::Idle;
-    QCoreApplication::setApplicationVersion(QStringLiteral(SNOW_SHOT_TEST_VERSION));
     const auto& registry = settings::builtInSettingsRegistry();
-    require(registry.isValid(), "About preserves catalog validity");
-    const auto* definition = registry.catalog().pageForRoute(QStringLiteral("/about"));
-    require(definition != nullptr && definition->kind == settings::SettingsPageKind::About &&
-                definition->sections.isEmpty(),
-            "About is a dedicated page without settings sections");
-    const auto resolved = registry.catalog().resolveLocation(
-        {QStringLiteral("about"), QStringLiteral("stale-section"), QStringLiteral("stale-item")});
-    require(resolved.pageId == QStringLiteral("about") && resolved.sectionId.isEmpty() &&
-                resolved.itemId.isEmpty(),
-            "About discards stale section and item locations");
+    require(registry.isValid(), "catalog remains valid");
+    require(registry.catalog().pageForRoute(QStringLiteral("/about")) == nullptr,
+            "the removed About page must not resolve from any route");
 
     snow_shot::presentation::GlobalShortcutManager shortcuts;
     settings::BuiltInSettingsBackend backend(shortcuts);
@@ -691,164 +673,19 @@ void mainNavigationSearchThemesAndLanguages() {
             "main interface components");
     auto* menu = sidebar->findChild<adqt::widgets::AdNavigationMenu*>();
     require(menu != nullptr, "main navigation menu");
-    QModelIndex aboutIndex;
     for (int row = 0; row < menu->model()->rowCount(); ++row) {
         const auto index = menu->model()->index(row, 0);
-        if (index.data(adqt::widgets::AdNavigationMenu::StableIdRole).toString() ==
-            QStringLiteral("/about")) {
-            aboutIndex = index;
-            break;
-        }
+        require(index.data(adqt::widgets::AdNavigationMenu::StableIdRole).toString() !=
+                    QStringLiteral("/about"),
+                "the About item must not appear in the main navigation");
     }
-    require(aboutIndex.isValid() && aboutIndex.data(Qt::DecorationRole).isValid(),
-            "About has a top-level navigation item and icon");
-    menu->activated(aboutIndex);
-    flushEvents();
-    auto* page = window.findChild<AboutPageWidget*>();
-    require(page != nullptr && page->isVisible() &&
-                card->currentRoute() == QStringLiteral("/about") &&
-                sidebar->currentRoute() == QStringLiteral("/about"),
-            "sidebar activation opens the About page in the main interface");
-    require(card->currentSections().isEmpty() &&
-                !child<adqt::widgets::AdTabs>(*header, "mainSectionTabs")->isVisible(),
-            "About hides settings section tabs");
 
     const settings::SettingsSearchIndex search(registry);
     const auto results = search.search(QStringLiteral("version"));
-    const auto aboutResult = std::find_if(results.cbegin(), results.cend(), [](const auto& result) {
-        return result.location.pageId == QStringLiteral("about");
-    });
-    require(aboutResult != results.cend(), "version search finds About");
-    QPointer<AboutPageWidget> previous(page);
-    card->setCurrentRoute(QStringLiteral("/settings/generalSettings"));
-    flushEvents();
-    require(previous.isNull(), "leaving About releases its page and connections");
-    header->locationRequested(aboutResult->location);
-    flushEvents();
-    page = window.findChild<AboutPageWidget*>();
-    require(page != nullptr && sidebar->currentRoute() == QStringLiteral("/about"),
-            "search navigation opens About and synchronizes the sidebar");
-
-    QImage previousHero;
-    QImage previousArtwork;
-    for (const auto appearance : {styles::ThemeAppearance::Light, styles::ThemeAppearance::Dark}) {
-        styles::ThemeManager::instance().setThemeAppearance(appearance);
-        flushEvents();
-        const auto scheme = styles::ThemeManager::instance().themeColorScheme();
-        require(
-            child<QLabel>(*page, "aboutVersionValue")->palette().color(QPalette::WindowText) ==
-                    scheme.map.colorText &&
-                child<QLabel>(*page, "aboutDescription")->palette().color(QPalette::WindowText) ==
-                    scheme.map.colorTextSecondary,
-            "About typography follows the active theme");
-        require(child<QFrame>(*page, "aboutVersionPanel")
-                    ->styleSheet()
-                    .contains(scheme.map.colorBorderSecondary.name(QColor::HexArgb)),
-                "compact version surface follows the neutral theme tokens");
-        require(!child<QLabel>(*page, "aboutLogo")->pixmap().isNull(), "render the Snow Shot icon");
-        auto* logo = child<QLabel>(*page, "aboutLogo");
-        require(qFuzzyCompare(logo->pixmap().devicePixelRatio(), logo->devicePixelRatioF()),
-                "the logo uses the current display pixel ratio");
-        auto* artwork = child<QWidget>(*page, "aboutArtwork");
-        const QImage hero = child<QWidget>(*page, "aboutHero")->grab().toImage();
-        const QImage renderedArtwork = artwork->grab().toImage();
-        require(!renderedArtwork.isNull() && !artwork->accessibleName().isEmpty(),
-                "the embedded artwork is rendered and has an accessible name");
-        if (!previousHero.isNull()) {
-            require(hero != previousHero && renderedArtwork != previousArtwork,
-                    "both the hero surface and artwork adapt to dark mode");
-        }
-        previousHero = hero;
-        previousArtwork = renderedArtwork;
-        snapshot(window, appearance == styles::ThemeAppearance::Light
-                             ? QStringLiteral("about-light")
-                             : QStringLiteral("about-dark"));
-    }
-
-    styles::ThemeManager::instance().setThemeAppearance(styles::ThemeAppearance::Light);
-    for (const QString& locale :
-         {QStringLiteral("en_US"), QStringLiteral("zh_CN"), QStringLiteral("zh_TW")}) {
-        QTranslator translator;
-        require(translator.load(QStringLiteral(SNOW_SHOT_TEST_TRANSLATIONS_DIR) +
-                                QStringLiteral("/snow_shot_%1.qm").arg(locale)),
-                "load a compiled application translation catalog");
-        QCoreApplication::installTranslator(&translator);
-        flushEvents();
-        const QString translatedTitle = translator.translate("AboutPageWidget", "About Snow Shot");
-        require(!translatedTitle.isEmpty() && page->accessibleName() == translatedTitle,
-                "an open About page retranslates immediately");
-        require(child<QLabel>(*page, "aboutVersionValue")->text() ==
-                    QStringLiteral(SNOW_SHOT_TEST_VERSION),
-                "language changes preserve the release version");
-        require(child<adqt::widgets::AdButton>(*page, "aboutCopyVersion")->text() ==
-                    translator.translate("AboutPageWidget", "Copy version number"),
-                "copy action retranslates");
-        require(child<QLabel>(*page, "aboutLicense")
-                    ->text()
-                    .contains(translator.translate("AboutPageWidget",
-                                                   "GNU General Public License v3.0 or later")),
-                "license details retranslate");
-        require(
-            child<QLabel>(*page, "aboutOpenSource")->text() ==
-                    translator.translate("AboutPageWidget", "Free · Open source") &&
-                child<QLabel>(*page, "aboutDescription")->text() ==
-                    translator.translate(
-                        "AboutPageWidget",
-                        "Capture, annotate, recognize text, and record your screen,\n"
-                        "so every moment on screen can be expressed clearly and shared easily."),
-            "the new hero copy retranslates immediately");
-        require(child<QLabel>(*page, "aboutTagline")
-                    ->text()
-                    .contains(translator.translate("AboutPageWidget", "Elegant screenshots")),
-                "the two-tone headline retranslates");
-        require(child<QLabel>(*page, "aboutSlogan")->text() ==
-                    translator.translate("AboutPageWidget", "Snow Shot · Make expression clearer"),
-                "the footer slogan retranslates");
-        const std::array<const char*, 6> features{"Screenshot capture", "Easy annotation",
-                                                  "Text recognition",   "Screen recording",
-                                                  "Pin to screen",      "Screenshot history"};
-        for (size_t i = 0; i < features.size(); ++i) {
-            auto* label = page->findChild<QLabel*>(QStringLiteral("aboutFeatureLabel%1").arg(i));
-            require(label != nullptr &&
-                        label->text() == translator.translate("AboutPageWidget", features[i]),
-                    "every feature label retranslates");
-            auto* icon = page->findChild<QLabel*>(QStringLiteral("aboutFeatureIcon%1").arg(i));
-            require(icon != nullptr && !icon->pixmap().isNull(), "every feature icon renders");
-        }
-        require(child<QAbstractButton>(*page, "aboutWebsite")->accessibleName() ==
-                        translator.translate("AboutPageWidget", "Official website") &&
-                    child<QWidget>(*page, "aboutArtwork")->accessibleName() ==
-                        translator.translate(
-                            "AboutPageWidget",
-                            "Screenshot selection, annotation tools, and recognized text"),
-                "resource and illustration accessibility copy follows the active language");
-        require(sidebar->currentRoute() == QStringLiteral("/about"),
-                "translated navigation preserves About selection");
-        auto* scroll = page->findChild<adqt::widgets::AdScrollArea*>();
-        snapshot(window, QStringLiteral("about-%1").arg(locale));
-        if (scroll != nullptr && scroll->verticalScrollBar()->maximum() != 0) {
-            std::cerr << "Default About viewport " << scroll->viewport()->width() << 'x'
-                      << scroll->viewport()->height() << ", content height "
-                      << scroll->widget()->height() << '\n';
-        }
-        require(scroll != nullptr && scroll->verticalScrollBar()->maximum() == 0,
-                "all About information fits in the default window size");
-        window.resize(512, 316);
-        sidebar->setCollapsed(true);
-        flushEvents();
-        require(scroll != nullptr && scroll->horizontalScrollBar()->maximum() == 0,
-                "narrow About page fits without horizontal scrolling");
-        require(scroll->verticalScrollBar()->maximum() > 0,
-                "short windows can scroll to all About content");
-        snapshot(window, QStringLiteral("about-%1-compact").arg(locale));
-        scroll->verticalScrollBar()->setValue(scroll->verticalScrollBar()->maximum());
-        flushEvents();
-        snapshot(window, QStringLiteral("about-%1-compact-bottom").arg(locale));
-        window.resize(900, 556);
-        sidebar->setCollapsed(false);
-        QCoreApplication::removeTranslator(&translator);
-        flushEvents();
-    }
+    require(std::none_of(results.cbegin(), results.cend(), [](const auto& result) {
+                return result.location.pageId == QStringLiteral("about");
+            }),
+            "version search must not surface the removed About page");
     window.hide();
 }
 } // namespace

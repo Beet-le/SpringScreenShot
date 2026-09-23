@@ -2486,15 +2486,6 @@ QVector<SettingsPageDefinition> builtInPages() {
                 },
             },
         },
-        {
-            QStringLiteral("about"),
-            QStringLiteral("/about"),
-            settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "About")),
-            settingsText(
-                QT_TRANSLATE_NOOP("SettingsCatalog", "Software version and license information")),
-            {},
-            SettingsPageKind::About,
-        },
     };
 }
 
@@ -2561,17 +2552,12 @@ QVector<SettingsNavigationNode> builtInNavigation() {
                                    QStringLiteral("app-permissions"),
                                    []() { return outlined_icons::Lock(); }});
 #endif
-    SettingsNavigationPageDefinition about;
-    about.id = QStringLiteral("nav.about");
-    about.pageId = QStringLiteral("about");
-    about.iconFactory = []() { return outlined_icons::InfoCircle(); };
-
     SettingsNavigationPageDefinition translation;
     translation.id = QStringLiteral("nav.translation");
     translation.pageId = QStringLiteral("translation");
     translation.iconFactory = []() { return outlined_icons::Translation(); };
 
-    return {globalHotkeys, globalMouse, history, translation, settingsGroup, about};
+    return {globalHotkeys, globalMouse, history, translation, settingsGroup};
 }
 
 QString locationText(const SettingsLocation& location) {

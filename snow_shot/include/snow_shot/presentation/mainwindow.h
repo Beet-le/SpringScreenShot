@@ -36,7 +36,6 @@ class MainWindow : public QMainWindow {
     void showAndActivate();
     void showInterfaceSettings();
     void showFunctionSettings();
-    void showAbout();
     void showAppPermissions(const QString& permissionId = {});
     void showScreenshotHistory();
     void showTranslation(const QString& text);

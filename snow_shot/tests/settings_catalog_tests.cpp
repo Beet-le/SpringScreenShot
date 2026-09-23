@@ -82,9 +82,9 @@ void builtInCatalogIsCompleteAndValid() {
                 !std::get<settings::SettingsColorDefinition>(primary->payload).alphaChannelEnabled,
             "general settings must expose an opaque theme primary color picker");
 #ifdef Q_OS_MACOS
-    require(catalog.pages().size() == 13, "macOS includes App Permissions");
+    require(catalog.pages().size() == 12, "macOS includes App Permissions");
 #else
-    require(catalog.pages().size() == 12, "other platforms retain twelve pages");
+    require(catalog.pages().size() == 11, "other platforms retain eleven pages");
 #endif
 
     for (const auto& pageId :
@@ -1778,10 +1778,10 @@ void searchIndexIsGeneratedAndRanked() {
         }
     }
 #ifdef Q_OS_MACOS
-    constexpr int expectedPages = 13;
+    constexpr int expectedPages = 12;
     constexpr int expectedSections = 40;
 #else
-    constexpr int expectedPages = 12;
+    constexpr int expectedPages = 11;
     constexpr int expectedSections = 39;
 #endif
     require(pages == expectedPages && sections == expectedSections &&

@@ -9,7 +9,6 @@
 #include "snow_shot/presentation/components/icons/snowshoticons.h"
 #include "snow_shot/presentation/styles/thememanager.h"
 #include "snow_shot/presentation/settings/applicationpriority.h"
-#include "snow_shot/platform/windows/autostartregistration.h"
 #include "snow_shot/platform/windows/administratorlaunch.h"
 #include "widgets/message.h"
 #include "widgets/platform_compatibility.h"
@@ -100,8 +99,8 @@ int main(int argc, char* argv[]) {
     bool administratorRestart = false;
     if (argc > 1 && QString::fromLocal8Bit(argv[1]) == u"--administrator-helper") {
         QCoreApplication helper(argc, argv);
-        const int result =
-            snow_shot::platform::windows::dispatchAdministratorHelper(helper.arguments());
+        const int result = snow_shot::platform::windows::dispatchAdministratorHelper(
+            QCoreApplication::arguments());
         if (result != -1)
             return result;
         administratorRestart = true;
@@ -111,7 +110,7 @@ int main(int argc, char* argv[]) {
     if (argc >= 3 && QString::fromLocal8Bit(argv[1]) == u"--recording-macos-probe") {
         QApplication probe(argc, argv);
         adqt::widgets::initializePlatformCompatibility(probe);
-        const QStringList arguments = probe.arguments();
+        const QStringList arguments = QCoreApplication::arguments();
         const QByteArray path = QFileInfo(arguments[2]).absoluteFilePath().toUtf8();
         const QRect screen = probe.primaryScreen()->geometry();
         const QPoint origin = screen.topLeft() + QPoint(40, 40);

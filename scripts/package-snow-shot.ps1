@@ -308,13 +308,15 @@ if (-not (Test-Path -LiteralPath $mainExecutable)) {
 }
 
 $versionInfo = (Get-Item -LiteralPath $mainExecutable).VersionInfo
+# Product branding is 'Spring Screenshot' (rebranded); binary/internal names stay 'Snow Apps'/'snow_shot'.
+# Keep these in sync with snow_shot/resources/windows-app-resource.rc.in and SNOW_SHOT_PRODUCT_NAME.
 $expectedBinaryMetadata = @{
     CompanyName = "Snow Apps"
-    FileDescription = "Snow Shot screenshot utility"
+    FileDescription = "Spring screenshot utility"
     InternalName = "snow_shot"
     LegalCopyright = "Copyright (C) 2025-2026 mg-chao"
     OriginalFilename = "snow_shot.exe"
-    ProductName = "Snow Shot"
+    ProductName = "Spring Screenshot"
 }
 foreach ($property in $expectedBinaryMetadata.Keys) {
     if ($versionInfo.$property -ne $expectedBinaryMetadata[$property]) {
@@ -641,7 +643,7 @@ if (-not (Test-Path -LiteralPath $cpackConfig)) {
 $cpackConfiguration = Get-Content -LiteralPath $cpackConfig -Raw
 $requiredCpackSettings = @{
     CPACK_CREATE_DESKTOP_LINKS = "snow_shot"
-    CPACK_PACKAGE_EXECUTABLES = "snow_shot;Snow Shot"
+    CPACK_PACKAGE_EXECUTABLES = "snow_shot;Spring Screenshot"
     CPACK_PACKAGE_HOMEPAGE_URL = "https://snowshot.top"
     CPACK_PACKAGE_INSTALL_DIRECTORY = "SnowShot"
     CPACK_PACKAGE_INSTALL_REGISTRY_KEY = "SnowShot"
@@ -1289,14 +1291,15 @@ string(REPLACE "snow-shot-$packageVersion-windows-x64.exe" "$packageBaseName.exe
         throw "NSIS $variant packaging failed."
     }
     $installerVersionInfo = (Get-Item -LiteralPath $packagePath).VersionInfo
+    # Installer metadata follows SNOW_SHOT_PRODUCT_NAME ('Spring Screenshot'); see CMakeLists CPACK_NSIS_DEFINES.
     $expectedInstallerMetadata = @{
         CompanyName = "Snow Apps"
-        FileDescription = "Snow Shot installer"
+        FileDescription = "Spring Screenshot installer"
         FileVersion = "$packageVersionNumeric.0"
         InternalName = "snow-shot-installer"
         LegalCopyright = "Copyright (C) 2025-2026 mg-chao"
         OriginalFilename = "$packageBaseName.exe"
-        ProductName = "Snow Shot"
+        ProductName = "Spring Screenshot"
         ProductVersion = $packageVersion
     }
     foreach ($property in $expectedInstallerMetadata.Keys) {
