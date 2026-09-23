@@ -41,13 +41,18 @@ elif name == 'hdiutil':
     elif args[0] == 'attach':
         if os.environ.get('FAIL_ATTACH'): fail()
         mount = pathlib.Path(args[args.index('-mountpoint') + 1])
-        shutil.copytree(root / 'bundle', mount / 'snow_shot.app', dirs_exist_ok=True)
+        shutil.copytree(root / 'bundle', mount / os.environ.get('BUNDLE_NAME', 'Snow Shot.app'), dirs_exist_ok=True)
         (root / 'mounted').write_text(str(mount))
     elif args[0] == 'detach':
         if os.environ.get('FAIL_DETACH'): fail()
         (root / 'mounted').unlink(missing_ok=True)
 elif name == 'mount':
-    if (root / 'mounted').exists(): print('/dev/disk99 on ' + (root / 'mounted').read_text() + ' (apfs, local, read-only)')
+    if (root / 'mounted').exists():
+        reported = (root / 'mounted').read_text()
+        if os.environ.get('CANONICAL_MOUNT_PATH'):
+            reported = os.path.normpath(reported)
+            if reported.startswith('/var/'): reported = '/private' + reported
+        print('/dev/disk99 on ' + reported + ' (apfs, local, read-only)')
 elif name == 'plutil':
     data = plistlib.loads(pathlib.Path(args[-1]).read_bytes())
     key = args[args.index('-extract') + 1]
@@ -61,7 +66,7 @@ elif name == 'codesign':
         executable.write_bytes(executable.read_bytes() + b' locally signed')
     elif '-d' in args: print('designated => ' + os.environ['REQUIREMENT'])
     elif (pathlib.Path(args[-1]) / 'reject-signature').exists(): fail()
-    elif os.environ.get('FAIL_FINAL') and args[-1] == str(root / 'Applications/snow_shot.app'): fail()
+    elif os.environ.get('FAIL_FINAL') and args[-1] == str(root / 'Applications/Snow Shot.app'): fail()
     elif os.environ.get('FAIL_REQUIREMENT') and '-R' in args: fail()
 elif name == 'ditto': shutil.copytree(args[0], args[1], dirs_exist_ok=True, symlinks=True)
 elif name == 'security':
@@ -72,6 +77,7 @@ elif name == 'openssl':
     if args[0] == 'req':
         pathlib.Path(args[args.index('-keyout')+1]).write_text('private fixture')
         pathlib.Path(args[args.index('-out')+1]).write_text('certificate fixture')
+    elif args[0] == 'rand': print('B'*64)
     elif args[0] == 'x509': print('SHA1 Fingerprint=' + ':'.join(['AA']*20))
     elif args[0] == 'pkcs12': pathlib.Path(args[args.index('-out')+1]).write_text('fixture p12')
 elif name == 'uuidgen': print('TEST-UUID')
@@ -113,7 +119,7 @@ class InstallerTests(unittest.TestCase):
         self.work.mkdir()
         self.apps = self.root / 'Applications'
         self.apps.mkdir()
-        self.destination = self.apps / 'snow_shot.app'
+        self.destination = self.apps / 'Snow Shot.app'
         self.bundle = self.root / 'bundle'
         (self.bundle / 'Contents/MacOS').mkdir(parents=True)
         (self.bundle / 'Contents/Resources/assets/ocr').mkdir(parents=True)
@@ -142,6 +148,11 @@ class InstallerTests(unittest.TestCase):
         self.commands = ['curl', 'hdiutil', 'mount', 'plutil', 'file', 'codesign', 'ditto', 'security', 'openssl', 'uuidgen', 'xattr', 'pgrep', 'osascript', 'sleep', 'open', 'sudo', 'uname', 'sysctl', 'defaults']
         for command in self.commands:
             (self.bin / command).symlink_to(self.mock)
+
+    def test_accepts_legacy_dmg_bundle_name(self):
+        self.shell('validate_and_stage "$FIXTURE/package.dmg" "$FIXTURE/package.dmg.sha256"',
+                   BUNDLE_NAME='snow_shot.app')
+        self.assertTrue((self.work / 'snow_shot.app/Contents/MacOS/snow_shot').is_file())
 
     def write_info(self):
         (self.bundle / 'Contents/Info.plist').write_bytes(plistlib.dumps(self.info))
@@ -224,6 +235,12 @@ class InstallerTests(unittest.TestCase):
         self.assertTrue((self.work / 'snow_shot.app').is_dir())
         self.assertFalse((self.root / 'mounted').exists())
         self.assertFalse(self.calls('security'))
+
+    def test_detach_does_not_depend_on_mount_path_spelling(self):
+        self.shell('work="$FIXTURE//work"; obtain_package', CANONICAL_MOUNT_PATH='1')
+        self.assertFalse((self.root / 'mounted').exists())
+        self.assertEqual(len([call for call in self.calls('hdiutil') if call[1] == 'detach']), 1)
+        self.assertFalse(self.calls('mount'))
 
     @unittest.skipUnless(sys.platform == 'darwin', 'Requires built-in JXA')
     def test_missing_primary_falls_back_to_github(self):
@@ -314,6 +331,10 @@ class InstallerTests(unittest.TestCase):
         imported = next(c for c in security if c[1] == 'import')
         self.assertNotIn('-A', imported)
         self.assertEqual(imported[imported.index('-T')+1], '/usr/bin/codesign')
+        self.assertEqual(imported[imported.index('-P')+1], 'B'*64)
+        exported = next(c for c in self.calls('openssl') if c[1] == 'pkcs12')
+        self.assertEqual(exported[exported.index('-passout')+1],
+                         'env:SNOW_INSTALLER_P12_PASSWORD')
         self.assertFalse((self.work / 'private.pem').exists())
         self.assertFalse((self.work / 'identity.p12').exists())
 
@@ -408,6 +429,25 @@ sign_application''', success=False)
         self.assertFalse((self.root / 'outside').exists())
         self.assertFalse((self.state / 'lock').exists())
 
+    def test_legacy_installation_migrates_to_product_name(self):
+        self.stage()
+        legacy = self.apps / 'snow_shot.app'
+        legacy.mkdir()
+        (legacy / 'old-marker').write_text('previous application')
+        self.shell('trap cleanup EXIT; requirement="$REQUIREMENT"; install_application')
+        self.assertFalse(legacy.exists())
+        self.assertTrue((self.destination / 'Contents/MacOS/snow_shot').is_file())
+
+    def test_failed_legacy_migration_restores_original_path(self):
+        self.stage()
+        legacy = self.apps / 'snow_shot.app'
+        legacy.mkdir()
+        (legacy / 'old-marker').write_text('previous application')
+        self.shell('trap cleanup EXIT; requirement="$REQUIREMENT"; install_application',
+                   success=False, FAIL_FINAL='1')
+        self.assertTrue((legacy / 'old-marker').is_file())
+        self.assertFalse(self.destination.exists())
+
     def test_successful_install_replaces_old_app_and_cleans_backup(self):
         self.previous()
         self.stage()
@@ -448,13 +488,13 @@ sign_application''', success=False)
 
     def test_interrupt_between_moves_restores_previous_app(self):
         self.previous()
-        self.shell('trap cleanup EXIT; slot=$(mktemp -d "$FIXTURE/Applications/.snow-shot-install.XXXXXX"); mv "$destination" "$slot/previous.app"; exit 143', success=False)
+        self.shell('trap cleanup EXIT; previous_destination="$destination"; slot=$(mktemp -d "$FIXTURE/Applications/.snow-shot-install.XXXXXX"); mv "$destination" "$slot/previous.app"; exit 143', success=False)
         self.assertTrue((self.destination / 'old-marker').exists())
 
     def test_failed_recovery_preserves_backup(self):
         self.previous()
         self.shell('''trap cleanup EXIT
-slot=$(mktemp -d "$FIXTURE/Applications/.snow-shot-install.XXXXXX")
+previous_destination="$destination"; slot=$(mktemp -d "$FIXTURE/Applications/.snow-shot-install.XXXXXX")
 mv "$destination" "$slot/previous.app"
 as_install() { return 1; }
 exit 1''', success=False)

@@ -5,6 +5,7 @@ set(CMAKE_OSX_DEPLOYMENT_TARGET 15.0)
 set(SNOW_SHOT_VERSION 1.0.5-beta)
 set(SNOW_SHOT_VERSION_NUMERIC 1.0.5)
 set(SNOW_SHOT_VENDOR "Snow Apps")
+set(SNOW_SHOT_COPYRIGHT "Copyright (C) 2025-2026 mg-chao")
 # This fixture provisions the shared Qt/ONNX runtime deployment path.
 set(SNOW_SHOT_RELEASE_STATIC OFF)
 set(SNOW_SHOT_QT_STATIC OFF)

@@ -158,6 +158,18 @@ QJsonObject recordJson(const StoredRecord& stored) {
     if (record.contentKind == CaptureHistoryContentKind::Image) {
         object.insert(QStringLiteral("content_kind"), QStringLiteral("image"));
     }
+    if (record.scrolling.has_value()) {
+        object.insert(QStringLiteral("scrolling"), *record.scrolling);
+    }
+    if (record.desktopGeometry) {
+        const auto& desktop = *record.desktopGeometry;
+        object.insert(QStringLiteral("desktop_geometry"),
+                      QJsonObject{{QStringLiteral("x"), desktop.canvasOrigin.x()},
+                                  {QStringLiteral("y"), desktop.canvasOrigin.y()},
+                                  {QStringLiteral("space"), desktop.canvasUsesPoints
+                                                                ? QStringLiteral("points")
+                                                                : QStringLiteral("pixels")}});
+    }
     return object;
 }
 
@@ -186,7 +198,29 @@ bool parseRecord(const QJsonObject& object, StoredRecord* stored) {
             return false;
         record.contentKind = CaptureHistoryContentKind::Image;
     }
+    const QJsonValue scrolling = object.value(QStringLiteral("scrolling"));
+    if (!scrolling.isUndefined()) {
+        if (!scrolling.isBool())
+            return false;
+        record.scrolling = scrolling.toBool();
+    }
     record.id = object.value(QStringLiteral("id")).toString();
+    const QJsonValue desktop = object.value(QStringLiteral("desktop_geometry"));
+    if (!desktop.isUndefined()) {
+        const auto geometry = desktop.toObject();
+        qint64 x = 0, y = 0;
+        const QString space = geometry.value(QStringLiteral("space")).toString();
+        if (!desktop.isObject() ||
+            (space != QStringLiteral("points") && space != QStringLiteral("pixels")) ||
+            !integer(geometry.value(QStringLiteral("x")), std::numeric_limits<int>::min(),
+                     std::numeric_limits<int>::max(), &x) ||
+            !integer(geometry.value(QStringLiteral("y")), std::numeric_limits<int>::min(),
+                     std::numeric_limits<int>::max(), &y)) {
+            return false;
+        }
+        record.desktopGeometry = CaptureHistoryDesktopGeometry{
+            QPoint(static_cast<int>(x), static_cast<int>(y)), space == QStringLiteral("points")};
+    }
     const QString date = object.value(QStringLiteral("created_utc")).toString();
     record.createdUtc = QDateTime::fromString(date, Qt::ISODateWithMs);
     if (!validUuid(record.id) || !date.endsWith(u'Z') || !record.createdUtc.isValid() ||
@@ -377,6 +411,8 @@ bool encodeDraft(const CaptureHistoryDraft& draft, qint64 quota, EncodedDraft* r
     record.canvasBounds = draft.canvasBounds;
     record.selection = draft.selection;
     record.source = draft.source;
+    record.scrolling = draft.scrolling;
+    record.desktopGeometry = draft.desktopGeometry;
     record.canvasBytes = draft.canvasHistory.size();
     record.totalBytes = record.canvasBytes;
     result->files.insert(stored.canvasFileName, draft.canvasHistory);
@@ -403,9 +439,9 @@ bool encodeDraft(const CaptureHistoryDraft& draft, qint64 quota, EncodedDraft* r
                                                      : draft.resultImage->size();
         stored.resultFileName = QStringLiteral("capture_result.png");
         const qint64 bytes = addImage(size, *stored.resultFileName, [&]() {
-            return draft.preparedResultImage
-                       ? draft.preparedResultImage->bytes()
-                       : snow_shot::image_codec::encodePng(*draft.resultImage);
+            return draft.preparedResultImage ? draft.preparedResultImage->bytes()
+                                             : snow_shot::image_codec::encodePng(
+                                                   *draft.resultImage, draft.pngCompressionLevel);
         });
         if (bytes == 0)
             return false;
@@ -444,7 +480,8 @@ bool encodeDraft(const CaptureHistoryDraft& draft, qint64 quota, EncodedDraft* r
             return false;
         const QString name = QStringLiteral("display_%1.png").arg(i);
         const qint64 bytes = addImage(display.image.size(), name, [&]() {
-            return snow_shot::image_codec::encodePng(display.image);
+            return snow_shot::image_codec::encodePng(display.image,
+                                                     draft.displayPngCompressionLevel);
         });
         if (bytes == 0)
             return false;

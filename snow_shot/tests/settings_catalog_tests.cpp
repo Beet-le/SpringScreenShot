@@ -226,11 +226,11 @@ void builtInCatalogIsCompleteAndValid() {
     }
 #ifdef Q_OS_MACOS
     require(sectionCount == 40, "macOS adds one permissions section");
-    require(itemCount == 167, "macOS adds login settings and omits administrator controls, "
-                              "Windows-only choices, and tray middle-click");
+    require(itemCount == 171, "macOS adds login settings and omits administrator controls "
+                              "and Windows-only choices");
 #else
     require(sectionCount == 39, "catalog must contain thirty-nine sections");
-    require(itemCount == 169, "catalog must contain one hundred sixty-nine items");
+    require(itemCount == 172, "catalog must contain one hundred seventy-two items");
 #endif
     require(foundUpdates, "catalog must contain the update mode item");
     const auto* pinnedEditor =
@@ -244,9 +244,10 @@ void builtInCatalogIsCompleteAndValid() {
             "Interface Settings must expose the pinned editor in Pin to Screen");
     const auto* history =
         catalog.section(QStringLiteral("storage-and-privacy"), QStringLiteral("history"));
-    require(history != nullptr && history->items.size() >= 2 &&
+    require(history != nullptr && history->items.size() >= 3 &&
                 history->items[0].id == QStringLiteral("history.enabled") &&
-                history->items[1].id == QStringLiteral("history.keep-permanently"),
+                history->items[1].id == QStringLiteral("history.keep-permanently") &&
+                history->items[2].id == QStringLiteral("history.compression-level"),
             "permanent history must follow persistent history in Storage and Privacy");
     const auto& permanent = history->items[1];
     require(permanent.title.translated() == QStringLiteral("Keep records permanently") &&
@@ -254,6 +255,21 @@ void builtInCatalogIsCompleteAndValid() {
                     settings::SettingsSwitchBinding::HistoryKeepPermanently &&
                 storage::ConfigurationSchema::defaultValue(permanent.configurationKey) == false,
             "permanent history must be a default-off switch with the requested label");
+    const auto& historyCompression = history->items[2];
+    const auto& historyCompressionSelect =
+        std::get<settings::SettingsSelectDefinition>(historyCompression.payload);
+    require(historyCompression.title.translated() == QStringLiteral("Compression level") &&
+                historyCompression.configurationKey ==
+                    QStringLiteral("capture_history/compression_level") &&
+                historyCompressionSelect.binding ==
+                    settings::SettingsSelectBinding::HistoryCompressionLevel &&
+                historyCompressionSelect.options.size() == 3 &&
+                historyCompressionSelect.options[0].value == QStringLiteral("low") &&
+                historyCompressionSelect.options[1].value == QStringLiteral("medium") &&
+                historyCompressionSelect.options[2].value == QStringLiteral("high") &&
+                storage::ConfigurationSchema::defaultValue(historyCompression.configurationKey) ==
+                    QStringLiteral("medium"),
+            "history compression must follow permanent history with a medium default");
     const auto* fill = catalog.item({QStringLiteral("interface-settings"),
                                      QStringLiteral("interface-text-recognition"),
                                      QStringLiteral("interface.text-recognition.fill-style")});
@@ -568,19 +584,6 @@ void builtInCatalogIsCompleteAndValid() {
         "Drawing settings must expose the default-off remembered drawing tool switch");
 
     const auto& traySection = functionPage->sections.at(6);
-#ifdef Q_OS_MACOS
-    require(traySection.items.size() == 2 &&
-                traySection.items.at(0).id == QStringLiteral("tray.left-click-action") &&
-                traySection.items.at(1).id == QStringLiteral("tray.menu-options") &&
-                catalog.item({QStringLiteral("function-settings"), QStringLiteral("tray-settings"),
-                              QStringLiteral("tray.middle-click-action")}) == nullptr,
-            "macOS tray settings must omit the unsupported middle-click action");
-    const auto& leftTray =
-        std::get<settings::SettingsSelectDefinition>(traySection.items.at(0).payload);
-    require(leftTray.binding == settings::SettingsSelectBinding::TrayLeftClickAction &&
-                leftTray.options.size() == 5,
-            "macOS must retain the configurable left-click actions");
-#else
     require(traySection.items.size() == 3 &&
                 traySection.items.at(0).id == QStringLiteral("tray.left-click-action") &&
                 traySection.items.at(1).id == QStringLiteral("tray.middle-click-action") &&
@@ -605,7 +608,6 @@ void builtInCatalogIsCompleteAndValid() {
                         middleTray.options.at(index).label.translated(),
                 "tray selectors must share ordered values and labels");
     }
-#endif
 
     const auto* pinDoubleClick =
         catalog.item({QStringLiteral("function-settings"), QStringLiteral("pin-to-screen-settings"),
@@ -722,8 +724,28 @@ void builtInCatalogIsCompleteAndValid() {
     const auto* pdfPageSize =
         catalog.item({QStringLiteral("storage-and-privacy"), QStringLiteral("screenshots"),
                       QStringLiteral("screenshot-output.pdf-page-size")});
-    require(pdfPageSize != nullptr && storagePage->sections.at(0).items.at(2).id == pdfPageSize->id,
-            "PDF page size must immediately follow image format");
+    const auto* compressionLevel =
+        catalog.item({QStringLiteral("storage-and-privacy"), QStringLiteral("screenshots"),
+                      QStringLiteral("screenshot-output.compression-level")});
+    const auto* imageQuality =
+        catalog.item({QStringLiteral("storage-and-privacy"), QStringLiteral("screenshots"),
+                      QStringLiteral("screenshot-output.image-quality")});
+    require(compressionLevel != nullptr && imageQuality != nullptr && pdfPageSize != nullptr &&
+                storagePage->sections.at(0).items.at(2).id == compressionLevel->id &&
+                storagePage->sections.at(0).items.at(3).id == imageQuality->id &&
+                storagePage->sections.at(0).items.at(4).id == pdfPageSize->id,
+            "compression and quality must follow image format before PDF page size");
+    const auto& compression =
+        std::get<settings::SettingsSelectDefinition>(compressionLevel->payload);
+    const auto& quality = std::get<settings::SettingsSliderDefinition>(imageQuality->payload);
+    require(compression.binding == settings::SettingsSelectBinding::ScreenshotCompressionLevel &&
+                compression.options.size() == 3 &&
+                compression.options.at(0).value == QStringLiteral("low") &&
+                compression.options.at(1).value == QStringLiteral("medium") &&
+                compression.options.at(2).value == QStringLiteral("high") &&
+                quality.binding == settings::SettingsSliderBinding::ScreenshotImageQuality &&
+                quality.suffix.translated() == QStringLiteral("%"),
+            "image compression and quality controls must expose their fixed settings bindings");
     const auto& paper = std::get<settings::SettingsSelectDefinition>(pdfPageSize->payload);
     require(paper.binding == settings::SettingsSelectBinding::ScreenshotPdfPageSize &&
                 paper.options.size() == 3 &&
@@ -1346,7 +1368,7 @@ void globalHotkeyShortcutsHaveStableContracts() {
                 trayGroups.at(3).id == QStringLiteral("other") &&
                 trayGroups.at(3).options.size() == 4 &&
                 trayGroups.at(4).id == QStringLiteral("system") &&
-                trayGroups.at(4).options.size() == 3 && trayOptionIds.size() == 20 &&
+                trayGroups.at(4).options.size() == 4 && trayOptionIds.size() == 21 &&
                 trayOptionIds.at(8) == QStringLiteral("quick.pin-clipboard-content") &&
                 trayOptionIds.at(9) == QStringLiteral("quick.pin-selected-files") &&
                 trayOptionIds.at(10) == QStringLiteral("quick.screen-record") &&
@@ -1361,9 +1383,18 @@ void globalHotkeyShortcutsHaveStableContracts() {
                 trayGroups.at(4).options.at(0).kind ==
                     settings::SettingsTrayMenuOptionKind::WindowGrouping &&
                 trayOptionIds.at(18) == QStringLiteral("tray.show-main-window") &&
-                trayOptionIds.at(19) == QStringLiteral("tray.exit") && trayMenuSchema != nullptr &&
+                trayOptionIds.at(19) == QStringLiteral("tray.restart-app") &&
+                trayGroups.at(4).options.at(2).kind ==
+                    settings::SettingsTrayMenuOptionKind::RestartApp &&
+                trayGroups.at(4).options.at(2).iconFactory &&
+                trayGroups.at(4).options.at(2).iconFactory() ==
+                    snow_shot::presentation::icons::custom::outlined::Restart() &&
+                trayOptionIds.at(20) == QStringLiteral("tray.exit") && trayMenuSchema != nullptr &&
                 trayMenuSchema->allowedStringValues == trayOptionIds,
             "tray menu options must derive all global-hotkey groups and append system commands");
+
+    require(!trayMenuSchema->defaultValue.toArray().contains(QStringLiteral("tray.restart-app")),
+            "Restart App must remain unchecked in the default tray customization");
 
     const settings::SettingsTrayMenuOptionDefinition* hotkeyToggleTrayOption = nullptr;
     for (const auto& group : trayGroups) {

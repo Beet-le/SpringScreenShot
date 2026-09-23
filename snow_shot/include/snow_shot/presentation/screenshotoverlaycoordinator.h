@@ -19,7 +19,7 @@
 
 #include <cstdint>
 
-class ScreenshotColorPickerWidget;
+class ScreenshotColorPickerWindow;
 class ScreenshotDisplaySession;
 class ScreenshotOverlayEventSink;
 class ScreenshotSelectionToolbarCommandSink;
@@ -122,7 +122,10 @@ class ScreenshotOverlayCoordinator final : public ScreenshotOverlayExclusionPort
     void redoCanvasEdit();
     ScreenshotSelectionToolbarWidget* selectionToolbar() const;
     void attachSelectionToolbarToOverlay(ScreenshotOverlayWindow* overlay);
-    ScreenshotColorPickerWidget* colorPicker() const;
+    void createColorPicker(const QPoint& initialCursorGlobalPosition);
+    void prepareColorPickerSurface(const ScreenshotDisplaySession& displaySession);
+    void releaseColorPicker();
+    ScreenshotColorPickerWindow* colorPicker() const;
     void updateColorPicker(ScreenshotOverlayWindow* overlay, const QImage& image,
                            const QRect& physicalRect, const QPoint& physicalPoint,
                            const QPointF& localPosition, qreal opacity);
@@ -130,8 +133,8 @@ class ScreenshotOverlayCoordinator final : public ScreenshotOverlayExclusionPort
     void setColorPickerCenterGuideLineColor(const QColor& color);
     void updateShortcutHints(ScreenshotOverlayWindow* overlay,
                              const ScreenshotShortcutHintContext& context, qreal opacity,
-                             const QRectF& selectionGlobal = {});
-    [[nodiscard]] bool screenshotUiContainsGlobalCursor() const;
+                             const QRectF& selectionGlobal, const QPoint& cursorPosition);
+    [[nodiscard]] bool screenshotUiContainsGlobalPoint(const QPoint& position) const;
     [[nodiscard]] bool stepToolbarStrokeWidth(int direction);
     [[nodiscard]] bool stepToolbarSelectionOpacity(int direction);
     [[nodiscard]] bool stepToolbarSpotlightOpacity(int direction);
@@ -142,6 +145,7 @@ class ScreenshotOverlayCoordinator final : public ScreenshotOverlayExclusionPort
     void hideToolbar();
     void showToolbar();
     void hideSelectionToolbar();
+    void setSelectionToolbarHiddenForSession(bool hidden);
     void showSelectionToolbar();
     void raiseSelectionToolbar();
     void destroyUiResources();
@@ -155,6 +159,7 @@ class ScreenshotOverlayCoordinator final : public ScreenshotOverlayExclusionPort
     void flushDeferredOverlayMaintenance(const ScreenshotDisplaySession& displaySession);
 
     ScreenshotOverlayUiHost m_uiHost;
+    QPoint m_colorPickerInitialCursorGlobalPosition;
     ScreenshotOverlayPool m_overlayPool;
     ScreenshotOverlayCanvasPresenter m_canvasPresenter;
     bool m_overlayMaintenancePending = false;

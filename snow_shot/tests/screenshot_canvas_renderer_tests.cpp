@@ -427,6 +427,63 @@ void physicalViewportRenderingPreservesEveryPixelAtFractionalDprs() {
     }
 }
 
+void overlayCameraPreservesDesktopPixels() {
+    SnowCanvasWidget canvas;
+    ScreenshotCanvasRenderer renderer(canvas);
+    ScreenshotGeometryMapper mapper;
+    for (const QSize size : {QSize(2240, 1440), QSize(2560, 1600), QSize(321, 181)}) {
+        for (const qreal dpr : {1.5, 1.25, 1.75, 2.0}) {
+            CapturedDisplayModel display;
+            display.physicalRect = QRect(QPoint(-2560, -1600), size);
+            display.canvasRect = QRect(QPoint(317, 211), size);
+            display.logicalRect = QRect(QPoint(-2560, -1600), QSize(qRound(size.width() / dpr),
+                                                                    qRound(size.height() / dpr)));
+            display.logicalToPhysicalScale = dpr;
+            const auto viewport = ScreenshotGeometryMapper::displayViewportGeometry(display);
+            const qreal zoom = viewport.canvasToLogicalScale;
+            const QTransform transform(
+                zoom, 0, 0, zoom,
+                viewport.logicalRect.width() / 2.0 - viewport.canvasCenter.x() * zoom,
+                viewport.logicalRect.height() / 2.0 - viewport.canvasCenter.y() * zoom);
+            const QPointF local = transform.map(QPointF(display.canvasRect.topLeft()));
+            require(std::hypot(local.x(), local.y()) < 1e-9 && std::abs(zoom * dpr - 1.0) < 1e-12,
+                    "overlay camera must anchor native pixels at the origin with exact DPI scale");
+            const QPointF sample = QPointF(display.canvasRect.topLeft()) + QPointF(123, 87);
+            const QPointF logical = mapper.logicalPositionForCanvasPoint(display, sample) -
+                                    QPointF(display.logicalRect.topLeft());
+            require(QLineF(logical, transform.map(sample)).length() < 1e-9,
+                    "selection mapping and image camera must use the same DPI transform");
+            display.active = true;
+            ScreenshotDisplaySession displays;
+            displays.appendDisplay(display);
+            require(mapper.physicalPositionForLogicalPoint(
+                        displays, logical + QPointF(display.logicalRect.topLeft())) ==
+                        display.physicalRect.topLeft() + QPoint(123, 87),
+                    "logical pointer mapping must select the original physical pixel");
+            QImage source(size, QImage::Format_RGB32);
+            for (int y = 0; y < size.height(); ++y) {
+                auto* row = reinterpret_cast<QRgb*>(source.scanLine(y));
+                for (int x = 0; x < size.width(); ++x) {
+                    row[x] = qRgb(x % 256, y % 256, (x + y) % 256);
+                }
+            }
+            renderer.setImage(source, QRectF(display.canvasRect));
+            QImage output(size, QImage::Format_RGB32);
+            output.setDevicePixelRatio(dpr);
+            output.fill(Qt::black);
+            QPainter painter(&output);
+            // Include the fractional final logical cell in the paint damage.
+            const QRect damage(0, 0, qCeil(size.width() / dpr), qCeil(size.height() / dpr));
+            renderer.renderBeforeCanvas(painter, {QRect(QPoint(), viewport.logicalRect.size()),
+                                                  QRegion(damage), transform, dpr});
+            painter.end();
+            output.setDevicePixelRatio(1);
+            require(output == source,
+                    "overlay rendering must preserve every desktop pixel at fractional DPI");
+        }
+    }
+}
+
 QImage renderPinnedResult(const QImage& source, const QTransform& canvasToView,
                           qreal devicePixelRatio) {
     SnowCanvasWidget canvas;
@@ -1920,6 +1977,20 @@ void selectionDamagePlannerAvoidsFullCanvasFallback() {
     require(dirtyArea < static_cast<qint64>(viewport.width()) * viewport.height() / 2,
             "subpixel selection damage must remain bounded by the changed perimeter");
 
+    ScreenshotSelectionVisualState largeSquare;
+    largeSquare.bounds = QRectF(960.0, 540.0, 1920.0, 1080.0);
+    largeSquare.present = true;
+    ScreenshotSelectionVisualState shiftedSquare = largeSquare;
+    shiftedSquare.bounds.translate(1.0, 0.0);
+    const QRegion squareDamage = planScreenshotSelectionDamage(
+        largeSquare, shiftedSquare, QRect(0, 0, 3840, 2160), transform, true);
+    qint64 squareDamageArea = 0;
+    for (const QRect& rect : squareDamage) {
+        squareDamageArea += static_cast<qint64>(rect.width()) * rect.height();
+    }
+    require(squareDamageArea < 70'000,
+            "square selection damage should use the border width rather than a broad band");
+
     ScreenshotSelectionVisualState square = before;
     square.bounds = QRectF(100.0, 100.0, 200.0, 200.0);
     square.cornerRadius = 0;
@@ -1968,6 +2039,36 @@ void activeWatermarkAreaMovementUsesUnionDamage() {
     require(!dirty.isEmpty(), "moving an active watermark area should repaint");
     require(dirty.contains(overlapView),
             "an active watermark area move must invalidate the old/new union");
+}
+
+void unchangedActiveWatermarkAreaDoesNotRepaint() {
+    SnowCanvasWidget canvas;
+    canvas.resize(320, 240);
+    canvas.show();
+    require(canvas.setViewportCamera(0.0, 0.0, 1.0), "camera should update");
+
+    SnowCanvasWatermarkConfig config;
+    config.text = QStringLiteral("VISIBLE");
+    config.color = Qt::white;
+    config.fontSize = 18.0;
+    config.opacity = 1.0;
+    require(canvas.setCanvasWatermarkConfig(config), "the watermark should be visible");
+    const QRectF area(-120.0, -80.0, 160.0, 120.0);
+    canvas.setDecorationRenderAreas({std::optional<QRectF>(area), std::optional<QRectF>(QRectF())});
+    QApplication::processEvents();
+
+    CanvasPaintRegionObserver observer;
+    canvas.installEventFilter(&observer);
+    observer.begin();
+    canvas.setDecorationRenderAreas({std::optional<QRectF>(area), std::optional<QRectF>(QRectF())});
+    canvas.setDecorationRenderAreas({
+        std::optional<QRectF>(QRectF(area.bottomRight(), area.topLeft())),
+        std::optional<QRectF>(QRectF()),
+    });
+    QApplication::processEvents();
+    const QRegion dirty = observer.region();
+    canvas.removeEventFilter(&observer);
+    require(dirty.isEmpty(), "an unchanged active watermark area must not repaint");
 }
 
 void activeSpotlightAreaMovementUsesSymmetricDifferenceDamage() {
@@ -2071,6 +2172,23 @@ void selectionTransitionsCoverChangedPixelsAtFractionalDprs() {
         requireChangedPixelsCoveredByDirtyRegion(
             previous, preview, dirty,
             "fractional-DPR shadow changes must cover every changed pixel");
+
+        renderer.setSelectionToolbarHovered(false);
+        renderer.setSelection(QRectF(-80.25, -50.25, 160.5, 100.5), true, 0, 16,
+                              QColor(0x59, 0x59, 0x59));
+        QApplication::processEvents();
+        const QImage squareBefore = renderCanvas(canvas, devicePixelRatio);
+        CanvasPaintRegionObserver squareObserver;
+        canvas.installEventFilter(&squareObserver);
+        squareObserver.begin();
+        renderer.setSelection(QRectF(-79.75, -49.75, 160.5, 100.5), true, 0, 16,
+                              QColor(0x59, 0x59, 0x59));
+        QApplication::processEvents();
+        const QRegion squareDirty = squareObserver.region();
+        canvas.removeEventFilter(&squareObserver);
+        requireChangedPixelsCoveredByDirtyRegion(
+            squareBefore, renderCanvas(canvas, devicePixelRatio), squareDirty,
+            "fractional-DPR square selection damage must cover every changed pixel");
         canvas.setCustomRenderer(nullptr);
     }
 }
@@ -4005,6 +4123,7 @@ int main(int argc, char** argv) {
     rendererCoversTheWidgetRectOnceAScreenshotFillsTheViewport();
     overlayPaintSkipsRedundantTransparentClearWhenRendererCoversTheRect();
     layeredImageSourceMatchesMaterializedOutput();
+    overlayCameraPreservesDesktopPixels();
     physicalViewportRenderingPreservesEveryPixelAtFractionalDprs();
     pinnedResultDownscaleUsesLinearFiltering();
     largeRasterSourceExtentsRenderWithoutFixedPointWrap();
@@ -4030,6 +4149,7 @@ int main(int argc, char** argv) {
     overlaySelectionMoveDoesNotExpandForInactiveDecorations();
     selectionDamagePlannerAvoidsFullCanvasFallback();
     activeWatermarkAreaMovementUsesUnionDamage();
+    unchangedActiveWatermarkAreaDoesNotRepaint();
     activeSpotlightAreaMovementUsesSymmetricDifferenceDamage();
     selectionTransitionsCoverChangedPixelsAtFractionalDprs();
     sharedShadowPreviewMatchesExportAndCacheStaysBounded();

@@ -903,8 +903,9 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
       QStringLiteral("quick.toggle-disable-on-focused-fullscreen-window"),
       QStringLiteral("tray.window-grouping"),
       QStringLiteral("tray.show-main-window"),
+      QStringLiteral("tray.restart-app"),
       QStringLiteral("tray.exit")},
-     20},
+     21},
     {QStringLiteral("screenshot_selection/previous_selection"), QJsonValue::Null,
      ConfigurationValueKind::Structured},
     {QStringLiteral("screenshot_selection/smart_selection"), true, ConfigurationValueKind::Boolean},
@@ -974,12 +975,21 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      {QStringLiteral("system"), QStringLiteral("snow_shot")}},
     {QStringLiteral("screenshot/save_path_shortcuts"), QJsonArray(),
      ConfigurationValueKind::Structured},
+    {QStringLiteral("screenshot/manual_save_format_options"), QJsonObject(),
+     ConfigurationValueKind::Structured},
     {QStringLiteral("screenshot/image_format"),
      QStringLiteral("png"),
      ConfigurationValueKind::String,
      std::nullopt,
      {QStringLiteral("png"), QStringLiteral("jpeg"), QStringLiteral("bmp"), QStringLiteral("webp"),
       QStringLiteral("jxl"), QStringLiteral("avif"), QStringLiteral("pdf")}},
+    {QStringLiteral("screenshot/compression_level"),
+     QStringLiteral("low"),
+     ConfigurationValueKind::String,
+     std::nullopt,
+     {QStringLiteral("low"), QStringLiteral("medium"), QStringLiteral("high")}},
+    {QStringLiteral("screenshot/image_quality"), 100, ConfigurationValueKind::Integer,
+     ConfigurationIntegerRange{0, 100, 1}},
     {QStringLiteral("screenshot/pdf_page_size"),
      QStringLiteral("a4_portrait"),
      ConfigurationValueKind::String,
@@ -1004,6 +1014,11 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      ConfigurationValueKind::Structured},
     {QStringLiteral("capture_history/enabled"), true, ConfigurationValueKind::Boolean},
     {QStringLiteral("capture_history/keep_permanently"), false, ConfigurationValueKind::Boolean},
+    {QStringLiteral("capture_history/compression_level"),
+     QStringLiteral("medium"),
+     ConfigurationValueKind::String,
+     std::nullopt,
+     {QStringLiteral("low"), QStringLiteral("medium"), QStringLiteral("high")}},
     {QStringLiteral("capture_history/retention_days"), 7, ConfigurationValueKind::Integer,
      ConfigurationIntegerRange{CaptureHistoryPolicy::MinimumRetentionDays,
                                CaptureHistoryPolicy::MaximumRetentionDays, 1}},
@@ -1571,6 +1586,53 @@ QJsonValue ConfigurationSchema::defaultValue(const QString& key) {
     return found == nullptr ? QJsonValue() : found->defaultValue;
 }
 
+namespace {
+ConfigurationNormalization normalizeManualSaveFormatOptions(const QJsonValue& value) {
+    if (!value.isObject())
+        return {};
+    const QJsonObject source = value.toObject();
+    QJsonObject result;
+    const QSet<QString> qualityFormats{
+        QStringLiteral("jpeg"), QStringLiteral("webp"), QStringLiteral("jxl"),
+        QStringLiteral("avif"), QStringLiteral("pdf"),
+    };
+    const QSet<QString> compressionFormats{
+        QStringLiteral("png"),
+        QStringLiteral("webp"),
+        QStringLiteral("jxl"),
+        QStringLiteral("avif"),
+    };
+    const QSet<QString> compressionValues{
+        QStringLiteral("low"),
+        QStringLiteral("medium"),
+        QStringLiteral("high"),
+    };
+    for (auto format = source.constBegin(); format != source.constEnd(); ++format) {
+        if ((!qualityFormats.contains(format.key()) &&
+             !compressionFormats.contains(format.key())) ||
+            !format.value().isObject()) {
+            continue;
+        }
+        const QJsonObject options = format.value().toObject();
+        QJsonObject normalized;
+        if (qualityFormats.contains(format.key())) {
+            const QJsonValue quality = options.value(QStringLiteral("quality"));
+            if (isInteger(quality))
+                normalized.insert(QStringLiteral("quality"), qBound(0, quality.toInt(), 100));
+        }
+        if (compressionFormats.contains(format.key())) {
+            const QString compression =
+                options.value(QStringLiteral("compression_level")).toString().trimmed();
+            if (compressionValues.contains(compression))
+                normalized.insert(QStringLiteral("compression_level"), compression);
+        }
+        if (!normalized.isEmpty())
+            result.insert(format.key(), normalized);
+    }
+    return {result, true, result != source};
+}
+} // namespace
+
 ConfigurationNormalization ConfigurationSchema::normalize(const QString& key,
                                                           const QJsonValue& value) {
     const ConfigurationSchemaEntry* schemaEntry = entry(key);
@@ -1622,6 +1684,8 @@ ConfigurationNormalization ConfigurationSchema::normalize(const QString& key,
         }
         return {result, true, result != value.toArray()};
     }
+    if (key == QStringLiteral("screenshot/manual_save_format_options"))
+        return normalizeManualSaveFormatOptions(value);
     if (key == QStringLiteral("screenshot_toolbar/layout")) {
         return normalizeToolbarLayout(value, kDrawingToolbarItemIds,
                                       defaultDrawingToolbarPositions());

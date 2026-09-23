@@ -7,6 +7,7 @@ launch=1
 local_dmg=''
 work=''
 mount_dir=''
+package_mounted=0
 slot=''
 state=''
 lock_owned=0
@@ -14,7 +15,8 @@ committed=0
 replacement_started=0
 had_previous=0
 needs_sudo=0
-destination=/Applications/snow_shot.app
+destination='/Applications/Snow Shot.app'
+previous_destination=''
 
 message() {
     local en cn tw
@@ -41,10 +43,10 @@ message() {
         permissions) en='On first installation or migration from an older signature, grant Screen Recording and Accessibility in System Settings → Privacy & Security when requested. Use this installer for future updates to retain the local identity. Permission retention has not yet been qualified across supported macOS versions; macOS may still request consent.'; cn='首次安装或从旧签名迁移时，请按提示在“系统设置 → 隐私与安全性”中授予屏幕录制和辅助功能权限。今后请使用此安装器更新，以保留本地身份。跨 macOS 版本的权限保留尚未完成验证；系统仍可能要求授权。'; tw='首次安裝或從舊簽署遷移時，請依提示在「系統設定 → 隱私權與安全性」中授予螢幕錄製和輔助使用權限。之後請使用此安裝程式更新，以保留本機身分。跨 macOS 版本的權限保留尚未完成驗證；系統仍可能要求授權。' ;;
         failed) en='Installation failed. Check the diagnostic below, resolve the issue, and retry.'; cn='安装失败。请检查下方诊断信息，解决问题后重试。'; tw='安裝失敗。請檢查下方診斷資訊，解決問題後重試。' ;;
         rollback) en='Restoring the previous application…'; cn='正在恢复原应用…'; tw='正在還原原應用程式…' ;;
-        recovery) en='Automatic cleanup or recovery failed. Keep the following directory; it may contain your previous app. Restore previous.app to /Applications/snow_shot.app before retrying:'; cn='自动清理或恢复失败。请保留以下目录，其中可能包含原应用。重试前请将 previous.app 恢复到 /Applications/snow_shot.app：'; tw='自動清理或還原失敗。請保留以下目錄，其中可能包含原應用程式。重試前請將 previous.app 還原至 /Applications/snow_shot.app：' ;;
+        recovery) en='Automatic cleanup or recovery failed. Keep the following directory; it may contain your previous app. Restore previous.app to the installation path printed below before retrying:'; cn='自动清理或恢复失败。请保留以下目录，其中可能包含原应用。重试前请将 previous.app 恢复到下方显示的安装路径：'; tw='自動清理或還原失敗。請保留以下目錄，其中可能包含原應用程式。重試前請將 previous.app 還原至下方顯示的安裝路徑：' ;;
         detach) en='Could not detach the installer volume. Eject it in Finder:'; cn='无法卸载安装卷。请在访达中推出：'; tw='無法卸載安裝卷。請在 Finder 中退出：' ;;
         state) en='Installer state is unsafe or another installation is running. Check ownership and symlinks in the directory below. Remove its lock directory only after confirming no installer is running:'; cn='安装器状态不安全或已有安装正在运行。请检查下方目录的所有权及符号链接。仅在确认没有安装器运行后移除 lock 目录：'; tw='安裝程式狀態不安全或已有安裝正在執行。請檢查下方目錄的擁有權及符號連結。僅在確認沒有安裝程式執行後移除 lock 目錄：' ;;
-        launch) en='Installed successfully, but launch failed. Open /Applications/snow_shot.app from Finder.'; cn='安装成功，但启动失败。请从访达打开 /Applications/snow_shot.app。'; tw='安裝成功，但啟動失敗。請從 Finder 開啟 /Applications/snow_shot.app。' ;;
+        launch) en='Installed successfully, but launch failed. Open Snow Shot from Applications in Finder.'; cn='安装成功，但启动失败。请从访达的“应用程序”打开 Snow Shot。'; tw='安裝成功，但啟動失敗。請從 Finder 的「應用程式」開啟 Snow Shot。' ;;
         *) return 1 ;;
     esac
     case "$language" in zh-CN) printf '%s\n' "$cn" ;; zh-TW) printf '%s\n' "$tw" ;; *) printf '%s\n' "$en" ;; esac
@@ -136,12 +138,10 @@ JXA
 }
 
 unmount_package() {
-    [[ -n "$mount_dir" ]] || return 0
-    # attach can fail before mounting anything (for example an unsupported image).
-    local mounted
-    mounted=$(mount) || return 1
-    if [[ "$mounted" != *" on $mount_dir ("* ]]; then mount_dir=''; return 0; fi
+    # mount(8) can canonicalize /var aliases and repeated slashes; track ownership instead.
+    [[ "$package_mounted" == 1 ]] || { mount_dir=''; return 0; }
     run hdiutil detach "$mount_dir" || return 1
+    package_mounted=0
     mount_dir=''
 }
 
@@ -152,7 +152,9 @@ validate_and_stage() {
     mount_dir="$work/volume"
     mkdir -p "$mount_dir" || return 1
     run hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "$mount_dir" "$dmg" || return 1
-    bundle="$mount_dir/snow_shot.app"
+    package_mounted=1
+    bundle="$mount_dir/Snow Shot.app"
+    if [[ ! -e "$bundle" ]]; then bundle="$mount_dir/snow_shot.app"; fi
     [[ -d "$bundle" && ! -L "$bundle" ]] || return 1
     [[ "$(plutil -extract CFBundleIdentifier raw -o - "$bundle/Contents/Info.plist" 2>> "$work/diagnostic.log")" == com.snowshot.snow_shot ]] || return 1
     executable=$(plutil -extract CFBundleExecutable raw -o - "$bundle/Contents/Info.plist" 2>> "$work/diagnostic.log") || return 1
@@ -211,7 +213,7 @@ prepare_state() {
 }
 
 prepare_identity() {
-    local keychain="$HOME/Library/Keychains/login.keychain-db" fingerprint identities
+    local keychain="$HOME/Library/Keychains/login.keychain-db" fingerprint identities pkcs12_password
     [[ -f "$keychain" ]] || die identity
     if [[ -f "$state/identity" ]]; then
         fingerprint=$(tr '[:lower:]' '[:upper:]' < "$state/identity")
@@ -238,10 +240,13 @@ CERT
             -config "$work/certificate.cnf" -keyout "$work/private.pem" -out "$work/certificate.pem" || die identity
         fingerprint=$(openssl x509 -in "$work/certificate.pem" -noout -fingerprint -sha1 | sed 's/.*=//; s/://g')
         [[ "$fingerprint" =~ ^[[:xdigit:]]{40}$ ]] || die identity
-        # Temporary PKCS#12 is private (umask 077); no password or private key in argv.
-        run openssl pkcs12 -export -inkey "$work/private.pem" -in "$work/certificate.pem" \
-            -out "$work/identity.p12" -passout pass: || die identity
-        run security import "$work/identity.p12" -k "$keychain" -P '' -T /usr/bin/codesign || die identity
+        pkcs12_password=$(openssl rand -hex 32) || die identity
+        SNOW_INSTALLER_P12_PASSWORD="$pkcs12_password" run openssl pkcs12 -export \
+            -inkey "$work/private.pem" -in "$work/certificate.pem" \
+            -out "$work/identity.p12" -passout env:SNOW_INSTALLER_P12_PASSWORD || die identity
+        run security import "$work/identity.p12" -k "$keychain" -P "$pkcs12_password" \
+            -T /usr/bin/codesign || die identity
+        unset pkcs12_password
         # User trust domain only, scoped to code signing (no -d or -A).
         run security add-trusted-cert -r trustRoot -p codeSign -k "$keychain" "$work/certificate.pem" || die identity
         printf '%s\n' "$fingerprint" > "$state/identity.tmp"
@@ -276,7 +281,7 @@ sign_application() {
 }
 
 installed_pids() {
-    pgrep -f '^/Applications/snow_shot[.]app/Contents/MacOS/snow_shot( |$)' || [[ $? == 1 ]]
+    pgrep -f '^/Applications/(Snow Shot|snow_shot)[.]app/Contents/MacOS/snow_shot( |$)' || [[ $? == 1 ]]
 }
 
 quit_installed() {
@@ -304,8 +309,15 @@ JXA
 install_application() {
     say install
     local applications_dir="${destination%/*}"
+    previous_destination="$destination"
+    # Move the old bundle into the existing transaction backup so success adopts
+    # the product name and failure restores the original installation path.
+    if [[ ! -e "$destination" && -e "$applications_dir/snow_shot.app" ]]; then
+        previous_destination="$applications_dir/snow_shot.app"
+    fi
     [[ -d "$applications_dir" && ! -L "$applications_dir" && ! -L "$destination" && ( ! -e "$destination" || -d "$destination" ) ]] || die invalid
-    if [[ ! -w "$applications_dir" ]] || [[ -e "$destination" && ! -w "$destination" ]]; then
+    [[ ! -L "$previous_destination" && ( ! -e "$previous_destination" || -d "$previous_destination" ) ]] || die invalid
+    if [[ ! -w "$applications_dir" ]] || [[ -e "$previous_destination" && ! -w "$previous_destination" ]]; then
         needs_sudo=1
         say sudo
         sudo -v
@@ -315,8 +327,8 @@ install_application() {
     run ditto "$work/snow_shot.app" "$slot/new.app"
     run codesign --verify --deep --strict "$slot/new.app"
     quit_installed
-    [[ ! -e "$destination" ]] || had_previous=1
-    if [[ "$had_previous" == 1 ]]; then as_install mv "$destination" "$slot/previous.app"; fi
+    [[ ! -e "$previous_destination" ]] || had_previous=1
+    if [[ "$had_previous" == 1 ]]; then as_install mv "$previous_destination" "$slot/previous.app"; fi
     replacement_started=1
     as_install mv "$slot/new.app" "$destination"
     run codesign --verify --deep --strict "$destination"
@@ -339,14 +351,14 @@ cleanup() {
     if [[ -n "$slot" && "$committed" == 0 ]]; then
         if [[ -d "$slot/previous.app" ]]; then
             message rollback >&2
-            as_install rm -rf -- "$destination" && as_install mv "$slot/previous.app" "$destination" || safe_to_remove=0
+            as_install rm -rf -- "$destination" && as_install mv "$slot/previous.app" "$previous_destination" || safe_to_remove=0
         elif [[ "$replacement_started" == 1 && "$had_previous" == 0 && ! -e "$slot/new.app" ]]; then
             as_install rm -rf -- "$destination" || safe_to_remove=0
         fi
     fi
     if [[ -n "$slot" ]]; then
         if [[ "$safe_to_remove" == 1 ]]; then as_install rm -rf -- "$slot" || safe_to_remove=0; fi
-        if [[ "$safe_to_remove" == 0 ]]; then message recovery >&2; printf '%s\n' "$slot" >&2; status=1; fi
+        if [[ "$safe_to_remove" == 0 ]]; then message recovery >&2; printf '%s\n' "$previous_destination" >&2; printf '%s\n' "$slot" >&2; status=1; fi
     fi
     if ! unmount_package; then
         message detach >&2; printf '%s\n' "$mount_dir" >&2; status=1

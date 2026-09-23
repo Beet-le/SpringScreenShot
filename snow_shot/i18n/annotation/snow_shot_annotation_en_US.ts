@@ -60,6 +60,10 @@
             <translation>Arrow</translation>
         </message>
         <message>
+            <source>Arrow ratio (scroll to adjust)</source>
+            <translation>Arrow ratio (scroll to adjust)</translation>
+        </message>
+        <message>
             <source>Arrow shaft type</source>
             <translation>Arrow shaft type</translation>
         </message>
@@ -406,6 +410,10 @@
         <message>
             <source>Half-width</source>
             <translation>Half-width</translation>
+        </message>
+        <message>
+            <source>Hide selection toolbar</source>
+            <translation>Hide selection toolbar</translation>
         </message>
         <message>
             <source>Highlight</source>

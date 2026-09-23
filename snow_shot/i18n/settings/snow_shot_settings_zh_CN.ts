@@ -994,6 +994,14 @@
             <translation>选择系统托盘使用的内置图标</translation>
         </message>
         <message>
+            <source>Choose the compression effort used for display images saved in screenshot history</source>
+            <translation>选择截图历史记录中保存的显示器图像的压缩级别</translation>
+        </message>
+        <message>
+            <source>Choose the compression effort used for image output and history results</source>
+            <translation>选择图像输出和历史记录结果图像的压缩级别</translation>
+        </message>
+        <message>
             <source>Choose the dialog used for manual screenshot saves</source>
             <translation>选择手动保存截图时使用的对话框</translation>
         </message>
@@ -1116,6 +1124,10 @@
         <message>
             <source>Color picker display mode</source>
             <translation>颜色拾取器显示模式</translation>
+        </message>
+        <message>
+            <source>Compression level</source>
+            <translation>压缩级别</translation>
         </message>
         <message>
             <source>Configuration</source>
@@ -1614,6 +1626,10 @@
             <translation>图像格式</translation>
         </message>
         <message>
+            <source>Image quality</source>
+            <translation>图像质量</translation>
+        </message>
+        <message>
             <source>Image save directory</source>
             <translation>图像保存目录</translation>
         </message>
@@ -1744,6 +1760,10 @@
         <message>
             <source>Loop Animated Images</source>
             <translation>循环播放动图</translation>
+        </message>
+        <message>
+            <source>Low</source>
+            <translation>低</translation>
         </message>
         <message>
             <source>MSAA</source>
@@ -2015,7 +2035,7 @@
         </message>
         <message>
             <source>Pin selected image files from Finder or the desktop to the screen</source>
-            <translation>将访达或桌面中选中的图像文件贴到屏幕</translation>
+            <translation>将访达或桌面中选中的图像文件固定到屏幕</translation>
         </message>
         <message>
             <source>Pin selection</source>
@@ -2208,6 +2228,10 @@
         <message>
             <source>Restart</source>
             <translation>重启</translation>
+        </message>
+        <message>
+            <source>Restart App</source>
+            <translation>重启应用</translation>
         </message>
         <message>
             <source>Restart SpringScreenShot with administrator privileges</source>
@@ -2422,6 +2446,10 @@
             <translation>序号</translation>
         </message>
         <message>
+            <source>Set image quality for saves made with the system file dialog</source>
+            <translation>设置通过系统文件对话框保存时的图像质量</translation>
+        </message>
+        <message>
             <source>Set the border color of pinned screenshots</source>
             <translation>设置固定截图的边框颜色</translation>
         </message>
@@ -2623,7 +2651,7 @@
         </message>
         <message>
             <source>Start new screenshot sessions and pin drawing mode with the last used drawing tool instead of the move tool</source>
-            <translation>开始新的截图会话或进入贴图绘制模式时，自动启用上次使用的绘图工具，而不是移动工具</translation>
+            <translation>开始新的截图会话或进入固定到屏幕绘制模式时，自动启用上次使用的绘图工具，而不是移动工具</translation>
         </message>
         <message>
             <source>Start/pause/resume recording</source>

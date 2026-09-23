@@ -5,7 +5,7 @@
 #include "snow_draw_engine_qt/snow_canvas_widget.h"
 #include "snow_shot/presentation/components/icons/iconrenderutils.h"
 #include "snow_shot/presentation/components/icons/snowshoticons.h"
-#include "snow_shot/presentation/screenshotcolorpickerwidget.h"
+#include "snow_shot/presentation/screenshotcolorpickerwindow.h"
 #include "snow_shot/presentation/screenshotselectiontoolbarwidget.h"
 #include "snow_shot/presentation/screenshotoverlaywindow.h"
 #include "snow_shot/presentation/screenshottoolbarcommands.h"
@@ -16,7 +16,6 @@
 #include <utility>
 
 #include <QCoreApplication>
-#include <QCursor>
 #include <QEvent>
 #include <QFontMetrics>
 #include <QGuiApplication>
@@ -454,24 +453,41 @@ void ScreenshotOverlayUiHost::attachSelectionToolbarToOverlay(ScreenshotOverlayW
     toolbarWidget->setAttribute(Qt::WA_TranslucentBackground, true);
     toolbarWidget->setAttribute(Qt::WA_NoSystemBackground, true);
     toolbarWidget->setFocusPolicy(Qt::NoFocus);
-    if (wasVisible && overlay != nullptr && overlay->isVisible()) {
+    if (wasVisible && !m_selectionToolbarHiddenForSession && overlay != nullptr &&
+        overlay->isVisible()) {
         showPreparedChildWidget(toolbarWidget);
         toolbarWidget->raise();
     }
 }
 
-ScreenshotColorPickerWidget* ScreenshotOverlayUiHost::ensureColorPicker() {
+void ScreenshotOverlayUiHost::createColorPicker() {
     if (m_colorPicker == nullptr) {
-        auto* colorPicker = new ScreenshotColorPickerWidget();
+        auto* colorPicker = new ScreenshotColorPickerWindow();
         m_ownedWidgets.add(colorPicker);
         m_colorPicker = colorPicker;
         colorPicker->setCenterGuideLineColor(m_colorPickerCenterGuideLineColor);
         colorPicker->hide();
     }
-    return trackedWidget(m_colorPicker);
 }
 
-ScreenshotColorPickerWidget* ScreenshotOverlayUiHost::colorPicker() const {
+void ScreenshotOverlayUiHost::prepareColorPickerSurface(ScreenshotOverlayWindow* overlay) {
+    // Capture-result preparation must not move a picker that already follows
+    // the cursor on another display back to the first overlay.
+    if (m_colorPicker != nullptr && overlay != nullptr &&
+        (m_colorPicker->parentWidget() == nullptr || m_colorPicker->windowHandle() == nullptr)) {
+        m_colorPicker->setOwnerWindow(overlay);
+    }
+    if (m_colorPicker != nullptr && m_colorPicker->parentWidget() != nullptr) {
+        m_colorPicker->prepareNativeSurface();
+    }
+}
+
+void ScreenshotOverlayUiHost::releaseColorPicker() {
+    // QObjectCleanupHandler and QPointer both stop tracking a deleted object.
+    delete m_colorPicker.data();
+}
+
+ScreenshotColorPickerWindow* ScreenshotOverlayUiHost::colorPicker() const {
     return m_colorPicker.data();
 }
 
@@ -484,17 +500,12 @@ void ScreenshotOverlayUiHost::updateColorPicker(ScreenshotOverlayWindow* overlay
         return;
     }
 
-    ScreenshotColorPickerWidget* picker = ensureColorPicker();
-    SnowCanvasWidget* canvas = overlay->canvas();
-    QWidget* pickerParent =
-        canvas != nullptr ? static_cast<QWidget*>(canvas) : static_cast<QWidget*>(overlay);
-    if (picker->parentWidget() != pickerParent) {
-        picker->hidePicker();
-        picker->setParent(pickerParent);
-        picker->setAttribute(Qt::WA_TranslucentBackground, true);
-        picker->setAttribute(Qt::WA_NoSystemBackground, true);
-        picker->setAttribute(Qt::WA_TransparentForMouseEvents, true);
-        picker->setFocusPolicy(Qt::NoFocus);
+    ScreenshotColorPickerWindow* picker = colorPicker();
+    if (picker == nullptr) {
+        return;
+    }
+    if (picker->parentWidget() != overlay || !picker->isWindow()) {
+        picker->setOwnerWindow(overlay);
     }
 
     picker->setCaptureImage(image, physicalRect);
@@ -532,12 +543,10 @@ bool ScreenshotOverlayUiHost::colorPickerBelongsToOverlay(
         return false;
     }
 
-    const QWidget* parent = m_colorPicker->parentWidget();
-    return parent == overlay || parent == overlay->canvas();
+    return m_colorPicker->parentWidget() == overlay;
 }
 
-bool ScreenshotOverlayUiHost::screenshotUiContainsGlobalCursor() const {
-    const QPoint globalPosition = QCursor::pos();
+bool ScreenshotOverlayUiHost::screenshotUiContainsGlobalPoint(const QPoint& globalPosition) const {
     if (m_toolbar != nullptr && m_toolbar->isVisible() &&
         m_toolbar->containsInteractiveGlobalPoint(globalPosition)) {
         return true;
@@ -554,7 +563,8 @@ bool ScreenshotOverlayUiHost::screenshotUiContainsGlobalCursor() const {
 
 void ScreenshotOverlayUiHost::updateShortcutHints(ScreenshotOverlayWindow* overlay,
                                                   const ScreenshotShortcutHintContext& context,
-                                                  qreal opacity, const QRectF& selectionGlobal) {
+                                                  qreal opacity, const QRectF& selectionGlobal,
+                                                  const QPoint& cursorPosition) {
     const ScreenshotShortcutHintMode mode = screenshotShortcutHintModeForContext(context);
     auto* hints = static_cast<ScreenshotShortcutHintsWidget*>(m_shortcutHints.data());
     if (overlay == nullptr || hints == nullptr || mode == ScreenshotShortcutHintMode::Hidden ||
@@ -582,7 +592,7 @@ void ScreenshotOverlayUiHost::updateShortcutHints(ScreenshotOverlayWindow* overl
         std::max(kShortcutHintsMargin, overlay->height() - hints->height() - kShortcutHintsMargin);
     hints->move(kShortcutHintsMargin, y);
     hints->setObscuringSelection(selectionGlobal);
-    hints->refreshVisibility(QCursor::pos());
+    hints->refreshVisibility(cursorPosition);
 }
 
 void ScreenshotOverlayUiHost::hideShortcutHints() {
@@ -617,6 +627,7 @@ bool ScreenshotOverlayUiHost::stepToolbarWatermarkFontSize(int direction) {
 }
 
 void ScreenshotOverlayUiHost::resetToolbarForNewCapture() {
+    m_selectionToolbarHiddenForSession = false;
     if (m_toolbar != nullptr) {
         const bool wasVisible = m_toolbar->isVisible();
         m_toolbar->resetForNewCapture();
@@ -663,6 +674,7 @@ void ScreenshotOverlayUiHost::showToolbar() {
     toolbarWindow->restoreRememberedDrawingTool();
     showPreparedWidget(toolbarWindow);
     toolbarWindow->raise();
+    raiseColorPickerAboveToolbar();
 }
 
 void ScreenshotOverlayUiHost::hideSelectionToolbar() {
@@ -674,7 +686,17 @@ void ScreenshotOverlayUiHost::hideSelectionToolbar() {
     }
 }
 
+void ScreenshotOverlayUiHost::setSelectionToolbarHiddenForSession(bool hidden) {
+    m_selectionToolbarHiddenForSession = hidden;
+    if (hidden) {
+        hideSelectionToolbar();
+    }
+}
+
 void ScreenshotOverlayUiHost::showSelectionToolbar() {
+    if (m_selectionToolbarHiddenForSession) {
+        return;
+    }
     ScreenshotSelectionToolbarWidget* toolbarWidget = trackedWidget(m_selectionToolbar);
     if (toolbarWidget == nullptr || toolbarWidget->parentWidget() == nullptr) {
         return;
@@ -682,11 +704,19 @@ void ScreenshotOverlayUiHost::showSelectionToolbar() {
     toolbarWidget->prepareForDisplay();
     showPreparedChildWidget(toolbarWidget);
     toolbarWidget->raise();
+    raiseColorPickerAboveToolbar();
 }
 
 void ScreenshotOverlayUiHost::raiseSelectionToolbar() {
     if (m_selectionToolbar != nullptr) {
         m_selectionToolbar->raise();
+    }
+    raiseColorPickerAboveToolbar();
+}
+
+void ScreenshotOverlayUiHost::raiseColorPickerAboveToolbar() {
+    if (m_colorPicker != nullptr && m_colorPicker->isVisible()) {
+        m_colorPicker->raise();
     }
 }
 
@@ -723,8 +753,7 @@ void ScreenshotOverlayUiHost::detachOverlayTransientUi(ScreenshotOverlayWindow* 
         m_toolbar->setOwnerWindow(nullptr);
     }
     if (colorPickerBelongsToOverlay(overlay)) {
-        m_colorPicker->hidePicker();
-        m_colorPicker->setParent(nullptr);
+        m_colorPicker->setOwnerWindow(nullptr);
     }
     if (m_shortcutHints != nullptr && m_shortcutHints->parentWidget() == overlay) {
         hideShortcutHints();

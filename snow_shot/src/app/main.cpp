@@ -1,4 +1,5 @@
 #include "snow_shot/app/applicationcontroller.h"
+#include "snow_shot/app/applicationrestart.h"
 #include <QTemporaryDir>
 #include <QProcess>
 #include <QLocalServer>
@@ -53,6 +54,7 @@
 extern "C" void snow_diagnostics_install_panic_hook(void (*callback)(const unsigned char*, size_t));
 
 namespace {
+#ifndef Q_OS_MACOS
 QString updateInstallationRoot(const QString& executableDirectory) {
     return QFileInfo(executableDirectory).dir().absolutePath();
 }
@@ -72,6 +74,7 @@ std::optional<bool> updateTransactionPending(const QString& helperPath, const QS
     }
     return output == "pending";
 }
+#endif
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -96,6 +99,14 @@ int main(int argc, char* argv[]) {
     }
     QCoreApplication::setApplicationName(applicationName);
     QCoreApplication::setApplicationVersion(QStringLiteral(SNOW_DIAGNOSTICS_VERSION));
+    bool applicationRestart = false;
+    if (argc > 1 && QString::fromLocal8Bit(argv[1]) == u"--restart-helper") {
+        QCoreApplication helper(argc, argv);
+        const int result = snow_shot::app::dispatchApplicationRestartHelper(helper.arguments());
+        if (result != -1)
+            return result;
+        applicationRestart = true;
+    }
     bool administratorRestart = false;
     if (argc > 1 && QString::fromLocal8Bit(argv[1]) == u"--administrator-helper") {
         QCoreApplication helper(argc, argv);
@@ -259,6 +270,8 @@ int main(int argc, char* argv[]) {
         storage.shutdown();
         return 0;
     }
+#ifndef Q_OS_MACOS
+    // macOS updates use a downloaded DMG, not the standalone transaction helper.
     QString executablePath = QString::fromLocal8Bit(argv[0]);
 #ifdef Q_OS_WIN
     wchar_t modulePath[32768]{};
@@ -313,6 +326,16 @@ int main(int argc, char* argv[]) {
         socket->waitForBytesWritten(5000);
         return 0;
     }
+#endif
+#ifdef Q_OS_MACOS
+    // Exercise normal pre-application startup without touching live user state.
+    if (argc == 2 && QString::fromLocal8Bit(argv[1]) == u"--startup-probe") {
+        qputenv("QT_QPA_PLATFORM", "offscreen");
+        QApplication probe(argc, argv);
+        adqt::widgets::initializePlatformCompatibility(probe);
+        return 0;
+    }
+#endif
     auto& diagnostics = snow_shot::diagnostics::DiagnosticsService::instance();
     struct DiagnosticsLifetime {
         ~DiagnosticsLifetime() {
@@ -353,6 +376,10 @@ int main(int argc, char* argv[]) {
 #ifdef Q_OS_MACOS
     snow_shot::platform::macos::observeNativeLoginItemLaunch();
 #endif
+    // The internal application name also owns settings and single-instance keys.
+    // Keep it stable while giving Qt windows and the macOS menu the product name.
+    QGuiApplication::setApplicationDisplayName(
+        QCoreApplication::translate("AboutPageWidget", "Snow Shot"));
     QApplication app(argc, argv);
     adqt::widgets::initializePlatformCompatibility(app);
     snow_shot::diagnostics::logEvent(QStringLiteral("snow_shot.app"),
@@ -368,7 +395,9 @@ int main(int argc, char* argv[]) {
     snow_shot::presentation::capture_perf::configureTrace(
         qEnvironmentVariable("SNOW_SHOT_CAPTURE_PERF_TRACE"));
 #endif
-    auto launchArguments = QApplication::arguments();
+    auto launchArguments =
+        applicationRestart ? snow_shot::app::normalApplicationArguments(QApplication::arguments())
+                           : QApplication::arguments();
 #ifdef Q_OS_MACOS
     launchArguments = snow_shot::platform::macos::loginItemLaunchArguments(
         launchArguments, snow_shot::platform::macos::initialNativeLoginItemLaunch());

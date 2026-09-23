@@ -5,8 +5,9 @@
 #include <QUuid>
 
 namespace snow_shot::presentation {
-storage::CaptureHistoryDraft directCaptureHistoryDraft(const DirectCaptureRequest& request,
-                                                       const DirectCaptureFrame& frame) {
+storage::CaptureHistoryDraft
+directCaptureHistoryDraft(const DirectCaptureRequest& request, const DirectCaptureFrame& frame,
+                          std::optional<storage::PreparedPngImage> png) {
     storage::CaptureHistoryDraft draft;
     if (!frame.isValid() || frame.displays.isEmpty())
         return draft;
@@ -32,6 +33,8 @@ storage::CaptureHistoryDraft directCaptureHistoryDraft(const DirectCaptureReques
     }
     // The editor uses captured coordinates relative to the complete desktop's top-left.
     const QPoint canvasOffset = -draft.canvasBounds.topLeft();
+    draft.desktopGeometry = storage::CaptureHistoryDesktopGeometry{
+        draft.canvasBounds.topLeft(), !frame.displays.front().logicalBounds.isEmpty()};
     draft.canvasBounds.translate(canvasOffset);
     draft.selection.rectangle =
         (frame.logicalBounds.isEmpty() ? frame.physicalBounds : frame.logicalBounds)
@@ -42,13 +45,20 @@ storage::CaptureHistoryDraft directCaptureHistoryDraft(const DirectCaptureReques
             display.sourceCanvasRect->translate(canvasOffset);
     }
     draft.resultImage = frame.image;
-    if (!frame.canonicalPng.isEmpty()) {
-        draft.preparedResultImage =
-            storage::PreparedPngImage::fromBytes(frame.image.size(), frame.canonicalPng);
-    }
+    draft.preparedResultImage = std::move(png);
+    draft.pngCompressionLevel = ScreenshotImageFileService::encodeOptions(
+                                    ScreenshotImageFileFormat::Png,
+                                    ScreenshotImageEncodingOptions{100, request.compressionLevel})
+                                    .compression_level;
+    draft.displayPngCompressionLevel =
+        ScreenshotImageFileService::encodeOptions(
+            ScreenshotImageFileFormat::Png,
+            ScreenshotImageEncodingOptions{100, request.historyDisplayCompressionLevel})
+            .compression_level;
     draft.source = request.target == DirectCaptureTarget::FocusedWindow
                        ? storage::CaptureHistorySource::FocusedWindow
                        : storage::CaptureHistorySource::CurrentMonitor;
+    draft.scrolling = false;
     return draft;
 }
 } // namespace snow_shot::presentation

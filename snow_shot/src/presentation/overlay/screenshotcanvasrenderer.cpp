@@ -86,7 +86,6 @@ constexpr double kSelectionHandleRadius = 4.0;
 constexpr double kSelectionHandleStrokeWidth = 1.5;
 constexpr double kShowEndHandlesMinSize = 32.0;
 constexpr double kShowMidHandlesMinSize = 64.0;
-constexpr int kSelectionUpdatePadding = 10;
 constexpr int kSelectionBorderUpdatePadding = 3;
 constexpr int kSelectionHandleUpdatePadding = 6;
 constexpr int kGuideLineUpdatePadding = 1;
@@ -134,18 +133,6 @@ QPainterPath selectionShapePath(const QRectF& selection, int cornerRadius,
         std::clamp(canvasRadius * verticalScale - inset, 0.0, viewRect.height() / 2.0);
     path.addRoundedRect(viewRect, horizontalRadius, verticalRadius, Qt::AbsoluteSize);
     return path;
-}
-
-QRectF snappedOutwardToDevicePixels(const QRectF& rect, qreal devicePixelRatio) {
-    if (!rect.isValid() || rect.isEmpty() || devicePixelRatio <= 0.0) {
-        return rect;
-    }
-
-    const qreal left = std::floor(rect.left() * devicePixelRatio) / devicePixelRatio;
-    const qreal top = std::floor(rect.top() * devicePixelRatio) / devicePixelRatio;
-    const qreal right = std::ceil(rect.right() * devicePixelRatio) / devicePixelRatio;
-    const qreal bottom = std::ceil(rect.bottom() * devicePixelRatio) / devicePixelRatio;
-    return QRectF(QPointF(left, top), QPointF(right, bottom));
 }
 
 bool rectFCovers(const QRectF& outer, const QRect& inner) {
@@ -203,15 +190,15 @@ QRegion selectionStateDecorationRegion(const ScreenshotSelectionVisualState& sta
     }
     const qreal scale = viewScale(canvasToViewTransform);
     const qreal shadow = state.toolbarHovered ? std::max(0, state.shadowWidth) * scale : 0.0;
-    const qreal padding =
-        std::max<qreal>(kSelectionUpdatePadding, shadow + kSelectionBorderUpdatePadding);
+    const qreal padding = shadow + kSelectionBorderUpdatePadding;
     QRegion decoration(selectionBounds.adjusted(-padding, -padding, padding, padding)
                            .toAlignedRect()
                            .intersected(viewportRect));
-    const QRect stableInterior = selectionBounds
-                                     .adjusted(kSelectionUpdatePadding, kSelectionUpdatePadding,
-                                               -kSelectionUpdatePadding, -kSelectionUpdatePadding)
-                                     .toAlignedRect();
+    const QRect stableInterior =
+        selectionBounds
+            .adjusted(kSelectionBorderUpdatePadding, kSelectionBorderUpdatePadding,
+                      -kSelectionBorderUpdatePadding, -kSelectionBorderUpdatePadding)
+            .toAlignedRect();
     if (!stableInterior.isEmpty()) {
         decoration -= QRegion(stableInterior.intersected(viewportRect));
     }
@@ -1341,8 +1328,7 @@ bool ScreenshotCanvasRenderer::coversWidgetRect(const QRect& widgetRect) const {
         return widgetRect == canvasRect;
     }
 
-    const QRectF targetRect = snappedOutwardToDevicePixels(
-        canvasToView.mapRect(m_imageSource.materializedCanvasRect), devicePixelRatio);
+    const QRectF targetRect = canvasToView.mapRect(m_imageSource.materializedCanvasRect);
     return rectFCovers(targetRect, widgetRect);
 }
 
@@ -1403,11 +1389,7 @@ void ScreenshotCanvasRenderer::renderBeforeCanvas(QPainter& painter,
         painter.restore();
     } else if (m_imageSource.isMaterialized()) {
         const QRectF targetRect =
-            m_renderMode == RenderMode::PinnedResult
-                ? context.canvasToViewTransform.mapRect(m_imageSource.materializedCanvasRect)
-                : snappedOutwardToDevicePixels(
-                      context.canvasToViewTransform.mapRect(m_imageSource.materializedCanvasRect),
-                      context.devicePixelRatio);
+            context.canvasToViewTransform.mapRect(m_imageSource.materializedCanvasRect);
         if (context.exposedRegion.intersects(targetRect.toAlignedRect())) {
             painter.save();
             if (m_renderMode == RenderMode::PinnedResult) {
@@ -1435,8 +1417,7 @@ void ScreenshotCanvasRenderer::renderBeforeCanvas(QPainter& painter,
         const QRectF canvasRect = m_ocrFilteredCanvasRect.isValid()
                                       ? m_ocrFilteredCanvasRect
                                       : QRectF(m_ocrPresentation->selection).normalized();
-        const QRectF targetRect = snappedOutwardToDevicePixels(
-            context.canvasToViewTransform.mapRect(canvasRect), context.devicePixelRatio);
+        const QRectF targetRect = context.canvasToViewTransform.mapRect(canvasRect);
         if (!canvasRect.isEmpty() && targetRect.isValid() && !targetRect.isEmpty() &&
             context.exposedRegion.intersects(targetRect.toAlignedRect())) {
             painter.save();

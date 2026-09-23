@@ -165,6 +165,8 @@ void defaultsAndTypedRoundTrip() {
                 history.value(QStringLiteral("retention_days")).toInt() == 7 &&
                 history.value(QStringLiteral("max_entries")).toInt() == 100 &&
                 history.value(QStringLiteral("max_disk_mib")).toInt() == 1024 &&
+                history.value(QStringLiteral("compression_level")).toString() ==
+                    QStringLiteral("medium") &&
                 screenshotUi.value(QStringLiteral("toolbar_size")).toString() ==
                     QStringLiteral("normal") &&
                 screenshotUi.value(QStringLiteral("selection_transition_animation")).toBool() &&
@@ -201,6 +203,7 @@ void defaultsAndTypedRoundTrip() {
             {QStringLiteral("capture_history/retention_days"), 30},
             {QStringLiteral("capture_history/max_entries"), 250},
             {QStringLiteral("capture_history/max_disk_mib"), 2048},
+            {QStringLiteral("capture_history/compression_level"), QStringLiteral("high")},
             {QStringLiteral("screenshot_selection/smart_selection"), false},
             {QStringLiteral("screenshot_ui/selection_mask_color"), QStringLiteral(" #12ab34cd ")},
             {QStringLiteral("screenshot_ui/shortcut_hint_opacity"), 42},
@@ -215,6 +218,10 @@ void defaultsAndTypedRoundTrip() {
             reloaded.value(QStringLiteral("interface/language")).toString() ==
                 QStringLiteral("zh_CN") &&
             reloaded.value(QStringLiteral("capture_history/retention_days")).toInt() == 30 &&
+            reloaded.value(QStringLiteral("capture_history/compression_level")).toString() ==
+                QStringLiteral("high") &&
+            reloaded.value(QStringLiteral("screenshot/compression_level")).toString() ==
+                QStringLiteral("low") &&
             !reloaded.value(QStringLiteral("screenshot_selection/smart_selection")).toBool() &&
             reloaded.value(QStringLiteral("screenshot_ui/selection_mask_color")).toString() ==
                 QStringLiteral("#12AB34CD") &&
@@ -269,6 +276,9 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
                 systemSaveDirectory(QStandardPaths::PicturesLocation) &&
             defaultValue("screenshot/last_manual_save_directory").toString().isEmpty() &&
             defaultValue("screenshot/image_format").toString() == QStringLiteral("png") &&
+            defaultValue("screenshot/compression_level").toString() == QStringLiteral("low") &&
+            defaultValue("screenshot/image_quality").toInt() == 100 &&
+            defaultValue("screenshot/manual_save_format_options").toObject().isEmpty() &&
             defaultValue("screenshot/manual_save_filename_format").toString() ==
                 QStringLiteral("SpringScreenShot_{YYYY-MM-DD_HH-mm-ss}") &&
             defaultValue("screenshot/auto_save_filename_format").toString() ==
@@ -450,6 +460,13 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
         storage::ConfigurationSchema::defaultValue(QStringLiteral("tray/menu_options")).toArray());
     require(stableTrayOptions.valid && !stableTrayOptions.changed,
             "current tray menu defaults must normalize without changes");
+    const auto restartTrayOption = storage::ConfigurationSchema::normalize(
+        QStringLiteral("tray/menu_options"),
+        QJsonArray{QStringLiteral("tray.show-main-window"), QStringLiteral("tray.restart-app"),
+                   QStringLiteral("tray.exit")});
+    require(restartTrayOption.valid && !restartTrayOption.changed &&
+                restartTrayOption.value.toArray().contains(QStringLiteral("tray.restart-app")),
+            "Restart App must be accepted only when explicitly selected");
     require(!storage::ConfigurationSchema::normalize(QStringLiteral("tray/menu_options"),
                                                      QStringLiteral("quick.screenshot"))
                  .valid,
@@ -509,6 +526,10 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
          {QStringLiteral("png"), QStringLiteral("jpeg"), QStringLiteral("bmp"),
           QStringLiteral("webp"), QStringLiteral("jxl"), QStringLiteral("avif"),
           QStringLiteral("pdf")}},
+        {QStringLiteral("screenshot/compression_level"),
+         {QStringLiteral("low"), QStringLiteral("medium"), QStringLiteral("high")}},
+        {QStringLiteral("capture_history/compression_level"),
+         {QStringLiteral("low"), QStringLiteral("medium"), QStringLiteral("high")}},
         {QStringLiteral("pin_to_screen/mouse_wheel_zoom_mode"),
          {QStringLiteral("mouse_position"), QStringLiteral("top_left"), QStringLiteral("top_right"),
           QStringLiteral("bottom_left"), QStringLiteral("bottom_right"), QStringLiteral("center")}},
@@ -546,6 +567,54 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
             !storage::ConfigurationSchema::normalize(it.key(), QStringLiteral("unsupported-value"))
                  .valid,
             "select settings must reject unsupported values");
+    }
+
+    const auto repairedManualOptions = storage::ConfigurationSchema::normalize(
+        QStringLiteral("screenshot/manual_save_format_options"),
+        QJsonObject{
+            {QStringLiteral("png"),
+             QJsonObject{{QStringLiteral("quality"), 41},
+                         {QStringLiteral("compression_level"), QStringLiteral("medium")},
+                         {QStringLiteral("unknown"), true}}},
+            {QStringLiteral("jpeg"),
+             QJsonObject{{QStringLiteral("quality"), -4},
+                         {QStringLiteral("compression_level"), QStringLiteral("high")}}},
+            {QStringLiteral("webp"),
+             QJsonObject{{QStringLiteral("quality"), 140},
+                         {QStringLiteral("compression_level"), QStringLiteral("invalid")}}},
+            {QStringLiteral("jxl"), QStringLiteral("malformed")},
+            {QStringLiteral("avif"),
+             QJsonObject{{QStringLiteral("quality"), 55.5},
+                         {QStringLiteral("compression_level"), QStringLiteral("high")}}},
+            {QStringLiteral("pdf"), QJsonObject{{QStringLiteral("quality"), 0}}},
+            {QStringLiteral("unsupported"), QJsonObject{{QStringLiteral("quality"), 75}}},
+        });
+    const QJsonObject expectedManualOptions{
+        {QStringLiteral("png"),
+         QJsonObject{{QStringLiteral("compression_level"), QStringLiteral("medium")}}},
+        {QStringLiteral("jpeg"), QJsonObject{{QStringLiteral("quality"), 0}}},
+        {QStringLiteral("webp"), QJsonObject{{QStringLiteral("quality"), 100}}},
+        {QStringLiteral("avif"),
+         QJsonObject{{QStringLiteral("compression_level"), QStringLiteral("high")}}},
+        {QStringLiteral("pdf"), QJsonObject{{QStringLiteral("quality"), 0}}},
+    };
+    require(repairedManualOptions.valid && repairedManualOptions.changed &&
+                repairedManualOptions.value.toObject() == expectedManualOptions &&
+                !storage::ConfigurationSchema::normalize(
+                     QStringLiteral("screenshot/manual_save_format_options"), QJsonArray{})
+                     .valid,
+            "manual-save format options must clamp supported values and remove malformed fields");
+    for (const int quality : {0, 1, 99, 100}) {
+        require(storage::ConfigurationSchema::normalize(QStringLiteral("screenshot/image_quality"),
+                                                        quality)
+                    .valid,
+                "image quality boundaries must be accepted");
+    }
+    for (const int quality : {-1, 101}) {
+        require(!storage::ConfigurationSchema::normalize(QStringLiteral("screenshot/image_quality"),
+                                                         quality)
+                     .valid,
+                "out-of-range image quality must be rejected");
     }
 }
 
@@ -1168,6 +1237,9 @@ void settingsAdaptersRoundTripAndRejectInvalidValues() {
                 !screenshot.captureCursor() && !screenshot.autoSaveAfterCopy() &&
                 !screenshot.copyImageFileToClipboard() &&
                 screenshot.imageFormat() == QStringLiteral("png") &&
+                screenshot.compressionLevel() == QStringLiteral("low") &&
+                screenshot.imageQuality() == 100 &&
+                screenshot.manualSaveFormatOptions().isEmpty() &&
                 screenshot.manualSaveFilenameFormat() ==
                     QStringLiteral("SpringScreenShot_{YYYY-MM-DD_HH-mm-ss}") &&
                 screenshot.autoSaveFilenameFormat() ==
@@ -1185,6 +1257,12 @@ void settingsAdaptersRoundTripAndRejectInvalidValues() {
                 screenshot.setImageSaveDirectory(QStringLiteral("D:/Captures")) &&
                 screenshot.setLastManualSaveDirectory(QStringLiteral("D:/Exports")) &&
                 screenshot.setImageFormat(QStringLiteral("bmp")) &&
+                screenshot.setCompressionLevel(QStringLiteral("high")) &&
+                screenshot.setImageQuality(0) &&
+                screenshot.setManualSaveFormatOptions(QJsonObject{
+                    {QStringLiteral("png"),
+                     QJsonObject{{QStringLiteral("compression_level"), QStringLiteral("medium")}}},
+                    {QStringLiteral("jpeg"), QJsonObject{{QStringLiteral("quality"), 83}}}}) &&
                 screenshot.setManualSaveFilenameFormat(QStringLiteral("Manual_{yyyyMMdd}")) &&
                 screenshot.setAutoSaveFilenameFormat(QStringLiteral("Auto_{HHmmss}")) &&
                 screenshot.autoExecuteAfterTextRecognition() ==
@@ -1195,13 +1273,23 @@ void settingsAdaptersRoundTripAndRejectInvalidValues() {
                 screenshot.imageSaveDirectory() == QStringLiteral("D:/Captures") &&
                 screenshot.lastManualSaveDirectory() == QStringLiteral("D:/Exports") &&
                 screenshot.imageFormat() == QStringLiteral("bmp") &&
+                screenshot.compressionLevel() == QStringLiteral("high") &&
+                screenshot.imageQuality() == 0 &&
+                screenshot.manualSaveFormatOptions()
+                        .value(QStringLiteral("jpeg"))
+                        .toObject()
+                        .value(QStringLiteral("quality")) == 83 &&
                 screenshot.manualSaveFilenameFormat() == QStringLiteral("Manual_{yyyyMMdd}") &&
                 screenshot.autoSaveFilenameFormat() == QStringLiteral("Auto_{HHmmss}"),
             "screenshot adapters must persist every new value type");
     require(!screenshot.setDoubleClickAction(QStringLiteral("unsupported")) &&
                 !screenshot.setImageFormat(QStringLiteral("unsupported")) &&
+                !screenshot.setCompressionLevel(QStringLiteral("maximum")) &&
+                !screenshot.setImageQuality(101) &&
                 !screenshot.setAutoSaveFilenameFormat(QStringLiteral("invalid/name")) &&
-                screenshot.doubleClickAction() == QStringLiteral("save"),
+                screenshot.doubleClickAction() == QStringLiteral("save") &&
+                screenshot.compressionLevel() == QStringLiteral("high") &&
+                screenshot.imageQuality() == 0,
             "invalid screenshot actions must be rejected without changing the stored value");
 
     const storage::DrawingSettings drawing;
@@ -1487,6 +1575,12 @@ void settingsAdaptersRoundTripAndRejectInvalidValues() {
     applicationStorage.shutdown();
     static_cast<void>(initialize(executable, temporary.path()));
     require(screenshot.imageSaveDirectory() == QStringLiteral("D:/Captures") &&
+                screenshot.compressionLevel() == QStringLiteral("high") &&
+                screenshot.imageQuality() == 0 &&
+                screenshot.manualSaveFormatOptions()
+                        .value(QStringLiteral("png"))
+                        .toObject()
+                        .value(QStringLiteral("compression_level")) == QStringLiteral("medium") &&
                 recording.videoSaveDirectory() == QStringLiteral("D:/Recordings"),
             "custom save directories must survive reload without being replaced by defaults");
 }
@@ -1945,12 +2039,18 @@ void trayClickSettingsSurviveRestart() {
             "missing tray settings must use independent defaults");
     require(tray.setLeftClickAction(QStringLiteral("screenshot_copy")) &&
                 tray.setMiddleClickAction(QStringLiteral("open_function_settings")) &&
+                tray.setMenuOptions({QStringLiteral("tray.show-main-window"),
+                                     QStringLiteral("tray.restart-app"),
+                                     QStringLiteral("tray.exit")}) &&
                 applicationStorage.flushNow().success,
-            "persist distinct tray click actions");
+            "persist distinct tray click actions and opt-in menu commands");
     static_cast<void>(initialize(executable, temporary.path()));
     require(tray.leftClickAction() == QStringLiteral("screenshot_copy") &&
-                tray.middleClickAction() == QStringLiteral("open_function_settings"),
-            "both tray click choices must survive storage restart");
+                tray.middleClickAction() == QStringLiteral("open_function_settings") &&
+                tray.menuOptions() == QStringList{QStringLiteral("tray.show-main-window"),
+                                                  QStringLiteral("tray.restart-app"),
+                                                  QStringLiteral("tray.exit")},
+            "tray click choices and Restart App must survive storage restart");
     applicationStorage.shutdown();
 }
 

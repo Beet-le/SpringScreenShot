@@ -20,7 +20,9 @@
 #include "snow_shot/presentation/pinnedwindowgroupmanager.h"
 #include "snow_shot/presentation/screenshotpinnededitcontroller.h"
 #include "snow_shot/presentation/screenshotfloatingtoolpalettewindow.h"
+#include "snow_shot/presentation/screenshotdisplaysession.h"
 #include "snow_shot/presentation/screenshotgeometry.h"
+#include "snow_shot/presentation/screenshotresultcompositor.h"
 #include "snow_shot/presentation/screenshotocrpresentation.h"
 #include "snow_shot/presentation/screenshotocrrecognitionservice.h"
 #include "snow_shot/presentation/screenshotqrrecognitionservice.h"
@@ -110,6 +112,7 @@
 
 #if defined(Q_OS_WIN) || defined(_WIN32)
 #include <qt_windows.h>
+#include <dwmapi.h>
 #endif
 
 void runPinnedOriginalImageTranslationTests();
@@ -3416,6 +3419,51 @@ void pinnedDeferredPresentationSurvivesGroupSwitch(SnowCanvasRuntime&) {
     const auto inactiveRecord = repository.loadRecord(inactivePersistenceId);
     require(inactiveRecord.has_value() && !inactiveRecord->image.isNull(),
             "an inactive loading pinned window should persist after materialization");
+}
+
+void historySelectionPresentationPreservesCompositedCanvas() {
+    QScreen* screen = QGuiApplication::primaryScreen();
+    require(screen != nullptr, "a primary screen is required");
+    for (const int scale : {1, 2}) {
+        QImage content(QSize(100, 50) * scale, QImage::Format_ARGB32_Premultiplied);
+        content.fill(QColor(84, 168, 112));
+        const QImage image = ScreenshotResultCompositor::compose(
+            content, ScreenshotResultStyle{0, 8 * scale, QColor(0x33, 0x33, 0x33)});
+        ScreenshotPinnedSelectionRequest request;
+        request.selection = QRect(100, 80, 100, 50);
+        request.contentCanvasRect = request.selection;
+        request.surfaceCanvasRect = QRectF(92, 72, 116, 66);
+        request.initialWindowSize = QSize(116, 66);
+        request.geometry = ScreenshotGeometryMapper::pinnedImageGeometry(
+            physicalPinGeometry(*screen, QPoint(92, 72), request.initialWindowSize), image.size());
+        request.geometry.canvasSourceRect = request.surfaceCanvasRect;
+        request.resultStyle = ScreenshotResultStyle{0, 8, QColor(0x33, 0x33, 0x33)};
+        request.screen = screen;
+        ScreenshotSelectionExportUiServices services;
+        require(services.presentCompositedSelectionImage(image, request),
+                "history selection presentation failed");
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        ScreenshotPinnedWindow* window = nullptr;
+        for (QWidget* widget : QApplication::topLevelWidgets()) {
+            auto* candidate = qobject_cast<ScreenshotPinnedWindow*>(widget);
+            if (candidate != nullptr && candidate->isVisible()) {
+                window = candidate;
+                break;
+            }
+        }
+        require(window != nullptr, "history selection pin was not shown");
+        const auto snapshot = window->persistenceSnapshot();
+        require(snapshot.canvasSourceRect == request.surfaceCanvasRect &&
+                    snapshot.contentCanvasRect == request.surfaceCanvasRect &&
+                    snapshot.surfaceCanvasRect == request.surfaceCanvasRect &&
+                    snapshot.initialWindowSize == request.initialWindowSize &&
+                    snapshot.image == image,
+                "history presentation must preserve canvas mapping and must not composite shadow "
+                "twice");
+        QPointer<ScreenshotPinnedWindow> guardedWindow(window);
+        window->close();
+        require(processUntilDeleted(guardedWindow, 2000), "history selection pin was not closed");
+    }
 }
 
 void deferredPinUserCloseCancelsLateMaterialization() {
@@ -9562,25 +9610,176 @@ void pinnedAutoFilterPreservesBackgroundAndSession() {
             "changed background dimensions make record stale without clearing it");
 }
 
+QImage pinnedPixelPattern(const QSize& size) {
+    QImage image(size, QImage::Format_ARGB32_Premultiplied);
+    for (int y = 0; y < image.height(); ++y) {
+        auto* row = reinterpret_cast<QRgb*>(image.scanLine(y));
+        for (int x = 0; x < image.width(); ++x) {
+            row[x] = qRgb((x * 37 + y * 17) % 256, (x * 13 + y * 43) % 256, (x * 53 + y * 7) % 256);
+        }
+    }
+    return image;
+}
+
+#if defined(Q_OS_WIN) || defined(_WIN32)
+void requirePinnedPixels(const QImage& actual, const QImage& expected, int inset,
+                         const char* stage) {
+    require(actual.size() == expected.size(), "pin image dimensions must match the selection");
+    for (int y = inset; y < expected.height() - inset; ++y) {
+        for (int x = inset; x < expected.width() - inset; ++x) {
+            if (actual.pixel(x, y) != expected.pixel(x, y)) {
+                throw std::runtime_error(
+                    QStringLiteral("%1 pixel mismatch at %2,%3: actual=%4 expected=%5 (%6x%7)")
+                        .arg(QString::fromLatin1(stage))
+                        .arg(x)
+                        .arg(y)
+                        .arg(actual.pixel(x, y), 8, 16, QLatin1Char('0'))
+                        .arg(expected.pixel(x, y), 8, 16, QLatin1Char('0'))
+                        .arg(expected.width())
+                        .arg(expected.height())
+                        .toStdString());
+            }
+        }
+    }
+}
+
+QImage capturePresentedPixels(const QRect& rect) {
+    if (rect.isEmpty())
+        return {};
+    const QSize size = rect.size();
+    const HDC screen = GetDC(nullptr);
+    const HDC memory = CreateCompatibleDC(screen);
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = size.width();
+    info.bmiHeader.biHeight = -size.height();
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    void* pixels = nullptr;
+    const HBITMAP bitmap = CreateDIBSection(screen, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
+    QImage result;
+    if (memory != nullptr && bitmap != nullptr && pixels != nullptr) {
+        const HGDIOBJ previous = SelectObject(memory, bitmap);
+        // PrintWindow can repaint via WM_PRINT and miss a presentation offset.
+        // Sample the desktop including layered windows, after DwmFlush.
+        if (BitBlt(memory, 0, 0, size.width(), size.height(), screen, rect.x(), rect.y(),
+                   SRCCOPY | CAPTUREBLT) != FALSE) {
+            GdiFlush();
+            result = QImage(static_cast<const uchar*>(pixels), size.width(), size.height(),
+                            QImage::Format_RGB32)
+                         .copy();
+        }
+        SelectObject(memory, previous);
+    }
+    if (bitmap != nullptr)
+        DeleteObject(bitmap);
+    if (memory != nullptr)
+        DeleteDC(memory);
+    if (screen != nullptr)
+        ReleaseDC(nullptr, screen);
+    return result;
+}
+#endif
+
+void pinnedSelectionContentMatchesScreenshotSelection() {
+#if defined(Q_OS_WIN) || defined(_WIN32)
+    require(QGuiApplication::platformName() == QStringLiteral("windows"),
+            "native selection alignment requires the Windows platform");
+    QScreen* screen = QGuiApplication::primaryScreen();
+    require(screen != nullptr, "a primary screen is required");
+
+    // Reproduce the selection/export/placement path with known pixels. The
+    // virtual capture is independent of desktop contents and monitor size.
+    const QRect selection(677, 395, 869, 937);
+    CapturedDisplayModel display;
+    display.name = screen->name();
+    display.physicalRect = QRect(ScreenshotGeometryMapper::physicalRectForScreen(*screen).topLeft(),
+                                 QSize(1600, 1400));
+    display.active = true;
+    display.image = pinnedPixelPattern(display.physicalRect.size());
+    ScreenshotDisplaySession session;
+    session.appendDisplay(display);
+    ScreenshotGeometryMapper geometry;
+    geometry.rebuild(session);
+    const QImage expected = display.image.copy(selection);
+    const QList<CanvasExportSource> sources{
+        {display.image,
+         ScreenshotGeometryMapper::displayImageSourceCanvasRect(session.displayAt(0))}};
+    SnowCanvasRuntime exportRuntime;
+    require(exportRuntime.isValid(), "selection export runtime creation failed");
+    const ScreenshotSelectionRenderSpec spec = screenshotSelectionRenderSpec(session, selection);
+    require(spec.isValid(), "selection render spec must be valid");
+    const QImage exported = exportRuntime.renderToImage(QRectF(selection), spec.pixelSize, sources);
+    requirePinnedPixels(exported, expected, 0, "export");
+    const QRect selectionOnScreen(selection.topLeft() + geometry.canvasOrigin(), selection.size());
+    const auto placement = geometry.pinnedImagePlacement(session, selection, selection.size(), 0);
+    require(placement.valid && placement.geometry.nativeGeometry == selectionOnScreen,
+            "pin placement must preserve the screenshot selection");
+
+    // Only move the pointer when it would reveal controls over the fixture.
+    // Reading an already-outside pointer does not require input-desktop access.
+    std::optional<CursorPositionRestorer> cursor;
+    if (selectionOnScreen.contains(systemCursorPosition())) {
+        cursor.emplace();
+        setSystemCursorPosition(ScreenshotGeometryMapper::physicalRectForScreen(*screen).topLeft());
+    }
+    ScreenshotPinnedWindow window;
+    window.setAttribute(Qt::WA_DeleteOnClose, false);
+    const auto closeWindow = qScopeGuard([&] { window.close(); });
+    ScreenshotPinnedWindow::Config config;
+    config.nativeGeometry = placement.geometry.nativeGeometry;
+    config.canvasSourceRect = QRectF(selection);
+    config.contentCanvasRect = QRectF(selection);
+    config.surfaceCanvasRect = QRectF(selection);
+    config.initialWindowSize = selection.size();
+    config.imageSource = ScreenshotImageSource::fromImage(exported, config.canvasSourceRect);
+    config.screen = screen;
+    config.enableEditing = false;
+    config.automaticTextRecognition = false;
+    require(window.present(config), "pinning the screenshot selection failed");
+    waitForUi(50);
+    require(window.currentNativeGeometry() == selectionOnScreen,
+            "native window must retain the selection rectangle");
+    auto* canvas = window.findChild<SnowCanvasWidget*>();
+    require(canvas != nullptr, "the pin must contain a canvas");
+    const qreal dpr = canvas->devicePixelRatioF();
+    QImage painted(selection.size(), QImage::Format_ARGB32_Premultiplied);
+    painted.setDevicePixelRatio(dpr);
+    painted.fill(Qt::transparent);
+    canvas->render(&painted);
+    requirePinnedPixels(painted, expected, 0, "canvas");
+    require(SetWindowPos(toNativeHwnd(window.winId()), HWND_TOPMOST, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE) != FALSE,
+            "the presentation fixture must be above other windows");
+    require(SUCCEEDED(DwmFlush()), "the desktop compositor must publish the pin");
+    // Inspect the visible interior, excluding the two-pixel border. Small
+    // monitors can show only part of the pin; the canvas check covers all pixels.
+    const QRect visibleContent =
+        selectionOnScreen.adjusted(2, 2, -2, -2)
+            .intersected(ScreenshotGeometryMapper::physicalRectForScreen(*screen));
+    require(!visibleContent.isEmpty(), "the fixture must have visible content to compare");
+    const QImage composited = capturePresentedPixels(visibleContent);
+    requirePinnedPixels(composited,
+                        expected.copy(visibleContent.translated(-selectionOnScreen.topLeft())), 0,
+                        "desktop presentation");
+    std::cout << "selection alignment verified at DPR " << dpr << '\n';
+#endif
+}
+
 } // namespace
 
 void pinnedOddPixelExtentRemainsSharp() {
     QScreen* screen = QGuiApplication::primaryScreen();
-    for (const QSize extent : {QSize(321, 181), QSize(1000, 667)}) {
+    for (const QSize extent : {QSize(321, 181), QSize(1000, 667), QSize(667, 1000), QSize(868, 936),
+                               QSize(869, 937), QSize(870, 938)}) {
         ScreenshotPinnedWindow window;
         window.setAttribute(Qt::WA_DeleteOnClose, false);
         const bool logical = snow_shot::presentation::kPinnedGeometryUnits ==
                              snow_shot::presentation::PinnedGeometryUnits::LogicalPixels;
         const qreal rasterScale = logical ? screen->devicePixelRatio() : 1.;
-        QImage source(
-            QSize(qRound(extent.width() * rasterScale), qRound(extent.height() * rasterScale)),
-            QImage::Format_ARGB32_Premultiplied);
-        for (int y = 0; y < source.height(); ++y) {
-            for (int x = 0; x < source.width(); ++x)
-                source.setPixel(
-                    x, y,
-                    qRgb((x * 37 + y * 17) % 256, (x * 13 + y * 43) % 256, (x * 53 + y * 7) % 256));
-        }
+        const QImage source = pinnedPixelPattern(
+            QSize(qRound(extent.width() * rasterScale), qRound(extent.height() * rasterScale)));
         ScreenshotPinnedWindow::Config config;
         config.screen = screen;
         config.placement = {screen->name(), screen->serialNumber(), QPointF(120, 120), extent};
@@ -9613,9 +9812,27 @@ void pinnedOddPixelExtentRemainsSharp() {
         require(rendered.width() >= source.width() && rendered.height() >= source.height(),
                 "Qt paint extent must cover the entire physical client");
         for (int y = 0; y < source.height(); ++y) {
-            for (int x = 0; x < source.width(); ++x)
-                require(rendered.pixel(x, y) == source.pixel(x, y),
-                        "odd backing extent must not shift or blur image pixels");
+            for (int x = 0; x < source.width(); ++x) {
+                if (rendered.pixel(x, y) != source.pixel(x, y)) {
+                    const auto transform = canvas->canvasToViewTransform();
+                    throw std::runtime_error(
+                        QStringLiteral("pixel mismatch at %1,%2: actual=%3 expected=%4; "
+                                       "source=%5x%6 widget=%7x%8 dpr=%9 transform=%10,%11,%12")
+                            .arg(x)
+                            .arg(y)
+                            .arg(rendered.pixel(x, y), 8, 16, QLatin1Char('0'))
+                            .arg(source.pixel(x, y), 8, 16, QLatin1Char('0'))
+                            .arg(source.width())
+                            .arg(source.height())
+                            .arg(canvas->width())
+                            .arg(canvas->height())
+                            .arg(dpr)
+                            .arg(transform.m11(), 0, 'g', 17)
+                            .arg(transform.dx(), 0, 'g', 17)
+                            .arg(transform.dy(), 0, 'g', 17)
+                            .toStdString());
+                }
+            }
         }
         ScreenshotPinnedWindowTestAccess::copyCurrentViewport(window);
         const auto artifact = ScreenshotPinnedWindowTestAccess::exportArtifact(window);
@@ -10060,17 +10277,20 @@ int main(int argc, char* argv[]) {
         // without this, lazily initialized storage lands in the developer's
         // real AppData (see IsolatedPinnedStorage).
         IsolatedPinnedStorage processStorage;
+        const double expectedDpr = qEnvironmentVariable("SNOW_PIN_TEST_DPR").toDouble();
+        if (expectedDpr > 0)
+            require(
+                qFuzzyCompare(QGuiApplication::primaryScreen()->devicePixelRatio(), expectedDpr),
+                "pixel fixture must run at the registered DPR, independently of monitor settings");
+        if (app.arguments().contains(QStringLiteral("--selection-content-alignment-only"))) {
+            pinnedSelectionContentMatchesScreenshotSelection();
+            return 0;
+        }
         if (app.arguments().contains(QStringLiteral("--physical-authority-only"))) {
             pinnedPhysicalAuthoritySurvivesObservations();
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--pixel-alignment-only"))) {
-            const double expectedDpr = qEnvironmentVariable("SNOW_PIN_TEST_DPR").toDouble();
-            if (expectedDpr > 0)
-                require(qFuzzyCompare(QGuiApplication::primaryScreen()->devicePixelRatio(),
-                                      expectedDpr),
-                        "pixel fixture must run at the registered DPR, independently of monitor "
-                        "settings");
             pinnedOddPixelExtentRemainsSharp();
             if (QGuiApplication::platformName() == QStringLiteral("windows")) {
                 SnowCanvasRuntime pixelRuntime;
@@ -10264,6 +10484,10 @@ int main(int argc, char* argv[]) {
         }
         if (app.arguments().contains(QStringLiteral("--async-presentation-only"))) {
             pinnedAsyncPresentationDefersContent(sourceRuntime);
+            return 0;
+        }
+        if (app.arguments().contains(QStringLiteral("--history-selection-only"))) {
+            historySelectionPresentationPreservesCompositedCanvas();
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--pooling-only"))) {

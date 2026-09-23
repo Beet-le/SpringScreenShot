@@ -746,6 +746,33 @@ SettingsItemDefinition screenshotImageFormatItem() {
          {QStringLiteral("pdf"), settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "PDF"))}});
 }
 
+SettingsItemDefinition screenshotCompressionLevelItem() {
+    return fixedSelectItem(
+        QStringLiteral("screenshot-output.compression-level"),
+        QT_TRANSLATE_NOOP("SettingsCatalog", "Compression level"),
+        QT_TRANSLATE_NOOP(
+            "SettingsCatalog",
+            "Choose the compression effort used for image output and history results"),
+        QStringLiteral("screenshot/compression_level"),
+        SettingsSelectBinding::ScreenshotCompressionLevel,
+        {{QStringLiteral("low"), settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Low"))},
+         {QStringLiteral("medium"), settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Medium"))},
+         {QStringLiteral("high"), settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "High"))}});
+}
+
+SettingsItemDefinition screenshotImageQualityItem() {
+    return {
+        QStringLiteral("screenshot-output.image-quality"),
+        settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Image quality")),
+        settingsText(QT_TRANSLATE_NOOP(
+            "SettingsCatalog", "Set image quality for saves made with the system file dialog")),
+        {},
+        QStringLiteral("screenshot/image_quality"),
+        SettingsSliderDefinition{SettingsSliderBinding::ScreenshotImageQuality,
+                                 settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "%"))},
+    };
+}
+
 SettingsItemDefinition ocrFillStyleItem() {
     return fixedSelectItem(
         QStringLiteral("interface.text-recognition.fill-style"),
@@ -782,6 +809,8 @@ QVector<SettingsItemDefinition> screenshotOutputItems() {
             SettingsDirectoryPathBinding::ScreenshotImageDirectory,
             QT_TRANSLATE_NOOP("SettingsCatalog", "Select image save directory")),
         screenshotImageFormatItem(),
+        screenshotCompressionLevelItem(),
+        screenshotImageQualityItem(),
         fixedSelectItem(QStringLiteral("screenshot-output.pdf-page-size"),
                         QT_TRANSLATE_NOOP("SettingsCatalog", "PDF page size"),
                         QT_TRANSLATE_NOOP(
@@ -1174,7 +1203,6 @@ SettingsItemDefinition trayLeftClickItem() {
         trayClickActionOptions());
 }
 
-#ifndef Q_OS_MACOS
 SettingsItemDefinition trayMiddleClickItem() {
     return fixedSelectItem(
         QStringLiteral("tray.middle-click-action"),
@@ -1183,7 +1211,6 @@ SettingsItemDefinition trayMiddleClickItem() {
         QStringLiteral("tray/middle_click_action"), SettingsSelectBinding::TrayMiddleClickAction,
         trayClickActionOptions());
 }
-#endif
 
 SettingsItemDefinition translationLayoutProcessingItem() {
     return fixedSelectItem(
@@ -2044,11 +2071,7 @@ QVector<SettingsPageDefinition> builtInPages() {
                     settingsText(QT_TRANSLATE_NOOP("SettingsCatalog",
                                                    "System tray availability and icon settings")),
                     SettingsSectionReset::TrayBehavior,
-                    {trayLeftClickItem(),
-#ifndef Q_OS_MACOS
-                     trayMiddleClickItem(),
-#endif
-                     trayMenuOptionsItem()},
+                    {trayLeftClickItem(), trayMiddleClickItem(), trayMenuOptionsItem()},
                 },
                 {
                     QStringLiteral("global-hotkeys"),
@@ -2210,6 +2233,20 @@ QVector<SettingsPageDefinition> builtInPages() {
                          {},
                          QStringLiteral("capture_history/keep_permanently"),
                          SettingsSwitchDefinition{SettingsSwitchBinding::HistoryKeepPermanently}},
+                        fixedSelectItem(
+                            QStringLiteral("history.compression-level"),
+                            QT_TRANSLATE_NOOP("SettingsCatalog", "Compression level"),
+                            QT_TRANSLATE_NOOP("SettingsCatalog",
+                                              "Choose the compression effort used for display "
+                                              "images saved in screenshot history"),
+                            QStringLiteral("capture_history/compression_level"),
+                            SettingsSelectBinding::HistoryCompressionLevel,
+                            {{QStringLiteral("low"),
+                              settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Low"))},
+                             {QStringLiteral("medium"),
+                              settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Medium"))},
+                             {QStringLiteral("high"),
+                              settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "High"))}}),
                         historyIntegerItem(
                             QStringLiteral("history.retention-days"),
                             settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Retention period")),
@@ -2820,6 +2857,10 @@ QVector<SettingsTrayMenuGroupDefinition> SettingsCatalog::trayMenuGroups() const
          settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Show main interface")),
          SettingsTrayMenuOptionKind::ShowMainWindow, GlobalShortcutAction::Screenshot,
          []() { return custom_outlined_icons::Window(); }},
+        {QStringLiteral("tray.restart-app"),
+         settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Restart App")),
+         SettingsTrayMenuOptionKind::RestartApp, GlobalShortcutAction::Screenshot,
+         []() { return custom_outlined_icons::Restart(); }},
         {QStringLiteral("tray.exit"), settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Exit")),
          SettingsTrayMenuOptionKind::Exit, GlobalShortcutAction::Screenshot,
          []() { return custom_outlined_icons::Exit(); }},
@@ -2955,6 +2996,11 @@ TrayCommandManifest buildBuiltInTrayCommandManifest() {
            SettingsTrayMenuOptionKind::ShowMainWindow,
            GlobalShortcutAction::Screenshot,
            []() { return custom_outlined_icons::Window(); }},
+          {QStringLiteral("tray.restart-app"),
+           {"SettingsCatalog", QT_TRANSLATE_NOOP("SettingsCatalog", "Restart App")},
+           SettingsTrayMenuOptionKind::RestartApp,
+           GlobalShortcutAction::Screenshot,
+           []() { return custom_outlined_icons::Restart(); }},
           {QStringLiteral("tray.exit"),
            {"SettingsCatalog", QT_TRANSLATE_NOOP("SettingsCatalog", "Exit")},
            SettingsTrayMenuOptionKind::Exit,
@@ -3171,6 +3217,12 @@ QStringList SettingsCatalog::validationErrors() const {
                         break;
                     case SettingsSelectBinding::ScreenshotImageFormat:
                         expectedKey = QStringLiteral("screenshot/image_format");
+                        break;
+                    case SettingsSelectBinding::ScreenshotCompressionLevel:
+                        expectedKey = QStringLiteral("screenshot/compression_level");
+                        break;
+                    case SettingsSelectBinding::HistoryCompressionLevel:
+                        expectedKey = QStringLiteral("capture_history/compression_level");
                         break;
                     case SettingsSelectBinding::ScreenshotSaveAsFileDialog:
                         expectedKey = QStringLiteral("screenshot/save_as_file_dialog");
@@ -3480,6 +3532,9 @@ QStringList SettingsCatalog::validationErrors() const {
                     switch (slider->binding) {
                     case SettingsSliderBinding::ShortcutHintOpacity:
                         expectedKey = QStringLiteral("screenshot_ui/shortcut_hint_opacity");
+                        break;
+                    case SettingsSliderBinding::ScreenshotImageQuality:
+                        expectedKey = QStringLiteral("screenshot/image_quality");
                         break;
                     }
                     if (itemDefinition.configurationKey != expectedKey || schemaEntry == nullptr ||

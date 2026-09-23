@@ -2,6 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+    <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
+    <key>NSHumanReadableCopyright</key><string>${SNOW_SHOT_COPYRIGHT}</string>
     <key>CFBundleExecutable</key><string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
     <key>CFBundleIdentifier</key><string>com.snowshot.snow_shot</string>
     <key>CFBundleName</key><string>Snow Shot</string>

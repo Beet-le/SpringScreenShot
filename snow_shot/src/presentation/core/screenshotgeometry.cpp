@@ -1,9 +1,13 @@
 #include "snow_shot/presentation/screenshotgeometry.h"
 
 #include "snow_shot/presentation/screenshotdisplaysession.h"
+#include "snow_shot/presentation/screenshotselectionlimits.h"
 
 #include <QGuiApplication>
 #include <QScreen>
+#ifdef Q_OS_WIN
+#include <qt_windows.h>
+#endif
 #ifdef Q_OS_MACOS
 #include <QtGui/qscreen_platform.h>
 #import <AppKit/AppKit.h>
@@ -13,6 +17,46 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+
+namespace {
+QSize scaledSelectionPixelSize(const QSize& selection, qreal scale) {
+    if (selection.width() < 1 || selection.height() < 1 || !std::isfinite(scale) || scale <= 0.0) {
+        return {};
+    }
+    const double width = static_cast<double>(selection.width()) * scale;
+    const double height = static_cast<double>(selection.height()) * scale;
+    if (!std::isfinite(width) || !std::isfinite(height) || width < 1.0 || height < 1.0) {
+        return {};
+    }
+    const double pixelWidth = std::ceil(width);
+    const double pixelHeight = std::ceil(height);
+    if (!std::isfinite(pixelWidth) || !std::isfinite(pixelHeight) || pixelWidth < 1.0 ||
+        pixelHeight < 1.0 ||
+        pixelWidth > static_cast<double>(std::numeric_limits<int>::max()) / 4.0 ||
+        pixelHeight > static_cast<double>(std::numeric_limits<int>::max()) ||
+        pixelWidth * pixelHeight >
+            static_cast<double>(std::numeric_limits<qsizetype>::max()) / 4.0) {
+        return {};
+    }
+    return QSize(static_cast<int>(pixelWidth), static_cast<int>(pixelHeight));
+}
+} // namespace
+
+QSize screenshotSelectionRenderedPixelSize(const QSize& selection, qreal scale) {
+    return scaledSelectionPixelSize(selection, scale);
+}
+
+int screenshotSelectionRenderedShadowPixels(int shadowWidth, qreal scale) {
+    if (shadowWidth <= 0 || !std::isfinite(scale) || scale <= 0.0) {
+        return 0;
+    }
+    const double scaled = static_cast<double>(shadowWidth) * scale;
+    if (!std::isfinite(scaled)) {
+        return 0;
+    }
+    return std::clamp(qRound(scaled), 0,
+                      snow_shot::presentation::kScreenshotSelectionShadowWidthMax);
+}
 
 ScreenshotSelectionRenderSpec
 screenshotSelectionRenderSpec(const ScreenshotDisplaySession& displays, const QRect& selection) {
@@ -35,14 +79,11 @@ screenshotSelectionRenderSpec(const ScreenshotDisplaySession& displays, const QR
             spec.scale = std::max(spec.scale, display.backingScale);
         }
     });
-    const double width = std::ceil(selection.width() * spec.scale);
-    const double height = std::ceil(selection.height() * spec.scale);
-    if (!valid || !intersects || !std::isfinite(width) || !std::isfinite(height) || width < 1 ||
-        height < 1 || width > std::numeric_limits<int>::max() / 4 ||
-        height > std::numeric_limits<int>::max() ||
-        width * height > static_cast<double>(std::numeric_limits<qsizetype>::max() / 4))
+    if (!valid || !intersects)
         return spec;
-    spec.pixelSize = QSize(static_cast<int>(width), static_cast<int>(height));
+    spec.pixelSize = screenshotSelectionRenderedPixelSize(selection.size(), spec.scale);
+    if (!spec.isValid())
+        return spec;
     spec.canvasToImage.scale(spec.scale, spec.scale);
     spec.canvasToImage.translate(-selection.x(), -selection.y());
     return spec;
@@ -101,10 +142,19 @@ struct DisplayCoordinateTransform {
         : display(sourceDisplay) {}
 
     [[nodiscard]] QPointF canvasToLogical(const QPointF& point) const {
+        if (hasDeviceScale()) {
+            return QPointF(display.logicalRect.topLeft()) +
+                   (point - QPointF(display.canvasRect.topLeft())) / display.logicalToPhysicalScale;
+        }
         return mapPointBetweenRects(point, display.canvasRect, display.logicalRect);
     }
 
     [[nodiscard]] QPointF physicalToLogical(const QPointF& point) const {
+        if (hasDeviceScale()) {
+            return QPointF(display.logicalRect.topLeft()) +
+                   (point - QPointF(display.physicalRect.topLeft())) /
+                       display.logicalToPhysicalScale;
+        }
         return mapPointBetweenRects(point, display.physicalRect, display.logicalRect);
     }
 
@@ -117,10 +167,18 @@ struct DisplayCoordinateTransform {
     }
 
     [[nodiscard]] QPointF logicalToPhysical(const QPointF& point) const {
+        if (hasDeviceScale()) {
+            return QPointF(display.physicalRect.topLeft()) +
+                   (point - QPointF(display.logicalRect.topLeft())) *
+                       display.logicalToPhysicalScale;
+        }
         return mapPointBetweenRects(point, display.logicalRect, display.physicalRect);
     }
 
     [[nodiscard]] QPointF overlayLocalToCanvas(const QPointF& point) const {
+        if (hasDeviceScale()) {
+            return QPointF(display.canvasRect.topLeft()) + point * display.logicalToPhysicalScale;
+        }
         const QRect overlayLocalRect(QPoint(0, 0), display.logicalRect.size());
         return mapPointBetweenRects(point, overlayLocalRect, display.canvasRect);
     }
@@ -138,7 +196,16 @@ struct DisplayCoordinateTransform {
     }
 
     [[nodiscard]] QSizeF canvasToLogicalScale() const {
+        if (hasDeviceScale()) {
+            const qreal scale = 1.0 / display.logicalToPhysicalScale;
+            return QSizeF(scale, scale);
+        }
         return scaleBetweenRects(display.canvasRect, display.logicalRect);
+    }
+
+    [[nodiscard]] bool hasDeviceScale() const {
+        return !display.canvasUsesPoints && std::isfinite(display.logicalToPhysicalScale) &&
+               display.logicalToPhysicalScale > 0.0;
     }
 
     const CapturedDisplayModel& display;
@@ -295,7 +362,11 @@ void rebuildDisplayGeometry(ScreenshotDisplaySession& displaySession, QPoint& ca
             return;
         }
 
-        if (display.canvasUsesPoints && !display.capturedLogicalRect.isEmpty()) {
+        if (display.geometryResolved) {
+            display.canvasRect =
+                (display.canvasUsesPoints ? display.logicalRect : display.physicalRect)
+                    .translated(-canvasOrigin);
+        } else if (display.canvasUsesPoints && !display.capturedLogicalRect.isEmpty()) {
             display.logicalRect = display.capturedLogicalRect;
             display.canvasRect = display.logicalRect.translated(-canvasOrigin);
 #ifdef Q_OS_MACOS
@@ -314,8 +385,17 @@ void rebuildDisplayGeometry(ScreenshotDisplaySession& displaySession, QPoint& ca
             display.canvasRect = display.physicalRect.translated(-canvasOrigin);
             display.screen = ScreenshotGeometryMapper::screenForCaptureDisplay(
                 display.name, display.physicalRect);
+            display.logicalToPhysicalScale =
+                display.screen != nullptr ? display.screen->devicePixelRatio() : 0.0;
             display.logicalRect = ScreenshotGeometryMapper::logicalRectForPhysicalRect(
                 display.physicalRect, display.screen);
+            if (display.screen != nullptr &&
+                display.physicalRect ==
+                    ScreenshotGeometryMapper::physicalRectForScreen(*display.screen)) {
+                // A full-monitor overlay uses Qt's window extent; its image transform
+                // retains the fractional extent independently of this integer size.
+                display.logicalRect = display.screen->geometry();
+            }
         }
 
         const ScreenshotHalfOpenRect canvasRect =
@@ -711,11 +791,12 @@ ScreenshotGeometryMapper::displayViewportGeometry(const CapturedDisplayModel& di
         return geometry;
     }
 
-    const ScreenshotHalfOpenRect canvasRect =
-        ScreenshotHalfOpenRect::fromRectF(geometry.canvasRect);
-    geometry.canvasCenter = canvasRect.center();
-    geometry.canvasToLogicalScale = scaleOrFallbackValue(
-        static_cast<double>(geometry.logicalRect.width()), geometry.canvasRect.width());
+    const DisplayCoordinateTransform transform(display);
+    geometry.canvasToLogicalScale = transform.canvasToLogicalScale().width();
+    // Center the logical viewport, not the rounded physical display extent.
+    // This keeps the first captured pixel at local (0, 0) at fractional DPI.
+    geometry.canvasCenter = transform.overlayLocalToCanvas(
+        QPointF(geometry.logicalRect.width() / 2.0, geometry.logicalRect.height() / 2.0));
     return geometry;
 }
 
@@ -752,6 +833,8 @@ CapturedDisplayModel ScreenshotGeometryMapper::preCaptureDisplayModel(QScreen& s
     display.physicalRect = physicalRectForScreen(screen);
     display.canvasRect = display.physicalRect;
     display.screen = &screen;
+    display.logicalToPhysicalScale = screen.devicePixelRatio();
+    display.primary = &screen == QGuiApplication::primaryScreen();
     display.active = true;
 #ifdef Q_OS_MACOS
     // Selection can finish before image acquisition. Use the same display identity
@@ -771,6 +854,16 @@ CapturedDisplayModel ScreenshotGeometryMapper::preCaptureDisplayModel(QScreen& s
 }
 
 QRect ScreenshotGeometryMapper::physicalRectForScreen(const QScreen& screen) {
+#ifdef Q_OS_WIN
+    DEVMODEW mode{};
+    mode.dmSize = sizeof(mode);
+    if (QGuiApplication::platformName() == QStringLiteral("windows") &&
+        EnumDisplaySettingsW(reinterpret_cast<LPCWSTR>(screen.name().utf16()),
+                             ENUM_CURRENT_SETTINGS, &mode)) {
+        return QRect(mode.dmPosition.x, mode.dmPosition.y, static_cast<int>(mode.dmPelsWidth),
+                     static_cast<int>(mode.dmPelsHeight));
+    }
+#endif
     const QRect logicalGeometry = screen.geometry();
     const qreal devicePixelRatio = screen.devicePixelRatio();
     if (devicePixelRatio <= 0.0) {
@@ -793,12 +886,11 @@ QRectF ScreenshotGeometryMapper::logicalRectFForPhysicalRect(const QRect& rect,
         const QRect physicalBounds = physicalRectForScreen(*screen);
         if (logicalBounds.isValid() && !logicalBounds.isEmpty() && physicalBounds.isValid() &&
             !physicalBounds.isEmpty()) {
-            const QPointF topLeft = mapPointBetweenRects(QPointF(rect.left(), rect.top()),
-                                                         physicalBounds, logicalBounds);
-            const QPointF bottomRight = mapPointBetweenRects(
-                QPointF(rect.left() + rect.width(), rect.top() + rect.height()), physicalBounds,
-                logicalBounds);
-            return QRectF(topLeft, bottomRight).normalized();
+            const qreal dpr = screen->devicePixelRatio();
+            const QPointF topLeft =
+                QPointF(logicalBounds.topLeft()) +
+                (QPointF(rect.topLeft()) - QPointF(physicalBounds.topLeft())) / dpr;
+            return QRectF(topLeft, QSizeF(rect.size()) / dpr);
         }
     }
 
@@ -977,6 +1069,37 @@ QPoint ScreenshotGeometryMapper::cursorPanelPosition(const QPoint& cursorPositio
         useTop ? cursorPosition.y() - effectiveGap - panelSize.height() : bottomRightPosition.y());
 
     return clampContentPositionToRect(desiredPosition, QRect(QPoint(), panelSize), bounds);
+}
+
+QPoint ScreenshotGeometryMapper::selectionToolbarContentPosition(const QRectF& selectionLogical,
+                                                                 const QSize& toolbarSize,
+                                                                 const QRect& bounds, int gap) {
+    const int effectiveGap = std::max(0, gap);
+    const int left = qRound(selectionLogical.left());
+    const int top = qRound(selectionLogical.top());
+    const int right = qRound(selectionLogical.right());
+    const int bottom = qRound(selectionLogical.bottom());
+    const QRect content(QPoint(0, 0), toolbarSize);
+    const QPoint topLeft(left, top - toolbarSize.height() - effectiveGap);
+    const QPoint candidates[] = {
+        topLeft,
+        QPoint(right + effectiveGap, top),
+        QPoint(left - toolbarSize.width() - effectiveGap, top),
+        QPoint(left, bottom + effectiveGap),
+    };
+    const auto fullyVisible = [&](const QPoint& position) {
+        if (content.isEmpty() || !bounds.isValid() || bounds.isEmpty()) {
+            return false;
+        }
+        const QRect translated = content.translated(position);
+        return translated.intersected(bounds) == translated;
+    };
+    for (const QPoint& candidate : candidates) {
+        if (fullyVisible(candidate)) {
+            return candidate;
+        }
+    }
+    return clampContentPositionToRect(topLeft, content, bounds);
 }
 
 ScreenshotAnchoredToolbarPlacement ScreenshotGeometryMapper::anchoredToolbarPlacement(

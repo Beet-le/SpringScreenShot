@@ -60,6 +60,10 @@
             <translation>箭头</translation>
         </message>
         <message>
+            <source>Arrow ratio (scroll to adjust)</source>
+            <translation>箭头比例（滚动调整）</translation>
+        </message>
+        <message>
             <source>Arrow shaft type</source>
             <translation>箭杆类型</translation>
         </message>
@@ -406,6 +410,10 @@
         <message>
             <source>Half-width</source>
             <translation>半角</translation>
+        </message>
+        <message>
+            <source>Hide selection toolbar</source>
+            <translation>隐藏选区工具栏</translation>
         </message>
         <message>
             <source>Highlight</source>

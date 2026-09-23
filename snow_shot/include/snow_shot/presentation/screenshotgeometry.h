@@ -29,6 +29,11 @@ struct ScreenshotSelectionRenderSpec {
 [[nodiscard]] ScreenshotSelectionRenderSpec
 screenshotSelectionRenderSpec(const ScreenshotDisplaySession& displays, const QRect& selection);
 
+// Ceiled pixel size used by screenshotSelectionRenderSpec.
+[[nodiscard]] QSize screenshotSelectionRenderedPixelSize(const QSize& selection, qreal scale);
+// Shadow width export stores in a DPR-1 result: the scaled width clamped before compose.
+[[nodiscard]] int screenshotSelectionRenderedShadowPixels(int shadowWidth, qreal scale);
+
 struct ScreenshotHalfOpenRect {
     double left = 0.0;
     double top = 0.0;
@@ -192,6 +197,9 @@ class ScreenshotGeometryMapper final {
     [[nodiscard]] static QPoint cursorPanelPosition(const QPoint& cursorPosition,
                                                     const QSize& panelSize, const QRect& bounds,
                                                     int gap);
+    [[nodiscard]] static QPoint selectionToolbarContentPosition(const QRectF& selectionLogical,
+                                                                const QSize& toolbarSize,
+                                                                const QRect& bounds, int gap);
     [[nodiscard]] static ScreenshotAnchoredToolbarPlacement
     anchoredToolbarPlacement(const QPoint& bottomRightAnchor, const QPoint& topRightAnchor,
                              const ScreenshotToolbarPlacementGeometry& bottomPlacement,

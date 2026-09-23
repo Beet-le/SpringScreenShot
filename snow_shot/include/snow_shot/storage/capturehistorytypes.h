@@ -75,6 +75,16 @@ struct CaptureHistoryResultAsset {
     }
 };
 
+// Maps selection canvas coordinates to the desktop at capture time. Windows uses physical
+// pixels; macOS uses points. Missing on older records, whose absolute position is unknown.
+struct CaptureHistoryDesktopGeometry {
+    QPoint canvasOrigin;
+    bool canvasUsesPoints = false;
+
+    friend bool operator==(const CaptureHistoryDesktopGeometry&,
+                           const CaptureHistoryDesktopGeometry&) = default;
+};
+
 struct CaptureHistoryDraft {
     CaptureHistoryContentKind contentKind = CaptureHistoryContentKind::ScreenshotSession;
     QString id;
@@ -85,7 +95,12 @@ struct CaptureHistoryDraft {
     QVector<CaptureHistoryDisplayDraft> displays;
     std::optional<QImage> resultImage;
     std::optional<PreparedPngImage> preparedResultImage;
+    int pngCompressionLevel = 0;
+    int displayPngCompressionLevel = 6;
     CaptureHistorySource source = CaptureHistorySource::CopiedToClipboard;
+    // Absent on records persisted before the scrolling marker existed.
+    std::optional<bool> scrolling{};
+    std::optional<CaptureHistoryDesktopGeometry> desktopGeometry{};
 };
 
 struct CaptureHistoryDisplayRecord {
@@ -122,13 +137,18 @@ struct CaptureHistoryRecord {
     qint64 canvasBytes = 0;
     qint64 totalBytes = 0;
     CaptureHistorySource source = CaptureHistorySource::CopiedToClipboard;
+    // Absent on records persisted before the scrolling marker existed.
+    std::optional<bool> scrolling{};
+    std::optional<CaptureHistoryDesktopGeometry> desktopGeometry{};
 
     friend bool operator==(const CaptureHistoryRecord& first, const CaptureHistoryRecord& second) {
         return first.contentKind == second.contentKind && first.id == second.id &&
                first.createdUtc == second.createdUtc && first.canvasBounds == second.canvasBounds &&
                first.selection == second.selection && first.displays == second.displays &&
                first.result == second.result && first.canvasBytes == second.canvasBytes &&
-               first.totalBytes == second.totalBytes && first.source == second.source;
+               first.totalBytes == second.totalBytes && first.source == second.source &&
+               first.scrolling == second.scrolling &&
+               first.desktopGeometry == second.desktopGeometry;
     }
 };
 

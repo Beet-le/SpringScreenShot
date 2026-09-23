@@ -13,6 +13,7 @@ class ScreenshotCaptureWorkerEventSink {
   public:
     virtual ~ScreenshotCaptureWorkerEventSink() = default;
 
+    virtual void handleLayoutReady(const ScreenshotCaptureLayout& layout) = 0;
     virtual void handleCapturePrepared(quint64 requestId, bool ok) = 0;
     virtual void handleCaptureFinished(const ScreenshotCaptureResult& result) = 0;
     virtual void handleLayoutRefreshed(quint64 requestId, bool ok) = 0;
@@ -58,6 +59,9 @@ class ScreenshotCaptureRuntimePort {
 
     [[nodiscard]] virtual bool clearDocumentPreservingViewports() = 0;
     [[nodiscard]] virtual bool resetCanvasRuntime() = 0;
+    virtual void createColorPicker(const QPoint& initialCursorGlobalPosition) = 0;
+    virtual void prepareColorPickerSurface(const ScreenshotDisplaySession& displaySession) = 0;
+    virtual void releaseColorPicker() = 0;
     virtual void resetColorPicker() = 0;
 };
 

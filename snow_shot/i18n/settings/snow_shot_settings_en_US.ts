@@ -994,6 +994,14 @@
             <translation>Choose the bundled icon used in the system tray</translation>
         </message>
         <message>
+            <source>Choose the compression effort used for display images saved in screenshot history</source>
+            <translation>Choose the compression effort used for display images saved in screenshot history</translation>
+        </message>
+        <message>
+            <source>Choose the compression effort used for image output and history results</source>
+            <translation>Choose the compression effort used for image output and history results</translation>
+        </message>
+        <message>
             <source>Choose the dialog used for manual screenshot saves</source>
             <translation>Choose the dialog used for manual screenshot saves</translation>
         </message>
@@ -1116,6 +1124,10 @@
         <message>
             <source>Color picker display mode</source>
             <translation>Color picker display mode</translation>
+        </message>
+        <message>
+            <source>Compression level</source>
+            <translation>Compression level</translation>
         </message>
         <message>
             <source>Configuration</source>
@@ -1614,6 +1626,10 @@
             <translation>Image format</translation>
         </message>
         <message>
+            <source>Image quality</source>
+            <translation>Image quality</translation>
+        </message>
+        <message>
             <source>Image save directory</source>
             <translation>Image save directory</translation>
         </message>
@@ -1744,6 +1760,10 @@
         <message>
             <source>Loop Animated Images</source>
             <translation>Loop Animated Images</translation>
+        </message>
+        <message>
+            <source>Low</source>
+            <translation>Low</translation>
         </message>
         <message>
             <source>MSAA</source>
@@ -2210,6 +2230,10 @@
             <translation>Restart</translation>
         </message>
         <message>
+            <source>Restart App</source>
+            <translation>Restart App</translation>
+        </message>
+        <message>
             <source>Restart SpringScreenShot with administrator privileges</source>
             <translation>Restart SpringScreenShot with administrator privileges</translation>
         </message>
@@ -2420,6 +2444,10 @@
         <message>
             <source>Serial number</source>
             <translation>Serial number</translation>
+        </message>
+        <message>
+            <source>Set image quality for saves made with the system file dialog</source>
+            <translation>Set image quality for saves made with the system file dialog</translation>
         </message>
         <message>
             <source>Set the border color of pinned screenshots</source>
