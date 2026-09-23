@@ -1,3 +1,4 @@
+#include "snow_shot/presentation/screenshotencodingsettings.h"
 #include "snow_shot/presentation/pinnedgeometry.h"
 #include "snow_shot/presentation/screenshotautofiltercontroller.h"
 #include "snow_shot/presentation/screenshotsourceimagecomposer.h"
@@ -3448,9 +3449,7 @@ void ScreenshotController::Impl::saveSelectionToFile() {
     }
     const ScreenshotImageFileFormat format =
         ScreenshotImageFileService::formatForDialogSelection(selectedPath, selectedFilter);
-    const ScreenshotImageEncodingOptions encoding{
-        outputSettings.imageQuality(),
-        ScreenshotImageFileService::compressionLevelForKey(outputSettings.compressionLevel())};
+    const auto encoding = snow_shot::presentation::screenshotEncodingOptions(outputSettings);
     static_cast<void>(
         outputSettings.setLastManualSaveFormat(ScreenshotImageFileService::formatKey(format)));
     if (!ensureExportFeature()) {
@@ -3948,6 +3947,7 @@ void ScreenshotController::Impl::saveArtifactForCopy(
         &owner, ScreenshotImageFileService::automaticDirectories(settings.imageSaveDirectory()),
         ScreenshotImageFileService::formatForKey(settings.imageFormat()),
         settings.autoSaveFilenameFormat(),
+        snow_shot::presentation::screenshotEncodingOptions(settings),
         [receiver, artifact, generation, copyFileToClipboard, historySource, historyCandidate,
          scrolling](ScreenshotExportTaskResult result) mutable {
             if (receiver.isNull() || receiver->m_impl == nullptr)
