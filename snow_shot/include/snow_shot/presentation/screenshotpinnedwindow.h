@@ -79,7 +79,7 @@ class ScreenshotPinnedEditController;
 class ScreenshotFloatingToolPaletteWindow;
 class ScreenshotExportArtifact;
 class ScreenshotPinnedHideToTopController;
-class ScreenshotPinnedPointerPresence;
+class ScreenshotPinnedControlsPresence;
 class ScreenshotPinnedNativeGeometryController;
 class QTextDocument;
 
@@ -232,13 +232,9 @@ class ScreenshotPinnedWindow final : public QWidget {
     void updateCanvasViewport();
     void updateBorderOutline();
     void updateControlsGeometry();
-    // Single writer for hover presence: the live native cursor against the
-    // complete window frame. Native mouse messages, queued Enter/Leave, and
-    // passive geometry settlement all resolve through this. Returns false when
-    // the native query is unavailable so the caller can fall back to
-    // event-derived presence.
-    bool applyNativePointerPresence();
-    void schedulePointerPresence(bool inside);
+    void refreshControlsPointerPresence();
+    void setControlsPointerInside(bool inside);
+    void updateControlsVisibility();
     void destroyCanvas();
     using MaterializationCallback = std::function<void(bool)>;
     using PresentationCompletion = std::function<void(bool, QImage)>;
@@ -531,11 +527,12 @@ class ScreenshotPinnedWindow final : public QWidget {
     bool m_systemSizingActive = false;
     bool m_windowDragActive = false;
     bool m_windowDragCursorSet = false;
-    bool m_pointerInside = false;
     QPointer<QScreen> m_clickThroughScreen;
     QMetaObject::Connection m_clickThroughScreenGeometryConnection;
     QMetaObject::Connection m_clickThroughScreenDpiConnection;
-    std::unique_ptr<ScreenshotPinnedPointerPresence> m_pointerPresence;
+    std::unique_ptr<ScreenshotPinnedControlsPresence> m_pointerPresence;
+    bool m_nonClientPointerInside = false;
+    bool m_nonClientTrackingPending = false;
     bool m_windowActive = false;
     bool m_fileDragActive = false;
     bool m_passiveGeometryReconciliationActive = false;

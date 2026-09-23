@@ -14,7 +14,7 @@
 #include "../src/platform/windows/pinnedwindownative.h"
 #include "../src/presentation/pinned/screenshotpinnedclickthroughgeometry.h"
 #include "../src/presentation/pinned/screenshotpinnedhidetotopcontroller.h"
-#include "../src/presentation/pinned/screenshotpinnedpointerpresence.h"
+#include "../src/presentation/pinned/screenshotpinnedcontrolspresence.h"
 #include "../src/presentation/pinned/screenshotpinnednativegeometrycontroller.h"
 #include "snow_shot/presentation/screenshotcanvasrenderer.h"
 #include "snow_shot/presentation/screenshotexportartifact.h"
@@ -103,6 +103,7 @@
 #include <QWindow>
 
 #include <algorithm>
+#include <exception>
 #include <functional>
 #include <initializer_list>
 #include <iostream>
@@ -448,10 +449,19 @@ class ScreenshotPinnedWindowTestAccess {
     }
 #endif
     static bool pointerInside(const ScreenshotPinnedWindow& window) {
-        return window.m_pointerInside;
+        return window.m_pointerPresence->inside();
+    }
+    static QPoint nativePoint(const ScreenshotPinnedWindow& window, const QPoint& local) {
+        return window.nativePositionForWindowPosition(local).toPoint();
     }
     static QTimer& pointerPresenceTimer(ScreenshotPinnedWindow& window) {
-        return window.m_pointerPresence->timer();
+        return window.m_pointerPresence->m_hideTimer;
+    }
+    static QTimer& pointerPresenceTimer(ScreenshotPinnedControlsPresence& presence) {
+        return presence.m_hideTimer;
+    }
+    static void observePointerOffscreen(ScreenshotPinnedWindow& window, bool inside) {
+        window.setControlsPointerInside(inside);
     }
     static bool moveWindow(ScreenshotPinnedWindow& window, const QRect& nativeGeometry) {
         return window.applyWindowGeometry(nativeGeometry,
@@ -2646,48 +2656,31 @@ QImage waitForClipboardImage(const std::function<bool(const QImage&)>& predicate
 }
 
 void setPinnedWindowHovered(ScreenshotPinnedWindow& window, bool hovered) {
-    const auto settlePresence = qScopeGuard([]() { waitForUi(120); });
 #if defined(Q_OS_WIN) || defined(_WIN32)
-    // Presence resolves from the live cursor, so the native backend places the
-    // system pointer and then delivers the production NC mouse move. Message
-    // coordinates are not a second source of truth. The offscreen backend has
-    // no native window and keeps the event-driven simulation.
     if (QGuiApplication::platformName() == QStringLiteral("windows") &&
         window.internalWinId() != 0) {
-        const HWND hwnd = toNativeHwnd(window.internalWinId());
-        const QRect nativeGeometry = window.currentNativeGeometry();
-        require(nativeGeometry.isValid() && !nativeGeometry.isEmpty(),
-                "hover simulation requires a presented pinned window");
-        QPoint position = nativeGeometry.center();
+        const QRect frame = window.currentNativeGeometry();
+        require(frame.isValid(), "hover simulation needs a presented pinned window");
+        QPoint position = frame.center();
         if (!hovered) {
-            QScreen* screen = window.screen();
-            if (screen == nullptr) {
-                screen = QGuiApplication::primaryScreen();
-            }
-            require(screen != nullptr, "hover simulation requires a screen");
+            QScreen* screen = window.screen() ? window.screen() : QGuiApplication::primaryScreen();
+            require(screen != nullptr, "hover simulation needs a screen");
             position = ScreenshotGeometryMapper::physicalRectForScreen(*screen).bottomRight() -
                        QPoint(8, 8);
-            if (nativeGeometry.contains(position)) {
-                position = nativeGeometry.topLeft() - QPoint(64, 64);
-            }
-            require(!nativeGeometry.contains(position),
-                    "hover-leave simulation needs a point outside the window");
+            if (frame.contains(position))
+                position = frame.topLeft() - QPoint(64, 64);
         }
         setSystemCursorPosition(position);
-        SendMessageW(
-            hwnd, WM_NCMOUSEMOVE, HTCAPTION,
-            MAKELPARAM(static_cast<short>(position.x()), static_cast<short>(position.y())));
-        return;
     }
 #endif
     if (hovered) {
-        const QPointF center(window.rect().center());
-        QEnterEvent enter(center, center, QPointF(window.mapToGlobal(center.toPoint())));
+        QEnterEvent enter(QPointF(10, 10), QPointF(10, 10), QPointF(10, 10));
         QCoreApplication::sendEvent(&window, &enter);
-        return;
+    } else {
+        QEvent leave(QEvent::Leave);
+        QCoreApplication::sendEvent(&window, &leave);
+        waitForUi(120);
     }
-    QEvent leave(QEvent::Leave);
-    QCoreApplication::sendEvent(&window, &leave);
 }
 
 void setPinnedWindowActive(ScreenshotPinnedWindow& window, bool active) {
@@ -5023,8 +5016,8 @@ void pinnedGeometryQueriesDoNotCreateNativeWindows() {
     QCoreApplication::sendEvent(&window, &enter);
     require(window.internalWinId() == 0,
             "hover delivery must not create an unpresented native window");
-    require(ScreenshotPinnedWindowTestAccess::pointerInside(window),
-            "hover delivery without a native window must apply event-derived presence immediately");
+    require(!ScreenshotPinnedWindowTestAccess::pointerInside(window),
+            "an unpresented window must ignore hover delivery");
 
     window.show();
     window.close();
@@ -5070,70 +5063,176 @@ void pinnedGeometryQueriesDoNotCreateNativeWindows() {
     presentedWindow.close();
 }
 
+void pinnedControlsVisibilityPolicy() {
+    using Presence = ScreenshotPinnedControlsPresence;
+    QObject owner;
+    QList<bool> visibility;
+    Presence presence(&owner, [&](bool visible) { visibility.append(visible); });
+    Presence::Presentation normal{true, false, false, false, QSize(383, 383)};
+    presence.setPresentation(normal);
+    presence.enter();
+    require(visibility.isEmpty(), "an inactive pin must ignore pointer entry");
+    presence.setActive(true);
+    require(visibility.isEmpty(), "activation alone must not invent hover");
+    presence.enter();
+    require(visibility == QList<bool>{true}, "entry must reveal eligible controls");
+
+    const auto verifySuppression = [&](const Presence::Presentation& suppressed) {
+        presence.setPresentation(suppressed);
+        require(!visibility.last(), "each presentation restriction must suppress controls");
+        require(presence.inside(), "presentation restrictions must preserve hover");
+        presence.setPresentation(normal);
+        require(visibility.last(), "lifting a restriction must restore hover");
+    };
+    auto suppressed = normal;
+    suppressed.windowVisible = false;
+    verifySuppression(suppressed);
+    suppressed = normal;
+    suppressed.thumbnail = true;
+    verifySuppression(suppressed);
+    suppressed = normal;
+    suppressed.editing = true;
+    verifySuppression(suppressed);
+    suppressed = normal;
+    suppressed.clickThrough = true;
+    verifySuppression(suppressed);
+    for (const QSize size : {QSize(), QSize(382, 383), QSize(383, 382)}) {
+        suppressed = normal;
+        suppressed.nativeSize = size;
+        verifySuppression(suppressed);
+    }
+    const auto notifications = visibility.size();
+    presence.setPresentation(normal);
+    require(visibility.size() == notifications, "unchanged visibility must not touch the panel");
+
+    presence.leave();
+    auto& timer = ScreenshotPinnedWindowTestAccess::pointerPresenceTimer(presence);
+    require(presence.inside() && timer.isActive(),
+            "exit must allow a brief client and non-client crossing");
+    presence.enter();
+    require(presence.inside() && !timer.isActive(), "re-entry must cancel pending exit");
+    presence.leave();
+    require(QMetaObject::invokeMethod(&timer, "timeout"), "deliver the exit deadline");
+    require(!presence.inside() && !visibility.last(), "confirmed exit must hide controls");
+    presence.setActive(false);
+    presence.enter();
+    require(!presence.inside(), "inactive pins must ignore late entry");
+}
+
+void pinnedPointerPresenceFollowsEvents() {
+    ScreenshotPinnedWindow window;
+    window.setAttribute(Qt::WA_DeleteOnClose, false);
+    auto* platform = ScreenshotPinnedWindowTestAccess::installObservedPlatform(window);
+    platform->observed = QRect(40, 40, 600, 400);
+    window.resize(platform->observed.size());
+    window.show();
+    auto* panel = window.findChild<QFrame*>(QStringLiteral("screenshotPinnedControlsPanel"));
+    auto* canvas = window.findChild<SnowCanvasWidget*>();
+    require(panel && canvas, "the hover fixture needs controls and a canvas");
+
+    QEnterEvent enter(QPointF(10, 10), QPointF(10, 10), QPointF(50, 50));
+    QEvent leave(QEvent::Leave);
+    QCoreApplication::sendEvent(&window, &enter);
+    require(panel->isVisible(), "top-level entry must reveal controls");
+    QCoreApplication::sendEvent(&window, &leave);
+    require(ScreenshotPinnedWindowTestAccess::pointerPresenceTimer(window).isActive(),
+            "top-level exit must schedule hiding");
+    QCoreApplication::sendEvent(canvas, &enter);
+    require(panel->isVisible() &&
+                !ScreenshotPinnedWindowTestAccess::pointerPresenceTimer(window).isActive(),
+            "entry into a child must preserve hover across the transition");
+    QCoreApplication::sendEvent(canvas, &leave);
+    require(panel->isVisible(), "leaving a child must not imply leaving the window");
+
+    QCoreApplication::sendEvent(&window, &leave);
+    auto& timer = ScreenshotPinnedWindowTestAccess::pointerPresenceTimer(window);
+    timer.stop();
+    require(QMetaObject::invokeMethod(&timer, "timeout"), "deliver the exit deadline");
+    require(!panel->isVisible(), "leaving the top-level window must hide controls");
+
+    QMouseEvent move(QEvent::MouseMove, QPointF(10, 10), QPointF(50, 50), Qt::NoButton,
+                     Qt::NoButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(&window, &move);
+    require(panel->isVisible(), "mouse movement must recover a missing Enter event");
+    window.close();
+}
+
 void pinnedPointerPresenceIsDebounced() {
     ScreenshotPinnedWindow window;
     window.setAttribute(Qt::WA_DeleteOnClose, false);
+    auto* platform = ScreenshotPinnedWindowTestAccess::installObservedPlatform(window);
+    platform->observed = QRect(40, 40, 600, 400);
+    window.resize(platform->observed.size());
+    auto* panel = window.findChild<QFrame*>(QStringLiteral("screenshotPinnedControlsPanel"));
+    auto* edit =
+        window.findChild<adqt::widgets::AdButton*>(QStringLiteral("screenshotPinnedEditButton"));
+    auto* close =
+        window.findChild<adqt::widgets::AdButton*>(QStringLiteral("screenshotPinnedCloseButton"));
+    require(panel && edit && close, "the controls fixture needs both buttons");
     auto& timer = ScreenshotPinnedWindowTestAccess::pointerPresenceTimer(window);
     const auto inside = [&]() { return ScreenshotPinnedWindowTestAccess::pointerInside(window); };
-    const auto expire = [&]() {
-        timer.stop();
-        require(QMetaObject::invokeMethod(&timer, "timeout"), "deliver presence timeout");
-    };
-    QEnterEvent enter(QPointF(10, 10), QPointF(10, 10), QPointF(10, 10));
+    QEnterEvent enter(QPointF(10, 10), QPointF(10, 10), QPointF(50, 50));
     QEvent leave(QEvent::Leave);
     require(timer.interval() == 100 && timer.isSingleShot() &&
                 timer.timerType() == Qt::PreciseTimer,
             "hiding must wait at least 100 ms");
     QCoreApplication::sendEvent(&window, &enter);
-    require(inside() && !timer.isActive(), "enter must reveal controls immediately");
+    require(!inside(), "unshown windows must not track the pointer");
+    window.show();
     QCoreApplication::sendEvent(&window, &enter);
-    require(inside() && !timer.isActive(), "repeated entry must not schedule hiding");
+    require(inside() && edit->isVisible() && close->isVisible(), "entry must reveal both controls");
     QCoreApplication::sendEvent(&window, &leave);
-    require(inside() && timer.isActive(), "leave must not change presence immediately");
+    require(inside() && timer.isActive(), "exit must start the delay");
     const auto timerId = timer.id();
     QCoreApplication::sendEvent(&window, &leave);
-    require(timer.id() == timerId, "repeated leave must not restart the delay");
-    QCoreApplication::sendEvent(&window, &enter);
-    require(inside() && !timer.isActive(), "brief exit must cancel without hiding controls");
+    require(timer.id() == timerId, "repeated leaves must not restart the delay");
+    QCoreApplication::sendEvent(edit, &enter);
+    require(inside() && !timer.isActive(), "entry onto a child must cancel pending hiding");
     QCoreApplication::sendEvent(&window, &leave);
-    expire();
-    require(!inside(), "stable exit must commit on timeout");
+    timer.stop();
+    require(QMetaObject::invokeMethod(&timer, "timeout"), "deliver presence timeout");
+    require(!inside() && !panel->isVisible() && !edit->isVisible() && !close->isVisible(),
+            "stable exit must hide both buttons together");
+
     QCoreApplication::sendEvent(&window, &enter);
-    QCoreApplication::sendEvent(&window, &leave);
-    QEvent hide(QEvent::Hide);
-    QCoreApplication::sendEvent(&window, &hide);
+    require(inside() && panel->isVisible(), "re-entry must reveal without pointer sampling");
+    platform->observed.setSize(QSize(382, 400));
+    window.resize(platform->observed.size());
+    require(inside() && !panel->isVisible(), "small pins must suppress the controls");
+    platform->observed.setSize(QSize(600, 400));
+    window.resize(platform->observed.size());
+    require(panel->isVisible(), "restoring size must restore controls without pointer motion");
+
+    window.hide();
     require(!inside() && !timer.isActive(), "hiding must cancel pending presence");
     QCoreApplication::sendEvent(&window, &enter);
-    QCoreApplication::sendEvent(&window, &leave);
+    require(!inside(), "hidden pins must ignore late entry");
+    window.show();
+    QCoreApplication::sendEvent(&window, &enter);
+    require(panel->isVisible(), "reshowing must accept a fresh entry");
     window.close();
-    require(!inside() && !timer.isActive(), "closing must cancel pending presence");
+    QCoreApplication::sendEvent(&window, &enter);
+    require(!inside() && !timer.isActive(), "closed pins must ignore late callbacks");
 }
 
 void pinnedControlsPresenceFollowsLiveCursor() {
 #if defined(Q_OS_WIN) || defined(_WIN32)
-    // Regression for the unstable hover reveal: USER32's leave tracking and
-    // Qt's synthesized Enter/Leave both follow the client area and are queued,
-    // while the pinned image surface is non-client. Presence must therefore be
-    // resolved from the live cursor against the complete window frame instead
-    // of the stale event semantics.
-    if (QGuiApplication::platformName() != QStringLiteral("windows")) {
-        return; // The regression needs a real HWND and the system cursor.
-    }
+    if (QGuiApplication::platformName() != QStringLiteral("windows"))
+        return;
     const auto settleInto = [](const std::function<bool()>& condition, const char* what) {
         QElapsedTimer elapsed;
         elapsed.start();
         while (elapsed.elapsed() < 2000) {
             QApplication::processEvents(QEventLoop::AllEvents, 20);
-            if (condition()) {
+            if (condition())
                 return;
-            }
             QThread::msleep(1);
         }
         require(condition(), what);
     };
     const CursorPositionRestorer cursorRestorer;
     QScreen* screen = QGuiApplication::primaryScreen();
-    require(screen != nullptr, "the pointer presence fixture needs a screen");
+    require(screen != nullptr, "the hover fixture needs a screen");
     QImage background(600, 400, QImage::Format_ARGB32_Premultiplied);
     background.fill(Qt::white);
     ScreenshotPinnedWindow window;
@@ -5144,76 +5243,61 @@ void pinnedControlsPresenceFollowsLiveCursor() {
     config.canvasSourceRect = QRectF(QPointF(), QSizeF(background.size()));
     config.imageSource = ScreenshotImageSource::fromImage(background, config.canvasSourceRect);
     config.automaticTextRecognition = false;
-    require(window.present(config), "the pointer presence fixture must present");
+    require(window.present(config), "the hover fixture must present");
     waitForUi(200);
+    auto* panel = window.findChild<QFrame*>(QStringLiteral("screenshotPinnedControlsPanel"));
+    auto* edit =
+        window.findChild<adqt::widgets::AdButton*>(QStringLiteral("screenshotPinnedEditButton"));
+    require(panel && edit, "the hover fixture needs the controls");
 
-    auto* controlsPanel =
-        window.findChild<QFrame*>(QStringLiteral("screenshotPinnedControlsPanel"));
-    require(controlsPanel != nullptr, "the pointer presence fixture needs a controls panel");
-
-    const QRect nativeGeometry = window.currentNativeGeometry();
-    const QPoint outsidePoint =
+    const QRect frame = window.currentNativeGeometry();
+    const QPoint outside =
         ScreenshotGeometryMapper::physicalRectForScreen(*screen).bottomRight() - QPoint(8, 8);
-    require(!nativeGeometry.contains(outsidePoint),
-            "the pointer presence fixture window must not cover the screen corner");
+    require(!frame.contains(outside), "the fixture must leave space outside the pin");
+    setSystemCursorPosition(outside);
+    settleInto([&] { return !panel->isVisible(); }, "outside must hide controls");
 
-    setSystemCursorPosition(outsidePoint);
-    settleInto([&] { return !controlsPanel->isVisible(); },
-               "controls must stay hidden while the cursor is outside the window");
-
-    setSystemCursorPosition(nativeGeometry.center());
-    settleInto([&] { return controlsPanel->isVisible(); },
-               "hovering inside the window must reveal the controls");
-
+    setSystemCursorPosition(frame.center());
+    settleInto([&] { return panel->isVisible(); },
+               "entering the non-client image must reveal controls");
     const HWND hwnd = toNativeHwnd(window.internalWinId());
-    require(hwnd != nullptr, "the pointer presence fixture needs a native window");
-    SendMessageW(
-        hwnd, WM_NCMOUSEMOVE, HTCAPTION,
-        MAKELPARAM(static_cast<short>(outsidePoint.x()), static_cast<short>(outsidePoint.y())));
-    require(controlsPanel->isVisible(),
-            "stale mouse-message coordinates must not hide controls while the cursor is inside");
+    const auto nonClientTracked = [hwnd] {
+        TRACKMOUSEEVENT tracking{};
+        tracking.cbSize = sizeof(tracking);
+        tracking.dwFlags = TME_QUERY;
+        tracking.hwndTrack = hwnd;
+        return TrackMouseEvent(&tracking) && tracking.hwndTrack == hwnd &&
+               (tracking.dwFlags & (TME_LEAVE | TME_NONCLIENT)) == (TME_LEAVE | TME_NONCLIENT);
+    };
+    settleInto(nonClientTracked, "non-client entry must arm leave tracking");
 
-    // A queued leave delivered while the cursor still rests inside the window
-    // (the observed instability) must not hide the controls.
-    QEvent leave(QEvent::Leave);
-    QCoreApplication::sendEvent(&window, &leave);
-    require(controlsPanel->isVisible(),
-            "a queued leave while the cursor is inside must keep the controls visible");
+    const QPoint button = ScreenshotPinnedWindowTestAccess::nativePoint(
+        window, edit->mapTo(&window, edit->rect().center()));
+    setSystemCursorPosition(button);
+    settleInto([&] { return panel->isVisible(); },
+               "crossing into a child control must preserve hover");
+    SendMessageW(hwnd, WM_NCMOUSELEAVE, 0, 0);
+    waitForUi(150);
+    require(panel->isVisible(), "a late non-client leave must not hide a hovered child");
+    setSystemCursorPosition(frame.topLeft() + QPoint(1, 1));
+    settleInto([&] { return panel->isVisible(); },
+               "crossing onto the resize frame must preserve hover");
+    SendMessageW(hwnd, WM_MOUSELEAVE, 0, 0);
+    waitForUi(150);
+    require(panel->isVisible(), "a late client leave must not hide the resize frame");
+    setSystemCursorPosition(outside);
+    settleInto([&] { return !panel->isVisible(); },
+               "leaving the non-client frame must hide controls");
 
-    // Leaving across the resize frame and the non-client image must hide them.
-    setSystemCursorPosition(outsidePoint);
-    settleInto([&] { return !controlsPanel->isVisible(); },
-               "leaving the window must hide the controls");
-
-    SendMessageW(hwnd, WM_NCMOUSEMOVE, HTCAPTION,
-                 MAKELPARAM(static_cast<short>(nativeGeometry.center().x()),
-                            static_cast<short>(nativeGeometry.center().y())));
-    require(!controlsPanel->isVisible(),
-            "stale mouse-message coordinates must not reveal controls while the cursor is outside");
-
-    // A queued enter delivered after the pointer already left must not show them.
-    QEnterEvent enter(QPointF(10, 10), QPointF(10, 10), QPointF(10, 10));
-    QCoreApplication::sendEvent(&window, &enter);
-    require(!controlsPanel->isVisible(),
-            "a queued enter while the cursor is outside must keep the controls hidden");
-
-    // Relocating geometry under a stationary pointer (thumbnail transition,
-    // keyboard move, restore animation) produces no mouse message; presence
-    // must be re-evaluated as the geometry settles.
-    setSystemCursorPosition(nativeGeometry.center());
-    settleInto([&] { return controlsPanel->isVisible(); },
-               "hovering inside the window must reveal the controls");
-    auto* thumbnail = window.findChild<QAction*>(QStringLiteral("screenshotPinnedThumbnailAction"));
-    require(thumbnail != nullptr, "the pointer presence fixture needs the thumbnail action");
-    thumbnail->setChecked(true);
-    waitForUi(300);
-    thumbnail->setChecked(false);
-    settleInto(
-        [&] {
-            return window.currentNativeGeometry() == nativeGeometry && controlsPanel->isVisible();
-        },
-        "controls must reappear once geometry settles back under the stationary cursor");
-
+    setSystemCursorPosition(frame.center());
+    settleInto([&] { return panel->isVisible(); }, "re-entry must reveal controls");
+    QWidget cover(nullptr, Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
+    cover.setGeometry(window.geometry());
+    cover.show();
+    cover.raise();
+    settleInto([&] { return !panel->isVisible(); },
+               "covering the pin must end its hover without moving the cursor");
+    cover.hide();
     window.close();
 #endif
 }
@@ -10560,6 +10644,8 @@ int main(int argc, char* argv[]) {
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--pointer-presence-only"))) {
+            pinnedControlsVisibilityPolicy();
+            pinnedPointerPresenceFollowsEvents();
             pinnedPointerPresenceIsDebounced();
             pinnedControlsPresenceFollowsLiveCursor();
             return 0;
