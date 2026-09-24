@@ -87,11 +87,11 @@
         </message>
         <message>
             <source>The clipboard content could not be pinned</source>
-            <translation>无法固定剪贴板内容到屏幕</translation>
+            <translation>无法将剪贴板内容固定到屏幕</translation>
         </message>
         <message>
             <source>The clipboard content could not be pinned: %1</source>
-            <translation>无法固定剪贴板内容到屏幕：%1</translation>
+            <translation>无法将剪贴板内容固定到屏幕：%1</translation>
         </message>
         <message>
             <source>The clipboard does not contain content that can be pinned</source>
@@ -99,11 +99,15 @@
         </message>
         <message>
             <source>The clipboard pin could not be presented</source>
-            <translation>无法显示已固定的剪贴板内容</translation>
+            <translation>无法显示已固定到屏幕的剪贴板内容</translation>
         </message>
         <message>
             <source>The clipboard pin queue is full</source>
-            <translation>剪贴板内容固定队列已满</translation>
+            <translation>将剪贴板内容固定到屏幕的队列已满</translation>
+        </message>
+        <message>
+            <source>The pinned window could not be restored</source>
+            <translation>无法恢复固定到屏幕窗口</translation>
         </message>
         <message>
             <source>The screenshot clipboard operation could not be started</source>
@@ -135,7 +139,7 @@
         </message>
         <message>
             <source>The scrolling screenshot could not be pinned</source>
-            <translation>无法固定滚动截图到屏幕</translation>
+            <translation>无法将滚动截图固定到屏幕</translation>
         </message>
         <message>
             <source>The scrolling screenshot could not be prepared</source>
@@ -155,6 +159,29 @@
         <message>
             <source>Loading screenshot history</source>
             <translation>正在加载截图历史</translation>
+        </message>
+    </context>
+    <context>
+        <name>ScreenshotRegionTypeControl</name>
+        <message>
+            <source>Ctrl+Tab to switch region type</source>
+            <translation>按 Ctrl+Tab 切换区域类型</translation>
+        </message>
+        <message>
+            <source>Curve region</source>
+            <translation>曲线区域</translation>
+        </message>
+        <message>
+            <source>Freehand region</source>
+            <translation>自由绘制区域</translation>
+        </message>
+        <message>
+            <source>Polyline region</source>
+            <translation>折线区域</translation>
+        </message>
+        <message>
+            <source>Rectangle region</source>
+            <translation>矩形区域</translation>
         </message>
     </context>
     <context>
@@ -276,6 +303,10 @@
         <message>
             <source>Corner radius</source>
             <translation>圆角半径</translation>
+        </message>
+        <message>
+            <source>Corner radius is unavailable for custom regions</source>
+            <translation>自定义区域不支持圆角半径</translation>
         </message>
         <message>
             <source>Height</source>

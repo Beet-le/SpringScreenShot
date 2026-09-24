@@ -12,6 +12,10 @@
             <translation>Add</translation>
         </message>
         <message>
+            <source>Add screenshot region</source>
+            <translation>Add screenshot region</translation>
+        </message>
+        <message>
             <source>Add template</source>
             <translation>Add template</translation>
         </message>
@@ -204,6 +208,10 @@
             <translation>Current watermark font size</translation>
         </message>
         <message>
+            <source>Curve region</source>
+            <translation>Curve region</translation>
+        </message>
+        <message>
             <source>Curved arrow</source>
             <translation>Curved arrow</translation>
         </message>
@@ -390,6 +398,10 @@
         <message>
             <source>Formatting</source>
             <translation>Formatting</translation>
+        </message>
+        <message>
+            <source>Freehand region</source>
+            <translation>Freehand region</translation>
         </message>
         <message>
             <source>Full-width</source>
@@ -636,6 +648,10 @@
             <translation>Please enter a template value</translation>
         </message>
         <message>
+            <source>Polyline region</source>
+            <translation>Polyline region</translation>
+        </message>
+        <message>
             <source>Punctuation</source>
             <translation>Punctuation</translation>
         </message>
@@ -682,6 +698,10 @@
         <message>
             <source>Rectangle highlight</source>
             <translation>Rectangle highlight</translation>
+        </message>
+        <message>
+            <source>Rectangle region</source>
+            <translation>Rectangle region</translation>
         </message>
         <message>
             <source>Red</source>
@@ -914,6 +934,10 @@
         <message>
             <source>Stroke width %1</source>
             <translation>Stroke width %1</translation>
+        </message>
+        <message>
+            <source>Subtract screenshot region</source>
+            <translation>Subtract screenshot region</translation>
         </message>
         <message>
             <source>Table recognition</source>

@@ -5,6 +5,7 @@
 #include "widgets/control_scale.h"
 #include "snow_draw_engine_qt/snow_canvas_types.h"
 #include "snow_shot/presentation/screenshotdefaultstyles.h"
+#include "snow_shot/image/screenshotregiongeometry.h"
 #include "snow_shot/presentation/screenshotgeometry.h"
 #include "snow_shot/presentation/screenshotscrollingtypes.h"
 #include "snow_shot/storage/settingsadapters.h"
@@ -311,6 +312,7 @@ class ScreenshotToolPalette final : public QWidget,
     [[nodiscard]] bool activateScreenshotShortcut(const QString& actionId);
     [[nodiscard]] bool activateRememberedDrawingTool();
     void setCaptureCursorEnabled(bool enabled);
+    void setScreenshotRegionType(ScreenshotRegionType type);
     [[nodiscard]] bool captureCursorEnabled() const;
     void setSelectionToolbarHidden(bool hidden);
     [[nodiscard]] bool selectionToolbarHidden() const;
@@ -417,6 +419,9 @@ class ScreenshotToolPalette final : public QWidget,
     void moveRequested();
     void captureCursorToggled(bool enabled);
     void recaptureRequested();
+    void screenshotRegionTypeRequested(int type);
+    void addScreenshotRegionRequested();
+    void subtractScreenshotRegionRequested();
     void selectionToolbarHiddenChanged(bool hidden);
     void selectRequested();
     void recordingExportSettingsVisibleChanged(bool visible);
@@ -781,6 +786,8 @@ class ScreenshotToolPalette final : public QWidget,
     adqt::widgets::AdButton* m_captureCursorButton = nullptr;
     adqt::widgets::AdButton* m_hideSelectionToolbarButton = nullptr;
     adqt::widgets::AdButton* m_recaptureButton = nullptr;
+    adqt::widgets::AdButton* m_addRegionButton = nullptr;
+    adqt::widgets::AdButton* m_subtractRegionButton = nullptr;
     adqt::widgets::AdButton* m_undoButton = nullptr;
     adqt::widgets::AdButton* m_redoButton = nullptr;
     adqt::widgets::AdButton* m_selectButton = nullptr;
@@ -934,6 +941,7 @@ class ScreenshotToolPalette final : public QWidget,
     bool m_recordingKeyboardVisible = false;
     bool m_recordingCursorVisible = true;
     bool m_captureCursorEnabled = false;
+    ScreenshotRegionType m_screenshotRegionType = ScreenshotRegionType::Rectangle;
     bool m_selectionToolbarHidden = false;
     bool m_recaptureBusy = false;
     bool m_ocrEnabled = true;

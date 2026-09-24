@@ -453,6 +453,7 @@ struct AdButton::Private {
   IconPosition iconPosition = IconPosition::Leading;
   detail::SegmentPosition segmentPosition = detail::SegmentPosition::Standalone;
   bool interactionBackgroundVisible = true;
+  bool checkedUsesActiveStyle = true;
 
   bool busy = false;
   int busyDelayMs = -1;
@@ -644,6 +645,17 @@ void AdButton::setSizeClass(SizeClass value) {
 }
 
 bool AdButton::interactionBackgroundVisible() const { return d_->interactionBackgroundVisible; }
+
+bool AdButton::checkedUsesActiveStyle() const { return d_->checkedUsesActiveStyle; }
+
+void AdButton::setCheckedUsesActiveStyle(bool value) {
+  if (d_->checkedUsesActiveStyle == value) {
+    return;
+  }
+  d_->checkedUsesActiveStyle = value;
+  refreshAfterPropertyChange(false);
+  emit checkedUsesActiveStyleChanged(value);
+}
 
 void AdButton::setInteractionBackgroundVisible(bool value) {
   if (d_->interactionBackgroundVisible == value) {
@@ -1393,7 +1405,7 @@ detail::ButtonStateStyle AdButton::currentStateStyle(const detail::ButtonVisualS
     state = style.disabled;
   } else if (isDown()) {
     state = style.active;
-  } else if (isChecked()) {
+  } else if (isChecked() && d_->checkedUsesActiveStyle) {
     state = style.checked;
   } else if (detail::widgetHovered(this)) {
     state = style.hover;

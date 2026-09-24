@@ -12,6 +12,10 @@
             <translation>新增</translation>
         </message>
         <message>
+            <source>Add screenshot region</source>
+            <translation>新增截圖區域</translation>
+        </message>
+        <message>
             <source>Add template</source>
             <translation>新增範本</translation>
         </message>
@@ -204,6 +208,10 @@
             <translation>目前浮水印字型大小</translation>
         </message>
         <message>
+            <source>Curve region</source>
+            <translation>曲線區域</translation>
+        </message>
+        <message>
             <source>Curved arrow</source>
             <translation>曲線箭頭</translation>
         </message>
@@ -390,6 +398,10 @@
         <message>
             <source>Formatting</source>
             <translation>格式</translation>
+        </message>
+        <message>
+            <source>Freehand region</source>
+            <translation>自由繪製區域</translation>
         </message>
         <message>
             <source>Full-width</source>
@@ -621,7 +633,7 @@
         </message>
         <message>
             <source>Pin to screen</source>
-            <translation>釘選到螢幕</translation>
+            <translation>固定到螢幕</translation>
         </message>
         <message>
             <source>Plain shaft</source>
@@ -634,6 +646,10 @@
         <message>
             <source>Please enter a template value</source>
             <translation>請輸入範本值</translation>
+        </message>
+        <message>
+            <source>Polyline region</source>
+            <translation>折線區域</translation>
         </message>
         <message>
             <source>Punctuation</source>
@@ -682,6 +698,10 @@
         <message>
             <source>Rectangle highlight</source>
             <translation>矩形醒目提示</translation>
+        </message>
+        <message>
+            <source>Rectangle region</source>
+            <translation>矩形區域</translation>
         </message>
         <message>
             <source>Red</source>
@@ -914,6 +934,10 @@
         <message>
             <source>Stroke width %1</source>
             <translation>筆畫寬度 %1</translation>
+        </message>
+        <message>
+            <source>Subtract screenshot region</source>
+            <translation>減去截圖區域</translation>
         </message>
         <message>
             <source>Table recognition</source>

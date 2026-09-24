@@ -608,6 +608,13 @@ void traySettingsAndFunctionNavigation() {
                 sidebar->currentRoute() == QStringLiteral("/settings/functionSettings"),
             "function settings action must show a hidden window and navigate from another page");
     window.hide();
+    window.showPinToScreenManagement();
+    flushEvents();
+    require(window.isVisible() &&
+                card->currentLocation().pageId == QStringLiteral("pin-to-screen-management") &&
+                sidebar->currentRoute() == QStringLiteral("/pin-to-screen-management"),
+            "pinned management hotkey route must show its page from a hidden window");
+    window.hide();
 }
 
 void mainNavigationSearchThemesAndLanguages() {

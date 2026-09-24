@@ -96,6 +96,7 @@ enum class SettingsSelectBinding {
     ScreenshotImageFormat,
     ScreenshotCompressionLevel,
     HistoryCompressionLevel,
+    PinnedHistoryCompressionLevel,
     ScreenshotPdfPageSize,
     ScreenshotSaveAsFileDialog,
     TrayLeftClickAction,
@@ -112,12 +113,15 @@ struct SettingsSelectDefinition {
 
 enum class SettingsSwitchBinding {
     HistoryEnabled,
+    PinnedHistoryEnabled,
     HistoryKeepPermanently,
+    PinnedHistoryKeepPermanently,
     SmartSelection,
     DirectMlAcceleration,
     OcrResidentProcess,
     OcrModelHotStart,
     SelectionTransitionAnimation,
+    ScreenshotAreaTypeHint,
     TrayEnabled,
     ScreenshotAutoSaveAfterCopy,
     ScreenshotCaptureCursor,
@@ -147,8 +151,11 @@ struct SettingsSwitchDefinition {
 
 enum class SettingsIntegerBinding {
     HistoryRetentionDays,
+    PinnedHistoryRetentionDays,
     HistoryMaxEntries,
+    PinnedHistoryMaxEntries,
     HistoryMaxDiskMiB,
+    PinnedHistoryMaxDiskMiB,
     ScreenshotDelaySeconds,
 };
 
@@ -256,6 +263,7 @@ struct SettingsShortcutActionDefinition {
     TranslatableText trayLabel;
     // Marks the tray menu entry as checkable so it can mirror runtime state.
     bool trayCheckable = false;
+    bool showInTrayMenu = true;
 };
 
 enum class SettingsLocalShortcutScope {
@@ -275,6 +283,7 @@ enum class SettingsActionBinding {
     OpenLoginItemSettings,
     RestartAsAdministrator,
     ClearCaptureHistory,
+    ClearPinnedHistory,
     ClearThumbnailCache,
     ClearRecordingTemp,
     CopyTodayLog,
@@ -390,6 +399,7 @@ enum class SettingsSectionReset {
     GlobalPinToScreenShortcuts,
     GeneralSettings,
     HistoryPolicy,
+    PinnedHistoryPolicy,
     ScreenshotSettings,
     ScreenshotOutput,
     ScreenshotInterfaceSettings,
@@ -439,6 +449,7 @@ struct SettingsSectionDefinition {
 enum class SettingsPageKind {
     GeneratedSettings,
     ScreenshotHistory,
+    PinnedWindowManagement,
     About,
     Translation,
 };

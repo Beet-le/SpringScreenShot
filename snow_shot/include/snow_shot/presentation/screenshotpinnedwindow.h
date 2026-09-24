@@ -34,6 +34,7 @@
 namespace adqt::widgets {
 class AdButton;
 class AdContextMenu;
+class AdModal;
 class AdSlider;
 } // namespace adqt::widgets
 namespace snow_shot::presentation {
@@ -106,6 +107,9 @@ class ScreenshotPinnedWindow final : public QWidget {
         QRectF surfaceCanvasRect;
         ScreenshotResultStyle resultStyle;
         std::optional<snow_shot::storage::PinnedBorderAppearance> borderAppearance;
+        // Known from a selection's shape or rendered text. Imported images
+        // with unknown opacity use their alpha capability conservatively.
+        std::optional<bool> checkerboardEnabled;
         QSize initialWindowSize;
         QString mouseWheelZoomMode = QStringLiteral("mouse_position");
         ScreenshotImageSource imageSource;
@@ -148,6 +152,9 @@ class ScreenshotPinnedWindow final : public QWidget {
         std::function<void(const snow_shot::storage::PinnedWindowRecord&)>
             replacementPersistenceWriter;
         std::function<void(const QString&)> persistenceRemover;
+        std::function<void(const snow_shot::storage::PinnedWindowRecord&)> persistenceCloser;
+        snow_shot::storage::PinnedWindowCreationSource creationSource =
+            snow_shot::storage::PinnedWindowCreationSource::Other;
         snow_shot::presentation::PinnedWindowGroupManager* groupManager = nullptr;
         QString groupId = QStringLiteral("default");
     };
@@ -169,6 +176,8 @@ class ScreenshotPinnedWindow final : public QWidget {
   public slots:
     void setGroupId(const QString& id);
     void closeForInactiveGroup();
+    void requestDestroy();
+    void showFromManagement();
     void cancelDeferredInactiveGroupClose();
 
   public:
@@ -179,7 +188,7 @@ class ScreenshotPinnedWindow final : public QWidget {
   signals:
     void showMainWindowRequested();
     void closingForPersistence(const snow_shot::storage::PinnedWindowRecord& snapshot,
-                               bool removalRequested);
+                               snow_shot::storage::PinnedWindowCloseIntent intent);
 
   private:
     friend class ScreenshotPinnedEditController;
@@ -221,7 +230,9 @@ class ScreenshotPinnedWindow final : public QWidget {
     void registerWindowShortcuts();
     void reloadPinnedWindowShortcuts();
     void createContextMenu();
+    void confirmDestroy();
     void rebuildGroupMenu();
+    void refreshContextMenuIfVisible();
     void refreshContextMenuForGroup(const QString& groupId);
     void deleteIfInGroup(const QString& groupId);
     void applyRuntimeBorderColor();
@@ -231,6 +242,7 @@ class ScreenshotPinnedWindow final : public QWidget {
     void showContextMenu(const QPoint& globalPosition);
     void updateCanvasViewport();
     void updateBorderOutline();
+    [[nodiscard]] QPainterPath bakedSelectionPath(const QSize& pixelSize) const;
     void updateControlsGeometry();
     void refreshControlsPointerPresence();
     void setControlsPointerInside(bool inside);
@@ -431,6 +443,7 @@ class ScreenshotPinnedWindow final : public QWidget {
     std::unique_ptr<QWidget> m_clickThroughOpacityEditor;
     adqt::widgets::AdSlider* m_clickThroughOpacitySlider = nullptr;
     adqt::widgets::AdContextMenu* m_contextMenu = nullptr;
+    QPointer<adqt::widgets::AdModal> m_destroyConfirmation;
     adqt::widgets::AdContextMenu* m_groupMenu = nullptr;
     adqt::widgets::AdContextMenu* m_deleteSpecifiedGroupMenu = nullptr;
     QAction* m_ocrAction = nullptr;
@@ -458,6 +471,7 @@ class ScreenshotPinnedWindow final : public QWidget {
     ScreenshotImageSource m_imageSource;
     QImage m_originalImage;
     QImage m_transformedImage;
+    std::optional<bool> m_checkerboardEnabled;
     QTransform m_imageTransform;
     std::shared_ptr<ScreenshotOcrPresentation> m_originalOcrPresentation;
     std::shared_ptr<ScreenshotOcrPresentation> m_displayOcrPresentation;
@@ -483,6 +497,12 @@ class ScreenshotPinnedWindow final : public QWidget {
     std::function<void(const snow_shot::storage::PinnedWindowRecord&)>
         m_replacementPersistenceWriter;
     std::function<void(const QString&)> m_persistenceRemover;
+    std::function<void(const snow_shot::storage::PinnedWindowRecord&)> m_persistenceCloser;
+    snow_shot::storage::PinnedWindowCreationSource m_creationSource =
+        snow_shot::storage::PinnedWindowCreationSource::Other;
+    QDateTime m_createdUtc;
+    snow_shot::storage::PinnedWindowCloseIntent m_closeIntent =
+        snow_shot::storage::PinnedWindowCloseIntent::Preserve;
     QPointer<snow_shot::presentation::PinnedWindowGroupManager> m_groupManager;
     std::unique_ptr<ScreenshotRecognitionSessionController> m_recognitionSession;
     double m_viewportZoom = 1.0;

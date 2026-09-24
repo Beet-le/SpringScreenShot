@@ -97,8 +97,9 @@ const QStringList& pinToScreenShortcutActionIds() {
         QStringLiteral("drawing_mode"),         QStringLiteral("resize_window"),
         QStringLiteral("thumbnail_mode"),       QStringLiteral("hide_to_top"),
         QStringLiteral("toggle_click_through"), QStringLiteral("close_window"),
-        QStringLiteral("move_cursor_up"),       QStringLiteral("move_cursor_down"),
-        QStringLiteral("move_cursor_left"),     QStringLiteral("move_cursor_right"),
+        QStringLiteral("destroy_window"),       QStringLiteral("move_cursor_up"),
+        QStringLiteral("move_cursor_down"),     QStringLiteral("move_cursor_left"),
+        QStringLiteral("move_cursor_right"),
     };
     return ids;
 }
@@ -395,6 +396,16 @@ bool ShortcutSettings::setOpenCaptureHistory(const shortcuts::ShortcutBindingLis
     return setShortcutValue(QStringLiteral("global_shortcuts/open_capture_history"), bindings);
 }
 
+shortcuts::ShortcutBindingList ShortcutSettings::openPinToScreenManagement() const {
+    return shortcutValue(QStringLiteral("global_shortcuts/open_pin_to_screen_management"));
+}
+
+bool ShortcutSettings::setOpenPinToScreenManagement(
+    const shortcuts::ShortcutBindingList& bindings) const {
+    return setShortcutValue(QStringLiteral("global_shortcuts/open_pin_to_screen_management"),
+                            bindings);
+}
+
 shortcuts::ShortcutBindingList ShortcutSettings::openSettings() const {
     return shortcutValue(QStringLiteral("global_shortcuts/open_settings"));
 }
@@ -471,6 +482,15 @@ shortcuts::ShortcutBindingList ShortcutSettings::pinSelectedFiles() const {
 
 bool ShortcutSettings::setPinSelectedFiles(const shortcuts::ShortcutBindingList& bindings) const {
     return setShortcutValue(QStringLiteral("global_shortcuts/pin_selected_files"), bindings);
+}
+shortcuts::ShortcutBindingList ShortcutSettings::restoreLastClosedWindows() const {
+    return shortcutValue(QStringLiteral("global_shortcuts/restore_last_closed_windows"));
+}
+
+bool ShortcutSettings::setRestoreLastClosedWindows(
+    const shortcuts::ShortcutBindingList& bindings) const {
+    return setShortcutValue(QStringLiteral("global_shortcuts/restore_last_closed_windows"),
+                            bindings);
 }
 
 bool ShortcutSettings::setPinClipboardContent(
@@ -1186,6 +1206,14 @@ int ScreenshotUiSettings::shortcutHintOpacity() const {
 
 bool ScreenshotUiSettings::setShortcutHintOpacity(int opacity) const {
     return cache().setValue(QStringLiteral("screenshot_ui/shortcut_hint_opacity"), opacity);
+}
+
+bool ScreenshotUiSettings::screenshotAreaTypeHintEnabled() const {
+    return cache().value(QStringLiteral("screenshot_ui/area_type_hint_enabled")).toBool();
+}
+
+bool ScreenshotUiSettings::setScreenshotAreaTypeHintEnabled(bool enabled) const {
+    return cache().setValue(QStringLiteral("screenshot_ui/area_type_hint_enabled"), enabled);
 }
 
 QColor ScreenshotUiSettings::cursorGuideLineColor() const {

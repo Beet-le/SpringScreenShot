@@ -20,7 +20,8 @@ snow_shot::storage::ConfigurationStore& configuration() {
 
 storage::PersistedSelection persistedSelection(const ScreenshotSelectionParams& params) {
     return {params.selection,   params.radius,          params.shadowWidth,
-            params.shadowColor, params.lockAspectRatio, params.lockDragAspectRatio};
+            params.shadowColor, params.lockAspectRatio, params.lockDragAspectRatio,
+            params.region};
 }
 
 std::optional<ScreenshotSelectionParams> selectionFromJson(const QJsonValue& value) {
@@ -31,7 +32,8 @@ std::optional<ScreenshotSelectionParams> selectionFromJson(const QJsonValue& val
     const storage::PersistedSelection& selection = normalized.value;
     return ScreenshotSelectionParams{selection.rectangle,       selection.cornerRadius,
                                      selection.shadowWidth,     selection.shadowColor,
-                                     selection.lockAspectRatio, selection.lockDragAspectRatio};
+                                     selection.lockAspectRatio, selection.lockDragAspectRatio,
+                                     selection.region};
 }
 } // namespace
 
@@ -115,7 +117,9 @@ void ScreenshotSelectionSettingsStore::setPresets(
     const QVector<ScreenshotSelectionPreset>& presets) {
     QJsonArray array;
     for (const ScreenshotSelectionPreset& preset : presets) {
-        QJsonObject object = storage::persistedSelectionToJson(persistedSelection(preset.params));
+        auto rectangleParams = preset.params;
+        rectangleParams.region.reset();
+        QJsonObject object = storage::persistedSelectionToJson(persistedSelection(rectangleParams));
         object.insert(QStringLiteral("name"), preset.name);
         array.push_back(object);
     }
@@ -131,4 +135,13 @@ void ScreenshotSelectionSettingsStore::clear() {
         {QStringLiteral("screenshot_selection/shadow_width"), 0},
         {QStringLiteral("screenshot_selection/lock_aspect_ratio"), false},
     }));
+}
+
+ScreenshotRegionType ScreenshotSelectionSettingsStore::regionType() const {
+    return screenshotRegionTypeFromId(
+        configuration().value(QStringLiteral("screenshot_selection/region_type")).toString());
+}
+void ScreenshotSelectionSettingsStore::setRegionType(ScreenshotRegionType type) {
+    static_cast<void>(configuration().setValue(QStringLiteral("screenshot_selection/region_type"),
+                                               screenshotRegionTypeId(type)));
 }

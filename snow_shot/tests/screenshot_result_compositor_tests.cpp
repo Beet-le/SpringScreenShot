@@ -1,7 +1,7 @@
 #include "snow_shot/presentation/screenshotresultcompositor.h"
 #include "snow_shot/presentation/screenshotselectionshadowrenderer.h"
 
-#include <QCoreApplication>
+#include <QApplication>
 #include <QImage>
 #include <QPainter>
 #include <QTransform>
@@ -59,7 +59,7 @@ void previewAssetsAreReleasedAfterCapture() {
         solidContent(), ScreenshotResultStyle{16, 12, QColor(20, 30, 40, 220)});
     require(!exported.isNull(), "the shadowed export must render");
     const auto afterExport = ScreenshotSelectionShadowRenderer::diagnosticsForCurrentThread();
-    require(afterExport.retainedEntries == 0 && afterExport.checkerboardRetainedBytes == 0,
+    require(afterExport.retainedEntries == 0 && afterExport.regionCacheRetainedBytes == 0,
             "one-off export composition must not retain preview assets");
 
     QImage preview(QSize(104, 72), QImage::Format_ARGB32_Premultiplied);
@@ -70,14 +70,14 @@ void previewAssetsAreReleasedAfterCapture() {
                                                          QColor(20, 30, 40, 220), 1.0);
     }
     const auto retained = ScreenshotSelectionShadowRenderer::diagnosticsForCurrentThread();
-    require(retained.retainedEntries == 1 && retained.checkerboardRetainedBytes > 0,
-            "an active preview must retain its shadow asset and checkerboard tile");
+    require(retained.retainedEntries == 1 && retained.retainedBytes > 0,
+            "an active preview must retain its shadow asset");
 
     ScreenshotSelectionShadowRenderer::resetCacheForCurrentThread();
     const auto released = ScreenshotSelectionShadowRenderer::diagnosticsForCurrentThread();
     require(released.retainedEntries == 0 && released.retainedBytes == 0 &&
-                released.checkerboardRetainedBytes == 0,
-            "capture cleanup must release both preview caches");
+                released.regionCacheRetainedBytes == 0,
+            "capture cleanup must release selection preview caches");
 
     {
         QPainter painter(&preview);
@@ -85,8 +85,8 @@ void previewAssetsAreReleasedAfterCapture() {
                                                          QColor(20, 30, 40, 220), 1.0);
     }
     const auto rebuilt = ScreenshotSelectionShadowRenderer::diagnosticsForCurrentThread();
-    require(rebuilt.retainedEntries == 1 && rebuilt.checkerboardRetainedBytes > 0,
-            "the next capture must be able to rebuild both preview assets");
+    require(rebuilt.retainedEntries == 1 && rebuilt.retainedBytes > 0,
+            "the next capture must be able to rebuild the shadow preview asset");
     ScreenshotSelectionShadowRenderer::resetCacheForCurrentThread();
 }
 
@@ -227,7 +227,7 @@ void liveSurfacePreservesTranslatedFractionalContent() {
 } // namespace
 
 int main(int argc, char** argv) {
-    QCoreApplication application(argc, argv);
+    QApplication application(argc, argv);
     try {
         squareResultPreservesPhysicalPixels();
         roundedAndShadowedResultHasRealTransparency();

@@ -5,8 +5,10 @@
 #include "snow_shot/presentation/screenshotoverlayeventsink.h"
 #include "snow_shot/presentation/screenshotselectiongeometry.h"
 
+#include "snow_shot/image/screenshotregiongeometry.h"
 #include <QPoint>
 #include <QPointF>
+#include <QTimer>
 #include <Qt>
 
 #include <functional>
@@ -151,6 +153,11 @@ class ScreenshotOverlayInputHandler final {
     [[nodiscard]] ScreenshotOverlayRightClickResult
     handleRightClick(ScreenshotOverlayWindow* overlay, const QPointF& localPosition);
     void handleUnhandledLeftDoubleClick();
+    bool handleRegionDoubleClick(ScreenshotOverlayWindow* overlay, const QPointF& position);
+    void setRegionType(ScreenshotRegionType type);
+    bool cycleRegionType(bool reverse);
+    bool removeRegionVertex();
+    bool customRegionInputActive() const;
     void handleUnhandledMiddleClick();
     [[nodiscard]] bool handleWheel(ScreenshotOverlayWindow* overlay, const QPointF& localPosition,
                                    const QPoint& angleDelta, const QPoint& pixelDelta);
@@ -188,6 +195,9 @@ class ScreenshotOverlayInputHandler final {
     // This is also used by non-interactive quick actions that select a whole
     // monitor or a focused window after the capture frame arrives.
     void confirmSelection();
+    void beginRegionOperation(bool subtract);
+    bool cancelRegionOperation();
+    [[nodiscard]] bool regionOperationActive() const;
 
   private:
     [[nodiscard]] QPointF virtualPositionForOverlay(const ScreenshotOverlayWindow* overlay,
@@ -198,12 +208,22 @@ class ScreenshotOverlayInputHandler final {
     [[nodiscard]] ScreenshotSelectionDragMode
     dragModeForPosition(const ScreenshotOverlayWindow* overlay, const QPointF& localPosition,
                         bool borderOnly) const;
+    [[nodiscard]] bool outsideClickRecreatesSelection() const;
     [[nodiscard]] QRectF selectionRectForDrag(ScreenshotSelectionDragMode dragMode,
                                               const QPointF& position) const;
     void restoreToolAfterSelectionResize();
     void restoreScrollingCaptureAfterFailedResize();
     void finishTransientDrag();
 
+    void updateRegionDraft(const QPointF& pointer, bool includePointer);
+    bool finishRegionDraft();
+    QVector<QPointF> m_regionPoints;
+    qsizetype m_freehandRawStart = 0;
+    QTimer m_regionPreviewTimer;
+    QPointF m_pendingRegionPointer;
+    bool m_pendingRegionEdge = false;
+    bool m_freehandPressed = false;
+    bool m_consumeRegionRelease = false;
     ScreenshotOverlayInputHandlerContext m_context;
     bool m_externalDragActive = false;
     std::optional<ScreenshotActiveTool> m_toolBeforeSelectionResize;

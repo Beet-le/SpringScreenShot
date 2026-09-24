@@ -44,19 +44,25 @@ bool hasSamePixels(const QImage& actual, const QImage& expected) {
 
 class ExportFixture final {
   public:
-    explicit ExportFixture(bool points = false)
+    explicit ExportFixture(bool points = false, QSize pixels = QSize(80, 60), qreal dpr = 0.0)
         : m_runtime(
               SnowCanvasRuntimeConfig{snow_shot::presentation::screenshotCanvasStyleDefaults()}) {
         CapturedDisplayModel display;
         display.stableId = QStringLiteral("display-history-source");
         display.name = QStringLiteral("Display history source");
-        display.physicalRect = QRect(0, 0, 80, 60);
+        display.physicalRect = QRect(QPoint(), pixels);
         display.canvasRect = display.physicalRect;
         display.imageSourceCanvasRect = display.canvasRect;
         display.logicalRect = display.physicalRect;
         display.image = patternedImage(display.physicalRect.size(), 3);
         display.screen = QGuiApplication::primaryScreen();
         display.active = true;
+        if (dpr > 0.0) {
+            display.logicalRect.setSize(
+                QSize(qRound(pixels.width() / dpr), qRound(pixels.height() / dpr)));
+            display.logicalToPhysicalScale = dpr;
+            display.geometryResolved = true;
+        }
         if (points) {
             display.canvasUsesPoints = true;
             display.capturedLogicalRect = QRect(0, 0, 40, 30);
@@ -217,6 +223,33 @@ void selectionClipboardPreservesEffects() {
                 require(hasSamePixels(image, fixture.displaySnapshot().copy(selection)),
                         "plain clipboard export changed capture pixels");
             }
+        }
+    }
+}
+
+void fractionalDpiExportsPreserveCapturePixels() {
+    for (const auto& [pixels, dpr] :
+         {std::pair{QSize(2560, 1440), 1.5}, std::pair{QSize(2560, 1600), 1.5},
+          std::pair{QSize(3840, 2160), 2.25}}) {
+        ExportFixture fixture(false, pixels, dpr);
+        require(fixture.isValid(), "fractional-DPI export fixture could not initialize");
+        // Check the complete capture and a crop touching the last physical row/column.
+        for (const QRect selection : {QRect(QPoint(), pixels),
+                                      QRect(pixels.width() - 101, pixels.height() - 79, 101, 79)}) {
+            const QImage expected = fixture.displaySnapshot().copy(selection);
+            const QImage result = waitForResult(
+                [&](QObject* receiver, auto callback) {
+                    return fixture.service().requestSelectionClipboard(selection, {}, receiver,
+                                                                       std::move(callback));
+                },
+                [&](ScreenshotSelectionClipboardResult value) {
+                    require(value.isValid(), "fractional-DPI clipboard export failed");
+                    require(hasSamePixels(QImage::fromData(value.payload.pngBytes()), expected),
+                            "fractional-DPI PNG must preserve every captured pixel and dimension");
+                    return std::move(value.image);
+                });
+            require(hasSamePixels(result, expected),
+                    "fractional-DPI export must not stretch or crop the captured image");
         }
     }
 }
@@ -419,8 +452,84 @@ void pointSelectionRetainsBackingPixelsAndScalesEffects() {
 }
 } // namespace
 
+void compoundExportsSnapshotTheirGeometry() {
+    for (bool points : {false, true}) {
+        ExportFixture fixture(points);
+        require(fixture.isValid(), "compound export fixture");
+        const QRect selection(0, 0, 40, 30);
+        ScreenshotResultStyle style;
+        const QRegion shape = QRegion(selection).subtracted(QRect(10, 10, 10, 10));
+        style.region = shape;
+        const auto result = waitForResult(
+            [&](QObject* receiver, auto callback) {
+                const bool scheduled = fixture.service().requestSelectionResult(
+                    selection, style, receiver, std::move(callback));
+                style.region = QRegion(selection);
+                return scheduled;
+            },
+            [](QImage image) { return image; });
+        const int scale = points ? 2 : 1;
+        require(result.size() == selection.size() * scale &&
+                    result.pixelColor(15 * scale, 15 * scale).alpha() == 0 &&
+                    result.pixelColor(5 * scale, 5 * scale).alpha() == 255,
+                "asynchronous export must retain its shape snapshot at backing scale");
+        style.region = shape;
+        const auto clipboard = waitForResult(
+            [&](QObject* receiver, auto callback) {
+                return fixture.service().requestSelectionClipboard(selection, style, receiver,
+                                                                   std::move(callback));
+            },
+            [](ScreenshotSelectionClipboardResult value) { return value.image; });
+        require(hasSamePixels(clipboard, result), "clipboard must use the same compound mask");
+        const auto request = fixture.service().preparePinnedSelection(selection, style);
+        require(request && request->resultStyle.region == style.region,
+                "pin request carries region snapshot");
+        require(hasSamePixels(waitForPinnedResult(fixture.service(), *request), result),
+                "pin output must use the same compound mask");
+    }
+}
+
+void exportWorkerReleasesSharedDerivedContours() {
+    ExportFixture fixture;
+    QPainterPath ellipse;
+    ellipse.addEllipse(QRectF(0, 0, 40, 30));
+    ScreenshotResultStyle style;
+    style.region = ScreenshotRegionGeometry::fromPath(ellipse, ScreenshotRegionType::Curve)
+                       .subtracted(QRect(10, 10, 10, 10));
+    style.shadowWidth = 3;
+    style.region->clearDerivedCache();
+    const auto coldBytes = style.region->retainedBytesEstimate();
+    for (const bool clipboard : {false, true}) {
+        require(!style.region->path(1.5).isEmpty(), "warm export contour");
+        require(style.region->retainedBytesEstimate() > coldBytes, "warm contour has storage");
+        const auto result =
+            clipboard ? waitForResult(
+                            [&](QObject* receiver, auto callback) {
+                                return fixture.service().requestSelectionClipboard(
+                                    QRect(0, 0, 40, 30), style, receiver, std::move(callback));
+                            },
+                            [](ScreenshotSelectionClipboardResult value) { return value.image; })
+                      : waitForResult(
+                            [&](QObject* receiver, auto callback) {
+                                return fixture.service().requestSelectionResult(
+                                    QRect(0, 0, 40, 30), style, receiver, std::move(callback));
+                            },
+                            [](QImage value) { return value; });
+        require(!result.isNull(), "export survives cache cleanup");
+        require(style.region->retainedBytesEstimate() == coldBytes,
+                "worker releases shared derived contours before publishing its result");
+    }
+}
+
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
+    if (app.arguments().contains(QStringLiteral("--fractional-dpi"))) {
+        fractionalDpiExportsPreserveCapturePixels();
+        return EXIT_SUCCESS;
+    }
+    fractionalDpiExportsPreserveCapturePixels();
+    exportWorkerReleasesSharedDerivedContours();
+    compoundExportsSnapshotTheirGeometry();
     pointSelectionRetainsBackingPixelsAndScalesEffects();
     styledClipboardResultRetainsPngTransparency();
     selectionClipboardPreservesEffects();

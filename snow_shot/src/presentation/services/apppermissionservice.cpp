@@ -59,8 +59,10 @@ AppPermissions requiredPermissions(GlobalShortcutAction action, bool /*microphon
         return {P::Accessibility};
     case Action::OpenScreenRecordingFolder:
     case Action::OpenCaptureHistory:
+    case Action::OpenPinToScreenManagement:
     case Action::OpenSettings:
     case Action::PinClipboardContent:
+    case Action::RestoreLastClosedWindows:
     case Action::PinSelectedFiles:
     case Action::ToggleGlobalHotkeys:
     case Action::ToggleDisableOnFocusedFullscreenWindow:

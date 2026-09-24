@@ -83,6 +83,7 @@ ArrowheadTriangleStart(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef Blur(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ColorPicker(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef Delete(const adqt::icons::IconColors& colors = {});
+[[nodiscard]] adqt::icons::IconRef DestroyPinnedWindow(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef Disabled(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef DistributeHorizontal(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef DistributeVertical(const adqt::icons::IconColors& colors = {});
@@ -115,6 +116,8 @@ MoveSelectionVertical(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef Opacity(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef PinClipboard(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef PinToScreen(const adqt::icons::IconColors& colors = {});
+[[nodiscard]] adqt::icons::IconRef
+PinToScreenManagement(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef QuickSave(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef RecordScreen(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef RecorderDelay(const adqt::icons::IconColors& colors = {});
@@ -136,6 +139,17 @@ MoveSelectionVertical(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef
 ScreenshotFocusedWindow(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ScreenshotFullScreen(const adqt::icons::IconColors& colors = {});
+[[nodiscard]] adqt::icons::IconRef ScreenshotRegionAdd(const adqt::icons::IconColors& colors = {});
+[[nodiscard]] adqt::icons::IconRef
+ScreenshotRegionCurved(const adqt::icons::IconColors& colors = {});
+[[nodiscard]] adqt::icons::IconRef
+ScreenshotRegionFreehand(const adqt::icons::IconColors& colors = {});
+[[nodiscard]] adqt::icons::IconRef
+ScreenshotRegionPolyline(const adqt::icons::IconColors& colors = {});
+[[nodiscard]] adqt::icons::IconRef
+ScreenshotRegionRectangle(const adqt::icons::IconColors& colors = {});
+[[nodiscard]] adqt::icons::IconRef
+ScreenshotRegionReduce(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ScrollingHorizontal(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ScrollingScreenshot(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ScrollingVertical(const adqt::icons::IconColors& colors = {});

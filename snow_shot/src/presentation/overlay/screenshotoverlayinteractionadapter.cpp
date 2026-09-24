@@ -96,3 +96,8 @@ void ScreenshotOverlayEventAdapter::raiseToolbarForCanvasInteraction() {
         m_raiseToolbarForCanvasInteraction();
     }
 }
+
+bool ScreenshotOverlayEventAdapter::handleRegionDoubleClick(ScreenshotOverlayWindow* overlay,
+                                                            const QPointF& position) {
+    return m_inputHandler && m_inputHandler->handleRegionDoubleClick(overlay, position);
+}

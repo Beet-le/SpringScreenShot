@@ -3,6 +3,7 @@
 
 #include "snow_shot/presentation/screenshotselectiongeometry.h"
 #include "snow_shot/presentation/screenshotselectionparams.h"
+#include "snow_shot/presentation/screenshotresultcompositor.h"
 
 #include <QColor>
 #include <QPointF>
@@ -12,7 +13,44 @@
 
 class ScreenshotSelectionModel final {
   public:
+    enum class RegionOperation { Replace, Add, Subtract };
     void reset();
+    ScreenshotRegionType regionType() const {
+        return m_regionType;
+    }
+    void setRegionType(ScreenshotRegionType type) {
+        m_regionType = type;
+    }
+    bool constructionActive() const {
+        return m_draftRegion.has_value();
+    }
+    bool cornerRadiusApplicable() const {
+        return !selectionRegion().custom();
+    }
+    void setDraftRegion(const ScreenshotRegionGeometry& region,
+                        const QVector<QPointF>& vertices = {});
+    QPainterPath draftPath() const {
+        return m_draftRegion ? m_draftRegion->path() : QPainterPath();
+    }
+    const QVector<QPointF>& draftVertices() const {
+        return m_draftVertices;
+    }
+    void clearDraftRegion();
+    void commitDraftRegion(const QRect& canvasBounds = {});
+    [[nodiscard]] ScreenshotRegionGeometry selectionRegion() const;
+    // Compose a displayed smart-selection frame without changing the capture operand.
+    [[nodiscard]] ScreenshotRegionGeometry selectionRegionForMarquee(const QRectF& marquee) const;
+    [[nodiscard]] ScreenshotRegionGeometry confirmedRegion() const;
+    [[nodiscard]] bool rectangular() const;
+    [[nodiscard]] bool regionOperationActive() const;
+    [[nodiscard]] RegionOperation regionOperation() const;
+    [[nodiscard]] QRectF pendingMarquee() const;
+    void beginRegionOperation(RegionOperation operation);
+    void commitRegionOperation();
+    void cancelRegionOperation();
+    void setSelectionRegion(const ScreenshotRegionGeometry& region);
+    void setDraggedSelectionRect(const QRectF& rect, ScreenshotSelectionDragMode mode);
+    [[nodiscard]] ScreenshotResultStyle resultStyle() const;
 
     [[nodiscard]] QRectF normalizedSelection() const;
     [[nodiscard]] QRect pixelSelection() const;
@@ -61,6 +99,14 @@ class ScreenshotSelectionModel final {
     [[nodiscard]] bool applyParams(const ScreenshotSelectionParams& params, const QRect& bounds);
 
   private:
+    QVector<QPointF> m_draftVertices;
+    mutable std::optional<ScreenshotRegionGeometry> m_cachedSelectionRegion;
+    ScreenshotRegionType m_regionType = ScreenshotRegionType::Rectangle;
+    std::optional<ScreenshotRegionGeometry> m_draftRegion;
+    std::optional<ScreenshotRegionGeometry> m_region;
+    ScreenshotRegionGeometry m_confirmedRegion;
+    ScreenshotRegionGeometry m_moveOriginalRegion;
+    RegionOperation m_regionOperation = RegionOperation::Replace;
     QPointF m_start;
     QPointF m_end;
     QPointF m_moveStart;

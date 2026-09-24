@@ -106,6 +106,10 @@
             <translation>The clipboard pin queue is full</translation>
         </message>
         <message>
+            <source>The pinned window could not be restored</source>
+            <translation>The pinned window could not be restored</translation>
+        </message>
+        <message>
             <source>The screenshot clipboard operation could not be started</source>
             <translation>The screenshot clipboard operation could not be started</translation>
         </message>
@@ -155,6 +159,29 @@
         <message>
             <source>Loading screenshot history</source>
             <translation>Loading screenshot history</translation>
+        </message>
+    </context>
+    <context>
+        <name>ScreenshotRegionTypeControl</name>
+        <message>
+            <source>Ctrl+Tab to switch region type</source>
+            <translation>Ctrl+Tab to switch region type</translation>
+        </message>
+        <message>
+            <source>Curve region</source>
+            <translation>Curve region</translation>
+        </message>
+        <message>
+            <source>Freehand region</source>
+            <translation>Freehand region</translation>
+        </message>
+        <message>
+            <source>Polyline region</source>
+            <translation>Polyline region</translation>
+        </message>
+        <message>
+            <source>Rectangle region</source>
+            <translation>Rectangle region</translation>
         </message>
     </context>
     <context>
@@ -276,6 +303,10 @@
         <message>
             <source>Corner radius</source>
             <translation>Corner radius</translation>
+        </message>
+        <message>
+            <source>Corner radius is unavailable for custom regions</source>
+            <translation>Corner radius is unavailable for custom regions</translation>
         </message>
         <message>
             <source>Height</source>

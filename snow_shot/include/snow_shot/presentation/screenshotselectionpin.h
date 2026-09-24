@@ -12,7 +12,16 @@ screenshotSelectionBorderAppearance(const QSize& contentSize, const ScreenshotRe
     const auto normalized = ScreenshotResultCompositor::normalizedStyle(style);
     const auto layout = ScreenshotResultCompositor::layoutForContent(contentSize, normalized);
     return {layout.outputRect.size(), QRectF(layout.contentRect),
-            static_cast<qreal>(normalized.cornerRadius), normalized.shadowWidth > 0};
+            static_cast<qreal>(normalized.cornerRadius), normalized.shadowWidth > 0,
+            normalized.region};
+}
+
+[[nodiscard]] inline bool screenshotSelectionNeedsCheckerboard(
+    const std::optional<snow_shot::storage::PinnedBorderAppearance>& appearance) {
+    return appearance && appearance->region &&
+           (appearance->region->custom() || appearance->region->rectCount() != 1 ||
+            appearance->region->boundingRect() !=
+                QRect(QPoint(), appearance->contentRect.size().toSize()));
 }
 
 // Window geometry for one composited selection. Live Pin to Screen and history pins both

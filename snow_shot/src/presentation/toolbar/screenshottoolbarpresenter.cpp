@@ -84,6 +84,9 @@ void ScreenshotToolbarPresenter::repositionForContentChange(
 
 void ScreenshotToolbarPresenter::updateSelectionToolbarState(
     const ScreenshotToolbarPresentationState& state, bool reposition) {
+    if (auto* toolbar = m_overlayCoordinator.toolbar()) {
+        toolbar->setScreenshotRegionType(state.regionType);
+    }
     updateOcrAvailability(m_overlayCoordinator, state.ocrAvailable);
     if (!state.selectionToolbarMode || !hasValidSelection(state.selectionPixels)) {
         m_overlayCoordinator.hideSelectionToolbar();
@@ -103,6 +106,8 @@ void ScreenshotToolbarPresenter::updateSelectionToolbarState(
             canvasUsesPoints |= display.canvasUsesPoints;
         });
 #endif
+        toolbarWidget->setSelectionResizable(state.selectionResizable);
+        toolbarWidget->setCornerRadiusApplicable(state.cornerRadiusApplicable);
         toolbarWidget->setSelectionState(
             state.selectionPixels, state.aspectRatioLocked, state.cornerRadius, state.shadowWidth,
             state.intelligentSelecting ? ScreenshotSelectionToolbarWidget::DisplayMode::SizeOnly

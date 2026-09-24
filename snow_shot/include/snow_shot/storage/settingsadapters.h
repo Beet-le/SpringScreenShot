@@ -114,12 +114,16 @@ class ShortcutSettings final {
     bool setOpenScreenRecordingFolder(const shortcuts::ShortcutBindingList& bindings) const;
     [[nodiscard]] shortcuts::ShortcutBindingList openCaptureHistory() const;
     bool setOpenCaptureHistory(const shortcuts::ShortcutBindingList& bindings) const;
+    [[nodiscard]] shortcuts::ShortcutBindingList openPinToScreenManagement() const;
+    bool setOpenPinToScreenManagement(const shortcuts::ShortcutBindingList& bindings) const;
     [[nodiscard]] shortcuts::ShortcutBindingList openSettings() const;
     bool setOpenSettings(const shortcuts::ShortcutBindingList& bindings) const;
     [[nodiscard]] shortcuts::ShortcutBindingList pinClipboardContent() const;
     bool setPinClipboardContent(const shortcuts::ShortcutBindingList& bindings) const;
     [[nodiscard]] shortcuts::ShortcutBindingList pinSelectedFiles() const;
     bool setPinSelectedFiles(const shortcuts::ShortcutBindingList& bindings) const;
+    [[nodiscard]] shortcuts::ShortcutBindingList restoreLastClosedWindows() const;
+    bool setRestoreLastClosedWindows(const shortcuts::ShortcutBindingList& bindings) const;
     [[nodiscard]] shortcuts::ShortcutBindingList translateSelectedText() const;
     bool setTranslateSelectedText(const shortcuts::ShortcutBindingList& bindings) const;
     [[nodiscard]] shortcuts::ShortcutBindingList toggleGlobalHotkeys() const;
@@ -312,6 +316,8 @@ class ScreenshotUiSettings final {
     bool setSelectionMaskColor(const QColor& color) const;
     [[nodiscard]] int shortcutHintOpacity() const;
     bool setShortcutHintOpacity(int opacity) const;
+    [[nodiscard]] bool screenshotAreaTypeHintEnabled() const;
+    bool setScreenshotAreaTypeHintEnabled(bool enabled) const;
     [[nodiscard]] QColor cursorGuideLineColor() const;
     bool setCursorGuideLineColor(const QColor& color) const;
     [[nodiscard]] QColor monitorCenterGuideLineColor() const;
