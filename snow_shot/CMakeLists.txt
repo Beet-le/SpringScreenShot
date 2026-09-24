@@ -1828,6 +1828,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         include/snow_shot/presentation/screenshotresultcompositor.h
         include/snow_shot/presentation/screenshotselectionshadowrenderer.h
         include/snow_shot/presentation/screenshotselectionpin.h
+        src/platform/windows/monitorgeometry.cpp
         src/presentation/core/screenshotgeometry.cpp
         src/presentation/overlay/screenshotselectionshadowrenderer.cpp
         src/presentation/services/screenshotclipboardservice.cpp
@@ -1848,7 +1849,10 @@ if(SNOW_SHOT_BUILD_TESTS)
     endif()
     add_test(NAME snow-shot-screenshot-export-service-tests
              COMMAND snow-shot-screenshot-export-service-tests)
-    set_tests_properties(snow-shot-screenshot-export-service-tests PROPERTIES
+    add_test(NAME snow-shot-fractional-dpi-export-tests
+             COMMAND snow-shot-screenshot-export-service-tests --fractional-dpi)
+    set_tests_properties(snow-shot-screenshot-export-service-tests
+        snow-shot-fractional-dpi-export-tests PROPERTIES
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
@@ -1857,6 +1861,7 @@ if(SNOW_SHOT_BUILD_TESTS)
 
     add_executable(snow-shot-screenshot-result-geometry-tests
         tests/screenshot_result_geometry_tests.cpp
+        src/platform/windows/monitorgeometry.cpp
         src/presentation/core/screenshotgeometry.cpp
     )
     target_include_directories(snow-shot-screenshot-result-geometry-tests PRIVATE
@@ -2607,6 +2612,7 @@ if(SNOW_SHOT_BUILD_TESTS)
 
     add_executable(snow-shot-selection-effects-tests
         tests/screenshot_selection_effects_tests.cpp
+        src/platform/windows/monitorgeometry.cpp
         src/presentation/core/screenshotgeometry.cpp
         src/presentation/core/screenshotinteractionstate.cpp
         src/presentation/selection/screenshotselectioneditworkflow.cpp
@@ -2757,6 +2763,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         include/snow_shot/presentation/screenshotselectionparams.h
         src/presentation/capture/screenshotcapturedisplaymodelreconciler.cpp
         src/presentation/capture/screenshotcaptureworkflow.cpp
+        src/platform/windows/monitorgeometry.cpp
         src/presentation/core/screenshotgeometry.cpp
         src/presentation/core/screenshotintelligentselectionmodel.cpp
         src/presentation/core/screenshotinteractionstate.cpp
@@ -2799,6 +2806,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         include/snow_shot/presentation/screenshotselectionparams.h
         include/snow_shot/presentation/screenshottoolcommandworkflow.h
         include/snow_shot/presentation/screenshottoolcommandworkflowports.h
+        src/platform/windows/monitorgeometry.cpp
         src/presentation/core/screenshotgeometry.cpp
         src/presentation/core/screenshotintelligentselectionmodel.cpp
         src/presentation/core/screenshotinteractionstate.cpp
@@ -2889,6 +2897,15 @@ if(SNOW_SHOT_BUILD_TESTS)
                 "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
             LABELS "unit;windows"
         )
+        add_test(NAME snow-shot-selection-geometry-windows-fractional-tests
+            COMMAND snow-shot-selection-geometry-tests)
+        set_tests_properties(snow-shot-selection-geometry-windows-fractional-tests PROPERTIES
+            ENVIRONMENT
+                "QT_QPA_PLATFORM=windows;QT_SCALE_FACTOR=1.5;QT_ENABLE_HIGHDPI_SCALING=1;QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::QWindowsIntegrationPlugin>"
+            ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+            LABELS "unit;windows"
+        )
     endif()
 
     add_executable(snow-shot-selection-export-workflow-tests
@@ -2896,6 +2913,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         include/snow_shot/presentation/screenshotclipboardservice.h
         include/snow_shot/presentation/screenshotselectionexportworkflow.h
         include/snow_shot/presentation/screenshotselectionexportworkflowports.h
+        src/platform/windows/monitorgeometry.cpp
         src/presentation/core/screenshotgeometry.cpp
         src/presentation/selection/screenshotselectionexportworkflow.cpp
         src/presentation/selection/screenshotselectiongeometry.cpp
@@ -2925,6 +2943,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         tests/screenshot_color_picker_tests.cpp
         include/snow_shot/presentation/styles/thememanager.h
         src/presentation/services/screenshotcolorpickerwindow.cpp
+        src/platform/windows/monitorgeometry.cpp
         src/presentation/core/screenshotgeometry.cpp
         src/presentation/styles/thememanager.cpp
         src/presentation/styles/themecolorscheme.cpp
@@ -2968,6 +2987,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         src/presentation/services/screenshotimagefileservice.cpp
         src/presentation/services/screenshotpdfexport.cpp
         src/presentation/services/screenshotshortcutexitconfirmation.cpp
+        src/platform/windows/monitorgeometry.cpp
         src/presentation/core/screenshotgeometry.cpp
         src/presentation/core/screenshotintelligentselectionmodel.cpp
         src/presentation/core/screenshotinteractionstate.cpp
@@ -3133,6 +3153,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         src/presentation/capture/screenshotscrollingthumbnailwidget.cpp
         src/presentation/capture/screenshotcapturedisplaymodelreconciler.cpp
         src/presentation/core/screenshotcanvastoolstyles.cpp
+        src/platform/windows/monitorgeometry.cpp
         src/presentation/core/screenshotgeometry.cpp
         src/presentation/selection/screenshotselectiongeometry.cpp
         src/presentation/selection/screenshotselectionmodel.cpp
@@ -3171,6 +3192,12 @@ if(SNOW_SHOT_BUILD_TESTS)
     )
     add_test(NAME snow-shot-direct-capture-history-rendering-tests
         COMMAND snow-shot-screenshot-canvas-renderer-tests --direct-capture-history-rendering)
+    add_test(NAME snow-shot-fractional-dpi-rendering-tests
+        COMMAND snow-shot-screenshot-canvas-renderer-tests --fractional-dpi)
+    set_tests_properties(snow-shot-fractional-dpi-rendering-tests PROPERTIES
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+    )
     add_test(NAME snow-shot-scrolling-overlay-tests
         COMMAND snow-shot-screenshot-canvas-renderer-tests --scrolling-overlay -platform offscreen)
     set_tests_properties(snow-shot-scrolling-overlay-tests PROPERTIES LABELS "unit")
@@ -3344,6 +3371,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         include/snow_shot/presentation/screenshottoolpalettehost.h
         include/snow_shot/presentation/styles/thememanager.h
         src/presentation/components/icons/snowshoticons.cpp
+        src/platform/windows/monitorgeometry.cpp
         src/presentation/core/screenshotgeometry.cpp
         src/presentation/core/screenshotcanvastoolstyles.cpp
         src/presentation/ocr/screenshotocrpresentation.cpp
@@ -4211,6 +4239,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         include/snow_shot/presentation/screenshottoolpalettehost.h
         include/snow_shot/presentation/styles/thememanager.h
         src/presentation/components/icons/snowshoticons.cpp
+        src/platform/windows/monitorgeometry.cpp
         src/presentation/core/screenshotgeometry.cpp
         src/presentation/core/screenshotcanvastoolstyles.cpp
         src/presentation/tools/screenshotfloatingtoolpalettenative.cpp
@@ -4259,6 +4288,7 @@ if(SNOW_SHOT_BUILD_TESTS)
             include/snow_shot/presentation/screenshottoolpalettehost.h
             include/snow_shot/presentation/styles/thememanager.h
             src/presentation/components/icons/snowshoticons.cpp
+            src/platform/windows/monitorgeometry.cpp
             src/presentation/core/screenshotgeometry.cpp
             src/presentation/core/screenshotcanvastoolstyles.cpp
             src/presentation/tools/screenshotfloatingtoolpalettenative.cpp
@@ -4322,6 +4352,7 @@ if(SNOW_SHOT_BUILD_TESTS)
             include/snow_shot/presentation/screenshottoolpalettehost.h
             include/snow_shot/presentation/styles/thememanager.h
             src/presentation/components/icons/snowshoticons.cpp
+            src/platform/windows/monitorgeometry.cpp
             src/presentation/core/screenshotgeometry.cpp
             src/presentation/core/screenshotcanvastoolstyles.cpp
             src/presentation/tools/screenshotfloatingtoolpalettenative.cpp
@@ -4380,6 +4411,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         include/snow_shot/presentation/screenshottoolpalettehost.h
         include/snow_shot/presentation/styles/thememanager.h
         src/presentation/components/icons/snowshoticons.cpp
+        src/platform/windows/monitorgeometry.cpp
         src/presentation/core/screenshotgeometry.cpp
         src/presentation/core/screenshotcanvastoolstyles.cpp
         src/presentation/styles/thememanager.cpp
@@ -4453,6 +4485,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         include/snow_shot/presentation/screenshottoolpalettehost.h
         include/snow_shot/presentation/styles/thememanager.h
         src/presentation/components/icons/snowshoticons.cpp
+        src/platform/windows/monitorgeometry.cpp
         src/presentation/core/screenshotgeometry.cpp
         src/presentation/core/screenshotcanvastoolstyles.cpp
         src/presentation/styles/thememanager.cpp
@@ -5039,6 +5072,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         src/presentation/tools/screenshotfloatingtoolpalettewindow.cpp
         src/presentation/tools/screenshotfloatingtoolpalettenative.cpp
         src/presentation/tools/screenshottoolpalettehost.cpp
+        src/platform/windows/monitorgeometry.cpp
         src/presentation/core/screenshotgeometry.cpp
         src/presentation/services/screenshotimagefileservice.cpp
         src/presentation/services/screenshotpdfexport.cpp
@@ -5132,6 +5166,7 @@ if(SNOW_SHOT_BUILD_TESTS)
 
     add_executable(snow-shot-screen-recording-geometry-tests
         tests/screen_recording_geometry_tests.cpp
+        src/platform/windows/monitorgeometry.cpp
         src/presentation/core/screenshotgeometry.cpp
         src/presentation/recording/screenrecordinggeometry.cpp
     )
@@ -5157,6 +5192,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         tests/screen_recording_area_window_tests.cpp
         include/snow_shot/presentation/screenrecordingareawindow.h
         src/presentation/core/screenshotcanvastoolstyles.cpp
+        src/platform/windows/monitorgeometry.cpp
         src/presentation/core/screenshotgeometry.cpp
         src/presentation/recording/screenrecordingareawindow.cpp
         src/presentation/recording/screenrecordinggeometry.cpp
@@ -5222,6 +5258,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         include/snow_shot/presentation/screenshotocrtexttransform.h
         include/snow_shot/presentation/screenshottabledocument.h
         include/snow_shot/presentation/screenshotsourceimagecomposer.h
+        src/platform/windows/monitorgeometry.cpp
         src/presentation/core/screenshotgeometry.cpp
         src/presentation/ocr/screenshotocrpresentation.cpp
         src/presentation/ocr/screenshotocrtexteditingsession.cpp
@@ -5255,6 +5292,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         include/snow_shot/presentation/screenshottabledocument.h
         include/snow_shot/presentation/screenshottableeditor.h
         include/snow_shot/presentation/screenshotrecognitionwindow.h
+        src/platform/windows/monitorgeometry.cpp
         src/presentation/core/screenshotgeometry.cpp
         src/presentation/ocr/screenshotocrpresentation.cpp
         src/presentation/ocr/screenshotocrvisuals.cpp
@@ -5420,6 +5458,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         include/snow_shot/presentation/screenshotrecognitionwindow.h
         include/snow_shot/presentation/screenshottabledocument.h
         include/snow_shot/presentation/screenshottableeditor.h
+        src/platform/windows/monitorgeometry.cpp
         src/presentation/core/screenshotgeometry.cpp
         src/presentation/ocr/screenshotocrpresentation.cpp
         src/presentation/ocr/screenshotocrtexteditingsession.cpp
@@ -5964,6 +6003,7 @@ if(WIN32 AND SNOW_SHOT_BUILD_BENCHMARKS)
         include/snow_shot/presentation/screenshottoolpalettehost.h
         include/snow_shot/presentation/styles/thememanager.h
         src/presentation/components/icons/snowshoticons.cpp
+        src/platform/windows/monitorgeometry.cpp
         src/presentation/core/screenshotgeometry.cpp
         src/presentation/core/screenshotcanvastoolstyles.cpp
         src/presentation/tools/screenshotfloatingtoolpalettenative.cpp
@@ -6045,6 +6085,7 @@ if(WIN32 AND SNOW_SHOT_BUILD_BENCHMARKS)
         include/snow_shot/presentation/screenshotresultcompositor.h
         include/snow_shot/presentation/screenshotselectionshadowrenderer.h
         include/snow_shot/presentation/screenshotselectionpin.h
+        src/platform/windows/monitorgeometry.cpp
         src/presentation/core/screenshotgeometry.cpp
         src/presentation/overlay/screenshotselectionshadowrenderer.cpp
         src/presentation/services/screenshotclipboardperfinstrumentation.h
@@ -6121,6 +6162,7 @@ if(WIN32 AND SNOW_SHOT_BUILD_BENCHMARKS)
         include/snow_shot/presentation/screenshottoolpalettehost.h
         include/snow_shot/presentation/styles/thememanager.h
         src/presentation/components/icons/snowshoticons.cpp
+        src/platform/windows/monitorgeometry.cpp
         src/presentation/core/screenshotgeometry.cpp
         src/presentation/core/screenshotcanvastoolstyles.cpp
         src/presentation/ocr/screenshotocrpresentation.cpp
