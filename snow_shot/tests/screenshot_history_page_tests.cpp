@@ -242,6 +242,11 @@ void entriesUseBordersAndSupportCrossPageSelection() {
     flushEvents();
     require(selectionBar->isVisible() && summary->text() == QStringLiteral("Selected 1 item"),
             "selecting one entry must show the singular selection summary");
+    auto* countLabel = page.findChild<QLabel*>(QStringLiteral("screenshotHistoryCountLabel"));
+    require(countLabel != nullptr &&
+                countLabel->font().pixelSize() == summary->font().pixelSize() &&
+                countLabel->font().weight() == summary->font().weight(),
+            "selected history records keep the same text style as the page subtitle");
     require(verticalLayoutGap(page, filters, selectionPanel) > 0 &&
                 verticalLayoutGap(page, selectionPanel, firstEntry) > 0,
             "the selection bar must preserve gaps below the filters and above the first entry");
@@ -440,7 +445,7 @@ void emptyStateRemainsVisibleAfterFilteringEmptyHistory() {
         "an emptied repository must restore the unfiltered empty-state prompt");
 }
 
-void emptyStateIconsMatchPinnedWindowManagement() {
+void pageTextAndEmptyStateMatchPinnedWindowManagement() {
     MutableHistoryDataSource dataSource;
     ScreenshotHistoryPageWidget historyPage(&dataSource, nullptr);
     PinnedWindowManagementPageWidget pinnedPage;
@@ -449,6 +454,16 @@ void emptyStateIconsMatchPinnedWindowManagement() {
     auto* pinnedIcon = pinnedPage.findChild<QLabel*>(QStringLiteral("pinnedManagementEmptyIcon"));
     require(historyIcon != nullptr && pinnedIcon != nullptr,
             "both management pages must expose their empty-state icons");
+    auto* historyCount =
+        historyPage.findChild<QLabel*>(QStringLiteral("screenshotHistoryCountLabel"));
+    auto* pinnedCount = pinnedPage.findChild<QLabel*>(QStringLiteral("pinnedManagementCountLabel"));
+    auto* historySelection =
+        historyPage.findChild<QLabel*>(QStringLiteral("screenshotHistorySelectionSummary"));
+    auto* pinnedSelection =
+        pinnedPage.findChild<QLabel*>(QStringLiteral("pinnedManagementSelectionSummary"));
+    require(historyCount != nullptr && pinnedCount != nullptr && historySelection != nullptr &&
+                pinnedSelection != nullptr,
+            "both management pages must expose their count and selection labels");
 
     for (const auto appearance : {snow_shot::presentation::styles::ThemeAppearance::Light,
                                   snow_shot::presentation::styles::ThemeAppearance::Dark}) {
@@ -460,6 +475,13 @@ void emptyStateIconsMatchPinnedWindowManagement() {
         require(!historyIcon->pixmap().isNull() &&
                     historyIcon->pixmap().toImage() == pinnedIcon->pixmap().toImage(),
                 "the empty-state icon must use identical colors on both pages in each theme");
+        for (QLabel* label : {historyCount, pinnedCount, historySelection, pinnedSelection}) {
+            require(
+                label->font().pixelSize() == scheme.metricAlias.fontSize &&
+                    label->font().weight() == QFont::Normal &&
+                    label->palette().color(QPalette::WindowText) == scheme.map.colorTextSecondary,
+                "both page subtitles and selection summaries must use the same theme text style");
+        }
     }
 }
 
@@ -728,7 +750,7 @@ int main(int argc, char** argv) {
                 .success,
             "isolated application storage must initialize");
     emptyStateRemainsVisibleAfterFilteringEmptyHistory();
-    emptyStateIconsMatchPinnedWindowManagement();
+    pageTextAndEmptyStateMatchPinnedWindowManagement();
     moreMenuOffersPinAndDelete();
     entriesUseBordersAndSupportCrossPageSelection();
     imageFailuresRespectCacheFallbackAndCancellation();
