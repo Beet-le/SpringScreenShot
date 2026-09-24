@@ -2,6 +2,8 @@
 #include "snow_shot/presentation/screenshotselectionshadowrenderer.h"
 
 #include "snow_draw_engine_qt/snow_canvas_widget.h"
+#include "snow_draw_engine_qt/snow_canvas_path_geometry.h"
+#include "snow_shot/image/screenshotregionpoints.h"
 
 #include <QApplication>
 #include <QCommandLineParser>
@@ -110,6 +112,11 @@ struct FrameSample {
     std::size_t shadowRetainedBytes = 0;
     std::size_t shadowTransientAllocations = 0;
     std::size_t selectionDamagePathFallbacks = 0;
+    double mutationMs = 0;
+    double paintMs = 0;
+    std::size_t regionMaskBuilds = 0;
+    std::size_t regionShadowBuilds = 0;
+    std::size_t regionScratchPeakBytes = 0;
 };
 
 struct ScenarioResult {
@@ -165,6 +172,7 @@ FrameSample measureFrame(BenchmarkFixture& fixture, const std::function<void()>&
     QElapsedTimer timer;
     timer.start();
     mutation();
+    const auto mutationNs = timer.nsecsElapsed();
     QApplication::processEvents();
     const qint64 elapsedNanoseconds = timer.nsecsElapsed();
     const QRegion requested = fixture.paintProbe.region();
@@ -183,6 +191,11 @@ FrameSample measureFrame(BenchmarkFixture& fixture, const std::function<void()>&
         shadowDiagnostics.retainedBytes,
         shadowDiagnostics.selectionSizedTransientAllocations,
         selectionDiagnostics.pathFallbacks,
+        mutationNs / 1'000'000.0,
+        (elapsedNanoseconds - mutationNs) / 1'000'000.0,
+        shadowDiagnostics.regionMaskBuilds,
+        shadowDiagnostics.regionShadowBuilds,
+        shadowDiagnostics.regionScratchPeakBytes,
     };
 }
 
@@ -222,7 +235,7 @@ double mean(const std::vector<double>& values) {
 
 QJsonObject summarize(const ScenarioResult& result, const DwmSnapshot& beforeDwm,
                       const DwmSnapshot& afterDwm) {
-    std::vector<double> milliseconds;
+    std::vector<double> milliseconds, mutationMs, paintMs;
     std::vector<double> requestedRegionRatios;
     std::vector<double> paintedRegionRatios;
     std::vector<double> selectionDamageRatios;
@@ -235,8 +248,14 @@ QJsonObject summarize(const ScenarioResult& result, const DwmSnapshot& beforeDwm
     std::size_t shadowRetainedBytes = 0;
     std::size_t shadowTransientAllocations = 0;
     std::size_t selectionDamagePathFallbacks = 0;
+    std::size_t regionMaskBuilds = 0, regionShadowBuilds = 0, regionScratchPeakBytes = 0;
     for (const FrameSample& sample : result.samples) {
+        regionMaskBuilds += sample.regionMaskBuilds;
+        regionShadowBuilds += sample.regionShadowBuilds;
+        regionScratchPeakBytes = std::max(regionScratchPeakBytes, sample.regionScratchPeakBytes);
         milliseconds.push_back(sample.milliseconds);
+        mutationMs.push_back(sample.mutationMs);
+        paintMs.push_back(sample.paintMs);
         requestedRegionRatios.push_back(sample.requestedPaintRegionRatio);
         paintedRegionRatios.push_back(sample.paintedPaintRegionRatio);
         selectionDamageRatios.push_back(sample.selectionDamageRegionRatio);
@@ -253,6 +272,8 @@ QJsonObject summarize(const ScenarioResult& result, const DwmSnapshot& beforeDwm
     object.insert(QStringLiteral("available"), result.available);
     object.insert(QStringLiteral("sampleCount"), static_cast<qint64>(result.samples.size()));
     object.insert(QStringLiteral("p50Ms"), percentile(milliseconds, 0.50));
+    object.insert(QStringLiteral("mutationP95Ms"), percentile(mutationMs, 0.95));
+    object.insert(QStringLiteral("paintP95Ms"), percentile(paintMs, 0.95));
     object.insert(QStringLiteral("p95Ms"), p95);
     object.insert(QStringLiteral("p99Ms"), percentile(milliseconds, 0.99));
     object.insert(QStringLiteral("meanRequestedPaintRegionRatio"), mean(requestedRegionRatios));
@@ -266,6 +287,9 @@ QJsonObject summarize(const ScenarioResult& result, const DwmSnapshot& beforeDwm
                   static_cast<qint64>(shadowTransientAllocations));
     object.insert(QStringLiteral("selectionDamagePathFallbacks"),
                   static_cast<qint64>(selectionDamagePathFallbacks));
+    object.insert(QStringLiteral("regionMaskBuilds"), qint64(regionMaskBuilds));
+    object.insert(QStringLiteral("regionShadowBuilds"), qint64(regionShadowBuilds));
+    object.insert(QStringLiteral("regionScratchPeakBytes"), qint64(regionScratchPeakBytes));
     object.insert(QStringLiteral("targetMs"), kFrameBudgetMilliseconds);
     object.insert(QStringLiteral("classification"), p95 <= kFrameBudgetMilliseconds
                                                         ? QStringLiteral("within-target")
@@ -365,15 +389,30 @@ int main(int argc, char** argv) {
     parser.addOption({QStringLiteral("warmup"), QStringLiteral("Warmup frames per scenario"),
                       QStringLiteral("count"), QString::number(kDefaultWarmup)});
     parser.addOption({QStringLiteral("list"), QStringLiteral("List benchmark scenarios and exit")});
+    parser.addOption({QStringLiteral("scenario"), QStringLiteral("Run one scenario (repeatable)"),
+                      QStringLiteral("name")});
     parser.process(application);
 
     const QStringList scenarioNames{
+        QStringLiteral("custom-freehand"),
+        QStringLiteral("custom-curve"),
+        QStringLiteral("custom-mixed-operations"),
+        QStringLiteral("custom-growing-draft"),
+        QStringLiteral("rounded-many-regions"),
+        QStringLiteral("sparse-region-export"),
+        QStringLiteral("dense-region-export"),
+        QStringLiteral("custom-alternating-scale"),
+        QStringLiteral("region-one-pixel-move"),
+        QStringLiteral("region-hover-one-pixel-move"),
+        QStringLiteral("region-two-stage-presentation"),
+        QStringLiteral("region-one-pass-presentation"),
         QStringLiteral("one-pixel-move"),
         QStringLiteral("one-pixel-resize"),
         QStringLiteral("smart-selection-animation"),
         QStringLiteral("rounded-corners"),
         QStringLiteral("hover-entry-exit"),
         QStringLiteral("shadow-width-sweep"),
+        QStringLiteral("rounded-shadow-toggle"),
         QStringLiteral("cursor-and-monitor-guide-lines"),
         QStringLiteral("monitor-center-guide-line-only"),
         QStringLiteral("active-spotlight"),
@@ -401,17 +440,183 @@ int main(int argc, char** argv) {
     auto& renderer = *fixture.renderer;
     const QRectF baseSelection(-960.0, -540.0, 1920.0, 1080.0);
     const QColor shadowColor(0x59, 0x59, 0x59);
+    const ScreenshotRegionGeometry compoundRegion(
+        QRegion(QRect(-960, -540, 1920, 1080)).subtracted(QRect(-120, -120, 240, 240)));
     QList<QJsonObject> reports;
 
     const auto run = [&](const QString& name, const std::function<void(int)>& mutation,
                          bool available = true) {
+        if (parser.isSet(QStringLiteral("scenario")) &&
+            !parser.values(QStringLiteral("scenario")).contains(name))
+            return;
+        // Each scenario starts with the same selection, including draft and hover
+        // state. Otherwise the result depends on which scenarios ran before it.
+        ScreenshotSelectionVisualState initial;
+        initial.bounds = baseSelection;
+        initial.present = true;
+        initial.shadowWidth = 16;
+        initial.shadowColor = shadowColor;
+        renderer.applySelectionState(initial);
+        QApplication::processEvents();
         const DwmSnapshot before = dwmSnapshot(fixture.window);
         const ScenarioResult result =
             runScenario(fixture, name, warmup, iterations, mutation, available);
         const DwmSnapshot after = dwmSnapshot(fixture.window);
-        reports.append(summarize(result, before, after));
+        auto report = summarize(result, before, after);
+        report.insert(QStringLiteral("outlineCacheRetainedBytes"),
+                      renderer.selectionOutlineCacheBytes());
+        report.insert(QStringLiteral("maskCacheRetainedBytes"), renderer.selectionMaskCacheBytes());
+        reports.append(report);
     };
 
+    QVector<QPointF> freehand;
+    freehand.reserve(10000);
+    for (int i = 0; i < 10000; ++i) {
+        const qreal angle = i * 6.283185307179586 / 9999.0;
+        freehand.append(
+            QPointF(700 * std::cos(angle), 450 * std::sin(angle) + 4 * std::sin(angle * 75)));
+    }
+    const auto simplified = simplifyScreenshotRegionPoints(freehand, 0.25);
+    QPainterPath freehandPath;
+    freehandPath.addPolygon(QPolygonF(simplified));
+    freehandPath.closeSubpath();
+    const auto freehandRegion =
+        ScreenshotRegionGeometry::fromPath(freehandPath, ScreenshotRegionType::Freehand);
+    QVector<QPointF> curveVertices;
+    for (int i = 0; i < 128; ++i) {
+        const qreal angle = i * 6.283185307179586 / 128.0;
+        const qreal radius = 500 + 60 * std::sin(angle * 9);
+        curveVertices.append(QPointF(radius * std::cos(angle), radius * std::sin(angle)));
+    }
+    const auto curveRegion = ScreenshotRegionGeometry::fromPath(
+        snowCanvasCatmullRomPath(curveVertices, true), ScreenshotRegionType::Curve);
+    run(QStringLiteral("custom-freehand"), [&](int index) {
+        auto points = simplified;
+        points.last() += QPointF(index & 1, 0);
+        QPainterPath path;
+        path.addPolygon(QPolygonF(points));
+        path.closeSubpath();
+        renderer.setSelectionRegion(
+            ScreenshotRegionGeometry::fromPath(path, ScreenshotRegionType::Freehand), {}, {}, false,
+            Qt::red);
+    });
+    run(QStringLiteral("custom-curve"), [&](int index) {
+        auto points = curveVertices;
+        points.last() += QPointF(index & 1, 0);
+        renderer.setSelectionRegion(
+            ScreenshotRegionGeometry::fromPath(snowCanvasCatmullRomPath(points, true),
+                                               ScreenshotRegionType::Curve),
+            {}, {}, false, Qt::red);
+    });
+    auto mixed = curveRegion;
+    for (int i = 0; i < 12; ++i)
+        mixed = mixed.subtracted(QRect(-300 + i * 45, -250, 20, 400));
+    run(QStringLiteral("custom-mixed-operations"), [&](int index) {
+        const auto candidate = mixed.united(freehandRegion.translated(index & 1, 0));
+        renderer.setSelectionRegion(candidate, mixed, {}, false, Qt::red);
+    });
+    QVector<QPointF> growingVertices;
+    growingVertices.reserve(4096);
+    for (int i = 0; i < 4096; ++i) {
+        const qreal angle = i * 6.283185307179586 / 4096.0;
+        growingVertices.append(QPointF(620 * std::cos(angle), 390 * std::sin(angle)));
+    }
+    run(QStringLiteral("custom-growing-draft"), [&](int index) {
+        const int count = 2048 + index % 2048;
+        const auto path = snowCanvasCatmullRomPath(growingVertices.mid(0, count), true);
+        ScreenshotSelectionVisualState state;
+        state.region = ScreenshotRegionGeometry::fromPath(path, ScreenshotRegionType::Freehand);
+        state.bounds = state.region->boundingRect();
+        state.present = true;
+        state.draftPath = path;
+        renderer.applySelectionState(state);
+    });
+    QRegion manyRegions;
+    for (int row = 0; row < 10; ++row)
+        for (int column = 0; column < 20; ++column)
+            manyRegions += QRect(-1250 + column * 125, -650 + row * 130, 82, 82);
+    run(QStringLiteral("rounded-many-regions"), [&](int index) {
+        ScreenshotSelectionVisualState state;
+        const ScreenshotRegionGeometry region(manyRegions.translated(index & 1, 0));
+        state.region = region;
+        state.confirmedRegion = region;
+        state.bounds = region.boundingRect();
+        state.present = true;
+        state.cornerRadius = 8;
+        renderer.applySelectionState(state);
+    });
+    QImage sparseContent(surfaceSize, QImage::Format_ARGB32_Premultiplied);
+    sparseContent.fill(Qt::white);
+    ScreenshotResultStyle sparseStyle;
+    sparseStyle.region =
+        QRegion(QRect(40, 40, 120, 120)) +
+        QRegion(QRect(surfaceSize.width() - 160, surfaceSize.height() - 160, 120, 120));
+    sparseStyle.shadowWidth = 16;
+    run(QStringLiteral("sparse-region-export"), [&](int index) {
+        sparseStyle.shadowColor = (index & 1) ? QColor(0x33, 0x33, 0x33) : QColor(0x34, 0x33, 0x33);
+        const QImage result = ScreenshotResultCompositor::compose(sparseContent, sparseStyle);
+        if (result.isNull())
+            throw std::runtime_error("sparse region export failed");
+    });
+    ScreenshotResultStyle denseStyle;
+    QPainterPath densePath;
+    densePath.addEllipse(QRectF(0, 0, surfaceSize.width(), surfaceSize.height()));
+    denseStyle.region = ScreenshotRegionGeometry::fromPath(densePath, ScreenshotRegionType::Curve);
+    denseStyle.shadowWidth = 16;
+    run(QStringLiteral("dense-region-export"), [&](int index) {
+        denseStyle.shadowColor = (index & 1) ? QColor(0x33, 0x33, 0x33) : QColor(0x34, 0x33, 0x33);
+        if (ScreenshotResultCompositor::compose(sparseContent, denseStyle).isNull())
+            throw std::runtime_error("dense region export failed");
+    });
+    run(QStringLiteral("custom-alternating-scale"), [&](int) {
+        for (const qreal scale : {1.0, 1.5, 2.0}) {
+            if (mixed.path(scale).isEmpty())
+                throw std::runtime_error("scaled region contour failed");
+        }
+    });
+    run(QStringLiteral("region-one-pixel-move"), [&](int index) {
+        const auto moved = compoundRegion.translated(index & 1, 0);
+        renderer.setSelectionRegion(moved, moved, {}, false, Qt::red);
+    });
+    run(QStringLiteral("region-hover-one-pixel-move"), [&](int index) {
+        const auto moved = compoundRegion.translated(index & 1, 0);
+        renderer.setSelectionRegion(moved, moved, {}, false, Qt::red);
+        renderer.setSelectionToolbarHovered(true);
+    });
+    run(QStringLiteral("region-two-stage-presentation"), [&](int index) {
+        const auto moved = compoundRegion.translated(index & 1, 0);
+        renderer.setSelection(QRectF(moved.boundingRect()), false, 0, 16, shadowColor);
+        renderer.setSelectionRegion(moved, moved, {}, false, Qt::red);
+        renderer.setSelectionToolbarHovered(false);
+    });
+    run(QStringLiteral("region-one-pass-presentation"), [&](int index) {
+        const auto moved = compoundRegion.translated(index & 1, 0);
+        ScreenshotSelectionVisualState state;
+        state.bounds = QRectF(moved.boundingRect());
+        state.present = true;
+        state.handlesVisible = false;
+        state.shadowWidth = 16;
+        state.shadowColor = shadowColor;
+        state.region = moved;
+        state.confirmedRegion = moved;
+        state.dangerColor = Qt::red;
+        renderer.applySelectionState(state);
+    });
+    QElapsedTimer commitTimer;
+    commitTimer.start();
+    const auto committed = mixed.united(freehandRegion);
+    const auto commitPath = committed.path();
+    const double commitMs = commitTimer.nsecsElapsed() / 1'000'000.0;
+    for (auto& report : reports) {
+        report.insert(QStringLiteral("freehandInputPoints"), freehand.size());
+        report.insert(QStringLiteral("freehandRetainedPoints"), simplified.size());
+        report.insert(QStringLiteral("mixedCommitMs"), commitMs);
+        report.insert(QStringLiteral("mixedSerializedBytes"),
+                      QJsonDocument(committed.toJson()).toJson(QJsonDocument::Compact).size());
+        report.insert(QStringLiteral("mixedDerivedPathElements"), commitPath.elementCount());
+        report.insert(QStringLiteral("geometryRetainedBytesEstimate"),
+                      committed.retainedBytesEstimate());
+    }
     run(QStringLiteral("one-pixel-move"), [&](int index) {
         renderer.setSelection(QRectF(baseSelection.left() + (index & 1), baseSelection.top(),
                                      baseSelection.width(), baseSelection.height()),
@@ -443,6 +648,10 @@ int main(int argc, char** argv) {
     run(QStringLiteral("shadow-width-sweep"), [&](int index) {
         static constexpr std::array<int, 8> widths = {1, 4, 16, 32, 64, 32, 16, 4};
         renderer.setSelection(baseSelection, true, 16, widths[index % widths.size()], shadowColor);
+        renderer.setSelectionToolbarHovered(true);
+    });
+    run(QStringLiteral("rounded-shadow-toggle"), [&](int index) {
+        renderer.setSelection(baseSelection, false, 18, (index & 1) ? 10 : 0, shadowColor);
         renderer.setSelectionToolbarHovered(true);
     });
 

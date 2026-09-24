@@ -18,6 +18,7 @@
 #include <QPainter>
 #include <QPaintEvent>
 #include <QRegion>
+#include "snow_shot/presentation/screenshotregiontypecontrol.h"
 #include <QResizeEvent>
 #include <QVBoxLayout>
 #include <QWheelEvent>
@@ -63,6 +64,8 @@ ScreenshotOverlayWindow::ScreenshotOverlayWindow(ScreenshotOverlayEventSink& eve
     layout->setSpacing(0);
     layout->addWidget(m_canvas);
 
+    m_regionTypeControl = new ScreenshotRegionTypeControl(this, true);
+    m_regionTypeControl->hide();
     m_scrollingThumbnail = new ScreenshotScrollingThumbnailWidget(*this);
     m_scrollingThumbnail->hide();
     m_framePresenter = std::make_unique<ScreenshotOverlayFramePresenter>(*this);
@@ -149,29 +152,43 @@ void ScreenshotOverlayWindow::setScreenshotSelection(const QRectF& selection, bo
                                                      int cornerRadius, int shadowWidth,
                                                      const QColor& shadowColor,
                                                      bool selectionToolbarHovered) {
+    const QRectF normalizedSelection = selection.normalized();
+    ScreenshotSelectionVisualState state;
+    state.bounds = normalizedSelection;
+    state.present = normalizedSelection.isValid() && !normalizedSelection.isEmpty();
+    state.handlesVisible = handlesVisible;
+    state.cornerRadius = cornerRadius;
+    state.shadowWidth = shadowWidth;
+    state.shadowColor = shadowColor;
+    state.toolbarHovered = selectionToolbarHovered;
+    setScreenshotSelectionState(state);
+}
+
+void ScreenshotOverlayWindow::setScreenshotSelectionState(
+    const ScreenshotSelectionVisualState& requestedState) {
     if (m_canvas != nullptr) {
-        const QRectF normalizedSelection = selection.normalized();
-        const QRectF configuredArea =
-            normalizedSelection.isValid() && !normalizedSelection.isEmpty() ? normalizedSelection
-                                                                            : QRectF();
+        const QRectF normalizedSelection = requestedState.bounds.normalized();
+        const QRectF configuredArea = requestedState.present && normalizedSelection.isValid() &&
+                                              !normalizedSelection.isEmpty()
+                                          ? normalizedSelection
+                                          : QRectF();
         m_canvas->setDecorationRenderAreas(SnowCanvasDecorationRenderAreas{
             std::optional<QRectF>(configuredArea),
             std::optional<QRectF>(configuredArea),
         });
     }
     if (m_screenshotRenderer != nullptr) {
-        const QRectF normalizedSelection = selection.normalized();
-        ScreenshotSelectionVisualState state;
-        state.bounds = normalizedSelection;
-        state.present = normalizedSelection.isValid() && !normalizedSelection.isEmpty();
-        state.handlesVisible = handlesVisible;
+        ScreenshotSelectionVisualState state = requestedState;
         state.borderVisible = m_screenshotRenderer->selectionBorderVisible();
-        state.cornerRadius = cornerRadius;
-        state.shadowWidth = shadowWidth;
-        state.shadowColor = shadowColor;
-        state.toolbarHovered = selectionToolbarHovered;
         m_screenshotRenderer->applySelectionState(state);
     }
+}
+
+void ScreenshotOverlayWindow::setScreenshotSelectionRegion(
+    const ScreenshotRegionGeometry& region, const ScreenshotRegionGeometry& confirmed,
+    const QRectF& marquee, bool subtracting, const QColor& danger) {
+    if (m_screenshotRenderer)
+        m_screenshotRenderer->setSelectionRegion(region, confirmed, marquee, subtracting, danger);
 }
 
 void ScreenshotOverlayWindow::clearScreenshotSelection() {
@@ -705,7 +722,7 @@ bool ScreenshotOverlayWindow::handleCanvasEvent(QEvent* event) {
 
     if ((event->type() == QEvent::KeyPress || event->type() == QEvent::MouseButtonPress ||
          event->type() == QEvent::MouseMove || event->type() == QEvent::MouseButtonRelease ||
-         event->type() == QEvent::Wheel) &&
+         event->type() == QEvent::MouseButtonDblClick || event->type() == QEvent::Wheel) &&
         !m_eventSink.acceptOverlayInput(event->spontaneous())) {
         event->accept();
         return true;
@@ -714,7 +731,8 @@ bool ScreenshotOverlayWindow::handleCanvasEvent(QEvent* event) {
         return handleCanvasKeyPress(static_cast<QKeyEvent*>(event));
     }
     if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseMove ||
-        event->type() == QEvent::MouseButtonRelease) {
+        event->type() == QEvent::MouseButtonRelease ||
+        event->type() == QEvent::MouseButtonDblClick) {
         return handleCanvasMouseEvent(static_cast<QMouseEvent*>(event));
     }
     if (event->type() == QEvent::Wheel) {
@@ -743,6 +761,11 @@ bool ScreenshotOverlayWindow::handleCanvasMouseEvent(QMouseEvent* event) {
         return false;
     }
 
+    if (event->type() == QEvent::MouseButtonDblClick && event->button() == Qt::LeftButton &&
+        m_eventSink.handleRegionDoubleClick(this, event->position())) {
+        event->accept();
+        return true;
+    }
     if (event->type() == QEvent::MouseButtonPress && event->button() == Qt::RightButton) {
         const auto action = m_eventSink.handleOverlayRightClick(this, event->position());
         if (action == ScreenshotOverlayRightClickResult::CancelCapture) {
@@ -813,4 +836,27 @@ bool ScreenshotOverlayWindow::dispatchHandledMouseEvent(QMouseEvent* event) {
     }
 
     return false;
+}
+
+void ScreenshotOverlayWindow::setRegionTypeControlVisible(bool visible, ScreenshotRegionType type,
+                                                          const QRectF& selectionGlobal,
+                                                          const QPointF& cursorGlobal) {
+    m_regionTypeControl->setType(type);
+    if (visible) {
+        const int maximumWidth = std::max(1, width() - 16);
+        if (m_regionTypeControl->maximumWidth() != maximumWidth) {
+            m_regionTypeControl->setMaximumWidth(maximumWidth);
+            m_regionTypeControl->adjustSize();
+        }
+        const QPoint position(std::max(0, (width() - m_regionTypeControl->width()) / 2),
+                              std::max(0, std::min(12, height() - m_regionTypeControl->height())));
+        if (m_regionTypeControl->pos() != position)
+            m_regionTypeControl->move(position);
+    }
+    m_regionTypeControl->setPresentationVisible(visible, selectionGlobal, cursorGlobal);
+}
+
+void ScreenshotOverlayWindow::setSelectionDraft(const QPainterPath& path,
+                                                const QVector<QPointF>& vertices) {
+    m_screenshotRenderer->setSelectionDraft(path, vertices);
 }

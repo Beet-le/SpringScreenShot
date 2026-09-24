@@ -9,9 +9,12 @@ makeScreenshotToolbarPresentationState(const ScreenshotInteractionState& interac
                                        const ScreenshotSelectionModel& selection) {
     ScreenshotToolbarPresentationState state;
     state.selectionPixels = selection.pixelSelection();
+    state.regionType = selection.regionType();
     state.selectionCanvas = selection.normalizedSelection();
     state.inactive = interaction.inactive();
-    state.selectionToolbarMode = interaction.selectionToolbarMode();
+    state.selectionToolbarMode =
+        interaction.selectionToolbarMode() && !selection.regionOperationActive();
+    state.selectionResizable = selection.rectangular() && interaction.canResizeSelection();
     state.intelligentSelecting = interaction.intelligentSelecting();
     state.editing = interaction.editing();
     const QRect selectionPixels = state.selectionPixels;
@@ -19,6 +22,7 @@ makeScreenshotToolbarPresentationState(const ScreenshotInteractionState& interac
                          screenshotOcrImageWithinPixelLimit(selectionPixels.size());
     state.aspectRatioLocked = selection.aspectRatioLocked();
     state.cornerRadius = selection.cornerRadius();
+    state.cornerRadiusApplicable = selection.cornerRadiusApplicable();
     state.shadowWidth = selection.shadowWidth();
     state.shadowColor = selection.shadowColor();
     return state;

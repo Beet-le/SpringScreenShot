@@ -7,6 +7,7 @@
 #include <QDateTime>
 #include <QImage>
 #include <QRect>
+#include "snow_shot/image/screenshotregiongeometry.h"
 #include <QRectF>
 #include <QSize>
 #include <QString>
@@ -17,12 +18,14 @@ namespace snow_shot::storage {
 
 // Outline in a reference screenshot raster of sourceSize pixels. The displayed
 // image may have a higher backing resolution (for example, a Retina capture).
-// This describes window chrome only; it must never be applied to image exports.
+// Effects are baked into the source image. This outline also clips subsequent edits,
+// preserving the baked exterior without composing those effects a second time.
 struct PinnedBorderAppearance final {
     QSize sourceSize;
     QRectF contentRect;
     qreal cornerRadius = 0.0;
     bool hasShadow = false;
+    std::optional<ScreenshotRegionGeometry> region;
 
     friend bool operator==(const PinnedBorderAppearance&, const PinnedBorderAppearance&) = default;
 };
@@ -97,6 +100,7 @@ struct PinnedWindowRecord final {
     bool alwaysOnTop = true;
     bool showBorder = true;
     std::optional<PinnedBorderAppearance> borderAppearance;
+    std::optional<bool> checkerboardEnabled;
     QRect preThumbnailNativeGeometry;
     QByteArray resultStyle;
     QByteArray canvasSession;

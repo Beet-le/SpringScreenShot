@@ -84,6 +84,10 @@ void stateUpdatesBeforeFirstFlushPreserveRestorableSources() {
         const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
         const QString group = QUuid::createUuid().toString(QUuid::WithoutBraces);
         auto record = recordWithId(id, patternedImage(QSize(29, 13), 3));
+        if (source == 0) {
+            record.image.setPixelColor(0, 0, Qt::transparent);
+        }
+        record.checkerboardEnabled = source == 0;
         const QImage originalImage = record.image;
         const QByteArray encoded = pngBytes(originalImage, 8);
         if (source == 1) {
@@ -121,6 +125,7 @@ void stateUpdatesBeforeFirstFlushPreserveRestorableSources() {
                     "move pin into inactive group and activate it");
             const auto beforeFlush = repository.loadRecord(id);
             require(beforeFlush && beforeFlush->groupId == group &&
+                        beforeFlush->checkerboardEnabled == record.checkerboardEnabled &&
                         beforeFlush->canvasSession == record.canvasSession &&
                         beforeFlush->recognitionResults == record.recognitionResults &&
                         (source == 1 ? beforeFlush->originalHtml == record.originalHtml
@@ -131,7 +136,9 @@ void stateUpdatesBeforeFirstFlushPreserveRestorableSources() {
         storage::PinnedWindowRepository reopened(directory.path(), false);
         const auto restored = reopened.loadRecord(id);
         require(reopened.summaries().size() == 1 && reopened.activeGroupId() == group && restored &&
-                    restored->groupId == group && restored->canvasSession == record.canvasSession &&
+                    restored->groupId == group &&
+                    restored->checkerboardEnabled == record.checkerboardEnabled &&
+                    restored->canvasSession == record.canvasSession &&
                     restored->recognitionResults == record.recognitionResults &&
                     (source == 1 ? restored->originalText == record.originalText &&
                                        restored->originalHtml == record.originalHtml
@@ -632,6 +639,39 @@ void showBorderStateRoundTripsAndDefaultsToEnabledForLegacyRecords() {
     const auto loaded = repository.loadRecord(id);
     require(loaded.has_value() && loaded->showBorder && !loaded->borderAppearance,
             "legacy records must restore with the border visible");
+}
+void malformedCustomBorderRejectsRecord() {
+    QTemporaryDir directory;
+    const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    auto record = recordWithId(id, patternedImage(QSize(200, 100), 5));
+    record.borderAppearance =
+        storage::PinnedBorderAppearance{QSize(200, 100), QRectF(0, 0, 200, 100), 0, false};
+    QPainterPath shape;
+    shape.addEllipse(QRectF(0, 0, 200, 100));
+    record.borderAppearance->region =
+        ScreenshotRegionGeometry::fromPath(shape, ScreenshotRegionType::Curve);
+    {
+        storage::PinnedWindowRepository repository(directory.path());
+        require(repository.upsert(record).success && repository.flush().success,
+                "save custom pin fixture");
+    }
+    const auto manifest =
+        QDir(directory.path()).filePath(QStringLiteral("pinned_windows_v2/index.json"));
+    auto root = QJsonDocument::fromJson(readBytes(manifest)).object();
+    auto records = root.value(QStringLiteral("records")).toArray();
+    auto item = records.first().toObject();
+    auto border = item.value(QStringLiteral("border_appearance")).toObject();
+    border.insert(QStringLiteral("geometry"), QJsonObject{{QStringLiteral("version"), 999}});
+    item.insert(QStringLiteral("border_appearance"), border);
+    records[0] = item;
+    root.insert(QStringLiteral("records"), records);
+    QFile file(manifest);
+    require(file.open(QIODevice::WriteOnly | QIODevice::Truncate), "open malformed pin fixture");
+    file.write(QJsonDocument(root).toJson());
+    file.close();
+    storage::PinnedWindowRepository repository(directory.path());
+    require(!repository.loadRecord(id),
+            "malformed custom outline must not restore as a bounding rectangle");
 }
 void thumbnailStateSurvivesRestartAndExit() {
     QTemporaryDir directory;
@@ -1176,6 +1216,7 @@ int main(int argc, char* argv[]) {
     clickThroughStateRoundTripsAndRecoversLegacyOrConflictingMetadata();
     alwaysOnTopStateRoundTripsAndDefaultsToEnabledForLegacyRecords();
     showBorderStateRoundTripsAndDefaultsToEnabledForLegacyRecords();
+    malformedCustomBorderRejectsRecord();
     thumbnailStateSurvivesRestartAndExit();
     hideToTopRoundTripsAndRecoversLegacyMetadata();
     return 0;

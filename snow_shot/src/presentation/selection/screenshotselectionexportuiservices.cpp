@@ -25,6 +25,7 @@
 #include <QStringList>
 #include <QTimer>
 #include <QDataStream>
+#include <QJsonDocument>
 #include <QUuid>
 
 #include <algorithm>
@@ -82,15 +83,6 @@ void applyPersistence(ScreenshotPinnedWindow::Config* config, const QString& id 
                 static_cast<void>(storage.pinnedWindows().upsertExisting(record));
             }
         };
-}
-
-ScreenshotResultStyle decodeResultStyle(const QByteArray& bytes) {
-    ScreenshotResultStyle style;
-    if (!bytes.isEmpty()) {
-        QDataStream stream(bytes);
-        stream >> style.cornerRadius >> style.shadowWidth >> style.shadowColor;
-    }
-    return style;
 }
 
 // Restore display-local positions within the current usable area. Window
@@ -630,6 +622,7 @@ bool ScreenshotSelectionExportUiServices::presentPinnedArtifact(
     config.resultStyle = ScreenshotResultStyle{};
     config.borderAppearance =
         screenshotSelectionBorderAppearance(request.selection.size(), request.resultStyle);
+    config.checkerboardEnabled = screenshotSelectionNeedsCheckerboard(config.borderAppearance);
     config.initialWindowSize = request.initialWindowSize;
     config.screen = request.screen;
     config.enableEditing = true;
@@ -729,6 +722,7 @@ bool ScreenshotSelectionExportUiServices::presentPinnedImageArtifact(
     config.surfaceCanvasRect = config.canvasSourceRect;
     config.initialWindowSize = initialWindowSize;
     config.screen = screen;
+    config.checkerboardEnabled = false;
     config.enableEditing = true;
     config.recognition = m_recognition;
     config.qrRecognition = m_qrRecognition;
@@ -804,6 +798,7 @@ bool ScreenshotSelectionExportUiServices::presentPinnedImage(
     ScreenshotClipboardOriginalContent originalContent, ScreenshotImageLoader imageLoader,
     PinnedCompletion completion,
     std::optional<snow_shot::storage::PinnedBorderAppearance> borderAppearance,
+    std::optional<bool> checkerboardEnabled,
     snow_shot::storage::PinnedWindowCreationSource source) {
     const QSize imageSize =
         !image.isNull() && !image.size().isEmpty() ? image.size() : initialWindowSize;
@@ -811,11 +806,12 @@ bool ScreenshotSelectionExportUiServices::presentPinnedImage(
         nativeGeometry.isEmpty()) {
         return false;
     }
-    return presentPinnedImageOnCanvas(
-        image, screen, nativeGeometry, initialWindowSize,
-        QRectF(QPointF(0.0, 0.0), QSizeF(imageSize)), std::move(formattedTextDocument),
-        formattedPlainText, formattedTextDevicePixelRatio, std::move(originalContent),
-        std::move(imageLoader), std::move(completion), std::move(borderAppearance), source);
+    return presentPinnedImageOnCanvas(image, screen, nativeGeometry, initialWindowSize,
+                                      QRectF(QPointF(0.0, 0.0), QSizeF(imageSize)),
+                                      std::move(formattedTextDocument), formattedPlainText,
+                                      formattedTextDevicePixelRatio, std::move(originalContent),
+                                      std::move(imageLoader), std::move(completion),
+                                      std::move(borderAppearance), checkerboardEnabled, source);
 }
 
 bool ScreenshotSelectionExportUiServices::presentCompositedSelectionImage(
@@ -826,10 +822,12 @@ bool ScreenshotSelectionExportUiServices::presentCompositedSelectionImage(
         request.surfaceCanvasRect.size() != QSizeF(request.initialWindowSize)) {
         return false;
     }
+    const auto appearance =
+        screenshotSelectionBorderAppearance(request.selection.size(), request.resultStyle);
     return presentPinnedImageOnCanvas(
         image, request.screen.data(), request.geometry.nativeGeometry, request.initialWindowSize,
-        request.surfaceCanvasRect, {}, {}, 1.0, {}, {}, std::move(completion),
-        screenshotSelectionBorderAppearance(request.selection.size(), request.resultStyle),
+        request.surfaceCanvasRect, {}, {}, 1.0, {}, {}, std::move(completion), appearance,
+        screenshotSelectionNeedsCheckerboard(appearance),
         snow_shot::storage::PinnedWindowCreationSource::ScreenshotHistory);
 }
 
@@ -840,6 +838,7 @@ bool ScreenshotSelectionExportUiServices::presentPinnedImageOnCanvas(
     qreal formattedTextDevicePixelRatio, ScreenshotClipboardOriginalContent originalContent,
     ScreenshotImageLoader imageLoader, PinnedCompletion completion,
     std::optional<snow_shot::storage::PinnedBorderAppearance> borderAppearance,
+    std::optional<bool> checkerboardEnabled,
     snow_shot::storage::PinnedWindowCreationSource source) {
     SNOW_SHOT_PIN_PERF_SCOPE("ui.present_pinned_image");
     const QSize imageSize =
@@ -875,6 +874,8 @@ bool ScreenshotSelectionExportUiServices::presentPinnedImageOnCanvas(
     config.nativeGeometry = nativeGeometry;
     config.canvasSourceRect = canvasRect;
     config.borderAppearance = std::move(borderAppearance);
+    config.checkerboardEnabled =
+        formattedTextDocument != nullptr ? std::optional<bool>(false) : checkerboardEnabled;
     if (!image.isNull()) {
         config.imageSource = ScreenshotImageSource::fromImage(image, canvasRect);
     }
@@ -1051,8 +1052,16 @@ bool ScreenshotSelectionExportUiServices::presentRestoredRecord(
     config.initialWindowSize = record.initialWindowSize;
     config.screen = targetScreen;
     config.enableEditing = true;
-    config.resultStyle = decodeResultStyle(record.resultStyle);
+    const auto restoredStyle = decodeScreenshotResultStyle(record.resultStyle);
+    if (!restoredStyle)
+        return false;
+    config.resultStyle = *restoredStyle;
     config.borderAppearance = record.borderAppearance;
+    config.checkerboardEnabled = record.checkerboardEnabled;
+    if (!config.checkerboardEnabled && config.borderAppearance) {
+        // Records predating the stored decision still identify selection shapes.
+        config.checkerboardEnabled = screenshotSelectionNeedsCheckerboard(config.borderAppearance);
+    }
     config.persistenceId = record.id;
     config.creationSource = record.creationSource;
     config.restorePersistentState = true;
@@ -1087,6 +1096,7 @@ bool ScreenshotSelectionExportUiServices::presentRestoredRecord(
 
     std::shared_ptr<QTextDocument> formattedDocument;
     if (record.sourceKind == snow_shot::storage::PinnedWindowSourceKind::ClipboardText) {
+        config.checkerboardEnabled = false;
         ScreenshotClipboardOriginalContent original;
         original.html = record.originalHtml;
         original.text = record.originalText;

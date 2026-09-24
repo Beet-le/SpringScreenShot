@@ -56,6 +56,7 @@ class ScreenshotSelectionExportUiServices final : public ScreenshotSelectionExpo
         ScreenshotClipboardOriginalContent originalContent = {},
         ScreenshotImageLoader imageLoader = {}, PinnedCompletion completion = {},
         std::optional<snow_shot::storage::PinnedBorderAppearance> borderAppearance = {},
+        std::optional<bool> checkerboardEnabled = {},
         snow_shot::storage::PinnedWindowCreationSource source =
             snow_shot::storage::PinnedWindowCreationSource::Other);
     // An already composited selection bitmap placed by screenshotSelectionPinRequest.
@@ -91,6 +92,7 @@ class ScreenshotSelectionExportUiServices final : public ScreenshotSelectionExpo
         qreal formattedTextDevicePixelRatio, ScreenshotClipboardOriginalContent originalContent,
         ScreenshotImageLoader imageLoader, PinnedCompletion completion,
         std::optional<snow_shot::storage::PinnedBorderAppearance> borderAppearance = {},
+        std::optional<bool> checkerboardEnabled = {},
         snow_shot::storage::PinnedWindowCreationSource source =
             snow_shot::storage::PinnedWindowCreationSource::Other);
 

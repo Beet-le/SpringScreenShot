@@ -130,6 +130,12 @@ void ScreenshotToolbarWindow::initializePalette() {
                         snow_shot::storage::ScreenshotSettings().captureCursor());
                 }
             });
+    connect(toolPalette, &ScreenshotToolPalette::screenshotRegionTypeRequested, this,
+            [this](int type) { m_commands.setScreenshotRegionType(type); });
+    connect(toolPalette, &ScreenshotToolPalette::addScreenshotRegionRequested, this,
+            [this]() { m_commands.addScreenshotRegion(); });
+    connect(toolPalette, &ScreenshotToolPalette::subtractScreenshotRegionRequested, this,
+            [this]() { m_commands.subtractScreenshotRegion(); });
     connect(toolPalette, &ScreenshotToolPalette::recaptureRequested, this,
             [this]() { m_commands.requestRecapture(); });
     connect(toolPalette, &ScreenshotToolPalette::selectionToolbarHiddenChanged, this,
@@ -484,6 +490,12 @@ void ScreenshotToolbarWindow::setScrollingScreenshotMode(bool enabled) {
     prepareForDisplay();
     if (!m_manuallyDragged) {
         m_commands.repositionToolbarForPresentationChange();
+    }
+}
+
+void ScreenshotToolbarWindow::setScreenshotRegionType(ScreenshotRegionType type) {
+    if (auto* toolPalette = palette()) {
+        toolPalette->setScreenshotRegionType(type);
     }
 }
 

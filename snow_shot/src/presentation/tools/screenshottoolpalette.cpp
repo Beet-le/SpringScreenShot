@@ -2089,6 +2089,18 @@ bool ScreenshotToolPalette::recordingCursorVisible() const {
     return m_recordingCursorVisible;
 }
 
+void ScreenshotToolPalette::setScreenshotRegionType(ScreenshotRegionType type) {
+    if (m_screenshotRegionType == type) {
+        return;
+    }
+    m_screenshotRegionType = type;
+    if (auto* group = findChild<adqt::widgets::AdRadioButtonGroup*>(
+            QStringLiteral("screenshotMoveRegionTypeButtonGroup"))) {
+        const QSignalBlocker blocker(group);
+        group->setCheckedId(int(type));
+    }
+}
+
 void ScreenshotToolPalette::setCaptureCursorEnabled(bool enabled) {
     m_captureCursorEnabled = enabled;
     setScreenshotToolPaletteButtonActive(m_captureCursorButton, enabled);
@@ -2109,6 +2121,9 @@ bool ScreenshotToolPalette::selectionToolbarHidden() const {
 
 void ScreenshotToolPalette::setRecaptureBusy(bool busy) {
     m_recaptureBusy = busy;
+    for (auto* button : {m_addRegionButton, m_subtractRegionButton})
+        if (button)
+            button->setEnabled(!busy);
     if (m_recaptureButton != nullptr) {
         m_recaptureButton->setEnabled(!busy);
     }
@@ -2933,8 +2948,15 @@ void ScreenshotToolPalette::applyScaledToolbarMetrics() {
         }
         for (adqt::widgets::AdButton* button :
              {m_scrollingVerticalButton, m_scrollingHorizontalButton,
-              m_scrollingMoveHorizontalButton, m_scrollingMoveVerticalButton}) {
+              m_scrollingMoveHorizontalButton, m_scrollingMoveVerticalButton, m_addRegionButton,
+              m_subtractRegionButton}) {
             configureScreenshotToolPaletteStyleButton(button, nullptr, metrics);
+        }
+        if (auto* regionTypes = m_selectActionPanel->findChild<adqt::widgets::AdRadioButtonGroup*>(
+                QStringLiteral("screenshotMoveRegionTypeButtonGroup"))) {
+            configureScreenshotToolPaletteStyleRadioButtonGroup(regionTypes, metrics, true);
+            const QSignalBlocker blocker(regionTypes);
+            regionTypes->setCheckedId(int(m_screenshotRegionType));
         }
         if (m_scrollingRecognitionControls != nullptr &&
             m_scrollingRecognitionControls->layout() != nullptr) {
@@ -6211,6 +6233,8 @@ void ScreenshotToolPalette::clearSecondaryResourceBindings() {
     m_moveActionControls = nullptr;
     m_captureCursorButton = nullptr;
     m_recaptureButton = nullptr;
+    m_addRegionButton = nullptr;
+    m_subtractRegionButton = nullptr;
     m_lineStyleControlsWidget = nullptr;
     m_freeDrawStyleControlsWidget = nullptr;
     m_arrowStyleControlsWidget = nullptr;
@@ -6858,6 +6882,44 @@ void ScreenshotToolPalette::createMoveActionFamily() {
     layout->setSpacing(0);
     m_styleControlLayouts.push_back(layout);
 
+    m_addRegionButton = createScreenshotToolPaletteStyleActionButton(
+        m_moveActionControls, QT_TR_NOOP("Add screenshot region"),
+        custom_outlined_icons::ScreenshotRegionAdd(), actionButtonMetrics(m_physicalScale));
+    m_addRegionButton->setObjectName(QStringLiteral("screenshotAddRegionButton"));
+    layout->addWidget(m_addRegionButton);
+    addStyleToolbarSpacing(layout, STYLE_ITEM_SPACING);
+    m_subtractRegionButton = createScreenshotToolPaletteStyleActionButton(
+        m_moveActionControls, QT_TR_NOOP("Subtract screenshot region"),
+        custom_outlined_icons::ScreenshotRegionReduce(), actionButtonMetrics(m_physicalScale));
+    m_subtractRegionButton->setObjectName(QStringLiteral("screenshotSubtractRegionButton"));
+    layout->addWidget(m_subtractRegionButton);
+    addStyleToolbarSpacing(layout, STYLE_GROUP_SPACING);
+    ScreenshotToolPaletteRadioEditorConfig regionTypeConfig;
+    regionTypeConfig.objectName = QStringLiteral("screenshotMoveRegionTypeButtonGroup");
+    regionTypeConfig.options = {
+        {0, QT_TR_NOOP("Rectangle region"), custom_outlined_icons::ScreenshotRegionRectangle()},
+        {1, QT_TR_NOOP("Polyline region"), custom_outlined_icons::ScreenshotRegionPolyline()},
+        {2, QT_TR_NOOP("Curve region"), custom_outlined_icons::ScreenshotRegionCurved()},
+        {3, QT_TR_NOOP("Freehand region"), custom_outlined_icons::ScreenshotRegionFreehand()},
+    };
+    regionTypeConfig.initialId = int(m_screenshotRegionType);
+    regionTypeConfig.useButtonMetrics = true;
+    const auto regionTypes = createScreenshotToolPaletteRadioEditor(
+        m_moveActionControls, regionTypeConfig, actionButtonMetrics(m_physicalScale));
+    regionTypes.group->setObjectName(QStringLiteral("screenshotMoveRegionTypeButtonGroup"));
+    layout->addWidget(regionTypes.container);
+    connect(regionTypes.group, &QButtonGroup::idClicked, this,
+            [this](int type) { emit screenshotRegionTypeRequested(type); });
+    connect(m_addRegionButton, &adqt::widgets::AdButton::clicked, this,
+            &ScreenshotToolPalette::addScreenshotRegionRequested);
+    connect(m_subtractRegionButton, &adqt::widgets::AdButton::clicked, this,
+            &ScreenshotToolPalette::subtractScreenshotRegionRequested);
+    addStyleToolbarSpacing(layout, STYLE_GROUP_SPACING * 2);
+    auto* regionActionsSeparator = createStyleToolbarSeparator(m_moveActionControls);
+    regionActionsSeparator->setObjectName(QStringLiteral("screenshotRegionActionsSeparator"));
+    layout->addWidget(regionActionsSeparator);
+    addStyleToolbarSpacing(layout, STYLE_GROUP_SPACING * 2);
+
     m_captureCursorButton = createScreenshotToolPaletteStyleActionButton(
         m_moveActionControls, "Capture cursor", custom_outlined_icons::RecordingCursor(),
         actionButtonMetrics(m_physicalScale));
@@ -6894,8 +6956,10 @@ void ScreenshotToolPalette::createMoveActionFamily() {
     });
     m_selectActionLayout->addWidget(m_moveActionControls);
     stampScreenshotToolbarReferenceWidth(
-        m_moveActionControls, actionButtonMetrics(1.0).buttonSize * 3 + STYLE_ITEM_SPACING +
-                                  STYLE_GROUP_SPACING * 4 + TOOLBAR_SEPARATOR_WIDTH);
+        m_moveActionControls, actionButtonMetrics(1.0).buttonSize * 5 +
+                                  screenshotToolbarReferenceWidth(regionTypes.container) +
+                                  STYLE_ITEM_SPACING * 2 + STYLE_GROUP_SPACING * 9 + 6 +
+                                  TOOLBAR_SEPARATOR_WIDTH * 2);
     setCaptureCursorEnabled(m_captureCursorEnabled);
     setSelectionToolbarHidden(m_selectionToolbarHidden);
     setRecaptureBusy(m_recaptureBusy);

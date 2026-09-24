@@ -107,6 +107,9 @@ class ScreenshotPinnedWindow final : public QWidget {
         QRectF surfaceCanvasRect;
         ScreenshotResultStyle resultStyle;
         std::optional<snow_shot::storage::PinnedBorderAppearance> borderAppearance;
+        // Known from a selection's shape or rendered text. Imported images
+        // with unknown opacity use their alpha capability conservatively.
+        std::optional<bool> checkerboardEnabled;
         QSize initialWindowSize;
         QString mouseWheelZoomMode = QStringLiteral("mouse_position");
         ScreenshotImageSource imageSource;
@@ -239,6 +242,7 @@ class ScreenshotPinnedWindow final : public QWidget {
     void showContextMenu(const QPoint& globalPosition);
     void updateCanvasViewport();
     void updateBorderOutline();
+    [[nodiscard]] QPainterPath bakedSelectionPath(const QSize& pixelSize) const;
     void updateControlsGeometry();
     void refreshControlsPointerPresence();
     void setControlsPointerInside(bool inside);
@@ -467,6 +471,7 @@ class ScreenshotPinnedWindow final : public QWidget {
     ScreenshotImageSource m_imageSource;
     QImage m_originalImage;
     QImage m_transformedImage;
+    std::optional<bool> m_checkerboardEnabled;
     QTransform m_imageTransform;
     std::shared_ptr<ScreenshotOcrPresentation> m_originalOcrPresentation;
     std::shared_ptr<ScreenshotOcrPresentation> m_displayOcrPresentation;

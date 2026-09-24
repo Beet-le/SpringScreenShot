@@ -438,10 +438,19 @@ QJsonValue borderAppearanceToJson(const std::optional<PinnedBorderAppearance>& a
     if (!appearance) {
         return QJsonValue();
     }
-    return QJsonObject{{QStringLiteral("source_size"), sizeToJson(appearance->sourceSize)},
+    QJsonObject result{{QStringLiteral("source_size"), sizeToJson(appearance->sourceSize)},
                        {QStringLiteral("content_rect"), rectFToJson(appearance->contentRect)},
                        {QStringLiteral("corner_radius"), appearance->cornerRadius},
                        {QStringLiteral("has_shadow"), appearance->hasShadow}};
+    if (appearance->region && appearance->region->custom()) {
+        result.insert(QStringLiteral("geometry"), appearance->region->toJson());
+    } else if (appearance->region) {
+        QJsonArray regions;
+        for (const QRect& rect : *appearance->region)
+            regions.push_back(rectToJson(rect));
+        result.insert(QStringLiteral("regions"), regions);
+    }
+    return result;
 }
 
 std::optional<PinnedBorderAppearance> borderAppearanceFromJson(const QJsonValue& value) {
@@ -453,6 +462,28 @@ std::optional<PinnedBorderAppearance> borderAppearanceFromJson(const QJsonValue&
         !finiteNumber(object.value(QStringLiteral("corner_radius")), 0, 1e9, &radius) ||
         !QRectF(QPointF(), QSizeF(appearance.sourceSize)).contains(appearance.contentRect)) {
         return {};
+    }
+    if (object.contains(QStringLiteral("geometry"))) {
+        const auto geometry =
+            ScreenshotRegionGeometry::fromJson(object.value(QStringLiteral("geometry")));
+        if (!geometry || geometry->isEmpty() ||
+            !QRectF(QPointF(), appearance.contentRect.size())
+                 .contains(geometry->path().boundingRect()))
+            return std::nullopt;
+        appearance.region = *geometry;
+    } else if (object.contains(QStringLiteral("regions"))) {
+        const auto regions = object.value(QStringLiteral("regions"));
+        if (!regions.isArray() || regions.toArray().isEmpty() || regions.toArray().size() > 65536)
+            return {};
+        QRegion region;
+        for (const auto& item : regions.toArray()) {
+            QRect rect;
+            if (!rectFromJson(item, &rect) || !rect.isValid() ||
+                !QRectF(QPointF(), appearance.contentRect.size()).contains(QRectF(rect)))
+                return {};
+            region += rect;
+        }
+        appearance.region = region;
     }
     appearance.cornerRadius = radius;
     appearance.hasShadow = object.value(QStringLiteral("has_shadow")).toBool(false);
@@ -498,6 +529,8 @@ QJsonObject recordToJson(const PinnedWindowRecord& record, const QJsonObject& pa
         {QStringLiteral("always_on_top"), record.alwaysOnTop},
         {QStringLiteral("show_border"), record.showBorder},
         {QStringLiteral("border_appearance"), borderAppearanceToJson(record.borderAppearance)},
+        {QStringLiteral("checkerboard_enabled"),
+         record.checkerboardEnabled ? QJsonValue(*record.checkerboardEnabled) : QJsonValue()},
         {QStringLiteral("recognition_visible"), record.recognitionVisible},
         {QStringLiteral("translation_visible"), record.translationVisible},
         {QStringLiteral("pre_thumbnail_geometry"), rectToJson(record.preThumbnailNativeGeometry)},
@@ -854,6 +887,17 @@ bool parseRecord(const QJsonObject& object, const QString& root, PinnedWindowRec
     record.showBorder = object.value(QStringLiteral("show_border")).toBool(true);
     record.borderAppearance =
         borderAppearanceFromJson(object.value(QStringLiteral("border_appearance")));
+    const QJsonValue checkerboard = object.value(QStringLiteral("checkerboard_enabled"));
+    if (checkerboard.isBool()) {
+        record.checkerboardEnabled = checkerboard.toBool();
+    } else if (!checkerboard.isNull() && !checkerboard.isUndefined()) {
+        return false;
+    }
+    if (object.value(QStringLiteral("border_appearance"))
+            .toObject()
+            .contains(QStringLiteral("geometry")) &&
+        !record.borderAppearance)
+        return false;
     const auto accentValue = object.value(QStringLiteral("hide_to_top_accent_index"));
     const int accent = accentValue.toInt(-1);
     record.hideToTopAccentIndex =
@@ -1694,6 +1738,9 @@ StorageResult PinnedWindowRepository::updateState(PinnedWindowRecord record) {
     record.originalFileName = existing->record.originalFileName;
     record.originalHtml = existing->record.originalHtml;
     record.originalText = existing->record.originalText;
+    if (!record.checkerboardEnabled) {
+        record.checkerboardEnabled = existing->record.checkerboardEnabled;
+    }
     record.resultStyle = existing->record.resultStyle;
 
     QJsonObject payloads = existing->payloads;

@@ -121,6 +121,7 @@ enum class SettingsSwitchBinding {
     OcrResidentProcess,
     OcrModelHotStart,
     SelectionTransitionAnimation,
+    ScreenshotAreaTypeHint,
     TrayEnabled,
     ScreenshotAutoSaveAfterCopy,
     ScreenshotCaptureCursor,

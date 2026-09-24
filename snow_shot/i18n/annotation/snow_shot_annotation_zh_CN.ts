@@ -12,6 +12,10 @@
             <translation>添加</translation>
         </message>
         <message>
+            <source>Add screenshot region</source>
+            <translation>添加截图区域</translation>
+        </message>
+        <message>
             <source>Add template</source>
             <translation>添加模板</translation>
         </message>
@@ -204,6 +208,10 @@
             <translation>当前水印字体大小</translation>
         </message>
         <message>
+            <source>Curve region</source>
+            <translation>曲线区域</translation>
+        </message>
+        <message>
             <source>Curved arrow</source>
             <translation>曲线箭头</translation>
         </message>
@@ -390,6 +398,10 @@
         <message>
             <source>Formatting</source>
             <translation>格式</translation>
+        </message>
+        <message>
+            <source>Freehand region</source>
+            <translation>自由绘制区域</translation>
         </message>
         <message>
             <source>Full-width</source>
@@ -636,6 +648,10 @@
             <translation>请输入模板值</translation>
         </message>
         <message>
+            <source>Polyline region</source>
+            <translation>折线区域</translation>
+        </message>
+        <message>
             <source>Punctuation</source>
             <translation>标点符号</translation>
         </message>
@@ -682,6 +698,10 @@
         <message>
             <source>Rectangle highlight</source>
             <translation>矩形高亮</translation>
+        </message>
+        <message>
+            <source>Rectangle region</source>
+            <translation>矩形区域</translation>
         </message>
         <message>
             <source>Red</source>
@@ -914,6 +934,10 @@
         <message>
             <source>Stroke width %1</source>
             <translation>描边宽度 %1</translation>
+        </message>
+        <message>
+            <source>Subtract screenshot region</source>
+            <translation>减去截图区域</translation>
         </message>
         <message>
             <source>Table recognition</source>
