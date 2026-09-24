@@ -23,17 +23,17 @@ constexpr IconDescriptor kEntries[] =
 
   <rect width="256" height="256" rx="40" fill="#FFFFFF"/>
 
-  <g fill="none" stroke="#81D550" stroke-width="12" stroke-linecap="butt" stroke-linejoin="round">
+  <g fill="none" stroke="#1F1F1F" stroke-width="12" stroke-linecap="butt" stroke-linejoin="round">
     <path d="M87 35H58C44.745 35 34 45.745 34 59V88"/>
     <path d="M168 35H197C210.255 35 221 45.745 221 59V88"/>
     <path d="M34 168V197C34 210.255 44.745 221 58 221H87"/>
     <path d="M221 168V197C221 210.255 210.255 221 197 221H168"/>
   </g>
 
-  <path fill="#9254DE" d="M94 83L176 62L161 93L111 104L180 145L164 173L82 194L98 165L145 152L77 113L94 83Z"/>
+  <path fill="#1F1F1F" d="M94 83L176 62L161 93L111 104L180 145L164 173L82 194L98 165L145 152L77 113L94 83Z"/>
 </svg>
 )ADQT_SVG_0"),
-         std::string_view("e0978efa76d639524f8f48c65caf102c2a26a59cea75c34d8729525a56021de0"),
+         std::string_view("710a31ba61a661f6151793556948b9b1f087d630bb02c606bf628d9e711aa092"),
          IconColorModel::FullColor, IconFit::Contain,
          IconStaticColors{std::string_view(""), std::string_view(""), std::string_view("")}, false},
         {std::string_view("snow-shot"), std::string_view("app"),
@@ -42,18 +42,18 @@ constexpr IconDescriptor kEntries[] =
              R"ADQT_SVG_1(<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" fill="none">
 
   <g transform="translate(-36.02 -36.663) scale(1.28643)">
-    <g fill="none" stroke="#81D550" stroke-width="12" stroke-linecap="butt" stroke-linejoin="round">
+    <g fill="none" stroke="#1F1F1F" stroke-width="12" stroke-linecap="butt" stroke-linejoin="round">
       <path d="M87 35H58C44.745 35 34 45.745 34 59V88"/>
       <path d="M168 35H197C210.255 35 221 45.745 221 59V88"/>
       <path d="M34 168V197C34 210.255 44.745 221 58 221H87"/>
       <path d="M221 168V197C221 210.255 210.255 221 197 221H168"/>
     </g>
 
-    <path fill="#9254DE" d="M94 83L176 62L161 93L111 104L180 145L164 173L82 194L98 165L145 152L77 113L94 83Z"/>
+    <path fill="#1F1F1F" d="M94 83L176 62L161 93L111 104L180 145L164 173L82 194L98 165L145 152L77 113L94 83Z"/>
   </g>
 </svg>
 )ADQT_SVG_1"),
-         std::string_view("dfd73335e868c609a93a3ac2dec1ca0f557b5491429524ba06f42c5910e891f0"),
+         std::string_view("0626f8390ad62e400746cbd52a6a2a9f9756492b15bbd2e1fa20ee2e483107a8"),
          IconColorModel::FullColor, IconFit::Contain,
          IconStaticColors{std::string_view(""), std::string_view(""), std::string_view("")}, false},
         {std::string_view("snow-shot"), std::string_view("brand"),
@@ -1345,7 +1345,7 @@ constexpr IconDescriptor kEntries[] =
 
 constexpr IconPack kStaticPack{
     std::string_view("snow-shot"), std::string_view("Snow Shot project-owned static SVG assets"),
-    std::string_view("c956fc370d59d6c38297e12d9b7372e8c81125a76b874eeccf5d7289d32ad98b"), kEntries,
+    std::string_view("e6f204426d8f99b00174e95966578a4fe3efb9aca910ec3effe884759569d149"), kEntries,
     sizeof(kEntries) / sizeof(kEntries[0])};
 
 } // namespace

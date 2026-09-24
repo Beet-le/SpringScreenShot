@@ -25,12 +25,11 @@ void require(bool condition, const char* message) {
     }
 }
 
-bool isIconGreen(const QColor& color) {
-    return color.alpha() >= 180 && color.green() > color.red() + 25 &&
-           color.green() > color.blue() + 50;
+bool isIconDarkMark(const QColor& color) {
+    return color.alpha() >= 180 && color.red() < 180 && color.green() < 180 && color.blue() < 180;
 }
 
-bool containsGreenNearBorder(const QImage& image) {
+bool containsDarkNearBorder(const QImage& image) {
     const int border = std::max(1, image.width() / 5);
     for (int y = 0; y < image.height(); ++y) {
         for (int x = 0; x < image.width(); ++x) {
@@ -38,7 +37,19 @@ bool containsGreenNearBorder(const QImage& image) {
                 y < image.height() - border) {
                 continue;
             }
-            if (isIconGreen(image.pixelColor(x, y))) {
+            if (isIconDarkMark(image.pixelColor(x, y))) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool containsDarkInCenter(const QImage& image) {
+    const int inset = std::max(1, image.width() / 4);
+    for (int y = inset; y < image.height() - inset; ++y) {
+        for (int x = inset; x < image.width() - inset; ++x) {
+            if (isIconDarkMark(image.pixelColor(x, y))) {
                 return true;
             }
         }
@@ -63,16 +74,8 @@ void applicationIconScalesWithoutEmbeddedRasterImages() {
                     pixmap.devicePixelRatio() == scale,
                 "caption icon must provide physical pixels for the window's display scale");
         const QImage image = pixmap.toImage();
-        require(containsGreenNearBorder(image), "caption icon must retain its green scan frame");
-        bool containsPurple = false;
-        for (int y = 0; y < image.height(); ++y) {
-            for (int x = 0; x < image.width(); ++x) {
-                const QColor color = image.pixelColor(x, y);
-                containsPurple |= color.alpha() >= 180 && color.red() > color.green() + 25 &&
-                                  color.blue() > color.red() + 25;
-            }
-        }
-        require(containsPurple, "caption icon must retain its purple lightning mark");
+        require(containsDarkNearBorder(image), "caption icon must retain its dark scan frame");
+        require(containsDarkInCenter(image), "caption icon must retain its dark lightning mark");
     }
 }
 
@@ -90,39 +93,38 @@ void titleBarIconDropsItsBackgroundAndFillsTheWhiteArea() {
         request.devicePixelRatio = scale;
         const QImage image = adqt::icons::renderIconPixmap(icon, request).toImage();
         bool containsWhiteBackdrop = false;
-        bool containsPurple = false;
+        bool containsDarkMark = false;
         for (int y = 0; y < image.height(); ++y) {
             for (int x = 0; x < image.width(); ++x) {
                 const QColor color = image.pixelColor(x, y);
                 containsWhiteBackdrop |= color.alpha() >= 250 && color.red() >= 240 &&
                                          color.green() >= 240 && color.blue() >= 240;
-                containsPurple |= color.alpha() >= 180 && color.red() > color.green() + 25 &&
-                                  color.blue() > color.red() + 25;
+                containsDarkMark |= isIconDarkMark(color);
             }
         }
         require(!containsWhiteBackdrop,
                 "the title bar icon must render without an opaque white backdrop");
-        require(containsPurple, "the title bar icon must retain its purple lightning mark");
+        require(containsDarkMark, "the title bar icon must retain its dark lightning mark");
         // The artwork is scaled into the area the white background used to fill, so
-        // the green scan frame must reach all four edges of the canvas.
-        bool greenOnTop = false;
-        bool greenOnBottom = false;
+        // the dark scan frame must reach all four edges of the canvas.
+        bool darkOnTop = false;
+        bool darkOnBottom = false;
         for (int x = 0; x < image.width(); ++x) {
-            greenOnTop |= isIconGreen(image.pixelColor(x, 0));
-            greenOnBottom |= isIconGreen(image.pixelColor(x, image.height() - 1));
+            darkOnTop |= isIconDarkMark(image.pixelColor(x, 0));
+            darkOnBottom |= isIconDarkMark(image.pixelColor(x, image.height() - 1));
         }
-        bool greenOnLeft = false;
-        bool greenOnRight = false;
+        bool darkOnLeft = false;
+        bool darkOnRight = false;
         for (int y = 0; y < image.height(); ++y) {
-            greenOnLeft |= isIconGreen(image.pixelColor(0, y));
-            greenOnRight |= isIconGreen(image.pixelColor(image.width() - 1, y));
+            darkOnLeft |= isIconDarkMark(image.pixelColor(0, y));
+            darkOnRight |= isIconDarkMark(image.pixelColor(image.width() - 1, y));
         }
-        require(greenOnTop && greenOnBottom && greenOnLeft && greenOnRight,
+        require(darkOnTop && darkOnBottom && darkOnLeft && darkOnRight,
                 "the title bar icon artwork must fill the former white background area");
     }
 }
 
-void installedApplicationIconPreservesItsGreenTaskbarBorder() {
+void installedApplicationIconPreservesItsDarkTaskbarMark() {
     namespace icons = snow_shot::presentation::icons::custom;
     QApplication::setWindowIcon(adqt::icons::makeIcon(icons::app::ApplicationIcon()));
     const QIcon installedIcon = QApplication::windowIcon();
@@ -132,13 +134,13 @@ void installedApplicationIconPreservesItsGreenTaskbarBorder() {
         const QPixmap pixmap = installedIcon.pixmap(QSize(size, size));
         require(!pixmap.isNull() && pixmap.size() == QSize(size, size),
                 "application icon should provide every taskbar raster size");
-        require(containsGreenNearBorder(pixmap.toImage()),
-                "application icon should preserve its green border at taskbar sizes");
+        require(containsDarkNearBorder(pixmap.toImage()),
+                "application icon should preserve its dark border at taskbar sizes");
     }
 }
 
 #ifdef Q_OS_WIN
-void executableIconResourcePreservesItsGreenTaskbarBorder() {
+void executableIconResourcePreservesItsDarkTaskbarMark() {
     HMODULE module = GetModuleHandleW(nullptr);
     require(module != nullptr, "application icon test could not resolve its module");
     for (const int size : {16, 32, 48}) {
@@ -147,8 +149,8 @@ void executableIconResourcePreservesItsGreenTaskbarBorder() {
         require(icon != nullptr, "Snow Shot executable did not contain its application icon");
         const QImage image = QImage::fromHICON(icon);
         DestroyIcon(icon);
-        require(!image.isNull() && containsGreenNearBorder(image),
-                "embedded Snow Shot application icon should preserve its green border");
+        require(!image.isNull() && containsDarkNearBorder(image),
+                "embedded Snow Shot application icon should preserve its dark border");
     }
 }
 #endif
@@ -160,9 +162,9 @@ int main(int argc, char** argv) {
     try {
         applicationIconScalesWithoutEmbeddedRasterImages();
         titleBarIconDropsItsBackgroundAndFillsTheWhiteArea();
-        installedApplicationIconPreservesItsGreenTaskbarBorder();
+        installedApplicationIconPreservesItsDarkTaskbarMark();
 #ifdef Q_OS_WIN
-        executableIconResourcePreservesItsGreenTaskbarBorder();
+        executableIconResourcePreservesItsDarkTaskbarMark();
 #endif
         return 0;
     } catch (const std::exception& error) {
