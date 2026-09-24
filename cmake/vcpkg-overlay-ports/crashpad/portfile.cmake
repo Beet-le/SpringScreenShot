@@ -13,6 +13,19 @@ foreach(_snow_patch fix-linux.patch fix-lib-name-conflict.patch crashpad-memset-
     string(REPLACE "        ${_snow_patch}" "        \"${_snow_upstream}/${_snow_patch}\""
         _snow_port "${_snow_port}")
 endforeach()
+if(VCPKG_TARGET_IS_OSX)
+    # Honor the triplet's minimum OS and tolerate deprecated SDK APIs in pinned
+    # mini_chromium, without relaxing warnings in Snow's own code.
+    set(_snow_mac_options " mac_deployment_target=\"${VCPKG_OSX_DEPLOYMENT_TARGET}\" extra_cflags=\"-Wno-error=deprecated-declarations\"")
+    string(REPLACE "set(OPTIONS_DBG \"is_debug=true\")"
+        "string(APPEND OPTIONS [==[${_snow_mac_options}]==])\nset(OPTIONS_DBG \"is_debug=true\")"
+        _snow_port "${_snow_port}")
+    string(REPLACE "\${CMAKE_CURRENT_LIST_DIR}" "${_snow_upstream}" _snow_port "${_snow_port}")
+    file(WRITE "${CURRENT_BUILDTREES_DIR}/snow-port.cmake" "${_snow_port}")
+    include("${CURRENT_BUILDTREES_DIR}/snow-port.cmake")
+    return()
+endif()
+
 set(_snow_escape [=[
     foreach(_snow_flags VCPKG_COMBINED_C_FLAGS_DEBUG VCPKG_COMBINED_CXX_FLAGS_DEBUG
             VCPKG_COMBINED_C_FLAGS_RELEASE VCPKG_COMBINED_CXX_FLAGS_RELEASE

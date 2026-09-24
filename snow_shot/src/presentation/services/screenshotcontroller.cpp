@@ -1,3 +1,4 @@
+#include "snow_shot/presentation/screenshotencodingsettings.h"
 #include "snow_shot/presentation/pinnedgeometry.h"
 #include "snow_shot/presentation/screenshotautofiltercontroller.h"
 #include "snow_shot/presentation/screenshotsourceimagecomposer.h"
@@ -1728,16 +1729,8 @@ void ScreenshotController::Impl::prepareRecaptureWindows(quint64 generation) {
         return;
     }
 
-    QVector<QWidget*> visibleWindows;
-    m_displaySession.forEachOverlay([&visibleWindows](qsizetype, ScreenshotOverlayWindow* overlay) {
-        if (overlay != nullptr && overlay->isVisible() && !visibleWindows.contains(overlay)) {
-            visibleWindows.push_back(overlay);
-        }
-    });
-    if (ScreenshotToolbarWindow* toolbar = m_overlayCoordinator->toolbar();
-        toolbar != nullptr && toolbar->isVisible() && !visibleWindows.contains(toolbar)) {
-        visibleWindows.push_back(toolbar);
-    }
+    const QVector<QWidget*> visibleWindows =
+        m_overlayCoordinator->visibleRecaptureWindows(m_displaySession);
 
 #ifdef Q_OS_MACOS
     // ScreenCaptureKit filters explicit window IDs while the editing UI stays visible.
@@ -3006,9 +2999,16 @@ void ScreenshotController::Impl::pinHistoryRecord(const QString& recordId) {
                 presented = impl.m_selectionExportUiServices->presentCompositedSelectionImage(
                     result.image, selectionPlacement, std::move(completion));
             } else {
-                presented = impl.presentDecodedImageOnScreen(
-                    fallbackScreen, result.image, fallbackScreen->devicePixelRatio(),
-                    autoResizeWindow, {}, std::move(completion));
+                const auto fit = snow_shot::presentation::fitPinnedImageOnScreen(
+                    *fallbackScreen,
+                    snow_shot::presentation::pinnedImageWindowSize(
+                        result.image, fallbackScreen->devicePixelRatio()),
+                    autoResizeWindow);
+                presented = fit.valid &&
+                            impl.m_selectionExportUiServices->presentPinnedImage(
+                                result.image, fallbackScreen, fit.nativeGeometry,
+                                fit.initialWindowSize, {}, {}, 1.0, {}, {}, std::move(completion),
+                                snow_shot::presentation::historySelectionBorderAppearance(record));
             }
             if (!presented) {
                 qWarning("Screenshot history pin could not be presented");
@@ -3456,9 +3456,7 @@ void ScreenshotController::Impl::saveSelectionToFile() {
     }
     const ScreenshotImageFileFormat format =
         ScreenshotImageFileService::formatForDialogSelection(selectedPath, selectedFilter);
-    const ScreenshotImageEncodingOptions encoding{
-        outputSettings.imageQuality(),
-        ScreenshotImageFileService::compressionLevelForKey(outputSettings.compressionLevel())};
+    const auto encoding = snow_shot::presentation::screenshotEncodingOptions(outputSettings);
     static_cast<void>(
         outputSettings.setLastManualSaveFormat(ScreenshotImageFileService::formatKey(format)));
     if (!ensureExportFeature()) {
@@ -3956,6 +3954,7 @@ void ScreenshotController::Impl::saveArtifactForCopy(
         &owner, ScreenshotImageFileService::automaticDirectories(settings.imageSaveDirectory()),
         ScreenshotImageFileService::formatForKey(settings.imageFormat()),
         settings.autoSaveFilenameFormat(),
+        snow_shot::presentation::screenshotEncodingOptions(settings),
         [receiver, artifact, generation, copyFileToClipboard, historySource, historyCandidate,
          scrolling](ScreenshotExportTaskResult result) mutable {
             if (receiver.isNull() || receiver->m_impl == nullptr)

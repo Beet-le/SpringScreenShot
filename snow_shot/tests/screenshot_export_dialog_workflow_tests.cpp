@@ -426,7 +426,7 @@ void pdfDialogAndSettings(QWidget& owner, const QTemporaryDir& temp) {
             "history display compression must validate, reset, and remain independent of output");
     require(backend.resetSection(settings::SettingsSectionReset::ScreenshotOutput) &&
                 settings.pdfPageSize() == QStringLiteral("a4_portrait") &&
-                settings.compressionLevel() == QStringLiteral("low") &&
+                settings.compressionLevel() == QStringLiteral("medium") &&
                 settings.imageQuality() == 100,
             "output reset must restore PDF, compression, and quality defaults");
     require(settings.setImageSaveDirectory(temp.path()) &&
@@ -601,7 +601,7 @@ void stateRules(const QTemporaryDir& temp) {
             "suggested filename must omit the image format extension");
     require(state.directory == remembered && state.output.size == QSize(160, 100) &&
                 state.output.format == Format::Png && state.output.quality == 100 &&
-                state.output.compressionLevel == ScreenshotCompressionLevel::Low &&
+                state.output.compressionLevel == ScreenshotCompressionLevel::Medium &&
                 state.lockAspectRatio,
             "opening controls must use defaults and remembered directory");
     require(settings.setLastManualSaveDirectory(temp.filePath("missing")),
@@ -1124,7 +1124,7 @@ void unchangedPreviewEdits(QWidget& owner) {
     require(content->property("previewGeneration").toULongLong() == generation,
             "equivalent edits must not complete redundant preview jobs");
     const qulonglong preparedIdentity = content->property("preparedPixelsIdentity").toULongLong();
-    compression->setCurrentValue(QStringLiteral("medium"));
+    compression->setCurrentValue(QStringLiteral("high"));
     require(!busy->isHidden(), "PNG compression changes must render a new encoded result");
     processUntil([&] { return content->property("previewGeneration").toULongLong() > generation; });
     require(content->property("preparedPixelsIdentity").toULongLong() == preparedIdentity,
@@ -1280,6 +1280,35 @@ void shortcutPopupInteraction(QWidget& owner, const QTemporaryDir& temp) {
     leave(menu);
     settle();
     require(!menu->isVisible(), "leaving the popup must hide it without a click");
+
+    flush();
+    trigger->click();
+    flush();
+    menu = child<AdContextMenu>(content, "savePathMenu");
+    require(menu && menu->isVisible(), "covered-trigger setup must reopen the shortcut menu");
+    QWidget blocker(content);
+    blocker.setGeometry(QRect(trigger->mapTo(content, QPoint()), trigger->size()));
+    blocker.show();
+    blocker.raise();
+    require(menu && menu->isVisible(), "covering the trigger must leave the menu open initially");
+    const QPoint coveredTrigger = trigger->mapToGlobal(trigger->rect().center());
+    QCursor::setPos(coveredTrigger);
+    require(QApplication::widgetAt(coveredTrigger) == &blocker,
+            "hover occlusion fixture must cover the shortcut trigger");
+    QMouseEvent coveredMove(QEvent::MouseMove, menu->mapFromGlobal(coveredTrigger), coveredTrigger,
+                            Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(menu, &coveredMove);
+    settle();
+    require(!menu->isVisible(),
+            "a covered trigger must not keep the hover popup open after pointer movement");
+    const QPoint triggerCenter = trigger->rect().center();
+    QEnterEvent coveredEnter(triggerCenter, triggerCenter, coveredTrigger);
+    QApplication::sendEvent(trigger, &coveredEnter);
+    const auto menus = content->findChildren<AdContextMenu*>(QStringLiteral("savePathMenu"));
+    require(
+        std::none_of(menus.begin(), menus.end(),
+                     [](const AdContextMenu* candidate) { return candidate->isPopupVisible(); }),
+        "entering a covered trigger must not reopen its hover popup");
     require(settings.setSavePathShortcuts({}), "hover shortcut cleanup failed");
 }
 
@@ -1450,7 +1479,7 @@ void previewAndSave(QWidget& owner, const QTemporaryDir& temp) {
     auto* unit = child<AdSegmented>(dimensions, "saveSizeUnitSegmented");
     require(sizeLabel->text() == QStringLiteral("Size") && unit->count() == 2 &&
                 unit->currentValue() == QStringLiteral("pixels") &&
-                unit->optionLabel(0) == QStringLiteral("px") &&
+                unit->optionLabel(0) == QStringLiteral("pixel") &&
                 unit->optionLabel(1) == QStringLiteral("Percentage") &&
                 sizeLabel->geometry().right() < unit->geometry().left() &&
                 unit->geometry().right() == dimensions->rect().right(),
@@ -1495,8 +1524,8 @@ void previewAndSave(QWidget& owner, const QTemporaryDir& temp) {
         modal->setContentWidget(content);
     }
     require(qualityRow->isHidden() && !compressionRow->isHidden() &&
-                compression->currentValue() == QStringLiteral("low"),
-            "PNG must hide Quality and show Compression level at Low");
+                compression->currentValue() == QStringLiteral("medium"),
+            "PNG must hide Quality and show Compression level at Medium");
     format->setCurrentValue(QStringLiteral("bmp"));
     require(format->currentValue() == QStringLiteral("bmp") && qualityRow->isHidden() &&
                 compressionRow->isHidden(),
@@ -1526,7 +1555,7 @@ void previewAndSave(QWidget& owner, const QTemporaryDir& temp) {
     require(quality->value() == 73 && compression->currentValue() == QStringLiteral("high"),
             "WebP must restore its independent quality and compression values");
     format->setCurrentValue(QStringLiteral("png"));
-    compression->setCurrentValue(QStringLiteral("medium"));
+    compression->setCurrentValue(QStringLiteral("low"));
     const quint64 generation = content->property("previewGeneration").toULongLong();
     child<AdLineEdit>(content, "saveFilenameInput")->setText(QString());
     child<AdInputNumber>(content, "saveWidthInput")->setValue(96);
@@ -1535,6 +1564,7 @@ void previewAndSave(QWidget& owner, const QTemporaryDir& temp) {
     require(child<AdInputNumber>(content, "saveHeightInput")->value() == 50 &&
                 !modal->acceptButton()->isEnabled(),
             "latest geometry must render despite invalid filename and Save must remain blocked");
+    compression->setCurrentValue(QStringLiteral("medium"));
     child<AdLineEdit>(content, "saveFilenameInput")->setText(QStringLiteral("result"));
     const QString blocking = temp.filePath("blocking-file");
     QFile file(blocking);
@@ -1776,7 +1806,7 @@ void sizeUnits(QWidget& owner, const QTemporaryDir& temp) {
     require(QApplication::installTranslator(&translator), "size translator unavailable");
     flush();
     require(child<QLabel>(content, "saveSizeLabel")->text() == QStringLiteral("Translated Size") &&
-                unit->optionLabel(0) == QStringLiteral("Translated px") &&
+                unit->optionLabel(0) == QStringLiteral("Translated pixel") &&
                 unit->optionLabel(1) == QStringLiteral("Translated Percentage") &&
                 unit->accessibleName() == QStringLiteral("Translated Size unit") &&
                 width->toolTip() == QStringLiteral("Translated Width") &&
@@ -1800,7 +1830,8 @@ void sizeUnits(QWidget& owner, const QTemporaryDir& temp) {
             flush();
             auto* dimensions = child<QWidget>(content, "saveDimensionsForm");
             auto* label = child<QLabel>(content, "saveSizeLabel");
-            require(label->geometry().right() < unit->geometry().left() &&
+            require(unit->optionLabel(0) == QStringLiteral("像素") &&
+                        label->geometry().right() < unit->geometry().left() &&
                         dimensions->rect().contains(unit->geometry()) &&
                         unit->width() >= unit->minimumSizeHint().width(),
                     "translated size header must fit without clipping");

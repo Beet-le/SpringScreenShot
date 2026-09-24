@@ -83,6 +83,8 @@ QImage testRenderOcrFilteredImage(const QImage& source, const QRectF& canvasRect
 class NoopOverlayEventSink final : public ScreenshotOverlayEventSink {
   public:
     ScreenshotOverlayRightClickResult rightClickResult = ScreenshotOverlayRightClickResult::Ignored;
+    bool consumeWheel = false;
+    int wheelCalls = 0;
     std::function<void()> cancel = [] {};
     void completeRightClickCancellation() override {
         cancel();
@@ -105,7 +107,8 @@ class NoopOverlayEventSink final : public ScreenshotOverlayEventSink {
 
     bool handleOverlayWheel(ScreenshotOverlayWindow*, const QPointF&, const QPoint&,
                             const QPoint&) override {
-        return false;
+        ++wheelCalls;
+        return consumeWheel;
     }
 
     bool shouldBlockUnhandledOverlayKeyInput() const override {
@@ -1628,6 +1631,57 @@ void roundedSelectionPreviewKeepsTheSameContentBoundsWithAndWithoutShadow() {
         require(withoutShadow.pixelColor(point) == screenshotColor &&
                     withShadow.pixelColor(point) == screenshotColor,
                 "enabling shadow must not inset or shrink the rounded selection content");
+    }
+    canvas.setCustomRenderer(nullptr);
+}
+
+void changingRoundedSelectionShadowRepaintsCornerPixels() {
+    SnowCanvasWidget canvas;
+    canvas.resize(160, 140);
+    canvas.setClearBackgroundEnabled(false);
+    require(canvas.setViewportCamera(0.0, 0.0, 1.0), "camera should update");
+
+    ScreenshotCanvasRenderer renderer(canvas);
+    canvas.setCustomRenderer(&renderer);
+    QImage screenshot(160, 140, QImage::Format_RGBA8888);
+    screenshot.fill(QColor(0, 80, 240));
+    renderer.setImage(std::move(screenshot), QRectF(-80.0, -70.0, 160.0, 140.0));
+    renderer.setMaskVisible(true);
+    const QRectF selection(-40.0, -30.0, 80.0, 60.0);
+    renderer.setSelection(selection, false, 24, 0);
+    renderer.setSelectionToolbarHovered(true);
+    canvas.show();
+    QApplication::processEvents();
+
+    constexpr qreal devicePixelRatio = 1.5;
+    QImage previous = renderCanvas(canvas, devicePixelRatio);
+    const QColor initialShadowColor(0x33, 0x33, 0x33);
+    const std::array<std::pair<int, QColor>, 5> shadowStates = {{
+        {8, initialShadowColor},
+        {1, initialShadowColor},
+        {0, initialShadowColor},
+        {12, initialShadowColor},
+        {12, QColor(0x99, 0x22, 0x22)},
+    }};
+    for (const auto& [shadowWidth, shadowColor] : shadowStates) {
+        CanvasPaintRegionObserver observer;
+        canvas.installEventFilter(&observer);
+        observer.begin();
+        renderer.setSelection(selection, false, 24, shadowWidth, shadowColor);
+        QApplication::processEvents();
+        const QRegion dirty = observer.region();
+        canvas.removeEventFilter(&observer);
+
+        const QImage next = renderCanvas(canvas, devicePixelRatio);
+        if (shadowWidth == 8) {
+            require(previous.pixelColor(69, 69) != next.pixelColor(69, 69),
+                    "enabling shadow should change a rounded selection corner pixel");
+        }
+        requireChangedPixelsCoveredByDirtyRegion(
+            previous, next, dirty, "rounded shadow changes must repaint every changed pixel");
+        require(!dirty.contains(QPoint(80, 70)),
+                "shadow changes should preserve the stable selection center");
+        previous = next;
     }
     canvas.setCustomRenderer(nullptr);
 }
@@ -3668,6 +3722,39 @@ void canvasWheelZoomCanBeDisabled() {
             "a disabled canvas should ignore wheel zoom");
 }
 
+void overlayPassesTextDraftWheelToCanvas() {
+    NoopOverlayEventSink eventSink;
+    eventSink.consumeWheel = true;
+    auto* canvas = new SnowCanvasWidget;
+    ScreenshotOverlayWindow overlay(eventSink, canvas);
+    overlay.resize(300, 200);
+    overlay.show();
+    QApplication::processEvents();
+    canvas->setInteractionEnabled(true);
+    require(canvas->setCanvasTool(SnowCanvasTool::Text), "activate overlay text tool");
+
+    const QPointF position(150.0, 100.0);
+    const auto sendWheel = [&] {
+        QWheelEvent event(position, canvas->mapToGlobal(position.toPoint()), QPoint(),
+                          QPoint(0, 120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(canvas, &event);
+    };
+    const double initialFontSize = canvas->canvasStyleToolbarState().textStyle.fontSize;
+    sendWheel();
+    require(eventSink.wheelCalls == 1 &&
+                canvas->canvasStyleToolbarState().textStyle.fontSize == initialFontSize,
+            "overlay owns wheel input when no text draft is active");
+
+    QMouseEvent press(QEvent::MouseButtonPress, position, canvas->mapToGlobal(position.toPoint()),
+                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(canvas, &press);
+    require(canvas->hasActiveTextEditing(), "overlay starts a text draft");
+    sendWheel();
+    require(eventSink.wheelCalls == 1 &&
+                canvas->canvasStyleToolbarState().textStyle.fontSize == initialFontSize + 1.0,
+            "overlay passes an active text draft's wheel input to the canvas");
+}
+
 void disabledCanvasBlocksWidgetLevelToolInput() {
     WheelTestCanvas canvas;
     canvas.resize(200, 160);
@@ -4016,6 +4103,10 @@ void overlayRightClickClosesOnRelease(bool native = false) {
 
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
+    if (application.arguments().contains(QStringLiteral("--text-wheel-only"))) {
+        overlayPassesTextDraftWheelToCanvas();
+        return 0;
+    }
 #ifdef Q_OS_WIN
     if (close_release_native_test::receiverRequested()) {
         return close_release_native_test::runReceiver();
@@ -4139,6 +4230,7 @@ int main(int argc, char** argv) {
     bgraScreenshotImagesRenderWithCorrectColors();
     hoveredSelectionToolbarHidesBorderAndRendersShadowPreview();
     roundedSelectionPreviewKeepsTheSameContentBoundsWithAndWithoutShadow();
+    changingRoundedSelectionShadowRepaintsCornerPixels();
     squareSelectionPreviewKeepsTheSameContentBoundsWithAndWithoutShadow();
     hoveredSelectionToolbarInvalidatesOnlyPreviewRing();
     hiddenSelectionBorderRetainsSelectionAndMask();
@@ -4177,6 +4269,7 @@ int main(int argc, char** argv) {
     screenshotMessagesFollowSelectionAndRememberTheirOwner();
     screenshotMessagesFallBackWhenNoOverlayIsAvailable();
     canvasWheelZoomCanBeDisabled();
+    overlayPassesTextDraftWheelToCanvas();
     disabledCanvasBlocksWidgetLevelToolInput();
     overlayCanvasesAreDisabledUntilCanvasInteractionIsEnabled();
     overlayNativeSurfaceIsReleasedBeforeDeferredObjectDeletion();
