@@ -21,6 +21,8 @@
 namespace snow_shot::app {
 namespace {
 constexpr int kForwardTimeoutMilliseconds = 1500;
+constexpr int kEarlyProbeConnectTimeoutMilliseconds = 200;
+constexpr int kEarlyProbeWriteTimeoutMilliseconds = 500;
 constexpr int kMaximumRequestBytes = 1024 * 1024;
 
 QString instanceIdentity() {
@@ -124,6 +126,25 @@ SingleInstanceResult SingleInstanceCoordinator::acquireOrForward(const QStringLi
             .arg(processId)
             .arg(hostName, applicationName, forwardError),
     };
+}
+
+bool SingleInstanceCoordinator::tryForwardToRunningInstance(const QStringList& arguments) {
+    const QByteArray payload = requestPayload(arguments);
+    if (payload.size() > kMaximumRequestBytes) {
+        return false;
+    }
+    const QByteArray frame = framedPayload(payload);
+    QLocalSocket socket;
+    socket.connectToServer(QStringLiteral("snow-shot-") + instanceIdentity(), QIODevice::WriteOnly);
+    if (!socket.waitForConnected(kEarlyProbeConnectTimeoutMilliseconds)) {
+        return false;
+    }
+    if (socket.write(frame) != frame.size() ||
+        !socket.waitForBytesWritten(kEarlyProbeWriteTimeoutMilliseconds)) {
+        return false;
+    }
+    socket.disconnectFromServer();
+    return true;
 }
 
 bool SingleInstanceCoordinator::isPrimary() const {

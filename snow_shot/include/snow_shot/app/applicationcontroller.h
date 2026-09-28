@@ -18,6 +18,7 @@ class ApplicationController final : public QObject {
 
     void start();
     void showMainWindow();
+    void requestScreenshot();
     void handleLaunchRequest(const QStringList& arguments);
     void restorePinnedWindows();
 

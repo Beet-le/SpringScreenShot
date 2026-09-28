@@ -33,6 +33,11 @@ class SingleInstanceCoordinator final : public QObject {
     ~SingleInstanceCoordinator() override;
 
     [[nodiscard]] SingleInstanceResult acquireOrForward(const QStringList& arguments);
+    // Best-effort fast path for early startup: forwards the launch request to a
+    // running instance with a single short connect attempt and returns true when
+    // delivered. Returns false quickly when no instance is reachable, so the
+    // caller can continue full startup (acquireOrForward still handles races).
+    [[nodiscard]] static bool tryForwardToRunningInstance(const QStringList& arguments);
     [[nodiscard]] bool isPrimary() const;
     [[nodiscard]] QString lockFilePath() const;
     void setLaunchRequestHandler(std::function<void(const QStringList&)> handler);

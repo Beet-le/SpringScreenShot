@@ -948,6 +948,17 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_test(NAME snow-shot-application-restart-tests COMMAND snow-shot-application-restart-tests)
     set_tests_properties(snow-shot-application-restart-tests PROPERTIES LABELS "unit" TIMEOUT 60
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
+    add_executable(snow-shot-launch-command-tests
+        tests/launch_command_tests.cpp
+        include/snow_shot/app/launchcommands.h
+        src/app/launchcommands.cpp)
+    target_include_directories(snow-shot-launch-command-tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include")
+    target_link_libraries(snow-shot-launch-command-tests PRIVATE Qt6::Core)
+    add_test(NAME snow-shot-launch-command-tests COMMAND snow-shot-launch-command-tests)
+    set_tests_properties(snow-shot-launch-command-tests PROPERTIES LABELS "unit" TIMEOUT 30
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 endif()
 add_library(snow_shot_permissions STATIC
     include/snow_shot/presentation/apppermissionservice.h
@@ -1205,6 +1216,7 @@ set(PROJECT_CXX_SOURCES
     src/app/mcp/mcpmediaservice.cpp
     src/app/applicationrestart.cpp
     src/app/featureavailability.cpp
+    src/app/launchcommands.cpp
     src/app/main.cpp
     src/app/singleinstancecoordinator.cpp
     src/platform/physicalcursor.cpp

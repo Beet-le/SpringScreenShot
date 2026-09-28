@@ -1,5 +1,6 @@
 #include "snow_shot/app/applicationcontroller.h"
 #include "snow_shot/app/applicationrestart.h"
+#include "snow_shot/app/launchcommands.h"
 #include <QTemporaryDir>
 #include <QProcess>
 #include <QLocalServer>
@@ -331,6 +332,29 @@ int main(int argc, char* argv[]) {
         storage.shutdown();
         return 0;
     }
+    // A second instance triggered by --open-draw forwards to the running primary
+    // before any heavyweight startup (update probe, diagnostics, QApplication).
+    if (!applicationRestart && !administratorRestart) {
+        for (int index = 1; index < argc; ++index) {
+            if (QString::fromLocal8Bit(argv[index]) != QStringLiteral("--open-draw")) {
+                continue;
+            }
+            QStringList arguments;
+            for (int inner = 0; inner < argc; ++inner) {
+                arguments.push_back(QString::fromLocal8Bit(argv[inner]));
+            }
+            bool forwarded = false;
+            {
+                QCoreApplication forwarder(argc, argv);
+                forwarded = snow_shot::app::SingleInstanceCoordinator::tryForwardToRunningInstance(
+                    arguments);
+            }
+            if (forwarded) {
+                return 0;
+            }
+            break;
+        }
+    }
 #ifndef Q_OS_MACOS
     // macOS updates use a downloaded DMG, not the standalone transaction helper.
     QString executablePath = QString::fromLocal8Bit(argv[0]);
@@ -571,9 +595,16 @@ int main(int argc, char* argv[]) {
         applicationController.showMainWindow();
     snow_shot::diagnostics::logEvent(QStringLiteral("snow_shot.app"),
                                      QStringLiteral("application.ready"));
-    if (!launchArguments.contains(QStringLiteral("--autostart")) &&
-        QApplication::arguments().contains(QStringLiteral("--show-main-window"))) {
+    switch (snow_shot::app::launchActionForColdStart(launchArguments)) {
+    case snow_shot::app::LaunchAction::None:
+        break;
+    case snow_shot::app::LaunchAction::ShowMainWindow:
         applicationController.showMainWindow();
+        break;
+    case snow_shot::app::LaunchAction::Screenshot:
+        QTimer::singleShot(0, &app,
+                           [&applicationController] { applicationController.requestScreenshot(); });
+        break;
     }
     return QApplication::exec();
 }

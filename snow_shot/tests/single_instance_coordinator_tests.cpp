@@ -183,6 +183,45 @@ void pipeRejectsAnonymousClients() {
             "single-instance pipe allowed an anonymous client");
 }
 #endif
+
+void earlyForwardReachesRunningPrimary() {
+    single_instance::SingleInstanceCoordinator primary;
+    require(primary.acquireOrForward({QStringLiteral("snow-shot-test")}).outcome ==
+                single_instance::SingleInstanceOutcome::Primary,
+            "could not acquire the early-forward fixture");
+    QStringList signaledArguments;
+    QObject::connect(
+        &primary, &single_instance::SingleInstanceCoordinator::launchRequestReceived,
+        [&signaledArguments](const QStringList& arguments) { signaledArguments = arguments; });
+    const QStringList forwardedArguments{QStringLiteral("snow-shot-test"),
+                                         QStringLiteral("--open-draw")};
+    // Same cross-process pattern as the production --open-draw fast path: the
+    // primary must keep pumping events while the client performs its attempt.
+    QProcess secondary;
+    QStringList secondaryArguments{QStringLiteral("--single-instance-early-forward")};
+    secondaryArguments.append(forwardedArguments);
+    secondary.start(QCoreApplication::applicationFilePath(), secondaryArguments);
+    require(secondary.waitForStarted(3000), "early-forward client did not start");
+    require(waitUntil([&secondary]() { return secondary.state() == QProcess::NotRunning; }, 5000),
+            "early-forward client did not finish");
+    if (secondary.exitStatus() != QProcess::NormalExit || secondary.exitCode() != EXIT_SUCCESS) {
+        std::cerr << secondary.readAllStandardError().constData();
+    }
+    require(secondary.exitStatus() == QProcess::NormalExit && secondary.exitCode() == EXIT_SUCCESS,
+            "early forward to a running primary was not delivered");
+    require(waitUntil([&signaledArguments]() { return !signaledArguments.isEmpty(); }, 1000) &&
+                signaledArguments == forwardedArguments,
+            "primary did not decode the early-forwarded launch request");
+}
+
+void earlyForwardFailsFastWithoutOwner() {
+    QElapsedTimer timer;
+    timer.start();
+    require(!single_instance::SingleInstanceCoordinator::tryForwardToRunningInstance(
+                {QStringLiteral("snow-shot-test"), QStringLiteral("--open-draw")}),
+            "early forward succeeded without a running primary");
+    require(timer.elapsed() < 1000, "early forward did not fail fast when no owner is present");
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -209,11 +248,20 @@ int main(int argc, char** argv) {
         }
         return EXIT_SUCCESS;
     }
+    if (application.arguments().size() >= 3 &&
+        application.arguments().at(1) == QStringLiteral("--single-instance-early-forward")) {
+        return single_instance::SingleInstanceCoordinator::tryForwardToRunningInstance(
+                   application.arguments().mid(2))
+                   ? EXIT_SUCCESS
+                   : EXIT_FAILURE;
+    }
 
 #ifdef Q_OS_WIN
     pipeRejectsAnonymousClients();
     forwardingWaitsForSlowPrimary();
 #endif
+    earlyForwardFailsFastWithoutOwner();
+    earlyForwardReachesRunningPrimary();
     firstInstanceAndQueuedForwarding();
     staleOwnerIsRecovered();
     liveUnreachableOwnerIsNotBypassed();

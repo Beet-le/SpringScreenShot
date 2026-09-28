@@ -2,6 +2,7 @@
 #include "snow_shot/app/applicationrestart.h"
 #include "snow_shot/app/updateconfirmationdialog.h"
 #include "snow_shot/app/featureavailability.h"
+#include "snow_shot/app/launchcommands.h"
 #include "snow_shot/presentation/apppermissionservice.h"
 #ifdef Q_OS_MACOS
 #include "snow_shot/platform/macos/applicationactivation.h"
@@ -1623,11 +1624,21 @@ void ApplicationController::showMainWindow() {
     m_impl->showMainWindow();
 }
 
+void ApplicationController::requestScreenshot() {
+    m_impl->dispatchQuickAction(presentation::GlobalShortcutAction::Screenshot);
+}
+
 void ApplicationController::handleLaunchRequest(const QStringList& arguments) {
-    if (arguments.contains(QStringLiteral("--autostart"))) {
+    switch (launchActionForForwardedRequest(arguments)) {
+    case LaunchAction::None:
+        return;
+    case LaunchAction::ShowMainWindow:
+        m_impl->showMainWindow();
+        return;
+    case LaunchAction::Screenshot:
+        m_impl->dispatchQuickAction(presentation::GlobalShortcutAction::Screenshot);
         return;
     }
-    m_impl->showMainWindow();
 }
 
 void ApplicationController::restorePinnedWindows() {
