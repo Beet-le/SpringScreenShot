@@ -147,6 +147,50 @@ void stateUpdatesBeforeFirstFlushPreserveRestorableSources() {
     }
 }
 
+void allocationAdmissionPrecedesSourceDecode() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "temporary storage directory is unavailable");
+    const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const auto image = patternedImage(QSize(81, 63), 23);
+    auto record = recordWithId(id, image);
+    record.canvasSession = QByteArrayLiteral("retained editor session");
+    record.originalText = QStringLiteral("retained source text");
+    storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+    const auto prepared = storage::PreparedPngImage::fromBytes(
+        image.size(), std::make_shared<const QByteArray>(pngBytes(image, 8)));
+    require(prepared && repository.create(record, *prepared).success && repository.flush().success,
+            "publish pinned source admission fixture");
+    int rejectedCalls = 0;
+    require(!repository.loadRecord(
+                id,
+                [&](qint64 bytes) {
+                    ++rejectedCalls;
+                    require(bytes > 0, "pin admission must include retained text/session payloads");
+                    return false;
+                }) &&
+                rejectedCalls == 1,
+            "rejected pin payload must stop before reading or decoding the image");
+    qint64 peak = 0;
+    const auto accepted = repository.loadRecord(id, [&](qint64 bytes) {
+        peak = std::max(peak, bytes);
+        return true;
+    });
+    require(accepted && samePixels(accepted->image, image) && peak >= 2 * image.sizeInBytes() &&
+                accepted->canvasSession == record.canvasSession,
+            "pin admission must account for decoded buffers and preserve source payloads");
+    int decodedReservations = 0;
+    require(!repository.loadRecord(id,
+                                   [&](qint64 bytes) {
+                                       if (bytes >= 2 * image.sizeInBytes()) {
+                                           ++decodedReservations;
+                                           return false;
+                                       }
+                                       return true;
+                                   }) &&
+                decodedReservations == 1,
+            "encoded pin may be admitted while decoded raster allocation is rejected");
+}
+
 void preparedSourceIsWrittenOnceAndStateUpdatesPreserveIt() {
     QTemporaryDir directory;
     require(directory.isValid(), "temporary storage directory is unavailable");
@@ -191,6 +235,11 @@ void preparedSourceIsWrittenOnceAndStateUpdatesPreserveIt() {
     require(cleared.has_value() && cleared->canvasSession.isEmpty() &&
                 samePixels(cleared->image, persisted),
             "cleared pinned state left a stale payload descriptor");
+    require(
+        !QFileInfo::exists(
+            QDir(directory.path())
+                .filePath(QStringLiteral("pinned_windows_v2/pins/%1/canvas_session.bin").arg(id))),
+        "a committed state removal must prune its obsolete payload file");
 }
 
 // Invariant: payload data is available before the writer commits it and is
@@ -236,6 +285,51 @@ void committedPayloadsAreServedFromDisk() {
                 reloaded->canvasSession == record.canvasSession &&
                 reloaded->originalHtml == record.originalHtml,
             "the committed lazy record did not survive a repository restart");
+}
+
+void missingOptionalPayloadDoesNotHideRestorableImage() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "temporary storage directory is unavailable");
+    const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QImage image = patternedImage(QSize(33, 17), 8);
+    auto record = recordWithId(id, image);
+    record.canvasSession = QByteArrayLiteral("drawing");
+    record.recognitionResults = QByteArrayLiteral("recognition");
+    const QString missingPath =
+        QDir(directory.path())
+            .filePath(QStringLiteral("pinned_windows_v2/pins/%1/recognition_results.bin").arg(id));
+    {
+        storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+        require(repository.upsert(record).success && repository.flush().success,
+                "commit the pin with optional recognition results");
+        require(QFile::remove(missingPath), "simulate an interrupted optional-payload cleanup");
+        const auto loaded = repository.loadRecord(id);
+        require(loaded && samePixels(loaded->image, image) &&
+                    loaded->canvasSession == record.canvasSession &&
+                    loaded->recognitionResults.isEmpty(),
+                "a missing optional payload must not block full image loading or restore");
+    }
+    storage::PinnedWindowRepository reopened(directory.path(), true, 30000);
+    const auto loaded = reopened.loadRecord(id);
+    require(loaded && samePixels(loaded->image, image) &&
+                loaded->canvasSession == record.canvasSession &&
+                loaded->recognitionResults.isEmpty(),
+            "a missing optional payload must not hide the pin after restart");
+    require(reopened.markClosed(id).success && reopened.flush().success,
+            "persist the recovered record");
+    const QJsonObject manifest =
+        QJsonDocument::fromJson(
+            readBytes(
+                QDir(directory.path()).filePath(QStringLiteral("pinned_windows_v2/index.json"))))
+            .object();
+    const QJsonObject payloads = manifest.value(QStringLiteral("records"))
+                                     .toArray()
+                                     .first()
+                                     .toObject()
+                                     .value(QStringLiteral("payloads"))
+                                     .toObject();
+    require(!payloads.contains(QStringLiteral("recognition_results")),
+            "the recovered index must drop the missing optional payload reference");
 }
 
 // Invariant: demotion must not corrupt payload identity. A metadata-only
@@ -597,7 +691,7 @@ void showBorderStateRoundTripsAndDefaultsToEnabledForLegacyRecords() {
     auto record = recordWithId(id, patternedImage(QSize(200, 100), 5));
     record.showBorder = false;
     record.borderAppearance =
-        storage::PinnedBorderAppearance{QSize(200, 100), QRectF(8, 8, 184, 84), 16.0, true};
+        storage::PinnedBorderAppearance{QSize(200, 100), QRectF(8, 8, 184, 84), 16.0, true, {}};
     const QString manifest =
         QDir(directory.path()).filePath(QStringLiteral("pinned_windows_v2/index.json"));
     {
@@ -645,7 +739,7 @@ void malformedCustomBorderRejectsRecord() {
     const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
     auto record = recordWithId(id, patternedImage(QSize(200, 100), 5));
     record.borderAppearance =
-        storage::PinnedBorderAppearance{QSize(200, 100), QRectF(0, 0, 200, 100), 0, false};
+        storage::PinnedBorderAppearance{QSize(200, 100), QRectF(0, 0, 200, 100), 0, false, {}};
     QPainterPath shape;
     shape.addEllipse(QRectF(0, 0, 200, 100));
     record.borderAppearance->region =
@@ -1102,9 +1196,10 @@ void previewsReadOnlySourcePayloadAndKeepStableRevision() {
             .filePath(
                 QStringLiteral("pinned_windows_v2/pins/%1/canvas_session.bin").arg(record.id));
     require(QFile::remove(extraPath), "remove unrelated drawing payload");
-    require(repository.loadPreviewSource(record.id).has_value() &&
-                !repository.loadRecord(record.id).has_value(),
-            "preview remains available when an unrelated payload is unavailable");
+    const auto recovered = repository.loadRecord(record.id);
+    require(repository.loadPreviewSource(record.id).has_value() && recovered &&
+                samePixels(recovered->image, record.image) && recovered->canvasSession.isEmpty(),
+            "a missing drawing payload must not hide the restorable source image");
 
     record.canvasSession = QByteArrayLiteral("second drawing");
     require(repository.updateState(record).success &&
@@ -1207,7 +1302,9 @@ int main(int argc, char* argv[]) {
     precisePlacementAndPreviousVersionIsolation();
     stateUpdatesBeforeFirstFlushPreserveRestorableSources();
     committedPayloadsAreServedFromDisk();
+    missingOptionalPayloadDoesNotHideRestorableImage();
     preparedSourceIsWrittenOnceAndStateUpdatesPreserveIt();
+    allocationAdmissionPrecedesSourceDecode();
     metadataOnlyUpdatesDoNotRewriteCommittedPayloads();
     changedPayloadsRecommitAndStayLazy();
     removedRecordsPruneTheirPayloads();

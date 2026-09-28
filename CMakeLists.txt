@@ -5,9 +5,14 @@ if(CMAKE_HOST_APPLE AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
     set(CMAKE_OSX_DEPLOYMENT_TARGET "15.0" CACHE STRING "Minimum supported macOS version.")
 endif()
 
+if(CMAKE_HOST_WIN32 AND CMAKE_CXX_COMPILER MATCHES "clang-cl")
+    find_program(SNOW_MSVC_LIB_EXECUTABLE NAMES lib.exe REQUIRED)
+    set(CMAKE_AR "${SNOW_MSVC_LIB_EXECUTABLE}" CACHE FILEPATH "MSVC archiver for clang-cl." FORCE)
+endif()
+
 project(snow_apps VERSION 0.2.0 LANGUAGES CXX)
 
-set(SNOW_SHOT_VERSION "1.1.1-beta")
+set(SNOW_SHOT_VERSION "1.1.6-beta")
 if(NOT SNOW_SHOT_VERSION MATCHES "^([0-9]+\\.[0-9]+\\.[0-9]+)(-[0-9A-Za-z.-]+)?$")
     message(FATAL_ERROR "SNOW_SHOT_VERSION must be a semantic version such as 0.8.0-dev")
 endif()
@@ -23,7 +28,7 @@ set(SNOW_SHOT_COPYRIGHT "Copyright (C) 2025-2026 mg-chao")
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-if(MSVC)
+if(MSVC AND NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     add_compile_options(/MP)
 elseif(APPLE)
     # Preserve source/line information in optimized objects for release dSYMs.

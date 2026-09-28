@@ -28,6 +28,13 @@
         </message>
     </context>
     <context>
+        <name>ScreenshotCaptureCoordinator</name>
+        <message>
+            <source>Could not snapshot the cursor</source>
+            <translation>無法擷取滑鼠游標</translation>
+        </message>
+    </context>
+    <context>
         <name>ScreenshotController</name>
         <message>
             <source>Allow Snow Shot to access Finder in System Settings &gt; Privacy &amp; Security &gt; Automation, then try again.</source>
@@ -40,6 +47,10 @@
         <message>
             <source>Cancel</source>
             <translation>取消</translation>
+        </message>
+        <message>
+            <source>Could not insert the draw template</source>
+            <translation>無法插入繪圖範本</translation>
         </message>
         <message>
             <source>Could not read the selected files from Finder. Please try again.</source>
@@ -68,6 +79,10 @@
         <message>
             <source>No recognized result is available to copy</source>
             <translation>沒有可複製的辨識結果</translation>
+        </message>
+        <message>
+            <source>Save recognition text</source>
+            <translation>儲存辨識文字</translation>
         </message>
         <message>
             <source>Save screenshot</source>
@@ -108,6 +123,10 @@
         <message>
             <source>The pinned window could not be restored</source>
             <translation>無法還原固定到螢幕視窗</translation>
+        </message>
+        <message>
+            <source>The recognition text could not be saved: %1</source>
+            <translation>無法儲存辨識文字：%1</translation>
         </message>
         <message>
             <source>The screenshot clipboard operation could not be started</source>
@@ -155,6 +174,13 @@
         </message>
     </context>
     <context>
+        <name>ScreenshotMcpServer</name>
+        <message>
+            <source>MCP request failed (%1).</source>
+            <translation>MCP 請求失敗（%1）。</translation>
+        </message>
+    </context>
+    <context>
         <name>ScreenshotOverlayWindow</name>
         <message>
             <source>Loading screenshot history</source>
@@ -162,10 +188,41 @@
         </message>
     </context>
     <context>
+        <name>ScreenshotQrController</name>
+        <message>
+            <source>Copy Text</source>
+            <translation>複製文字</translation>
+        </message>
+        <message>
+            <source>Open URL</source>
+            <translation>開啟連結</translation>
+        </message>
+        <message>
+            <source>QR Code</source>
+            <translation>二維碼</translation>
+        </message>
+        <message>
+            <source>QR Code %1</source>
+            <translation>二維碼 %1</translation>
+        </message>
+        <message>
+            <source>QR code recognition failed</source>
+            <translation>二維碼辨識失敗</translation>
+        </message>
+        <message>
+            <source>QR code text</source>
+            <translation>二維碼文字</translation>
+        </message>
+        <message>
+            <source>Unable to open the recognized link</source>
+            <translation>無法開啟辨識出的連結</translation>
+        </message>
+    </context>
+    <context>
         <name>ScreenshotRegionTypeControl</name>
         <message>
-            <source>Ctrl+Tab to switch region type</source>
-            <translation>按 Ctrl+Tab 切換區域類型</translation>
+            <source>%1 to switch region type</source>
+            <translation>按 %1 切換區域類型</translation>
         </message>
         <message>
             <source>Curve region</source>
@@ -317,12 +374,12 @@
             <translation>鎖定選取範圍長寬比</translation>
         </message>
         <message>
-            <source>Pixels</source>
-            <translation>像素</translation>
+            <source>Logical pixels</source>
+            <translation>邏輯像素</translation>
         </message>
         <message>
-            <source>Points</source>
-            <translation>點</translation>
+            <source>Pixels</source>
+            <translation>像素</translation>
         </message>
         <message>
             <source>Shadow width</source>
@@ -341,8 +398,8 @@
             <translation> Y 座標</translation>
         </message>
         <message>
-            <source>pt</source>
-            <translation>pt</translation>
+            <source>dp</source>
+            <translation>dp</translation>
         </message>
         <message>
             <source>px</source>
@@ -402,6 +459,32 @@
         <message>
             <source>mouse wheel</source>
             <translation>滑鼠滾輪</translation>
+        </message>
+    </context>
+    <context>
+        <name>snow_shot::app::mcp::ScreenshotMcpServer</name>
+        <message>
+            <source>Another Snow Shot instance owns the MCP endpoint.</source>
+            <translation>另一個 Snow Shot 執行個體正在使用 MCP 端點。</translation>
+        </message>
+        <message>
+            <source>Could not open the local MCP endpoint.</source>
+            <translation>無法開啟本機 MCP 端點。</translation>
+        </message>
+        <message>
+            <source>Could not secure the MCP runtime directory.</source>
+            <translation>無法設定 MCP 執行目錄的安全權限。</translation>
+        </message>
+        <message>
+            <source>Could not write the private MCP descriptor.</source>
+            <translation>無法寫入私有 MCP 描述檔。</translation>
+        </message>
+    </context>
+    <context>
+        <name>snow_shot::app::mcp::ScreenshotMcpSession</name>
+        <message>
+            <source>MCP request failed (%1).</source>
+            <translation>MCP 請求失敗（%1）。</translation>
         </message>
     </context>
     <context>

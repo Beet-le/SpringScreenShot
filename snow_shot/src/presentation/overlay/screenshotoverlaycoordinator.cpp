@@ -125,9 +125,7 @@ bool ScreenshotOverlayCoordinator::preparePreCaptureOverlayWindows(
         if (overlay->screen() != screen) {
             overlay->setScreen(screen);
         }
-        if (overlay->geometry() != display.logicalRect) {
-            overlay->setGeometry(display.logicalRect);
-        }
+        overlay->setCaptureGeometry(display.logicalRect);
         overlay->setCanvasClearBackgroundEnabled(false);
         overlay->setScreenshotMaskVisible(true);
     }
@@ -353,8 +351,9 @@ void ScreenshotOverlayCoordinator::previewWatermarkConfig(
 }
 
 void ScreenshotOverlayCoordinator::setTextStyle(const ScreenshotDisplaySession& displaySession,
-                                                const SnowCanvasTextStyle& style) {
-    m_canvasPresenter.setTextStyle(displaySession, style);
+                                                const SnowCanvasTextStyle& style,
+                                                quint32 properties) {
+    m_canvasPresenter.setTextStyle(displaySession, style, properties);
 }
 
 void ScreenshotOverlayCoordinator::setSerialNumberStyle(
@@ -454,11 +453,12 @@ ScreenshotColorPickerWindow* ScreenshotOverlayCoordinator::colorPicker() const {
     return m_uiHost.colorPicker();
 }
 
-void ScreenshotOverlayCoordinator::updateColorPicker(ScreenshotOverlayWindow* overlay,
-                                                     const QImage& image, const QRect& physicalRect,
-                                                     const QPoint& physicalPoint,
-                                                     const QPointF& localPosition, qreal opacity) {
-    m_uiHost.updateColorPicker(overlay, image, physicalRect, physicalPoint, localPosition, opacity);
+void ScreenshotOverlayCoordinator::updateColorPicker(
+    ScreenshotOverlayWindow* overlay, const QImage& image, const QRect& physicalRect,
+    const QPoint& physicalPoint, const QPointF& localPosition, qreal opacity,
+    const ScreenshotCoordinateDisplayValues& displayValues) {
+    m_uiHost.updateColorPicker(overlay, image, physicalRect, physicalPoint, localPosition, opacity,
+                               displayValues);
 }
 
 void ScreenshotOverlayCoordinator::hideColorPicker() {

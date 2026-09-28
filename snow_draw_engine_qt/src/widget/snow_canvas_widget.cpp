@@ -362,7 +362,7 @@ struct SnowCanvasWidget::Impl : public snow_canvas_runtime::Client {
     std::optional<SnowCanvasAutoFilterRecord> autoFilterRegions() const;
     bool setAutoFilterRegions(const std::optional<SnowCanvasAutoFilterRecord>& record);
     bool fillAutoFilterCategory(const QString& category);
-    bool setCanvasTextStyle(const SnowCanvasTextStyle& style);
+    bool setCanvasTextStyle(const SnowCanvasTextStyle& style, quint32 properties);
     bool setCanvasSerialNumberStyle(const SnowCanvasSerialNumberStyle& style);
     SnowCanvasHistoryState canvasHistoryState() const;
     SnowCanvasSnapConfig canvasSnapConfig() const;
@@ -407,6 +407,7 @@ struct SnowCanvasWidget::Impl : public snow_canvas_runtime::Client {
     bool deleteAllElements();
     bool clearDocument();
     bool duplicateSelected(const QPointF& offset);
+    bool insertDrawTemplate(const QByteArray& payload, const QPointF& center);
     bool reorderSelected(SnowCanvasSelectionOrder order);
     bool alignSelected(SnowCanvasSelectionAlignment alignment);
     bool setSelectedOpacity(double opacity);
@@ -447,6 +448,7 @@ struct SnowCanvasWidget::Impl : public snow_canvas_runtime::Client {
     FontWheelTarget fontWheelTarget() const;
     bool stepSerialNumberFontSize(bool increase);
     bool stepTextFontSize(bool increase);
+    CommandKeyResolver commandKeyResolver;
     bool handleKeyPress(QKeyEvent* event);
     bool handleKeyRelease(QKeyEvent* event);
     bool handleInputMethodEvent(QInputMethodEvent* event);
@@ -1077,11 +1079,12 @@ bool SnowCanvasWidget::setCanvasFilterStyle(const SnowCanvasFilterStyle& style,
     return m_impl->setCanvasFilterStyle(style, properties);
 }
 
-bool SnowCanvasWidget::Impl::setCanvasTextStyle(const SnowCanvasTextStyle& style) {
+bool SnowCanvasWidget::Impl::setCanvasTextStyle(const SnowCanvasTextStyle& style,
+                                                quint32 properties) {
     const SnowTextStyle engineStyle = snow_canvas_types::toEngineTextStyle(style);
     SnowCanvasWidgetTextInteraction::StyleChangeResult result =
         textInteraction.applyTextStyle(runtimeBinding.engine(), runtimeBinding.viewportHandle(),
-                                       displayState.displayCache(), engineStyle);
+                                       displayState.displayCache(), engineStyle, properties);
     if (!result.success) {
         return false;
     }
@@ -1093,8 +1096,8 @@ bool SnowCanvasWidget::Impl::setCanvasTextStyle(const SnowCanvasTextStyle& style
     return true;
 }
 
-bool SnowCanvasWidget::setCanvasTextStyle(const SnowCanvasTextStyle& style) {
-    return m_impl->setCanvasTextStyle(style);
+bool SnowCanvasWidget::setCanvasTextStyle(const SnowCanvasTextStyle& style, quint32 properties) {
+    return m_impl->setCanvasTextStyle(style, properties);
 }
 
 bool SnowCanvasWidget::Impl::setCanvasSerialNumberStyle(const SnowCanvasSerialNumberStyle& style) {
@@ -1607,6 +1610,15 @@ bool SnowCanvasWidget::Impl::duplicateSelected(const QPointF& offset) {
 
 bool SnowCanvasWidget::duplicateSelected(const QPointF& offset) {
     return m_impl->duplicateSelected(offset);
+}
+
+bool SnowCanvasWidget::insertDrawTemplate(const QByteArray& payload, const QPointF& center) {
+    return m_impl->insertDrawTemplate(payload, center);
+}
+
+bool SnowCanvasWidget::Impl::insertDrawTemplate(const QByteArray& payload, const QPointF& center) {
+    return applyMutationResult(snow_canvas_commands::insertDrawTemplate(
+        runtimeBinding.engine(), runtimeBinding.viewportHandle(), payload, center.x(), center.y()));
 }
 
 bool SnowCanvasWidget::Impl::reorderSelected(SnowCanvasSelectionOrder order) {
@@ -2727,10 +2739,37 @@ bool SnowCanvasWidget::Impl::handleKeyPress(QKeyEvent* event) {
         break;
     }
 
-    return dispatchInput(event, snow_canvas_input::makeKeyInput(*event, SNOW_KEY_EVENT_DOWN));
+    auto input = snow_canvas_input::makeKeyInput(*event, SNOW_KEY_EVENT_DOWN);
+    if (commandKeyResolver) {
+        // Engine characters represent commands here; text editing was handled
+        // above with the original text. Never dispatch a layout character as Z.
+        const QString commandText = event->key() >= Qt::Key_A && event->key() <= Qt::Key_Z
+                                        ? QString(QChar(static_cast<ushort>(event->key())))
+                                        : QString();
+        QKeyEvent command(event->type(), event->key(), event->modifiers(), commandText,
+                          event->isAutoRepeat(), static_cast<quint16>(event->count()));
+        input = snow_canvas_input::makeKeyInput(command, SNOW_KEY_EVENT_DOWN);
+    }
+    return dispatchInput(event, input);
+}
+
+void SnowCanvasWidget::setCommandKeyResolver(CommandKeyResolver resolver) {
+    m_impl->commandKeyResolver = std::move(resolver);
 }
 
 void SnowCanvasWidget::keyPressEvent(QKeyEvent* event) {
+    if (m_impl->commandKeyResolver) {
+        QKeyEvent command(event->type(), m_impl->commandKeyResolver(*event), event->modifiers(),
+                          event->nativeScanCode(), event->nativeVirtualKey(),
+                          event->nativeModifiers(), event->text(), event->isAutoRepeat(),
+                          static_cast<quint16>(event->count()));
+        if (m_impl->handleKeyPress(&command)) {
+            event->accept();
+            return;
+        }
+        QWidget::keyPressEvent(event);
+        return;
+    }
     if (m_impl->handleKeyPress(event)) {
         return;
     }
@@ -2755,10 +2794,33 @@ bool SnowCanvasWidget::Impl::handleKeyRelease(QKeyEvent* event) {
         accept(*event);
         return true;
     }
-    return dispatchInput(event, snow_canvas_input::makeKeyInput(*event, SNOW_KEY_EVENT_UP));
+    auto input = snow_canvas_input::makeKeyInput(*event, SNOW_KEY_EVENT_UP);
+    if (commandKeyResolver) {
+        // Engine characters represent commands here; text editing was handled
+        // above with the original text. Never dispatch a layout character as Z.
+        const QString commandText = event->key() >= Qt::Key_A && event->key() <= Qt::Key_Z
+                                        ? QString(QChar(static_cast<ushort>(event->key())))
+                                        : QString();
+        QKeyEvent command(event->type(), event->key(), event->modifiers(), commandText,
+                          event->isAutoRepeat(), static_cast<quint16>(event->count()));
+        input = snow_canvas_input::makeKeyInput(command, SNOW_KEY_EVENT_UP);
+    }
+    return dispatchInput(event, input);
 }
 
 void SnowCanvasWidget::keyReleaseEvent(QKeyEvent* event) {
+    if (m_impl->commandKeyResolver) {
+        QKeyEvent command(event->type(), m_impl->commandKeyResolver(*event), event->modifiers(),
+                          event->nativeScanCode(), event->nativeVirtualKey(),
+                          event->nativeModifiers(), event->text(), event->isAutoRepeat(),
+                          static_cast<quint16>(event->count()));
+        if (m_impl->handleKeyRelease(&command)) {
+            event->accept();
+            return;
+        }
+        QWidget::keyReleaseEvent(event);
+        return;
+    }
     if (m_impl->handleKeyRelease(event)) {
         return;
     }

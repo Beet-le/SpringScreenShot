@@ -75,6 +75,7 @@ enum class SettingsSelectBinding {
     Proxy,
     UpdateMode,
     OcrModelType,
+    OcrDetectorResizePolicy,
     ScreenshotApiMode,
     WindowElementApi,
     ScreenshotToolbarSize,
@@ -128,6 +129,7 @@ enum class SettingsSwitchBinding {
     ScreenshotCaptureUiInScrollingScreenshot,
     ScreenshotShutterSoundNotification,
     ScreenshotConfirmBeforeExitingViaShortcut,
+    ScreenshotAutoRecognizeQrCode,
     ScreenshotRestoreOriginalScreenColors,
     ScreenshotCopyImageFileToClipboard,
     SaveRecognitionResultAsImage,
@@ -140,6 +142,7 @@ enum class SettingsSwitchBinding {
     LoopAnimatedImages,
     ScreenRecordingCaptureToolbar,
     DisableHotkeysOnFocusedFullscreen,
+    McpEnabled,
     AutoStartAtBoot,
     LaunchAsAdministrator,
     DrawingRememberLastUsedTool,
@@ -319,6 +322,7 @@ struct SettingsActionDefinition {
 };
 
 enum class SettingsCustomRenderer {
+    McpStatus,
     PermissionScreenRecording,
     PermissionAccessibility,
     PermissionInputMonitoring,

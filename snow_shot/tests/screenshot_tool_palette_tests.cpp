@@ -1,3 +1,4 @@
+#include "physical_key_test_support.h"
 #include "snow_shot/presentation/screenshotregiontypecontrol.h"
 #include "snow_shot/presentation/screenshottoolpalette.h"
 #include "snow_shot/presentation/screenshotcanvastoolstyles.h"
@@ -737,7 +738,7 @@ void recordingEffectSettingsModal() {
     form->window()->activateWindow();
     duration->setFocus();
     QCoreApplication::processEvents();
-    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    PhysicalKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
     QCoreApplication::sendEvent(QApplication::focusWidget(), &escape);
     QCoreApplication::processEvents();
     // Escape dismisses the dialog, which destroys it; the local pointers are
@@ -2793,8 +2794,8 @@ void configurableToolbarLayoutSupportsArbitraryPopoverGroups() {
     palette.show();
     QCoreApplication::processEvents();
     const QList<adqt::widgets::AdButton*> drawingButtons = mainDrawingToolbarButtons(palette);
-    require(drawingButtons.size() == 3,
-            "each configured drawing position should occupy one live toolbar slot");
+    require(drawingButtons.size() == 5,
+            "each configured drawing and history position should occupy one live toolbar slot");
     auto* firstTrigger = palette.findChild<adqt::widgets::AdButton*>(
         QStringLiteral("screenshotDrawingToolGroupButton0"));
     auto* secondTrigger = palette.findChild<adqt::widgets::AdButton*>(
@@ -2892,7 +2893,7 @@ void configurableToolbarLayoutSupportsArbitraryPopoverGroups() {
     if (updatedPopover != nullptr) {
         materializeLazyPopover(updatedGroupTrigger);
     }
-    require(updatedDrawingButtons.size() == 4 && updatedPopover != nullptr &&
+    require(updatedDrawingButtons.size() == 6 && updatedPopover != nullptr &&
                 updatedGroupTrigger->accessibleName() == QStringLiteral("Pen") &&
                 popoverButtonWithTooltip(updatedPopover, "Pen") != nullptr &&
                 popoverButtonWithTooltip(updatedPopover, "Highlight") != nullptr &&
@@ -2912,7 +2913,7 @@ void configurableToolbarLayoutSupportsArbitraryPopoverGroups() {
     QCoreApplication::processEvents();
     const QList<adqt::widgets::AdButton*> restoredDrawingButtons =
         mainDrawingToolbarButtons(palette);
-    require(restoredDrawingButtons.size() == 5 &&
+    require(restoredDrawingButtons.size() == 7 &&
                 std::any_of(
                     restoredDrawingButtons.cbegin(), restoredDrawingButtons.cend(),
                     [](const adqt::widgets::AdButton* button) {
@@ -3750,6 +3751,11 @@ void actionStacksKeepEnabledAlternativesReachable() {
     auto* ocr = popoverButtonWithTooltip(popover, "Text recognition");
     auto* record = popoverButtonWithTooltip(popover, "Record screen");
     require(ocr && record, "the mixed stack must expose both actions");
+    require(adqt::icons::describeIcon(trigger->iconRef()).key.name ==
+                    QStringLiteral("text-recognition") &&
+                adqt::icons::describeIcon(ocr->iconRef()).key.name ==
+                    QStringLiteral("text-recognition"),
+            "the text recognition stack trigger and option must use the text recognition icon");
     int ocrRequests = 0;
     int recordRequests = 0;
     QObject::connect(&palette, &ScreenshotToolPalette::ocrRequested, [&]() { ++ocrRequests; });
@@ -3819,6 +3825,204 @@ void sharedToolbarLayoutModelOperationsAreDeterministic() {
              QStringLiteral("table-recognition"), QStringLiteral("text-translation"));
     exercise(ScreenshotToolbarLayoutKind::ActionTools, QStringLiteral("barcode-recognition"),
              QStringLiteral("table-recognition"), QStringLiteral("record-screen"));
+
+    const auto drawing = ScreenshotToolbarLayoutKind::DrawingTools;
+    const ScreenshotToolbarLayout legacy{{{QStringLiteral("shape")}}, {}};
+    const ScreenshotToolbarLayout upgraded = normalizedLayout(legacy, drawing);
+    require(upgraded.positions.at(upgraded.positions.size() - 3) ==
+                    QStringList{QStringLiteral("separator")} &&
+                upgraded.positions.at(upgraded.positions.size() - 2) ==
+                    QStringList{QStringLiteral("undo")} &&
+                upgraded.positions.constLast() == QStringList{QStringLiteral("redo")},
+            "legacy drawing layouts must gain separator, Undo and Redo after the drawing tools");
+
+    QStringList remaining = defaultOrder(drawing);
+    for (const QString& id : {QStringLiteral("shape"), QStringLiteral("separator"),
+                              QStringLiteral("undo"), QStringLiteral("redo")}) {
+        remaining.removeAll(id);
+    }
+    const ScreenshotToolbarLayout withSeparator{{{QStringLiteral("shape")},
+                                                 {QStringLiteral("separator")},
+                                                 {QStringLiteral("undo"), QStringLiteral("redo")}},
+                                                remaining};
+    const auto separatorMoved =
+        stackItemInPosition(withSeparator, drawing, QStringLiteral("separator"), 0, 1);
+    const auto undoMoved =
+        stackItemInPosition(withSeparator, drawing, QStringLiteral("undo"), 1, 0);
+    for (const auto& candidate : {separatorMoved, undoMoved}) {
+        for (const QStringList& position : candidate.positions) {
+            require(!position.contains(QStringLiteral("separator")) || position.size() == 1,
+                    "separator must never stack with a drawing or history button");
+        }
+    }
+    const auto hiddenSeparator =
+        moveItemToHidden(withSeparator, drawing, QStringLiteral("separator"), 0);
+    require(hiddenSeparator.hidden.constFirst() == QStringLiteral("separator") &&
+                std::none_of(hiddenSeparator.positions.cbegin(), hiddenSeparator.positions.cend(),
+                             [](const QStringList& position) {
+                                 return position.contains(QStringLiteral("separator"));
+                             }),
+            "separator must be movable into Hidden tools");
+}
+
+void drawingHistoryActionsFollowStacksAndHiddenShortcuts() {
+    namespace layout = snow_shot::presentation::toolbar_layout;
+    ScreenshotToolPalette::Options options;
+    options.showShapeTool = true;
+    options.showHistoryActions = true;
+    options.enableStyleToolbar = false;
+    QStringList hidden =
+        layout::defaultOrder(snow_shot::storage::ScreenshotToolbarLayoutKind::DrawingTools);
+    for (const QString& id : {QStringLiteral("shape"), QStringLiteral("undo"),
+                              QStringLiteral("redo"), QStringLiteral("separator")}) {
+        hidden.removeAll(id);
+    }
+    options.toolbarLayout = snow_shot::storage::ScreenshotToolbarLayout{
+        {{QStringLiteral("shape"), QStringLiteral("undo"), QStringLiteral("redo")},
+         {QStringLiteral("separator")}},
+        hidden};
+    ScreenshotToolPalette palette(options);
+    palette.show();
+    QCoreApplication::processEvents();
+
+    SnowCanvasHistoryState history;
+    history.canUndo = true;
+    history.canRedo = true;
+    palette.setHistoryState(history);
+    int undoRequests = 0;
+    int redoRequests = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::undoRequested,
+                     [&undoRequests]() { ++undoRequests; });
+    QObject::connect(&palette, &ScreenshotToolPalette::redoRequested,
+                     [&redoRequests]() { ++redoRequests; });
+    auto* trigger = palette.findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotDrawingToolGroupButton0"));
+    require(trigger != nullptr &&
+                trigger->property("screenshotToolbarItemId").toString() == QStringLiteral("redo"),
+            "Redo at the bottom of a mixed stack must be its initial visible button");
+    materializeLazyPopover(trigger);
+    auto* popover = popoverForTrigger(trigger);
+    auto* undoOption = popoverButtonWithTooltip(popover, "Undo");
+    auto* redoOption = popoverButtonWithTooltip(popover, "Redo");
+    require(undoOption != nullptr && redoOption != nullptr && undoOption->isEnabled() &&
+                redoOption->isEnabled(),
+            "Undo and Redo must appear as ordinary enabled stack options");
+    undoOption->click();
+    require(undoRequests == 1 &&
+                trigger->property("screenshotToolbarItemId").toString() == QStringLiteral("undo"),
+            "selecting Undo must execute it and make it the stack's visible entry");
+    history.canUndo = false;
+    palette.setHistoryState(history);
+    materializeLazyPopover(trigger);
+    popover = popoverForTrigger(trigger);
+    undoOption = popoverButtonWithTooltip(popover, "Undo");
+    redoOption = popoverButtonWithTooltip(popover, "Redo");
+    require(undoOption != nullptr && redoOption != nullptr && !undoOption->isEnabled() &&
+                trigger->isEnabled(),
+            "an unavailable selected history action must leave other stack options reachable");
+    redoOption->click();
+    require(redoRequests == 1 &&
+                trigger->property("screenshotToolbarItemId").toString() == QStringLiteral("redo"),
+            "an available Redo option must remain executable after Undo becomes unavailable");
+
+    QStringList hiddenAll =
+        layout::defaultOrder(snow_shot::storage::ScreenshotToolbarLayoutKind::DrawingTools);
+    hiddenAll.removeAll(QStringLiteral("shape"));
+    palette.setToolbarLayout({{{QStringLiteral("shape")}}, hiddenAll});
+    QCoreApplication::processEvents();
+    auto* undoButton =
+        palette.findChild<adqt::widgets::AdButton*>(QStringLiteral("screenshotUndoButton"));
+    auto* redoButton =
+        palette.findChild<adqt::widgets::AdButton*>(QStringLiteral("screenshotRedoButton"));
+    require(undoButton != nullptr && undoButton->isHidden() && redoButton != nullptr &&
+                redoButton->isHidden(),
+            "hidden Undo and Redo must have no visible toolbar buttons");
+    QLayout* hiddenRow = palette.mainPanel()->layout();
+    bool hiddenSeparatorVisible = false;
+    for (int index = 0; index < hiddenRow->count(); ++index) {
+        hiddenSeparatorVisible |=
+            qobject_cast<QFrame*>(hiddenRow->itemAt(index)->widget()) != nullptr;
+    }
+    require(!hiddenSeparatorVisible,
+            "hiding Separator Component must remove the configurable divider");
+    history.canUndo = true;
+    palette.setHistoryState(history);
+    require(palette.activateScreenshotShortcut(QStringLiteral("undo")) &&
+                palette.activateScreenshotShortcut(QStringLiteral("redo")) && undoRequests == 2 &&
+                redoRequests == 2,
+            "hidden history actions must still respond to their shortcuts");
+    history.canUndo = false;
+    history.canRedo = false;
+    palette.setHistoryState(history);
+    require(!palette.activateScreenshotShortcut(QStringLiteral("undo")) &&
+                !palette.activateScreenshotShortcut(QStringLiteral("redo")),
+            "hidden history shortcuts must still respect command availability");
+
+    palette.setToolbarLayout({{{QStringLiteral("undo")},
+                               {QStringLiteral("separator")},
+                               {QStringLiteral("shape")},
+                               {QStringLiteral("redo")}},
+                              hidden});
+    QCoreApplication::processEvents();
+    const auto drawingButtons = mainDrawingToolbarButtons(palette);
+    QLayout* row = palette.mainPanel()->layout();
+    int separatorIndex = -1;
+    for (int index = 0; index < row->count(); ++index) {
+        if (qobject_cast<QFrame*>(row->itemAt(index)->widget()) != nullptr) {
+            separatorIndex = index;
+            break;
+        }
+    }
+    require(drawingButtons.size() == 3 && drawingButtons.at(0) == undoButton &&
+                drawingButtons.at(2) == redoButton && separatorIndex > row->indexOf(undoButton) &&
+                separatorIndex < row->indexOf(drawingButtons.at(1)),
+            "standalone Undo and Redo must follow their configured order around the separator");
+    history.canUndo = true;
+    palette.setHistoryState(history);
+    undoButton->click();
+    require(undoRequests == 3, "a moved standalone Undo button must remain executable");
+}
+
+void recordingDrawingLayoutRendersConfiguredSeparator() {
+    namespace layout = snow_shot::presentation::toolbar_layout;
+    ScreenshotToolPalette::Options options;
+    options.showShapeTool = true;
+    options.showArrowTool = true;
+    options.showRecordingControls = true;
+    options.enableStyleToolbar = false;
+    QStringList hidden =
+        layout::defaultOrder(snow_shot::storage::ScreenshotToolbarLayoutKind::DrawingTools);
+    for (const QString& id :
+         {QStringLiteral("shape"), QStringLiteral("arrow"), QStringLiteral("separator")}) {
+        hidden.removeAll(id);
+    }
+    options.toolbarLayout = snow_shot::storage::ScreenshotToolbarLayout{
+        {{QStringLiteral("shape")}, {QStringLiteral("separator")}, {QStringLiteral("arrow")}},
+        hidden};
+    ScreenshotToolPalette palette(options);
+    palette.show();
+    QCoreApplication::processEvents();
+
+    const auto hasDividerBetweenDrawingButtons = [&palette]() {
+        const auto buttons = mainDrawingToolbarButtons(palette);
+        require(buttons.size() == 2, "recording toolbar must show the configured drawing tools");
+        const QLayout* row = palette.mainPanel()->layout();
+        const int first = row->indexOf(buttons.at(0));
+        const int second = row->indexOf(buttons.at(1));
+        for (int index = first + 1; index < second; ++index) {
+            if (qobject_cast<QFrame*>(row->itemAt(index)->widget()) != nullptr) {
+                return true;
+            }
+        }
+        return false;
+    };
+    require(hasDividerBetweenDrawingButtons(),
+            "recording toolbar must render the configured separator without history buttons");
+    hidden.push_back(QStringLiteral("separator"));
+    palette.setToolbarLayout({{{QStringLiteral("shape")}, {QStringLiteral("arrow")}}, hidden});
+    QCoreApplication::processEvents();
+    require(!hasDividerBetweenDrawingButtons(),
+            "hiding the shared separator must remove it from the recording drawing tools");
 }
 
 void pinnedActionLayoutUsesGenericStacks() {
@@ -3839,11 +4043,17 @@ void pinnedActionLayoutUsesGenericStacks() {
     options.showSaveButton = options.saveButtonWithResultActions = true;
     options.actions = ScreenshotToolPalette::CopyAction | ScreenshotToolPalette::ConfirmAction;
     options.actionToolsLayoutKind = kind;
-    const ScreenshotToolbarLayout expected{
+    const ScreenshotToolbarLayout previous{
         {{barcode, table}, {markdown}, {html}, {ocr}, {translation}}, {}};
-    options.actionToolsLayout = expected;
-    require(layout::normalizedLayout(expected, kind) == expected,
-            "presentation normalization must not migrate pinned layouts");
+    const ScreenshotToolbarLayout expected{{{barcode, table},
+                                            {markdown, QStringLiteral("latex-recognition")},
+                                            {html},
+                                            {ocr},
+                                            {translation}},
+                                           {}};
+    options.actionToolsLayout = previous;
+    require(layout::normalizedLayout(previous, kind) == expected,
+            "pinned migration adds LaTeX beside Markdown without rearranging other positions");
     ScreenshotToolPalette palette(options);
     palette.show();
     QCoreApplication::processEvents();
@@ -3858,6 +4068,16 @@ void pinnedActionLayoutUsesGenericStacks() {
     };
     require(positions() == expected.positions,
             "pinned rendering must preserve configured positions");
+    const auto actionButtons = mainActionToolbarButtons(palette);
+    const auto ocrButton =
+        std::find_if(actionButtons.cbegin(), actionButtons.cend(),
+                     [&ocr](const adqt::widgets::AdButton* button) {
+                         return button->property("screenshotToolbarItemId").toString() == ocr;
+                     });
+    require(ocrButton != actionButtons.cend() &&
+                adqt::icons::describeIcon((*ocrButton)->iconRef()).key.name ==
+                    QStringLiteral("text-recognition"),
+            "the pinned text recognition tool must keep the text recognition icon after layout");
     auto* trigger = mainActionToolbarButtons(palette).first();
     require(trigger->property("screenshotToolbarItemId").toString() == table,
             "legacy Barcode preference must not replace the configured Table entry");
@@ -4414,8 +4634,8 @@ void ocrControlReflectsLoadingState() {
                 translationButton->busy(),
             "busy translation must remain accessible by mouse");
     ocrButton->click();
-    QKeyEvent keyPress(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier);
-    QKeyEvent keyRelease(QEvent::KeyRelease, Qt::Key_Space, Qt::NoModifier);
+    PhysicalKeyEvent keyPress(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier);
+    PhysicalKeyEvent keyRelease(QEvent::KeyRelease, Qt::Key_Space, Qt::NoModifier);
     QCoreApplication::sendEvent(translationButton, &keyPress);
     QCoreApplication::sendEvent(translationButton, &keyRelease);
     require(palette.activeToolForTests() == ScreenshotToolPalette::Tool::TextTranslation,
@@ -4769,7 +4989,8 @@ void imageConversionToolsExposeRecognitionActions() {
             group->property("screenshotToolbarPositionItems").toStringList() ==
                 QStringList{
                     QStringLiteral("convert-to-html"), QStringLiteral("convert-to-markdown"),
-                    QStringLiteral("barcode-recognition"), QStringLiteral("table-recognition")} &&
+                    QStringLiteral("latex-recognition"), QStringLiteral("barcode-recognition"),
+                    QStringLiteral("table-recognition")} &&
             group->accessibleName() == QStringLiteral("Table recognition"),
         "the recognition group initially shows the bottom tool even with a remembered QR entry");
     static_cast<void>(palette.sizeHint());
@@ -4798,6 +5019,7 @@ void imageConversionToolsExposeRecognitionActions() {
     }
     require(popoverItems == QStringList{QStringLiteral("table-recognition"),
                                         QStringLiteral("barcode-recognition"),
+                                        QStringLiteral("latex-recognition"),
                                         QStringLiteral("convert-to-markdown"),
                                         QStringLiteral("convert-to-html")},
             "recognition popover follows the configured stack from bottom to top");
@@ -4825,6 +5047,7 @@ void imageConversionToolsExposeRecognitionActions() {
                 !popoverButtonWithTooltip(popover, "Table recognition")->isEnabled(),
             "conversion options remain reachable when the selected barcode and table tools are "
             "unavailable");
+    palette.setLatexState(false, false);
     palette.setImageConversionEnabled(false);
     require(!group->isEnabled(),
             "the recognition group disables only when all options are unavailable");
@@ -4859,6 +5082,30 @@ void imageConversionToolsExposeRecognitionActions() {
                 group->accessibleName() == QStringLiteral("Convert to HTML") &&
                 adqt::icons::describeIcon(group->iconRef()).key.name == QStringLiteral("html"),
             "HTML switches format and retains the conversion sub-toolbar");
+    palette.setLatexState(true, false);
+    reopenConversionOptions();
+    auto* latex = popoverButtonWithTooltip(popover, "LaTeX Formula Recognition");
+    int latexRequests = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::latexRequested, &palette,
+                     [&]() { ++latexRequests; });
+    require(latex != nullptr, "recognition popup contains LaTeX");
+    latex->click();
+    require(latexRequests == 1 && palette.activeTool() == ScreenshotToolPalette::Tool::Latex,
+            "LaTeX activates through the recognition popup");
+    settings = palette.findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotImageConversionSettingsButton"));
+    require(!settings || settings->isHidden(), "LaTeX has no conversion settings");
+    auto* original = palette.findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotShowOriginalImageButton"));
+    require(original && !original->isHidden(), "LaTeX retains QR's original image toggle");
+    palette.setLatexState(true, true);
+    require(group->busy(), "LaTeX progress reaches the group button");
+    palette.setLatexState(true, false);
+    reopenConversionOptions();
+    html->click();
+    settings = palette.findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotImageConversionSettingsButton"));
+    require(settings != nullptr, "returning to HTML recreates conversion settings");
     const QString snapshots = qEnvironmentVariable("SNOW_SHOT_CONVERSION_SNAPSHOTS");
     if (!snapshots.isEmpty()) {
         require(QDir().mkpath(snapshots), "create conversion toolbar snapshot directory");
@@ -4917,17 +5164,18 @@ void imageConversionToolsExposeRecognitionActions() {
                 palette.activeTool() == ScreenshotToolPalette::Tool::Select,
             "clicking the selected conversion group trigger toggles recognition off");
     group->click();
-    require(htmlRequests == 2 && palette.activeTool() == ScreenshotToolPalette::Tool::Html,
+    require(htmlRequests == 3 && palette.activeTool() == ScreenshotToolPalette::Tool::Html,
             "the group trigger remembers and reactivates the selected conversion format");
     settings = palette.findChild<adqt::widgets::AdButton*>(
         QStringLiteral("screenshotImageConversionSettingsButton"));
     const QPointer<adqt::widgets::AdButton> settingsGuard(settings);
     reopenConversionOptions();
+    palette.setLatexState(false, false);
     palette.setImageConversionEnabled(false);
     require(group->isEnabled() && !markdown->isEnabled() && !html->isEnabled(),
             "barcode and table remain reachable when the selected conversion is unavailable");
     group->click();
-    require(htmlRequests == 2,
+    require(htmlRequests == 3,
             "the enabled group trigger cannot dispatch its disabled conversion entry");
     reopenConversionOptions();
     auto* barcodeOption = popoverButtonWithTooltip(popover, "Barcode recognition");
@@ -7444,6 +7692,224 @@ void watermarkTemplateLibraryAndEditorApplySnapshotsDeterministically() {
     palette.hide();
 }
 
+void drawTemplateSelectSavesFiltersInsertsAndDeletes() {
+    const snow_shot::storage::DrawTemplateSettings settings;
+    require(settings.setTemplates({}), "draw-template test must start with an empty library");
+    const QByteArray payload =
+        QByteArrayLiteral(R"({"schemaVersion":1,"selectedIds":[1],"elements":[1]})");
+    ScreenshotToolPalette::Options options;
+    options.showSelectTool = true;
+    options.showOcrTool = true;
+    ScreenshotToolPalette palette(options);
+    QWidget display;
+    display.setGeometry(60, 60, 600, 440);
+    display.show();
+    palette.setWatermarkTemplateModalOwnerWindow(&display);
+    int snapshots = 0;
+    QVector<QByteArray> inserted;
+    palette.setDrawTemplateCallbacks(
+        [&]() {
+            ++snapshots;
+            return payload;
+        },
+        [&](const QByteArray& value) { inserted.push_back(value); });
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Select);
+    palette.show();
+    QCoreApplication::processEvents();
+    auto* select =
+        palette.findChild<adqt::widgets::AdSelect*>(QStringLiteral("screenshotDrawTemplateSelect"));
+    auto* opacity = palette.findChild<adqt::widgets::AdSlider*>(
+        QStringLiteral("screenshotSelectionOpacitySlider"));
+    auto* layout =
+        select == nullptr ? nullptr : qobject_cast<QBoxLayout*>(select->parentWidget()->layout());
+    require(select != nullptr && opacity != nullptr && layout != nullptr &&
+                select->placeholder() == QStringLiteral("Draw Template") &&
+                select->searchEnabled() && select->isEnabled() &&
+                layout->indexOf(select) < layout->indexOf(opacity),
+            "Draw Template should be an enabled searchable select left of opacity");
+    bool separatorBetween = false;
+    for (int i = layout->indexOf(select) + 1; i < layout->indexOf(opacity); ++i) {
+        separatorBetween |= qobject_cast<QFrame*>(layout->itemAt(i)->widget()) != nullptr;
+    }
+    require(separatorBetween, "Draw Template and opacity need a separator");
+
+    select->showPopup();
+    QCoreApplication::processEvents();
+    auto* add = select->view()->window()->findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotDrawTemplateAddButton"));
+    require(add != nullptr && !add->isEnabled(),
+            "Add Template should be disabled without selected elements");
+
+    SnowCanvasStyleToolbarState selected;
+    selected.source = SnowCanvasStyleToolbarSource::SelectedRectangle;
+    selected.selectedElementCount = 1;
+    palette.setStyleToolbarState(selected);
+    require(select->isEnabled() && add->isEnabled(),
+            "selecting an element should enable Add Template without changing the select");
+    const SnowCanvasStyleToolbarState unselected;
+    palette.setStyleToolbarState(unselected);
+    require(select->isEnabled() && !add->isEnabled(),
+            "clearing selection while the popup is open should disable only Add Template");
+    palette.setStyleToolbarState(selected);
+    require(add->isEnabled(), "reselecting an element should enable the open Add Template footer");
+    select->showPopup();
+    QCoreApplication::processEvents();
+    add = select->view()->window()->findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotDrawTemplateAddButton"));
+    require(add != nullptr && add->isVisible() && add->text() == QStringLiteral("Add Template") &&
+                add->accentRole() == adqt::widgets::AdButton::AccentRole::Primary,
+            "an empty Draw Template popup should retain its Add Template footer");
+    auto& language = snow_shot::presentation::LanguageManager::instance();
+    require(language.setLanguage(QStringLiteral("zh_CN")),
+            "Draw Template popup should load Simplified Chinese");
+    QCoreApplication::processEvents();
+    require(select->placeholder() == QStringLiteral("绘图模板") &&
+                add->text() == QStringLiteral("添加模板"),
+            "an open Draw Template popup should retranslate its field and footer");
+    require(language.setLanguage(QStringLiteral("en_US")),
+            "Draw Template popup should restore English before naming");
+    QCoreApplication::processEvents();
+    add->click();
+    QCoreApplication::processEvents();
+    auto* modal = palette.findChild<adqt::widgets::AdModal*>(
+        QStringLiteral("screenshotDrawTemplateCreateModal"));
+    auto* form =
+        modal == nullptr ? nullptr : qobject_cast<adqt::widgets::AdForm*>(modal->contentWidget());
+    auto* name = form == nullptr ? nullptr
+                                 : form->findChild<adqt::widgets::AdLineEdit*>(
+                                       QStringLiteral("screenshotDrawTemplateNameInput"));
+    require(modal != nullptr && modal->isOpen(), "Add Template should open a modal");
+    require(modal->ownerWindow() == &display, "Add Template modal should use the current display");
+    require(name != nullptr, "Add Template should expose a name input");
+    require(name->text() == QStringLiteral("Template 1"),
+            "Add Template should generate Template 1");
+    require(language.setLanguage(QStringLiteral("zh_TW")),
+            "Draw Template modal should load Traditional Chinese");
+    QCoreApplication::processEvents();
+    require(modal->windowTitle() == QStringLiteral("新增範本") &&
+                select->placeholder() == QStringLiteral("繪圖範本"),
+            "an open Add Template modal should retranslate without closing");
+    require(language.setLanguage(QStringLiteral("en_US")),
+            "Draw Template test should restore English");
+    QCoreApplication::processEvents();
+    require(snapshots == 0, "Add Template should wait for confirmation to capture the selection");
+    modal->acceptButton()->click();
+    QCoreApplication::processEvents();
+    require(snapshots == 1, "confirming Add Template should capture the selected elements once");
+    require(settings.templates() ==
+                QVector<snow_shot::storage::DrawTemplate>{{QStringLiteral("Template 1"), payload}},
+            "confirming Add Template should persist the editable element payload");
+
+    palette.setStyleToolbarState(unselected);
+    select->showPopup();
+    QCoreApplication::processEvents();
+    add = select->view()->window()->findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotDrawTemplateAddButton"));
+    require(select->isEnabled() && add != nullptr && !add->isEnabled() &&
+                select->options().size() == 1,
+            "saved templates should remain selectable without selected elements");
+    emit select->selected(QVariant(QStringLiteral("draw-template:0")),
+                          QStringLiteral("Template 1"));
+    require(inserted == QVector<QByteArray>{payload},
+            "choosing a draw template without a selection should insert its elements");
+    inserted.clear();
+    select->hidePopup();
+    palette.setStyleToolbarState(selected);
+
+    select->showPopup();
+    QCoreApplication::processEvents();
+    add = select->view()->window()->findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotDrawTemplateAddButton"));
+    require(add != nullptr, "saved Draw Template should retain its Add footer");
+    add->click();
+    QCoreApplication::processEvents();
+    modal = nullptr;
+    for (auto* candidate : palette.findChildren<adqt::widgets::AdModal*>(
+             QStringLiteral("screenshotDrawTemplateCreateModal"))) {
+        if (candidate->isOpen()) {
+            modal = candidate;
+        }
+    }
+    form =
+        modal == nullptr ? nullptr : qobject_cast<adqt::widgets::AdForm*>(modal->contentWidget());
+    name = form == nullptr ? nullptr
+                           : form->findChild<adqt::widgets::AdLineEdit*>(
+                                 QStringLiteral("screenshotDrawTemplateNameInput"));
+    require(modal != nullptr && name != nullptr && name->text() == QStringLiteral("Template 2"),
+            "Add Template should propose the next available numbered name");
+    modal->rejectButton()->click();
+    QCoreApplication::processEvents();
+    require(snapshots == 1 && settings.templates().size() == 1,
+            "canceling Add Template should neither capture nor save content");
+
+    select->showPopup();
+    QCoreApplication::processEvents();
+    add = select->view()->window()->findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotDrawTemplateAddButton"));
+    select->setSearchText(QStringLiteral("missing"));
+    QCoreApplication::processEvents();
+    int visibleOptions = 0;
+    for (int row = 0; row < select->view()->model()->rowCount(); ++row) {
+        visibleOptions += select->view()
+                              ->model()
+                              ->index(row, 0)
+                              .data(Qt::UserRole)
+                              .toString()
+                              .startsWith(QStringLiteral("draw-template:"));
+    }
+    require(visibleOptions == 0 && add->isVisible(),
+            "typing in Draw Template should filter options without hiding Add Template");
+    select->setSearchText(QStringLiteral("template"));
+    QCoreApplication::processEvents();
+    visibleOptions = 0;
+    for (int row = 0; row < select->view()->model()->rowCount(); ++row) {
+        visibleOptions += select->view()->model()->index(row, 0).data(Qt::UserRole).toString() ==
+                          QStringLiteral("draw-template:0");
+    }
+    require(visibleOptions == 1, "Draw Template search should match names case insensitively");
+    select->hidePopup();
+    emit select->selected(QVariant(QStringLiteral("draw-template:0")),
+                          QStringLiteral("Template 1"));
+    emit select->selected(QVariant(QStringLiteral("draw-template:0")),
+                          QStringLiteral("Template 1"));
+    require(inserted == QVector<QByteArray>{payload, payload} && !select->currentValue().isValid(),
+            "choosing the same template twice should insert twice and restore the placeholder");
+
+    select->showPopup();
+    QCoreApplication::processEvents();
+    QListView* view = select->view();
+    QModelIndex option;
+    for (int row = 0; row < view->model()->rowCount(); ++row) {
+        const QModelIndex candidate = view->model()->index(row, 0);
+        if (candidate.data(Qt::UserRole).toString() == QStringLiteral("draw-template:0")) {
+            option = candidate;
+            break;
+        }
+    }
+    require(option.isValid(), "saved Draw Template should have an option row");
+    const QRect rowRect = view->visualRect(option);
+    const QPoint action(rowRect.right() - 15, rowRect.center().y());
+    const auto mouse = [view, action](QEvent::Type type, Qt::MouseButton button,
+                                      Qt::MouseButtons buttons) {
+        QMouseEvent event(type, QPointF(action), QPointF(view->viewport()->mapToGlobal(action)),
+                          button, buttons, Qt::NoModifier);
+        QCoreApplication::sendEvent(view->viewport(), &event);
+    };
+    mouse(QEvent::MouseMove, Qt::NoButton, Qt::NoButton);
+    mouse(QEvent::MouseButtonPress, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, Qt::LeftButton, Qt::NoButton);
+    QCoreApplication::processEvents();
+    auto* deletion = palette.findChild<adqt::widgets::AdModal*>(
+        QStringLiteral("screenshotDrawTemplateDeleteModal"));
+    require(deletion != nullptr && deletion->isOpen() && deletion->ownerWindow() == &display &&
+                deletion->acceptAccentRole() == adqt::widgets::AdButton::AccentRole::Danger,
+            "the option delete action should open a danger confirmation on the current display");
+    deletion->acceptButton()->click();
+    QCoreApplication::processEvents();
+    require(settings.templates().isEmpty(), "deleting a Draw Template should remove its row");
+    palette.hide();
+}
+
 void watermarkControlsFollowPhysicalScale() {
     ScreenshotToolPalette::Options options;
     options.showWatermarkTool = true;
@@ -8499,14 +8965,18 @@ void textStyleControlsExposeAndEmitAllRequestedProperties() {
     strokePicker->setPopupVisible(false);
 
     SnowCanvasTextStyle emittedStyle;
+    quint32 emittedProperties = 0;
     int changeCount = 0;
     QObject::connect(&palette, &ScreenshotToolPalette::textStyleChanged,
-                     [&emittedStyle, &changeCount](const SnowCanvasTextStyle& style) {
+                     [&emittedStyle, &emittedProperties,
+                      &changeCount](const SnowCanvasTextStyle& style, quint32 properties) {
                          emittedStyle = style;
+                         emittedProperties = properties;
                          ++changeCount;
                      });
     clickStyleControl(palette, "Text font size XL (54px)");
-    require(changeCount == 1 && qFuzzyCompare(emittedStyle.fontSize + 1.0, 55.0),
+    require(changeCount == 1 && qFuzzyCompare(emittedStyle.fontSize + 1.0, 55.0) &&
+                emittedProperties == SnowCanvasTextStyleMixedFontSize,
             "XL text size should emit 54px once");
     auto* xlFontSizePreset = qobject_cast<adqt::widgets::AdButton*>(
         controlWithTooltip(palette, "Text font size XL (54px)"));
@@ -8516,13 +8986,15 @@ void textStyleControlsExposeAndEmitAllRequestedProperties() {
             activeFontSizePreset->buttonStyle() == adqt::widgets::AdButton::ButtonStyle::Text,
         "changing text size should move the shared style-toolbar active state to the new preset");
     clickStyleControl(palette, "Line text fill");
-    require(changeCount == 2 && emittedStyle.fillStyle == SnowCanvasFillStyle::Line,
+    require(changeCount == 2 && emittedStyle.fillStyle == SnowCanvasFillStyle::Line &&
+                emittedProperties == SnowCanvasTextStyleMixedFillStyle,
             "text fill pattern should update");
     QWidget* alignmentTrigger = controlWithAccessibleName(palette, "Text alignment");
     adqt::widgets::AdPopover* alignmentPopover = showPopoverForTrigger(alignmentTrigger);
     clickPopoverStyleControl(alignmentPopover, "Align text center");
     require(changeCount == 3 &&
-                emittedStyle.horizontalAlign == SnowCanvasTextHorizontalAlign::Center,
+                emittedStyle.horizontalAlign == SnowCanvasTextHorizontalAlign::Center &&
+                emittedProperties == SnowCanvasTextStyleMixedHorizontalAlign,
             "text alignment should update");
     require(emittedStyle.verticalAlign == SnowCanvasTextVerticalAlign::Bottom &&
                 qFuzzyCompare(emittedStyle.opacity + 1.0, 1.65),
@@ -8935,11 +9407,11 @@ void serialNumberInputCommitsEditsAndSupportsWheel() {
                      });
     const auto typeText = [input](const QString& text) {
         input->selectAll();
-        QKeyEvent key(QEvent::KeyPress, Qt::Key_unknown, Qt::NoModifier, text);
+        PhysicalKeyEvent key(QEvent::KeyPress, Qt::Key_unknown, Qt::NoModifier, text);
         QApplication::sendEvent(input, &key);
     };
     const auto finish = [input]() {
-        QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        PhysicalKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
         QApplication::sendEvent(input, &enter);
     };
     const auto wheel = [](QWidget* target, int delta) {
@@ -10658,7 +11130,7 @@ void secondaryRowsDoNotDriftAcrossScaleRoundTrips() {
         if (panel->size() != initial) {
             std::cerr << "row round trip " << static_cast<int>(tool) << " initial "
                       << initial.width() << 'x' << initial.height() << " final " << panel->width()
-                      << 'x' << panel->height() << '\\n';
+                      << 'x' << panel->height() << '\n';
         }
         require(panel->size() == initial, "secondary row accumulated geometry drift");
     }
@@ -11111,45 +11583,45 @@ void colorPickerChannelKeyboardInput() {
             require(receiver != nullptr, "color input must acquire keyboard focus");
             const QColor before = picker->value().solidColor;
             editor->selectAll();
-            QKeyEvent erase(QEvent::KeyPress, Qt::Key_Backspace, Qt::NoModifier);
+            PhysicalKeyEvent erase(QEvent::KeyPress, Qt::Key_Backspace, Qt::NoModifier);
             QApplication::sendEvent(receiver, &erase);
             require(picker->value().solidColor == before,
                     "clearing a channel while typing must not replace it with zero");
             const bool hex = editor->objectName() == QStringLiteral("ad-color-picker-hex-input");
             const QString text = hex ? QStringLiteral("12345680") : QStringLiteral("42");
             for (const QChar character : text) {
-                QKeyEvent key(QEvent::KeyPress, character.unicode(), Qt::NoModifier,
-                              QString(character));
+                PhysicalKeyEvent key(QEvent::KeyPress, character.unicode(), Qt::NoModifier,
+                                     QString(character));
                 QApplication::sendEvent(receiver, &key);
                 QApplication::processEvents();
             }
-            QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+            PhysicalKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
             QApplication::sendEvent(receiver, &enter);
             QApplication::processEvents();
             if (auto* number = qobject_cast<adqt::widgets::AdInputNumber*>(receiver)) {
                 require(number->hasValue() && number->value() == 42,
                         "numeric channels must commit the complete typed value");
-                QKeyEvent up(QEvent::KeyPress, Qt::Key_Up, Qt::NoModifier);
+                PhysicalKeyEvent up(QEvent::KeyPress, Qt::Key_Up, Qt::NoModifier);
                 QApplication::sendEvent(receiver, &up);
                 require(number->value() == 43, "Up must step the active numeric channel");
-                QKeyEvent down(QEvent::KeyPress, Qt::Key_Down, Qt::NoModifier);
+                PhysicalKeyEvent down(QEvent::KeyPress, Qt::Key_Down, Qt::NoModifier);
                 QApplication::sendEvent(receiver, &down);
                 require(number->value() == 42, "Down must step the active numeric channel");
                 editor->selectAll();
-                QKeyEvent replacement(QEvent::KeyPress, Qt::Key_5, Qt::NoModifier,
-                                      QStringLiteral("51"));
+                PhysicalKeyEvent replacement(QEvent::KeyPress, Qt::Key_5, Qt::NoModifier,
+                                             QStringLiteral("51"));
                 QApplication::sendEvent(receiver, &replacement);
-                QKeyEvent tab(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+                PhysicalKeyEvent tab(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
                 QApplication::sendEvent(receiver, &tab);
                 QApplication::processEvents();
                 require(number->value() == 51, "Tab must commit pending text before moving focus");
                 editor->setFocus();
-                QKeyEvent selectAll(QEvent::KeyPress, Qt::Key_A, Qt::ControlModifier);
+                PhysicalKeyEvent selectAll(QEvent::KeyPress, Qt::Key_A, Qt::ControlModifier);
                 QApplication::sendEvent(receiver, &selectAll);
                 QApplication::clipboard()->setText(QStringLiteral("24"));
-                QKeyEvent paste(QEvent::KeyPress, Qt::Key_V, Qt::ControlModifier);
+                PhysicalKeyEvent paste(QEvent::KeyPress, Qt::Key_V, Qt::ControlModifier);
                 QApplication::sendEvent(receiver, &paste);
-                QKeyEvent keypadEnter(QEvent::KeyPress, Qt::Key_Enter, Qt::KeypadModifier);
+                PhysicalKeyEvent keypadEnter(QEvent::KeyPress, Qt::Key_Enter, Qt::KeypadModifier);
                 QApplication::sendEvent(receiver, &keypadEnter);
                 require(number->value() == 24,
                         "Select All, paste and keypad Enter must work in every numeric channel");
@@ -11814,10 +12286,32 @@ void moveToolExposesCaptureCursorAndRecaptureOptions() {
             layout->indexOf(regionSeparator) == 6 && layout->indexOf(cursor) == 8 &&
             layout->indexOf(recapture) == 10 &&
             layout->indexOf(hideSelectionToolbar) == layout->count() - 1 &&
-            layout->itemAt(layout->indexOf(hideSelectionToolbar) - 2) != nullptr &&
+            layout->itemAt(layout->indexOf(hideSelectionToolbar) - 4) != nullptr &&
             qobject_cast<QFrame*>(
-                layout->itemAt(layout->indexOf(hideSelectionToolbar) - 2)->widget()) != nullptr,
+                layout->itemAt(layout->indexOf(hideSelectionToolbar) - 4)->widget()) != nullptr,
         "Move options must group region actions at the far left, before capture actions and hide");
+    auto* qr =
+        palette.findChild<adqt::widgets::AdButton*>(QStringLiteral("screenshotShowQrCodeButton"));
+    require(qr && layout->indexOf(qr) == layout->indexOf(recapture) + 2 && !qr->isEnabled(),
+            "QR toggle follows Recapture and starts disabled");
+    int qrCommands = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::qrCodeVisibilityRequested,
+                     [&qrCommands](bool) { ++qrCommands; });
+    palette.setQrCodeState(true, true);
+    require(qr->isEnabled() && qr->isChecked(), "detected codes enable and check QR toggle");
+    require(!qr->checkedUsesActiveStyle() &&
+                qr->buttonStyle() == adqt::widgets::AdButton::ButtonStyle::Solid &&
+                qr->accentRole() == adqt::widgets::AdButton::AccentRole::Primary,
+            "QR checked state uses shared toolbar active background");
+    qr->click();
+    require(!qr->isChecked() && qrCommands == 1, "QR click hides markers with one command");
+
+    palette.setRecaptureBusy(true);
+    require(!qr->isEnabled(), "recapture temporarily disables QR toggle");
+    palette.setRecaptureBusy(false);
+    require(qr->isEnabled(), "failed recapture restores QR toggle");
+    palette.setQrCodeState(false, true);
+    require(!qr->isEnabled() && !qr->isChecked(), "invalidated results disable QR toggle");
     require(!cursor->isCheckable() && !cursor->isChecked() && !palette.captureCursorEnabled(),
             "Capture cursor must use the same state-driven action button as scrolling screenshot");
 
@@ -11829,6 +12323,43 @@ void moveToolExposesCaptureCursorAndRecaptureOptions() {
     require(regionTypes && regionGroup &&
                 layout->indexOf(regionTypes) == layout->indexOf(subtractRegion) + 2,
             "shape group follows subtract region");
+    auto* unitGroup = palette.findChild<adqt::widgets::AdRadioButtonGroup*>(
+        QStringLiteral("screenshotSelectionDisplayUnitButtonGroup"));
+    require(unitGroup && unitGroup->buttons().size() == 2 &&
+                unitGroup->checkedId() == int(kDefaultScreenshotSelectionDisplayUnit) &&
+                layout->indexOf(qobject_cast<QWidget*>(unitGroup->parent())) ==
+                    layout->indexOf(hideSelectionToolbar) - 2,
+            "the exclusive unit group must use platform defaults directly before Hide");
+    int unitCommands = 0;
+    auto requestedUnit = kDefaultScreenshotSelectionDisplayUnit;
+    QObject::connect(&palette, &ScreenshotToolPalette::selectionDisplayUnitChanged,
+                     [&](ScreenshotSelectionDisplayUnit unit) {
+                         ++unitCommands;
+                         requestedUnit = unit;
+                     });
+    for (const auto unit : {ScreenshotSelectionDisplayUnit::PhysicalPixels,
+                            ScreenshotSelectionDisplayUnit::LogicalPixels}) {
+        auto* button = unitGroup->button(int(unit));
+        require(button && !button->icon().isNull() && !button->toolTip().isEmpty() &&
+                    button->accessibleName() == button->toolTip(),
+                "unit buttons must expose icons and full accessible tooltips");
+        button->click();
+        require(requestedUnit == unit && unitGroup->checkedId() == int(unit) &&
+                    !unitGroup->button(1 - int(unit))->isChecked(),
+                "clicking a unit must dispatch it and select exactly one option");
+    }
+    require(unitCommands == 2, "unit clicks dispatch exactly once each");
+    auto& language = snow_shot::presentation::LanguageManager::instance();
+    for (const QString& locale :
+         {QStringLiteral("zh_CN"), QStringLiteral("zh_TW"), QStringLiteral("en_US")}) {
+        require(language.setLanguage(locale), "unit tooltip catalogs must load");
+        QCoreApplication::processEvents();
+        const auto tooltip =
+            QCoreApplication::translate("ScreenshotToolPalette", "Logical Pixel Selection");
+        require(unitGroup->button(1)->toolTip() == tooltip &&
+                    unitGroup->button(1)->accessibleName() == tooltip,
+                "unit tooltips and accessible names must retranslate live");
+    }
     palette.show();
     QCoreApplication::processEvents();
     const auto requireJoinedRegionButtons = [&] {
@@ -12045,8 +12576,14 @@ void moveToolExposesCaptureCursorAndRecaptureOptions() {
                     palette.actionPanel()->layout()->contentsMargins() ==
                         scrollingPalette.actionPanel()->layout()->contentsMargins(),
                 "Move must share scrolling screenshot panel height and padding at every scale");
+        require(unitGroup->button(0)->size() == regionGroup->button(0)->size() &&
+                    unitGroup->button(0)->iconSize() == regionGroup->button(0)->iconSize(),
+                "unit buttons and icons must follow action metrics at every scale");
+        require(unitGroup->button(1)->x() ==
+                    unitGroup->button(0)->x() + unitGroup->button(0)->width() - 2,
+                "unit buttons must share a joined border at every scale");
         auto* scrollingLayout = scrollingControls->layout();
-        const int hideSeparator = layout->indexOf(hideSelectionToolbar) - 2;
+        const int hideSeparator = layout->indexOf(hideSelectionToolbar) - 4;
         require(regionSeparator->size() == layout->itemAt(hideSeparator)->widget()->size() &&
                     layout->itemAt(hideSeparator)->widget()->size() ==
                         scrollingLayout->itemAt(2)->widget()->size() &&
@@ -12096,6 +12633,12 @@ void moveToolExposesCaptureCursorAndRecaptureOptions() {
                     !recapture->isEnabled() && hideSelectionToolbar != nullptr,
                 "returning to Move must restore capture state through the shared action row");
         requireMatchingButtonState();
+        unitGroup = palette.findChild<adqt::widgets::AdRadioButtonGroup*>(
+            QStringLiteral("screenshotSelectionDisplayUnitButtonGroup"));
+        require(unitGroup &&
+                    unitGroup->checkedId() == int(ScreenshotSelectionDisplayUnit::LogicalPixels) &&
+                    unitCommands == 2,
+                "rebuilding Move must retain the selected unit without dispatching commands");
     }
     palette.setRecaptureBusy(false);
     require(palette.activateScreenshotShortcut(QStringLiteral("recapture")) && recaptures == 4,
@@ -12173,10 +12716,18 @@ void regionSwitcherRetranslatesAndRenders() {
                         scheme.map.colorBgContainer,
                     "floating region surface uses the drawing toolbar container background");
             auto* hint = floating.findChild<QLabel*>();
-            require(
-                hint && hint->heightForWidth(hint->width()) <= hint->fontMetrics().lineSpacing() &&
-                    hint->palette().color(QPalette::WindowText) == scheme.map.colorTextSecondary,
-                "floating hint stays on one line and uses the secondary theme text color");
+            require(hint &&
+                        hint->text() == QCoreApplication::translate("ScreenshotRegionTypeControl",
+                                                                    "%1 to switch region type")
+                                            .arg(QKeySequence(screenshotRegionTypeCycleKey())
+                                                     .toString(QKeySequence::NativeText)),
+                    "region hint must show the active platform shortcut in every language");
+            require(hint &&
+                        hint->heightForWidth(hint->width()) ==
+                            hint->heightForWidth(hint->width() * 2) &&
+                        hint->palette().color(QPalette::WindowText) ==
+                            scheme.map.colorTextSecondary,
+                    "floating hint stays on one line and uses the secondary theme text color");
             if (!snapshots.isEmpty()) {
                 const auto suffix =
                     locale + (dark ? QStringLiteral("-dark") : QStringLiteral("-light"));
@@ -12214,6 +12765,12 @@ int main(int argc, char** argv) {
     require(QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/segoeui.ttf")) >= 0,
             "the font editor tests require a system TrueType font");
 #endif
+    if (application.arguments().contains(QStringLiteral("--text-style-only"))) {
+        textStyleControlsExposeAndEmitAllRequestedProperties();
+        textStylePopupLifecyclesAreBalanced();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--original-image-only"))) {
         originalImageToggleLeadsRecognitionActions();
         imageConversionToolsExposeRecognitionActions();
@@ -12424,6 +12981,11 @@ int main(int argc, char** argv) {
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
+    if (application.arguments().contains(QStringLiteral("--draw-template-only"))) {
+        drawTemplateSelectSavesFiltersInsertsAndDeletes();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--watermark-template-width-only"))) {
         watermarkTemplateSelectMatchesFontSelectWidth();
         snow_shot::storage::ApplicationStorage::instance().shutdown();
@@ -12433,10 +12995,19 @@ int main(int argc, char** argv) {
         drawingModeSelectionsSurviveToolbarReentry();
         drawingGroupClicksActivateOnceAfterPointerReentry();
         configurableToolbarLayoutSupportsArbitraryPopoverGroups();
+        drawingHistoryActionsFollowStacksAndHiddenShortcuts();
+        recordingDrawingLayoutRendersConfiguredSeparator();
         arrowAndLineUseConfiguredPopoverGroup();
         highlightVariantsUseConfiguredPopoverGroup();
         drawingToolbarGroupsUseToolbarPopoverMetrics();
         spotlightControlsMatchMaskConfigurationBehavior();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--history-only"))) {
+        screenshotShortcutsShareButtonCommandsAndAvailability();
+        drawingHistoryActionsFollowStacksAndHiddenShortcuts();
+        tableToolExposesStructureActionsAndOwnHistoryState();
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
@@ -12497,6 +13068,8 @@ int main(int argc, char** argv) {
     groupedActionOptionsShowShortcutTooltips();
     screenshotActionTooltipsFollowStorageChangesWithoutRetranslation();
     configurableToolbarLayoutSupportsArbitraryPopoverGroups();
+    drawingHistoryActionsFollowStacksAndHiddenShortcuts();
+    recordingDrawingLayoutRendersConfiguredSeparator();
     ocrControlReflectsLoadingState();
     ocrToolReplacesSelectionActionToolbarContents();
     clickingActiveToolbarToolReturnsToSelect();
@@ -12539,6 +13112,7 @@ int main(int argc, char** argv) {
     watermarkEditsCommitCompleteConfigsAndClampWheel();
     watermarkTemplateLibraryAndEditorApplySnapshotsDeterministically();
     watermarkControlsFollowPhysicalScale();
+    drawTemplateSelectSavesFiltersInsertsAndDeletes();
     selectedStyleEditsAreReflectedInTheCreationStyleContext();
     mixedColorsKeepUniformStyleButtonsActive();
     styleToolbarWidthTracksTheActiveTool();

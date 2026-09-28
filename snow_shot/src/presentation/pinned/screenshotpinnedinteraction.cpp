@@ -1,3 +1,4 @@
+#include "snow_shot/shortcuts/shortcutbinding.h"
 #include "snow_shot/presentation/pinnedgeometry.h"
 #include "snow_shot/presentation/screenshotwheelinput.h"
 #include "snow_shot/presentation/screenshotpinnedwindow.h"
@@ -161,6 +162,10 @@ bool ScreenshotPinnedWindow::beginControlledInteraction(const QPointF& desktopPo
     resetPinnedGestures();
     m_interactionPlacement = placement;
     m_interactionResizeHandle = handle;
+    m_interactionEffectiveResizeHandle = handle.value_or(0);
+    m_interactionNativePointer = handle && !m_platform->usesControlledInteraction()
+                                     ? physicalCursorPosition()
+                                     : std::nullopt;
     m_interactionPointer = desktopPosition;
     m_interactionAnchor =
         (desktopPosition - platform::pinnedDesktopRect(*placement, *screen()).topLeft()) *
@@ -198,24 +203,24 @@ void ScreenshotPinnedWindow::updateControlledInteraction(const QPointF& desktopP
     } else {
         QScreen* originScreen = platform::pinnedDisplay(placement, screen());
         const QRect origin = platform::pinnedWindowRect(placement, *originScreen);
-        QRect proposed = origin;
-        const QPoint delta = ((desktopPosition - m_interactionPointer) *
-                              platform::pinnedGeometryScale(originScreen->devicePixelRatio()))
-                                 .toPoint();
-        using H = resize_geometry::DragHandle;
-        const H handle = H(*m_interactionResizeHandle);
-        if (handle == H::Left || handle == H::TopLeft || handle == H::BottomLeft)
-            proposed.setLeft(origin.left() + delta.x());
-        if (handle == H::Right || handle == H::TopRight || handle == H::BottomRight)
-            proposed.setRight(origin.right() + delta.x());
-        if (handle == H::Top || handle == H::TopLeft || handle == H::TopRight)
-            proposed.setTop(origin.top() + delta.y());
-        if (handle == H::Bottom || handle == H::BottomLeft || handle == H::BottomRight)
-            proposed.setBottom(origin.bottom() + delta.y());
+        QPoint delta = ((desktopPosition - m_interactionPointer) *
+                        platform::pinnedGeometryScale(originScreen->devicePixelRatio()))
+                           .toPoint();
+        if (m_interactionNativePointer) {
+            const auto pointer = physicalCursorPosition();
+            if (!pointer)
+                return;
+            delta = *pointer - *m_interactionNativePointer;
+        }
+        auto effective = resize_geometry::DragHandle(m_interactionEffectiveResizeHandle);
         QRect resized;
-        if (!resize_geometry::proportionalResizeRect(proposed, origin, orientedInitialWindowSize(),
-                                                     handle, .1, 5., &resized))
+        if (!resize_geometry::dragResizeRect(
+                origin, delta, orientedInitialWindowSize(),
+                resize_geometry::DragHandle(*m_interactionResizeHandle), .1, 5., &effective,
+                &resized))
             return;
+        m_interactionEffectiveResizeHandle = int(effective);
+        setWindowDragCursor(resizeCursor(int(effective)));
         target = originScreen;
         placement = platform::pinnedPlacement(resized, *target);
     }
@@ -224,6 +229,11 @@ void ScreenshotPinnedWindow::updateControlledInteraction(const QPointF& desktopP
     bool settled = false;
     const int attempts = placement.units == platform::PinnedGeometryUnits::LogicalPixels ? 1 : 3;
     for (int attempt = 0; attempt < attempts; ++attempt) {
+        if (!m_nativeGeometryController->acceptInteractiveGeometry(
+                platform::pinnedWindowRect(placement, *target))) {
+            endControlledInteraction(true);
+            return;
+        }
         m_platformApplying = true;
         const bool applied = m_platform->applyPlacement(placement, target);
         m_platformApplying = false;
@@ -268,6 +278,7 @@ void ScreenshotPinnedWindow::endControlledInteraction(bool cancel) {
     const auto original = *m_interactionPlacement;
     m_interactionPlacement.reset();
     m_interactionResizeHandle.reset();
+    m_interactionNativePointer.reset();
     qApp->removeEventFilter(this);
     auto grabber = m_interactionGrabber;
     m_interactionGrabber = nullptr;
@@ -305,17 +316,24 @@ void ScreenshotPinnedWindow::endControlledInteraction(bool cancel) {
 }
 
 bool ScreenshotPinnedWindow::handleControlledPointer(QObject* watched, QEvent* event) {
-    if (!m_platform->usesControlledInteraction() || !event)
+    if ((!m_platform->usesControlledInteraction() && !m_interactionPlacement &&
+         !m_controlledEscapeRelease) ||
+        !event)
         return false;
     if (m_controlledEscapeRelease && event->type() == QEvent::KeyRelease &&
-        static_cast<QKeyEvent*>(event)->key() == Qt::Key_Escape) {
+        snow_shot::shortcuts::commandKey(*static_cast<QKeyEvent*>(event)) == Qt::Key_Escape) {
         m_controlledEscapeRelease = false;
         event->accept();
         return true;
     }
     if (m_interactionPlacement) {
+        if (event->type() == QEvent::ShortcutOverride &&
+            snow_shot::shortcuts::commandKey(*static_cast<QKeyEvent*>(event)) == Qt::Key_Escape) {
+            event->accept();
+            return true;
+        }
         if (event->type() == QEvent::KeyPress &&
-            static_cast<QKeyEvent*>(event)->key() == Qt::Key_Escape) {
+            snow_shot::shortcuts::commandKey(*static_cast<QKeyEvent*>(event)) == Qt::Key_Escape) {
             m_controlledEscapeRelease = true;
             endControlledInteraction(true);
             event->accept();
@@ -348,6 +366,10 @@ bool ScreenshotPinnedWindow::handleControlledPointer(QObject* watched, QEvent* e
     const bool moveControl = watched == m_clickThroughMoveButton.get();
     if (watched != this && watched != m_canvas && watched != m_recognitionContent && !moveControl)
         return false;
+    if (event->type() == QEvent::Leave) {
+        clearWindowDragCursor();
+        return false;
+    }
     if (event->type() != QEvent::MouseMove && event->type() != QEvent::MouseButtonPress)
         return false;
     auto* mouse = static_cast<QMouseEvent*>(event);
@@ -359,6 +381,10 @@ bool ScreenshotPinnedWindow::handleControlledPointer(QObject* watched, QEvent* e
             setWindowDragCursor(resizeCursor(*handle));
             return true;
         }
+        // Edge resizing owns the host cursor even when a drawing tool disables
+        // window dragging. Release that ownership outside the edge so the canvas
+        // tool (or the window move policy) can resolve the cursor again.
+        updateWindowDragCursor(local.toPoint());
         return false;
     }
     if (mouse->button() == Qt::LeftButton &&

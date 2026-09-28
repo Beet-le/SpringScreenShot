@@ -6,6 +6,7 @@
 #include "snow_shot/storage/persistedwindowgeometry.h"
 
 #include <QColor>
+#include <QByteArray>
 #include <QJsonObject>
 #include <QMap>
 #include <QString>
@@ -143,6 +144,8 @@ class ScreenshotSettings final {
   public:
     [[nodiscard]] bool shutterSoundNotification() const;
     bool setShutterSoundNotification(bool enabled) const;
+    [[nodiscard]] bool autoRecognizeQrCode() const;
+    bool setAutoRecognizeQrCode(bool enabled) const;
     [[nodiscard]] bool confirmBeforeExitingViaShortcut() const;
     bool setConfirmBeforeExitingViaShortcut(bool enabled) const;
     [[nodiscard]] bool captureCursor() const;
@@ -229,6 +232,7 @@ class ScreenshotShortcutSettings final {
     [[nodiscard]] shortcuts::ShortcutBindingList selectPreviouslySelectedArea() const;
     [[nodiscard]] shortcuts::ShortcutBindingList recapture() const;
     [[nodiscard]] shortcuts::ShortcutBindingList copyColor() const;
+    [[nodiscard]] shortcuts::ShortcutBindingList toggleCoordinateMode() const;
 
     [[nodiscard]] shortcuts::ShortcutBindingList shortcuts(const QString& actionId) const;
     bool setShortcuts(const QString& actionId,
@@ -306,8 +310,12 @@ class ScreenshotUiSettings final {
     bool setToolbarSize(const QString& size) const;
     [[nodiscard]] bool selectionTransitionAnimationEnabled() const;
     bool setSelectionTransitionAnimationEnabled(bool enabled) const;
+    [[nodiscard]] QString selectionDisplayUnit() const;
+    bool setSelectionDisplayUnit(const QString& unit) const;
     [[nodiscard]] QString colorPickerDisplayMode() const;
     bool setColorPickerDisplayMode(const QString& mode) const;
+    [[nodiscard]] QString colorPickerCoordinateMode() const;
+    bool setColorPickerCoordinateMode(const QString& mode) const;
     [[nodiscard]] QString colorPickerFormat() const;
     bool setColorPickerFormat(const QString& format) const;
     [[nodiscard]] QColor selectionBorderColor() const;
@@ -405,6 +413,19 @@ class WatermarkTemplateSettings final {
   public:
     [[nodiscard]] QVector<WatermarkTemplate> templates() const;
     bool setTemplates(const QVector<WatermarkTemplate>& templates) const;
+};
+
+struct DrawTemplate {
+    QString name;
+    QByteArray payload;
+
+    friend bool operator==(const DrawTemplate&, const DrawTemplate&) = default;
+};
+
+class DrawTemplateSettings final {
+  public:
+    [[nodiscard]] QVector<DrawTemplate> templates() const;
+    bool setTemplates(const QVector<DrawTemplate>& templates) const;
 };
 
 class PinToScreenSettings final {

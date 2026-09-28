@@ -86,6 +86,7 @@ void ScreenshotToolbarPresenter::updateSelectionToolbarState(
     const ScreenshotToolbarPresentationState& state, bool reposition) {
     if (auto* toolbar = m_overlayCoordinator.toolbar()) {
         toolbar->setScreenshotRegionType(state.regionType);
+        toolbar->setSelectionDisplayUnit(state.selectionDisplayUnit);
     }
     updateOcrAvailability(m_overlayCoordinator, state.ocrAvailable);
     if (!state.selectionToolbarMode || !hasValidSelection(state.selectionPixels)) {
@@ -100,19 +101,15 @@ void ScreenshotToolbarPresenter::updateSelectionToolbarState(
 
     {
         SNOW_SHOT_CAPTURE_PERF_SCOPE("toolbar.set_selection_state");
-        bool canvasUsesPoints = false;
-#ifdef Q_OS_MACOS
-        m_displaySession.forEachImageSource([&](qsizetype, const CapturedDisplayModel& display) {
-            canvasUsesPoints |= display.canvasUsesPoints;
-        });
-#endif
+        const auto conversion = screenshotSelectionDisplayConversion(
+            m_geometry, m_displaySession, state.selectionPixels, state.selectionDisplayUnit);
         toolbarWidget->setSelectionResizable(state.selectionResizable);
         toolbarWidget->setCornerRadiusApplicable(state.cornerRadiusApplicable);
         toolbarWidget->setSelectionState(
             state.selectionPixels, state.aspectRatioLocked, state.cornerRadius, state.shadowWidth,
             state.intelligentSelecting ? ScreenshotSelectionToolbarWidget::DisplayMode::SizeOnly
                                        : ScreenshotSelectionToolbarWidget::DisplayMode::Full,
-            canvasUsesPoints);
+            conversion.canvasUsesPoints, conversion.selection);
     }
 
     if (reposition) {
@@ -158,7 +155,7 @@ void ScreenshotToolbarPresenter::moveToolbar(const ScreenshotToolbarPresentation
     ScreenshotOverlayWindow* overlay = m_displaySession.overlayForDisplay(display);
     const ScreenshotDisplayPlacementGeometry placementGeometry =
         ScreenshotGeometryMapper::displayPlacementGeometry(
-            display, overlay != nullptr ? overlay->geometry() : QRect());
+            display, overlay != nullptr ? overlay->captureGeometry() : QRect());
     if (!placementGeometry.valid) {
         return;
     }
@@ -207,7 +204,7 @@ void ScreenshotToolbarPresenter::moveSelectionToolbar(
         m_overlayCoordinator.attachSelectionToolbarToOverlay(overlay);
     }
     const ScreenshotDisplayPlacementGeometry placementGeometry =
-        ScreenshotGeometryMapper::displayPlacementGeometry(display, overlay->geometry());
+        ScreenshotGeometryMapper::displayPlacementGeometry(display, overlay->captureGeometry());
     if (!placementGeometry.valid) {
         m_overlayCoordinator.hideSelectionToolbar();
         return;

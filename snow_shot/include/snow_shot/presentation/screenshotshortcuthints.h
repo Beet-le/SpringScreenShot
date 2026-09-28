@@ -264,6 +264,9 @@ inline void appendScreenshotCursorMovementShortcutHintRows(
                                               "Select previously selected area");
     appendScreenshotConfiguredShortcutHintRow(rows, configuredShortcuts,
                                               QStringLiteral("copy_color"), "Copy color");
+    appendScreenshotConfiguredShortcutHintRow(rows, configuredShortcuts,
+                                              QStringLiteral("toggle_coordinate_mode"),
+                                              "Toggle Global/Relative Coordinates");
     rows.push_back(screenshotFixedShortcutHintRow("Switch color format: Shift"));
 
     const snow_shot::shortcuts::ShortcutBindingList previousHistoryShortcuts =
@@ -439,6 +442,7 @@ screenshotShortcutHintRows(const ScreenshotShortcutHintContext& context) {
     case ScreenshotActiveTool::Ocr:
     case ScreenshotActiveTool::Table:
     case ScreenshotActiveTool::Qr:
+    case ScreenshotActiveTool::Latex:
     case ScreenshotActiveTool::Markdown:
     case ScreenshotActiveTool::Html:
     case ScreenshotActiveTool::Move:

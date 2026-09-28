@@ -1,3 +1,4 @@
+#include "window_close_shortcut_test_support.h"
 #include "snow_shot/presentation/components/actionrow.h"
 #include "snow_shot/presentation/components/contentcardwidget.h"
 #include "snow_shot/presentation/components/titlebarwidget.h"
@@ -280,6 +281,18 @@ void mainWindowTitlesKeepSmoothRendering() {
 }
 
 #ifdef Q_OS_MACOS
+void standardCloseClosesMainWindow() {
+    const auto& registry = settings::builtInSettingsRegistry();
+    snow_shot::presentation::GlobalShortcutManager shortcuts;
+    settings::BuiltInSettingsBackend backend(shortcuts);
+    settings::SettingsRuntimeSession session(registry, backend);
+    QPointer<MainWindow> window = new MainWindow(registry, session);
+    window->show();
+    require(triggerWindowCloseShortcut(window), "main window registers standard Close");
+    flushEvents();
+    require(!window, "standard Close disposes the main window");
+}
+
 void permissionRedirectShowsMainInterfacePrompt() {
     const auto& registry = settings::builtInSettingsRegistry();
     snow_shot::presentation::GlobalShortcutManager shortcuts;
@@ -352,6 +365,7 @@ int main(int argc, char** argv) {
     titleBarBackgroundMatchesNavigationMenu();
     mainWindowTitlesKeepSmoothRendering();
 #ifdef Q_OS_MACOS
+    standardCloseClosesMainWindow();
     permissionRedirectShowsMainInterfacePrompt();
 #endif
     storage.shutdown();

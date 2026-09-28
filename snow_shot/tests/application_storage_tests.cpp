@@ -154,7 +154,6 @@ void defaultsAndTypedRoundTrip() {
                                           .toObject()
                                           .value(QStringLiteral("layout"))
                                           .toObject();
-    const QJsonArray toolbarPositions = toolbarLayout.value(QStringLiteral("positions")).toArray();
     const QJsonObject tray = root.value(QStringLiteral("tray")).toObject();
     require(root.value(QStringLiteral("storage"))
                         .toObject()
@@ -180,18 +179,6 @@ void defaultsAndTypedRoundTrip() {
                 screenshotUi.value(QStringLiteral("shortcut_hint_opacity")).toInt() == 100 &&
                 toolbarLayout.size() == 2 &&
                 toolbarLayout.value(QStringLiteral("hidden")).toArray().isEmpty() &&
-                toolbarPositions ==
-                    QJsonArray{
-                        QJsonArray{QStringLiteral("shape")},
-                        QJsonArray{QStringLiteral("line"), QStringLiteral("arrow")},
-                        QJsonArray{QStringLiteral("free-draw")},
-                        QJsonArray{QStringLiteral("spotlight"), QStringLiteral("highlighter")},
-                        QJsonArray{QStringLiteral("text")},
-                        QJsonArray{QStringLiteral("serial-number")},
-                        QJsonArray{QStringLiteral("filter")},
-                        QJsonArray{QStringLiteral("eraser")},
-                        QJsonArray{QStringLiteral("watermark")},
-                    } &&
                 tray.value(QStringLiteral("enabled")).toBool() &&
                 tray.value(QStringLiteral("icon")).toString() == QStringLiteral("default") &&
                 tray.value(QStringLiteral("custom_icon")).toString().isEmpty() &&
@@ -241,6 +228,8 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
         defaultValue("system/auto_start_at_boot").toBool() &&
             defaultValue("network/proxy").toString() == QStringLiteral("none") &&
             defaultValue("text_recognition/model_type").toString() == QStringLiteral("small") &&
+            defaultValue("text_recognition/detector_resize_policy").toString() ==
+                QStringLiteral("max") &&
             !defaultValue("text_recognition/resident_process").toBool() &&
             !defaultValue("text_recognition/model_hot_start").toBool() &&
             !defaultValue("global_shortcuts/disable_on_focused_fullscreen_window").toBool() &&
@@ -374,6 +363,7 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
         {QStringLiteral("select_previously_selected_area"), QJsonArray{QStringLiteral("R")}},
         {QStringLiteral("recapture"), QJsonArray{QStringLiteral("Alt+R")}},
         {QStringLiteral("copy_color"), QJsonArray{QStringLiteral("C")}},
+        {QStringLiteral("toggle_coordinate_mode"), QJsonArray{QStringLiteral("Ctrl+P")}},
         {QStringLiteral("table_recognition"), QJsonArray{QStringLiteral("Ctrl+X")}},
         {QStringLiteral("qr_code_recognition"), QJsonArray{QStringLiteral("Ctrl+Q")}},
         {QStringLiteral("video_recording"), QJsonArray{QStringLiteral("Ctrl+R")}},
@@ -517,6 +507,8 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
          {QStringLiteral("extra_small"), QStringLiteral("small"), QStringLiteral("medium"),
           QStringLiteral("small_v5"), QStringLiteral("medium_v5"), QStringLiteral("small_v4"),
           QStringLiteral("medium_v4")}},
+        {QStringLiteral("text_recognition/detector_resize_policy"),
+         {QStringLiteral("max"), QStringLiteral("min")}},
         {QStringLiteral("screenshot/auto_execute_after_text_recognition"),
          {QStringLiteral("no_action"), QStringLiteral("copy_text"),
           QStringLiteral("copy_text_and_end_screenshot"), QStringLiteral("quick_copy_text"),
@@ -774,28 +766,33 @@ void globalMouseCombinationSchemaIsStrictAndPersistent() {
 }
 
 void screenshotUiSchemaRepairsStructuredValues() {
+    require(!storage::ConfigurationSchema::normalize(
+                 QStringLiteral("screenshot_toolbar/last_drawing_tool"), QStringLiteral("undo"))
+                 .valid,
+            "history actions must not become remembered drawing tools");
     const QJsonObject defaultActionLayout =
         storage::ConfigurationSchema::defaultValue(
             QStringLiteral("screenshot_toolbar/action_tools_layout"))
             .toObject();
-    require(defaultActionLayout ==
-                QJsonObject{
-                    {QStringLiteral("positions"),
+    require(
+        defaultActionLayout ==
+            QJsonObject{
+                {QStringLiteral("positions"),
+                 QJsonArray{
                      QJsonArray{
-                         QJsonArray{QStringLiteral("convert-to-html"),
-                                    QStringLiteral("convert-to-markdown"),
-                                    QStringLiteral("barcode-recognition"),
-                                    QStringLiteral("table-recognition")},
-                         QJsonArray{QStringLiteral("record-screen")},
-                         QJsonArray{QStringLiteral("pin-to-screen")},
-                         QJsonArray{QStringLiteral("text-recognition")},
-                         QJsonArray{QStringLiteral("text-translation")},
-                         QJsonArray{QStringLiteral("scrolling-screenshot")},
-                         QJsonArray{QStringLiteral("quick-save"), QStringLiteral("save-as-file")},
-                     }},
-                    {QStringLiteral("hidden"), QJsonArray{}},
-                },
-            "default action toolbar groups conversions with barcode and table recognition");
+                         QStringLiteral("convert-to-html"), QStringLiteral("convert-to-markdown"),
+                         QStringLiteral("latex-recognition"), QStringLiteral("barcode-recognition"),
+                         QStringLiteral("table-recognition")},
+                     QJsonArray{QStringLiteral("record-screen")},
+                     QJsonArray{QStringLiteral("pin-to-screen")},
+                     QJsonArray{QStringLiteral("text-recognition")},
+                     QJsonArray{QStringLiteral("text-translation")},
+                     QJsonArray{QStringLiteral("scrolling-screenshot")},
+                     QJsonArray{QStringLiteral("quick-save"), QStringLiteral("save-as-file")},
+                 }},
+                {QStringLiteral("hidden"), QJsonArray{}},
+            },
+        "default action toolbar groups conversions with barcode and table recognition");
 
     const auto validColor = storage::ConfigurationSchema::normalize(
         QStringLiteral("screenshot_ui/cursor_guide_line_color"), QStringLiteral("#abcdef80"));
@@ -834,10 +831,44 @@ void screenshotUiSchemaRepairsStructuredValues() {
                         QJsonArray{QStringLiteral("serial-number")},
                         QJsonArray{QStringLiteral("filter")},
                         QJsonArray{QStringLiteral("eraser")},
+                        QJsonArray{QStringLiteral("separator")},
+                        QJsonArray{QStringLiteral("undo")},
+                        QJsonArray{QStringLiteral("redo")},
                     } &&
                 layout.value(QStringLiteral("hidden")).toArray() ==
                     QJsonArray{QStringLiteral("arrow"), QStringLiteral("free-draw")},
             "toolbar layout normalization did not preserve hidden nested membership");
+
+    const QJsonObject invalidSeparatorLayout{
+        {QStringLiteral("positions"),
+         QJsonArray{QJsonArray{QStringLiteral("shape"), QStringLiteral("separator"),
+                               QStringLiteral("undo"), QStringLiteral("redo")},
+                    QJsonArray{}}},
+        {QStringLiteral("hidden"), QJsonArray{}}};
+    const auto separated = storage::ConfigurationSchema::normalize(
+        QStringLiteral("screenshot_toolbar/layout"), invalidSeparatorLayout);
+    const QJsonArray separatedPositions =
+        separated.value.toObject().value(QStringLiteral("positions")).toArray();
+    require(separated.valid && separated.changed && separatedPositions.size() >= 3 &&
+                separatedPositions.at(0).toArray() == QJsonArray{QStringLiteral("shape")} &&
+                separatedPositions.at(1).toArray() == QJsonArray{QStringLiteral("separator")} &&
+                separatedPositions.at(2).toArray() ==
+                    QJsonArray{QStringLiteral("undo"), QStringLiteral("redo")},
+            "separator must normalize into its own drawing toolbar position");
+    const QJsonObject hiddenSeparatorLayout{
+        {QStringLiteral("positions"),
+         QJsonArray{QJsonArray{QStringLiteral("shape")}, QJsonArray{}}},
+        {QStringLiteral("hidden"), QJsonArray{QStringLiteral("separator")}}};
+    const auto hiddenSeparator = storage::ConfigurationSchema::normalize(
+        QStringLiteral("screenshot_toolbar/layout"), hiddenSeparatorLayout);
+    require(hiddenSeparator.valid &&
+                hiddenSeparator.value.toObject().value(QStringLiteral("hidden")).toArray() ==
+                    QJsonArray{QStringLiteral("separator")} &&
+                !hiddenSeparator.value.toObject()
+                     .value(QStringLiteral("positions"))
+                     .toArray()
+                     .contains(QJsonArray{QStringLiteral("separator")}),
+            "a hidden separator must stay hidden during legacy layout upgrade");
 
     const QJsonObject malformedActionLayout{
         {QStringLiteral("positions"),
@@ -859,10 +890,10 @@ void screenshotUiSchemaRepairsStructuredValues() {
         normalizedActions.valid && normalizedActions.changed && actionLayout.size() == 2 &&
             actionLayout.value(QStringLiteral("positions")).toArray() ==
                 QJsonArray{
-                    QJsonArray{QStringLiteral("quick-save"), QStringLiteral("save-as-file"),
-                               QStringLiteral("table-recognition"),
-                               QStringLiteral("convert-to-markdown"),
-                               QStringLiteral("convert-to-html")},
+                    QJsonArray{
+                        QStringLiteral("quick-save"), QStringLiteral("save-as-file"),
+                        QStringLiteral("table-recognition"), QStringLiteral("convert-to-markdown"),
+                        QStringLiteral("latex-recognition"), QStringLiteral("convert-to-html")},
                     QJsonArray{QStringLiteral("record-screen")},
                     QJsonArray{QStringLiteral("pin-to-screen")},
                     QJsonArray{QStringLiteral("text-translation")},
@@ -879,10 +910,10 @@ void screenshotUiSchemaRepairsStructuredValues() {
         {QStringLiteral("hidden"),
          QJsonArray{QStringLiteral("barcode-recognition"), QStringLiteral("table-recognition"),
                     QStringLiteral("convert-to-markdown"), QStringLiteral("convert-to-html"),
-                    QStringLiteral("record-screen"), QStringLiteral("pin-to-screen"),
-                    QStringLiteral("text-recognition"), QStringLiteral("text-translation"),
-                    QStringLiteral("scrolling-screenshot"), QStringLiteral("quick-save"),
-                    QStringLiteral("save-as-file")}},
+                    QStringLiteral("latex-recognition"), QStringLiteral("record-screen"),
+                    QStringLiteral("pin-to-screen"), QStringLiteral("text-recognition"),
+                    QStringLiteral("text-translation"), QStringLiteral("scrolling-screenshot"),
+                    QStringLiteral("quick-save"), QStringLiteral("save-as-file")}},
     };
     const auto normalizedAllHidden = storage::ConfigurationSchema::normalize(
         QStringLiteral("screenshot_toolbar/action_tools_layout"), allHiddenActionLayout);
@@ -930,6 +961,9 @@ void screenshotUiAdaptersRoundTripTypedValues() {
         {QStringLiteral("serial-number")},
         {QStringLiteral("filter")},
         {QStringLiteral("eraser")},
+        {QStringLiteral("separator")},
+        {QStringLiteral("undo")},
+        {QStringLiteral("redo")},
     };
     const storage::ScreenshotToolbarLayout expectedLayout{
         expectedPositions,
@@ -946,8 +980,8 @@ void screenshotUiAdaptersRoundTripTypedValues() {
          {QStringLiteral("table-recognition")}},
         {QStringLiteral("barcode-recognition"), QStringLiteral("pin-to-screen"),
          QStringLiteral("convert-to-markdown"), QStringLiteral("convert-to-html"),
-         QStringLiteral("text-recognition"), QStringLiteral("text-translation"),
-         QStringLiteral("scrolling-screenshot")},
+         QStringLiteral("latex-recognition"), QStringLiteral("text-recognition"),
+         QStringLiteral("text-translation"), QStringLiteral("scrolling-screenshot")},
     };
     require(toolbar.setLayout(storage::ScreenshotToolbarLayoutKind::ActionTools, actionLayout) &&
                 toolbar.layout(storage::ScreenshotToolbarLayoutKind::ActionTools) == actionLayout &&
@@ -962,7 +996,7 @@ void screenshotUiAdaptersRoundTripTypedValues() {
     // This valid layout resembles a historical screenshot default; pinned layouts must not migrate.
     const storage::ScreenshotToolbarLayout pinnedLayout{
         {{QStringLiteral("barcode-recognition"), QStringLiteral("table-recognition")},
-         {QStringLiteral("convert-to-markdown")},
+         {QStringLiteral("convert-to-markdown"), QStringLiteral("latex-recognition")},
          {QStringLiteral("convert-to-html")},
          {QStringLiteral("text-recognition")},
          {QStringLiteral("text-translation")}},
@@ -1503,7 +1537,7 @@ void settingsAdaptersRoundTripAndRejectInvalidValues() {
     const storage::ScreenshotShortcutSettings screenshotShortcuts;
     const shortcuts::ShortcutBindingMap screenshotDefaults = screenshotShortcuts.allShortcuts();
     require(
-        screenshotDefaults.size() == 26 &&
+        screenshotDefaults.size() == 27 &&
             portable(screenshotShortcuts.moveTool()) ==
                 QStringList{QStringLiteral("M"), QStringLiteral("Ctrl+E")} &&
             portable(screenshotShortcuts.moveCursorUp()) ==
@@ -1528,6 +1562,8 @@ void settingsAdaptersRoundTripAndRejectInvalidValues() {
                 QStringList{QStringLiteral("R")} &&
             portable(screenshotShortcuts.recapture()) == QStringList{QStringLiteral("Alt+R")} &&
             portable(screenshotShortcuts.copyColor()) == QStringList{QStringLiteral("C")} &&
+            portable(screenshotShortcuts.toggleCoordinateMode()) ==
+                QStringList{QStringLiteral("Ctrl+P")} &&
             portable(screenshotDefaults.value(QStringLiteral("pin_to_screen"))) ==
                 QStringList{QStringLiteral("Ctrl+F")} &&
             portable(screenshotDefaults.value(QStringLiteral("quick_save"))) ==
@@ -2226,6 +2262,65 @@ void watermarkTemplateSettingsRepairAndSurviveRestart() {
     applicationStorage.shutdown();
 }
 
+void drawTemplateSettingsRepairAndSurviveRestart() {
+    QTemporaryDir temporary;
+    require(temporary.isValid(), "temporary draw-template settings directory");
+    const QString executable = temporary.filePath(QStringLiteral("app"));
+    require(QDir().mkpath(executable), "failed to create draw-template executable directory");
+    const QString config = temporary.filePath(QStringLiteral("config.json"));
+    const QByteArray payload =
+        QByteArrayLiteral(R"({"schemaVersion":1,"selectedIds":[1],"elements":[1]})");
+    const QString encoded = QString::fromLatin1(payload.toBase64());
+    writeBytes(
+        config,
+        QJsonDocument(
+            QJsonObject{
+                {QStringLiteral("storage"), QJsonObject{{QStringLiteral("schema_version"), 1}}},
+                {QStringLiteral("drawing"),
+                 QJsonObject{
+                     {QStringLiteral("draw_templates"),
+                      QJsonArray{
+                          QJsonObject{{QStringLiteral("name"), QStringLiteral("  Mark  ")},
+                                      {QStringLiteral("payload"), encoded},
+                                      {QStringLiteral("extra"), 1}},
+                          QJsonObject{{QStringLiteral("name"), QStringLiteral("Mark")},
+                                      {QStringLiteral("payload"), encoded}},
+                          QJsonObject{{QStringLiteral("name"), QStringLiteral("Bad")},
+                                      {QStringLiteral("payload"), QStringLiteral("!invalid!")}},
+                          QJsonObject{{QStringLiteral("name"), QStringLiteral("  ")},
+                                      {QStringLiteral("payload"), encoded}},
+                      }}}},
+            })
+            .toJson(QJsonDocument::Compact));
+
+    auto& applicationStorage = initialize(executable, temporary.path());
+    const storage::DrawTemplateSettings settings;
+    require(settings.templates() ==
+                QVector<storage::DrawTemplate>{{QStringLiteral("Mark"), payload},
+                                               {QStringLiteral("Mark"), payload}},
+            "draw-template repair must retain order and duplicate names");
+    require(applicationStorage.flushNow().success, "repaired draw-template settings must flush");
+    const QJsonArray stored = readObject(config)
+                                  .value(QStringLiteral("drawing"))
+                                  .toObject()
+                                  .value(QStringLiteral("draw_templates"))
+                                  .toArray();
+    require(stored.size() == 2 && stored.at(0).toObject().size() == 2,
+            "draw-template repair must discard malformed entries and extra fields");
+    require(!settings.setTemplates({{QStringLiteral("Invalid"), QByteArrayLiteral("no")}}),
+            "draw-template settings must reject malformed payloads");
+    require(settings.setTemplates(
+                {{QStringLiteral("  First  "), payload}, {QStringLiteral("First"), payload}}) &&
+                applicationStorage.flushNow().success,
+            "draw-template settings must persist valid entries");
+    static_cast<void>(initialize(executable, temporary.path()));
+    require(settings.templates() ==
+                QVector<storage::DrawTemplate>{{QStringLiteral("First"), payload},
+                                               {QStringLiteral("First"), payload}},
+            "draw templates must survive restart without deduplicating");
+    applicationStorage.shutdown();
+}
+
 void pinnedManagementConfigurationAndTrayMigration() {
     QTemporaryDir directory;
     const auto defaults =
@@ -2281,6 +2376,12 @@ int main(int argc, char** argv) {
     }
     QCoreApplication::setOrganizationName(QStringLiteral("SnowShotTests"));
     QCoreApplication::setApplicationName(QStringLiteral("storage-tests"));
+    if (application.arguments().contains(QStringLiteral("--shortcut-settings-only"))) {
+        settingsSchemaDefaultsAndValidationAreComplete();
+        settingsAdaptersRoundTripAndRejectInvalidValues();
+        storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--quit-lifetime-only"))) {
         applicationQuitPreservesStorageForConsumerDestruction();
         return 0;
@@ -2296,6 +2397,10 @@ int main(int argc, char** argv) {
         screenshotUiAdaptersRoundTripTypedValues();
         screenshotTranslationSettingsRoundTripSupportedValues();
         storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--draw-template-only"))) {
+        drawTemplateSettingsRepairAndSurviveRestart();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--pin-shortcuts-only"))) {
@@ -2317,6 +2422,7 @@ int main(int argc, char** argv) {
     legacyTrayHotkeyCommandMigratesToQuickAction();
     trayClickSettingsSurviveRestart();
     watermarkTemplateSettingsRepairAndSurviveRestart();
+    drawTemplateSettingsRepairAndSurviveRestart();
     globalMouseCombinationSchemaIsStrictAndPersistent();
     screenshotUiSchemaRepairsStructuredValues();
     screenshotUiAdaptersRoundTripTypedValues();

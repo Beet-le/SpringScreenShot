@@ -125,9 +125,18 @@ def remove_development_libraries(runtime):
     marker = runtime / 'assets/ocr/development-libraries.json'
     if not marker.exists():
         return
-    for name in json.loads(marker.read_text()):
+    names = json.loads(marker.read_text())
+    for name in names:
         if Path(name).name != name or not name.endswith('.dylib') or name in RUNTIME_FILES:
             raise ValueError('Invalid development library inventory')
+    staged_libraries = {runtime.resolve() / name for name in names}
+    # CMake may stage versioned dylib symlinks alongside the temporary files.
+    # Remove links before their targets so the signed bundle has no dangling code.
+    staged_links = [path for path in runtime.iterdir()
+                    if path.is_symlink() and path.resolve() in staged_libraries]
+    for path in staged_links:
+        path.unlink()
+    for name in names:
         (runtime / name).unlink(missing_ok=True)
     marker.unlink()
 
@@ -237,11 +246,11 @@ def runtime_manifest(source, runtime, static_runtime=False):
             raise ValueError(f'Expected a thin ARM64 Mach-O binary: {path}')
     if not os.access(runtime / RUNTIME_FILES[0], os.X_OK):
         raise ValueError('The OCR worker is not executable')
-    expected = f'snow-ocr-process {version} macos-aarch64 protocol 3'
+    expected = f'snow-ocr-process {version} macos-aarch64 protocol 4'
     if run(str(runtime / RUNTIME_FILES[0]), '--version') != expected:
         raise ValueError('The OCR worker version/protocol does not match the application')
     return dict(schema=3, default_model='small', runtime=dict(
-        version=version, platform='macos-arm64', delivery='bundled', protocol=3,
+        version=version, platform='macos-arm64', delivery='bundled', protocol=4,
         executable=RUNTIME_FILES[0], static=static_runtime,
         files=[descriptor(runtime / n) for n in runtime_files]),
         models=source['models'])

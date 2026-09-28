@@ -103,11 +103,7 @@ bool TranslationService::savePreferences(const TranslationPreferences& preferenc
 void TranslationService::publishModels(bool resolveSelection) {
     if (m_client == nullptr)
         return;
-    m_models.clear();
-    for (const auto& model : m_client->cachedChatModels()) {
-        if (model.supportsTranslation())
-            m_models.append(model);
-    }
+    m_models = m_client->cachedChatModels();
     // Select renders a header for each contiguous group. Keep custom and server general
     // models together while preserving their order within each translation category.
     std::stable_partition(m_models.begin(), m_models.end(), [](const auto& model) {
@@ -182,6 +178,15 @@ TranslationJob* TranslationService::createJob(const QStringList& texts, QObject*
     return new TranslationJob(*this, texts, owner);
 }
 
+TranslationJob* TranslationService::createJob(const QStringList& texts,
+                                              const TranslationPreferences& preferences,
+                                              QObject* owner) {
+    auto* job = new TranslationJob(*this, texts, owner);
+    job->m_preferences = preferences;
+    job->m_fixedPreferences = true;
+    return job;
+}
+
 TranslationJob::TranslationJob(TranslationService& service, const QStringList& texts,
                                QObject* owner)
     : QObject(owner), m_service(&service), m_client(service.m_client),
@@ -235,8 +240,10 @@ void TranslationJob::retry() {
         fail(tr("Translation service is unavailable"));
         return;
     }
-    const bool changed = m_preferences != m_service->preferences() || m_state == State::Invalidated;
-    m_preferences = m_service->preferences();
+    const bool changed = (!m_fixedPreferences && m_preferences != m_service->preferences()) ||
+                         m_state == State::Invalidated;
+    if (!m_fixedPreferences)
+        m_preferences = m_service->preferences();
     for (auto& unit : m_units) {
         if (changed) {
             unit.text.clear();
@@ -276,6 +283,10 @@ void TranslationJob::prepare() {
             return;
         if (!m_service->m_catalogAttempted) {
             m_service->refreshModels();
+            return;
+        }
+        if (m_fixedPreferences && !m_preferences.modelId.isEmpty()) {
+            fail(m_service->errorText());
             return;
         }
         const int index = translationModelIndex(models, m_service->preferences().modelId);

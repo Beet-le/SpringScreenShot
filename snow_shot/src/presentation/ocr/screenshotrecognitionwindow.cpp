@@ -246,6 +246,10 @@ ScreenshotRecognitionWindow::ScreenshotRecognitionWindow(
     outerLayout->setSizeConstraint(QLayout::SetNoConstraint);
     outerLayout->addWidget(m_contentContainer);
     m_contentContainer->setObjectName(QStringLiteral("screenshotRecognitionContent"));
+    // The mouse-transparent OCR layer exposes this container as the hit-test
+    // receiver. It must receive button-free moves so they can reach the window's
+    // hover cursor and selection-resize handling in both presentation modes.
+    m_contentContainer->setMouseTracking(true);
     m_stack->setContentsMargins(0, 0, 0, 0);
     // This window is an exact overlay for the screenshot selection. Child pages such as
     // QGraphicsView and AdTextEdit have useful standalone minimum size hints, but those hints
@@ -775,7 +779,7 @@ void ScreenshotRecognitionWindow::hideTextEditor() {
     m_stack->setCurrentWidget(m_textLayer);
 }
 
-void ScreenshotRecognitionWindow::showQrContents(const QStringList& contents) {
+void ScreenshotRecognitionWindow::showQrContents(const QStringList& contents, bool detectLinks) {
     clearImageConversion();
     hideTextEditor();
     clearFormattedText();
@@ -815,6 +819,9 @@ void ScreenshotRecognitionWindow::showQrContents(const QStringList& contents) {
             .arg(contentMargins.top())
             .arg(contentMargins.left()));
 
+    m_qrDetectLinks = detectLinks;
+    m_qrBrowser->setAccessibleName(detectLinks ? tr("Barcode recognition result")
+                                               : tr("LaTeX formula source"));
     QTextDocument* document = m_qrBrowser->document();
     document->clear();
     document->setDocumentMargin(0.0);
@@ -838,7 +845,7 @@ void ScreenshotRecognitionWindow::showQrContents(const QStringList& contents) {
         const QString content = contents.at(index);
         const QString trimmed = content.trimmed();
         QUrl url;
-        if (!trimmed.isEmpty() && isHttpUrl(trimmed, &url)) {
+        if (detectLinks && !trimmed.isEmpty() && isHttpUrl(trimmed, &url)) {
             const qsizetype start = content.indexOf(trimmed);
             cursor.insertText(content.left(start), plainFormat);
             linkFormat.setAnchorHref(url.toString(QUrl::FullyEncoded));
@@ -1324,4 +1331,12 @@ void ScreenshotRecognitionWindow::updateTextEditorSpinGeometry() {
     m_textEditorSpin->setGeometry(m_textEditorContainer->width() - spinSize.width() - margin,
                                   m_textEditorContainer->height() - spinSize.height() - margin,
                                   spinSize.width(), spinSize.height());
+}
+
+void ScreenshotRecognitionWindow::changeEvent(QEvent* event) {
+    QWidget::changeEvent(event);
+    if (event->type() == QEvent::LanguageChange && m_qrBrowser) {
+        m_qrBrowser->setAccessibleName(m_qrDetectLinks ? tr("Barcode recognition result")
+                                                       : tr("LaTeX formula source"));
+    }
 }

@@ -8,6 +8,7 @@
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/settingsadapters.h"
 #include "widgets/button.h"
+#include "widgets/radio_button_group.h"
 #include "widgets/popover.h"
 #include "widgets/detail/overlay_popup_surface.h"
 #include <QPushButton>
@@ -198,6 +199,12 @@ class NativeGeometryWarningScope final {
 
 class NoOpToolbarCommands final : public ScreenshotToolbarCommandSink {
   public:
+    int selectionUnitCommands = 0;
+    void setSelectionDisplayUnit(ScreenshotSelectionDisplayUnit unit) override {
+        ++selectionUnitCommands;
+        static_cast<void>(snow_shot::storage::ScreenshotUiSettings().setSelectionDisplayUnit(
+            screenshotSelectionDisplayUnitId(unit)));
+    }
     int quickSaveCount = 0;
     void quickSaveSelection() override {
         ++quickSaveCount;
@@ -246,7 +253,7 @@ class NoOpToolbarCommands final : public ScreenshotToolbarCommandSink {
     void startScreenRecording() override {}
     void setShapeStyleFromToolbar(const SnowCanvasShapeStyle&, quint32,
                                   SnowCanvasShapeKind) override {}
-    void setTextStyleFromToolbar(const SnowCanvasTextStyle&) override {}
+    void setTextStyleFromToolbar(const SnowCanvasTextStyle&, quint32) override {}
     void setSerialNumberStyleFromToolbar(const SnowCanvasSerialNumberStyle&) override {}
     void decrementSelectedSerialNumbers() override {}
     void incrementSelectedSerialNumbers() override {}
@@ -1386,7 +1393,7 @@ void dpiCommitPresentsContentWhenUpdatesResume() {
 #endif
 }
 
-void reusedToolbarFitsOnFirstShowAcrossScreens() {
+bool reusedToolbarFitsOnFirstShowAcrossScreens() {
     QScreen* screenA = nullptr;
     QScreen* screenB = nullptr;
     for (QScreen* screen : QGuiApplication::screens()) {
@@ -1396,9 +1403,11 @@ void reusedToolbarFitsOnFirstShowAcrossScreens() {
             screenB = screen;
         }
     }
-    require(screenA != nullptr && screenB != nullptr, "requires 150% and 100% screens");
-    require(screenB->geometry().right() + 1 == screenA->geometry().left(),
-            "requires 100% monitor B immediately left of 150% monitor A");
+    if (screenA == nullptr || screenB == nullptr ||
+        screenB->geometry().right() + 1 != screenA->geometry().left()) {
+        std::cout << "requires adjacent 100% and 150% screens\n";
+        return false;
+    }
     class Owner : public QWidget {
       public:
         void retire() {
@@ -1456,6 +1465,7 @@ void reusedToolbarFitsOnFirstShowAcrossScreens() {
         require(monitor.painted && !monitor.clipped,
                 "reused toolbar must not paint a clipped frame on its first show");
     }
+    return true;
 }
 
 void dpiScaledSizeMessagePreservesThePhysicalWindowSize() {
@@ -1647,6 +1657,46 @@ void unchangedShadowMarginsAreNoOps() {
     require(palette != nullptr, "floating toolbar should own a palette");
     require(!palette->setShadowMargins(ScreenshotToolPaletteHost::defaultShadowMargins()),
             "setting the current shadow margins should be a no-op");
+}
+
+void screenshotSelectionUnitSurvivesWindowAndCaptureReset() {
+    using Unit = ScreenshotSelectionDisplayUnit;
+    const snow_shot::storage::ScreenshotUiSettings settings;
+    const QString saved = settings.selectionDisplayUnit();
+    require(settings.setSelectionDisplayUnit(QStringLiteral("logical_pixels")),
+            "initialize unit preference");
+    NoOpToolbarCommands commands;
+    {
+        ScreenshotToolbarWindow window(commands);
+        auto* palette = window.palette();
+        palette->setActiveTool(ScreenshotToolPalette::Tool::Move);
+        const auto group = [&] {
+            return palette->findChild<adqt::widgets::AdRadioButtonGroup*>(
+                QStringLiteral("screenshotSelectionDisplayUnitButtonGroup"));
+        };
+        require(group() && group()->checkedId() == int(Unit::LogicalPixels),
+                "toolbar construction must load the saved selection unit");
+        group()->button(int(Unit::PhysicalPixels))->click();
+        require(commands.selectionUnitCommands == 1 &&
+                    settings.selectionDisplayUnit() == QStringLiteral("physical_pixels"),
+                "unit click must route exactly once through the toolbar command sink");
+        window.resetForNewCapture();
+        palette->setActiveTool(ScreenshotToolPalette::Tool::Move);
+        require(group() && group()->checkedId() == int(Unit::PhysicalPixels),
+                "capture reset must preserve the unit");
+        require(settings.setSelectionDisplayUnit(QStringLiteral("logical_pixels")),
+                "change unit externally");
+        require(group()->checkedId() == int(Unit::LogicalPixels) &&
+                    commands.selectionUnitCommands == 1,
+                "live preference changes must synchronize without command loops");
+    }
+    ScreenshotToolbarWindow recreated(commands);
+    recreated.palette()->setActiveTool(ScreenshotToolPalette::Tool::Move);
+    const auto* group = recreated.palette()->findChild<adqt::widgets::AdRadioButtonGroup*>(
+        QStringLiteral("screenshotSelectionDisplayUnitButtonGroup"));
+    require(group && group->checkedId() == int(Unit::LogicalPixels),
+            "recreated windows must retain the persisted unit");
+    require(settings.setSelectionDisplayUnit(saved), "restore unit preference");
 }
 
 void screenshotToolbarSizeMultiplierSurvivesCaptureReset() {
@@ -2956,8 +3006,7 @@ int main(int argc, char* argv[]) {
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--capture-screen-switch-only"))) {
-            reusedToolbarFitsOnFirstShowAcrossScreens();
-            return 0;
+            return reusedToolbarFitsOnFirstShowAcrossScreens() ? 0 : 77;
         }
         if (app.arguments().contains(QStringLiteral("--quick-save-only"))) {
             NoOpToolbarCommands commands;
@@ -3000,6 +3049,10 @@ int main(int argc, char* argv[]) {
         if (app.arguments().contains(QStringLiteral("--jump-to-translation-page-only"))) {
             jumpToTranslationPageFollowsLiveSettingsAndOcrAvailability();
             jumpToTranslationPageCommandMustOutliveItsClickDispatch();
+            return 0;
+        }
+        if (app.arguments().contains(QStringLiteral("--selection-unit-only"))) {
+            screenshotSelectionUnitSurvivesWindowAndCaptureReset();
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--toolbar-size-only"))) {

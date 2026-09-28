@@ -12,6 +12,10 @@
             <translation>Add</translation>
         </message>
         <message>
+            <source>Add Template</source>
+            <translation>Add Template</translation>
+        </message>
+        <message>
             <source>Add screenshot region</source>
             <translation>Add screenshot region</translation>
         </message>
@@ -168,6 +172,18 @@
             <translation>Corner radius (scroll to adjust)</translation>
         </message>
         <message>
+            <source>Could not capture selected elements</source>
+            <translation>Could not capture selected elements</translation>
+        </message>
+        <message>
+            <source>Could not delete the draw template</source>
+            <translation>Could not delete the draw template</translation>
+        </message>
+        <message>
+            <source>Could not save the draw template</source>
+            <translation>Could not save the draw template</translation>
+        </message>
+        <message>
             <source>Cross-line fill</source>
             <translation>Cross-line fill</translation>
         </message>
@@ -240,6 +256,14 @@
             <translation>Delete</translation>
         </message>
         <message>
+            <source>Delete Draw Template</source>
+            <translation>Delete Draw Template</translation>
+        </message>
+        <message>
+            <source>Delete draw template "%1"? This action cannot be undone.</source>
+            <translation>Delete draw template "%1"? This action cannot be undone.</translation>
+        </message>
+        <message>
             <source>Delete selected elements</source>
             <translation>Delete selected elements</translation>
         </message>
@@ -274,6 +298,10 @@
         <message>
             <source>Drag toolbar</source>
             <translation>Drag toolbar</translation>
+        </message>
+        <message>
+            <source>Draw Template</source>
+            <translation>Draw Template</translation>
         </message>
         <message>
             <source>Edit</source>
@@ -488,6 +516,10 @@
             <translation>Keyboard Size</translation>
         </message>
         <message>
+            <source>LaTeX Formula Recognition</source>
+            <translation>LaTeX Formula Recognition</translation>
+        </message>
+        <message>
             <source>Line</source>
             <translation>Line</translation>
         </message>
@@ -502,6 +534,10 @@
         <message>
             <source>Line text fill</source>
             <translation>Line text fill</translation>
+        </message>
+        <message>
+            <source>Logical Pixel Selection</source>
+            <translation>Logical Pixel Selection</translation>
         </message>
         <message>
             <source>Mask color</source>
@@ -576,6 +612,10 @@
             <translation>Move selection vertically (press and hold to drag)</translation>
         </message>
         <message>
+            <source>No matching templates</source>
+            <translation>No matching templates</translation>
+        </message>
+        <message>
             <source>No templates yet</source>
             <translation>No templates yet</translation>
         </message>
@@ -626,6 +666,10 @@
         <message>
             <source>Pen highlight stroke width %1 (%2px)</source>
             <translation>Pen highlight stroke width %1 (%2px)</translation>
+        </message>
+        <message>
+            <source>Physical Pixel Selection</source>
+            <translation>Physical Pixel Selection</translation>
         </message>
         <message>
             <source>Pick color from canvas</source>
@@ -794,6 +838,10 @@
         <message>
             <source>Shape</source>
             <translation>Shape</translation>
+        </message>
+        <message>
+            <source>Show QR Code</source>
+            <translation>Show QR Code</translation>
         </message>
         <message>
             <source>Show cursor in recording</source>

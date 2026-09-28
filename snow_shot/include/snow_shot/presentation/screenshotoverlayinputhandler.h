@@ -6,6 +6,7 @@
 #include "snow_shot/presentation/screenshotselectiongeometry.h"
 
 #include "snow_shot/image/screenshotregiongeometry.h"
+#include "snow_draw_engine_qt/snow_canvas_path_geometry.h"
 #include <QPoint>
 #include <QPointF>
 #include <QTimer>
@@ -65,6 +66,7 @@ struct ScreenshotOverlayInputActions {
         [](const QPointF&) {};
     std::function<bool()> copyColorPickerColorToClipboard = []() { return false; };
     std::function<bool()> cycleColorPickerFormat = []() { return false; };
+    std::function<bool()> toggleColorPickerCoordinateMode = []() { return false; };
     std::function<bool(snow_shot::platform::PhysicalCursorDirection direction)> moveCursorOnePixel =
         [](snow_shot::platform::PhysicalCursorDirection) { return false; };
 
@@ -215,10 +217,12 @@ class ScreenshotOverlayInputHandler final {
     void restoreScrollingCaptureAfterFailedResize();
     void finishTransientDrag();
 
+    void flushFreehandPoints(bool finish = false);
     void updateRegionDraft(const QPointF& pointer, bool includePointer);
     bool finishRegionDraft();
     QVector<QPointF> m_regionPoints;
     qsizetype m_freehandRawStart = 0;
+    SnowCanvasStrokeFilter m_freehandFilter;
     QTimer m_regionPreviewTimer;
     QPointF m_pendingRegionPointer;
     bool m_pendingRegionEdge = false;

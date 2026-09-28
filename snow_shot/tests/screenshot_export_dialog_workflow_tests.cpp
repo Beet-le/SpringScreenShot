@@ -1,3 +1,4 @@
+#include "physical_key_test_support.h"
 #include "snow_shot/presentation/screenshotsaveasfiledialog.h"
 #include "snow_shot/presentation/screenshotsavepreviewcanvas.h"
 #include "snow_shot/presentation/screenshotexportartifact.h"
@@ -1000,7 +1001,13 @@ void canvasZoomHint() {
         require(hint->isHidden(), "zoom hint must disappear when its timer expires");
     };
     const auto pressKey = [&](int key) {
-        QKeyEvent event(QEvent::KeyPress, key, Qt::NoModifier);
+        PhysicalKeyEvent hardware(QEvent::KeyPress, key, Qt::NoModifier);
+#ifdef Q_OS_MACOS
+        QKeyEvent event(QEvent::KeyPress, Qt::Key_Q, Qt::NoModifier, 1, hardware.nativeVirtualKey(),
+                        0);
+#else
+        auto& event = hardware;
+#endif
         QApplication::sendEvent(&canvas, &event);
     };
     pressKey(Qt::Key_Plus);
@@ -1781,8 +1788,8 @@ void sizeUnits(QWidget& owner, const QTemporaryDir& temp) {
         editor->setFocus();
         editor->selectAll();
         for (const auto character : text) {
-            QKeyEvent key(QEvent::KeyPress, character.unicode(), Qt::NoModifier,
-                          QString(character));
+            PhysicalKeyEvent key(QEvent::KeyPress, character.unicode(), Qt::NoModifier,
+                                 QString(character));
             QApplication::sendEvent(editor, &key);
         }
     };
@@ -2259,7 +2266,7 @@ void oversizedManualPngStreamsWithoutPopulatingCache(QWidget& owner, const QTemp
     const QImage image = fixture();
     auto artifact = std::make_shared<ScreenshotExportArtifact>(
         ScreenshotExportSource::fromImage(image), ScreenshotCompressionLevel::Low,
-        ScreenshotExportArtifact::PngCachePolicy{1});
+        ScreenshotExportArtifact::PngCachePolicy{1, {}});
     require(!artifact->shouldCachePng(image.size()), "large image should use streaming");
     QString savedPath;
     require(ScreenshotSaveAsFileDialog::open(&owner, &owner, artifact,
@@ -2459,8 +2466,8 @@ void saveReusesCalculatedResult(QWidget& owner, const QTemporaryDir& temp) {
         }
         child<AdInputNumber>(content, "saveWidthInput")->setValue(80);
         if (moment == Moment::QueuedEncode) {
-            require(ScreenshotExportCoordinator::shared().pendingJobCount() == 3,
-                    "the calculation must be queued behind the worker gates");
+            processUntil(
+                [&] { return ScreenshotExportCoordinator::shared().pendingJobCount() == 3; });
             save();
             *gate.released = true;
         } else if (moment == Moment::RunningEncode) {
@@ -2516,8 +2523,8 @@ void committedControlsAndSave(QWidget& owner, const QTemporaryDir& temp) {
         editor->setFocus();
         editor->selectAll();
         for (const auto character : text) {
-            QKeyEvent key(QEvent::KeyPress, character.unicode(), Qt::NoModifier,
-                          QString(character));
+            PhysicalKeyEvent key(QEvent::KeyPress, character.unicode(), Qt::NoModifier,
+                                 QString(character));
             QApplication::sendEvent(editor, &key);
         }
     };
@@ -2644,6 +2651,37 @@ void failedAndClosedCalculations(QWidget& owner, const QTemporaryDir& temp) {
             "closing during calculation must discard worker completion and release the dialog");
 }
 
+void repeatedPreviewChangesKeepLatestRequest(QWidget& owner, const QTemporaryDir& temp) {
+    auto probe = std::make_shared<ExportProbe>();
+    QString savedPath;
+    auto* modal = openCountedDialog(owner, probe, [&](const QString& path) { savedPath = path; });
+    auto* content = modal->contentWidget();
+    ExportObserver observer(content);
+    WorkerGate gate;
+    gate.block(&owner);
+    processUntil(
+        [&] { return gate.started->load() == std::clamp(QThread::idealThreadCount(), 1, 2); });
+    auto* width = child<AdInputNumber>(content, "saveWidthInput");
+    for (int index = 0; index < 40; ++index) {
+        width->setValue(80 + index);
+        flush(); // Each edit occurs in a separate event-loop turn, as with real input.
+        require(ScreenshotExportCoordinator::shared().pendingJobCount() == 3 &&
+                    child<QLabel>(content, "saveErrorLabel")->isHidden(),
+                "only the latest preview may occupy a queued slot");
+    }
+    *gate.released = true;
+    processUntil([&] { return observer.publications == 1; });
+    require(observer.encodes == 1 && probe->passes == 2 && width->value() == 119,
+            "superseded preview jobs must not read or encode the source");
+    child<AdLineEdit>(content, "saveDirectoryInput")->setText(temp.path());
+    child<AdLineEdit>(content, "saveFilenameInput")->setText(QStringLiteral("latest-preview"));
+    modal->acceptButton()->click();
+    processUntil([&] { return !savedPath.isEmpty(); });
+    require(QImage(savedPath).width() == 119 && observer.encodes == 1,
+            "Save must reuse the latest successful preview without another edit or retry");
+    flush();
+}
+
 void rejectedCalculationRetries(QWidget& owner, const QTemporaryDir& temp) {
     auto probe = std::make_shared<ExportProbe>();
     QString savedPath;
@@ -2653,6 +2691,7 @@ void rejectedCalculationRetries(QWidget& owner, const QTemporaryDir& temp) {
     WorkerGate gate;
     gate.block(&owner, 16);
     child<AdInputNumber>(content, "saveWidthInput")->setValue(80);
+    processUntil([&] { return !child<QLabel>(content, "saveErrorLabel")->isHidden(); });
     require(!child<QLabel>(content, "saveErrorLabel")->isHidden() && probe->passes == 1 &&
                 observer.encodes == 0 && modal->acceptButton()->isEnabled(),
             "a rejected calculation must preserve the latest options and allow retry");
@@ -2721,6 +2760,7 @@ int main(int argc, char* argv[]) {
             committedControlsAndSave(owner, temp);
             retainedResultFailures(owner, temp);
             failedAndClosedCalculations(owner, temp);
+            repeatedPreviewChangesKeepLatestRequest(owner, temp);
             rejectedCalculationRetries(owner, temp);
             ScreenshotExportCoordinator::shared().shutdown();
             storage::ApplicationStorage::instance().shutdown();
@@ -2811,6 +2851,7 @@ int main(int argc, char* argv[]) {
         committedControlsAndSave(owner, temp);
         retainedResultFailures(owner, temp);
         failedAndClosedCalculations(owner, temp);
+        repeatedPreviewChangesKeepLatestRequest(owner, temp);
         rejectedCalculationRetries(owner, temp);
         pendingCancellation(owner);
         ScreenshotExportCoordinator::shared().shutdown();

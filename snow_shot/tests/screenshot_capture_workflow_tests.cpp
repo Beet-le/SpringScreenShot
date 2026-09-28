@@ -1090,7 +1090,7 @@ void captureSessionsApplyTheCurrentSmartSelectionSetting() {
 }
 } // namespace
 
-void initialCaptureAppliesSettingsForItsSelectionMode() {
+void initialCaptureSnapshotsScreenshotSettings() {
     ScreenshotCaptureState state;
     state.sessionState = ScreenshotSessionState::IdlePrepared;
     ScreenshotDisplaySession displays;
@@ -1117,13 +1117,13 @@ void initialCaptureAppliesSettingsForItsSelectionMode() {
             "active capture must retain its setting snapshot");
     workflow.startCapture();
     require(runtime.lastCaptureRequest.restoreOriginalScreenColors &&
-                state.restoreOriginalScreenColors && !runtime.lastCaptureRequest.captureCursor &&
-                !state.captureCursor,
-            "smart region selection must exclude the cursor from its source frame");
+                state.restoreOriginalScreenColors && runtime.lastCaptureRequest.captureCursor &&
+                state.captureCursor,
+            "normal capture must honor the enabled cursor setting with smart selection");
     workflow.startCapture(ScreenshotCaptureWorkflow::StartMode::ExternalDrag);
     require(runtime.lastCaptureRequest.restoreOriginalScreenColors &&
                 runtime.lastCaptureRequest.captureCursor && state.captureCursor,
-            "external region drags must continue to observe the cursor setting");
+            "external region drags must also observe the cursor setting");
 }
 
 void toolbarVisibilityIsIndependentOfInputAndPreparation() {
@@ -1840,7 +1840,41 @@ void customCaptureDoesNotWaitForSelector() {
     }
 }
 
+void silentCaptureSuppressesAllPresentationAndRestoresVisibleMode() {
+    ScreenshotCaptureState state;
+    ScreenshotDisplaySession displays;
+    ScreenshotGeometryMapper geometry;
+    ScreenshotInteractionState interaction;
+    ScreenshotSelectionModel selection;
+    ScreenshotIntelligentSelectionModel intelligent;
+    CaptureRuntime runtime;
+    runtime.seedActiveDisplayOnPrepare = true;
+    auto workflow =
+        makeWorkflow(state, displays, geometry, interaction, selection, intelligent, runtime);
+    workflow.startCapture(ScreenshotCaptureWorkflow::StartMode::Normal,
+                          ScreenshotCaptureWorkflow::ToolbarPreparation::OnDemand,
+                          ScreenshotCaptureWorkflow::ToolbarVisibility::Suppressed,
+                          ScreenshotCaptureWorkflow::PresentationMode::Silent);
+    CapturedDisplayModel snapshot;
+    snapshot.stableId = QStringLiteral("primary");
+    snapshot.physicalRect = QRect(0, 0, 64, 48);
+    snapshot.logicalRect = snapshot.physicalRect;
+    snapshot.image = QImage(snapshot.physicalRect.size(), QImage::Format_RGB32);
+    snapshot.image.fill(Qt::blue);
+    runtime.deliverResult(successfulResult(state.sessionId, snapshot));
+    require(
+        state.presentationSuppressed && runtime.showOverlayCalls == 0 &&
+            runtime.createColorPickerCalls == 0 && runtime.startWorkflowRefreshCalls == 0 &&
+            runtime.prewarmToolbarSurfaceCalls == 0,
+        "silent capture must acquire images without exposing overlay, picker, toolbar or selector");
+    require(!geometry.isEmpty(), "silent capture retains the native display session");
+    workflow.startCapture();
+    require(!state.presentationSuppressed && runtime.createColorPickerCalls == 1,
+            "normal capture after a silent session restores presentation");
+}
+
 int main() {
+    silentCaptureSuppressesAllPresentationAndRestoresVisibleMode();
     confirmedSelectionPreservesRegionTypeInToolbarPresentation();
     customCaptureDoesNotWaitForSelector();
     startupDisplayIdentityMatchesByNameRectOrNativeId();
@@ -1857,7 +1891,7 @@ int main() {
     externalDragDisplayChangesInvalidatePendingCapture();
     globalDragCoordinatesStayPhysicalAcrossDifferentDisplayScales();
     externalDragBypassesSelectorAndPreparesBeforeReveal();
-    initialCaptureAppliesSettingsForItsSelectionMode();
+    initialCaptureSnapshotsScreenshotSettings();
     captureRestoresSelectionPreferencesAfterReset();
     idlePrewarmDoesNotInitializeSelector();
     endingScreenshotReprewarmsOverlaySurfaces();

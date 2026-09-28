@@ -1,3 +1,4 @@
+#include "snow_shot/presentation/windowcloseshortcut.h"
 #include "snow_shot/presentation/mainwindow.h"
 
 #include "snow_shot/platform/windows/windowchrome.h"
@@ -32,7 +33,7 @@
 
 namespace {
 constexpr int MAIN_WINDOW_WIDTH = 900;
-constexpr int MAIN_WINDOW_HEIGHT = 556;
+constexpr int MAIN_WINDOW_HEIGHT = 640;
 constexpr int MAIN_WINDOW_MIN_WIDTH = 512;
 constexpr int MAIN_WINDOW_MIN_HEIGHT = 316;
 constexpr int TITLE_BAR_BOTTOM_SHADOW_HEIGHT = 6;
@@ -87,6 +88,8 @@ MainWindow::MainWindow(const snow_shot::presentation::settings::SettingsRegistry
     QFont interfaceFont = font();
     interfaceFont.setHintingPreference(QFont::PreferNoHinting);
     setFont(interfaceFont);
+
+    snow_shot::presentation::installWindowCloseShortcut(this, [this] { close(); });
 
     menuBar()->hide();
     statusBar()->hide();
@@ -293,6 +296,12 @@ void MainWindow::showFunctionSettings() {
     if (m_contentCard != nullptr) {
         m_contentCard->showFunctionSettings();
     }
+    showAndActivate();
+}
+
+void MainWindow::showSettingsLocation(const QString& pageId, const QString& sectionId) {
+    if (m_contentCard)
+        m_contentCard->navigateTo({pageId, sectionId, {}});
     showAndActivate();
 }
 

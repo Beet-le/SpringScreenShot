@@ -50,6 +50,8 @@ class ScreenshotTableEditingSession final {
     std::function<void()> documentChanged;
 
     void replaceDocument(const ScreenshotTableDocument& replacement);
+    static void applyDocument(const std::shared_ptr<ScreenshotTableEditingSession>& session,
+                              const ScreenshotTableDocument& replacement, const QString& label);
 };
 
 class ScreenshotTableEditor final : public QTableView {
@@ -90,6 +92,7 @@ class ScreenshotTableEditor final : public QTableView {
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseDoubleClickEvent(QMouseEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
+    bool focusNextPrevChild(bool next) override;
     void contextMenuEvent(QContextMenuEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;

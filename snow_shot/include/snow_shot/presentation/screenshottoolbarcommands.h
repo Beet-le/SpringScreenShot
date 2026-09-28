@@ -1,10 +1,12 @@
 #ifndef SNOW_SHOT_PRESENTATION_SCREENSHOTTOOLBARCOMMANDS_H
 #define SNOW_SHOT_PRESENTATION_SCREENSHOTTOOLBARCOMMANDS_H
 
+#include "snow_shot/presentation/screenshotselectiondisplayunit.h"
 #include "snow_draw_engine_qt/snow_canvas_types.h"
 #include "snow_shot/presentation/screenshotscrollingtypes.h"
 
 #include <QString>
+#include <QByteArray>
 #include <QPoint>
 
 namespace adqt::widgets {
@@ -21,6 +23,7 @@ class ScreenshotToolbarCommandSink {
     virtual void addScreenshotRegion() {}
     virtual void subtractScreenshotRegion() {}
     virtual void requestRecapture() {}
+    virtual void setSelectionDisplayUnit(ScreenshotSelectionDisplayUnit) {}
     virtual void setSelectionToolbarHiddenForSession(bool) {}
     virtual void setMoveTool() = 0;
     virtual void setSelectTool() = 0;
@@ -54,6 +57,7 @@ class ScreenshotToolbarCommandSink {
     }
     virtual void setTableTool() {}
     virtual void setQrTool() {}
+    virtual void setLatexTool() {}
     virtual void setMarkdownTool() {}
     virtual void setHtmlTool() {}
     virtual void openImageConversionSettings() {}
@@ -88,7 +92,7 @@ class ScreenshotToolbarCommandSink {
     virtual void startScreenRecording() = 0;
     virtual void setShapeStyleFromToolbar(const SnowCanvasShapeStyle& style, quint32 properties,
                                           SnowCanvasShapeKind kind) = 0;
-    virtual void setTextStyleFromToolbar(const SnowCanvasTextStyle& style) = 0;
+    virtual void setTextStyleFromToolbar(const SnowCanvasTextStyle& style, quint32 properties) = 0;
     virtual void setSerialNumberStyleFromToolbar(const SnowCanvasSerialNumberStyle& style) = 0;
     virtual void decrementSelectedSerialNumbers() = 0;
     virtual void incrementSelectedSerialNumbers() = 0;
@@ -97,6 +101,10 @@ class ScreenshotToolbarCommandSink {
     virtual void alignSelectedElements(SnowCanvasSelectionAlignment) {}
     virtual void setSelectedElementsOpacity(qreal) {}
     virtual void duplicateSelectedElements() {}
+    virtual QByteArray selectedDrawTemplatePayload() {
+        return {};
+    }
+    virtual void insertDrawTemplate(const QByteArray&) {}
     virtual void deleteSelectedElements() {}
     virtual void deleteAllElements() {}
     virtual void repositionToolbarForContentChange() = 0;

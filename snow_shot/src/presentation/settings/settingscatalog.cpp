@@ -117,7 +117,7 @@ SettingsItemDefinition screenshotOcrItem() {
         {settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "OCR")),
          settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Recognize text"))},
         GlobalShortcutAction::ScreenshotOcr, QStringLiteral("global_shortcuts/screenshot_ocr"),
-        []() { return custom_outlined_icons::ToolRecognizeText(); });
+        []() { return custom_outlined_icons::TextRecognition(); });
 }
 
 SettingsItemDefinition screenshotTranslationItem() {
@@ -1031,6 +1031,17 @@ SettingsItemDefinition screenshotShutterSoundNotificationItem() {
         SettingsSwitchBinding::ScreenshotShutterSoundNotification);
 }
 
+SettingsItemDefinition screenshotAutoRecognizeQrCodeItem() {
+    return switchItem(
+        QStringLiteral("screenshot.auto-recognize-qr-code"),
+        QT_TRANSLATE_NOOP("SettingsCatalog", "Auto-recognize QR Code"),
+        QT_TRANSLATE_NOOP(
+            "SettingsCatalog",
+            "Recognize QR codes automatically after confirming the screenshot selection area."),
+        QStringLiteral("screenshot/auto_recognize_qr_code"),
+        SettingsSwitchBinding::ScreenshotAutoRecognizeQrCode);
+}
+
 SettingsItemDefinition screenshotConfirmBeforeExitingViaShortcutItem() {
     return switchItem(
         QStringLiteral("screenshot.confirm-before-exiting-via-shortcut"),
@@ -1448,6 +1459,25 @@ SettingsItemDefinition autoStartItem() {
         QStringLiteral("system/auto_start_at_boot"), SettingsSwitchBinding::AutoStartAtBoot);
 }
 
+SettingsItemDefinition mcpEnabledItem() {
+    return switchItem(QStringLiteral("system.mcp-enabled"),
+                      QT_TRANSLATE_NOOP("SettingsCatalog", "Enable MCP integration"),
+                      QT_TRANSLATE_NOOP("SettingsCatalog",
+                                        "Allow MCP clients running as your OS user to control "
+                                        "Snow Shot. Snow Shot must be running."),
+                      QStringLiteral("mcp/enabled"), SettingsSwitchBinding::McpEnabled);
+}
+
+SettingsItemDefinition mcpStatusItem() {
+    return {QStringLiteral("system.mcp-status"),
+            settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "MCP connection and client setup")),
+            settingsText(QT_TRANSLATE_NOOP(
+                "SettingsCatalog", "View connection status and configure your MCP client.")),
+            {},
+            {},
+            SettingsCustomDefinition{SettingsCustomRenderer::McpStatus}};
+}
+
 SettingsItemDefinition localShortcutItem(SettingsLocalShortcutScope scope,
                                          const QString& shortcutId, const char* title,
                                          std::function<adqt::icons::IconRef()> iconFactory) {
@@ -1538,6 +1568,10 @@ QVector<SettingsItemDefinition> screenshotShortcutItems() {
         localShortcutItem(SettingsLocalShortcutScope::Screenshot, QStringLiteral("copy_color"),
                           QT_TRANSLATE_NOOP("SettingsCatalog", "Copy color"),
                           []() { return outlined_icons::Copy(); }),
+        localShortcutItem(
+            SettingsLocalShortcutScope::Screenshot, QStringLiteral("toggle_coordinate_mode"),
+            QT_TRANSLATE_NOOP("SettingsCatalog", "Toggle Global/Relative Coordinates"),
+            []() { return outlined_icons::Swap(); }),
         localShortcutItem(SettingsLocalShortcutScope::Screenshot, QStringLiteral("pin_to_screen"),
                           QT_TRANSLATE_NOOP("SettingsCatalog", "Pin to screen"),
                           []() { return custom_outlined_icons::PinToScreen(); }),
@@ -1578,7 +1612,7 @@ QVector<SettingsItemDefinition> screenshotOtherShortcutItems() {
         localShortcutItem(SettingsLocalShortcutScope::Screenshot,
                           QStringLiteral("text_recognition"),
                           QT_TRANSLATE_NOOP("SettingsCatalog", "Text recognition"),
-                          []() { return custom_outlined_icons::ToolRecognizeText(); }),
+                          []() { return custom_outlined_icons::TextRecognition(); }),
         localShortcutItem(SettingsLocalShortcutScope::Screenshot,
                           QStringLiteral("text_translation"),
                           QT_TRANSLATE_NOOP("SettingsCatalog", "Text translation"),
@@ -1663,7 +1697,7 @@ QVector<SettingsItemDefinition> pinToScreenShortcutItems() {
         localShortcutItem(SettingsLocalShortcutScope::PinToScreen,
                           QStringLiteral("show_text_recognition_results"),
                           QT_TRANSLATE_NOOP("SettingsCatalog", "Show text recognition results"),
-                          []() { return custom_outlined_icons::ToolRecognizeText(); }),
+                          []() { return custom_outlined_icons::TextRecognition(); }),
         localShortcutItem(SettingsLocalShortcutScope::PinToScreen, QStringLiteral("drawing_mode"),
                           QT_TRANSLATE_NOOP("SettingsCatalog", "Drawing mode"),
                           []() { return outlined_icons::Edit(); }),
@@ -1770,6 +1804,27 @@ SettingsItemDefinition ocrModelTypeItem() {
             "Choose the OCR model version and size to balance recognition speed and accuracy")),
         {settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "OCR model"))},
         QStringLiteral("text_recognition/model_type"),
+        payload,
+    };
+}
+
+SettingsItemDefinition ocrDetectorResizePolicyItem() {
+    SettingsSelectDefinition payload;
+    payload.options = {
+        {QStringLiteral("max"),
+         settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Limit long side (faster)"))},
+        {QStringLiteral("min"),
+         settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Enlarge short side (more detail)"))},
+    };
+    payload.binding = SettingsSelectBinding::OcrDetectorResizePolicy;
+    return {
+        QStringLiteral("text-recognition.detector-resize-policy"),
+        settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Text detection scaling")),
+        settingsText(QT_TRANSLATE_NOOP(
+            "SettingsCatalog", "Choose how text detection resizes images. Limiting the long side "
+                               "is faster; enlarging the short side may find smaller text.")),
+        {},
+        QStringLiteral("text_recognition/detector_resize_policy"),
         payload,
     };
 }
@@ -2110,7 +2165,8 @@ QVector<SettingsPageDefinition> builtInPages() {
                      screenshotDoubleClickActionItem(), screenshotMiddleClickActionItem(),
                      screenshotAutoSaveAfterCopyItem(), screenshotCopyFileItem(),
                      screenshotSaveAsFileDialogItem(), screenshotShutterSoundNotificationItem(),
-                     screenshotConfirmBeforeExitingViaShortcutItem()},
+                     screenshotConfirmBeforeExitingViaShortcutItem(),
+                     screenshotAutoRecognizeQrCodeItem()},
                 },
                 {
                     QStringLiteral("pin-to-screen-settings"),
@@ -2567,7 +2623,7 @@ QVector<SettingsPageDefinition> builtInPages() {
                     settingsText(QT_TRANSLATE_NOOP(
                         "SettingsCatalog", "Configure text recognition models and acceleration")),
                     SettingsSectionReset::TextRecognition,
-                    {ocrModelTypeItem(),
+                    {ocrModelTypeItem(), ocrDetectorResizePolicyItem(),
 #ifndef Q_OS_MACOS
                      directMlAccelerationItem(),
 #endif
@@ -2579,6 +2635,14 @@ QVector<SettingsPageDefinition> builtInPages() {
                     settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Core application settings")),
                     SettingsSectionReset::SystemSettings,
                     {applicationPriorityItem()},
+                },
+                {
+                    QStringLiteral("mcp"),
+                    settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "MCP")),
+                    settingsText(
+                        QT_TRANSLATE_NOOP("SettingsCatalog", "Connect AI clients to Snow Shot")),
+                    SettingsSectionReset::None,
+                    {mcpEnabledItem(), mcpStatusItem()},
                 },
             },
         },
@@ -3089,7 +3153,7 @@ TrayCommandManifest buildBuiltInTrayCommandManifest() {
           quick(QStringLiteral("quick.screenshot-ocr"),
                 QT_TRANSLATE_NOOP("SettingsCatalog", "Text recognition"),
                 GlobalShortcutAction::ScreenshotOcr,
-                []() { return custom_outlined_icons::ToolRecognizeText(); }),
+                []() { return custom_outlined_icons::TextRecognition(); }),
           quick(QStringLiteral("quick.screenshot-translation"),
                 QT_TRANSLATE_NOOP("SettingsCatalog", "Text translation"),
                 GlobalShortcutAction::ScreenshotTranslation,
@@ -3324,6 +3388,9 @@ QStringList SettingsCatalog::validationErrors() const {
                     case SettingsSelectBinding::OcrModelType:
                         expectedKey = QStringLiteral("text_recognition/model_type");
                         break;
+                    case SettingsSelectBinding::OcrDetectorResizePolicy:
+                        expectedKey = QStringLiteral("text_recognition/detector_resize_policy");
+                        break;
                     case SettingsSelectBinding::ScreenshotApiMode:
                         expectedKey = QStringLiteral("screenshot/api_mode");
                         break;
@@ -3504,6 +3571,9 @@ QStringList SettingsCatalog::validationErrors() const {
                         expectedKey =
                             QStringLiteral("screenshot/confirm_before_exiting_via_shortcut");
                         break;
+                    case SettingsSwitchBinding::ScreenshotAutoRecognizeQrCode:
+                        expectedKey = QStringLiteral("screenshot/auto_recognize_qr_code");
+                        break;
                     case SettingsSwitchBinding::ScreenshotRestoreOriginalScreenColors:
                         expectedKey = QStringLiteral("screenshot/restore_original_screen_colors");
                         break;
@@ -3544,6 +3614,9 @@ QStringList SettingsCatalog::validationErrors() const {
                     case SettingsSwitchBinding::DisableHotkeysOnFocusedFullscreen:
                         expectedKey =
                             QStringLiteral("global_shortcuts/disable_on_focused_fullscreen_window");
+                        break;
+                    case SettingsSwitchBinding::McpEnabled:
+                        expectedKey = QStringLiteral("mcp/enabled");
                         break;
                     case SettingsSwitchBinding::LaunchAsAdministrator:
                         expectedKey = QStringLiteral("system/launch_as_administrator");
@@ -3897,6 +3970,7 @@ QStringList SettingsCatalog::validationErrors() const {
                     case SettingsCustomRenderer::PermissionAccessibility:
                     case SettingsCustomRenderer::PermissionInputMonitoring:
                     case SettingsCustomRenderer::PermissionMicrophone:
+                    case SettingsCustomRenderer::McpStatus:
                     case SettingsCustomRenderer::StorageStatus:
                         rendererSupported = true;
                         break;

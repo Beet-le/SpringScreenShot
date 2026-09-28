@@ -176,7 +176,7 @@ void builtInCatalogIsCompleteAndValid() {
                         .toString() == QStringLiteral("follow_mouse_movement"),
             "selection resize mode must offer both follow styles and default to mouse movement");
     qsizetype sectionCount = 0;
-    qsizetype itemCount = 0;
+    QSet<QString> itemIds;
     bool foundUpdates = false;
     QSet<QString> objectNames;
     for (const auto& page : catalog.pages()) {
@@ -188,13 +188,13 @@ void builtInCatalogIsCompleteAndValid() {
                                                QStringLiteral("settings-page"), page.id)),
                 "generated page object names must be unique");
         for (const auto& section : page.sections) {
-            itemCount += section.items.size();
             require(
                 insertUnique(&objectNames, settings::generatedObjectName(
                                                QStringLiteral("settings-section"),
                                                QStringLiteral("%1-%2").arg(page.id, section.id))),
                 "generated section object names must be unique");
             for (const auto& item : section.items) {
+                require(insertUnique(&itemIds, item.id), "catalog item IDs must be unique");
                 require(insertUnique(&objectNames, settings::generatedObjectName(
                                                        QStringLiteral("settings-item"), item.id)),
                         "generated item object names must be unique");
@@ -234,13 +234,39 @@ void builtInCatalogIsCompleteAndValid() {
         }
     }
 #ifdef Q_OS_MACOS
-    require(sectionCount == 41, "macOS adds one permissions section");
-    require(itemCount == 181, "macOS adds login settings and omits administrator controls "
-                              "and Windows-only choices");
+    require(sectionCount == 42, "macOS adds one permissions section");
 #else
-    require(sectionCount == 40, "catalog must contain forty sections");
-    require(itemCount == 183, "catalog must contain one hundred eighty-three items");
+    require(sectionCount == 41, "catalog must contain forty-one sections");
 #endif
+    // Keep the shared total in one place: adding a shared setting must update both platforms.
+    // Explicit platform membership also catches substitutions that a total alone would miss.
+    const QSet<QString> windowsOnlyItems{
+        QStringLiteral("system.launch-as-administrator"),
+        QStringLiteral("system.restart-as-administrator"),
+        QStringLiteral("screenshot.api-mode"),
+        QStringLiteral("screenshot.window-element-api"),
+        QStringLiteral("screenshot.restore-original-screen-colors"),
+        QStringLiteral("text-recognition.direct-ml-acceleration"),
+    };
+    const QSet<QString> macOnlyItems{
+        QStringLiteral("system.login-item-settings"),
+        QStringLiteral("screen-recording"),
+        QStringLiteral("accessibility"),
+        QStringLiteral("input-monitoring"),
+        QStringLiteral("microphone"),
+    };
+#ifdef Q_OS_MACOS
+    const auto& expectedPlatformItems = macOnlyItems;
+    const auto& excludedPlatformItems = windowsOnlyItems;
+#else
+    const auto& expectedPlatformItems = windowsOnlyItems;
+    const auto& excludedPlatformItems = macOnlyItems;
+#endif
+    for (const auto& id : expectedPlatformItems)
+        require(itemIds.remove(id), "catalog must contain each platform-specific setting");
+    for (const auto& id : excludedPlatformItems)
+        require(!itemIds.contains(id), "catalog must omit settings exclusive to another platform");
+    require(itemIds.size() == 182, "catalog must contain 182 shared settings on every platform");
     require(foundUpdates, "catalog must contain the update mode item");
     const auto* pinnedEditor =
         catalog.item({QStringLiteral("interface-settings"), QStringLiteral("pin-to-screen"),
@@ -458,6 +484,14 @@ void builtInCatalogIsCompleteAndValid() {
                 std::next(shutterItem)->id ==
                     QStringLiteral("screenshot.confirm-before-exiting-via-shortcut"),
             "shortcut exit confirmation must immediately follow the shutter notification");
+    const auto qrItem = std::next(shutterItem, 2);
+    require(qrItem != screenshotSettings->items.cend() &&
+                qrItem->id == QStringLiteral("screenshot.auto-recognize-qr-code") &&
+                qrItem->title.translated() == QStringLiteral("Auto-recognize QR Code") &&
+                storage::ConfigurationSchema::defaultValue(qrItem->configurationKey).toBool() &&
+                std::get<settings::SettingsSwitchDefinition>(qrItem->payload).binding ==
+                    settings::SettingsSwitchBinding::ScreenshotAutoRecognizeQrCode,
+            "enabled automatic QR recognition must immediately follow shortcut exit confirmation");
     require(shutterSound != nullptr &&
                 shutterSound->title.translated() == QStringLiteral("Shutter Sound Notification") &&
                 shutterSound->configurationKey ==
@@ -781,15 +815,23 @@ void builtInCatalogIsCompleteAndValid() {
     const auto* modelTypeSelect =
         modelType != nullptr ? std::get_if<settings::SettingsSelectDefinition>(&modelType->payload)
                              : nullptr;
+    const auto* resizePolicy =
+        catalog.item({QStringLiteral("system-settings"), QStringLiteral("text-recognition"),
+                      QStringLiteral("text-recognition.detector-resize-policy")});
+    const auto* resizePolicySelect =
+        resizePolicy != nullptr
+            ? std::get_if<settings::SettingsSelectDefinition>(&resizePolicy->payload)
+            : nullptr;
     require(
-        systemPage != nullptr && systemPage->sections.size() == 6 &&
+        systemPage != nullptr && systemPage->sections.size() == 7 &&
             systemPage->sections.at(0).id == QStringLiteral("system-general") &&
             systemPage->sections.at(1).id == QStringLiteral("screenshot-capture") &&
             systemPage->sections.at(1).reset == settings::SettingsSectionReset::ScreenshotCapture &&
             systemPage->sections.at(2).id == QStringLiteral("screen-recording-capture") &&
             systemPage->sections.at(3).id == QStringLiteral("network") &&
             systemPage->sections.at(4).id == QStringLiteral("text-recognition") &&
-            systemPage->sections.at(5).id == QStringLiteral("core") && proxy != nullptr &&
+            systemPage->sections.at(5).id == QStringLiteral("core") &&
+            systemPage->sections.at(6).id == QStringLiteral("mcp") && proxy != nullptr &&
             proxy->configurationKey == QStringLiteral("network/proxy") && proxySelect != nullptr &&
             proxySelect->binding == settings::SettingsSelectBinding::Proxy &&
             proxySelect->options.size() == 2 &&
@@ -798,15 +840,26 @@ void builtInCatalogIsCompleteAndValid() {
             textRecognition != nullptr &&
             textRecognition->reset == settings::SettingsSectionReset::TextRecognition &&
 #ifdef Q_OS_MACOS
-            textRecognition->items.size() == 3 &&
+            textRecognition->items.size() == 4 &&
             catalog.item({QStringLiteral("system-settings"), QStringLiteral("text-recognition"),
                           QStringLiteral("text-recognition.direct-ml-acceleration")}) == nullptr &&
 #else
-            textRecognition->items.size() == 4 &&
-            textRecognition->items.at(1).id ==
+            textRecognition->items.size() == 5 &&
+            textRecognition->items.at(2).id ==
                 QStringLiteral("text-recognition.direct-ml-acceleration") &&
 #endif
             textRecognition->items.at(0).id == QStringLiteral("text-recognition.model-type") &&
+            textRecognition->items.at(1).id ==
+                QStringLiteral("text-recognition.detector-resize-policy") &&
+            resizePolicy != nullptr &&
+            resizePolicy->configurationKey ==
+                QStringLiteral("text_recognition/detector_resize_policy") &&
+            resizePolicySelect != nullptr &&
+            resizePolicySelect->binding ==
+                settings::SettingsSelectBinding::OcrDetectorResizePolicy &&
+            resizePolicySelect->options.size() == 2 &&
+            resizePolicySelect->options.at(0).value == QStringLiteral("max") &&
+            resizePolicySelect->options.at(1).value == QStringLiteral("min") &&
             modelType != nullptr &&
             modelType->configurationKey == QStringLiteral("text_recognition/model_type") &&
             modelTypeSelect != nullptr &&
@@ -820,6 +873,16 @@ void builtInCatalogIsCompleteAndValid() {
             modelTypeSelect->options.at(5).value == QStringLiteral("small_v4") &&
             modelTypeSelect->options.at(6).value == QStringLiteral("medium_v4"),
         "System settings must expose the ordered OCR model and acceleration controls");
+    const auto* mcp = catalog.section(QStringLiteral("system-settings"), QStringLiteral("mcp"));
+    require(mcp != nullptr && mcp->items.size() == 2 &&
+                mcp->items.at(0).id == QStringLiteral("system.mcp-enabled") &&
+                mcp->items.at(1).id == QStringLiteral("system.mcp-status") &&
+                mcp->items.at(0).configurationKey == QStringLiteral("mcp/enabled") &&
+                catalog.item({QStringLiteral("system-settings"), QStringLiteral("system-general"),
+                              QStringLiteral("system.mcp-enabled")}) == nullptr &&
+                catalog.item({QStringLiteral("system-settings"), QStringLiteral("system-general"),
+                              QStringLiteral("system.mcp-status")}) == nullptr,
+            "MCP controls must live together below Core, outside General");
     const QStringList modelLabels{QStringLiteral("Ultra Small V6"), QStringLiteral("Small V6"),
                                   QStringLiteral("Medium V6"),      QStringLiteral("Small V5"),
                                   QStringLiteral("Medium V5"),      QStringLiteral("Small V4"),
@@ -918,14 +981,16 @@ void builtInCatalogIsCompleteAndValid() {
          "screenshot_shortcuts/select_previously_selected_area"},
         {11, "screenshot-shortcut.recapture", "screenshot_shortcuts/recapture"},
         {12, "screenshot-shortcut.copy_color", "screenshot_shortcuts/copy_color"},
-        {13, "screenshot-shortcut.pin_to_screen", "screenshot_shortcuts/pin_to_screen"},
-        {14, "screenshot-shortcut.video_recording", "screenshot_shortcuts/video_recording"},
-        {15, "screenshot-shortcut.scrolling_screenshot",
+        {13, "screenshot-shortcut.toggle_coordinate_mode",
+         "screenshot_shortcuts/toggle_coordinate_mode"},
+        {14, "screenshot-shortcut.pin_to_screen", "screenshot_shortcuts/pin_to_screen"},
+        {15, "screenshot-shortcut.video_recording", "screenshot_shortcuts/video_recording"},
+        {16, "screenshot-shortcut.scrolling_screenshot",
          "screenshot_shortcuts/scrolling_screenshot"},
-        {16, "screenshot-shortcut.quick_save", "screenshot_shortcuts/quick_save"},
-        {17, "screenshot-shortcut.save_as_file", "screenshot_shortcuts/save_as_file"},
-        {18, "screenshot-shortcut.cancel_screenshot", "screenshot_shortcuts/cancel_screenshot"},
-        {19, "screenshot-shortcut.copy_to_clipboard", "screenshot_shortcuts/copy_to_clipboard"},
+        {17, "screenshot-shortcut.quick_save", "screenshot_shortcuts/quick_save"},
+        {18, "screenshot-shortcut.save_as_file", "screenshot_shortcuts/save_as_file"},
+        {19, "screenshot-shortcut.cancel_screenshot", "screenshot_shortcuts/cancel_screenshot"},
+        {20, "screenshot-shortcut.copy_to_clipboard", "screenshot_shortcuts/copy_to_clipboard"},
     };
     bool newScreenshotShortcutContractsMatch = screenshotShortcuts != nullptr;
     for (const ScreenshotShortcutContract& contract : newScreenshotShortcutContracts) {
@@ -939,7 +1004,7 @@ void builtInCatalogIsCompleteAndValid() {
     require(
         applicationShortcutsPage != nullptr && applicationShortcutsPage->sections.size() == 5 &&
             everyHotkeySectionUsesTwoColumns && screenshotShortcuts != nullptr &&
-            screenshotShortcuts->items.size() == 20 &&
+            screenshotShortcuts->items.size() == 21 &&
             screenshotShortcuts->itemLayout == settings::SettingsSectionItemLayout::TwoColumnGrid &&
             screenshotShortcuts->items.constFirst().id ==
                 QStringLiteral("screenshot-shortcut.move_tool") &&
@@ -960,17 +1025,19 @@ void builtInCatalogIsCompleteAndValid() {
             screenshotShortcuts->items.at(11).title.translated() == QStringLiteral("Recapture") &&
             screenshotShortcuts->items.at(12).title.translated() == QStringLiteral("Copy color") &&
             screenshotShortcuts->items.at(13).title.translated() ==
-                QStringLiteral("Pin to screen") &&
+                QStringLiteral("Toggle Global/Relative Coordinates") &&
             screenshotShortcuts->items.at(14).title.translated() ==
-                QStringLiteral("Video recording") &&
+                QStringLiteral("Pin to screen") &&
             screenshotShortcuts->items.at(15).title.translated() ==
+                QStringLiteral("Video recording") &&
+            screenshotShortcuts->items.at(16).title.translated() ==
                 QStringLiteral("Scrolling screenshot") &&
-            screenshotShortcuts->items.at(16).title.translated() == QStringLiteral("Quick save") &&
-            screenshotShortcuts->items.at(17).title.translated() ==
-                QStringLiteral("Save as file") &&
+            screenshotShortcuts->items.at(17).title.translated() == QStringLiteral("Quick save") &&
             screenshotShortcuts->items.at(18).title.translated() ==
-                QStringLiteral("Cancel screenshot") &&
+                QStringLiteral("Save as file") &&
             screenshotShortcuts->items.at(19).title.translated() ==
+                QStringLiteral("Cancel screenshot") &&
+            screenshotShortcuts->items.at(20).title.translated() ==
                 QStringLiteral("Copy to clipboard") &&
             newScreenshotShortcutContractsMatch &&
             std::get<settings::SettingsLocalShortcutDefinition>(
@@ -1495,7 +1562,7 @@ void globalHotkeyShortcutsHaveStableContracts() {
             : nullptr;
     require(ocrShortcut != nullptr && ocrShortcut->iconFactory &&
                 ocrShortcut->iconFactory() ==
-                    snow_shot::presentation::icons::custom::outlined::ToolRecognizeText(),
+                    snow_shot::presentation::icons::custom::outlined::TextRecognition(),
             "Text recognition quick action must use the screenshot toolbar OCR icon");
     const auto* translationItem =
         catalog.item({QStringLiteral("global-hotkeys"), QStringLiteral("screenshot"),

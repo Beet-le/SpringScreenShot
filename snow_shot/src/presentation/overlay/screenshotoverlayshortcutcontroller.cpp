@@ -1,13 +1,16 @@
+#include "snow_shot/shortcuts/shortcutbinding.h"
 #include "snow_shot/presentation/screenshotoverlayshortcutcontroller.h"
 
 #include "snow_shot/presentation/screenshotinteractionstate.h"
 #include "snow_shot/presentation/screenshotintelligentselectionmodel.h"
+#include "snow_shot/presentation/screenshotregiontypeshortcut.h"
 #include "snow_shot/presentation/windowshortcutmanager.h"
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/configurationstore.h"
 #include "snow_shot/storage/settingsadapters.h"
 
 #include <QKeyEvent>
+#include <QKeySequence>
 #include <QMap>
 
 #include <utility>
@@ -111,14 +114,24 @@ struct ScreenshotOverlayShortcutController::Impl {
     }
 
     void registerFixedBindings() {
+#ifdef Q_OS_MACOS
+        QList<QKeyCombination> closeKeys;
+        for (const auto& sequence : QKeySequence::keyBindings(QKeySequence::Close))
+            closeKeys.append(sequence[0]);
+        auto close = fixedBinding(QStringLiteral("screenshot.close"), std::move(closeKeys),
+                                  ShortcutManager::StandardPriority::WindowCommand, {},
+                                  [this] { return actions.cancelCaptureViaShortcut(); });
+        // Retire the complete capture, including every display and the toolbar, after
+        // key release. Text editing must not suppress this standard window command.
+        close.activationTrigger = ShortcutManager::Binding::ActivationTrigger::Release;
+        static_cast<void>(shortcutManager.addBinding(&q, std::move(close)));
+#endif
         for (bool reverse : {false, true}) {
             static_cast<void>(shortcutManager.addBinding(
                 &q, fixedBinding(
                         reverse ? QStringLiteral("screenshot.region_previous")
                                 : QStringLiteral("screenshot.region_next"),
-                        {QKeyCombination(reverse ? Qt::ControlModifier | Qt::ShiftModifier
-                                                 : Qt::ControlModifier,
-                                         Qt::Key_Tab)},
+                        {screenshotRegionTypeCycleKey(reverse)},
                         ShortcutManager::StandardPriority::WindowCommand,
                         [this] {
                             return actions.localShortcutInputAllowed() &&
@@ -184,6 +197,7 @@ struct ScreenshotOverlayShortcutController::Impl {
             QStringLiteral("select_previously_selected_area"),
             QStringLiteral("recapture"),
             QStringLiteral("copy_color"),
+            QStringLiteral("toggle_coordinate_mode"),
             QStringLiteral("table_recognition"),
             QStringLiteral("qr_code_recognition"),
             QStringLiteral("video_recording"),
@@ -256,7 +270,8 @@ struct ScreenshotOverlayShortcutController::Impl {
                            !interaction.scrollingCapture() && actions.localShortcutInputAllowed() &&
                            actions.recaptureAvailable();
                 }
-                if (actionId == QStringLiteral("copy_color")) {
+                if (actionId == QStringLiteral("copy_color") ||
+                    actionId == QStringLiteral("toggle_coordinate_mode")) {
                     return interaction.moveToolActive() && actions.localShortcutInputAllowed();
                 }
                 if (actionId.startsWith(QStringLiteral("move_cursor_"))) {
@@ -295,7 +310,8 @@ struct ScreenshotOverlayShortcutController::Impl {
                     const Qt::KeyboardModifiers eventModifiers =
                         context.event != nullptr ? context.event->modifiers() : Qt::NoModifier;
                     const bool plainShiftColorFormatFallback =
-                        context.event != nullptr && context.event->key() == Qt::Key_Shift &&
+                        context.event != nullptr &&
+                        snow_shot::shortcuts::commandKey(*context.event) == Qt::Key_Shift &&
                         (eventModifiers == Qt::NoModifier || eventModifiers == Qt::ShiftModifier) &&
                         interaction.moveToolActive();
                     return inputHandler.activateKeepSelectionAspectRatioShortcut(
@@ -318,6 +334,9 @@ struct ScreenshotOverlayShortcutController::Impl {
                         intelligentSelection.clearPress();
                     }
                     return selected;
+                }
+                if (actionId == QStringLiteral("toggle_coordinate_mode")) {
+                    return actions.toggleColorPickerCoordinateMode();
                 }
                 if (actionId == QStringLiteral("copy_color")) {
                     if (!actions.copyColorPickerColorToClipboard()) {

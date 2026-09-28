@@ -1,5 +1,9 @@
+#include "physical_key_test_support.h"
+#include <QLineEdit>
+#include "snow_shot/image/screenshotregionpoints.h"
 #include "snow_shot/presentation/screenshotselectorworkflow.h"
 #include "snow_shot/presentation/screenshotregionpreferences.h"
+#include "snow_shot/presentation/screenshotregiontypeshortcut.h"
 #include "snow_shot/presentation/screenshothistoryservice.h"
 #include "snow_shot/presentation/directcapturehistory.h"
 #include "snowimageqtcodec.h"
@@ -60,11 +64,12 @@ void require(bool condition, const char* message) {
 
 bool dispatchShortcut(QWidget& receiver, Qt::Key key,
                       Qt::KeyboardModifiers modifiers = Qt::NoModifier, bool autoRepeat = false) {
-    QKeyEvent shortcutOverride(QEvent::ShortcutOverride, key, modifiers, QString(), autoRepeat);
+    PhysicalKeyEvent shortcutOverride(QEvent::ShortcutOverride, key, modifiers, QString(),
+                                      autoRepeat);
     shortcutOverride.setAccepted(false);
     QCoreApplication::sendEvent(&receiver, &shortcutOverride);
 
-    QKeyEvent keyPress(QEvent::KeyPress, key, modifiers, QString(), autoRepeat);
+    PhysicalKeyEvent keyPress(QEvent::KeyPress, key, modifiers, QString(), autoRepeat);
     keyPress.setAccepted(false);
     QCoreApplication::sendEvent(&receiver, &keyPress);
     return keyPress.isAccepted();
@@ -73,7 +78,7 @@ bool dispatchShortcut(QWidget& receiver, Qt::Key key,
 bool dispatchShortcutRelease(QWidget& receiver, Qt::Key key,
                              Qt::KeyboardModifiers modifiers = Qt::NoModifier,
                              bool autoRepeat = false) {
-    QKeyEvent keyRelease(QEvent::KeyRelease, key, modifiers, QString(), autoRepeat);
+    PhysicalKeyEvent keyRelease(QEvent::KeyRelease, key, modifiers, QString(), autoRepeat);
     keyRelease.setAccepted(false);
     QCoreApplication::sendEvent(&receiver, &keyRelease);
     return keyRelease.isAccepted();
@@ -941,6 +946,38 @@ void multipleValidEntriesCanBeTraversed(const QString& root) {
             "newer traversal entry was not applied after direct navigation");
     require(history.returnToCurrentScreenshot() && displays.displayAt(0).image == liveImage,
             "direct return did not restore the live endpoint");
+}
+
+void transientMcpDocumentPreservesUndoAndSources(const QString& root) {
+    ScreenshotDisplaySession displays;
+    displays.appendDisplay(display(QStringLiteral("A"), QStringLiteral("Primary"),
+                                   QRect(0, 0, 200, 100),
+                                   solidImage(QSize(200, 100), qRgb(30, 60, 90))));
+    SnowCanvasRuntime runtime;
+    ScreenshotSelectionModel selection;
+    selection.setSelectionRect(QRect(10, 10, 120, 70));
+    ScreenshotInteractionState interaction;
+    interaction.enterOverlayVisible(false);
+    ScreenshotIntelligentSelectionModel intelligent;
+    ScreenshotHistoryService history({displays, runtime, selection, interaction, intelligent},
+                                     root);
+    require(!runtime
+                 .applyAnnotationTransaction(
+                     R"({"version":1,"operations":[{"type":"rectangle","bounds":[20,20,30,40]}]})")
+                 .isEmpty(),
+            "transient document fixture must contain a real undoable edit");
+    auto entry = takeSnapshot(history.snapshotCurrent(false), "transient snapshot must succeed");
+    const auto originalSelection = entry.selection;
+    require(runtime.undo(), "fixture must change live history before importing");
+    selection.setSelectionRect(QRect(0, 0, 20, 20));
+    require(history.presentTransientEntry(entry),
+            "transient document must present without persistence");
+    require(selection.pixelSelection() == originalSelection.selection && runtime.canUndo() &&
+                !runtime.canRedo(),
+            "transient presentation must restore exact selection and full undo history");
+    require(runtime.undo() && runtime.redo(), "imported edit history must remain usable");
+    require(historyDirectory(root).entryList(QDir::Dirs | QDir::NoDotAndDotDot).isEmpty(),
+            "presenting an isolated document must not publish a history record");
 }
 
 void committedSelectionFollowsHistory(const QString& root) {
@@ -1961,6 +1998,10 @@ void configuredSelectionShortcutsRouteTabHistoryAndColorActions(bool targetSwitc
     int nextHistoryCalls = 0;
     int previousSelectionCalls = 0;
     int copyColorCalls = 0;
+    int coordinateToggles = 0;
+    int coordinateCancelCalls = 0;
+    int brushCalls = 0;
+    bool coordinateInputAllowed = true;
     int selectorHitTestRequests = 0;
     int persistedTargetChanges = 0;
     ScreenshotIntelligentSelectionTarget persistedTarget =
@@ -1991,6 +2032,19 @@ void configuredSelectionShortcutsRouteTabHistoryAndColorActions(bool targetSwitc
     actions.copyColorPickerColorToClipboard = [&copyColorCalls]() {
         ++copyColorCalls;
         return true;
+    };
+    actions.toggleColorPickerCoordinateMode = [&]() {
+        ++coordinateToggles;
+        return true;
+    };
+    actions.cancelCapture = [&]() { ++coordinateCancelCalls; };
+    actions.localShortcutInputAllowed = [&]() { return coordinateInputAllowed; };
+    actions.activateDrawingShortcut = [&](const QString& id) {
+        if (id == QStringLiteral("brush")) {
+            ++brushCalls;
+            return true;
+        }
+        return false;
     };
     ScreenshotOverlayInputHandler handler({
         captureState,
@@ -2091,10 +2145,29 @@ void configuredSelectionShortcutsRouteTabHistoryAndColorActions(bool targetSwitc
     require(dispatchShortcut(shortcutWindow, Qt::Key_R) && previousSelectionCalls == 2 &&
                 !intelligent.pressActive(),
             "R did not request the previously selected area in Move mode");
+    require(!dispatchShortcut(shortcutWindow, Qt::Key_P, Qt::ShiftModifier) &&
+                coordinateToggles == 0,
+            "Shift+P must not toggle coordinates by default");
+    require(dispatchShortcut(shortcutWindow, Qt::Key_P, Qt::ControlModifier) &&
+                coordinateToggles == 1 && coordinateCancelCalls == 0 && copyColorCalls == 0,
+            "Ctrl+P must toggle coordinates without copying or ending capture");
+    static_cast<void>(dispatchShortcut(shortcutWindow, Qt::Key_P, Qt::ControlModifier, true));
+    require(coordinateToggles == 1, "coordinate toggle must ignore auto-repeat");
+    coordinateInputAllowed = false;
+    require(!dispatchShortcut(shortcutWindow, Qt::Key_P, Qt::ControlModifier) &&
+                coordinateToggles == 1,
+            "coordinate shortcut must respect local input restrictions");
+    coordinateInputAllowed = true;
+    require(dispatchShortcut(shortcutWindow, Qt::Key_P) && brushCalls == 1 &&
+                coordinateToggles == 1,
+            "unmodified P must still activate Brush");
     require(dispatchShortcut(shortcutWindow, Qt::Key_C) && copyColorCalls == 1,
             "C did not copy the color-picker color in Move mode");
 
     interaction.setCanvasTool(ScreenshotActiveTool::Shape);
+    require(!dispatchShortcut(shortcutWindow, Qt::Key_P, Qt::ControlModifier) &&
+                coordinateToggles == 1,
+            "coordinate toggle must be inactive in drawing modes");
     require(!dispatchShortcut(shortcutWindow, Qt::Key_R) &&
                 !dispatchShortcut(shortcutWindow, Qt::Key_C) && previousSelectionCalls == 2 &&
                 copyColorCalls == 1,
@@ -2111,6 +2184,7 @@ void configuredSelectionShortcutsRouteTabHistoryAndColorActions(bool targetSwitc
                     {QStringLiteral("J")});
     remapped.insert(QStringLiteral("select_previously_selected_area"), {QStringLiteral("K")});
     remapped.insert(QStringLiteral("copy_color"), {QStringLiteral("B")});
+    remapped.insert(QStringLiteral("toggle_coordinate_mode"), {QStringLiteral("Alt+P")});
     remapped.insert(QStringLiteral("previous_screenshot_history"), {QStringLiteral("Y")});
     remapped.insert(QStringLiteral("next_screenshot_history"), {QStringLiteral("U")});
     require(shortcutSettings.setAllShortcutsAtomic(remapped),
@@ -2126,6 +2200,15 @@ void configuredSelectionShortcutsRouteTabHistoryAndColorActions(bool targetSwitc
                 dispatchShortcut(shortcutWindow, Qt::Key_J) && selectorHitTestRequests == 6,
             "remapped Tab shortcut did not replace the default key");
     interaction.confirmSelection();
+    require(!dispatchShortcut(shortcutWindow, Qt::Key_P, Qt::ControlModifier) &&
+                dispatchShortcut(shortcutWindow, Qt::Key_P, Qt::AltModifier) &&
+                coordinateToggles == 2,
+            "configured coordinate shortcut must replace Ctrl+P");
+    require(shortcutSettings.setShortcuts(QStringLiteral("toggle_coordinate_mode"), {}),
+            "failed to disable coordinate shortcut");
+    shortcutController.reloadConfiguredShortcuts();
+    require(!dispatchShortcut(shortcutWindow, Qt::Key_P, Qt::AltModifier) && coordinateToggles == 2,
+            "unassigned coordinate shortcut must be inactive");
     require(!dispatchShortcut(shortcutWindow, Qt::Key_R) &&
                 dispatchShortcut(shortcutWindow, Qt::Key_K) &&
                 !dispatchShortcut(shortcutWindow, Qt::Key_C) &&
@@ -2449,6 +2532,68 @@ void configuredScreenshotShortcutsControlMoveAndCursorNavigation() {
     require(cursorMoves == QVector<PhysicalCursorDirection>{PhysicalCursorDirection::Up},
             "restored cursor shortcut must use the persisted configuration");
 }
+
+#ifdef Q_OS_MACOS
+void standardCloseExitsScreenshotSession() {
+    ScreenshotCaptureState captureState;
+    ScreenshotDisplaySession displays;
+    ScreenshotGeometryMapper geometry;
+    ScreenshotSelectionModel selection;
+    ScreenshotIntelligentSelectionModel intelligent;
+    ScreenshotInteractionState interaction;
+    QWidget overlay;
+    QWidget toolbar;
+    QWidget unrelated;
+    QLineEdit editor(&overlay);
+    overlay.show();
+    toolbar.show();
+    unrelated.show();
+    snow_shot::presentation::WindowShortcutManager manager;
+    manager.addScopeWindow(&overlay);
+    manager.addScopeWindow(&toolbar);
+    int exits = 0;
+    bool confirm = false;
+    snow_shot::presentation::ScreenshotShortcutExitConfirmation confirmation(
+        manager, [&] { ++exits; }, [](QWidget*) {});
+    ScreenshotOverlayInputActions actions;
+    actions.localShortcutInputAllowed = [] { return false; }; // A text editor owns input.
+    actions.cancelCaptureViaShortcut = [&] { return confirmation.request(confirm, &overlay); };
+    ScreenshotOverlayInputHandler handler(
+        {captureState, interaction, selection, intelligent, geometry, displays, actions});
+    ScreenshotOverlayShortcutController controller(manager, handler, interaction, intelligent,
+                                                   actions);
+    // Qt maps ControlModifier to Command on macOS.
+    const auto press = [&](QWidget& receiver) {
+        return dispatchShortcut(receiver, Qt::Key_W, Qt::ControlModifier);
+    };
+    const auto release = [&](QWidget& receiver) {
+        return dispatchShortcutRelease(receiver, Qt::Key_W, Qt::ControlModifier);
+    };
+    for (QWidget* receiver : {&overlay, &toolbar, static_cast<QWidget*>(&editor)}) {
+        const int previous = exits;
+        require(press(*receiver) && exits == previous,
+                "standard Close must reserve the screenshot command until key release");
+        require(release(*receiver) && exits == previous + 1,
+                "overlay, toolbar and text editor must close through the session exit action");
+    }
+    const int previous = exits;
+    static_cast<void>(press(unrelated));
+    static_cast<void>(release(unrelated));
+    require(exits == previous, "standard Close must not exit capture from unrelated windows");
+    interaction.enterScrollingCapture();
+    confirm = true;
+    require(press(overlay) && release(overlay) && exits == previous,
+            "standard Close must respect screenshot exit confirmation while scrolling");
+    auto* modal = overlay.findChild<adqt::widgets::AdModal*>(
+        QStringLiteral("screenshotShortcutExitConfirmation"));
+    require(modal && modal->isOpen(), "standard Close opens the existing confirmation");
+    static_cast<void>(press(toolbar));
+    static_cast<void>(release(toolbar));
+    require(exits == previous, "confirmation must suspend capture shortcuts");
+    modal->acceptButton()->click();
+    require(exits == previous + 1, "accepting confirmation exits capture exactly once");
+}
+#endif
 
 void shortcutExitConfirmationGatesCancellation() {
     QWidget owner;
@@ -3439,6 +3584,60 @@ void customRegionsMoveDuringManualSelection() {
     }
 }
 
+void freehandRegionSuppressesSlowJitter() {
+    ScreenshotCaptureState capture;
+    ScreenshotDisplaySession displays;
+    displays.appendDisplay(display(QStringLiteral("custom"), QStringLiteral("custom"),
+                                   QRect(0, 0, 500, 500),
+                                   solidImage(QSize(500, 500), qRgb(0, 0, 0))));
+    ScreenshotGeometryMapper mapper;
+    mapper.rebuild(displays);
+    ScreenshotSelectionModel selection;
+    ScreenshotIntelligentSelectionModel intelligent;
+    ScreenshotInteractionState interaction;
+    interaction.enterOverlayVisible(false);
+    int confirmations = 0, completions = 0, hitTests = 0;
+    ScreenshotOverlayInputActions actions;
+    actions.selectionConfirmed = [&] { ++confirmations; };
+    actions.activateScreenshotShortcut = [&](const QString&) {
+        ++completions;
+        return true;
+    };
+    actions.requestUiSelectorHitTest = [&](const QPoint&) { ++hitTests; };
+    ScreenshotOverlayInputHandler handler(
+        {capture, interaction, selection, intelligent, mapper, displays, actions});
+    handler.setRegionType(ScreenshotRegionType::Freehand);
+    for (int stroke = 0; stroke < 2; ++stroke) {
+        selection.clearSelection();
+        interaction.enterOverlayVisible(false);
+        const qreal top = 50.0 + stroke * 100.0;
+        handler.handleMousePress(nullptr, QPointF(50, top));
+        for (int i = 1; i <= 1200; ++i) {
+            handler.handleMouseMove(nullptr, QPointF(50.0 + i * 0.1, top + (i % 2 ? -1 : 1)));
+            if (i % 16 == 0)
+                QCoreApplication::processEvents();
+        }
+        const auto path = selection.draftPath();
+        int interiorPoints = 0;
+        for (int i = 0; i < path.elementCount(); ++i) {
+            const auto point = path.elementAt(i);
+            // Inspect the curve and its controls away from the start and tip.
+            if (point.x > 60 && point.x < 160) {
+                ++interiorPoints;
+                require(std::abs(point.y - top) < 0.3,
+                        "slow freehand boundary must suppress one-pixel pointer jitter");
+            }
+        }
+        require(interiorPoints > 0, "slow motion still produces a curved region draft");
+        handler.handleMouseMove(nullptr, QPointF(170, top + 60));
+        handler.handleMouseMove(nullptr, QPointF(50, top + 60));
+        handler.handleMouseRelease(nullptr, QPointF(50, top));
+        require(selection.hasPixelSelection() &&
+                    selection.selectionRegion().contains(QPointF(100, top + 30)),
+                "filtered freehand release closes and preserves the region interior");
+    }
+}
+
 void customRegionInputTransactions() {
     ScreenshotCaptureState capture;
     ScreenshotDisplaySession displays;
@@ -3501,8 +3700,15 @@ void customRegionInputTransactions() {
     handler.handleMouseMove(nullptr, QPointF(100, 50));
     handler.handleMouseMove(nullptr, QPointF(90, 95));
     QCoreApplication::processEvents();
-    const auto expectedFreehandPath =
-        snowCanvasCatmullRomPath({{70, 50}, {100, 50}, {90, 95}}, true);
+    SnowCanvasStrokeFilter referenceFilter;
+    referenceFilter.reset({70, 50});
+    referenceFilter.append({100, 50});
+    referenceFilter.append({90, 95});
+    QVector<QPointF> filteredPoints{{70, 50}};
+    filteredPoints.append(referenceFilter.takePoints());
+    if (filteredPoints.size() >= 128)
+        filteredPoints = simplifyScreenshotRegionPoints(filteredPoints, 0.125);
+    const auto expectedFreehandPath = snowCanvasCatmullRomPath(filteredPoints, true);
     require(selection.draftPath() == expectedFreehandPath &&
                 selection.draftPath().elementAt(1).type == QPainterPath::CurveToElement,
             "freehand preview uses the same smooth path as Free Draw");
@@ -3535,13 +3741,19 @@ void customRegionInputTransactions() {
     shortcuts.addScopeWindow(&shortcutWindow);
     ScreenshotOverlayShortcutController controller(shortcuts, handler, interaction, intelligent,
                                                    actions);
-    require(dispatchShortcut(shortcutWindow, Qt::Key_Tab, Qt::ControlModifier) &&
+    const auto cycleModifier = screenshotRegionTypeCycleKey().keyboardModifiers();
+    require(dispatchShortcut(shortcutWindow, Qt::Key_Tab, cycleModifier) &&
                 selection.regionType() == ScreenshotRegionType::Curve,
-            "Ctrl+Tab advances region type in Move mode");
-    require(
-        dispatchShortcut(shortcutWindow, Qt::Key_Tab, Qt::ControlModifier | Qt::ShiftModifier) &&
-            selection.regionType() == ScreenshotRegionType::Polyline,
-        "Ctrl+Shift+Tab reverses region type");
+            "the platform region shortcut advances the type in Move mode");
+    require(dispatchShortcut(shortcutWindow, Qt::Key_Backtab, cycleModifier | Qt::ShiftModifier) &&
+                selection.regionType() == ScreenshotRegionType::Polyline,
+            "the platform reverse region shortcut accepts Backtab");
+    require(dispatchShortcut(shortcutWindow, Qt::Key_Tab, cycleModifier | Qt::ShiftModifier) &&
+                selection.regionType() == ScreenshotRegionType::Rectangle,
+            "the reverse region shortcut also accepts Shift+Tab");
+    require(dispatchShortcut(shortcutWindow, Qt::Key_Tab, cycleModifier) &&
+                selection.regionType() == ScreenshotRegionType::Polyline,
+            "region cycling restores the type needed by the following shape transaction");
     interaction.enterOverlayVisible(false);
     selection.clearSelection();
     handler.handleMousePress(nullptr, QPointF(20, 20));
@@ -3597,9 +3809,15 @@ int main(int argc, char** argv) {
     };
     require(storage::ApplicationStorage::instance().initialize(storageOptions).success,
             "failed to initialize isolated shortcut settings");
+    if (QCoreApplication::arguments().contains(QStringLiteral("--mcp-transient-only"))) {
+        transientMcpDocumentPreservesUndoAndSources(temporary.path());
+        storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (QCoreApplication::arguments().contains(QStringLiteral("--region-shapes-only"))) {
         rectangularRegionOperationsUseSmartSelection();
         customRegionInputTransactions();
+        freehandRegionSuppressesSlowJitter();
         regionOperationsUseMarqueeAndRestoreOnCancel();
         complexRegionsMoveFromTheirBoundingRectangle();
         customRegionsMoveDuringManualSelection();
@@ -3635,6 +3853,9 @@ int main(int argc, char** argv) {
     }
     if (QCoreApplication::arguments().contains(QStringLiteral("--shortcut-input-only"))) {
         startupInputWaitsForRevealAndIgnoresSyntheticEvents();
+#ifdef Q_OS_MACOS
+        standardCloseExitsScreenshotSession();
+#endif
         shortcutExitConfirmationGatesCancellation();
         rightClickSeparatesDismissalFromSelectionChanges();
         areaTypesExitFromPreselectionButKeepDraftCancellation();

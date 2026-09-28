@@ -222,6 +222,10 @@
             <translation>请输入不含 /chat/completions 的基础 URL。</translation>
         </message>
         <message>
+            <source>Explicitly enable or disable reasoning in model requests.</source>
+            <translation>在模型请求中显式开启或关闭推理。</translation>
+        </message>
+        <message>
             <source>Model Name</source>
             <translation>模型名称</translation>
         </message>
@@ -236,6 +240,10 @@
         <message>
             <source>Optional for servers that do not require authentication.</source>
             <translation>不需要身份验证的服务器可留空。</translation>
+        </message>
+        <message>
+            <source>Reasoning Support</source>
+            <translation>推理支持</translation>
         </message>
         <message>
             <source>Save</source>
@@ -285,8 +293,8 @@
             <translation>绘制工具栏预览</translation>
         </message>
         <message>
-            <source>Drop beside a tool to create a position. Drop above a tool to stack it. The bottom tool stays on the main toolbar row.</source>
-            <translation>拖放到工具旁边可新建位置；拖放到工具上方可将其堆叠。最下方的工具会保留在主工具栏上。</translation>
+            <source>Drop beside a tool to create a position. Drop above a tool to stack it. The bottom tool stays on the main toolbar row. Separator Component occupies its own position.</source>
+            <translation>将工具拖到旁边以创建位置，拖到上方以堆叠。最下方的工具显示在主工具栏中。分隔组件单独占据一个位置。</translation>
         </message>
         <message>
             <source>Eraser</source>
@@ -321,6 +329,14 @@
             <translation>画笔</translation>
         </message>
         <message>
+            <source>Redo</source>
+            <translation>重做</translation>
+        </message>
+        <message>
+            <source>Separator Component</source>
+            <translation>分隔组件</translation>
+        </message>
+        <message>
             <source>Serial number</source>
             <translation>序号</translation>
         </message>
@@ -335,6 +351,10 @@
         <message>
             <source>Text</source>
             <translation>文本</translation>
+        </message>
+        <message>
+            <source>Undo</source>
+            <translation>撤销</translation>
         </message>
         <message>
             <source>Watermark</source>
@@ -558,6 +578,45 @@
         </message>
     </context>
     <context>
+        <name>ScreenshotMcpSettings</name>
+        <message>
+            <source>Add this configuration to your MCP client, then restart the client to connect. Keep Snow Shot running while using MCP.</source>
+            <translation>将此配置添加到 MCP 客户端，然后重启客户端以连接。使用 MCP 时请保持 Snow Shot 运行。</translation>
+        </message>
+        <message>
+            <source>Connected clients: %1</source>
+            <translation>已连接的客户端：%1</translation>
+        </message>
+        <message>
+            <source>Copied</source>
+            <translation>已复制</translation>
+        </message>
+        <message>
+            <source>Copy configuration</source>
+            <translation>复制配置</translation>
+        </message>
+        <message>
+            <source>Local endpoint descriptor: %1</source>
+            <translation>本地端点描述文件：%1</translation>
+        </message>
+        <message>
+            <source>MCP client configuration</source>
+            <translation>MCP 客户端配置</translation>
+        </message>
+        <message>
+            <source>MCP is disabled or unavailable.</source>
+            <translation>MCP 已禁用或不可用。</translation>
+        </message>
+        <message>
+            <source>Running</source>
+            <translation>运行中</translation>
+        </message>
+        <message>
+            <source>Unavailable</source>
+            <translation>不可用</translation>
+        </message>
+    </context>
+    <context>
         <name>ScreenshotToolbarEditorSettingsWidget</name>
         <message>
             <source>Barcode recognition</source>
@@ -586,6 +645,10 @@
         <message>
             <source>Hidden tools</source>
             <translation>隐藏的工具</translation>
+        </message>
+        <message>
+            <source>LaTeX Formula Recognition</source>
+            <translation>LaTeX 公式识别</translation>
         </message>
         <message>
             <source>No hidden tools</source>
@@ -766,6 +829,10 @@
             <translation>所有截图历史都将被删除</translation>
         </message>
         <message>
+            <source>Allow MCP clients running as your OS user to control Snow Shot. Snow Shot must be running.</source>
+            <translation>允许以当前系统用户身份运行的 MCP 客户端控制 Snow Shot。Snow Shot 必须保持运行。</translation>
+        </message>
+        <message>
             <source>Always</source>
             <translation>始终</translation>
         </message>
@@ -844,6 +911,10 @@
         <message>
             <source>Auto start at boot</source>
             <translation>开机时自动启动</translation>
+        </message>
+        <message>
+            <source>Auto-recognize QR Code</source>
+            <translation>自动识别二维码</translation>
         </message>
         <message>
             <source>Auto-save screenshot filename format</source>
@@ -968,6 +1039,10 @@
         <message>
             <source>Choose how much execution time the application receives</source>
             <translation>选择应用程序获得的执行时间</translation>
+        </message>
+        <message>
+            <source>Choose how text detection resizes images. Limiting the long side is faster; enlarging the short side may find smaller text.</source>
+            <translation>选择文字检测时的图像缩放方式。限制长边可提高速度；放大短边可能识别出更小的文字。</translation>
         </message>
         <message>
             <source>Choose how the area behind recognized text is filled</source>
@@ -1204,6 +1279,10 @@
         <message>
             <source>Confirm before exiting screenshot via shortcut</source>
             <translation>使用快捷键退出截图前确认</translation>
+        </message>
+        <message>
+            <source>Connect AI clients to Snow Shot</source>
+            <translation>将 AI 客户端连接到 Snow Shot</translation>
         </message>
         <message>
             <source>Control when the screenshot color picker is visible</source>
@@ -1450,6 +1529,10 @@
             <translation>编辑选区</translation>
         </message>
         <message>
+            <source>Enable MCP integration</source>
+            <translation>启用 MCP 集成</translation>
+        </message>
+        <message>
             <source>Enable edit mode</source>
             <translation>启用编辑模式</translation>
         </message>
@@ -1472,6 +1555,10 @@
         <message>
             <source>End recording</source>
             <translation>结束录屏</translation>
+        </message>
+        <message>
+            <source>Enlarge short side (more detail)</source>
+            <translation>放大短边（更多细节）</translation>
         </message>
         <message>
             <source>Enter or browse to a PNG or ICO file; invalid files use the selected bundled icon</source>
@@ -1794,6 +1881,10 @@
             <translation>限制截图历史可使用的磁盘空间</translation>
         </message>
         <message>
+            <source>Limit long side (faster)</source>
+            <translation>限制长边（更快）</translation>
+        </message>
+        <message>
             <source>Line</source>
             <translation>直线</translation>
         </message>
@@ -1808,6 +1899,14 @@
         <message>
             <source>Low</source>
             <translation>低</translation>
+        </message>
+        <message>
+            <source>MCP</source>
+            <translation>MCP</translation>
+        </message>
+        <message>
+            <source>MCP connection and client setup</source>
+            <translation>MCP 连接和客户端设置</translation>
         </message>
         <message>
             <source>MSAA</source>
@@ -2188,6 +2287,10 @@
         <message>
             <source>Recapture</source>
             <translation>重新截图</translation>
+        </message>
+        <message>
+            <source>Recognize QR codes automatically after confirming the screenshot selection area.</source>
+            <translation>确认截图选区后自动识别二维码。</translation>
         </message>
         <message>
             <source>Recognize global mouse gestures while you use other apps.</source>
@@ -2802,6 +2905,10 @@
             <translation>文字识别</translation>
         </message>
         <message>
+            <source>Text detection scaling</source>
+            <translation>文字检测缩放</translation>
+        </message>
+        <message>
             <source>Text recognition</source>
             <translation>文本识别</translation>
         </message>
@@ -2840,6 +2947,10 @@
         <message>
             <source>Thumbnail mode</source>
             <translation>缩略图模式</translation>
+        </message>
+        <message>
+            <source>Toggle Global/Relative Coordinates</source>
+            <translation>切换全局/相对坐标</translation>
         </message>
         <message>
             <source>Toggle hotkeys</source>
@@ -2960,6 +3071,10 @@
         <message>
             <source>Video save directory</source>
             <translation>视频保存目录</translation>
+        </message>
+        <message>
+            <source>View connection status and configure your MCP client.</source>
+            <translation>查看连接状态并配置 MCP 客户端。</translation>
         </message>
         <message>
             <source>Vision Support</source>

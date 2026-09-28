@@ -4,6 +4,93 @@ The app presets target macOS 15 or newer, with separate Apple Silicon (`arm64`)
 and Intel (`x64`) builds. Each build uses one architecture throughout CMake,
 vcpkg and Cargo; universal builds are not supported by these presets.
 
+## Homebrew installation
+
+The project tap is `mg-chao/homebrew-tap`. Stable releases update `snow-shot`;
+beta releases update `snow-shot@beta`, independently of the stable channel.
+Tags accept `v<version>` with an optional `_snow-shot` suffix; beta versions use
+`-beta` or `-beta.<number>`. Other prerelease versions are not supported. Initially,
+Homebrew installation supports Apple Silicon and macOS 15 or later only. Keep
+Homebrew current with `brew update`.
+
+```sh
+brew update
+brew install --cask mg-chao/tap/snow-shot
+brew upgrade --cask snow-shot
+brew uninstall --cask snow-shot
+```
+
+For beta releases, use `brew install --cask mg-chao/tap/snow-shot@beta` and
+`brew upgrade --cask snow-shot@beta`. Quit the app and uninstall the current cask
+before switching channels because both install `Snow Shot.app`. User data and
+the signing identity are retained. Each release needs its versioned DMG and a
+GitHub SHA-256 digest or matching `.sha256` asset. When both are present, both
+must match; the workflow packages only verified release assets.
+
+Finish recordings and quit Snow Shot before upgrading or uninstalling. Homebrew
+owns the final application placement and removal; the cask's preflight verifies
+and locally signs a staged copy. The archive includes the DMG, its checksum, and
+the installer from the matching release source. Its SHA-256 is pinned in the tap.
+Installation never downloads a newer installer or follows the website's mutable
+latest-package URL.
+
+The first installation may request login Keychain access or code-signing trust.
+The same local identity and designated requirement used by the standalone
+installer are retained under `~/Library/Application Support/Snow Shot/Installer`.
+Use the same installing account for upgrades. Uninstall does not delete the
+identity, installer state, settings, or captures; there is no destructive `zap`
+rule. Local signing is not Developer ID notarization and does not guarantee that
+macOS will retain Screen Recording or Accessibility consent.
+
+### Migrating an existing installation
+
+Quit Snow Shot and move `/Applications/Snow Shot.app` (or the legacy
+`/Applications/snow_shot.app`) to a backup folder outside Applications before
+running `brew install`. Keep the installer state directory and original Keychain
+identity. Do not use `--force` to overwrite an existing app. Confirm that the new
+copy launches and can capture before deleting the backup. If installation fails,
+restore the backup to its original location. Use Homebrew for subsequent upgrades.
+
+A custom destination is supported through Homebrew's standard option:
+
+```sh
+mkdir -p "$HOME/Applications"
+brew install --cask --appdir="$HOME/Applications" mg-chao/tap/snow-shot
+```
+
+If signing fails, follow the identity recovery instructions below; do not delete
+state to bypass a missing identity. Homebrew handles application rollback during
+an upgrade. Its restored staged backup is signature-verified without requiring
+the signing key again. Inspect its reported recovery result before retrying. Retain the
+previous app backup and original identity until the installation is working.
+
+### Installer staging interface
+
+`install-snow-shot-macos.sh --dmg PATH --prepare-app /absolute/New.app` validates
+and signs a local DMG into a fresh `.app` directory. The adjacent `PATH.sha256`
+is mandatory. The destination's parent must already exist, and an existing output
+or symlink is rejected. This mode saves the validated signing requirement but
+does not close, replace, or launch any installed application. On failure it removes
+only its own incomplete output. The standalone installer still installs normally
+when `--prepare-app` is absent.
+
+Focused checks:
+
+```sh
+python3 scripts/test-snow-shot-homebrew.py
+python3 scripts/test-macos-installer.py
+bash -n scripts/install-snow-shot-macos.sh
+```
+
+Native release qualification uses a disposable macOS desktop account with
+Homebrew: install, launch, upgrade between two stable releases, uninstall, and
+repeat with `--appdir`. Check that the signing identity stays the same, the OCR
+helper and manifest bytes remain unchanged, and uninstall preserves user data.
+In that disposable account, test an inaccessible signing identity and verify
+that Homebrew restores the previous app after the failed upgrade. Restore the
+identity and retry. This qualification is separate from the mocked regression
+checks and requires real release assets and interactive Keychain/privacy consent.
+
 ## Install a packaged release (no build tools required)
 
 The standalone installer supports macOS 15+, Apple Silicon (including a terminal
@@ -148,8 +235,8 @@ If the original key cannot be recovered, explicitly move the state directory
 aside before reinstalling. This creates a new identity and requires granting
 permissions again. Users sharing a Mac should use the same installing account
 for updates to the shared `/Applications` copy. The application updater and
-Finder drag-and-drop do not reuse this installer's identity; use the script for
-subsequent updates. Local signing does not provide Apple notarization or silently
+Finder drag-and-drop do not reuse this installer's identity; use the script or
+Homebrew for subsequent updates. Local signing does not provide Apple notarization or silently
 grant privacy permissions. Only the validated staged copy is eligible for removal
 of its quarantine attribute; Gatekeeper and TCC remain enabled.
 
@@ -380,7 +467,7 @@ remain available for media harness development.
 
 ## Apple Silicon OCR validation
 
-The runtime uses protocol 3. Its generated schema-3 manifest records
+The runtime uses protocol 4. Its generated schema-3 manifest records
 `macos-arm64`, `delivery: bundled`, static linkage, the executable name, and the
 size/SHA-256 of the worker. ONNX Runtime is linked into the worker in release
 packages; shared development builds still stage `libonnxruntime.dylib`. The

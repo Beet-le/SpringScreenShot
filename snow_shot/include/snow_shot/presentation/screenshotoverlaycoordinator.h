@@ -1,6 +1,7 @@
 #ifndef SNOW_SHOT_PRESENTATION_SCREENSHOTOVERLAYCOORDINATOR_H
 #define SNOW_SHOT_PRESENTATION_SCREENSHOTOVERLAYCOORDINATOR_H
 
+#include "snow_shot/presentation/screenshotselectiondisplayunit.h"
 #include "snow_shot/presentation/screenshottypes.h"
 #include "snow_shot/presentation/screenshotselectiongeometry.h"
 #include "snow_shot/presentation/screenshotselectorworkflowports.h"
@@ -100,7 +101,7 @@ class ScreenshotOverlayCoordinator final : public ScreenshotOverlayExclusionPort
     void previewSpotlightConfig(ScreenshotDisplaySession& displaySession,
                                 const SnowCanvasSpotlightConfig& config);
     void setTextStyle(const ScreenshotDisplaySession& displaySession,
-                      const SnowCanvasTextStyle& style);
+                      const SnowCanvasTextStyle& style, quint32 properties);
     void setSerialNumberStyle(const ScreenshotDisplaySession& displaySession,
                               const SnowCanvasSerialNumberStyle& style);
     void adjustSelectedSerialNumbers(const ScreenshotDisplaySession& displaySession, qint64 delta);
@@ -128,7 +129,8 @@ class ScreenshotOverlayCoordinator final : public ScreenshotOverlayExclusionPort
     ScreenshotColorPickerWindow* colorPicker() const;
     void updateColorPicker(ScreenshotOverlayWindow* overlay, const QImage& image,
                            const QRect& physicalRect, const QPoint& physicalPoint,
-                           const QPointF& localPosition, qreal opacity);
+                           const QPointF& localPosition, qreal opacity,
+                           const ScreenshotCoordinateDisplayValues& displayValues);
     void hideColorPicker();
     void setColorPickerCenterGuideLineColor(const QColor& color);
     void updateShortcutHints(ScreenshotOverlayWindow* overlay,

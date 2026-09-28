@@ -36,6 +36,10 @@ typedef enum SnowError {
 
 SnowError snow_runtime_serialize_document_session(SnowRuntime runtime, uint8_t* buffer,
                                                   size_t buffer_capacity, size_t* out_size);
+SnowError snow_runtime_serialize_selected_draw_template(SnowRuntime runtime, uint8_t* buffer,
+                                                        size_t buffer_capacity, size_t* out_size);
+SnowError snow_runtime_serialize_selected_element_ids(SnowRuntime runtime, uint8_t* buffer,
+                                                      size_t buffer_capacity, size_t* out_size);
 SnowError snow_runtime_create_from_document_session_with_config(const uint8_t* bytes, size_t size,
                                                                 const SnowRuntimeConfig* config,
                                                                 SnowRuntime* out_runtime);
@@ -139,6 +143,7 @@ typedef struct SnowFilterStyle {
 #define SNOW_TEXT_STYLE_MIXED_HORIZONTAL_ALIGN (1u << 8)
 #define SNOW_TEXT_STYLE_MIXED_VERTICAL_ALIGN (1u << 9)
 #define SNOW_TEXT_STYLE_MIXED_OPACITY (1u << 10)
+#define SNOW_TEXT_STYLE_ALL_PROPERTIES ((1u << 11) - 1u)
 
 #define SNOW_SERIAL_NUMBER_STYLE_MIXED_NUMBER (1u << 0)
 #define SNOW_SERIAL_NUMBER_STYLE_MIXED_COLOR (1u << 1)
@@ -716,6 +721,8 @@ typedef struct SnowTextElementInfo {
     double center_y;
     double width;
     double height;
+    double content_width;
+    double content_height;
     double rotation;
     double font_size;
     uint32_t text_utf8_len;
@@ -1233,6 +1240,15 @@ SnowError snow_viewport_fill_auto_filter_category(SnowRuntime runtime, SnowViewp
 
 SnowError snow_runtime_get_history_state(SnowRuntime runtime, SnowHistoryState* out_state);
 
+/* Apply one validated versioned annotation batch as one history entry. Output bytes are
+   owned by
+ * the caller and released with snow_annotation_result_destroy, even on empty result. */
+SnowError snow_runtime_apply_annotation_json(SnowRuntime runtime, const uint8_t* bytes, size_t size,
+                                             uint8_t** out_json, size_t* out_size,
+                                             SnowChangedViewportList* out_changed);
+void snow_annotation_result_destroy(uint8_t* bytes, size_t size);
+uint64_t snow_runtime_document_revision(SnowRuntime runtime);
+
 SnowError
 snow_runtime_clear_document_preserving_viewports(SnowRuntime runtime,
                                                  SnowChangedViewportList* out_changed_viewports);
@@ -1274,6 +1290,11 @@ SnowError snow_viewport_set_text_style_ex(SnowRuntime runtime, SnowViewport view
                                           const SnowTextLayoutOverride* layouts,
                                           uint32_t layout_count,
                                           SnowChangedViewportList* out_changed_viewports);
+SnowError snow_viewport_patch_text_style_ex(SnowRuntime runtime, SnowViewport viewport,
+                                            const SnowTextStyle* style, uint32_t properties,
+                                            const SnowTextLayoutOverride* layouts,
+                                            uint32_t layout_count,
+                                            SnowChangedViewportList* out_changed_viewports);
 
 SnowError snow_viewport_set_serial_number_style_ex(SnowRuntime runtime, SnowViewport viewport,
                                                    const SnowSerialNumberStyle* style,
@@ -1356,6 +1377,10 @@ SnowError snow_viewport_delete_all_elements_ex(SnowRuntime runtime, SnowViewport
 SnowError snow_viewport_duplicate_selected_ex(SnowRuntime runtime, SnowViewport viewport,
                                               double offset_x, double offset_y,
                                               SnowChangedViewportList* out_changed_viewports);
+SnowError snow_viewport_insert_draw_template_ex(SnowRuntime runtime, SnowViewport viewport,
+                                                const uint8_t* bytes, size_t size, double center_x,
+                                                double center_y,
+                                                SnowChangedViewportList* out_changed_viewports);
 
 SnowError snow_viewport_reorder_selected_ex(SnowRuntime runtime, SnowViewport viewport,
                                             uint32_t action,
@@ -1477,6 +1502,19 @@ SnowError snow_viewport_set_spotlight_config_ex(SnowRuntime runtime, SnowViewpor
 SnowError snow_patch_get_decoration_dirty_rects(SnowPatchHandle patch,
                                                 const SnowDirtyRect** out_rects,
                                                 uint32_t* out_count);
+
+// Stateful shared freehand stabilization. Input batches contain only new points.
+typedef struct SnowStrokeFilter SnowStrokeFilter;
+SnowError snow_stroke_filter_create(SnowArrowPoint start, double sample_spacing,
+                                    double response_distance, SnowStrokeFilter** output);
+void snow_stroke_filter_free(SnowStrokeFilter* filter);
+// Each batch is limited to 65536 input points and 65536 resampled points of work.
+// Invalid batches leave filter state unchanged.
+// Output borrows from filter until its next append/free; copy before another call.
+// finish recovers the exact endpoint. An empty finish-only batch is valid.
+SnowError snow_stroke_filter_append(SnowStrokeFilter* filter, const SnowArrowPoint* points,
+                                    size_t count, uint8_t finish, const SnowArrowPoint** output,
+                                    size_t* output_count);
 
 // Stateless curve construction; null commands queries the required count.
 SnowError snow_build_catmull_rom_path(const SnowArrowPoint* vertices, size_t vertex_count,

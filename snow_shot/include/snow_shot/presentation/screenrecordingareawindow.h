@@ -48,6 +48,9 @@ class ScreenRecordingAreaWindow final : public QWidget {
     [[nodiscard]] bool countdownActive() const;
     [[nodiscard]] QColor inputSurfaceColor() const;
     [[nodiscard]] SnowCanvasWidget* canvas() const;
+    [[nodiscard]] SnowCanvasRuntime& canvasRuntime() {
+        return *m_canvasRuntime;
+    }
     [[nodiscard]] QRect canvasGeometry() const;
     [[nodiscard]] QRectF selectionRect() const {
         return m_selectionRect;
@@ -75,6 +78,12 @@ class ScreenRecordingAreaWindow final : public QWidget {
     friend class ScreenRecordingAreaWindowTestAccess;
 
     void applyInputMode();
+    void placeRecordingRegion(const QRect& region);
+    void beginRegionDrag(const QPoint& pointer, Qt::Edges edges);
+    void updateRegionDrag(const QPoint& pointer);
+    void applyRegionDragGeometry(const QRect& region);
+    void setRegionCursor(Qt::Edges edges);
+    [[nodiscard]] int minimumRegionExtent() const;
     void updateRegionCursor(const QPointF& position);
     void applyQuickSelectionPreferences();
     void applyNativePassThrough(bool enabled);
@@ -100,11 +109,12 @@ class ScreenRecordingAreaWindow final : public QWidget {
     bool m_settingRegion = false;
     bool m_geometrySyncPending = false;
     QMarginsF m_physicalInsets;
-#ifdef Q_OS_MACOS
+    bool m_controlledRegionDrag = false;
+    bool m_regionEscapeRelease = false;
     QPoint m_regionDragOrigin;
     QRect m_regionDragRect;
     Qt::Edges m_regionDragEdges;
-#endif
+    Qt::Edges m_regionEffectiveEdges;
     std::unique_ptr<SnowCanvasRuntime> m_canvasRuntime;
     SnowCanvasWidget* m_canvas = nullptr;
     snow_shot::presentation::recording::RecordingCountdownOverlay* m_countdownOverlay = nullptr;

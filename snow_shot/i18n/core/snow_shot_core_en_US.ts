@@ -82,6 +82,10 @@ so every moment on screen can be expressed clearly and shared easily.</translati
             <translation>Discover more features and ways to use it</translation>
         </message>
         <message>
+            <source>Discussion and support · Group No. %1</source>
+            <translation>Discussion and support · Group No. %1</translation>
+        </message>
+        <message>
             <source>Download from website</source>
             <translation>Download from website</translation>
         </message>
@@ -148,6 +152,14 @@ so every moment on screen can be expressed clearly and shared easily.</translati
         <message>
             <source>Preview</source>
             <translation>Preview</translation>
+        </message>
+        <message>
+            <source>QQ Group 2</source>
+            <translation>QQ Group 2</translation>
+        </message>
+        <message>
+            <source>QQ Group 3</source>
+            <translation>QQ Group 3</translation>
         </message>
         <message>
             <source>Ready to install %1</source>
@@ -350,6 +362,13 @@ so every moment on screen can be expressed clearly and shared easily.</translati
         </message>
     </context>
     <context>
+        <name>McpDocumentService</name>
+        <message>
+            <source>Document request failed (%1).</source>
+            <translation>Document request failed (%1).</translation>
+        </message>
+    </context>
+    <context>
         <name>QObject</name>
         <message>
             <source>%1 cannot be registered as a global shortcut, try another key</source>
@@ -505,6 +524,10 @@ so every moment on screen can be expressed clearly and shared easily.</translati
             <translation>Image conversion timed out. Try a smaller area.</translation>
         </message>
         <message>
+            <source>Invalid LaTeX recognition response</source>
+            <translation>Invalid LaTeX recognition response</translation>
+        </message>
+        <message>
             <source>Invalid model stream response</source>
             <translation>Invalid model stream response</translation>
         </message>
@@ -519,6 +542,22 @@ so every moment on screen can be expressed clearly and shared easily.</translati
         <message>
             <source>Invalid translation stream response</source>
             <translation>Invalid translation stream response</translation>
+        </message>
+        <message>
+            <source>LaTeX recognition failed</source>
+            <translation>LaTeX recognition failed</translation>
+        </message>
+        <message>
+            <source>LaTeX recognition request timed out</source>
+            <translation>LaTeX recognition request timed out</translation>
+        </message>
+        <message>
+            <source>LaTeX recognition response is too large</source>
+            <translation>LaTeX recognition response is too large</translation>
+        </message>
+        <message>
+            <source>LaTeX recognition returned no formula</source>
+            <translation>LaTeX recognition returned no formula</translation>
         </message>
         <message>
             <source>No translation services are available</source>
@@ -612,6 +651,10 @@ so every moment on screen can be expressed clearly and shared easily.</translati
         <message>
             <source>An update is ready. Open About to restart and update Snow Shot.</source>
             <translation>An update is ready. Open About to restart and update Snow Shot.</translation>
+        </message>
+        <message>
+            <source>Cancel</source>
+            <translation>Cancel</translation>
         </message>
         <message>
             <source>Could not pin selected files</source>

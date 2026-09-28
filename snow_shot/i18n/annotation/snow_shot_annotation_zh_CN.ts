@@ -12,6 +12,10 @@
             <translation>添加</translation>
         </message>
         <message>
+            <source>Add Template</source>
+            <translation>添加模板</translation>
+        </message>
+        <message>
             <source>Add screenshot region</source>
             <translation>添加截图区域</translation>
         </message>
@@ -168,6 +172,18 @@
             <translation>圆角半径（滚动调整）</translation>
         </message>
         <message>
+            <source>Could not capture selected elements</source>
+            <translation>无法捕获所选元素</translation>
+        </message>
+        <message>
+            <source>Could not delete the draw template</source>
+            <translation>无法删除绘图模板</translation>
+        </message>
+        <message>
+            <source>Could not save the draw template</source>
+            <translation>无法保存绘图模板</translation>
+        </message>
+        <message>
             <source>Cross-line fill</source>
             <translation>交叉线填充</translation>
         </message>
@@ -240,6 +256,14 @@
             <translation>删除</translation>
         </message>
         <message>
+            <source>Delete Draw Template</source>
+            <translation>删除绘图模板</translation>
+        </message>
+        <message>
+            <source>Delete draw template "%1"? This action cannot be undone.</source>
+            <translation>删除绘图模板“%1”？此操作无法撤销。</translation>
+        </message>
+        <message>
             <source>Delete selected elements</source>
             <translation>删除选中元素</translation>
         </message>
@@ -274,6 +298,10 @@
         <message>
             <source>Drag toolbar</source>
             <translation>拖动工具栏</translation>
+        </message>
+        <message>
+            <source>Draw Template</source>
+            <translation>绘图模板</translation>
         </message>
         <message>
             <source>Edit</source>
@@ -488,6 +516,10 @@
             <translation>键盘大小</translation>
         </message>
         <message>
+            <source>LaTeX Formula Recognition</source>
+            <translation>LaTeX 公式识别</translation>
+        </message>
+        <message>
             <source>Line</source>
             <translation>直线</translation>
         </message>
@@ -502,6 +534,10 @@
         <message>
             <source>Line text fill</source>
             <translation>线条文本填充</translation>
+        </message>
+        <message>
+            <source>Logical Pixel Selection</source>
+            <translation>逻辑像素选区</translation>
         </message>
         <message>
             <source>Mask color</source>
@@ -576,6 +612,10 @@
             <translation>垂直移动选区（按住并拖动）</translation>
         </message>
         <message>
+            <source>No matching templates</source>
+            <translation>没有匹配的模板</translation>
+        </message>
+        <message>
             <source>No templates yet</source>
             <translation>暂无模板</translation>
         </message>
@@ -626,6 +666,10 @@
         <message>
             <source>Pen highlight stroke width %1 (%2px)</source>
             <translation>画笔高亮描边宽度 %1 (%2px)</translation>
+        </message>
+        <message>
+            <source>Physical Pixel Selection</source>
+            <translation>物理像素选区</translation>
         </message>
         <message>
             <source>Pick color from canvas</source>
@@ -794,6 +838,10 @@
         <message>
             <source>Shape</source>
             <translation>图形</translation>
+        </message>
+        <message>
+            <source>Show QR Code</source>
+            <translation>显示二维码</translation>
         </message>
         <message>
             <source>Show cursor in recording</source>

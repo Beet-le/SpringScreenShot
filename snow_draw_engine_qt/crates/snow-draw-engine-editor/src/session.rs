@@ -11,6 +11,7 @@ use super::{
     SerialNumberToolbarState, ShapeStyle, ShapeStylePatch, StyleToolbarSource, TextDraftCommit,
     TextLayoutOverride, TextResizeMeasurementRequest, TextStyle, state::EditorState,
 };
+use crate::DrawTemplate;
 use crate::defaults::EditorStyleDefaults;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -336,9 +337,11 @@ impl EditorSession {
         &mut self,
         document: &DocumentModel,
         style: TextStyle,
+        properties: u32,
         layouts: &[TextLayoutOverride],
     ) -> Result<Option<EditorCommand>, ErrorCode> {
-        self.editor.set_text_style(document, style, layouts)
+        self.editor
+            .set_text_style(document, style, properties, layouts)
     }
 
     pub fn set_serial_number_style(
@@ -438,6 +441,22 @@ impl EditorSession {
         offset: Point<f64>,
     ) -> Result<Option<EditorCommand>, ErrorCode> {
         self.editor.duplicate_selected(document, offset)
+    }
+
+    pub fn selected_draw_template(
+        &self,
+        document: &DocumentModel,
+    ) -> Result<DrawTemplate, ErrorCode> {
+        self.editor.selected_draw_template(document)
+    }
+
+    pub fn insert_draw_template(
+        &mut self,
+        document: &DocumentModel,
+        template: &DrawTemplate,
+        center: Point<f64>,
+    ) -> Result<EditorCommand, ErrorCode> {
+        self.editor.insert_draw_template(document, template, center)
     }
 
     pub fn filter_style(&self, document: &DocumentModel) -> FilterStyle {

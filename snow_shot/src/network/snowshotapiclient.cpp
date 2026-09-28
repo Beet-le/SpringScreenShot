@@ -33,6 +33,21 @@ constexpr int kTranslationTimeoutMs = 120'000;
 constexpr qsizetype kMaximumResponseBytes = 4 * 1024 * 1024;
 constexpr qsizetype kMaximumChatRequestBytes = 2 * 1024 * 1024;
 
+QImage prepareLatexImage(const QImage& image) {
+    // Match RapidLaTeXOCR's max_width/max_height in SnowShotApi. Extra pixels
+    // would be discarded by the worker after uploading and decoding them.
+    constexpr int maximumWidth = 672;
+    constexpr int maximumHeight = 192;
+    if (image.isNull() || (image.width() <= maximumWidth && image.height() <= maximumHeight)) {
+        return image;
+    }
+    const double ratio = std::max(static_cast<double>(image.width()) / maximumWidth,
+                                  static_cast<double>(image.height()) / maximumHeight);
+    const QSize size(std::max(1, static_cast<int>(image.width() / ratio)),
+                     std::max(1, static_cast<int>(image.height() / ratio)));
+    return image.scaled(size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+}
+
 QByteArray imageConversionBody(const SnowShotImageConversionRequest& input) {
     const QByteArray webp =
         SnowShotApiClient::encodeWebp(SnowShotApiClient::prepareImage(input.image));
@@ -190,13 +205,15 @@ std::optional<QString> qwenMtLanguage(const QString& language) {
 } // namespace
 
 struct SnowShotApiClient::Request {
-    enum class Kind { TableExtract, ChatModels, Translation, ImageConversion };
+    enum class Kind { LatexExtract, TableExtract, ChatModels, Translation, ImageConversion };
     explicit Request(Kind requestKind) : kind(requestKind) {
         elapsed.start();
     }
     const Kind kind;
     QString kindName() const {
         switch (kind) {
+        case Kind::LatexExtract:
+            return QStringLiteral("latex_extract");
         case Kind::TableExtract:
             return QStringLiteral("table_extract");
         case Kind::ChatModels:
@@ -227,6 +244,7 @@ struct SnowShotApiClient::Request {
     }
     QPointer<QObject> receiver;
     Completion completion;
+    LatexCompletion latexCompletion;
     ChatModelsCompletion chatModelsCompletion;
     TranslationDelta translationDelta;
     TranslationCompletion translationCompletion;
@@ -462,6 +480,149 @@ void SnowShotApiClient::startTableUpload(RequestToken token, const QByteArray& w
     });
 }
 
+SnowShotApiClient::RequestToken SnowShotApiClient::extractLatex(const QImage& source,
+                                                                QObject* receiver,
+                                                                LatexCompletion completion) {
+    if (receiver == nullptr || !completion || m_baseUrl.isEmpty() || source.isNull()) {
+        return 0;
+    }
+
+    const RequestToken token = ++m_nextToken;
+    auto* state = new Request(Request::Kind::LatexExtract);
+    state->receiver = receiver;
+    state->latexCompletion = std::move(completion);
+    m_requests.insert(token, state);
+    state->receiverDestroyed =
+        connect(receiver, &QObject::destroyed, this, [this, token]() { cancel(token); });
+    auto* deadline = new QTimer(this);
+    deadline->setSingleShot(true);
+    state->timeout = deadline;
+    connect(deadline, &QTimer::timeout, this, [this, token]() {
+        SnowShotLatexResult result;
+        result.error = tr("LaTeX recognition request timed out");
+        finishLatex(token, std::move(result));
+    });
+    deadline->start(m_latexTimeoutMs);
+    const QPointer<SnowShotApiClient> guard(this);
+    const QElapsedTimer accepted = state->elapsed;
+    const auto prepare = m_tableImagePreparation;
+    QThreadPool::globalInstance()->start([guard, token, source, accepted, prepare]() {
+        const qint64 queueMs = accepted.elapsed();
+        QElapsedTimer encoding;
+        encoding.start();
+        const QByteArray webp = prepare ? prepare(source) : encodeWebp(prepareLatexImage(source));
+        const qint64 preparationMs = encoding.elapsed();
+        QMetaObject::invokeMethod(
+            QCoreApplication::instance(),
+            [guard, token, webp, queueMs, preparationMs, dimensions = source.size()]() {
+                if (!guard || !guard->m_requests.contains(token)) {
+                    return;
+                }
+                auto* requestState = guard->m_requests.value(token);
+                if (!requestState->receiver) {
+                    guard->cancel(token);
+                    return;
+                }
+                snow_shot::diagnostics::logEvent(
+                    QStringLiteral("snow_shot.network"), QStringLiteral("latex.image_prepared"),
+                    {{QStringLiteral("operation"), requestState->operation},
+                     {QStringLiteral("queue_ms"), queueMs},
+                     {QStringLiteral("preparation_ms"), preparationMs},
+                     {QStringLiteral("width"), dimensions.width()},
+                     {QStringLiteral("height"), dimensions.height()}});
+                guard->startLatexUpload(token, webp);
+            },
+            Qt::QueuedConnection);
+    });
+    return token;
+}
+
+void SnowShotApiClient::startLatexUpload(RequestToken token, const QByteArray& webp) {
+    auto* requestState = m_requests.value(token, nullptr);
+    if (!requestState) {
+        return;
+    }
+    const qint64 remaining = m_latexTimeoutMs - requestState->elapsed.elapsed();
+    if (webp.isEmpty() || remaining <= 0) {
+        SnowShotLatexResult result;
+        result.error = remaining <= 0 ? tr("LaTeX recognition request timed out")
+                                      : tr("LaTeX recognition failed");
+        finishLatex(token, std::move(result));
+        return;
+    }
+    auto* manager = networkAccessManager();
+    requestState->transport.start();
+    QNetworkRequest request(QUrl(m_baseUrl + QStringLiteral("/api/v1/latex/extract")));
+    request.setRawHeader("X-Request-ID",
+                         QUuid::createUuid().toString(QUuid::WithoutBraces).toUtf8());
+    request.setTransferTimeout(static_cast<int>(remaining));
+
+    auto* multipart = new QHttpMultiPart(QHttpMultiPart::FormDataType);
+    QHttpPart imagePart;
+    imagePart.setHeader(
+        QNetworkRequest::ContentDispositionHeader,
+        QVariant(QStringLiteral("form-data; name=\"image\"; filename=\"latex.webp\"")));
+    imagePart.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("image/webp"));
+    imagePart.setBody(webp);
+    multipart->append(imagePart);
+
+    QNetworkReply* reply = manager->post(request, multipart);
+    multipart->setParent(reply);
+    requestState->reply = reply;
+
+    connect(reply, &QNetworkReply::finished, this, [this, token, reply]() {
+        if (!m_requests.contains(token)) {
+            reply->deleteLater();
+            return;
+        }
+
+        SnowShotLatexResult result;
+        result.httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const QByteArray body = reply->read(kMaximumResponseBytes + 1);
+        if (body.size() > kMaximumResponseBytes) {
+            result.error = tr("LaTeX recognition response is too large");
+        } else {
+            QJsonParseError parseError{};
+            const QJsonDocument document = QJsonDocument::fromJson(body, &parseError);
+            const QJsonObject root = document.isObject() ? document.object() : QJsonObject{};
+            result.code = root.value(QStringLiteral("code")).toVariant().toString();
+
+            if (reply->error() != QNetworkReply::NoError) {
+                if (reply->error() == QNetworkReply::OperationCanceledError) {
+                    result.error = tr("LaTeX recognition request timed out");
+                } else {
+                    QString description = problemDetail(root);
+                    if (description.isEmpty() && result.httpStatus > 0) {
+                        description =
+                            reply->attribute(QNetworkRequest::HttpReasonPhraseAttribute).toString();
+                    }
+                    if (description.isEmpty()) {
+                        description = reply->errorString();
+                    }
+                    result.error = formatFailure(result.httpStatus, result.code, description);
+                }
+            } else if (!document.isObject()) {
+                result.error = tr("Invalid LaTeX recognition response");
+            } else {
+                if (result.httpStatus == 200 && root.value(QStringLiteral("data")).isObject()) {
+                    const QJsonObject data = root.value(QStringLiteral("data")).toObject();
+                    result.latex = data.value(QStringLiteral("latex")).toString();
+                    if (result.latex.trimmed().isEmpty()) {
+                        result.error = tr("LaTeX recognition returned no formula");
+                    }
+                } else {
+                    result.error = problemDetail(root);
+                    if (result.error.isEmpty()) {
+                        result.error = tr("LaTeX recognition failed");
+                    }
+                    result.error = formatFailure(result.httpStatus, result.code, result.error);
+                }
+            }
+        }
+        finishLatex(token, std::move(result));
+    });
+}
+
 const QVector<SnowShotChatModel>& SnowShotApiClient::cachedChatModels() const {
     return m_availableModels;
 }
@@ -490,16 +651,13 @@ QString SnowShotApiClient::modelFingerprint(const QString& id) const {
 void SnowShotApiClient::rebuildAvailableModels() {
     m_availableModels = m_cachedChatModels;
     for (const auto& model : m_customModels) {
-        m_availableModels.push_back({model.selectionId(), model.name, false,
-                                     QStringLiteral("default"), model.supportsVision,
-                                     SnowShotModelOrigin::Custom});
+        m_availableModels.push_back({model.selectionId(), model.name, model.supportsReasoning,
+                                     QStringLiteral("default"), model.supportsVision});
     }
 }
 
 QString SnowShotApiClient::fallbackModel(bool vision) const {
-    const auto eligible = [vision](const auto& model) {
-        return vision ? model.supportsVision : model.supportsTranslation();
-    };
+    const auto eligible = [vision](const auto& model) { return !vision || model.supportsVision; };
     for (const auto& model : m_cachedChatModels) {
         if (eligible(model) && model.translationMode == QStringLiteral("default")) {
             return model.id;
@@ -527,7 +685,8 @@ void SnowShotApiClient::setCustomModels(const snow_shot::CustomAiModels& models)
         const QString id = old.selectionId();
         const auto* current = customModel(id);
         const bool changed = current == nullptr || old.baseUrl != current->baseUrl ||
-                             old.apiKey != current->apiKey || old.model != current->model;
+                             old.apiKey != current->apiKey || old.model != current->model ||
+                             old.supportsReasoning != current->supportsReasoning;
         const bool vision = changed || (old.supportsVision && !current->supportsVision);
         if (!changed && !vision) {
             continue;
@@ -680,7 +839,7 @@ SnowShotApiClient::streamTranslation(const SnowShotTranslationRequest& input, QO
     if (custom != nullptr) {
         body.remove(QStringLiteral("temperature"));
         body.remove(QStringLiteral("max_tokens"));
-        body.remove(QStringLiteral("enable_thinking"));
+        body.insert(QStringLiteral("enable_thinking"), custom->supportsReasoning);
         body.insert(QStringLiteral("stream"), true);
     }
     const RequestToken token = ++m_nextToken;
@@ -746,13 +905,14 @@ SnowShotApiClient::RequestToken SnowShotApiClient::streamImageConversion(
         effectiveInput.model = custom->model;
     }
     QThreadPool::globalInstance()->start(
-        [guard, token, effectiveInput, isCustom = custom != nullptr]() {
+        [guard, token, effectiveInput, isCustom = custom != nullptr,
+         supportsReasoning = custom != nullptr && custom->supportsReasoning]() {
             QByteArray body = imageConversionBody(effectiveInput);
             if (isCustom && !body.isEmpty()) {
                 auto object = QJsonDocument::fromJson(body).object();
                 object.remove(QStringLiteral("temperature"));
                 object.remove(QStringLiteral("max_tokens"));
-                object.remove(QStringLiteral("enable_thinking"));
+                object.insert(QStringLiteral("enable_thinking"), supportsReasoning);
                 body = QJsonDocument(object).toJson(QJsonDocument::Compact);
             }
             QMetaObject::invokeMethod(
@@ -993,6 +1153,21 @@ void SnowShotApiClient::finish(RequestToken token, SnowShotTableResult result) {
                     result.httpStatus);
     const QPointer<QObject> receiver = request->receiver;
     Completion completion = std::move(request->completion);
+    cleanupRequest(request);
+    if (receiver && completion) {
+        completion(std::move(result));
+    }
+}
+
+void SnowShotApiClient::finishLatex(RequestToken token, SnowShotLatexResult result) {
+    Request* request = m_requests.take(token);
+    if (!request) {
+        return;
+    }
+    request->report(result.succeeded() ? QStringLiteral("succeeded") : QStringLiteral("failed"),
+                    result.httpStatus);
+    const QPointer<QObject> receiver = request->receiver;
+    LatexCompletion completion = std::move(request->latexCompletion);
     cleanupRequest(request);
     if (receiver && completion) {
         completion(std::move(result));

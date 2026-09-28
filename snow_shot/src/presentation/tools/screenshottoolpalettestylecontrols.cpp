@@ -2585,10 +2585,11 @@ QWidget* ScreenshotToolPaletteStyleControls::buildWatermarkFamily(
     m_watermarkTemplateSelect->setFocusPolicy(Qt::ClickFocus);
     m_watermarkTemplateSelect->setControlSize(adqt::widgets::AdSelect::ControlSize::Small);
     m_watermarkTemplateSelect->setVariant(adqt::widgets::AdSelect::Variant::Borderless);
-    m_watermarkTemplateSelect->setFixedSize(
-        qMax(1,
-             qRound(static_cast<qreal>(kScreenshotToolPaletteSelectWidth) * metrics.physicalScale)),
-        qMax(1, qRound(metrics.buttonSize * metrics.physicalScale)));
+    m_watermarkTemplateSelect->setFixedWidth(qMax(
+        1, qRound(static_cast<qreal>(kScreenshotToolPaletteSelectWidth) * metrics.physicalScale)));
+    auto selectTokens = m_watermarkTemplateSelect->componentTokens();
+    selectTokens.metrics.controlHeight = metrics.buttonSize;
+    m_watermarkTemplateSelect->setComponentTokens(selectTokens);
     stampScreenshotToolbarReferenceWidth(m_watermarkTemplateSelect,
                                          kScreenshotToolPaletteSelectWidth);
     setScreenshotToolPalettePlaceholderSource(m_watermarkTemplateSelect, "Template");
@@ -3716,7 +3717,7 @@ bool ScreenshotToolPaletteStyleControls::stepTextFontSize(int direction) {
         m_state.m_creationTextStyle.setFontSize(m_state.m_textStyle.textStyle().fontSize));
     m_state.m_textStyleMixed &= ~SnowCanvasTextStyleMixedFontSize;
     updateTextStyleControls();
-    notifyTextStyleChanged();
+    notifyTextStyleChanged(SnowCanvasTextStyleMixedFontSize);
     return true;
 }
 
@@ -3760,7 +3761,7 @@ bool ScreenshotToolPaletteStyleControls::handleTextStrokeWidthWheel(const QPoint
             m_state.m_textStyle.textStyle().strokeWidth));
         m_state.m_textStyleMixed &= ~SnowCanvasTextStyleMixedStrokeWidth;
         updateTextStyleControls();
-        notifyTextStyleChanged();
+        notifyTextStyleChanged(SnowCanvasTextStyleMixedStrokeWidth);
     }
     return true;
 }
@@ -3998,10 +3999,12 @@ void ScreenshotToolPaletteStyleControls::refreshToolbarMetrics(
         stampScreenshotToolbarReferenceWidth(m_watermarkTextEdit, kWatermarkTextWidth);
     }
     if (applies(m_watermarkTemplateSelect)) {
-        m_watermarkTemplateSelect->setFixedSize(
-            qMax(1, qRound(static_cast<qreal>(kScreenshotToolPaletteSelectWidth) *
-                           metrics.physicalScale)),
-            qMax(1, qRound(metrics.buttonSize * metrics.physicalScale)));
+        m_watermarkTemplateSelect->setFixedWidth(qMax(
+            1,
+            qRound(static_cast<qreal>(kScreenshotToolPaletteSelectWidth) * metrics.physicalScale)));
+        auto selectTokens = m_watermarkTemplateSelect->componentTokens();
+        selectTokens.metrics.controlHeight = metrics.buttonSize;
+        m_watermarkTemplateSelect->setComponentTokens(selectTokens);
         stampScreenshotToolbarReferenceWidth(m_watermarkTemplateSelect,
                                              kScreenshotToolPaletteSelectWidth);
     }
@@ -4052,9 +4055,9 @@ void ScreenshotToolPaletteStyleControls::notifyWatermarkPreviewChanged() const {
     }
 }
 
-void ScreenshotToolPaletteStyleControls::notifyTextStyleChanged() const {
+void ScreenshotToolPaletteStyleControls::notifyTextStyleChanged(quint32 properties) const {
     if (m_callbacks.textStyleChanged) {
-        m_callbacks.textStyleChanged(m_state.m_textStyle.textStyle());
+        m_callbacks.textStyleChanged(m_state.m_textStyle.textStyle(), properties);
     }
 }
 
@@ -4146,7 +4149,7 @@ void ScreenshotToolPaletteStyleControls::commitTextProperty(quint32 mixedFlag, A
     mirror(m_state.m_textStyle, m_state.m_creationTextStyle);
     m_state.m_textStyleMixed &= ~mixedFlag;
     updateTextStyleControls();
-    notifyTextStyleChanged();
+    notifyTextStyleChanged(mixedFlag);
 }
 
 template <typename Apply>
@@ -4433,7 +4436,7 @@ void ScreenshotToolPaletteStyleControls::cycleTextFontSize() {
             m_state.m_creationTextStyle.setFontSize(m_state.m_textStyle.textStyle().fontSize));
         m_state.m_textStyleMixed &= ~SnowCanvasTextStyleMixedFontSize;
         updateTextStyleControls();
-        notifyTextStyleChanged();
+        notifyTextStyleChanged(SnowCanvasTextStyleMixedFontSize);
     }
 }
 

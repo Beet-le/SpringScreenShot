@@ -59,12 +59,17 @@ ScreenshotToolbarWindow::ScreenshotToolbarWindow(ScreenshotToolbarCommandSink& c
         toolbarSettings.layout(snow_shot::storage::ScreenshotToolbarLayoutKind::ActionTools));
     initializePalette();
     synchronizeJumpToTranslationPageSetting();
+    setSelectionDisplayUnit(screenshotSelectionDisplayUnitFromId(
+        snow_shot::storage::ScreenshotUiSettings().selectionDisplayUnit()));
 
     auto& configuration = snow_shot::storage::ApplicationStorage::instance().configuration();
     connect(&configuration, &snow_shot::storage::ConfigurationStore::valueChanged, this,
             [this](const QString& key, const QJsonValue&) {
                 if (key == QStringLiteral("screenshot_ui/toolbar_size")) {
                     setToolbarSize(snow_shot::storage::ScreenshotUiSettings().toolbarSize());
+                } else if (key == QStringLiteral("screenshot_ui/selection_display_unit")) {
+                    setSelectionDisplayUnit(screenshotSelectionDisplayUnitFromId(
+                        snow_shot::storage::ScreenshotUiSettings().selectionDisplayUnit()));
                 } else if (key == QStringLiteral("screenshot_toolbar/layout")) {
                     setToolbarLayout(snow_shot::storage::ScreenshotToolbarSettings().layout(
                         snow_shot::storage::ScreenshotToolbarLayoutKind::DrawingTools));
@@ -85,6 +90,11 @@ void ScreenshotToolbarWindow::setActionToolsLayout(
     if (ScreenshotToolPalette* toolPalette = palette()) {
         toolPalette->setActionToolsLayout(layout);
     }
+}
+
+void ScreenshotToolbarWindow::setSelectionDisplayUnit(ScreenshotSelectionDisplayUnit unit) {
+    if (auto* toolPalette = palette())
+        toolPalette->setSelectionDisplayUnit(unit);
 }
 
 void ScreenshotToolbarWindow::setToolbarSize(const QString& size) {
@@ -110,6 +120,10 @@ void ScreenshotToolbarWindow::initializePalette() {
     if (toolPalette == nullptr || host == nullptr) {
         return;
     }
+
+    toolPalette->setDrawTemplateCallbacks(
+        [this]() { return m_commands.selectedDrawTemplatePayload(); },
+        [this](const QByteArray& payload) { m_commands.insertDrawTemplate(payload); });
 
     resetForNewCapture();
     synchronizeCaptureCursorSetting();
@@ -138,6 +152,9 @@ void ScreenshotToolbarWindow::initializePalette() {
             [this]() { m_commands.subtractScreenshotRegion(); });
     connect(toolPalette, &ScreenshotToolPalette::recaptureRequested, this,
             [this]() { m_commands.requestRecapture(); });
+    connect(
+        toolPalette, &ScreenshotToolPalette::selectionDisplayUnitChanged, this,
+        [this](ScreenshotSelectionDisplayUnit unit) { m_commands.setSelectionDisplayUnit(unit); });
     connect(toolPalette, &ScreenshotToolPalette::selectionToolbarHiddenChanged, this,
             [this](bool hidden) { m_commands.setSelectionToolbarHiddenForSession(hidden); });
     connect(host, &ScreenshotToolPaletteHost::dragStarted, this,
@@ -180,6 +197,10 @@ void ScreenshotToolbarWindow::connectToolCommands(ScreenshotToolPalette& toolPal
     connect(&toolPalette, &ScreenshotToolPalette::tableRequested, this, [this]() {
         m_commands.setTableTool();
         setActiveToolAndReposition(ScreenshotToolPalette::Tool::Table);
+    });
+    connect(&toolPalette, &ScreenshotToolPalette::latexRequested, this, [this]() {
+        m_commands.setLatexTool();
+        setActiveToolAndReposition(ScreenshotToolPalette::Tool::Latex);
     });
     connect(&toolPalette, &ScreenshotToolPalette::markdownRequested, this, [this]() {
         m_commands.setMarkdownTool();
@@ -312,8 +333,8 @@ void ScreenshotToolbarWindow::connectStyleCommands(ScreenshotToolPalette& toolPa
             }
         });
     connect(&toolPalette, &ScreenshotToolPalette::textStyleChanged, this,
-            [this](const SnowCanvasTextStyle& style) {
-                m_commands.setTextStyleFromToolbar(style);
+            [this](const SnowCanvasTextStyle& style, quint32 properties) {
+                m_commands.setTextStyleFromToolbar(style, properties);
                 if (ScreenshotToolPalette* palette = this->palette()) {
                     static_cast<void>(snow_shot::presentation::persistScreenshotCanvasToolStyles(
                         palette->creationStyleDefaults()));
@@ -470,6 +491,7 @@ void ScreenshotToolbarWindow::resetForNewCapture() {
     m_rememberedDrawingToolRestorePending = true;
     if (ScreenshotToolPalette* toolPalette = palette()) {
         toolPalette->setSelectionToolbarHidden(false);
+        toolPalette->setQrCodeState(false, true);
     }
     prepareForDisplay();
 }

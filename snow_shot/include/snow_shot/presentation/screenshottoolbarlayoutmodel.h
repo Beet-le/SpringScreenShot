@@ -65,6 +65,9 @@ enum class Icon {
     Filter,
     Eraser,
     Watermark,
+    Undo,
+    Redo,
+    Separator,
     BarcodeRecognition,
     TableRecognition,
     RecordScreen,
@@ -74,6 +77,7 @@ enum class Icon {
     ScrollingScreenshot,
     SaveAsFile,
     QuickSave,
+    Latex,
     Markdown,
     Html,
 };
@@ -145,6 +149,7 @@ struct EditorDescriptor {
     for (const Descriptor& candidate : descriptors()) {
         result.push_back(QString::fromLatin1(candidate.id));
     }
+    result.append({QStringLiteral("separator"), QStringLiteral("undo"), QStringLiteral("redo")});
     return result;
 }
 
@@ -159,6 +164,9 @@ struct EditorDescriptor {
         {"convert-to-markdown", "ScreenshotToolbarEditorSettingsWidget",
          QT_TRANSLATE_NOOP("ScreenshotToolbarEditorSettingsWidget", "Convert to Markdown"),
          Icon::Markdown},
+        {"latex-recognition", "ScreenshotToolbarEditorSettingsWidget",
+         QT_TRANSLATE_NOOP("ScreenshotToolbarEditorSettingsWidget", "LaTeX Formula Recognition"),
+         Icon::Latex},
         {"convert-to-html", "ScreenshotToolbarEditorSettingsWidget",
          QT_TRANSLATE_NOOP("ScreenshotToolbarEditorSettingsWidget", "Convert to HTML"), Icon::Html},
         {"record-screen", "ScreenshotToolbarEditorSettingsWidget",
@@ -185,6 +193,29 @@ struct EditorDescriptor {
     return value;
 }
 
+[[nodiscard]] inline const QVector<EditorDescriptor>& drawingEditorDescriptors() {
+    static const QVector<EditorDescriptor> value = [] {
+        QVector<EditorDescriptor> result;
+        result.reserve(descriptors().size() + 3);
+        for (const Descriptor& descriptor : descriptors()) {
+            result.push_back({descriptor.id, "DrawingToolbarEditorSettingsWidget", descriptor.label,
+                              descriptor.icon});
+        }
+        result.push_back(
+            {"separator", "DrawingToolbarEditorSettingsWidget",
+             QT_TRANSLATE_NOOP("DrawingToolbarEditorSettingsWidget", "Separator Component"),
+             Icon::Separator});
+        result.push_back({"undo", "DrawingToolbarEditorSettingsWidget",
+                          QT_TRANSLATE_NOOP("DrawingToolbarEditorSettingsWidget", "Undo"),
+                          Icon::Undo});
+        result.push_back({"redo", "DrawingToolbarEditorSettingsWidget",
+                          QT_TRANSLATE_NOOP("DrawingToolbarEditorSettingsWidget", "Redo"),
+                          Icon::Redo});
+        return result;
+    }();
+    return value;
+}
+
 [[nodiscard]] inline QVector<EditorDescriptor>
 editorDescriptors(storage::ScreenshotToolbarLayoutKind kind) {
     if (kind == storage::ScreenshotToolbarLayoutKind::PinnedActionTools) {
@@ -193,6 +224,7 @@ editorDescriptors(storage::ScreenshotToolbarLayoutKind kind) {
             const QString id = QString::fromLatin1(descriptor.id);
             if (id == QStringLiteral("barcode-recognition") ||
                 id == QStringLiteral("table-recognition") ||
+                id == QStringLiteral("latex-recognition") ||
                 id == QStringLiteral("convert-to-markdown") ||
                 id == QStringLiteral("convert-to-html") ||
                 id == QStringLiteral("text-recognition") ||
@@ -205,13 +237,7 @@ editorDescriptors(storage::ScreenshotToolbarLayoutKind kind) {
     if (kind == storage::ScreenshotToolbarLayoutKind::ActionTools) {
         return actionDescriptors();
     }
-    QVector<EditorDescriptor> result;
-    result.reserve(descriptors().size());
-    for (const Descriptor& descriptor : descriptors()) {
-        result.push_back({descriptor.id, "DrawingToolbarEditorSettingsWidget", descriptor.label,
-                          descriptor.icon});
-    }
-    return result;
+    return drawingEditorDescriptors();
 }
 
 [[nodiscard]] inline const EditorDescriptor* actionDescriptor(const QString& id) {
@@ -229,14 +255,16 @@ editorDescriptors(storage::ScreenshotToolbarLayoutKind kind) {
         {QStringLiteral("free-draw")}, {QStringLiteral("spotlight"), QStringLiteral("highlighter")},
         {QStringLiteral("text")},      {QStringLiteral("serial-number")},
         {QStringLiteral("filter")},    {QStringLiteral("eraser")},
-        {QStringLiteral("watermark")},
+        {QStringLiteral("watermark")}, {QStringLiteral("separator")},
+        {QStringLiteral("undo")},      {QStringLiteral("redo")},
     };
 }
 
 [[nodiscard]] inline QVector<QStringList> actionDefaultPositions() {
     return {
         {QStringLiteral("convert-to-html"), QStringLiteral("convert-to-markdown"),
-         QStringLiteral("barcode-recognition"), QStringLiteral("table-recognition")},
+         QStringLiteral("latex-recognition"), QStringLiteral("barcode-recognition"),
+         QStringLiteral("table-recognition")},
         {QStringLiteral("record-screen")},
         {QStringLiteral("pin-to-screen")},
         {QStringLiteral("text-recognition")},
@@ -251,7 +279,8 @@ defaultPositions(storage::ScreenshotToolbarLayoutKind kind) {
     if (kind == storage::ScreenshotToolbarLayoutKind::PinnedActionTools) {
         return {
             {QStringLiteral("convert-to-html"), QStringLiteral("convert-to-markdown"),
-             QStringLiteral("barcode-recognition"), QStringLiteral("table-recognition")},
+             QStringLiteral("latex-recognition"), QStringLiteral("barcode-recognition"),
+             QStringLiteral("table-recognition")},
             {QStringLiteral("text-recognition")},
             {QStringLiteral("text-translation")},
         };
@@ -280,6 +309,15 @@ normalizedLayout(const storage::ScreenshotToolbarLayout& input, const QStringLis
         QStringList position;
         for (const QString& itemId : inputPosition) {
             if (known.contains(itemId) && !positioned.contains(itemId)) {
+                if (itemId == QStringLiteral("separator")) {
+                    if (!position.isEmpty()) {
+                        result.positions.push_back(position);
+                        position.clear();
+                    }
+                    result.positions.push_back({itemId});
+                    positioned.insert(itemId);
+                    continue;
+                }
                 position.push_back(itemId);
                 positioned.insert(itemId);
             }
@@ -352,6 +390,39 @@ normalizedLayout(const storage::ScreenshotToolbarLayout& input, const QStringLis
             }
         }
     }
+    // Upgrade the previous default recognition group, preserving custom arrangements.
+    for (QStringList& position : result.positions) {
+        if (position == QStringList{QStringLiteral("convert-to-html"),
+                                    QStringLiteral("latex-recognition"),
+                                    QStringLiteral("convert-to-markdown"),
+                                    QStringLiteral("barcode-recognition"),
+                                    QStringLiteral("table-recognition")}) {
+            position.swapItemsAt(1, 2);
+        }
+    }
+    if (known.contains(QStringLiteral("latex-recognition")) &&
+        !positioned.contains(QStringLiteral("latex-recognition")) &&
+        !hidden.contains(QStringLiteral("latex-recognition"))) {
+        for (QStringList& position : result.positions) {
+            if (position.contains(QStringLiteral("latex-recognition"))) {
+                positioned.insert(QStringLiteral("latex-recognition"));
+                break;
+            }
+            const auto index = position.indexOf(QStringLiteral("convert-to-markdown"));
+            if (index >= 0) {
+                // Popup buttons reverse the saved stack: insert after Markdown to appear to its
+                // left.
+                position.insert(index + 1, QStringLiteral("latex-recognition"));
+                positioned.insert(QStringLiteral("latex-recognition"));
+                break;
+            }
+        }
+        if (!positioned.contains(QStringLiteral("latex-recognition")) &&
+            hidden.contains(QStringLiteral("convert-to-markdown"))) {
+            result.hidden.push_back(QStringLiteral("latex-recognition"));
+            hidden.insert(QStringLiteral("latex-recognition"));
+        }
+    }
     for (const QStringList& defaultPosition : defaultLayout) {
         QStringList missing;
         for (const QString& itemId : defaultPosition) {
@@ -369,7 +440,8 @@ normalizedLayout(const storage::ScreenshotToolbarLayout& input, const QStringLis
 
 [[nodiscard]] inline storage::ScreenshotToolbarLayout
 normalizedLayout(const storage::ScreenshotToolbarLayout& input) {
-    return normalizedLayout(input, defaultOrder(), defaultPositions());
+    return normalizedLayout(input, defaultOrder(storage::ScreenshotToolbarLayoutKind::DrawingTools),
+                            defaultPositions());
 }
 
 [[nodiscard]] inline storage::ScreenshotToolbarLayout
@@ -434,6 +506,12 @@ stackItemInPosition(const storage::ScreenshotToolbarLayout& input,
                     storage::ScreenshotToolbarLayoutKind kind, const QString& itemId,
                     int targetPositionIndex, int targetItemIndex) {
     storage::ScreenshotToolbarLayout result = normalizedLayout(input, kind);
+    if (kind == storage::ScreenshotToolbarLayoutKind::DrawingTools &&
+        (itemId == QStringLiteral("separator") ||
+         result.positions.value(targetPositionIndex).contains(QStringLiteral("separator")))) {
+        return moveItemToPosition(result, kind, itemId,
+                                  targetPositionIndex + (targetItemIndex > 0 ? 1 : 0));
+    }
     const detail::ItemLocation source = detail::itemLocation(result, itemId);
     if (source.positionIndex < 0 && source.hiddenIndex < 0) {
         return result;
@@ -519,10 +597,18 @@ moveItemToHidden(const storage::ScreenshotToolbarLayout& input,
         return custom::ToolEraser();
     case Icon::Watermark:
         return custom::ToolWatermark();
+    case Icon::Undo:
+        return adqt::icons::antd::outlined::Undo();
+    case Icon::Redo:
+        return adqt::icons::antd::outlined::Redo();
+    case Icon::Separator:
+        return {};
     case Icon::BarcodeRecognition:
         return custom::ScanQrcode();
     case Icon::TableRecognition:
         return custom::TableRecognition();
+    case Icon::Latex:
+        return adqt::icons::antd::outlined::Function();
     case Icon::Markdown:
         return custom::Markdown();
     case Icon::Html:
@@ -532,7 +618,7 @@ moveItemToHidden(const storage::ScreenshotToolbarLayout& input,
     case Icon::PinToScreen:
         return custom::PinToScreen();
     case Icon::TextRecognition:
-        return custom::ToolRecognizeText();
+        return custom::TextRecognition();
     case Icon::TextTranslation:
         return custom::OcrTranslate();
     case Icon::ScrollingScreenshot:

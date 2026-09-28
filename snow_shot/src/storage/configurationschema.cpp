@@ -1,4 +1,4 @@
-#include "snow_shot/presentation/globalmousetypes.h"
+#include "snow_shot/globalmouseactivationkeys.h"
 #include "snow_shot/storage/configurationschema.h"
 #include "snow_shot/customaimodelconfiguration.h"
 
@@ -7,6 +7,7 @@
 #include "snow_shot/shortcuts/shortcutbinding.h"
 
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QKeySequence>
 #include <QLocale>
@@ -21,21 +22,24 @@
 
 namespace snow_shot::storage {
 namespace {
-const QStringList kDrawingToolbarItemIds = {
+const QStringList kDrawingToolIds = {
     QStringLiteral("shape"),     QStringLiteral("arrow"),         QStringLiteral("line"),
     QStringLiteral("free-draw"), QStringLiteral("highlighter"),   QStringLiteral("spotlight"),
     QStringLiteral("text"),      QStringLiteral("serial-number"), QStringLiteral("filter"),
     QStringLiteral("eraser"),    QStringLiteral("watermark"),
 };
-const QStringList kLastDrawingToolIds = QStringList{QStringLiteral("")} + kDrawingToolbarItemIds;
+const QStringList kDrawingToolbarItemIds =
+    kDrawingToolIds +
+    QStringList{QStringLiteral("separator"), QStringLiteral("undo"), QStringLiteral("redo")};
+const QStringList kLastDrawingToolIds = QStringList{QStringLiteral("")} + kDrawingToolIds;
 
 const QStringList kActionToolbarItemIds = {
-    QStringLiteral("barcode-recognition"),  QStringLiteral("table-recognition"),
-    QStringLiteral("convert-to-markdown"),  QStringLiteral("convert-to-html"),
-    QStringLiteral("record-screen"),        QStringLiteral("pin-to-screen"),
-    QStringLiteral("text-recognition"),     QStringLiteral("text-translation"),
-    QStringLiteral("scrolling-screenshot"), QStringLiteral("quick-save"),
-    QStringLiteral("save-as-file"),
+    QStringLiteral("barcode-recognition"), QStringLiteral("table-recognition"),
+    QStringLiteral("convert-to-markdown"), QStringLiteral("latex-recognition"),
+    QStringLiteral("convert-to-html"),     QStringLiteral("record-screen"),
+    QStringLiteral("pin-to-screen"),       QStringLiteral("text-recognition"),
+    QStringLiteral("text-translation"),    QStringLiteral("scrolling-screenshot"),
+    QStringLiteral("quick-save"),          QStringLiteral("save-as-file"),
 };
 
 QJsonArray jsonArray(const QStringList& values) {
@@ -60,14 +64,16 @@ QVector<QStringList> defaultDrawingToolbarPositions() {
         {QStringLiteral("free-draw")}, {QStringLiteral("spotlight"), QStringLiteral("highlighter")},
         {QStringLiteral("text")},      {QStringLiteral("serial-number")},
         {QStringLiteral("filter")},    {QStringLiteral("eraser")},
-        {QStringLiteral("watermark")},
+        {QStringLiteral("watermark")}, {QStringLiteral("separator")},
+        {QStringLiteral("undo")},      {QStringLiteral("redo")},
     };
 }
 
 QVector<QStringList> defaultActionToolbarPositions() {
     return {
         {QStringLiteral("convert-to-html"), QStringLiteral("convert-to-markdown"),
-         QStringLiteral("barcode-recognition"), QStringLiteral("table-recognition")},
+         QStringLiteral("latex-recognition"), QStringLiteral("barcode-recognition"),
+         QStringLiteral("table-recognition")},
         {QStringLiteral("record-screen")},
         {QStringLiteral("pin-to-screen")},
         {QStringLiteral("text-recognition")},
@@ -79,13 +85,15 @@ QVector<QStringList> defaultActionToolbarPositions() {
 
 const QStringList kPinnedActionToolbarItemIds = {
     QStringLiteral("barcode-recognition"), QStringLiteral("table-recognition"),
-    QStringLiteral("convert-to-markdown"), QStringLiteral("convert-to-html"),
-    QStringLiteral("text-recognition"),    QStringLiteral("text-translation")};
+    QStringLiteral("convert-to-markdown"), QStringLiteral("latex-recognition"),
+    QStringLiteral("convert-to-html"),     QStringLiteral("text-recognition"),
+    QStringLiteral("text-translation")};
 
 QVector<QStringList> defaultPinnedActionToolbarPositions() {
     return {
         {QStringLiteral("convert-to-html"), QStringLiteral("convert-to-markdown"),
-         QStringLiteral("barcode-recognition"), QStringLiteral("table-recognition")},
+         QStringLiteral("latex-recognition"), QStringLiteral("barcode-recognition"),
+         QStringLiteral("table-recognition")},
         {QStringLiteral("text-recognition")},
         {QStringLiteral("text-translation")},
     };
@@ -126,6 +134,7 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
       QStringLiteral("real_time")}},
     {QStringLiteral("system/auto_start_at_boot"), true, ConfigurationValueKind::Boolean},
     {QStringLiteral("system/launch_as_administrator"), false, ConfigurationValueKind::Boolean},
+    {QStringLiteral("mcp/enabled"), false, ConfigurationValueKind::Boolean},
 #ifdef Q_OS_MACOS
     {QStringLiteral("updates/mode"),
      QStringLiteral("check"),
@@ -155,6 +164,11 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      {QStringLiteral("extra_small"), QStringLiteral("small"), QStringLiteral("medium"),
       QStringLiteral("small_v5"), QStringLiteral("medium_v5"), QStringLiteral("small_v4"),
       QStringLiteral("medium_v4")}},
+    {QStringLiteral("text_recognition/detector_resize_policy"),
+     QStringLiteral("max"),
+     ConfigurationValueKind::String,
+     std::nullopt,
+     {QStringLiteral("max"), QStringLiteral("min")}},
     {QStringLiteral("screenshot_translation/source_language"),
      QStringLiteral("auto"),
      ConfigurationValueKind::String,
@@ -444,6 +458,7 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
     {QStringLiteral("drawing/spotlight_style"), QJsonObject(), ConfigurationValueKind::Structured},
     {QStringLiteral("drawing/watermark_templates"), QJsonArray(),
      ConfigurationValueKind::Structured},
+    {QStringLiteral("drawing/draw_templates"), QJsonArray(), ConfigurationValueKind::Structured},
     {QStringLiteral("drawing_shortcuts/select"),
      QJsonArray{QStringLiteral("V")},
      ConfigurationValueKind::StringList,
@@ -572,6 +587,12 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      2},
     {QStringLiteral("screenshot_shortcuts/recapture"),
      QJsonArray{QStringLiteral("Alt+R")},
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {},
+     2},
+    {QStringLiteral("screenshot_shortcuts/toggle_coordinate_mode"),
+     QJsonArray{QStringLiteral("Ctrl+P")},
      ConfigurationValueKind::StringList,
      std::nullopt,
      {},
@@ -816,12 +837,26 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      {QStringLiteral("small"), QStringLiteral("normal")}},
     {QStringLiteral("screenshot_ui/selection_transition_animation"), true,
      ConfigurationValueKind::Boolean},
+    {QStringLiteral("screenshot_ui/selection_display_unit"),
+#ifdef Q_OS_MACOS
+     QStringLiteral("logical_pixels"),
+#else
+     QStringLiteral("physical_pixels"),
+#endif
+     ConfigurationValueKind::String,
+     std::nullopt,
+     {QStringLiteral("physical_pixels"), QStringLiteral("logical_pixels")}},
     {QStringLiteral("screenshot_ui/color_picker_display_mode"),
      QStringLiteral("hide_outside_selection"),
      ConfigurationValueKind::String,
      std::nullopt,
      {QStringLiteral("hide_outside_selection"), QStringLiteral("always_show"),
       QStringLiteral("always_hide")}},
+    {QStringLiteral("screenshot_ui/color_picker_coordinate_mode"),
+     QStringLiteral("global"),
+     ConfigurationValueKind::String,
+     std::nullopt,
+     {QStringLiteral("global"), QStringLiteral("relative")}},
     {QStringLiteral("screenshot_ui/color_picker_format"),
      QStringLiteral("hex"),
      ConfigurationValueKind::String,
@@ -951,6 +986,7 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      ConfigurationValueKind::Boolean},
     {QStringLiteral("screenshot/shutter_sound_notification"), true,
      ConfigurationValueKind::Boolean},
+    {QStringLiteral("screenshot/auto_recognize_qr_code"), true, ConfigurationValueKind::Boolean},
     {QStringLiteral("screenshot/confirm_before_exiting_via_shortcut"), false,
      ConfigurationValueKind::Boolean},
     {QStringLiteral("screenshot/restore_original_screen_colors"), true,
@@ -1085,11 +1121,13 @@ QJsonArray shortcutDefaults(const QJsonValue& value) {
         snow_shot::shortcuts::shortcutBindingsFromJson(value, true));
 }
 
+#ifdef Q_OS_MACOS
 QJsonArray macGlobalShortcutDefault(const QString& portableText, quint32 virtualKey) {
     snow_shot::shortcuts::ShortcutBinding binding{portableText};
     binding.physicalKeys.insert(snow_shot::shortcuts::ShortcutPlatform::MacOS, virtualKey);
     return snow_shot::shortcuts::shortcutBindingsToJson({binding});
 }
+#endif
 
 QVector<ConfigurationSchemaEntry> buildEntries() {
     QVector<ConfigurationSchemaEntry> result = kRawEntries;
@@ -1350,6 +1388,37 @@ ConfigurationNormalization normalizeWatermarkTemplates(const QJsonValue& value) 
     return {result, true, changed};
 }
 
+ConfigurationNormalization normalizeDrawTemplates(const QJsonValue& value) {
+    if (!value.isArray()) {
+        return {};
+    }
+    QJsonArray result;
+    bool changed = false;
+    for (const QJsonValue& item : value.toArray()) {
+        const QJsonObject object = item.toObject();
+        const QString name = object.value(QStringLiteral("name")).toString().trimmed();
+        const QString encoded = object.value(QStringLiteral("payload")).toString();
+        const QByteArray bytes = QByteArray::fromBase64(encoded.toLatin1());
+        QJsonParseError error;
+        const QJsonDocument document = QJsonDocument::fromJson(bytes, &error);
+        const QJsonObject payload = document.object();
+        if (!item.isObject() || name.isEmpty() || bytes.isEmpty() ||
+            bytes.size() > 16 * 1024 * 1024 || QString::fromLatin1(bytes.toBase64()) != encoded ||
+            error.error != QJsonParseError::NoError ||
+            payload.value(QStringLiteral("schemaVersion")).toInt(-1) != 1 ||
+            payload.value(QStringLiteral("elements")).toArray().isEmpty() ||
+            payload.value(QStringLiteral("selectedIds")).toArray().isEmpty()) {
+            changed = true;
+            continue;
+        }
+        const QJsonObject normalized{{QStringLiteral("name"), name},
+                                     {QStringLiteral("payload"), encoded}};
+        result.push_back(normalized);
+        changed = changed || normalized != object;
+    }
+    return {result, true, changed};
+}
+
 bool isRgbaColorKey(const QString& key) {
     return key == QStringLiteral("interface/theme_primary_color") ||
            key == QStringLiteral("screenshot_ui/selection_border_color") ||
@@ -1434,6 +1503,15 @@ ConfigurationNormalization normalizeToolbarLayout(const QJsonValue& value,
         QStringList position;
         for (const QString& id : ids) {
             if (known.contains(id) && !positioned.contains(id) && !hiddenSet.contains(id)) {
+                if (id == QStringLiteral("separator")) {
+                    if (!position.isEmpty()) {
+                        positions.push_back(position);
+                        position.clear();
+                    }
+                    positions.push_back({id});
+                    positioned.insert(id);
+                    continue;
+                }
                 position.push_back(id);
                 positioned.insert(id);
             }
@@ -1532,6 +1610,39 @@ ConfigurationNormalization normalizeToolbarLayout(const QJsonValue& value,
             }
         }
     }
+    // Upgrade the previous default recognition group, preserving custom arrangements.
+    for (QStringList& position : positions) {
+        if (position == QStringList{QStringLiteral("convert-to-html"),
+                                    QStringLiteral("latex-recognition"),
+                                    QStringLiteral("convert-to-markdown"),
+                                    QStringLiteral("barcode-recognition"),
+                                    QStringLiteral("table-recognition")}) {
+            position.swapItemsAt(1, 2);
+        }
+    }
+    if (known.contains(QStringLiteral("latex-recognition")) &&
+        !positioned.contains(QStringLiteral("latex-recognition")) &&
+        !hiddenSet.contains(QStringLiteral("latex-recognition"))) {
+        for (QStringList& position : positions) {
+            if (position.contains(QStringLiteral("latex-recognition"))) {
+                positioned.insert(QStringLiteral("latex-recognition"));
+                break;
+            }
+            const auto index = position.indexOf(QStringLiteral("convert-to-markdown"));
+            if (index >= 0) {
+                // Popup buttons reverse the saved stack: insert after Markdown to appear to its
+                // left.
+                position.insert(index + 1, QStringLiteral("latex-recognition"));
+                positioned.insert(QStringLiteral("latex-recognition"));
+                break;
+            }
+        }
+        if (!positioned.contains(QStringLiteral("latex-recognition")) &&
+            hiddenSet.contains(QStringLiteral("convert-to-markdown"))) {
+            hidden.push_back(QStringLiteral("latex-recognition"));
+            hiddenSet.insert(QStringLiteral("latex-recognition"));
+        }
+    }
     for (const QStringList& defaultPosition : defaultPositions) {
         QStringList missing;
         for (const QString& id : defaultPosition) {
@@ -1579,7 +1690,7 @@ ConfigurationNormalization normalizeGlobalMouseCombination(const QJsonValue& val
         }
     }
     const QString mouseButton = object.value(QStringLiteral("mouse_button")).toString().trimmed();
-    static const QStringList activationKeys = presentation::globalMouseActivationKeys();
+    static const QStringList activationKeys = globalMouseActivationKeys();
     static const QSet<QString> mouseButtons{
         QStringLiteral("left_drag"), QStringLiteral("right_drag"), QStringLiteral("wheel_drag"),
         QStringLiteral("side_button_1_drag"), QStringLiteral("side_button_2_drag")};
@@ -1708,6 +1819,9 @@ ConfigurationNormalization ConfigurationSchema::normalize(const QString& key,
     }
     if (key == QStringLiteral("drawing/watermark_templates")) {
         return normalizeWatermarkTemplates(value);
+    }
+    if (key == QStringLiteral("drawing/draw_templates")) {
+        return normalizeDrawTemplates(value);
     }
     if (key == QStringLiteral("screenshot/save_path_shortcuts")) {
         if (!value.isArray()) {

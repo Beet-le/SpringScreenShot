@@ -8,6 +8,7 @@ mod creation_workflow;
 pub use creation_workflow::SerialNumberLabelLayoutRequest;
 mod defaults;
 mod document_ops;
+mod draw_template;
 mod edit_workflow;
 mod eraser_workflow;
 mod free_draw_workflow;
@@ -49,13 +50,15 @@ pub use api::{
     SHAPE_STYLE_PROPERTY_START_ARROWHEAD, SHAPE_STYLE_PROPERTY_STROKE,
     SHAPE_STYLE_PROPERTY_STROKE_STYLE, SHAPE_STYLE_PROPERTY_STROKE_WIDTH, SelectionArrowState,
     SelectionBounds, SelectionRectState, SerialNumberToolbarState, ShapeKind, ShapeStyle,
-    ShapeStylePatch, StyleToolbarSource, StyleToolbarState, TEXT_STYLE_MIXED_COLOR,
-    TEXT_STYLE_MIXED_CORNER_RADII, TEXT_STYLE_MIXED_FILL, TEXT_STYLE_MIXED_FILL_STYLE,
-    TEXT_STYLE_MIXED_FONT_FAMILY, TEXT_STYLE_MIXED_FONT_SIZE, TEXT_STYLE_MIXED_HORIZONTAL_ALIGN,
-    TEXT_STYLE_MIXED_OPACITY, TEXT_STYLE_MIXED_STROKE, TEXT_STYLE_MIXED_STROKE_WIDTH,
-    TEXT_STYLE_MIXED_VERTICAL_ALIGN, selection_box_visible_for_members,
+    ShapeStylePatch, StyleToolbarSource, StyleToolbarState, TEXT_STYLE_ALL_PROPERTIES,
+    TEXT_STYLE_MIXED_COLOR, TEXT_STYLE_MIXED_CORNER_RADII, TEXT_STYLE_MIXED_FILL,
+    TEXT_STYLE_MIXED_FILL_STYLE, TEXT_STYLE_MIXED_FONT_FAMILY, TEXT_STYLE_MIXED_FONT_SIZE,
+    TEXT_STYLE_MIXED_HORIZONTAL_ALIGN, TEXT_STYLE_MIXED_OPACITY, TEXT_STYLE_MIXED_STROKE,
+    TEXT_STYLE_MIXED_STROKE_WIDTH, TEXT_STYLE_MIXED_VERTICAL_ALIGN,
+    selection_box_visible_for_members,
 };
 pub use defaults::{EditorStyleDefaults, editor_style_defaults};
+pub use draw_template::DrawTemplate;
 pub use session::{
     EditorSession, EditorSessionSnapshot, PersistedEditorSession, validate_editor_style_defaults,
 };

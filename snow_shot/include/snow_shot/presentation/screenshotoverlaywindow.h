@@ -41,6 +41,10 @@ class ScreenshotOverlayWindow final : public QWidget {
     ~ScreenshotOverlayWindow() override;
 
     SnowCanvasWidget* canvas() const;
+    // Display coordinates describe the canvas, independently of native frame padding.
+    void setCaptureGeometry(const QRect& displayGeometry);
+    [[nodiscard]] QRect captureGeometry() const;
+    [[nodiscard]] QPoint canvasLocalPosition(const QPoint& globalPosition) const;
     void setScreenshotImage(QImage image, const QRectF& canvasRect);
     void setScreenshotImageSource(ScreenshotImageSource source);
     void setScreenshotMaskVisible(bool visible);
@@ -88,6 +92,7 @@ class ScreenshotOverlayWindow final : public QWidget {
     void reanchorScrollingThumbnail(const QRect& localSelection);
     void clearScrollingThumbnail();
     [[nodiscard]] ScreenshotScrollingTrimRange scrollingThumbnailTrim() const;
+    void setScrollingTrimModel(std::shared_ptr<ScreenshotScrollingTrimRange> trim);
 #if defined(SNOW_SHOT_BENCH_INTERNALS)
     [[nodiscard]] quint64 windowMaskApplicationCountForTesting() const;
     [[nodiscard]] quint64 transparentClearCountForTesting() const;
@@ -120,6 +125,7 @@ class ScreenshotOverlayWindow final : public QWidget {
     void updateWindowMask();
 
     ScreenshotOverlayEventSink& m_eventSink;
+    QMargins m_captureFrameMargins;
     snow_shot::presentation::MouseReleaseActionController m_mouseReleaseAction;
     SnowCanvasWidget* m_canvas = nullptr;
     ScreenshotRegionTypeControl* m_regionTypeControl = nullptr;

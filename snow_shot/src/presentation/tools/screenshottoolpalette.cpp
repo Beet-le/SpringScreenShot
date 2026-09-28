@@ -1,3 +1,4 @@
+#include "snow_shot/shortcuts/shortcutbinding.h"
 #include "snow_shot/presentation/screenshottoolpalette.h"
 #include "snow_shot/presentation/shortcutdisplaytext.h"
 
@@ -31,7 +32,12 @@
 #include "widgets/form.h"
 #include "widgets/modal.h"
 #include "widgets/input_number.h"
+#include "widgets/input_line_edit.h"
+#include "widgets/alert.h"
+#include "theme/theme_manager.h"
 
+#include <QAbstractItemDelegate>
+#include <QAbstractButton>
 #include <QColor>
 #include <QEvent>
 #include <QFrame>
@@ -39,6 +45,7 @@
 #include <QBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QListView>
 #include <QLayout>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -49,6 +56,8 @@
 #include <QSpacerItem>
 #include <QStandardItem>
 #include <QStandardItemModel>
+#include <QStyle>
+#include <QStyleOptionViewItem>
 #include <QSet>
 #include <QStringList>
 #include <QVBoxLayout>
@@ -262,6 +271,7 @@ bool toolUsesActionToolbar(ScreenshotToolPalette::Tool tool, bool showMoveOption
            tool == ScreenshotToolPalette::Tool::Ocr ||
            tool == ScreenshotToolPalette::Tool::TextTranslation ||
            tool == ScreenshotToolPalette::Tool::Qr || tool == ScreenshotToolPalette::Tool::Table ||
+           tool == ScreenshotToolPalette::Tool::Latex ||
            tool == ScreenshotToolPalette::Tool::Markdown ||
            tool == ScreenshotToolPalette::Tool::Html ||
            tool == ScreenshotToolPalette::Tool::ScrollingScreenshot;
@@ -281,6 +291,7 @@ actionFamilyForTool(ScreenshotToolPalette::Tool tool) {
     case ScreenshotToolPalette::Tool::TextTranslation:
         return ScreenshotToolPalette::ActionFamily::TextRecognition;
     case ScreenshotToolPalette::Tool::Table:
+    case ScreenshotToolPalette::Tool::Latex:
     case ScreenshotToolPalette::Tool::Qr:
         return ScreenshotToolPalette::ActionFamily::TableRecognition;
     case ScreenshotToolPalette::Tool::ScrollingScreenshot:
@@ -312,6 +323,7 @@ bool toolUsesStandardStyleToolbar(ScreenshotToolPalette::Tool tool) {
     case ScreenshotToolPalette::Tool::Ocr:
     case ScreenshotToolPalette::Tool::TextTranslation:
     case ScreenshotToolPalette::Tool::Table:
+    case ScreenshotToolPalette::Tool::Latex:
     case ScreenshotToolPalette::Tool::Qr:
     case ScreenshotToolPalette::Tool::ScrollingScreenshot:
     case ScreenshotToolPalette::Tool::Markdown:
@@ -396,6 +408,8 @@ QString actionToolShortcutId(const QString& itemId) {
 }
 
 std::optional<ScreenshotToolPalette::Tool> actionTool(const QString& itemId) {
+    if (itemId == QStringLiteral("latex-recognition"))
+        return ScreenshotToolPalette::Tool::Latex;
     if (itemId == QStringLiteral("convert-to-markdown")) {
         return ScreenshotToolPalette::Tool::Markdown;
     }
@@ -422,6 +436,8 @@ std::optional<ScreenshotToolPalette::Tool> actionTool(const QString& itemId) {
 
 QString actionToolItemId(ScreenshotToolPalette::Tool tool) {
     switch (tool) {
+    case ScreenshotToolPalette::Tool::Latex:
+        return QStringLiteral("latex-recognition");
     case ScreenshotToolPalette::Tool::Markdown:
         return QStringLiteral("convert-to-markdown");
     case ScreenshotToolPalette::Tool::Html:
@@ -706,6 +722,116 @@ initialActionToolsLayout(const ScreenshotToolPalette::Options& options) {
         options.actionToolsLayoutKind);
 }
 
+int drawTemplateIndex(const QString& key) {
+    const QString prefix = QStringLiteral("draw-template:");
+    if (!key.startsWith(prefix)) {
+        return -1;
+    }
+    bool ok = false;
+    const int index = key.sliced(prefix.size()).toInt(&ok);
+    return ok ? index : -1;
+}
+
+class DrawTemplateOptionActionDelegate final : public QAbstractItemDelegate {
+  public:
+    DrawTemplateOptionActionDelegate(adqt::widgets::AdSelect* select, QListView* view,
+                                     QAbstractItemDelegate* baseDelegate,
+                                     std::function<void(int)> deleteRequested)
+        : QAbstractItemDelegate(select), m_view(view), m_baseDelegate(baseDelegate),
+          m_deleteRequested(std::move(deleteRequested)) {
+        if (m_view != nullptr && m_view->viewport() != nullptr) {
+            m_view->viewport()->installEventFilter(this);
+        }
+    }
+
+    QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const override {
+        return m_baseDelegate != nullptr ? m_baseDelegate->sizeHint(option, index) : QSize();
+    }
+
+    void paint(QPainter* painter, const QStyleOptionViewItem& option,
+               const QModelIndex& index) const override {
+        if (m_baseDelegate != nullptr) {
+            m_baseDelegate->paint(painter, option, index);
+        }
+        if (painter == nullptr || m_view == nullptr ||
+            (option.state & QStyle::State_MouseOver) == 0 ||
+            drawTemplateIndex(index.data(Qt::UserRole).toString()) < 0) {
+            return;
+        }
+        const auto theme = adqt::theme::ThemeManager::instance().resolveTheme(m_view);
+        const QRect action(option.rect.right() - 31, option.rect.top(), 32, option.rect.height());
+        const bool hovered = m_hovered == index.data(Qt::UserRole).toString();
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing, true);
+        painter->fillRect(action.adjusted(-4, 0, 0, 0), theme.colorBgElevated);
+        painter->fillRect(action.adjusted(-4, 0, 0, 0), theme.colorFillTertiary);
+        if (hovered) {
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(theme.colorErrorBgHover);
+            painter->drawRoundedRect(action.adjusted(-4, 2, -2, -2), 4, 4);
+        }
+        const auto colors =
+            adqt::icons::IconColors::primary(hovered ? theme.colorErrorHover : theme.colorError);
+        const QPixmap icon = adqt::icons::renderIconPixmap(
+            outlined_icons::IconDelete(colors), {QSize(16, 16), m_view->devicePixelRatioF()});
+        painter->drawPixmap(action.center() - QPoint(8, 8), icon);
+        painter->restore();
+    }
+
+  protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (m_view == nullptr || watched != m_view->viewport() || event == nullptr) {
+            return QAbstractItemDelegate::eventFilter(watched, event);
+        }
+        if (event->type() == QEvent::Leave) {
+            m_hovered.clear();
+            m_pressed.clear();
+            m_view->viewport()->update();
+            return false;
+        }
+        if (event->type() != QEvent::MouseMove && event->type() != QEvent::MouseButtonPress &&
+            event->type() != QEvent::MouseButtonRelease &&
+            event->type() != QEvent::MouseButtonDblClick) {
+            return false;
+        }
+        auto* mouse = static_cast<QMouseEvent*>(event);
+        const QModelIndex index = m_view->indexAt(mouse->position().toPoint());
+        const QString key = index.data(Qt::UserRole).toString();
+        const QRect action(m_view->visualRect(index).right() - 31, m_view->visualRect(index).top(),
+                           32, m_view->visualRect(index).height());
+        const bool overAction = index.isValid() && drawTemplateIndex(key) >= 0 &&
+                                action.contains(mouse->position().toPoint());
+        const QString nextHovered = overAction ? key : QString();
+        if (m_hovered != nextHovered) {
+            m_hovered = nextHovered;
+            m_view->viewport()->update();
+        }
+        if (event->type() == QEvent::MouseMove || mouse->button() != Qt::LeftButton) {
+            return false;
+        }
+        if (event->type() == QEvent::MouseButtonPress ||
+            event->type() == QEvent::MouseButtonDblClick) {
+            m_pressed = overAction ? key : QString();
+            return overAction;
+        }
+        if (event->type() == QEvent::MouseButtonRelease && !m_pressed.isEmpty()) {
+            const QString pressed = std::exchange(m_pressed, {});
+            if (overAction && key == pressed && m_deleteRequested) {
+                m_deleteRequested(drawTemplateIndex(key));
+            }
+            return true;
+        }
+        return false;
+    }
+
+  private:
+    QPointer<QListView> m_view;
+    QPointer<QAbstractItemDelegate> m_baseDelegate;
+    std::function<void(int)> m_deleteRequested;
+    QString m_hovered;
+    QString m_pressed;
+};
+
 } // namespace
 
 ScreenshotToolPalette::ScreenshotToolPalette(const Options& options, QWidget* parent)
@@ -736,7 +862,9 @@ ScreenshotToolPalette::ScreenshotToolPalette(const Options& options, QWidget* pa
                        SnowCanvasShapeKind kind) {
                     emit shapeStyleChanged(style, properties, kind);
                 },
-                [this](const SnowCanvasTextStyle& style) { emit textStyleChanged(style); },
+                [this](const SnowCanvasTextStyle& style, quint32 properties) {
+                    emit textStyleChanged(style, properties);
+                },
                 [this]() { emit textStylePopupInteractionBegan(); },
                 [this]() { emit textStylePopupInteractionEnded(); },
                 [this](const SnowCanvasSerialNumberStyle& style) {
@@ -1189,7 +1317,7 @@ bool ScreenshotToolPalette::setSecondaryToolbarVisibility(bool actionToolbarVisi
 
     const bool ocrVisible = m_activeTool == Tool::Ocr || m_activeTool == Tool::TextTranslation;
     const bool tableVisible = m_activeTool == Tool::Table;
-    const bool qrVisible = m_activeTool == Tool::Qr;
+    const bool qrVisible = m_activeTool == Tool::Qr || m_activeTool == Tool::Latex;
     const bool conversionVisible = m_activeTool == Tool::Markdown || m_activeTool == Tool::Html;
     const bool originalVisible = ocrVisible || tableVisible || qrVisible || conversionVisible;
     const bool scrollingVisible = m_activeTool == Tool::ScrollingScreenshot;
@@ -1307,8 +1435,12 @@ void ScreenshotToolPalette::updateSelectionActionAvailability(bool hasSelection,
     m_selectedElementCount = selectedElementCount;
     for (QWidget* control : std::as_const(m_selectionActionControls)) {
         if (control != nullptr) {
-            control->setEnabled(control == m_resetCanvasButton || hasSelection);
+            control->setEnabled(control == m_resetCanvasButton || control == m_drawTemplateSelect ||
+                                hasSelection);
         }
+    }
+    if (m_drawTemplateAddButton != nullptr) {
+        m_drawTemplateAddButton->setEnabled(hasSelection);
     }
     const bool canAlign = hasSelection && selectedElementCount >= 2;
     for (QWidget* control : std::as_const(m_selectionAlignControls)) {
@@ -1602,6 +1734,7 @@ void ScreenshotToolPalette::setActiveTool(Tool tool) {
     case Tool::TextTranslation:
         activeButton = actionToolEntryButton(QStringLiteral("text-translation"));
         break;
+    case Tool::Latex:
     case Tool::Markdown:
     case Tool::Html:
         activeButton = actionToolEntryButton(actionToolItemId(tool));
@@ -1684,7 +1817,7 @@ void ScreenshotToolPalette::selectDynamicEntryTool(Tool tool) {
         selectDrawingToolGroupEntry(tool);
     } else if (tool == Tool::Table || tool == Tool::Qr) {
         setTableQrEntryTool(tool);
-    } else if (tool == Tool::Markdown || tool == Tool::Html) {
+    } else if (tool == Tool::Latex || tool == Tool::Markdown || tool == Tool::Html) {
         selectActionToolGroupEntry(actionToolItemId(tool));
     } else if (tool == Tool::Ocr) {
         selectActionToolGroupEntry(QStringLiteral("text-recognition"));
@@ -2110,6 +2243,16 @@ bool ScreenshotToolPalette::captureCursorEnabled() const {
     return m_captureCursorEnabled;
 }
 
+void ScreenshotToolPalette::setSelectionDisplayUnit(ScreenshotSelectionDisplayUnit unit) {
+    if (m_selectionDisplayUnit == unit)
+        return;
+    m_selectionDisplayUnit = unit;
+    if (auto* group = m_selectionDisplayUnitGroup.data()) {
+        const QSignalBlocker blocker(group);
+        group->setCheckedId(int(unit));
+    }
+}
+
 void ScreenshotToolPalette::setSelectionToolbarHidden(bool hidden) {
     m_selectionToolbarHidden = hidden;
     setScreenshotToolPaletteButtonActive(m_hideSelectionToolbarButton, hidden);
@@ -2121,11 +2264,28 @@ bool ScreenshotToolPalette::selectionToolbarHidden() const {
 
 void ScreenshotToolPalette::setRecaptureBusy(bool busy) {
     m_recaptureBusy = busy;
+    setQrCodeState(m_qrCodeAvailable, m_qrCodeVisible, m_qrCodeError);
     for (auto* button : {m_addRegionButton, m_subtractRegionButton})
         if (button)
             button->setEnabled(!busy);
     if (m_recaptureButton != nullptr) {
         m_recaptureButton->setEnabled(!busy);
+    }
+}
+
+void ScreenshotToolPalette::setQrCodeState(bool available, bool visible, const QString& error) {
+    m_qrCodeAvailable = available;
+    m_qrCodeVisible = visible;
+    m_qrCodeError = error;
+    if (m_showQrCodeButton) {
+        m_showQrCodeButton->setEnabled(available && !m_recaptureBusy);
+        m_showQrCodeButton->setCheckable(true);
+        m_showQrCodeButton->setCheckedUsesActiveStyle(false);
+        const QSignalBlocker blocker(m_showQrCodeButton);
+        m_showQrCodeButton->setChecked(available && visible);
+        setScreenshotToolPaletteButtonActive(m_showQrCodeButton, available && visible);
+        m_showQrCodeButton->setAccessibleName(tr("Show QR Code"));
+        m_showQrCodeButton->setToolTip(error.isEmpty() ? tr("Show QR Code") : error);
     }
 }
 
@@ -2581,6 +2741,13 @@ void ScreenshotToolPalette::setWatermarkTemplateModalOwnerWindow(QWidget* owner)
     m_watermarkTemplateModalOwnerWindow = owner;
 }
 
+void ScreenshotToolPalette::setDrawTemplateCallbacks(
+    std::function<QByteArray()> selectedPayload,
+    std::function<void(const QByteArray&)> insertPayload) {
+    m_selectedDrawTemplatePayload = std::move(selectedPayload);
+    m_insertDrawTemplatePayload = std::move(insertPayload);
+}
+
 void ScreenshotToolPalette::setSpotlightConfig(const SnowCanvasSpotlightConfig& config) {
     m_styleControls->styleState().spotlightConfig = config;
     m_styleControls->updateSpotlightColorControls(config.color);
@@ -2942,7 +3109,8 @@ void ScreenshotToolPalette::applyScaledToolbarMetrics() {
                 configureScreenshotToolPaletteStyleButton(button, tooltip.constData(), metrics);
             }
         }
-        for (adqt::widgets::AdSelect* select : {m_textFormattingSelect, m_textPunctuationSelect}) {
+        for (adqt::widgets::AdSelect* select :
+             {m_textFormattingSelect, m_textPunctuationSelect, m_drawTemplateSelect}) {
             ScreenshotToolPaletteSelectEditor editor{select, TEXT_TRANSFORM_SELECT_WIDTH};
             configureScreenshotToolPaletteSelectEditor(editor, metrics);
         }
@@ -2957,6 +3125,11 @@ void ScreenshotToolPalette::applyScaledToolbarMetrics() {
             configureScreenshotToolPaletteStyleRadioButtonGroup(regionTypes, metrics, true);
             const QSignalBlocker blocker(regionTypes);
             regionTypes->setCheckedId(int(m_screenshotRegionType));
+        }
+        if (auto* units = m_selectionDisplayUnitGroup.data()) {
+            configureScreenshotToolPaletteStyleRadioButtonGroup(units, metrics, true);
+            const QSignalBlocker blocker(units);
+            units->setCheckedId(int(m_selectionDisplayUnit));
         }
         if (m_scrollingRecognitionControls != nullptr &&
             m_scrollingRecognitionControls->layout() != nullptr) {
@@ -3509,7 +3682,7 @@ bool ScreenshotToolPalette::eventFilter(QObject* watched, QEvent* event) {
     }
     if (m_options.recordingDrawingMode && event != nullptr && event->type() == QEvent::KeyPress) {
         auto* key = static_cast<QKeyEvent*>(event);
-        if (key->key() == Qt::Key_Escape && !key->isAutoRepeat()) {
+        if (snow_shot::shortcuts::commandKey(*key) == Qt::Key_Escape && !key->isAutoRepeat()) {
             bool dismissedTransient = false;
             if (m_recordOutputFormatSelect != nullptr &&
                 m_recordOutputFormatSelect->popupVisible()) {
@@ -3564,8 +3737,9 @@ bool ScreenshotToolPalette::eventFilter(QObject* watched, QEvent* event) {
             }
         } else if (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease) {
             const auto* key = static_cast<QKeyEvent*>(event);
-            if (key->key() == Qt::Key_Space || key->key() == Qt::Key_Return ||
-                key->key() == Qt::Key_Enter) {
+            if (snow_shot::shortcuts::commandKey(*key) == Qt::Key_Space ||
+                snow_shot::shortcuts::commandKey(*key) == Qt::Key_Return ||
+                snow_shot::shortcuts::commandKey(*key) == Qt::Key_Enter) {
                 if (!key->isAutoRepeat()) {
                     const bool pressed = event->type() == QEvent::KeyPress;
                     const bool activate = !pressed && watchedButton->isDown();
@@ -3594,6 +3768,7 @@ void ScreenshotToolPalette::changeEvent(QEvent* event) {
 
 void ScreenshotToolPalette::retranslateUi() {
     retranslateScreenshotToolPalette(this);
+    retranslateDrawTemplateUi();
     if (m_styleControls != nullptr) {
         m_styleControls->retranslateWatermarkTemplateUi();
     }
@@ -3615,6 +3790,7 @@ void ScreenshotToolPalette::retranslateUi() {
     if (m_captureCursorButton != nullptr) {
         configureScreenshotToolPaletteTooltip(m_captureCursorButton, "Capture cursor");
     }
+    setQrCodeState(m_qrCodeAvailable, m_qrCodeVisible, m_qrCodeError);
 }
 
 void ScreenshotToolPalette::refreshShortcutTooltips() {
@@ -3790,6 +3966,16 @@ adqt::widgets::AdButton* ScreenshotToolPalette::drawingToolButton(const QString&
     return nullptr;
 }
 
+adqt::widgets::AdButton* ScreenshotToolPalette::drawingItemButton(const QString& itemId) const {
+    if (itemId == QStringLiteral("undo")) {
+        return m_undoButton;
+    }
+    if (itemId == QStringLiteral("redo")) {
+        return m_redoButton;
+    }
+    return drawingToolButton(itemId);
+}
+
 adqt::widgets::AdButton* ScreenshotToolPalette::drawingToolEntryButton(Tool tool) const {
     const QString itemId = drawingToolItemId(tool);
     for (const DrawingToolGroup& group : m_drawingToolGroups) {
@@ -3889,6 +4075,9 @@ void ScreenshotToolPalette::activateDrawingTool(Tool tool) {
         break;
     case Tool::Qr:
         emit qrRequested();
+        break;
+    case Tool::Latex:
+        emit latexRequested();
         break;
     case Tool::Markdown:
         emit markdownRequested();
@@ -4028,6 +4217,7 @@ bool ScreenshotToolPalette::activateToolFromToolbar(Tool tool, bool toggleVisibl
     case Tool::TextTranslation:
         requestedButton = actionToolEntryButton(QStringLiteral("text-translation"));
         break;
+    case Tool::Latex:
     case Tool::Markdown:
     case Tool::Html:
         requestedButton = actionToolEntryButton(actionToolItemId(tool));
@@ -4061,15 +4251,56 @@ bool ScreenshotToolPalette::activateToolFromToolbar(Tool tool, bool toggleVisibl
     return true;
 }
 
+bool ScreenshotToolPalette::historyActionEnabled(const QString& itemId) const {
+    if (!m_options.showHistoryActions ||
+        (itemId != QStringLiteral("undo") && itemId != QStringLiteral("redo"))) {
+        return false;
+    }
+    const bool undo = itemId == QStringLiteral("undo");
+    if (m_activeTool == Tool::Latex || m_activeTool == Tool::Qr || m_activeTool == Tool::Markdown ||
+        m_activeTool == Tool::Html) {
+        return false;
+    }
+    if (m_activeTool == Tool::Table) {
+        return m_tableEditingAvailable && (undo ? m_tableCanUndo : m_tableCanRedo);
+    }
+    if (m_activeTool == Tool::Ocr || m_activeTool == Tool::TextTranslation) {
+        return m_textEditingAvailable && (undo ? m_textCanUndo : m_textCanRedo);
+    }
+    return undo ? m_canvasHistoryState.canUndo : m_canvasHistoryState.canRedo;
+}
+
+bool ScreenshotToolPalette::activateDrawingItem(const QString& itemId, bool toggleVisibleButton) {
+    if (itemId == QStringLiteral("undo") || itemId == QStringLiteral("redo")) {
+        const auto* button = drawingItemButton(itemId);
+        if (!historyActionEnabled(itemId) || (button != nullptr && !button->isEnabled())) {
+            return false;
+        }
+        selectDrawingItemGroupEntry(itemId);
+        if (itemId == QStringLiteral("undo")) {
+            emit undoRequested();
+        } else {
+            emit redoRequested();
+        }
+        return true;
+    }
+    const auto* descriptor = toolbar_layout::descriptor(itemId);
+    return descriptor != nullptr &&
+           activateToolFromToolbar(drawingToolFromItem(descriptor->item), toggleVisibleButton);
+}
+
 void ScreenshotToolPalette::selectDrawingToolGroupEntry(Tool tool) {
     const Tool entryTool = toolbarFacingDrawingTool(tool);
-    const QString itemId = drawingToolItemId(entryTool);
+    selectDrawingItemGroupEntry(drawingToolItemId(entryTool));
+}
+
+void ScreenshotToolPalette::selectDrawingItemGroupEntry(const QString& itemId) {
     for (int groupIndex = 0; groupIndex < m_drawingToolGroups.size(); ++groupIndex) {
         DrawingToolGroup& group = m_drawingToolGroups[groupIndex];
-        if (!group.itemIds.contains(itemId) || group.entryTool == entryTool) {
+        if (!group.itemIds.contains(itemId) || group.entryItemId == itemId) {
             continue;
         }
-        group.entryTool = entryTool;
+        group.entryItemId = itemId;
         refreshDrawingToolGroup(groupIndex);
         return;
     }
@@ -4080,28 +4311,58 @@ void ScreenshotToolPalette::refreshDrawingToolGroup(int groupIndex) {
         return;
     }
     DrawingToolGroup& group = m_drawingToolGroups[groupIndex];
-    const QString itemId = drawingToolItemId(group.entryTool);
-    const toolbar_layout::Descriptor* descriptor = toolbar_layout::descriptor(itemId);
-    if (group.trigger == nullptr || descriptor == nullptr) {
+    const QString& itemId = group.entryItemId;
+    const auto& definitions = toolbar_layout::drawingEditorDescriptors();
+    const auto descriptor =
+        std::find_if(definitions.cbegin(), definitions.cend(), [&itemId](const auto& candidate) {
+            return itemId == QLatin1String(candidate.id);
+        });
+    if (group.trigger == nullptr || descriptor == definitions.cend()) {
         return;
     }
     configureScreenshotToolPaletteTooltip(group.trigger, descriptor->label);
-    applyDrawingShortcutTooltip(group.trigger, QString::fromUtf8(descriptor->label), itemId);
+    if (itemId == QStringLiteral("undo") || itemId == QStringLiteral("redo")) {
+        applyScreenshotShortcutTooltip(group.trigger, QString::fromUtf8(descriptor->label), itemId);
+    } else {
+        applyDrawingShortcutTooltip(group.trigger, QString::fromUtf8(descriptor->label), itemId);
+    }
     setScreenshotToolPaletteToolButtonIcon(group.trigger, toolbar_layout::icon(descriptor->icon));
     group.trigger->setProperty("screenshotToolbarItemId", itemId);
     group.trigger->setProperty("screenshotToolbarPositionItems", group.itemIds);
-    refreshRecordingToolAvailability(group.trigger, group.entryTool,
-                                     QString::fromUtf8(descriptor->label));
+    if (const auto* drawing = toolbar_layout::descriptor(itemId)) {
+        refreshRecordingToolAvailability(group.trigger, drawingToolFromItem(drawing->item),
+                                         QString::fromUtf8(descriptor->label));
+    } else {
+        group.trigger->setEnabled(group.itemIds.size() > 1 || historyActionEnabled(itemId));
+    }
     for (adqt::widgets::AdButton* optionButton : group.optionButtons) {
         if (optionButton == nullptr) {
             continue;
         }
-        applyDrawingShortcutTooltip(
-            optionButton, optionButton->property("snowShotDrawingShortcutTooltipSource").toString(),
-            optionButton->property("screenshotToolbarItemId").toString());
+        const QString optionId = optionButton->property("screenshotToolbarItemId").toString();
+        if (optionId == QStringLiteral("undo") || optionId == QStringLiteral("redo")) {
+            applyScreenshotShortcutTooltip(optionButton,
+                                           optionId == QStringLiteral("undo")
+                                               ? QStringLiteral("Undo")
+                                               : QStringLiteral("Redo"),
+                                           optionId);
+            optionButton->setEnabled(historyActionEnabled(optionId));
+        } else {
+            applyDrawingShortcutTooltip(
+                optionButton,
+                optionButton->property("snowShotDrawingShortcutTooltipSource").toString(),
+                optionId);
+        }
     }
+    const QString activeId = m_activeTool.has_value()
+                                 ? drawingToolItemId(toolbarFacingDrawingTool(*m_activeTool))
+                                 : QString();
+    const auto active =
+        std::find_if(definitions.cbegin(), definitions.cend(), [&activeId](const auto& candidate) {
+            return activeId == QLatin1String(candidate.id);
+        });
     const int activeValue =
-        m_activeTool.has_value() ? static_cast<int>(toolbarFacingDrawingTool(*m_activeTool)) : -1;
+        active == definitions.cend() ? -1 : static_cast<int>(active - definitions.cbegin());
     updateScreenshotToolPaletteOptionPopoverEditor(group.optionButtons, group.optionValues,
                                                    activeValue);
 }
@@ -4124,18 +4385,26 @@ void ScreenshotToolPalette::ensureDrawingToolGroupPopover(adqt::widgets::AdButto
             config.contentObjectName = QStringLiteral("screenshotDrawingToolGroupPopoverContent");
         }
         config.optionSpacing = TOOLBAR_ITEM_SPACING;
+        const auto& definitions = toolbar_layout::drawingEditorDescriptors();
         for (const QString& itemId : std::as_const(group.popoverItemIds)) {
-            const toolbar_layout::Descriptor* descriptor = toolbar_layout::descriptor(itemId);
-            if (descriptor == nullptr) {
+            const auto descriptor = std::find_if(
+                definitions.cbegin(), definitions.cend(),
+                [&itemId](const auto& candidate) { return itemId == QLatin1String(candidate.id); });
+            if (descriptor == definitions.cend()) {
                 continue;
             }
-            config.options.push_back({static_cast<int>(drawingToolFromItem(descriptor->item)),
+            config.options.push_back({static_cast<int>(descriptor - definitions.cbegin()),
                                       QString::fromUtf8(descriptor->label),
                                       toolbar_layout::icon(descriptor->icon)});
         }
         const auto editor = materializeScreenshotToolPaletteOptionPopoverEditor(
             group.popover, this, config,
-            [this](int value) { activateToolFromToolbar(static_cast<Tool>(value), false); },
+            [this](int value) {
+                const auto& definitions = toolbar_layout::drawingEditorDescriptors();
+                if (value >= 0 && value < definitions.size()) {
+                    activateDrawingItem(QString::fromLatin1(definitions.at(value).id), false);
+                }
+            },
             actionButtonMetrics(1.0));
         group.optionButtons = editor.buttons;
         group.optionValues = editor.values;
@@ -4151,6 +4420,13 @@ void ScreenshotToolPalette::ensureDrawingToolGroupPopover(adqt::widgets::AdButto
                 applyDrawingShortcutTooltip(button, QString::fromUtf8(descriptor->label), itemId);
                 refreshRecordingToolAvailability(button, drawingToolFromItem(descriptor->item),
                                                  QString::fromUtf8(descriptor->label));
+            } else if (itemId == QStringLiteral("undo") || itemId == QStringLiteral("redo")) {
+                applyScreenshotShortcutTooltip(button,
+                                               itemId == QStringLiteral("undo")
+                                                   ? QStringLiteral("Undo")
+                                                   : QStringLiteral("Redo"),
+                                               itemId);
+                button->setEnabled(historyActionEnabled(itemId));
             }
         }
         group.popoverConstructing = false;
@@ -4165,6 +4441,8 @@ void ScreenshotToolPalette::ensureDrawingToolGroupPopover(adqt::widgets::AdButto
 
 adqt::widgets::AdButton*
 ScreenshotToolPalette::actionToolSourceButton(const QString& itemId) const {
+    if (itemId == QStringLiteral("latex-recognition"))
+        return m_latexButton;
     if (itemId == QStringLiteral("convert-to-markdown")) {
         return m_markdownButton;
     }
@@ -4251,6 +4529,8 @@ bool ScreenshotToolPalette::activateActionTool(const QString& itemId, bool toggl
         return activateToolFromToolbar(Tool::Ocr, toggleVisibleButton);
     } else if (itemId == QStringLiteral("text-translation")) {
         return activateToolFromToolbar(Tool::TextTranslation, toggleVisibleButton);
+    } else if (itemId == QStringLiteral("latex-recognition")) {
+        return activateToolFromToolbar(Tool::Latex, toggleVisibleButton);
     } else if (itemId == QStringLiteral("convert-to-markdown")) {
         return activateToolFromToolbar(Tool::Markdown, toggleVisibleButton);
     } else if (itemId == QStringLiteral("convert-to-html")) {
@@ -4566,20 +4846,25 @@ void ScreenshotToolPalette::applyMainToolbarLayout(bool notify) {
         addSeparator();
     }
 
+    for (adqt::widgets::AdButton* source : {m_undoButton, m_redoButton}) {
+        if (source != nullptr) {
+            source->hide();
+            source->setProperty("screenshotToolbarPositionItems", QStringList{});
+        }
+    }
+
     bool hasDrawingPositions = false;
     for (const QStringList& position : normalized.positions) {
+        if (position.contains(QStringLiteral("separator"))) {
+            addSeparator();
+            continue;
+        }
         const auto stack =
             toolbar_layout::stackPresentation(position, [this](const QString& itemId) {
-                return toolbar_layout::descriptor(itemId) != nullptr &&
-                       drawingToolButton(itemId) != nullptr;
+                return drawingItemButton(itemId) != nullptr;
             });
         const QStringList& availableItemIds = stack.itemIds;
-        QVector<Tool> tools;
-        for (const QString& itemId : availableItemIds) {
-            const toolbar_layout::Descriptor* descriptor = toolbar_layout::descriptor(itemId);
-            tools.push_back(drawingToolFromItem(descriptor->item));
-        }
-        if (tools.isEmpty()) {
+        if (availableItemIds.isEmpty()) {
             continue;
         }
         if (!hasDrawingPositions &&
@@ -4591,16 +4876,17 @@ void ScreenshotToolPalette::applyMainToolbarLayout(bool notify) {
         }
         DrawingToolGroup group;
         group.itemIds = availableItemIds;
-        group.tools = tools;
-        group.entryTool =
-            drawingToolFromItem(toolbar_layout::descriptor(stack.entryItemId())->item);
+        group.entryItemId = stack.entryItemId();
         group.popoverItemIds = stack.popoverItemIds;
-        if (tools.size() == 1) {
-            group.trigger = drawingToolButton(availableItemIds.constFirst());
+        if (availableItemIds.size() == 1) {
+            group.trigger = drawingItemButton(availableItemIds.constFirst());
         } else {
-            const toolbar_layout::Descriptor* entryDescriptor =
-                toolbar_layout::descriptor(stack.entryItemId());
-            if (entryDescriptor == nullptr) {
+            const auto& definitions = toolbar_layout::drawingEditorDescriptors();
+            const auto entryDescriptor = std::find_if(
+                definitions.cbegin(), definitions.cend(), [&stack](const auto& candidate) {
+                    return stack.entryItemId() == QLatin1String(candidate.id);
+                });
+            if (entryDescriptor == definitions.cend()) {
                 continue;
             }
             group.trigger = createScreenshotToolPaletteToolButton(
@@ -4629,7 +4915,7 @@ void ScreenshotToolPalette::applyMainToolbarLayout(bool notify) {
                         for (const DrawingToolGroup& candidate :
                              std::as_const(m_drawingToolGroups)) {
                             if (candidate.trigger == trigger) {
-                                activateToolFromToolbar(candidate.entryTool);
+                                activateDrawingItem(candidate.entryItemId);
                                 return;
                             }
                         }
@@ -4647,12 +4933,6 @@ void ScreenshotToolPalette::applyMainToolbarLayout(bool notify) {
         hasDrawingPositions = true;
     }
 
-    if (hasContent && (m_undoButton != nullptr || m_redoButton != nullptr)) {
-        addSeparator();
-    }
-    addFixedWidget(m_undoButton);
-    addFixedWidget(m_redoButton);
-
     if (m_options.showRecordingControls) {
         if (hasContent) {
             addSeparator();
@@ -4666,16 +4946,10 @@ void ScreenshotToolPalette::applyMainToolbarLayout(bool notify) {
     }
 
     const QVector<adqt::widgets::AdButton*> actionSources{
-        m_tableButton,
-        m_markdownButton,
-        m_htmlButton,
-        m_screenRecordButton,
-        m_pinButton,
-        m_ocrButton,
-        m_textTranslationButton,
-        m_scrollingScreenshotButton,
-        m_saveButton,
-        m_quickSaveButton,
+        m_tableButton, m_markdownButton,        m_latexButton,
+        m_htmlButton,  m_screenRecordButton,    m_pinButton,
+        m_ocrButton,   m_textTranslationButton, m_scrollingScreenshotButton,
+        m_saveButton,  m_quickSaveButton,
     };
     for (adqt::widgets::AdButton* source : actionSources) {
         if (source != nullptr) {
@@ -4901,21 +5175,17 @@ void ScreenshotToolPalette::setHistoryState(const SnowCanvasHistoryState& state)
 }
 
 void ScreenshotToolPalette::updateHistoryActionAvailability() {
-    const bool tableActive = m_activeTool == Tool::Table;
-    const bool textActive = m_activeTool == Tool::Ocr || m_activeTool == Tool::TextTranslation;
-    const bool qrActive =
-        m_activeTool == Tool::Qr || m_activeTool == Tool::Markdown || m_activeTool == Tool::Html;
     if (m_undoButton != nullptr) {
-        m_undoButton->setEnabled(qrActive      ? false
-                                 : tableActive ? m_tableEditingAvailable && m_tableCanUndo
-                                 : textActive  ? m_textEditingAvailable && m_textCanUndo
-                                               : m_canvasHistoryState.canUndo);
+        m_undoButton->setEnabled(historyActionEnabled(QStringLiteral("undo")));
     }
     if (m_redoButton != nullptr) {
-        m_redoButton->setEnabled(qrActive      ? false
-                                 : tableActive ? m_tableEditingAvailable && m_tableCanRedo
-                                 : textActive  ? m_textEditingAvailable && m_textCanRedo
-                                               : m_canvasHistoryState.canRedo);
+        m_redoButton->setEnabled(historyActionEnabled(QStringLiteral("redo")));
+    }
+    for (int index = 0; index < m_drawingToolGroups.size(); ++index) {
+        if (m_drawingToolGroups.at(index).itemIds.contains(QStringLiteral("undo")) ||
+            m_drawingToolGroups.at(index).itemIds.contains(QStringLiteral("redo"))) {
+            refreshDrawingToolGroup(index);
+        }
     }
 }
 
@@ -4948,9 +5218,9 @@ bool ScreenshotToolPalette::addMainHistoryButtons(const Options& options, QBoxLa
     addMainToolbarSpacing(TOOLBAR_ITEM_SPACING);
     layout->addWidget(m_redoButton);
     connect(m_undoButton, &adqt::widgets::AdButton::clicked, this,
-            &ScreenshotToolPalette::undoRequested);
+            [this]() { activateDrawingItem(QStringLiteral("undo")); });
     connect(m_redoButton, &adqt::widgets::AdButton::clicked, this,
-            &ScreenshotToolPalette::redoRequested);
+            [this]() { activateDrawingItem(QStringLiteral("redo")); });
     return true;
 }
 
@@ -5013,6 +5283,12 @@ bool ScreenshotToolPalette::addMainSecondaryButtons(const Options& options, QBox
     }
 
     if (options.showImageConversionTools) {
+        m_latexButton =
+            addToolButton(QT_TRANSLATE_NOOP("ScreenshotToolPalette", "LaTeX Formula Recognition"),
+                          adqt::icons::antd::outlined::Function());
+        m_latexButton->setObjectName(QStringLiteral("screenshotLatexRecognitionButton"));
+        connect(m_latexButton, &adqt::widgets::AdButton::clicked, this,
+                [this]() { activateActionTool(QStringLiteral("latex-recognition")); });
         m_markdownButton =
             addToolButton(QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Convert to Markdown"),
                           custom_outlined_icons::Markdown());
@@ -5020,7 +5296,7 @@ bool ScreenshotToolPalette::addMainSecondaryButtons(const Options& options, QBox
         m_htmlButton = addToolButton(QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Convert to HTML"),
                                      custom_outlined_icons::Html());
         m_htmlButton->setObjectName(QStringLiteral("screenshotConvertToHtmlButton"));
-        for (auto* button : {m_markdownButton, m_htmlButton}) {
+        for (auto* button : {m_markdownButton, m_htmlButton, m_latexButton}) {
             button->setBusyIndicatorPresentation(
                 adqt::widgets::AdButton::BusyIndicatorPresentation::IsolatedSurface);
             addButton(button);
@@ -5052,7 +5328,7 @@ bool ScreenshotToolPalette::addMainSecondaryButtons(const Options& options, QBox
     }
 
     if (options.showOcrTool) {
-        m_ocrButton = addToolButton("Text recognition", custom_outlined_icons::ToolRecognizeText());
+        m_ocrButton = addToolButton("Text recognition", custom_outlined_icons::TextRecognition());
         applyScreenshotShortcutTooltip(m_ocrButton, QStringLiteral("Text recognition"),
                                        QStringLiteral("text_recognition"));
         m_ocrButton->setBusyIndicatorPresentation(
@@ -5116,7 +5392,10 @@ ScreenshotToolPalette::Tool ScreenshotToolPalette::drawingShortcutEntryTool(cons
     }
     for (const DrawingToolGroup& group : m_drawingToolGroups) {
         if (group.itemIds.contains(itemId)) {
-            return group.entryTool;
+            if (const auto* descriptor = toolbar_layout::descriptor(group.entryItemId)) {
+                return drawingToolFromItem(descriptor->item);
+            }
+            return fallback;
         }
     }
     return fallback;
@@ -5179,6 +5458,9 @@ bool ScreenshotToolPalette::activateRememberedDrawingTool() {
 }
 
 bool ScreenshotToolPalette::activateScreenshotShortcut(const QString& actionId) {
+    if (actionId == QStringLiteral("undo") || actionId == QStringLiteral("redo")) {
+        return activateDrawingItem(actionId);
+    }
     if (actionId == QStringLiteral("move_tool")) {
         return activateToolShortcut(Tool::Move);
     }
@@ -6207,6 +6489,10 @@ void ScreenshotToolPalette::clearSecondaryResourceBindings() {
 
     m_selectionOpacityIcon = nullptr;
     m_selectionOpacitySlider = nullptr;
+    m_drawTemplateSelect = nullptr;
+    m_drawTemplateAddButton = nullptr;
+    m_drawTemplateEmptyLabel = nullptr;
+    m_pendingDrawTemplatePayload.clear();
     m_showOriginalImageButton = nullptr;
     m_showOriginalImageSpacing = nullptr;
     m_textEditButton = nullptr;
@@ -6231,8 +6517,10 @@ void ScreenshotToolPalette::clearSecondaryResourceBindings() {
 
     m_rectangleStyleControlsWidget = nullptr;
     m_moveActionControls = nullptr;
+    m_selectionDisplayUnitGroup = nullptr;
     m_captureCursorButton = nullptr;
     m_recaptureButton = nullptr;
+    m_showQrCodeButton = nullptr;
     m_addRegionButton = nullptr;
     m_subtractRegionButton = nullptr;
     m_lineStyleControlsWidget = nullptr;
@@ -6647,6 +6935,10 @@ void ScreenshotToolPalette::createSelectionActionFamily() {
     addSpacing(STYLE_GROUP_SPACING * 2);
     m_selectActionLayout->addWidget(createStyleToolbarSeparator(m_selectActionPanel));
     addSpacing(STYLE_GROUP_SPACING * 2);
+    createDrawTemplateSelect();
+    addSpacing(STYLE_ITEM_SPACING);
+    m_selectActionLayout->addWidget(createStyleToolbarSeparator(m_selectActionPanel));
+    addSpacing(STYLE_GROUP_SPACING * 2);
     ScreenshotToolPaletteSliderEditorConfig opacityConfig;
     opacityConfig.iconObjectName = QStringLiteral("screenshotSelectionOpacityIcon");
     opacityConfig.sliderObjectName = QStringLiteral("screenshotSelectionOpacitySlider");
@@ -6692,6 +6984,324 @@ void ScreenshotToolPalette::createSelectionActionFamily() {
     m_selectionActionAvailabilityInitialized = false;
     updateSelectionActionAvailability(m_hasSelectedElements, m_selectedElementCount);
     setSelectionOpacity(m_selectionOpacity, m_selectionOpacityMixed);
+}
+
+void ScreenshotToolPalette::createDrawTemplateSelect() {
+    ScreenshotToolPaletteSelectEditorConfig config;
+    config.objectName = QStringLiteral("screenshotDrawTemplateSelect");
+    config.accessibleName = QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Draw Template");
+    config.tooltip = QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Draw Template");
+    config.placeholder = QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Draw Template");
+    config.baseWidth = TEXT_TRANSFORM_SELECT_WIDTH;
+    config.compact = false;
+    config.searchEnabled = true;
+    config.popupMatchSelectWidth = true;
+    m_drawTemplateSelect = createScreenshotToolPaletteSelectEditor(
+                               m_selectActionPanel, config, actionButtonMetrics(m_physicalScale))
+                               .select;
+    if (m_drawTemplateSelect == nullptr) {
+        return;
+    }
+    m_drawTemplateSelect->setAutoClearSearchValue(true);
+    m_selectionActionControls.push_back(m_drawTemplateSelect);
+    m_selectActionLayout->addWidget(m_drawTemplateSelect);
+
+    auto* emptyLabel = new QLabel(m_drawTemplateSelect);
+    emptyLabel->setObjectName(QStringLiteral("screenshotDrawTemplateEmptyLabel"));
+    emptyLabel->setAlignment(Qt::AlignCenter);
+    emptyLabel->setContentsMargins(12, 8, 12, 8);
+    m_drawTemplateEmptyLabel = emptyLabel;
+    m_drawTemplateSelect->setNotFoundContentWidget(emptyLabel);
+    m_drawTemplateSelect->setPopupExtraContentFactory([this](QWidget* parent) {
+        auto* button = new adqt::widgets::AdButton(parent);
+        button->setObjectName(QStringLiteral("screenshotDrawTemplateAddButton"));
+        button->setButtonStyle(adqt::widgets::AdButton::ButtonStyle::Text);
+        button->setAccentRole(adqt::widgets::AdButton::AccentRole::Primary);
+        button->setIconRef(outlined_icons::Plus());
+        button->setIconPosition(adqt::widgets::AdButton::IconPosition::Leading);
+        button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        m_drawTemplateAddButton = button;
+        button->setEnabled(m_hasSelectedElements);
+        button->setText(tr("Add Template"));
+        button->setToolTip(tr("Add Template"));
+        button->setAccessibleName(tr("Add Template"));
+        connect(button, &QAbstractButton::clicked, this, [this]() {
+            if (m_drawTemplateSelect != nullptr) {
+                m_drawTemplateSelect->hidePopup();
+            }
+            openCreateDrawTemplateModal();
+        });
+        return button;
+    });
+    connect(m_drawTemplateSelect, &adqt::widgets::AdSelect::popupOpening, this, [this]() {
+        if (m_drawTemplateSelect == nullptr) {
+            return;
+        }
+        QListView* view = m_drawTemplateSelect->view();
+        if (view != nullptr &&
+            dynamic_cast<DrawTemplateOptionActionDelegate*>(view->itemDelegate()) == nullptr) {
+            auto* delegate = new DrawTemplateOptionActionDelegate(
+                m_drawTemplateSelect, view, view->itemDelegate(), [this](int index) {
+                    if (m_drawTemplateSelect != nullptr) {
+                        m_drawTemplateSelect->hidePopup();
+                    }
+                    openDeleteDrawTemplateModal(index);
+                });
+            m_drawTemplateSelect->setItemDelegate(delegate);
+        }
+        refreshDrawTemplateOptions();
+    });
+    connect(m_drawTemplateSelect, &adqt::widgets::AdSelect::searchTextChanged, this,
+            [this](const QString&) { retranslateDrawTemplateUi(); });
+    connect(m_drawTemplateSelect, &adqt::widgets::AdSelect::selected, this,
+            [this](const QVariant& value, const QString&) {
+                const int index = drawTemplateIndex(value.toString());
+                if (index < 0 || index >= m_drawTemplates.size() ||
+                    m_drawTemplateSelect == nullptr) {
+                    return;
+                }
+                const QByteArray payload = m_drawTemplates.at(index).payload;
+                {
+                    const QSignalBlocker blocker(m_drawTemplateSelect);
+                    m_drawTemplateSelect->setCurrentValue(QVariant{});
+                }
+                m_drawTemplateSelect->setSearchText({});
+                if (m_insertDrawTemplatePayload) {
+                    m_insertDrawTemplatePayload(payload);
+                }
+            });
+    refreshDrawTemplateOptions();
+}
+
+void ScreenshotToolPalette::refreshDrawTemplateOptions() {
+    if (m_drawTemplateSelect == nullptr) {
+        return;
+    }
+    m_drawTemplates = snow_shot::storage::DrawTemplateSettings().templates();
+    QVector<adqt::widgets::AdSelect::Option> options;
+    options.reserve(m_drawTemplates.size());
+    for (int index = 0; index < m_drawTemplates.size(); ++index) {
+        adqt::widgets::AdSelect::Option option;
+        option.value = QStringLiteral("draw-template:") + QString::number(index);
+        option.label = m_drawTemplates.at(index).name;
+        options.push_back(option);
+    }
+    const QSignalBlocker blocker(m_drawTemplateSelect);
+    m_drawTemplateSelect->setOptions(options);
+    m_drawTemplateSelect->setCurrentValue(QVariant{});
+    retranslateDrawTemplateUi();
+}
+
+void ScreenshotToolPalette::openCreateDrawTemplateModal() {
+    if (m_drawTemplateSelect == nullptr || m_createDrawTemplateModal != nullptr) {
+        return;
+    }
+    m_pendingDrawTemplatePayload.clear();
+    m_drawTemplates = snow_shot::storage::DrawTemplateSettings().templates();
+    QSet<QString> names;
+    for (const auto& drawTemplate : std::as_const(m_drawTemplates)) {
+        names.insert(drawTemplate.name.toCaseFolded());
+    }
+    int suffix = 1;
+    while (names.contains(tr("Template %1").arg(suffix).toCaseFolded())) {
+        ++suffix;
+    }
+
+    auto* form = new adqt::widgets::AdForm();
+    form->setObjectName(QStringLiteral("screenshotDrawTemplateCreateForm"));
+    form->setFixedWidth(352);
+    form->setFormLayout(adqt::widgets::AdForm::FormLayout::Vertical);
+    form->setLabelAlign(adqt::widgets::AdForm::LabelAlign::Left);
+    form->setRequiredMark(adqt::widgets::AdForm::RequiredMark::Visible);
+    form->setControlSize(adqt::widgets::AdForm::ControlSize::Medium);
+    form->setVariant(adqt::widgets::AdForm::Variant::Outlined);
+    form->setColon(false);
+
+    auto* nameInput = new adqt::widgets::AdLineEdit(form);
+    nameInput->setObjectName(QStringLiteral("screenshotDrawTemplateNameInput"));
+    nameInput->setAllowClear(true);
+    nameInput->setMaxLength(80);
+    nameInput->setText(tr("Template %1").arg(suffix));
+    auto* nameItem =
+        form->addField(tr("Template Name"), nameInput, QStringLiteral("drawTemplateName"));
+    nameItem->setItemLayout(adqt::widgets::AdFormItem::ItemLayout::Vertical);
+    nameItem->setRequired(true);
+    nameItem->setRequiredMessage(tr("Please enter a template name"));
+    nameItem->setFormValidator([](const QVariant& value, adqt::widgets::AdFormItem*) {
+        adqt::widgets::AdFormItem::ValidationResult result;
+        if (value.toString().trimmed().isEmpty()) {
+            result.status = adqt::widgets::AdFormItem::ValidateStatus::Error;
+            result.errors.push_back(tr("Please enter a template name"));
+        }
+        return result;
+    });
+
+    auto* alert = new adqt::widgets::AdAlert(form);
+    alert->setObjectName(QStringLiteral("screenshotDrawTemplateCreateAlert"));
+    alert->setSeverity(adqt::widgets::AdAlert::Severity::Error);
+    alert->setClosable(false);
+    if (auto* layout = qobject_cast<QBoxLayout*>(form->layout())) {
+        layout->addWidget(alert);
+    }
+    alert->hide();
+
+    auto* modal = new adqt::widgets::AdModal(m_drawTemplateSelect);
+    modal->setObjectName(QStringLiteral("screenshotDrawTemplateCreateModal"));
+    modal->setOwnerWindow(m_watermarkTemplateModalOwnerWindow != nullptr
+                              ? m_watermarkTemplateModalOwnerWindow.data()
+                              : m_drawTemplateSelect->window());
+    modal->setMode(adqt::widgets::AdModal::Mode::Window);
+    modal->setWindowModality(Qt::ApplicationModal);
+    modal->setCentered(true);
+    modal->setPreferredWidth(400);
+    modal->setMaskVisible(false);
+    modal->setCloseOnMaskClick(false);
+    modal->setClosePolicy(adqt::widgets::AdModal::ClosePolicy::Manual);
+    modal->setStandardButtons(adqt::widgets::AdModal::StandardButton::Ok |
+                              adqt::widgets::AdModal::StandardButton::Cancel);
+    modal->setContentWidget(form);
+    modal->setInitialFocusWidget(nameInput);
+    m_createDrawTemplateModal = modal;
+    m_drawTemplateNameItem = nameItem;
+    m_drawTemplateAlert = alert;
+    m_drawTemplateAlertKind = 0;
+    retranslateDrawTemplateUi();
+
+    const QPointer<adqt::widgets::AdForm> formGuard(form);
+    const QPointer<adqt::widgets::AdLineEdit> nameGuard(nameInput);
+    connect(modal, &adqt::widgets::AdModal::closeRequested, modal,
+            [this, modal, formGuard, nameGuard](adqt::widgets::AdModal::CloseReason reason) {
+                if (reason != adqt::widgets::AdModal::CloseReason::OkAction) {
+                    modal->reject();
+                    return;
+                }
+                if (formGuard == nullptr || nameGuard == nullptr || !formGuard->submit()) {
+                    return;
+                }
+                m_pendingDrawTemplatePayload =
+                    m_selectedDrawTemplatePayload ? m_selectedDrawTemplatePayload() : QByteArray();
+                if (m_pendingDrawTemplatePayload.isEmpty()) {
+                    m_drawTemplateAlertKind = 1;
+                    retranslateDrawTemplateUi();
+                    return;
+                }
+                const snow_shot::storage::DrawTemplateSettings settings;
+                QVector<snow_shot::storage::DrawTemplate> templates = settings.templates();
+                templates.push_back({nameGuard->text().trimmed(), m_pendingDrawTemplatePayload});
+                if (!settings.setTemplates(templates)) {
+                    m_drawTemplateAlertKind = 2;
+                    retranslateDrawTemplateUi();
+                    return;
+                }
+                m_pendingDrawTemplatePayload.clear();
+                refreshDrawTemplateOptions();
+                modal->accept();
+            });
+    connect(modal, &adqt::widgets::AdModal::finished, modal,
+            [this, modal](adqt::widgets::AdModal::DialogCode) {
+                if (m_createDrawTemplateModal == modal) {
+                    m_createDrawTemplateModal = nullptr;
+                    m_drawTemplateNameItem = nullptr;
+                    m_drawTemplateAlert = nullptr;
+                    m_pendingDrawTemplatePayload.clear();
+                }
+                modal->deleteLater();
+            });
+    modal->open();
+    nameInput->focusEditor(adqt::widgets::AdLineEdit::FocusSelection::SelectAll);
+}
+
+void ScreenshotToolPalette::openDeleteDrawTemplateModal(int index) {
+    if (m_drawTemplateSelect == nullptr || m_deleteDrawTemplateModal != nullptr || index < 0 ||
+        index >= m_drawTemplates.size()) {
+        return;
+    }
+    const snow_shot::storage::DrawTemplate target = m_drawTemplates.at(index);
+    m_deleteDrawTemplateName = target.name;
+    auto* modal = new adqt::widgets::AdModal(m_drawTemplateSelect);
+    modal->setObjectName(QStringLiteral("screenshotDrawTemplateDeleteModal"));
+    modal->setOwnerWindow(m_watermarkTemplateModalOwnerWindow != nullptr
+                              ? m_watermarkTemplateModalOwnerWindow.data()
+                              : m_drawTemplateSelect->window());
+    modal->setMode(adqt::widgets::AdModal::Mode::Window);
+    modal->setWindowModality(Qt::ApplicationModal);
+    modal->setCentered(true);
+    modal->setPreferredWidth(400);
+    modal->setMaskVisible(false);
+    modal->setCloseOnMaskClick(false);
+    modal->setClosePolicy(adqt::widgets::AdModal::ClosePolicy::Manual);
+    modal->setPreset(adqt::widgets::AdModal::Preset::Confirm);
+    modal->setAcceptAccentRole(adqt::widgets::AdButton::AccentRole::Danger);
+    modal->setStandardButtons(adqt::widgets::AdModal::StandardButton::Ok |
+                              adqt::widgets::AdModal::StandardButton::Cancel);
+    m_deleteDrawTemplateModal = modal;
+    retranslateDrawTemplateUi();
+    connect(modal, &adqt::widgets::AdModal::closeRequested, modal,
+            [this, modal, index, target](adqt::widgets::AdModal::CloseReason reason) {
+                if (reason != adqt::widgets::AdModal::CloseReason::OkAction) {
+                    modal->reject();
+                    return;
+                }
+                const snow_shot::storage::DrawTemplateSettings settings;
+                QVector<snow_shot::storage::DrawTemplate> templates = settings.templates();
+                if (index >= templates.size() || templates.at(index) != target) {
+                    modal->setText(tr("Could not delete the draw template"));
+                    return;
+                }
+                templates.removeAt(index);
+                if (!settings.setTemplates(templates)) {
+                    modal->setText(tr("Could not delete the draw template"));
+                    return;
+                }
+                refreshDrawTemplateOptions();
+                modal->accept();
+            });
+    connect(modal, &adqt::widgets::AdModal::finished, modal,
+            [this, modal](adqt::widgets::AdModal::DialogCode) {
+                if (m_deleteDrawTemplateModal == modal) {
+                    m_deleteDrawTemplateModal = nullptr;
+                    m_deleteDrawTemplateName.clear();
+                }
+                modal->deleteLater();
+            });
+    modal->open();
+}
+
+void ScreenshotToolPalette::retranslateDrawTemplateUi() {
+    if (m_drawTemplateAddButton != nullptr) {
+        m_drawTemplateAddButton->setText(tr("Add Template"));
+        m_drawTemplateAddButton->setToolTip(tr("Add Template"));
+        m_drawTemplateAddButton->setAccessibleName(tr("Add Template"));
+    }
+    if (m_drawTemplateEmptyLabel != nullptr) {
+        m_drawTemplateEmptyLabel->setText(m_drawTemplateSelect != nullptr &&
+                                                  !m_drawTemplateSelect->searchText().isEmpty()
+                                              ? tr("No matching templates")
+                                              : tr("No templates yet"));
+    }
+    if (m_createDrawTemplateModal != nullptr) {
+        m_createDrawTemplateModal->setWindowTitle(tr("Add Template"));
+        m_createDrawTemplateModal->setAcceptText(tr("Add"));
+        m_createDrawTemplateModal->setRejectText(tr("Cancel"));
+    }
+    if (m_drawTemplateNameItem != nullptr) {
+        m_drawTemplateNameItem->setLabel(tr("Template Name"));
+        m_drawTemplateNameItem->setRequiredMessage(tr("Please enter a template name"));
+    }
+    if (m_drawTemplateAlert != nullptr) {
+        m_drawTemplateAlert->setText(m_drawTemplateAlertKind == 1
+                                         ? tr("Could not capture selected elements")
+                                         : tr("Could not save the draw template"));
+        m_drawTemplateAlert->setVisible(m_drawTemplateAlertKind != 0);
+    }
+    if (m_deleteDrawTemplateModal != nullptr) {
+        m_deleteDrawTemplateModal->setWindowTitle(tr("Delete Draw Template"));
+        m_deleteDrawTemplateModal->setText(
+            tr("Delete draw template \"%1\"? This action cannot be undone.")
+                .arg(m_deleteDrawTemplateName));
+        m_deleteDrawTemplateModal->setAcceptText(tr("Delete"));
+        m_deleteDrawTemplateModal->setRejectText(tr("Cancel"));
+    }
 }
 
 void ScreenshotToolPalette::setShowOriginalImage(bool show) {
@@ -6933,9 +7543,40 @@ void ScreenshotToolPalette::createMoveActionFamily() {
     applyScreenshotShortcutTooltip(m_recaptureButton, QStringLiteral("Recapture"),
                                    QStringLiteral("recapture"));
     layout->addWidget(m_recaptureButton);
+    addStyleToolbarSpacing(layout, STYLE_ITEM_SPACING);
+    m_showQrCodeButton = createScreenshotToolPaletteStyleActionButton(
+        m_moveActionControls, "Show QR Code", custom_outlined_icons::ScanQrcode(),
+        actionButtonMetrics(m_physicalScale));
+    m_showQrCodeButton->setObjectName(QStringLiteral("screenshotShowQrCodeButton"));
+    layout->addWidget(m_showQrCodeButton);
+    connect(m_showQrCodeButton, &adqt::widgets::AdButton::clicked, this, [this]() {
+        setQrCodeState(m_qrCodeAvailable, !m_qrCodeVisible, m_qrCodeError);
+        emit qrCodeVisibilityRequested(m_qrCodeVisible);
+    });
     addStyleToolbarSpacing(layout, STYLE_GROUP_SPACING * 2);
     layout->addWidget(createStyleToolbarSeparator(m_moveActionControls));
     addStyleToolbarSpacing(layout, STYLE_GROUP_SPACING * 2);
+    ScreenshotToolPaletteRadioEditorConfig unitConfig;
+    unitConfig.objectName = QStringLiteral("screenshotSelectionDisplayUnitButtonGroup");
+    unitConfig.options = {
+        {int(ScreenshotSelectionDisplayUnit::PhysicalPixels),
+         QT_TR_NOOP("Physical Pixel Selection"), custom_outlined_icons::PhysicalPixels()},
+        {int(ScreenshotSelectionDisplayUnit::LogicalPixels), QT_TR_NOOP("Logical Pixel Selection"),
+         custom_outlined_icons::LogicalPixels()},
+    };
+    unitConfig.initialId = int(m_selectionDisplayUnit);
+    unitConfig.useButtonMetrics = true;
+    const auto units = createScreenshotToolPaletteRadioEditor(m_moveActionControls, unitConfig,
+                                                              actionButtonMetrics(m_physicalScale));
+    units.group->setObjectName(unitConfig.objectName);
+    m_selectionDisplayUnitGroup = units.group;
+    layout->addWidget(units.container);
+    addStyleToolbarSpacing(layout, STYLE_GROUP_SPACING);
+    connect(units.group, &QButtonGroup::idClicked, this, [this](int id) {
+        const auto unit = static_cast<ScreenshotSelectionDisplayUnit>(id);
+        setSelectionDisplayUnit(unit);
+        emit selectionDisplayUnitChanged(unit);
+    });
     auto* hideSelectionToolbarButton = createScreenshotToolPaletteStyleActionButton(
         m_moveActionControls, "Hide selection toolbar", outlined_icons::EyeInvisible(),
         actionButtonMetrics(m_physicalScale));
@@ -6956,9 +7597,10 @@ void ScreenshotToolPalette::createMoveActionFamily() {
     });
     m_selectActionLayout->addWidget(m_moveActionControls);
     stampScreenshotToolbarReferenceWidth(
-        m_moveActionControls, actionButtonMetrics(1.0).buttonSize * 5 +
+        m_moveActionControls, actionButtonMetrics(1.0).buttonSize * 6 +
                                   screenshotToolbarReferenceWidth(regionTypes.container) +
-                                  STYLE_ITEM_SPACING * 2 + STYLE_GROUP_SPACING * 9 + 6 +
+                                  screenshotToolbarReferenceWidth(units.container) +
+                                  STYLE_ITEM_SPACING * 3 + STYLE_GROUP_SPACING * 10 + 6 +
                                   TOOLBAR_SEPARATOR_WIDTH * 2);
     setCaptureCursorEnabled(m_captureCursorEnabled);
     setSelectionToolbarHidden(m_selectionToolbarHidden);
@@ -7556,15 +8198,26 @@ void ScreenshotToolPalette::setActiveToolButton(adqt::widgets::AdButton* activeB
         }
     }
 
-    const int activeValue =
-        m_activeTool.has_value() ? static_cast<int>(toolbarFacingDrawingTool(*m_activeTool)) : -1;
+    const auto& definitions = toolbar_layout::drawingEditorDescriptors();
+    const QString activeId = m_activeTool.has_value()
+                                 ? drawingToolItemId(toolbarFacingDrawingTool(*m_activeTool))
+                                 : QString();
+    const auto activeDescriptor =
+        std::find_if(definitions.cbegin(), definitions.cend(), [&activeId](const auto& candidate) {
+            return activeId == QLatin1String(candidate.id);
+        });
+    const int activeValue = activeDescriptor == definitions.cend()
+                                ? -1
+                                : static_cast<int>(activeDescriptor - definitions.cbegin());
     for (const DrawingToolGroup& group : std::as_const(m_drawingToolGroups)) {
         updateScreenshotToolPaletteOptionPopoverEditor(group.optionButtons, group.optionValues,
                                                        activeValue);
     }
     refreshActionToolGroups();
+    const int activeToolValue =
+        m_activeTool.has_value() ? static_cast<int>(toolbarFacingDrawingTool(*m_activeTool)) : -1;
     updateScreenshotToolPaletteOptionPopoverEditor(m_tableQrOptionButtons, m_tableQrOptionValues,
-                                                   activeValue);
+                                                   activeToolValue);
 }
 
 #if defined(SNOW_SHOT_TEST_HOOKS)
@@ -8028,4 +8681,12 @@ void ScreenshotToolPalette::setAutoFilterAvailable(bool available) {
     if (m_fillRegionsSelect) {
         m_fillRegionsSelect->setEnabled(available);
     }
+}
+
+void ScreenshotToolPalette::setLatexState(bool enabled, bool busy) {
+    if (m_latexButton) {
+        m_latexButton->setEnabled(enabled);
+        m_latexButton->setBusy(busy);
+    }
+    refreshActionToolGroups();
 }

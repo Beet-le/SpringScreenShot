@@ -7,6 +7,7 @@
 #include "capturehistorypolicy_p.h"
 
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QKeySequence>
 #include <QSet>
@@ -73,6 +74,7 @@ const QStringList& screenshotShortcutActionIds() {
         QStringLiteral("select_previously_selected_area"),
         QStringLiteral("recapture"),
         QStringLiteral("copy_color"),
+        QStringLiteral("toggle_coordinate_mode"),
         QStringLiteral("table_recognition"),
         QStringLiteral("qr_code_recognition"),
         QStringLiteral("video_recording"),
@@ -137,12 +139,24 @@ QString pinToScreenShortcutKey(const QString& actionId) {
                : QString();
 }
 
+bool shortcutUsesKey(const shortcuts::ShortcutBinding& shortcut, Qt::Key key) {
+#ifdef Q_OS_MACOS
+    const auto physical = shortcuts::macVirtualKeyForBinding(shortcut);
+    const auto expected = shortcuts::macVirtualKeyForBinding(
+        shortcuts::bindingFromPortableText(QKeySequence(key).toString(QKeySequence::PortableText)));
+    return physical && expected && physical == expected;
+#else
+    return shortcuts::commandKey(shortcut) == key;
+#endif
+}
+
 bool screenshotHistoryShortcutAllowed(const QString& actionId,
                                       const shortcuts::ShortcutBinding& shortcut) {
     const bool historyAction = actionId == QStringLiteral("previous_screenshot_history") ||
                                actionId == QStringLiteral("next_screenshot_history");
-    return historyAction && (shortcut.portableText == QStringLiteral(",") ||
-                             shortcut.portableText == QStringLiteral("."));
+    const auto identity = shortcuts::effectiveIdentity(shortcut);
+    return historyAction && identity.modifiers == Qt::NoModifier &&
+           (shortcutUsesKey(shortcut, Qt::Key_Comma) || shortcutUsesKey(shortcut, Qt::Key_Period));
 }
 
 bool isReservedLocalShortcut(const shortcuts::ShortcutBinding& shortcut) {
@@ -152,21 +166,20 @@ bool isReservedLocalShortcut(const shortcuts::ShortcutBinding& shortcut) {
         return false;
     }
 
-    const QKeyCombination combination = sequence[0];
-    const Qt::Key key = combination.key();
-    const Qt::KeyboardModifiers modifiers = combination.keyboardModifiers();
-    if (key == Qt::Key_Escape || key == Qt::Key_Backspace || key == Qt::Key_Delete ||
-        key == Qt::Key_F4) {
+    const Qt::KeyboardModifiers modifiers = shortcuts::effectiveIdentity(shortcut).modifiers;
+    if (shortcutUsesKey(shortcut, Qt::Key_Escape) || shortcutUsesKey(shortcut, Qt::Key_Backspace) ||
+        shortcutUsesKey(shortcut, Qt::Key_Delete) || shortcutUsesKey(shortcut, Qt::Key_F4)) {
         return true;
     }
-    if ((key == Qt::Key_Comma || key == Qt::Key_Period) && modifiers == Qt::NoModifier) {
+    if ((shortcutUsesKey(shortcut, Qt::Key_Comma) || shortcutUsesKey(shortcut, Qt::Key_Period)) &&
+        modifiers == Qt::NoModifier) {
         return true;
     }
-    if (key == Qt::Key_C && modifiers.testFlag(Qt::ControlModifier) &&
+    if (shortcutUsesKey(shortcut, Qt::Key_C) && modifiers.testFlag(Qt::ControlModifier) &&
         !modifiers.testFlag(Qt::AltModifier) && !modifiers.testFlag(Qt::MetaModifier)) {
         return true;
     }
-    return key == Qt::Key_Z && modifiers.testFlag(Qt::ControlModifier);
+    return shortcutUsesKey(shortcut, Qt::Key_Z) && modifiers.testFlag(Qt::ControlModifier);
 }
 
 QVector<QStringList> stringListArray(const QJsonValue& value) {
@@ -517,6 +530,14 @@ bool ScreenshotSettings::setShutterSoundNotification(bool enabled) const {
     return cache().setValue(QStringLiteral("screenshot/shutter_sound_notification"), enabled);
 }
 
+bool ScreenshotSettings::autoRecognizeQrCode() const {
+    return cache().value(QStringLiteral("screenshot/auto_recognize_qr_code")).toBool();
+}
+
+bool ScreenshotSettings::setAutoRecognizeQrCode(bool enabled) const {
+    return cache().setValue(QStringLiteral("screenshot/auto_recognize_qr_code"), enabled);
+}
+
 bool ScreenshotSettings::confirmBeforeExitingViaShortcut() const {
     return cache().value(QStringLiteral("screenshot/confirm_before_exiting_via_shortcut")).toBool();
 }
@@ -818,6 +839,10 @@ shortcuts::ShortcutBindingList ScreenshotShortcutSettings::recapture() const {
     return shortcuts(QStringLiteral("recapture"));
 }
 
+shortcuts::ShortcutBindingList ScreenshotShortcutSettings::toggleCoordinateMode() const {
+    return shortcuts(QStringLiteral("toggle_coordinate_mode"));
+}
+
 shortcuts::ShortcutBindingList ScreenshotShortcutSettings::copyColor() const {
     return shortcuts(QStringLiteral("copy_color"));
 }
@@ -865,18 +890,16 @@ bool ScreenshotShortcutSettings::isReservedShortcutAllowed(
         return false;
     }
 
-    const QKeyCombination combination = sequence[0];
-    const Qt::Key key = combination.key();
-    const Qt::KeyboardModifiers modifiers = combination.keyboardModifiers();
+    const Qt::KeyboardModifiers modifiers = shortcuts::effectiveIdentity(shortcut).modifiers;
     if (actionId == QStringLiteral("cancel_screenshot")) {
-        return key == Qt::Key_Escape;
+        return shortcutUsesKey(shortcut, Qt::Key_Escape);
     }
     if (actionId == QStringLiteral("copy_to_clipboard")) {
-        return key == Qt::Key_C && modifiers.testFlag(Qt::ControlModifier) &&
+        return shortcutUsesKey(shortcut, Qt::Key_C) && modifiers.testFlag(Qt::ControlModifier) &&
                !modifiers.testFlag(Qt::AltModifier) && !modifiers.testFlag(Qt::MetaModifier);
     }
     if (actionId == QStringLiteral("undo")) {
-        return key == Qt::Key_Z && modifiers.testFlag(Qt::ControlModifier);
+        return shortcutUsesKey(shortcut, Qt::Key_Z) && modifiers.testFlag(Qt::ControlModifier);
     }
     return false;
 }
@@ -1168,12 +1191,28 @@ bool ScreenshotUiSettings::setSelectionTransitionAnimationEnabled(bool enabled) 
                             enabled);
 }
 
+QString ScreenshotUiSettings::selectionDisplayUnit() const {
+    return cache().value(QStringLiteral("screenshot_ui/selection_display_unit")).toString();
+}
+
+bool ScreenshotUiSettings::setSelectionDisplayUnit(const QString& unit) const {
+    return cache().setValue(QStringLiteral("screenshot_ui/selection_display_unit"), unit);
+}
+
 QString ScreenshotUiSettings::colorPickerDisplayMode() const {
     return cache().value(QStringLiteral("screenshot_ui/color_picker_display_mode")).toString();
 }
 
 bool ScreenshotUiSettings::setColorPickerDisplayMode(const QString& mode) const {
     return cache().setValue(QStringLiteral("screenshot_ui/color_picker_display_mode"), mode);
+}
+
+QString ScreenshotUiSettings::colorPickerCoordinateMode() const {
+    return cache().value(QStringLiteral("screenshot_ui/color_picker_coordinate_mode")).toString();
+}
+
+bool ScreenshotUiSettings::setColorPickerCoordinateMode(const QString& mode) const {
+    return cache().setValue(QStringLiteral("screenshot_ui/color_picker_coordinate_mode"), mode);
 }
 
 QString ScreenshotUiSettings::colorPickerFormat() const {
@@ -1566,6 +1605,41 @@ bool WatermarkTemplateSettings::setTemplates(const QVector<WatermarkTemplate>& t
                                     {QStringLiteral("value"), watermarkTemplate.value}});
     }
     return cache().setValue(QStringLiteral("drawing/watermark_templates"), array);
+}
+
+QVector<DrawTemplate> DrawTemplateSettings::templates() const {
+    QVector<DrawTemplate> result;
+    const QJsonArray array = cache().value(QStringLiteral("drawing/draw_templates")).toArray();
+    result.reserve(array.size());
+    for (const QJsonValue& item : array) {
+        const QJsonObject object = item.toObject();
+        result.push_back({object.value(QStringLiteral("name")).toString(),
+                          QByteArray::fromBase64(
+                              object.value(QStringLiteral("payload")).toString().toLatin1())});
+    }
+    return result;
+}
+
+bool DrawTemplateSettings::setTemplates(const QVector<DrawTemplate>& templates) const {
+    QJsonArray array;
+    for (const DrawTemplate& drawTemplate : templates) {
+        const QString name = drawTemplate.name.trimmed();
+        QJsonParseError error;
+        const QJsonDocument document = QJsonDocument::fromJson(drawTemplate.payload, &error);
+        const QJsonObject payload = document.object();
+        if (name.isEmpty() || drawTemplate.payload.isEmpty() ||
+            drawTemplate.payload.size() > 16 * 1024 * 1024 ||
+            error.error != QJsonParseError::NoError ||
+            payload.value(QStringLiteral("schemaVersion")).toInt(-1) != 1 ||
+            payload.value(QStringLiteral("elements")).toArray().isEmpty() ||
+            payload.value(QStringLiteral("selectedIds")).toArray().isEmpty()) {
+            return false;
+        }
+        array.push_back(QJsonObject{
+            {QStringLiteral("name"), name},
+            {QStringLiteral("payload"), QString::fromLatin1(drawTemplate.payload.toBase64())}});
+    }
+    return cache().setValue(QStringLiteral("drawing/draw_templates"), array);
 }
 
 QString PinToScreenSettings::doubleClickAction() const {

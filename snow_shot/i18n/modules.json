@@ -6,6 +6,7 @@
     "LanguageCatalog",
     "MainContentHeaderWidget",
     "MainWindow",
+    "McpDocumentService",
     "QObject",
     "SectionHeaderWidget",
     "SidebarWidget",
@@ -24,6 +25,7 @@
     "LoginItemService",
     "PermissionGuide",
     "PinnedToolbarEditorSettingsWidget",
+    "ScreenshotMcpSettings",
     "ScreenshotToolbarEditorSettingsWidget",
     "SettingsBackend",
     "SettingsCatalog",
@@ -37,13 +39,18 @@
   "capture": [
     "DirectCaptureController",
     "ScreenshotAutoFilterController",
+    "ScreenshotQrController",
+    "ScreenshotCaptureCoordinator",
     "ScreenshotController",
+    "ScreenshotMcpServer",
     "ScreenshotOverlayWindow",
     "ScreenshotRegionTypeControl",
     "ScreenshotSelectionResizeModalContent",
     "ScreenshotSelectionResizeWorkflow",
     "ScreenshotSelectionToolbarWidget",
     "ScreenshotShortcutHintsWidget",
+    "snow_shot::app::mcp::ScreenshotMcpServer",
+    "snow_shot::app::mcp::ScreenshotMcpSession",
     "snow_shot::presentation::DirectCaptureController"
   ],
   "annotation": [
@@ -54,6 +61,7 @@
     "ScreenshotExportArtifact",
     "ScreenshotImageFileService",
     "ScreenshotPdfExport",
+    "ScreenshotRecognitionFileExport",
     "ScreenshotSaveAsFileDialog",
     "ScreenshotSavePreviewCanvas"
   ],

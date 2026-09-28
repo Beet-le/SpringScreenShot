@@ -82,6 +82,10 @@ so every moment on screen can be expressed clearly and shared easily.</source>
             <translation>探索更多功能與使用方式</translation>
         </message>
         <message>
+            <source>Discussion and support · Group No. %1</source>
+            <translation>交流與答疑 · 群號 %1</translation>
+        </message>
+        <message>
             <source>Download from website</source>
             <translation>前往官網下載</translation>
         </message>
@@ -148,6 +152,14 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         <message>
             <source>Preview</source>
             <translation>預覽版</translation>
+        </message>
+        <message>
+            <source>QQ Group 2</source>
+            <translation>QQ 群組 2</translation>
+        </message>
+        <message>
+            <source>QQ Group 3</source>
+            <translation>QQ 群組 3</translation>
         </message>
         <message>
             <source>Ready to install %1</source>
@@ -350,6 +362,13 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         </message>
     </context>
     <context>
+        <name>McpDocumentService</name>
+        <message>
+            <source>Document request failed (%1).</source>
+            <translation>文件請求失敗（%1）。</translation>
+        </message>
+    </context>
+    <context>
         <name>QObject</name>
         <message>
             <source>%1 cannot be registered as a global shortcut, try another key</source>
@@ -505,6 +524,10 @@ so every moment on screen can be expressed clearly and shared easily.</source>
             <translation>影像轉換逾時，請嘗試較小的區域。</translation>
         </message>
         <message>
+            <source>Invalid LaTeX recognition response</source>
+            <translation>無效的 LaTeX 辨識回應</translation>
+        </message>
+        <message>
             <source>Invalid model stream response</source>
             <translation>模型串流回應無效</translation>
         </message>
@@ -519,6 +542,22 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         <message>
             <source>Invalid translation stream response</source>
             <translation>無效的翻譯串流回應</translation>
+        </message>
+        <message>
+            <source>LaTeX recognition failed</source>
+            <translation>LaTeX 辨識失敗</translation>
+        </message>
+        <message>
+            <source>LaTeX recognition request timed out</source>
+            <translation>LaTeX 辨識請求逾時</translation>
+        </message>
+        <message>
+            <source>LaTeX recognition response is too large</source>
+            <translation>LaTeX 辨識回應過大</translation>
+        </message>
+        <message>
+            <source>LaTeX recognition returned no formula</source>
+            <translation>LaTeX 辨識未傳回公式</translation>
         </message>
         <message>
             <source>No translation services are available</source>
@@ -612,6 +651,10 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         <message>
             <source>An update is ready. Open About to restart and update Snow Shot.</source>
             <translation>更新已準備就緒。請開啟「關於」頁面，重新啟動並更新 Snow Shot。</translation>
+        </message>
+        <message>
+            <source>Cancel</source>
+            <translation>取消</translation>
         </message>
         <message>
             <source>Could not pin selected files</source>

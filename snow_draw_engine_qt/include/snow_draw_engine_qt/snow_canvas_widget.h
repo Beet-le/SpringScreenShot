@@ -2,6 +2,7 @@
 #include "snow_draw_engine_qt/snow_canvas_smart_erase.h"
 
 #include <QRect>
+#include <QByteArray>
 #include <QRectF>
 #include <QTransform>
 #include <QVariant>
@@ -9,6 +10,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <functional>
 #include <optional>
 
 #include "snow_draw_engine_qt/snow_canvas_types.h"
@@ -40,6 +42,11 @@ class SnowCanvasWidget : public QWidget {
     explicit SnowCanvasWidget(SnowCanvasRuntime& runtime, QWidget* parent = nullptr);
     ~SnowCanvasWidget() override;
 
+    // Resolve command keys without changing text/IME input. An empty resolver
+    // preserves the library's default Qt key semantics.
+    using CommandKeyResolver = std::function<Qt::Key(const QKeyEvent&)>;
+    void setCommandKeyResolver(CommandKeyResolver resolver);
+
     SnowCanvasTool canvasTool() const;
     bool setCanvasTool(SnowCanvasTool tool);
 
@@ -57,7 +64,8 @@ class SnowCanvasWidget : public QWidget {
     bool setCanvasShapeStylePatch(const SnowCanvasShapeStyle& style, quint32 properties,
                                   SnowCanvasShapeKind kind);
     bool setCanvasFilterStyle(const SnowCanvasFilterStyle& style, quint32 properties);
-    bool setCanvasTextStyle(const SnowCanvasTextStyle& style);
+    bool setCanvasTextStyle(const SnowCanvasTextStyle& style,
+                            quint32 properties = SnowCanvasTextStyleAllProperties);
     bool setCanvasSerialNumberStyle(const SnowCanvasSerialNumberStyle& style);
 
     SnowCanvasHistoryState canvasHistoryState() const;
@@ -81,6 +89,7 @@ class SnowCanvasWidget : public QWidget {
     // Clears all document elements and history, preserving viewports and creation styles.
     bool clearDocument();
     bool duplicateSelected(const QPointF& offset = QPointF(12.0, 12.0));
+    bool insertDrawTemplate(const QByteArray& payload, const QPointF& center);
     bool reorderSelected(SnowCanvasSelectionOrder order);
     // Aligns or distributes the selected elements to their shared bounds as one
     // undoable history entry. Requires at least two selected elements for the

@@ -222,6 +222,10 @@
             <translation>Enter the base URL without /chat/completions.</translation>
         </message>
         <message>
+            <source>Explicitly enable or disable reasoning in model requests.</source>
+            <translation>Explicitly enable or disable reasoning in model requests.</translation>
+        </message>
+        <message>
             <source>Model Name</source>
             <translation>Model Name</translation>
         </message>
@@ -236,6 +240,10 @@
         <message>
             <source>Optional for servers that do not require authentication.</source>
             <translation>Optional for servers that do not require authentication.</translation>
+        </message>
+        <message>
+            <source>Reasoning Support</source>
+            <translation>Reasoning Support</translation>
         </message>
         <message>
             <source>Save</source>
@@ -285,8 +293,8 @@
             <translation>Drawing toolbar preview</translation>
         </message>
         <message>
-            <source>Drop beside a tool to create a position. Drop above a tool to stack it. The bottom tool stays on the main toolbar row.</source>
-            <translation>Drop beside a tool to create a position. Drop above a tool to stack it. The bottom tool stays on the main toolbar row.</translation>
+            <source>Drop beside a tool to create a position. Drop above a tool to stack it. The bottom tool stays on the main toolbar row. Separator Component occupies its own position.</source>
+            <translation>Drop beside a tool to create a position. Drop above a tool to stack it. The bottom tool stays on the main toolbar row. Separator Component occupies its own position.</translation>
         </message>
         <message>
             <source>Eraser</source>
@@ -321,6 +329,14 @@
             <translation>Pen</translation>
         </message>
         <message>
+            <source>Redo</source>
+            <translation>Redo</translation>
+        </message>
+        <message>
+            <source>Separator Component</source>
+            <translation>Separator Component</translation>
+        </message>
+        <message>
             <source>Serial number</source>
             <translation>Serial number</translation>
         </message>
@@ -335,6 +351,10 @@
         <message>
             <source>Text</source>
             <translation>Text</translation>
+        </message>
+        <message>
+            <source>Undo</source>
+            <translation>Undo</translation>
         </message>
         <message>
             <source>Watermark</source>
@@ -558,6 +578,45 @@
         </message>
     </context>
     <context>
+        <name>ScreenshotMcpSettings</name>
+        <message>
+            <source>Add this configuration to your MCP client, then restart the client to connect. Keep Snow Shot running while using MCP.</source>
+            <translation>Add this configuration to your MCP client, then restart the client to connect. Keep Snow Shot running while using MCP.</translation>
+        </message>
+        <message>
+            <source>Connected clients: %1</source>
+            <translation>Connected clients: %1</translation>
+        </message>
+        <message>
+            <source>Copied</source>
+            <translation>Copied</translation>
+        </message>
+        <message>
+            <source>Copy configuration</source>
+            <translation>Copy configuration</translation>
+        </message>
+        <message>
+            <source>Local endpoint descriptor: %1</source>
+            <translation>Local endpoint descriptor: %1</translation>
+        </message>
+        <message>
+            <source>MCP client configuration</source>
+            <translation>MCP client configuration</translation>
+        </message>
+        <message>
+            <source>MCP is disabled or unavailable.</source>
+            <translation>MCP is disabled or unavailable.</translation>
+        </message>
+        <message>
+            <source>Running</source>
+            <translation>Running</translation>
+        </message>
+        <message>
+            <source>Unavailable</source>
+            <translation>Unavailable</translation>
+        </message>
+    </context>
+    <context>
         <name>ScreenshotToolbarEditorSettingsWidget</name>
         <message>
             <source>Barcode recognition</source>
@@ -586,6 +645,10 @@
         <message>
             <source>Hidden tools</source>
             <translation>Hidden tools</translation>
+        </message>
+        <message>
+            <source>LaTeX Formula Recognition</source>
+            <translation>LaTeX Formula Recognition</translation>
         </message>
         <message>
             <source>No hidden tools</source>
@@ -766,6 +829,10 @@
             <translation>All screenshot history will be removed</translation>
         </message>
         <message>
+            <source>Allow MCP clients running as your OS user to control Snow Shot. Snow Shot must be running.</source>
+            <translation>Allow MCP clients running as your OS user to control Snow Shot. Snow Shot must be running.</translation>
+        </message>
+        <message>
             <source>Always</source>
             <translation>Always</translation>
         </message>
@@ -844,6 +911,10 @@
         <message>
             <source>Auto start at boot</source>
             <translation>Auto start at boot</translation>
+        </message>
+        <message>
+            <source>Auto-recognize QR Code</source>
+            <translation>Auto-recognize QR Code</translation>
         </message>
         <message>
             <source>Auto-save screenshot filename format</source>
@@ -968,6 +1039,10 @@
         <message>
             <source>Choose how much execution time the application receives</source>
             <translation>Choose how much execution time the application receives</translation>
+        </message>
+        <message>
+            <source>Choose how text detection resizes images. Limiting the long side is faster; enlarging the short side may find smaller text.</source>
+            <translation>Choose how text detection resizes images. Limiting the long side is faster; enlarging the short side may find smaller text.</translation>
         </message>
         <message>
             <source>Choose how the area behind recognized text is filled</source>
@@ -1204,6 +1279,10 @@
         <message>
             <source>Confirm before exiting screenshot via shortcut</source>
             <translation>Confirm before exiting screenshot via shortcut</translation>
+        </message>
+        <message>
+            <source>Connect AI clients to Snow Shot</source>
+            <translation>Connect AI clients to Snow Shot</translation>
         </message>
         <message>
             <source>Control when the screenshot color picker is visible</source>
@@ -1450,6 +1529,10 @@
             <translation>Edit selection</translation>
         </message>
         <message>
+            <source>Enable MCP integration</source>
+            <translation>Enable MCP integration</translation>
+        </message>
+        <message>
             <source>Enable edit mode</source>
             <translation>Enable edit mode</translation>
         </message>
@@ -1472,6 +1555,10 @@
         <message>
             <source>End recording</source>
             <translation>End recording</translation>
+        </message>
+        <message>
+            <source>Enlarge short side (more detail)</source>
+            <translation>Enlarge short side (more detail)</translation>
         </message>
         <message>
             <source>Enter or browse to a PNG or ICO file; invalid files use the selected bundled icon</source>
@@ -1794,6 +1881,10 @@
             <translation>Limit how much disk space screenshot history can use</translation>
         </message>
         <message>
+            <source>Limit long side (faster)</source>
+            <translation>Limit long side (faster)</translation>
+        </message>
+        <message>
             <source>Line</source>
             <translation>Line</translation>
         </message>
@@ -1808,6 +1899,14 @@
         <message>
             <source>Low</source>
             <translation>Low</translation>
+        </message>
+        <message>
+            <source>MCP</source>
+            <translation>MCP</translation>
+        </message>
+        <message>
+            <source>MCP connection and client setup</source>
+            <translation>MCP connection and client setup</translation>
         </message>
         <message>
             <source>MSAA</source>
@@ -2188,6 +2287,10 @@
         <message>
             <source>Recapture</source>
             <translation>Recapture</translation>
+        </message>
+        <message>
+            <source>Recognize QR codes automatically after confirming the screenshot selection area.</source>
+            <translation>Recognize QR codes automatically after confirming the screenshot selection area.</translation>
         </message>
         <message>
             <source>Recognize global mouse gestures while you use other apps.</source>
@@ -2802,6 +2905,10 @@
             <translation>Text Recognition</translation>
         </message>
         <message>
+            <source>Text detection scaling</source>
+            <translation>Text detection scaling</translation>
+        </message>
+        <message>
             <source>Text recognition</source>
             <translation>Text recognition</translation>
         </message>
@@ -2840,6 +2947,10 @@
         <message>
             <source>Thumbnail mode</source>
             <translation>Thumbnail mode</translation>
+        </message>
+        <message>
+            <source>Toggle Global/Relative Coordinates</source>
+            <translation>Toggle Global/Relative Coordinates</translation>
         </message>
         <message>
             <source>Toggle hotkeys</source>
@@ -2960,6 +3071,10 @@
         <message>
             <source>Video save directory</source>
             <translation>Video save directory</translation>
+        </message>
+        <message>
+            <source>View connection status and configure your MCP client.</source>
+            <translation>View connection status and configure your MCP client.</translation>
         </message>
         <message>
             <source>Vision Support</source>

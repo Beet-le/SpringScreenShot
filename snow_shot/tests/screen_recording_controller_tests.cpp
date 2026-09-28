@@ -1,3 +1,4 @@
+#include "window_close_shortcut_test_support.h"
 #include <QFontDatabase>
 #include "recording_effect_test_source.h"
 #include "../src/presentation/recording/recordingeffectstyle.h"
@@ -28,7 +29,9 @@
 #include "widgets/dpi_stable_window_controller.h"
 
 #include <QApplication>
+#include <QtMath>
 #include <QDir>
+#include <QFileInfo>
 #include <QTemporaryDir>
 #include <QElapsedTimer>
 #include <QThread>
@@ -38,6 +41,7 @@
 #include <QScreen>
 #include <QPointer>
 #include <QTimer>
+#include <QJsonArray>
 #include <QMessageBox>
 #include "widgets/color_picker.h"
 #include <future>
@@ -214,6 +218,21 @@ void stopAndCopyBusyIndicatorsStayOnTheInitiatingControl() {
     }
 }
 
+#ifdef Q_OS_MACOS
+void standardCloseFromRecordingArea() {
+    ScreenRecordingController controller(testEffectsSource);
+    controller.open({40, 40, 320, 240});
+    ScreenRecordingAreaWindow* area = nullptr;
+    for (auto* widget : QApplication::topLevelWidgets())
+        if (auto* candidate = qobject_cast<ScreenRecordingAreaWindow*>(widget))
+            area = candidate;
+    require(area && triggerWindowCloseShortcut(area), "recording area registers standard Close");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    require(!controller.isOpen() && recordingWindowCount() == 0,
+            "standard Close on the area retires both recording windows");
+}
+#endif
+
 void closeAndStopHaveIndependentUiLifetimes() {
     ErrorObserver errors;
     qApp->installEventFilter(&errors);
@@ -239,7 +258,12 @@ void closeAndStopHaveIndependentUiLifetimes() {
                     "subsequent recordings must snapshot disabled looping");
             if (close) {
                 // Exercise the native close path as well as the toolbar command.
+#ifdef Q_OS_MACOS
+                require(triggerWindowCloseShortcut(toolbar),
+                        "recording toolbar registers standard Close");
+#else
                 toolbar->close();
+#endif
             } else {
                 palette()->recordingStopRequested();
             }
@@ -311,6 +335,36 @@ void requireToolbarAboveArea(ScreenRecordingAreaWindow* area) {
     require(toolbar->windowHandle()->transientParent() == area->windowHandle(),
             "recording toolbar must retain the area as its transient owner");
     area->setInputMode(previousInputMode);
+}
+
+void recordingExpandsSmallSelectionsOnOpenAndReopen() {
+    ScreenRecordingController controller(testEffectsSource);
+    for (const QSize size :
+         {QSize(1, 1), QSize(1, 100), QSize(9, 9), QSize(10, 10), QSize(320, 240)}) {
+        controller.open(QRect(QPoint(40, 40), size));
+        QCoreApplication::processEvents();
+        ScreenRecordingAreaWindow* area = nullptr;
+        for (QWidget* widget : QApplication::topLevelWidgets()) {
+            if (auto* candidate = qobject_cast<ScreenRecordingAreaWindow*>(widget))
+                area = candidate;
+        }
+        require(area != nullptr, "even a one-pixel selection must open recording");
+#ifdef Q_OS_MACOS
+        const int minimum = qCeil(10.0 / area->devicePixelRatioF());
+#else
+        const int minimum = 10;
+#endif
+        const QSize expected = size.expandedTo(QSize(minimum, minimum));
+        require(area->recordingRegion().topLeft() == QPoint(40, 40) &&
+                    area->recordingRegion().size() == expected,
+                "open and reopen must expand only the undersized dimensions");
+        const QJsonArray state =
+            controller.automationState().value(QStringLiteral("region")).toArray();
+        require(state == QJsonArray{40, 40, expected.width(), expected.height()},
+                "controller and visible area must agree on the expanded region");
+    }
+    palette()->recordingCloseRequested();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 }
 
 void recordingAreaOwnsFocusAcrossPresentation() {
@@ -1377,29 +1431,41 @@ int nativeEffectsPreviewCapture() {
                 keyInput.ki.wVk = 'A';
                 checkNative(SendInput(1, &keyInput, sizeof(INPUT)) == 1,
                             "native key input must reach the preview");
-                checkNative(waitUntil([&]() {
-                                if (!preview.hasFrame()) {
-                                    return false;
-                                }
-                                const qreal dpr = area.devicePixelRatioF();
-                                QImage image(area.canvas()->size() * dpr,
-                                             QImage::Format_RGBA8888_Premultiplied);
-                                image.setDevicePixelRatio(dpr);
-                                image.fill(Qt::transparent);
-                                {
-                                    QPainter painter(&image);
-                                    area.canvas()->render(&painter);
-                                }
-                                QRect keyPixels;
-                                for (int y = 0; y < image.height(); ++y) {
-                                    for (int x = 0; x < image.width(); ++x) {
-                                        if (image.pixelColor(x, y).alpha() > 16) {
-                                            keyPixels |= QRect(x, y, 1, 1);
-                                        }
-                                    }
-                                }
-                                return keyPixels.size() == QSize(64, 64);
-                            }),
+                QSize observedKeycap;
+                const bool keyboardFrame = waitUntil([&]() {
+                    if (!preview.hasFrame()) {
+                        return false;
+                    }
+                    const qreal dpr = area.devicePixelRatioF();
+                    QImage image(area.canvas()->size() * dpr,
+                                 QImage::Format_RGBA8888_Premultiplied);
+                    image.setDevicePixelRatio(dpr);
+                    image.fill(Qt::transparent);
+                    {
+                        QPainter painter(&image);
+                        area.canvas()->render(&painter);
+                    }
+                    QRect keyPixels;
+                    for (int y = 0; y < image.height(); ++y) {
+                        for (int x = 0; x < image.width(); ++x) {
+                            if (image.pixelColor(x, y).alpha() > 16) {
+                                keyPixels |= QRect(x, y, 1, 1);
+                            }
+                        }
+                    }
+                    observedKeycap = keyPixels.size();
+                    // The antialiased outer edge can fall below the
+                    // opacity threshold on one physical pixel.
+                    return keyPixels.width() >= 63 && keyPixels.width() <= 64 &&
+                           keyPixels.height() >= 63 && keyPixels.height() <= 64;
+                });
+                if (!keyboardFrame)
+                    std::cerr << "native keyboard preview bounds=" << observedKeycap.width() << 'x'
+                              << observedKeycap.height() << " dpr=" << area.devicePixelRatioF()
+                              << " capture=" << captureSize.width() << 'x' << captureSize.height()
+                              << " export=" << exportSize.width() << 'x' << exportSize.height()
+                              << '\n';
+                checkNative(keyboardFrame,
                             "native keyboard preview must remain exactly 64 physical pixels");
                 keyInput.ki.dwFlags = KEYEVENTF_KEYUP;
                 SendInput(1, &keyInput, sizeof(INPUT));
@@ -1668,6 +1734,132 @@ int main(int argc, char** argv) {
     QApplication::setFont(testFont);
     QFontDatabase::setApplicationFallbackFontFamilies(QChar::Script_Han,
                                                       {QStringLiteral("Snow Recording Test Han")});
+    if (app.arguments().contains(QStringLiteral("--automation-only"))) {
+        {
+            ScreenRecordingController manual(testEffectsSource);
+            const QRect region(10, 10, 320, 240);
+            manual.open(region);
+            const auto checkOption = [&](const QString& key, const QJsonValue& value,
+                                         const std::function<void(const QJsonValue&)>& change) {
+                const auto before = manual.automationState();
+                const auto original = before.value(QStringLiteral("options")).toObject().value(key);
+                require(original != value, "option fixture must change the value");
+                change(value);
+                const auto changed = manual.automationState();
+                require(changed.value(QStringLiteral("revision")).toInteger() >
+                                before.value(QStringLiteral("revision")).toInteger() &&
+                            changed.value(QStringLiteral("options")).toObject().value(key) == value,
+                        "manual options must be observable immediately without a timer tick");
+                change(value);
+                require(manual.automationState().value(QStringLiteral("revision")) ==
+                            changed.value(QStringLiteral("revision")),
+                        "repeated option values must not invalidate a revision");
+                change(original);
+                const auto restored = manual.automationState();
+                require(restored.value(QStringLiteral("revision")).toInteger() >
+                                changed.value(QStringLiteral("revision")).toInteger() &&
+                            restored.value(QStringLiteral("options")).toObject().value(key) ==
+                                original,
+                        "change then restore must invalidate stale commands between timer ticks");
+                require(manual.automationState() == restored,
+                        "reading automation state must not mutate its revision");
+            };
+            const auto options =
+                manual.automationState().value(QStringLiteral("options")).toObject();
+            checkOption(QStringLiteral("microphone"),
+                        !options.value(QStringLiteral("microphone")).toBool(),
+                        [](const QJsonValue& value) {
+                            palette()->recordingMicrophoneToggled(value.toBool());
+                        });
+            checkOption(QStringLiteral("system_audio"),
+                        !options.value(QStringLiteral("system_audio")).toBool(),
+                        [](const QJsonValue& value) {
+                            palette()->recordingSystemAudioToggled(value.toBool());
+                        });
+            checkOption(QStringLiteral("start_delay_seconds"), 7, [](const QJsonValue& value) {
+                palette()->recordingStartDelaySecondsChanged(value.toInt());
+            });
+            checkOption(QStringLiteral("keyboard_size"), 96, [](const QJsonValue& value) {
+                palette()->recordingKeyboardSizeChanged(value.toInt());
+            });
+            checkOption(QStringLiteral("mouse_trail"), QStringLiteral("#ff123456"),
+                        [](const QJsonValue& value) {
+                            palette()->recordingMouseTrailColorChanged(QColor(value.toString()));
+                        });
+            const auto beforeRegion =
+                manual.automationState().value(QStringLiteral("revision")).toInteger();
+            manual.open(region.translated(20, 20));
+            manual.open(region);
+            require(manual.automationState().value(QStringLiteral("revision")).toInteger() >
+                            beforeRegion &&
+                        manual.automationState()
+                                .value(QStringLiteral("options"))
+                                .toObject()
+                                .value(QStringLiteral("region")) == QJsonArray{10, 10, 320, 240},
+                    "reopening an existing UI tracks region changes and restoration");
+        }
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        const auto saved = ApplicationStorage::instance().configuration().snapshot();
+        ScreenRecordingController controller(testEffectsSource);
+        QString error;
+        require(!controller.startAutomation(QRect(10, 10, 320, 240),
+                                            {{QStringLiteral("frame_rate"), 37}}, &error) &&
+                    error == QStringLiteral("invalid_parameters") && !controller.isOpen(),
+                "invalid automation options must reject before opening recording UI");
+        require(controller.startAutomation(QRect(10, 10, 320, 240),
+                                           {{QStringLiteral("format"), QStringLiteral("gif")},
+                                            {QStringLiteral("start_delay_seconds"), 10},
+                                            {QStringLiteral("animated_frame_rate"), 15}},
+                                           &error),
+                "automation must support isolated recording options");
+        require(controller.automationState().value(QStringLiteral("operation")).toString() ==
+                    QStringLiteral("counting_down"),
+                "automation state must expose countdown");
+        const int previousStarts = starts.load();
+        controller.detachAutomation();
+        QCoreApplication::processEvents();
+        require(!controller.isOpen() && starts == previousStarts,
+                "disconnect must cancel countdown without starting capture");
+        require(ApplicationStorage::instance().configuration().snapshot() == saved,
+                "automation options must not change persistent preferences");
+        QTemporaryDir outputDirectory;
+        require(outputDirectory.isValid(), "recording output directory must be isolated");
+        const QString outputPath = outputDirectory.filePath(QStringLiteral("recording.mp4"));
+        require(controller.startAutomation(QRect(10, 10, 320, 240),
+                                           {{QStringLiteral("format"), QStringLiteral("mp4")},
+                                            {QStringLiteral("path"), outputPath},
+                                            {QStringLiteral("start_delay_seconds"), 0},
+                                            {QStringLiteral("frame_rate"), 24}},
+                                           &error),
+                "automation start must succeed");
+        waitForRecording(controller);
+        require(!QFileInfo::exists(outputPath),
+                "the controller must leave output publication to the recording exporter");
+        require(lastDirectConfig.capture_fps == 24,
+                "automation frame rate must reach the native capture configuration");
+        const auto runningRevision =
+            controller.automationState().value(QStringLiteral("revision")).toInteger();
+        require(controller.controlAutomation(QStringLiteral("pause"), {}, &error),
+                "automation pause must succeed");
+        require(controller.automationState().value(QStringLiteral("state")).toString() ==
+                    QStringLiteral("paused"),
+                "automation must expose paused state");
+        require(controller.controlAutomation(QStringLiteral("resume"), {}, &error),
+                "automation resume must succeed");
+        require(controller.automationState().value(QStringLiteral("revision")).toInteger() >
+                    runningRevision,
+                "pause then resume must invalidate a stale revision despite restoring state");
+        const int previousExports = exports.load();
+        controller.detachAutomation();
+        waitForIdle(controller);
+        require(exports == previousExports + 1 &&
+                    controller.automationState().value(QStringLiteral("finalized")).toBool(),
+                "disconnect must finalize exactly once and retain the output artifact");
+        require(ApplicationStorage::instance().configuration().snapshot() == saved,
+                "recording lifecycle must preserve persistent preferences");
+        ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (app.arguments().contains(QStringLiteral("--effects-preview-only"))) {
         class KeyTranslator : public QTranslator {
           public:
@@ -1702,6 +1894,7 @@ int main(int argc, char** argv) {
         ApplicationStorage::instance().shutdown();
         return 0;
     }
+    recordingExpandsSmallSelectionsOnOpenAndReopen();
     recordingAreaOwnsFocusAcrossPresentation();
     recordingToolbarReconcilesFrameBeforeShowing();
     recordingToolbarPlacementAcrossDisplays();
@@ -1861,6 +2054,9 @@ int main(int argc, char** argv) {
     QCoreApplication::processEvents();
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     require(starts == 1, "destroying the controller must cancel a queued recording start");
+#ifdef Q_OS_MACOS
+    standardCloseFromRecordingArea();
+#endif
     closeAndStopHaveIndependentUiLifetimes();
     require(snow_shot::storage::RecordingSettings().setLoopAnimatedImages(true),
             "restore recording loop preference");
