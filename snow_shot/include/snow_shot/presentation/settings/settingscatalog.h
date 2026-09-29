@@ -66,11 +66,13 @@ struct SettingsOptionDefinition {
 enum class SettingsSelectSource {
     Fixed,
     LanguageCatalog,
+    FontFamilies,
 };
 
 enum class SettingsSelectBinding {
     Theme,
     Language,
+    AppFont,
     ApplicationPriority,
     Proxy,
     UpdateMode,
@@ -125,6 +127,7 @@ enum class SettingsSwitchBinding {
     ScreenshotAreaTypeHint,
     TrayEnabled,
     ScreenshotAutoSaveAfterCopy,
+    ScreenshotQuickSelectionModification,
     ScreenshotCaptureCursor,
     ScreenshotCaptureUiInScrollingScreenshot,
     ScreenshotShutterSoundNotification,
@@ -242,6 +245,7 @@ struct SettingsDirectoryPathDefinition {
 };
 
 enum class SettingsTextBinding {
+    ServerUrl,
     ScreenshotManualFilenameFormat,
     ScreenshotAutoFilenameFormat,
     ScreenRecordingVideoFilenameFormat,
@@ -328,6 +332,7 @@ enum class SettingsCustomRenderer {
     PermissionInputMonitoring,
     PermissionMicrophone,
     CustomAiModels,
+    TextTranslationConfigurations,
     StorageStatus,
     DrawingToolbarEditor,
     ScreenshotToolbarEditor,
@@ -396,6 +401,7 @@ struct SettingsItemDefinition {
 };
 
 enum class SettingsSectionReset {
+    Server,
     None,
     ScreenshotShortcuts,
     GlobalMouse,
@@ -432,6 +438,7 @@ enum class SettingsSectionReset {
     TextRecognition,
     Translation,
     CustomAiModels,
+    TextTranslationConfigurations,
     ExtendedTranslation,
 };
 

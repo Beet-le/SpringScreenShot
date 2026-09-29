@@ -174,6 +174,10 @@
             <translation>取消</translation>
         </message>
         <message>
+            <source>Concurrency</source>
+            <translation>并发数</translation>
+        </message>
+        <message>
             <source>Copy</source>
             <translation>复制</translation>
         </message>
@@ -224,6 +228,10 @@
         <message>
             <source>Explicitly enable or disable reasoning in model requests.</source>
             <translation>在模型请求中显式开启或关闭推理。</translation>
+        </message>
+        <message>
+            <source>Maximum simultaneous translation and image conversion requests for this model (1-16).</source>
+            <translation>此模型同时进行的翻译和图像转换请求数上限（1-16）。</translation>
         </message>
         <message>
             <source>Model Name</source>
@@ -694,6 +702,10 @@
     <context>
         <name>SettingsBackend</name>
         <message>
+            <source>Enter a valid HTTP or HTTPS server address without credentials, a query, or a fragment.</source>
+            <translation>请输入有效的 HTTP 或 HTTPS 服务器地址，不包含凭据、查询参数或片段。</translation>
+        </message>
+        <message>
             <source>The clipboard is unavailable.</source>
             <translation>剪贴板不可用。</translation>
         </message>
@@ -833,6 +845,10 @@
             <translation>允许以当前系统用户身份运行的 MCP 客户端控制 Snow Shot。Snow Shot 必须保持运行。</translation>
         </message>
         <message>
+            <source>Allow resizing the selection from its borders while non-move tools are active</source>
+            <translation>启用非移动工具时，允许从选区边缘调整选区大小</translation>
+        </message>
+        <message>
             <source>Always</source>
             <translation>始终</translation>
         </message>
@@ -855,6 +871,10 @@
         <message>
             <source>Animated image frame rate</source>
             <translation>动图帧率</translation>
+        </message>
+        <message>
+            <source>App Font</source>
+            <translation>应用字体</translation>
         </message>
         <message>
             <source>App Permissions</source>
@@ -917,8 +937,8 @@
             <translation>自动识别二维码</translation>
         </message>
         <message>
-            <source>Auto-save screenshot filename format</source>
-            <translation>自动保存截图文件名格式</translation>
+            <source>Auto-save image filename format</source>
+            <translation>自动保存图像文件名格式</translation>
         </message>
         <message>
             <source>Automatic text recognition</source>
@@ -1089,16 +1109,20 @@
             <translation>选择图像输出和历史记录结果图像的压缩级别</translation>
         </message>
         <message>
-            <source>Choose the dialog used for manual screenshot saves</source>
-            <translation>选择手动保存截图时使用的对话框</translation>
+            <source>Choose the dialog used for manual image saves</source>
+            <translation>选择手动保存图像时使用的对话框</translation>
         </message>
         <message>
             <source>Choose the fixed point used when zooming a pinned screenshot</source>
             <translation>选择缩放固定到屏幕的截图时使用的固定点</translation>
         </message>
         <message>
-            <source>Choose the format used for automatically saved screenshot files</source>
-            <translation>选择自动保存的截图文件所使用的格式</translation>
+            <source>Choose the font used throughout the application</source>
+            <translation>选择整个应用使用的字体</translation>
+        </message>
+        <message>
+            <source>Choose the format used for automatically saved image files</source>
+            <translation>选择自动保存图像文件时使用的格式</translation>
         </message>
         <message>
             <source>Choose the functions shown in the system tray menu</source>
@@ -1115,6 +1139,10 @@
         <message>
             <source>Choose the primary color used throughout the theme</source>
             <translation>选择整个主题使用的主色</translation>
+        </message>
+        <message>
+            <source>Choose the server for built-in online services. Application updates are not affected.</source>
+            <translation>选择内置在线服务使用的服务器。此设置不影响应用更新。</translation>
         </message>
         <message>
             <source>Choose the size of the screenshot, pinned, and recording toolbars</source>
@@ -1245,8 +1273,8 @@
             <translation>配置应用程序进程行为</translation>
         </message>
         <message>
-            <source>Configure custom AI model connections</source>
-            <translation>配置自定义 AI 模型连接</translation>
+            <source>Configure custom AI models and text translation services</source>
+            <translation>配置自定义 AI 模型和文本翻译服务</translation>
         </message>
         <message>
             <source>Configure drawing tools and the screenshot drawing toolbar</source>
@@ -1357,6 +1385,10 @@
             <translation>光标辅助线颜色</translation>
         </message>
         <message>
+            <source>Custom DeepL, Baidu, and Youdao-compatible services</source>
+            <translation>自定义兼容 DeepL、百度和有道的服务</translation>
+        </message>
+        <message>
             <source>Custom Models</source>
             <translation>自定义模型</translation>
         </message>
@@ -1377,12 +1409,24 @@
             <translation>自定义截图工具栏</translation>
         </message>
         <message>
+            <source>Custom translation endpoints and concurrency</source>
+            <translation>自定义翻译端点和并发数</translation>
+        </message>
+        <message>
             <source>DXGI</source>
             <translation>DXGI</translation>
         </message>
         <message>
             <source>Dark</source>
             <translation>深色</translation>
+        </message>
+        <message>
+            <source>Decrease opacity by 10%</source>
+            <translation>不透明度减少 10%</translation>
+        </message>
+        <message>
+            <source>Decrease scale by 10%</source>
+            <translation>缩放比例减少 10%</translation>
         </message>
         <message>
             <source>Default</source>
@@ -1561,6 +1605,10 @@
             <translation>放大短边（更多细节）</translation>
         </message>
         <message>
+            <source>Enter an HTTP or HTTPS address. Changes apply immediately. Clear to use the default server.</source>
+            <translation>输入 HTTP 或 HTTPS 地址。更改立即生效。清空可使用默认服务器。</translation>
+        </message>
+        <message>
             <source>Enter or browse to a PNG or ICO file; invalid files use the selected bundled icon</source>
             <translation>输入或浏览选择 PNG 或 ICO 文件；无效文件将使用所选内置图标</translation>
         </message>
@@ -1629,6 +1677,14 @@
             <translation>固定到屏幕的截图</translation>
         </message>
         <message>
+            <source>Flip horizontally</source>
+            <translation>水平翻转</translation>
+        </message>
+        <message>
+            <source>Flip vertically</source>
+            <translation>垂直翻转</translation>
+        </message>
+        <message>
             <source>Focused window</source>
             <translation>焦点窗口</translation>
         </message>
@@ -1653,6 +1709,10 @@
             <translation>全屏</translation>
         </message>
         <message>
+            <source>Full-screen canvas (enable/disable click-through)</source>
+            <translation>全屏画布（开启/关闭鼠标穿透）</translation>
+        </message>
+        <message>
             <source>Fullscreen suppression</source>
             <translation>全屏抑制</translation>
         </message>
@@ -1675,6 +1735,10 @@
         <message>
             <source>General system integration settings</source>
             <translation>常规系统集成设置</translation>
+        </message>
+        <message>
+            <source>Global Canvas</source>
+            <translation>全局画布</translation>
         </message>
         <message>
             <source>Global hotkey activation behavior</source>
@@ -1730,7 +1794,7 @@
         </message>
         <message>
             <source>Hotkey hint opacity</source>
-            <translation>快捷键提示透明度</translation>
+            <translation>快捷键提示不透明度</translation>
         </message>
         <message>
             <source>Icon</source>
@@ -1739,6 +1803,10 @@
         <message>
             <source>Ignore global hotkeys while the focused window occupies an entire monitor</source>
             <translation>焦点窗口占满整个显示器时忽略全局快捷键</translation>
+        </message>
+        <message>
+            <source>Image Export</source>
+            <translation>图像导出</translation>
         </message>
         <message>
             <source>Image files (*.png *.ico);;PNG images (*.png);;Icon files (*.ico)</source>
@@ -1791,6 +1859,14 @@
         <message>
             <source>Include the screenshot window and its toolbar in the stitched scrolling screenshot.</source>
             <translation>在拼接后的滚动截图中包含截图窗口及其工具栏。</translation>
+        </message>
+        <message>
+            <source>Increase opacity by 10%</source>
+            <translation>不透明度增加 10%</translation>
+        </message>
+        <message>
+            <source>Increase scale by 10%</source>
+            <translation>缩放比例增加 10%</translation>
         </message>
         <message>
             <source>Input Monitoring</source>
@@ -1929,8 +2005,8 @@
             <translation>手动</translation>
         </message>
         <message>
-            <source>Manual save screenshot filename format</source>
-            <translation>手动保存截图文件名格式</translation>
+            <source>Manual save image filename format</source>
+            <translation>手动保存图像文件名格式</translation>
         </message>
         <message>
             <source>Match your system appearance or choose a light or dark theme</source>
@@ -2079,6 +2155,10 @@
         <message>
             <source>Open Login Items Settings</source>
             <translation>打开登录项设置</translation>
+        </message>
+        <message>
+            <source>Open a canvas on the current display or toggle click-through</source>
+            <translation>在当前显示器上打开画布或切换鼠标穿透</translation>
         </message>
         <message>
             <source>Open selected text translation in a standalone window.</source>
@@ -2273,6 +2353,10 @@
             <translation>代理</translation>
         </message>
         <message>
+            <source>Quick Selection Modification</source>
+            <translation>快速修改选区</translation>
+        </message>
+        <message>
             <source>Quick save</source>
             <translation>快速保存</translation>
         </message>
@@ -2381,6 +2465,10 @@
             <translation>重置缩放</translation>
         </message>
         <message>
+            <source>Reset transform</source>
+            <translation>重置变换</translation>
+        </message>
+        <message>
             <source>Resident Recognition Process</source>
             <translation>常驻识别进程</translation>
         </message>
@@ -2445,8 +2533,12 @@
             <translation>在截图中还原受支持的全屏颜色滤镜效果。</translation>
         </message>
         <message>
-            <source>Save a PNG file automatically whenever a screenshot is copied</source>
-            <translation>每次复制截图时自动保存 PNG 文件</translation>
+            <source>Rotate clockwise</source>
+            <translation>顺时针旋转</translation>
+        </message>
+        <message>
+            <source>Rotate counterclockwise</source>
+            <translation>逆时针旋转</translation>
         </message>
         <message>
             <source>Save as file</source>
@@ -2541,10 +2633,6 @@
             <translation>截图界面和视觉辅助设置</translation>
         </message>
         <message>
-            <source>Screenshot output locations, formats, and filenames</source>
-            <translation>截图输出位置、格式和文件名</translation>
-        </message>
-        <message>
             <source>Screenshot selection behavior</source>
             <translation>截图选择行为</translation>
         </message>
@@ -2571,10 +2659,6 @@
         <message>
             <source>Screenshot translation settings</source>
             <translation>截图翻译设置</translation>
-        </message>
-        <message>
-            <source>Screenshots</source>
-            <translation>截图</translation>
         </message>
         <message>
             <source>Scrolling screenshot</source>
@@ -2633,8 +2717,12 @@
             <translation>序号</translation>
         </message>
         <message>
-            <source>Set image quality for screenshot files saved outside the Snow Shot dialog</source>
-            <translation>设置通过 Snow Shot 对话框以外的方式保存截图文件时的图像质量</translation>
+            <source>Server address</source>
+            <translation>服务器地址</translation>
+        </message>
+        <message>
+            <source>Set quality for image files saved outside the Snow Shot dialog</source>
+            <translation>设置在 Snow Shot 对话框以外保存的图像文件质量</translation>
         </message>
         <message>
             <source>Set the border color of pinned screenshots</source>
@@ -2650,23 +2738,23 @@
         </message>
         <message>
             <source>Set the color and opacity outside the screenshot selection</source>
-            <translation>设置截图选区外区域的颜色和透明度</translation>
+            <translation>设置截图选区外区域的颜色和不透明度</translation>
         </message>
         <message>
             <source>Set the frame rate of exported animated images</source>
             <translation>设置导出动图的帧率</translation>
         </message>
         <message>
-            <source>Set the generated filename used by automatic screenshot file saves</source>
-            <translation>设置自动保存截图文件时使用的自动生成文件名</translation>
+            <source>Set the generated filename used by automatic image file saves</source>
+            <translation>设置自动保存图像文件时生成的文件名</translation>
         </message>
         <message>
             <source>Set the generated filename used for recording output files</source>
             <translation>设置录制输出文件使用的自动生成文件名</translation>
         </message>
         <message>
-            <source>Set the generated filename used when saving a screenshot as a file</source>
-            <translation>设置将截图保存为文件时使用的自动生成文件名</translation>
+            <source>Set the generated filename used when saving an image as a file</source>
+            <translation>设置将图像保存为文件时生成的文件名</translation>
         </message>
         <message>
             <source>Set the maximum resolution of exported animated images</source>
@@ -2674,7 +2762,7 @@
         </message>
         <message>
             <source>Set the overall opacity of screenshot shortcut hints</source>
-            <translation>设置截图快捷键提示的整体透明度</translation>
+            <translation>设置截图快捷键提示的整体不透明度</translation>
         </message>
         <message>
             <source>Set the screen recording frame rate</source>
@@ -2705,8 +2793,12 @@
             <translation>图形</translation>
         </message>
         <message>
+            <source>Shared image export settings for screenshot and pin-to-screen windows</source>
+            <translation>截图窗口和贴图窗口共用的图像导出设置</translation>
+        </message>
+        <message>
             <source>Shortcut hint opacity</source>
-            <translation>快捷键提示透明度</translation>
+            <translation>快捷键提示不透明度</translation>
         </message>
         <message>
             <source>Shortcut keys for drawing tools</source>
@@ -2783,6 +2875,10 @@
         <message>
             <source>Snow Shot</source>
             <translation>Snow Shot</translation>
+        </message>
+        <message>
+            <source>Snow Shot server</source>
+            <translation>Snow Shot 服务器</translation>
         </message>
         <message>
             <source>Snowflake</source>
@@ -2873,6 +2969,10 @@
             <translation>系统</translation>
         </message>
         <message>
+            <source>System default</source>
+            <translation>系统默认</translation>
+        </message>
+        <message>
             <source>System settings</source>
             <translation>系统设置</translation>
         </message>
@@ -2903,6 +3003,10 @@
         <message>
             <source>Text Recognition</source>
             <translation>文字识别</translation>
+        </message>
+        <message>
+            <source>Text Translation</source>
+            <translation>文本翻译</translation>
         </message>
         <message>
             <source>Text detection scaling</source>
@@ -2991,6 +3095,10 @@
         <message>
             <source>Translation</source>
             <translation>翻译</translation>
+        </message>
+        <message>
+            <source>Translation Configurations</source>
+            <translation>翻译配置</translation>
         </message>
         <message>
             <source>Translation Page</source>
@@ -3093,6 +3201,10 @@
             <translation>WebP</translation>
         </message>
         <message>
+            <source>When copying an image to the clipboard, also save it in the selected image format and save directory</source>
+            <translation>将图像复制到剪贴板时，同时按所选图像格式保存到指定目录</translation>
+        </message>
+        <message>
             <source>Window Element API</source>
             <translation>窗口元素 API</translation>
         </message>
@@ -3105,8 +3217,8 @@
             <translation>窗口分组</translation>
         </message>
         <message>
-            <source>Write the screenshot to a file and copy that file to the clipboard</source>
-            <translation>将截图写入文件并将该文件复制到剪贴板</translation>
+            <source>Write the image to a file and copy that file to the clipboard</source>
+            <translation>将图像写入文件并将该文件复制到剪贴板</translation>
         </message>
         <message>
             <source>Zip archives (*.zip);;All files (*.*)</source>
@@ -3427,6 +3539,137 @@ Unavailable: %2</source>
         </message>
     </context>
     <context>
+        <name>TextTranslationSettingsWidget</name>
+        <message>
+            <source>%1 (Copy %2)</source>
+            <translation>%1（副本 %2）</translation>
+        </message>
+        <message>
+            <source>%1 (Copy)</source>
+            <translation>%1（副本）</translation>
+        </message>
+        <message>
+            <source>%1 configuration %2</source>
+            <translation>%1配置 %2</translation>
+        </message>
+        <message>
+            <source>A configuration with this name already exists.</source>
+            <translation>已存在同名配置。</translation>
+        </message>
+        <message>
+            <source>API Key</source>
+            <translation>API 密钥</translation>
+        </message>
+        <message>
+            <source>API URL</source>
+            <translation>API URL</translation>
+        </message>
+        <message>
+            <source>Add Configuration</source>
+            <translation>添加配置</translation>
+        </message>
+        <message>
+            <source>Application ID</source>
+            <translation>应用 ID</translation>
+        </message>
+        <message>
+            <source>Application Secret</source>
+            <translation>应用密钥</translation>
+        </message>
+        <message>
+            <source>Baidu</source>
+            <translation>百度</translation>
+        </message>
+        <message>
+            <source>Cancel</source>
+            <translation>取消</translation>
+        </message>
+        <message>
+            <source>Concurrency</source>
+            <translation>并发数</translation>
+        </message>
+        <message>
+            <source>Configuration Name</source>
+            <translation>配置名称</translation>
+        </message>
+        <message>
+            <source>Copy</source>
+            <translation>复制</translation>
+        </message>
+        <message>
+            <source>DeepL</source>
+            <translation>DeepL</translation>
+        </message>
+        <message>
+            <source>Delete</source>
+            <translation>删除</translation>
+        </message>
+        <message>
+            <source>Delete Configuration</source>
+            <translation>删除配置</translation>
+        </message>
+        <message>
+            <source>Delete configuration "%1"? If selected, another available service will be used.</source>
+            <translation>删除配置“%1”？如果当前已选用此配置，将改用其他可用服务。</translation>
+        </message>
+        <message>
+            <source>Edit</source>
+            <translation>编辑</translation>
+        </message>
+        <message>
+            <source>Edit Configuration</source>
+            <translation>编辑配置</translation>
+        </message>
+        <message>
+            <source>Enter a configuration name.</source>
+            <translation>请输入配置名称。</translation>
+        </message>
+        <message>
+            <source>Enter a full HTTP or HTTPS endpoint without embedded credentials or a fragment.</source>
+            <translation>请输入完整的 HTTP 或 HTTPS 端点，不含嵌入式凭据或片段。</translation>
+        </message>
+        <message>
+            <source>Maximum simultaneous requests for this configuration across translation jobs (1-16).</source>
+            <translation>此配置在所有翻译任务中的最大同时请求数（1-16）。</translation>
+        </message>
+        <message>
+            <source>No translation configurations added</source>
+            <translation>尚未添加翻译配置</translation>
+        </message>
+        <message>
+            <source>Optional for servers that do not require authentication.</source>
+            <translation>不需要身份验证的服务器可留空。</translation>
+        </message>
+        <message>
+            <source>Save</source>
+            <translation>保存</translation>
+        </message>
+        <message>
+            <source>Service Format</source>
+            <translation>服务格式</translation>
+        </message>
+        <message>
+            <source>The API key must not contain line breaks.</source>
+            <translation>API 密钥不能包含换行符。</translation>
+        </message>
+        <message>
+            <source>The full translation endpoint. Its path and query are used as entered.</source>
+            <translation>完整的翻译端点。路径和查询参数将按输入内容使用。</translation>
+        </message>
+        <message>
+            <source>This configuration was deleted. Close this form and create a new configuration.</source>
+            <translation>此配置已被删除。请关闭此表单并创建新配置。</translation>
+        </message>
+        <message>
+            <source>Unable to save configurations. Check that configuration storage is writable and try again.</source>
+            <translation>无法保存配置。请检查配置存储是否可写，然后重试。</translation>
+        </message>
+        <message>
+            <source>Youdao</source>
+            <translation>有道</translation>
+        </message>
+    </context>
+    <context>
         <name>snow_shot::presentation::GlobalMouseManager</name>
         <message>
             <source>Allow Snow Shot in System Settings &gt; Privacy &amp; Security &gt; Accessibility to use global mouse gestures.</source>
@@ -3483,8 +3726,8 @@ Unavailable: %2</source>
     <context>
         <name>snow_shot::storage::ConfigurationStore</name>
         <message>
-            <source>Some custom AI model configurations are invalid and were ignored</source>
-            <translation>部分自定义 AI 模型配置无效，已忽略。</translation>
+            <source>Some custom API configurations are invalid and were ignored</source>
+            <translation>部分自定义 API 配置无效，已被忽略</translation>
         </message>
     </context>
 </TS>

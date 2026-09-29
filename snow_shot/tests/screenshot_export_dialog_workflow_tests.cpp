@@ -25,6 +25,9 @@
 #include "widgets/slider.h"
 #include "widgets/popover.h"
 #include "theme/theme_manager.h"
+#ifdef Q_OS_MACOS
+#include "macos_native_input.h"
+#endif
 
 #include <QApplication>
 #include <QColorSpace>
@@ -149,6 +152,7 @@ void reusablePathInputsAndSettings() {
     const auto& registry = settings::builtInSettingsRegistry();
     settings::SettingsRuntimeSession session(registry, backend);
     SettingsPageWidget storagePage(registry, QStringLiteral("storage-and-privacy"), session);
+    storagePage.reveal({storagePage.pageId(), QStringLiteral("screen-recording-output"), {}});
     const auto directoryControls = storagePage.findChildren<DirectoryPathInput*>();
     require(directoryControls.size() == 2,
             "all screenshot and recording directory settings must use DirectoryPathInput");
@@ -160,6 +164,7 @@ void reusablePathInputsAndSettings() {
     }
 
     SettingsPageWidget interfacePage(registry, QStringLiteral("interface-settings"), session);
+    interfacePage.reveal({interfacePage.pageId(), QStringLiteral("tray"), {}});
     const auto fileControls = interfacePage.findChildren<FilePathInput*>();
     require(fileControls.size() == 1 &&
                 adqt::icons::describeIcon(fileControls.constFirst()->browseButton()->iconRef())
@@ -242,7 +247,15 @@ void saveDialogKeepsToolbarVisible() {
                 "the screenshot toolbar must remain visible throughout Save as File");
         require(!toolbar.testAttribute(Qt::WA_DontShowOnScreen),
                 "saving must not alter the toolbar's native visibility attributes");
-        if (QApplication::platformName() != QStringLiteral("offscreen")) {
+#ifdef Q_OS_MACOS
+        if (QApplication::platformName() == QStringLiteral("cocoa")) {
+            // Cocoa's native modal ordering can differ from Qt's topLevelAt()
+            // when the dialog's transient toolbar differs from its QWidget owner.
+            require(macWindowReceivesPoint(surface, toolbar.geometry().center()),
+                    "the native save dialog must remain above its toolbar after a queued raise");
+        } else
+#endif
+            if (QApplication::platformName() != QStringLiteral("offscreen")) {
             require(QApplication::topLevelAt(toolbar.geometry().center()) == surface,
                     "the save dialog must remain above its toolbar after a queued raise");
         }
@@ -311,12 +324,21 @@ void persistence(const QTemporaryDir& temp) {
     require(backend.selectValue(settings::SettingsSelectBinding::ScreenshotSaveAsFileDialog) ==
                 QStringLiteral("snow_shot"),
             "settings backend failed to read dialog selection");
-    require(backend.resetSection(settings::SettingsSectionReset::ScreenshotSettings) &&
+    require(backend.resetSection(settings::SettingsSectionReset::ScreenshotOutput) &&
                 adapter.saveAsFileDialog() == QStringLiteral("system"),
-            "reset must restore system dialog");
+            "screenshot output reset must restore the system dialog");
     require(backend.applySelectValue(settings::SettingsSelectBinding::ScreenshotSaveAsFileDialog,
                                      QStringLiteral("snow_shot")),
             "settings backend failed to write dialog selection");
+    require(adapter.setAutoSaveAfterCopy(true) && adapter.setCopyImageFileToClipboard(true) &&
+                backend.resetSection(settings::SettingsSectionReset::ScreenshotSettings) &&
+                adapter.autoSaveAfterCopy() && adapter.copyImageFileToClipboard() &&
+                adapter.saveAsFileDialog() == QStringLiteral("snow_shot"),
+            "function reset must preserve screenshot output settings");
+    require(backend.resetSection(settings::SettingsSectionReset::ScreenshotOutput) &&
+                !adapter.autoSaveAfterCopy() && !adapter.copyImageFileToClipboard() &&
+                adapter.saveAsFileDialog() == QStringLiteral("system"),
+            "output reset must restore all moved screenshot settings");
 
     const QString pathKey = QStringLiteral("screenshot/save_path_shortcuts");
     const auto malformed =

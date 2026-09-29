@@ -101,10 +101,13 @@ void captureFamiliesFollowOwnership() {
     QWindow toolbar;
     toolbar.setProperty(kScreenshotLayer, kToolbarLayer);
     toolbar.setProperty(kCaptureFamily, static_cast<int>(CaptureFamily::Recording));
+    QWindow pin;
+    pin.setProperty(kScreenshotLayer, kOverlayLayer);
+    pin.setProperty(kCaptureFamily, static_cast<int>(CaptureFamily::Pinned));
     QWindow popup;
     QWindow nested;
     nested.setTransientParent(&popup);
-    for (QWindow* owner : {&recording, &screenshot, &toolbar}) {
+    for (QWindow* owner : {&pin, &recording, &screenshot, &toolbar}) {
         popup.setTransientParent(owner);
         const auto parent = captureLayer(owner);
         const auto child = captureLayer(&popup);
@@ -114,12 +117,18 @@ void captureFamiliesFollowOwnership() {
                 "nested popups must remain above their parent");
     }
     popup.setModality(Qt::WindowModal);
-    const ModalFloors floors{20, 7};
+    const ModalFloors floors{20, 7, 3, 11};
     require(captureLayer(&popup, floors).layer == 7,
             "recording modals must not inherit the screenshot modal floor");
     popup.setTransientParent(&screenshot);
     require(captureLayer(&popup, floors).layer == 20,
             "reparented modals must use the new family's floor");
+    popup.setTransientParent(&pin);
+    require(captureLayer(&popup, floors).layer == 11 &&
+                captureWindowLevel(captureLayer(&nested, floors)) > pinLevel &&
+                captureWindowLevel({CaptureFamily::Pinned, 1000}) <
+                    captureWindowLevel({CaptureFamily::Recording, kOverlayLayer}),
+            "pin modals and nested popups must share an inherited band below recording");
     popup.setTransientParent(nullptr);
     require(!captureLayer(&popup).valid() && !captureLayer(&nested).valid(),
             "detached popups must release inherited capture roles");
@@ -134,6 +143,7 @@ void captureFamiliesKeepNativeOrder() {
     using namespace snow_shot::presentation;
     OverlayFixture screenshot;
     ToolFixture pin;
+    ToolFixture pinPopup;
     ToolFixture recording;
     ToolFixture toolbar;
     ToolFixture popup;
@@ -146,6 +156,9 @@ void captureFamiliesKeepNativeOrder() {
     }
     auto pinnedPlatform = createPinnedWindowPlatform(static_cast<QWidget*>(&pin));
     require(pinnedPlatform->attach(), "pin must attach to its real Cocoa policy");
+    pinPopup.winId();
+    pinPopup.windowHandle()->setTransientParent(pin.windowHandle());
+    pinPopup.show();
     configureScreenRecordingAreaWindow(static_cast<QWidget*>(&recording));
     configureScreenRecordingToolbarWindow(static_cast<QWidget*>(&toolbar));
     toolbar.windowHandle()->setTransientParent(recording.windowHandle());
@@ -166,6 +179,12 @@ void captureFamiliesKeepNativeOrder() {
             require(native(pin).level > CGWindowLevelForKey(kCGMainMenuWindowLevelKey) &&
                         native(pin).level > CGWindowLevelForKey(kCGDockWindowLevelKey),
                     "raising capture windows must leave topmost pins above system chrome");
+        require(native(pinPopup).level > native(pin).level &&
+                    native(pinPopup).level < native(recording).level,
+                "pin popups must inherit their owner's band below recording windows");
+        if (!pinTopmost)
+            require(native(pinPopup).level < detail::pinnedWindowLevel(),
+                    "disabling pin topmost must also release its descendants' elevated levels");
         require(native(recording).level > CGWindowLevelForKey(kCGMainMenuWindowLevelKey) &&
                     native(recording).level > CGWindowLevelForKey(kCGDockWindowLevelKey),
                 "recording must retain its position above system chrome");
@@ -331,6 +350,38 @@ void screenshotNativeSettingsFollowOwnership() {
     }
 }
 
+void screenshotPresentationFollowsOwnership() {
+    OverlayFixture overlay;
+    ToolFixture ordinaryOwner;
+    ToolFixture dialog;
+    dialog.setWindowFlags(Qt::Dialog | Qt::WindowTitleHint);
+    overlay.show();
+    ordinaryOwner.show();
+    for (int surface = 0; surface != 2; ++surface) {
+        dialog.show();
+        dialog.windowHandle()->setTransientParent(ordinaryOwner.windowHandle());
+        NSWindow* native = reinterpret_cast<NSView*>(dialog.winId()).window;
+        native.animationBehavior = NSWindowAnimationBehaviorDefault;
+        dialog.windowHandle()->setTransientParent(overlay.windowHandle());
+        require(native.animationBehavior == NSWindowAnimationBehaviorDocumentWindow,
+                "elevating a titled window must preserve the normal level's default animation");
+        for (auto explicitBehavior :
+             {NSWindowAnimationBehaviorNone, NSWindowAnimationBehaviorUtilityWindow}) {
+            native.animationBehavior = explicitBehavior;
+            overlay.raise();
+            require(native.animationBehavior == explicitBehavior,
+                    "capture stacking must respect explicit animation choices");
+        }
+        native.animationBehavior = NSWindowAnimationBehaviorDefault;
+        require(native.animationBehavior == NSWindowAnimationBehaviorDocumentWindow,
+                "resetting animation to default must retain presentation at the capture level");
+        dialog.windowHandle()->setTransientParent(ordinaryOwner.windowHandle());
+        require(native.animationBehavior == NSWindowAnimationBehaviorDefault,
+                "leaving capture must restore the requested default animation policy");
+        dialog.recreateSurface();
+    }
+}
+
 void screenshotWindowsKeepTheirStackingOrder(bool cocoa) {
     OverlayFixture overlay;
     overlay.resize(64, 64);
@@ -406,14 +457,21 @@ void screenshotWindowsKeepTheirStackingOrder(bool cocoa) {
         QWidget* surface = content->window();
         recognition.raise();
         toolbar.raise();
-        require(QApplication::activeModalWidget() == surface,
-                "the selection editor must own modal interaction");
+        QWidget* blocker = QApplication::activeModalWidget();
+        require(
+            attempt < 2 ? blocker == surface
+                        : blocker && blocker->windowModality() == Qt::WindowModal &&
+                              surface->windowHandle()->transientParent() == blocker->windowHandle(),
+            "application modals must keep native modality; window modals must block their owner");
         if (cocoa) {
             NSWindow* nativeModal = reinterpret_cast<NSView*>(surface->winId()).window;
             require(attempt < 2 ? NSApp.modalWindow == nativeModal
-                                : nativeModal.sheetParent ==
-                                      reinterpret_cast<NSView*>(overlay.winId()).window,
-                    "the test must exercise a Cocoa modal session or window-modal sheet");
+                                : !nativeModal.isSheet && nativeModal.movable &&
+                                      nativeModal.parentWindow == nil &&
+                                      nativeModal.animationBehavior ==
+                                          NSWindowAnimationBehaviorDocumentWindow,
+                    "application modals must use Cocoa presentation; window modals must retain "
+                    "independent movement and presentation animation");
             require(level(*surface) > level(recognition) && level(*surface) > level(toolbar) &&
                         level(*surface) > level(nestedPopup),
                     "the selection modal must cover OCR results, toolbars, and their popups");
@@ -593,6 +651,16 @@ void adqtPopupPreservesScreenshotLayers(bool cocoa) {
         recognition.raise();
         recognition.activateWindow();
         QCoreApplication::processEvents();
+        // A real toolbar click activates its scope before opening the popover.
+        // Cocoa activation is asynchronous; a pending recognition activation
+        // would otherwise dismiss the newly opened popup as ScopeDeactivated.
+        toolbar.activateWindow();
+        QElapsedTimer activation;
+        activation.start();
+        while (!toolbar.isActiveWindow() && activation.elapsed() < 3000)
+            finishNativeModalTransition();
+        require(toolbar.isActiveWindow(), "the toolbar must own focus before opening its popup");
+        finishNativeModalTransition();
         popover.show();
         QCoreApplication::processEvents();
         recognition.raise();
@@ -620,6 +688,20 @@ void adqtPopupPreservesScreenshotLayers(bool cocoa) {
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     const bool cocoa = QGuiApplication::platformName() == QStringLiteral("cocoa");
+    if (app.arguments().contains(QStringLiteral("--presentation-policy-only"))) {
+        if (cocoa) {
+            @autoreleasepool {
+                screenshotPresentationFollowsOwnership();
+            }
+        }
+        return 0;
+    }
+    if (app.arguments().contains(QStringLiteral("--modal-stacking-only"))) {
+        @autoreleasepool {
+            screenshotWindowsKeepTheirStackingOrder(cocoa);
+        }
+        return 0;
+    }
     if (app.arguments().contains(QStringLiteral("--recognition-stacking-only"))) {
         @autoreleasepool {
             adqtPopupPreservesScreenshotLayers(cocoa);
@@ -678,6 +760,7 @@ int main(int argc, char** argv) {
         if (cocoa) {
             captureFamiliesKeepNativeOrder();
             screenshotNativeSettingsFollowOwnership();
+            screenshotPresentationFollowsOwnership();
         }
         screenshotWindowsKeepTheirStackingOrder(cocoa);
         adqtPopupPreservesScreenshotLayers(cocoa);

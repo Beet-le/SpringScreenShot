@@ -122,7 +122,8 @@ typedef enum SnowFilterType {
     SNOW_FILTER_TYPE_GRAYSCALE = 2,
     SNOW_FILTER_TYPE_INVERSION = 3,
     SNOW_FILTER_TYPE_EMBOSS = 4,
-    SNOW_FILTER_TYPE_SMART_ERASE = 5
+    SNOW_FILTER_TYPE_SMART_ERASE = 5,
+    SNOW_FILTER_TYPE_BRIGHTNESS = 6
 } SnowFilterType;
 
 typedef struct SnowFilterStyle {
@@ -1296,6 +1297,12 @@ SnowError snow_viewport_patch_text_style_ex(SnowRuntime runtime, SnowViewport vi
                                             uint32_t layout_count,
                                             SnowChangedViewportList* out_changed_viewports);
 
+SnowError snow_viewport_set_text_creation_style_ex(SnowRuntime runtime, SnowViewport viewport,
+                                                   const SnowTextStyle* style, uint32_t properties,
+                                                   SnowChangedViewportList* out_changed_viewports);
+SnowError snow_viewport_set_serial_number_style_patch_ex(
+    SnowRuntime runtime, SnowViewport viewport, const SnowSerialNumberStyle* style,
+    uint32_t properties, SnowChangedViewportList* out_changed_viewports);
 SnowError snow_viewport_set_serial_number_style_ex(SnowRuntime runtime, SnowViewport viewport,
                                                    const SnowSerialNumberStyle* style,
                                                    SnowChangedViewportList* out_changed_viewports);

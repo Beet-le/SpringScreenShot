@@ -32,6 +32,7 @@
     "SettingsPageWidget",
     "ShortcutKeyRow",
     "StorageStatusSettingsWidget",
+    "TextTranslationSettingsWidget",
     "snow_shot::presentation::GlobalMouseManager",
     "snow_shot::storage::ConfigurationArchive",
     "snow_shot::storage::ConfigurationStore"
@@ -54,6 +55,7 @@
     "snow_shot::presentation::DirectCaptureController"
   ],
   "annotation": [
+    "snow_shot::presentation::GlobalCanvasController",
     "ScreenshotToolPalette"
   ],
   "export": [

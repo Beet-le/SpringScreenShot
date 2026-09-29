@@ -465,6 +465,10 @@
             <translation>当前：%1%</translation>
         </message>
         <message>
+            <source>Decrease 10%</source>
+            <translation>减少 10%</translation>
+        </message>
+        <message>
             <source>Default</source>
             <translation>默认</translation>
         </message>
@@ -541,6 +545,10 @@
             <translation>图像尺寸过大。</translation>
         </message>
         <message>
+            <source>Increase 10%</source>
+            <translation>增加 10%</translation>
+        </message>
+        <message>
             <source>Load new content</source>
             <translation>加载新内容</translation>
         </message>
@@ -554,11 +562,11 @@
         </message>
         <message>
             <source>Opacity</source>
-            <translation>透明度</translation>
+            <translation>不透明度</translation>
         </message>
         <message>
             <source>Opacity: %1%</source>
-            <translation>透明度：%1%</translation>
+            <translation>不透明度：%1%</translation>
         </message>
         <message>
             <source>Process image</source>
@@ -603,6 +611,10 @@
         <message>
             <source>Show main interface</source>
             <translation>显示主界面</translation>
+        </message>
+        <message>
+            <source>The image could not be saved automatically: %1</source>
+            <translation>无法自动保存图像：%1</translation>
         </message>
         <message>
             <source>The new content could not be loaded</source>

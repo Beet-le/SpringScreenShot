@@ -96,6 +96,10 @@
             <translation>Auto-scroll</translation>
         </message>
         <message>
+            <source>Auto-scroll interval (scroll to adjust; click to reset to 200 ms)</source>
+            <translation>Auto-scroll interval (scroll to adjust; click to reset to 200 ms)</translation>
+        </message>
+        <message>
             <source>Avatar</source>
             <translation>Avatar</translation>
         </message>
@@ -106,6 +110,10 @@
         <message>
             <source>Blue</source>
             <translation>Blue</translation>
+        </message>
+        <message>
+            <source>Brightness</source>
+            <translation>Brightness</translation>
         </message>
         <message>
             <source>Bring forward</source>
@@ -138,6 +146,10 @@
         <message>
             <source>Circle</source>
             <translation>Circle</translation>
+        </message>
+        <message>
+            <source>Click-through</source>
+            <translation>Click-through</translation>
         </message>
         <message>
             <source>Close recording</source>
@@ -386,6 +398,10 @@
         <message>
             <source>Eraser</source>
             <translation>Eraser</translation>
+        </message>
+        <message>
+            <source>Exit</source>
+            <translation>Exit</translation>
         </message>
         <message>
             <source>Export Settings</source>
@@ -1096,10 +1112,6 @@
             <translation>Transparent</translation>
         </message>
         <message>
-            <source>Unavailable while recording</source>
-            <translation>Unavailable while recording</translation>
-        </message>
-        <message>
             <source>Undo</source>
             <translation>Undo</translation>
         </message>
@@ -1148,12 +1160,24 @@
             <translation>ms</translation>
         </message>
         <message>
+            <source>ms</source>
+            <comment>Auto-scroll interval unit</comment>
+            <translation>ms</translation>
+        </message>
+        <message>
             <source>px</source>
             <translation>px</translation>
         </message>
         <message>
             <source>{text} represents the current watermark text; timestamp formats such as {YYYY-MM-DD_HH-mm-ss} are supported</source>
             <translation>{text} represents the current watermark text; timestamp formats such as {YYYY-MM-DD_HH-mm-ss} are supported</translation>
+        </message>
+    </context>
+    <context>
+        <name>snow_shot::presentation::GlobalCanvasController</name>
+        <message>
+            <source>Could not change canvas click-through.</source>
+            <translation>Could not change canvas click-through.</translation>
         </message>
     </context>
 </TS>

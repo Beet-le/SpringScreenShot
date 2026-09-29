@@ -4,7 +4,7 @@
 #include "snow_shot/presentation/screenshotselectiondisplayunit.h"
 #include "icon_core.h"
 #include "widgets/control_scale.h"
-#include "snow_draw_engine_qt/snow_canvas_types.h"
+#include "snow_draw_engine_qt/snow_canvas_style_edit.h"
 #include "snow_shot/presentation/screenshotdefaultstyles.h"
 #include "snow_shot/image/screenshotregiongeometry.h"
 #include "snow_shot/presentation/screenshotgeometry.h"
@@ -241,6 +241,7 @@ class ScreenshotToolPalette final : public QWidget,
         bool showQrTool = false;
         bool showImageConversionTools = false;
         bool showScrollingScreenshotTool = false;
+        bool showGlobalCanvasActions = false;
         bool showSaveButton = false;
         bool saveButtonWithResultActions = false;
         bool copyButtonWithNeutralIcon = false;
@@ -286,6 +287,8 @@ class ScreenshotToolPalette final : public QWidget,
     void resetStyleState();
     void setCreationStyleDefaults(const SnowCanvasStyleDefaults& defaults);
     [[nodiscard]] SnowCanvasStyleDefaults creationStyleDefaults() const;
+    void rememberStyleEdit(const SnowCanvasStyleEdit& edit);
+    void setStyleEditHandler(std::function<bool(const SnowCanvasStyleEdit&)> handler);
     bool setShadowMargins(const QMargins& margins);
     bool setPhysicalScale(qreal scale);
     bool setScaleContext(const adqt::widgets::AdControlScaleContext& context);
@@ -311,10 +314,15 @@ class ScreenshotToolPalette final : public QWidget,
     void setActiveTool(Tool tool);
     void refreshConfirmShortcutHint();
     void refreshShortcutTooltips();
+    void setGlobalCanvasClickThrough(bool enabled);
+    [[nodiscard]] bool canActivateDrawingShortcut(const QString& toolId) const;
+    [[nodiscard]] bool canActivateScreenshotShortcut(const QString& actionId);
     [[nodiscard]] bool activateDrawingShortcut(const QString& toolId);
     [[nodiscard]] bool activateToolShortcut(Tool tool);
     [[nodiscard]] bool activateScreenshotShortcut(const QString& actionId);
     [[nodiscard]] bool activateRememberedDrawingTool();
+    void setScrollingAutoScrollIntervalMs(int milliseconds);
+    [[nodiscard]] int scrollingAutoScrollIntervalMs() const;
     void setCaptureCursorEnabled(bool enabled);
     void setScreenshotRegionType(ScreenshotRegionType type);
     [[nodiscard]] bool captureCursorEnabled() const;
@@ -423,6 +431,8 @@ class ScreenshotToolPalette final : public QWidget,
 #endif
 
   signals:
+    void globalCanvasClickThroughRequested();
+    void globalCanvasExitRequested();
     void undoRequested();
     void redoRequested();
     void moveRequested();
@@ -480,6 +490,7 @@ class ScreenshotToolPalette final : public QWidget,
     void scrollingSelectionMoveUpdated(QPoint globalPosition);
     void scrollingSelectionMoveFinished();
     void scrollingAutoScrollChanged(bool enabled);
+    void scrollingAutoScrollIntervalMsChanged(int milliseconds);
     void screenRecordRequested();
     void serialNumberDecrementRequested();
     void serialNumberIncrementRequested();
@@ -542,6 +553,11 @@ class ScreenshotToolPalette final : public QWidget,
     void materializedScope(QWidget* scope);
 
   private:
+    std::function<bool(const SnowCanvasStyleEdit&)> m_styleEditHandler;
+    [[nodiscard]] bool submitStyleEdit(const SnowCanvasStyleEdit& edit);
+    void notifyFilterStyleChanged(const SnowCanvasFilterStyle& style, quint32 properties);
+    void setFilterStrength(double strength);
+    void setPenFilterStrokeWidth(double width);
     void changeEvent(QEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
@@ -589,18 +605,20 @@ class ScreenshotToolPalette final : public QWidget,
     void rememberLastUsedDrawingTool(Tool tool);
     void recordUserDrawingToolIntent(Tool tool);
     [[nodiscard]] bool drawingToolCanBeActivated(Tool tool) const;
+    [[nodiscard]] bool canActivateToolShortcut(Tool tool) const;
+    [[nodiscard]] adqt::widgets::AdButton* toolShortcutButton(Tool tool) const;
+    [[nodiscard]] std::optional<Tool> drawingShortcutTool(const QString& toolId) const;
     void clearDrawingToolGroups();
     void releaseDrawingToolGroupPopover(adqt::widgets::AdButton* trigger);
     bool activateToolFromToolbar(Tool tool, bool toggleVisibleButton = true);
     void activateDrawingTool(Tool tool);
-    [[nodiscard]] bool isRecordingUnavailableTool(Tool tool) const;
-    void refreshRecordingToolAvailability(adqt::widgets::AdButton* button, Tool tool,
-                                          const QString& label);
     [[nodiscard]] Tool drawingShortcutEntryTool(const QString& itemId, Tool fallback) const;
     void selectDrawingToolGroupEntry(Tool tool);
     void selectDrawingItemGroupEntry(const QString& itemId);
     bool activateDrawingItem(const QString& itemId, bool toggleVisibleButton = true);
     [[nodiscard]] bool historyActionEnabled(const QString& itemId) const;
+    [[nodiscard]] bool canActivateHistoryItem(const QString& itemId) const;
+    [[nodiscard]] adqt::widgets::AdButton* screenshotShortcutButton(const QString& actionId);
     void refreshDrawingToolGroup(int groupIndex);
     void addRecordingControls(QBoxLayout* layout);
     void createRecordingExportSettingsToolbar();
@@ -907,6 +925,8 @@ class ScreenshotToolPalette final : public QWidget,
     adqt::widgets::AdButton* m_cancelButton = nullptr;
     adqt::widgets::AdButton* m_copyButton = nullptr;
     adqt::widgets::AdButton* m_confirmButton = nullptr;
+    adqt::widgets::AdButton* m_globalCanvasClickThroughButton = nullptr;
+    adqt::widgets::AdButton* m_globalCanvasExitButton = nullptr;
     QLabel* m_selectionOpacityIcon = nullptr;
     adqt::widgets::AdSlider* m_selectionOpacitySlider = nullptr;
     adqt::widgets::AdSelect* m_drawTemplateSelect = nullptr;
@@ -958,6 +978,8 @@ class ScreenshotToolPalette final : public QWidget,
     bool m_selectionOpacityAvailable = false;
     bool m_selectionActionAvailabilityInitialized = false;
     bool m_scrollingScreenshotMode = false;
+    int m_scrollingAutoScrollIntervalMs = kScreenshotScrollingAutoScrollIntervalDefault;
+    IconNumericValuePreviewButton* m_scrollingAutoScrollIntervalEditor = nullptr;
     bool m_scrollingAutoScroll = false;
     adqt::widgets::AdButton* m_scrollingAutoScrollButton = nullptr;
     ScreenshotScrollingRecognitionMode m_scrollingRecognitionMode =

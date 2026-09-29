@@ -2,7 +2,7 @@
 #define SNOW_SHOT_PRESENTATION_SCREENSHOTTOOLBARCOMMANDS_H
 
 #include "snow_shot/presentation/screenshotselectiondisplayunit.h"
-#include "snow_draw_engine_qt/snow_canvas_types.h"
+#include "snow_draw_engine_qt/snow_canvas_style_edit.h"
 #include "snow_shot/presentation/screenshotscrollingtypes.h"
 
 #include <QString>
@@ -13,8 +13,11 @@ namespace adqt::widgets {
 class AdColorPicker;
 }
 
+class SnowCanvasWidget;
+
 class ScreenshotToolbarCommandSink {
   public:
+    virtual void replicateStyleEdit(const SnowCanvasStyleEdit&, SnowCanvasWidget*) {}
     virtual ~ScreenshotToolbarCommandSink() = default;
 
     virtual void undoCanvasEdit() {}
@@ -81,6 +84,7 @@ class ScreenshotToolbarCommandSink {
     virtual void startScrollingScreenshot() = 0;
     virtual void setScrollingScreenshotRecognitionMode(ScreenshotScrollingRecognitionMode) {}
     virtual void setScrollingScreenshotAutoScroll(bool) {}
+    virtual void setScrollingScreenshotAutoScrollIntervalMs(int) {}
     virtual void beginScrollingSelectionMove(ScreenshotScrollingRecognitionMode, QPoint) {}
     virtual void updateScrollingSelectionMove(QPoint) {}
     virtual void endScrollingSelectionMove() {}

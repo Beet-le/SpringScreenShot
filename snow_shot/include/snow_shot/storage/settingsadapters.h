@@ -2,6 +2,7 @@
 #define SNOW_SHOT_STORAGE_SETTINGSADAPTERS_H
 
 #include "snow_shot/customaimodelconfiguration.h"
+#include "snow_shot/texttranslationconfiguration.h"
 #include "snow_shot/shortcuts/shortcutbinding.h"
 #include "snow_shot/storage/persistedwindowgeometry.h"
 
@@ -65,14 +66,20 @@ enum class ScreenshotToolbarLayoutKind {
 
 class ApiConfigurationSettings final {
   public:
+    [[nodiscard]] QString serverUrl() const;
+    bool setServerUrl(const QString& value) const;
     [[nodiscard]] CustomAiModels customModels() const;
     bool setCustomModels(const CustomAiModels& models) const;
+    [[nodiscard]] TextTranslationConfigurations textTranslationConfigurations() const;
+    bool setTextTranslationConfigurations(const TextTranslationConfigurations& values) const;
 };
 
 class InterfaceSettings final {
   public:
     [[nodiscard]] QColor themePrimaryColor() const;
     bool setThemePrimaryColor(const QColor& color) const;
+    [[nodiscard]] QString appFontFamily() const;
+    bool setAppFontFamily(const QString& family) const;
     [[nodiscard]] QString themeMode() const;
     bool setThemeMode(const QString& mode) const;
     [[nodiscard]] QString language() const;
@@ -115,6 +122,8 @@ class ShortcutSettings final {
     bool setOpenScreenRecordingFolder(const shortcuts::ShortcutBindingList& bindings) const;
     [[nodiscard]] shortcuts::ShortcutBindingList openCaptureHistory() const;
     bool setOpenCaptureHistory(const shortcuts::ShortcutBindingList& bindings) const;
+    [[nodiscard]] shortcuts::ShortcutBindingList globalCanvas() const;
+    bool setGlobalCanvas(const shortcuts::ShortcutBindingList& bindings) const;
     [[nodiscard]] shortcuts::ShortcutBindingList openPinToScreenManagement() const;
     bool setOpenPinToScreenManagement(const shortcuts::ShortcutBindingList& bindings) const;
     [[nodiscard]] shortcuts::ShortcutBindingList openSettings() const;
@@ -150,6 +159,8 @@ class ScreenshotSettings final {
     bool setConfirmBeforeExitingViaShortcut(bool enabled) const;
     [[nodiscard]] bool captureCursor() const;
     bool setCaptureCursor(bool enabled) const;
+    [[nodiscard]] int scrollingAutoScrollIntervalMs() const;
+    bool setScrollingAutoScrollIntervalMs(int milliseconds) const;
     [[nodiscard]] bool captureUiInScrollingScreenshot() const;
     bool setCaptureUiInScrollingScreenshot(bool enabled) const;
     [[nodiscard]] bool restoreOriginalScreenColors() const;
@@ -166,6 +177,8 @@ class ScreenshotSettings final {
     bool setDoubleClickAction(const QString& action) const;
     [[nodiscard]] QString middleMouseButtonAction() const;
     bool setMiddleMouseButtonAction(const QString& action) const;
+    [[nodiscard]] bool quickSelectionModification() const;
+    bool setQuickSelectionModification(bool enabled) const;
     [[nodiscard]] QString selectionResizeMode() const;
     bool setSelectionResizeMode(const QString& mode) const;
     [[nodiscard]] bool autoSaveAfterCopy() const;

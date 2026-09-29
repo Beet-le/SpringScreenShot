@@ -367,6 +367,14 @@
     },
     {
       "variant": "outlined",
+      "symbol": "AutoScrollInterval",
+      "name": "auto-scroll-interval",
+      "source": "../src/presentation/components/icons/resources/auto-scroll-interval.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "Blur",
       "name": "blur",
       "source": "../src/presentation/components/icons/resources/blur.svg",
@@ -498,6 +506,14 @@
       "symbol": "FontSizeVeryLarge",
       "name": "font-size-very-large",
       "source": "../src/presentation/components/icons/resources/font-size-very-large.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "FullScreenCanvas",
+      "name": "full-screen-canvas",
+      "source": "../src/presentation/components/icons/resources/full-screen-canvas.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },

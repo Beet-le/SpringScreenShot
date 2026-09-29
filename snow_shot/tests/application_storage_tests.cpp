@@ -74,6 +74,48 @@ void writeBytes(const QString& path, const QByteArray& bytes) {
     require(file.write(bytes) == bytes.size(), "failed to write test file");
 }
 
+void scrollingIntervalSettingsPersistAndValidate() {
+    QTemporaryDir temporary;
+    require(temporary.isValid(), "interval settings require an isolated directory");
+    auto& appStorage = storage::ApplicationStorage::instance();
+    const storage::StorageInitializationOptions options{temporary.filePath(QStringLiteral("bin")),
+                                                        temporary.filePath(QStringLiteral("data")),
+                                                        60000};
+    static_cast<void>(appStorage.initialize(options));
+    const storage::ScreenshotSettings settings;
+    const QString key = QStringLiteral("screenshot/scrolling_auto_scroll_interval_ms");
+    require(settings.scrollingAutoScrollIntervalMs() == 200, "interval must default to 200 ms");
+    for (const int value : {128, 1000, 350}) {
+        require(settings.setScrollingAutoScrollIntervalMs(value) &&
+                    settings.scrollingAutoScrollIntervalMs() == value,
+                "valid intervals must round trip through the settings adapter");
+    }
+    for (const int value : {127, 1001}) {
+        require(!settings.setScrollingAutoScrollIntervalMs(value) &&
+                    settings.scrollingAutoScrollIntervalMs() == 350,
+                "invalid writes must preserve the accepted setting");
+    }
+    require(appStorage.flushNow().success, "interval must be persisted to disk");
+    appStorage.shutdown();
+    static_cast<void>(appStorage.initialize(options));
+    require(settings.scrollingAutoScrollIntervalMs() == 350,
+            "interval must survive application storage restart");
+    appStorage.shutdown();
+    for (const QJsonValue value : {QJsonValue(127), QJsonValue(1001), QJsonValue(200.5),
+                                   QJsonValue(QStringLiteral("invalid"))}) {
+        const QString path = temporary.filePath(QStringLiteral("invalid.json"));
+        writeBytes(
+            path, QJsonDocument(
+                      QJsonObject{{QStringLiteral("screenshot"),
+                                   QJsonObject{{QStringLiteral("scrolling_auto_scroll_interval_ms"),
+                                                value}}}})
+                      .toJson());
+        storage::ConfigurationStore store(path, true, true, 60000);
+        require(store.value(key).toInt() == 200,
+                "invalid stored intervals must fall back to 200 ms");
+    }
+}
+
 void setLastModified(const QString& path, const QDateTime& when) {
     namespace fs = std::filesystem;
     const auto systemMoment =
@@ -624,6 +666,7 @@ void globalMouseCombinationSchemaIsStrictAndPersistent() {
         QStringLiteral("global_mouse/screenshot_translation"),
         QStringLiteral("global_mouse/screenshot_save"),
         QStringLiteral("global_mouse/screenshot_quick_save"),
+        QStringLiteral("global_mouse/screen_recording"),
     };
     const QStringList activationKeys{snow_shot::presentation::globalMouseActivationKeys().at(0),
                                      snow_shot::presentation::globalMouseActivationKeys().at(1),
@@ -638,6 +681,10 @@ void globalMouseCombinationSchemaIsStrictAndPersistent() {
         const auto* entry = storage::ConfigurationSchema::entry(key);
         require(entry != nullptr && entry->valueKind == storage::ConfigurationValueKind::Structured,
                 "global mouse fields must be structured values");
+#ifdef Q_OS_MACOS
+        require(entry->defaultValue == QJsonObject{},
+                "macOS global mouse bindings must be unset by default");
+#else
         const QString button =
             key.endsWith(QStringLiteral("screenshot_copy"))    ? QStringLiteral("left_drag")
             : key.endsWith(QStringLiteral("screenshot_fixed")) ? QStringLiteral("wheel_drag")
@@ -652,6 +699,7 @@ void globalMouseCombinationSchemaIsStrictAndPersistent() {
                       {QStringLiteral("mouse_button"), button}};
         require(entry->defaultValue == expected,
                 "copy, pin, and OCR must default to Windows plus left, middle, and right drag");
+#endif
         const auto unset = storage::ConfigurationSchema::normalize(key, QJsonObject());
         require(unset.valid && !unset.changed && unset.value == QJsonObject(),
                 "an empty global mouse object must normalize as Unset");
@@ -1076,7 +1124,7 @@ void verifyPinToScreenShortcutSettings() {
     const storage::PinToScreenShortcutSettings shortcutSettings;
     const shortcuts::ShortcutBindingMap defaults = shortcutSettings.allShortcuts();
     require(
-        defaults.size() == 15 &&
+        defaults.size() == 24 &&
             portable(defaults.value(QStringLiteral("copy_to_clipboard"))) ==
                 QStringList{QStringLiteral("Ctrl+C")} &&
             portable(defaults.value(QStringLiteral("copy_original_content"))) ==
@@ -1108,7 +1156,34 @@ void verifyPinToScreenShortcutSettings() {
                                            {QStringLiteral("M")}) &&
             shortcutSettings.shortcuts(QStringLiteral("unsupported")).isEmpty() &&
             !shortcutSettings.setShortcuts(QStringLiteral("unsupported"), {QStringLiteral("Q")}),
-        "pinned-window shortcut adapter must expose fifteen stable actions and defaults");
+        "pinned-window shortcut adapter must expose twenty-four stable actions and defaults");
+    require(portable(defaults.value(QStringLiteral("increase_opacity"))) ==
+                QStringList{QStringLiteral("]")},
+            "increase_opacity must have its default binding");
+    require(portable(defaults.value(QStringLiteral("decrease_opacity"))) ==
+                QStringList{QStringLiteral("[")},
+            "decrease_opacity must have its default binding");
+    require(portable(defaults.value(QStringLiteral("increase_scale"))) ==
+                QStringList{QStringLiteral(".")},
+            "increase_scale must have its default binding");
+    require(portable(defaults.value(QStringLiteral("decrease_scale"))) ==
+                QStringList{QStringLiteral(",")},
+            "decrease_scale must have its default binding");
+    require(portable(defaults.value(QStringLiteral("rotate_clockwise"))) ==
+                QStringList{QStringLiteral("1")},
+            "rotate_clockwise must have its default binding");
+    require(portable(defaults.value(QStringLiteral("rotate_counterclockwise"))) ==
+                QStringList{QStringLiteral("2")},
+            "rotate_counterclockwise must have its default binding");
+    require(portable(defaults.value(QStringLiteral("flip_horizontal"))) ==
+                QStringList{QStringLiteral("3")},
+            "flip_horizontal must have its default binding");
+    require(portable(defaults.value(QStringLiteral("flip_vertical"))) ==
+                QStringList{QStringLiteral("4")},
+            "flip_vertical must have its default binding");
+    require(portable(defaults.value(QStringLiteral("reset_transform"))) ==
+                QStringList{QStringLiteral("0")},
+            "reset_transform must have its default binding");
     require(
         shortcutSettings.setShortcuts(QStringLiteral("drawing_mode"), {QStringLiteral("Alt+E")}) &&
             portable(shortcutSettings.shortcuts(QStringLiteral("drawing_mode"))) ==
@@ -1118,6 +1193,9 @@ void verifyPinToScreenShortcutSettings() {
     duplicates.insert(QStringLiteral("thumbnail_mode"), {QStringLiteral("Ctrl+C")});
     require(!shortcutSettings.setAllShortcutsAtomic(duplicates),
             "pinned-window shortcuts must reject duplicate bindings atomically");
+    require(shortcutSettings.setAllShortcutsAtomic(defaults) &&
+                shortcutSettings.allShortcuts() == defaults,
+            "resetting the complete pinned shortcut map must restore all image commands");
 }
 
 void pinToScreenShortcutSettingsRoundTrip() {
@@ -2370,6 +2448,10 @@ void pinnedManagementConfigurationAndTrayMigration() {
 
 int main(int argc, char** argv) {
     QCoreApplication application(argc, argv);
+    if (application.arguments().contains(QStringLiteral("--scrolling-interval-only"))) {
+        scrollingIntervalSettingsPersistAndValidate();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--global-mouse-only"))) {
         globalMouseCombinationSchemaIsStrictAndPersistent();
         return 0;

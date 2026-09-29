@@ -1,7 +1,7 @@
 #include "snow_shot/platform/screenshotnative.h"
 #include "screenshotwindowtarget_p.h"
-#include "screenshotinputregion_p.h"
 #include "capturewindowlayers_p.h"
+#include "windowcursorcoordinator.h"
 #include <QCursor>
 #include <QTimer>
 #include "snow_shot/platform/macos/recapturefocus.h"
@@ -19,12 +19,14 @@
 #include <QVariant>
 #include <QWindow>
 #include <QWidget>
+#include <qpa/qplatformwindow.h>
 
 namespace {
 struct ScreenshotNativeSettings {
     NSInteger level;
     NSWindowCollectionBehavior collectionBehavior;
     BOOL hidesOnDeactivate;
+    NSWindowAnimationBehavior animationBehavior;
 };
 } // namespace
 
@@ -36,6 +38,8 @@ struct ScreenshotNativeSettings {
     ScreenshotNativeSettings required;
     ScreenshotNativeSettings requested;
     bool applying;
+    bool unconstrainedFrame;
+    NSWindowAnimationBehavior defaultAnimation;
 }
 @end
 @implementation SnowScreenshotWindowPolicy
@@ -52,16 +56,26 @@ SnowScreenshotWindowPolicy* nativePolicyState(NSWindow* window) {
         objc_getAssociatedObject(window, &nativePolicyKey));
 }
 
+NSWindowAnimationBehavior managedAnimation(SnowScreenshotWindowPolicy* state) {
+    return state->requested.animationBehavior == NSWindowAnimationBehaviorDefault
+               ? state->defaultAnimation
+               : state->requested.animationBehavior;
+}
+
 template <typename Value>
 void installNativeSettingPolicy(Class windowClass, SEL selector,
                                 Value ScreenshotNativeSettings::* setting,
-                                Value (^readSetting)(NSWindow*)) {
+                                Value (^readSetting)(NSWindow*),
+                                Value (^resolveRequired)(SnowScreenshotWindowPolicy*) = nil) {
     const Method method = class_getInstanceMethod(windowClass, selector);
     const IMP originalSetter = method_getImplementation(method);
     const IMP setter = imp_implementationWithBlock(^(NSWindow* receiver, Value requested) {
       if (auto* state = nativePolicyState(receiver)) {
-          if (!state->applying)
+          if (!state->applying) {
               state->requested.*setting = requested;
+              if (resolveRequired)
+                  state->required.*setting = resolveRequired(state);
+          }
           requested = state->required.*setting;
           if (readSetting(receiver) == requested)
               return;
@@ -96,6 +110,26 @@ void attachNativeWindowPolicy(NSWindow* window) {
                                ^BOOL(NSWindow* receiver) {
                                  return receiver.hidesOnDeactivate;
                                });
+    installNativeSettingPolicy(
+        windowClass, @selector(setAnimationBehavior:), &ScreenshotNativeSettings::animationBehavior,
+        ^NSWindowAnimationBehavior(NSWindow* receiver) {
+          return receiver.animationBehavior;
+        },
+        ^NSWindowAnimationBehavior(SnowScreenshotWindowPolicy* state) {
+          return managedAnimation(state);
+        });
+    const SEL constrain = @selector(constrainFrameRect:toScreen:);
+    const Method method = class_getInstanceMethod(windowClass, constrain);
+    const IMP original = method_getImplementation(method);
+    const IMP replacement =
+        imp_implementationWithBlock(^NSRect(NSWindow* receiver, NSRect frame, NSScreen* screen) {
+          const auto* policy = nativePolicyState(receiver);
+          if (policy && policy->unconstrainedFrame)
+              return frame;
+          return reinterpret_cast<NSRect (*)(id, SEL, NSRect, NSScreen*)>(original)(
+              receiver, constrain, frame, screen);
+        });
+    class_replaceMethod(windowClass, constrain, replacement, method_getTypeEncoding(method));
     installedClasses.insert(windowClass);
 }
 
@@ -106,25 +140,31 @@ void applyNativeSettings(NSWindow* window, const ScreenshotNativeSettings& setti
         window.collectionBehavior = settings.collectionBehavior;
     if (window.hidesOnDeactivate != settings.hidesOnDeactivate)
         window.hidesOnDeactivate = settings.hidesOnDeactivate;
+    if (window.animationBehavior != settings.animationBehavior)
+        window.animationBehavior = settings.animationBehavior;
 }
 
-void applyNativeWindowPolicy(NSWindow* window, NSInteger level, bool enforceQtSettings = true) {
+void applyNativeWindowPolicy(
+    NSWindow* window, NSInteger level, bool enforceQtSettings = true,
+    NSWindowAnimationBehavior defaultAnimation = NSWindowAnimationBehaviorDefault) {
     if (!window)
         return;
     auto* state = nativePolicyState(window);
     if (!state) {
         state = [SnowScreenshotWindowPolicy new];
-        state->requested = {window.level, window.collectionBehavior, window.hidesOnDeactivate};
+        state->requested = {window.level, window.collectionBehavior, window.hidesOnDeactivate,
+                            window.animationBehavior};
         objc_setAssociatedObject(window, &nativePolicyKey, state,
                                  OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [state release];
         if (enforceQtSettings)
             attachNativeWindowPolicy(window);
     }
+    state->defaultAnimation = defaultAnimation;
     state->required = {level,
                        NSWindowCollectionBehaviorCanJoinAllSpaces |
                            NSWindowCollectionBehaviorFullScreenAuxiliary,
-                       NO};
+                       NO, managedAnimation(state)};
     const QScopedValueRollback guard(state->applying, true);
     applyNativeSettings(window, state->required);
 }
@@ -173,7 +213,20 @@ void applyScreenshotLayer(QWidget* widget, const ModalFloors& floors) {
         return;
     }
     const NSInteger level = captureWindowLevel(role);
-    applyNativeWindowPolicy(window, level);
+    // AppKit's default nonmodal animation is inferred from the native level:
+    // elevating an otherwise ordinary titled window changes it from DocumentWindow
+    // to None. Preserve presentation while changing stacking, without overriding
+    // explicit animation choices or native sheet/application-modal presentation.
+    const auto defaultAnimation =
+        handle->modality() == Qt::NonModal && (window.styleMask & NSWindowStyleMaskTitled)
+            ? NSWindowAnimationBehaviorDocumentWindow
+            : NSWindowAnimationBehaviorDefault;
+    applyNativeWindowPolicy(window, level, true, defaultAnimation);
+    // AppKit otherwise constrains a screen-sized panel to the visible/safe frame,
+    // shifting its top edge below the menu bar or camera housing. Only the canvas
+    // surface owns the entire display; its tools keep normal frame constraints.
+    nativePolicyState(window)->unconstrainedFrame =
+        role.family == CaptureFamily::GlobalCanvas && role.layer == kOverlayLayer;
 }
 
 void synchronizeScreenshotLayers() {
@@ -194,7 +247,8 @@ void synchronizeScreenshotLayers() {
     // A selection modal and an OCR result can be siblings of the same overlay.
     // Transient depth alone cannot order them. Put modals above every visible
     // non-modal screenshot surface, regardless of its popup nesting depth.
-    ModalFloors modalFloors{kPopupLayer, kPopupLayer};
+    ModalFloors modalFloors;
+    modalFloors.fill(kPopupLayer);
     for (QWidget* widget : windows) {
         if (!widget->isVisible())
             continue;
@@ -206,7 +260,7 @@ void synchronizeScreenshotLayers() {
         if (!belongsToModal && role.valid())
             modalFloors[role.index()] = std::max(modalFloors[role.index()], role.layer + 1);
     }
-    std::array<NSInteger, 2> panelLevels{};
+    std::array<NSInteger, static_cast<std::size_t>(CaptureFamily::Count)> panelLevels{};
     for (QWidget* widget : windows) {
         applyScreenshotLayer(widget, modalFloors);
         if (widget->isVisible() && widget->internalWinId()) {
@@ -215,9 +269,9 @@ void synchronizeScreenshotLayers() {
             if (role.valid() && nativePolicyState(native)) {
                 auto& level = panelLevels[role.index()];
                 level = std::max(level, native.level + 1);
-                if (role.family == CaptureFamily::Recording)
+                if (role.family != CaptureFamily::Screenshot)
                     level = std::min(
-                        level, NSInteger(CGWindowLevelForKey(kCGScreenSaverWindowLevelKey) - 1));
+                        level, NSInteger(captureWindowLevel({role.family, kCaptureBandSize - 1})));
             }
         }
     }
@@ -240,8 +294,9 @@ void synchronizeScreenshotLayers() {
                 }
             }
         }
-        const std::size_t family = owner.valid() ? owner.index() : (panelLevels[0] ? 0u : 1u);
-        const NSInteger panelLevel = panelLevels[family];
+        const NSInteger panelLevel =
+            owner.valid() ? panelLevels[owner.index()]
+                          : *std::max_element(panelLevels.begin(), panelLevels.end());
         if (panelLevel && window.visible)
             applyNativeWindowPolicy(window, panelLevel, false);
         else
@@ -375,58 +430,28 @@ class ControlledWindowDragging final : public QObject {
     bool m_controlResizing = false;
 };
 
-// AppKit's per-window ignoresMouseEvents controls WindowServer routing. A Qt
-// mask only clips the view; rejecting an event there cannot deliver it to another
-// application's window. Observe pointer movement on both sides of the hole so
-// native routing is already correct when the next wheel/trackpad event arrives.
-class ScreenshotInputPassThrough final : public QObject {
+// AppKit controls whole-window input routing independently of the visual mask.
+class ScreenshotInputTransparency final : public QObject {
   public:
-    explicit ScreenshotInputPassThrough(QWidget* widget) : QObject(widget), m_widget(widget) {
+    explicit ScreenshotInputTransparency(QWidget* widget) : QObject(widget), m_widget(widget) {
         widget->installEventFilter(this);
     }
-    ~ScreenshotInputPassThrough() override {
-        stopMonitoring();
+    ~ScreenshotInputTransparency() override {
         restore();
     }
 
-    void setRegion(const QRegion& region) {
-        m_region.passThrough = region;
-        if (region.isEmpty()) {
-            stopMonitoring();
-            m_region.heldButtons = 0;
-        } else if (!m_localMonitor) {
-            constexpr NSEventMask events =
-                NSEventMaskMouseMoved | NSEventMaskLeftMouseDragged | NSEventMaskRightMouseDragged |
-                NSEventMaskOtherMouseDragged | NSEventMaskLeftMouseDown |
-                NSEventMaskRightMouseDown | NSEventMaskOtherMouseDown | NSEventMaskLeftMouseUp |
-                NSEventMaskRightMouseUp | NSEventMaskOtherMouseUp;
-            m_localMonitor =
-                [NSEvent addLocalMonitorForEventsMatchingMask:events
-                                                      handler:^NSEvent*(NSEvent* event) {
-                                                        handlePointerEvent(event, true);
-                                                        return event;
-                                                      }];
-            // Mouse monitoring requires no Accessibility/Input Monitoring permission.
-            // Once transparent, movement is delivered to the application underneath.
-            m_globalMonitor =
-                [NSEvent addGlobalMonitorForEventsMatchingMask:events
-                                                       handler:^(NSEvent* event) {
-                                                         handlePointerEvent(event, false);
-                                                       }];
-        }
-        synchronize(); // Also handles activation with a stationary pointer.
+    void setTransparent(bool transparent) {
+        m_transparent = transparent;
+        synchronize();
     }
 
   protected:
     bool eventFilter(QObject*, QEvent* event) override {
         switch (event->type()) {
         case QEvent::Hide:
-            m_region.heldButtons = 0;
             restore();
             break;
         case QEvent::Show:
-        case QEvent::Move:
-        case QEvent::Resize:
         case QEvent::WinIdChange:
             synchronize();
             break;
@@ -437,24 +462,6 @@ class ScreenshotInputPassThrough final : public QObject {
     }
 
   private:
-    void handlePointerEvent(NSEvent* event, bool local) {
-        const bool down = event.type == NSEventTypeLeftMouseDown ||
-                          event.type == NSEventTypeRightMouseDown ||
-                          event.type == NSEventTypeOtherMouseDown;
-        const bool up = event.type == NSEventTypeLeftMouseUp ||
-                        event.type == NSEventTypeRightMouseUp ||
-                        event.type == NSEventTypeOtherMouseUp;
-        if (down && local && event.window == nativeWindow())
-            m_region.press(static_cast<unsigned>(event.buttonNumber));
-        if (up) {
-            m_region.release(static_cast<unsigned>(event.buttonNumber));
-            // Let Qt dispatch the release before making its NSWindow transparent.
-            QTimer::singleShot(0, this, [this] { synchronize(); });
-            return;
-        }
-        synchronize();
-    }
-
     NSWindow* nativeWindow() const {
         if (!m_widget || !m_widget->internalWinId())
             return nil;
@@ -462,7 +469,7 @@ class ScreenshotInputPassThrough final : public QObject {
     }
 
     void synchronize() {
-        if (m_region.passThrough.isEmpty()) {
+        if (!m_transparent || !m_widget->isVisible()) {
             restore();
             return;
         }
@@ -472,11 +479,8 @@ class ScreenshotInputPassThrough final : public QObject {
             m_native = window;
             m_originalIgnoresMouse = window.ignoresMouseEvents;
         }
-        if (!window)
-            return;
-        const bool transparent =
-            m_region.transparentAt(m_widget->mapFromGlobal(QCursor::pos()), m_widget->isVisible());
-        window.ignoresMouseEvents = transparent || m_originalIgnoresMouse;
+        if (window)
+            window.ignoresMouseEvents = YES;
     }
 
     void restore() {
@@ -485,21 +489,10 @@ class ScreenshotInputPassThrough final : public QObject {
         m_native = nil;
     }
 
-    void stopMonitoring() {
-        if (m_localMonitor)
-            [NSEvent removeMonitor:m_localMonitor];
-        if (m_globalMonitor)
-            [NSEvent removeMonitor:m_globalMonitor];
-        m_localMonitor = nil;
-        m_globalMonitor = nil;
-    }
-
     QPointer<QWidget> m_widget;
-    detail::ScreenshotInputRegion m_region;
+    bool m_transparent = false;
     NSWindow* m_native = nil;
     BOOL m_originalIgnoresMouse = NO;
-    id m_localMonitor = nil;
-    id m_globalMonitor = nil;
 };
 
 detail::WindowTarget windowTarget(pid_t owner, const QPoint* point) {
@@ -513,6 +506,38 @@ detail::WindowTarget windowTarget(pid_t owner, const QPoint* point) {
     return result;
 }
 } // namespace
+void detail::setPinnedWindowLayer(QWidget* widget, bool enabled) {
+    if (!widget || QGuiApplication::platformName() != QStringLiteral("cocoa"))
+        return;
+    if (enabled) {
+        registerScreenshotLayer(widget, kOverlayLayer, CaptureFamily::Pinned);
+    } else {
+        widget->setProperty(kScreenshotLayer, {});
+        widget->setProperty(kCaptureFamily, {});
+        if (QWindow* handle = widget->windowHandle()) {
+            handle->setProperty(kScreenshotLayer, {});
+            handle->setProperty(kCaptureFamily, {});
+        }
+        synchronizeScreenshotLayers();
+        // Cocoa bakes the transient owner's native level into a child's Qt
+        // flags when it is shown. Changing only the owner's native level does
+        // not make Qt recompute that inherited value. After releasing capture
+        // levels, reapply descendant flags in owner-first order.
+        QList<QWindow*> owners{widget->windowHandle()};
+        const auto windows = QGuiApplication::topLevelWindows();
+        for (qsizetype i = 0; i < owners.size(); ++i) {
+            for (QWindow* child : windows) {
+                if (!owners[i] || child->transientParent() != owners[i] ||
+                    child->property(kScreenshotLayer).isValid())
+                    continue;
+                if (child->handle())
+                    child->handle()->setWindowFlags(child->flags());
+                owners.append(child);
+            }
+        }
+    }
+}
+
 void configureControlledWindowDragging(QWidget* widget, bool controlResizing) {
     if (!widget || QGuiApplication::platformName() != QStringLiteral("cocoa"))
         return;
@@ -526,40 +551,51 @@ void configureControlledWindowDragging(QWidget* widget, bool controlResizing) {
     policy->configure(controlResizing);
 }
 
+void configureGlobalCanvasWindow(QWidget* widget) {
+    macos::configureWindowCursorUpdates(widget);
+    registerScreenshotLayer(widget, kOverlayLayer, CaptureFamily::GlobalCanvas);
+    configureControlledWindowDragging(widget, true);
+}
+
 void configureScreenshotOverlayWindow(QWidget* widget) {
+    macos::configureWindowCursorUpdates(widget);
     registerScreenshotLayer(widget, kOverlayLayer);
     configureControlledWindowDragging(widget, true);
 }
 
 void configureScreenRecordingAreaWindow(QWidget* widget) {
+    macos::configureWindowCursorUpdates(widget);
     configureControlledWindowDragging(widget);
     registerScreenshotLayer(widget, kOverlayLayer, CaptureFamily::Recording);
 }
 
 void configureScreenRecordingToolbarWindow(QWidget* widget) {
+    macos::configureWindowCursorUpdates(widget);
     configureControlledWindowDragging(widget);
     registerScreenshotLayer(widget, kToolbarLayer, CaptureFamily::Recording);
 }
 
 void configureScreenshotRecognitionWindow(QWidget* widget) {
+    macos::configureWindowCursorUpdates(widget);
     registerScreenshotLayer(widget, kRecognitionLayer);
 }
 
-void setScreenshotInputPassThroughRegion(QWidget* widget, const QRegion& region) {
+void setScreenshotInputTransparent(QWidget* widget, bool transparent) {
     if (!widget || QGuiApplication::platformName() != QStringLiteral("cocoa"))
         return;
-    ScreenshotInputPassThrough* policy = nullptr;
+    ScreenshotInputTransparency* policy = nullptr;
     for (QObject* child : widget->children()) {
-        if ((policy = dynamic_cast<ScreenshotInputPassThrough*>(child)))
+        if ((policy = dynamic_cast<ScreenshotInputTransparency*>(child)))
             break;
     }
-    if (!policy && !region.isEmpty())
-        policy = new ScreenshotInputPassThrough(widget);
+    if (!policy && transparent)
+        policy = new ScreenshotInputTransparency(widget);
     if (policy)
-        policy->setRegion(region);
+        policy->setTransparent(transparent);
 }
 
 void configureScreenshotToolbarWindow(QWidget* widget) {
+    macos::configureWindowCursorUpdates(widget);
     configureControlledWindowDragging(widget);
     registerScreenshotLayer(widget, kToolbarLayer);
 }

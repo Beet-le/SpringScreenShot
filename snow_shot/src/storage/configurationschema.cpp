@@ -1,6 +1,8 @@
 #include "snow_shot/globalmouseactivationkeys.h"
 #include "snow_shot/storage/configurationschema.h"
+#include "snow_shot/serverconfiguration.h"
 #include "snow_shot/customaimodelconfiguration.h"
+#include "snow_shot/texttranslationconfiguration.h"
 
 #include "snow_shot/storage/capturehistorytypes.h"
 #include "snow_shot/storage/persistedselectioncodec.h"
@@ -113,6 +115,9 @@ QString defaultOutputDirectory(QStandardPaths::StandardLocation primary) {
 }
 
 const QVector<ConfigurationSchemaEntry> kRawEntries = {
+    {QStringLiteral("api_configuration/server_url"), QString(), ConfigurationValueKind::String},
+    {QStringLiteral("api_configuration/text_translation"), QJsonArray(),
+     ConfigurationValueKind::Structured},
     {QStringLiteral("api_configuration/custom_models"), QJsonArray(),
      ConfigurationValueKind::Structured},
     {QStringLiteral("storage/schema_version"), 3, ConfigurationValueKind::Integer,
@@ -124,6 +129,7 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      {QStringLiteral("system"), QStringLiteral("light"), QStringLiteral("dark")}},
     {QStringLiteral("interface/theme_primary_color"), QStringLiteral("#1677FFFF"),
      ConfigurationValueKind::String},
+    {QStringLiteral("interface/app_font"), QStringLiteral(""), ConfigurationValueKind::String},
     {QStringLiteral("interface/language"), QStringLiteral("system"),
      ConfigurationValueKind::String},
     {QStringLiteral("system/application_priority"),
@@ -291,6 +297,12 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      std::nullopt,
      {},
      2},
+    {QStringLiteral("global_shortcuts/global_canvas"),
+     QJsonArray(),
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {},
+     2},
     {QStringLiteral("global_shortcuts/open_settings"),
      QJsonArray(),
      ConfigurationValueKind::StringList,
@@ -337,27 +349,27 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      ConfigurationValueKind::Boolean},
     {QStringLiteral("global_mouse/screenshot_copy"),
 #ifdef Q_OS_MACOS
-     QJsonObject{{QStringLiteral("activation_key"), QJsonArray{QStringLiteral("command")}},
+     QJsonObject(),
 #else
      QJsonObject{{QStringLiteral("activation_key"), QJsonArray{QStringLiteral("windows")}},
-#endif
                  {QStringLiteral("mouse_button"), QStringLiteral("left_drag")}},
+#endif
      ConfigurationValueKind::Structured},
     {QStringLiteral("global_mouse/screenshot_fixed"),
 #ifdef Q_OS_MACOS
-     QJsonObject{{QStringLiteral("activation_key"), QJsonArray{QStringLiteral("command")}},
+     QJsonObject(),
 #else
      QJsonObject{{QStringLiteral("activation_key"), QJsonArray{QStringLiteral("windows")}},
-#endif
                  {QStringLiteral("mouse_button"), QStringLiteral("wheel_drag")}},
+#endif
      ConfigurationValueKind::Structured},
     {QStringLiteral("global_mouse/screenshot_ocr"),
 #ifdef Q_OS_MACOS
-     QJsonObject{{QStringLiteral("activation_key"), QJsonArray{QStringLiteral("command")}},
+     QJsonObject(),
 #else
      QJsonObject{{QStringLiteral("activation_key"), QJsonArray{QStringLiteral("windows")}},
-#endif
                  {QStringLiteral("mouse_button"), QStringLiteral("right_drag")}},
+#endif
      ConfigurationValueKind::Structured},
     {QStringLiteral("global_mouse/screenshot_translation"), QJsonObject(),
      ConfigurationValueKind::Structured},
@@ -771,6 +783,60 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      std::nullopt,
      {},
      2},
+    {QStringLiteral("pin_to_screen_shortcuts/increase_opacity"),
+     QJsonArray{QStringLiteral("]")},
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {},
+     2},
+    {QStringLiteral("pin_to_screen_shortcuts/decrease_opacity"),
+     QJsonArray{QStringLiteral("[")},
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {},
+     2},
+    {QStringLiteral("pin_to_screen_shortcuts/increase_scale"),
+     QJsonArray{QStringLiteral(".")},
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {},
+     2},
+    {QStringLiteral("pin_to_screen_shortcuts/decrease_scale"),
+     QJsonArray{QStringLiteral(",")},
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {},
+     2},
+    {QStringLiteral("pin_to_screen_shortcuts/rotate_clockwise"),
+     QJsonArray{QStringLiteral("1")},
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {},
+     2},
+    {QStringLiteral("pin_to_screen_shortcuts/rotate_counterclockwise"),
+     QJsonArray{QStringLiteral("2")},
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {},
+     2},
+    {QStringLiteral("pin_to_screen_shortcuts/flip_horizontal"),
+     QJsonArray{QStringLiteral("3")},
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {},
+     2},
+    {QStringLiteral("pin_to_screen_shortcuts/flip_vertical"),
+     QJsonArray{QStringLiteral("4")},
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {},
+     2},
+    {QStringLiteral("pin_to_screen_shortcuts/reset_transform"),
+     QJsonArray{QStringLiteral("0")},
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {},
+     2},
     {QStringLiteral("pin_to_screen_shortcuts/move_cursor_up"),
      QJsonArray{QStringLiteral("W"), QStringLiteral("Up")},
      ConfigurationValueKind::StringList,
@@ -981,6 +1047,8 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      ConfigurationIntegerRange{0, 64, 1}},
     {QStringLiteral("screenshot_selection/lock_aspect_ratio"), false,
      ConfigurationValueKind::Boolean},
+    {QStringLiteral("screenshot/scrolling_auto_scroll_interval_ms"), 200,
+     ConfigurationValueKind::Integer, ConfigurationIntegerRange{128, 1000, 1}},
     {QStringLiteral("screenshot/capture_cursor"), false, ConfigurationValueKind::Boolean},
     {QStringLiteral("screenshot/capture_ui_in_scrolling_screenshot"), true,
      ConfigurationValueKind::Boolean},
@@ -1012,6 +1080,8 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      std::nullopt,
      {QStringLiteral("copy"), QStringLiteral("save"), QStringLiteral("quick_save"),
       QStringLiteral("pin"), QStringLiteral("none")}},
+    {QStringLiteral("screenshot/quick_selection_modification"), true,
+     ConfigurationValueKind::Boolean},
     {QStringLiteral("screenshot/selection_resize_mode"),
      QStringLiteral("follow_mouse_movement"),
      ConfigurationValueKind::String,
@@ -1799,10 +1869,21 @@ ConfigurationNormalization ConfigurationSchema::normalize(const QString& key,
         return {QStringLiteral("check"), true, true};
     }
 #endif
+    if (key == QStringLiteral("api_configuration/server_url")) {
+        const auto normalized = normalizedServerUrl(value.toString());
+        return {normalized.value_or(QString()), value.isString() && normalized.has_value(),
+                normalized.has_value() && *normalized != value};
+    }
     if (key == QStringLiteral("api_configuration/custom_models")) {
         bool valid = false;
         const auto models = customAiModelsFromJson(value, &valid);
         const auto normalized = customAiModelsToJson(models);
+        return {normalized, valid, normalized != value};
+    }
+    if (key == QStringLiteral("api_configuration/text_translation")) {
+        bool valid = false;
+        const auto models = textTranslationConfigurationsFromJson(value, &valid);
+        const auto normalized = textTranslationConfigurationsToJson(models);
         return {normalized, valid, normalized != value};
     }
     if (key == QStringLiteral("interface/theme_mode")) {

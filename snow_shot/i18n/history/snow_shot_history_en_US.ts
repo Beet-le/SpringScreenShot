@@ -471,6 +471,10 @@
             <translation>Current: %1%</translation>
         </message>
         <message>
+            <source>Decrease 10%</source>
+            <translation>Decrease 10%</translation>
+        </message>
+        <message>
             <source>Default</source>
             <translation>Default</translation>
         </message>
@@ -547,6 +551,10 @@
             <translation>Image size is too large.</translation>
         </message>
         <message>
+            <source>Increase 10%</source>
+            <translation>Increase 10%</translation>
+        </message>
+        <message>
             <source>Load new content</source>
             <translation>Load new content</translation>
         </message>
@@ -609,6 +617,10 @@
         <message>
             <source>Show main interface</source>
             <translation>Show main interface</translation>
+        </message>
+        <message>
+            <source>The image could not be saved automatically: %1</source>
+            <translation>The image could not be saved automatically: %1</translation>
         </message>
         <message>
             <source>The new content could not be loaded</source>

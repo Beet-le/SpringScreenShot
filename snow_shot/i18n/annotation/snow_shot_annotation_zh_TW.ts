@@ -29,7 +29,7 @@
         </message>
         <message>
             <source>Adjust opacity</source>
-            <translation>調整透明度</translation>
+            <translation>調整不透明度</translation>
         </message>
         <message>
             <source>Align bottom</source>
@@ -96,6 +96,10 @@
             <translation>自動捲動</translation>
         </message>
         <message>
+            <source>Auto-scroll interval (scroll to adjust; click to reset to 200 ms)</source>
+            <translation>自動捲動間隔（滾輪調整；按一下重設為 200 ms）</translation>
+        </message>
+        <message>
             <source>Avatar</source>
             <translation>頭像</translation>
         </message>
@@ -106,6 +110,10 @@
         <message>
             <source>Blue</source>
             <translation>藍色</translation>
+        </message>
+        <message>
+            <source>Brightness</source>
+            <translation>亮度</translation>
         </message>
         <message>
             <source>Bring forward</source>
@@ -138,6 +146,10 @@
         <message>
             <source>Circle</source>
             <translation>圓形</translation>
+        </message>
+        <message>
+            <source>Click-through</source>
+            <translation>滑鼠穿透</translation>
         </message>
         <message>
             <source>Close recording</source>
@@ -388,6 +400,10 @@
             <translation>橡皮擦</translation>
         </message>
         <message>
+            <source>Exit</source>
+            <translation>結束</translation>
+        </message>
+        <message>
             <source>Export Settings</source>
             <translation>匯出設定</translation>
         </message>
@@ -621,7 +637,7 @@
         </message>
         <message>
             <source>Opacity</source>
-            <translation>透明度</translation>
+            <translation>不透明度</translation>
         </message>
         <message>
             <source>Open recording folder</source>
@@ -1096,10 +1112,6 @@
             <translation>透明</translation>
         </message>
         <message>
-            <source>Unavailable while recording</source>
-            <translation>錄製期間無法使用</translation>
-        </message>
-        <message>
             <source>Undo</source>
             <translation>復原</translation>
         </message>
@@ -1148,12 +1160,24 @@
             <translation>毫秒</translation>
         </message>
         <message>
+            <source>ms</source>
+            <comment>Auto-scroll interval unit</comment>
+            <translation>ms</translation>
+        </message>
+        <message>
             <source>px</source>
             <translation>px</translation>
         </message>
         <message>
             <source>{text} represents the current watermark text; timestamp formats such as {YYYY-MM-DD_HH-mm-ss} are supported</source>
             <translation>{text} 代表目前的浮水印文字；支援 {YYYY-MM-DD_HH-mm-ss} 等時間戳記格式</translation>
+        </message>
+    </context>
+    <context>
+        <name>snow_shot::presentation::GlobalCanvasController</name>
+        <message>
+            <source>Could not change canvas click-through.</source>
+            <translation>無法切換畫布的滑鼠穿透狀態。</translation>
         </message>
     </context>
 </TS>

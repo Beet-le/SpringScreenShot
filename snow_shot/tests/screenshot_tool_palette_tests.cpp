@@ -794,6 +794,13 @@ void recordingEffectSettingsModal() {
 }
 
 void recordingExportSettingsAndDrawingAvailabilityFollowSessionState() {
+    const snow_shot::storage::ScreenshotToolbarSettings settings;
+    const QString previousHighlightTool = settings.lastHighlightTool();
+    const QString previousFilterTool = settings.lastFilterTool();
+    snow_shot::storage::ScreenshotToolbarSettings().setLastHighlightTool(
+        QStringLiteral("rectangle-highlight"));
+    snow_shot::storage::ScreenshotToolbarSettings().setLastFilterTool(
+        QStringLiteral("rectangle-filter"));
     ScreenshotToolPalette::Options options;
     options.showDragHandle = true;
     options.showShapeTool = true;
@@ -878,9 +885,9 @@ void recordingExportSettingsAndDrawingAvailabilityFollowSessionState() {
     const auto disabledIconColor =
         snow_shot::presentation::styles::generateThemeColorScheme().map.colorTextQuaternary;
     const std::optional<QColor> filterIconColor = filterButton->iconRef().colors().primarySlot();
-    require(filterButton->isEnabled() && filterIconColor.has_value() &&
-                filterIconColor->rgba() == disabledIconColor.rgba(),
-            "unavailable recording tools should remain explorable and use the disabled icon color");
+    require(filterButton->isEnabled() && (!filterIconColor.has_value() ||
+                                          filterIconColor->rgba() != disabledIconColor.rgba()),
+            "recording filters should be enabled and use the normal tool icon color");
     require(exportButton->toolTip() == QStringLiteral("Export Settings") &&
                 exportButton->accessibleName() == QStringLiteral("Export Settings") &&
                 adqt::icons::describeIcon(exportButton->iconRef()).key.name ==
@@ -1154,9 +1161,10 @@ void recordingExportSettingsAndDrawingAvailabilityFollowSessionState() {
     require(exportVisible && exportVisibilityChanges > 1,
             "activating export settings should notify the controller to enable region movement");
     filterButton->click();
-    require(exportPanel->isVisible() && !palette.activeToolForTests().has_value() &&
+    require(!exportPanel->isVisible() &&
+                palette.activeToolForTests() == ScreenshotToolPalette::Tool::RectangleFilter &&
                 selectRequests == 1,
-            "selecting an unavailable recording tool should leave the shared state unchanged");
+            "selecting a recording filter should activate drawing and close Export Settings");
     shapeButton->click();
     shapeButton->click();
     require(exportPanel->isVisible() && !palette.activeToolForTests().has_value() &&
@@ -1354,11 +1362,11 @@ void recordingExportSettingsAndDrawingAvailabilityFollowSessionState() {
     palette.setActiveTool(ScreenshotToolPalette::Tool::Shape);
     require(palette.activeToolForTests() == ScreenshotToolPalette::Tool::Shape,
             "shape should activate during recording drawing mode");
-    require(!palette.activateDrawingShortcut(QStringLiteral("highlight")) &&
-                palette.activeToolForTests() == ScreenshotToolPalette::Tool::Shape &&
-                !palette.activateDrawingShortcut(QStringLiteral("filter")) &&
-                palette.activeToolForTests() == ScreenshotToolPalette::Tool::Shape,
-            "unavailable recording tools should not activate through scoped shortcuts");
+    require(palette.activateDrawingShortcut(QStringLiteral("highlight")) &&
+                palette.activeToolForTests() == ScreenshotToolPalette::Tool::RectangleHighlight &&
+                palette.activateDrawingShortcut(QStringLiteral("filter")) &&
+                palette.activeToolForTests() == ScreenshotToolPalette::Tool::RectangleFilter,
+            "recording highlights and filters should activate through scoped shortcuts");
     require(palette.activateDrawingShortcut(QStringLiteral("eraser")) &&
                 palette.activeToolForTests() == ScreenshotToolPalette::Tool::Eraser,
             "enabled recording tools should remain available through scoped shortcuts");
@@ -1385,6 +1393,8 @@ void recordingExportSettingsAndDrawingAvailabilityFollowSessionState() {
     verifyColorIconTooltips();
     require(trail->toolTip().isEmpty() && click->toolTip().isEmpty(),
             "retranslation should keep color picker tooltips on their icons");
+    settings.setLastHighlightTool(previousHighlightTool);
+    settings.setLastFilterTool(previousFilterTool);
 }
 
 void dynamicToolbarLabelsUseEveryTranslationCatalog() {
@@ -3083,8 +3093,7 @@ void mainToolbarGroupPopoversRecreateTheirOptions() {
         QCoreApplication::processEvents();
     };
     const auto verifyDrawingGroup = [&](ScreenshotToolPalette::Options options,
-                                        const QString& triggerObjectName,
-                                        bool expectRecordingRestriction) {
+                                        const QString& triggerObjectName, bool recordingGroup) {
         ScreenshotToolPalette palette(options);
         palette.show();
         QCoreApplication::processEvents();
@@ -3103,7 +3112,7 @@ void mainToolbarGroupPopoversRecreateTheirOptions() {
         auto* alternative =
             firstContent != nullptr
                 ? firstContent->findChild<adqt::widgets::AdButton*>(
-                      expectRecordingRestriction
+                      recordingGroup
                           ? QStringLiteral("screenshotDrawingToolGroupOption-highlighter")
                           : QStringLiteral("screenshotDrawingToolGroupOption-line"))
                 : nullptr;
@@ -3111,10 +3120,9 @@ void mainToolbarGroupPopoversRecreateTheirOptions() {
                     firstContent->layout()->indexOf(arrow) <
                         firstContent->layout()->indexOf(alternative),
                 "each drawing group opening must rebuild its configured ordered options");
-        if (expectRecordingRestriction) {
-            require(alternative->accessibleDescription() ==
-                        QStringLiteral("Unavailable while recording"),
-                    "recording-only restrictions must be applied to recreated group options");
+        if (recordingGroup) {
+            require(alternative->isEnabled() && alternative->accessibleDescription().isEmpty(),
+                    "recording highlight options should be enabled without a restriction");
         }
         QPointer<adqt::widgets::AdButton> firstArrow = arrow;
         QPointer<adqt::widgets::AdButton> firstAlternative = alternative;
@@ -3126,7 +3134,7 @@ void mainToolbarGroupPopoversRecreateTheirOptions() {
         require(firstContent.isNull() && firstArrow.isNull() && firstAlternative.isNull(),
                 "drawing group content and buttons must be deferred-deleted after hiding");
 
-        if (!expectRecordingRestriction) {
+        if (!recordingGroup) {
             palette.setActiveTool(ScreenshotToolPalette::Tool::Line);
         }
         popover->show();
@@ -3134,12 +3142,11 @@ void mainToolbarGroupPopoversRecreateTheirOptions() {
         auto* secondArrow = popover->contentWidget()->findChild<adqt::widgets::AdButton*>(
             QStringLiteral("screenshotDrawingToolGroupOption-arrow"));
         auto* secondAlternative = popover->contentWidget()->findChild<adqt::widgets::AdButton*>(
-            expectRecordingRestriction
-                ? QStringLiteral("screenshotDrawingToolGroupOption-highlighter")
-                : QStringLiteral("screenshotDrawingToolGroupOption-line"));
+            recordingGroup ? QStringLiteral("screenshotDrawingToolGroupOption-highlighter")
+                           : QStringLiteral("screenshotDrawingToolGroupOption-line"));
         require(secondArrow != nullptr && secondAlternative != nullptr,
                 "reopening a drawing group must create a complete new option tree");
-        if (!expectRecordingRestriction) {
+        if (!recordingGroup) {
             require(
                 secondAlternative->buttonStyle() == adqt::widgets::AdButton::ButtonStyle::Solid &&
                     secondAlternative->accentRole() == adqt::widgets::AdButton::AccentRole::Primary,
@@ -4673,9 +4680,9 @@ void scrollingSelectionButtonsDragAndLockAxis() {
     require(!horizontal->isEnabled() && vertical->isEnabled(),
             "vertical mode must lock horizontal movement");
     auto* layout = separator->parentWidget()->layout();
-    require(layout->itemAt(8)->widget() == separator &&
-                layout->itemAt(10)->widget() == horizontal &&
-                layout->itemAt(12)->widget() == vertical,
+    require(layout->itemAt(10)->widget() == separator &&
+                layout->itemAt(12)->widget() == horizontal &&
+                layout->itemAt(14)->widget() == vertical,
             "movement controls must follow direction controls");
     require(!vertical->toolTip().isEmpty() && !vertical->accessibleName().isEmpty(),
             "movement button must explain its interaction accessibly");
@@ -4742,11 +4749,46 @@ void scrollingSelectionButtonsDragAndLockAxis() {
     require(finishes == 5, "session exit must end dragging once");
 }
 
+void scrollingIntervalContentsScaleProportionally() {
+    ScreenshotToolPalette::Options options;
+    options.showScrollingScreenshotTool = true;
+    ScreenshotToolPalette baseline(options);
+    baseline.setScrollingScreenshotMode(true);
+    auto* reference = baseline.findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotScrollingAutoScrollIntervalEditor"));
+    require(reference != nullptr, "interval reference must exist");
+    const QFont referenceFont = reference->font();
+    const QSize referenceIcon = reference->iconSize();
+    for (const bool createBeforeScale : {false, true}) {
+        ScreenshotToolPalette palette(options);
+        if (createBeforeScale)
+            palette.setScrollingScreenshotMode(true);
+        for (const qreal scale : {0.75, 1.25, 1.5, 2.0, 1.0}) {
+            static_cast<void>(palette.setPhysicalScale(scale));
+            palette.setScrollingScreenshotMode(true);
+            palette.show();
+            QCoreApplication::processEvents();
+            auto* editor = palette.findChild<adqt::widgets::AdButton*>(
+                QStringLiteral("screenshotScrollingAutoScrollIntervalEditor"));
+            const QFont expectedFont = adqt::widgets::scaleControlFont(referenceFont, scale);
+            std::cerr << "interval scale=" << scale << " early=" << createBeforeScale
+                      << " font=" << editor->font().toString().toStdString()
+                      << " expected=" << expectedFont.toString().toStdString()
+                      << " icon=" << editor->iconSize().width() << '\n';
+            require(editor->font() == expectedFont,
+                    "interval text must scale once from its reference font");
+            require(editor->iconSize() == adqt::widgets::scaleControlSize(referenceIcon, scale),
+                    "interval icon must scale with its text");
+        }
+    }
+}
+
 void scrollingScreenshotExposesAxisRecognitionModes() {
     ScreenshotToolPalette::Options options;
     options.showScrollingScreenshotTool = true;
     options.showOcrTool = true;
     ScreenshotToolPalette palette(options);
+    palette.show();
 
     palette.setActiveTool(ScreenshotToolPalette::Tool::Ocr);
     QCoreApplication::processEvents();
@@ -4777,7 +4819,7 @@ void scrollingScreenshotExposesAxisRecognitionModes() {
                                  : nullptr;
     require(controls != nullptr &&
                 controls->findChild<adqt::widgets::AdRadioButtonGroup*>() == nullptr &&
-                modeButtons.size() == 5 && verticalButton != nullptr && horizontalButton != nullptr,
+                modeButtons.size() == 6 && verticalButton != nullptr && horizontalButton != nullptr,
             "scrolling screenshot should expose two independent mode buttons");
     auto* autoScroll = controls->findChild<adqt::widgets::AdButton*>(
         QStringLiteral("screenshotScrollingAutoScrollButton"));
@@ -4786,6 +4828,48 @@ void scrollingScreenshotExposesAxisRecognitionModes() {
     require(autoScroll != nullptr && separator != nullptr && !autoScroll->isCheckable() &&
                 !autoScroll->isChecked(),
             "auto-scroll must use the same non-checkable action button as the axis controls");
+    auto* interval = dynamic_cast<IconNumericValuePreviewButton*>(controls->findChild<QWidget*>(
+        QStringLiteral("screenshotScrollingAutoScrollIntervalEditor")));
+    require(
+        interval != nullptr && interval->valueText() == QStringLiteral("200ms") &&
+            interval->isEnabled() && interval->width() == 96,
+        "interval editor must show the default with units and remain enabled without auto-scroll");
+    int intervalChanges = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::scrollingAutoScrollIntervalMsChanged,
+                     [&](int value) {
+                         ++intervalChanges;
+                         require(value == palette.scrollingAutoScrollIntervalMs(),
+                                 "interval signal must match the displayed state");
+                     });
+    const auto intervalWheel = [&](int delta) {
+        const QPoint local = interval->rect().center();
+        QWheelEvent event(QPointF(local), interval->mapToGlobal(local), QPoint(), QPoint(0, delta),
+                          Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        require(palette.handleToolbarWheel(&event) && event.isAccepted(),
+                "interval wheel input must be consumed, including at limits");
+    };
+    intervalWheel(120);
+    require(interval->valueText() == QStringLiteral("210ms") && intervalChanges == 1,
+            "wheel up must increase the interval by 10 ms exactly once");
+    palette.setScrollingAutoScrollIntervalMs(130);
+    intervalWheel(-120);
+    intervalWheel(-120);
+    require(interval->valueText() == QStringLiteral("128ms") && intervalChanges == 2,
+            "wheel down must clamp to 128 ms without duplicate changes at the limit");
+    palette.setScrollingAutoScrollIntervalMs(995);
+    intervalWheel(120);
+    intervalWheel(120);
+    require(interval->valueText() == QStringLiteral("1000ms") && intervalChanges == 3,
+            "wheel up must clamp to 1000 ms without duplicate changes at the limit");
+    interval->click();
+    interval->click();
+    require(interval->valueText() == QStringLiteral("200ms") && intervalChanges == 4,
+            "click must reset to 200 ms and avoid redundant notifications");
+    palette.setScrollingAutoScrollIntervalMs(-1);
+    require(palette.scrollingAutoScrollIntervalMs() == 128, "setter must clamp the minimum");
+    palette.setScrollingAutoScrollIntervalMs(2000);
+    require(palette.scrollingAutoScrollIntervalMs() == 1000, "setter must clamp the maximum");
+    palette.setScrollingAutoScrollIntervalMs(350);
     const auto requireAutoScrollStyle = [&](bool active) {
         require(!autoScroll->isCheckable() && !autoScroll->isChecked() &&
                     autoScroll->buttonStyle() ==
@@ -4798,12 +4882,14 @@ void scrollingScreenshotExposesAxisRecognitionModes() {
     };
     requireAutoScrollStyle(false);
     require(controls->layout()->itemAt(0)->widget() == autoScroll &&
-                controls->layout()->itemAt(2)->widget() == separator &&
-                controls->layout()->itemAt(4)->widget() == verticalButton,
+                controls->layout()->itemAt(2)->widget() == interval &&
+                controls->layout()->itemAt(4)->widget() == separator &&
+                controls->layout()->itemAt(6)->widget() == verticalButton,
             "auto-scroll must be the leftmost control with a separator to its right");
     const auto requireSeparatorSpacing = [&](int groupSpacing, int buttonSpacing) {
         controls->layout()->activate();
-        require(separator->x() - (autoScroll->x() + autoScroll->width()) == groupSpacing &&
+        require(interval->x() - (autoScroll->x() + autoScroll->width()) == buttonSpacing &&
+                    separator->x() - (interval->x() + interval->width()) == groupSpacing &&
                     verticalButton->x() - (separator->x() + separator->width()) == groupSpacing,
                 "scrolling separator must match the selection toolbar's spacing on both sides");
         require(horizontalButton->x() - (verticalButton->x() + verticalButton->width()) ==
@@ -4860,14 +4946,16 @@ void scrollingScreenshotExposesAxisRecognitionModes() {
         require(button != nullptr && !button->toolTip().isEmpty() &&
                     button->accessibleName() == button->toolTip(),
                 "scrolling mode buttons should expose translated tooltip accessibility");
-        require(button->size() == QSize(32, 32) && button->iconSize() == QSize(24, 24),
+        require(button->size() == QSize(button == interval ? 96 : 32, 32) &&
+                    button->iconSize() == QSize(24, 24),
                 "scrolling mode buttons should use the enlarged action toolbar metrics");
     }
     require(palette.setPhysicalScale(1.5),
             "scrolling screenshot toolbar should accept a physical scale change");
     requireSeparatorSpacing(24, 6);
     for (adqt::widgets::AdButton* button : modeButtons) {
-        require(button->size() == QSize(48, 48) && button->iconSize() == QSize(36, 36),
+        require(button->size() == QSize(button == interval ? 144 : 48, 48) &&
+                    button->iconSize() == QSize(36, 36),
                 "scrolling mode buttons should retain their enlarged metrics after scaling");
     }
 
@@ -4899,6 +4987,11 @@ void scrollingScreenshotExposesAxisRecognitionModes() {
         QStringLiteral("screenshotScrollingAutoScrollButton"));
     require(autoScroll != nullptr && !autoScroll->isChecked(),
             "a new scrolling capture must reset auto-scroll activation");
+    interval = dynamic_cast<IconNumericValuePreviewButton*>(
+        palette.findChild<QWidget*>(QStringLiteral("screenshotScrollingAutoScrollIntervalEditor")));
+    require(interval != nullptr && interval->valueText() == QStringLiteral("350ms") &&
+                palette.scrollingAutoScrollIntervalMs() == 350,
+            "toolbar recreation and new captures must preserve the chosen interval");
     requireAutoScrollStyle(false);
     controls = palette.findChild<QWidget*>(QStringLiteral("screenshotScrollingRecognitionMode"));
     verticalButton = controls != nullptr ? controls->findChild<adqt::widgets::AdButton*>(
@@ -4913,6 +5006,25 @@ void scrollingScreenshotExposesAxisRecognitionModes() {
                 verticalButton->buttonStyle() == adqt::widgets::AdButton::ButtonStyle::Solid &&
                 horizontalButton->buttonStyle() == adqt::widgets::AdButton::ButtonStyle::Text,
             "each new scrolling screenshot session should reset to vertical recognition");
+    auto& languages = snow_shot::presentation::LanguageManager::instance();
+    const QString englishTooltip = interval->toolTip();
+    for (const auto& locale : {QStringLiteral("zh_CN"), QStringLiteral("zh_TW")}) {
+        require(languages.setLanguage(locale), "load interval translations");
+        QCoreApplication::processEvents();
+        require(interval->toolTip() != englishTooltip &&
+                    interval->accessibleName() == interval->toolTip() &&
+                    interval->valueText() == QStringLiteral("350ms"),
+                "interval tooltip must translate while retaining the ms unit");
+        static_cast<void>(palette.setPhysicalScale(locale == QStringLiteral("zh_CN") ? 1.0 : 1.5));
+        require(interval->width() >=
+                    interval->iconSize().width() +
+                        interval->fontMetrics().horizontalAdvance(QStringLiteral("1000ms")) + 8,
+                "the editor must fit the maximum value and icon at each scale");
+    }
+    require(languages.setLanguage(QStringLiteral("en_US")), "restore English interval labels");
+    QCoreApplication::processEvents();
+    require(interval->toolTip() == englishTooltip,
+            "scaling a translated interval editor must preserve its translation source");
 }
 
 void originalImageToggleLeadsRecognitionActions() {
@@ -5530,9 +5642,10 @@ void groupedToolShortcutsToggleOnlyTheRequestedTool() {
     require(recordingPalette.activeToolForTests() == Tool::Shape &&
                 !recordingPalette.recordingExportSettingsVisible(),
             "programmatic recording tool synchronization must remain idempotent");
-    require(!recordingPalette.activateDrawingShortcut(QStringLiteral("highlight")) &&
-                recordingPalette.activeToolForTests() == Tool::Shape,
-            "unavailable recording shortcuts should leave the current tool unchanged");
+    require(recordingPalette.activateDrawingShortcut(QStringLiteral("highlight")) &&
+                (recordingPalette.activeToolForTests() == Tool::RectangleHighlight ||
+                 recordingPalette.activeToolForTests() == Tool::PenHighlight),
+            "recording highlight shortcuts should activate the canvas tool");
 }
 
 void screenshotShortcutsShareButtonCommandsAndAvailability() {
@@ -5586,12 +5699,16 @@ void screenshotShortcutsShareButtonCommandsAndAvailability() {
             const auto clickedTool = palette.activeToolForTests();
             require(requests == 1, "button must emit its command exactly once");
             palette.setActiveTool(Tool::Select);
+            require(palette.canActivateScreenshotShortcut(QString::fromLatin1(command.id)) &&
+                        requests == 1,
+                    "checking command availability must not activate the tool");
             require(palette.activateScreenshotShortcut(QString::fromLatin1(command.id)) &&
                         requests == 2 && palette.activeToolForTests() == clickedTool,
                     "shortcut must produce the same command and active tool as a button click");
             button->setEnabled(false);
             button->click();
-            require(!palette.activateScreenshotShortcut(QString::fromLatin1(command.id)) &&
+            require(!palette.canActivateScreenshotShortcut(QString::fromLatin1(command.id)) &&
+                        !palette.activateScreenshotShortcut(QString::fromLatin1(command.id)) &&
                         requests == 2,
                     "disabled button and shortcut must both reject the command");
             button->setEnabled(true);
@@ -5600,13 +5717,17 @@ void screenshotShortcutsShareButtonCommandsAndAvailability() {
     }
     palette.setTableEnabled(false);
     palette.setQrEnabled(true);
-    require(!palette.activateScreenshotShortcut(QStringLiteral("table_recognition")) &&
+    require(!palette.canActivateScreenshotShortcut(QStringLiteral("table_recognition")) &&
+                palette.canActivateScreenshotShortcut(QStringLiteral("qr_code_recognition")) &&
+                !palette.activateScreenshotShortcut(QStringLiteral("table_recognition")) &&
                 palette.activateScreenshotShortcut(QStringLiteral("qr_code_recognition")) &&
                 palette.activeToolForTests() == Tool::Qr,
             "shared recognition entries must respect each option's enabled state");
     palette.setTableEnabled(true);
     palette.setQrEnabled(false);
-    require(!palette.activateScreenshotShortcut(QStringLiteral("qr_code_recognition")) &&
+    require(!palette.canActivateScreenshotShortcut(QStringLiteral("qr_code_recognition")) &&
+                palette.canActivateScreenshotShortcut(QStringLiteral("table_recognition")) &&
+                !palette.activateScreenshotShortcut(QStringLiteral("qr_code_recognition")) &&
                 palette.activateScreenshotShortcut(QStringLiteral("table_recognition")) &&
                 palette.activeToolForTests() == Tool::Table,
             "the enabled recognition option must remain reachable through its shortcut");
@@ -6403,8 +6524,8 @@ void filterToolExposesTypeAndIntensityControls() {
             "Filter type select should match the font-family select style");
     require(palette.findChild<QSlider*>(QStringLiteral("screenshotFilterOpacitySlider")) == nullptr,
             "Filter should not expose an opacity style editor");
-    require(typeSelect->model() != nullptr && typeSelect->model()->rowCount() == 6,
-            "Filter type select should expose all six filter types");
+    require(typeSelect->model() != nullptr && typeSelect->model()->rowCount() == 7,
+            "Filter type select should expose all seven filter types");
     struct FilterTypeRow {
         int row;
         SnowCanvasFilterType type;
@@ -6417,6 +6538,7 @@ void filterToolExposesTypeAndIntensityControls() {
         {3, SnowCanvasFilterType::Grayscale, QStringLiteral("Grayscale")},
         {4, SnowCanvasFilterType::Inversion, QStringLiteral("Inversion")},
         {5, SnowCanvasFilterType::Emboss, QStringLiteral("Emboss")},
+        {6, SnowCanvasFilterType::Brightness, QStringLiteral("Brightness")},
     };
     for (const FilterTypeRow& expected : filterTypeRows) {
         const QModelIndex row = typeSelect->model()->index(expected.row, 0);
@@ -6936,6 +7058,9 @@ void watermarkToolExposesSharedStyleControls() {
         require(preset != nullptr && preset->text().isEmpty(),
                 "Watermark font-size presets should use the text icons");
     }
+    require(family->model()->rowCount() == 2, "watermark fonts remain unloaded before opening");
+    family->showPopup();
+    family->hidePopup();
     require(family->placeholder() == QStringLiteral("Font family") &&
                 family->variant() == adqt::widgets::AdSelect::Variant::Borderless &&
                 family->controlSize() == adqt::widgets::AdSelect::ControlSize::Small &&
@@ -7648,6 +7773,8 @@ void watermarkTemplateLibraryAndEditorApplySnapshotsDeterministically() {
     auto* deleteModal = palette.findChild<adqt::widgets::AdModal*>(
         QStringLiteral("screenshotWatermarkTemplateDeleteModal"));
     const SnowCanvasWatermarkConfig beforeDelete = applied;
+    require(deleteModal && deleteModal->ownerWindow() == &selectionDisplayOverlay,
+            "watermark deletion must use the same display owner as creation");
     require(deleteModal != nullptr && deleteModal->isOpen() &&
                 deleteModal->mode() == adqt::widgets::AdModal::Mode::Window &&
                 deleteModal->windowModality() == Qt::ApplicationModal &&
@@ -8835,6 +8962,9 @@ void textStyleControlsExposeAndEmitAllRequestedProperties() {
             "text font-family select should be borderless");
     require(fontSelect->popupLayerMode() == adqt::widgets::AdSelect::PopupLayerMode::QtTool,
             "text font-family select should use QtTool");
+    require(fontSelect->model()->rowCount() == 2, "text fonts remain unloaded before opening");
+    fontSelect->showPopup();
+    fontSelect->hidePopup();
     require(fontSelect->model() != nullptr &&
                 fontSelect->model()->rowCount() ==
                     snow_shot::presentation::screenshotToolPaletteFontFamilies().size() + 2,
@@ -9897,7 +10027,7 @@ void configurationDrivenStyleEditorsShareStructuralContracts() {
                 fontSelect->toolTip().isEmpty() &&
                 filterSelect->toolTip() == QStringLiteral("Filter type") &&
                 fontSelect->model() != filterSelect->model() &&
-                filterSelect->model()->rowCount() == 6,
+                filterSelect->model()->rowCount() == 7,
             "select configuration should preserve search, tooltip, and model differences");
     const QSize selectReferenceSize = fontSelect->size();
     require(selectReferenceSize == filterSelect->size(),
@@ -11721,7 +11851,7 @@ void canvasToolStylesPersistIndependentlyWithoutGlobalStyles() {
     styles.rectangleHighlight.fill = QColor(9, 10, 11, 12);
     styles.penHighlight.strokeWidth = 7.0;
     styles.rectangleFilter = {SnowCanvasFilterType::GaussianBlur, 0.25, 0.8, 8.0};
-    styles.penFilter = {SnowCanvasFilterType::Emboss, 0.75, 0.6, 44.0};
+    styles.penFilter = {SnowCanvasFilterType::Brightness, 0.75, 0.6, 44.0};
     styles.text.color = QColor(13, 14, 15, 16);
     styles.text.fontFamily = QStringLiteral("Persisted text font");
     styles.text.fontSize = 36.0;
@@ -11958,6 +12088,55 @@ void colorPresetEditorsPreserveCommandsAcrossRebinding() {
     }
 }
 
+void fontEditorLoadsOnFirstOpen() {
+    QWidget host;
+    QHBoxLayout layout(&host);
+    snow_shot::presentation::ScreenshotToolPaletteFontEditor editor;
+    snow_shot::presentation::ScreenshotToolPaletteFontEditorConfig config;
+    int commits = 0;
+    editor.build(&layout, &host, &host, config, 16, QStringLiteral("Segoe UI"), {}, {},
+                 [&commits](const QString&) { ++commits; }, {}, {});
+    auto* select = editor.familySelect();
+    auto* model = select->model();
+    require(model->rowCount() == 3 && select->currentText() == QStringLiteral("Segoe UI"),
+            "unopened toolbar shows only special rows and the saved font");
+    const QString missing = QStringLiteral("Missing lazy font 019837");
+    editor.update(16, missing, false, false, 2, 1, 2);
+    require(model->rowCount() == 3 && select->currentText() == missing,
+            "unopened toolbar updates its saved font without marking it unavailable");
+    int liveFontInsertions = 0;
+    QObject::connect(model, &QAbstractItemModel::rowsInserted, &host,
+                     [&liveFontInsertions]() { ++liveFontInsertions; });
+    select->showPopup();
+    require(liveFontInsertions == 0,
+            "opening must publish complete fonts without rebuilding the live selector per font");
+    model = select->model();
+    require(select->currentData(adqt::widgets::AdSelect::DefaultValueRole).toString() == missing &&
+                select->currentText().contains(QStringLiteral("unavailable")) &&
+                !(select->currentModelIndex().flags() & Qt::ItemIsEnabled) && commits == 0,
+            "opening resolves unavailable fonts without committing");
+    const int loadedRows = model->rowCount();
+    select->hidePopup();
+    select->showPopup();
+    require(select->model() == model && model->rowCount() == loadedRows && commits == 0,
+            "reopening reuses loaded toolbar fonts");
+    select->hidePopup();
+    editor.release();
+    editor.build(&layout, &host, &host, config, 16, QString(), {}, {}, {}, {}, {});
+    select = editor.familySelect();
+    editor.update(16, QString(), false, true, 2, 1, 2);
+    require(select->model()->rowCount() == 2 &&
+                select->currentData(adqt::widgets::AdSelect::DefaultValueRole).toString() ==
+                    QStringLiteral("__mixed__"),
+            "rebuilt editor keeps mixed fonts lazy");
+    select->showPopup();
+    require(select->currentData(adqt::widgets::AdSelect::DefaultValueRole).toString() ==
+                QStringLiteral("__mixed__"),
+            "loading preserves the mixed selection");
+    select->hidePopup();
+    editor.release();
+}
+
 void fontFamilyListIsCachedForEditorBuilds() {
     const QStringList& first = snow_shot::presentation::screenshotToolPaletteFontFamilies();
     const QStringList& second = snow_shot::presentation::screenshotToolPaletteFontFamilies();
@@ -12020,7 +12199,7 @@ void filterEditorsRestoreValuesAfterToolSwitch() {
         QObject::connect(&palette, &ScreenshotToolPalette::filterStyleChanged, [&]() { ++edits; });
         for (const auto type : {SnowCanvasFilterType::Mosaic, SnowCanvasFilterType::GaussianBlur,
                                 SnowCanvasFilterType::Grayscale, SnowCanvasFilterType::Inversion,
-                                SnowCanvasFilterType::Emboss}) {
+                                SnowCanvasFilterType::Emboss, SnowCanvasFilterType::Brightness}) {
             state.filterStyle.type = type;
             state.filterStyle.strength = 0.37;
             palette.setStyleToolbarState(state);
@@ -12041,9 +12220,10 @@ void filterEditorsRestoreValuesAfterToolSwitch() {
                         "returning to a filter tool restores the unchanged filter type");
                 require(slider && slider->value() == 37,
                         "returning to a filter tool restores the unchanged intensity");
-                if (type == SnowCanvasFilterType::Emboss) {
-                    require(slider->isEnabled(),
-                            "Emboss intensity remains enabled for every filter tool mode");
+                if (type == SnowCanvasFilterType::Emboss ||
+                    type == SnowCanvasFilterType::Brightness) {
+                    require(slider->isEnabled(), "Strength-based filter intensity remains enabled "
+                                                 "for every filter tool mode");
                 }
             }
         }
@@ -12051,7 +12231,7 @@ void filterEditorsRestoreValuesAfterToolSwitch() {
     }
 }
 
-void selectedFilterTypeDoesNotReplaceCreationDefault() {
+void selectedFilterTypeRemembersOnlyTheEditedProperty() {
     ScreenshotToolPalette::Options options;
     options.showFilterTool = true;
     ScreenshotToolPalette palette(options);
@@ -12069,8 +12249,10 @@ void selectedFilterTypeDoesNotReplaceCreationDefault() {
         palette.findChild<adqt::widgets::AdSelect*>(QStringLiteral("screenshotFilterTypeSelect"));
     require(type != nullptr, "selected filter exposes its type control");
     type->setCurrentValue(static_cast<int>(SnowCanvasFilterType::Grayscale));
-    require(palette.creationStyleDefaults().rectangleFilter.type == before.type,
-            "selected filter type edit preserves creation type");
+    require(palette.creationStyleDefaults().rectangleFilter.type ==
+                    SnowCanvasFilterType::Grayscale &&
+                palette.creationStyleDefaults().rectangleFilter.strength == before.strength,
+            "explicit selected filter type edits remember only the edited property");
 }
 
 void filterTypeSelectKeepsSmartEraseAcrossFilterModeSwitches() {
@@ -12082,13 +12264,13 @@ void filterTypeSelectKeepsSmartEraseAcrossFilterModeSwitches() {
     auto* autoType = palette.findChild<adqt::widgets::AdSelect*>(
         QStringLiteral("screenshotAutoFilterTypeSelect"));
     require(autoType != nullptr && autoType->model() != nullptr &&
-                autoType->model()->rowCount() == 5,
-            "Auto Filter exposes its five filter types without Smart Erase");
+                autoType->model()->rowCount() == 6,
+            "Auto Filter exposes its six filter types without Smart Erase");
 
     const auto requireSmartErase = [&palette](const QString& objectName) {
         auto* select = palette.findChild<adqt::widgets::AdSelect*>(objectName);
-        require(select != nullptr && select->model() != nullptr && select->model()->rowCount() == 6,
-                "leaving Auto Filter keeps all six filter types");
+        require(select != nullptr && select->model() != nullptr && select->model()->rowCount() == 7,
+                "leaving Auto Filter keeps all seven filter types");
         const QModelIndex smartEraseRow = select->model()->index(2, 0);
         require(smartEraseRow.data(adqt::widgets::AdSelect::DefaultValueRole).toInt() ==
                     static_cast<int>(SnowCanvasFilterType::SmartErase),
@@ -12114,7 +12296,7 @@ void filterTypeSelectKeepsSmartEraseAcrossFilterModeSwitches() {
     autoType = palette.findChild<adqt::widgets::AdSelect*>(
         QStringLiteral("screenshotAutoFilterTypeSelect"));
     require(autoType != nullptr && autoType->model() != nullptr &&
-                autoType->model()->rowCount() == 5,
+                autoType->model()->rowCount() == 6,
             "returning to Auto Filter restores its Smart-Erase-free type model");
     palette.setActiveTool(Tool::RectangleFilter);
     requireSmartErase(QStringLiteral("screenshotFilterTypeSelect"));
@@ -12747,6 +12929,9 @@ void regionSwitcherRetranslatesAndRenders() {
 }
 } // namespace
 
+void runScreenshotStyleBindingTests();
+void runScreenshotStylePersistenceFailureTest();
+
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     QTemporaryDir storageDirectory;
@@ -12765,7 +12950,25 @@ int main(int argc, char** argv) {
     require(QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/segoeui.ttf")) >= 0,
             "the font editor tests require a system TrueType font");
 #endif
+    if (application.arguments().contains(QStringLiteral("--style-commit-only"))) {
+        runScreenshotStyleBindingTests();
+        selectedStyleEditsAreReflectedInTheCreationStyleContext();
+        arrowStyleControlsExposeAndEmitAllStyleProperties();
+        selectedArrowMixedPropertiesResolveIndependently();
+        lineStyleControlsExposeStraightAndCurveTypes();
+        serialNumberStyleControlsExposeAndEmitRequestedProperties();
+        serialNumberInputCommitsEditsAndSupportsWheel();
+        watermarkToolExposesSharedStyleControls();
+        activeFilterAndWatermarkToolsExposeCanvasWheelSteps();
+        selectedFilterTypeRemembersOnlyTheEditedProperty();
+        canvasToolStylesPersistIndependentlyWithoutGlobalStyles();
+        runScreenshotStylePersistenceFailureTest();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--text-style-only"))) {
+        fontEditorLoadsOnFirstOpen();
+        fontFamilyListIsCachedForEditorBuilds();
         textStyleControlsExposeAndEmitAllRequestedProperties();
         textStylePopupLifecyclesAreBalanced();
         snow_shot::storage::ApplicationStorage::instance().shutdown();
@@ -12786,7 +12989,7 @@ int main(int argc, char** argv) {
         configurationDrivenStyleEditorsShareStructuralContracts();
         filterEditorsRestoreValuesAfterToolSwitch();
         autoFilterLegacyStrengthMigration();
-        selectedFilterTypeDoesNotReplaceCreationDefault();
+        selectedFilterTypeRemembersOnlyTheEditedProperty();
         filterTypeSelectKeepsSmartEraseAcrossFilterModeSwitches();
         autoFilterControlsShareStylesAndKeepCategoryUnselected();
         filterToolExposesTypeAndIntensityControls();
@@ -13033,6 +13236,7 @@ int main(int argc, char** argv) {
     }
     if (application.arguments().contains(QStringLiteral("--scrolling-only"))) {
         scrollingSelectionButtonsDragAndLockAxis();
+        scrollingIntervalContentsScaleProportionally();
         scrollingScreenshotExposesAxisRecognitionModes();
         scrollingScreenshotKeepsDrawingToolsAvailable();
         snow_shot::storage::ApplicationStorage::instance().shutdown();
@@ -13057,6 +13261,7 @@ int main(int argc, char** argv) {
     prewarmedDestinationMergesSourceSharedAndDestinationOnlyEditors();
     retainedEditorsApplyDestinationMixedStateDuringReconciliation();
     repeatedStyleReconciliationDoesNotAccumulateHiddenRows();
+    fontEditorLoadsOnFirstOpen();
     fontFamilyListIsCachedForEditorBuilds();
     scrollingScreenshotKeepsDrawingToolsAvailable();
     recognitionToolsKeepDrawingToolsAvailable();

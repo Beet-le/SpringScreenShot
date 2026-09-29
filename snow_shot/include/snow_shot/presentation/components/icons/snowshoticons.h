@@ -80,6 +80,7 @@ ArrowheadTriangleOutlineStart(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef
 ArrowheadTriangleStart(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef AutoScroll(const adqt::icons::IconColors& colors = {});
+[[nodiscard]] adqt::icons::IconRef AutoScrollInterval(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef Blur(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ColorPicker(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef Delete(const adqt::icons::IconColors& colors = {});
@@ -97,6 +98,7 @@ ArrowheadTriangleStart(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef FontSizeMedium(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef FontSizeSmall(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef FontSizeVeryLarge(const adqt::icons::IconColors& colors = {});
+[[nodiscard]] adqt::icons::IconRef FullScreenCanvas(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef Group(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef Html(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ImportConfiguration(const adqt::icons::IconColors& colors = {});

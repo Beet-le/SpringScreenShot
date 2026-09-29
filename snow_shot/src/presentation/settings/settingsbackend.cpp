@@ -1,5 +1,6 @@
 #include "snow_shot/presentation/globalmousemanager.h"
 #include "snow_shot/presentation/settings/settingsbackend.h"
+#include "snow_shot/presentation/fontfamilies.h"
 #include "snow_shot/presentation/settings/settingsregistry.h"
 #include "snow_shot/presentation/settings/applicationpriority.h"
 #include "snow_shot/presentation/settings/textrecognitionacceleration.h"
@@ -219,6 +220,9 @@ BuiltInSettingsBackend::BuiltInSettingsBackend(
     connect(&themeManager, &styles::ThemeManager::themeModeChanged, this,
             [this](styles::ThemeMode) { emit synchronized(); });
 
+    connect(&themeManager, &styles::ThemeManager::appFontFamilyChanged, this,
+            [this](const QString&) { emit synchronized(); });
+
     auto& languageManager = LanguageManager::instance();
     connect(&languageManager, &LanguageManager::languageChanged, this,
             [this](const QString&, const QLocale&) {
@@ -252,6 +256,8 @@ QVariant BuiltInSettingsBackend::selectValue(SettingsSelectBinding binding) cons
     switch (binding) {
     case SettingsSelectBinding::TranslationLayoutProcessing:
         return storage::ScreenshotTranslationSettings().layoutProcessing();
+    case SettingsSelectBinding::AppFont:
+        return styles::ThemeManager::instance().appFontFamily();
     case SettingsSelectBinding::Theme:
         return themeModeValue(styles::ThemeManager::instance().themeMode());
     case SettingsSelectBinding::Language:
@@ -352,6 +358,19 @@ QVariant BuiltInSettingsBackend::selectValue(SettingsSelectBinding binding) cons
 QVector<SettingsRuntimeOption>
 BuiltInSettingsBackend::dynamicSelectOptions(SettingsSelectBinding binding) const {
     QVector<SettingsRuntimeOption> result;
+    if (binding == SettingsSelectBinding::AppFont) {
+        QStringList families = applicationFontFamilies();
+        const QString saved = styles::ThemeManager::instance().appFontFamily();
+        if (!saved.isEmpty() && !families.contains(saved)) {
+            families.append(saved);
+            families.sort(Qt::CaseInsensitive);
+        }
+        result.reserve(families.size());
+        for (const QString& family : families) {
+            result.push_back({family, family});
+        }
+        return result;
+    }
     if (binding != SettingsSelectBinding::Language) {
         return result;
     }
@@ -368,6 +387,8 @@ bool BuiltInSettingsBackend::applySelectValue(SettingsSelectBinding binding,
     switch (binding) {
     case SettingsSelectBinding::TranslationLayoutProcessing:
         return storage::ScreenshotTranslationSettings().setLayoutProcessing(value.toString());
+    case SettingsSelectBinding::AppFont:
+        return styles::ThemeManager::instance().setAppFontFamily(value.toString());
     case SettingsSelectBinding::Theme: {
         const auto requested = themeModeForValue(value);
         styles::ThemeManager::instance().setThemeMode(requested);
@@ -509,6 +530,8 @@ bool BuiltInSettingsBackend::switchValue(SettingsSwitchBinding binding) const {
         return storage::TraySettings().enabled();
     case SettingsSwitchBinding::ScreenshotAutoSaveAfterCopy:
         return storage::ScreenshotSettings().autoSaveAfterCopy();
+    case SettingsSwitchBinding::ScreenshotQuickSelectionModification:
+        return storage::ScreenshotSettings().quickSelectionModification();
     case SettingsSwitchBinding::ScreenshotCaptureCursor:
         return storage::ScreenshotSettings().captureCursor();
     case SettingsSwitchBinding::ScreenshotCaptureUiInScrollingScreenshot:
@@ -634,6 +657,9 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     }
     if (binding == SettingsSwitchBinding::ScreenshotConfirmBeforeExitingViaShortcut) {
         return storage::ScreenshotSettings().setConfirmBeforeExitingViaShortcut(value);
+    }
+    if (binding == SettingsSwitchBinding::ScreenshotQuickSelectionModification) {
+        return storage::ScreenshotSettings().setQuickSelectionModification(value);
     }
     if (binding == SettingsSwitchBinding::ScreenshotCaptureCursor) {
         return storage::ScreenshotSettings().setCaptureCursor(value);
@@ -764,6 +790,7 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     case SettingsSwitchBinding::ScreenshotAreaTypeHint:
     case SettingsSwitchBinding::TrayEnabled:
     case SettingsSwitchBinding::ScreenshotAutoSaveAfterCopy:
+    case SettingsSwitchBinding::ScreenshotQuickSelectionModification:
     case SettingsSwitchBinding::ScreenshotCaptureCursor:
     case SettingsSwitchBinding::ScreenshotCaptureUiInScrollingScreenshot:
     case SettingsSwitchBinding::ScreenshotShutterSoundNotification:
@@ -1008,6 +1035,8 @@ bool BuiltInSettingsBackend::applyDirectoryPathValue(SettingsDirectoryPathBindin
 
 QString BuiltInSettingsBackend::textValue(SettingsTextBinding binding) const {
     switch (binding) {
+    case SettingsTextBinding::ServerUrl:
+        return storage::ApiConfigurationSettings().serverUrl();
     case SettingsTextBinding::ScreenshotManualFilenameFormat:
         return storage::ScreenshotSettings().manualSaveFilenameFormat();
     case SettingsTextBinding::ScreenshotAutoFilenameFormat:
@@ -1020,6 +1049,8 @@ QString BuiltInSettingsBackend::textValue(SettingsTextBinding binding) const {
 
 bool BuiltInSettingsBackend::applyTextValue(SettingsTextBinding binding, const QString& value) {
     switch (binding) {
+    case SettingsTextBinding::ServerUrl:
+        return storage::ApiConfigurationSettings().setServerUrl(value);
     case SettingsTextBinding::ScreenshotManualFilenameFormat:
         return storage::ScreenshotSettings().setManualSaveFilenameFormat(value);
     case SettingsTextBinding::ScreenshotAutoFilenameFormat:
@@ -1412,6 +1443,14 @@ bool BuiltInSettingsBackend::applyCustomAiModels(const CustomAiModels& models) {
     return storage::ApiConfigurationSettings().setCustomModels(models);
 }
 
+TextTranslationConfigurations BuiltInSettingsBackend::textTranslationConfigurations() const {
+    return storage::ApiConfigurationSettings().textTranslationConfigurations();
+}
+bool BuiltInSettingsBackend::applyTextTranslationConfigurations(
+    const TextTranslationConfigurations& models) {
+    return storage::ApiConfigurationSettings().setTextTranslationConfigurations(models);
+}
+
 bool BuiltInSettingsBackend::importConfigurationSnapshot(
     const QMap<QString, QJsonValue>& values, int schemaVersion,
     std::shared_future<storage::StorageResult>* completion) {
@@ -1450,6 +1489,9 @@ bool BuiltInSettingsBackend::importConfigurationSnapshot(
     };
     applyRuntimeValue(QStringLiteral("interface/theme_mode"), [&](const QJsonValue& value) {
         return applySelectValue(SettingsSelectBinding::Theme, value.toVariant());
+    });
+    applyRuntimeValue(QStringLiteral("interface/app_font"), [&](const QJsonValue& value) {
+        return applySelectValue(SettingsSelectBinding::AppFont, value.toVariant());
     });
     applyRuntimeValue(QStringLiteral("interface/language"), [&](const QJsonValue& value) {
         return applySelectValue(SettingsSelectBinding::Language, value.toVariant());
@@ -1555,6 +1597,8 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
         };
         resetShortcut(GlobalShortcutAction::OpenCaptureHistory,
                       QStringLiteral("global_shortcuts/open_capture_history"));
+        resetShortcut(GlobalShortcutAction::GlobalCanvas,
+                      QStringLiteral("global_shortcuts/global_canvas"));
         resetShortcut(GlobalShortcutAction::OpenPinToScreenManagement,
                       QStringLiteral("global_shortcuts/open_pin_to_screen_management"));
         resetShortcut(GlobalShortcutAction::TranslateSelectedText,
@@ -1592,7 +1636,10 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
             storage::colorFromRgbaString(storage::ConfigurationSchema::defaultValue(
                                              QStringLiteral("interface/theme_primary_color"))
                                              .toString()));
-        return themeAccepted && languageAccepted && primaryColorAccepted;
+        const bool fontAccepted = applySelectValue(
+            SettingsSelectBinding::AppFont,
+            storage::ConfigurationSchema::defaultValue(QStringLiteral("interface/app_font")));
+        return themeAccepted && languageAccepted && primaryColorAccepted && fontAccepted;
     }
     case SettingsSectionReset::HistoryPolicy:
         return storage::ApplicationStorage::instance().requestCaptureHistoryPolicy(
@@ -1614,9 +1661,6 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
                        QStringLiteral("screenshot_selection/smart_selection"))
                        .toBool()) &&
                storage::ApplicationStorage::instance().configuration().setValues({
-                   {QStringLiteral("screenshot/save_as_file_dialog"),
-                    storage::ConfigurationSchema::defaultValue(
-                        QStringLiteral("screenshot/save_as_file_dialog"))},
                    {QStringLiteral("screenshot/shutter_sound_notification"),
                     storage::ConfigurationSchema::defaultValue(
                         QStringLiteral("screenshot/shutter_sound_notification"))},
@@ -1635,18 +1679,24 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
                    {QStringLiteral("screenshot/middle_mouse_button_action"),
                     storage::ConfigurationSchema::defaultValue(
                         QStringLiteral("screenshot/middle_mouse_button_action"))},
+                   {QStringLiteral("screenshot/quick_selection_modification"),
+                    storage::ConfigurationSchema::defaultValue(
+                        QStringLiteral("screenshot/quick_selection_modification"))},
                    {QStringLiteral("screenshot/selection_resize_mode"),
                     storage::ConfigurationSchema::defaultValue(
                         QStringLiteral("screenshot/selection_resize_mode"))},
-                   {QStringLiteral("screenshot/auto_save_after_copy"),
-                    storage::ConfigurationSchema::defaultValue(
-                        QStringLiteral("screenshot/auto_save_after_copy"))},
-                   {QStringLiteral("screenshot/copy_image_file_to_clipboard"),
-                    storage::ConfigurationSchema::defaultValue(
-                        QStringLiteral("screenshot/copy_image_file_to_clipboard"))},
                });
     case SettingsSectionReset::ScreenshotOutput:
         return storage::ApplicationStorage::instance().configuration().setValues({
+            {QStringLiteral("screenshot/auto_save_after_copy"),
+             storage::ConfigurationSchema::defaultValue(
+                 QStringLiteral("screenshot/auto_save_after_copy"))},
+            {QStringLiteral("screenshot/copy_image_file_to_clipboard"),
+             storage::ConfigurationSchema::defaultValue(
+                 QStringLiteral("screenshot/copy_image_file_to_clipboard"))},
+            {QStringLiteral("screenshot/save_as_file_dialog"),
+             storage::ConfigurationSchema::defaultValue(
+                 QStringLiteral("screenshot/save_as_file_dialog"))},
             {QStringLiteral("screenshot/image_save_directory"),
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("screenshot/image_save_directory"))},
@@ -1854,6 +1904,8 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("screenshot_translation/layout_processing"))},
         });
+    case SettingsSectionReset::Server:
+    case SettingsSectionReset::TextTranslationConfigurations:
     case SettingsSectionReset::CustomAiModels:
     case SettingsSectionReset::ExtendedTranslation: {
         // These categories contain configuration-backed fields only. The compiled
