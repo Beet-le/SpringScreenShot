@@ -240,7 +240,8 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      QStringLiteral("download"),
      ConfigurationValueKind::String,
      std::nullopt,
-     {QStringLiteral("manual"), QStringLiteral("check"), QStringLiteral("download")}},
+     {QStringLiteral("manual"), QStringLiteral("check"), QStringLiteral("download"),
+      QStringLiteral("next_launch")}},
 #endif
     {QStringLiteral("network/proxy"),
      QStringLiteral("none"),
@@ -2118,7 +2119,8 @@ ConfigurationNormalization ConfigurationSchema::normalize(const QString& key,
         return {};
     }
 #ifdef Q_OS_MACOS
-    if (key == u"updates/mode" && value.toString() == u"download") {
+    if (key == u"updates/mode" &&
+        (value.toString() == u"download" || value.toString() == u"next_launch")) {
         return {QStringLiteral("check"), true, true};
     }
 #endif
