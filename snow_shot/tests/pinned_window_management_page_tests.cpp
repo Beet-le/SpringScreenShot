@@ -1,4 +1,6 @@
 #include "snow_shot/presentation/components/pinnedwindowmanagementpagewidget.h"
+#include "snow_draw_engine_qt/snow_canvas_image.h"
+#include "../../test-support/virtualmemory.h"
 #include "snow_shot/presentation/components/thumbnailcache.h"
 #include "snow_shot/presentation/styles/thememanager.h"
 #include "snow_shot/storage/applicationstorage.h"
@@ -287,7 +289,7 @@ void pinnedPreviewRetriesAcrossStorageMigration(const QString& destination) {
     auto& repository = applicationStorage.pinnedWindows();
     storage::PinnedWindowRecord record;
     record.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
-    record.image = QImage(64, 32, QImage::Format_RGB32);
+    record.image = QImage(1600, 900, QImage::Format_RGB32);
     record.image.fill(Qt::yellow);
     record.nativeGeometry = QRect(QPoint(0, 0), record.image.size());
     record.canvasSourceRect = QRectF(record.nativeGeometry);
@@ -301,14 +303,21 @@ void pinnedPreviewRetriesAcrossStorageMigration(const QString& destination) {
     auto* source = page.findChild<PinnedWindowManagementDataSource*>();
     int replies = 0;
     bool lastSucceeded = false;
-    QObject::connect(source, &PinnedWindowManagementDataSource::previewReady, &page,
-                     [&](const QString&, quint64, const QImage& image, const QSize&) {
-                         ++replies;
-                         lastSucceeded = !image.isNull();
-                     });
+    QImage recoveredPreview;
+    QSize recoveredNaturalSize;
+    QObject::connect(
+        source, &PinnedWindowManagementDataSource::previewReady, &page,
+        [&](const QString&, quint64 requestId, const QImage& image, const QSize& naturalSize) {
+            ++replies;
+            lastSucceeded = !image.isNull();
+            if (requestId == 700000) {
+                recoveredPreview = image;
+                recoveredNaturalSize = naturalSize;
+            }
+        });
 
     repository.suspendWrites(true);
-    source->requestPreview(record.id, 700000, QSize(31, 13));
+    source->requestPreview(record.id, 700000, QSize(800, 600));
     require(applicationStorage.pinnedPreviewPool().waitForDone(5000),
             "queue a rejected preview before delivering the completion generation");
     repository.suspendWrites(false);
@@ -322,6 +331,10 @@ void pinnedPreviewRetriesAcrossStorageMigration(const QString& destination) {
     }
     require(replies == 1 && lastSucceeded,
             "a failed reply delivered after migration finishes retries the current generation");
+    require(recoveredPreview.size() == QSize(800, 450) &&
+                recoveredNaturalSize == record.image.size() &&
+                recoveredPreview.pixelColor(400, 225) == QColor(Qt::yellow),
+            "a migration retry scales pixels while preserving aspect ratio and natural size");
     repository.suspendWrites(true);
     source->requestPreview(record.id, 700003, QSize(37, 19));
     require(applicationStorage.pinnedPreviewPool().waitForDone(5000),
@@ -383,6 +396,15 @@ void pinnedPreviewRetriesAcrossStorageMigration(const QString& destination) {
 #endif
     require(repository.remove(record.id).success && repository.flush().success,
             "remove the migration recovery fixture");
+    static_cast<void>(source->records());
+    const auto* recoveredPixels = recoveredPreview.constBits();
+    require(snowCanvasDetachImage(recoveredPreview) &&
+                recoveredPreview.constBits() == recoveredPixels,
+            "a recovered large preview retains writable page-backed storage without copying");
+    const auto* middle = recoveredPixels + recoveredPreview.sizeInBytes() / 2;
+    recoveredPreview = {};
+    require(!snow::test_support::virtualMemoryMapped(middle),
+            "releasing a recovered preview and its cache returns large pixel pages to the OS");
 }
 
 int main(int argc, char** argv) {

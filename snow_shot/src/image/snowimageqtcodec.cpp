@@ -1,7 +1,12 @@
+#include "snow_draw_engine_qt/snow_canvas_image.h"
 #include "snowimageqtcodec.h"
+#include "snowimageqtsrgbrowreader.h"
 
 #include "snowimagecodecbridge.h"
 
+#include <snow/memory/pixel_buffer.h>
+
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -15,6 +20,7 @@
 #include <QBuffer>
 #include <QColorSpace>
 #include <QIODevice>
+#include <QImageReader>
 #include <QPainter>
 #include <QTransform>
 
@@ -546,31 +552,23 @@ QByteArray encodePng(const QImage& image, int compressionLevel) {
 }
 
 ScreenshotImageRowSource srgbRowSource(const QImage& image) {
-    const QColorSpace srgb(QColorSpace::SRgb);
-    QImage rgba = image.colorSpace().isValid() && image.colorSpace() != srgb
-                      ? image.convertedToColorSpace(srgb, QImage::Format_RGBA8888)
-                      : image.convertToFormat(QImage::Format_RGBA8888);
-    if (rgba.isNull()) {
+    if (image.isNull())
         return {};
-    }
-    rgba.setColorSpace(srgb);
+    const QColorSpace srgb(QColorSpace::SRgb);
+    const bool convertColor = image.colorSpace().isValid() && image.colorSpace() != srgb;
     ScreenshotImageRowSource source;
-    source.size = rgba.size();
-    source.backingImage = rgba;
-    source.readRows = [rgba](int first, int count, qsizetype stride, uchar* destination,
-                             qsizetype capacity) {
-        const qsizetype rowBytes = static_cast<qsizetype>(rgba.width()) * 4;
-        if (first < 0 || count <= 0 || first > rgba.height() || count > rgba.height() - first ||
-            destination == nullptr || stride < rowBytes || capacity < rowBytes ||
-            count - 1 > (capacity - rowBytes) / stride) {
-            return false;
-        }
-        for (int row = 0; row < count; ++row) {
-            std::memcpy(destination + row * stride, rgba.constScanLine(first + row),
-                        static_cast<std::size_t>(rowBytes));
-        }
-        return true;
-    };
+    source.size = image.size();
+    // Untagged images retain the existing assumption that their pixels are
+    // sRGB. Retagging a shared image here would detach its complete raster.
+    if (!convertColor && image.format() == QImage::Format_RGBA8888) {
+        source.backingImage = image;
+        source.readRows = [image](int first, int count, qsizetype stride, uchar* destination,
+                                  qsizetype capacity) {
+            return snowCanvasCopyRgba8888Rows(image, first, count, destination, capacity, stride);
+        };
+    } else {
+        source.readRows = detail::BoundedSrgbRowReader(image);
+    }
     return source;
 }
 
@@ -596,6 +594,46 @@ QImage decode(const QByteArray& encoded, snow::image::Format expectedFormat,
               const char* /*nameHint*/) {
     return decodeBytes(encoded, expectedFormat);
 }
+
+QImage readManagedImage(QImageReader& reader) {
+    const auto fallback = [&reader] {
+        QImage image = reader.read();
+        return image.sizeInBytes() < qsizetype(snow::memory::kMappedPixelBufferMinimum)
+                   ? image
+                   : snowCanvasCopyImage(image);
+    };
+    const QSize size = reader.size();
+    const QImage::Format format = reader.imageFormat();
+    if (size.isEmpty() || format <= QImage::Format_Invalid || format >= QImage::NImageFormats)
+        return fallback();
+
+    // Qt checks this limit only when its handler allocates a new image. Reusing
+    // our allocation must enforce the same effective depth and aligned stride.
+    const quint64 depth =
+        std::max(quint64{32}, quint64{QImage::toPixelFormat(format).bitsPerPixel()});
+    const quint64 stride = ((static_cast<quint64>(size.width()) * depth + 31) / 32) * 4;
+    if (stride == 0 || static_cast<quint64>(size.height()) >
+                           static_cast<quint64>(std::numeric_limits<qsizetype>::max()) / stride)
+        return fallback();
+    const quint64 bytes = stride * static_cast<quint64>(size.height());
+    const int limit = QImageReader::allocationLimit();
+    if (limit > 0 && bytes > static_cast<quint64>(limit) * 1024 * 1024)
+        return fallback();
+
+    QImage result = snowCanvasAllocateImage(size, format);
+    if (result.isNull())
+        return fallback();
+    const uchar* pixels = result.constBits();
+    if (!reader.read(&result))
+        return {};
+    // Some plugins cannot reuse storage, and automatic orientation or reader
+    // scaling can replace it after decoding. Preserve those results exactly.
+    return result.constBits() == pixels ||
+                   result.sizeInBytes() < qsizetype(snow::memory::kMappedPixelBufferMinimum)
+               ? result
+               : snowCanvasCopyImage(result);
+}
+
 QImage decodeIconFile(const QString& path, uint32_t preferredExtent) {
     if (preferredExtent == 0)
         return {};
@@ -691,21 +729,23 @@ SkinDecodeResult decodeSkinFile(const QString& path) {
         const QSize framePreview(qMax(1, qRound(decodedSize.width() * scaleX)),
                                  qMax(1, qRound(decodedSize.height() * scaleY)));
         if (framePreview != image.size())
-            image = image.scaled(framePreview, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+            image = snowCanvasScaleImage(image, framePreview, Qt::IgnoreAspectRatio,
+                                         Qt::SmoothTransformation);
         if (image.isNull())
             return {{}, SkinDecodeError::ResourceLimit};
         const QColorSpace srgb(QColorSpace::SRgb);
-        image = image.colorSpace().isValid() && image.colorSpace() != srgb
-                    ? image.convertedToColorSpace(srgb, QImage::Format_ARGB32_Premultiplied)
-                    : image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        image =
+            image.colorSpace().isValid() && image.colorSpace() != srgb
+                ? snowCanvasColorConvertedImage(image, srgb, QImage::Format_ARGB32_Premultiplied)
+                : snowCanvasConvertImage(image, QImage::Format_ARGB32_Premultiplied);
         if (image.isNull())
             return {{}, SkinDecodeError::ResourceLimit};
         image.setColorSpace(srgb);
         if (info.frame_x != 0 || info.frame_y != 0 || decodedSize != canvasSize) {
-            QImage canvas(previewCanvas, QImage::Format_ARGB32_Premultiplied);
+            QImage canvas =
+                snowCanvasAllocateZeroedImage(previewCanvas, QImage::Format_ARGB32_Premultiplied);
             if (canvas.isNull())
                 return {{}, SkinDecodeError::ResourceLimit};
-            canvas.fill(Qt::transparent);
             canvas.setColorSpace(srgb);
             QPainter painter(&canvas);
             painter.setRenderHint(QPainter::SmoothPixmapTransform);
@@ -742,7 +782,7 @@ SkinDecodeResult decodeSkinFile(const QString& path) {
             break;
         }
         if (!orientation.isIdentity())
-            image = image.transformed(orientation, Qt::FastTransformation);
+            image = snowCanvasTransformImage(image, orientation, Qt::FastTransformation);
         if (image.isNull())
             return {{}, SkinDecodeError::ResourceLimit};
         image.setDevicePixelRatio(1.0);
