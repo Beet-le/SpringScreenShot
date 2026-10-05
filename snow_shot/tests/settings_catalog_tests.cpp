@@ -474,10 +474,13 @@ void builtInCatalogIsCompleteAndValid() {
                 itemIds.contains(QStringLiteral("screenshot-shortcut.upload_to_cloud")) &&
                 itemIds.contains(QStringLiteral("pin-to-screen-shortcut.upload_to_cloud")),
             "cloud upload must expose its configuration and shortcuts in both local scopes");
-    require(itemIds.size() == 240,
+    require(itemIds.size() == 242,
             qPrintable(QStringLiteral(
-                           "catalog must contain 240 shared settings on every platform; found %1")
+                           "catalog must contain 242 shared settings on every platform; found %1")
                            .arg(itemIds.size())));
+    require(itemIds.contains(QStringLiteral("pin-to-screen.confirm-before-closing-window")) &&
+                itemIds.contains(QStringLiteral("pin-to-screen.confirm-before-destroying-window")),
+            "catalog must retain both independent pinned window confirmation settings");
     require(foundUpdates, "catalog must contain the update mode item");
     const auto* pinnedEditor =
         catalog.item({QStringLiteral("pinned-windows"), QStringLiteral("pin-to-screen-toolbar"),
@@ -1593,7 +1596,7 @@ void builtInCatalogIsCompleteAndValid() {
     require(pinPage != nullptr && pinPage->sections.size() == 3 &&
                 pinPage->sections.at(0).id == QStringLiteral("pin-to-screen-settings") &&
                 pinPage->sections.at(0).title.translated() == QStringLiteral("Interaction") &&
-                pinPage->sections.at(0).items.size() == 8 &&
+                pinPage->sections.at(0).items.size() == 10 &&
                 pinPage->sections.at(1).id == pinSection.id &&
                 pinSection.title.translated() == QStringLiteral("Window interface") &&
                 pinPage->sections.at(2).id == QStringLiteral("pin-to-screen-toolbar") &&

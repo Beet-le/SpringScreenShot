@@ -1210,6 +1210,14 @@
             <translation>Arrow</translation>
         </message>
         <message>
+            <source>Ask for confirmation before closing a pinned window.</source>
+            <translation>Ask for confirmation before closing a pinned window.</translation>
+        </message>
+        <message>
+            <source>Ask for confirmation before permanently destroying a pinned window.</source>
+            <translation>Ask for confirmation before permanently destroying a pinned window.</translation>
+        </message>
+        <message>
             <source>Ask for confirmation when using the Cancel screenshot shortcut.</source>
             <translation>Ask for confirmation when using the Cancel screenshot shortcut.</translation>
         </message>
@@ -1692,6 +1700,14 @@
         <message>
             <source>Configure the screenshot, pinned, and recording toolbars</source>
             <translation>Configure the screenshot, pinned, and recording toolbars</translation>
+        </message>
+        <message>
+            <source>Confirm before closing window</source>
+            <translation>Confirm before closing window</translation>
+        </message>
+        <message>
+            <source>Confirm before destroying window</source>
+            <translation>Confirm before destroying window</translation>
         </message>
         <message>
             <source>Confirm before exiting screenshot via shortcut</source>

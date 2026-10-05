@@ -436,6 +436,7 @@ class ScreenshotPinnedWindow final : public QWidget {
     void closeOtherPinnedWindows();
     void closeAllPinnedWindows();
     void requestUserClose();
+    void closeAfterConfirmation();
     [[nodiscard]] std::optional<QPoint> physicalCursorPosition() const;
     bool cursorMovementEnabled() const;
     bool moveCursorOnePixel(snow_shot::platform::PhysicalCursorDirection direction);
@@ -548,6 +549,7 @@ class ScreenshotPinnedWindow final : public QWidget {
     adqt::widgets::AdSlider* m_clickThroughOpacitySlider = nullptr;
     adqt::widgets::AdContextMenu* m_contextMenu = nullptr;
     QPointer<adqt::widgets::AdModal> m_destroyConfirmation;
+    QPointer<adqt::widgets::AdModal> m_closeConfirmation;
     adqt::widgets::AdContextMenu* m_groupMenu = nullptr;
     adqt::widgets::AdContextMenu* m_deleteSpecifiedGroupMenu = nullptr;
     QAction* m_ocrAction = nullptr;

@@ -151,6 +151,7 @@
 
 #if defined(Q_OS_WIN) || defined(_WIN32)
 #include <qt_windows.h>
+#include <qpa/qwindowsysteminterface.h>
 #include <dwmapi.h>
 #include <commctrl.h>
 #endif
@@ -1009,7 +1010,7 @@ class PinnedWindowTestApplication final : public QApplication {
 };
 
 QPushButton* buttonNamed(QWidget& window, const QString& accessibleName);
-bool processUntilDeleted(QPointer<ScreenshotPinnedWindow>& window, int timeoutMs);
+template <typename T> bool processUntilDeleted(QPointer<T>& window, int timeoutMs);
 adqt::widgets::AdButton* toolbarButtonNamed(ScreenshotToolPalette& toolbar, const QString& tooltip);
 
 class ImmediateQrRecognition final : public ScreenshotQrRecognitionPort {
@@ -3925,7 +3926,7 @@ QPushButton* buttonNamed(QWidget& window, const QString& accessibleName) {
     return nullptr;
 }
 
-bool processUntilDeleted(QPointer<ScreenshotPinnedWindow>& window, int timeoutMs) {
+template <typename T> bool processUntilDeleted(QPointer<T>& window, int timeoutMs) {
     QElapsedTimer elapsed;
     elapsed.start();
     while (!window.isNull() && elapsed.elapsed() < timeoutMs) {
@@ -5304,7 +5305,160 @@ void pinnedConfiguredShortcutUpdatesImmediately(SnowCanvasRuntime&) {
     require(processUntilDeleted(guardedWindow, 2000), "shortcut test pin was not deleted");
 }
 
+void pinnedWindowConfirmationPreferences() {
+    const snow_shot::storage::PinToScreenSettings settings;
+    const bool oldClose = settings.confirmBeforeClosingWindow();
+    const bool oldDestroy = settings.confirmBeforeDestroyingWindow();
+    const auto restore = qScopeGuard([&] {
+        require(settings.setConfirmBeforeClosingWindow(oldClose) &&
+                    settings.setConfirmBeforeDestroyingWindow(oldDestroy),
+                "restore window confirmation settings");
+    });
+    for (const bool destroy : {false, true}) {
+        for (const bool confirm : {false, true}) {
+            require(settings.setConfirmBeforeClosingWindow(!destroy && confirm) &&
+                        settings.setConfirmBeforeDestroyingWindow(destroy && confirm),
+                    "configure independent window confirmation preferences");
+            ScreenshotPinnedWindow window;
+            window.setAttribute(Qt::WA_DeleteOnClose, false);
+            auto config = cachedOcrPinConfig(nullptr);
+            config.persistenceId = QStringLiteral("confirmation-fixture");
+            int closes = 0;
+            int removals = 0;
+            int closeSignals = 0;
+            config.persistenceCloser = [&](const auto&) { ++closes; };
+            config.persistenceRemover = [&](const auto&) { ++removals; };
+            QObject::connect(
+                &window, &ScreenshotPinnedWindow::closingForPersistence,
+                [&](const auto&, auto intent) {
+                    ++closeSignals;
+                    require(intent == (destroy
+                                           ? snow_shot::storage::PinnedWindowCloseIntent::Destroy
+                                           : snow_shot::storage::PinnedWindowCloseIntent::Close),
+                            "confirmed operations must retain their close intent");
+                });
+            require(window.present(config), "present window confirmation fixture");
+            const QString actionName = destroy ? QStringLiteral("screenshotPinnedDestroyAction")
+                                               : QStringLiteral("screenshotPinnedCloseAction");
+            const QString modalName = destroy
+                                          ? QStringLiteral("screenshotPinnedDestroyConfirmation")
+                                          : QStringLiteral("screenshotPinnedCloseConfirmation");
+            auto* action = window.findChild<QAction*>(actionName);
+            require(action, "confirmation fixture must expose its window action");
+            action->trigger();
+            if (confirm) {
+                auto* modal = window.findChild<adqt::widgets::AdModal*>(modalName);
+                require(modal && modal->isOpen() && modal->windowModality() == Qt::WindowModal &&
+                            window.isVisible() && window.sourcePinAvailable() && closes == 0 &&
+                            removals == 0 && closeSignals == 0,
+                        "confirmation must defer hiding, persistence and removal");
+                action->trigger();
+                require(window.findChildren<adqt::widgets::AdModal*>(modalName).size() == 1,
+                        "repeated requests must reuse the open confirmation");
+                class ConfirmationTranslator final : public QTranslator {
+                  public:
+                    QString translate(const char* context, const char* sourceText, const char*,
+                                      int) const override {
+                        if (QByteArray(context) == "ScreenshotPinnedWindow")
+                            return QStringLiteral("Translated %1")
+                                .arg(QString::fromUtf8(sourceText));
+                        return {};
+                    }
+                } translator;
+                QApplication::installTranslator(&translator);
+                QEvent languageChange(QEvent::LanguageChange);
+                QApplication::sendEvent(&window, &languageChange);
+                require(
+                    modal->windowTitle() ==
+                            (destroy ? QStringLiteral("Translated Destroy pinned window")
+                                     : QStringLiteral("Translated Close pinned window")) &&
+                        modal->text() ==
+                            (destroy ? QStringLiteral("Translated Destroy this pinned window? This "
+                                                      "action cannot be undone.")
+                                     : QStringLiteral("Translated Close this pinned window?")) &&
+                        modal->acceptText() == (destroy ? QStringLiteral("Translated Destroy")
+                                                        : QStringLiteral("Translated Close")) &&
+                        modal->rejectText() == QStringLiteral("Translated Cancel"),
+                    "open window confirmations must retranslate their title, prompt and buttons");
+                QApplication::removeTranslator(&translator);
+                QApplication::sendEvent(&window, &languageChange);
+                QPointer<adqt::widgets::AdModal> dismissed(modal);
+                modal->reject();
+                require(processUntilDeleted(dismissed, 2000) && window.isVisible() &&
+                            window.sourcePinAvailable() && closes == 0 && removals == 0 &&
+                            closeSignals == 0,
+                        "canceling confirmation must preserve the pin and persisted state");
+                action->trigger();
+                modal = window.findChild<adqt::widgets::AdModal*>(modalName);
+                require(modal && modal->isOpen(), "canceled confirmation must be reopenable");
+                modal->accept();
+            } else {
+                require(!window.findChild<adqt::widgets::AdModal*>(modalName),
+                        "disabled confirmation must perform the operation without a modal");
+            }
+            QCoreApplication::processEvents();
+            require(!window.isVisible() && closeSignals == 1 && closes == (destroy ? 0 : 1) &&
+                        (destroy ? removals > 0 : removals == 0),
+                    "the operation must close once and apply the corresponding persistence change");
+        }
+    }
+    require(settings.setConfirmBeforeClosingWindow(true), "enable close confirmation on live pin");
+    ScreenshotPinnedWindow window;
+    window.setAttribute(Qt::WA_DeleteOnClose, false);
+    require(window.present(cachedOcrPinConfig(nullptr)),
+            "present close button confirmation fixture");
+    auto* button =
+        window.findChild<adqt::widgets::AdButton*>(QStringLiteral("screenshotPinnedCloseButton"));
+    require(button, "close button confirmation fixture must expose its close button");
+    button->click();
+    auto* modal = window.findChild<adqt::widgets::AdModal*>(
+        QStringLiteral("screenshotPinnedCloseConfirmation"));
+    require(modal && modal->isOpen(), "close button must honor confirmation preference");
+    QPointer<adqt::widgets::AdModal> dismissed(modal);
+    modal->reject();
+    require(processUntilDeleted(dismissed, 2000), "dismiss close button confirmation");
+    auto* canvas = window.findChild<SnowCanvasWidget*>();
+    require(canvas, "close shortcut fixture must expose its canvas");
+    sendShortcut(*canvas, Qt::Key_Escape);
+    PhysicalKeyEvent closeRelease(QEvent::KeyRelease, Qt::Key_Escape, Qt::NoModifier);
+    QCoreApplication::sendEvent(canvas, &closeRelease);
+    modal = window.findChild<adqt::widgets::AdModal*>(
+        QStringLiteral("screenshotPinnedCloseConfirmation"));
+    require(modal && modal->isOpen() && window.isVisible(),
+            "close shortcut must honor confirmation preference");
+    dismissed = modal;
+    modal->reject();
+    require(processUntilDeleted(dismissed, 2000), "dismiss close shortcut confirmation");
+#if defined(Q_OS_WIN) || defined(_WIN32)
+    require(
+        window.windowHandle() &&
+            !QWindowSystemInterface::handleCloseEvent<QWindowSystemInterface::SynchronousDelivery>(
+                window.windowHandle()) &&
+            window.isVisible(),
+        "native close must defer closing while confirmation is enabled");
+    modal = window.findChild<adqt::widgets::AdModal*>(
+        QStringLiteral("screenshotPinnedCloseConfirmation"));
+    require(modal && modal->isOpen(), "native close must open the window confirmation");
+    dismissed = modal;
+    modal->reject();
+    require(processUntilDeleted(dismissed, 2000), "dismiss native close confirmation");
+#endif
+    require(settings.setConfirmBeforeClosingWindow(false),
+            "disable close confirmation on live pin");
+    button->click();
+    require(!window.isVisible(), "existing pins must read updated close preferences immediately");
+    QCoreApplication::processEvents();
+}
+
 void pinnedDestroyShortcutUsesDestructiveMenuColor() {
+    const snow_shot::storage::PinToScreenSettings settings;
+    const bool oldDestroy = settings.confirmBeforeDestroyingWindow();
+    const auto restore = qScopeGuard([&] {
+        require(settings.setConfirmBeforeDestroyingWindow(oldDestroy),
+                "restore destroy shortcut confirmation preference");
+    });
+    require(settings.setConfirmBeforeDestroyingWindow(true),
+            "enable destroy shortcut confirmation");
     QScreen* screen = QGuiApplication::primaryScreen();
     require(screen != nullptr, "a primary screen is required");
     QImage background(160, 90, QImage::Format_ARGB32_Premultiplied);
@@ -5343,7 +5497,22 @@ void pinnedDestroyShortcutUsesDestructiveMenuColor() {
     require(!guardedWindow.isNull(), "Destroy must activate on shortcut release");
     PhysicalKeyEvent destroyRelease(QEvent::KeyRelease, Qt::Key_Escape, Qt::ShiftModifier);
     QCoreApplication::sendEvent(canvas, &destroyRelease);
-    require(processUntilDeleted(guardedWindow, 2000), "Shift+Esc must destroy the pinned window");
+    auto* modal = pinnedWindow->findChild<adqt::widgets::AdModal*>(
+        QStringLiteral("screenshotPinnedDestroyConfirmation"));
+    require(modal && modal->isOpen() && pinnedWindow->isVisible(),
+            "Shift+Esc must honor enabled destroy confirmation");
+    QPointer<adqt::widgets::AdModal> dismissed(modal);
+    modal->reject();
+    require(processUntilDeleted(dismissed, 2000) && pinnedWindow->isVisible(),
+            "canceling shortcut confirmation must preserve the pinned window");
+    require(settings.setConfirmBeforeDestroyingWindow(false),
+            "disable destroy confirmation on an existing pin");
+    sendShortcut(*canvas, Qt::Key_Escape, Qt::ShiftModifier);
+    QCoreApplication::sendEvent(canvas, &destroyRelease);
+    require(!pinnedWindow->findChild<adqt::widgets::AdModal*>(
+                QStringLiteral("screenshotPinnedDestroyConfirmation")),
+            "disabled Shift+Esc confirmation must not open a modal");
+    require(processUntilDeleted(guardedWindow, 2000), "unconfirmed Shift+Esc must destroy the pin");
 }
 
 void pinnedMovementShortcutsMoveIdleWindow() {
@@ -16872,8 +17041,8 @@ void pinnedMultiSelectionMenuAndLocks() {
     auto* alignment = actions.at(3)->menu();
     auto* groupMenu = qobject_cast<adqt::widgets::AdContextMenu*>(actions.at(4)->menu());
     require(groupMenu != nullptr, "multi-selection owns a group context submenu");
-    auto& defaultGroup = pinnedSelectionAction(
-        *groupMenu, QStringLiteral("screenshotPinnedSelectionGroup-default"));
+    auto& defaultGroup =
+        pinnedSelectionAction(*groupMenu, QStringLiteral("screenshotPinnedSelectionGroup-default"));
     require(defaultGroup.text() == QStringLiteral("Default") &&
                 groupMenu->actionBadge(&defaultGroup) == QStringLiteral("3/3") &&
                 defaultGroup.shortcut().isEmpty() && defaultGroup.isChecked(),
@@ -17014,6 +17183,76 @@ void pinnedMultiSelectionCloseAndGroups() {
     }
 }
 
+void pinnedMultiSelectionCloseConfirmation() {
+    const snow_shot::storage::PinToScreenSettings settings;
+    const bool oldClose = settings.confirmBeforeClosingWindow();
+    const auto restore = qScopeGuard([&] {
+        require(settings.setConfirmBeforeClosingWindow(oldClose),
+                "restore multi-selection close confirmation preference");
+    });
+    require(settings.setConfirmBeforeClosingWindow(true), "enable selected close confirmation");
+    PinnedSelectionFixture fixture;
+    auto& first = fixture.add({40, 60});
+    auto& second = fixture.add({230, 160});
+    auto& other = fixture.add({420, 260});
+    fixture.selection.toggleSelection(&first);
+    fixture.selection.toggleSelection(&second);
+    const auto confirmation = [](ScreenshotPinnedWindow& window) {
+        auto* modal = window.findChild<adqt::widgets::AdModal*>(
+            QStringLiteral("screenshotPinnedCloseConfirmation"));
+        require(modal && modal->isOpen(), "selected close opens a window confirmation");
+        return modal;
+    };
+    const auto cancel = [&](ScreenshotPinnedWindow& window) {
+        QPointer<adqt::widgets::AdModal> modal(confirmation(window));
+        modal->reject();
+        require(processUntilDeleted(modal, 2000), "dismiss selected close confirmation");
+    };
+    auto* close = first.findChild<QAction*>(QStringLiteral("screenshotPinnedCloseAction"));
+    require(close != nullptr, "selected pin exposes its individual close action");
+    close->trigger();
+    require(fixture.selection.isSelected(&first) && fixture.selection.isSelectable(&first) &&
+                fixture.selection.selectedCount() == 2 && fixture.closed == 0,
+            "pending individual close preserves selection and registration");
+    cancel(first);
+#if defined(Q_OS_WIN) || defined(_WIN32)
+    require(
+        first.windowHandle() &&
+            !QWindowSystemInterface::handleCloseEvent<QWindowSystemInterface::SynchronousDelivery>(
+                first.windowHandle()) &&
+            fixture.selection.isSelected(&first) && fixture.selection.isSelectable(&first),
+        "pending native close preserves selection and registration");
+    cancel(first);
+#endif
+    auto& othersMenu = fixture.menu(first);
+    pinnedSelectionAction(othersMenu, QStringLiteral("screenshotPinnedSelectionCloseOthers"))
+        .trigger();
+    cancel(other);
+    require(fixture.selection.isSelectable(&other) && fixture.closed == 0 &&
+                fixture.selection.selectedCount() == 2,
+            "canceling Close Other Windows leaves the other pin registered");
+    auto& closeMenu = fixture.menu(first);
+    pinnedSelectionAction(closeMenu, QStringLiteral("screenshotPinnedSelectionClose")).trigger();
+    require(confirmation(first) && confirmation(second) && fixture.closed == 0 &&
+                fixture.selection.selectedCount() == 2,
+            "batch Close honors confirmation without changing selection or stored records");
+    cancel(first);
+    confirmation(second)->accept();
+    require(first.sourcePinAvailable() && !second.isVisible() && other.sourcePinAvailable() &&
+                fixture.selection.isSelected(&first) && fixture.selection.isSelectable(&first) &&
+                !fixture.selection.isSelectable(&second) &&
+                fixture.selection.selectedCount() == 1 && fixture.closed == 1 &&
+                !fixture.repository.loadRecord(first.persistenceId())->ignored &&
+                fixture.repository.loadRecord(second.persistenceId())->ignored,
+            "only the confirmed pin closes and unregisters; canceled peers remain restorable");
+    close->trigger();
+    confirmation(first)->accept();
+    require(fixture.selection.selectedCount() == 0 && !fixture.selection.isSelectable(&first) &&
+                fixture.closed == 2,
+            "confirmed individual close unregisters the remaining selected pin");
+    QCoreApplication::processEvents();
+}
+
 void pinnedMultiSelectionDestroyConfirmation() {
     PinnedSelectionFixture fixture;
     auto& first = fixture.add({40, 60});
@@ -17068,6 +17307,50 @@ void pinnedMultiSelectionDestroyConfirmation() {
                 !fixture.repository.loadRecord(second.persistenceId()) &&
                 fixture.repository.loadRecord(other.persistenceId()) && other.sourcePinAvailable(),
             "confirmed Destroy removes only the frozen selection with one backend batch");
+}
+
+void pinnedMultiSelectionDestroyWithoutConfirmation() {
+    const snow_shot::storage::PinToScreenSettings settings;
+    const bool oldClose = settings.confirmBeforeClosingWindow();
+    const bool oldDestroy = settings.confirmBeforeDestroyingWindow();
+    const auto restore = qScopeGuard([&] {
+        require(settings.setConfirmBeforeClosingWindow(oldClose) &&
+                    settings.setConfirmBeforeDestroyingWindow(oldDestroy),
+                "restore independent multi-selection confirmation preferences");
+    });
+    require(settings.setConfirmBeforeClosingWindow(true) &&
+                settings.setConfirmBeforeDestroyingWindow(false),
+            "disable batch destroy confirmation independently of close confirmation");
+    PinnedSelectionFixture fixture;
+    auto& first = fixture.add({40, 60});
+    auto& second = fixture.add({230, 160});
+    auto& other = fixture.add({420, 260});
+    fixture.selection.toggleSelection(&first);
+    fixture.selection.toggleSelection(&second);
+    fixture.rejectDestroy = true;
+    auto& menu = fixture.menu(first);
+    pinnedSelectionAction(menu, QStringLiteral("screenshotPinnedSelectionDestroy")).trigger();
+    require(!first.findChild<adqt::widgets::AdModal*>(
+                QStringLiteral("screenshotPinnedSelectionDestroyConfirmation")) &&
+                fixture.destroyAttempts == 1 && fixture.selection.selectedCount() == 2 &&
+                first.sourcePinAvailable() && second.sourcePinAvailable() &&
+                fixture.repository.summaries().size() == 3,
+            "unconfirmed batch Destroy retains atomic preflight and preserves pins on failure");
+    fixture.rejectDestroy = false;
+    auto& retryMenu = fixture.menu(first);
+    pinnedSelectionAction(retryMenu, QStringLiteral("screenshotPinnedSelectionDestroy")).trigger();
+    require(
+        fixture.destroyAttempts == 2 && fixture.lastDestroyedIds.size() == 2 &&
+            fixture.lastDestroyedIds.contains(first.persistenceId()) &&
+            fixture.lastDestroyedIds.contains(second.persistenceId()) &&
+            fixture.selection.selectedCount() == 0 && !first.sourcePinAvailable() &&
+            !second.sourcePinAvailable() && !fixture.repository.loadRecord(first.persistenceId()) &&
+            !fixture.repository.loadRecord(second.persistenceId()) &&
+            fixture.repository.loadRecord(other.persistenceId()) && other.sourcePinAvailable() &&
+            !first.findChild<adqt::widgets::AdModal*>(
+                QStringLiteral("screenshotPinnedSelectionDestroyConfirmation")),
+        "disabled confirmation destroys only the selected pins with one storage batch");
+    QCoreApplication::processEvents();
 }
 
 void pinnedMultiSelectionGroupFailureAndRetry() {
@@ -17999,6 +18282,12 @@ int main(int argc, char* argv[]) {
         // without this, lazily initialized storage lands in the developer's
         // real AppData (see IsolatedPinnedStorage).
         IsolatedPinnedStorage processStorage;
+        if (app.arguments().contains(QStringLiteral("--window-confirmation-only"))) {
+            pinnedWindowConfirmationPreferences();
+            pinnedMultiSelectionCloseConfirmation();
+            pinnedMultiSelectionDestroyWithoutConfirmation();
+            return 0;
+        }
         if (app.arguments().contains(QStringLiteral("--multi-selection-capture-loss-only"))) {
             pinnedMultiSelectionCaptureLoss();
             return 0;
@@ -18015,7 +18304,9 @@ int main(int argc, char* argv[]) {
             pinnedMultiSelectionDeferredPersistence();
             pinnedMultiSelectionMenuAndLocks();
             pinnedMultiSelectionCloseAndGroups();
+            pinnedMultiSelectionCloseConfirmation();
             pinnedMultiSelectionDestroyConfirmation();
+            pinnedMultiSelectionDestroyWithoutConfirmation();
             pinnedMultiSelectionGroupFailureAndRetry();
             pinnedMultiSelectionGroupModalManagerTeardown();
             pinnedMultiSelectionLiveLanguageAndTheme();

@@ -2,6 +2,7 @@
 #include "snow_shot/presentation/screenshotpinnedwindow.h"
 #include "snow_shot/presentation/pinnedwindowgroupmanager.h"
 #include "snow_shot/presentation/components/icons/snowshoticons.h"
+#include "snow_shot/storage/settingsadapters.h"
 #include "antd_icons.h"
 #include "widgets/context_menu.h"
 #include "widgets/message.h"
@@ -278,9 +279,9 @@ void PinnedWindowSelectionController::buildContextMenu(ScreenshotPinnedWindow* o
         const auto entries = manager->displaySnapshot();
         for (const auto& entry : entries) {
             auto* action = group->addItem(entry.name);
-            group->setActionBadge(action, QStringLiteral("%1/%2")
-                                              .arg(entry.counts.nonIgnored)
-                                              .arg(entry.counts.total));
+            group->setActionBadge(
+                action,
+                QStringLiteral("%1/%2").arg(entry.counts.nonIgnored).arg(entry.counts.total));
             action->setObjectName(
                 QStringLiteral("screenshotPinnedSelectionGroup-%1").arg(entry.id));
             action->setCheckable(true);
@@ -365,6 +366,22 @@ void PinnedWindowSelectionController::confirmDestroy(
     for (const auto& window : targets)
         if (window && !ids.contains(window->persistenceId()))
             ids.append(window->persistenceId());
+    const auto destroy = [this, ids, targets, owner = QPointer(owner)] {
+        if (m_destroyRecords) {
+            const auto result = m_destroyRecords(ids);
+            if (!result.success) {
+                showFailure(owner, tr("The selected windows could not be destroyed."));
+                return;
+            }
+        }
+        for (const auto& window : targets)
+            if (window && !window->m_closing && ids.contains(window->persistenceId()))
+                window->requestDestroy();
+    };
+    if (!storage::PinToScreenSettings().confirmBeforeDestroyingWindow()) {
+        destroy();
+        return;
+    }
     auto* modal = new adqt::widgets::AdModal(owner);
     m_destroyConfirmation = modal;
     modal->setObjectName(QStringLiteral("screenshotPinnedSelectionDestroyConfirmation"));
@@ -377,19 +394,7 @@ void PinnedWindowSelectionController::confirmDestroy(
     modal->setStandardButtons(adqt::widgets::AdModal::StandardButton::Ok |
                               adqt::widgets::AdModal::StandardButton::Cancel);
     retranslateUi();
-    connect(modal, &adqt::widgets::AdModal::accepted, this,
-            [this, ids, targets, owner = QPointer(owner)] {
-                if (m_destroyRecords) {
-                    const auto result = m_destroyRecords(ids);
-                    if (!result.success) {
-                        showFailure(owner, tr("The selected windows could not be destroyed."));
-                        return;
-                    }
-                }
-                for (const auto& window : targets)
-                    if (window && !window->m_closing && ids.contains(window->persistenceId()))
-                        window->requestDestroy();
-            });
+    connect(modal, &adqt::widgets::AdModal::accepted, this, destroy);
     connect(modal, &adqt::widgets::AdModal::finished, this, [this, modal](auto) {
         if (m_destroyConfirmation == modal)
             m_destroyConfirmation = nullptr;
