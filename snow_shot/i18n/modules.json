@@ -109,6 +109,7 @@
   "history": [
     "HistoryEntryWidget",
     "PinnedWindowManagementPageWidget",
+    "snow_shot::presentation::PinnedWindowSelectionController",
     "ScreenshotHistoryPageWidget",
     "ScreenshotPinnedWindow",
     "WindowGroupSwitcher",
