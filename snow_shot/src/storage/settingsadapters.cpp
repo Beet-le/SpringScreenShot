@@ -122,6 +122,7 @@ const QStringList& pinToScreenShortcutActionIds() {
         QStringLiteral("thumbnail_mode"),
         QStringLiteral("hide_to_top"),
         QStringLiteral("toggle_click_through"),
+        QStringLiteral("toggle_lock"),
         QStringLiteral("always_on_top"),
         QStringLiteral("show_border"),
         QStringLiteral("close_window"),
@@ -2076,6 +2077,14 @@ QColor PinToScreenSettings::borderActiveColor() const {
 
 bool PinToScreenSettings::setBorderActiveColor(const QColor& color) const {
     return setColorValue(QStringLiteral("pin_to_screen/border_active_color"), color);
+}
+
+QColor PinToScreenSettings::lockedBorderColor() const {
+    return colorValue(QStringLiteral("pin_to_screen/locked_border_color"));
+}
+
+bool PinToScreenSettings::setLockedBorderColor(const QColor& color) const {
+    return setColorValue(QStringLiteral("pin_to_screen/locked_border_color"), color);
 }
 
 QString PinToScreenSettings::mouseWheelZoomMode() const {
