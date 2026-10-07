@@ -26,9 +26,17 @@ $script:SnowStaticQtSourcePatches = @($script:SnowStaticQtFeaturePolicy.windowsS
 $featureHashes = @((Get-FileHash -Algorithm SHA256 -LiteralPath (
     Join-Path $PSScriptRoot "static-qt-features.json")).Hash.ToLowerInvariant()) +
     @($script:SnowStaticQtSourcePatches | ForEach-Object { $_.SHA256 })
-$script:SnowStaticQtFeatureFingerprint = [Convert]::ToHexString(
-    [System.Security.Cryptography.SHA256]::HashData(
-        [System.Text.Encoding]::UTF8.GetBytes($featureHashes -join '|'))).ToLowerInvariant()
+# The batch launcher also supports Windows PowerShell 5.1 (.NET Framework).
+$featureHasher = [System.Security.Cryptography.SHA256]::Create()
+try {
+    $featureDigest = $featureHasher.ComputeHash(
+        [System.Text.Encoding]::UTF8.GetBytes($featureHashes -join '|'))
+    $script:SnowStaticQtFeatureFingerprint = [BitConverter]::ToString($featureDigest).
+        Replace('-', '').ToLowerInvariant()
+}
+finally {
+    $featureHasher.Dispose()
+}
 
 function Get-SnowWindowsHostArchitecture {
     # OSArchitecture remains correct when PowerShell runs under emulation on ARM64.

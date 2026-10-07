@@ -1,7 +1,7 @@
 # Launcher contracts with a deterministic process fixture; no application launches.
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$fixture = Join-Path ([IO.Path]::GetTempPath()) "snow-shot-launch-$([guid]::NewGuid().ToString('N'))"
+$fixture = Join-Path ([IO.Path]::GetTempPath()) "snow-shot launch-$([guid]::NewGuid().ToString('N'))"
 function Require($Value, [string]$Message) { if (-not $Value) { throw $Message } }
 Add-Type @'
 public class SnowLaunchProcessFixture {
@@ -19,11 +19,22 @@ public class SnowLaunchProcessFixture {
 try {
     $scripts = Join-Path $fixture 'scripts'
     $null = New-Item -ItemType Directory -Path $scripts
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'run-snow-shot.ps1') -Destination $scripts
+    $policy = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot 'static-qt-features.json') |
+        ConvertFrom-Json
+    foreach ($file in @('run-snow-shot.ps1', 'run-snow-shot.bat', 'snow-build-environment.ps1',
+            'qt-toolchain.json', 'static-qt-features.json') + @($policy.windowsSourcePatches)) {
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination $scripts
+    }
+    # Exercise the real architecture check with a minimal x64 PE header.
+    $binary = New-Object byte[] 88
+    [BitConverter]::GetBytes([uint16]0x5A4D).CopyTo($binary, 0)
+    [BitConverter]::GetBytes([uint32]64).CopyTo($binary, 0x3C)
+    [BitConverter]::GetBytes([uint32]0x00004550).CopyTo($binary, 64)
+    [BitConverter]::GetBytes([uint16]0x8664).CopyTo($binary, 68)
     foreach ($target in @('snow_shot', 'snow_shot_mini')) {
         $directory = Join-Path $fixture "build/windows-msvc-debug/$target/Debug"
         $null = New-Item -ItemType Directory -Path $directory -Force
-        [IO.File]::WriteAllText((Join-Path $directory "$target.exe"), 'process fixture')
+        [IO.File]::WriteAllBytes((Join-Path $directory "$target.exe"), $binary)
     }
     $global:SnowLaunchFixtureExitCode = 0
     $global:SnowLaunchFixtureProcess = $null
@@ -55,7 +66,38 @@ try {
     $global:SnowLaunchFixtureProcess = $null
     & $launcher -Edition Mini -NoBuild -Detached
     Require ($null -eq $global:SnowLaunchFixtureProcess) 'Detached launches must return immediately.'
-    Write-Output 'PASS: edition selection, foreground waiting, exit reporting, and detached launching.'
+
+    # A missing performance build exercises the real batch entry point and argument
+    # forwarding without starting an application. Restrict PATH to force its 5.1 fallback.
+    $originalPath = $env:Path
+    $originalModulePath = $env:PSModulePath
+    $originalErrorPreference = $ErrorActionPreference
+    try {
+        # Let each child host initialize its own built-in module search path.
+        Remove-Item Env:PSModulePath -ErrorAction SilentlyContinue
+        foreach ($path in @($originalPath, "$env:SystemRoot\System32;$env:SystemRoot\System32\WindowsPowerShell\v1.0")) {
+            $env:Path = $path
+            $ErrorActionPreference = 'Continue'
+            $batch = Join-Path $scripts 'run-snow-shot.bat'
+            $output = (& $env:ComSpec /d /c "`"$batch`" -NoBuild -Preset windows-msvc-performance -Edition Mini" 2>&1 |
+                Out-String)
+            $exitCode = $LASTEXITCODE
+            $ErrorActionPreference = $originalErrorPreference
+            Require ($exitCode -eq 1) 'The batch launcher must propagate a launch failure.'
+            $expectedPath = Join-Path $fixture 'build\windows-msvc-performance\snow_shot_mini\Release\snow_shot_mini.exe'
+            # PowerShell 7's concise error view wraps long paths with gutter bars.
+            $normalizedOutput = $output -replace '[\s|]', ''
+            $expectedOutput = "Snow Shot executable was not found at '$expectedPath'." -replace '\s', ''
+            Require ($normalizedOutput.Contains($expectedOutput)) `
+                "Both batch PowerShell hosts must load the helper and forward arguments. Output: $output"
+        }
+    }
+    finally {
+        $env:Path = $originalPath
+        $env:PSModulePath = $originalModulePath
+        $ErrorActionPreference = $originalErrorPreference
+    }
+    Write-Output "PASS: launcher contracts and batch PowerShell fallback (PowerShell $($PSVersionTable.PSVersion))."
 }
 finally {
     Remove-Variable -Scope Global -Name SnowLaunchFixtureExitCode, SnowLaunchFixtureProcess,
