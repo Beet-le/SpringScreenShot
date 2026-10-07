@@ -482,7 +482,8 @@ Result<Picture> import_raster_picture(const RasterSource& source, std::stop_toke
     if (!WebPPictureAlloc(picture.get()))
         return webp_error(ErrorCode::out_of_memory, "Could not allocate WebP input pixels.");
     const bool bgra = frame.layout.planes.front().format == kBgra8;
-    const std::size_t stride = static_cast<std::size_t>(picture->argb_stride) * 4U;
+    const std::size_t argb_stride = static_cast<std::size_t>(picture->argb_stride);
+    const std::size_t stride = argb_stride * 4U;
     const std::size_t row_bytes = static_cast<std::size_t>(frame.width) * 4U;
     constexpr std::uint32_t kRowsPerRead = 64;
     for (std::uint32_t first = 0; first < frame.height; first += kRowsPerRead) {
@@ -499,8 +500,7 @@ Result<Picture> import_raster_picture(const RasterSource& source, std::stop_toke
         for (std::uint32_t row = 0; row < count; ++row) {
             if (stop.stop_requested())
                 return cancelled_status();
-            auto* pixels =
-                picture->argb + static_cast<std::size_t>(first + row) * picture->argb_stride;
+            auto* pixels = picture->argb + static_cast<std::size_t>(first + row) * argb_stride;
             const auto* bytes = reinterpret_cast<const std::uint8_t*>(pixels);
             for (std::uint32_t x = 0; x < frame.width; ++x) {
                 const std::size_t offset = static_cast<std::size_t>(x) * 4U;

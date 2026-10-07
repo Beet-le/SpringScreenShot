@@ -46,7 +46,7 @@ struct ScreenshotImageEncodingOptions {
 struct ScreenshotImageFileSaveResult {
     QString path;
     QString error;
-    QByteArray encodedSha256;
+    QByteArray encodedSha256{};
     qint64 encodedByteCount = -1;
 
     [[nodiscard]] bool succeeded() const {
