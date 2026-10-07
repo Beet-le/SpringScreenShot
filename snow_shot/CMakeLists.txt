@@ -3861,6 +3861,9 @@ if(SNOW_SHOT_BUILD_TESTS)
     )
     add_test(NAME snow-shot-screenshot-guide-preferences-tests
         COMMAND snow-shot-screenshot-canvas-renderer-tests --screenshot-ui-preferences)
+    add_test(NAME snow-shot-screenshot-guide-rendering-tests
+        COMMAND snow-shot-screenshot-canvas-renderer-tests --guide-rendering-only -platform offscreen)
+    set_tests_properties(snow-shot-screenshot-guide-rendering-tests PROPERTIES LABELS "unit" TIMEOUT 60)
     add_test(NAME snow-shot-direct-capture-history-rendering-tests
         COMMAND snow-shot-screenshot-canvas-renderer-tests --direct-capture-history-rendering)
     add_test(NAME snow-shot-pinned-filter-reference-tests
@@ -3928,6 +3931,7 @@ if(SNOW_SHOT_BUILD_TESTS)
     set_tests_properties(
         snow-shot-screenshot-canvas-renderer-tests
         snow-shot-screenshot-guide-preferences-tests
+        snow-shot-screenshot-guide-rendering-tests
         snow-shot-overlay-pool-prewarm-tests
         PROPERTIES
         ENVIRONMENT
@@ -5832,6 +5836,8 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-color-picker-lifecycle-tests --selection-toolbar-visibility-only -platform offscreen)
     set_tests_properties(snow-shot-selection-toolbar-visibility-tests PROPERTIES LABELS "unit" TIMEOUT 60)
     snow_shot_link_macos_window_platform(snow-shot-color-picker-lifecycle-tests)
+    target_compile_definitions(snow-shot-color-picker-lifecycle-tests PRIVATE
+        SNOW_SHOT_BENCH_INTERNALS=1)
     target_include_directories(snow-shot-color-picker-lifecycle-tests PRIVATE include)
     target_link_libraries(snow-shot-color-picker-lifecycle-tests PRIVATE
         snow_shot_diagnostics snow_shot_storage snow_shot_window_shortcuts
@@ -5857,6 +5863,13 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-color-picker-lifecycle-tests)
     add_test(NAME snow-shot-toolbar-picker-hover-tests
         COMMAND snow-shot-color-picker-lifecycle-tests --toolbar-picker-hover-only)
+    add_test(NAME snow-shot-toolbar-guide-hover-tests
+        COMMAND snow-shot-color-picker-lifecycle-tests --toolbar-guide-hover-only)
+    set_tests_properties(snow-shot-toolbar-guide-hover-tests PROPERTIES
+        LABELS "unit" SNOW_TEST_CROSS_PLATFORM TRUE
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+        TIMEOUT 60)
     set_tests_properties(snow-shot-toolbar-picker-hover-tests PROPERTIES
         LABELS "unit"
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"

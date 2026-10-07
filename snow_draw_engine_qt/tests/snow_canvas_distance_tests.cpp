@@ -89,6 +89,17 @@ void pixelCalibrationPreservesFocusAndPublishedPresentation() {
     require(QApplication::focusWidget() == &input, "focus the host's calibration input");
 
     const QByteArray before = runtime.serializeDocumentSession();
+    const QByteArray history = runtime.serializeDocumentHistory();
+    for (const auto& targets :
+         {SnowCanvasSnapGuideTargets{{100.0}, {80.0}}, SnowCanvasSnapGuideTargets{{100.0}, {80.0}},
+          SnowCanvasSnapGuideTargets{{200.0}, {180.0}}, SnowCanvasSnapGuideTargets{}}) {
+        require(canvas.setCanvasSnapGuideTargets(targets), "update guides over distance controls");
+        require(QApplication::focusWidget() == &input,
+                "guide updates must preserve focus in the distance calibration input");
+        require(runtime.serializeDocumentSession() == before &&
+                    runtime.serializeDocumentHistory() == history,
+                "guide updates must preserve the measured distance and undo history");
+    }
     SnowCanvasViewport observer;
     const auto engine = snow_canvas_runtime::Access::handle(runtime);
     require(observer.create(engine, snow_canvas_viewport::defaultEngineConfig()),
@@ -144,6 +155,8 @@ void distanceMovesPublishOneIncrementalPatchForEveryViewport() {
         SnowPatchInfo info{};
         require(snow_patch_get_info(patch.get(), &info) == SNOW_OK, "read observer cursor");
         cursor = {info.scene_revision, info.decoration_revision, info.overlay_revision};
+        require(canvas.setCanvasSnapGuideTargets({{static_cast<double>(x - 300)}, {0.0}}),
+                "update guides during a distance gesture");
         mouse(canvas, QEvent::MouseMove, {static_cast<double>(x), 180}, Qt::NoButton,
               Qt::LeftButton);
         require(snow_viewport_acquire_patch(engine, observer.get(), &cursor, patch.outParam()) ==

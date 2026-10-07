@@ -23,7 +23,7 @@ void clearDrawingCachesForCurrentThread() {
     // Export sessions have no canvas clients, and their threads outlive the document.
     snow_canvas_fill_render::resetHatchTextureCacheForCurrentThread();
     snow_canvas_renderer::resetWatermarkRenderCacheForCurrentThread();
-    snow_canvas_text_render::resetLayoutCacheForCurrentThread();
+    snow_canvas_text_render::clearRenderCacheForCurrentThread();
 }
 
 bool toEngineRuntimeConfig(const SnowCanvasRuntimeConfig& config, SnowStyleDefaults& styleDefaults,

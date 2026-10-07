@@ -549,6 +549,7 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     setSelectionAspectRatioPresetFromToolbar(ScreenshotSelectionAspectRatioPreset preset) override;
     void openSelectionResizeModalFromToolbar() override;
     void hideColorPickersForScreenshotUi() override;
+    void updateGuideLinesForScreenshotUi(const QPoint& globalPosition) override;
     void beginCanvasColorSampling(adqt::widgets::AdColorPicker* picker) override;
     void adjustSelectionFromToolbar(int minDx, int minDy, int maxDx, int maxDy) override;
     void setSelectionCornerRadiusFromToolbar(int radius) override;
@@ -5318,6 +5319,15 @@ void ScreenshotController::Impl::openSelectionResizeModalFromToolbar() {
 
 void ScreenshotController::Impl::hideColorPickersForScreenshotUi() {
     m_selectionEditWorkflow->hideColorPickersForScreenshotUi();
+}
+
+void ScreenshotController::Impl::updateGuideLinesForScreenshotUi(const QPoint& globalPosition) {
+    if (m_interaction.inactive() || !m_guideVisibility.visible()) {
+        return;
+    }
+    m_overlayCoordinator->updateGuideLinesAtGlobalPosition(
+        m_displaySession, globalPosition, true, m_uiPreferences.cursorGuideLineColor,
+        m_uiPreferences.monitorCenterGuideLineColor, m_uiPreferences.selectionCenterGuideLineColor);
 }
 
 QPoint

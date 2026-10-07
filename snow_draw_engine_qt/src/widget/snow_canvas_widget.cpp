@@ -61,6 +61,7 @@
 #include <QWheelEvent>
 #include <QWindow>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <functional>
@@ -524,6 +525,7 @@ struct SnowCanvasWidget::Impl : public snow_canvas_runtime::Client {
     bool suppressMouseContextMenu = false;
     SnowCanvasTool requestedCanvasTool = SnowCanvasTool::Select;
     SnowCanvasCustomRenderer* installedCustomRenderer = nullptr;
+    std::optional<SnowCanvasSnapGuideTargets> snapGuideTargets;
     std::optional<QRectF> configuredWatermarkRenderArea;
     std::optional<QRectF> configuredSpotlightRenderArea;
     snow_canvas_filter_render::RenderWorkspace filterWorkspace;
@@ -1265,15 +1267,31 @@ bool SnowCanvasWidget::setCanvasSnapConfig(const SnowCanvasSnapConfig& config) {
 }
 
 bool SnowCanvasWidget::Impl::setCanvasSnapGuideTargets(const SnowCanvasSnapGuideTargets& targets) {
-    if (targets.verticalXs.size() > 2 || targets.horizontalYs.size() > 2) {
+    const auto finite = [](qreal value) { return std::isfinite(value); };
+    if (!hasViewport() || targets.verticalXs.size() > 2 || targets.horizontalYs.size() > 2 ||
+        !std::all_of(targets.verticalXs.cbegin(), targets.verticalXs.cend(), finite) ||
+        !std::all_of(targets.horizontalYs.cbegin(), targets.horizontalYs.cend(), finite)) {
         return false;
     }
-    return applyMutation([&]() {
-        return snow_canvas_commands::setSnapGuideTargets(
-            runtimeBinding.engine(), runtimeBinding.viewportHandle(),
-            targets.verticalXs.constData(), static_cast<size_t>(targets.verticalXs.size()),
-            targets.horizontalYs.constData(), static_cast<size_t>(targets.horizontalYs.size()));
-    });
+    if (snapGuideTargets && snapGuideTargets->verticalXs == targets.verticalXs &&
+        snapGuideTargets->horizontalYs == targets.horizontalYs) {
+        return true;
+    }
+
+    const auto result = snow_canvas_commands::setSnapGuideTargets(
+        runtimeBinding.engine(), runtimeBinding.viewportHandle(), targets.verticalXs.constData(),
+        static_cast<size_t>(targets.verticalXs.size()), targets.horizontalYs.constData(),
+        static_cast<size_t>(targets.horizontalYs.size()));
+    if (!result.success) {
+        return false;
+    }
+    snapGuideTargets = targets;
+    // Guides are viewport metadata. They cannot change text layout and must not take
+    // keyboard focus from a host control whenever the pointer moves.
+    if (snow_changed_viewports_count(result.changedViewports.get()) > 0) {
+        runtimeBinding.syncChangedViewports(result.changedViewports.get());
+    }
+    return true;
 }
 
 bool SnowCanvasWidget::setCanvasSnapGuideTargets(const SnowCanvasSnapGuideTargets& targets) {
@@ -1698,6 +1716,7 @@ void SnowCanvasWidget::Impl::detachRuntimeOwner(SnowCanvasRuntime* owner) {
 }
 
 void SnowCanvasWidget::Impl::attachRuntime(SnowRuntime runtime) {
+    snapGuideTargets.reset();
     runtimeBinding.attachRuntime(runtime, displayState);
     setSurfaceSizeAndSync(widget.size(), false);
     refreshSerialNumberToolbar();
@@ -1705,6 +1724,7 @@ void SnowCanvasWidget::Impl::attachRuntime(SnowRuntime runtime) {
 }
 
 void SnowCanvasWidget::Impl::clearRetainedDisplayState() {
+    snapGuideTargets.reset();
     referenceScene.reset();
     if (pendingLiveStrokePreservesEverySample && hasViewport()) {
         flushLiveStrokeMoves();
@@ -1749,6 +1769,7 @@ void SnowCanvasWidget::Impl::clearRenderState() {
 }
 
 void SnowCanvasWidget::Impl::resetDocumentRetainedState() {
+    snapGuideTargets.reset();
     displayState.resetDocumentRetainedState();
     textInteraction.resetDocumentRetainedState();
     std::vector<SnowInputEvent>().swap(pendingLiveStrokeMoves);
