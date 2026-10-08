@@ -174,10 +174,6 @@ so every moment on screen can be expressed clearly and shared easily.</source>
             <translation>预览版</translation>
         </message>
         <message>
-            <source>QQ Group 2</source>
-            <translation>QQ 交流群 2</translation>
-        </message>
-        <message>
             <source>QQ Group 3</source>
             <translation>QQ 交流群 3</translation>
         </message>

@@ -174,10 +174,6 @@ so every moment on screen can be expressed clearly and shared easily.</translati
             <translation>Preview</translation>
         </message>
         <message>
-            <source>QQ Group 2</source>
-            <translation>QQ Group 2</translation>
-        </message>
-        <message>
             <source>QQ Group 3</source>
             <translation>QQ Group 3</translation>
         </message>
