@@ -70,3 +70,7 @@ repository-level scope rules and third-party material policy.
 Synchronized and bundled third-party materials retain their upstream licenses.
 See [Ant Design Qt third-party notices](ant_design_qt/THIRD_PARTY_NOTICES.md)
 and [Snow Shot third-party notices](snow_shot/THIRD_PARTY_NOTICES.md).
+
+## Community
+
+[![LINUX DO](https://img.shields.io/badge/LINUX%20DO-Community-blue)](https://linux.do)
