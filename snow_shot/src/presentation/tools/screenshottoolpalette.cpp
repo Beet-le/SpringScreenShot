@@ -4330,6 +4330,7 @@ void ScreenshotToolPalette::retranslateUi() {
     retranslateDrawTemplateUi();
     if (m_styleControls != nullptr) {
         m_styleControls->retranslateWatermarkTemplateUi();
+        m_styleControls->retranslateTextEmphasisUi();
     }
     if (m_mainPanel != nullptr) {
         retranslateScreenshotToolPalette(m_mainPanel);
