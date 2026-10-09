@@ -475,9 +475,9 @@ void builtInCatalogIsCompleteAndValid() {
                 itemIds.contains(QStringLiteral("screenshot-shortcut.upload_to_cloud")) &&
                 itemIds.contains(QStringLiteral("pin-to-screen-shortcut.upload_to_cloud")),
             "cloud upload must expose its configuration and shortcuts in both local scopes");
-    require(itemIds.size() == 252,
+    require(itemIds.size() == 259,
             qPrintable(QStringLiteral(
-                           "catalog must contain 252 shared settings on every platform; found %1")
+                           "catalog must contain 259 shared settings on every platform; found %1")
                            .arg(itemIds.size())));
     require(itemIds.contains(QStringLiteral("pin-to-screen.confirm-before-closing-window")) &&
                 itemIds.contains(QStringLiteral("pin-to-screen.confirm-before-destroying-window")),
@@ -1453,9 +1453,9 @@ void builtInCatalogIsCompleteAndValid() {
             std::get<settings::SettingsLocalShortcutDefinition>(
                 screenshotShortcuts->items.constFirst().payload)
                     .scope == settings::SettingsLocalShortcutScope::Screenshot &&
-            drawingShortcuts != nullptr && drawingShortcuts->items.size() == 15 &&
+            drawingShortcuts != nullptr && drawingShortcuts->items.size() == 16 &&
             drawingShortcuts->itemLayout == settings::SettingsSectionItemLayout::TwoColumnGrid &&
-            pinToScreenShortcuts != nullptr && pinToScreenShortcuts->items.size() == 29 &&
+            pinToScreenShortcuts != nullptr && pinToScreenShortcuts->items.size() == 30 &&
             pinToScreenShortcuts->itemLayout ==
                 settings::SettingsSectionItemLayout::TwoColumnGrid &&
             pinToScreenShortcuts->title.translated() == QStringLiteral("Pin to screen") &&
@@ -1513,10 +1513,16 @@ void builtInCatalogIsCompleteAndValid() {
                 QStringLiteral("Show border") &&
             pinToScreenShortcuts->items.at(13).configurationKey ==
                 QStringLiteral("pin_to_screen_shortcuts/show_border") &&
-            pinToScreenShortcuts->items.at(15).id ==
+            pinToScreenShortcuts->items.at(14).id ==
+                QStringLiteral("pin-to-screen-shortcut.show_shadow") &&
+            pinToScreenShortcuts->items.at(14).title.translated() ==
+                QStringLiteral("Show shadow") &&
+            pinToScreenShortcuts->items.at(14).configurationKey ==
+                QStringLiteral("pin_to_screen_shortcuts/show_shadow") &&
+            pinToScreenShortcuts->items.at(16).id ==
                 QStringLiteral("pin-to-screen-shortcut.destroy_window") &&
-            pinToScreenShortcuts->items.at(15).title.translated() == QStringLiteral("Destroy") &&
-            pinToScreenShortcuts->items.at(15).configurationKey ==
+            pinToScreenShortcuts->items.at(16).title.translated() == QStringLiteral("Destroy") &&
+            pinToScreenShortcuts->items.at(16).configurationKey ==
                 QStringLiteral("pin_to_screen_shortcuts/destroy_window") &&
             std::get<settings::SettingsLocalShortcutDefinition>(
                 pinToScreenShortcuts->items.at(10).payload)
@@ -1531,13 +1537,25 @@ void builtInCatalogIsCompleteAndValid() {
             otherShortcutSection->itemLayout ==
                 settings::SettingsSectionItemLayout::TwoColumnGrid &&
             otherShortcutSection->title.translated() == QStringLiteral("Image Recognition") &&
-            drawingShortcuts->items.at(13).id == QStringLiteral("screenshot-shortcut.undo") &&
-            drawingShortcuts->items.at(14).id == QStringLiteral("screenshot-shortcut.redo") &&
+            drawingShortcuts->items.at(14).id == QStringLiteral("screenshot-shortcut.undo") &&
+            drawingShortcuts->items.at(15).id == QStringLiteral("screenshot-shortcut.redo") &&
             drawingShortcuts->items.at(3).configurationKey ==
                 QStringLiteral("drawing_shortcuts/distance") &&
+            drawingShortcuts->items.at(4).id == QStringLiteral("drawing-shortcut.angle") &&
+            drawingShortcuts->items.at(4).title.translated() ==
+                QStringLiteral("Angle annotation") &&
             drawingShortcuts->items.at(4).configurationKey ==
+                QStringLiteral("drawing_shortcuts/angle") &&
+            std::get<settings::SettingsLocalShortcutDefinition>(
+                drawingShortcuts->items.at(4).payload)
+                    .scope == settings::SettingsLocalShortcutScope::Drawing &&
+            std::get<settings::SettingsLocalShortcutDefinition>(
+                drawingShortcuts->items.at(4).payload)
+                    .iconFactory() ==
+                snow_shot::presentation::icons::custom::outlined::AngleAnnotation() &&
+            drawingShortcuts->items.at(5).configurationKey ==
                 QStringLiteral("drawing_shortcuts/line") &&
-            drawingShortcuts->items.at(7).configurationKey ==
+            drawingShortcuts->items.at(8).configurationKey ==
                 QStringLiteral("drawing_shortcuts/spotlight") &&
             drawingShortcuts->items.constFirst().id == QStringLiteral("drawing-shortcut.select") &&
             drawingShortcuts->items.at(1).id == QStringLiteral("drawing-shortcut.shape"),
@@ -1765,7 +1783,7 @@ void builtInCatalogIsCompleteAndValid() {
         catalog.item({QStringLiteral("pinned-windows"), QStringLiteral("pin-to-screen"),
                       QStringLiteral("interface.pin-to-screen.border-active-color")});
     require(
-        pinSection.items.size() == 3 && pinBorderActiveColor != nullptr &&
+        pinSection.items.size() == 8 && pinBorderActiveColor != nullptr &&
             pinBorderActiveColor->configurationKey ==
                 QStringLiteral("pin_to_screen/border_active_color") &&
             std::get<settings::SettingsColorDefinition>(pinBorderActiveColor->payload).binding ==
@@ -1784,6 +1802,56 @@ void builtInCatalogIsCompleteAndValid() {
             storage::ConfigurationSchema::defaultValue(lockedColor->configurationKey) ==
                 QStringLiteral("#FAAD14FF"),
         "locked border color must be searchable, resettable, and default to Ant Design warning");
+
+    const auto* borderDefault =
+        catalog.item({QStringLiteral("pinned-windows"), QStringLiteral("pin-to-screen"),
+                      QStringLiteral("interface.pin-to-screen.show-border-by-default")});
+    const auto* shadowDefault =
+        catalog.item({QStringLiteral("pinned-windows"), QStringLiteral("pin-to-screen"),
+                      QStringLiteral("interface.pin-to-screen.show-shadow-by-default")});
+    require(
+        borderDefault && shadowDefault && pinSection.items.at(0).id == borderDefault->id &&
+            pinSection.items.at(4).id == shadowDefault->id &&
+            borderDefault->configurationKey ==
+                QStringLiteral("pin_to_screen/show_border_by_default") &&
+            shadowDefault->configurationKey ==
+                QStringLiteral("pin_to_screen/show_shadow_by_default") &&
+            std::get<settings::SettingsSwitchDefinition>(borderDefault->payload).binding ==
+                settings::SettingsSwitchBinding::PinShowBorderByDefault &&
+            std::get<settings::SettingsSwitchDefinition>(shadowDefault->payload).binding ==
+                settings::SettingsSwitchBinding::PinShowShadowByDefault &&
+            storage::ConfigurationSchema::defaultValue(borderDefault->configurationKey) == true &&
+            storage::ConfigurationSchema::defaultValue(shadowDefault->configurationKey) == false,
+        "new pin appearance defaults must expose an enabled border and disabled shadow");
+    struct ShadowColorFixture {
+        const char* id;
+        const char* key;
+        qsizetype position;
+        settings::SettingsColorBinding binding;
+        const char* defaultRgba;
+    };
+    const ShadowColorFixture shadowColors[] = {
+        {"interface.pin-to-screen.shadow-color", "pin_to_screen/shadow_color", 5,
+         settings::SettingsColorBinding::PinShadowColor, "#BFBFBFFF"},
+        {"interface.pin-to-screen.shadow-active-color", "pin_to_screen/shadow_active_color", 6,
+         settings::SettingsColorBinding::PinShadowActiveColor, "#69B1FFFF"},
+        {"interface.pin-to-screen.locked-shadow-color", "pin_to_screen/locked_shadow_color", 7,
+         settings::SettingsColorBinding::PinLockedShadowColor, "#FAAD14FF"},
+    };
+    for (const auto& fixture : shadowColors) {
+        const auto* item =
+            catalog.item({QStringLiteral("pinned-windows"), QStringLiteral("pin-to-screen"),
+                          QString::fromLatin1(fixture.id)});
+        require(
+            item && pinSection.items.at(fixture.position).id == item->id &&
+                item->configurationKey == QString::fromLatin1(fixture.key) &&
+                std::get<settings::SettingsColorDefinition>(item->payload).binding ==
+                    fixture.binding &&
+                std::get<settings::SettingsColorDefinition>(item->payload).alphaChannelEnabled &&
+                storage::ConfigurationSchema::defaultValue(item->configurationKey) ==
+                    QString::fromLatin1(fixture.defaultRgba),
+            "pin shadow colors must expose separate resettable RGBA fields");
+    }
 
     const auto* retention =
         storage::ConfigurationSchema::entry(QStringLiteral("capture_history/retention_days"));
