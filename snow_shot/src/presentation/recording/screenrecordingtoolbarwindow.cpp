@@ -6,6 +6,7 @@
 #include "snow_shot/presentation/screenshottoolpalette.h"
 #include "snow_shot/presentation/screenshottoolpalettehost.h"
 #include "snow_shot/storage/settingsadapters.h"
+#include "snow_shot/storage/applicationstorage.h"
 #include "screenrecordinggeometry.h"
 #include "screenrecordingperfinstrumentation.h"
 
@@ -30,6 +31,7 @@ ScreenshotToolPalette::Options recordingToolbarOptions() {
     options.showShapeTool = true;
     options.showArrowTool = true;
     options.showLineTool = true;
+    options.showDistanceTool = true;
     options.showFreeDrawTool = true;
     options.showHighlightTool = true;
     options.showPenHighlightTool = true;
@@ -45,6 +47,10 @@ ScreenshotToolPalette::Options recordingToolbarOptions() {
     options.enableStyleToolbar = true;
     options.toolbarLayout = snow_shot::storage::ScreenshotToolbarSettings().layout(
         snow_shot::storage::ScreenshotToolbarLayoutKind::DrawingTools);
+    options.actionToolsLayoutKind =
+        snow_shot::storage::ScreenshotToolbarLayoutKind::RecordingActionTools;
+    options.actionToolsLayout = snow_shot::storage::ScreenshotToolbarSettings().layout(
+        snow_shot::storage::ScreenshotToolbarLayoutKind::RecordingActionTools);
     options.styleDefaults = snow_shot::presentation::screenshotCanvasToolStyleDefaults();
     return options;
 }
@@ -70,6 +76,18 @@ ScreenRecordingToolbarWindow::ScreenRecordingToolbarWindow(QWidget* parent)
     });
     connect(paletteHost(), &ScreenshotToolPaletteHost::dragStarted, this,
             [this](const QPoint&) { m_manuallyDragged = true; });
+    auto& storage = snow_shot::storage::ApplicationStorage::instance();
+    if (storage.isInitialized()) {
+        connect(
+            &storage.configuration(), &snow_shot::storage::ConfigurationStore::valueChanged, this,
+            [this](const QString& key, const QJsonValue&) {
+                if (key == QStringLiteral("screen_recording/action_tools_layout")) {
+                    palette()->setActionToolsLayout(
+                        snow_shot::storage::ScreenshotToolbarSettings().layout(
+                            snow_shot::storage::ScreenshotToolbarLayoutKind::RecordingActionTools));
+                }
+            });
+    }
 }
 
 void ScreenRecordingToolbarWindow::showAndActivate() {
@@ -155,6 +173,7 @@ void ScreenRecordingToolbarWindow::beginRegionInteraction() {
         return;
     }
     m_regionInteractionActive = true;
+    palette()->closeRecordingAudioGainPopovers();
     for (auto* picker : palette()->findChildren<adqt::widgets::AdColorPicker*>()) {
         picker->setPopupVisible(false);
     }

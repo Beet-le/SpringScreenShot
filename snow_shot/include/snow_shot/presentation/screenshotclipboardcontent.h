@@ -1,6 +1,9 @@
 #ifndef SNOW_SHOT_PRESENTATION_SCREENSHOTCLIPBOARDCONTENT_H
 #define SNOW_SHOT_PRESENTATION_SCREENSHOTCLIPBOARDCONTENT_H
 
+#include "snow_shot/storage/pinnedsourceidentity.h"
+#include "snow_shot/presentation/screenshotclipboardplacement.h"
+#include "snow_shot/presentation/screenshotclipboardappearance.h"
 #include <QByteArray>
 #include <QColor>
 #include <QDateTime>
@@ -36,12 +39,15 @@ struct ScreenshotClipboardOriginalContent final {
 };
 
 struct ScreenshotClipboardContent {
+    snow_shot::storage::PinnedSourceIdentity sourceIdentity;
     ScreenshotClipboardContentKind kind = ScreenshotClipboardContentKind::Image;
     QImage image;
     std::shared_ptr<QTextDocument> formattedDocument;
     QString plainText;
     qreal formattedTextDevicePixelRatio = 1.0;
     ScreenshotClipboardOriginalContent originalContent;
+    std::optional<ScreenshotClipboardPlacement> placement = std::nullopt;
+    std::optional<ScreenshotClipboardAppearance> appearance = std::nullopt;
 
     [[nodiscard]] bool isValid() const {
         return !image.isNull() && !image.size().isEmpty() &&
@@ -64,6 +70,7 @@ struct ScreenshotClipboardLocalImage final {
     QString suffix;
     qint64 size = -1;
     QDateTime lastModifiedUtc;
+    snow_shot::storage::PinnedSourceIdentity sourceIdentity;
 };
 
 enum class ScreenshotClipboardNativeDibFormat {
@@ -90,6 +97,8 @@ struct ScreenshotClipboardContentSnapshot final {
     QString text;
     QColor baseColor;
     qreal devicePixelRatio = 1.0;
+    std::optional<ScreenshotClipboardPlacement> placement = std::nullopt;
+    std::optional<ScreenshotClipboardAppearance> appearance = std::nullopt;
 
     [[nodiscard]] bool isValid() const {
         return !encodedImages.isEmpty() || (nativeDib.has_value() && nativeDib->isValid()) ||

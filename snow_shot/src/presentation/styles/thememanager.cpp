@@ -212,12 +212,15 @@ ThemeManager::ThemeManager(QObject* parent)
     : QObject(parent), m_config(toThemeStyleConfig(adqt::theme::makeResolvedTheme(
                            adqt::theme::ThemeManager::instance().config()))),
       m_scheme(generateThemeColorScheme(m_config)),
-      m_mode(decodeThemeMode(snow_shot::storage::InterfaceSettings().themeMode())) {
+      m_mode(decodeThemeMode(snow_shot::storage::InterfaceSettings().themeMode())),
+      m_baseAppFont(QApplication::font()), m_baseFontSize(m_config.fontSize),
+      m_appFontSizePercentage(storage::InterfaceSettings().appFontSizePercentage()) {
     m_config.colorPrimary = storage::InterfaceSettings().themePrimaryColor();
     const QString family = storage::InterfaceSettings().appFontFamily();
     if (!family.isEmpty()) {
         m_config.appFont.setFamily(family);
     }
+    applyFontSize(m_config);
     auto& adqtThemeManager = adqt::theme::ThemeManager::instance();
     adqtThemeManager.setConfig(toAdqtThemeConfig(m_config));
     m_config = toThemeStyleConfig(adqt::theme::makeResolvedTheme(adqtThemeManager.config()));
@@ -256,6 +259,39 @@ ThemeColorScheme ThemeManager::themeColorScheme() const {
     return m_scheme;
 }
 
+QJsonObject ThemeManager::updateProgressAppearance() const {
+    const auto& resolved = adqt::theme::ThemeManager::instance().globalResolvedTheme();
+    const auto& colors = resolved.theme.palette;
+    const auto& metrics = resolved.theme.metrics;
+    const QColor background = resolved.semantic.surfaceElevated;
+    // The native updater paints opaque RGB surfaces. Flatten Ant's translucent
+    // text and fill tokens over the same elevated background used by Qt popups.
+    const auto rgb = [&background](const QColor& color) {
+        const float alpha = color.alphaF();
+        QColor mixed;
+        mixed.setRedF(color.redF() * alpha + background.redF() * (1.0F - alpha));
+        mixed.setGreenF(color.greenF() * alpha + background.greenF() * (1.0F - alpha));
+        mixed.setBlueF(color.blueF() * alpha + background.blueF() * (1.0F - alpha));
+        return static_cast<int>(mixed.rgb() & 0xffffffU);
+    };
+    return {{QStringLiteral("background"), rgb(background)},
+            {QStringLiteral("border"), rgb(colors.colorBorderSecondary)},
+            {QStringLiteral("text"), rgb(colors.colorText)},
+            {QStringLiteral("textSecondary"), rgb(colors.colorTextSecondary)},
+            {QStringLiteral("textTertiary"), rgb(colors.colorTextTertiary)},
+            {QStringLiteral("fillSecondary"), rgb(colors.colorFillSecondary)},
+            {QStringLiteral("fillTertiary"), rgb(colors.colorFillTertiary)},
+            {QStringLiteral("primary"), rgb(colors.colorPrimary)},
+            {QStringLiteral("primaryBackground"), rgb(colors.colorPrimaryBg)},
+            {QStringLiteral("success"), rgb(colors.colorSuccess)},
+            {QStringLiteral("error"), rgb(colors.colorError)},
+            {QStringLiteral("fontFamily"), QApplication::font().family().left(63)},
+            {QStringLiteral("fontSize"), qRound(metrics.fontSize)},
+            {QStringLiteral("smallFontSize"), qRound(metrics.fontSizeSM)},
+            {QStringLiteral("borderRadius"), qRound(metrics.borderRadiusLG)},
+            {QStringLiteral("motion"), resolved.config.motion}};
+}
+
 void ThemeManager::setThemeStyleConfig(const ThemeStyleConfig& config) {
     auto& adqtThemeManager = adqt::theme::ThemeManager::instance();
     adqtThemeManager.setConfig(toAdqtThemeConfig(config));
@@ -280,10 +316,45 @@ bool ThemeManager::setAppFontFamily(const QString& family) {
         if (!normalized.isEmpty()) {
             config.appFont.setFamily(normalized);
         }
+        applyFontSize(config);
         setThemeStyleConfig(config);
         emit appFontFamilyChanged(normalized);
     }
     return true;
+}
+
+int ThemeManager::appFontSizePercentage() const {
+    return m_appFontSizePercentage;
+}
+
+bool ThemeManager::setAppFontSizePercentage(int percentage) {
+    if (!storage::InterfaceSettings().setAppFontSizePercentage(percentage)) {
+        return false;
+    }
+    if (m_appFontSizePercentage != percentage) {
+        m_appFontSizePercentage = percentage;
+        auto config = m_config;
+        applyFontSize(config);
+        setThemeStyleConfig(config);
+        emit appFontSizePercentageChanged(percentage);
+    }
+    return true;
+}
+
+void ThemeManager::applyFontSize(ThemeStyleConfig& config) const {
+    const qreal scale = m_appFontSizePercentage / 100.0;
+    config.fontSize = qRound(m_baseFontSize * scale);
+    // Always scale the original font, so repeated edits never compound. At 100%, let
+    // application and native popup fonts resolve their original platform sizes again.
+    if (m_baseAppFont.pointSizeF() > 0) {
+        config.appFont.setPointSizeF(m_baseAppFont.pointSizeF() * scale);
+    } else if (m_baseAppFont.pixelSize() > 0) {
+        config.appFont.setPixelSize(qRound(m_baseAppFont.pixelSize() * scale));
+    }
+    if (m_appFontSizePercentage == 100) {
+        config.appFont.setResolveMask(config.appFont.resolveMask() &
+                                      ~static_cast<uint>(QFont::SizeResolved));
+    }
 }
 
 bool ThemeManager::setThemePrimaryColor(const QColor& color) {

@@ -28,11 +28,15 @@ mod arrow_render_core;
 mod arrow_state_core;
 mod auto_filter;
 mod bindings;
+mod distance;
 mod document;
 pub use auto_filter::*;
+pub use distance::*;
 mod document_geometry;
 mod free_draw;
+mod serial_number_format;
 mod transaction;
+pub use serial_number_format::{SerialNumberNumericType, format_serial_number};
 
 pub use arrow::{
     ArrowData, ArrowEndpointBinding, DEFAULT_ARROW_MAX_COORDINATE, LinearElementKind, arrow_bounds,

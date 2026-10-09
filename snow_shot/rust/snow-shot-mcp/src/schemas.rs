@@ -89,6 +89,7 @@ struct Selection {
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 enum CanvasTool {
+    Distance,
     Move,
     Select,
     Rectangle,
@@ -110,6 +111,8 @@ enum CanvasTool {
     Qr,
     Markdown,
     Html,
+    RectangleEraser,
+    BrushEraser,
 }
 #[derive(Deserialize, JsonSchema)]
 struct ToolInput {
@@ -285,6 +288,11 @@ enum Annotation {
         bounds: [f64; 4],
         #[serde(default)]
         style: Style,
+    },
+    Distance {
+        points: [[f64; 2]; 2],
+        #[serde(default)]
+        style: DistanceAnnotationStyle,
     },
     Arrow {
         points: Vec<[f64; 2]>,
@@ -466,9 +474,13 @@ struct Scrolling {
 #[serde(rename_all = "snake_case")]
 enum RecognitionKind {
     Text,
+    #[cfg(not(feature = "mini"))]
     Table,
+    #[cfg(not(feature = "mini"))]
     Qr,
+    #[cfg(not(feature = "mini"))]
     Markdown,
+    #[cfg(not(feature = "mini"))]
     Html,
 }
 #[derive(Deserialize, JsonSchema)]
@@ -552,11 +564,17 @@ enum RecognitionAction {
     ResetText,
     Format,
     Punctuation,
+    #[cfg(not(feature = "mini"))]
     SelectCells,
+    #[cfg(not(feature = "mini"))]
     SetCell,
+    #[cfg(not(feature = "mini"))]
     MergeCells,
+    #[cfg(not(feature = "mini"))]
     SplitCells,
+    #[cfg(not(feature = "mini"))]
     ResetTable,
+    #[cfg(not(feature = "mini"))]
     ShowOriginal,
     Undo,
     Redo,
@@ -567,14 +585,19 @@ struct EditRecognition {
     action: RecognitionAction,
     #[serde(default)]
     text: Option<String>,
+    #[cfg(not(feature = "mini"))]
     #[serde(default)]
     value: Option<String>,
+    #[cfg(not(feature = "mini"))]
     #[serde(default)]
     range: Option<[u32; 4]>,
+    #[cfg(not(feature = "mini"))]
     #[serde(default)]
     row: Option<u32>,
+    #[cfg(not(feature = "mini"))]
     #[serde(default)]
     column: Option<u32>,
+    #[cfg(not(feature = "mini"))]
     #[serde(default)]
     enabled: Option<bool>,
 }
@@ -604,7 +627,9 @@ enum RecognitionOutput {
 #[serde(rename_all = "snake_case")]
 enum RecognitionFormat {
     Text,
+    #[cfg(not(feature = "mini"))]
     Html,
+    #[cfg(not(feature = "mini"))]
     Markdown,
     Json,
 }
@@ -625,6 +650,7 @@ struct AutoFilter {
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 enum StyleTarget {
+    Distance,
     Rectangle,
     Arrow,
     Line,
@@ -685,9 +711,13 @@ macro_rules! bounded_style_number {
         }
     };
 }
-bounded_style_number!(ArrowRatio, f64, "number", 1.0, 3.0);
+bounded_style_number!(DistanceFactor, f64, "number", 0.01, 1000.0);
+bounded_style_number!(DistanceDecimals, u8, "integer", 0, 3);
+bounded_style_number!(DistanceStrokeWidth, f64, "number", 1.0, 72.0);
+bounded_style_number!(ArrowRatio, f64, "number", 0.5, 3.0);
 bounded_style_number!(CornerRadius, f64, "number", 0.0, 8192.0);
 bounded_style_number!(SerialNumber, u64, "integer", 0_u64, 9007199254740991_u64);
+bounded_style_number!(BrushEraserWidth, f64, "number", 1.0, 72.0);
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 enum ShapeVariant {
@@ -702,6 +732,28 @@ enum FillStyle {
     CrossLine,
     Solid,
 }
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+enum DistanceUnit {
+    Px,
+    Cm,
+    M,
+    Km,
+    Mm,
+}
+
+#[derive(Default, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+struct DistanceAnnotationStyle {
+    stroke: Option<[u8; 4]>,
+    stroke_width: Option<DistanceStrokeWidth>,
+    factor: Option<DistanceFactor>,
+    unit: Option<DistanceUnit>,
+    decimal_places: Option<DistanceDecimals>,
+    endpoint_scale: Option<ArrowRatio>,
+    endpoint_style: Option<Arrowhead>,
+}
+
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 enum Arrowhead {
@@ -732,14 +784,57 @@ enum FilterKind {
     SmartErase,
 }
 #[derive(Deserialize, JsonSchema)]
+#[serde(untagged)]
+enum ToolStyle {
+    Standard(Box<StandardToolStyle>),
+    BrushEraser(BrushEraserToolStyle),
+}
+// Serde cannot consume a flattened untagged enum under deny_unknown_fields.
+// Keep the union outside each complete mutation so its strict object branch
+// owns all fields, including the revision guard.
+#[derive(Deserialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("type" = "object"))]
+enum ScreenshotToolStyleMutation {
+    Standard(Box<Mutation<StandardToolStyle>>),
+    BrushEraser(Mutation<BrushEraserToolStyle>),
+}
+#[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct ToolStyle {
+struct StandardToolStyle {
     target: StyleTarget,
     style: StylePatch,
 }
 #[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum BrushEraserTarget {
+    BrushEraser,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct BrushEraserToolStyle {
+    target: BrushEraserTarget,
+    style: BrushEraserStylePatch,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct BrushEraserStylePatch {
+    /// Width in canvas pixels for future Brush Eraser strokes.
+    stroke_width: BrushEraserWidth,
+}
+#[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct StylePatch {
+    #[serde(default)]
+    factor: Option<DistanceFactor>,
+    #[serde(default)]
+    unit: Option<DistanceUnit>,
+    #[serde(default)]
+    decimal_places: Option<DistanceDecimals>,
+    #[serde(default)]
+    endpoint_scale: Option<ArrowRatio>,
+    #[serde(default)]
+    endpoint_style: Option<Arrowhead>,
     #[serde(default)]
     arrow_shaft_type: Option<ArrowShaftType>,
     #[serde(default)]
@@ -808,15 +903,25 @@ fn model<T: JsonSchema + DeserializeOwned>(
         .clone())
 }
 pub fn schema(name: &str, input: Option<Value>) -> Result<Map<String, Value>, serde_json::Error> {
+    if !crate::edition::method_enabled(name)
+        || input
+            .as_ref()
+            .is_some_and(|value| !crate::edition::input_enabled(name, value))
+    {
+        return Err(serde::de::Error::custom(
+            "This operation is unavailable in the compiled edition",
+        ));
+    }
     match name {
         "snow_shot_mcp_status" => model::<Empty>(input),
         "snow_shot_screenshot_set_selection_style" => model::<Mutation<SelectionStyle>>(input),
-        "snow_shot_screenshot_set_tool_style" => model::<Mutation<ToolStyle>>(input),
+        "snow_shot_screenshot_set_tool_style" => model::<ScreenshotToolStyleMutation>(input),
         "snow_shot_screenshot_edit_elements" => model::<Mutation<EditElements>>(input),
         "snow_shot_screenshot_recapture" => model::<Mutation<Empty>>(input),
         "snow_shot_screenshot_scrolling" => model::<Mutation<Scrolling>>(input),
         "snow_shot_screenshot_scroll_once" => model::<Mutation<ScrollOnce>>(input),
         "snow_shot_screenshot_recognize" => model::<Mutation<Recognize>>(input),
+        #[cfg(not(feature = "mini"))]
         "snow_shot_screenshot_translate" => model::<Mutation<Empty>>(input),
         "snow_shot_screenshot_auto_filter" => model::<Mutation<AutoFilter>>(input),
         "snow_shot_screenshot_operation" => model::<Operation>(input),
@@ -845,6 +950,186 @@ pub fn schema(name: &str, input: Option<Value>) -> Result<Map<String, Value>, se
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn eraser_tool_ids_are_accepted_for_screenshots_and_documents() {
+        for (name, owner) in [
+            ("snow_shot_screenshot_set_tool", "session_id"),
+            ("snow_shot_document_set_tool", "document_id"),
+        ] {
+            for tool in ["eraser", "rectangle_eraser", "brush_eraser"] {
+                let input = json!({owner:"owned","expected_revision":1,"tool":tool});
+                assert!(schema(name, Some(input.clone())).is_ok(), "{name}: {tool}");
+                let mut invalid = input;
+                invalid.as_object_mut().unwrap().remove("expected_revision");
+                assert!(schema(name, Some(invalid)).is_err(), "{name}: {tool}");
+            }
+            assert!(
+                schema(
+                    name,
+                    Some(json!({owner:"owned","expected_revision":1,"tool":"restore_background"}))
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn eraser_brush_style_requires_only_a_bounded_width() {
+        for (name, owner) in [
+            ("snow_shot_screenshot_set_tool_style", "session_id"),
+            ("snow_shot_document_set_tool_style", "document_id"),
+        ] {
+            for width in [1.0, 30.5, 72.0] {
+                let result = schema(
+                    name,
+                    Some(json!({owner:"owned","expected_revision":1,
+                    "target":"brush_eraser","style":{"stroke_width":width}})),
+                );
+                assert!(result.is_ok(), "{name}: {width}: {result:?}");
+            }
+            for style in [
+                json!({}),
+                json!({"stroke_width":0.999}),
+                json!({"stroke_width":72.001}),
+                json!({"stroke_width":null}),
+                json!({"stroke_width":"30"}),
+                json!({"stroke_width":30,"opacity":1}),
+                json!({"stroke_width":30,"strength":1}),
+                json!({"stroke_width":30,"filter":"mosaic"}),
+                json!({"stroke_width":30,"stroke":[0,0,0,255]}),
+                json!({"stroke_width":30,"unknown":true}),
+            ] {
+                assert!(
+                    schema(
+                        name,
+                        Some(json!({owner:"owned","expected_revision":1,
+                    "target":"brush_eraser","style":style}))
+                    )
+                    .is_err(),
+                    "{name}: {style}"
+                );
+            }
+            for target in ["eraser", "rectangle_eraser", "restore_background"] {
+                assert!(
+                    schema(
+                        name,
+                        Some(json!({owner:"owned","expected_revision":1,
+                    "target":target,"style":{"stroke_width":30}}))
+                    )
+                    .is_err(),
+                    "{name}: {target}"
+                );
+            }
+            for target in ["rectangle_filter", "pen_filter"] {
+                assert!(
+                    schema(
+                        name,
+                        Some(json!({owner:"owned","expected_revision":1,
+                    "target":target,"style":{"filter":"mosaic","stroke_width":30}}))
+                    )
+                    .is_ok()
+                );
+                assert!(
+                    schema(
+                        name,
+                        Some(json!({owner:"owned","expected_revision":1,
+                    "target":target,"style":{"filter":"restore_background"}}))
+                    )
+                    .is_err()
+                );
+            }
+            assert!(
+                schema(
+                    name,
+                    Some(json!({owner:"owned","target":"brush_eraser",
+                "style":{"stroke_width":30}}))
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn eraser_pinned_payloads_reuse_the_document_contract() {
+        for tool in ["rectangle_eraser", "brush_eraser"] {
+            assert!(
+                schema(
+                    "snow_shot_pinned_edit",
+                    Some(json!({"id":"pinned",
+                "expected_revision":1,"action":"tool","payload":{"tool":tool}}))
+                )
+                .is_ok()
+            );
+        }
+        assert!(
+            schema(
+                "snow_shot_pinned_edit",
+                Some(json!({"id":"pinned",
+            "expected_revision":1,"action":"tool_style","payload":{
+                "target":"brush_eraser","style":{"stroke_width":30}}}))
+            )
+            .is_ok()
+        );
+        for style in [
+            json!({"stroke_width":73}),
+            json!({"stroke_width":30,"opacity":1}),
+        ] {
+            assert!(
+                schema(
+                    "snow_shot_pinned_edit",
+                    Some(json!({"id":"pinned",
+                "expected_revision":1,"action":"tool_style","payload":{
+                    "target":"brush_eraser","style":style}}))
+                )
+                .is_err()
+            );
+        }
+    }
+    #[test]
+    fn full_only_tools_and_recognition_fields_follow_the_compiled_edition() {
+        for name in [
+            "snow_shot_screenshot_translate",
+            "snow_shot_models_list",
+            "snow_shot_models_update",
+            "snow_shot_credentials_set",
+            "snow_shot_translation_catalog",
+            "snow_shot_translation_start",
+        ] {
+            assert_eq!(schema(name, None).is_ok(), !crate::edition::MINI, "{name}");
+            let included = crate::server::TOOLS
+                .iter()
+                .chain(domains::TOOLS.iter())
+                .any(|(tool, _, _)| *tool == name);
+            assert_eq!(included, !crate::edition::MINI, "{name}");
+        }
+        for name in [
+            "snow_shot_screenshot_edit_recognition",
+            "snow_shot_document_edit_recognition",
+        ] {
+            let published = schema(name, None).unwrap();
+            for (field, value) in [
+                ("value", json!("cell")),
+                ("range", json!([0, 0, 1, 1])),
+                ("row", json!(0)),
+                ("column", json!(0)),
+                ("enabled", json!(true)),
+            ] {
+                assert_eq!(
+                    published["properties"].get(field).is_some(),
+                    !crate::edition::MINI,
+                    "{name}: {field}"
+                );
+                let mut arguments = if name.contains("screenshot") {
+                    json!({"session_id":"s","expected_revision":1,"action":"set_text","text":"edited"})
+                } else {
+                    json!({"document_id":"d","expected_revision":1,"expected_recognition_revision":1,"action":"set_text","text":"edited"})
+                };
+                arguments[field] = value;
+                assert_eq!(schema(name, Some(arguments)).is_ok(), !crate::edition::MINI);
+            }
+        }
+    }
     #[test]
     fn every_screenshot_tool_accepts_its_checked_input_contract() {
         let fixture: Value =
@@ -853,6 +1138,9 @@ mod tests {
         let mut covered = std::collections::HashSet::new();
         for case in fixture["fixtures"].as_array().unwrap() {
             let name = case["name"].as_str().unwrap();
+            if !crate::edition::method_enabled(name) {
+                continue;
+            }
             assert!(covered.insert(name), "duplicate contract: {name}");
             assert!(
                 schema(name, Some(case["arguments"].clone())).is_ok(),
@@ -871,12 +1159,118 @@ mod tests {
             covered,
             crate::server::TOOLS
                 .iter()
+                .filter(|(name, _, _)| crate::edition::method_enabled(name))
                 .map(|(name, _, _)| *name)
                 .collect()
         );
     }
     #[test]
+    fn distance_annotation_schemas_validate_settings_and_two_endpoints() {
+        for unit in ["px", "cm", "m", "km", "mm"] {
+            let style = json!({"stroke":[245,34,45,255],"stroke_width":2,"factor":0.01,
+                "unit":unit,"decimal_places":3,"endpoint_scale":0.5,"endpoint_style":"bar"});
+            assert!(
+                schema(
+                    "snow_shot_screenshot_set_tool_style",
+                    Some(json!({
+                        "session_id":"s","expected_revision":1,"target":"distance","style":style
+                    }))
+                )
+                .is_ok()
+            );
+            assert!(
+                schema(
+                    "snow_shot_document_set_tool_style",
+                    Some(json!({
+                        "document_id":"d","expected_revision":1,"target":"distance","style":style
+                    }))
+                )
+                .is_ok()
+            );
+            assert!(
+                schema(
+                    "snow_shot_screenshot_apply_annotations",
+                    Some(json!({
+                        "session_id":"s","expected_revision":1,"operations":[{
+                            "type":"distance","points":[[0,0],[3,4]],"style":style
+                        }]
+                    }))
+                )
+                .is_ok()
+            );
+        }
+        for style in [
+            json!({"factor":0}),
+            json!({"factor":1000.1}),
+            json!({"decimal_places":4}),
+            json!({"decimal_places":1.5}),
+            json!({"unit":"unsupported"}),
+            json!({"endpoint_scale":0.4}),
+            json!({"endpoint_style":"unsupported"}),
+        ] {
+            assert!(
+                schema(
+                    "snow_shot_screenshot_set_tool_style",
+                    Some(json!({
+                        "session_id":"s","expected_revision":1,"target":"distance","style":style
+                    }))
+                )
+                .is_err()
+            );
+        }
+        for points in [json!([[0, 0]]), json!([[0, 0], [3, 4], [5, 6]])] {
+            assert!(
+                schema(
+                    "snow_shot_screenshot_apply_annotations",
+                    Some(json!({
+                        "session_id":"s","expected_revision":1,"operations":[{
+                            "type":"distance","points":points
+                        }]
+                    }))
+                )
+                .is_err()
+            );
+        }
+        // Image calibration belongs to the host, never caller-controlled annotation style.
+        assert!(
+            schema(
+                "snow_shot_screenshot_apply_annotations",
+                Some(json!({
+                    "session_id":"s","expected_revision":1,"operations":[{
+                        "type":"distance","points":[[0,0],[3,4]],"pixel_scale":[2,2]
+                    }]
+                }))
+            )
+            .is_err()
+        );
+        assert!(
+            schema(
+                "snow_shot_screenshot_set_tool",
+                Some(json!({
+                    "session_id":"s","expected_revision":1,"tool":"distance"
+                }))
+            )
+            .is_ok()
+        );
+        assert!(
+            schema(
+                "snow_shot_document_set_tool",
+                Some(json!({
+                    "document_id":"d","expected_revision":1,"tool":"distance"
+                }))
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
     fn workflow_schemas_are_typed() {
+        for ratio in [0.5, 0.6, 1.0] {
+            assert!(schema("snow_shot_screenshot_set_tool_style", Some(json!({"session_id":"s","expected_revision":1,"target":"arrow","style":{"arrow_ratio":ratio}}))).is_ok());
+        }
+        for ratio in [0.0, 0.4] {
+            assert!(schema("snow_shot_screenshot_set_tool_style", Some(json!({"session_id":"s","expected_revision":1,"target":"arrow","style":{"arrow_ratio":ratio}}))).is_err());
+        }
         assert!(schema("snow_shot_screenshot_set_tool_style", Some(json!({"session_id":"s","expected_revision":1,"target":"arrow","style":{"arrow_shaft_type":"tapered","arrow_ratio":3}}))).is_ok());
         assert!(schema("snow_shot_screenshot_set_tool_style", Some(json!({"session_id":"s","expected_revision":1,"target":"arrow","style":{"arrow_ratio":3.1}}))).is_err());
         assert!(schema("snow_shot_screenshot_set_tool_style", Some(json!({"session_id":"s","expected_revision":1,"target":"text","style":{"horizontal_align":"center","vertical_align":"bottom","corner_radii":[0,1,2,3]}}))).is_ok());
@@ -911,7 +1305,7 @@ mod tests {
             )
             .is_err()
         );
-        assert!(schema("snow_shot_screenshot_edit_recognition", Some(json!({"session_id":"s","expected_revision":1,"action":"set_cell","row":0,"column":1,"text":"value"}))).is_ok());
+        assert_eq!(schema("snow_shot_screenshot_edit_recognition", Some(json!({"session_id":"s","expected_revision":1,"action":"set_cell","row":0,"column":1,"text":"value"}))).is_ok(), !crate::edition::MINI);
         assert!(
             schema(
                 "snow_shot_screenshot_undo",

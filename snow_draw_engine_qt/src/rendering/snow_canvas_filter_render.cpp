@@ -1,3 +1,4 @@
+#include "snow_draw_engine_qt/snow_canvas_image.h"
 #include "snow_canvas_filter_render.h"
 #include "snow_canvas_filter_avx2.h"
 #include "snow_canvas_render_diagnostics.h"
@@ -291,7 +292,8 @@ MosaicGrid mosaicGrid(const QSize& size, const Parameters& parameters) {
 }
 
 void collectMosaicSamples(const ConstImageView& source, const MosaicGrid& grid, int firstColumn,
-                          int columnCount, int firstRow, int rowCount, std::vector<QRgb>& samples) {
+                          int columnCount, int firstRow, int rowCount,
+                          snow::memory::PixelArray<QRgb>& samples) {
     for (int localRow = 0; localRow < rowCount; ++localRow) {
         const int row = firstRow + localRow;
         const int sampleY =
@@ -355,12 +357,16 @@ inline QRgb transformedColor(QRgb pixel, std::uint32_t type) {
 
 // Resolve the intensity once per dispatch. Neutral brightness returns before detaching
 // shared images; other values operate directly on the requested pixels with no scratch image.
-void brightnessRect(const QImage& source, QImage& destination, AlphaView mask,
+bool brightnessRect(const QImage& source, QImage& destination, AlphaView mask,
                     const QPoint& maskOrigin, const QRect& pixels, double strength, int coverage,
                     RenderWorkspace* workspace, const ExecutionOptions& options) {
     const int scale = qRound(normalizedStrength(strength) * 131072.0);
     if (scale == 65536 || coverage == 0 || pixels.isEmpty()) {
-        return;
+        return true;
+    }
+    if (!snowCanvasDetachImage(destination, workspace != nullptr &&
+                                                workspace->ownsWritablePixels(destination))) {
+        return false;
     }
     const ImageView destinationView = view(destination);
     const ConstImageView sourceView = view(source);
@@ -402,6 +408,7 @@ void brightnessRect(const QImage& source, QImage& destination, AlphaView mask,
             diagnostics.backend = SimdBackend::Avx2;
         }
     }
+    return true;
 }
 
 int embossSamplingRadius(const Parameters& parameters) {
@@ -564,7 +571,8 @@ std::size_t verticalBoxBlur(const QImage& source, QImage& destination, int radiu
         return 0;
     }
     return parallelRows(height, width, singleThreaded, [&](int begin, int end) {
-        thread_local std::vector<int> sums;
+        // Pool threads outlive captures; keep pixel scratch within this operation.
+        std::vector<int> sums;
         sums.assign(static_cast<std::size_t>(width) * 4u, 0);
         auto* alpha = sums.data();
         auto* red = alpha + width;
@@ -742,8 +750,8 @@ void prepareAxisSamples(std::vector<AxisSample>& samples, int firstCoordinate, i
 template <int Factor>
 std::size_t upsampleBilinearImpl(const QImage& source, QImage& destination, bool singleThreaded,
                                  bool useAvx2, bool* avx2Executed) {
-    thread_local std::vector<AxisSample> xSamples;
-    thread_local std::vector<AxisSample> ySamples;
+    std::vector<AxisSample> xSamples;
+    std::vector<AxisSample> ySamples;
     prepareAxisSamples<Factor>(xSamples, 0, destination.width(), source.width());
     prepareAxisSamples<Factor>(ySamples, 0, destination.height(), source.height());
     const AxisSample* const horizontalSamples = xSamples.data();
@@ -751,13 +759,13 @@ std::size_t upsampleBilinearImpl(const QImage& source, QImage& destination, bool
     std::atomic_bool executed = false;
     const std::size_t jobs = parallelRows(
         destination.height(), destination.width(), singleThreaded, [&](int begin, int end) {
-            thread_local std::vector<QRgb> firstExpanded;
-            thread_local std::vector<QRgb> secondExpanded;
+            snow::memory::PixelArray<QRgb> firstExpanded;
+            snow::memory::PixelArray<QRgb> secondExpanded;
             firstExpanded.resize(static_cast<std::size_t>(destination.width()));
             secondExpanded.resize(static_cast<std::size_t>(destination.width()));
             int firstSourceRow = -1;
             int secondSourceRow = -1;
-            const auto expandRow = [&](int sourceRow, std::vector<QRgb>& expanded) {
+            const auto expandRow = [&](int sourceRow, snow::memory::PixelArray<QRgb>& expanded) {
                 const auto* line = reinterpret_cast<const QRgb*>(source.constScanLine(sourceRow));
                 for (int x = 0; x < destination.width(); ++x) {
                     const AxisSample horizontal = horizontalSamples[x];
@@ -833,8 +841,8 @@ std::size_t upsampleBilinearCompositedImpl(const QImage& source, QImage& destina
                                            bool singleThreaded, bool useAvx2, bool* avx2Executed) {
     const ConstImageView sourceView = view(source);
     const ImageView destinationView = view(destination);
-    thread_local std::vector<AxisSample> xSamples;
-    thread_local std::vector<AxisSample> ySamples;
+    std::vector<AxisSample> xSamples;
+    std::vector<AxisSample> ySamples;
     prepareAxisSamples<Factor>(xSamples, destinationPixels.left() - sourcePixels.left(),
                                destinationPixels.width(), source.width());
     prepareAxisSamples<Factor>(ySamples, destinationPixels.top() - sourcePixels.top(),
@@ -845,13 +853,13 @@ std::size_t upsampleBilinearCompositedImpl(const QImage& source, QImage& destina
     const std::size_t jobs = parallelRows(
         destinationPixels.height(), destinationPixels.width(), singleThreaded,
         [&](int begin, int end) {
-            thread_local std::vector<QRgb> firstExpanded;
-            thread_local std::vector<QRgb> secondExpanded;
+            snow::memory::PixelArray<QRgb> firstExpanded;
+            snow::memory::PixelArray<QRgb> secondExpanded;
             firstExpanded.resize(static_cast<std::size_t>(destinationPixels.width()));
             secondExpanded.resize(static_cast<std::size_t>(destinationPixels.width()));
             int firstSourceRow = -1;
             int secondSourceRow = -1;
-            const auto expandRow = [&](int sourceRow, std::vector<QRgb>& expanded) {
+            const auto expandRow = [&](int sourceRow, snow::memory::PixelArray<QRgb>& expanded) {
                 const auto* line = reinterpret_cast<const QRgb*>(
                     sourceView.data + static_cast<qsizetype>(sourceRow) * sourceView.stride);
                 for (int localX = 0; localX < destinationPixels.width(); ++localX) {
@@ -1176,7 +1184,7 @@ bool blurMasked(const QImage& source, QImage& destination, AlphaView mask, const
 std::size_t mosaic(QImage& image, const Parameters& parameters, RenderWorkspace& workspace,
                    bool singleThreaded) {
     const MosaicGrid grid = mosaicGrid(image.size(), parameters);
-    std::vector<QRgb>& samples = workspace.mosaicSampleScratch(
+    snow::memory::PixelArray<QRgb>& samples = workspace.mosaicSampleScratch(
         static_cast<std::size_t>(grid.columnCount) * static_cast<std::size_t>(grid.rowCount));
     collectMosaicSamples(view(static_cast<const QImage&>(image)), grid, 0, grid.columnCount, 0,
                          grid.rowCount, samples);
@@ -1316,7 +1324,7 @@ QImage& RenderWorkspace::ensureImage(QImage& image, PoolEntry*& entry, int lease
                    candidate.storage.size() == bucketSize;
         });
         if (found == m_pool.end()) {
-            QImage storage(bucketSize, format);
+            QImage storage = snowCanvasAllocateImage(bucketSize, format);
             if (storage.isNull()) {
                 return image;
             }
@@ -1358,11 +1366,16 @@ QImage& RenderWorkspace::preLayerScratch(const QSize& size, qreal devicePixelRat
                        devicePixelRatio);
 }
 
+QImage& RenderWorkspace::originalBackgroundScratch(const QSize& size, qreal devicePixelRatio) {
+    return ensureImage(m_originalBackground, m_originalBackgroundEntry, 5, size,
+                       QImage::Format_ARGB32_Premultiplied, devicePixelRatio);
+}
+
 QImage& RenderWorkspace::alphaScratch(const QSize& size, qreal devicePixelRatio) {
     return ensureImage(m_alpha, m_alphaEntry, 2, size, QImage::Format_Alpha8, devicePixelRatio);
 }
 
-std::vector<QRgb>& RenderWorkspace::mosaicSampleScratch(std::size_t count) {
+snow::memory::PixelArray<QRgb>& RenderWorkspace::mosaicSampleScratch(std::size_t count) {
     if (m_mosaicSamples.capacity() < count) {
         const std::size_t previousCapacity = m_mosaicSamples.capacity();
         m_mosaicSamples.reserve(count);
@@ -1375,20 +1388,30 @@ std::vector<QRgb>& RenderWorkspace::mosaicSampleScratch(std::size_t count) {
     return m_mosaicSamples;
 }
 
+bool RenderWorkspace::ownsWritablePixels(QImage& image) {
+    const std::array<QImage*, 6> leases{
+        &m_argbA, &m_argbB, &m_scene, &m_preLayer, &m_originalBackground, &m_alpha};
+    return !image.isNull() && std::any_of(leases.begin(), leases.end(), [&](QImage* lease) {
+        return lease->data_ptr() == image.data_ptr();
+    });
+}
+
 void RenderWorkspace::clear() {
+    releaseLease(m_originalBackgroundEntry, m_originalBackground);
     releaseLease(m_argbAEntry, m_argbA);
     releaseLease(m_argbBEntry, m_argbB);
     releaseLease(m_sceneEntry, m_scene);
     releaseLease(m_preLayerEntry, m_preLayer);
     releaseLease(m_alphaEntry, m_alpha);
     m_pool.clear();
-    std::vector<QRgb>().swap(m_mosaicSamples);
+    snow::memory::PixelArray<QRgb>().swap(m_mosaicSamples);
     m_poolClock = 0;
     m_diagnostics = {};
 }
 
 void RenderWorkspace::finishFrame(bool releaseAll) {
     constexpr qsizetype kMaximumRetainedScratchBytes = 16 * 1024 * 1024;
+    releaseLease(m_originalBackgroundEntry, m_originalBackground);
     releaseLease(m_argbAEntry, m_argbA);
     releaseLease(m_argbBEntry, m_argbB);
     releaseLease(m_sceneEntry, m_scene);
@@ -1396,7 +1419,7 @@ void RenderWorkspace::finishFrame(bool releaseAll) {
     releaseLease(m_alphaEntry, m_alpha);
     if (releaseAll) {
         m_pool.clear();
-        std::vector<QRgb>().swap(m_mosaicSamples);
+        snow::memory::PixelArray<QRgb>().swap(m_mosaicSamples);
     } else {
         for (auto iterator = m_pool.begin(); iterator != m_pool.end();) {
             if (iterator->lease < 0 &&
@@ -1408,7 +1431,7 @@ void RenderWorkspace::finishFrame(bool releaseAll) {
         }
         if (m_mosaicSamples.capacity() * sizeof(QRgb) >
             static_cast<std::size_t>(kMaximumRetainedScratchBytes)) {
-            std::vector<QRgb>().swap(m_mosaicSamples);
+            snow::memory::PixelArray<QRgb>().swap(m_mosaicSamples);
         }
         while (retainedBytes() > m_retainedByteLimit && !m_pool.empty()) {
             const auto victim = std::min_element(m_pool.begin(), m_pool.end(),
@@ -1418,7 +1441,7 @@ void RenderWorkspace::finishFrame(bool releaseAll) {
             m_pool.erase(victim);
         }
         if (retainedBytes() > m_retainedByteLimit) {
-            std::vector<QRgb>().swap(m_mosaicSamples);
+            snow::memory::PixelArray<QRgb>().swap(m_mosaicSamples);
         }
     }
     m_diagnostics.retainedBytes = retainedBytes();
@@ -1505,9 +1528,16 @@ void apply(QImage& image, const Parameters& parameters, RenderWorkspace* workspa
         return;
     }
     if (image.format() != QImage::Format_ARGB32_Premultiplied) {
-        image = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        QImage converted = snowCanvasConvertImage(image, QImage::Format_ARGB32_Premultiplied);
+        if (converted.isNull()) {
+            return;
+        }
+        image = std::move(converted);
     }
-    image.detach();
+    if (!snowCanvasDetachImage(image,
+                               workspace != nullptr && workspace->ownsWritablePixels(image))) {
+        return;
+    }
     RenderWorkspace localWorkspace(0);
     RenderWorkspace& activeWorkspace = workspace != nullptr ? *workspace : localWorkspace;
     KernelDiagnostics& diagnostics = const_cast<KernelDiagnostics&>(activeWorkspace.diagnostics());
@@ -1536,7 +1566,9 @@ void apply(QImage& image, const Parameters& parameters, RenderWorkspace* workspa
     }
     case 4: {
         const QImage source = image;
-        image.detach();
+        if (!snowCanvasDetachImage(image)) {
+            return;
+        }
         diagnostics.parallelJobs +=
             embossRect(source, image, image.rect(), parameters, 255, options.singleThreaded);
         break;
@@ -1574,9 +1606,8 @@ bool applyMasked(const QImage& source, QImage& destination, const QImage& mask,
         return false;
     }
     if (parameters.type == 6) {
-        brightnessRect(source, destination, alphaView(mask), maskOriginPixels, pixels,
-                       parameters.strength, 255, workspace, options);
-        return true;
+        return brightnessRect(source, destination, alphaView(mask), maskOriginPixels, pixels,
+                              parameters.strength, 255, workspace, options);
     }
     const bool colorEffectType = parameters.type == 2 || parameters.type == 3;
     const int strengthMix = colorEffectType ? normalizedStrengthMix(parameters.strength) : 255;
@@ -1587,7 +1618,10 @@ bool applyMasked(const QImage& source, QImage& destination, const QImage& mask,
     if (parameters.type == 4 && source.constBits() == destination.constBits()) {
         embossSource = source;
     }
-    destination.detach();
+    if (!snowCanvasDetachImage(destination, workspace != nullptr &&
+                                                workspace->ownsWritablePixels(destination))) {
+        return false;
+    }
     RenderWorkspace localWorkspace(0);
     RenderWorkspace& activeWorkspace = workspace != nullptr ? *workspace : localWorkspace;
     KernelDiagnostics& diagnostics = const_cast<KernelDiagnostics&>(activeWorkspace.diagnostics());
@@ -1621,7 +1655,7 @@ bool applyMasked(const QImage& source, QImage& destination, const QImage& mask,
         const int lastRow = (pixels.bottom() - grid.firstY) / grid.block;
         const int sampleColumnCount = lastColumn - firstColumn + 1;
         const int sampleRowCount = lastRow - firstRow + 1;
-        std::vector<QRgb>& samples = activeWorkspace.mosaicSampleScratch(
+        snow::memory::PixelArray<QRgb>& samples = activeWorkspace.mosaicSampleScratch(
             static_cast<std::size_t>(sampleColumnCount) * static_cast<std::size_t>(sampleRowCount));
         collectMosaicSamples(sourceView, grid, firstColumn, sampleColumnCount, firstRow,
                              sampleRowCount, samples);
@@ -1747,8 +1781,10 @@ bool applyMaskedSparse(const QImage& source, QImage& destination, const QImage& 
         for (const MaskSpan& span : spans) {
             const QRect row =
                 QRect(span.beginX, span.y, span.endX - span.beginX, 1).intersected(pixels);
-            brightnessRect(source, destination, alphaView(mask), maskOriginPixels, row,
-                           parameters.strength, 255, workspace, options);
+            if (!brightnessRect(source, destination, alphaView(mask), maskOriginPixels, row,
+                                parameters.strength, 255, workspace, options)) {
+                return false;
+            }
         }
         return true;
     }
@@ -1762,7 +1798,10 @@ bool applyMaskedSparse(const QImage& source, QImage& destination, const QImage& 
     if (parameters.type == 4 && source.constBits() == destination.constBits()) {
         embossSource = source;
     }
-    destination.detach();
+    if (!snowCanvasDetachImage(destination, workspace != nullptr &&
+                                                workspace->ownsWritablePixels(destination))) {
+        return false;
+    }
     RenderWorkspace localWorkspace(0);
     RenderWorkspace& activeWorkspace = workspace != nullptr ? *workspace : localWorkspace;
     KernelDiagnostics& diagnostics = const_cast<KernelDiagnostics&>(activeWorkspace.diagnostics());
@@ -1835,7 +1874,7 @@ bool applyMaskedSparse(const QImage& source, QImage& destination, const QImage& 
             const int lastRow = (pixels.bottom() - grid.firstY) / grid.block;
             const int sampleColumnCount = lastColumn - firstColumn + 1;
             const int sampleRowCount = lastRow - firstRow + 1;
-            std::vector<QRgb>& samples =
+            snow::memory::PixelArray<QRgb>& samples =
                 activeWorkspace.mosaicSampleScratch(static_cast<std::size_t>(sampleColumnCount) *
                                                     static_cast<std::size_t>(sampleRowCount));
             collectMosaicSamples(sourceView, grid, firstColumn, sampleColumnCount, firstRow,
@@ -1984,15 +2023,17 @@ bool applyRect(const QImage& source, QImage& destination, const QRect& destinati
         return true;
     }
     if (parameters.type == 6) {
-        brightnessRect(source, destination, {}, {}, pixels, parameters.strength, mix, workspace,
-                       options);
-        return true;
+        return brightnessRect(source, destination, {}, {}, pixels, parameters.strength, mix,
+                              workspace, options);
     }
     QImage embossSource;
     if (parameters.type == 4 && source.constBits() == destination.constBits()) {
         embossSource = source;
     }
-    destination.detach();
+    if (!snowCanvasDetachImage(destination, workspace != nullptr &&
+                                                workspace->ownsWritablePixels(destination))) {
+        return false;
+    }
     RenderWorkspace localWorkspace(0);
     RenderWorkspace& activeWorkspace = workspace != nullptr ? *workspace : localWorkspace;
     bool succeeded = true;
@@ -2044,8 +2085,10 @@ bool applyRegion(const QImage& source, QImage& destination, const QRegion& desti
     }
     if (parameters.type == 6) {
         for (const QRect& rect : pixels) {
-            brightnessRect(source, destination, {}, {}, rect, parameters.strength, 255, workspace,
-                           options);
+            if (!brightnessRect(source, destination, {}, {}, rect, parameters.strength, 255,
+                                workspace, options)) {
+                return false;
+            }
         }
         return true;
     }
@@ -2053,7 +2096,10 @@ bool applyRegion(const QImage& source, QImage& destination, const QRegion& desti
     if (parameters.type == 4 && source.constBits() == destination.constBits()) {
         embossSource = source;
     }
-    destination.detach();
+    if (!snowCanvasDetachImage(destination, workspace != nullptr &&
+                                                workspace->ownsWritablePixels(destination))) {
+        return false;
+    }
     RenderWorkspace localWorkspace(0);
     RenderWorkspace& activeWorkspace = workspace != nullptr ? *workspace : localWorkspace;
     bool succeeded = true;
@@ -2095,6 +2141,9 @@ void blendOverSource(QImage& filtered, const QImage& source, double opacity,
         return;
     }
     const int mix = qBound(0, qRound(opacity * 256.0), 256);
+    if (!snowCanvasDetachImage(filtered)) {
+        return;
+    }
     const std::size_t jobs = parallelRows(
         filtered.height(), filtered.width(), options.singleThreaded, [&](int begin, int end) {
             for (int y = begin; y < end; ++y) {

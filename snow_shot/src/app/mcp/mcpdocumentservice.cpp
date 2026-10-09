@@ -1,3 +1,5 @@
+#include "snow_shot/app/mcp/mcpedition.h"
+#include "snow_shot/platform/applicationqos.h"
 #include "snow_shot/app/mcp/mcpdocumentservice.h"
 #include "snow_shot/app/mcp/mcpjobregistry.h"
 #include "snow_shot/app/mcp/screenshotmcpselection.h"
@@ -140,11 +142,14 @@ const QHash<QString, SnowCanvasTool> kCanvasTools{
     {QStringLiteral("select"), SnowCanvasTool::Select},
     {QStringLiteral("rectangle"), SnowCanvasTool::Shape},
     {QStringLiteral("arrow"), SnowCanvasTool::Arrow},
+    {QStringLiteral("distance"), SnowCanvasTool::Distance},
     {QStringLiteral("line"), SnowCanvasTool::Line},
     {QStringLiteral("freehand"), SnowCanvasTool::FreeDraw},
     {QStringLiteral("rectangle_highlight"), SnowCanvasTool::RectangleHighlight},
     {QStringLiteral("pen_highlight"), SnowCanvasTool::PenHighlight},
     {QStringLiteral("eraser"), SnowCanvasTool::Eraser},
+    {QStringLiteral("rectangle_eraser"), SnowCanvasTool::RectangleEraser},
+    {QStringLiteral("brush_eraser"), SnowCanvasTool::BrushEraser},
     {QStringLiteral("rectangle_filter"), SnowCanvasTool::RectangleFilter},
     {QStringLiteral("pen_filter"), SnowCanvasTool::PenFilter},
     {QStringLiteral("text"), SnowCanvasTool::Text},
@@ -516,7 +521,7 @@ class DocumentWorker final : public QObject {
                     return {failure(request, QStringLiteral("invalid_source")), {}};
                 QImageReader reader(&buffer);
                 reader.setAutoTransform(true);
-                auto size = reader.size();
+                auto size = reader.effectiveSize();
                 const bool native = !size.isValid();
                 auto nativeFormat = snow::image::Format::unknown;
                 if (native) {
@@ -540,7 +545,7 @@ class DocumentWorker final : public QObject {
                     return {failure(request, QStringLiteral("canceled")), {}};
                 source.image = native
                                    ? snow_shot::image_codec::decode(encoded, nativeFormat, nullptr)
-                                   : reader.read();
+                                   : snow_shot::image_codec::readManagedImage(reader);
             }
             encoded.clear();
             source.metadata = {{QStringLiteral("kind"), QStringLiteral("file")},
@@ -691,7 +696,14 @@ class DocumentWorker final : public QObject {
                         return {failure(request, QStringLiteral("invalid_parameters")), {}};
                     points.append(point);
                 }
-                ok = editor.erasePath(points);
+                const SnowCanvasTool eraserTool =
+                    document.tool == QStringLiteral("rectangle_eraser")
+                        ? SnowCanvasTool::RectangleEraser
+                    : document.tool == QStringLiteral("brush_eraser") ? SnowCanvasTool::BrushEraser
+                                                                      : SnowCanvasTool::Eraser;
+                if (eraserTool == SnowCanvasTool::RectangleEraser && points.size() != 2)
+                    return {failure(request, QStringLiteral("invalid_parameters")), {}};
+                ok = editor.erasePath(points, eraserTool);
             } else if (action == QStringLiteral("delete_all"))
                 ok = editor.deleteAllElements();
             else if (action == QStringLiteral("duplicate"))
@@ -834,7 +846,10 @@ class DocumentWorker final : public QObject {
                 {QStringLiteral("label"),
                  params.value(QStringLiteral("label")).toString(QStringLiteral("MCP annotation"))},
                 {QStringLiteral("operations"), params.value(QStringLiteral("operations"))}};
-            const QByteArray bytes = QJsonDocument(batch).toJson(QJsonDocument::Compact);
+            const auto annotated = mcpDistanceAnnotationsWithPixelScale(
+                batch,
+                mcpDistancePixelScale(document.sources, document.selection.pixelSelection()));
+            const QByteArray bytes = QJsonDocument(annotated).toJson(QJsonDocument::Compact);
             if (bytes.size() > 1024 * 1024)
                 return {failure(request, QStringLiteral("invalid_parameters"),
                                 QStringLiteral("operations")),
@@ -1056,11 +1071,25 @@ struct McpDocumentService::Impl {
         qsizetype bytes = 0;
         std::shared_ptr<ScreenshotExportArtifact> artifact;
         QJsonObject metadata;
+        qsizetype encodedBytes = 0;
     };
     QHash<QString, ArtifactCache> artifactCache;
     qsizetype artifactCacheBytes = 0;
     qsizetype artifactCacheLimit() const {
         return std::clamp<qsizetype>(ports.artifactCacheBytes, 0, kMaximumCacheBytes);
+    }
+    void retainEncodedBytes(const QString& documentId,
+                            const std::shared_ptr<ScreenshotExportArtifact>& artifact,
+                            qsizetype bytes) {
+        auto cached = artifactCache.find(documentId);
+        if (cached == artifactCache.end() || cached->artifact != artifact)
+            return;
+        const auto extra = bytes - cached->encodedBytes;
+        cached->encodedBytes = bytes;
+        cached->bytes += extra;
+        artifactCacheBytes += extra;
+        if (artifactCacheBytes > artifactCacheLimit())
+            artifactCacheBytes -= artifactCache.take(documentId).bytes;
     }
     void retainEncodedMetadata(const QString& documentId,
                                const std::shared_ptr<ScreenshotExportArtifact>& artifact,
@@ -1068,15 +1097,9 @@ struct McpDocumentService::Impl {
         auto cached = artifactCache.find(documentId);
         if (cached == artifactCache.end() || cached->artifact != artifact)
             return;
-        const bool firstEncoding = cached->metadata.isEmpty();
         cached->metadata = metadata;
-        if (firstEncoding) {
-            const auto size = metadata.value(QStringLiteral("byte_count")).toInteger();
-            cached->bytes += size;
-            artifactCacheBytes += size;
-        }
-        if (artifactCacheBytes > artifactCacheLimit())
-            artifactCacheBytes -= artifactCache.take(documentId).bytes;
+        retainEncodedBytes(documentId, artifact,
+                           metadata.value(QStringLiteral("byte_count")).toInteger());
     }
     struct Blob {
         quint64 owner = 0;
@@ -1127,6 +1150,7 @@ struct McpDocumentService::Impl {
             worker->moveToThread(&thread);
             QObject::connect(&thread, &QThread::finished, worker, &QObject::deleteLater);
             thread.setObjectName(QStringLiteral("McpDocumentWorker%1").arg(index));
+            snow_shot::platform::configureApplicationQoSThread(&thread);
             thread.start();
         }
         auto* expiration = new QTimer(&q);
@@ -1874,8 +1898,9 @@ struct McpDocumentService::Impl {
             request.method == QStringLiteral("snow_shot_document_save") &&
             request.params.value(QStringLiteral("format")).toString(QStringLiteral("png")) ==
                 QStringLiteral("png");
-        const bool reusable =
-            request.method == QStringLiteral("snow_shot_document_render") || pngSave;
+        const bool reusable = request.method == QStringLiteral("snow_shot_document_render") ||
+                              request.method == QStringLiteral("snow_shot_document_copy") ||
+                              pngSave;
         const auto compression = ScreenshotImageFileService::compressionLevelForKey(
             pngSave ? request.params.value(QStringLiteral("compression_level"))
                           .toString(QStringLiteral("medium"))
@@ -1954,7 +1979,7 @@ struct McpDocumentService::Impl {
         }
         if (request.method == QStringLiteral("snow_shot_document_copy")) {
             if (!artifact->requestClipboard(
-                    &q, [this, request, canceled, response = result.response,
+                    &q, [this, request, documentId, artifact, canceled, response = result.response,
                          finish](ScreenshotExportClipboardResult prepared) mutable {
                         if (canceled->load())
                             return;
@@ -1962,6 +1987,8 @@ struct McpDocumentService::Impl {
                             finish(failure(request, QStringLiteral("output_failed")));
                             return;
                         }
+                        retainEncodedBytes(documentId, artifact,
+                                           prepared.payload.pngBytes().size());
                         publishClipboard(
                             request,
                             [&](Clipboard::Completion completion) {
@@ -2000,6 +2027,19 @@ struct McpDocumentService::Impl {
                         }
                         response.result.insert(QStringLiteral("path"), saved.savedPath);
                         response.result.insert(QStringLiteral("format"), format);
+                        if (!saved.encodedSha256.isEmpty() && saved.encodedByteCount >= 0) {
+                            const QJsonObject metadata{
+                                {QStringLiteral("format"), format},
+                                {QStringLiteral("byte_count"), saved.encodedByteCount},
+                                {QStringLiteral("sha256"),
+                                 QString::fromLatin1(saved.encodedSha256)}};
+                            for (auto it = metadata.begin(); it != metadata.end(); ++it)
+                                response.result.insert(it.key(), it.value());
+                            if (format == QStringLiteral("png"))
+                                retainEncodedMetadata(documentId, artifact, metadata);
+                            finish(std::move(response));
+                            return;
+                        }
                         const auto encoded = artifactCache.constFind(documentId);
                         if (format == QStringLiteral("png") && encoded != artifactCache.cend() &&
                             encoded->artifact == artifact && !encoded->metadata.isEmpty()) {
@@ -2395,6 +2435,10 @@ void McpDocumentService::request(const ScreenshotMcpRequest& request,
     if (s.stopped || !handles(request.method) || request.connectionId == 0) {
         done(failure(request,
                      s.stopped ? QStringLiteral("disabled") : QStringLiteral("method_not_found")));
+        return;
+    }
+    if (!editionRequestEnabled(request.method, request.params)) {
+        done(failure(request, QStringLiteral("unsupported")));
         return;
     }
     if (readOnly(request.method)) {

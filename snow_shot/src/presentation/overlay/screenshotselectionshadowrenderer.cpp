@@ -1,3 +1,5 @@
+#include "snow_draw_engine_qt/snow_canvas_image.h"
+#include <snow/memory/pixel_array.h>
 #include "snow_shot/presentation/screenshotselectionshadowrenderer.h"
 
 #include "snow_shot/presentation/screenshotresultcompositor.h"
@@ -7,6 +9,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QRegion>
+#include <QColorSpace>
 
 #include <algorithm>
 #include <cmath>
@@ -44,6 +47,8 @@ QImage applyOutputOpacity(QImage image, qreal opacity) {
         return image;
     }
 
+    if (!snowCanvasDetachImage(image))
+        return {};
     QPainter painter(&image);
     painter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
     painter.fillRect(image.rect(), QColor(0, 0, 0, qRound(normalizedOpacity * 255.0)));
@@ -102,7 +107,7 @@ QImage buildShadowAsset(const ShadowKey& key) {
     const int shadow = std::max(1, key.physicalShadowWidth);
     const int cornerSpan = radius + shadow;
     const int size = std::max(3, cornerSpan * 2 + 1);
-    QImage asset(QSize(size, size), QImage::Format_ARGB32);
+    QImage asset = snowCanvasAllocateImage(QSize(size, size), QImage::Format_ARGB32);
     asset.fill(Qt::transparent);
 
     QColor color = QColor::fromRgba(key.color);
@@ -365,8 +370,7 @@ QPainterPath screenshotRegionPath(const ScreenshotRegionGeometry& geometry, qrea
     const int columns = std::max(1, qCeil(bounds.width() / cellSize) + 1);
     const int rows = std::max(1, qCeil(bounds.height() / cellSize) + 1);
     const auto columnCount = static_cast<std::size_t>(columns);
-    std::vector<std::vector<std::size_t>> edgeCells(columnCount *
-                                                    static_cast<std::size_t>(rows));
+    std::vector<std::vector<std::size_t>> edgeCells(columnCount * static_cast<std::size_t>(rows));
     const auto columnFor = [&](qreal x) {
         return std::clamp(qFloor((x - bounds.left()) / cellSize), 0, columns - 1);
     };
@@ -437,11 +441,10 @@ QPainterPath screenshotRegionPath(const ScreenshotRegionGeometry& geometry, qrea
 
 namespace {
 QImage regionMask(const QSize& size, const QPainterPath& path) {
-    QImage mask(size, QImage::Format_Alpha8);
+    QImage mask = snowCanvasAllocateZeroedImage(size, QImage::Format_Alpha8);
     ++g_diagnostics.regionMaskBuilds;
     g_diagnostics.regionScratchPeakBytes = std::max(g_diagnostics.regionScratchPeakBytes,
                                                     static_cast<std::size_t>(mask.sizeInBytes()));
-    mask.fill(0);
     QPainter painter(&mask);
     painter.setRenderHint(QPainter::Antialiasing);
     painter.fillPath(path, Qt::white);
@@ -458,17 +461,16 @@ QImage regionShadow(const QImage& mask, int width, const QColor& color) {
     g_diagnostics.regionScratchPeakBytes =
         std::max(g_diagnostics.regionScratchPeakBytes,
                  static_cast<std::size_t>(mask.sizeInBytes()) +
-                     pixelCount * (sizeof(QRgb) + 2 * sizeof(float)) +
-                     rowWidth * sizeof(float));
-    std::vector<float> alpha(pixelCount);
-    std::vector<float> scratch(alpha.size());
+                     pixelCount * (sizeof(QRgb) + 2 * sizeof(float)) + rowWidth * sizeof(float));
+    snow::memory::PixelArray<float> alpha(pixelCount);
+    snow::memory::PixelArray<float> scratch(alpha.size());
     for (int y = 0; y < h; ++y) {
         const auto* row = mask.constScanLine(y);
         for (int x = 0; x < w; ++x)
             alpha[static_cast<std::size_t>(y) * rowWidth + static_cast<std::size_t>(x)] =
                 static_cast<float>(row[x]);
     }
-    std::vector<float> columns(rowWidth);
+    snow::memory::PixelArray<float> columns(rowWidth);
     for (int pass = 0; pass < 3; ++pass) {
         const int radius = width / 3 + (pass < width % 3 ? 1 : 0);
         if (radius == 0)
@@ -494,8 +496,7 @@ QImage regionShadow(const QImage& mask, int width, const QColor& color) {
         for (int y = 0; y <= radius && y < h; ++y)
             for (int x = 0; x < w; ++x)
                 columns[static_cast<std::size_t>(x)] +=
-                    scratch[static_cast<std::size_t>(y) * rowWidth +
-                            static_cast<std::size_t>(x)];
+                    scratch[static_cast<std::size_t>(y) * rowWidth + static_cast<std::size_t>(x)];
         for (int y = 0; y < h; ++y) {
             const auto offset = static_cast<std::size_t>(y) * rowWidth;
             for (int x = 0; x < w; ++x)
@@ -513,17 +514,16 @@ QImage regionShadow(const QImage& mask, int width, const QColor& color) {
                                 static_cast<std::size_t>(x)];
         }
     }
-    QImage shadow(mask.size(), QImage::Format_ARGB32_Premultiplied);
+    QImage shadow = snowCanvasAllocateImage(mask.size(), QImage::Format_ARGB32_Premultiplied);
     for (int y = 0; y < h; ++y) {
         auto* row = reinterpret_cast<QRgb*>(shadow.scanLine(y));
         const auto* maskRow = mask.constScanLine(y);
         for (int x = 0; x < w; ++x) {
             const int a =
-                std::clamp(qRound(static_cast<qreal>(
-                                      alpha[static_cast<std::size_t>(y) * rowWidth +
-                                            static_cast<std::size_t>(x)]) *
-                                  static_cast<qreal>(color.alphaF()) *
-                                  kPeakAlphaScale * (255 - maskRow[x]) / 255.0),
+                std::clamp(qRound(static_cast<qreal>(alpha[static_cast<std::size_t>(y) * rowWidth +
+                                                           static_cast<std::size_t>(x)]) *
+                                  static_cast<qreal>(color.alphaF()) * kPeakAlphaScale *
+                                  (255 - maskRow[x]) / 255.0),
                            0, 255);
             row[x] = qPremultiply(qRgba(color.red(), color.green(), color.blue(), a));
         }
@@ -599,8 +599,9 @@ void paintTiledRegion(QPainter& painter, const QImage& content,
 QImage composeSparseRegion(const QImage& content, const ScreenshotResultLayout& layout,
                            const ScreenshotResultStyle& style, const std::vector<RegionTile>& tiles,
                            qreal opacity) {
-    QImage output(layout.outputRect.size(), QImage::Format_ARGB32_Premultiplied);
-    output.fill(Qt::transparent);
+    QImage output = snowCanvasAllocateZeroedImage(layout.outputRect.size(),
+                                                  QImage::Format_ARGB32_Premultiplied);
+    output.setColorSpace(content.colorSpace());
     QPainter outputPainter(&output);
     for (const auto& region : tiles) {
         if (layout.effectInsets.left() > 0 &&
@@ -610,7 +611,8 @@ QImage composeSparseRegion(const QImage& content, const ScreenshotResultLayout& 
         }
         QPainterPath localPath = region.path.translated(-region.bounds.topLeft());
         const QImage mask = regionMask(region.bounds.size(), localPath);
-        QImage tile(region.bounds.size(), QImage::Format_ARGB32_Premultiplied);
+        QImage tile =
+            snowCanvasAllocateImage(region.bounds.size(), QImage::Format_ARGB32_Premultiplied);
         tile.fill(Qt::transparent);
         QPainter painter(&tile);
         painter.drawImage(layout.contentRect.topLeft() - region.bounds.topLeft(), content);
@@ -648,7 +650,7 @@ void paintTiledRegion(QPainter& painter, const QImage& content,
             }
             const auto localPath = path.translated(-halo.topLeft());
             const auto mask = regionMask(halo.size(), localPath);
-            QImage tile(halo.size(), QImage::Format_ARGB32_Premultiplied);
+            QImage tile = snowCanvasAllocateImage(halo.size(), QImage::Format_ARGB32_Premultiplied);
             tile.fill(Qt::transparent);
             {
                 QPainter tilePainter(&tile);
@@ -666,8 +668,9 @@ void paintTiledRegion(QPainter& painter, const QImage& content,
 QImage composeTiledRegion(const QImage& content, const ScreenshotResultLayout& layout,
                           const ScreenshotResultStyle& style, const QPainterPath& path,
                           qreal opacity) {
-    QImage output(layout.outputRect.size(), QImage::Format_ARGB32_Premultiplied);
-    output.fill(Qt::transparent);
+    QImage output = snowCanvasAllocateZeroedImage(layout.outputRect.size(),
+                                                  QImage::Format_ARGB32_Premultiplied);
+    output.setColorSpace(content.colorSpace());
     QPainter painter(&output);
     paintTiledRegion(painter, content, layout, style, path, layout.outputRect);
     painter.end();
@@ -720,8 +723,9 @@ QImage composeRegion(const QImage& content, const ScreenshotResultStyle& style,
         if (cache.mask.sizeInBytes() + shadow.sizeInBytes() <= qsizetype(kCacheByteLimit))
             cache.shadow = shadow;
     }
-    QImage output(layout.outputRect.size(), QImage::Format_ARGB32_Premultiplied);
-    output.fill(Qt::transparent);
+    QImage output = snowCanvasAllocateZeroedImage(layout.outputRect.size(),
+                                                  QImage::Format_ARGB32_Premultiplied);
+    output.setColorSpace(content.colorSpace());
     QPainter painter(&output);
     painter.drawImage(layout.contentRect.topLeft(), content);
     painter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
@@ -770,9 +774,15 @@ QImage ScreenshotResultCompositor::normalizeImage(const QImage& image) {
     if (image.isNull()) {
         return {};
     }
-    QImage normalized = image.format() == QImage::Format_ARGB32_Premultiplied
-                            ? image
-                            : image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    const QColorSpace srgb(QColorSpace::SRgb);
+    // Imported pins can have an ICC profile. Convert their pixels before painting
+    // alongside sRGB screenshots; QPainter does not perform this conversion.
+    QImage normalized =
+        image.colorSpace().isValid() && image.colorSpace() != srgb
+            ? snowCanvasColorConvertedImage(image, srgb, QImage::Format_ARGB32_Premultiplied)
+            : snowCanvasConvertImage(image, QImage::Format_ARGB32_Premultiplied);
+    if (normalized.devicePixelRatio() != 1.0 && !snowCanvasDetachImage(normalized))
+        return {};
     normalized.setDevicePixelRatio(1.0);
     return normalized;
 }
@@ -780,7 +790,7 @@ QImage ScreenshotResultCompositor::normalizeImage(const QImage& image) {
 QImage ScreenshotResultCompositor::compose(const QImage& content,
                                            const ScreenshotResultStyle& style,
                                            qreal devicePixelRatio, qreal outputOpacity) {
-    const QImage normalizedContent = normalizeImage(content);
+    QImage normalizedContent = normalizeImage(content);
     if (normalizedContent.isNull()) {
         return {};
     }
@@ -789,7 +799,7 @@ QImage ScreenshotResultCompositor::compose(const QImage& content,
         return composeRegion(normalizedContent, normalized, devicePixelRatio, outputOpacity);
     }
     if (normalized.cornerRadius == 0 && normalized.shadowWidth == 0) {
-        return applyOutputOpacity(normalizedContent, outputOpacity);
+        return applyOutputOpacity(std::move(normalizedContent), outputOpacity);
     }
     const ScreenshotResultLayout layout =
         layoutForContent(normalizedContent.size(), normalized, devicePixelRatio);
@@ -797,7 +807,9 @@ QImage ScreenshotResultCompositor::compose(const QImage& content,
         return {};
     }
 
-    QImage output(layout.outputRect.size(), QImage::Format_ARGB32_Premultiplied);
+    QImage output =
+        snowCanvasAllocateImage(layout.outputRect.size(), QImage::Format_ARGB32_Premultiplied);
+    output.setColorSpace(normalizedContent.colorSpace());
     output.setDevicePixelRatio(1.0);
     output.fill(Qt::transparent);
     QPainter painter(&output);
@@ -806,8 +818,7 @@ QImage ScreenshotResultCompositor::compose(const QImage& content,
 
     const qreal physicalRadius = normalized.cornerRadius * layout.devicePixelRatio;
     if (normalized.cornerRadius > 0) {
-        QImage mask(output.size(), QImage::Format_ARGB32_Premultiplied);
-        mask.fill(Qt::transparent);
+        QImage mask = snowCanvasAllocateZeroedImage(output.size(), QImage::Format_Alpha8);
         {
             QPainter maskPainter(&mask);
             maskPainter.setRenderHint(QPainter::Antialiasing, true);
@@ -890,10 +901,13 @@ void ScreenshotResultCompositor::restoreBakedExterior(QImage& image, const QImag
     if (image.isNull() || background.isNull() || path.isEmpty())
         return;
     const QImage mask = regionMask(image.size(), path);
-    QImage outside = normalizeImage(
-        background.size() == image.size()
-            ? background
-            : background.scaled(image.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+    QImage outside =
+        normalizeImage(background.size() == image.size()
+                           ? background
+                           : snowCanvasScaleImage(background, image.size(), Qt::IgnoreAspectRatio,
+                                                  Qt::SmoothTransformation));
+    if (!snowCanvasDetachImage(outside) || !snowCanvasDetachImage(image))
+        return;
     {
         QPainter painter(&outside);
         painter.setCompositionMode(QPainter::CompositionMode_DestinationOut);

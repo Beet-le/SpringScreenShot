@@ -14,14 +14,14 @@ impl Engine {
     }
 
     pub fn undo_with_viewport_changes(&mut self) -> Result<MutationResult, ErrorCode> {
-        let follows_serial_number = self.editor.serial_number_follows_document(&self.model);
+        let following_numeric_types = self
+            .editor
+            .serial_number_types_following_document(&self.model);
         let Some(history_result) = self.history.undo(&mut self.model)? else {
             return Ok(MutationResult::default());
         };
-        if follows_serial_number {
-            self.editor
-                .sync_serial_number_after_history_change(&self.model);
-        }
+        self.editor
+            .sync_serial_number_types_after_document_change(&self.model, &following_numeric_types);
         if history_result.restore_selection {
             self.editor
                 .restore_history_selection(&self.model, &history_result.snapshot);
@@ -38,14 +38,14 @@ impl Engine {
     }
 
     pub fn redo_with_viewport_changes(&mut self) -> Result<MutationResult, ErrorCode> {
-        let follows_serial_number = self.editor.serial_number_follows_document(&self.model);
+        let following_numeric_types = self
+            .editor
+            .serial_number_types_following_document(&self.model);
         let Some(history_result) = self.history.redo(&mut self.model)? else {
             return Ok(MutationResult::default());
         };
-        if follows_serial_number {
-            self.editor
-                .sync_serial_number_after_history_change(&self.model);
-        }
+        self.editor
+            .sync_serial_number_types_after_document_change(&self.model, &following_numeric_types);
         if history_result.restore_selection {
             self.editor
                 .restore_history_selection(&self.model, &history_result.snapshot);
@@ -88,7 +88,27 @@ impl Engine {
         let undo_snapshot = history_undo_snapshot.unwrap_or_else(|| redo_snapshot.clone());
         let label = transaction.label().to_owned();
         let redo = transaction.clone();
+        let removes_elements = transaction.operations().iter().any(|operation| {
+            matches!(
+                operation,
+                snow_draw_engine_document::Operation::RemoveElement { .. }
+            )
+        });
+        let following_numeric_types = if removes_elements {
+            self.editor
+                .serial_number_types_following_document(&self.model)
+        } else {
+            Vec::new()
+        };
         let apply_result = self.model.apply_transaction(transaction)?;
+        // Deletion (including canvas reset) must update the creation value before
+        // refreshing viewports, just as undo and redo do. Keep explicit defaults.
+        if !apply_result.changes.removed.is_empty() {
+            self.editor.sync_serial_number_types_after_document_change(
+                &self.model,
+                &following_numeric_types,
+            );
+        }
         let mutation_result = self.finish_document_change(&redo_snapshot, &apply_result.changes);
         self.history.push_committed(
             label,
@@ -149,6 +169,97 @@ mod tests {
                 .unwrap();
         }
         engine
+    }
+
+    #[test]
+    fn serial_number_deletion_updates_toolbar_and_history() {
+        for (numbers, next, deleted, expected) in [
+            (vec![1, 2, 3], 4, 2, 3),
+            (vec![1, 5], 6, 1, 2),
+            (vec![1], 2, 0, 1),
+            (vec![3, 1], 4, 1, 4),
+            (vec![3, 3], 4, 1, 4),
+            (vec![1, i64::MAX], i64::MAX, 1, 2),
+            (vec![1, 2, 3], 10, 2, 10),
+        ] {
+            let mut engine = engine_with_serial_numbers(&numbers, next);
+            let viewport = engine.create_viewport(ViewportConfig::default()).unwrap();
+            engine
+                .set_viewport_active_tool(viewport, ActiveTool::SerialNumber)
+                .unwrap();
+            engine
+                .select_element_with_viewport_changes(
+                    viewport,
+                    ElementId {
+                        index: deleted,
+                        generation: 1,
+                    },
+                )
+                .unwrap();
+            engine
+                .delete_selected_with_viewport_changes(viewport)
+                .unwrap();
+            assert_eq!(
+                engine
+                    .viewport_style_toolbar_state(viewport)
+                    .unwrap()
+                    .serial_number_style
+                    .number,
+                expected
+            );
+            engine.undo().unwrap();
+            assert_eq!(
+                engine.editor.serial_number_style(&engine.model).number,
+                next
+            );
+            engine.redo().unwrap();
+            assert_eq!(
+                engine
+                    .viewport_style_toolbar_state(viewport)
+                    .unwrap()
+                    .serial_number_style
+                    .number,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn serial_number_canvas_reset_updates_toolbar_and_history() {
+        let mut engine = engine_with_serial_numbers(&[1, 2, 3], 4);
+        let viewport = engine.create_viewport(ViewportConfig::default()).unwrap();
+        engine
+            .set_viewport_active_tool(viewport, ActiveTool::SerialNumber)
+            .unwrap();
+        engine
+            .delete_all_elements_with_viewport_changes(viewport)
+            .unwrap();
+        assert_eq!(
+            engine
+                .viewport_style_toolbar_state(viewport)
+                .unwrap()
+                .serial_number_style
+                .number,
+            1
+        );
+        engine.undo().unwrap();
+        assert_eq!(
+            engine
+                .viewport_style_toolbar_state(viewport)
+                .unwrap()
+                .serial_number_style
+                .number,
+            4
+        );
+        engine.redo().unwrap();
+        assert_eq!(
+            engine
+                .viewport_style_toolbar_state(viewport)
+                .unwrap()
+                .serial_number_style
+                .number,
+            1
+        );
     }
 
     #[test]

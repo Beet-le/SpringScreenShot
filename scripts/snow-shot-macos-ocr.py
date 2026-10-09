@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage and verify the bundled macOS ARM64 OCR contract (standard library only)."""
+"""Stage and verify macOS OCR runtimes and optional bundled models."""
 import argparse
 import hashlib
 import json
@@ -15,6 +15,11 @@ ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / 'snow_shot/packaging/snow-shot-ocr-asset-manifest.json'
 RUNTIME_FILES = ('snow-ocr-process', 'libonnxruntime.dylib')
 ARM64_HEADER = bytes.fromhex('cffaedfe0c000001')
+X64_HEADER = bytes.fromhex('cffaedfe07000001')
+ARCHITECTURES = {
+    'arm64': dict(header=ARM64_HEADER, slice='arm64', worker='aarch64', label='ARM64'),
+    'x64': dict(header=X64_HEADER, slice='x86_64', worker='x86_64', label='x64'),
+}
 
 
 def run(*args):
@@ -192,20 +197,41 @@ def deploy_native_libraries(app, library_directory):
     remove_development_libraries(runtime)
 
 
-def prepare_bundle(app, library_directory=None):
+def require_real_directory(path):
+    if path.is_symlink() or (path.exists() and not path.is_dir()):
+        raise ValueError(f'Invalid bundled resource directory: {path}')
+
+
+def validate_bundle_directories(app):
+    for relative in ('Contents', 'Contents/MacOS', 'Contents/Resources'):
+        require_real_directory(app / relative)
+
+
+def prepare_bundle(app, library_directory=None, runtime_only=False):
     """Seal data as resources while preserving executable-relative lookup paths.
 
     codesign interprets regular files inside MacOS as nested code. Directory
     symlinks preserve the existing assets/ocr and audios contracts without
     signing model files or JSON as executable code.
     """
+    validate_bundle_directories(app)
+    if runtime_only:
+        directories = [app / 'Contents' / name for name in ('MacOS', 'Resources')]
+        for directory in directories:
+            bundled_models_directory(directory)
+        # Remove both payloads before merging resources. A stale destination
+        # models link must never let copytree write into an external cache.
+        for directory in directories:
+            remove_bundled_models(directory)
     for name in ('assets', 'audios'):
         source = app / 'Contents/MacOS' / name
         destination = app / 'Contents/Resources' / name
         if source.is_symlink():
-            if source.readlink() != Path('../Resources') / name or not destination.is_dir():
+            if (source.readlink() != Path('../Resources') / name
+                    or destination.is_symlink() or not destination.is_dir()):
                 raise ValueError(f'Invalid bundled resource link: {source}')
             continue
+        require_real_directory(destination)
         if not source.exists():
             continue
         if not source.is_dir() or destination.is_symlink():
@@ -217,6 +243,8 @@ def prepare_bundle(app, library_directory=None):
         else:
             source.rename(destination)
         source.symlink_to(Path('../Resources') / name, target_is_directory=True)
+    if runtime_only:
+        verify_no_bundled_models(app / 'Contents/Resources')
     if library_directory is not None:
         deploy_native_libraries(app, library_directory)
 
@@ -235,36 +263,77 @@ def stage_models(manifest, cache, destination, all_models=False):
                     dict(schema=1, component=model['id']))
 
 
-def runtime_manifest(source, runtime, static_runtime=False):
+def runtime_manifest(source, runtime, static_runtime=False, arch='arm64'):
+    architecture = ARCHITECTURES[arch]
     version = source['runtime']['version']
     runtime_files = RUNTIME_FILES[:1] if static_runtime else RUNTIME_FILES
     for name in runtime_files:
         path = runtime / name
         with path.open('rb') as binary:
             header = binary.read(32)
-        if len(header) != 32 or header[:8] != ARM64_HEADER:
-            raise ValueError(f'Expected a thin ARM64 Mach-O binary: {path}')
+        if len(header) != 32 or header[:8] != architecture['header']:
+            raise ValueError(f'Expected a thin {architecture["label"]} Mach-O binary: {path}')
     if not os.access(runtime / RUNTIME_FILES[0], os.X_OK):
         raise ValueError('The OCR worker is not executable')
-    expected = f'snow-ocr-process {version} macos-aarch64 protocol 4'
+    expected = f'snow-ocr-process {version} macos-{architecture["worker"]} protocol 5'
     if run(str(runtime / RUNTIME_FILES[0]), '--version') != expected:
         raise ValueError('The OCR worker version/protocol does not match the application')
     return dict(schema=3, default_model='small', runtime=dict(
-        version=version, platform='macos-arm64', delivery='bundled', protocol=4,
+        version=version, platform=f'macos-{arch}', delivery='bundled', protocol=5,
         executable=RUNTIME_FILES[0], static=static_runtime,
         files=[descriptor(runtime / n) for n in runtime_files]),
         models=source['models'])
 
 
-def finalize(source, runtime, static_runtime=False):
-    manifest = runtime_manifest(source, runtime, static_runtime)
+def bundled_models_directory(runtime):
+    """Validate every package-owned parent before touching the model subtree."""
+    require_real_directory(runtime)
+    assets = runtime / 'assets'
+    is_bundle_directory = runtime.name in ('MacOS', 'Resources') and runtime.parent.name == 'Contents'
+    if is_bundle_directory:
+        validate_bundle_directories(runtime.parent.parent)
+    if assets.is_symlink():
+        if (not is_bundle_directory or runtime.name != 'MacOS'
+                or assets.readlink() != Path('../Resources/assets')):
+            raise ValueError(f'Invalid bundled resource link: {assets}')
+        assets = runtime.parent / 'Resources/assets'
+        if assets.is_symlink() or not assets.is_dir():
+            raise ValueError(f'Invalid bundled resource link: {assets}')
+    require_real_directory(assets)
+    require_real_directory(assets / 'ocr')
+    return assets / 'ocr/models'
+
+
+def remove_bundled_models(runtime):
+    """Make reused Mini staging trees model-free without touching the cache."""
+    directory = bundled_models_directory(runtime)
+    if directory.is_symlink() or directory.is_file():
+        directory.unlink()
+    elif directory.exists():
+        shutil.rmtree(directory)
+
+
+def verify_no_bundled_models(runtime):
+    directory = bundled_models_directory(runtime)
+    if directory.exists() or directory.is_symlink():
+        raise ValueError(f'Runtime-only OCR package must not contain bundled models: {directory}')
+
+
+def finalize(source, runtime, static_runtime=False, runtime_only=False, arch='arm64'):
+    if runtime_only:
+        verify_no_bundled_models(runtime)
+    manifest = runtime_manifest(source, runtime, static_runtime, arch)
     atomic_json(runtime / 'assets/ocr/asset-manifest.json', manifest)
 
 
-def verify_assets(source, runtime, static_runtime=False):
+def verify_assets(source, runtime, static_runtime=False, runtime_only=False, arch='arm64'):
+    if runtime_only:
+        verify_no_bundled_models(runtime)
     actual = json.loads((runtime / 'assets/ocr/asset-manifest.json').read_text())
-    if actual != runtime_manifest(source, runtime, static_runtime):
+    if actual != runtime_manifest(source, runtime, static_runtime, arch):
         raise ValueError('Bundled OCR manifest does not match finalized runtime bytes')
+    if runtime_only:
+        return actual
     small = next(m for m in source['models'] if m['type'] == 'small')
     directory = runtime / 'assets/ocr/models' / small['id']
     for item in small['files']:
@@ -275,9 +344,11 @@ def verify_assets(source, runtime, static_runtime=False):
     return actual
 
 
-def verify_bundle(app):
+def verify_bundle(app, arch='arm64'):
     """Reject unresolved Mach-O loads and build-machine paths, including LC_RPATH."""
     executable_root = app / 'Contents/MacOS'
+    architecture = ARCHITECTURES[arch]
+    target_slice = architecture['slice']
     checked = []
     for path in sorted(app.rglob('*')):
         if not path.is_file() or path.is_symlink():
@@ -287,9 +358,9 @@ def verify_bundle(app):
         if magic not in (bytes.fromhex('cffaedfe'), bytes.fromhex('cafebabe'),
                          bytes.fromhex('cafebabf')):
             continue
-        if 'arm64' not in run('/usr/bin/lipo', '-archs', str(path)).split():
-            raise ValueError(f'Non-ARM64 bundle dependency: {path}')
-        loads = run('/usr/bin/otool', '-arch', 'arm64', '-l', str(path)).splitlines()
+        if target_slice not in run('/usr/bin/lipo', '-archs', str(path)).split():
+            raise ValueError(f'Non-{architecture["label"]} bundle dependency: {path}')
+        loads = run('/usr/bin/otool', '-arch', target_slice, '-l', str(path)).splitlines()
         rpaths = []
         for i, line in enumerate(loads):
             if line.strip() == 'cmd LC_RPATH':
@@ -306,8 +377,8 @@ def verify_bundle(app):
                 raise ValueError(f'Non-relocatable rpath in {path}: {value}')
             if value.startswith('@') and not expand(value).resolve().is_relative_to(app.resolve()):
                 raise ValueError(f'Bundle rpath escapes the app in {path}: {value}')
-        dependencies = run('/usr/bin/otool', '-arch', 'arm64', '-L', str(path)).splitlines()[1:]
-        ids = run('/usr/bin/otool', '-arch', 'arm64', '-D', str(path)).splitlines()[1:]
+        dependencies = run('/usr/bin/otool', '-arch', target_slice, '-L', str(path)).splitlines()[1:]
+        ids = run('/usr/bin/otool', '-arch', target_slice, '-D', str(path)).splitlines()[1:]
         for line in dependencies:
             dependency = line.strip().split(' (compatibility')[0]
             if dependency in ids or dependency.startswith(('/usr/lib/', '/System/Library/')):
@@ -330,6 +401,7 @@ def verify_bundle(app):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=('stage', 'finalize', 'verify', 'fetch-models', 'prepare-bundle'))
+    parser.add_argument('--arch', choices=ARCHITECTURES, default='arm64')
     parser.add_argument('--manifest', type=Path, default=MANIFEST)
     parser.add_argument('--runtime-dir', type=Path)
     parser.add_argument('--cache', type=Path, default=ROOT / 'artifacts')
@@ -343,11 +415,15 @@ def main():
                         help='Finalize after macdeployqt has moved dependencies into Frameworks')
     parser.add_argument('--static-runtime', action='store_true',
                         help='ONNX Runtime is linked into the worker instead of deployed as a dylib')
+    parser.add_argument('--runtime-only', action='store_true',
+                        help='Package the OCR runtime without bundled models')
     args = parser.parse_args()
+    if args.runtime_only and args.command == 'fetch-models':
+        parser.error('--runtime-only cannot be used with fetch-models')
     if args.command == 'prepare-bundle':
         if args.app is None:
             parser.error('--app is required')
-        prepare_bundle(args.app.resolve(), args.library_dir)
+        prepare_bundle(args.app.resolve(), args.library_dir, args.runtime_only)
         return
     source = json.loads(args.manifest.read_text())
     if args.command == 'fetch-models':
@@ -357,6 +433,8 @@ def main():
         return
     if args.runtime_dir is None:
         parser.error('--runtime-dir is required')
+    if args.runtime_only:
+        bundled_models_directory(args.runtime_dir.absolute())
     runtime = args.runtime_dir.resolve()
     if args.command == 'stage':
         if args.worker is None or (args.library is None and not args.static_runtime):
@@ -367,20 +445,25 @@ def main():
             stage_native_dependencies(args.library, runtime, args.worker)
         else:
             (runtime / RUNTIME_FILES[1]).unlink(missing_ok=True)
-        stage_models(source, args.cache, runtime / 'assets/ocr/models')
-        finalize(source, runtime, args.static_runtime)
+        if args.runtime_only:
+            remove_bundled_models(runtime)
+        else:
+            stage_models(source, args.cache, runtime / 'assets/ocr/models')
+        finalize(source, runtime, args.static_runtime, args.runtime_only, args.arch)
     elif args.command == 'finalize':
         if args.deployed:
             remove_development_libraries(runtime)
-        finalize(source, runtime, args.static_runtime)
+        finalize(source, runtime, args.static_runtime, args.runtime_only, args.arch)
     else:
-        manifest = verify_assets(source, runtime, args.static_runtime)
-        binaries = verify_bundle(args.app.resolve()) if args.app else []
+        manifest = verify_assets(source, runtime, args.static_runtime, args.runtime_only, args.arch)
+        binaries = verify_bundle(args.app.resolve(), args.arch) if args.app else []
         if args.report:
-            atomic_json(args.report, dict(platform='macos-arm64', runtime=manifest['runtime'],
-                        bundled_model=manifest['default_model'], verified_binaries=binaries,
+            atomic_json(args.report, dict(platform=f'macos-{args.arch}', runtime=manifest['runtime'],
+                        bundled_model=None if args.runtime_only else manifest['default_model'],
+                        verified_binaries=binaries,
                         signature='ad-hoc' if args.app else None))
-        print('Verified macOS ARM64 OCR assets' + (' and app bundle' if args.app else ''))
+        print(f'Verified macOS {ARCHITECTURES[args.arch]["label"]} OCR assets'
+              + (' and app bundle' if args.app else ''))
 
 
 if __name__ == '__main__':

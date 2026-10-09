@@ -1,5 +1,7 @@
 #pragma once
 
+#include <snow/memory/pixel_array.h>
+
 #include <QImage>
 #include <QPointF>
 #include <QRect>
@@ -96,8 +98,10 @@ class RenderWorkspace {
     QImage& argbScratchB(const QSize& size, qreal devicePixelRatio = 1.0);
     QImage& sceneScratch(const QSize& size, qreal devicePixelRatio = 1.0);
     QImage& preLayerScratch(const QSize& size, qreal devicePixelRatio = 1.0);
+    QImage& originalBackgroundScratch(const QSize& size, qreal devicePixelRatio = 1.0);
     QImage& alphaScratch(const QSize& size, qreal devicePixelRatio = 1.0);
-    std::vector<QRgb>& mosaicSampleScratch(std::size_t count);
+    snow::memory::PixelArray<QRgb>& mosaicSampleScratch(std::size_t count);
+    bool ownsWritablePixels(QImage& image);
     // Releases all canvas-owned scratch images and sample storage.
     void clear();
     void finishFrame(bool releaseAll = false);
@@ -119,13 +123,15 @@ class RenderWorkspace {
     QImage m_argbB;
     QImage m_scene;
     QImage m_preLayer;
+    QImage m_originalBackground;
     QImage m_alpha;
     PoolEntry* m_argbAEntry = nullptr;
     PoolEntry* m_argbBEntry = nullptr;
     PoolEntry* m_sceneEntry = nullptr;
     PoolEntry* m_preLayerEntry = nullptr;
+    PoolEntry* m_originalBackgroundEntry = nullptr;
     PoolEntry* m_alphaEntry = nullptr;
-    std::vector<QRgb> m_mosaicSamples;
+    snow::memory::PixelArray<QRgb> m_mosaicSamples;
     KernelDiagnostics m_diagnostics;
     bool m_failAllocationsForTests = false;
 };

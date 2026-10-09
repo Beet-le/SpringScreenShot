@@ -3,6 +3,8 @@
 #include "snow_shot/presentation/globalshortcutmanager.h"
 #include "snow_shot/presentation/settings/settingsruntimesession.h"
 #include "snow_shot/storage/applicationstorage.h"
+#include "snow_shot/storage/capturehistoryrepository.h"
+#include "snowimageqtcodec.h"
 #include "snow_shot/storage/configurationarchive.h"
 #include "../src/app/mcp/mcpsettingsadapter_p.h"
 #include "translation_test_support.h"
@@ -11,9 +13,13 @@
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QFileInfo>
+#include <QFile>
 #include <QJsonDocument>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QUuid>
+#include <QtEndian>
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 
@@ -45,7 +51,6 @@ void runMcpApplicationTests() {
     updateOptions.root = updateDirectory.path();
     updateOptions.cacheDirectory = updateDirectory.filePath(QStringLiteral("cache"));
     // macOS rejects non-HTTPS before network access; Windows lacks its packaged helper here.
-    updateOptions.baseUrl = QUrl(QStringLiteral("http://updates.example.invalid"));
     update::UpdateService updates(std::move(updateOptions));
     translation_tests::Server provider;
     SnowShotApiClient api(provider.url());
@@ -57,6 +62,18 @@ void runMcpApplicationTests() {
     ports.jobs = &jobs;
     ports.translation = &translation;
     ports.updates = &updates;
+    QByteArray historyPng;
+    ports.artifactWriter = [&](quint64, QByteArray bytes, QString mime) {
+        require(mime == QStringLiteral("image/png"), "history returns a PNG artifact");
+        historyPng = std::move(bytes);
+        return QJsonObject{{QStringLiteral("artifact_id"), QStringLiteral("history-image")}};
+    };
+    int selectionCaptures = 0;
+    ports.selectedText = [&](auto completion) {
+        ++selectionCaptures;
+        completion(QStringLiteral("こんにちは"), {});
+        return std::function<void()>{};
+    };
     int lifecycleActions = 0;
     ports.restartAllowed = [] { return true; };
     ports.action = [&](const QString&, const QJsonObject&) {
@@ -132,6 +149,108 @@ void runMcpApplicationTests() {
                     .errorCode == QStringLiteral("idempotency_conflict"),
             "reused token with different arguments rejected");
     require(jobs.list(71).isEmpty(), "synchronous settings patches release reserved job capacity");
+
+    const auto* recordingToolbarField =
+        registry.field(QStringLiteral("interface.screen-recording.recording-toolbar-editor"));
+    require(recordingToolbarField != nullptr, "recording toolbar layout is discoverable over MCP");
+    const auto recordingKind = storage::ScreenshotToolbarLayoutKind::RecordingActionTools;
+    const auto defaultRecordingLayout = session.toolbarLayout(recordingKind);
+    const auto screenshotLayout =
+        session.toolbarLayout(storage::ScreenshotToolbarLayoutKind::ActionTools);
+    require(session.applySelectValue(settings::SettingsSelectBinding::ScreenRecordingFrameRate, 60),
+            "prepare an unrelated recording setting before toolbar reset");
+    auto recordingLayout = defaultRecordingLayout;
+    recordingLayout.positions.removeIf(
+        [](const QStringList& position) { return position.contains(QStringLiteral("duration")); });
+    recordingLayout.hidden.append(QStringLiteral("duration"));
+    std::reverse(recordingLayout.positions.begin(), recordingLayout.positions.end());
+    const QJsonValue recordingJson = settingsJson(QVariant::fromValue(recordingLayout));
+    QVariant decodedRecording;
+    require(settingsValue(*recordingToolbarField, recordingJson, &decodedRecording) &&
+                decodedRecording.value<storage::ScreenshotToolbarLayout>() == recordingLayout,
+            "recording toolbar layouts have a lossless typed MCP representation");
+    const auto toolbarWrite =
+        call(QStringLiteral("settings_update"),
+             {{QStringLiteral("values"), QJsonObject{{recordingToolbarField->id, recordingJson}}}},
+             configuration.revision());
+    require(toolbarWrite.ok && session.toolbarLayout(recordingKind) == recordingLayout &&
+                session.toolbarLayout(storage::ScreenshotToolbarLayoutKind::ActionTools) ==
+                    screenshotLayout,
+            "MCP recording toolbar edits preserve screenshot action layouts");
+
+    const QJsonObject repairableRecordingJson{
+        {QStringLiteral("positions"),
+         QJsonArray{QJsonValue(QJsonArray{
+             QStringLiteral("copy"), QStringLiteral("duration"), QStringLiteral("pause-resume"),
+             QStringLiteral("separator"), QStringLiteral("start-stop"), QStringLiteral("copy"),
+             QStringLiteral("unknown-action")})}},
+        {QStringLiteral("hidden"),
+         QJsonArray{QStringLiteral("microphone"), QStringLiteral("microphone"),
+                    QStringLiteral("duration"), QStringLiteral("unknown-hidden-action")}},
+    };
+    const auto canonicalRecording = storage::ConfigurationSchema::normalize(
+        recordingToolbarField->configurationKey, repairableRecordingJson);
+    const bool recordingDecoded =
+        settingsValue(*recordingToolbarField, repairableRecordingJson, &decodedRecording);
+    require(canonicalRecording.valid && canonicalRecording.changed && recordingDecoded &&
+                settingsJson(decodedRecording) == canonicalRecording.value,
+            "MCP toolbar decoding canonicalizes singleton stacks, duplicates and omitted actions");
+    const auto canonicalWrite =
+        call(QStringLiteral("settings_update"),
+             {{QStringLiteral("values"),
+               QJsonObject{{recordingToolbarField->id, repairableRecordingJson}}}},
+             configuration.revision());
+    require(canonicalWrite.ok, "MCP accepts repairable recording toolbar layouts");
+    if (const auto jobId = canonicalWrite.result.value(QStringLiteral("job_id")).toString();
+        !jobId.isEmpty()) {
+        translation_tests::waitUntil(
+            [&] {
+                return jobs.get(71, jobId)->value(QStringLiteral("status")) !=
+                       QStringLiteral("running");
+            },
+            "canonical recording toolbar write completes its job");
+        require(jobs.get(71, jobId)->value(QStringLiteral("status")) == QStringLiteral("completed"),
+                "canonical recording toolbar job must complete without reporting a conflict");
+    }
+    QCoreApplication::processEvents();
+    const auto recordingState = session.state(recordingToolbarField->id);
+    require(settingsJson(QVariant::fromValue(session.toolbarLayout(recordingKind))) ==
+                    canonicalRecording.value &&
+                configuration.value(recordingToolbarField->configurationKey) ==
+                    canonicalRecording.value &&
+                recordingState.phase == settings::SettingsWritePhase::Clean &&
+                !recordingState.busy && !recordingState.dirty && !recordingState.conflicted &&
+                recordingState.error.isEmpty() && !jobs.hasRunningJobs() &&
+                session.toolbarLayout(storage::ScreenshotToolbarLayoutKind::ActionTools) ==
+                    screenshotLayout,
+            "canonical MCP toolbar writes settle cleanly and preserve unrelated action layouts");
+
+    for (const QJsonObject& invalidRecordingJson : {
+             QJsonObject{{QStringLiteral("positions"), QJsonArray{QStringLiteral("start-stop")}},
+                         {QStringLiteral("hidden"), QJsonArray{}}},
+             QJsonObject{{QStringLiteral("positions"), QJsonArray{QJsonValue(QJsonArray{true})}},
+                         {QStringLiteral("hidden"), QJsonArray{}}},
+             QJsonObject{{QStringLiteral("positions"), QJsonArray{}},
+                         {QStringLiteral("hidden"), QJsonArray{1}}},
+             QJsonObject{{QStringLiteral("positions"), QJsonArray{}}},
+         }) {
+        require(!settingsValue(*recordingToolbarField, invalidRecordingJson, &decodedRecording),
+                "canonical decoding must retain strict rejection of malformed toolbar JSON types");
+    }
+    const auto toolbarReset =
+        call(QStringLiteral("settings_reset"),
+             {{QStringLiteral("page_id"), recordingToolbarField->pageId},
+              {QStringLiteral("section_id"), recordingToolbarField->sectionId}},
+             configuration.revision());
+    require(toolbarReset.ok && session.toolbarLayout(recordingKind) == defaultRecordingLayout &&
+                session.toolbarLayout(storage::ScreenshotToolbarLayoutKind::ActionTools) ==
+                    screenshotLayout &&
+                session.integerValue(auxiliary->binding) == delay,
+            "MCP recording toolbar category reset restores only its own layout");
+    require(
+        session.selectValue(settings::SettingsSelectBinding::ScreenRecordingFrameRate).toInt() ==
+            60,
+        "recording toolbar reset preserves video preferences on the same settings page");
     const auto historyField =
         std::find_if(registry.fields().cbegin(), registry.fields().cend(), [](const auto& item) {
             return item.configurationKey == u"capture_history/enabled";
@@ -258,13 +377,97 @@ void runMcpApplicationTests() {
         call(QStringLiteral("history_list"), {{QStringLiteral("cursor"), QStringLiteral("bogus")}})
                 .errorCode == QStringLiteral("invalid_cursor"),
         "history cursor validated");
+    auto historyPolicy = storage.captureHistory().policy();
+    historyPolicy.enabled = true;
+    require(storage.captureHistory().updatePolicy(historyPolicy).get().success,
+            "enable history image fixture publication");
+    QImage historyImage(23, 17, QImage::Format_RGBA8888);
+    historyImage.fill(QColor(21, 73, 129, 170));
+    const QByteArray originalPng = image_codec::encodePng(historyImage, 0);
+    storage::CaptureHistoryDraft historyDraft;
+    historyDraft.contentKind = storage::CaptureHistoryContentKind::Image;
+    historyDraft.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    historyDraft.createdUtc = QDateTime::currentDateTimeUtc();
+    historyDraft.canvasBounds = historyImage.rect();
+    historyDraft.selection.rectangle = historyImage.rect();
+    historyDraft.selection.shadowColor = Qt::black;
+    historyDraft.canvasHistory =
+        QByteArrayLiteral("{\"schemaVersion\":1,\"document\":{},\"history\":{}}");
+    historyDraft.displays.push_back(
+        {QStringLiteral("history-display"), QStringLiteral("History fixture"), historyImage});
+    historyDraft.preparedResultImage =
+        storage::PreparedPngImage::fromBytes(historyImage.size(), originalPng);
+    const auto publishedHistory = storage.captureHistory().publish(std::move(historyDraft)).get();
+    require(publishedHistory.storage.success, "publish history image fixture");
+    const QJsonObject historyRequest{{QStringLiteral("history_id"), publishedHistory.record.id},
+                                     {QStringLiteral("include_image"), true}};
+    require(call(QStringLiteral("history_get"), historyRequest).ok && historyPng == originalPng,
+            "history delivers original stored PNG bytes without recompression");
+    const auto historyAssets = storage.captureHistory().displayAssets(publishedHistory.record);
+    require(historyAssets && historyAssets->result, "history result file is discoverable");
+    QFile damagedFile(historyAssets->result->localFileUrl.toLocalFile());
+    auto damagedPng = originalPng;
+    bool damaged = false;
+    for (qsizetype offset = 8; offset + 12 <= damagedPng.size();) {
+        const auto length = qFromBigEndian<quint32>(damagedPng.constData() + offset);
+        if (length > static_cast<quint32>(damagedPng.size() - offset - 12))
+            break;
+        if (damagedPng.mid(offset + 4, 4) == "IDAT" && length > 0) {
+            damagedPng[offset + 8] = char(damagedPng[offset + 8] ^ 0xff);
+            damaged = true;
+            break;
+        }
+        offset += qsizetype(length) + 12;
+    }
+    require(damaged && damagedFile.open(QIODevice::WriteOnly | QIODevice::Truncate) &&
+                damagedFile.write(damagedPng) == damagedPng.size(),
+            "damage IDAT without changing the valid PNG header or recorded byte count");
+    damagedFile.close();
+    require(call(QStringLiteral("history_get"), historyRequest).errorCode ==
+                QStringLiteral("image_unavailable"),
+            "history byte reuse still rejects corrupt PNG pixel data");
+    {
+        QImage largeImage(4000, 4000, QImage::Format_RGBA8888);
+        largeImage.fill(QColor(21, 73, 129, 170));
+        const QByteArray largePng = image_codec::encodePng(largeImage, 0);
+        require(largePng.size() > 60 * 1024 * 1024,
+                "low-compression history fixture exceeds the MCP response limit");
+        storage::CaptureHistoryDraft largeDraft;
+        largeDraft.contentKind = storage::CaptureHistoryContentKind::Image;
+        largeDraft.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        largeDraft.createdUtc = QDateTime::currentDateTimeUtc();
+        largeDraft.canvasBounds = largeImage.rect();
+        largeDraft.selection.rectangle = largeImage.rect();
+        largeDraft.selection.shadowColor = Qt::black;
+        largeDraft.canvasHistory =
+            QByteArrayLiteral("{\"schemaVersion\":1,\"document\":{},\"history\":{}}");
+        largeDraft.displays.push_back({QStringLiteral("large-history-display"),
+                                       QStringLiteral("History fixture"), largeImage});
+        largeDraft.preparedResultImage =
+            storage::PreparedPngImage::fromBytes(largeImage.size(), largePng);
+        const auto largeHistory = storage.captureHistory().publish(std::move(largeDraft)).get();
+        require(largeHistory.storage.success, "publish large low-compression history fixture");
+        require(call(QStringLiteral("history_get"),
+                     {{QStringLiteral("history_id"), largeHistory.record.id},
+                      {QStringLiteral("include_image"), true}})
+                        .ok &&
+                    historyPng.size() <= 60 * 1024 * 1024 && historyPng != largePng,
+                "oversized stored PNG retains the previous default recompression fallback");
+        const auto image = image_codec::decode(historyPng, snow::image::Format::png, "history.png");
+        require(image.size() == largeImage.size() &&
+                    image.pixelColor(0, 0) == largeImage.pixelColor(0, 0),
+                "history size-limit fallback preserves dimensions and pixel content");
+    }
     require(call(QStringLiteral("translation_catalog")).ok, "translation catalog available");
     translation_tests::waitUntil([&] { return !translation.loadingModels(); },
                                  "deterministic provider catalog completes");
+    auto capturedPreferences = translation.preferences();
+    capturedPreferences.secondaryTargetLanguage = QStringLiteral("fr");
+    require(translation.savePreferences(capturedPreferences), "set original secondary target");
     const auto started = call(QStringLiteral("translation_start"),
-                              {{QStringLiteral("texts"), QJsonArray{QStringLiteral("hello")}},
+                              {{QStringLiteral("texts"), QJsonArray{QStringLiteral("こんにちは")}},
                                {QStringLiteral("model_id"), QStringLiteral("general")},
-                               {QStringLiteral("source_language"), QStringLiteral("en")},
+                               {QStringLiteral("source_language"), QStringLiteral("ja")},
                                {QStringLiteral("target_language"), QStringLiteral("ja")}});
     require(started.ok, "translation returns an owned job");
     const auto translationId = started.result.value(QStringLiteral("job_id")).toString();
@@ -291,14 +494,18 @@ void runMcpApplicationTests() {
         },
         "provider failure produces terminal job");
     const auto snapshotInput = jobs.input(71, translationId);
-    require(snapshotInput.has_value() && !jobs.input(72, translationId),
-            "retained retry input checks ownership");
+    require(snapshotInput.has_value() &&
+                snapshotInput->value(QStringLiteral("secondary_target_language")) ==
+                    QStringLiteral("fr") &&
+                !jobs.input(72, translationId),
+            "retained retry input captures secondary target and checks ownership");
     require(call(QStringLiteral("translation_start"),
                  {{QStringLiteral("retry_job_id"), translationId}}, {}, {}, 72)
                     .errorCode == QStringLiteral("job_not_found"),
             "wrong-owner retry does not disclose private job");
     auto changedPreferences = translation.preferences();
     changedPreferences.targetLanguage = QStringLiteral("de");
+    changedPreferences.secondaryTargetLanguage = QStringLiteral("de");
     require(translation.savePreferences(changedPreferences), "UI changes translation preferences");
     const auto retried = call(QStringLiteral("translation_start"),
                               {{QStringLiteral("retry_job_id"), translationId}});
@@ -308,6 +515,8 @@ void runMcpApplicationTests() {
             "retry owns a new handle and preserves captured preferences");
     translation_tests::waitUntil([&] { return provider.streams.size() == 2; },
                                  "retry reaches provider");
+    require(provider.streams.at(1).body == provider.streams.at(0).body,
+            "retry restores original text and both targets after shared preferences change");
     provider.delta(1, QStringLiteral("translated"));
     provider.finish(1);
     translation_tests::waitUntil(
@@ -316,16 +525,54 @@ void runMcpApplicationTests() {
                    QStringLiteral("completed");
         },
         "retry completes");
+    changedPreferences.secondaryTargetLanguage = QStringLiteral("pt");
+    require(translation.savePreferences(changedPreferences), "change targets before chained retry");
     const auto canceled =
         call(QStringLiteral("translation_start"), {{QStringLiteral("retry_job_id"), retryId}});
     const auto canceledId = canceled.result.value(QStringLiteral("job_id")).toString();
     translation_tests::waitUntil([&] { return provider.streams.size() == 3; },
                                  "cancel fixture starts");
+    require(provider.streams.at(2).body == provider.streams.at(0).body,
+            "chained retry preserves the original secondary target");
     require(jobs.cancel(71, canceledId), "translation cancellation accepted");
     translation_tests::waitUntil([&] { return provider.disconnected(2); },
                                  "translation cancellation releases provider request");
     require(jobs.get(71, canceledId)->value(QStringLiteral("status")) == QStringLiteral("canceled"),
             "translation cancellation remains distinct from provider failure");
+    const auto selected = call(QStringLiteral("translation_start"),
+                               {{QStringLiteral("source"), QStringLiteral("selection")},
+                                {QStringLiteral("model_id"), QStringLiteral("general")},
+                                {QStringLiteral("source_language"), QStringLiteral("ja")},
+                                {QStringLiteral("target_language"), QStringLiteral("ja")}});
+    require(selected.ok, "selected text returns a translation job");
+    const auto selectedId = selected.result.value(QStringLiteral("job_id")).toString();
+    translation_tests::waitUntil([&] { return provider.streams.size() == 4; },
+                                 "selected text reaches provider");
+    provider.fail(3);
+    translation_tests::waitUntil(
+        [&] {
+            return jobs.get(71, selectedId)->value(QStringLiteral("status")) ==
+                   QStringLiteral("failed");
+        },
+        "selected text failure produces a retryable job");
+    changedPreferences.secondaryTargetLanguage = QStringLiteral("ko");
+    require(translation.savePreferences(changedPreferences), "change target after selection");
+    const auto selectedRetry =
+        call(QStringLiteral("translation_start"), {{QStringLiteral("retry_job_id"), selectedId}});
+    require(selectedRetry.ok, "selected text can retry from retained input");
+    translation_tests::waitUntil([&] { return provider.streams.size() == 5; },
+                                 "selected text retry reaches provider");
+    require(selectionCaptures == 1 && provider.streams.at(4).body == provider.streams.at(3).body,
+            "selected text retry retains both targets without recapturing the selection");
+    provider.delta(4, QStringLiteral("selected translation"));
+    provider.finish(4);
+    const auto selectedRetryId = selectedRetry.result.value(QStringLiteral("job_id")).toString();
+    translation_tests::waitUntil(
+        [&] {
+            return jobs.get(71, selectedRetryId)->value(QStringLiteral("status")) ==
+                   QStringLiteral("completed");
+        },
+        "selected text retry completes");
     require(call(QStringLiteral("updates_action"),
                  {{QStringLiteral("action"), QStringLiteral("download")}})
                     .errorCode ==

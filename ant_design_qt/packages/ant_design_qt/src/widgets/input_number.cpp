@@ -81,11 +81,7 @@ Qt::Alignment defaultTextAlignmentForLayout(AdInputNumber::StepButtonLayout mode
 }
 
 QPoint mouseEventPos(const QMouseEvent* event) {
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
   return event ? event->position().toPoint() : QPoint();
-#else
-  return event ? event->pos() : QPoint();
-#endif
 }
 
 bool isLeftMouseActivationEvent(const QEvent* event) {
@@ -97,33 +93,6 @@ bool isLeftMouseActivationEvent(const QEvent* event) {
   }
   const auto* mouseEvent = static_cast<const QMouseEvent*>(event);
   return mouseEvent->button() == Qt::LeftButton;
-}
-
-QColor compositeOn(const QColor& foreground, const QColor& background) {
-  if (!foreground.isValid()) {
-    return background;
-  }
-  if (!background.isValid()) {
-    QColor opaque = foreground;
-    opaque.setAlpha(255);
-    return opaque;
-  }
-
-  const float fgAlpha = std::clamp(foreground.alphaF(), 0.0F, 1.0F);
-  if (fgAlpha >= 0.999F) {
-    return foreground;
-  }
-
-  QColor mixed;
-  mixed.setRedF(foreground.redF() * fgAlpha + background.redF() * (1.0F - fgAlpha));
-  mixed.setGreenF(foreground.greenF() * fgAlpha + background.greenF() * (1.0F - fgAlpha));
-  mixed.setBlueF(foreground.blueF() * fgAlpha + background.blueF() * (1.0F - fgAlpha));
-  mixed.setAlpha(255);
-  return mixed;
-}
-
-QColor parseThemeColor(const QColor& value, const QColor& fallback) {
-  return value.isValid() ? value : fallback;
 }
 
 QPainterPath roundedRectPath(const QRectF& rect, qreal topLeft, qreal topRight, qreal bottomRight,
@@ -1507,12 +1476,6 @@ AdInputNumber::ResolvedVisualState AdInputNumber::resolvedVisualState() const {
     }
   }
 
-  if (variant_ == Variant::Filled && state.background.isValid() && state.background.alpha() < 255) {
-    const auto map = adqt::theme::ThemeManager::instance().resolveTheme(this);
-    const QColor containerBg = parseThemeColor(map.colorBgContainer, QColor("#ffffff"));
-    state.background = compositeOn(state.background, containerBg);
-  }
-
   state.inputShellBorderCanBeVisible = state.style.underlined ||
                                        state.style.selectorBorderColor.alpha() > 0 ||
                                        state.style.selectorHoverBorderColor.alpha() > 0 ||
@@ -1894,9 +1857,13 @@ void AdInputNumber::refreshVisualState(bool geometryChanged) {
   }
 
   if (inputActionsWidget_) {
-    const QColor actionsBackground = stepButtonLayout_ == StepButtonLayout::Compact
-                                         ? state.style.handleBg
-                                         : QColor(Qt::transparent);
+    // The actions sit over the shell. Repainting an identical translucent fill
+    // would apply the scoped mask twice and make the step area more opaque.
+    const QColor actionsBackground =
+        stepButtonLayout_ == StepButtonLayout::Compact && state.style.handleBg != state.background
+            ? state.style.handleBg
+            : QColor(Qt::transparent);
+    inputActionsWidget_->setAutoFillBackground(actionsBackground.alpha() > 0);
     QPalette actionsPalette = inputActionsWidget_->palette();
     actionsPalette.setColor(QPalette::Window, actionsBackground);
     actionsPalette.setColor(QPalette::Disabled, QPalette::Window, actionsBackground);

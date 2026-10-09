@@ -1,6 +1,7 @@
 #include "snow_shot/platform/focusedfullscreenwindow.h"
 #include "snow_shot/presentation/globalshortcutmanager.h"
 #include "snow_shot/storage/applicationstorage.h"
+#include "snow_shot/storage/settingsadapters.h"
 
 #include <QCoreApplication>
 #include <QHash>
@@ -13,9 +14,11 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include "../src/platform/windows/globalshortcutbackend_p.h"
 #endif
 
 #include <array>
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <utility>
@@ -31,6 +34,8 @@ constexpr std::array ALL_ACTIONS{
     GlobalShortcutAction::ScreenshotOcr,
     GlobalShortcutAction::ScreenshotTranslation,
     GlobalShortcutAction::ScreenshotCopy,
+    GlobalShortcutAction::ScreenshotSave,
+    GlobalShortcutAction::ScreenshotQuickSave,
     GlobalShortcutAction::ScreenshotFullScreen,
     GlobalShortcutAction::ScreenshotFocusedWindow,
     GlobalShortcutAction::ScreenRecord,
@@ -39,6 +44,7 @@ constexpr std::array ALL_ACTIONS{
     GlobalShortcutAction::OpenCaptureHistory,
     GlobalShortcutAction::OpenPinToScreenManagement,
     GlobalShortcutAction::GlobalCanvas,
+    GlobalShortcutAction::SwitchWindowGroup,
     GlobalShortcutAction::OpenSettings,
     GlobalShortcutAction::PinClipboardContent,
     GlobalShortcutAction::TranslateSelectedText,
@@ -104,6 +110,147 @@ void clearAll(GlobalShortcutManager& manager) {
     }
 }
 
+void screenshotSaveShortcutsRegisterActivateAndPersist() {
+    const std::array actions{GlobalShortcutAction::ScreenshotSave,
+                             GlobalShortcutAction::ScreenshotQuickSave};
+    const std::array bindings{
+        shortcuts::ShortcutBindingList{QStringLiteral("Ctrl+Alt+F10"), QStringLiteral("Shift+F10")},
+        shortcuts::ShortcutBindingList{QStringLiteral("Ctrl+Alt+F11"),
+                                       QStringLiteral("Shift+F11")}};
+    {
+        auto backend = std::make_unique<FakeBackend>();
+        auto* input = backend.get();
+        GlobalShortcutManager manager(std::move(backend), nullptr, [] { return false; });
+        manager.initialize();
+        clearAll(manager);
+        QVector<GlobalShortcutAction> activated;
+        QObject::connect(&manager, &GlobalShortcutManager::activated, &manager,
+                         [&](GlobalShortcutAction action) { activated.append(action); });
+        for (std::size_t i = 0; i < actions.size(); ++i) {
+            const auto action = actions[i];
+            require(manager.state(action).status == GlobalShortcutStatus::Unset,
+                    "screenshot save hotkeys start unset");
+            require(manager.setShortcuts(action, bindings[i]) &&
+                        manager.state(action).status == GlobalShortcutStatus::Registered &&
+                        manager.state(action).bindings.size() == 2,
+                    "both screenshot save hotkey bindings register");
+            for (auto it = input->registrations.cbegin(); it != input->registrations.cend(); ++it) {
+                if (bindings[i].contains(it.value()))
+                    input->handler(it.key());
+            }
+            require(activated.count(action) == 2,
+                    "each save binding activates its own screenshot action");
+        }
+        require(!manager.validateShortcut(actions[1], bindings[0].first()).supported,
+                "save actions participate in global hotkey conflict detection");
+    }
+    GlobalShortcutManager restored(std::make_unique<FakeBackend>(), nullptr, [] { return false; });
+    restored.initialize();
+    const snow_shot::storage::ShortcutSettings settings;
+    require(settings.screenshotSave() == bindings[0] &&
+                settings.screenshotQuickSave() == bindings[1],
+            "save actions persist under distinct settings keys");
+    for (std::size_t i = 0; i < actions.size(); ++i) {
+        require(restored.state(actions[i]).shortcuts == bindings[i] &&
+                    restored.state(actions[i]).status == GlobalShortcutStatus::Registered,
+                "save hotkeys register again after manager reload");
+        require(restored.setShortcuts(actions[i], {}) &&
+                    restored.state(actions[i]).status == GlobalShortcutStatus::Unset,
+                "save hotkeys can be cleared");
+    }
+}
+
+void switchGroupShortcutPersistsAndReportsBinding() {
+    constexpr auto action = GlobalShortcutAction::SwitchWindowGroup;
+    const shortcuts::ShortcutBindingList keys{QStringLiteral("Ctrl+Alt+F8"),
+                                              QStringLiteral("Shift+F9")};
+    {
+        auto backend = std::make_unique<FakeBackend>();
+        auto* input = backend.get();
+        GlobalShortcutManager manager(std::move(backend), nullptr, [] { return false; });
+        manager.initialize();
+        require(manager.state(action).shortcuts.isEmpty(), "switcher starts unset");
+        require(manager.setShortcuts(action, keys), "set both switcher bindings");
+        int received = 0;
+        int actions = 0;
+        QObject::connect(&manager, &GlobalShortcutManager::bindingActivated, &manager,
+                         [&](GlobalShortcutAction a, int id) {
+                             if (a == action)
+                                 received = id;
+                         });
+        QObject::connect(&manager, &GlobalShortcutManager::activated, &manager,
+                         [&](GlobalShortcutAction a) {
+                             if (a == action)
+                                 ++actions;
+                         });
+        for (auto it = input->registrations.cbegin(); it != input->registrations.cend(); ++it) {
+            if (!keys.contains(it.value()))
+                continue;
+            input->handler(it.key());
+            require(received == it.key(), "exact native binding is delivered");
+        }
+        require(actions == 2, "legacy activation remains once per press");
+    }
+    GlobalShortcutManager restored(std::make_unique<FakeBackend>(), nullptr, [] { return false; });
+    restored.initialize();
+    require(restored.state(action).shortcuts == keys, "switcher bindings survive reload");
+    require(restored.setShortcuts(action, {}), "clear switcher fixture");
+}
+#ifdef Q_OS_WIN
+UINT observedModifiers = 0;
+BOOL WINAPI fakeRegisterGroupHotkey(HWND, int, UINT modifiers, UINT) {
+    observedModifiers = modifiers;
+    return TRUE;
+}
+BOOL WINAPI fakeUnregisterGroupHotkey(HWND, int) {
+    return TRUE;
+}
+void nativeGroupKeyStateUsesEveryShortcutKey() {
+    QSet<int> down;
+    bool available = true;
+    WindowsHotKeyInputApi api;
+    api.registerHotKey = fakeRegisterGroupHotkey;
+    api.unregisterHotKey = fakeUnregisterGroupHotkey;
+    api.keyState = [&](int key) { return static_cast<SHORT>(down.contains(key) ? 0x8000 : 0); };
+    api.available = [&] { return available; };
+    auto backend = createWindowsGlobalShortcutBackend(api);
+    require(backend->registerShortcut(123, {QStringLiteral("Ctrl+Alt+Shift+Meta+F8")}).registered,
+            "register injectable shortcut");
+    require((observedModifiers & MOD_NOREPEAT) != 0, "held keys do not repeat");
+    for (int key : {VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN, VK_F8}) {
+        down = {key};
+        require(backend->inputState(123)->anyShortcutKeyDown,
+                "each required key alone keeps session alive");
+    }
+    std::array releaseOrder{VK_SHIFT, VK_CONTROL, VK_MENU, VK_F8};
+    std::sort(releaseOrder.begin(), releaseOrder.end());
+    do {
+        down = {VK_SHIFT, VK_CONTROL, VK_MENU, VK_F8};
+        for (int key : releaseOrder) {
+            down.remove(key);
+            require(backend->inputState(123)->anyShortcutKeyDown == !down.isEmpty(),
+                    "every release ordering waits for the final shortcut key");
+        }
+    } while (std::next_permutation(releaseOrder.begin(), releaseOrder.end()));
+    down = {VK_F9};
+    require(!backend->inputState(123)->anyShortcutKeyDown, "unrelated key does not delay release");
+    require(backend->registerShortcut(124, {QStringLiteral("F8")}).registered,
+            "modifierless shortcut registers");
+    down = {VK_CONTROL};
+    require(!backend->inputState(124)->anyShortcutKeyDown,
+            "unrelated modifiers do not hold a modifierless shortcut open");
+    down = {VK_F8};
+    require(backend->inputState(124)->anyShortcutKeyDown, "modifierless key is tracked");
+    down = {VK_ESCAPE};
+    require(backend->inputState(0)->escapeDown, "Escape observed without registration");
+    available = false;
+    require(!backend->inputState(123), "unobservable state is not release");
+    available = true;
+    backend->unregisterShortcut(123);
+    require(!backend->inputState(123), "removed registration is unavailable");
+}
+#endif
+
 void pinnedManagementShortcutCanBeAssignedAndRestored() {
     constexpr auto action = GlobalShortcutAction::OpenPinToScreenManagement;
     const shortcuts::ShortcutBinding binding{QStringLiteral("Ctrl+F8")};
@@ -133,6 +280,80 @@ void pinnedManagementShortcutCanBeAssignedAndRestored() {
                 restored.state(action).shortcuts == shortcuts::ShortcutBindingList{binding},
             "pinned management hotkey must survive manager recreation");
     require(restored.setShortcuts(action, {}), "clear pinned management hotkey fixture");
+}
+
+void hiddenFloatingToolsPreserveGlobalHotkeys() {
+    namespace storage = snow_shot::storage;
+    const storage::ScreenshotToolbarSettings settings;
+    constexpr auto kind = storage::ScreenshotToolbarLayoutKind::FloatingTools;
+    const auto original = settings.layout(kind);
+    auto hidden = original;
+    for (const auto& position : original.positions)
+        hidden.hidden.append(position);
+    hidden.positions.clear();
+    constexpr std::array actions{
+        GlobalShortcutAction::Screenshot,
+        GlobalShortcutAction::ScreenshotDelay,
+        GlobalShortcutAction::ScreenshotFixed,
+        GlobalShortcutAction::ScreenshotOcr,
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
+        GlobalShortcutAction::ScreenshotTranslation,
+#endif
+        GlobalShortcutAction::ScreenRecord,
+    };
+    for (const bool initiallyHidden : {false, true}) {
+        require(settings.setLayout(kind, initiallyHidden ? hidden : original),
+                "configure initial floating layout");
+        auto backend = std::make_unique<FakeBackend>();
+        auto* input = backend.get();
+        GlobalShortcutManager manager(std::move(backend), nullptr, [] { return false; });
+        manager.initialize();
+        clearAll(manager);
+        QHash<int, GlobalShortcutAction> expected;
+        for (const auto action : actions) {
+            const shortcuts::ShortcutBinding binding{
+                QStringLiteral("Ctrl+Alt+F%1").arg(expected.size() + 1)};
+            require(manager.setShortcuts(action, {binding}), "configure floating action hotkey");
+            for (auto it = input->registrations.cbegin(); it != input->registrations.cend(); ++it) {
+                if (it.value() == binding)
+                    expected.insert(it.key(), action);
+            }
+        }
+        require(expected.size() == static_cast<qsizetype>(actions.size()),
+                "register every floating action with a hotkey");
+        const auto registered = input->registrations;
+        const int registerCalls = input->registerCalls;
+        const int unregisterCalls = input->unregisterCalls;
+        int activations = 0;
+        GlobalShortcutAction requested = GlobalShortcutAction::Screenshot;
+        QObject::connect(&manager, &GlobalShortcutManager::activated, &manager,
+                         [&](GlobalShortcutAction action) {
+                             require(action == requested,
+                                     "hidden floating hotkey dispatches the same action");
+                             ++activations;
+                         });
+        require(settings.setLayout(kind, hidden), "hide all floating toolbar tools");
+        const auto saved = settings.layout(kind);
+        require(input->registrations == registered && input->registerCalls == registerCalls &&
+                    input->unregisterCalls == unregisterCalls,
+                "floating visibility changes do not change global registrations");
+        const auto activateAll = [&](const storage::ScreenshotToolbarLayout& savedLayout) {
+            for (auto it = expected.cbegin(); it != expected.cend(); ++it) {
+                requested = it.value();
+                const int before = activations;
+                input->handler(it.key());
+                require(activations == before + 1 && settings.layout(kind) == savedLayout,
+                        "each floating action activates once without rewriting its layout");
+            }
+        };
+        activateAll(saved);
+        require(settings.setLayout(kind, original), "restore floating toolbar tools");
+        activateAll(original);
+        require(input->registrations == registered && input->registerCalls == registerCalls &&
+                    input->unregisterCalls == unregisterCalls,
+                "restoring floating tools preserves their hotkeys");
+        clearAll(manager);
+    }
 }
 
 void globalCanvasShortcutCanBeAssignedAndRestored() {
@@ -274,6 +495,13 @@ void fullscreenClassificationUsesTheFocusedLayerZeroWindow() {
 
     const QVector<QRectF> displays{QRectF(0.0, 0.0, 1728.0, 1117.0),
                                    QRectF(1728.0, 0.0, 1920.0, 1080.0)};
+    const QVector<FocusedWindowSnapshot> secondMonitor{{41, 0, 1.0, displays.last()}};
+    require(focusedWindowCoversDisplay(41, secondMonitor, {displays.last()}) &&
+                !focusedWindowCoversDisplay(41, secondMonitor, {displays.first()}),
+            "monitor-scoped fullscreen detection must ignore another monitor");
+    require(!focusedWindowCoversDisplay(41, {{41, 0, 1.0, QRectF(0.0, 0.0, 1728.0, 1069.0)}},
+                                        {displays.first()}),
+            "a maximized window excluding the taskbar is not fullscreen");
     require(focusedWindowCoversDisplay(41,
                                        {{22, 0, 1.0, displays.first()},
                                         {41, 8, 1.0, displays.first()},
@@ -705,6 +933,33 @@ void disabledMacOSSystemReservationsRemainUsable() {
     symbolicLookupStatus = noErr;
 }
 
+void macGroupInputTracksPhysicalKeys() {
+    symbolicHotKeys.clear();
+    QSet<CGKeyCode> down;
+    bool available = true;
+    MacOSHotKeyApi api{copySymbolicHotKeyFixture, registerHotKeyFixture, unregisterHotKeyFixture};
+    api.keyDown = [&](CGKeyCode key) { return down.contains(key); };
+    api.inputAvailable = [&] { return available; };
+    auto backend = createMacOSGlobalShortcutBackend(api);
+    require(backend->registerShortcut(123, {QStringLiteral("Ctrl+Alt+Shift+Meta+F8")}).registered,
+            "register injected macOS chord");
+    for (const CGKeyCode key :
+         {CGKeyCode(kVK_Command), CGKeyCode(kVK_RightCommand), CGKeyCode(kVK_Control),
+          CGKeyCode(kVK_RightControl), CGKeyCode(kVK_Option), CGKeyCode(kVK_RightOption),
+          CGKeyCode(kVK_Shift), CGKeyCode(kVK_RightShift), CGKeyCode(kVK_F8)}) {
+        down = {key};
+        require(backend->inputState(123)->anyShortcutKeyDown,
+                "each macOS chord key delays release");
+    }
+    down = {CGKeyCode(kVK_F9)};
+    require(!backend->inputState(123)->anyShortcutKeyDown,
+            "unrelated macOS key does not delay release");
+    down = {CGKeyCode(kVK_Escape)};
+    require(backend->inputState(0)->escapeDown, "macOS Escape is observable without a binding");
+    available = false;
+    require(!backend->inputState(123), "unobservable macOS input is not a release");
+}
+
 void macOSSystemReservationChangesReconcileLiveBindings() {
     symbolicHotKeys = {{kVK_ANSI_1, controlKey, false}};
     auto backend = createMacOSGlobalShortcutBackend(
@@ -874,6 +1129,16 @@ int main(int argc, char** argv) {
                 .success,
             "initialize shortcut test storage");
     validationCoversSupportedAndRejectedKeys();
+    if (application.arguments().contains(QStringLiteral("--hidden-tools-only"))) {
+        hiddenFloatingToolsPreserveGlobalHotkeys();
+        storage.shutdown();
+        return 0;
+    }
+    screenshotSaveShortcutsRegisterActivateAndPersist();
+    switchGroupShortcutPersistsAndReportsBinding();
+#ifdef Q_OS_WIN
+    nativeGroupKeyStateUsesEveryShortcutKey();
+#endif
     pinnedManagementShortcutCanBeAssignedAndRestored();
     globalCanvasShortcutCanBeAssignedAndRestored();
     globalCanvasFullscreenGateTracksSession();
@@ -881,6 +1146,7 @@ int main(int argc, char** argv) {
 #ifdef Q_OS_MACOS
     disabledMacOSSystemReservationsRemainUsable();
     macOSSystemReservationChangesReconcileLiveBindings();
+    macGroupInputTracksPhysicalKeys();
 #endif
     fullscreenClassificationUsesTheFocusedLayerZeroWindow();
     deterministicOwnershipPartialFailureAndSuspension();

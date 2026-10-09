@@ -15,6 +15,11 @@ share/snow-shot/licenses/third-party/
 license file. The bundle includes the Ant Design Icons MIT notice from
 `ant_design_qt/THIRD_PARTY_NOTICES.md`.
 
+The Qt 6.12 LTS toolchain is pinned by `scripts/qt-toolchain.json`. The Qt notice
+bundle preserves the source archive version and digest, license texts, and
+upstream licensing metadata for Qt Base, Qt SVG, Qt Tools, and Qt Translations.
+Qt Translations uses `licenseRule.json`; the other modules use REUSE metadata.
+
 Screen color restoration uses nalgebra (Apache-2.0) for fixed-size matrix
 inversion and validation. Its license and resolved dependencies are included
 in the generated Rust dependency notice bundle.
@@ -25,6 +30,16 @@ https://github.com/mg-chao/ort with a native diagnostic-decoding and logger-cate
 fix. Cargo retrieves their source and original license files from that fork.
 The release collector includes the selected Rust FFI and static OCR-worker
 dependency graphs, including these Git dependencies.
+
+The Windows asset manifest pins immutable OCR runtime 1.0.9. This raw-pixel
+worker enables static ONNX Runtime, DirectML, and crash diagnostics. Its notice
+collection follows that dependency closure; RapidOCR's CLI, encoded-image
+decoding, HTTP/TLS model downloads, and YAML features are disabled.
+
+RapidOCR's optional HTTP features use Reqwest with Rustls (Apache-2.0 OR ISC OR
+MIT). They require Rustls 0.23.45 or a compatible newer release to address
+GHSA-2mjx-qc3c-rqvc. Builds enabling those features include Rustls and its
+resolved dependency licenses in the generated notice bundle.
 
 The GPL-3.0-only `snow-shot-updater` sidecar is implemented in Rust and is
 distributed as part of Snow Shot. Its resolved normal and build dependency
@@ -67,6 +82,13 @@ and the existing objc2 framework bindings (Zlib OR Apache-2.0 OR MIT) for
 Accessibility and pasteboard interoperability. Their resolved notices are
 included in the generated Rust dependency bundle. Apple system frameworks are
 provided by macOS and are not redistributed.
+Full includes these components in its unified Rust FFI archive; Mini's archive
+does not enable the selected-text dependency.
+
+macOS application QoS uses the repository's Apache-2.0 `snow-core` scheduling
+policy and the existing Rayon worker pools (MIT OR Apache-2.0). Native pthread
+and dispatch APIs are provided by macOS and are not redistributed. The resolved
+Rayon notices remain included in the generated Rust dependency bundle.
 
 Smart selection (`snow-ui-selector` and `snow-ui-selector-c`) uses the same
 accessibility-sys, core-foundation, and core-foundation-sys dependencies
@@ -79,6 +101,12 @@ and `snow-recording-effects-c`) are Apache-2.0 code under `snow-crates/`. They
 reuse crossbeam-channel (MIT OR Apache-2.0) and Microsoft windows-rs (MIT OR
 Apache-2.0) for bounded input observation and native font rendering. Their
 resolved licenses are included in the generated Rust dependency bundle.
+
+Shared recording source metadata and export settings reuse bincode 1.3.3 (MIT)
+for versioned serialization. Its original notice is included in the resolved
+Rust dependency bundle. Deferred HDR source encoding uses the existing x265
+(GPL-2.0-or-later) dependency with both 8-bit and Main10 APIs; it adds no separate
+codec library or license.
 
 GPU screen recording uses the repository's Apache-2.0 `snow-d3d11` crate and
 Microsoft windows-rs (MIT OR Apache-2.0). The restricted FFmpeg 9.0 build enables
@@ -96,6 +124,11 @@ x264 (GPL-2.0-or-later), x265 (GPL-2.0-or-later), WebP (BSD-3-Clause), and zlib-
 (Zlib). The resulting FFmpeg binaries are GPL builds. Capture-only C libraries
 do not link FFmpeg. Each architecture's resolved license bundle is generated
 with `scripts/collect-third-party-licenses.ps1 -StandaloneMedia`.
+
+Recording GIF regression tests use the `gif` crate 0.14.2 (MIT OR Apache-2.0)
+as an independent decoder. It is a development dependency; the adaptive palette
+encoder adds no production dependencies. The crate's original notices are in
+the Cargo registry source used by the test build.
 
 The generated bundle is authoritative for a particular binary because its
 contents are produced from that build environment. Dependency licenses and

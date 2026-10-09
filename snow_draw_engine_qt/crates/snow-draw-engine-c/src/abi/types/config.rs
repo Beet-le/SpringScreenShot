@@ -25,6 +25,9 @@ pub enum SnowActiveTool {
     PenFilter = 12,
     Spotlight = 13,
     AutoFilter = 14,
+    RectangleEraser = 15,
+    BrushEraser = 16,
+    Distance = 17,
 }
 
 impl SnowActiveTool {
@@ -59,6 +62,10 @@ pub enum SnowStyleToolbarSource {
     SelectedPenFilter = 21,
     DefaultSpotlight = 22,
     SelectedSpotlight = 23,
+    DefaultRectangleEraser = 24,
+    DefaultBrushEraser = 25,
+    DefaultDistance = 26,
+    SelectedDistance = 27,
 }
 
 impl SnowStyleToolbarSource {
@@ -79,6 +86,7 @@ snow_c_enum! {
         Emboss = 4,
         SmartErase = 5,
         Brightness = 6,
+        RestoreBackground = 7,
     }
 }
 
@@ -91,6 +99,18 @@ snow_c_enum! {
         OutlinedSquare = 2,
         SolidSquare = 3,
     Circle = 4,
+    }
+}
+
+snow_c_enum! {
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub enum SnowSerialNumberNumericType {
+        #[default]
+        Arabic = 0,
+        Roman = 1,
+        LowercaseLetters = 2,
+        UppercaseLetters = 3,
+        Chinese = 4,
     }
 }
 
@@ -120,6 +140,50 @@ pub struct SnowCornerRadii {
     pub bottom_right: f64,
     pub bottom_left: f64,
 }
+
+snow_c_enum! {
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub enum SnowDistanceUnit {
+        #[default]
+        Px = 0,
+        Cm = 1,
+        M = 2,
+        Km = 3,
+        Mm = 4,
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SnowDistanceStyle {
+    pub stroke: SnowColorRgba8,
+    pub stroke_width: f64,
+    pub factor: f64,
+    pub unit: SnowDistanceUnit,
+    pub decimal_places: u32,
+    pub endpoint_scale: f64,
+    pub endpoint_style: SnowArrowhead,
+}
+
+pub const SNOW_DISTANCE_STYLE_PROPERTY_STROKE: u32 = 1 << 0;
+pub const SNOW_DISTANCE_STYLE_PROPERTY_STROKE_WIDTH: u32 = 1 << 1;
+pub const SNOW_DISTANCE_STYLE_PROPERTY_FACTOR: u32 = 1 << 2;
+pub const SNOW_DISTANCE_STYLE_PROPERTY_UNIT: u32 = 1 << 3;
+pub const SNOW_DISTANCE_STYLE_PROPERTY_DECIMAL_PLACES: u32 = 1 << 4;
+pub const SNOW_DISTANCE_STYLE_PROPERTY_ENDPOINT_SCALE: u32 = 1 << 5;
+pub const SNOW_DISTANCE_STYLE_PROPERTY_ENDPOINT_STYLE: u32 = 1 << 6;
+pub const SNOW_DISTANCE_STYLE_PROPERTY_ALL: u32 = (1 << 7) - 1;
+
+pub const SNOW_DISTANCE_STYLE_MIXED_STROKE: u32 = SNOW_DISTANCE_STYLE_PROPERTY_STROKE;
+pub const SNOW_DISTANCE_STYLE_MIXED_STROKE_WIDTH: u32 = SNOW_DISTANCE_STYLE_PROPERTY_STROKE_WIDTH;
+pub const SNOW_DISTANCE_STYLE_MIXED_FACTOR: u32 = SNOW_DISTANCE_STYLE_PROPERTY_FACTOR;
+pub const SNOW_DISTANCE_STYLE_MIXED_UNIT: u32 = SNOW_DISTANCE_STYLE_PROPERTY_UNIT;
+pub const SNOW_DISTANCE_STYLE_MIXED_DECIMAL_PLACES: u32 =
+    SNOW_DISTANCE_STYLE_PROPERTY_DECIMAL_PLACES;
+pub const SNOW_DISTANCE_STYLE_MIXED_ENDPOINT_SCALE: u32 =
+    SNOW_DISTANCE_STYLE_PROPERTY_ENDPOINT_SCALE;
+pub const SNOW_DISTANCE_STYLE_MIXED_ENDPOINT_STYLE: u32 =
+    SNOW_DISTANCE_STYLE_PROPERTY_ENDPOINT_STYLE;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -291,6 +355,9 @@ mod spotlight_abi_tests {
         assert_eq!(std::mem::size_of::<SnowSpotlightConfig>(), 16);
         assert_eq!(std::mem::offset_of!(SnowSpotlightConfig, color), 0);
         assert_eq!(std::mem::offset_of!(SnowSpotlightConfig, opacity), 8);
+        assert_eq!(std::mem::size_of::<SnowSpotlightCutout>(), 48);
+        assert_eq!(std::mem::offset_of!(SnowSpotlightCutout, rotation), 32);
+        assert_eq!(std::mem::offset_of!(SnowSpotlightCutout, shape), 40);
         assert_eq!(SnowSerialNumberType::OutlinedCircle as i32, 0);
         assert_eq!(SnowSerialNumberType::SolidCircle as i32, 1);
         assert_eq!(SnowSerialNumberType::OutlinedSquare as i32, 2);
@@ -298,6 +365,12 @@ mod spotlight_abi_tests {
         assert_eq!(SnowSerialNumberType::Circle as i32, 4);
         assert_eq!(std::mem::size_of::<SnowSerialNumberStyle>(), 200);
         assert_eq!(std::mem::align_of::<SnowSerialNumberStyle>(), 8);
+        assert_eq!(
+            std::mem::offset_of!(SnowSerialNumberStyle, numeric_type),
+            196
+        );
+        assert_eq!(SnowSerialNumberNumericType::Arabic as i32, 0);
+        assert_eq!(SnowSerialNumberNumericType::Chinese as i32, 4);
         assert_eq!(
             std::mem::offset_of!(SnowSerialNumberStyle, serial_number_type),
             56
@@ -321,6 +394,7 @@ pub struct SnowSerialNumberStyle {
     pub font_family_truncated: u8,
     pub reserved1: [u8; 3],
     pub font_family_utf8: [std::ffi::c_char; SNOW_FONT_FAMILY_UTF8_CAPACITY],
+    pub numeric_type: SnowSerialNumberNumericType,
 }
 
 #[repr(C)]
@@ -336,6 +410,10 @@ pub struct SnowStyleToolbarState {
     pub shape_style_mixed: u32,
     pub filter_style: SnowFilterStyle,
     pub filter_style_mixed: u32,
+    pub brush_eraser_style: SnowBrushEraserStyle,
+    pub distance_style: SnowDistanceStyle,
+    pub distance_style_mixed: u32,
+    pub distance_measured_length: f64,
 }
 
 #[repr(C)]
@@ -353,6 +431,9 @@ pub struct SnowStyleDefaults {
     pub serial_number: SnowSerialNumberStyle,
     pub watermark: SnowWatermarkConfig,
     pub spotlight: SnowSpotlightConfig,
+    pub brush_eraser: SnowBrushEraserStyle,
+    pub spotlight_shape: SnowRectangleShape,
+    pub distance: SnowDistanceStyle,
 }
 
 #[repr(C)]
@@ -547,6 +628,7 @@ impl Default for SnowSerialNumberStyle {
             stroke_style: SnowStrokeStyle::Solid,
             opacity: 1.0,
             serial_number_type: SnowSerialNumberType::OutlinedCircle,
+            numeric_type: SnowSerialNumberNumericType::Arabic,
             font_family_utf8_len: 0,
             font_family_truncated: 0,
             reserved1: [0; 3],
@@ -564,3 +646,17 @@ impl Default for SnowGridConfig {
         }
     }
 }
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SnowBrushEraserStyle {
+    pub stroke_width: f64,
+}
+
+impl Default for SnowBrushEraserStyle {
+    fn default() -> Self {
+        Self { stroke_width: 30.0 }
+    }
+}
+
+pub const SNOW_BRUSH_ERASER_STYLE_PROPERTY_STROKE_WIDTH: u32 = 1 << 0;

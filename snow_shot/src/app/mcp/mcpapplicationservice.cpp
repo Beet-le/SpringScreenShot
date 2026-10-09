@@ -1,3 +1,4 @@
+#include "snow_shot/app/mcp/mcpedition.h"
 #include "snow_shot/app/mcp/mcpapplicationservice.h"
 #include "snow_shot/app/mcp/mcpjobregistry.h"
 #include "snow_shot/app/mcp/screenshotmcpsession.h"
@@ -6,10 +7,13 @@
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/capturehistoryrepository.h"
 #include "snow_shot/storage/configurationarchive.h"
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
 #include "snow_shot/translation/translationservice.h"
 #include "snow_shot/translation/translationlanguages.h"
+#endif
 #include "snow_shot/update/updateservice.h"
 #include "snow_shot/platform/windows/monitorgeometry.h"
+#include "snowimageqtcodec.h"
 #include <QBuffer>
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -126,7 +130,9 @@ struct McpApplicationService::Impl {
     Ports ports;
     QThreadPool workers;
     bool stopping = false;
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
     QHash<QString, QPointer<translation::TranslationJob>> translations;
+#endif
     QString activeUpdateJob;
     quint64 activeUpdateOwner = 0;
     int admittedWork = 0;
@@ -305,13 +311,16 @@ struct McpApplicationService::Impl {
 
     void handle(const ScreenshotMcpRequest&, ScreenshotMcpServer::Completion);
 
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
     void translate(const QString& id, const QStringList& texts,
                    const translation::TranslationPreferences& preferences) {
         if (!ports.jobs->retainInput(
-                id, {{QStringLiteral("texts"), QJsonArray::fromStringList(texts)},
-                     {QStringLiteral("source_language"), preferences.sourceLanguage},
-                     {QStringLiteral("target_language"), preferences.targetLanguage},
-                     {QStringLiteral("model_id"), preferences.modelId}})) {
+                id,
+                {{QStringLiteral("texts"), QJsonArray::fromStringList(texts)},
+                 {QStringLiteral("source_language"), preferences.sourceLanguage},
+                 {QStringLiteral("target_language"), preferences.targetLanguage},
+                 {QStringLiteral("secondary_target_language"), preferences.secondaryTargetLanguage},
+                 {QStringLiteral("model_id"), preferences.modelId}})) {
             ports.jobs->fail(id, QStringLiteral("capacity_exceeded"));
             return;
         }
@@ -360,6 +369,8 @@ struct McpApplicationService::Impl {
         job->start();
     }
 
+#endif
+
     void storageJob(const ScreenshotMcpRequest& request,
                     const std::function<std::shared_future<storage::StorageResult>()>& start,
                     ScreenshotMcpServer::Completion completion) {
@@ -400,33 +411,39 @@ McpApplicationService::~McpApplicationService() {
 }
 
 QStringList McpApplicationService::methods() {
-    return {QStringLiteral("snow_shot_app_status"),
-            QStringLiteral("snow_shot_app_displays"),
-            QStringLiteral("snow_shot_app_action"),
-            QStringLiteral("snow_shot_settings_get"),
-            QStringLiteral("snow_shot_settings_update"),
-            QStringLiteral("snow_shot_settings_reset"),
-            QStringLiteral("snow_shot_settings_action"),
-            QStringLiteral("snow_shot_models_list"),
-            QStringLiteral("snow_shot_models_update"),
-            QStringLiteral("snow_shot_credentials_set"),
-            QStringLiteral("snow_shot_history_list"),
-            QStringLiteral("snow_shot_history_get"),
-            QStringLiteral("snow_shot_history_delete"),
-            QStringLiteral("snow_shot_history_clear"),
-            QStringLiteral("snow_shot_history_action"),
-            QStringLiteral("snow_shot_configuration_export"),
-            QStringLiteral("snow_shot_configuration_import"),
-            QStringLiteral("snow_shot_storage_status"),
-            QStringLiteral("snow_shot_storage_cleanup"),
-            QStringLiteral("snow_shot_permissions_get"),
-            QStringLiteral("snow_shot_permissions_request"),
-            QStringLiteral("snow_shot_updates_status"),
-            QStringLiteral("snow_shot_updates_action"),
-            QStringLiteral("snow_shot_templates_list"),
-            QStringLiteral("snow_shot_templates_update"),
-            QStringLiteral("snow_shot_translation_catalog"),
-            QStringLiteral("snow_shot_translation_start")};
+    return {
+        QStringLiteral("snow_shot_app_status"),
+        QStringLiteral("snow_shot_app_displays"),
+        QStringLiteral("snow_shot_app_action"),
+        QStringLiteral("snow_shot_settings_get"),
+        QStringLiteral("snow_shot_settings_update"),
+        QStringLiteral("snow_shot_settings_reset"),
+        QStringLiteral("snow_shot_settings_action"),
+#if SNOW_SHOT_ENABLE_API_CONFIGURATION
+        QStringLiteral("snow_shot_models_list"),
+        QStringLiteral("snow_shot_models_update"),
+        QStringLiteral("snow_shot_credentials_set"),
+#endif
+        QStringLiteral("snow_shot_history_list"),
+        QStringLiteral("snow_shot_history_get"),
+        QStringLiteral("snow_shot_history_delete"),
+        QStringLiteral("snow_shot_history_clear"),
+        QStringLiteral("snow_shot_history_action"),
+        QStringLiteral("snow_shot_configuration_export"),
+        QStringLiteral("snow_shot_configuration_import"),
+        QStringLiteral("snow_shot_storage_status"),
+        QStringLiteral("snow_shot_storage_cleanup"),
+        QStringLiteral("snow_shot_permissions_get"),
+        QStringLiteral("snow_shot_permissions_request"),
+        QStringLiteral("snow_shot_updates_status"),
+        QStringLiteral("snow_shot_updates_action"),
+        QStringLiteral("snow_shot_templates_list"),
+        QStringLiteral("snow_shot_templates_update"),
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
+        QStringLiteral("snow_shot_translation_catalog"),
+        QStringLiteral("snow_shot_translation_start"),
+#endif
+    };
 }
 bool McpApplicationService::handles(const QString& method) const {
     return methods().contains(method);
@@ -540,6 +557,10 @@ void McpApplicationService::Impl::handle(const ScreenshotMcpRequest& request,
     auto error = [&](const QString& code, const QString& field = QString()) {
         completion(failure(request, code, field));
     };
+    if (!editionRequestEnabled(method, params)) {
+        error(QStringLiteral("unsupported"));
+        return;
+    }
     auto change = [&](const std::function<bool()>& mutation) {
         if (!expected) {
             error(QStringLiteral("revision_required"));
@@ -729,6 +750,7 @@ void McpApplicationService::Impl::handle(const ScreenshotMcpRequest& request,
         response.revision = configuration().revision();
         observeSettings(request, job, pending, applied, response);
         completion(std::move(response));
+#if SNOW_SHOT_ENABLE_API_CONFIGURATION
     } else if (method == u"snow_shot_models_list") {
         finish({{QStringLiteral("models"), publicModels(ports.settings->customAiModels())},
                 {QStringLiteral("revision"), static_cast<qint64>(configuration().revision())}});
@@ -767,6 +789,7 @@ void McpApplicationService::Impl::handle(const ScreenshotMcpRequest& request,
             }
         }
         change([&] { return ports.settings->applyCustomAiModels(models); });
+#endif
     } else if (method == u"snow_shot_storage_status") {
         auto result = storageJson(ports.storage->status());
         result.insert(QStringLiteral("revision"), static_cast<qint64>(configuration().revision()));
@@ -957,13 +980,36 @@ void McpApplicationService::Impl::handle(const ScreenshotMcpRequest& request,
         background(
             request,
             [repository, record = *it, request, metadata] {
-                const auto image = repository->loadResultImage(record);
-                if (!image || image->isNull())
+                const auto png = repository->loadResultPng(record);
+                if (!png)
                     return failure(request, QStringLiteral("image_unavailable"));
-                auto response = reply(request, metadata);
-                QBuffer buffer(&response.attachment);
-                if (!buffer.open(QIODevice::WriteOnly) || !image->save(&buffer, "PNG"))
+                // Header validation alone cannot detect damaged IDAT data in a stored PNG.
+                // Validate pixels before returning the existing encoding, as the previous
+                // decode-and-encode path did, without performing a second PNG encode.
+                QByteArray recompressed;
+                bool encodeFailed = false;
+                const auto valid = [&] {
+                    const QImage image = image_codec::decode(png->bytes(), snow::image::Format::png,
+                                                             "capture_result.png");
+                    if (image.isNull() || image.size() != png->pixelSize())
+                        return false;
+                    if (png->bytes().size() > 60 * 1024 * 1024) {
+                        // A low-compression stored PNG may exceed the response limit even
+                        // though the previous default encoding fit. Keep that fallback.
+                        QBuffer buffer(&recompressed);
+                        encodeFailed =
+                            !buffer.open(QIODevice::WriteOnly) || !image.save(&buffer, "PNG");
+                    }
+                    return true;
+                }();
+                if (!valid) {
+                    repository->reportReadFailure(record, QStringLiteral("image_unavailable"));
+                    return failure(request, QStringLiteral("image_unavailable"));
+                }
+                if (encodeFailed)
                     return failure(request, QStringLiteral("output_failed"));
+                auto response = reply(request, metadata);
+                response.attachment = recompressed.isEmpty() ? png->bytes() : recompressed;
                 if (response.attachment.size() > 60 * 1024 * 1024)
                     return failure(request, QStringLiteral("output_too_large"));
                 response.attachmentMime = QStringLiteral("image/png");
@@ -1287,6 +1333,7 @@ void McpApplicationService::Impl::handle(const ScreenshotMcpRequest& request,
                        ? storage::DrawTemplateSettings().setTemplates(drawings)
                        : storage::WatermarkTemplateSettings().setTemplates(watermarks);
         });
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
     } else if (method == u"snow_shot_translation_catalog") {
         if (!ports.translation) {
             error(QStringLiteral("unavailable"));
@@ -1360,6 +1407,9 @@ void McpApplicationService::Impl::handle(const ScreenshotMcpRequest& request,
             preferences.sourceLanguage = input.value(QStringLiteral("source_language")).toString();
         if (input.contains(QStringLiteral("target_language")))
             preferences.targetLanguage = input.value(QStringLiteral("target_language")).toString();
+        if (params.contains(QStringLiteral("retry_job_id")))
+            preferences.secondaryTargetLanguage =
+                input.value(QStringLiteral("secondary_target_language")).toString();
         if (input.contains(QStringLiteral("model_id")))
             preferences.modelId = input.value(QStringLiteral("model_id")).toString();
         auto canceled = std::make_shared<bool>(false);
@@ -1392,6 +1442,7 @@ void McpApplicationService::Impl::handle(const ScreenshotMcpRequest& request,
                 });
         } else
             translate(id, texts, preferences);
+#endif
     } else {
         error(QStringLiteral("method_not_found"));
     }

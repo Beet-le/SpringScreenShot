@@ -1,8 +1,13 @@
 #ifndef SNOW_SHOT_NETWORK_SNOWSHOTAPICLIENT_H
 #define SNOW_SHOT_NETWORK_SNOWSHOTAPICLIENT_H
 
+#include "snow_shot/app/edition.h"
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION || SNOW_SHOT_ENABLE_TABLE_RECOGNITION ||                     \
+    SNOW_SHOT_ENABLE_LATEX_RECOGNITION || SNOW_SHOT_ENABLE_IMAGE_CONVERSION ||                     \
+    SNOW_SHOT_ENABLE_API_CONFIGURATION
 #include "snow_shot/customaimodelconfiguration.h"
 #include "snow_shot/texttranslationconfiguration.h"
+#endif
 
 #include <QHash>
 #include <QImage>
@@ -14,6 +19,7 @@
 #include <functional>
 
 class QNetworkAccessManager;
+class SnowShotApiClient;
 
 struct SnowShotTableResult {
     QString html;
@@ -62,6 +68,7 @@ struct SnowShotTranslationRequest {
     QString targetLanguage;
     QString text;
     QString translationMode = QStringLiteral("default");
+    QString secondaryTargetLanguage;
 };
 
 struct SnowShotTranslationResult {
@@ -85,6 +92,9 @@ struct SnowShotImageConversionRequest {
 
 using SnowShotImageConversionResult = SnowShotTranslationResult;
 
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION || SNOW_SHOT_ENABLE_TABLE_RECOGNITION ||                     \
+    SNOW_SHOT_ENABLE_LATEX_RECOGNITION || SNOW_SHOT_ENABLE_IMAGE_CONVERSION ||                     \
+    SNOW_SHOT_ENABLE_API_CONFIGURATION
 class SnowShotApiClient final : public QObject {
     Q_OBJECT
 
@@ -184,5 +194,6 @@ class SnowShotApiClient final : public QObject {
     QVector<SnowShotChatModel> m_cachedChatModels;
     QString m_cachedChatModelsLocale;
 };
+#endif
 
 #endif // SNOW_SHOT_NETWORK_SNOWSHOTAPICLIENT_H

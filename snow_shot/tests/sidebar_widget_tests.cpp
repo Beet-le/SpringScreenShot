@@ -27,7 +27,6 @@
 
 namespace {
 constexpr int SIDEBAR_EXPANDED_WIDTH = 220;
-constexpr int FIRST_TOP_LEVEL_MENU_TOP_SPACING = 8;
 constexpr int COLLAPSE_TRIGGER_HEIGHT = 48;
 constexpr int COLLAPSE_TRIGGER_ICON_SIZE = 18;
 
@@ -72,7 +71,7 @@ int settingsNavigationPageCount() {
             std::get_if<snow_shot::presentation::settings::SettingsNavigationGroupDefinition>(
                 &node);
         if (group != nullptr && group->id == QStringLiteral("nav.settings")) {
-            return group->pages.size();
+            return static_cast<int>(group->pages.size());
         }
     }
     return 0;
@@ -91,7 +90,18 @@ void navigationUsesAntDesignDefaultsAndCollapseTriggerStyle() {
     const QModelIndex history = findByStableId(menu->model(), QStringLiteral("/history"));
     const QModelIndex settings = findByStableId(menu->model(), QStringLiteral("nav.settings"));
     const QModelIndex storageAndPrivacy =
-        findByStableId(menu->model(), QStringLiteral("/settings/storageAndPrivacy"));
+        findByStableId(menu->model(), QStringLiteral("/settings/files-history"));
+    const QModelIndex capture =
+        findByStableId(menu->model(), QStringLiteral("/settings/screenshots"));
+    const auto* capturePage =
+        snow_shot::presentation::settings::builtInSettingsRegistry().catalog().page(
+            QStringLiteral("screenshots"));
+    require(capture.isValid() && capturePage != nullptr &&
+                capture.data(Qt::ToolTipRole).toString() == capturePage->title.translated() &&
+                capture.data(Qt::DisplayRole).toString() == capturePage->title.translated() &&
+                capture.data(Qt::AccessibleDescriptionRole).toString() ==
+                    capturePage->description.translated(),
+            "sidebar labels match page titles and retain accessible descriptions");
     require(history.isValid() && history.data(Qt::DecorationRole).isValid() &&
                 history.data(adqt::widgets::AdNavigationMenu::StableIdRole).toString() ==
                     QStringLiteral("/history") &&
@@ -100,20 +110,20 @@ void navigationUsesAntDesignDefaultsAndCollapseTriggerStyle() {
                 menu->isExpanded(settings) &&
                 !storageAndPrivacy.data(Qt::DecorationRole).isValid() &&
                 storageAndPrivacy.data(adqt::widgets::AdNavigationMenu::StableIdRole).toString() ==
-                    QStringLiteral("/settings/storageAndPrivacy"),
+                    QStringLiteral("/settings/files-history"),
             "top-level items should keep icons while expanded submenu items omit them");
-    sidebar.setCurrentRoute(QStringLiteral("/settings/storageAndPrivacy"));
-    require(sidebar.currentRoute() == QStringLiteral("/settings/storageAndPrivacy"),
+    sidebar.setCurrentRoute(QStringLiteral("/settings/files-history"));
+    require(sidebar.currentRoute() == QStringLiteral("/settings/files-history"),
             "storage and privacy route should be selectable");
 
     require(!findByStableId(menu->model(), QStringLiteral("/tools/translation")).isValid(),
             "optional translation navigation defaults hidden");
-    sidebar.setCurrentRoute(QStringLiteral("/settings/storageAndPrivacy"));
+    sidebar.setCurrentRoute(QStringLiteral("/settings/files-history"));
     menu->setExpanded(findByStableId(menu->model(), QStringLiteral("nav.settings")), false);
     require(snow_shot::storage::ExtendedFeaturesSettings().setTranslationPageEnabled(true),
             "enable optional page");
     require(findByStableId(menu->model(), QStringLiteral("/tools/translation")).isValid() &&
-                sidebar.currentRoute() == QStringLiteral("/settings/storageAndPrivacy") &&
+                sidebar.currentRoute() == QStringLiteral("/settings/files-history") &&
                 !menu->isExpanded(findByStableId(menu->model(), QStringLiteral("nav.settings"))),
             "live enable preserves unrelated selection and collapsed settings group");
     require(snow_shot::storage::ExtendedFeaturesSettings().setTranslationPageEnabled(false),
@@ -124,7 +134,7 @@ void navigationUsesAntDesignDefaultsAndCollapseTriggerStyle() {
     require(!menuTokens.metrics.itemHeight.has_value() &&
                 !menuTokens.metrics.itemPaddingInline.has_value() &&
                 !menuTokens.metrics.indentation.has_value() &&
-                menuTokens.metrics.rootPaddingBlockStart == FIRST_TOP_LEVEL_MENU_TOP_SPACING &&
+                menuTokens.metrics.rootPaddingBlockStart == 0 &&
                 !menuTokens.colors.shared.itemBackground.has_value() &&
                 !menuTokens.colors.shared.itemSelectedBackground.has_value(),
             "sidebar should only override the root content top padding token");
@@ -191,9 +201,8 @@ void sidebarBaseLayersUseTopLevelMenuBackground() {
     const QRect firstItemRect = inlineView->visualRect(firstItemIndex);
     require(firstItemIndex.isValid() && firstItemRect.isValid(),
             "global hotkeys should be visible");
-    require(inlineView->viewport()->mapTo(menu, firstItemRect.topLeft()).y() ==
-                FIRST_TOP_LEVEL_MENU_TOP_SPACING,
-            "the first top-level item should begin after the configured top spacing");
+    require(inlineView->viewport()->mapTo(menu, firstItemRect.topLeft()).y() == 0,
+            "menu items should start immediately because the fixed search container owns the gap");
 
     auto* trigger = sidebar.findChild<QFrame*>(QStringLiteral("sidebarCollapseTrigger"));
     require(trigger != nullptr, "sidebar should expose a collapse trigger background");

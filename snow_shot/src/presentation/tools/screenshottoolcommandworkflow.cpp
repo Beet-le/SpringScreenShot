@@ -54,6 +54,10 @@ void ScreenshotToolCommandWorkflow::setLineTool() {
     setCanvasTool(ScreenshotActiveTool::Line, SnowCanvasTool::Line);
 }
 
+void ScreenshotToolCommandWorkflow::setDistanceTool() {
+    setCanvasTool(ScreenshotActiveTool::Distance, SnowCanvasTool::Distance);
+}
+
 void ScreenshotToolCommandWorkflow::setFreeDrawTool() {
     setCanvasTool(ScreenshotActiveTool::FreeDraw, SnowCanvasTool::FreeDraw);
 }
@@ -68,6 +72,14 @@ void ScreenshotToolCommandWorkflow::setPenHighlightTool() {
 
 void ScreenshotToolCommandWorkflow::setEraserTool() {
     setCanvasTool(ScreenshotActiveTool::Eraser, SnowCanvasTool::Eraser);
+}
+
+void ScreenshotToolCommandWorkflow::setRectangleEraserTool() {
+    setCanvasTool(ScreenshotActiveTool::RectangleEraser, SnowCanvasTool::RectangleEraser);
+}
+
+void ScreenshotToolCommandWorkflow::setBrushEraserTool() {
+    setCanvasTool(ScreenshotActiveTool::BrushEraser, SnowCanvasTool::BrushEraser);
 }
 
 void ScreenshotToolCommandWorkflow::setFilterTool() {
@@ -146,8 +158,8 @@ void ScreenshotToolCommandWorkflow::setTextStyleFromToolbar(const SnowCanvasText
 }
 
 void ScreenshotToolCommandWorkflow::setSerialNumberStyleFromToolbar(
-    const SnowCanvasSerialNumberStyle& style) {
-    m_context.actions.setSerialNumberStyle(style);
+    const SnowCanvasSerialNumberStyle& style, std::optional<quint32> properties) {
+    m_context.actions.setSerialNumberStyle(style, properties);
 }
 
 bool ScreenshotToolCommandWorkflow::stepStrokeWidth(int delta) {

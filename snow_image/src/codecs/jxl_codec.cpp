@@ -1,5 +1,7 @@
 #include "codecs/jxl_codec.h"
 
+#include <snow/memory/pixel_array.h>
+
 #include "snow/image/processing.h"
 
 #include <jxl/decode.h>
@@ -623,7 +625,7 @@ struct NormalizedFrame final {
     JxlPixelFormat format{};
     PixelFormat snow_format;
     std::span<const std::byte> pixels;
-    std::vector<std::byte> storage;
+    snow::memory::PixelArray<std::byte> storage;
 };
 
 Result<NormalizedFrame> normalize_frame(const ImageView& view) {
@@ -649,6 +651,9 @@ Result<NormalizedFrame> normalize_frame(const ImageView& view) {
     } else if (view.format.sample_type == SampleType::unsigned_integer &&
                view.format.bits_per_channel == 8) {
         normalized.format.data_type = JXL_TYPE_UINT8;
+        // Single-byte samples have no byte order. Keep every packed layout
+        // consistent with the direct RGB8 path when comparing animation frames.
+        normalized.format.endianness = JXL_NATIVE_ENDIAN;
         normalized.snow_format = kRgba8;
     } else {
         return jxl_error(
@@ -724,6 +729,27 @@ Result<NormalizedFrame> normalize_frame(const ImageView& view) {
 }
 
 Result<NormalizedFrame> normalize_frame_without_alpha(const ImageView& view) {
+    if (view.format.sample_type == SampleType::unsigned_integer &&
+        view.format.bits_per_channel == 8 && view.format.channels == ChannelLayout::rgb) {
+        Result<void> valid = view.validate();
+        if (!valid)
+            return valid.error();
+        NormalizedFrame normalized;
+        normalized.format = {3, JXL_TYPE_UINT8, JXL_NATIVE_ENDIAN, 0};
+        normalized.snow_format = kRgb8;
+        const std::size_t row_bytes = static_cast<std::size_t>(view.width) * 3U;
+        if (view.row_stride == row_bytes) {
+            normalized.pixels = view.pixels.first(row_bytes * view.height);
+        } else {
+            normalized.storage.resize(row_bytes * view.height);
+            for (std::uint32_t y = 0; y < view.height; ++y)
+                std::memcpy(normalized.storage.data() + static_cast<std::size_t>(y) * row_bytes,
+                            view.pixels.data() + static_cast<std::size_t>(y) * view.row_stride,
+                            row_bytes);
+            normalized.pixels = normalized.storage;
+        }
+        return normalized;
+    }
     Result<NormalizedFrame> source = normalize_frame(view);
     if (!source)
         return source.error();
@@ -733,7 +759,7 @@ Result<NormalizedFrame> normalize_frame_without_alpha(const ImageView& view) {
                                                                                      : 2U;
     const std::size_t pixel_count = static_cast<std::size_t>(view.width) * view.height;
     try {
-        std::vector<std::byte> rgb(pixel_count * 3U * sample_bytes);
+        snow::memory::PixelArray<std::byte> rgb(pixel_count * 3U * sample_bytes);
         for (std::size_t pixel = 0; pixel < pixel_count; ++pixel) {
             std::memcpy(rgb.data() + pixel * 3U * sample_bytes,
                         normalized.pixels.data() + pixel * 4U * sample_bytes, 3U * sample_bytes);
@@ -1119,30 +1145,42 @@ Result<EncodedArtifactReceipt> JxlCodec::encode_raster_to_sink(const RasterSourc
                          "JPEG XL raster input size overflows addressable memory.");
     }
     try {
-        auto pixels = std::make_shared<std::vector<std::byte>>(row_bytes * source_frame.height);
+        const bool opaque = options.verified_alpha_content == AlphaContent::opaque;
+        const PixelFormat input_format = opaque ? kRgb8 : kRgba8;
+        Result<MutableImage> allocated =
+            MutableImage::allocate(source_frame.width, source_frame.height, input_format);
+        if (!allocated)
+            return allocated.error();
+        MutableImage pixels = std::move(allocated).value();
         constexpr std::uint32_t kRowsPerRead = 64;
+        snow::memory::PixelArray<std::byte> rgba_rows;
+        if (opaque)
+            rgba_rows.resize(row_bytes * std::min(kRowsPerRead, source_frame.height));
         for (std::uint32_t first = 0; first < source_frame.height; first += kRowsPerRead) {
             if (stop.stop_requested())
                 return cancelled_status();
             const std::uint32_t count = std::min(kRowsPerRead, source_frame.height - first);
-            const std::size_t offset = static_cast<std::size_t>(first) * row_bytes;
-            Result<void> read =
-                source.read_rows(0, 0, first, count, row_bytes,
-                                 std::span<std::byte>(*pixels).subspan(
-                                     offset, static_cast<std::size_t>(count) * row_bytes),
-                                 stop);
+            const std::size_t offset = static_cast<std::size_t>(first) * pixels.row_stride();
+            Result<void> read = source.read_rows(
+                0, 0, first, count, row_bytes,
+                opaque
+                    ? std::span(rgba_rows).first(static_cast<std::size_t>(count) * row_bytes)
+                    : pixels.pixels().subspan(offset, static_cast<std::size_t>(count) * row_bytes),
+                stop);
             if (!read)
                 return read.error();
+            if (opaque) {
+                for (std::uint32_t row = 0; row < count; ++row) {
+                    const std::byte* input =
+                        rgba_rows.data() + static_cast<std::size_t>(row) * row_bytes;
+                    std::byte* destination = pixels.pixels().data() + offset +
+                                             static_cast<std::size_t>(row) * pixels.row_stride();
+                    for (std::uint32_t x = 0; x < source_frame.width; ++x)
+                        std::memcpy(destination + static_cast<std::size_t>(x) * 3U,
+                                    input + static_cast<std::size_t>(x) * 4U, 3U);
+                }
+            }
         }
-        Result<SharedPixelBuffer> buffer = SharedPixelBuffer::adopt(
-            std::static_pointer_cast<const void>(pixels), std::span<const std::byte>(*pixels));
-        if (!buffer)
-            return buffer.error();
-        Result<Image> image = Image::adopt(source_frame.width, source_frame.height, kRgba8,
-                                           row_bytes, std::move(buffer).value());
-        if (!image)
-            return image.error();
-
         Document document;
         document.format = descriptor.format;
         document.canvas_width = descriptor.canvas_width;
@@ -1151,7 +1189,7 @@ Result<EncodedArtifactReceipt> JxlCodec::encode_raster_to_sink(const RasterSourc
         document.metadata = descriptor.metadata;
         document.color = descriptor.color;
         Frame frame;
-        frame.image = std::move(image).value();
+        frame.image = std::move(pixels).freeze();
         frame.x = source_frame.x;
         frame.y = source_frame.y;
         frame.duration = source_frame.duration;

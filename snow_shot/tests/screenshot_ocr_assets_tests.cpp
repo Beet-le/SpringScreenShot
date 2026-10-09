@@ -31,8 +31,28 @@
 #include <mz_zip_rw.h>
 
 namespace {
+#if defined(Q_OS_WIN) && defined(Q_PROCESSOR_ARM_64)
+const QString kWindowsPlatform = QStringLiteral("windows-arm64");
+#else
+const QString kWindowsPlatform = QStringLiteral("windows-x64");
+#endif
+const QString kWindowsWorkerName =
+    QStringLiteral("snow-ocr-process-1.0.10-%1.exe").arg(kWindowsPlatform);
+const QString kWindowsArchiveName =
+    QStringLiteral("snow-ocr-runtime-1.0.10-%1.zip").arg(kWindowsPlatform);
 #ifdef Q_OS_MACOS
 const QString kWorkerName = QStringLiteral("snow-ocr-process");
+#if defined(Q_PROCESSOR_ARM_64)
+const QString kMacPlatform = QStringLiteral("macos-arm64");
+const QString kOtherMacPlatform = QStringLiteral("macos-x64");
+const QByteArray kMacHeader = QByteArray::fromHex("cffaedfe0c000001") + QByteArray(24, '\0');
+const QByteArray kOtherMacHeader = QByteArray::fromHex("cffaedfe07000001") + QByteArray(24, '\0');
+#else
+const QString kMacPlatform = QStringLiteral("macos-x64");
+const QString kOtherMacPlatform = QStringLiteral("macos-arm64");
+const QByteArray kMacHeader = QByteArray::fromHex("cffaedfe07000001") + QByteArray(24, '\0');
+const QByteArray kOtherMacHeader = QByteArray::fromHex("cffaedfe0c000001") + QByteArray(24, '\0');
+#endif
 #endif
 void require(bool condition, const char* message) {
     if (!condition) {
@@ -97,13 +117,11 @@ void writeAssetManifest(const QString& root, bool completePayload) {
     const QByteArray recognizer("recognizer");
     const QByteArray dictionary("dictionary");
     const QString runtimeDirectory =
-        QDir(root).filePath(QStringLiteral("runtimes/1.0.8/windows-x64"));
+        QDir(root).filePath(QStringLiteral("runtimes/1.0.10/%1").arg(kWindowsPlatform));
     const QString modelDirectory =
         QDir(root).filePath(QStringLiteral("models/ppocrv6-small-463ea9f"));
     if (completePayload) {
-        writeFixture(QDir(runtimeDirectory)
-                         .filePath(QStringLiteral("snow-ocr-process-1.0.8-windows-x64.exe")),
-                     process);
+        writeFixture(QDir(runtimeDirectory).filePath(kWindowsWorkerName), process);
         writeFixture(QDir(runtimeDirectory).filePath(QStringLiteral("DirectML.dll")), directMl);
         writeFixture(QDir(runtimeDirectory).filePath(QStringLiteral("runtime-manifest.json")),
                      runtimeManifest);
@@ -113,13 +131,12 @@ void writeAssetManifest(const QString& root, bool completePayload) {
                      recognizer);
         writeFixture(QDir(modelDirectory).filePath(QStringLiteral("ppocrv6_dict.txt")), dictionary);
         writeFixture(QDir(runtimeDirectory).filePath(QStringLiteral(".complete.json")),
-                     R"({"schema":1,"component":"1.0.8"})");
+                     R"({"schema":1,"component":"1.0.10"})");
         writeFixture(QDir(modelDirectory).filePath(QStringLiteral(".complete.json")),
                      R"({"schema":1,"component":"ppocrv6-small-463ea9f"})");
     }
     const QJsonArray runtimeFiles{
-        assetFile(QStringLiteral("snow-ocr-process-1.0.8-windows-x64.exe"), process),
-        assetFile(QStringLiteral("DirectML.dll"), directMl),
+        assetFile(kWindowsWorkerName, process), assetFile(QStringLiteral("DirectML.dll"), directMl),
         assetFile(QStringLiteral("runtime-manifest.json"), runtimeManifest)};
     const auto model = [](const QString& type, const QString& id, const QString& detectorName,
                           const QByteArray& detectorContents, const QString& recognizerName,
@@ -147,10 +164,10 @@ void writeAssetManifest(const QString& root, bool completePayload) {
         {QStringLiteral("schema"), 2},
         {QStringLiteral("default_model"), QStringLiteral("small")},
         {QStringLiteral("runtime"),
-         QJsonObject{{QStringLiteral("version"), QStringLiteral("1.0.8")},
-                     {QStringLiteral("platform"), QStringLiteral("windows-x64")},
+         QJsonObject{{QStringLiteral("version"), QStringLiteral("1.0.10")},
+                     {QStringLiteral("platform"), kWindowsPlatform},
                      {QStringLiteral("archive"),
-                      assetFile(QStringLiteral("snow-ocr-runtime-1.0.8-windows-x64.zip"), archive,
+                      assetFile(kWindowsArchiveName, archive,
                                 QStringLiteral("https://example.invalid/runtime"))},
                      {QStringLiteral("files"), runtimeFiles}}},
         {QStringLiteral("models"),
@@ -185,9 +202,8 @@ void writeAssetManifest(const QString& root, bool completePayload) {
                    QStringLiteral("ppocr_keys_v1.txt"), dictionary),
          }}};
 #ifdef Q_OS_MACOS
-    const QByteArray armHeader = QByteArray::fromHex("cffaedfe0c000001") + QByteArray(24, '\0');
-    const QByteArray macProcess = armHeader + process;
-    const QByteArray macLibrary = armHeader + directMl;
+    const QByteArray macProcess = kMacHeader + process;
+    const QByteArray macLibrary = kMacHeader + directMl;
     writeFixture(QDir(root).filePath(kWorkerName), macProcess);
     require(QFile::setPermissions(QDir(root).filePath(kWorkerName), QFileDevice::ReadOwner |
                                                                         QFileDevice::WriteOwner |
@@ -197,10 +213,10 @@ void writeAssetManifest(const QString& root, bool completePayload) {
     manifest.insert(QStringLiteral("schema"), 3);
     manifest.insert(
         QStringLiteral("runtime"),
-        QJsonObject{{QStringLiteral("version"), QStringLiteral("1.0.8")},
-                    {QStringLiteral("platform"), QStringLiteral("macos-arm64")},
+        QJsonObject{{QStringLiteral("version"), QStringLiteral("1.0.10")},
+                    {QStringLiteral("platform"), kMacPlatform},
                     {QStringLiteral("delivery"), QStringLiteral("bundled")},
-                    {QStringLiteral("protocol"), 4},
+                    {QStringLiteral("protocol"), 5},
                     {QStringLiteral("executable"), kWorkerName},
                     {QStringLiteral("files"),
                      QJsonArray{assetFile(kWorkerName, macProcess),
@@ -249,7 +265,7 @@ bool writeDownloadedModelFixture(const QString& destination, QString* error) {
 // path encoding choices made by the production archive reader.
 [[maybe_unused]] QByteArray buildRuntimeArchiveBytes() {
     const QList<QPair<QString, QByteArray>> entries{
-        {QStringLiteral("snow-ocr-process-1.0.8-windows-x64.exe"), QByteArray("process")},
+        {kWindowsWorkerName, QByteArray("process")},
         {QStringLiteral("DirectML.dll"), QByteArray("directml")},
         {QStringLiteral("runtime-manifest.json"), QByteArray("runtime")},
     };
@@ -302,6 +318,10 @@ void validOfflineAssetsAreSelectedWithoutNetwork() {
     ScreenshotOcrAssets assets(options);
     QObject::connect(&assets, &ScreenshotOcrAssets::ready, &assets,
                      [&](const ScreenshotOcrResolvedAssets& result) {
+#ifdef Q_OS_WIN
+                         require(QFileInfo(result.processPath).fileName() == kWindowsWorkerName,
+                                 "resolved OCR worker must match the compiled Windows platform");
+#endif
                          ready = result.offline && result.valid();
                      });
     QObject::connect(&assets, &ScreenshotOcrAssets::failed, &assets,
@@ -536,6 +556,21 @@ void invalidSchemaTwoManifestsAreRejectedBeforeDownloading() {
     };
 
     rejectMutation([](QJsonObject* manifest) { manifest->insert(QStringLiteral("schema"), 1); });
+    rejectMutation([](QJsonObject* manifest) {
+        QJsonObject runtime = manifest->value(QStringLiteral("runtime")).toObject();
+        runtime.insert(QStringLiteral("version"), QStringLiteral("1.0.9"));
+        manifest->insert(QStringLiteral("runtime"), runtime);
+    });
+#ifdef Q_OS_WIN
+    rejectMutation([](QJsonObject* manifest) {
+        QJsonObject runtime = manifest->value(QStringLiteral("runtime")).toObject();
+        runtime.insert(QStringLiteral("platform"),
+                       kWindowsPlatform == QStringLiteral("windows-arm64")
+                           ? QStringLiteral("windows-x64")
+                           : QStringLiteral("windows-arm64"));
+        manifest->insert(QStringLiteral("runtime"), runtime);
+    });
+#endif
     rejectMutation([](QJsonObject* manifest) {
         manifest->insert(QStringLiteral("default_model"), QStringLiteral("medium"));
     });
@@ -828,6 +863,92 @@ void runtimeArchivesExtractThroughUnicodeCachePaths() {
 #endif
 }
 
+void macosRuntimeOnlyBundleAcquiresAndReusesDefaultModel() {
+#ifdef Q_OS_MACOS
+    QTemporaryDir bundle;
+    QTemporaryDir cache;
+    require(bundle.isValid() && cache.isValid(),
+            "temporary runtime-only OCR asset roots should be available");
+    writeAssetManifest(bundle.path(), false);
+    require(!QDir(bundle.path()).exists(QStringLiteral("models")),
+            "the runtime-only bundle fixture must contain no OCR models");
+    std::atomic<int> downloads = 0;
+    QSet<QString> downloadedFiles;
+    ScreenshotOcrAssets::Options options;
+    options.offlineRoot = bundle.path();
+    options.bundledRuntimeRoot = bundle.path();
+    options.cacheRoot = cache.path();
+    options.downloadOverride = [&](const QString& url, const QString& destination, QString* error) {
+        ++downloads;
+        const QString name = QFileInfo(destination).fileName();
+        require(url == QStringLiteral("https://example.invalid/") + name,
+                "runtime-only acquisition must use the descriptor's model file URLs");
+        downloadedFiles.insert(name);
+        return writeDownloadedModelFixture(destination, error);
+    };
+    ScreenshotOcrAssets assets(options);
+    ScreenshotOcrResolvedAssets resolved;
+    ScreenshotOcrAssetPhase phase = ScreenshotOcrAssetPhase::Unchecked;
+    int readyCount = 0;
+    bool failed = false;
+    QObject::connect(&assets, &ScreenshotOcrAssets::ready, &assets,
+                     [&](const ScreenshotOcrResolvedAssets& result) {
+                         resolved = result;
+                         ++readyCount;
+                     });
+    QObject::connect(&assets, &ScreenshotOcrAssets::statusChanged, &assets,
+                     [&](const ScreenshotOcrAssetStatus& status) { phase = status.phase; });
+    QObject::connect(&assets, &ScreenshotOcrAssets::failed, &assets,
+                     [&](const QString&) { failed = true; });
+    assets.prepare();
+    require(waitUntil([&] { return readyCount == 1 || failed; }, 5'000) && !failed,
+            "a valid bundled runtime must acquire missing Small model files");
+    require(downloads == 3 &&
+                downloadedFiles == QSet<QString>{QStringLiteral("PP-OCRv6_det_small.onnx"),
+                                                 QStringLiteral("PP-OCRv6_rec_small.onnx"),
+                                                 QStringLiteral("ppocrv6_dict.txt")},
+            "runtime-only acquisition must download exactly the three Small model files");
+    const QString modelDirectory =
+        QDir(cache.path()).filePath(QStringLiteral("models/ppocrv6-small-463ea9f"));
+    const QString processPath = QDir(bundle.path()).filePath(kWorkerName);
+    require(resolved.valid() && !resolved.offline &&
+                resolved.modelType == ScreenshotOcrModelType::Small &&
+                resolved.modelId == QStringLiteral("ppocrv6-small-463ea9f") &&
+                resolved.runtimeDirectory == bundle.path() && resolved.processPath == processPath &&
+                resolved.detectorModelPath ==
+                    QDir(modelDirectory).filePath(QStringLiteral("PP-OCRv6_det_small.onnx")) &&
+                resolved.recognizerModelPath ==
+                    QDir(modelDirectory).filePath(QStringLiteral("PP-OCRv6_rec_small.onnx")) &&
+                resolved.dictionaryPath ==
+                    QDir(modelDirectory).filePath(QStringLiteral("ppocrv6_dict.txt")) &&
+                phase == ScreenshotOcrAssetPhase::ReadyCached,
+            "runtime-only OCR must use bundled code with a completed cached Small model");
+    QFile completion(QDir(modelDirectory).filePath(QStringLiteral(".complete.json")));
+    require(completion.open(QIODevice::ReadOnly),
+            "the acquired model must have a completion marker");
+    const auto marker = QJsonDocument::fromJson(completion.readAll()).object();
+    require(marker.value(QStringLiteral("schema")).toInt() == 1 &&
+                marker.value(QStringLiteral("component")).toString() == resolved.modelId,
+            "the cached model completion marker must identify the Small model");
+    for (const auto& name : downloadedFiles) {
+        QFile file(QDir(modelDirectory).filePath(name));
+        require(file.open(QIODevice::ReadOnly) && file.readAll() == modelFixtureContents(name),
+                "every downloaded model role must be promoted to its completed cache");
+    }
+    require(!QDir(bundle.path()).exists(QStringLiteral("models")) &&
+                !QDir(cache.path()).exists(QStringLiteral("runtimes")),
+            "model acquisition must not write to the bundle or download another runtime");
+    downloads = 0;
+    assets.prepare();
+    require(
+        waitUntil([&] { return readyCount == 2 || failed; }, 5'000) && !failed && downloads == 0 &&
+            resolved.processPath == processPath &&
+            resolved.detectorModelPath.startsWith(modelDirectory + QDir::separator()) &&
+            phase == ScreenshotOcrAssetPhase::ReadyCached,
+        "a second prepare must reuse the cached Small model and bundled runtime without downloads");
+#endif
+}
+
 void macosBundledRuntimeTests() {
 #ifdef Q_OS_MACOS
     QTemporaryDir root(QDir::tempPath() + QStringLiteral("/snow OCR 空间-XXXXXX"));
@@ -877,6 +998,11 @@ void macosBundledRuntimeTests() {
         runtime.insert(QStringLiteral("protocol"), 3);
         manifest.insert(QStringLiteral("runtime"), runtime);
     });
+    rejects([&](QJsonObject& manifest) {
+        auto runtime = manifest.value(QStringLiteral("runtime")).toObject();
+        runtime.insert(QStringLiteral("platform"), kOtherMacPlatform);
+        manifest.insert(QStringLiteral("runtime"), runtime);
+    });
     rejects([&](QJsonObject&) { QFile::remove(QDir(root.path()).filePath(kWorkerName)); });
     rejects([&](QJsonObject&) {
         QFile::setPermissions(QDir(root.path()).filePath(kWorkerName), QFileDevice::ReadOwner);
@@ -884,15 +1010,20 @@ void macosBundledRuntimeTests() {
     rejects([&](QJsonObject&) {
         writeFixture(QDir(root.path()).filePath(QStringLiteral("libonnxruntime.dylib")), "corrupt");
     });
-    rejects([&](QJsonObject& manifest) {
-        const QByteArray intel = QByteArray::fromHex("cffaedfe07000001") + QByteArray(32, '\0');
-        writeFixture(QDir(root.path()).filePath(QStringLiteral("libonnxruntime.dylib")), intel);
-        auto runtime = manifest.value(QStringLiteral("runtime")).toObject();
-        auto files = runtime.value(QStringLiteral("files")).toArray();
-        files.replace(1, assetFile(QStringLiteral("libonnxruntime.dylib"), intel));
-        runtime.insert(QStringLiteral("files"), files);
-        manifest.insert(QStringLiteral("runtime"), runtime);
-    });
+    for (const auto& name : {kWorkerName, QStringLiteral("libonnxruntime.dylib")}) {
+        rejects([&](QJsonObject& manifest) {
+            const QByteArray otherBinary = kOtherMacHeader + QByteArray("other-architecture");
+            writeFixture(QDir(root.path()).filePath(name), otherBinary);
+            auto runtime = manifest.value(QStringLiteral("runtime")).toObject();
+            auto files = runtime.value(QStringLiteral("files")).toArray();
+            for (int index = 0; index < files.size(); ++index) {
+                if (files.at(index).toObject().value(QStringLiteral("name")).toString() == name)
+                    files.replace(index, assetFile(name, otherBinary));
+            }
+            runtime.insert(QStringLiteral("files"), files);
+            manifest.insert(QStringLiteral("runtime"), runtime);
+        });
+    }
 
     // A read-only bundle must recognize offline without writing state alongside code.
     writeAssetManifest(root.path(), true);
@@ -981,6 +1112,7 @@ int main(int argc, char** argv) {
     assetDestructionInterruptsTheCacheLockWait();
     concurrentAcquisitionAndInterruptedDownload();
     runtimeArchivesExtractThroughUnicodeCachePaths();
+    macosRuntimeOnlyBundleAcquiresAndReusesDefaultModel();
     macosBundledRuntimeTests();
     return 0;
 }

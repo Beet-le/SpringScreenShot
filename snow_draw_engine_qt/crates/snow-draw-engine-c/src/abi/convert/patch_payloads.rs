@@ -155,6 +155,12 @@ pub(crate) fn snow_spotlight_cutout_from_rust(
         width: value.width,
         height: value.height,
         rotation: value.rotation,
+        shape: match value.shape {
+            snow_draw_engine::DisplayRectangleShape::Rectangle => SnowDisplayRectShape::Rectangle,
+            snow_draw_engine::DisplayRectangleShape::Ellipse => SnowDisplayRectShape::Ellipse,
+            snow_draw_engine::DisplayRectangleShape::Diamond => SnowDisplayRectShape::Diamond,
+        } as u8,
+        reserved: [0; 7],
     }
 }
 
@@ -232,6 +238,7 @@ pub(crate) fn snow_scene_display_item_from_rust(
                 snow_draw_engine::DisplayFilterType::Inversion => 3,
                 snow_draw_engine::DisplayFilterType::Emboss => 4,
                 snow_draw_engine::DisplayFilterType::Brightness => 6,
+                snow_draw_engine::DisplayFilterType::RestoreBackground => 7,
                 snow_draw_engine::DisplayFilterType::SmartErase => 5,
             };
             out.filter.strength = item.filter.strength;
@@ -321,6 +328,8 @@ pub(crate) fn snow_scene_display_item_from_rust(
             out.font_family_utf8_len = converted.font_family_utf8.len() as u32;
         }
         SceneDisplayItem::SerialNumber(item) => {
+            converted.text_utf8 = utf8_bytes(Some(&item.label));
+            out.text_utf8_len = converted.text_utf8.len() as u32;
             out.kind = SnowSceneDisplayItemKind::SerialNumber;
             out.element_id = SnowElementId {
                 index: item.id.index,
@@ -559,6 +568,7 @@ mod tests {
                     start: 2,
                     delete_count: 1,
                     insert_items: vec![DisplaySpotlightCutout {
+                        shape: snow_draw_engine::DisplayRectangleShape::Diamond,
                         center_x: 10.0,
                         center_y: 20.0,
                         width: 30.0,
@@ -600,6 +610,11 @@ mod tests {
         assert_eq!(payload.spotlight_cutouts.len(), 1);
         assert_eq!(payload.spotlight_cutouts[0].center_x, 10.0);
         assert_eq!(payload.spotlight_cutouts[0].rotation, 0.5);
+        assert_eq!(
+            payload.spotlight_cutouts[0].shape,
+            SnowDisplayRectShape::Diamond as u8
+        );
+        assert_eq!(payload.spotlight_cutouts[0].reserved, [0; 7]);
     }
 
     #[test]
@@ -897,5 +912,21 @@ mod tests {
             false,
         );
         assert_eq!(item.view.has_bound_text_element, 0);
+    }
+    #[test]
+    fn serial_number_display_payload_owns_formatted_utf8() {
+        let label = "一百零一";
+        let source = SceneDisplayItem::SerialNumber(snow_draw_engine::SerialNumberDisplayItem {
+            label: label.to_owned(),
+            number: 101,
+            ..Default::default()
+        });
+        let item = snow_scene_display_item_from_rust(&source, false, false);
+        drop(source);
+        assert_eq!(item.view.text_utf8_len as usize, label.len());
+        let bytes =
+            unsafe { std::slice::from_raw_parts(item.view.text_utf8.cast::<u8>(), label.len()) };
+        assert_eq!(bytes, label.as_bytes());
+        assert_eq!(item.view.serial_number, 101);
     }
 }

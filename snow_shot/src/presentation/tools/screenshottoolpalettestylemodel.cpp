@@ -37,6 +37,11 @@ void ScreenshotToolPaletteStyleState::reset(const SnowCanvasStyleDefaults& defau
         defaults.arrow.arrowShaftType, defaults.arrow.arrowRatio,
     };
     m_arrowStyle = m_creationArrowStyle;
+    creationDistanceStyle = defaults.distance;
+    distanceStyle = defaults.distance;
+    distanceStyleMixed = 0;
+    distanceMeasuredLength = 0.0;
+    showingSelectedDistance = false;
     m_creationTextStyle.setTextStyle(defaults.text);
     m_textStyle.setTextStyle(defaults.text);
     m_creationSerialNumberStyle = defaults.serialNumber;
@@ -45,10 +50,16 @@ void ScreenshotToolPaletteStyleState::reset(const SnowCanvasStyleDefaults& defau
     rectangleFilterStyle = creationRectangleFilterStyle;
     creationPenFilterStyle = defaults.penFilter;
     penFilterStyle = creationPenFilterStyle;
+    creationBrushEraserStyle = defaults.brushEraser;
+    brushEraserStyle = creationBrushEraserStyle;
     creationWatermarkConfig = defaults.watermark;
     creationSpotlightConfig = defaults.spotlight;
     m_watermarkConfig = defaults.watermark;
     spotlightConfig = defaults.spotlight;
+    creationSpotlightShape = defaults.spotlightShape;
+    spotlightShape = defaults.spotlightShape;
+    showingSelectedSpotlight = false;
+    spotlightShapeMixed = 0;
     m_showingSelectedStyle = false;
     m_showingSelectedTextStyle = false;
     m_selectedStyleMixed = 0;
@@ -118,8 +129,6 @@ SnowCanvasTextStyle defaultTextStyle() {
 ScreenshotToolPaletteRectangleStyleModel::ScreenshotToolPaletteRectangleStyleModel(
     double minimumStrokeWidth)
     : m_strokeWidthValues{style_presets::shapeStrokeWidths()},
-      m_strokeColorValues{style_presets::strokeColors()},
-      m_fillColorValues{style_presets::shapeFillColors()},
       m_minimumStrokeWidth(std::clamp(minimumStrokeWidth, 0.0, kMaxRectangleStrokeWidth)) {
     reset();
 }
@@ -206,12 +215,12 @@ const QVector<double>& ScreenshotToolPaletteRectangleStyleModel::strokeWidthValu
     return m_strokeWidthValues;
 }
 
-const QVector<QColor>& ScreenshotToolPaletteRectangleStyleModel::strokeColorValues() const {
-    return m_strokeColorValues;
+QVector<QColor> ScreenshotToolPaletteRectangleStyleModel::strokeColorValues() const {
+    return style_presets::strokeColors();
 }
 
-const QVector<QColor>& ScreenshotToolPaletteRectangleStyleModel::fillColorValues() const {
-    return m_fillColorValues;
+QVector<QColor> ScreenshotToolPaletteRectangleStyleModel::fillColorValues() const {
+    return style_presets::shapeFillColors();
 }
 
 bool ScreenshotToolPaletteRectangleStyleModel::stepStrokeWidth(int direction) {
@@ -337,9 +346,7 @@ double ScreenshotToolPaletteRectangleStyleModel::clampedCornerRadius(double corn
 
 ScreenshotToolPaletteTextStyleModel::ScreenshotToolPaletteTextStyleModel()
     : m_fontSizeValues{style_presets::fontSizes()},
-      m_strokeWidthValues{style_presets::strokePresetWidths()},
-      m_colorValues{style_presets::textColors()},
-      m_fillColorValues{style_presets::textFillColors()} {
+      m_strokeWidthValues{style_presets::strokePresetWidths()} {
     reset();
 }
 
@@ -379,12 +386,12 @@ const QVector<double>& ScreenshotToolPaletteTextStyleModel::strokeWidthValues() 
     return m_strokeWidthValues;
 }
 
-const QVector<QColor>& ScreenshotToolPaletteTextStyleModel::colorValues() const {
-    return m_colorValues;
+QVector<QColor> ScreenshotToolPaletteTextStyleModel::colorValues() const {
+    return style_presets::textColors();
 }
 
-const QVector<QColor>& ScreenshotToolPaletteTextStyleModel::fillColorValues() const {
-    return m_fillColorValues;
+QVector<QColor> ScreenshotToolPaletteTextStyleModel::fillColorValues() const {
+    return style_presets::textFillColors();
 }
 
 bool ScreenshotToolPaletteTextStyleModel::setColor(const QColor& color) {

@@ -1,6 +1,6 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
-use snow_shot_updater::contract::verify_release_file;
+use snow_shot_updater::contract::verify_release_file_for_platform;
 use snow_shot_updater::error::{Result, UpdateError};
 use snow_shot_updater::transaction;
 use std::path::PathBuf;
@@ -35,14 +35,36 @@ fn run() -> Result<i32> {
     let operation = args.first().ok_or_else(|| {
         UpdateError::new("missing_updater_operation", "Missing updater operation")
     })?;
+    let offline = matches!(operation.as_str(), "--verify-release" | "--audit-release");
+    if !offline
+        && args
+            .iter()
+            .any(|argument| matches!(argument.as_str(), "--platform" | "--static-only"))
+    {
+        return Err(UpdateError::new(
+            "invalid_updater_argument",
+            "Invalid updater command argument",
+        ));
+    }
+    let platform = if args.iter().any(|argument| argument == "--platform") {
+        option(&args, "--platform")?
+    } else {
+        snow_shot_updater::edition::PLATFORM.to_owned()
+    };
+    let static_only = args.iter().any(|argument| argument == "--static-only");
     match operation.as_str() {
         "--verify-release" => {
-            verify_release_file(&path_option(&args, "--manifest")?)?;
+            verify_release_file_for_platform(&path_option(&args, "--manifest")?, &platform)?;
             Ok(0)
         }
         "--audit-release" => {
-            let release = verify_release_file(&path_option(&args, "--manifest")?)?;
-            transaction::audit_release(&path_option(&args, "--directory")?, &release)?;
+            let release =
+                verify_release_file_for_platform(&path_option(&args, "--manifest")?, &platform)?;
+            transaction::audit_release_with_options(
+                &path_option(&args, "--directory")?,
+                &release,
+                static_only,
+            )?;
             Ok(0)
         }
         "--transaction-state" => {
@@ -66,6 +88,20 @@ fn run() -> Result<i32> {
             transaction::uninstall(&root, !args.iter().any(|argument| argument == "--upgrade"))?;
             Ok(0)
         }
+        "--prepare-installer-upgrade" => {
+            transaction::prepare_installer_upgrade(
+                &path_option(&args, "--target")?,
+                &path_option(&args, "--backup")?,
+            )?;
+            Ok(0)
+        }
+        "--restore-installer-upgrade" => {
+            transaction::restore_installer_upgrade(
+                &path_option(&args, "--target")?,
+                &path_option(&args, "--backup")?,
+            )?;
+            Ok(0)
+        }
         "--migrate-startup" => {
             let root = path_option(&args, "--target")?;
             let previous = path_option(&args, "--previous")?;
@@ -78,7 +114,7 @@ fn run() -> Result<i32> {
             transaction::validate_root(&root)?;
             Ok(
                 if snow_shot_updater::platform::launch_on_interactive_desktop(
-                    &root.join("bin/snow_shot.exe"),
+                    &root.join(snow_shot_updater::edition::APP_PATH),
                 )? {
                     0
                 } else {
@@ -98,7 +134,8 @@ fn run() -> Result<i32> {
                 snow_shot_updater::service::ServiceOptions {
                     root,
                     cache_directory: path_option(&args, "--cache")?,
-                    base_url: option(&args, "--base-url")?,
+                    github_api_url: option(&args, "--github-api-url")?,
+                    gitee_api_url: option(&args, "--gitee-api-url")?,
                     allow_local_http: args.iter().any(|argument| argument == "--allow-local-http"),
                     parent_pid: option(&args, "--parent")?.parse().map_err(|_| {
                         UpdateError::new(

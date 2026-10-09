@@ -7,9 +7,7 @@ usage() {
     echo '       [--dependency-prefix PATH] [--source-dir PATH] [--build-dir PATH] [--force]'
 }
 
-qt_version=6.11.1
-qt_deployment_target=14.0
-arch="$(snow_default_arch)"
+arch=''
 install_prefix=''
 dependency_prefix=''
 source_dir=''
@@ -30,9 +28,10 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 [[ -n "$install_prefix" ]] || snow_die '--install-prefix is required'
-[[ "$arch" == arm64 || "$arch" == x64 ]] || snow_die '--arch needs arm64 or x64'
+[[ -z "$arch" || "$arch" == arm64 || "$arch" == x64 ]] || snow_die '--arch needs arm64 or x64'
 [[ "$parallelism" =~ ^[1-9][0-9]*$ ]] || snow_die '--parallel needs a positive integer'
 snow_require_macos
+[[ -n "$arch" ]] || arch="$(snow_default_arch)"
 
 case "$arch" in
     arm64) cmake_arch=arm64 ;;
@@ -47,6 +46,10 @@ export PATH="$snow_repo_root/.tools/macos-dev/bin:$snow_repo_root/.tools/macos-m
 for tool in cmake ninja curl tar python3 shasum xcrun; do
     command -v "$tool" >/dev/null || snow_die "Missing $tool. Install the prerequisites listed in docs-macos-build.md."
 done
+snow_require_target_tools "$arch"
+snow_load_qt_policy
+qt_version="$snow_qt_version"
+qt_deployment_target="$snow_qt_deployment_target"
 export MACOSX_DEPLOYMENT_TARGET="$qt_deployment_target"
 
 # Qt's source configure requires a discoverable full-Xcode version by default,
@@ -54,6 +57,11 @@ export MACOSX_DEPLOYMENT_TARGET="$qt_deployment_target"
 # this Ninja build. Keep Qt's SDK checks, but skip only its Xcode-version check
 # when xcodebuild reports that the selected developer directory is CLT-only.
 qt_apple_options=()
+if [[ "$snow_requires_rosetta" == 1 ]]; then
+    # Qt supports running target x64 tools through Rosetta. Avoid requiring a
+    # separate host kit, and discard any earlier implicit-cross-build cache.
+    qt_apple_options+=(--fresh -DQT_NO_HANDLE_APPLE_SINGLE_ARCH_CROSS_COMPILING=ON)
+fi
 if ! xcodebuild -version >/dev/null 2>&1; then
     if ! xcrun --show-sdk-path >/dev/null 2>&1; then
         snow_die 'The selected Apple developer tools do not provide a macOS SDK.'
@@ -72,7 +80,7 @@ install_prefix="$(canonical_path "$install_prefix")"
 dependency_prefix="$(canonical_path "$dependency_prefix")"
 work_root="${TMPDIR:-/tmp}"
 [[ -n "$source_dir" ]] || source_dir="$work_root/qt-everywhere-src-$qt_version"
-[[ -n "$build_dir" ]] || build_dir="$work_root/qt-build-$qt_version-macos-$arch-static"
+[[ -n "$build_dir" ]] || build_dir="$work_root/qt-build-$qt_version-macos-$arch-static-no-timezone-locale"
 source_dir="$(canonical_path "$source_dir")"
 build_dir="$(canonical_path "$build_dir")"
 
@@ -98,19 +106,10 @@ dependency_fingerprint="$(
 )"
 qt_config="$install_prefix/lib/cmake/Qt6/Qt6Config.cmake"
 stamp="$install_prefix/share/snow-apps/static-qt-build.json"
+feature_fingerprint="$(python3 "$snow_repo_root/scripts/validate-static-qt.py" --print-feature-fingerprint)"
 if [[ -f "$qt_config" && "$force" == 0 ]]; then
-    if [[ -f "$stamp" ]] &&
-        grep -Eq '"SchemaVersion"[[:space:]]*:[[:space:]]*1' "$stamp" &&
-        grep -Eq '"QtVersion"[[:space:]]*:[[:space:]]*"6\.11\.1"' "$stamp" &&
-        grep -Eq '"Architecture"[[:space:]]*:[[:space:]]*"'"$arch"'"' "$stamp" &&
-        grep -Eq '"Configuration"[[:space:]]*:[[:space:]]*"Release"' "$stamp" &&
-        grep -Eq '"DeploymentTarget"[[:space:]]*:[[:space:]]*"14\.0"' "$stamp" &&
-        grep -Eq '"Dup3"[[:space:]]*:[[:space:]]*false' "$stamp" &&
-        grep -Eq '"Ltcg"[[:space:]]*:[[:space:]]*true' "$stamp" &&
-        grep -Eq '"SystemPng"[[:space:]]*:[[:space:]]*true' "$stamp" &&
-        grep -Eq '"SystemZlib"[[:space:]]*:[[:space:]]*true' "$stamp" &&
-        grep -Fq "\"DependencyFingerprint\": \"$dependency_fingerprint\"" "$stamp" &&
-        [[ -d "$install_prefix/share/snow-apps/qt-licenses" ]]; then
+    if python3 "$snow_repo_root/scripts/validate-static-qt.py" --prefix "$install_prefix" \
+        --arch "$arch" --dependency-fingerprint "$dependency_fingerprint"; then
         printf 'Validated static Qt %s (%s) at %s\n' "$qt_version" "$arch" "$install_prefix"
         exit 0
     fi
@@ -131,10 +130,12 @@ if [[ ! -d "$source_dir" ]]; then
         curl --fail --location --retry 3 --output "$archive.part" "$source_url"
         mv "$archive.part" "$archive"
     fi
+    python3 "$snow_repo_root/scripts/validate-static-qt.py" --source-archive "$archive"
     mkdir -p "$(dirname "$source_dir")"
     tar -xf "$archive" -C "$(dirname "$source_dir")"
     [[ -d "$source_dir" ]] || snow_die "Qt source archive did not produce $source_dir"
 fi
+python3 "$snow_repo_root/scripts/validate-static-qt.py" --source-dir "$source_dir"
 
 mkdir -p "$build_dir"
 (
@@ -142,7 +143,7 @@ mkdir -p "$build_dir"
     "$source_dir/configure" \
         -static -release -ltcg -system-zlib -system-libpng -no-opengl \
         -opensource -confirm-license -prefix "$install_prefix" \
-        -submodules qtbase,qtsvg,qttools \
+        -submodules qtbase,qtsvg,qttools,qttranslations \
         -skip qtactiveqt -skip qtdeclarative -skip qtimageformats \
         -skip qtlanguageserver -skip qtshadertools \
         -nomake tests -nomake examples -- \
@@ -151,6 +152,7 @@ mkdir -p "$build_dir"
         -DCMAKE_PREFIX_PATH="$dependency_prefix" \
         -DZLIB_ROOT="$dependency_prefix" -DPNG_ROOT="$dependency_prefix" \
         -DCMAKE_FIND_PACKAGE_PREFER_CONFIG=ON \
+        -DFEATURE_timezone=ON -DFEATURE_timezone_locale=OFF \
         -DFEATURE_dup3=OFF \
         -DQT_FEATURE_concurrent=OFF -DQT_FEATURE_dbus=OFF \
         -DQT_FEATURE_linguist=ON -DQT_FEATURE_printsupport=OFF \
@@ -168,35 +170,33 @@ for entry in \
     'FEATURE_dup3:BOOL=OFF' 'QT_FEATURE_dup3:INTERNAL=OFF' \
     'FEATURE_ltcg:BOOL=ON' 'QT_FEATURE_ltcg:INTERNAL=ON' \
     'FEATURE_system_png:BOOL=ON' 'QT_FEATURE_system_png:INTERNAL=ON' \
-    'FEATURE_system_zlib:BOOL=ON' 'QT_FEATURE_system_zlib:INTERNAL=ON'; do
+    'FEATURE_system_zlib:BOOL=ON' 'QT_FEATURE_system_zlib:INTERNAL=ON' \
+    'FEATURE_timezone:BOOL=ON' 'QT_FEATURE_timezone:INTERNAL=ON' \
+    'FEATURE_timezone_locale:BOOL=OFF' 'QT_FEATURE_timezone_locale:INTERNAL=OFF'; do
     grep -Fqx "$entry" "$cache" || snow_die "Qt configuration is missing $entry"
 done
 cmake --build "$build_dir" --parallel "$parallelism"
 cmake --install "$build_dir"
 [[ -f "$qt_config" ]] || snow_die "Qt installation did not produce $qt_config"
+python3 "$snow_repo_root/scripts/validate-static-qt.py" --prefix "$install_prefix" --arch "$arch" --features-only
 
 license_root="$install_prefix/share/snow-apps/qt-licenses"
-mkdir -p "$license_root"
-for component in root qtbase qtsvg qttools; do
-    component_source="$source_dir"
-    [[ "$component" == root ]] || component_source="$source_dir/$component"
-    [[ -f "$component_source/REUSE.toml" && -d "$component_source/LICENSES" ]] || snow_die "Qt licensing metadata is incomplete for $component"
-    mkdir -p "$license_root/$component"
-    cp "$component_source/REUSE.toml" "$license_root/$component/"
-    cp -R "$component_source/LICENSES" "$license_root/$component/"
-done
+snow_install_qt_license_metadata "$source_dir" "$license_root"
 mkdir -p "$(dirname "$stamp")"
 python3 - "$stamp" "$qt_version" "$arch" "$qt_deployment_target" \
-    "$dependency_fingerprint" "$source_url" "$parallelism" <<'PY'
+    "$dependency_fingerprint" "$feature_fingerprint" "$source_url" "$parallelism" "$snow_qt_source_sha256" <<'PY'
 import json, pathlib, sys
-path, version, arch, deployment_target, fingerprint, source, parallelism = sys.argv[1:]
+path, version, arch, deployment_target, fingerprint, features, source, parallelism, source_sha256 = sys.argv[1:]
 value = {
-    'SchemaVersion': 1, 'QtVersion': version, 'Architecture': arch,
+    'SchemaVersion': 3, 'QtVersion': version, 'Architecture': arch,
+    'SourceArchiveSha256': source_sha256,
     'Configuration': 'Release', 'DeploymentTarget': deployment_target, 'Dup3': False,
     'DependencyFingerprint': fingerprint,
+    'FeatureFingerprint': features,
     'Ltcg': True, 'SystemPng': True, 'SystemZlib': True,
+    'Timezone': True, 'TimezoneLocale': False,
     'LicenseBundle': 'share/snow-apps/qt-licenses', 'SourceArchive': source,
-    'Submodules': ['qtbase', 'qtsvg', 'qttools'], 'Parallelism': int(parallelism),
+    'Submodules': ['qtbase', 'qtsvg', 'qttools', 'qttranslations'], 'Parallelism': int(parallelism),
 }
 pathlib.Path(path).write_text(json.dumps(value, indent=2) + '\n')
 PY

@@ -33,6 +33,33 @@
         </message>
     </context>
     <context>
+        <name>ScreenshotCloudUploadJob</name>
+        <message>
+            <source>Cloud upload failed (HTTP %1%2).</source>
+            <translation>Cloud upload failed (HTTP %1%2).</translation>
+        </message>
+        <message>
+            <source>Cloud upload failed because of a network error or timeout.</source>
+            <translation>Cloud upload failed because of a network error or timeout.</translation>
+        </message>
+        <message>
+            <source>The cloud upload configuration or image is unavailable.</source>
+            <translation>The cloud upload configuration or image is unavailable.</translation>
+        </message>
+        <message>
+            <source>The image could not be opened for upload.</source>
+            <translation>The image could not be opened for upload.</translation>
+        </message>
+        <message>
+            <source>The image could not be prepared for upload.</source>
+            <translation>The image could not be prepared for upload.</translation>
+        </message>
+        <message>
+            <source>The screenshot export queue is full.</source>
+            <translation>The screenshot export queue is full.</translation>
+        </message>
+    </context>
+    <context>
         <name>ScreenshotExportArtifact</name>
         <message>
             <source>Image source unavailable</source>
@@ -103,6 +130,29 @@
         <message>
             <source>The PDF export was cancelled</source>
             <translation>The PDF export was cancelled</translation>
+        </message>
+    </context>
+    <context>
+        <name>ScreenshotPrintService</name>
+        <message>
+            <source>The image could not be prepared for printing</source>
+            <translation>The image could not be prepared for printing</translation>
+        </message>
+        <message>
+            <source>The image could not be printed: %1</source>
+            <translation>The image could not be printed: %1</translation>
+        </message>
+        <message>
+            <source>The native print interface is unavailable</source>
+            <translation>The native print interface is unavailable</translation>
+        </message>
+        <message>
+            <source>The native print operation failed</source>
+            <translation>The native print operation failed</translation>
+        </message>
+        <message>
+            <source>Windows printing failed (%1)</source>
+            <translation>Windows printing failed (%1)</translation>
         </message>
     </context>
     <context>

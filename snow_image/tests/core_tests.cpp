@@ -1,9 +1,11 @@
+#include "../../test-support/virtualmemory.h"
 #include "snow/image/service.h"
 #include "snow/image/processing.h"
 #include "snow/image/resource_estimate.h"
 #include "snow/image/resource_plan.h"
 #include "snow/image/raster.h"
 #include "snow/image/raster_conversion.h"
+#include "heif_fixtures.h"
 
 #include <algorithm>
 #include <array>
@@ -180,6 +182,85 @@ class CountingSink final : public PixelSink {
     std::uint32_t height = 0;
     std::uint32_t rows = 0;
     std::size_t bytes = 0;
+};
+
+class ScratchLifetimeSink final : public PixelSink {
+  public:
+    explicit ScratchLifetimeSink(std::span<const std::byte> expected, bool reject = false)
+        : expected_(expected), reject_(reject) {}
+
+    Result<void> begin(const snow::image::DocumentInfo&) override {
+        return {};
+    }
+    Result<void> begin_frame(std::uint32_t, const snow::image::FrameInfo&) override {
+        return {};
+    }
+    Result<void> write_rows(std::uint32_t first, std::uint32_t count, std::size_t stride,
+                            std::span<const std::byte> pixels) override {
+        require(first == 0 && count == 512 && stride == 4096,
+                "large codec scratch preserves its full frame layout");
+        require(pixels.size() == expected_.size() &&
+                    std::equal(pixels.begin(), pixels.end(), expected_.begin()),
+                "large codec scratch preserves every decoded sample");
+        address = pixels.data() + pixels.size() / 2;
+        require(snow::test_support::virtualMemoryMapped(address),
+                "codec scratch remains mapped throughout the row callback");
+        return reject_ ? Status::error(ErrorCode::cancelled, "reject scratch frame")
+                       : Result<void>{};
+    }
+    Result<void> end_frame(std::uint32_t) override {
+        return {};
+    }
+    Result<void> end() override {
+        return {};
+    }
+
+    const std::byte* address = nullptr;
+
+  private:
+    std::span<const std::byte> expected_;
+    bool reject_ = false;
+};
+
+class ScratchLifetimeSource final : public snow::image::RasterSource {
+  public:
+    explicit ScratchLifetimeSource(Image image) : image_(std::move(image)) {
+        descriptor_.format = Format::jxl;
+        descriptor_.canvas_width = image_.width();
+        descriptor_.canvas_height = image_.height();
+        snow::image::RasterFrameDescriptor frame;
+        frame.width = image_.width();
+        frame.height = image_.height();
+        frame.layout.planes.push_back({snow::image::PlaneSemantic::packed, image_.width(),
+                                       image_.height(), image_.format(), 8});
+        descriptor_.frames.push_back(std::move(frame));
+    }
+    const snow::image::DocumentDescriptor& descriptor() const noexcept override {
+        return descriptor_;
+    }
+    snow::image::RasterAccess access() const noexcept override {
+        return snow::image::RasterAccess::random_rows;
+    }
+    Result<void> read_rows(std::uint32_t frame, std::uint32_t plane, std::uint32_t first,
+                           std::uint32_t count, std::size_t stride,
+                           std::span<std::byte> destination, std::stop_token stop) const override {
+        if (stop.stop_requested())
+            return Status::error(ErrorCode::cancelled, "scratch raster read cancelled");
+        require(frame == 0 && plane == 0 && stride == image_.row_stride() &&
+                    destination.size() == static_cast<std::size_t>(count) * stride,
+                "native JXL staging reads tightly packed source rows");
+        if (first == 0)
+            address = destination.data() + destination.size() / 2;
+        std::memcpy(destination.data(), image_.pixels().data() + first * stride,
+                    destination.size());
+        return {};
+    }
+
+    mutable const std::byte* address = nullptr;
+
+  private:
+    Image image_;
+    snow::image::DocumentDescriptor descriptor_;
 };
 
 class MappedOnlySource final : public snow::image::RasterSource {
@@ -734,15 +815,10 @@ void test_heif_family(Service& service) {
                 avif_sink.pixels.size() == 16,
             "AVIF stills copy directly from the codec plane into sink storage");
 
-    snow::image::EncodeOptions native_encode = options;
-    native_encode.lossless = false;
-    native_encode.quality = 92;
-    auto native_bytes = std::make_shared<std::vector<std::byte>>();
-    require(
-        service
-            .encode(still, snow::image::memory_output(native_bytes, "native.avif"), native_encode)
-            .has_value(),
-        "lossy AVIF native-plane fixture encodes");
+    auto native_bytes =
+        std::make_shared<std::vector<std::byte>>(snow::image::test::kNativeSdrAvif.size());
+    std::memcpy(native_bytes->data(), snow::image::test::kNativeSdrAvif.data(),
+                native_bytes->size());
     snow::image::DecodeOptions native_options;
     native_options.raster_layout = snow::image::RasterLayoutPolicy::native;
     const auto native_descriptor =
@@ -990,6 +1066,95 @@ void test_jpeg_xl(Service& service) {
             "JPEG XL animation preserves the second frame pixels");
 }
 
+void test_jxl_mixed_8bit_animation(Service& service) {
+    if (!service.encoder_info(Format::jxl))
+        return;
+    snow::image::PixelFormat bgr = snow::image::kRgb8;
+    bgr.channels = snow::image::ChannelLayout::bgr;
+    const std::array formats{snow::image::kRgb8, snow::image::kRgba8, bgr};
+    for (const bool opaque : {true, false}) {
+        for (const bool mixed_endian : {false, true}) {
+            std::array<std::size_t, 3> order{0, 1, 2};
+            do {
+                Document document;
+                document.format = Format::jxl;
+                document.canvas_width = 5;
+                document.canvas_height = 3;
+                for (std::size_t index = 0; index < order.size(); ++index) {
+                    snow::image::PixelFormat format = formats[order[index]];
+                    // Byte order cannot affect 8-bit samples, including frames
+                    // that take different packed-layout normalization paths.
+                    format.little_endian = !mixed_endian || index % 2U == 0;
+                    auto pixels = take(snow::image::MutableImage::allocate(5, 3, format),
+                                       "allocate mixed-layout JPEG XL frame");
+                    const bool reversed = format.channels == snow::image::ChannelLayout::bgr;
+                    for (std::uint32_t y = 0; y < pixels.height(); ++y) {
+                        for (std::uint32_t x = 0; x < pixels.width(); ++x) {
+                            const std::array<std::byte, 3> rgb{
+                                static_cast<std::byte>(x * 29U + index * 31U),
+                                static_cast<std::byte>(y * 37U + index * 17U),
+                                static_cast<std::byte>(x * 11U + y * 23U + index * 7U)};
+                            std::byte* pixel = pixels.pixels().data() + y * pixels.row_stride() +
+                                               x * format.channel_count();
+                            pixel[0] = rgb[reversed ? 2U : 0U];
+                            pixel[1] = rgb[1];
+                            pixel[2] = rgb[reversed ? 0U : 2U];
+                            if (format.channel_count() == 4U)
+                                pixel[3] = opaque ? std::byte{255} : std::byte{128};
+                        }
+                    }
+                    Frame frame;
+                    frame.image = std::move(pixels).freeze();
+                    frame.duration = std::chrono::milliseconds(40U * (index + 1U));
+                    document.frames.push_back(std::move(frame));
+                }
+                snow::image::EncodeOptions options;
+                options.format = Format::jxl;
+                options.lossless = true;
+                auto bytes = std::make_shared<std::vector<std::byte>>();
+                take(service.encode(document, snow::image::memory_output(bytes), options),
+                     "encode mixed-layout JPEG XL animation");
+                const auto info = take(service.inspect(snow::image::memory_input(bytes)),
+                                       "inspect mixed-layout JPEG XL animation");
+                require(info.frames.size() == order.size() &&
+                            std::all_of(
+                                info.frames.begin(), info.frames.end(),
+                                [opaque](const auto& frame) { return frame.has_alpha == !opaque; }),
+                        "mixed-layout JPEG XL preserves frame count and alpha content");
+                snow::image::DecodeOptions decode;
+                decode.output_format = snow::image::kRgba8;
+                const Document decoded =
+                    take(service.decode(snow::image::memory_input(bytes), decode),
+                         "decode mixed-layout JPEG XL animation");
+                require(decoded.frames.size() == document.frames.size(),
+                        "mixed-layout JPEG XL round trip preserves all frame orders");
+                for (std::size_t index = 0; index < document.frames.size(); ++index) {
+                    const ImageView input = document.frames[index].image.view();
+                    const ImageView output = decoded.frames[index].image.view();
+                    const bool reversed = input.format.channels == snow::image::ChannelLayout::bgr;
+                    require(output.width == input.width && output.height == input.height &&
+                                output.format == snow::image::kRgba8 &&
+                                decoded.frames[index].duration == document.frames[index].duration,
+                            "mixed-layout JPEG XL preserves frame dimensions and durations");
+                    for (std::uint32_t y = 0; y < input.height; ++y) {
+                        for (std::uint32_t x = 0; x < input.width; ++x) {
+                            const std::byte* pixel = input.pixels.data() + y * input.row_stride +
+                                                     x * input.format.channel_count();
+                            const std::array<std::byte, 4> expected{
+                                pixel[reversed ? 2U : 0U], pixel[1], pixel[reversed ? 0U : 2U],
+                                input.format.channel_count() == 4U ? pixel[3] : std::byte{255}};
+                            const std::byte* actual =
+                                output.pixels.data() + y * output.row_stride + x * 4U;
+                            require(std::equal(expected.begin(), expected.end(), actual),
+                                    "mixed-layout JPEG XL preserves every frame's pixels");
+                        }
+                    }
+                }
+            } while (std::next_permutation(order.begin(), order.end()));
+        }
+    }
+}
+
 void test_openexr(Service& service) {
     if (!supports(service, Format::exr, snow::image::CodecCapability::encode))
         return;
@@ -1221,6 +1386,59 @@ void test_jpeg_round_trip(Service& service) {
     require(std::search(encoded->begin(), encoded->end(), progressiveMarker.begin(),
                         progressiveMarker.end()) != encoded->end(),
             "progressive JPEG output uses a progressive frame marker");
+
+    // ICC profiles are opaque to the codec. Split a large payload across APP2
+    // markers to exercise libjpeg-turbo's assembly as well as every decode route.
+    const std::vector<std::byte> profile(70'000, std::byte{0xA5});
+    std::vector<std::byte> markers;
+    for (int index = 0; index < 2; ++index) {
+        constexpr std::size_t chunk_size = 35'000;
+        constexpr std::size_t marker_size = 2 + 14 + chunk_size;
+        markers.insert(markers.end(),
+                       {std::byte{0xFF}, std::byte{0xE2}, static_cast<std::byte>(marker_size >> 8U),
+                        static_cast<std::byte>(marker_size & 0xFFU)});
+        for (const char byte : std::string_view("ICC_PROFILE\0", 12))
+            markers.push_back(static_cast<std::byte>(byte));
+        markers.push_back(static_cast<std::byte>(index + 1));
+        markers.push_back(std::byte{2});
+        const auto first = profile.begin() + index * static_cast<std::ptrdiff_t>(chunk_size);
+        markers.insert(markers.end(), first, first + static_cast<std::ptrdiff_t>(chunk_size));
+    }
+    auto profiled_bytes = std::make_shared<std::vector<std::byte>>(*encoded);
+    profiled_bytes->insert(profiled_bytes->begin() + 2, markers.begin(), markers.end());
+    const auto profiled_input = snow::image::memory_input(profiled_bytes);
+    const auto profiled_info = take(service.inspect(profiled_input), "inspect profiled JPEG");
+    require(profiled_info.color.icc_profile == profile &&
+                profiled_info.frames.front().color.icc_profile == profile,
+            "JPEG inspection preserves the complete ICC profile on document and frame");
+    const auto profiled_document = take(service.decode(profiled_input), "decode profiled JPEG");
+    require(profiled_document.color.icc_profile == profile &&
+                profiled_document.frames.front().color.icc_profile == profile,
+            "owning JPEG decode retains its ICC profile");
+    StorageSink profiled_sink;
+    require(service.decode_to_sink(profiled_input, profiled_sink).has_value() &&
+                profiled_sink.info.color.icc_profile == profile &&
+                profiled_sink.info.frames.front().color.icc_profile == profile,
+            "streaming JPEG decode retains its ICC profile");
+    snow::image::DecodeOptions profiled_native;
+    profiled_native.raster_layout = snow::image::RasterLayoutPolicy::native;
+    const auto profiled_descriptor = take(service.inspect_raster(profiled_input, profiled_native),
+                                          "inspect profiled JPEG raster");
+    require(profiled_descriptor.color.icc_profile == profile &&
+                profiled_descriptor.frames.front().color.icc_profile == profile,
+            "native planar JPEG inspection retains its RGB ICC declaration");
+    snow::image::DecodeOptions profile_limit;
+    profile_limit.limits.maximum_metadata_bytes = profile.size() - 1;
+    const auto rejected_profile = service.decode(profiled_input, profile_limit);
+    require(!rejected_profile && rejected_profile.error().code == ErrorCode::limit_exceeded,
+            "JPEG color metadata respects the configured size limit");
+    profile_limit.preserve_metadata = false;
+    const auto stripped_profile =
+        take(service.decode(profiled_input, profile_limit), "decode JPEG without metadata");
+    require(stripped_profile.color.icc_profile.empty() &&
+                stripped_profile.frames.front().color.icc_profile.empty(),
+            "JPEG metadata stripping omits ICC profiles without rejecting their size");
+
     const auto input = snow::image::memory_input(encoded);
     require(take(service.detect(input), "detect JPEG") == Format::jpeg,
             "JPEG detected by signature");
@@ -1901,6 +2119,262 @@ void test_processing() {
             "zero resize dimensions are rejected");
 }
 
+void test_flatten_first_frame() {
+    Document animation = sample_document();
+    animation.loop_count = 7;
+    animation.metadata.comment = "animation metadata";
+    animation.frames.front().duration = std::chrono::milliseconds(40);
+    animation.frames.front().metadata.comment = "first frame metadata";
+    animation.frames.front().disposal = snow::image::FrameDisposal::previous;
+    const Image original = animation.frames.front().image;
+    for (int index = 0; index < 3; ++index) {
+        Frame later = animation.frames.front();
+        later.blend = snow::image::FrameBlend::over;
+        animation.frames.push_back(std::move(later));
+    }
+    const Document flattened = take(snow::image::flatten_animation(animation), "flatten first");
+    require(flattened.frames.size() == 1 && flattened.loop_count == 1 &&
+                flattened.frames.front().duration.count() == 0 &&
+                flattened.frames.front().disposal == snow::image::FrameDisposal::keep &&
+                flattened.metadata.comment == animation.metadata.comment &&
+                flattened.frames.front().metadata.comment == "first frame metadata",
+            "flattening returns the static first frame and preserves metadata");
+    require(flattened.frames.front().image.storage().owner() == original.storage().owner() &&
+                flattened.frames.front().image.pixels().data() == original.pixels().data(),
+            "a complete immutable RGBA first frame needs no composition allocation");
+
+    for (const auto blend : {snow::image::FrameBlend::source, snow::image::FrameBlend::over}) {
+        Document partial = animation;
+        partial.canvas_width = 4;
+        partial.canvas_height = 3;
+        partial.frames.front().x = 1;
+        partial.frames.front().y = 1;
+        partial.frames.front().blend = blend;
+        const Document output = take(snow::image::flatten_animation(partial), "flatten offset");
+        const auto view = output.frames.front().image.view();
+        require(view.width == 4 && view.height == 3 && view.format == snow::image::kRgba8 &&
+                    output.frames.front().x == 0 && output.frames.front().y == 0,
+                "partial first frames are composed into the full RGBA canvas");
+        for (std::uint32_t y = 0; y < view.height; ++y) {
+            for (std::uint32_t x = 0; x < view.width; ++x) {
+                const auto* actual = view.pixels.data() + y * view.row_stride + x * 4U;
+                std::array<std::byte, 4> expected{};
+                if (x >= 1 && x < 3 && y >= 1) {
+                    const auto* source =
+                        original.pixels().data() + (y - 1U) * original.row_stride() + (x - 1U) * 4U;
+                    if (blend == snow::image::FrameBlend::source || source[3] != std::byte{0})
+                        std::copy_n(source, 4U, expected.begin());
+                }
+                require(std::equal(expected.begin(), expected.end(), actual),
+                        "offset composition preserves straight alpha and transparent padding");
+            }
+        }
+    }
+
+    auto gray = take(snow::image::MutableImage::allocate(2, 2, snow::image::kGray8),
+                     "allocate gray first frame");
+    std::fill(gray.pixels().begin(), gray.pixels().end(), std::byte{0x50});
+    Document gray_animation = animation;
+    gray_animation.frames.front().image = std::move(gray).freeze();
+    const Document converted =
+        take(snow::image::flatten_animation(gray_animation), "flatten gray first");
+    const auto gray_pixels = converted.frames.front().image.pixels();
+    require(converted.frames.front().image.format() == snow::image::kRgba8,
+            "non-RGBA first frames retain canonical RGBA conversion");
+    for (std::size_t offset = 0; offset < gray_pixels.size(); offset += 4U)
+        require(gray_pixels[offset] == std::byte{0x50} &&
+                    gray_pixels[offset + 1U] == std::byte{0x50} &&
+                    gray_pixels[offset + 2U] == std::byte{0x50} &&
+                    gray_pixels[offset + 3U] == std::byte{0xFF},
+                "first-frame grayscale conversion preserves every channel");
+
+    auto oversized_pixels = std::make_shared<std::vector<std::byte>>(32U, std::byte{0x50});
+    auto oversized_owner =
+        take(snow::image::SharedPixelBuffer::adopt(oversized_pixels, *oversized_pixels),
+             "adopt oversized first-frame storage");
+    Document oversized = animation;
+    oversized.frames.front().image =
+        take(Image::adopt(2, 2, snow::image::kRgba8, 8U, std::move(oversized_owner)),
+             "adopt oversized first frame");
+    const Document bounded =
+        take(snow::image::flatten_animation(oversized), "flatten oversized first");
+    require(bounded.frames.front().image.pixels().size() == 16U &&
+                bounded.frames.front().image.pixels().data() != oversized_pixels->data(),
+            "flattening does not retain unused trailing pixels in adopted storage");
+
+    Document disposed = sample_document();
+    Frame temporary = disposed.frames.front();
+    temporary.x = 1;
+    temporary.y = 1;
+    temporary.disposal = snow::image::FrameDisposal::previous;
+    disposed.frames.push_back(temporary);
+    Frame later = temporary;
+    later.x = 0;
+    later.y = 1;
+    later.disposal = snow::image::FrameDisposal::keep;
+    disposed.frames.push_back(std::move(later));
+    const Document composed =
+        take(snow::image::transform(disposed, {}), "compose previous disposal");
+    require(composed.frames.size() == 3U &&
+                std::equal(original.pixels().begin(), original.pixels().begin() + 8U,
+                           composed.frames.back().image.pixels().begin()) &&
+                std::equal(original.pixels().begin(), original.pixels().begin() + 8U,
+                           composed.frames.back().image.pixels().begin() + 8U),
+            "previous disposal restores the pre-frame canvas before the next blend");
+
+    std::stop_source cancelled;
+    cancelled.request_stop();
+    for (const Document* input : {&animation, &gray_animation}) {
+        const auto result = snow::image::flatten_animation(*input, cancelled.get_token());
+        require(!result && result.error().code == ErrorCode::cancelled,
+                "both shared and composed flatten paths honor cancellation");
+    }
+    require(!snow::image::flatten_animation(Document{}), "empty animations are rejected");
+
+    auto large = take(snow::image::MutableImage::allocate(1025, 513, snow::image::kRgba8),
+                      "allocate managed flatten fixture");
+    const void* middle = large.pixels().data() + large.pixels().size() / 2U;
+    Document owned;
+    owned.canvas_width = large.width();
+    owned.canvas_height = large.height();
+    Frame frame;
+    frame.image = std::move(large).freeze();
+    owned.frames.push_back(std::move(frame));
+    Document shared = take(snow::image::flatten_animation(owned), "flatten managed first");
+    require(shared.frames.front().image.storage().owner() ==
+                owned.frames.front().image.storage().owner(),
+            "managed flattening retains the original pixel owner");
+    owned = {};
+    require(snow::test_support::virtualMemoryMapped(middle),
+            "flattened pixels outlive their source document");
+    shared = {};
+    require(!snow::test_support::virtualMemoryMapped(middle),
+            "flattened managed pixels release with their final owner");
+}
+
+void test_animation_region_disposal() {
+    using snow::image::FrameBlend;
+    using snow::image::FrameDisposal;
+    using Bytes = std::array<std::byte, 4>;
+    const Bytes base{std::byte{16}, std::byte{32}, std::byte{48}, std::byte{255}};
+    const auto rgba = [](std::uint32_t width, std::uint32_t height, Bytes value) {
+        auto image = take(snow::image::MutableImage::allocate(width, height, snow::image::kRgba8),
+                          "allocate animation region fixture");
+        for (std::size_t offset = 0; offset < image.pixels().size(); offset += 4U)
+            std::copy(value.begin(), value.end(), image.pixels().data() + offset);
+        return std::move(image).freeze();
+    };
+    Document input;
+    input.canvas_width = 6;
+    input.canvas_height = 5;
+    Frame first;
+    first.image = rgba(6, 5, base);
+    input.frames.push_back(first);
+    Frame previous;
+    previous.x = 4;
+    previous.y = 3;
+    previous.blend = FrameBlend::over;
+    previous.disposal = FrameDisposal::previous;
+    // A padded BGRA view exercises byte order and clipping on two edges.
+    auto pixels = std::make_shared<std::vector<std::byte>>(24U * 4U, std::byte{0xCC});
+    for (std::size_t y = 0; y < 4; ++y)
+        for (std::size_t x = 0; x < 4; ++x) {
+            const Bytes value{std::byte{16}, std::byte{64}, std::byte{240}, std::byte{128}};
+            std::copy(value.begin(), value.end(), pixels->data() + y * 24U + x * 4U);
+        }
+    previous.image = take(Image::adopt(4, 4, snow::image::kBgra8, 24,
+                                       take(snow::image::SharedPixelBuffer::adopt(pixels, *pixels),
+                                            "adopt padded animation pixels")),
+                          "adopt padded animation frame");
+    input.frames.push_back(previous);
+    Frame background;
+    auto gray = take(snow::image::MutableImage::allocate(3, 2, snow::image::kGray16),
+                     "allocate high-depth animation frame");
+    std::fill(gray.pixels().begin(), gray.pixels().end(), std::byte{128});
+    background.image = std::move(gray).freeze();
+    background.x = 1;
+    background.y = 1;
+    background.disposal = FrameDisposal::background;
+    input.frames.push_back(background);
+    Frame blended;
+    blended.image = rgba(3, 3, {std::byte{200}, std::byte{100}, std::byte{50}, std::byte{128}});
+    blended.x = 2;
+    blended.blend = FrameBlend::over;
+    input.frames.push_back(blended);
+    for (const auto disposal : {FrameDisposal::background, FrameDisposal::previous}) {
+        Frame outside = blended;
+        outside.x = std::numeric_limits<std::uint32_t>::max();
+        outside.disposal = disposal;
+        input.frames.push_back(std::move(outside));
+    }
+    Frame final = blended;
+    final.y = std::numeric_limits<std::uint32_t>::max();
+    input.frames.push_back(std::move(final));
+    const Document result = take(snow::image::transform(input, {}), "compose clipped animation");
+    require(result.frames.size() == input.frames.size(), "all animation outputs are preserved");
+    for (std::size_t index = 0; index < result.frames.size(); ++index) {
+        const auto view = result.frames[index].image.view();
+        for (std::uint32_t y = 0; y < view.height; ++y)
+            for (std::uint32_t x = 0; x < view.width; ++x) {
+                Bytes expected = base;
+                if (index == 1 && x >= 4 && y >= 3)
+                    expected = {std::byte{128}, std::byte{48}, std::byte{32}, std::byte{255}};
+                if (index == 2 && x >= 1 && x < 4 && y >= 1 && y < 3)
+                    expected = {std::byte{128}, std::byte{128}, std::byte{128}, std::byte{255}};
+                if (index >= 3) {
+                    const bool cleared = x >= 1 && x < 4 && y >= 1 && y < 3;
+                    if (cleared)
+                        expected = {};
+                    if (x >= 2 && x < 5 && y < 3)
+                        expected = cleared ? Bytes{std::byte{200}, std::byte{100}, std::byte{50},
+                                                   std::byte{128}}
+                                           : Bytes{std::byte{108}, std::byte{66}, std::byte{49},
+                                                   std::byte{255}};
+                }
+                const auto* actual = view.pixels.data() + y * view.row_stride + x * 4U;
+                require(std::equal(expected.begin(), expected.end(), actual),
+                        "clipped previous/background disposal and mixed formats preserve pixels");
+            }
+    }
+    class CheckingSink final : public PixelSink {
+      public:
+        explicit CheckingSink(const Document& expected) : expected_(expected) {}
+        Result<void> begin(const snow::image::DocumentInfo& info) override {
+            require(info.frames.size() == expected_.frames.size(), "sink preserves frame count");
+            return {};
+        }
+        Result<void> begin_frame(std::uint32_t index, const snow::image::FrameInfo&) override {
+            current_ = index;
+            return {};
+        }
+        Result<void> write_rows(std::uint32_t first, std::uint32_t count, std::size_t stride,
+                                std::span<const std::byte> pixels) override {
+            const auto& image = expected_.frames[current_].image;
+            const auto bytes = image.pixels().subspan(first * image.row_stride(), count * stride);
+            require(stride == image.row_stride() &&
+                        std::equal(bytes.begin(), bytes.end(), pixels.begin(), pixels.end()),
+                    "sink and owning animation composition have identical pixels");
+            return {};
+        }
+        Result<void> end_frame(std::uint32_t) override {
+            return {};
+        }
+        Result<void> end() override {
+            ended = true;
+            return {};
+        }
+        bool ended = false;
+
+      private:
+        const Document& expected_;
+        std::uint32_t current_ = 0;
+    } sink(result);
+    require(snow::image::transform_to_sink(input, {}, sink).has_value() && sink.ended,
+            "sink composition shares bounded region disposal behavior");
+    require((*pixels)[16] == std::byte{0xCC} && (*pixels)[0] == std::byte{16},
+            "composition preserves padded immutable source storage");
+}
+
 void test_webp(Service& service) {
     const snow::image::EncoderInfo* info = service.encoder_info(Format::webp);
     if (!info)
@@ -2178,8 +2652,8 @@ void test_webp(Service& service) {
                                    "query packed WebP raster route");
     require(native_route == snow::image::RasterEncodeRoute::native &&
                 lossless_route == snow::image::RasterEncodeRoute::materialized &&
-                packed_route == snow::image::RasterEncodeRoute::materialized,
-            "WebP route query selects native YUVA only for compatible lossy input");
+                packed_route == snow::image::RasterEncodeRoute::native,
+            "WebP route query selects native packed input and compatible lossy YUVA input");
 
     RowRasterWriter row_writer(native_descriptor);
     require(service.decode_into(snow::image::memory_input(lossy_bytes), row_writer, native_options)
@@ -2558,6 +3032,80 @@ void test_shared_image_ownership() {
     external.reset();
     require(!lifetime.expired() && adopted.pixels().front() == std::byte{0x33},
             "an adopted image retains its external owner");
+
+    auto large = take(snow::image::MutableImage::allocate(1025, 1025, snow::image::kRgba8),
+                      "allocate large image");
+    require(std::all_of(large.pixels().begin(), large.pixels().end(),
+                        [](std::byte byte) { return byte == std::byte{0}; }),
+            "large image storage is zero-initialized");
+    large.pixels().back() = std::byte{0x6A};
+    const auto* middle = large.pixels().data() + large.pixels().size() / 2;
+    Image large_frozen = std::move(large).freeze();
+    Image large_copy = large_frozen;
+    large_frozen = {};
+    require(snow::test_support::virtualMemoryMapped(middle) &&
+                large_copy.pixels().back() == std::byte{0x6A},
+            "frozen large image copies retain their mapped pixels");
+    large_copy = {};
+    require(!snow::test_support::virtualMemoryMapped(middle),
+            "last large image owner releases its VM region");
+}
+
+void test_codec_scratch_lifetime(Service& service) {
+    auto pixels = take(snow::image::MutableImage::allocate(1024, 512, snow::image::kRgba8),
+                       "allocate codec scratch fixture");
+    for (std::size_t offset = 0; offset < pixels.pixels().size(); offset += 4) {
+        pixels.pixels()[offset] = std::byte{0x25};
+        pixels.pixels()[offset + 1] = std::byte{0x56};
+        pixels.pixels()[offset + 2] = std::byte{0xA8};
+        pixels.pixels()[offset + 3] = std::byte{0x80};
+    }
+    Document document;
+    document.canvas_width = pixels.width();
+    document.canvas_height = pixels.height();
+    Frame frame;
+    frame.image = std::move(pixels).freeze();
+    document.frames.push_back(std::move(frame));
+    for (const Format format : {Format::png, Format::webp}) {
+        if (!supports(service, format, snow::image::CodecCapability::encode))
+            continue;
+        snow::image::EncodeOptions encode;
+        encode.format = format;
+        encode.lossless = true;
+        encode.interlaced = format == Format::png;
+        auto encoded = std::make_shared<std::vector<std::byte>>();
+        require(service.encode(document, snow::image::memory_output(encoded), encode).has_value(),
+                "encode large codec scratch fixture");
+        for (const bool reject : {false, true}) {
+            ScratchLifetimeSink sink(document.frames.front().image.pixels(), reject);
+            const Result<void> decoded =
+                service.decode_to_sink(snow::image::memory_input(encoded), sink);
+            require(reject ? !decoded && decoded.error().code == ErrorCode::cancelled
+                           : decoded.has_value(),
+                    "scratch row callback status reaches the caller");
+            require(sink.address && !snow::test_support::virtualMemoryMapped(sink.address),
+                    "large codec scratch releases its pages on success and row rejection");
+        }
+    }
+    if (supports(service, Format::jxl, snow::image::CodecCapability::encode)) {
+        ScratchLifetimeSource source(document.frames.front().image);
+        snow::image::EncodeOptions options;
+        options.format = Format::jxl;
+        options.lossless = true;
+        options.verified_alpha_content = snow::image::AlphaContent::non_opaque;
+        auto encoded = std::make_shared<std::vector<std::byte>>();
+        const auto status = service.encode(source, snow::image::memory_output(encoded), options);
+        require(status.has_value() && source.address,
+                "native JPEG XL encode stages large source rows successfully");
+        require(!snow::test_support::virtualMemoryMapped(source.address),
+                "native JPEG XL encode releases its full raster staging allocation");
+        Document decoded = take(service.decode(snow::image::memory_input(encoded)),
+                                "decode staged JPEG XL fixture");
+        require(std::equal(decoded.frames.front().image.pixels().begin(),
+                           decoded.frames.front().image.pixels().end(),
+                           document.frames.front().image.pixels().begin()),
+                "mapped native JPEG XL staging preserves all input pixels");
+    }
 }
 
 void test_transform_storage_and_precision() {
@@ -3608,11 +4156,66 @@ void test_jxl_opaque_progressive_preview(Service& service) {
 } // namespace
 
 int main(int argc, char* argv[]) {
+    if (argc == 2 && std::string_view(argv[1]) == "--export-codecs-only") {
+        Service service;
+        test_bmp_round_trip(service);
+        test_png_round_trip(service);
+        test_jpeg_round_trip(service);
+        test_jpeg_alpha_matte(service);
+        test_jpeg_xl(service);
+        test_jxl_mixed_8bit_animation(service);
+        test_jxl_opaque_progressive_preview(service);
+        test_webp(service);
+        test_opaque_codec_alpha_omission(service);
+        test_parallel_resize_determinism();
+        test_streaming_resize();
+        return 0;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--processing-only") {
+        test_processing();
+        test_flatten_first_frame();
+        test_animation_region_disposal();
+        return 0;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--buffer-paths-only") {
+        Service service;
+        test_codec_scratch_lifetime(service);
+        test_bmp_round_trip(service);
+        test_netpbm(service);
+        test_png_round_trip(service);
+        test_jpeg_round_trip(service);
+        test_gif_animation(service);
+        test_jpeg_xl(service);
+        test_jxl_mixed_8bit_animation(service);
+        test_jxl_opaque_progressive_preview(service);
+        test_openexr(service);
+        test_webp(service);
+        test_xbitmap_formats(service);
+        test_processing();
+        test_flatten_first_frame();
+        test_animation_region_disposal();
+        test_parallel_resize_determinism();
+        test_streaming_resize();
+        return 0;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--ownership-only") {
+        test_shared_image_ownership();
+        test_transform_storage_and_precision();
+        return 0;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--jpeg-only") {
         Service service;
         test_jpeg_round_trip(service);
         test_jpeg_alpha_matte(service);
         std::cout << "snow_image JPEG tests passed\n";
+        return 0;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--jxl-only") {
+        Service service;
+        test_jpeg_xl(service);
+        test_jxl_mixed_8bit_animation(service);
+        test_jxl_opaque_progressive_preview(service);
+        std::cout << "snow_image JPEG XL tests passed\n";
         return 0;
     }
     if (argc == 2 && std::string_view(argv[1]) == "--heif-only") {
@@ -3628,6 +4231,7 @@ int main(int argc, char* argv[]) {
     test_raster_buffer_store();
     test_format_mapping();
     Service service;
+    test_codec_scratch_lifetime(service);
     test_bmp_round_trip(service);
     test_netpbm(service);
     test_limits(service);
@@ -3642,8 +4246,11 @@ int main(int argc, char* argv[]) {
     test_svg_vector_round_trip(service);
     test_heif_family(service);
     test_jpeg_xl(service);
+    test_jxl_mixed_8bit_animation(service);
     test_openexr(service);
     test_processing();
+    test_flatten_first_frame();
+    test_animation_region_disposal();
     test_transform_storage_and_precision();
     test_parallel_resize_determinism();
     test_streaming_resize();

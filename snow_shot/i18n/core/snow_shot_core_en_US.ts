@@ -4,12 +4,24 @@
     <context>
         <name>AboutPageWidget</name>
         <message>
+            <source>%1 logo</source>
+            <translation>%1 logo</translation>
+        </message>
+        <message>
             <source>%1 · %2</source>
             <translation>%1 · %2</translation>
         </message>
         <message>
+            <source>%1 · Make expression clearer</source>
+            <translation>%1 · Make expression clearer</translation>
+        </message>
+        <message>
             <source>, excellent work.</source>
             <translation>, excellent work.</translation>
+        </message>
+        <message>
+            <source>About %1</source>
+            <translation>About %1</translation>
         </message>
         <message>
             <source>About Snow Shot</source>
@@ -36,6 +48,10 @@ so every moment on screen can be expressed clearly and shared easily.</translati
         <message>
             <source>Changelog</source>
             <translation>Changelog</translation>
+        </message>
+        <message>
+            <source>Check for a newer version of %1.</source>
+            <translation>Check for a newer version of %1.</translation>
         </message>
         <message>
             <source>Check for a newer version of Snow Shot.</source>
@@ -90,8 +106,8 @@ so every moment on screen can be expressed clearly and shared easily.</translati
             <translation>Download from GitHub</translation>
         </message>
         <message>
-            <source>Download from website</source>
-            <translation>Download from website</translation>
+            <source>Download from Gitee</source>
+            <translation>Download from Gitee</translation>
         </message>
         <message>
             <source>Download update</source>
@@ -156,10 +172,6 @@ so every moment on screen can be expressed clearly and shared easily.</translati
         <message>
             <source>Preview</source>
             <translation>Preview</translation>
-        </message>
-        <message>
-            <source>QQ Group 2</source>
-            <translation>QQ Group 2</translation>
         </message>
         <message>
             <source>QQ Group 3</source>
@@ -270,6 +282,13 @@ so every moment on screen can be expressed clearly and shared easily.</translati
         </message>
     </context>
     <context>
+        <name>ConfirmationSkipButton</name>
+        <message>
+            <source>Don't ask again</source>
+            <translation>Don't ask again</translation>
+        </message>
+    </context>
+    <context>
         <name>DiagnosticsService</name>
         <message>
             <source>A log file could not be read.</source>
@@ -341,17 +360,76 @@ so every moment on screen can be expressed clearly and shared easily.</translati
         </message>
     </context>
     <context>
+        <name>EditionMetadata</name>
+        <message>
+            <source>Snow Shot</source>
+            <translation>Snow Shot</translation>
+        </message>
+        <message>
+            <source>Snow Shot Mini</source>
+            <translation>Snow Shot Mini</translation>
+        </message>
+    </context>
+    <context>
+        <name>FloatingToolbar</name>
+        <message>
+            <source>Close</source>
+            <translation>Close</translation>
+        </message>
+        <message>
+            <source>Customize toolbar</source>
+            <translation>Customize toolbar</translation>
+        </message>
+        <message>
+            <source>Delay %1 seconds to execute</source>
+            <translation>Delay %1 seconds to execute</translation>
+        </message>
+        <message>
+            <source>Formula recognition</source>
+            <translation>Formula recognition</translation>
+        </message>
+        <message>
+            <source>Hide during screenshots</source>
+            <translation>Hide during screenshots</translation>
+        </message>
+        <message>
+            <source>Hide in fullscreen</source>
+            <translation>Hide in fullscreen</translation>
+        </message>
+        <message>
+            <source>Icon mode</source>
+            <translation>Icon mode</translation>
+        </message>
+        <message>
+            <source>More tools</source>
+            <translation>More tools</translation>
+        </message>
+        <message>
+            <source>QR code recognition</source>
+            <translation>QR code recognition</translation>
+        </message>
+        <message>
+            <source>Screen recording</source>
+            <translation>Screen recording</translation>
+        </message>
+        <message>
+            <source>Screenshot</source>
+            <translation>Screenshot</translation>
+        </message>
+        <message>
+            <source>Show toolbar</source>
+            <translation>Show toolbar</translation>
+        </message>
+        <message>
+            <source>Toolbar mode</source>
+            <translation>Toolbar mode</translation>
+        </message>
+    </context>
+    <context>
         <name>LanguageCatalog</name>
         <message>
             <source>Language name</source>
             <translation>English</translation>
-        </message>
-    </context>
-    <context>
-        <name>MainContentHeaderWidget</name>
-        <message>
-            <source>Search settings and functions</source>
-            <translation>Search settings and functions</translation>
         </message>
     </context>
     <context>
@@ -379,10 +457,6 @@ so every moment on screen can be expressed clearly and shared easily.</translati
             <translation>%1 cannot be registered as a global shortcut, try another key</translation>
         </message>
         <message>
-            <source>%1 cannot be used as a drawing shortcut, try another key</source>
-            <translation>%1 cannot be used as a drawing shortcut, try another key</translation>
-        </message>
-        <message>
             <source>%1 cannot be used as a pinned window shortcut, try another key</source>
             <translation>%1 cannot be used as a pinned window shortcut, try another key</translation>
         </message>
@@ -395,8 +469,12 @@ so every moment on screen can be expressed clearly and shared easily.</translati
             <translation>%1 cannot be used as a screenshot shortcut, try another key</translation>
         </message>
         <message>
-            <source>%1 is already assigned to another drawing tool, try another key</source>
-            <translation>%1 is already assigned to another drawing tool, try another key</translation>
+            <source>%1 cannot be used as an annotation shortcut, try another key</source>
+            <translation>%1 cannot be used as an annotation shortcut, try another key</translation>
+        </message>
+        <message>
+            <source>%1 is already assigned to another annotation tool, try another key</source>
+            <translation>%1 is already assigned to another annotation tool, try another key</translation>
         </message>
         <message>
             <source>%1 is already assigned to another pinned window action, try another key</source>
@@ -419,8 +497,8 @@ so every moment on screen can be expressed clearly and shared easily.</translati
             <translation>Global shortcuts are not supported on this platform</translation>
         </message>
         <message>
-            <source>Invalid drawing shortcut</source>
-            <translation>Invalid drawing shortcut</translation>
+            <source>Invalid annotation shortcut</source>
+            <translation>Invalid annotation shortcut</translation>
         </message>
         <message>
             <source>Invalid global shortcut</source>
@@ -447,10 +525,6 @@ so every moment on screen can be expressed clearly and shared easily.</translati
             <translation>This key cannot be registered as a global shortcut, try another key</translation>
         </message>
         <message>
-            <source>This key cannot be used as a drawing shortcut, try another key</source>
-            <translation>This key cannot be used as a drawing shortcut, try another key</translation>
-        </message>
-        <message>
             <source>This key cannot be used as a pinned window shortcut, try another key</source>
             <translation>This key cannot be used as a pinned window shortcut, try another key</translation>
         </message>
@@ -463,8 +537,12 @@ so every moment on screen can be expressed clearly and shared easily.</translati
             <translation>This key cannot be used as a screenshot shortcut, try another key</translation>
         </message>
         <message>
-            <source>This key is already assigned to another drawing tool, try another key</source>
-            <translation>This key is already assigned to another drawing tool, try another key</translation>
+            <source>This key cannot be used as an annotation shortcut, try another key</source>
+            <translation>This key cannot be used as an annotation shortcut, try another key</translation>
+        </message>
+        <message>
+            <source>This key is already assigned to another annotation tool, try another key</source>
+            <translation>This key is already assigned to another annotation tool, try another key</translation>
         </message>
         <message>
             <source>This key is already assigned to another pinned window action, try another key</source>
@@ -485,6 +563,14 @@ so every moment on screen can be expressed clearly and shared easily.</translati
     </context>
     <context>
         <name>SectionHeaderWidget</name>
+        <message>
+            <source>Collapse %1</source>
+            <translation>Collapse %1</translation>
+        </message>
+        <message>
+            <source>Expand %1</source>
+            <translation>Expand %1</translation>
+        </message>
         <message>
             <source>Refresh</source>
             <translation>Refresh</translation>
@@ -507,6 +593,10 @@ so every moment on screen can be expressed clearly and shared easily.</translati
         <message>
             <source>Expand navigation</source>
             <translation>Expand navigation</translation>
+        </message>
+        <message>
+            <source>Search Function</source>
+            <translation>Search Function</translation>
         </message>
     </context>
     <context>
@@ -673,6 +763,18 @@ so every moment on screen can be expressed clearly and shared easily.</translati
     <context>
         <name>snow_shot::app::ApplicationController</name>
         <message>
+            <source>%1 %2 is available. Open About for update options.</source>
+            <translation>%1 %2 is available. Open About for update options.</translation>
+        </message>
+        <message>
+            <source>%1 will close and restart to install the update. Continue?</source>
+            <translation>%1 will close and restart to install the update. Continue?</translation>
+        </message>
+        <message>
+            <source>An update is ready. Open About to restart and update %1.</source>
+            <translation>An update is ready. Open About to restart and update %1.</translation>
+        </message>
+        <message>
             <source>An update is ready. Open About to restart and update Snow Shot.</source>
             <translation>An update is ready. Open About to restart and update Snow Shot.</translation>
         </message>
@@ -687,6 +789,10 @@ so every moment on screen can be expressed clearly and shared easily.</translati
         <message>
             <source>Feature unavailable</source>
             <translation>Feature unavailable</translation>
+        </message>
+        <message>
+            <source>Finish capturing, recording, exporting, recognizing text, or updating before changing storage.</source>
+            <translation>Finish capturing, recording, exporting, recognizing text, or updating before changing storage.</translation>
         </message>
         <message>
             <source>Finish capturing, recording, or exporting before updating.</source>
@@ -722,6 +828,10 @@ so every moment on screen can be expressed clearly and shared easily.</translati
         <message>
             <source>Update</source>
             <translation>Update</translation>
+        </message>
+        <message>
+            <source>Video export completed</source>
+            <translation>Video export completed</translation>
         </message>
     </context>
 </TS>

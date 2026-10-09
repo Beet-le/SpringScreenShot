@@ -6,6 +6,7 @@
 
 #include <QFrame>
 #include <QPointer>
+#include <QBrush>
 
 #include <memory>
 
@@ -36,10 +37,11 @@ class ContentCardWidget final : public QFrame {
     void setCurrentRoute(const QString& route);
     void activateSection(const QString& sectionId);
     void navigateTo(const snow_shot::presentation::settings::SettingsLocation& location);
-    void showInterfaceSettings();
-    void showFunctionSettings();
+    void showGeneralSettings();
+    void showScreenshotSettings();
     void showTranslation(const QString& text);
     void applyTheme(const snow_shot::presentation::styles::ThemeColorScheme& scheme);
+    void setSkinMaskOpacity(qreal opacity);
     void retranslateUi();
 
   signals:
@@ -63,6 +65,7 @@ class ContentCardWidget final : public QFrame {
     createPage(const snow_shot::presentation::settings::SettingsPageDefinition& definition);
     void destroyActivePage();
     void handleCommand(const snow_shot::presentation::settings::SettingsCommand& command);
+    void updateBackgroundBrush();
 
     const snow_shot::presentation::settings::SettingsRegistry& m_registry;
     snow_shot::presentation::settings::SettingsRuntimeSession& m_runtimeSession;
@@ -72,6 +75,8 @@ class ContentCardWidget final : public QFrame {
     QString m_activePageId;
     snow_shot::presentation::settings::SettingsLocation m_currentLocation;
     snow_shot::presentation::styles::ThemeColorScheme m_colorScheme;
+    QBrush m_backgroundBrush;
+    qreal m_skinMaskOpacity = 1.0;
 };
 
 #endif // SNOW_SHOT_PRESENTATION_COMPONENTS_CONTENTCARDWIDGET_H

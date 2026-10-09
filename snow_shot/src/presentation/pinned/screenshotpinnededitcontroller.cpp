@@ -1,3 +1,4 @@
+#include "snow_shot/presentation/canvashistoryshortcuts.h"
 #include "snow_shot/shortcuts/shortcutbinding.h"
 #include "snow_shot/presentation/pinnedgeometry.h"
 #include "snow_shot/presentation/screenshotautofiltercontroller.h"
@@ -46,6 +47,7 @@ ScreenshotToolPalette::Options pinnedEditToolbarOptions() {
     options.showShapeTool = true;
     options.showArrowTool = true;
     options.showLineTool = true;
+    options.showDistanceTool = true;
     options.showFreeDrawTool = true;
     options.showHighlightTool = true;
     options.showSpotlightTool = true;
@@ -59,6 +61,8 @@ ScreenshotToolPalette::Options pinnedEditToolbarOptions() {
     options.showTableTool = true;
     options.showQrTool = true;
     options.showImageConversionTools = true;
+    options.toolbarLayout = snow_shot::storage::ScreenshotToolbarSettings().layout(
+        snow_shot::storage::ScreenshotToolbarLayoutKind::DrawingTools);
     options.actionToolsLayoutKind =
         snow_shot::storage::ScreenshotToolbarLayoutKind::PinnedActionTools;
     options.actionToolsLayout =
@@ -128,10 +132,19 @@ ScreenshotPinnedEditController::ScreenshotPinnedEditController(
         }
     });
 
+    new snow_shot::presentation::CanvasHistoryShortcuts(
+        m_shortcutManager, this,
+        [this](const auto&) {
+            return m_editMode && !canvasColorSamplingActive() && !m_canvas.hasActiveTextEditing() &&
+                   m_toolbarWindow && m_toolbarWindow->palette();
+        },
+        [this](const QString& action) {
+            return m_toolbarWindow->palette()->activateScreenshotShortcut(action);
+        });
     registerDrawingShortcuts();
     reloadDrawingShortcuts();
-    registerRecognitionShortcuts();
-    reloadRecognitionShortcuts();
+    registerScreenshotShortcuts();
+    reloadScreenshotShortcuts();
     auto& storage = snow_shot::storage::ApplicationStorage::instance();
     if (storage.isInitialized()) {
         connect(&storage.configuration(), &snow_shot::storage::ConfigurationStore::valueChanged,
@@ -144,10 +157,17 @@ ScreenshotPinnedEditController::ScreenshotPinnedEditController(
                                         PinnedActionTools));
                             updatePlacement();
                         }
+                    } else if (key == QStringLiteral("screenshot_toolbar/layout")) {
+                        if (m_toolbarWindow != nullptr && m_toolbarWindow->palette() != nullptr) {
+                            m_toolbarWindow->palette()->setToolbarLayout(
+                                snow_shot::storage::ScreenshotToolbarSettings().layout(
+                                    snow_shot::storage::ScreenshotToolbarLayoutKind::DrawingTools));
+                            updatePlacement();
+                        }
                     } else if (key.startsWith(QStringLiteral("drawing_shortcuts/"))) {
                         reloadDrawingShortcuts();
                     } else if (key.startsWith(QStringLiteral("screenshot_shortcuts/"))) {
-                        reloadRecognitionShortcuts();
+                        reloadScreenshotShortcuts();
                     }
                 });
     }
@@ -275,7 +295,7 @@ void ScreenshotPinnedEditController::reloadDrawingShortcuts() {
     }
 }
 
-void ScreenshotPinnedEditController::registerRecognitionShortcuts() {
+void ScreenshotPinnedEditController::registerScreenshotShortcuts() {
     const auto shortcuts = snow_shot::storage::ScreenshotShortcutSettings().allShortcuts();
     for (const QString& actionId :
          {QStringLiteral("table_recognition"), QStringLiteral("qr_code_recognition"),
@@ -297,15 +317,15 @@ void ScreenshotPinnedEditController::registerRecognitionShortcuts() {
         binding.activate = [this, actionId](const auto&) {
             return m_toolbarWindow->palette()->activateScreenshotShortcut(actionId);
         };
-        m_recognitionShortcutBindings.insert(
-            actionId, m_shortcutManager.addBinding(this, std::move(binding)));
+        m_screenshotShortcutBindings.insert(actionId,
+                                            m_shortcutManager.addBinding(this, std::move(binding)));
     }
 }
 
-void ScreenshotPinnedEditController::reloadRecognitionShortcuts() {
+void ScreenshotPinnedEditController::reloadScreenshotShortcuts() {
     const snow_shot::storage::ScreenshotShortcutSettings settings;
-    for (auto binding = m_recognitionShortcutBindings.cbegin();
-         binding != m_recognitionShortcutBindings.cend(); ++binding) {
+    for (auto binding = m_screenshotShortcutBindings.cbegin();
+         binding != m_screenshotShortcutBindings.cend(); ++binding) {
         static_cast<void>(
             m_shortcutManager.setShortcuts(binding.value(), settings.shortcuts(binding.key())));
     }
@@ -348,6 +368,8 @@ void ScreenshotPinnedEditController::ensureToolbar() {
                 [this]() { activateCanvasTool(SnowCanvasTool::Select); });
         connect(toolbar, &ScreenshotToolPalette::shapeRequested, this,
                 [this]() { activateCanvasTool(SnowCanvasTool::Shape); });
+        connect(toolbar, &ScreenshotToolPalette::distanceToolRequested, this,
+                [this]() { activateCanvasTool(SnowCanvasTool::Distance); });
         connect(toolbar, &ScreenshotToolPalette::arrowRequested, this,
                 [this]() { activateCanvasTool(SnowCanvasTool::Arrow); });
         connect(toolbar, &ScreenshotToolPalette::lineRequested, this,
@@ -360,6 +382,10 @@ void ScreenshotPinnedEditController::ensureToolbar() {
                 [this]() { activateCanvasTool(SnowCanvasTool::PenHighlight); });
         connect(toolbar, &ScreenshotToolPalette::spotlightRequested, this,
                 [this]() { activateCanvasTool(SnowCanvasTool::Spotlight); });
+        connect(toolbar, &ScreenshotToolPalette::rectangleEraserRequested, this,
+                [this]() { activateCanvasTool(SnowCanvasTool::RectangleEraser); });
+        connect(toolbar, &ScreenshotToolPalette::brushEraserRequested, this,
+                [this]() { activateCanvasTool(SnowCanvasTool::BrushEraser); });
         connect(toolbar, &ScreenshotToolPalette::eraserRequested, this,
                 [this]() { activateCanvasTool(SnowCanvasTool::Eraser); });
         connect(toolbar, &ScreenshotToolPalette::filterRequested, this,
@@ -532,6 +558,8 @@ void ScreenshotPinnedEditController::setEditMode(bool enabled) {
         }
     }
     destroyToolbar();
+    resetAutoFilterSession();
+    m_pinnedWindow.m_runtime.clearRenderState();
     emit editModeChanged(false);
 }
 
@@ -811,6 +839,9 @@ void ScreenshotPinnedEditController::syncPaletteFromCanvasTool() {
     case SnowCanvasTool::Arrow:
         host->setActiveTool(ScreenshotToolPalette::Tool::Arrow);
         break;
+    case SnowCanvasTool::Distance:
+        host->setActiveTool(ScreenshotToolPalette::Tool::Distance);
+        break;
     case SnowCanvasTool::Line:
         host->setActiveTool(ScreenshotToolPalette::Tool::Line);
         break;
@@ -828,6 +859,12 @@ void ScreenshotPinnedEditController::syncPaletteFromCanvasTool() {
         break;
     case SnowCanvasTool::Eraser:
         host->setActiveTool(ScreenshotToolPalette::Tool::Eraser);
+        break;
+    case SnowCanvasTool::RectangleEraser:
+        host->setActiveTool(ScreenshotToolPalette::Tool::RectangleEraser);
+        break;
+    case SnowCanvasTool::BrushEraser:
+        host->setActiveTool(ScreenshotToolPalette::Tool::BrushEraser);
         break;
     case SnowCanvasTool::AutoFilter:
         host->setActiveTool(ScreenshotToolPalette::Tool::AutoFilter);
@@ -1015,6 +1052,10 @@ QJsonObject ScreenshotPinnedEditController::automationAutoFilterState() const {
 void ScreenshotPinnedEditController::cancelAutomationAutoFilter() {
     if (m_automationFilterCategories.isEmpty())
         return;
+    resetAutoFilterSession();
+}
+
+void ScreenshotPinnedEditController::resetAutoFilterSession() {
     m_automationFilterCategories.clear();
     m_autoFilterController->resetSession();
 }

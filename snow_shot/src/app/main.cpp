@@ -1,3 +1,5 @@
+#include "snow_shot/app/edition.h"
+#include "snow_shot/platform/applicationqos.h"
 #include "snow_shot/app/applicationcontroller.h"
 #include "snow_shot/app/applicationrestart.h"
 #include "snow_shot/app/launchcommands.h"
@@ -16,8 +18,10 @@
 #include "widgets/platform_compatibility.h"
 #include "snow_shot/presentation/components/screenshothistorypagewidget.h"
 #include "snow_shot/storage/applicationstorage.h"
+#include "snow_shot/update/startupupdate.h"
 #include "snow_shot/diagnostics/diagnostics.h"
 #include "diagnosticsbridge.h"
+#include "startupregistrationreport.h"
 #include "snow_shot/storage/settingsadapters.h"
 #include "snow_shot/presentation/capture/screenshotcapturepolicy.h"
 #include "../presentation/capture/screenshotcaptureperfinstrumentation.h"
@@ -26,6 +30,7 @@
 #include "icon_renderer.h"
 #include "locale/locale.h"
 #include "widgets/tooltip.h"
+#include "theme/theme_manager.h"
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -38,6 +43,7 @@
 #include <QTimer>
 #include <QSysInfo>
 #include <optional>
+#include <utility>
 #include "snow_capture.h"
 #include "snow_recording.h"
 #ifdef SNOW_SHOT_MCP_TEST_FIXTURE
@@ -46,6 +52,7 @@
 #endif
 #ifdef Q_OS_MACOS
 #include "snow_shot/platform/macos/loginitemservice.h"
+#include "snow_shot/platform/macos/rastercolorspace.h"
 #include <QScopeGuard>
 #include <future>
 #include <thread>
@@ -84,8 +91,12 @@ std::optional<bool> updateTransactionPending(const QString& helperPath, const QS
 } // namespace
 
 int main(int argc, char* argv[]) {
-    QCoreApplication::setOrganizationName(QStringLiteral("SpringScreenShot"));
-    QString applicationName = QStringLiteral("Spring_ScreenShot");
+    QCoreApplication::setOrganizationName(snow_shot::app::edition::isMini
+                                              ? snow_shot::app::edition::registryName()
+                                              : QStringLiteral("SpringScreenShot"));
+    QString applicationName = snow_shot::app::edition::isMini
+                                  ? snow_shot::app::edition::applicationName()
+                                  : QStringLiteral("Spring_ScreenShot");
     QString e2eInstanceId;
     bool e2eCaptureEnabled = false;
     for (int index = 1; index < argc; ++index) {
@@ -188,6 +199,7 @@ int main(int argc, char* argv[]) {
         const QRect screen = probe.primaryScreen()->geometry();
         const QPoint origin = screen.topLeft() + QPoint(40, 40);
         auto result = std::async(std::launch::async, [path, arguments, origin] {
+            snow_shot::platform::applyApplicationQoSToCurrentThread();
             SnowCaptureDirectRecordingConfig config{};
             config.version = SNOW_CAPTURE_DIRECT_RECORDING_CONFIG_VERSION;
             config.struct_size = sizeof(config);
@@ -206,6 +218,7 @@ int main(int argc, char* argv[]) {
             config.output_fps = 15;
             config.maximum_width = 1920;
             config.maximum_height = 1080;
+            config.quality = 80;
             config.codec = arguments.contains(u"hevc") ? SNOW_CAPTURE_VIDEO_CODEC_H265
                                                        : SNOW_CAPTURE_VIDEO_CODEC_H264;
             config.preset = SNOW_CAPTURE_VIDEO_ENCODING_PRESET_VERYFAST;
@@ -293,6 +306,7 @@ int main(int argc, char* argv[]) {
         config.capture_fps = 30;
         config.output_fps = 30;
         config.preset = 1;
+        config.quality = 80;
         config.encoder_preference = 1;
         config.enable_system_audio = 1;
         config.show_cursor = 1;
@@ -367,11 +381,7 @@ int main(int argc, char* argv[]) {
 #endif
     const QString updateRoot = updateInstallationRoot(QFileInfo(executablePath).absolutePath());
     const QString updateHelper = QDir(QFileInfo(executablePath).absolutePath())
-#ifdef Q_OS_WIN
-                                     .filePath(QStringLiteral("snow-shot-updater.exe"));
-#else
-                                     .filePath(QStringLiteral("snow-shot-updater"));
-#endif
+                                     .filePath(snow_shot::app::edition::updaterName());
     const auto pendingUpdate = updateTransactionPending(updateHelper, updateRoot);
     if (!pendingUpdate.has_value()) {
         return 6;
@@ -442,6 +452,11 @@ int main(int argc, char* argv[]) {
     diagnosticsOptions.directories.append(
         QDir(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation))
             .filePath(QStringLiteral("logs")));
+    // Crashpad registers process-wide exception resources once. Its live database must
+    // stay at a stable path while the user-selected data/log directory is migrated.
+    diagnosticsOptions.crashCaptureDirectory =
+        QDir(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation))
+            .filePath(QStringLiteral("logs/crashes"));
     diagnosticsOptions.directories.append(
         QDir(QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation)).canonicalPath())
             .filePath(QStringLiteral("SpringScreenShot/%1/logs").arg(applicationName)));
@@ -466,12 +481,12 @@ int main(int argc, char* argv[]) {
     QCoreApplication::setAttribute(Qt::AA_DontCreateNativeWidgetSiblings);
 
 #ifdef Q_OS_MACOS
+    snow_shot::platform::macos::configureRasterColorSpace();
     snow_shot::platform::macos::observeNativeLoginItemLaunch();
 #endif
     // The internal application name also owns settings and single-instance keys.
     // Keep it stable while giving Qt windows and the macOS menu the product name.
-    QGuiApplication::setApplicationDisplayName(
-        QCoreApplication::translate("AboutPageWidget", "Snow Shot"));
+    QGuiApplication::setApplicationDisplayName(snow_shot::app::edition::productName());
     QApplication app(argc, argv);
     adqt::widgets::initializePlatformCompatibility(app);
     snow_shot::diagnostics::logEvent(QStringLiteral("snow_shot.app"),
@@ -521,6 +536,8 @@ int main(int argc, char* argv[]) {
     auto launchArguments =
         applicationRestart ? snow_shot::app::normalApplicationArguments(QApplication::arguments())
                            : QApplication::arguments();
+    const bool updaterRelaunch = snow_shot::update::isStartupUpdateRelaunch(launchArguments);
+    launchArguments = snow_shot::update::normalStartupArguments(std::move(launchArguments));
 #ifdef Q_OS_MACOS
     launchArguments = snow_shot::platform::macos::loginItemLaunchArguments(
         launchArguments, snow_shot::platform::macos::initialNativeLoginItemLaunch());
@@ -551,7 +568,9 @@ int main(int argc, char* argv[]) {
             shutdownScreenshotHistoryTasks();
         }
     } historyTaskDrain;
+#ifndef Q_OS_MACOS
     static_cast<void>(snow_shot::presentation::settings::applyConfiguredApplicationPriority());
+#endif
     QApplication::setQuitOnLastWindowClosed(false);
 #ifndef Q_OS_MACOS
     QApplication::setWindowIcon(
@@ -559,6 +578,46 @@ int main(int argc, char* argv[]) {
 #endif
     adqt::locale::LocaleManager::instance().applyTo(app);
     snow_shot::presentation::LanguageManager::instance().initialize();
+    snow_shot::presentation::styles::ThemeManager::instance().initialize(app);
+#ifdef Q_OS_WIN
+    auto& applicationStorage = snow_shot::storage::ApplicationStorage::instance();
+    if (!updaterRelaunch &&
+        applicationStorage.configuration().value(QStringLiteral("updates/mode")).toString() ==
+            u"next_launch") {
+        snow_shot::update::UpdateService startupUpdate(
+            snow_shot::update::defaultUpdateServiceOptions());
+        startupUpdate.setMode(QStringLiteral("next_launch"));
+        startupUpdate.setProgressAppearance(
+            snow_shot::presentation::styles::ThemeManager::instance().updateProgressAppearance());
+        QObject::connect(&adqt::theme::ThemeManager::instance(),
+                         &adqt::theme::ThemeManager::themeChanged, &startupUpdate,
+                         [&startupUpdate] {
+                             startupUpdate.setProgressAppearance(
+                                 snow_shot::presentation::styles::ThemeManager::instance()
+                                     .updateProgressAppearance());
+                         });
+        startupUpdate.setSystemProxy(
+            applicationStorage.configuration().value(QStringLiteral("network/proxy")).toString() ==
+            u"system");
+        bool foregroundRequested = administratorRestart;
+        const auto forwardedLaunch = QObject::connect(
+            &singleInstance, &snow_shot::app::SingleInstanceCoordinator::launchRequestReceived,
+            &app, [&](const QStringList& arguments) {
+                foregroundRequested =
+                    foregroundRequested || !arguments.contains(QStringLiteral("--autostart"));
+                startupUpdate.setRelaunchArguments(
+                    snow_shot::update::startupUpdateRelaunchArguments(foregroundRequested));
+            });
+        const auto startupUpdateResult = snow_shot::update::runStartupUpdate(
+            startupUpdate, [&applicationStorage] { return applicationStorage.flushNow().success; },
+            [&] { return foregroundRequested; });
+        QObject::disconnect(forwardedLaunch);
+        if (startupUpdateResult == snow_shot::update::StartupUpdateResult::ExitForUpdate)
+            return 0;
+    }
+#else
+    static_cast<void>(updaterRelaunch);
+#endif
     const auto startupSettings = snow_shot::storage::SystemSettings();
 #ifdef Q_OS_MACOS
     const auto startupResult =
@@ -574,22 +633,26 @@ int main(int argc, char* argv[]) {
             : snow_shot::platform::windows::StartupMode::Registry);
 #endif
 
-    snow_shot::presentation::styles::ThemeManager::instance().initialize(app);
     adqt::widgets::AdTooltip::installApplicationTooltips();
 
     snow_shot::app::ApplicationController applicationController(app);
     singleInstance.setLaunchRequestHandler([&applicationController](const QStringList& arguments) {
-        applicationController.handleLaunchRequest(arguments);
+        applicationController.handleLaunchRequest(
+            snow_shot::update::normalStartupArguments(arguments));
     });
     applicationController.start();
     if (!startupResult.success) {
-        qWarning().noquote() << startupResult.error;
-        QTimer::singleShot(0, &app, [error = startupResult.error] {
+        snow_shot::app::reportStartupRegistrationFailure(startupResult.error);
+#ifdef Q_OS_MACOS
+        QTimer::singleShot(0, &app, [&applicationController, error = startupResult.error] {
+            // Startup can otherwise have only a tiny floating toolbar visible.
+            // Give the error a readable application surface before opening it.
+            applicationController.showMainWindow();
             adqt::widgets::AdMessage::Request request;
             request.content = error;
-            adqt::widgets::AdMessageService::error(std::move(request),
-                                                   QApplication::activeWindow());
+            adqt::widgets::AdMessageService::error(std::move(request));
         });
+#endif
     }
     if (administratorRestart)
         applicationController.showMainWindow();

@@ -75,9 +75,14 @@ class SnowCanvasWidgetTextInteraction final {
 
     SnowCanvasWidgetTextInteraction(QWidget& widget, SnowCanvasCursorController& cursorController);
     void invalidateArrowTextMetrics();
+    void resetDocumentRetainedState();
 
     SnowCanvasTextEditorSession& session();
     const SnowCanvasTextEditorSession& session() const;
+    snow_canvas_commands::MutationResult
+    setTextEditingBounds(const std::optional<QRectF>& bounds, SnowRuntime runtime,
+                         SnowViewport viewport, const SnowCanvasDisplayCache& displayCache,
+                         const QFont& baseFont);
 
     snow_canvas_commands::MutationResult measureArrowText(SnowRuntime runtime,
                                                           SnowViewport viewport);
@@ -114,8 +119,7 @@ class SnowCanvasWidgetTextInteraction final {
     // styling the label was created with.
     snow_canvas_commands::CreateSerialNumberTextResult
     createSerialNumberText(SnowRuntime runtime, SnowViewport viewport,
-                           const SnowTextStyle& textStyle,
-                           const SnowSerialNumberStyle& serialNumberStyle);
+                           const SnowTextStyle& textStyle);
     BeginResult beginRequestedTextEdit(SnowRuntime runtime, SnowViewport viewport,
                                        const SnowCanvasDisplayCache& displayCache);
     // Starts a blank-canvas draft only after the engine authorized it by

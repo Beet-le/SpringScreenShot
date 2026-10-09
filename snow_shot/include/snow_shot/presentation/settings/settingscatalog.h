@@ -4,6 +4,7 @@
 #include "icon_core.h"
 #include "snow_shot/presentation/globalshortcuttypes.h"
 #include "snow_shot/presentation/globalmousetypes.h"
+#include "snow_shot/presentation/translatabletext.h"
 
 #include <QMetaType>
 #include <QHash>
@@ -17,14 +18,6 @@
 #include <variant>
 
 namespace snow_shot::presentation::settings {
-
-struct TranslatableText {
-    const char* context = nullptr;
-    const char* source = nullptr;
-
-    [[nodiscard]] bool isValid() const;
-    [[nodiscard]] QString translated() const;
-};
 
 struct SettingsLocation {
     QString pageId;
@@ -67,6 +60,7 @@ enum class SettingsSelectSource {
     Fixed,
     LanguageCatalog,
     FontFamilies,
+    TranslationServices,
 };
 
 enum class SettingsSelectBinding {
@@ -74,20 +68,26 @@ enum class SettingsSelectBinding {
     Language,
     AppFont,
     ApplicationPriority,
+    ApplicationQoS,
     Proxy,
     UpdateMode,
     OcrModelType,
     OcrDetectorResizePolicy,
+    OcrTextDetectionProcessing,
     ScreenshotApiMode,
+    ScreenRecordingApiMode,
     WindowElementApi,
     ScreenshotToolbarSize,
     OcrFillStyle,
+    OcrDefaultFormatting,
+    OcrDefaultPunctuation,
     ColorPickerDisplayMode,
     ScreenshotOcrAction,
     ScreenshotDoubleClickAction,
     ScreenshotMiddleClickAction,
     PinMouseWheelZoomMode,
     PinTextSelectionOnRecognitionResults,
+    PinDuplicateContentAction,
     PinDoubleClickAction,
     PinMiddleClickAction,
     ScreenRecordingClarity,
@@ -105,7 +105,15 @@ enum class SettingsSelectBinding {
     TrayLeftClickAction,
     TrayMiddleClickAction,
     TranslationLayoutProcessing,
+    TranslationSourceLanguage,
+    TranslationPrimaryTargetLanguage,
+    TranslationSecondaryTargetLanguage,
+    TranslationService,
     ScreenshotSelectionResizeMode,
+    SkinDisplayMode,
+    SkinPosition,
+    ToolbarSkinPosition,
+    TrayMenuSkinPosition,
 };
 
 struct SettingsSelectDefinition {
@@ -125,30 +133,42 @@ enum class SettingsSwitchBinding {
     OcrModelHotStart,
     SelectionTransitionAnimation,
     ScreenshotAreaTypeHint,
+    ShowGuidesByDefault,
+    ShowEditSelectionToolbar,
     TrayEnabled,
+    FloatingToolbarEnabled,
     ScreenshotAutoSaveAfterCopy,
     ScreenshotQuickSelectionModification,
-    ScreenshotCaptureCursor,
+    ScreenshotShowCursor,
     ScreenshotCaptureUiInScrollingScreenshot,
     ScreenshotShutterSoundNotification,
+    ScreenshotSoundNotification,
     ScreenshotConfirmBeforeExitingViaShortcut,
     ScreenshotAutoRecognizeQrCode,
     ScreenshotRestoreOriginalScreenColors,
     ScreenshotCopyImageFileToClipboard,
     SaveRecognitionResultAsImage,
+    ShowOriginalImagePreview,
     PinAutomaticTextRecognition,
     PinAutoResizeWindow,
+    PinShowWindowButtons,
+    PinConfirmBeforeClosingWindow,
+    PinConfirmBeforeDestroyingWindow,
     OriginalImageTranslation,
     TranslationPageEnabled,
     JumpToTranslationPage,
     StandaloneTranslationWindow,
+    SeparateRecordingAudioTracks,
     LoopAnimatedImages,
     ScreenRecordingCaptureToolbar,
+    ScreenRecordingAutoExitAfterRecordingEnds,
+    ScreenRecordingNotifyAfterExportCompletes,
     DisableHotkeysOnFocusedFullscreen,
     McpEnabled,
     AutoStartAtBoot,
     LaunchAsAdministrator,
     DrawingRememberLastUsedTool,
+    DrawingAlwaysShowFirstToolbarGroupButton,
 };
 
 struct SettingsSwitchDefinition {
@@ -182,8 +202,14 @@ struct SettingsIntegerDefinition {
 };
 
 enum class SettingsSliderBinding {
+    AppFontSize,
     ShortcutHintOpacity,
+    FloatingToolbarOpacity,
     ScreenshotImageQuality,
+    ScreenRecordingVideoQuality,
+    SkinOpacity,
+    SkinBlurLevel,
+    SkinMaskOpacity,
 };
 
 struct SettingsSliderDefinition {
@@ -196,15 +222,28 @@ enum class SettingsColorBinding {
     SelectionBorderColor,
     SelectionMaskColor,
     CursorGuideLineColor,
+    SelectionCenterGuideLineColor,
     MonitorCenterGuideLineColor,
     ColorPickerCenterGuideLineColor,
     PinBorderColor,
     PinBorderActiveColor,
+    PinLockedBorderColor,
 };
 
 struct SettingsColorDefinition {
     SettingsColorBinding binding = SettingsColorBinding::SelectionMaskColor;
     bool alphaChannelEnabled = true;
+};
+
+enum class SettingsColorPaletteBinding {
+    StrokeColors,
+    FillColors,
+};
+
+struct SettingsColorPaletteDefinition {
+    SettingsColorPaletteBinding binding = SettingsColorPaletteBinding::StrokeColors;
+    int colorCount = 5;
+    TranslatableText buttonLabel;
 };
 
 enum class SettingsRadioBinding {
@@ -224,6 +263,9 @@ struct SettingsRadioDefinition {
 
 enum class SettingsFilePathBinding {
     TrayCustomIcon,
+    SkinPath,
+    ToolbarSkinPath,
+    TrayMenuSkinPath,
 };
 
 struct SettingsFilePathDefinition {
@@ -315,6 +357,12 @@ struct SettingsActionFileOpenDefinition {
     TranslatableText fileFilter;
 };
 
+struct SettingsActionExportOptionsDefinition {
+    TranslatableText styleFieldLabel;
+    TranslatableText styleFieldDescription;
+    TranslatableText rejectText;
+};
+
 struct SettingsActionDefinition {
     SettingsActionBinding binding = SettingsActionBinding::ClearCaptureHistory;
     TranslatableText buttonText;
@@ -323,9 +371,11 @@ struct SettingsActionDefinition {
     std::optional<SettingsConfirmationDefinition> confirmation;
     std::optional<SettingsActionFileOpenDefinition> fileOpen;
     std::optional<TranslatableText> successMessage;
+    std::optional<SettingsActionExportOptionsDefinition> exportOptions;
 };
 
 enum class SettingsCustomRenderer {
+    CloudUploadConfigurations,
     McpStatus,
     PermissionScreenRecording,
     PermissionAccessibility,
@@ -336,7 +386,9 @@ enum class SettingsCustomRenderer {
     StorageStatus,
     DrawingToolbarEditor,
     ScreenshotToolbarEditor,
+    RecordingToolbarEditor,
     PinnedToolbarEditor,
+    FloatingToolbarEditor,
     TrayMenuOptions,
 };
 
@@ -381,12 +433,14 @@ struct TrayCommandManifest {
                                               int screenshotDelaySeconds = 3) const;
 };
 
-using SettingsItemPayload = std::variant<
-    SettingsSelectDefinition, SettingsSwitchDefinition, SettingsIntegerDefinition,
-    SettingsMultiSelectDefinition, SettingsSliderDefinition, SettingsColorDefinition,
-    SettingsRadioDefinition, SettingsFilePathDefinition, SettingsDirectoryPathDefinition,
-    SettingsTextDefinition, SettingsShortcutActionDefinition, SettingsLocalShortcutDefinition,
-    SettingsActionDefinition, SettingsCustomDefinition, SettingsGlobalMouseActionDefinition>;
+using SettingsItemPayload =
+    std::variant<SettingsSelectDefinition, SettingsSwitchDefinition, SettingsIntegerDefinition,
+                 SettingsMultiSelectDefinition, SettingsSliderDefinition, SettingsColorDefinition,
+                 SettingsColorPaletteDefinition, SettingsRadioDefinition,
+                 SettingsFilePathDefinition, SettingsDirectoryPathDefinition,
+                 SettingsTextDefinition, SettingsShortcutActionDefinition,
+                 SettingsLocalShortcutDefinition, SettingsActionDefinition,
+                 SettingsCustomDefinition, SettingsGlobalMouseActionDefinition>;
 
 struct SettingsItemDefinition {
     // Item IDs are globally stable within a registry. They are used as the
@@ -408,6 +462,7 @@ enum class SettingsSectionReset {
     OtherShortcuts,
     GlobalPinToScreenShortcuts,
     GeneralSettings,
+    Skin,
     HistoryPolicy,
     PinnedHistoryPolicy,
     ScreenshotSettings,
@@ -426,7 +481,7 @@ enum class SettingsSectionReset {
     PinToScreen,
     PinToScreenBehavior,
     Tray,
-    TrayBehavior,
+    FloatingToolbar,
     ScreenRecording,
     ScreenRecordingOutput,
     GlobalHotkeys,
@@ -440,6 +495,16 @@ enum class SettingsSectionReset {
     CustomAiModels,
     TextTranslationConfigurations,
     ExtendedTranslation,
+    ScreenshotCaptureBehavior,
+    ScreenshotCaptureCompatibility,
+    ScreenRecordingVideo,
+    ScreenRecordingAnimation,
+    ScreenRecordingEncoding,
+    Language,
+    PinToScreenToolbar,
+    ScreenshotActionToolbar,
+    ScreenRecordingActionToolbar,
+    ScreenRecordingInteraction,
 };
 
 enum class SettingsSectionItemLayout {
@@ -455,6 +520,7 @@ struct SettingsSectionDefinition {
     SettingsSectionReset reset = SettingsSectionReset::None;
     QVector<SettingsItemDefinition> items;
     SettingsSectionItemLayout itemLayout = SettingsSectionItemLayout::VerticalList;
+    bool collapsedByDefault = false;
 };
 
 enum class SettingsPageKind {
@@ -465,6 +531,12 @@ enum class SettingsPageKind {
     Translation,
 };
 
+// Links share the canonical destination instead of duplicating controls or state.
+struct SettingsRelatedLink {
+    TranslatableText title;
+    SettingsLocation location;
+};
+
 struct SettingsPageDefinition {
     QString id;
     QString route;
@@ -472,12 +544,16 @@ struct SettingsPageDefinition {
     TranslatableText description;
     QVector<SettingsSectionDefinition> sections;
     SettingsPageKind kind = SettingsPageKind::GeneratedSettings;
+    QVector<SettingsRelatedLink> relatedLinks = {};
+    QVector<TranslatableText> aliases = {};
 };
 
 struct SettingsNavigationPageDefinition {
     QString id;
     QString pageId;
     std::function<adqt::icons::IconRef()> iconFactory;
+    // Optional concise sidebar label; search keeps the full page title.
+    TranslatableText title = {};
 };
 
 struct SettingsNavigationGroupDefinition {

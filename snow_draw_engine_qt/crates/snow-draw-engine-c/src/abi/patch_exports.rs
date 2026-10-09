@@ -14,6 +14,7 @@ pub extern "C" fn snow_filter_render_spec_resolve(
         3 => snow_draw_engine::DisplayFilterType::Inversion,
         4 => snow_draw_engine::DisplayFilterType::Emboss,
         6 => snow_draw_engine::DisplayFilterType::Brightness,
+        7 => snow_draw_engine::DisplayFilterType::RestoreBackground,
         5 => snow_draw_engine::DisplayFilterType::SmartErase,
         _ => snow_draw_engine::DisplayFilterType::Mosaic,
     };
@@ -26,6 +27,7 @@ pub extern "C" fn snow_filter_render_spec_resolve(
             snow_draw_engine::DisplayFilterType::Inversion => 3,
             snow_draw_engine::DisplayFilterType::Emboss => 4,
             snow_draw_engine::DisplayFilterType::Brightness => 6,
+            snow_draw_engine::DisplayFilterType::RestoreBackground => 7,
             snow_draw_engine::DisplayFilterType::SmartErase => 5,
         },
         render_phase: 0,
@@ -482,6 +484,7 @@ mod spotlight_patch_export_tests {
             start: 3,
             delete_count: 2,
             insert_items: vec![DisplaySpotlightCutout {
+                shape: snow_draw_engine::DisplayRectangleShape::Ellipse,
                 center_x: 11.0,
                 center_y: 12.0,
                 width: 30.0,
@@ -513,6 +516,7 @@ mod spotlight_patch_export_tests {
             assert_eq!((*ops).delete_count, 2);
             assert_eq!((*cutouts).center_x, 11.0);
             assert_eq!((*cutouts).rotation, 0.25);
+            assert_eq!((*cutouts).shape, SnowDisplayRectShape::Ellipse as u8);
             snow_patch_destroy(handle);
         }
     }

@@ -17,19 +17,44 @@ struct SelectedFileTarget;
 }
 namespace snow_shot::presentation {
 class PinnedWindowGroupManager;
-}
+enum class GlobalShortcutAction;
+} // namespace snow_shot::presentation
 class ScreenshotOcrRecognitionService;
 class ScreenshotQrRecognitionPort;
 class SnowShotApiClient;
 class ScreenshotExportArtifact;
+class ScreenshotPrintService;
 class ScreenRecordingController;
 struct ScreenshotClipboardContent;
+struct ScreenshotClipboardContentSnapshot;
 struct ScreenshotHistoryEntry;
 
 class ScreenshotController : public QObject {
     Q_OBJECT
 
   public:
+    enum class CaptureAction {
+        None,
+        Pin,
+        RecognizeText,
+        RecognizeTextTranslation,
+        Copy,
+        Save,
+        QuickSave,
+        StartVideo,
+        StartScrolling,
+        RecognizeTable,
+        RecognizeQr,
+        RecognizeFormula,
+        ConvertMarkdown,
+        ConvertHtml,
+    };
+    Q_ENUM(CaptureAction)
+    [[nodiscard]] bool captureForAction(CaptureAction action);
+    // Consumes supported global tool shortcuts in an active capture, including rejected tools.
+    [[nodiscard]] bool
+    handleActiveScreenshotShortcut(snow_shot::presentation::GlobalShortcutAction action);
+    void pinDroppedContent(ScreenshotClipboardContentSnapshot snapshot, QStringList paths);
     explicit ScreenshotController(
         QObject* parent = nullptr,
         snow_shot::presentation::PinnedWindowGroupManager* groupManager = nullptr,
@@ -38,6 +63,7 @@ class ScreenshotController : public QObject {
     ~ScreenshotController() override;
     void pinSelectedFilesToScreen(snow_shot::platform::SelectedFileTarget target);
     [[nodiscard]] bool captureAvailable() const;
+    void setCaptureSuspended(bool suspended);
     [[nodiscard]] bool captureAcquisitionActive() const;
     [[nodiscard]] bool blocksApplicationUpdate() const;
     [[nodiscard]] bool beginGlobalMouseCapture(
@@ -49,6 +75,7 @@ class ScreenshotController : public QObject {
     void finishGlobalMouseCapture(quint64 gestureId, const QPointF& position);
     void cancelGlobalMouseCapture(quint64 gestureId);
 
+    void setPrintService(ScreenshotPrintService* service);
     void setRecordingPermissionCheck(std::function<bool(bool, bool, bool)> check);
 
     [[nodiscard]] QJsonObject mcpState() const;
@@ -103,6 +130,8 @@ class ScreenshotController : public QObject {
     void mcpRedoCanvasEdit();
 
   signals:
+    void recordingExportNotificationRequested(const QString& path);
+    void captureActivityChanged(const QString& source, bool active);
     void selectedFilePinFailed(const QString& message);
     void showMainWindowRequested();
     void accessibilityPermissionRequested();

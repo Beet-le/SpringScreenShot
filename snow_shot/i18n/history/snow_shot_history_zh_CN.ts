@@ -195,6 +195,10 @@
             <translation>暂无固定到屏幕窗口</translation>
         </message>
         <message>
+            <source>Not Closed</source>
+            <translation>未关闭</translation>
+        </message>
+        <message>
             <source>Other / legacy</source>
             <translation>其他 / 旧记录</translation>
         </message>
@@ -217,10 +221,6 @@
         <message>
             <source>Restore</source>
             <translation>恢复</translation>
-        </message>
-        <message>
-            <source>Retained</source>
-            <translation>已保留</translation>
         </message>
         <message>
             <source>Saved records and their open windows will be removed</source>
@@ -429,6 +429,10 @@
             <translation>始终置顶</translation>
         </message>
         <message>
+            <source>Annotation mode</source>
+            <translation>标注模式</translation>
+        </message>
+        <message>
             <source>Cancel</source>
             <translation>取消</translation>
         </message>
@@ -451,6 +455,14 @@
         <message>
             <source>Close other windows</source>
             <translation>关闭其他窗口</translation>
+        </message>
+        <message>
+            <source>Close pinned window</source>
+            <translation>关闭固定到屏幕窗口</translation>
+        </message>
+        <message>
+            <source>Close this pinned window?</source>
+            <translation>确定关闭此固定到屏幕窗口吗？</translation>
         </message>
         <message>
             <source>Copy original content</source>
@@ -481,6 +493,10 @@
             <translation>删除指定分组</translation>
         </message>
         <message>
+            <source>Deselect window</source>
+            <translation>取消选择窗口</translation>
+        </message>
+        <message>
             <source>Destroy</source>
             <translation>销毁</translation>
         </message>
@@ -497,12 +513,8 @@
             <translation>显示文本识别结果</translation>
         </message>
         <message>
-            <source>Drawing mode</source>
-            <translation>绘制模式</translation>
-        </message>
-        <message>
-            <source>Enable drawing mode</source>
-            <translation>启用绘制模式</translation>
+            <source>Enable annotation mode</source>
+            <translation>启用标注模式</translation>
         </message>
         <message>
             <source>Exit click-through mode</source>
@@ -537,10 +549,6 @@
             <translation>图像文件</translation>
         </message>
         <message>
-            <source>Image files (%1)</source>
-            <translation>图像文件 (%1)</translation>
-        </message>
-        <message>
             <source>Image size is too large.</source>
             <translation>图像尺寸过大。</translation>
         </message>
@@ -551,6 +559,14 @@
         <message>
             <source>Load new content</source>
             <translation>加载新内容</translation>
+        </message>
+        <message>
+            <source>Lock mode</source>
+            <translation>锁定模式</translation>
+        </message>
+        <message>
+            <source>Locked</source>
+            <translation>已锁定</translation>
         </message>
         <message>
             <source>Move window</source>
@@ -567,6 +583,10 @@
         <message>
             <source>Opacity: %1%</source>
             <translation>不透明度：%1%</translation>
+        </message>
+        <message>
+            <source>Preparing cloud upload...</source>
+            <translation>正在准备云上传…</translation>
         </message>
         <message>
             <source>Process image</source>
@@ -613,6 +633,10 @@
             <translation>显示主界面</translation>
         </message>
         <message>
+            <source>Supported files (%1)</source>
+            <translation>支持的文件 (%1)</translation>
+        </message>
+        <message>
             <source>The image could not be saved automatically: %1</source>
             <translation>无法自动保存图像：%1</translation>
         </message>
@@ -641,8 +665,43 @@
             <translation>缩略图模式</translation>
         </message>
         <message>
+            <source>Uploaded to cloud. Link copied to clipboard.</source>
+            <translation>已上传到云端，链接已复制到剪贴板。</translation>
+        </message>
+        <message>
+            <source>Uploading to cloud... %1%</source>
+            <translation>正在上传到云端… %1%</translation>
+        </message>
+        <message>
             <source>Window Management</source>
             <translation>窗口管理</translation>
+        </message>
+    </context>
+    <context>
+        <name>WindowGroupSwitcher</name>
+        <message>
+            <source>%1, %2 not closed windows, %3 total</source>
+            <translation>%1，%2 个未关闭窗口，共 %3 个</translation>
+        </message>
+        <message>
+            <source>Click a group to switch. Esc to cancel.</source>
+            <translation>点击分组以切换，按 Esc 取消。</translation>
+        </message>
+        <message>
+            <source>Current</source>
+            <translation>当前</translation>
+        </message>
+        <message>
+            <source>Release shortcut keys or click a group to switch. Esc to cancel.</source>
+            <translation>松开所有快捷键或点击分组以切换，按 Esc 取消。</translation>
+        </message>
+        <message>
+            <source>Switch Window Group</source>
+            <translation>切换窗口分组</translation>
+        </message>
+        <message>
+            <source>Windows · not closed / total</source>
+            <translation>窗口 · 未关闭 / 总数</translation>
         </message>
     </context>
     <context>
@@ -710,6 +769,116 @@
         <message>
             <source>This group name is already in use</source>
             <translation>该分组名称已被使用</translation>
+        </message>
+        <message>
+            <source>Unable to create the group or move the selected windows. Try again.</source>
+            <translation>无法创建分组或移动所选窗口。请重试。</translation>
+        </message>
+    </context>
+    <context>
+        <name>snow_shot::presentation::PinnedWindowSelectionController</name>
+        <message numerus="yes">
+            <source>%n selected window(s)</source>
+            <translation>
+            <numerusform>已选择 %n 个窗口</numerusform>
+        </translation>
+        </message>
+        <message>
+            <source>Align Position</source>
+            <translation>对齐位置</translation>
+        </message>
+        <message>
+            <source>Align bottom</source>
+            <translation>底对齐</translation>
+        </message>
+        <message>
+            <source>Align left</source>
+            <translation>左对齐</translation>
+        </message>
+        <message>
+            <source>Align right</source>
+            <translation>右对齐</translation>
+        </message>
+        <message>
+            <source>Align top</source>
+            <translation>顶对齐</translation>
+        </message>
+        <message>
+            <source>Cancel</source>
+            <translation>取消</translation>
+        </message>
+        <message>
+            <source>Center horizontally</source>
+            <translation>水平居中</translation>
+        </message>
+        <message>
+            <source>Center vertically</source>
+            <translation>垂直居中</translation>
+        </message>
+        <message>
+            <source>Close</source>
+            <translation>关闭</translation>
+        </message>
+        <message>
+            <source>Close Other Windows</source>
+            <translation>关闭其他窗口</translation>
+        </message>
+        <message>
+            <source>Delete Empty Groups</source>
+            <translation>删除空分组</translation>
+        </message>
+        <message>
+            <source>Delete Specified Group</source>
+            <translation>删除指定分组</translation>
+        </message>
+        <message>
+            <source>Destroy</source>
+            <translation>销毁</translation>
+        </message>
+        <message numerus="yes">
+            <source>Destroy %n selected window(s)? This action cannot be undone.</source>
+            <translation>
+            <numerusform>销毁所选的 %n 个窗口？此操作无法撤销。</numerusform>
+        </translation>
+        </message>
+        <message>
+            <source>Destroy selected windows</source>
+            <translation>销毁所选窗口</translation>
+        </message>
+        <message>
+            <source>Distribute horizontally</source>
+            <translation>水平分布</translation>
+        </message>
+        <message>
+            <source>Distribute vertically</source>
+            <translation>垂直分布</translation>
+        </message>
+        <message>
+            <source>Group</source>
+            <translation>分组</translation>
+        </message>
+        <message>
+            <source>Lock</source>
+            <translation>锁定</translation>
+        </message>
+        <message>
+            <source>New Group</source>
+            <translation>新建分组</translation>
+        </message>
+        <message>
+            <source>The selected windows could not be destroyed.</source>
+            <translation>无法销毁所选窗口。</translation>
+        </message>
+        <message>
+            <source>The selected windows could not be moved to the group.</source>
+            <translation>无法将所选窗口移至该分组。</translation>
+        </message>
+    </context>
+    <context>
+        <name>snow_shot::presentation::WindowGroupSwitcherController</name>
+        <message>
+            <source>Could not switch window group. Please try again.</source>
+            <translation>无法切换窗口分组，请重试。</translation>
         </message>
     </context>
 </TS>

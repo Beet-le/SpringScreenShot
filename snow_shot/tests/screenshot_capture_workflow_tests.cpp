@@ -11,8 +11,10 @@
 
 #include <QVector>
 
+#include <array>
 #include <cstdlib>
 #include <iostream>
+#include <utility>
 
 namespace {
 void require(bool condition, const char* message) {
@@ -269,6 +271,123 @@ ScreenshotCaptureWorkflow makeWorkflow(ScreenshotCaptureState& state,
     });
 }
 
+void captureStartSoundDefaultsToDisabled() {
+    ScreenshotCaptureState state;
+    ScreenshotDisplaySession displays;
+    ScreenshotGeometryMapper geometry;
+    ScreenshotInteractionState interaction;
+    ScreenshotSelectionModel selection;
+    ScreenshotIntelligentSelectionModel intelligent;
+    CaptureRuntime runtime;
+    ScreenshotCaptureWorkflowContext context{state,       runtime,   geometry,    displays,
+                                             interaction, selection, intelligent, {}};
+    int soundCalls = 0;
+    context.playShutterSound = [&]() { ++soundCalls; };
+    ScreenshotCaptureWorkflow workflow(std::move(context));
+    workflow.startCapture();
+    require(soundCalls == 0 && runtime.captureAllAsyncCalls == 1,
+            "capture start sound must default to disabled without preventing capture");
+}
+
+void captureStartSoundFollowsSessionLifetime() {
+    using Workflow = ScreenshotCaptureWorkflow;
+    for (const bool prewarm : {false, true}) {
+        for (const auto mode : {Workflow::StartMode::Normal, Workflow::StartMode::ExternalDrag}) {
+            for (const auto presentation :
+                 {Workflow::PresentationMode::Visible, Workflow::PresentationMode::Silent}) {
+                ScreenshotCaptureState state;
+                ScreenshotDisplaySession displays;
+                ScreenshotGeometryMapper geometry;
+                ScreenshotInteractionState interaction;
+                ScreenshotSelectionModel selection;
+                ScreenshotIntelligentSelectionModel intelligent;
+                CaptureRuntime runtime;
+                ScreenshotCaptureWorkflowContext context{
+                    state, runtime, geometry, displays, interaction, selection, intelligent, {}};
+                bool enabled = true;
+                int soundCalls = 0;
+                context.screenshotSoundNotification = [&]() { return enabled; };
+                context.playShutterSound = [&]() {
+                    require(state.captureInProgress &&
+                                state.sessionState == ScreenshotSessionState::Capturing,
+                            "sound must play after the new capture session is established");
+                    ++soundCalls;
+                    runtime.operations.push_back(QStringLiteral("shutter"));
+                };
+                Workflow workflow(std::move(context));
+                if (prewarm)
+                    workflow.prewarmResources();
+                require(soundCalls == 0, "prewarming must not play capture start sound");
+
+                const auto start = [&]() {
+                    workflow.startCapture(mode, Workflow::ToolbarPreparation::OnDemand,
+                                          Workflow::ToolbarVisibility::Suppressed, presentation);
+                };
+                enabled = false;
+                start();
+                require(soundCalls == 0 && runtime.captureAllAsyncCalls == 1,
+                        "disabled capture start sound must preserve acquisition in every mode");
+                workflow.cancelCapture();
+
+                enabled = true;
+                runtime.operations.clear();
+                start();
+                const auto soundIndex = runtime.operations.indexOf(QStringLiteral("shutter"));
+                const auto captureIndex =
+                    runtime.operations.indexOf(QStringLiteral("capture-dispatched"));
+                require(soundCalls == 1 && soundIndex >= 0 && captureIndex > soundIndex,
+                        "enabled sound must play once before dispatch in every capture mode");
+
+                CapturedDisplayModel snapshot;
+                snapshot.stableId = QStringLiteral("primary");
+                snapshot.physicalRect = QRect(0, 0, 64, 48);
+                snapshot.logicalRect = snapshot.physicalRect;
+                snapshot.image = QImage(snapshot.physicalRect.size(), QImage::Format_RGB32);
+                snapshot.image.fill(Qt::blue);
+                const auto result = successfulResult(state.sessionId, snapshot);
+                runtime.deliverResult(result);
+                workflow.handleInitialSmartSelectionResolved(state.sessionId);
+                runtime.deliverResult(result);
+                require(soundCalls == 1,
+                        "layout, presentation and duplicate completion must not replay sound");
+                workflow.cancelCapture();
+
+                enabled = false;
+                start();
+                require(soundCalls == 1,
+                        "disabling the preference must silence the next session immediately");
+                workflow.cancelCapture();
+
+                enabled = true;
+                workflow.setCaptureSuspended(true);
+                const int priorCaptures = runtime.captureAllAsyncCalls;
+                start();
+                require(soundCalls == 1 && runtime.captureAllAsyncCalls == priorCaptures,
+                        "suspended starts must neither capture nor play sound");
+                workflow.setCaptureSuspended(false);
+                start();
+                require(soundCalls == 2,
+                        "resuming capture must restore one sound per accepted session");
+                workflow.cancelCapture();
+
+                state.sessionState = ScreenshotSessionState::Editing;
+                interaction.setMoveTool(true, false);
+                require(workflow.startRecapture() && soundCalls == 2,
+                        "recapture within an editing session must not play start sound");
+                runtime.deliverResult(
+                    successfulRecaptureResult(runtime.lastCaptureRequest.requestId, snapshot));
+                require(soundCalls == 2, "recapture completion must not play start sound");
+                workflow.cancelCapture();
+
+                runtime.failCaptureSynchronously = true;
+                start();
+                require(soundCalls == 3 && !state.captureInProgress,
+                        "capture setup failure must retain the single start notification");
+            }
+        }
+    }
+}
+
 void toolbarPresentationTracksSelectionDragLifetime() {
     for (const auto mode : {ScreenshotSelectionDragMode::Marquee, ScreenshotSelectionDragMode::All,
                             ScreenshotSelectionDragMode::Top}) {
@@ -322,11 +441,13 @@ void captureRestoresSelectionPreferencesAfterReset() {
         int radius = 24;
         int shadowWidth = 12;
         bool aspectRatioLocked = true;
+        auto aspectRatioPreset = ScreenshotSelectionAspectRatioPreset::Landscape16x9;
         auto regionType = ScreenshotRegionType::Polyline;
         context.restoreSelectionPreferences = [&]() {
             selection.setRegionType(regionType);
             static_cast<void>(selection.setCornerRadius(radius));
             static_cast<void>(selection.setShadowWidth(shadowWidth));
+            static_cast<void>(selection.setAspectRatioPreset(aspectRatioPreset, {}, 5.0));
             static_cast<void>(selection.setAspectRatioLockEnabled(aspectRatioLocked, 5.0));
         };
         ScreenshotCaptureWorkflow workflow(std::move(context));
@@ -340,18 +461,30 @@ void captureRestoresSelectionPreferencesAfterReset() {
                 "cold and prewarmed captures must restore effects after resetting the model");
         require(!selection.hasPixelSelection() && selection.aspectRatioLocked(),
                 "capture startup must restore the lock preference without restoring geometry");
+        require(selection.aspectRatioPreset() == aspectRatioPreset,
+                "cold and prewarmed captures restore the explicit ratio before selection creation");
+        selection.clearSelection();
+        selection.beginMoveDrag(QPointF(20, 30));
+        const QRectF firstMarquee = selection.selectionRectForDrag(
+            ScreenshotSelectionDragMode::Marquee, QPointF(180, 100), QRectF(0, 0, 2000, 1000), 5.0);
+        require(qFuzzyCompare(firstMarquee.height() / firstMarquee.width(), 9.0 / 16.0),
+                "the first marquee after capture reset uses the remembered ratio");
         workflow.cancelCapture();
         radius = 32;
         shadowWidth = 16;
+        aspectRatioPreset = ScreenshotSelectionAspectRatioPreset::Portrait3x4;
         regionType = ScreenshotRegionType::Curve;
         workflow.startCapture();
         require(selection.regionType() == regionType,
                 "captures after cancellation reload the latest region type");
         require(selection.cornerRadius() == 32 && selection.shadowWidth() == 16,
                 "captures after cancellation must reload the latest saved effects");
+        require(selection.aspectRatioPreset() == aspectRatioPreset,
+                "captures after cancellation reload the latest ratio preference");
         radius = 0;
         shadowWidth = 0;
         aspectRatioLocked = false;
+        aspectRatioPreset = ScreenshotSelectionAspectRatioPreset::Free;
         regionType = ScreenshotRegionType::Freehand;
         workflow.startCapture();
         require(selection.regionType() == regionType,
@@ -531,6 +664,67 @@ void exportCancellationDefersExpensiveCleanup() {
             "deferred export cleanup must be idempotent");
     require(runtime.releaseSelectionPreviewCacheCalls == 1,
             "deferred export cleanup must release preview assets only once");
+}
+
+void captureCompletionReleasesHistoryBeforeExportsFinish() {
+    const auto trackedImage = [](int& releases) {
+        struct Pixels {
+            std::array<uchar, 8 * 8 * 4> data{};
+            int* releases;
+        };
+        auto* pixels = new Pixels{{}, &releases};
+        return QImage(
+            pixels->data.data(), 8, 8, QImage::Format_RGBA8888,
+            [](void* info) {
+                auto* released = static_cast<Pixels*>(info);
+                ++*released->releases;
+                delete released;
+            },
+            pixels);
+    };
+    for (const bool deferred : {false, true}) {
+        ScreenshotCaptureState state;
+        state.sessionState = ScreenshotSessionState::Editing;
+        state.captureInProgress = true;
+        ScreenshotDisplaySession displays;
+        ScreenshotGeometryMapper geometry;
+        ScreenshotInteractionState interaction;
+        interaction.beginCapture();
+        ScreenshotSelectionModel selection;
+        ScreenshotIntelligentSelectionModel intelligentSelection;
+        CaptureRuntime runtime;
+        int liveHistoryReleases = 0;
+        int exportReleases = 0;
+        int nextHistoryReleases = 0;
+        QImage liveHistory = trackedImage(liveHistoryReleases);
+        QImage pendingExport = trackedImage(exportReleases);
+        int historyCleanupCalls = 0;
+        ScreenshotCaptureWorkflowContext context{
+            state, runtime, geometry, displays, interaction, selection, intelligentSelection, {}};
+        context.releaseCaptureHistory = [&]() {
+            ++historyCleanupCalls;
+            liveHistory = {};
+        };
+        ScreenshotCaptureWorkflow workflow(std::move(context));
+        if (deferred) {
+            workflow.cancelCaptureForExport();
+        } else {
+            workflow.cancelCapture();
+        }
+        require(state.sessionState == ScreenshotSessionState::IdlePrepared,
+                "capture must become idle without waiting for a save or pin result");
+        require(liveHistoryReleases == 1 && historyCleanupCalls == 1,
+                "the live history backup must be released before export success or failure");
+        require(exportReleases == 0 && !pendingExport.isNull(),
+                "capture history cleanup must preserve independently owned export pixels");
+
+        // A delayed export/maintenance pass must not clear a later capture's navigation.
+        liveHistory = trackedImage(nextHistoryReleases);
+        workflow.completeDeferredExportCleanup();
+        workflow.completeDeferredExportCleanup();
+        require(historyCleanupCalls == 1 && nextHistoryReleases == 0,
+                "deferred export cleanup must not reset a newer live history endpoint");
+    }
 }
 
 void captureOverlapsSelectorInitialization() {
@@ -1140,21 +1334,21 @@ void initialCaptureSnapshotsScreenshotSettings() {
     ScreenshotCaptureWorkflowContext context{
         state, runtime, geometry, displays, interaction, selection, intelligentSelection, {}};
     context.restoreOriginalScreenColors = [&enabled]() { return enabled; };
-    context.captureCursor = [&captureCursor]() { return captureCursor; };
+    context.showCursor = [&captureCursor]() { return captureCursor; };
     ScreenshotCaptureWorkflow workflow(context);
     workflow.startCapture();
     require(!runtime.lastCaptureRequest.restoreOriginalScreenColors &&
-                !state.restoreOriginalScreenColors && !runtime.lastCaptureRequest.captureCursor &&
-                !state.captureCursor,
+                !state.restoreOriginalScreenColors && runtime.lastCaptureRequest.captureCursor &&
+                state.captureCursor && !displays.cursorVisible,
             "capture must propagate disabled screenshot settings");
     enabled = true;
     captureCursor = true;
-    require(!state.restoreOriginalScreenColors && !state.captureCursor,
+    require(!state.restoreOriginalScreenColors && state.captureCursor && !displays.cursorVisible,
             "active capture must retain its setting snapshot");
     workflow.startCapture();
     require(runtime.lastCaptureRequest.restoreOriginalScreenColors &&
                 state.restoreOriginalScreenColors && runtime.lastCaptureRequest.captureCursor &&
-                state.captureCursor,
+                state.captureCursor && displays.cursorVisible,
             "normal capture must honor the enabled cursor setting with smart selection");
     workflow.startCapture(ScreenshotCaptureWorkflow::StartMode::ExternalDrag);
     require(runtime.lastCaptureRequest.restoreOriginalScreenColors &&
@@ -1408,7 +1602,12 @@ void recapturePreservesEditingStateAndRollsBackFailures() {
     original.image = QImage(64, 48, QImage::Format_RGBA8888);
     original.image.fill(Qt::red);
     original.active = true;
+    original.cursorPatch = QImage(3, 4, QImage::Format_RGBA8888);
+    original.cursorPatch.fill(Qt::green);
+    original.cursorPixelRect = QRect(5, 6, 3, 4);
     displays.appendDisplay(original);
+    displays.cursorVisible = true;
+    displays.cursorAvailable = true;
     ScreenshotGeometryMapper geometry;
     geometry.rebuild(displays);
     ScreenshotInteractionState interaction;
@@ -1422,7 +1621,7 @@ void recapturePreservesEditingStateAndRollsBackFailures() {
     bool lastSucceeded = false;
     ScreenshotCaptureWorkflowContext context{state,       runtime,   geometry,    displays,
                                              interaction, selection, intelligent, {}};
-    context.captureCursor = [&captureCursor]() { return captureCursor; };
+    context.showCursor = [&captureCursor]() { return captureCursor; };
     context.recaptureCompleted = [&](bool succeeded, const QString&) {
         ++completions;
         lastSucceeded = succeeded;
@@ -1442,8 +1641,16 @@ void recapturePreservesEditingStateAndRollsBackFailures() {
     const ScreenshotCaptureMode modeBefore = interaction.mode();
     CapturedDisplayModel replacement = original;
     replacement.image.fill(Qt::blue);
-    runtime.deliverResult(
-        successfulRecaptureResult(runtime.lastCaptureRequest.requestId, replacement));
+    replacement.cursorPatch.fill(Qt::yellow);
+    replacement.cursorPixelRect.moveTopLeft(QPoint(7, 8));
+    auto cursorResult =
+        successfulRecaptureResult(runtime.lastCaptureRequest.requestId, replacement);
+    cursorResult.cursorAvailable = true;
+    runtime.deliverResult(cursorResult);
+    require(displays.cursorVisible && displays.cursorAvailable &&
+                displays.displayAt(0).cursorPatch == replacement.cursorPatch &&
+                displays.displayAt(0).cursorPixelRect == replacement.cursorPixelRect,
+            "recapture must replace cursor pixels while retaining session visibility");
     require(runtime.createColorPickerCalls == 0 && runtime.releaseColorPickerCalls == 0,
             "recapture must leave the existing session picker lifetime unchanged");
     require(completions == 1 && lastSucceeded && !workflow.recaptureInProgress() &&
@@ -1455,9 +1662,9 @@ void recapturePreservesEditingStateAndRollsBackFailures() {
             "successful recapture must preserve selection, interaction, and canvas state");
 
     captureCursor = false;
-    require(workflow.startRecapture() && !runtime.lastCaptureRequest.captureCursor &&
+    require(workflow.startRecapture() && runtime.lastCaptureRequest.captureCursor &&
                 runtime.lastCaptureRequest.excludedWindowIds.isEmpty(),
-            "each recapture must read the latest cursor setting");
+            "recapture must retain acquisition independently of the visibility default");
     ScreenshotCaptureResult failed;
     failed.requestId = runtime.lastCaptureRequest.requestId;
     failed.purpose = ScreenshotCapturePurpose::Recapture;
@@ -1909,7 +2116,48 @@ void silentCaptureSuppressesAllPresentationAndRestoresVisibleMode() {
             "normal capture after a silent session restores presentation");
 }
 
+void suspendedCaptureDoesNotStartAndRestoresAfterFailedHandoff() {
+    ScreenshotCaptureState state;
+    ScreenshotDisplaySession displays;
+    ScreenshotGeometryMapper geometry;
+    ScreenshotInteractionState interaction;
+    ScreenshotSelectionModel selection;
+    ScreenshotIntelligentSelectionModel intelligent;
+    CaptureRuntime runtime;
+    auto workflow =
+        makeWorkflow(state, displays, geometry, interaction, selection, intelligent, runtime);
+
+    workflow.setCaptureSuspended(true);
+    for (const auto mode : {ScreenshotCaptureWorkflow::StartMode::Normal,
+                            ScreenshotCaptureWorkflow::StartMode::ExternalDrag}) {
+        workflow.startCapture(mode);
+        require(workflow.captureSuspended() && !state.captureInProgress &&
+                    runtime.prepareAsyncCalls == 0 && runtime.captureAllAsyncCalls == 0 &&
+                    runtime.createColorPickerCalls == 0 && interaction.inactive(),
+                "queued capture during handoff must leave native acquisition and UI idle");
+    }
+
+    workflow.setCaptureSuspended(false);
+    workflow.startCapture();
+    require(!workflow.captureSuspended() && state.captureInProgress &&
+                runtime.captureAllAsyncCalls == 1,
+            "failed handoff must allow capture again");
+    workflow.cancelCapture();
+    state.sessionState = ScreenshotSessionState::Editing;
+    interaction.setMoveTool(true, false);
+    workflow.setCaptureSuspended(true);
+    require(!workflow.startRecapture() && runtime.captureAllAsyncCalls == 1,
+            "suspended recapture must not enter native acquisition");
+    workflow.setCaptureSuspended(false);
+    require(workflow.startRecapture() && runtime.captureAllAsyncCalls == 2,
+            "resuming capture must also restore recapture acquisition");
+}
+
 int main() {
+    captureStartSoundDefaultsToDisabled();
+    captureStartSoundFollowsSessionLifetime();
+    suspendedCaptureDoesNotStartAndRestoresAfterFailedHandoff();
+    captureCompletionReleasesHistoryBeforeExportsFinish();
     silentCaptureSuppressesAllPresentationAndRestoresVisibleMode();
     toolbarPresentationTracksSelectionDragLifetime();
     confirmedSelectionPreservesRegionTypeInToolbarPresentation();

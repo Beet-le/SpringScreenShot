@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use crate::history::HistoryStore;
 use snow_draw_engine_core::{
@@ -18,15 +18,23 @@ use snow_draw_engine_scene::{DocumentSceneCache, ViewportComposer};
 mod annotations;
 #[cfg(test)]
 mod auto_filter_tests;
+#[cfg(test)]
+mod distance_tests;
 mod document_commands;
 #[cfg(test)]
 mod duplicate_drag_tests;
+#[cfg(test)]
+mod eraser_filter_tests;
 #[cfg(test)]
 mod filter_snap_tests;
 #[cfg(test)]
 mod free_draw_continuation_tests;
 mod input;
 mod mutations;
+#[cfg(test)]
+mod pen_highlight_angle_tests;
+#[cfg(test)]
+mod spotlight_shape_tests;
 mod text_commands;
 mod viewports;
 
@@ -49,7 +57,7 @@ pub struct ViewportConfig {
     pub engine: ViewEngineConfig,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ViewportId(pub u64);
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -79,6 +87,8 @@ pub struct Engine {
     pub(crate) scene_cache: DocumentSceneCache,
     viewports: HashMap<ViewportId, ViewportSlot>,
     next_viewport_id: u64,
+    presentation_update_depth: u32,
+    pending_viewports: BTreeSet<ViewportId>,
 }
 
 impl Default for Engine {
@@ -116,6 +126,8 @@ impl Engine {
             scene_cache: DocumentSceneCache::default(),
             viewports: HashMap::new(),
             next_viewport_id: 0,
+            presentation_update_depth: 0,
+            pending_viewports: BTreeSet::new(),
         };
         engine.scene_cache.sync(&engine.model, None);
         Ok(engine)
@@ -127,29 +139,31 @@ impl Engine {
 
     pub fn clear_document_preserving_viewports(&mut self) -> Result<MutationResult, ErrorCode> {
         // Clearing a document must discard document/transient state without
-        // discarding the user's current creation styles. Most styles live in
-        // the editor session; watermark appearance and spotlight style are
-        // document-wide configuration, so carry those fields explicitly while
-        // dropping the watermark content that belongs to the old document.
-        let mut editor = self.editor.clone();
-        editor.reset_editing_state();
+        // discarding the user's current creation appearance. Serial numbering
+        // belongs to the old document and restarts from the runtime profile.
+        // Most styles live in the editor session; watermark appearance and
+        // spotlight style are document-wide configuration, so carry those fields
+        // explicitly while dropping watermark content from the old document.
         let mut watermark = self.model.watermark_config().clone();
-        watermark.text.clear();
-        watermark.template_value.clear();
+        watermark.text = String::new();
+        watermark.template_value = String::new();
         watermark.template_application_time = None;
         let spotlight = self.model.spotlight_config();
         let mut replacement = Self::try_new(self.config.clone())?;
-        replacement.editor = editor;
         let mut retained_styles = snow_draw_engine_document::Transaction::new("retained styles");
         retained_styles.update_watermark(watermark);
         retained_styles.update_spotlight(spotlight);
         replacement.model.apply_transaction(retained_styles)?;
         self.model = replacement.model;
         self.history = HistoryStore::default();
-        self.editor = replacement.editor;
+        self.editor
+            .reset_document_retained_state(&self.config.style_defaults.editor.serial_number);
         self.session_config_seeded = false;
         self.scene_cache = DocumentSceneCache::default();
         self.scene_cache.sync(&self.model, None);
+        for slot in self.viewports.values_mut() {
+            slot.composer.reset_document_retained_state();
+        }
         self.refresh_all_viewports()
     }
 
@@ -175,6 +189,8 @@ impl Engine {
                 })
                 .collect(),
             next_viewport_id: self.next_viewport_id,
+            presentation_update_depth: 0,
+            pending_viewports: BTreeSet::new(),
         };
         engine.scene_cache.sync(&engine.model, None);
         let _ = engine.refresh_all_viewports();
@@ -270,6 +286,10 @@ impl Engine {
             shape_style_mixed: self.editor.shape_style_mixed(&self.model),
             filter_style: self.editor.filter_style(&self.model),
             filter_style_mixed: self.editor.filter_style_mixed(&self.model),
+            brush_eraser_style: self.editor.brush_eraser_style(),
+            distance_style: self.editor.distance_style(&self.model),
+            distance_style_mixed: self.editor.distance_style_mixed(&self.model),
+            distance_measured_length: self.editor.distance_measured_length(&self.model),
         })
     }
 
@@ -289,6 +309,36 @@ impl Engine {
     ) -> Result<RectangleShapeStyle, ErrorCode> {
         self.ensure_viewport(id)?;
         Ok(self.editor.rectangle_shape_style(&self.model))
+    }
+
+    pub fn set_viewport_distance_style_patch(
+        &mut self,
+        id: ViewportId,
+        style: snow_draw_engine_editor::DistanceStyle,
+        properties: u32,
+    ) -> Result<MutationResult, ErrorCode> {
+        self.ensure_viewport(id)?;
+        let before = self.editor.snapshot();
+        let command = self
+            .editor
+            .set_distance_style_patch(&self.model, style, properties)?;
+        if let Some(command) = command {
+            self.apply_editor_command(id, command)
+        } else {
+            self.refresh_after_session_mutation(before)
+        }
+    }
+
+    pub fn set_viewport_distance_pixel_scale(
+        &mut self,
+        id: ViewportId,
+        scale: Point<f64>,
+    ) -> Result<MutationResult, ErrorCode> {
+        if !scale.x.is_finite() || scale.x <= 0.0 || !scale.y.is_finite() || scale.y <= 0.0 {
+            return Err(ErrorCode::InvalidArgument);
+        }
+        self.viewport_slot_mut(id)?.view.distance_pixel_scale = scale;
+        Ok(MutationResult::default())
     }
 
     pub fn set_viewport_shape_style_patch(
@@ -322,6 +372,33 @@ impl Engine {
         } else {
             self.refresh_after_session_mutation(before)
         }
+    }
+
+    pub fn set_viewport_brush_eraser_creation_style(
+        &mut self,
+        id: ViewportId,
+        style: snow_draw_engine_editor::BrushEraserStyle,
+        properties: u32,
+    ) -> Result<MutationResult, ErrorCode> {
+        self.ensure_viewport(id)?;
+        let before = self.editor.snapshot();
+        self.editor
+            .set_brush_eraser_creation_style(style, properties)?;
+        self.refresh_after_session_mutation(before)
+    }
+
+    pub fn set_viewport_filter_creation_style(
+        &mut self,
+        id: ViewportId,
+        style: FilterStyle,
+        properties: u32,
+        tool: ActiveTool,
+    ) -> Result<MutationResult, ErrorCode> {
+        self.ensure_viewport(id)?;
+        let before = self.editor.snapshot();
+        self.editor
+            .set_filter_creation_style(style, properties, tool)?;
+        self.refresh_after_session_mutation(before)
     }
 
     pub fn watermark_config(&self) -> &WatermarkConfig {
@@ -397,6 +474,76 @@ mod tests {
     use snow_draw_engine_core::{ColorRgba8, CornerRadii};
     use snow_draw_engine_document::{CanvasFilterType, FillStyle};
     use snow_draw_engine_editor::FILTER_STYLE_PROPERTY_ALL;
+
+    #[test]
+    fn filter_creation_style_synchronizes_views_without_tool_or_history_changes() {
+        let mut engine = Engine::new(EngineConfig::default());
+        let first = engine.create_viewport(ViewportConfig::default()).unwrap();
+        let second = engine.create_viewport(ViewportConfig::default()).unwrap();
+        engine
+            .set_viewport_active_tool(first, ActiveTool::PenFilter)
+            .unwrap();
+        let history = engine.serialize_document_history().unwrap();
+        let style = FilterStyle {
+            filter_type: CanvasFilterType::GaussianBlur,
+            strength: 0.3,
+            opacity: 0.6,
+            stroke_width: 20.0,
+        };
+        let result = engine
+            .set_viewport_filter_creation_style(
+                first,
+                style,
+                FILTER_STYLE_PROPERTY_ALL,
+                ActiveTool::PenFilter,
+            )
+            .unwrap();
+        assert!(
+            result.changed_viewports.is_empty(),
+            "creation defaults alone must not invalidate rendered patches"
+        );
+        for viewport in [first, second] {
+            assert_eq!(
+                engine.viewport_active_tool(viewport).unwrap(),
+                ActiveTool::PenFilter
+            );
+            assert_eq!(
+                engine
+                    .viewport_style_toolbar_state(viewport)
+                    .unwrap()
+                    .filter_style,
+                style
+            );
+        }
+        assert_eq!(engine.serialize_document_history().unwrap(), history);
+        for _ in 0..128 {
+            assert!(
+                engine
+                    .set_viewport_filter_creation_style(
+                        first,
+                        style,
+                        FILTER_STYLE_PROPERTY_ALL,
+                        ActiveTool::PenFilter
+                    )
+                    .unwrap()
+                    .changed_viewports
+                    .is_empty()
+            );
+        }
+        let before = engine.serialize_document_session().unwrap();
+        assert_eq!(
+            engine
+                .set_viewport_filter_creation_style(
+                    first,
+                    style,
+                    FILTER_STYLE_PROPERTY_ALL,
+                    ActiveTool::Shape
+                )
+                .unwrap_err(),
+            ErrorCode::InvalidArgument
+        );
+        assert_eq!(engine.serialize_document_session().unwrap(), before);
+    }
 
     fn custom_config(seed: u8) -> EngineConfig {
         let mut defaults = StyleDefaults::default();
@@ -607,6 +754,9 @@ mod tests {
         );
         assert_eq!(engine.spotlight_config(), changed_spotlight);
         assert_eq!(engine.history_state(), HistoryState::default());
+        assert_eq!(engine.style_defaults(), &config.style_defaults);
+        assert_eq!(engine.watermark_config().text.capacity(), 0);
+        assert_eq!(engine.watermark_config().template_value.capacity(), 0);
     }
 
     #[test]
@@ -698,6 +848,10 @@ mod tests {
         full.clear_document_preserving_viewports().unwrap();
         let mut expected_full_editor = source.style_defaults().editor.clone();
         expected_full_editor.rectangle = edited_rectangle;
+        // Clearing the restored document retains appearance but starts a new
+        // numbering session using the receiving runtime's profile.
+        expected_full_editor.serial_number.number =
+            target_config.style_defaults.editor.serial_number.number;
         assert_editor_defaults(
             &mut full,
             full_viewport,
@@ -737,6 +891,8 @@ mod tests {
         cloned.clear_document_preserving_viewports().unwrap();
         let mut expected_clone_editor = source.style_defaults().editor.clone();
         expected_clone_editor.rectangle = edited_rectangle;
+        expected_clone_editor.serial_number.number =
+            target_config.style_defaults.editor.serial_number.number;
         assert_editor_defaults(
             &mut cloned,
             source_viewport,

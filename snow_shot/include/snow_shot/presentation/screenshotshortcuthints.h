@@ -48,6 +48,7 @@ struct ScreenshotShortcutHintRow {
     QT_TRANSLATE_NOOP("ScreenshotShortcutHintsWidget", "Switch color format"),
     QT_TRANSLATE_NOOP("ScreenshotShortcutHintsWidget", "Switch screenshot history"),
     QT_TRANSLATE_NOOP("ScreenshotShortcutHintsWidget", "Maintain aspect ratio"),
+    QT_TRANSLATE_NOOP("ScreenshotShortcutHintsWidget", "Selection Aspect Ratio Snap"),
     QT_TRANSLATE_NOOP("ScreenshotShortcutHintsWidget", "Fixed-angle rotation"),
     QT_TRANSLATE_NOOP("ScreenshotShortcutHintsWidget", "Scale from center"),
     QT_TRANSLATE_NOOP("ScreenshotShortcutHintsWidget", "Auto-align"),
@@ -260,6 +261,9 @@ inline void appendScreenshotCursorMovementShortcutHintRows(
             "Keep selection width and height consistent");
     }
     appendScreenshotConfiguredShortcutHintRow(rows, configuredShortcuts,
+                                              QStringLiteral("selection_aspect_ratio_snap"),
+                                              "Selection Aspect Ratio Snap");
+    appendScreenshotConfiguredShortcutHintRow(rows, configuredShortcuts,
                                               QStringLiteral("select_previously_selected_area"),
                                               "Select previously selected area");
     appendScreenshotConfiguredShortcutHintRow(rows, configuredShortcuts,
@@ -267,6 +271,9 @@ inline void appendScreenshotCursorMovementShortcutHintRows(
     appendScreenshotConfiguredShortcutHintRow(rows, configuredShortcuts,
                                               QStringLiteral("toggle_coordinate_mode"),
                                               "Toggle Global/Relative Coordinates");
+    appendScreenshotConfiguredShortcutHintRow(rows, configuredShortcuts,
+                                              QStringLiteral("toggle_cursor_visibility"),
+                                              "Toggle cursor visibility");
     rows.push_back(screenshotFixedShortcutHintRow("Switch color format: Shift"));
 
     const snow_shot::shortcuts::ShortcutBindingList previousHistoryShortcuts =
@@ -351,7 +358,10 @@ screenshotShortcutHintRows(const ScreenshotShortcutHintContext& context) {
 
     QVector<ScreenshotShortcutHintRow> rows;
     if (context.activeTool != ScreenshotActiveTool::Eraser &&
+        context.activeTool != ScreenshotActiveTool::RectangleEraser &&
+        context.activeTool != ScreenshotActiveTool::BrushEraser &&
         context.activeTool != ScreenshotActiveTool::Ocr &&
+        context.activeTool != ScreenshotActiveTool::TextTranslation &&
         context.activeTool != ScreenshotActiveTool::Table &&
         context.activeTool != ScreenshotActiveTool::Qr &&
         context.activeTool != ScreenshotActiveTool::Markdown &&
@@ -383,6 +393,13 @@ screenshotShortcutHintRows(const ScreenshotShortcutHintContext& context) {
         append(rows, "Scale from center: Alt", !disabled(SnowCanvasTool::Arrow));
         append(rows, "Auto-align: Ctrl");
         append(rows, "Delete selected elements: Delete", !disabled(SnowCanvasTool::Arrow));
+        break;
+    case ScreenshotActiveTool::Distance:
+        append(rows, "Maintain aspect ratio: Shift", !disabled(SnowCanvasTool::Distance));
+        append(rows, "Fixed-angle rotation: Shift");
+        append(rows, "Scale from center: Alt", !disabled(SnowCanvasTool::Distance));
+        append(rows, "Auto-align: Ctrl");
+        append(rows, "Delete selected elements: Delete", !disabled(SnowCanvasTool::Distance));
         break;
     case ScreenshotActiveTool::Line:
         append(rows, "Maintain aspect ratio: Shift", !disabled(SnowCanvasTool::Line));
@@ -438,14 +455,26 @@ screenshotShortcutHintRows(const ScreenshotShortcutHintContext& context) {
         append(rows, "Delete selected elements: Delete",
                !disabled(SnowCanvasTool::RectangleFilter));
         break;
+    case ScreenshotActiveTool::Move:
+        appendScreenshotConfiguredShortcutHintRow(rows, context.configuredShortcuts,
+                                                  QStringLiteral("toggle_cursor_visibility"),
+                                                  "Toggle cursor visibility");
+        break;
+    case ScreenshotActiveTool::RectangleEraser:
+        append(rows, "Maintain aspect ratio: Shift");
+        append(rows, "Draw from center: Alt");
+        break;
+    case ScreenshotActiveTool::BrushEraser:
+        append(rows, "Draw straight line: Shift");
+        break;
     case ScreenshotActiveTool::Eraser:
     case ScreenshotActiveTool::Ocr:
+    case ScreenshotActiveTool::TextTranslation:
     case ScreenshotActiveTool::Table:
     case ScreenshotActiveTool::Qr:
     case ScreenshotActiveTool::Latex:
     case ScreenshotActiveTool::Markdown:
     case ScreenshotActiveTool::Html:
-    case ScreenshotActiveTool::Move:
     case ScreenshotActiveTool::Spotlight:
     case ScreenshotActiveTool::Watermark:
     case ScreenshotActiveTool::AutoFilter:

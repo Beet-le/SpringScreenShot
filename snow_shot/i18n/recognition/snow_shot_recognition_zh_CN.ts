@@ -2,6 +2,33 @@
 <!DOCTYPE TS>
 <TS version="2.1" language="zh_CN" sourcelanguage="en_US">
     <context>
+        <name>OcrTextOptions</name>
+        <message>
+            <source>Full-width</source>
+            <translation>全角</translation>
+        </message>
+        <message>
+            <source>Half-width</source>
+            <translation>半角</translation>
+        </message>
+        <message>
+            <source>Keep line breaks</source>
+            <translation>保留换行</translation>
+        </message>
+        <message>
+            <source>None</source>
+            <translation>无</translation>
+        </message>
+        <message>
+            <source>Remove line breaks</source>
+            <translation>移除换行</translation>
+        </message>
+        <message>
+            <source>Smart Typesetting</source>
+            <translation>智能排版</translation>
+        </message>
+    </context>
+    <context>
         <name>ScreenshotImageConversionController</name>
         <message>
             <source>Cancel</source>
@@ -102,8 +129,8 @@
             <translation>文本识别失败</translation>
         </message>
         <message>
-            <source>The bundled text recognition runtime is damaged or incompatible. Reinstall Snow Shot for Apple Silicon.</source>
-            <translation>内置文字识别运行时已损坏或不兼容。请重新安装适用于 Apple 芯片的 Snow Shot。</translation>
+            <source>The bundled text recognition runtime is damaged or incompatible. Reinstall Snow Shot for this Mac.</source>
+            <translation>内置文字识别运行时已损坏或不兼容。请重新安装适用于此 Mac 的 Snow Shot。</translation>
         </message>
         <message>
             <source>Unable to open the recognized link</source>

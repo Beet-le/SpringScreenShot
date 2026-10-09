@@ -1,9 +1,11 @@
 #include "codecs/jpeg_codec.h"
+
+#include <snow/memory/pixel_array.h>
 #include "planar_raster_io.h"
 
 #include <csetjmp>
 #include <cstdio>
-#include <jpeglib.h>
+#include "jpeg_headers.h"
 #include <turbojpeg.h>
 
 #include <algorithm>
@@ -42,6 +44,7 @@ struct JpegInfo final {
     PixelFormat pixel_format = kRgb8;
     int turbo_pixel_format = TJPF_RGB;
     int subsampling = TJSAMP_UNKNOWN;
+    ColorEncoding color;
 };
 
 Result<ChromaSubsampling> chroma_subsampling(int value) {
@@ -102,9 +105,11 @@ Result<DocumentDescriptor> native_descriptor(const JpegInfo& info) {
     document.format = Format::jpeg;
     document.canvas_width = info.width;
     document.canvas_height = info.height;
+    document.color = info.color;
     RasterFrameDescriptor frame;
     frame.width = info.width;
     frame.height = info.height;
+    frame.color = info.color;
     frame.layout.alpha = AlphaMode::none;
     frame.layout.color_range = ColorRange::full;
     if (info.colorspace == TJCS_GRAY || info.subsampling == TJSAMP_GRAY) {
@@ -153,7 +158,7 @@ bool matching_descriptor(const DocumentDescriptor& left, const DocumentDescripto
 }
 
 Result<std::pair<TjHandle, JpegInfo>> read_header(std::span<const std::byte> bytes,
-                                                  const DecodeLimits& limits) {
+                                                  const DecodeOptions& options) {
     if (bytes.size() > std::numeric_limits<std::size_t>::max()) {
         return Status::error(ErrorCode::limit_exceeded, "JPEG input is too large.",
                              "libjpeg-turbo");
@@ -162,6 +167,9 @@ Result<std::pair<TjHandle, JpegInfo>> read_header(std::span<const std::byte> byt
     if (!handle) {
         return Status::error(ErrorCode::out_of_memory, "Could not create the JPEG decoder.",
                              "libjpeg-turbo");
+    }
+    if (tj3Set(handle.get(), TJPARAM_SAVEMARKERS, options.preserve_metadata ? 4 : 0) != 0) {
+        return tj_error(handle.get(), ErrorCode::decode_failed);
     }
     if (tj3DecompressHeader(handle.get(), reinterpret_cast<const unsigned char*>(bytes.data()),
                             bytes.size()) != 0) {
@@ -173,8 +181,8 @@ Result<std::pair<TjHandle, JpegInfo>> read_header(std::span<const std::byte> byt
         return Status::error(ErrorCode::corrupt_data, "JPEG dimensions are invalid.",
                              "libjpeg-turbo");
     }
-    Result<void> dimensions = validate_dimensions(static_cast<std::uint32_t>(width),
-                                                  static_cast<std::uint32_t>(height), limits);
+    Result<void> dimensions = validate_dimensions(
+        static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height), options.limits);
     if (!dimensions)
         return dimensions.error();
     JpegInfo info;
@@ -182,6 +190,26 @@ Result<std::pair<TjHandle, JpegInfo>> read_header(std::span<const std::byte> byt
     info.height = static_cast<std::uint32_t>(height);
     info.colorspace = tj3Get(handle.get(), TJPARAM_COLORSPACE);
     info.subsampling = tj3Get(handle.get(), TJPARAM_SUBSAMP);
+    if (options.preserve_metadata) {
+        std::size_t profile_size = 0;
+        // TurboJPEG reports an absent ICC profile as a warning with size zero.
+        // Untagged JPEGs are valid; other retrieval failures remain decode errors.
+        if (tj3GetICCProfile(handle.get(), nullptr, &profile_size) != 0 &&
+            (profile_size != 0 || tj3GetErrorCode(handle.get()) != TJERR_WARNING))
+            return tj_error(handle.get(), ErrorCode::corrupt_data);
+        if (profile_size > options.limits.maximum_metadata_bytes) {
+            return Status::error(ErrorCode::limit_exceeded,
+                                 "JPEG ICC profile exceeds the metadata limit.", "libjpeg-turbo");
+        }
+        if (profile_size != 0) {
+            unsigned char* raw_profile = nullptr;
+            if (tj3GetICCProfile(handle.get(), &raw_profile, &profile_size) != 0)
+                return tj_error(handle.get(), ErrorCode::corrupt_data);
+            const std::unique_ptr<unsigned char, decltype(&tj3Free)> profile(raw_profile, &tj3Free);
+            const auto* first = reinterpret_cast<const std::byte*>(profile.get());
+            info.color.icc_profile.assign(first, first + profile_size);
+        }
+    }
     if (info.colorspace == TJCS_GRAY) {
         info.pixel_format = kGray8;
         info.turbo_pixel_format = TJPF_GRAY;
@@ -190,7 +218,7 @@ Result<std::pair<TjHandle, JpegInfo>> read_header(std::span<const std::byte> byt
                              true};
         info.turbo_pixel_format = TJPF_CMYK;
     }
-    return std::pair{std::move(handle), info};
+    return std::pair{std::move(handle), std::move(info)};
 }
 
 Result<JpegInfo> scaled_info(void* handle, JpegInfo info, const DecodeOptions& options) {
@@ -239,8 +267,10 @@ DocumentInfo document_info(const JpegInfo& info) {
     document.format = Format::jpeg;
     document.canvas_width = info.width;
     document.canvas_height = info.height;
+    document.color = info.color;
     document.frames.push_back({info.width, info.height, 0, 0, std::chrono::nanoseconds{0},
                                info.pixel_format, false, std::nullopt});
+    document.frames.back().color = info.color;
     return document;
 }
 
@@ -273,6 +303,7 @@ Result<int> turbo_pixel_format(const PixelFormat& format) {
 }
 
 constexpr std::size_t kJpegDestinationBytes = std::size_t{256} << 10U;
+using JpegBoolean = decltype(jpeg_compress_struct::raw_data_in);
 
 struct JpegErrorManager final {
     jpeg_error_mgr base{};
@@ -301,32 +332,28 @@ struct JpegEncoderContext final {
     std::longjmp(error->jump, 1);
 }
 
-void destination_failure(JpegDestinationManager* destination, Status status) {
-    destination->sink_error = std::move(status);
-    destination->has_sink_error = true;
-    std::longjmp(destination->error->jump, 1);
-}
-
 void jpeg_init_destination(j_compress_ptr compressor) {
     auto* destination = reinterpret_cast<JpegDestinationManager*>(compressor->dest);
     destination->base.next_output_byte = destination->buffer.data();
     destination->base.free_in_buffer = destination->buffer.size();
 }
 
-boolean jpeg_empty_output_buffer(j_compress_ptr compressor) {
+JpegBoolean jpeg_empty_output_buffer(j_compress_ptr compressor) {
     auto* destination = reinterpret_cast<JpegDestinationManager*>(compressor->dest);
-    Status failure;
     bool failed = false;
     {
         Result<void> written = destination->sink->write(
             std::as_bytes(std::span(destination->buffer.data(), destination->buffer.size())));
         if (!written) {
-            failure = std::move(written).error();
+            destination->sink_error = std::move(written).error();
+            destination->has_sink_error = true;
             failed = true;
         }
     }
+    // libjpeg's C error boundary must not bypass live C++ destructors.
+    // Keep the failure on the heap and destroy the Result before jumping.
     if (failed)
-        destination_failure(destination, std::move(failure));
+        std::longjmp(destination->error->jump, 1);
     destination->base.next_output_byte = destination->buffer.data();
     destination->base.free_in_buffer = destination->buffer.size();
     return TRUE;
@@ -337,18 +364,18 @@ void jpeg_term_destination(j_compress_ptr compressor) {
     const std::size_t remaining = destination->buffer.size() - destination->base.free_in_buffer;
     if (remaining == 0)
         return;
-    Status failure;
     bool failed = false;
     {
         Result<void> written = destination->sink->write(
             std::as_bytes(std::span(destination->buffer.data(), remaining)));
         if (!written) {
-            failure = std::move(written).error();
+            destination->sink_error = std::move(written).error();
+            destination->has_sink_error = true;
             failed = true;
         }
     }
     if (failed)
-        destination_failure(destination, std::move(failure));
+        std::longjmp(destination->error->jump, 1);
 }
 
 void initialize_destination(JpegEncoderContext* context, ByteSink* sink) {
@@ -398,10 +425,9 @@ Result<J_COLOR_SPACE> jpeg_input_color_space(const PixelFormat& format) {
                          "libjpeg-turbo");
 }
 
-Result<void> begin_compression(JpegEncoderContext* context, std::uint32_t width,
-                               std::uint32_t height, int components, J_COLOR_SPACE color_space,
-                               ChromaSubsampling sampling, const EncodeOptions& options,
-                               ByteSink* sink, bool raw_data) {
+void begin_compression(JpegEncoderContext* context, std::uint32_t width, std::uint32_t height,
+                       int components, J_COLOR_SPACE color_space, ChromaSubsampling sampling,
+                       const EncodeOptions& options, ByteSink* sink, bool raw_data) {
     context->compressor.err = jpeg_std_error(&context->error.base);
     context->error.base.error_exit = jpeg_error_exit;
     jpeg_CreateCompress(&context->compressor, JPEG_LIB_VERSION, sizeof(jpeg_compress_struct));
@@ -417,7 +443,6 @@ Result<void> begin_compression(JpegEncoderContext* context, std::uint32_t width,
         jpeg_simple_progression(&context->compressor);
     context->compressor.raw_data_in = raw_data ? TRUE : FALSE;
     jpeg_start_compress(&context->compressor, TRUE);
-    return {};
 }
 
 Status compression_error(const JpegEncoderContext& context) {
@@ -466,10 +491,11 @@ Result<DocumentInfo> JpegCodec::inspect(const Input& input, const DecodeOptions&
         read_all(*input.source, options.limits.maximum_input_bytes);
     if (!bytes)
         return bytes.error();
-    Result<std::pair<TjHandle, JpegInfo>> header = read_header(bytes.value(), options.limits);
+    Result<std::pair<TjHandle, JpegInfo>> header = read_header(bytes.value(), options);
     if (!header)
         return header.error();
-    Result<JpegInfo> info = scaled_info(header.value().first.get(), header.value().second, options);
+    Result<JpegInfo> info =
+        scaled_info(header.value().first.get(), std::move(header.value().second), options);
     if (!info)
         return info.error();
     return document_info(info.value());
@@ -484,10 +510,11 @@ Result<DocumentDescriptor> JpegCodec::inspect_raster(const Input& input,
         read_all(*input.source, options.limits.maximum_input_bytes);
     if (!bytes)
         return bytes.error();
-    Result<std::pair<TjHandle, JpegInfo>> header = read_header(bytes.value(), options.limits);
+    Result<std::pair<TjHandle, JpegInfo>> header = read_header(bytes.value(), options);
     if (!header)
         return header.error();
-    Result<JpegInfo> info = scaled_info(header.value().first.get(), header.value().second, options);
+    Result<JpegInfo> info =
+        scaled_info(header.value().first.get(), std::move(header.value().second), options);
     if (!info)
         return info.error();
     if (options.raster_layout == RasterLayoutPolicy::native && !options.output_format &&
@@ -508,14 +535,14 @@ Result<Document> JpegCodec::decode(const Input& input, const DecodeOptions& opti
         read_all(*input.source, options.limits.maximum_input_bytes);
     if (!bytes)
         return bytes.error();
-    Result<std::pair<TjHandle, JpegInfo>> header = read_header(bytes.value(), options.limits);
+    Result<std::pair<TjHandle, JpegInfo>> header = read_header(bytes.value(), options);
     if (!header)
         return header.error();
     TjHandle handle = std::move(header.value().first);
-    Result<JpegInfo> scaled = scaled_info(handle.get(), header.value().second, options);
+    Result<JpegInfo> scaled = scaled_info(handle.get(), std::move(header.value().second), options);
     if (!scaled)
         return scaled.error();
-    JpegInfo info = scaled.value();
+    JpegInfo info = std::move(scaled).value();
     if (options.output_format) {
         Result<int> output = turbo_pixel_format(*options.output_format);
         if (!output)
@@ -555,7 +582,9 @@ Result<Document> JpegCodec::decode(const Input& input, const DecodeOptions& opti
     document.format = Format::jpeg;
     document.canvas_width = info.width;
     document.canvas_height = info.height;
+    document.color = info.color;
     Frame frame;
+    frame.color = info.color;
     frame.image = std::move(pixels).freeze();
     document.frames.push_back(std::move(frame));
     return document;
@@ -619,14 +648,14 @@ Result<void> JpegCodec::decode_to_sink(const Input& input, PixelSink& sink,
         read_all(*input.source, options.limits.maximum_input_bytes);
     if (!bytes)
         return bytes.error();
-    Result<std::pair<TjHandle, JpegInfo>> header = read_header(bytes.value(), options.limits);
+    Result<std::pair<TjHandle, JpegInfo>> header = read_header(bytes.value(), options);
     if (!header)
         return header.error();
     TjHandle handle = std::move(header.value().first);
-    Result<JpegInfo> scaled = scaled_info(handle.get(), header.value().second, options);
+    Result<JpegInfo> scaled = scaled_info(handle.get(), std::move(header.value().second), options);
     if (!scaled)
         return scaled.error();
-    const JpegInfo info = scaled.value();
+    const JpegInfo info = std::move(scaled).value();
     JpegInfo sinkInfo = info;
     sinkInfo.pixel_format = options.output_format.value_or(kRgba8);
     Result<int> sink_pixel_format = turbo_pixel_format(sinkInfo.pixel_format);
@@ -656,7 +685,7 @@ Result<void> JpegCodec::decode_to_sink(const Input& input, PixelSink& sink,
         return status;
 
     std::span<std::byte> target = sink.frame_storage(0, row_stride, output_bytes);
-    std::vector<std::byte> owned;
+    snow::memory::PixelArray<std::byte> owned;
     if (target.size() != output_bytes) {
         if (output_bytes > options.limits.maximum_owned_output_bytes) {
             return Status::error(
@@ -701,14 +730,14 @@ Result<void> JpegCodec::decode_into(const Input& input, RasterWriter& writer,
         read_all(*input.source, options.limits.maximum_input_bytes);
     if (!bytes)
         return bytes.error();
-    Result<std::pair<TjHandle, JpegInfo>> header = read_header(bytes.value(), options.limits);
+    Result<std::pair<TjHandle, JpegInfo>> header = read_header(bytes.value(), options);
     if (!header)
         return header.error();
     TjHandle handle = std::move(header.value().first);
-    Result<JpegInfo> scaled = scaled_info(handle.get(), header.value().second, options);
+    Result<JpegInfo> scaled = scaled_info(handle.get(), std::move(header.value().second), options);
     if (!scaled)
         return scaled.error();
-    const JpegInfo info = scaled.value();
+    const JpegInfo info = std::move(scaled).value();
     if (!native_planar_supported(info))
         return Codec::decode_into(input, writer, options, stop);
     Result<DocumentDescriptor> descriptor = native_descriptor(info);
@@ -772,16 +801,13 @@ Result<EncodedArtifactReceipt> JpegCodec::encode_to_sink(const Document& documen
     }
     if (stop.stop_requested())
         return cancelled_status();
-    Result<void> begun =
-        begin_compression(context.get(), view.width, view.height,
-                          grayscale ? 1
-                                    : (view.format.channels == ChannelLayout::rgba ||
-                                               view.format.channels == ChannelLayout::bgra
-                                           ? 4
-                                           : 3),
-                          color_space.value(), sampling, options, output.sink.get(), false);
-    if (!begun)
-        return begun.error();
+    begin_compression(context.get(), view.width, view.height,
+                      grayscale ? 1
+                                : (view.format.channels == ChannelLayout::rgba ||
+                                           view.format.channels == ChannelLayout::bgra
+                                       ? 4
+                                       : 3),
+                      color_space.value(), sampling, options, output.sink.get(), false);
     while (context->compressor.next_scanline < context->compressor.image_height) {
         if (stop.stop_requested()) {
             jpeg_destroy_compress(&context->compressor);
@@ -839,7 +865,7 @@ Result<EncodedArtifactReceipt> JpegCodec::encode_raster_to_sink(const RasterSour
         if (!selected)
             return selected.error();
         const ChromaSubsampling sampling = selected.value();
-        std::vector<std::byte> row(row_bytes);
+        snow::memory::PixelArray<std::byte> row(row_bytes);
         auto context = std::make_unique<JpegEncoderContext>();
         context->compressor.err = jpeg_std_error(&context->error.base);
         context->error.base.error_exit = jpeg_error_exit;
@@ -851,23 +877,22 @@ Result<EncodedArtifactReceipt> JpegCodec::encode_raster_to_sink(const RasterSour
             return cancelled_status();
         const bool alpha = plane.format.channels == ChannelLayout::rgba ||
                            plane.format.channels == ChannelLayout::bgra;
-        Result<void> begun = begin_compression(context.get(), frame.width, frame.height,
-                                               grayscale ? 1 : (alpha ? 4 : 3), color_space.value(),
-                                               sampling, options, output.sink.get(), false);
-        if (!begun)
-            return begun.error();
+        begin_compression(context.get(), frame.width, frame.height, grayscale ? 1 : (alpha ? 4 : 3),
+                          color_space.value(), sampling, options, output.sink.get(), false);
         while (context->compressor.next_scanline < context->compressor.image_height) {
             if (stop.stop_requested()) {
                 jpeg_destroy_compress(&context->compressor);
                 return cancelled_status();
             }
             const std::uint32_t y = context->compressor.next_scanline;
-            Result<void> read = source.read_rows(0, 0, y, 1, row_bytes, row, stop);
-            if (!read) {
-                jpeg_destroy_compress(&context->compressor);
-                return read.error();
+            {
+                Result<void> read = source.read_rows(0, 0, y, 1, row_bytes, row, stop);
+                if (!read) {
+                    jpeg_destroy_compress(&context->compressor);
+                    return read.error();
+                }
             }
-            if (alpha) {
+            if (alpha && options.verified_alpha_content != AlphaContent::opaque) {
                 auto* pixels = reinterpret_cast<std::uint8_t*>(row.data());
                 for (std::uint32_t x = 0; x < frame.width; ++x) {
                     std::uint8_t* pixel = pixels + static_cast<std::size_t>(x) * 4U;
@@ -950,7 +975,7 @@ Result<EncodedArtifactReceipt> JpegCodec::encode_raster_to_sink(const RasterSour
     const int y_vertical = resolved == ChromaSubsampling::yuv420 ? 2 : 1;
     const std::array<int, 3> vertical_factors{y_vertical, 1, 1};
     const std::size_t plane_count = grayscale ? 1U : 3U;
-    std::array<std::vector<JSAMPLE>, 3> buffers;
+    std::array<snow::memory::PixelArray<JSAMPLE>, 3> buffers;
     std::array<std::vector<JSAMPROW>, 3> rows;
     std::array<std::size_t, 3> padded_widths{};
     std::array<JSAMPARRAY, 3> image_rows{};
@@ -974,11 +999,9 @@ Result<EncodedArtifactReceipt> JpegCodec::encode_raster_to_sink(const RasterSour
     }
     if (stop.stop_requested())
         return cancelled_status();
-    Result<void> begun = begin_compression(context.get(), frame.width, frame.height,
-                                           grayscale ? 1 : 3, grayscale ? JCS_GRAYSCALE : JCS_YCbCr,
-                                           resolved, options, output.sink.get(), true);
-    if (!begun)
-        return begun.error();
+    begin_compression(context.get(), frame.width, frame.height, grayscale ? 1 : 3,
+                      grayscale ? JCS_GRAYSCALE : JCS_YCbCr, resolved, options, output.sink.get(),
+                      true);
     while (context->compressor.next_scanline < context->compressor.image_height) {
         if (stop.stop_requested()) {
             jpeg_destroy_compress(&context->compressor);

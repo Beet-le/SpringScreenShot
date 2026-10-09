@@ -1,6 +1,7 @@
 #ifndef SNOW_SHOT_PRESENTATION_SETTINGS_SETTINGSRUNTIMESESSION_H
 #define SNOW_SHOT_PRESENTATION_SETTINGS_SETTINGSRUNTIMESESSION_H
 
+#include "snow_shot/clouduploadconfiguration.h"
 #include "snow_shot/presentation/settings/settingsregistry.h"
 #include "snow_shot/presentation/settings/settingsbackend.h"
 
@@ -67,6 +68,7 @@ class SettingsRuntimeSession final : public QObject {
 
     [[nodiscard]] const SettingsRegistry& registry() const;
     [[nodiscard]] SettingsFieldState state(const QString& fieldId) const;
+    [[nodiscard]] SettingsOptions options(const QString& fieldId) const;
     [[nodiscard]] bool hasDirtyFields() const;
     [[nodiscard]] bool hasPendingWrites() const;
     [[nodiscard]] QStringList dirtyFieldIds() const;
@@ -87,6 +89,9 @@ class SettingsRuntimeSession final : public QObject {
     [[nodiscard]] QVector<SettingsRuntimeOption>
     dynamicSelectOptions(SettingsSelectBinding binding) const;
     void requestFontOptions();
+    void requestSelectOptions(SettingsSelectBinding binding) {
+        m_backend.requestSelectOptions(binding);
+    }
     [[nodiscard]] bool applySelectValue(SettingsSelectBinding binding, const QVariant& value);
     [[nodiscard]] bool switchValue(SettingsSwitchBinding binding) const;
     [[nodiscard]] bool switchEnabled(SettingsSwitchBinding binding) const;
@@ -101,10 +106,15 @@ class SettingsRuntimeSession final : public QObject {
     [[nodiscard]] bool applySliderValue(SettingsSliderBinding binding, int value);
     [[nodiscard]] QColor colorValue(SettingsColorBinding binding) const;
     [[nodiscard]] bool applyColorValue(SettingsColorBinding binding, const QColor& value);
+    [[nodiscard]] QVector<QColor> colorPaletteValue(SettingsColorPaletteBinding binding) const;
+    [[nodiscard]] bool applyColorPaletteValue(SettingsColorPaletteBinding binding,
+                                              const QVector<QColor>& value);
     [[nodiscard]] QVariant radioValue(SettingsRadioBinding binding) const;
     [[nodiscard]] bool applyRadioValue(SettingsRadioBinding binding, const QVariant& value);
     [[nodiscard]] QString filePathValue(SettingsFilePathBinding binding) const;
     [[nodiscard]] bool applyFilePathValue(SettingsFilePathBinding binding, const QString& value);
+    [[nodiscard]] QString filePathStatus(SettingsFilePathBinding binding) const;
+    [[nodiscard]] bool filePathStatusError(SettingsFilePathBinding binding) const;
     [[nodiscard]] QString directoryPathValue(SettingsDirectoryPathBinding binding) const;
     [[nodiscard]] bool applyDirectoryPathValue(SettingsDirectoryPathBinding binding,
                                                const QString& value);
@@ -138,11 +148,16 @@ class SettingsRuntimeSession final : public QObject {
     globalMouseCombinationAvailable(SettingsGlobalMouseAction action,
                                     const SettingsGlobalMouseCombination& combination) const;
     [[nodiscard]] SettingsActionState actionState(SettingsActionBinding binding) const;
-    [[nodiscard]] bool triggerAction(SettingsActionBinding binding, const QString& filePath = {});
+    [[nodiscard]] bool triggerAction(SettingsActionBinding binding, const QString& filePath = {},
+                                     bool includeToolbarStyles = false);
+#if SNOW_SHOT_ENABLE_API_CONFIGURATION
     [[nodiscard]] CustomAiModels customAiModels() const;
     bool applyCustomAiModels(const CustomAiModels& models);
     [[nodiscard]] TextTranslationConfigurations textTranslationConfigurations() const;
     bool applyTextTranslationConfigurations(const TextTranslationConfigurations& values);
+#endif
+    [[nodiscard]] CloudUploadSettings cloudUploadSettings() const;
+    bool applyCloudUploadSettings(const CloudUploadSettings& values);
     bool
     importConfigurationSnapshot(const QMap<QString, QJsonValue>& values, int schemaVersion,
                                 std::shared_future<storage::StorageResult>* completion = nullptr) {
@@ -154,6 +169,9 @@ class SettingsRuntimeSession final : public QObject {
     [[nodiscard]] storage::StorageStatus storageStatus() const;
     void refreshPlatformSettings();
     void refreshStorageStatus();
+    storage::StorageResult changeStorageDirectory(const QString& directory, bool migrate) {
+        return m_backend.changeStorageDirectory(directory, migrate);
+    }
     void refreshStorageStatusIfStale();
 
     AppPermissionService* appPermissions() const {
@@ -174,6 +192,8 @@ class SettingsRuntimeSession final : public QObject {
     }
 
   signals:
+    void directoryChangeProgress(const snow_shot::storage::StorageDirectoryProgress& progress);
+    void directoryChangeFinished(const snow_shot::storage::StorageDirectoryChangeResult& result);
     void globalMousePermissionChanged();
     void operationMessage(const QString& message, bool warning);
     void fieldChanged(const QString& fieldId,
@@ -190,9 +210,15 @@ class SettingsRuntimeSession final : public QObject {
                          const snow_shot::presentation::GlobalShortcutRegistrationState& state);
     void auxiliaryIntegerChanged(snow_shot::presentation::settings::SettingsIntegerBinding binding,
                                  int value);
+    void filePathStatusChanged(snow_shot::presentation::settings::SettingsFilePathBinding binding);
     void refreshed();
 
   private:
+    struct FilePathStatus {
+        QString text;
+        bool error = false;
+    };
+
     struct PendingWrite {
         QVariant target;
         QVariant baseline;
@@ -215,6 +241,8 @@ class SettingsRuntimeSession final : public QObject {
     const SettingsFieldDescriptor* descriptorForMulti(SettingsMultiSelectBinding binding) const;
     const SettingsFieldDescriptor* descriptorForSlider(SettingsSliderBinding binding) const;
     const SettingsFieldDescriptor* descriptorForColor(SettingsColorBinding binding) const;
+    const SettingsFieldDescriptor*
+    descriptorForColorPalette(SettingsColorPaletteBinding binding) const;
     const SettingsFieldDescriptor* descriptorForRadio(SettingsRadioBinding binding) const;
     const SettingsFieldDescriptor* descriptorForFile(SettingsFilePathBinding binding) const;
     const SettingsFieldDescriptor*
@@ -251,6 +279,7 @@ class SettingsRuntimeSession final : public QObject {
                                                  const PendingWrite* activeWrite);
     void refreshField(const QString& fieldId, std::optional<quint64> expectedRevision);
     void refreshAuxiliaryInteger(SettingsIntegerBinding binding);
+    void refreshFilePathStatus(SettingsFilePathBinding binding);
     void updateState(const QString& fieldId, const SettingsFieldState& next);
 
     const SettingsRegistry& m_registry;
@@ -266,6 +295,7 @@ class SettingsRuntimeSession final : public QObject {
     mutable QHash<QString, SettingsOptions> m_optionsCache;
     QHash<int, SettingsCommandState> m_commandStateCache;
     QHash<int, int> m_auxiliaryIntegerValues;
+    QHash<int, FilePathStatus> m_filePathStatuses;
     storage::StorageStatus m_lastStorageStatus;
     bool m_hasStorageStatus = false;
     bool m_refreshPending = false;

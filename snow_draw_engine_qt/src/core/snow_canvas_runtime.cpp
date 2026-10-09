@@ -28,6 +28,7 @@ struct SnowCanvasRuntime::Impl {
     bool restoreDocumentHistory(const QByteArray& payload);
     bool restoreDocumentHistoryPreservingEditorStyles(const QByteArray& payload);
     bool clearDocumentPreservingViewports();
+    void clearRenderState();
     bool setQuickSelectionDisabledTools(const QSet<SnowCanvasTool>& tools);
     void destroyAsync();
     QImage renderToImage(const QRectF& virtualSelectionRect, const QSize& outputSize,
@@ -329,6 +330,9 @@ bool SnowCanvasRuntime::canRedo() const {
 quint64 SnowCanvasRuntime::documentRevision() const {
     return isOwnerThread() ? snow_runtime_document_revision(m_impl->handle()) : 0;
 }
+bool SnowCanvasRuntime::hasDocumentContent() const {
+    return !isOwnerThread() || snow_runtime_has_document_content(m_impl->handle()) != 0;
+}
 void SnowCanvasRuntime::setDocumentChangedHandler(std::function<void()> handler) {
     if (isOwnerThread()) {
         if (handler)
@@ -339,6 +343,16 @@ void SnowCanvasRuntime::setDocumentChangedHandler(std::function<void()> handler)
 
 void SnowCanvasRuntime::destroyAsync() {
     m_impl->destroyAsync();
+}
+
+void SnowCanvasRuntime::Impl::clearRenderState() {
+    if (hasThreadAccess("clearRenderState")) {
+        session.clearRenderState();
+    }
+}
+
+void SnowCanvasRuntime::clearRenderState() {
+    m_impl->clearRenderState();
 }
 
 QImage SnowCanvasRuntime::renderToImage(const QRectF& virtualSelectionRect, const QSize& outputSize,
@@ -450,6 +464,21 @@ SnowCanvasSpotlightConfig SnowCanvasRuntimeEditor::canvasSpotlightConfig() const
                                                              m_impl->viewport.get(), &state));
     return snow_canvas_types::toCanvasSpotlightConfig(state);
 }
+bool SnowCanvasRuntimeEditor::setDistanceStyleFromToolbar(const SnowCanvasDistanceStyle& style,
+                                                          quint32 properties) {
+    if (!snow_canvas_types::validDistanceStyle(style))
+        return false;
+    const auto value = snow_canvas_types::toEngineDistanceStyle(style);
+    return m_impl->mutate([&](auto r, auto v, auto changed) {
+        return snow_viewport_set_distance_style_patch_ex(r, v, &value, properties, changed);
+    });
+}
+bool SnowCanvasRuntimeEditor::setDistanceCreationPixelScale(const QSizeF& scale) {
+    return m_impl->mutate([&](auto r, auto v, auto changed) {
+        return snow_viewport_set_distance_pixel_scale_ex(r, v, scale.width(), scale.height(),
+                                                         changed);
+    });
+}
 bool SnowCanvasRuntimeEditor::setShapeStyleFromToolbar(const SnowCanvasShapeStyle& style,
                                                        quint32 properties,
                                                        SnowCanvasShapeKind kind) {
@@ -473,12 +502,26 @@ bool SnowCanvasRuntimeEditor::setSerialNumberStyleFromToolbar(
         return snow_viewport_set_serial_number_style_ex(r, v, &value, changed);
     });
 }
+bool SnowCanvasRuntimeEditor::setSerialNumberStyleFromToolbar(
+    const SnowCanvasSerialNumberStyle& style, quint32 properties) {
+    const auto value = snow_canvas_types::toEngineSerialNumberStyle(style);
+    return m_impl->mutate([&](auto r, auto v, auto changed) {
+        return snow_viewport_set_serial_number_style_patch_ex(r, v, &value, properties, changed);
+    });
+}
 bool SnowCanvasRuntimeEditor::setFilterStyleFromToolbar(const SnowCanvasFilterStyle& style,
                                                         quint32 properties) {
     const SnowFilterStyle value{static_cast<SnowFilterType>(style.type), style.strength,
                                 style.opacity, style.strokeWidth};
     return m_impl->mutate([&](auto r, auto v, auto changed) {
         return snow_viewport_set_filter_style_ex(r, v, &value, properties, changed);
+    });
+}
+bool SnowCanvasRuntimeEditor::setBrushEraserCreationStyle(const SnowCanvasBrushEraserStyle& style,
+                                                          quint32 properties) {
+    const SnowBrushEraserStyle value{style.strokeWidth};
+    return m_impl->mutate([&](auto r, auto v, auto changed) {
+        return snow_viewport_set_brush_eraser_creation_style_ex(r, v, &value, properties, changed);
     });
 }
 bool SnowCanvasRuntimeEditor::setWatermarkConfigFromToolbar(
@@ -511,8 +554,11 @@ bool SnowCanvasRuntimeEditor::deleteAllElements() {
         return snow_viewport_delete_all_elements_ex(r, v, changed);
     });
 }
-bool SnowCanvasRuntimeEditor::erasePath(const QList<QPointF>& points) {
-    if (!isValid() || points.isEmpty() || points.size() > 8192)
+bool SnowCanvasRuntimeEditor::erasePath(const QList<QPointF>& points, SnowCanvasTool eraserTool) {
+    if (!isValid() || points.isEmpty() || points.size() > 8192 ||
+        (eraserTool != SnowCanvasTool::Eraser && eraserTool != SnowCanvasTool::RectangleEraser &&
+         eraserTool != SnowCanvasTool::BrushEraser) ||
+        (eraserTool == SnowCanvasTool::RectangleEraser && points.size() != 2))
         return false;
     for (const auto& point : points)
         if (!std::isfinite(point.x()) || !std::isfinite(point.y()))
@@ -529,7 +575,7 @@ bool SnowCanvasRuntimeEditor::erasePath(const QList<QPointF>& points) {
             return snow_viewport_set_active_tool_ex(r, v, tool, changed);
         });
     };
-    if (!setTool(snow_canvas_types::toEngineTool(SnowCanvasTool::Eraser)))
+    if (!setTool(snow_canvas_types::toEngineTool(eraserTool)))
         return false;
     const auto eventAt = [](QPointF point, SnowPointerEventType type) {
         SnowInputEvent event{};

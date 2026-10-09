@@ -1,4 +1,5 @@
 #include "snow_shot/app/mcp/mcpdocumentservice.h"
+#include "image_orientation_fixture.h"
 #include "snow_shot/app/mcp/mcpjobregistry.h"
 #include "snow_shot/app/mcp/mcpapplicationservice.h"
 #include "snow_shot/presentation/settings/settingsruntimesession.h"
@@ -165,7 +166,7 @@ class FixtureQr final : public ScreenshotQrRecognitionPort {
         const auto token = ++m_next;
         QTimer::singleShot(100, receiver, [this, token, completion = std::move(completion)] {
             if (!m_canceled.remove(token))
-                completion({{QStringLiteral("fixture-qr-payload")}, {}});
+                completion({{QStringLiteral("fixture-qr-payload")}, {}, {}});
         });
         return token;
     }
@@ -379,6 +380,66 @@ int serve(QApplication& application, const QString& directory) {
     documents.shutdown();
     return result;
 }
+void orientedFileDocuments(const QString& directory) {
+    QImage image(64, 32, QImage::Format_RGB32);
+    image.fill(Qt::blue);
+    for (int y = 0; y < image.height(); ++y)
+        for (int x = 0; x < image.width() / 2; ++x)
+            image.setPixelColor(x, y, Qt::red);
+    McpDocumentService service({});
+    quint64 sequence = 0;
+    const auto call = [&](QString method, QJsonObject params) {
+        ScreenshotMcpRequest request;
+        request.connectionId = 1;
+        request.requestId = QString::number(++sequence);
+        request.idempotencyKey = request.requestId;
+        request.method = std::move(method);
+        request.params = std::move(params);
+        request.expectedRevision = 1;
+        std::optional<ScreenshotMcpResponse> response;
+        service.request(request, [&](auto value) { response = std::move(value); });
+        QElapsedTimer timer;
+        timer.start();
+        while (!response && timer.elapsed() < 5000) {
+            QCoreApplication::processEvents();
+            QThread::msleep(1);
+        }
+        require(response.has_value(), "oriented document operation completed");
+        return *response;
+    };
+    for (const quint8 orientation : {quint8(6), quint8(8)}) {
+        const QByteArray encoded =
+            image_orientation_fixture::jpegWithExifOrientation(image, orientation);
+        const QString path =
+            QDir(directory).filePath(QStringLiteral("oriented-source-%1.jpg").arg(orientation));
+        QFile file(path);
+        require(!encoded.isEmpty() && file.open(QIODevice::WriteOnly) &&
+                    file.write(encoded) == encoded.size(),
+                "oriented document fixture is writable");
+        file.close();
+        const auto opened = call(
+            QStringLiteral("snow_shot_document_open"),
+            {{QStringLiteral("source"), QStringLiteral("file")}, {QStringLiteral("path"), path}});
+        require(opened.ok && opened.result.value(QStringLiteral("canvas_bounds")) ==
+                                 QJsonArray{0, 0, 32, 64},
+                "admitted document canvas must use EXIF transformed dimensions");
+        const QJsonObject document{{QStringLiteral("document_id"),
+                                    opened.result.value(QStringLiteral("document_id")).toString()}};
+        const auto rendered = call(QStringLiteral("snow_shot_document_render"), document);
+        const QImage raster = QImage::fromData(rendered.attachment);
+        require(rendered.ok && raster.size() == QSize(32, 64),
+                "oriented document output must match its admitted canvas dimensions");
+        const QColor top = raster.pixelColor(16, 16);
+        const QColor bottom = raster.pixelColor(16, 48);
+        require(orientation == 6 ? top.red() > 240 && bottom.blue() > 240
+                                 : top.blue() > 240 && bottom.red() > 240,
+                "document imports must preserve both EXIF quarter-turn directions");
+        require(call(QStringLiteral("snow_shot_document_close"), document).ok,
+                "oriented source releases its document slot");
+    }
+    service.shutdown();
+}
+
 void documentReservations(const QString& directory) {
     QImage image(16, 16, QImage::Format_ARGB32_Premultiplied);
     image.fill(Qt::white);
@@ -490,6 +551,8 @@ void documentCacheWork(const QString& directory) {
     for (const bool evict : {false, true}) {
         std::atomic_int renders = 0, encodes = 0;
         McpDocumentService::Ports ports;
+        auto clipboard = std::make_shared<MemoryClipboard>();
+        ports.clipboard = clipboard;
         if (evict)
             ports.artifactCacheBytes = 80 * 60 * 4;
         ports.workObserved = [&](const QString&, const QString& operation) {
@@ -531,9 +594,17 @@ void documentCacheWork(const QString& directory) {
         require(opened.ok, "cache instrumentation document opened");
         const auto id = opened.result.value(QStringLiteral("document_id")).toString();
         const QJsonObject document{{QStringLiteral("document_id"), id}};
+        if (!evict) {
+            const auto copied = call(QStringLiteral("snow_shot_document_copy"), document);
+            require(copied.ok && renders == 1 && encodes == 1 && !clipboard->png.isEmpty(),
+                    "cold copy creates one reusable raster and PNG");
+        }
         const auto cold = call(QStringLiteral("snow_shot_document_render"), document);
         require(cold.ok && renders == 1 && encodes == 1,
-                "cold render reaches exactly one real raster and encoder boundary");
+                "first render reaches or reuses exactly one real raster and encoder boundary");
+        if (!evict)
+            require(clipboard->png == cold.attachment,
+                    "render after cold copy retains the identical PNG bytes");
         const auto warm = call(QStringLiteral("snow_shot_document_render"), document);
         if (evict) {
             require(
@@ -544,6 +615,12 @@ void documentCacheWork(const QString& directory) {
             require(warm.ok && warm.result.value(QStringLiteral("cache_hit")).toBool() &&
                         renders == 1 && encodes == 1 && warm.attachment == cold.attachment,
                     "valid render cache hit performs zero additional raster or encoder work");
+            for (int index = 0; index < 2; ++index) {
+                const auto copied = call(QStringLiteral("snow_shot_document_copy"), document);
+                require(copied.ok && renders == 1 && encodes == 1 &&
+                            clipboard->png == cold.attachment,
+                        "copy reuses the same immutable PNG as render without another encode");
+            }
             auto save = document;
             save.insert(QStringLiteral("path"),
                         QDir(directory).filePath(QStringLiteral("cache-save.png")));
@@ -1124,6 +1201,7 @@ void documentClipboardTeardown() {
 
 void jobs() {
     McpJobRegistry registry;
+    require(!registry.hasRunningJobs(), "empty registry permits storage migration");
     QString id;
     int canceled = 0;
     id = registry.start(1, QStringLiteral("test"), [&] {
@@ -1131,11 +1209,13 @@ void jobs() {
         require(!registry.complete(id, {{QStringLiteral("late"), true}}),
                 "late synchronous completion cannot resurrect canceled job");
     });
+    require(registry.hasRunningJobs(), "running jobs block storage migration");
     require(!id.isEmpty() && registry.list(1).size() == 1 && registry.list(2).isEmpty(),
             "jobs are independently owned");
     require(!registry.get(2, id) && !registry.cancel(2, id), "job lookup enforces owner");
     require(registry.cancel(1, id) && canceled == 1 && registry.cancel(1, id) && canceled == 1,
             "job cancellation is idempotent and retires callback first");
+    require(!registry.hasRunningJobs(), "canceled jobs no longer block migration");
     const auto committed = registry.start(1, QStringLiteral("committed"));
     require(registry.retainInput(committed,
                                  {{QStringLiteral("secret_input"), QStringLiteral("private")}}) &&
@@ -1200,6 +1280,116 @@ void jobs() {
                 expiredCancellation == 1 && expiredNotifications == 65,
             "expiry cancels pending work exactly once after retiring its record");
 }
+void eraserDocuments(const QString& directory) {
+    QImage image(100, 80, QImage::Format_ARGB32_Premultiplied);
+    image.fill(QColor(20, 40, 70));
+    const QString path = QDir(directory).filePath(QStringLiteral("eraser-source.png"));
+    require(image.save(path), "write eraser background");
+    McpJobRegistry registry;
+    McpDocumentService::Ports ports;
+    ports.jobs = &registry;
+    McpDocumentService service(std::move(ports));
+    quint64 sequence = 0;
+    QString id;
+    quint64 revision = 1;
+    const auto call = [&](QString method, QJsonObject parameters = {}, bool mutation = false) {
+        ScreenshotMcpRequest request;
+        request.connectionId = 1;
+        request.requestId = QString::number(++sequence);
+        request.idempotencyKey = request.requestId;
+        request.method = std::move(method);
+        if (!id.isEmpty()) {
+            parameters.insert(QStringLiteral("document_id"), id);
+            request.expectedRevision = revision;
+        }
+        request.params = std::move(parameters);
+        std::optional<ScreenshotMcpResponse> response;
+        service.request(request, [&](auto result) { response = std::move(result); });
+        QElapsedTimer elapsed;
+        elapsed.start();
+        while (!response && elapsed.elapsed() < 10000) {
+            QCoreApplication::processEvents();
+            QThread::msleep(1);
+        }
+        require(response.has_value(), "eraser document command completes");
+        if (mutation && response->ok)
+            revision = response->revision.value_or(revision);
+        return *response;
+    };
+    const auto opened =
+        call(QStringLiteral("snow_shot_document_open"), {{QStringLiteral("path"), path}});
+    require(opened.ok, "open eraser document");
+    id = opened.result.value(QStringLiteral("document_id")).toString();
+    const auto render = [&] {
+        const auto response = call(QStringLiteral("snow_shot_document_render"));
+        require(response.ok && response.attachmentMime == QStringLiteral("image/png"),
+                "eraser document renders a PNG attachment at the current revision");
+        const auto rendered = QImage::fromData(response.attachment);
+        require(rendered.size() == image.size(),
+                "eraser document attachment decodes to the original canvas size");
+        return rendered;
+    };
+    require(
+        call(QStringLiteral("snow_shot_document_apply_annotations"),
+             {{QStringLiteral("operations"),
+               QJsonArray{QJsonObject{{QStringLiteral("type"), QStringLiteral("rectangle")},
+                                      {QStringLiteral("bounds"), QJsonArray{10, 10, 60, 50}}}}}},
+             true)
+            .ok,
+        "create annotation under eraser masks");
+    const auto before = render();
+    require(before.pixelColor(10, 25) != image.pixelColor(10, 25) &&
+                before.pixelColor(70, 25) != image.pixelColor(70, 25),
+            "annotation changes local and distant source pixels");
+    for (const QString& tool :
+         {QStringLiteral("rectangle_eraser"), QStringLiteral("brush_eraser")}) {
+        require(call(QStringLiteral("snow_shot_document_set_tool"),
+                     {{QStringLiteral("tool"), tool}}, true)
+                    .ok,
+                "MCP accepts each new eraser tool");
+        if (tool == QStringLiteral("brush_eraser")) {
+            require(
+                call(QStringLiteral("snow_shot_document_set_tool_style"),
+                     {{QStringLiteral("target"), tool},
+                      {QStringLiteral("style"), QJsonObject{{QStringLiteral("stroke_width"), 12}}}},
+                     true)
+                    .ok,
+                "brush MCP style accepts creation width");
+            const auto invalid =
+                call(QStringLiteral("snow_shot_document_set_tool_style"),
+                     {{QStringLiteral("target"), tool},
+                      {QStringLiteral("style"), QJsonObject{{QStringLiteral("opacity"), 0.5}}}},
+                     true);
+            require(!invalid.ok, "brush MCP style rejects immutable opacity");
+        }
+        const QJsonArray points = tool == QStringLiteral("rectangle_eraser")
+                                      ? QJsonArray{QJsonArray{5, 20}, QJsonArray{20, 35}}
+                                      : QJsonArray{QJsonArray{10, 20}, QJsonArray{10, 35}};
+        if (tool == QStringLiteral("rectangle_eraser")) {
+            require(!call(QStringLiteral("snow_shot_document_edit_elements"),
+                          {{QStringLiteral("action"), QStringLiteral("erase_path")},
+                           {QStringLiteral("points"), QJsonArray{QJsonArray{10, 25}}}},
+                          true)
+                         .ok,
+                    "rectangle MCP eraser requires two corners");
+        }
+        require(call(QStringLiteral("snow_shot_document_edit_elements"),
+                     {{QStringLiteral("action"), QStringLiteral("erase_path")},
+                      {QStringLiteral("points"), points}},
+                     true)
+                    .ok,
+                "existing erase_path creates the active background eraser");
+        const auto erased = render();
+        require(erased.pixelColor(10, 25) == image.pixelColor(10, 25) &&
+                    erased.pixelColor(70, 25) == before.pixelColor(70, 25),
+                "MCP eraser restores local background and preserves distant annotation");
+        require(call(QStringLiteral("snow_shot_document_undo"), {}, true).ok,
+                "MCP eraser gesture is one undo transaction");
+        require(render() == before, "undo restores complete annotation with original geometry");
+    }
+    service.shutdown();
+}
+
 void documents(const QString& directory) {
     QImage image(80, 60, QImage::Format_ARGB32_Premultiplied);
     image.fill(Qt::white);
@@ -1582,7 +1772,17 @@ int main(int argc, char** argv) {
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
+    if (application.arguments().contains(QStringLiteral("--eraser-only"))) {
+        eraserDocuments(temporary.path());
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     jobs();
+    if (application.arguments().contains(QStringLiteral("--jobs-only"))) {
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    orientedFileDocuments(temporary.path());
     documentReservations(temporary.path());
     documentCacheWork(temporary.path());
     documentConcurrency();

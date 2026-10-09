@@ -22,6 +22,54 @@ NSRect cocoaRect(const QRectF& rect) {
 QRectF desktopRect(NSRect rect) {
     return {rect.origin.x, desktopTop() - NSMaxY(rect), rect.size.width, rect.size.height};
 }
+
+class CocoaPinnedWakeNotifications final : public QObject {
+  public:
+    explicit CocoaPinnedWakeNotifications(QObject* parent) : QObject(parent) {
+        // NSWorkspace retains internal power notifiers after removing subscriptions on some
+        // macOS releases. Share one subscription across native surfaces for the app's lifetime.
+        m_observer = [[NSWorkspace.sharedWorkspace.notificationCenter
+            addObserverForName:NSWorkspaceDidWakeNotification
+                        object:nil
+                         queue:nil
+                    usingBlock:^(NSNotification*) {
+                      const auto platforms = m_platforms;
+                      for (const auto& platform : platforms) {
+                          if (platform && m_platforms.contains(platform)) {
+                              const auto changed = platform->environmentChanged;
+                              if (changed)
+                                  changed(false);
+                          }
+                      }
+                    }] retain];
+    }
+
+    ~CocoaPinnedWakeNotifications() override {
+        [NSWorkspace.sharedWorkspace.notificationCenter removeObserver:m_observer];
+        [m_observer release];
+    }
+
+    void add(PinnedWindowPlatform* platform) {
+        if (!m_platforms.contains(platform))
+            m_platforms.append(platform);
+    }
+
+    void remove(PinnedWindowPlatform* platform) {
+        m_platforms.removeAll(platform);
+    }
+
+  private:
+    id m_observer = nil;
+    QList<QPointer<PinnedWindowPlatform>> m_platforms;
+};
+
+CocoaPinnedWakeNotifications* pinnedWakeNotifications() {
+    static QPointer<CocoaPinnedWakeNotifications> notifications;
+    if (!notifications)
+        notifications = new CocoaPinnedWakeNotifications(qApp);
+    return notifications;
+}
+
 class CocoaPinnedWindowPlatform final : public PinnedWindowPlatform {
   public:
     CocoaPinnedWindowPlatform(QWidget* window, Role role) : PinnedWindowPlatform(window, role) {
@@ -66,14 +114,8 @@ class CocoaPinnedWindowPlatform final : public PinnedWindowPlatform {
                             }];
                 [m_observers addObject:token];
             }
-            m_wakeObserver = [[NSWorkspace.sharedWorkspace.notificationCenter
-                addObserverForName:NSWorkspaceDidWakeNotification
-                            object:nil
-                             queue:nil
-                        usingBlock:^(NSNotification*) {
-                          if (environmentChanged)
-                              environmentChanged(false);
-                        }] retain];
+            m_wakeNotifications = pinnedWakeNotifications();
+            m_wakeNotifications->add(this);
             // Register each native surface once. Descendants then inherit the
             // same stacking policy as recording windows, including modal sessions.
             snow_shot::platform::detail::setPinnedWindowLayer(m_window, m_staysOnTop);
@@ -86,20 +128,31 @@ class CocoaPinnedWindowPlatform final : public PinnedWindowPlatform {
             constexpr NSWindowStyleMask nativeChrome =
                 NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
                 NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable;
-            window.styleMask &= ~nativeChrome;
-            window.movable = NO;
-            window.movableByWindowBackground = NO;
-            window.hasShadow = NO;
+            const NSWindowStyleMask currentStyle = window.styleMask;
+            const NSWindowStyleMask desiredStyle = currentStyle & ~nativeChrome;
+            if (currentStyle != desiredStyle)
+                window.styleMask = desiredStyle;
+            if (window.movable)
+                window.movable = NO;
+            if (window.movableByWindowBackground)
+                window.movableByWindowBackground = NO;
+            if (window.hasShadow)
+                window.hasShadow = NO;
         }
-        if (!m_staysOnTop)
+        if (!m_staysOnTop && window.level != NSNormalWindowLevel)
             window.level = NSNormalWindowLevel;
-        window.collectionBehavior =
-            (window.collectionBehavior & ~(NSWindowCollectionBehaviorMoveToActiveSpace |
-                                           NSWindowCollectionBehaviorFullScreenPrimary)) |
+        const NSWindowCollectionBehavior currentBehavior = window.collectionBehavior;
+        const NSWindowCollectionBehavior desiredBehavior =
+            (currentBehavior & ~(NSWindowCollectionBehaviorMoveToActiveSpace |
+                                 NSWindowCollectionBehaviorFullScreenPrimary)) |
             NSWindowCollectionBehaviorCanJoinAllSpaces |
             NSWindowCollectionBehaviorFullScreenAuxiliary;
-        window.hidesOnDeactivate = NO;
-        window.ignoresMouseEvents = m_transparent;
+        if (currentBehavior != desiredBehavior)
+            window.collectionBehavior = desiredBehavior;
+        if (window.hidesOnDeactivate)
+            window.hidesOnDeactivate = NO;
+        if (window.ignoresMouseEvents != m_transparent)
+            window.ignoresMouseEvents = m_transparent;
         return true;
     }
     void detach() override {
@@ -110,10 +163,9 @@ class CocoaPinnedWindowPlatform final : public PinnedWindowPlatform {
             [NSNotificationCenter.defaultCenter removeObserver:observer];
         [m_observers release];
         m_observers = nil;
-        if (m_wakeObserver) {
-            [NSWorkspace.sharedWorkspace.notificationCenter removeObserver:m_wakeObserver];
-            [m_wakeObserver release];
-            m_wakeObserver = nil;
+        if (m_wakeNotifications) {
+            m_wakeNotifications->remove(this);
+            m_wakeNotifications.clear();
         }
         if (NSWindow* native = m_native) {
             // Changing the style mask may synchronously tear down Qt's platform
@@ -158,8 +210,10 @@ class CocoaPinnedWindowPlatform final : public PinnedWindowPlatform {
         // valid drag.
         const QRectF requested = pinnedDesktopRect(placement, *screen);
         const QRect logicalFrame(requested.topLeft().toPoint(), placement.windowSize);
-        const NSRect frame = [m_native constrainFrameRect:cocoaRect(logicalFrame)
-                                                 toScreen:nativeScreen];
+        const NSRect frame = m_preservePlacementOrigin
+                                 ? cocoaRect(logicalFrame)
+                                 : [m_native constrainFrameRect:cocoaRect(logicalFrame)
+                                                       toScreen:nativeScreen];
         const QRect target(desktopRect(frame).topLeft().toPoint(), placement.windowSize);
         m_window->setGeometry(target);
         // QWidget defers native geometry changes while hidden. Pin creation and
@@ -193,7 +247,8 @@ class CocoaPinnedWindowPlatform final : public PinnedWindowPlatform {
     bool setInputTransparent(bool transparent) override {
         if (!attach())
             return false;
-        m_native.ignoresMouseEvents = transparent;
+        if (m_native.ignoresMouseEvents != transparent)
+            m_native.ignoresMouseEvents = transparent;
         if (m_native.ignoresMouseEvents != transparent)
             return false;
         m_transparent = transparent;
@@ -234,7 +289,7 @@ class CocoaPinnedWindowPlatform final : public PinnedWindowPlatform {
   private:
     NSWindow* m_native = nil;
     NSMutableArray* m_observers = nil;
-    id m_wakeObserver = nil;
+    QPointer<CocoaPinnedWakeNotifications> m_wakeNotifications;
     NSWindowStyleMask m_styleMask = NSWindowStyleMaskBorderless;
     bool m_movable = true;
     bool m_movableByWindowBackground = false;

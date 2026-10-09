@@ -6,11 +6,19 @@
 #include <QtGlobal>
 
 #include <cstring>
+#include <algorithm>
+#include <cmath>
 #include <optional>
 #include <QSet>
+#include <QVector>
 
 inline bool snowCanvasExactDoubleEqual(double lhs, double rhs) noexcept {
     return std::memcmp(&lhs, &rhs, sizeof(double)) == 0;
+}
+
+// Match the engine contract; controls limit adjustments to 0.5 or greater.
+inline double snowCanvasNormalizeArrowRatio(double value) noexcept {
+    return std::isfinite(value) && value > 0.0 ? std::min(value, 3.0) : 1.0;
 }
 
 enum class SnowCanvasTool {
@@ -31,6 +39,9 @@ enum class SnowCanvasTool {
     PenFilter,
     Spotlight,
     AutoFilter,
+    RectangleEraser,
+    BrushEraser,
+    Distance,
 };
 
 enum class SnowCanvasCursorLayer {
@@ -65,6 +76,10 @@ enum class SnowCanvasStyleToolbarSource {
     SelectedPenFilter,
     DefaultSpotlight,
     SelectedSpotlight,
+    DefaultRectangleEraser,
+    DefaultBrushEraser,
+    DefaultDistance,
+    SelectedDistance,
 };
 
 enum SnowCanvasTextStyleMixedFlag : quint32 {
@@ -89,8 +104,19 @@ enum SnowCanvasSerialNumberStyleMixedFlag : quint32 {
     SnowCanvasSerialNumberStyleMixedFillStyle = 1u << 3,
     SnowCanvasSerialNumberStyleMixedFontSize = 1u << 4,
     SnowCanvasSerialNumberStyleMixedFontFamily = 1u << 5,
+    SnowCanvasSerialNumberStyleMixedStrokeWidth = 1u << 6,
+    SnowCanvasSerialNumberStyleMixedStrokeStyle = 1u << 7,
     SnowCanvasSerialNumberStyleMixedOpacity = 1u << 8,
     SnowCanvasSerialNumberStyleMixedType = 1u << 9,
+    SnowCanvasSerialNumberStyleMixedNumericType = 1u << 10,
+};
+
+enum class SnowCanvasSerialNumberNumericType : quint32 {
+    Arabic = 0,
+    Roman = 1,
+    LowercaseLetters = 2,
+    UppercaseLetters = 3,
+    Chinese = 4,
 };
 
 enum class SnowCanvasSerialNumberType : quint32 {
@@ -182,6 +208,7 @@ enum class SnowCanvasFilterType {
     Emboss = 4,
     SmartErase = 5,
     Brightness = 6,
+    RestoreBackground = 7,
 };
 
 // Capability flag returned alongside filterStyleMixed property bits.
@@ -200,6 +227,24 @@ struct SnowCanvasFilterStyle {
     double opacity = 1.0;
     double strokeWidth = 2.0;
 };
+
+enum SnowCanvasBrushEraserStyleProperty : quint32 {
+    SnowCanvasBrushEraserStylePropertyStrokeWidth = 1u << 0,
+};
+
+struct SnowCanvasBrushEraserStyle {
+    double strokeWidth = 30.0;
+};
+
+inline bool operator==(const SnowCanvasBrushEraserStyle& lhs,
+                       const SnowCanvasBrushEraserStyle& rhs) {
+    return snowCanvasExactDoubleEqual(lhs.strokeWidth, rhs.strokeWidth);
+}
+
+inline bool operator!=(const SnowCanvasBrushEraserStyle& lhs,
+                       const SnowCanvasBrushEraserStyle& rhs) {
+    return !(lhs == rhs);
+}
 
 inline bool operator==(const SnowCanvasFilterStyle& lhs, const SnowCanvasFilterStyle& rhs) {
     return lhs.type == rhs.type && snowCanvasExactDoubleEqual(lhs.strength, rhs.strength) &&
@@ -275,6 +320,49 @@ inline bool operator==(const SnowCanvasCornerRadii& lhs, const SnowCanvasCornerR
 }
 
 inline bool operator!=(const SnowCanvasCornerRadii& lhs, const SnowCanvasCornerRadii& rhs) {
+    return !(lhs == rhs);
+}
+
+enum class SnowCanvasDistanceUnit { Px, Cm, M, Km, Mm };
+
+enum SnowCanvasDistanceStyleProperty : quint32 {
+    SnowCanvasDistanceStylePropertyStrokeColor = 1u << 0,
+    SnowCanvasDistanceStylePropertyStrokeWidth = 1u << 1,
+    SnowCanvasDistanceStylePropertyFactor = 1u << 2,
+    SnowCanvasDistanceStylePropertyUnit = 1u << 3,
+    SnowCanvasDistanceStylePropertyDecimalPlaces = 1u << 4,
+    SnowCanvasDistanceStylePropertyEndpointScale = 1u << 5,
+    SnowCanvasDistanceStylePropertyEndpointStyle = 1u << 6,
+};
+inline constexpr quint32 SnowCanvasDistanceStyleAllProperties = (1u << 7) - 1u;
+enum SnowCanvasDistanceStyleMixedFlag : quint32 {
+    SnowCanvasDistanceStyleMixedStrokeColor = 1u << 0,
+    SnowCanvasDistanceStyleMixedStrokeWidth = 1u << 1,
+    SnowCanvasDistanceStyleMixedFactor = 1u << 2,
+    SnowCanvasDistanceStyleMixedUnit = 1u << 3,
+    SnowCanvasDistanceStyleMixedDecimalPlaces = 1u << 4,
+    SnowCanvasDistanceStyleMixedEndpointScale = 1u << 5,
+    SnowCanvasDistanceStyleMixedEndpointStyle = 1u << 6,
+};
+
+struct SnowCanvasDistanceStyle {
+    QColor stroke = QColor(0xf5, 0x22, 0x2d);
+    double strokeWidth = 2.0;
+    double factor = 1.0;
+    SnowCanvasDistanceUnit unit = SnowCanvasDistanceUnit::Cm;
+    int decimalPlaces = 0;
+    double endpointScale = 1.0;
+    SnowCanvasArrowhead endpointStyle = SnowCanvasArrowhead::Bar;
+};
+inline bool operator==(const SnowCanvasDistanceStyle& lhs, const SnowCanvasDistanceStyle& rhs) {
+    return lhs.stroke == rhs.stroke &&
+           snowCanvasExactDoubleEqual(lhs.strokeWidth, rhs.strokeWidth) &&
+           snowCanvasExactDoubleEqual(lhs.factor, rhs.factor) && lhs.unit == rhs.unit &&
+           lhs.decimalPlaces == rhs.decimalPlaces &&
+           snowCanvasExactDoubleEqual(lhs.endpointScale, rhs.endpointScale) &&
+           lhs.endpointStyle == rhs.endpointStyle;
+}
+inline bool operator!=(const SnowCanvasDistanceStyle& lhs, const SnowCanvasDistanceStyle& rhs) {
     return !(lhs == rhs);
 }
 
@@ -446,6 +534,7 @@ inline bool operator!=(const SnowCanvasTextStyle& lhs, const SnowCanvasTextStyle
 struct SnowCanvasSerialNumberStyle {
     qint64 number = 1;
     SnowCanvasSerialNumberType type = SnowCanvasSerialNumberType::OutlinedCircle;
+    SnowCanvasSerialNumberNumericType numericType = SnowCanvasSerialNumberNumericType::Arabic;
     QColor color{0xf4, 0x21, 0x2c};
     QColor fill;
     SnowCanvasFillStyle fillStyle = SnowCanvasFillStyle::Solid;
@@ -458,8 +547,8 @@ struct SnowCanvasSerialNumberStyle {
 
 inline bool operator==(const SnowCanvasSerialNumberStyle& lhs,
                        const SnowCanvasSerialNumberStyle& rhs) {
-    return lhs.number == rhs.number && lhs.type == rhs.type && lhs.color == rhs.color &&
-           lhs.fill == rhs.fill && lhs.fillStyle == rhs.fillStyle &&
+    return lhs.number == rhs.number && lhs.type == rhs.type && lhs.numericType == rhs.numericType &&
+           lhs.color == rhs.color && lhs.fill == rhs.fill && lhs.fillStyle == rhs.fillStyle &&
            snowCanvasExactDoubleEqual(lhs.fontSize, rhs.fontSize) &&
            lhs.fontFamily == rhs.fontFamily &&
            snowCanvasExactDoubleEqual(lhs.strokeWidth, rhs.strokeWidth) &&
@@ -485,6 +574,9 @@ struct SnowCanvasStyleDefaults {
     SnowCanvasSerialNumberStyle serialNumber;
     SnowCanvasWatermarkConfig watermark;
     SnowCanvasSpotlightConfig spotlight;
+    SnowCanvasBrushEraserStyle brushEraser;
+    SnowCanvasRectangleShape spotlightShape = SnowCanvasRectangleShape::Rectangle;
+    SnowCanvasDistanceStyle distance;
 };
 
 inline bool operator==(const SnowCanvasStyleDefaults& lhs, const SnowCanvasStyleDefaults& rhs) {
@@ -493,7 +585,8 @@ inline bool operator==(const SnowCanvasStyleDefaults& lhs, const SnowCanvasStyle
            lhs.penHighlight == rhs.penHighlight && lhs.rectangleFilter == rhs.rectangleFilter &&
            lhs.penFilter == rhs.penFilter && lhs.text == rhs.text &&
            lhs.serialNumber == rhs.serialNumber && lhs.watermark == rhs.watermark &&
-           lhs.spotlight == rhs.spotlight;
+           lhs.spotlight == rhs.spotlight && lhs.brushEraser == rhs.brushEraser &&
+           lhs.spotlightShape == rhs.spotlightShape && lhs.distance == rhs.distance;
 }
 
 inline bool operator!=(const SnowCanvasStyleDefaults& lhs, const SnowCanvasStyleDefaults& rhs) {
@@ -517,6 +610,11 @@ struct SnowCanvasStyleToolbarState {
     SnowCanvasFilterStyle filterStyle;
     quint32 filterStyleMixed = 0;
     bool canEditArrowText = false;
+    SnowCanvasBrushEraserStyle brushEraserStyle;
+    SnowCanvasDistanceStyle distanceStyle;
+    quint32 distanceStyleMixed = 0;
+    // Calibrated length before applying the factor; zero without a single valid distance.
+    double distanceMeasuredLength = 0.0;
 };
 
 inline bool operator==(const SnowCanvasStyleToolbarState& lhs,
@@ -528,7 +626,10 @@ inline bool operator==(const SnowCanvasStyleToolbarState& lhs,
            lhs.textStyleMixed == rhs.textStyleMixed &&
            lhs.serialNumberStyleMixed == rhs.serialNumberStyleMixed &&
            lhs.shapeStyleMixed == rhs.shapeStyleMixed && lhs.filterStyle == rhs.filterStyle &&
-           lhs.filterStyleMixed == rhs.filterStyleMixed;
+           lhs.filterStyleMixed == rhs.filterStyleMixed &&
+           lhs.brushEraserStyle == rhs.brushEraserStyle && lhs.distanceStyle == rhs.distanceStyle &&
+           lhs.distanceStyleMixed == rhs.distanceStyleMixed &&
+           lhs.distanceMeasuredLength == rhs.distanceMeasuredLength;
 }
 
 inline bool operator!=(const SnowCanvasStyleToolbarState& lhs,
@@ -573,6 +674,11 @@ struct SnowCanvasSnapConfig {
     double markerSize = 8.0;
     double gapDashLength = 4.0;
     double gapDashGap = 4.0;
+};
+
+struct SnowCanvasSnapGuideTargets {
+    QVector<qreal> verticalXs;
+    QVector<qreal> horizontalYs;
 };
 
 struct SnowCanvasGridConfig {

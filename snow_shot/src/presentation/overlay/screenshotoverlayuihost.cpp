@@ -11,12 +11,16 @@
 #include "snow_shot/presentation/screenshotoverlaywindow.h"
 #include "snow_shot/presentation/screenshottoolbarcommands.h"
 #include "snow_shot/presentation/screenshottoolbarwindow.h"
+#include "snow_shot/storage/applicationstorage.h"
+#include "snow_shot/storage/settingsadapters.h"
+#include "widgets/detail/pointer_region.h"
 
 #include <algorithm>
 #include <optional>
 #include <utility>
 
 #include <QCoreApplication>
+#include <QEnterEvent>
 #include <QEvent>
 #include <QFontMetrics>
 #include <QGuiApplication>
@@ -317,10 +321,62 @@ void showPreparedChildWidget(QWidget* widget) {
 }
 } // namespace
 
-ScreenshotOverlayUiHost::ScreenshotOverlayUiHost() = default;
+ScreenshotOverlayUiHost::ScreenshotOverlayUiHost() {
+    m_selectionToolbarHidden = snow_shot::storage::ScreenshotUiSettings().selectionToolbarHidden();
+    auto& configuration = snow_shot::storage::ApplicationStorage::instance().configuration();
+    connect(&configuration, &snow_shot::storage::ConfigurationStore::valueChanged, this,
+            [this](const QString& key, const QJsonValue& value) {
+                if (key == QStringLiteral("screenshot_ui/selection_toolbar_hidden")) {
+                    setSelectionToolbarHidden(value.toBool());
+                }
+            });
+    if (QCoreApplication::instance() != nullptr) {
+        QCoreApplication::instance()->installEventFilter(this);
+    }
+}
 
 ScreenshotOverlayUiHost::~ScreenshotOverlayUiHost() {
+    if (QCoreApplication::instance() != nullptr) {
+        QCoreApplication::instance()->removeEventFilter(this);
+    }
     destroyUiResources();
+}
+
+bool ScreenshotOverlayUiHost::eventFilter(QObject* watched, QEvent* event) {
+    // Popovers receive pointer events in separate windows, so the overlay's
+    // mouse-move path and the toolbar's enter handler cannot observe this boundary.
+    const bool pickerVisible = m_colorPicker != nullptr && m_colorPicker->isVisible();
+    const bool guidePointerEvent =
+        event != nullptr && m_toolbarCommands != nullptr &&
+        (event->type() == QEvent::MouseMove || event->type() == QEvent::Enter);
+    const bool trackGuides =
+        guidePointerEvent && ((m_toolbar != nullptr && m_toolbar->isVisible()) ||
+                              (m_selectionToolbar != nullptr && m_selectionToolbar->isVisible()));
+    if (event != nullptr && (pickerVisible || trackGuides)) {
+        if (const auto* receiver = qobject_cast<QWidget*>(watched)) {
+            auto position = adqt::widgets::detail::pointerEventGlobalPosition(receiver, event);
+            if (trackGuides) {
+                const QPointF globalPosition =
+                    event->type() == QEvent::MouseMove
+                        ? static_cast<QMouseEvent*>(event)->globalPosition()
+                        : static_cast<QEnterEvent*>(event)->globalPosition();
+                // Match the canvas renderer's pixel alignment, including fractional DPRs
+                // and negative display origins, instead of rounding into an adjacent pixel.
+                position = QPoint(qFloor(globalPosition.x()), qFloor(globalPosition.y()));
+            }
+            if (position && screenshotUiContainsGlobalPoint(*position)) {
+                if (pickerVisible) {
+                    hideColorPicker();
+                }
+                // Application filters see moves even on controls without mouse tracking.
+                // Update only guide presentation; the original event still belongs to the UI.
+                if (trackGuides) {
+                    m_toolbarCommands->updateGuideLinesForScreenshotUi(*position);
+                }
+            }
+        }
+    }
+    return QObject::eventFilter(watched, event);
 }
 
 void ScreenshotOverlayUiHost::setToolbarCommandSinks(
@@ -461,8 +517,7 @@ void ScreenshotOverlayUiHost::attachSelectionToolbarToOverlay(ScreenshotOverlayW
     toolbarWidget->setAttribute(Qt::WA_TranslucentBackground, true);
     toolbarWidget->setAttribute(Qt::WA_NoSystemBackground, true);
     toolbarWidget->setFocusPolicy(Qt::NoFocus);
-    if (wasVisible && !m_selectionToolbarHiddenForSession && overlay != nullptr &&
-        overlay->isVisible()) {
+    if (wasVisible && !m_selectionToolbarHidden && overlay != nullptr && overlay->isVisible()) {
         showPreparedChildWidget(toolbarWidget);
         toolbarWidget->raise();
     }
@@ -502,7 +557,8 @@ ScreenshotColorPickerWindow* ScreenshotOverlayUiHost::colorPicker() const {
 void ScreenshotOverlayUiHost::updateColorPicker(
     ScreenshotOverlayWindow* overlay, const QImage& image, const QRect& physicalRect,
     const QPoint& physicalPoint, const QPointF& localPosition, qreal opacity,
-    const ScreenshotCoordinateDisplayValues& displayValues) {
+    const ScreenshotCoordinateDisplayValues& displayValues, const QImage& cursorPatch,
+    const QRect& cursorPixelRect) {
     if (overlay == nullptr) {
         hideColorPicker();
         return;
@@ -516,7 +572,7 @@ void ScreenshotOverlayUiHost::updateColorPicker(
         picker->setOwnerWindow(overlay);
     }
 
-    picker->setCaptureImage(image, physicalRect);
+    picker->setCaptureImage(image, physicalRect, cursorPatch, cursorPixelRect);
     picker->updatePicker(physicalPoint, localPosition, opacity, displayValues);
 }
 
@@ -647,7 +703,7 @@ bool ScreenshotOverlayUiHost::stepToolbarWatermarkFontSize(int direction) {
 }
 
 void ScreenshotOverlayUiHost::resetToolbarForNewCapture() {
-    m_selectionToolbarHiddenForSession = false;
+    setSelectionToolbarHidden(snow_shot::storage::ScreenshotUiSettings().selectionToolbarHidden());
     if (m_toolbar != nullptr) {
         const bool wasVisible = m_toolbar->isVisible();
         m_toolbar->resetForNewCapture();
@@ -706,15 +762,15 @@ void ScreenshotOverlayUiHost::hideSelectionToolbar() {
     }
 }
 
-void ScreenshotOverlayUiHost::setSelectionToolbarHiddenForSession(bool hidden) {
-    m_selectionToolbarHiddenForSession = hidden;
+void ScreenshotOverlayUiHost::setSelectionToolbarHidden(bool hidden) {
+    m_selectionToolbarHidden = hidden;
     if (hidden) {
         hideSelectionToolbar();
     }
 }
 
 void ScreenshotOverlayUiHost::showSelectionToolbar() {
-    if (m_selectionToolbarHiddenForSession) {
+    if (m_selectionToolbarHidden) {
         return;
     }
     ScreenshotSelectionToolbarWidget* toolbarWidget = trackedWidget(m_selectionToolbar);

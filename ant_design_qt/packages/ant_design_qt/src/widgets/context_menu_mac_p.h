@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 
 #include <QPoint>
 #include <QSize>
@@ -17,10 +18,12 @@ class AdContextMenu;
 namespace detail {
 bool usesNativeContextMenu();
 void initializeNativeContextMenu(QMenu* menu);
+void syncNativeContextMenuBadge(AdContextMenu* menu, QAction* action);
 QIcon nativeContextMenuIcon(QMenu* menu, const adqt::icons::IconRef& icon);
 QSize nativeContextMenuSize(QMenu* menu);
 QAction* execNativeContextMenu(AdContextMenu* menu, const QPoint& globalPosition,
                                QAction* initialAction);
 void dismissNativeContextMenu(QMenu* menu);
+QAction* trackNativeContextMenu(AdContextMenu* menu, const std::function<void()>& presenter);
 }  // namespace detail
 }  // namespace adqt::widgets

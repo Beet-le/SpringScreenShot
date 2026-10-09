@@ -396,6 +396,10 @@
             <translation>更新目标与应用程序进程不匹配</translation>
         </message>
         <message>
+            <source>The update worker failed</source>
+            <translation>更新工作进程失败</translation>
+        </message>
+        <message>
             <source>This copy does not have valid Snow Shot installation metadata</source>
             <translation>此副本缺少有效的 Snow Shot 安装元数据</translation>
         </message>
@@ -469,18 +473,73 @@
         </message>
     </context>
     <context>
+        <name>UpdateProgress</name>
+        <message>
+            <source>%1 / %2 bytes</source>
+            <translation>%1 / %2 字节</translation>
+        </message>
+        <message>
+            <source>%1 / %2 files</source>
+            <translation>%1 / %2 个文件</translation>
+        </message>
+        <message>
+            <source>Backing up application files</source>
+            <translation>正在备份应用程序文件</translation>
+        </message>
+        <message>
+            <source>Checking the updated application</source>
+            <translation>正在检查更新后的应用程序</translation>
+        </message>
+        <message>
+            <source>Downloading update</source>
+            <translation>正在下载更新</translation>
+        </message>
+        <message>
+            <source>Extracting update</source>
+            <translation>正在解压更新</translation>
+        </message>
+        <message>
+            <source>Installing update</source>
+            <translation>正在安装更新</translation>
+        </message>
+        <message>
+            <source>Preparing update</source>
+            <translation>正在准备更新</translation>
+        </message>
+        <message>
+            <source>Restoring the previous version</source>
+            <translation>正在恢复之前的版本</translation>
+        </message>
+        <message>
+            <source>Update complete</source>
+            <translation>更新完成</translation>
+        </message>
+        <message>
+            <source>Update failed</source>
+            <translation>更新失败</translation>
+        </message>
+        <message>
+            <source>Update ready</source>
+            <translation>更新已就绪</translation>
+        </message>
+        <message>
+            <source>Updating %1</source>
+            <translation>正在更新 %1</translation>
+        </message>
+        <message>
+            <source>Verifying update</source>
+            <translation>正在验证更新</translation>
+        </message>
+        <message>
+            <source>Waiting for %1 to close</source>
+            <translation>正在等待 %1 关闭</translation>
+        </message>
+    </context>
+    <context>
         <name>UpdateService</name>
         <message>
             <source>Could not check for updates. Please try again.</source>
             <translation>无法检查更新，请重试。</translation>
-        </message>
-        <message>
-            <source>The update check timed out. Please try again.</source>
-            <translation>检查更新超时，请重试。</translation>
-        </message>
-        <message>
-            <source>The update server returned an invalid version.</source>
-            <translation>更新服务器返回了无效的版本号。</translation>
         </message>
     </context>
 </TS>

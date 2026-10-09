@@ -1,5 +1,6 @@
 #pragma once
 
+#include "snow_shot/app/edition.h"
 #include "snow_shot/presentation/settings/settingsruntimesession.h"
 #include "snow_shot/storage/configurationschema.h"
 #include <QJsonArray>
@@ -29,6 +30,7 @@ auxiliaryIntegerSetting(const settings::SettingsFieldDescriptor& field) {
     return std::nullopt;
 }
 
+#if SNOW_SHOT_ENABLE_API_CONFIGURATION
 inline QJsonArray publicModels(const CustomAiModels& models) {
     QJsonArray result;
     for (const auto& model : models) {
@@ -39,12 +41,24 @@ inline QJsonArray publicModels(const CustomAiModels& models) {
     }
     return result;
 }
+#endif
 
 inline QJsonValue settingsJson(const QVariant& value) {
+    if (value.metaType() == QMetaType::fromType<CloudUploadSettings>()) {
+        auto settings = value.value<CloudUploadSettings>();
+        for (auto& profile : settings.configurations) {
+            profile.accessKeyId.clear();
+            profile.secretAccessKey.clear();
+            profile.sessionToken.clear();
+        }
+        return cloudUploadSettingsToJson(settings);
+    }
     if (value.metaType() == QMetaType::fromType<QColor>())
         return storage::colorToRgbaString(value.value<QColor>());
+#if SNOW_SHOT_ENABLE_API_CONFIGURATION
     if (value.metaType() == QMetaType::fromType<CustomAiModels>())
         return publicModels(value.value<CustomAiModels>());
+#endif
     if (value.metaType() == QMetaType::fromType<shortcuts::ShortcutBindingList>())
         return shortcuts::shortcutBindingsToJson(value.value<shortcuts::ShortcutBindingList>());
     if (value.metaType() == QMetaType::fromType<settings::SettingsGlobalMouseCombination>()) {
@@ -140,19 +154,33 @@ inline bool settingsValue(const settings::SettingsFieldDescriptor& field, const 
         }
         if (custom.renderer != Renderer::DrawingToolbarEditor &&
             custom.renderer != Renderer::ScreenshotToolbarEditor &&
+            custom.renderer != Renderer::RecordingToolbarEditor &&
             custom.renderer != Renderer::PinnedToolbarEditor)
             return false;
-        const auto object = json.toObject();
-        storage::ScreenshotToolbarLayout layout;
-        if (!json.isObject() || !object.value(QStringLiteral("positions")).isArray() ||
-            !stringArray(object.value(QStringLiteral("hidden")), &layout.hidden))
-            return false;
-        for (const auto& position : object.value(QStringLiteral("positions")).toArray()) {
-            QStringList tools;
-            if (!stringArray(position, &tools))
+        const auto decodeLayout = [](const QJsonValue& input,
+                                     storage::ScreenshotToolbarLayout* layout) {
+            const auto object = input.toObject();
+            if (!input.isObject() || !object.value(QStringLiteral("positions")).isArray() ||
+                !stringArray(object.value(QStringLiteral("hidden")), &layout->hidden))
                 return false;
-            layout.positions.append(tools);
-        }
+            for (const auto& position : object.value(QStringLiteral("positions")).toArray()) {
+                QStringList tools;
+                if (!stringArray(position, &tools))
+                    return false;
+                layout->positions.append(tools);
+            }
+            return true;
+        };
+        storage::ScreenshotToolbarLayout layout;
+        if (!decodeLayout(json, &layout))
+            return false;
+        // Keep strict JSON shape checks above, then submit the same canonical layout
+        // the storage backend will accept so runtime writes can settle successfully.
+        layout = {};
+        if (!decodeLayout(
+                storage::ConfigurationSchema::normalize(field.configurationKey, json).value,
+                &layout))
+            return false;
         *value = QVariant::fromValue(layout);
         return true;
     }

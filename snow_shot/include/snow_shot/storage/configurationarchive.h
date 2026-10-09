@@ -1,6 +1,8 @@
 #ifndef SNOW_SHOT_STORAGE_CONFIGURATIONARCHIVE_H
 #define SNOW_SHOT_STORAGE_CONFIGURATIONARCHIVE_H
 
+#include "snow_shot/app/edition.h"
+
 #include <QJsonValue>
 #include <QMap>
 #include <QString>

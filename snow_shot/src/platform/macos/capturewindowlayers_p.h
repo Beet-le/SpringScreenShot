@@ -18,7 +18,7 @@ inline constexpr int kToolbarLayer = 2;
 inline constexpr int kPopupLayer = 3;
 inline constexpr int kCaptureBandSize = 128;
 
-enum class CaptureFamily { Screenshot, Recording, GlobalCanvas, Pinned, Count };
+enum class CaptureFamily { Screenshot, Recording, GlobalCanvas, Pinned, DesktopToolbar, Count };
 using ModalFloors = std::array<int, static_cast<std::size_t>(CaptureFamily::Count)>;
 
 struct CaptureLayer {
@@ -34,6 +34,8 @@ struct CaptureLayer {
     int offset() const {
         if (family == CaptureFamily::Screenshot)
             return layer;
+        if (family == CaptureFamily::DesktopToolbar)
+            return std::min(layer, kCaptureBandSize - 1);
         const int band = family == CaptureFamily::Pinned ? 2 : 1;
         return std::min(layer, kCaptureBandSize - 1) - band * kCaptureBandSize;
     }
@@ -43,6 +45,10 @@ struct CaptureLayer {
 // Each band includes its tools, dialogs, and nested popups. Descendants must
 // inherit the same policy without crossing into another capture family's band.
 inline CGWindowLevel captureWindowLevel(CaptureLayer role) {
+    // AppKit does not deliver content drags above its dragging window. Desktop
+    // tools and their transient popups need a separate band below that level.
+    if (role.family == CaptureFamily::DesktopToolbar)
+        return CGWindowLevelForKey(kCGStatusWindowLevelKey) + role.offset();
     return CGWindowLevelForKey(kCGScreenSaverWindowLevelKey) + role.offset();
 }
 inline CGWindowLevel pinnedWindowLevel() {
@@ -72,6 +78,16 @@ inline CaptureLayer captureLayer(QWindow* window, const ModalFloors& floors = {}
     if (window->modality() != Qt::NonModal)
         result.layer = std::max(result.layer, floors[result.index()]);
     return result;
+}
+
+// AppKit sheets have no QWindow transient parent. Use the originating capture's
+// modal floor, including its floating tools, and keep nested sheets above it.
+inline CaptureLayer nativePanelLayer(CaptureLayer owner, const ModalFloors& floors,
+                                     int sheetDepth = 1) {
+    if (!owner.valid())
+        return {};
+    owner.layer = std::max(owner.layer + 1, floors[owner.index()]) + sheetDepth - 1;
+    return owner;
 }
 } // namespace snow_shot::platform::detail
 #endif

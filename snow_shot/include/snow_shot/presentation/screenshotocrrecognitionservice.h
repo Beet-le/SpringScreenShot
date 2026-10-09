@@ -38,11 +38,19 @@ enum class ScreenshotOcrRequestPriority { Interactive, Prefetch };
 
 enum class ScreenshotOcrBackendPreference { Cpu, DirectMl };
 enum class ScreenshotOcrDetectorResizePolicy { Max, Min };
+enum class ScreenshotOcrTextDetectionProcessing { AccuracyFirst, SpeedFirst };
 
 [[nodiscard]] inline ScreenshotOcrDetectorResizePolicy
 screenshotOcrDetectorResizePolicyFromValue(const QString& value) {
     return value == QStringLiteral("min") ? ScreenshotOcrDetectorResizePolicy::Min
                                           : ScreenshotOcrDetectorResizePolicy::Max;
+}
+
+[[nodiscard]] inline ScreenshotOcrTextDetectionProcessing
+screenshotOcrTextDetectionProcessingFromValue(const QString& value) {
+    return value == QStringLiteral("speed_first")
+               ? ScreenshotOcrTextDetectionProcessing::SpeedFirst
+               : ScreenshotOcrTextDetectionProcessing::AccuracyFirst;
 }
 
 struct ScreenshotOcrRuntimeConfiguration {
@@ -51,10 +59,13 @@ struct ScreenshotOcrRuntimeConfiguration {
     ScreenshotOcrDetectorResizePolicy detectorResizePolicy = ScreenshotOcrDetectorResizePolicy::Max;
     bool residentProcess = false;
     bool modelHotStart = false;
+    ScreenshotOcrTextDetectionProcessing textDetectionProcessing =
+        ScreenshotOcrTextDetectionProcessing::AccuracyFirst;
     bool operator==(const ScreenshotOcrRuntimeConfiguration& other) const {
         return modelType == other.modelType && backend == other.backend &&
                detectorResizePolicy == other.detectorResizePolicy &&
-               residentProcess == other.residentProcess && modelHotStart == other.modelHotStart;
+               residentProcess == other.residentProcess && modelHotStart == other.modelHotStart &&
+               textDetectionProcessing == other.textDetectionProcessing;
     }
 };
 
@@ -123,6 +134,8 @@ class ScreenshotOcrRecognitionService final : public ScreenshotOcrRecognitionPor
         ScreenshotOcrModelType modelType = ScreenshotOcrModelType::Small;
         ScreenshotOcrDetectorResizePolicy detectorResizePolicy =
             ScreenshotOcrDetectorResizePolicy::Max;
+        ScreenshotOcrTextDetectionProcessing textDetectionProcessing =
+            ScreenshotOcrTextDetectionProcessing::AccuracyFirst;
         // Explicit local assets, primarily for tests and development builds.
         QString processPath;
         QString detectorModelPath;
@@ -159,8 +172,13 @@ class ScreenshotOcrRecognitionService final : public ScreenshotOcrRecognitionPor
     void setProxyUrl(const QString& proxyUrl);
     void setModelType(ScreenshotOcrModelType modelType);
     void setDetectorResizePolicy(ScreenshotOcrDetectorResizePolicy policy);
+    void setTextDetectionProcessing(ScreenshotOcrTextDetectionProcessing processing);
     void setRuntimeConfiguration(const ScreenshotOcrRuntimeConfiguration& configuration);
     [[nodiscard]] int liveWorkerCount() const;
+    [[nodiscard]] bool storageBusy() const;
+    void suspendStorage();
+    void drainStorage();
+    void resumeStorage(const QString& cacheRoot);
     // Application-thread snapshots; the QProcess itself belongs to the transport thread.
     [[nodiscard]] qint64 processId() const;
     [[nodiscard]] QString processPath() const;
@@ -168,7 +186,10 @@ class ScreenshotOcrRecognitionService final : public ScreenshotOcrRecognitionPor
   private:
     class Impl;
     std::unique_ptr<Impl> m_impl;
+    std::unique_ptr<Impl> m_suspendedImpl;
     RequestToken m_nextToken = 0;
+    Options m_storageOptions;
+    ScreenshotOcrRuntimeConfiguration m_storageConfiguration;
 
   signals:
 };

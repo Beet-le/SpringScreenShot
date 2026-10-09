@@ -47,6 +47,8 @@ AppPermissions requiredPermissions(GlobalShortcutAction action, bool /*microphon
     case Action::ScreenshotOcr:
     case Action::ScreenshotTranslation:
     case Action::ScreenshotCopy:
+    case Action::ScreenshotSave:
+    case Action::ScreenshotQuickSave:
     case Action::ScreenshotFullScreen:
     case Action::ScreenshotFocusedWindow:
         return {P::ScreenRecording};
@@ -60,6 +62,7 @@ AppPermissions requiredPermissions(GlobalShortcutAction action, bool /*microphon
     case Action::OpenScreenRecordingFolder:
     case Action::OpenCaptureHistory:
     case Action::GlobalCanvas:
+    case Action::SwitchWindowGroup:
     case Action::OpenPinToScreenManagement:
     case Action::OpenSettings:
     case Action::PinClipboardContent:

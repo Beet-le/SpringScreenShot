@@ -4,9 +4,14 @@ param(
         "windows-msvc-debug",
         "windows-msvc-performance",
         "snow-shot-msvc-release",
-        "snow-shot-msvc-fast"
+        "snow-shot-msvc-fast",
+        "snow-shot-msvc-arm64-debug",
+        "snow-shot-msvc-arm64-performance",
+        "snow-shot-msvc-arm64-release",
+        "snow-shot-msvc-arm64-fast"
     )]
     [string]$Preset = "windows-msvc-debug",
+    [ValidateSet("Full", "Mini")][string]$Edition = "Full",
     [switch]$Clean,
     [switch]$NoBuild,
     [switch]$Detached
@@ -16,12 +21,15 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
-$buildDirectory = Join-Path $repoRoot "build\$Preset"
-$configuration = switch ($Preset) {
-    "windows-msvc-debug" { "Debug" }
-    default { "Release" }
+. (Join-Path $PSScriptRoot 'snow-build-environment.ps1')
+$windowsTarget = Get-SnowWindowsTarget -Preset $Preset
+if ($windowsTarget.Architecture -ceq 'arm64' -and $windowsTarget.HostArchitecture -cne 'arm64') {
+    throw 'Running Snow Shot ARM64 requires a Windows ARM64 host.'
 }
-$executablePath = Join-Path $buildDirectory "snow_shot\$configuration\snow_shot.exe"
+$target = if ($Edition -eq "Mini") { "snow_shot_mini" } else { "snow_shot" }
+$buildDirectory = Join-Path $repoRoot "build\$Preset"
+$configuration = $windowsTarget.Configuration
+$executablePath = Join-Path $buildDirectory "$target\$configuration\$target.exe"
 
 function Test-PathIsUnderDirectory {
     param(
@@ -44,7 +52,7 @@ function Test-PathIsUnderDirectory {
 function Stop-RunningBuildInstance {
     param([Parameter(Mandatory = $true)][string]$BuildDirectory)
 
-    $runningProcesses = @(Get-Process -Name "snow_shot" -ErrorAction SilentlyContinue)
+    $runningProcesses = @(Get-Process -Name $target -ErrorAction SilentlyContinue)
     foreach ($process in $runningProcesses) {
         try {
             $processPath = $process.Path
@@ -85,7 +93,7 @@ if (-not $NoBuild) {
     $buildScript = Join-Path $PSScriptRoot "build.ps1"
     $vcpkgExecutable = Join-Path $repoRoot ".tools\vcpkg\vcpkg.exe"
     $skipBootstrap = Test-Path -LiteralPath $vcpkgExecutable -PathType Leaf
-    & $buildScript -Preset $Preset -Target "snow_shot" -Clean:$Clean -SkipBootstrap:$skipBootstrap
+    & $buildScript -Preset $Preset -Target $target -Clean:$Clean -SkipBootstrap:$skipBootstrap
     if ($LASTEXITCODE -ne 0) {
         throw "Snow Shot build failed with exit code $LASTEXITCODE."
     }
@@ -102,18 +110,17 @@ if (-not (Test-Path -LiteralPath $executablePath -PathType Leaf)) {
 }
 
 $workingDirectory = Split-Path -Parent $executablePath
+if ((Get-SnowPeMachine -Path $executablePath) -ne $windowsTarget.PeMachine) {
+    throw "The Snow Shot executable does not match preset $Preset. Rebuild its selected architecture."
+}
 if ($Detached) {
-    Start-Process -FilePath $executablePath -WorkingDirectory $workingDirectory | Out-Null
+    Start-Process -FilePath $executablePath -WorkingDirectory $workingDirectory -WindowStyle Hidden | Out-Null
     return
 }
 
-Push-Location $workingDirectory
-try {
-    & $executablePath
-    if ($LASTEXITCODE -ne 0) {
-        throw "Snow Shot exited with code $LASTEXITCODE."
-    }
-}
-finally {
-    Pop-Location
+$process = Start-Process -FilePath $executablePath -WorkingDirectory $workingDirectory `
+    -WindowStyle Hidden -PassThru
+$process.WaitForExit()
+if ($process.ExitCode -ne 0) {
+    throw "Snow Shot exited with code $($process.ExitCode)."
 }

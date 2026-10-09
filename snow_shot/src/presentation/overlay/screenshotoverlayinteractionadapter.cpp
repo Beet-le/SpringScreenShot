@@ -65,6 +65,25 @@ void ScreenshotOverlayEventAdapter::completeRightClickCancellation() {
     }
 }
 
+bool ScreenshotOverlayEventAdapter::effectDragActive() const {
+    return m_inputHandler != nullptr && m_inputHandler->effectDragActive();
+}
+
+void ScreenshotOverlayEventAdapter::leaveEffectEditors() {
+    if (m_inputHandler != nullptr)
+        m_inputHandler->leaveEffectEditors();
+}
+
+void ScreenshotOverlayEventAdapter::cancelEffectDrag() {
+    if (m_inputHandler != nullptr)
+        static_cast<void>(m_inputHandler->cancelEffectDrag());
+}
+
+bool ScreenshotOverlayEventAdapter::handleEffectDoubleClick(ScreenshotOverlayWindow* overlay,
+                                                            const QPointF& position) {
+    return m_inputHandler != nullptr && m_inputHandler->handleEffectDoubleClick(overlay, position);
+}
+
 void ScreenshotOverlayEventAdapter::handleUnhandledLeftDoubleClick() {
     if (m_inputHandler != nullptr) {
         m_inputHandler->handleUnhandledLeftDoubleClick();
@@ -78,13 +97,11 @@ void ScreenshotOverlayEventAdapter::handleUnhandledMiddleClick() {
 }
 
 bool ScreenshotOverlayEventAdapter::handleOverlayWheel(ScreenshotOverlayWindow* overlay,
-                                                       const QPointF& localPosition,
-                                                       const QPoint& angleDelta,
-                                                       const QPoint& pixelDelta) {
+                                                       const QWheelEvent& event) {
     if (m_inputHandler == nullptr) {
         return false;
     }
-    return m_inputHandler->handleWheel(overlay, localPosition, angleDelta, pixelDelta);
+    return m_inputHandler->handleWheel(overlay, event);
 }
 
 bool ScreenshotOverlayEventAdapter::shouldBlockUnhandledOverlayKeyInput() const {

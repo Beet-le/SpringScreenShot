@@ -1,3 +1,5 @@
+#include "snow_draw_engine_qt/snow_canvas_image.h"
+#include "snow_shot/platform/applicationqos.h"
 #include "snow_shot/shortcuts/shortcutbinding.h"
 #include "snow_shot/presentation/screenshotqrcontroller.h"
 
@@ -188,6 +190,17 @@ class ScreenshotQrPopover final : public QWidget {
         copy->setAccentRole(url.isEmpty() ? AdButton::AccentRole::Primary
                                           : AdButton::AccentRole::Neutral);
     }
+    void clearDetection() {
+        text->clear();
+        url = QUrl();
+        status->clear();
+        status->hide();
+        open->hide();
+        lastAnchor = {};
+        lastAvailable = {};
+        // The popover is reused, but its native backing surface belongs to this capture.
+        destroy();
+    }
     void place(const QRect& anchor, const QRect& available) {
         lastAnchor = anchor;
         lastAvailable = available;
@@ -311,7 +324,7 @@ QImage ScreenshotQrController::prepareImage(const Snapshot& snapshot,
         {1.0, std::sqrt(1920.0 * 1080.0 / (width * height)), 2560.0 / std::max(width, height)});
     const QSize pixels(std::max(1, int(std::floor(width * scale))),
                        std::max(1, int(std::floor(height * scale))));
-    QImage image(pixels, QImage::Format_RGB32);
+    QImage image = snowCanvasAllocateImage(pixels, QImage::Format_RGB32);
     if (image.isNull())
         return {};
     image.fill(Qt::white);
@@ -382,6 +395,7 @@ void ScreenshotQrController::recognize(Snapshot snapshot) {
                 finish(generation, {}, {{}, tr("QR code recognition failed"), {}});
         }
     });
+    snow_shot::platform::configureApplicationQoSThread(worker);
     worker->start();
 }
 
@@ -450,8 +464,13 @@ void ScreenshotQrController::invalidate() {
     m_request = 0;
     m_busy = false;
     m_error.clear();
-    m_detections.clear();
+    m_detections = {};
+    m_bounds = {};
+    m_sourceSelection = {};
+    m_selection = {};
     dismissPopover();
+    if (m_popover)
+        m_popover->clearDetection();
     clearMarkers();
     emit stateChanged();
 }

@@ -1,15 +1,21 @@
 #include <QContextMenuEvent>
+#include <QActionEvent>
 #include <QCoreApplication>
 #include <QDir>
 #include <QFrame>
 #include <QImage>
 #include <QPalette>
+#include <QPainter>
 #include <QSignalSpy>
+#include <QStyleOption>
 #include <QTest>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QWindow>
+#include <qscopeguard.h>
 
 #include "antd_icons.h"
+#include "theme/theme_manager.h"
 #include "widgets/context_menu.h"
 
 using adqt::widgets::AdContextMenu;
@@ -37,7 +43,9 @@ class ContextMenuTests final : public QObject {
 
  private slots:
   void actionMetadataAndNativeStateCoexist();
+  void badgesPreserveWidgetTrailingText();
   void iconsCanBeReplacedAndCleared();
+  void iconUpdatesInvalidateOnlyTheChangedAction();
   void popupDismissalPreservesActions();
   void macMenuUsesPlatformDefaults();
   void macMultitoneIconsUseMenuForeground();
@@ -47,9 +55,17 @@ class ContextMenuTests final : public QObject {
   void keyboardActivationUsesNativeMenuBehavior();
   void menuUsesCompactAntMetrics();
   void metricTokensRelayoutExistingActions();
+  void cachedVisualsFollowThemeFontAndOwnerChanges();
+  void sharedLayoutMetricsFollowActionChanges();
+  void inheritedStyleUsesEachMenusActions();
   void longLabelsRespectTrailingColumnsInConstrainedMenus();
   void widgetMenuHonorsComponentTokens();
   void widgetSurfaceFollowsExistingSubmenus();
+  void lazySubmenusHaveTranslucentSurfaces_data();
+  void lazySubmenusHaveTranslucentSurfaces();
+  void preparedBackgroundClipsAndComposites();
+  void preparedBackgroundPreservesItemStates();
+  void preparedBackgroundDoesNotSelectNativeSurface();
 };
 
 void ContextMenuTests::actionMetadataAndNativeStateCoexist() {
@@ -83,6 +99,61 @@ void ContextMenuTests::actionMetadataAndNativeStateCoexist() {
   QCOMPARE(submenu->componentTokens().itemHeight.value(), 40);
 }
 
+void ContextMenuTests::badgesPreserveWidgetTrailingText() {
+  AdContextMenu menu;
+  AdContextMenu reference;
+  for (auto* candidate : {&menu, &reference}) {
+    candidate->setNativeMenuEnabled(false);
+    AdContextMenu::ComponentTokens tokens;
+    tokens.minimumWidth = 1;
+    candidate->setComponentTokens(tokens);
+  }
+  auto* action = menu.addItem(QStringLiteral("Group"));
+  auto* expected = reference.addItem(QStringLiteral("Group"));
+  for (auto* item : {action, expected}) {
+    item->setCheckable(true);
+    item->setChecked(true);
+  }
+  const auto render = [](AdContextMenu& candidate) {
+    candidate.resize(candidate.sizeHint());
+    QImage image(candidate.size(), QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::transparent);
+    candidate.render(&image);
+    return image;
+  };
+  const QSize withoutBadge = menu.sizeHint();
+  for (const QString& badge : {QStringLiteral("0/0"), QStringLiteral("123/456"), QString{}}) {
+    menu.setActionBadge(action, badge);
+    expected->setText(badge.isEmpty() ? QStringLiteral("Group")
+                                      : QStringLiteral("Group\t") + badge);
+    QCOMPARE(action->text(), QStringLiteral("Group"));
+    QVERIFY(action->shortcut().isEmpty());
+    QCOMPARE(menu.actionBadge(action), badge);
+    QCOMPARE(menu.sizeHint(), reference.sizeHint());
+    QCOMPARE(render(menu), render(reference));
+    action->setEnabled(false);
+    expected->setEnabled(false);
+    QCOMPARE(render(menu), render(reference));
+    action->setEnabled(true);
+    expected->setEnabled(true);
+    if (!badge.isEmpty()) {
+      QVERIFY(menu.sizeHint().width() > withoutBadge.width());
+    }
+  }
+  QCOMPARE(menu.sizeHint(), withoutBadge);
+  action->setShortcut(QKeySequence(Qt::Key_F2));
+  action->setShortcutVisibleInContextMenu(true);
+  menu.setActionBadge(action, QStringLiteral("1/2"));
+  expected->setText(QStringLiteral("Group\t1/2  ") +
+                    action->shortcut().toString(QKeySequence::NativeText));
+  QCOMPARE(action->shortcut(), QKeySequence(Qt::Key_F2));
+  QCOMPARE(menu.sizeHint(), reference.sizeHint());
+  QCOMPARE(render(menu), render(reference));
+  menu.setActionBadge(action, {});
+  QCOMPARE(action->shortcut(), QKeySequence(Qt::Key_F2));
+  QVERIFY(menu.actionBadge(action).isEmpty());
+}
+
 void ContextMenuTests::iconsCanBeReplacedAndCleared() {
   const bool previous = QCoreApplication::testAttribute(Qt::AA_DontShowIconsInMenus);
   QCoreApplication::setAttribute(Qt::AA_DontShowIconsInMenus, true);
@@ -105,6 +176,52 @@ void ContextMenuTests::iconsCanBeReplacedAndCleared() {
   QVERIFY(!menu.actionIcon(action).isValid());
   QVERIFY(action->icon().isNull());
   QCoreApplication::setAttribute(Qt::AA_DontShowIconsInMenus, previous);
+}
+
+void ContextMenuTests::iconUpdatesInvalidateOnlyTheChangedAction() {
+  AdContextMenu menu;
+  menu.setNativeMenuEnabled(false);
+  AdContextMenu::ComponentTokens tokens;
+  tokens.minimumWidth = 1;
+  menu.setComponentTokens(tokens);
+  QAction* first = menu.addItem(QStringLiteral("An existing disabled action"));
+  first->setEnabled(false);
+  QAction* second = menu.addItem(QStringLiteral("Second"));
+  const QSize withoutIcon = menu.sizeHint();
+  class Observer final : public QObject {
+   public:
+    QAction* watchedAction = nullptr;
+    int unrelatedChanges = 0;
+    bool eventFilter(QObject*, QEvent* event) override {
+      if (event->type() == QEvent::ActionChanged &&
+          static_cast<QActionEvent*>(event)->action() == watchedAction)
+        ++unrelatedChanges;
+      return false;
+    }
+  } observer;
+  observer.watchedAction = first;
+  menu.installEventFilter(&observer);
+  menu.setActionIcon(second, outlined_icons::Copy());
+  QVERIFY(menu.sizeHint().width() > withoutIcon.width());
+  QCOMPARE(menu.sizeHint().height(), withoutIcon.height());
+  menu.setActionIcon(second, outlined_icons::Edit());
+  QVERIFY(!second->icon().pixmap(16, 16).isNull());
+  menu.setActionIcon(second, {});
+  QCOMPARE(menu.sizeHint(), withoutIcon);
+  QVERIFY(!first->isEnabled());
+  QCOMPARE(observer.unrelatedChanges, 0);
+  menu.popupAt(QPoint(20, 20));
+  QVERIFY(menu.isVisible());
+  const int visibleWidth = menu.width();
+  observer.unrelatedChanges = 0;
+  menu.setActionIcon(second, outlined_icons::Copy());
+  QCoreApplication::processEvents();
+  QVERIFY(menu.width() > visibleWidth);
+  menu.setActionIcon(second, {});
+  QCoreApplication::processEvents();
+  QCOMPARE(menu.width(), visibleWidth);
+  QCOMPARE(observer.unrelatedChanges, 0);
+  menu.hide();
 }
 
 void ContextMenuTests::popupDismissalPreservesActions() {
@@ -345,6 +462,161 @@ void ContextMenuTests::metricTokensRelayoutExistingActions() {
   menu.hide();
 }
 
+void ContextMenuTests::cachedVisualsFollowThemeFontAndOwnerChanges() {
+  auto& manager = adqt::theme::ThemeManager::instance();
+  const auto originalConfig = manager.config();
+  const auto restore = qScopeGuard([&]() { manager.setConfig(originalConfig); });
+  QWidget firstOwner;
+  QWidget secondOwner;
+  adqt::theme::ThemeOverride firstOverride;
+  firstOverride.controlHeight = 36;
+  adqt::theme::ThemeOverride secondOverride;
+  secondOverride.controlHeight = 48;
+  manager.setScopeOverride(&firstOwner, firstOverride);
+  manager.setScopeOverride(&secondOwner, secondOverride);
+  AdContextMenu menu(&firstOwner);
+  menu.setNativeMenuEnabled(false);
+  menu.addItem(QStringLiteral("A label with enough letters to measure typography"));
+  const auto render = [](AdContextMenu& target) {
+    target.resize(target.sizeHint());
+    QImage image(target.size(), QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::transparent);
+    QPainter painter(&image);
+    target.render(&painter);
+    return image;
+  };
+  const auto compareWithFresh = [&]() {
+    AdContextMenu reference(menu.parentWidget());
+    reference.setNativeMenuEnabled(false);
+    reference.setTriggerWidget(menu.triggerWidget());
+    reference.setFont(menu.font());
+    reference.setColorScheme(menu.colorScheme());
+    reference.setComponentTokens(menu.componentTokens());
+    reference.addItem(menu.actions().first()->text());
+    return render(menu) == render(reference);
+  };
+  QVERIFY(compareWithFresh());
+  manager.setColorScheme(adqt::theme::ThemeScheme::Dark);
+  QVERIFY(compareWithFresh());
+  firstOverride.controlHeight = 56;
+  manager.setScopeOverride(&firstOwner, firstOverride);
+  QVERIFY(compareWithFresh());
+  QCOMPARE(menu.actionGeometry(menu.actions().first()).height(), 56);
+  AdContextMenu::ComponentTokens tokens;
+  tokens.itemHeight = 64;
+  tokens.background = QColor(Qt::red);
+  menu.setComponentTokens(tokens);
+  QVERIFY(compareWithFresh());
+  menu.resetComponentTokens();
+  QVERIFY(compareWithFresh());
+  QFont spaced = menu.font();
+  spaced.setLetterSpacing(QFont::AbsoluteSpacing, 3.0);
+  menu.setFont(spaced);
+  QVERIFY(compareWithFresh());
+  menu.setTriggerWidget(&secondOwner);
+  QVERIFY(compareWithFresh());
+  QCOMPARE(menu.actionGeometry(menu.actions().first()).height(), 48);
+  menu.setTriggerWidget(nullptr);
+  menu.setParent(&secondOwner, menu.windowFlags());
+  QVERIFY(compareWithFresh());
+  QCOMPARE(menu.actionGeometry(menu.actions().first()).height(), 48);
+  menu.setColorScheme(AdContextMenu::ColorScheme::Light);
+  QVERIFY(compareWithFresh());
+  for (auto type : {QEvent::LanguageChange, QEvent::DevicePixelRatioChange}) {
+    QEvent event(type);
+    QCoreApplication::sendEvent(&menu, &event);
+    QVERIFY(compareWithFresh());
+  }
+  menu.setColorScheme(AdContextMenu::ColorScheme::Inherit);
+  firstOverride.controlHeight = 48;
+  firstOverride.scheme = adqt::theme::ThemeScheme::Light;
+  manager.setScopeOverride(&firstOwner, firstOverride);
+  QWidget branch(&firstOwner);
+  QWidget trigger(&branch);
+  menu.setTriggerWidget(&trigger);
+  const QImage beforeReparent = render(menu);
+  branch.setParent(&secondOwner);
+  const QImage afterReparent = render(menu);
+  QVERIFY(beforeReparent != afterReparent);
+  QVERIFY(compareWithFresh());
+}
+
+void ContextMenuTests::sharedLayoutMetricsFollowActionChanges() {
+  AdContextMenu menu;
+  menu.setNativeMenuEnabled(false);
+  AdContextMenu::ComponentTokens tokens;
+  tokens.minimumWidth = 1;
+  menu.setComponentTokens(tokens);
+  QAction* first = menu.addItem(QStringLiteral("A fairly wide label"));
+  QAction* second = menu.addItem(QStringLiteral("Second"));
+  const auto compareWithFresh = [&]() {
+    AdContextMenu reference;
+    reference.setNativeMenuEnabled(false);
+    reference.setComponentTokens(tokens);
+    for (const auto* action : menu.actions()) {
+      auto* copy = reference.addItem(action->text(), menu.actionIcon(action), action->shortcut());
+      copy->setShortcutVisibleInContextMenu(action->isShortcutVisibleInContextMenu());
+      copy->setCheckable(action->isCheckable());
+      copy->setVisible(action->isVisible());
+    }
+    return menu.sizeHint() == reference.sizeHint();
+  };
+  const QSize baseline = menu.sizeHint();
+  second->setText(QStringLiteral("Second\tCtrl+Alt+Shift+F12"));
+  QVERIFY(compareWithFresh());
+  QVERIFY(menu.sizeHint().width() > baseline.width());
+  second->setVisible(false);
+  QVERIFY(compareWithFresh());
+  QCOMPARE(menu.sizeHint().width(), baseline.width());
+  second->setVisible(true);
+  second->setText(QStringLiteral("Second"));
+  second->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::SHIFT | Qt::Key_F12));
+  second->setShortcutVisibleInContextMenu(true);
+  QVERIFY(compareWithFresh());
+  second->setShortcutVisibleInContextMenu(false);
+  QVERIFY(compareWithFresh());
+  QCOMPARE(menu.sizeHint(), baseline);
+  first->setCheckable(true);
+  QVERIFY(compareWithFresh());
+  QVERIFY(menu.sizeHint().width() > baseline.width());
+  first->setCheckable(false);
+  menu.setActionIcon(second, outlined_icons::Copy());
+  QVERIFY(compareWithFresh());
+  menu.setActionIcon(second, {});
+  QCOMPARE(menu.sizeHint(), baseline);
+  menu.removeAction(second);
+  QVERIFY(compareWithFresh());
+  menu.addAction(second);
+  QVERIFY(compareWithFresh());
+  menu.clear();
+  menu.addItem(QStringLiteral("Replacement"));
+  QVERIFY(compareWithFresh());
+}
+
+void ContextMenuTests::inheritedStyleUsesEachMenusActions() {
+  AdContextMenu parent;
+  parent.setNativeMenuEnabled(false);
+  AdContextMenu::ComponentTokens tokens;
+  tokens.minimumWidth = 1;
+  parent.setComponentTokens(tokens);
+  parent.addItem(QStringLiteral("Parent"), outlined_icons::Copy(),
+                 QKeySequence(Qt::CTRL | Qt::ALT | Qt::SHIFT | Qt::Key_F12));
+  parent.sizeHint();
+  QMenu child(&parent);
+  child.setStyle(parent.style());
+  child.addAction(QStringLiteral("A child label without an icon or shortcut"));
+  AdContextMenu reference;
+  reference.setNativeMenuEnabled(false);
+  reference.setComponentTokens(tokens);
+  reference.addItem(child.actions().first()->text());
+  QCOMPARE(child.sizeHint(), reference.sizeHint());
+  child.actions().first()->setShortcut(QKeySequence(Qt::Key_F2));
+  child.actions().first()->setShortcutVisibleInContextMenu(true);
+  reference.actions().first()->setShortcut(QKeySequence(Qt::Key_F2));
+  reference.actions().first()->setShortcutVisibleInContextMenu(true);
+  QCOMPARE(child.sizeHint(), reference.sizeHint());
+}
+
 void ContextMenuTests::longLabelsRespectTrailingColumnsInConstrainedMenus() {
 #ifdef Q_OS_MACOS
   QSKIP("macOS controls menu metrics and painting");
@@ -432,6 +704,171 @@ void ContextMenuTests::widgetSurfaceFollowsExistingSubmenus() {
 #ifdef Q_OS_MACOS
   QVERIFY(!action->icon().isMask());
 #endif
+}
+
+void ContextMenuTests::lazySubmenusHaveTranslucentSurfaces_data() {
+  QTest::addColumn<bool>("keyboard");
+  QTest::addColumn<bool>("dark");
+  QTest::newRow("popup-light") << false << false;
+  QTest::newRow("popup-dark") << false << true;
+  QTest::newRow("keyboard-light") << true << false;
+  QTest::newRow("keyboard-dark") << true << true;
+}
+
+void ContextMenuTests::lazySubmenusHaveTranslucentSurfaces() {
+  QFETCH(bool, keyboard);
+  QFETCH(bool, dark);
+  AdContextMenu menu;
+  menu.setNativeMenuEnabled(false);
+  menu.setColorScheme(dark ? AdContextMenu::ColorScheme::Dark : AdContextMenu::ColorScheme::Light);
+  int openings = 0;
+  auto* entry = menu.addLazySubMenu(QStringLiteral("Child"), [&](AdContextMenu* child) {
+    ++openings;
+    child->addLazySubMenu(QStringLiteral("Nested"), [](AdContextMenu* nested) {
+      nested->addItem(QStringLiteral("Command"));
+    });
+  });
+  const auto openSubmenu = [keyboard](AdContextMenu* parent, QAction* action) {
+    if (keyboard) {
+      parent->setActiveAction(action);
+      QTest::keyClick(parent, Qt::Key_Right);
+    } else {
+      auto* child = qobject_cast<AdContextMenu*>(action->menu());
+      child->popupAt(parent->mapToGlobal(QPoint(parent->width(), 0)));
+    }
+  };
+  const auto verifySurface = [](AdContextMenu* popup) {
+    QVERIFY(popup->isVisible());
+    QVERIFY(popup->windowHandle());
+    // grab() renders into its own ARGB pixmap and alone cannot detect a native
+    // popup created without an alpha channel before aboutToShow.
+    QVERIFY(popup->windowHandle()->format().hasAlpha());
+    const QImage image = popup->grab().toImage();
+    QVERIFY(!image.isNull());
+    QCOMPARE(image.pixelColor(image.rect().topLeft()).alpha(), 0);
+    QCOMPARE(image.pixelColor(image.rect().topRight()).alpha(), 0);
+    QCOMPARE(image.pixelColor(image.rect().bottomLeft()).alpha(), 0);
+    QCOMPARE(image.pixelColor(image.rect().bottomRight()).alpha(), 0);
+    QCOMPARE(image.pixelColor(image.rect().center()).alpha(), 255);
+  };
+
+  menu.popupAt(QPoint(100, 100));
+  QTRY_VERIFY(menu.isVisible());
+  for (int opening = 1; opening <= 2; ++opening) {
+    auto* child = qobject_cast<AdContextMenu*>(entry->menu());
+    QVERIFY(child);
+    QVERIFY(child->actions().isEmpty());
+    QVERIFY(!child->windowHandle());
+    openSubmenu(&menu, entry);
+    QCOMPARE(openings, opening);
+    verifySurface(child);
+    auto* nestedEntry = child->actions().first();
+    auto* nested = qobject_cast<AdContextMenu*>(nestedEntry->menu());
+    QVERIFY(nested);
+    QVERIFY(nested->actions().isEmpty());
+    QVERIFY(!nested->windowHandle());
+    openSubmenu(child, nestedEntry);
+    verifySurface(nested);
+    child->dismissPopup();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    QVERIFY(menu.isVisible());
+  }
+  menu.dismissPopup();
+}
+
+void ContextMenuTests::preparedBackgroundClipsAndComposites() {
+  AdContextMenu menu;
+  menu.setNativeMenuEnabled(false);
+  menu.resize(200, 120);
+  AdContextMenu::ComponentTokens tokens;
+  tokens.background = Qt::white;
+  tokens.border = Qt::blue;
+  tokens.borderRadius = 12;
+  menu.setComponentTokens(tokens);
+  QPixmap skin(20, 20);
+  skin.fill(Qt::red);
+  const auto renderPanel = [&]() {
+    QImage result(menu.size(), QImage::Format_ARGB32_Premultiplied);
+    result.fill(Qt::black);
+    QPainter painter(&result);
+    QStyleOption option;
+    option.initFrom(&menu);
+    option.rect = menu.rect();
+    menu.style()->drawPrimitive(QStyle::PE_PanelMenu, &option, &painter, &menu);
+    return result;
+  };
+
+  menu.setBackgroundFrame({skin, QRectF(0.25, 0.25, 0.5, 0.5), 1.0, 0.0});
+  QImage rendered = renderPanel();
+  QCOMPARE(rendered.pixelColor(100, 60), QColor(Qt::red));
+  QCOMPARE(rendered.pixelColor(20, 60), QColor(Qt::white));
+  QCOMPARE(rendered.pixelColor(0, 0).alpha(), 0);
+  QCOMPARE(rendered.pixelColor(199, 119).alpha(), 0);
+
+  menu.setBackgroundFrame({skin, QRectF(0.0, 0.0, 1.0, 1.0), 0.5, 0.5});
+  rendered = renderPanel();
+  const QColor blended = rendered.pixelColor(100, 60);
+  QCOMPARE(blended.red(), 255);
+  QVERIFY(qAbs(blended.green() - 191) <= 1);
+  QVERIFY(qAbs(blended.blue() - 191) <= 1);
+  QCOMPARE(blended.alpha(), 255);
+  QCOMPARE(rendered.pixelColor(0, 0).alpha(), 0);
+
+  menu.resetBackgroundFrame();
+  QVERIFY(menu.backgroundFrame().image.isNull());
+  QCOMPARE(renderPanel().pixelColor(100, 60), QColor(Qt::white));
+  menu.setBackgroundFrame({skin, QRectF(), 1.0, 0.0});
+  QVERIFY(menu.backgroundFrame().image.isNull());
+}
+
+void ContextMenuTests::preparedBackgroundPreservesItemStates() {
+  AdContextMenu menu;
+  menu.setNativeMenuEnabled(false);
+  AdContextMenu::ComponentTokens tokens;
+  tokens.background = Qt::white;
+  tokens.hoverBackground = Qt::green;
+  tokens.dangerHoverBackground = Qt::yellow;
+  tokens.itemBorderRadius = 0;
+  menu.setComponentTokens(tokens);
+  QAction* normal = menu.addItem(QStringLiteral("Normal"));
+  QAction* danger = menu.addItem(QStringLiteral("Danger"));
+  menu.setActionDanger(danger);
+  QPixmap skin(20, 20);
+  skin.fill(Qt::red);
+  menu.setBackgroundFrame({skin, QRectF(0.0, 0.0, 1.0, 1.0), 1.0, 0.0});
+  menu.ensurePolished();
+  menu.adjustSize();
+  const auto renderItem = [&](QAction* action) {
+    QImage result(menu.size(), QImage::Format_ARGB32_Premultiplied);
+    result.fill(Qt::transparent);
+    QPainter painter(&result);
+    QStyleOptionMenuItem option;
+    option.initFrom(&menu);
+    option.rect = menu.actionGeometry(action);
+    option.state |= QStyle::State_Selected | QStyle::State_Enabled;
+    option.menuItemType = QStyleOptionMenuItem::Normal;
+    option.text = action->text();
+    menu.style()->drawControl(QStyle::CE_MenuItem, &option, &painter, &menu);
+    return result.pixelColor(option.rect.left() + 2, option.rect.center().y());
+  };
+  QCOMPARE(renderItem(normal), QColor(Qt::green));
+  QCOMPARE(renderItem(danger), QColor(Qt::yellow));
+  QVERIFY(!normal->isCheckable());
+  QVERIFY(menu.actionDanger(danger));
+}
+
+void ContextMenuTests::preparedBackgroundDoesNotSelectNativeSurface() {
+  AdContextMenu menu;
+  const bool native = menu.nativeMenuEnabled();
+  QStyle* originalStyle = menu.style();
+  QPixmap skin(10, 10);
+  skin.fill(Qt::red);
+  menu.setBackgroundFrame({skin, QRectF(0.0, 0.0, 1.0, 1.0), 1.0, 0.0});
+  QCOMPARE(menu.nativeMenuEnabled(), native);
+  QCOMPARE(menu.style(), originalStyle);
+  menu.resetBackgroundFrame();
+  QCOMPARE(menu.nativeMenuEnabled(), native);
 }
 
 QTEST_MAIN(ContextMenuTests)

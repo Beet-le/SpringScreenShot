@@ -12,6 +12,7 @@ vcpkg_from_github(
     PATCHES
         fix-static-delay-load.patch
         generate-reduced-ops-during-configure.patch
+        fix-arm64-msvc-mlas-stack-cookie.patch
 )
 
 find_program(PROTOC NAMES protoc PATHS "${CURRENT_HOST_INSTALLED_DIR}/tools/protobuf" REQUIRED NO_DEFAULT_PATH NO_CMAKE_PATH)
@@ -233,9 +234,20 @@ if("tensorrt" IN_LIST FEATURES)
     vcpkg_cmake_build(TARGET onnxruntime_providers_tensorrt LOGFILE_BASE build-tensorrt)
 endif()
 if(VCPKG_BUILD_TYPE STREQUAL "release" AND VCPKG_LIBRARY_LINKAGE STREQUAL "static")
-    # LTCG objects exhaust memory under vcpkg's default parallel build, which
-    # otherwise forces the helper to discard progress and retry serially.
-    vcpkg_cmake_install(DISABLE_PARALLEL)
+    if(VCPKG_TARGET_IS_WINDOWS AND NOT VCPKG_TARGET_IS_MINGW AND
+       VCPKG_TARGET_ARCHITECTURE STREQUAL "arm64")
+        # ARM64 emits native objects above, so the LTCG memory restriction does
+        # not apply. The pinned helper uses VCPKG_CONCURRENCY directly; bound
+        # this port to four jobs while preserving a caller's smaller limit.
+        if(NOT DEFINED VCPKG_CONCURRENCY OR VCPKG_CONCURRENCY GREATER 4)
+            set(VCPKG_CONCURRENCY 4)
+        endif()
+        vcpkg_cmake_install()
+    else()
+        # LTCG objects exhaust memory under vcpkg's default parallel build, which
+        # otherwise forces the helper to discard progress and retry serially.
+        vcpkg_cmake_install(DISABLE_PARALLEL)
+    endif()
 else()
     vcpkg_cmake_install()
 endif()
@@ -262,8 +274,11 @@ endif()
 
 if("directml" IN_LIST FEATURES)
     set(DIRECTML_PACKAGE_DIR "${CURRENT_BUILDTREES_DIR}/packages/Microsoft.AI.DirectML.1.15.4")
-    set(DIRECTML_RUNTIME "${DIRECTML_PACKAGE_DIR}/bin/x64-win/DirectML.dll")
-    set(DIRECTML_IMPORT_LIBRARY "${DIRECTML_PACKAGE_DIR}/bin/x64-win/DirectML.lib")
+    if(NOT VCPKG_TARGET_ARCHITECTURE MATCHES "^(x86|x64|arm|arm64)$")
+        message(FATAL_ERROR "Unsupported DirectML target: ${VCPKG_TARGET_ARCHITECTURE}")
+    endif()
+    set(DIRECTML_RUNTIME "${DIRECTML_PACKAGE_DIR}/bin/${VCPKG_TARGET_ARCHITECTURE}-win/DirectML.dll")
+    set(DIRECTML_IMPORT_LIBRARY "${DIRECTML_PACKAGE_DIR}/bin/${VCPKG_TARGET_ARCHITECTURE}-win/DirectML.lib")
     foreach(DIRECTML_FILE IN ITEMS "${DIRECTML_RUNTIME}" "${DIRECTML_IMPORT_LIBRARY}")
         if(NOT EXISTS "${DIRECTML_FILE}")
             message(FATAL_ERROR "DirectML package file was not restored: ${DIRECTML_FILE}")
@@ -271,17 +286,16 @@ if("directml" IN_LIST FEATURES)
     endforeach()
 
     file(INSTALL "${DIRECTML_IMPORT_LIBRARY}" DESTINATION "${CURRENT_PACKAGES_DIR}/lib")
-    file(TO_CMAKE_PATH "${DIRECTML_IMPORT_LIBRARY}" DIRECTML_IMPORT_LIBRARY_CMAKE)
+    include("${CMAKE_CURRENT_LIST_DIR}/relocate-directml-reference.cmake")
     file(GLOB ONNXRUNTIME_TARGETS_FILES
         "${CURRENT_PACKAGES_DIR}/share/onnxruntime/onnxruntimeTargets*.cmake")
     set(DIRECTML_TARGET_REFERENCE_FOUND FALSE)
     foreach(ONNXRUNTIME_TARGETS_FILE IN LISTS ONNXRUNTIME_TARGETS_FILES)
         file(READ "${ONNXRUNTIME_TARGETS_FILE}" ONNXRUNTIME_TARGETS_CONTENT)
-        string(REPLACE
-            "${DIRECTML_IMPORT_LIBRARY_CMAKE}"
-            "\${_IMPORT_PREFIX}/lib/DirectML.lib"
+        snow_onnxruntime_relocate_directml_reference(
             RELOCATABLE_ONNXRUNTIME_TARGETS_CONTENT
             "${ONNXRUNTIME_TARGETS_CONTENT}"
+            "${DIRECTML_IMPORT_LIBRARY}"
         )
         if(NOT RELOCATABLE_ONNXRUNTIME_TARGETS_CONTENT STREQUAL ONNXRUNTIME_TARGETS_CONTENT)
             set(DIRECTML_TARGET_REFERENCE_FOUND TRUE)

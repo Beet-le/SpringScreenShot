@@ -2,6 +2,7 @@
 #define SNOW_SHOT_STORAGE_PINNEDWINDOWTYPES_H
 
 #include "pinnedwindowplacement.h"
+#include "pinnedsourceidentity.h"
 #include "capturehistorytypes.h"
 #include <QByteArray>
 #include <QDateTime>
@@ -55,6 +56,7 @@ enum class PinnedWindowCloseIntent { Preserve, Close, Destroy };
 using PinnedWindowPolicy = CaptureHistoryPolicy;
 
 struct PinnedWindowRecord final {
+    PinnedSourceIdentity sourceIdentity;
     PinnedWindowCreationSource creationSource = PinnedWindowCreationSource::Other;
     QDateTime createdUtc;
     QDateTime lastClosedUtc;
@@ -97,6 +99,7 @@ struct PinnedWindowRecord final {
     int hideToTopAccentIndex = -1;
     bool thumbnailMode = false;
     bool clickThroughMode = false;
+    bool lockedMode = false;
     bool alwaysOnTop = true;
     bool showBorder = true;
     std::optional<PinnedBorderAppearance> borderAppearance;

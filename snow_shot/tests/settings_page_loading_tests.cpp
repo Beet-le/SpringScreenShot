@@ -1,4 +1,6 @@
 #include "snow_shot/presentation/components/settingspagewidget.h"
+#include "snow_shot/presentation/components/formfields.h"
+#include "snow_shot/presentation/components/pathinput.h"
 #include "snow_shot/presentation/components/toolbareditorsettingswidget.h"
 #include "snow_shot/presentation/globalshortcutmanager.h"
 #include "snow_shot/presentation/languagemanager.h"
@@ -10,15 +12,21 @@
 #include "widgets/color_picker.h"
 #include "widgets/select.h"
 #include "widgets/multi_select.h"
+#include "widgets/slider.h"
 #include <QListView>
 #include <QLineEdit>
 #include "widgets/switch.h"
+#include "widgets/button.h"
+#include "snow_shot/presentation/components/sectionheaderwidget.h"
+#include "snow_shot/storage/configurationschema.h"
 
 #include <QApplication>
 #include <QDir>
 #include <QEvent>
 #include <QFontDatabase>
 #include <QKeyEvent>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QLabel>
 #include <QProxyStyle>
 #include <QPixmap>
@@ -47,6 +55,62 @@ void drainEvents() {
     }
 }
 
+void settingsRowsHaveOnlySectionSpacing(const settings::SettingsRegistry& registry,
+                                        settings::SettingsRuntimeSession& session) {
+    SettingsPageWidget page(registry, QStringLiteral("general-appearance"), session);
+    page.resize(880, 760);
+    page.show();
+    drainEvents();
+    const auto metric =
+        snow_shot::presentation::styles::ThemeManager::instance().themeColorScheme().metricAlias;
+    const auto verifyRows = [&] {
+        QWidget* previous = nullptr;
+        for (const QString& id :
+             {QStringLiteral("interface.theme"), QStringLiteral("interface.theme-primary-color"),
+              QStringLiteral("interface.app-font")}) {
+            auto* row = page.findChild<QWidget*>(
+                settings::generatedObjectName(QStringLiteral("settings-item"), id));
+            require(row != nullptr, "general settings row exists");
+            auto* field =
+                row->findChild<snow_shot::presentation::components::form_fields::FormField*>();
+            require(field != nullptr, "general settings row uses the shared field");
+            QLabel* title = nullptr;
+            QLabel* description = nullptr;
+            for (auto* label : row->findChildren<QLabel*>()) {
+                if (label->text() == field->metadata().label.translated())
+                    title = label;
+                if (label->text() == field->metadata().description.translated())
+                    description = label;
+            }
+            require(title != nullptr && description != nullptr,
+                    "general settings row presents its title and description");
+            const int copyHeight = title->heightForWidth(title->width()) + metric.marginXXS +
+                                   description->heightForWidth(description->width());
+            require(
+                row->height() == qMax(copyHeight, field->controlWidget()->height()),
+                "settings rows fit their wrapped copy and control without a form bottom margin");
+            if (previous) {
+                require(row->y() - previous->y() - previous->height() == metric.paddingLG,
+                        "the settings section alone owns spacing between its rows");
+            }
+            previous = row;
+        }
+    };
+    verifyRows();
+    for (int width : {640, 1040, 880}) {
+        page.resize(width, 760);
+        drainEvents();
+        verifyRows();
+    }
+    auto& languageManager = snow_shot::presentation::LanguageManager::instance();
+    for (const QString& language :
+         {QStringLiteral("zh_CN"), QStringLiteral("zh_TW"), QStringLiteral("en_US")}) {
+        require(languageManager.setLanguage(language), "change the settings row language");
+        drainEvents();
+        verifyRows();
+    }
+}
+
 class CountingStyle final : public QProxyStyle {
   public:
     int polishes = 0;
@@ -70,11 +134,11 @@ class TestTranslator final : public QTranslator {
 
 void deferredStateAndKeyboard(const settings::SettingsRegistry& registry,
                               settings::SettingsRuntimeSession& session) {
-    SettingsPageWidget page(registry, QStringLiteral("interface-settings"), session);
+    SettingsPageWidget page(registry, QStringLiteral("desktop-tools"), session);
     page.resize(880, 760);
     page.show();
     drainEvents();
-    const QString trayId = QStringLiteral("interface.tray.enabled");
+    const QString trayId = QStringLiteral("floating-toolbar.enabled");
     const auto* tray = registry.field(trayId);
     require(tray != nullptr, "tray field is registered");
     const bool original = session.state(trayId).draftValue.toBool();
@@ -83,8 +147,8 @@ void deferredStateAndKeyboard(const settings::SettingsRegistry& registry,
     TestTranslator translator;
     QCoreApplication::installTranslator(&translator);
     drainEvents();
-    auto* shell =
-        page.findChild<QWidget*>(QStringLiteral("settings-section-list-interface-settings-tray"));
+    auto* shell = page.findChild<QWidget*>(
+        QStringLiteral("settings-section-list-desktop-tools-floating-toolbar"));
     require(shell != nullptr && shell->focusPolicy() == Qt::TabFocus,
             "deferred section participates in keyboard traversal");
     shell->setFocus(Qt::TabFocusReason);
@@ -107,7 +171,7 @@ void deferredStateAndKeyboard(const settings::SettingsRegistry& registry,
 
 void scrollingLoadsSections(const settings::SettingsRegistry& registry,
                             settings::SettingsRuntimeSession& session) {
-    SettingsPageWidget page(registry, QStringLiteral("interface-settings"), session);
+    SettingsPageWidget page(registry, QStringLiteral("files-history"), session);
     page.resize(880, 420);
     page.show();
     drainEvents();
@@ -115,9 +179,15 @@ void scrollingLoadsSections(const settings::SettingsRegistry& registry,
     auto* bar = scroll->verticalScrollBar();
     bar->setValue(bar->maximum());
     drainEvents();
-    auto* tray =
-        page.findChild<QWidget*>(QStringLiteral("settings-control-interface-tray-enabled"));
-    require(tray != nullptr, "scrolling to the bottom loads the last section without navigation");
+    const auto* definition = registry.catalog().page(page.pageId());
+    require(definition != nullptr && !definition->sections.isEmpty() &&
+                !definition->sections.constLast().items.isEmpty(),
+            "the settings page has a final section with items");
+    const QString lastItemId = definition->sections.constLast().items.constLast().id;
+    auto* lastItem = page.findChild<QWidget*>(
+        settings::generatedObjectName(QStringLiteral("settings-item"), lastItemId));
+    require(lastItem != nullptr,
+            "scrolling to the bottom loads the last section without navigation");
     require(bar->value() == bar->maximum(),
             "jumping to the bottom must stay at the bottom after deferred layout");
     page.resize(880, 1000);
@@ -127,7 +197,7 @@ void scrollingLoadsSections(const settings::SettingsRegistry& registry,
 
 void deferredSections(const settings::SettingsRegistry& registry,
                       settings::SettingsRuntimeSession& session) {
-    SettingsPageWidget page(registry, QStringLiteral("interface-settings"), session);
+    SettingsPageWidget page(registry, QStringLiteral("screenshots"), session);
     page.resize(880, 760);
     page.show();
     drainEvents();
@@ -177,7 +247,7 @@ void deferredSections(const settings::SettingsRegistry& registry,
     page.reveal({page.pageId(), QStringLiteral("drawing"), drawing});
     drainEvents();
     require(page.findChild<QWidget*>(drawingObject) == editor &&
-                page.findChildren<QWidget*>().size() == fullCount,
+                page.findChildren<QWidget*>().size() == fullCount + 1,
             "revisiting a section must reuse its controls");
     page.reveal({page.pageId(), {}, {}});
     drainEvents();
@@ -195,7 +265,7 @@ bool hasSelectableOption(const QAbstractItemModel* model) {
 
 void fontPreviewAndFiltering(const settings::SettingsRegistry& registry,
                              settings::SettingsRuntimeSession& session) {
-    SettingsPageWidget page(registry, QStringLiteral("interface-settings"), session);
+    SettingsPageWidget page(registry, QStringLiteral("general-appearance"), session);
     page.resize(880, 760);
     page.show();
     drainEvents();
@@ -272,7 +342,7 @@ void fontPreviewAndFiltering(const settings::SettingsRegistry& registry,
     require(session.selectValue(settings::SettingsSelectBinding::AppFont).toString() == family,
             "choosing a font commits the setting");
     {
-        SettingsPageWidget unopened(registry, QStringLiteral("interface-settings"), session);
+        SettingsPageWidget unopened(registry, QStringLiteral("general-appearance"), session);
         unopened.resize(880, 760);
         unopened.show();
         drainEvents();
@@ -393,10 +463,67 @@ void multiSettingsSelectsSearch(const settings::SettingsRegistry& registry,
     require(count > 0, "exercise the shared multi-select settings control");
 }
 
+void reorganizedSettingsPreserveIndependentState(const settings::SettingsRegistry& registry,
+                                                 settings::SettingsRuntimeSession& session) {
+    SettingsPageWidget general(registry, QStringLiteral("general"), session);
+    general.resize(880, 760);
+    general.show();
+    drainEvents();
+    auto* language = general.findChild<adqt::widgets::AdSelect*>(
+        QStringLiteral("settings-control-interface-language"));
+    require(language != nullptr, "General exposes the application language selector");
+    language->setCurrentValue(QStringLiteral("zh_TW"));
+    drainEvents();
+    require(session.selectValue(settings::SettingsSelectBinding::Language).toString() ==
+                QStringLiteral("zh_TW"),
+            "General language edits persist");
+    require(session.reset(settings::SettingsSectionReset::GeneralSettings) &&
+                session.selectValue(settings::SettingsSelectBinding::Language).toString() ==
+                    QStringLiteral("zh_TW"),
+            "resetting appearance preserves the language chosen in General");
+    require(
+        session.applySelectValue(settings::SettingsSelectBinding::Theme, QStringLiteral("dark")) &&
+            session.reset(settings::SettingsSectionReset::Language) &&
+            session.selectValue(settings::SettingsSelectBinding::Theme).toString() ==
+                QStringLiteral("dark") &&
+            session.selectValue(settings::SettingsSelectBinding::Language).toString() ==
+                snow_shot::storage::ConfigurationSchema::defaultValue(
+                    QStringLiteral("interface/language"))
+                    .toString(),
+        "resetting language preserves appearance and restores the language default");
+    require(session.applySelectValue(settings::SettingsSelectBinding::Language,
+                                     QStringLiteral("en_US")) &&
+                session.reset(settings::SettingsSectionReset::GeneralSettings),
+            "restore language and appearance for subsequent checks");
+
+    SettingsPageWidget hotkeys(registry, QStringLiteral("global-hotkeys"), session);
+    hotkeys.resize(880, 760);
+    hotkeys.show();
+    hotkeys.reveal({QStringLiteral("global-hotkeys"), QStringLiteral("global-hotkeys"),
+                    QStringLiteral("global-hotkeys.disable-on-focused-fullscreen-window")});
+    drainEvents();
+    require(hotkeys.findChild<adqt::widgets::AdSwitch*>(QStringLiteral(
+                "settings-control-global-hotkeys-disable-on-focused-fullscreen-window")) != nullptr,
+            "Global Hotkeys materializes the relocated full-screen switch");
+    const auto& configuration = snow_shot::storage::ApplicationStorage::instance().configuration();
+    const auto screenshotShortcut =
+        configuration.value(QStringLiteral("global_shortcuts/screenshot"));
+    require(session.applySwitchValue(
+                settings::SettingsSwitchBinding::DisableHotkeysOnFocusedFullscreen, true) &&
+                session.reset(settings::SettingsSectionReset::GlobalHotkeys) &&
+                configuration.value(
+                    QStringLiteral("global_shortcuts/disable_on_focused_fullscreen_window")) ==
+                    snow_shot::storage::ConfigurationSchema::defaultValue(
+                        QStringLiteral("global_shortcuts/disable_on_focused_fullscreen_window")) &&
+                configuration.value(QStringLiteral("global_shortcuts/screenshot")) ==
+                    screenshotShortcut,
+            "full-screen reset preserves global shortcut bindings");
+}
+
 void unchangedPresentation(const settings::SettingsRegistry& registry,
                            settings::SettingsRuntimeSession& session) {
     CountingStyle style;
-    SettingsPageWidget page(registry, QStringLiteral("interface-settings"), session);
+    SettingsPageWidget page(registry, QStringLiteral("general-appearance"), session);
     page.resize(880, 760);
     page.show();
     drainEvents();
@@ -411,6 +538,454 @@ void unchangedPresentation(const settings::SettingsRegistry& registry,
     drainEvents();
     require(style.polishes == 0, "unchanged field state must not repolish its control");
     require(select->model() == model, "identical options must retain the selector model");
+}
+
+void skinControlsCommitAndRetranslate(const settings::SettingsRegistry& registry,
+                                      settings::SettingsRuntimeSession& session) {
+    SettingsPageWidget page(registry, QStringLiteral("general-appearance"), session);
+    page.resize(880, 520);
+    page.show();
+    page.reveal({page.pageId(), QStringLiteral("skin"), QStringLiteral("interface.skin.path")});
+    drainEvents();
+    auto* path =
+        page.findChild<FilePathInput*>(QStringLiteral("settings-control-interface-skin-path"));
+    auto* mode = page.findChild<adqt::widgets::AdSelect*>(
+        QStringLiteral("settings-control-interface-skin-display-mode"));
+    require(path != nullptr && mode != nullptr && path->isEnabled() && mode->isEnabled() &&
+                path->allowClear() && path->browseButtonText() == QStringLiteral("Browse"),
+            "revealing Skin must create an editable path with browse/clear and a display mode");
+    path->setText(QStringLiteral("  /skins/settings-preview.webp  "));
+    require(QMetaObject::invokeMethod(path, "editingFinished", Qt::DirectConnection),
+            "commit the skin path through the settings widget");
+    mode->setCurrentValue(QStringLiteral("contain"));
+    drainEvents();
+    require(session.filePathValue(settings::SettingsFilePathBinding::SkinPath) ==
+                    QStringLiteral("/skins/settings-preview.webp") &&
+                path->text() == QStringLiteral("/skins/settings-preview.webp") &&
+                session.selectValue(settings::SettingsSelectBinding::SkinDisplayMode).toString() ==
+                    QStringLiteral("contain"),
+            "path editing must normalize the skin path and commit with mode selection");
+    for (const auto& id : {QStringLiteral("toolbar-path"), QStringLiteral("tray-menu-path")}) {
+        auto* surfacePath =
+            page.findChild<FilePathInput*>(QStringLiteral("settings-control-interface-skin-") + id);
+        const auto binding = id == QStringLiteral("toolbar-path")
+                                 ? settings::SettingsFilePathBinding::ToolbarSkinPath
+                                 : settings::SettingsFilePathBinding::TrayMenuSkinPath;
+        const QString value = QStringLiteral("/skins/") + id + QStringLiteral(".png");
+        require(surfacePath != nullptr && surfacePath->isEnabled() && surfacePath->allowClear(),
+                "Skin must expose independent editable toolbar and tray image paths");
+        surfacePath->setText(QStringLiteral("  ") + value + QStringLiteral("  "));
+        require(QMetaObject::invokeMethod(surfacePath, "editingFinished", Qt::DirectConnection),
+                "commit each surface image path through its settings widget");
+        drainEvents();
+        require(
+            session.filePathValue(binding) == value && surfacePath->text() == value &&
+                session.filePathValue(settings::SettingsFilePathBinding::SkinPath) ==
+                    QStringLiteral("/skins/settings-preview.webp"),
+            "toolbar and tray path editing must trim whitespace without replacing the main skin");
+    }
+    for (const auto& id : {QStringLiteral("position"), QStringLiteral("toolbar-position"),
+                           QStringLiteral("tray-menu-position")}) {
+        auto* position = page.findChild<adqt::widgets::AdSelect*>(
+            QStringLiteral("settings-control-interface-skin-") + id);
+        const auto binding = id == QStringLiteral("position")
+                                 ? settings::SettingsSelectBinding::SkinPosition
+                             : id == QStringLiteral("toolbar-position")
+                                 ? settings::SettingsSelectBinding::ToolbarSkinPosition
+                                 : settings::SettingsSelectBinding::TrayMenuSkinPosition;
+        require(position != nullptr && position->isEnabled() && position->model()->rowCount() == 9,
+                "each skin position selector must display nine editable alignment choices");
+        position->setCurrentValue(QStringLiteral("bottom_right"));
+        drainEvents();
+        require(session.selectValue(binding).toString() == QStringLiteral("bottom_right"),
+                "each surface position must commit through its own settings selector");
+    }
+    for (const auto& id : {QStringLiteral("opacity"), QStringLiteral("blur-level"),
+                           QStringLiteral("mask-opacity")}) {
+        auto* slider = page.findChild<adqt::widgets::AdSlider*>(
+            QStringLiteral("settings-control-interface-skin-") + id);
+        require(slider != nullptr && slider->isEnabled(),
+                "Skin must expose three editable sliders");
+        slider->setValue(37);
+        require(QMetaObject::invokeMethod(slider, "editingFinished", Qt::DirectConnection),
+                "complete the skin slider adjustment");
+    }
+    drainEvents();
+    require(session.sliderValue(settings::SettingsSliderBinding::SkinOpacity) == 37 &&
+                session.sliderValue(settings::SettingsSliderBinding::SkinBlurLevel) == 37 &&
+                session.sliderValue(settings::SettingsSliderBinding::SkinMaskOpacity) == 37,
+            "skin slider values must commit through the runtime session");
+    TestTranslator translator;
+    QCoreApplication::installTranslator(&translator);
+    drainEvents();
+    require(
+        path->lineEdit()->accessibleName() ==
+                QStringLiteral("Translated: Main Interface Skin Path") &&
+            mode->accessibleName() == QStringLiteral("Translated: Skin Display Mode") &&
+            path->browseButtonText() == QStringLiteral("Translated: Browse") &&
+            path->lineEdit()->accessibleDescription().startsWith(QStringLiteral("Translated: ")),
+        "skin controls and descriptions must retranslate after LanguageChange");
+    QCoreApplication::removeTranslator(&translator);
+    drainEvents();
+    require(path->lineEdit()->accessibleName() == QStringLiteral("Main Interface Skin Path") &&
+                session.reset(settings::SettingsSectionReset::Skin),
+            "skin controls must restore English and the independent Skin defaults");
+}
+void relatedSettingsLayoutAndKeyboard(const settings::SettingsRegistry& registry,
+                                      settings::SettingsRuntimeSession& session) {
+    using snow_shot::presentation::styles::ThemeMode;
+    auto& theme = snow_shot::presentation::styles::ThemeManager::instance();
+    const auto originalMode = theme.themeMode();
+    auto& language = snow_shot::presentation::LanguageManager::instance();
+    SettingsPageWidget page(registry, QStringLiteral("screenshots"), session);
+    page.resize(880, 760);
+    page.show();
+    drainEvents();
+    auto* panel = page.findChild<QWidget*>(QStringLiteral("settings-related-screenshots"));
+    auto* heading = page.findChild<QLabel*>(QStringLiteral("settingsRelatedHeading"));
+    require(panel != nullptr && heading != nullptr, "related settings have a named panel");
+    const auto* definition = registry.catalog().page(page.pageId());
+    QList<adqt::widgets::AdButton*> links;
+    for (const auto& link : definition->relatedLinks) {
+        auto* button = panel->findChild<adqt::widgets::AdButton*>(
+            settings::generatedObjectName(QStringLiteral("settings-link"),
+                                          page.pageId() + QLatin1Char('-') + link.location.pageId +
+                                              QLatin1Char('-') + link.location.sectionId));
+        require(button != nullptr, "every related destination is present");
+        links.push_back(button);
+    }
+    for (const auto mode : {ThemeMode::Light, ThemeMode::Dark}) {
+        theme.setThemeMode(mode);
+        for (const QString& locale :
+             {QStringLiteral("en_US"), QStringLiteral("zh_CN"), QStringLiteral("zh_TW")}) {
+            require(language.setLanguage(locale), "translate the related settings panel");
+            for (const int width : {440, 880}) {
+                page.resize(width, 760);
+                page.reveal({page.pageId(), {}, {}});
+                drainEvents();
+                require(panel->accessibleName() == heading->text(),
+                        "the panel's accessible name follows its translated heading");
+                const QRect headingRect(heading->mapTo(panel, QPoint()), heading->size());
+                const auto metric = theme.themeColorScheme().metricAlias;
+                QRect previous;
+                for (int index = 0; index < links.size(); ++index) {
+                    const auto* button = links.at(index);
+                    const QRect buttonRect(button->mapTo(panel, QPoint()), button->size());
+                    require(panel->rect().contains(buttonRect) &&
+                                buttonRect.top() > headingRect.bottom() &&
+                                !previous.intersects(buttonRect),
+                            "translated links wrap below the heading without clipping or overlap");
+                    require(button->accessibleName() ==
+                                definition->relatedLinks.at(index).title.translated(),
+                            "each navigation button retains its translated accessible name");
+                    QFont font = button->font();
+                    font.setPixelSize(metric.fontSize);
+                    const QFontMetrics metrics(font);
+                    // Glyph bearings can add a pixel or two beyond the text advance.
+                    require(qAbs(buttonRect.width() -
+                                 metrics.horizontalAdvance(button->accessibleName())) <= 2 &&
+                                buttonRect.height() == metrics.height(),
+                            "related buttons size to their text without built-in padding");
+                    if (previous.isNull() || previous.top() != buttonRect.top()) {
+                        require(buttonRect.left() == headingRect.left(),
+                                "each row of related buttons aligns with the heading");
+                    } else {
+                        require(buttonRect.left() - previous.right() - 1 ==
+                                    metric.paddingContentHorizontal,
+                                "related buttons have half their former text spacing");
+                    }
+                    previous = buttonRect;
+                }
+                if (width == 440 && locale == QStringLiteral("en_US")) {
+                    require(links.last()->y() > links.first()->y(),
+                            "related destinations wrap onto another row at narrow widths");
+                }
+                const QString snapshots = qEnvironmentVariable("SNOW_RELATED_SETTINGS_SNAPSHOTS");
+                if (!snapshots.isEmpty()) {
+                    require(QDir().mkpath(snapshots),
+                            "create the related settings snapshot folder");
+                    const QString name = QStringLiteral("related-%1-%2-%3.png")
+                                             .arg(mode == ThemeMode::Dark ? u"dark" : u"light")
+                                             .arg(locale)
+                                             .arg(width);
+                    require(page.grab().save(QDir(snapshots).filePath(name)),
+                            "save the related settings preview");
+                }
+            }
+        }
+    }
+    settings::SettingsLocation destination;
+    QObject::connect(&page, &SettingsPageWidget::commandRequested, &page,
+                     [&](const settings::SettingsCommand& command) {
+                         require(command.kind == settings::SettingsCommandKind::Navigate,
+                                 "related buttons issue navigation commands");
+                         destination = command.location;
+                     });
+    links.first()->setFocus(Qt::TabFocusReason);
+    for (int index = 0; index < links.size(); ++index) {
+        auto* button = links.at(index);
+        require(QApplication::focusWidget() == button,
+                "related links follow their visual order when tabbing");
+        QKeyEvent press(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier);
+        QKeyEvent release(QEvent::KeyRelease, Qt::Key_Space, Qt::NoModifier);
+        QApplication::sendEvent(button, &press);
+        QApplication::sendEvent(button, &release);
+        require(destination == definition->relatedLinks.at(index).location,
+                "keyboard activation preserves the exact related destination");
+        QKeyEvent tab(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+        QApplication::sendEvent(button, &tab);
+    }
+    theme.setThemeMode(originalMode);
+    require(language.setLanguage(QStringLiteral("en_US")), "restore English after panel checks");
+    drainEvents();
+}
+
+void screenshotActionToolbarSettings(const settings::SettingsRegistry& registry,
+                                     settings::SettingsRuntimeSession& session) {
+    SettingsPageWidget page(registry, QStringLiteral("screenshots"), session);
+    page.resize(880, 760);
+    page.show();
+    const QString sectionId = QStringLiteral("screenshot-action-toolbar");
+    const QString editorId = QStringLiteral("interface.screenshot.screenshot-toolbar-editor");
+    page.reveal({page.pageId(), sectionId, editorId});
+    drainEvents();
+    auto* editor = page.findChild<QWidget*>(
+        settings::generatedObjectName(QStringLiteral("settings-item"), editorId));
+    require(editor != nullptr && editor->isVisible(),
+            "screenshot toolbar navigation reveals its editor in Action Toolbar");
+    auto* header = page.findChild<SectionHeaderWidget*>(settings::generatedObjectName(
+        QStringLiteral("settings-section"), QStringLiteral("%1-%2").arg(page.pageId(), sectionId)));
+    require(header != nullptr, "screenshot action toolbar has a separate category header");
+    auto& language = snow_shot::presentation::LanguageManager::instance();
+    for (const QString& locale :
+         {QStringLiteral("en_US"), QStringLiteral("zh_CN"), QStringLiteral("zh_TW")}) {
+        require(language.setLanguage(locale), "switch screenshot toolbar settings language");
+        drainEvents();
+        const QString title = locale == u"en_US"   ? QStringLiteral("Action Toolbar")
+                              : locale == u"zh_CN" ? QString::fromUtf8("操作工具栏")
+                                                   : QString::fromUtf8("操作工具列");
+        bool hasTitle = false;
+        for (auto* label : header->findChildren<QLabel*>())
+            hasTitle = hasTitle || label->text() == title;
+        require(hasTitle, "screenshot Action Toolbar retranslates in every supported language");
+    }
+    require(language.setLanguage(QStringLiteral("en_US")), "restore English screenshot settings");
+    drainEvents();
+}
+
+void recordingActionToolbarSettings(const settings::SettingsRegistry& registry,
+                                    settings::SettingsRuntimeSession& session) {
+    SettingsPageWidget page(registry, QStringLiteral("screen-recording"), session);
+    page.resize(880, 360);
+    page.show();
+    drainEvents();
+    require(page.findChild<QWidget*>(QStringLiteral("settings-recording-toolbar-editor")) ==
+                nullptr,
+            "recording toolbar drag surfaces must stay lazy below the viewport");
+    const QString sectionId = QStringLiteral("screen-recording-action-toolbar");
+    const QString editorId = QStringLiteral("interface.screen-recording.recording-toolbar-editor");
+    page.reveal({page.pageId(), sectionId, editorId});
+    drainEvents();
+    auto* editor = page.findChild<QWidget*>(
+        settings::generatedObjectName(QStringLiteral("settings-item"), editorId));
+    require(editor != nullptr && editor->isVisible() &&
+                editor->findChild<QWidget*>(QStringLiteral("settings-recording-toolbar-surface")) !=
+                    nullptr,
+            "recording Action Toolbar navigation materializes and reveals the editor");
+    auto* header = page.findChild<SectionHeaderWidget*>(settings::generatedObjectName(
+        QStringLiteral("settings-section"), QStringLiteral("%1-%2").arg(page.pageId(), sectionId)));
+    require(header != nullptr, "recording action toolbar has a separate category header");
+    auto& language = snow_shot::presentation::LanguageManager::instance();
+    for (const QString& locale :
+         {QStringLiteral("en_US"), QStringLiteral("zh_CN"), QStringLiteral("zh_TW")}) {
+        require(language.setLanguage(locale), "switch recording toolbar settings language");
+        drainEvents();
+        const QString title = locale == u"en_US"   ? QStringLiteral("Action Toolbar")
+                              : locale == u"zh_CN" ? QString::fromUtf8("操作工具栏")
+                                                   : QString::fromUtf8("操作工具列");
+        bool hasTitle = false;
+        for (auto* label : header->findChildren<QLabel*>())
+            hasTitle = hasTitle || label->text() == title;
+        require(hasTitle, "recording Action Toolbar retranslates in every supported language");
+    }
+    require(language.setLanguage(QStringLiteral("en_US")), "restore English recording settings");
+    drainEvents();
+}
+
+void pinnedSettingsGroups(const settings::SettingsRegistry& registry,
+                          settings::SettingsRuntimeSession& session) {
+    SettingsPageWidget page(registry, QStringLiteral("pinned-windows"), session);
+    page.resize(880, 760);
+    page.show();
+    const QString toolbarSection = QStringLiteral("pin-to-screen-toolbar");
+    const QString toolbarId = QStringLiteral("interface.pin-to-screen.pinned-toolbar-editor");
+    page.reveal({page.pageId(), toolbarSection, toolbarId});
+    drainEvents();
+    auto* editor = page.findChild<QWidget*>(
+        settings::generatedObjectName(QStringLiteral("settings-item"), toolbarId));
+    require(editor != nullptr && editor->isVisible(),
+            "pinned toolbar navigation reveals its editor in the new section");
+
+    auto& language = snow_shot::presentation::LanguageManager::instance();
+    for (const QString& locale :
+         {QStringLiteral("en_US"), QStringLiteral("zh_CN"), QStringLiteral("zh_TW")}) {
+        require(language.setLanguage(locale), "switch pinned settings language");
+        drainEvents();
+        const QStringList titles =
+            locale == u"en_US"
+                ? QStringList{QStringLiteral("Interaction"), QStringLiteral("Window interface"),
+                              QStringLiteral("Action Toolbar")}
+            : locale == u"zh_CN"
+                ? QStringList{QString::fromUtf8("操作方式"), QString::fromUtf8("窗口界面"),
+                              QString::fromUtf8("操作工具栏")}
+                : QStringList{QString::fromUtf8("操作方式"), QString::fromUtf8("視窗介面"),
+                              QString::fromUtf8("操作工具列")};
+        const auto& sections = registry.catalog().page(page.pageId())->sections;
+        for (qsizetype index = 0; index < sections.size(); ++index) {
+            auto* header = page.findChild<SectionHeaderWidget*>(settings::generatedObjectName(
+                QStringLiteral("settings-section"),
+                QStringLiteral("%1-%2").arg(page.pageId(), sections.at(index).id)));
+            require(header != nullptr, "pinned settings section header exists");
+            bool hasTitle = false;
+            for (auto* label : header->findChildren<QLabel*>())
+                hasTitle = hasTitle || label->text() == titles.at(index);
+            require(hasTitle, "pinned section titles retranslate in every supported language");
+        }
+    }
+    require(language.setLanguage(QStringLiteral("en_US")), "restore English pinned settings");
+    drainEvents();
+
+    auto& configuration = snow_shot::storage::ApplicationStorage::instance().configuration();
+    const QString border = QStringLiteral("pin_to_screen/border_color");
+    const QString activeBorder = QStringLiteral("pin_to_screen/border_active_color");
+    const QString toolbar = QStringLiteral("pin_to_screen/action_tools_layout");
+    const QString action = QStringLiteral("pin_to_screen/double_click_action");
+    const QMap<QString, QJsonValue> previous{{border, configuration.value(border)},
+                                             {activeBorder, configuration.value(activeBorder)},
+                                             {toolbar, configuration.value(toolbar)},
+                                             {action, configuration.value(action)}};
+    auto customToolbar = snow_shot::storage::ConfigurationSchema::defaultValue(toolbar).toObject();
+    auto positions = customToolbar.value(QStringLiteral("positions")).toArray();
+    positions.prepend(positions.takeAt(positions.size() - 1));
+    customToolbar.insert(QStringLiteral("positions"), positions);
+    const QJsonValue color(QStringLiteral("#123456FF"));
+    require(configuration.setValues({{border, color},
+                                     {activeBorder, color},
+                                     {toolbar, customToolbar},
+                                     {action, QStringLiteral("close")}}),
+            "prepare custom pinned appearance, toolbar and interaction preferences");
+    const auto savedToolbar = configuration.value(toolbar);
+    require(savedToolbar != snow_shot::storage::ConfigurationSchema::defaultValue(toolbar),
+            "pinned toolbar fixture differs from the default layout");
+    require(session.reset(settings::SettingsSectionReset::PinToScreen) &&
+                configuration.value(border) ==
+                    snow_shot::storage::ConfigurationSchema::defaultValue(border) &&
+                configuration.value(activeBorder) ==
+                    snow_shot::storage::ConfigurationSchema::defaultValue(activeBorder) &&
+                configuration.value(toolbar) == savedToolbar &&
+                configuration.value(action).toString() == u"close",
+            "window interface reset restores both borders and preserves toolbar and interaction");
+    require(configuration.setValues({{border, color}, {activeBorder, color}}) &&
+                session.reset(settings::SettingsSectionReset::PinToScreenToolbar) &&
+                configuration.value(toolbar) ==
+                    snow_shot::storage::ConfigurationSchema::defaultValue(toolbar) &&
+                configuration.value(border) == color &&
+                configuration.value(activeBorder) == color &&
+                configuration.value(action).toString() == u"close",
+            "action toolbar reset restores its layout and preserves borders and interaction");
+    require(configuration.setValues(previous), "restore pinned preferences after reset checks");
+    session.refreshAll();
+}
+
+void featureLinksAdvancedControlsAndResets(const settings::SettingsRegistry& registry,
+                                           settings::SettingsRuntimeSession& session) {
+    SettingsPageWidget page(registry, QStringLiteral("screen-recording"), session);
+    page.resize(880, 760);
+    page.show();
+    drainEvents();
+    auto* encoding =
+        page.findChild<QWidget*>(QStringLiteral("settings-section-list-screen-recording-encoding"));
+    require(encoding != nullptr && !encoding->isHidden(), "encoding controls start expanded");
+    page.reveal(
+        {page.pageId(), QStringLiteral("encoding"), QStringLiteral("screen-recording.encoder")});
+    drainEvents();
+    auto* encoder =
+        page.findChild<QWidget*>(QStringLiteral("settings-control-screen-recording-encoder"));
+    require(encoding->isVisible() && encoder != nullptr && encoder->isVisible() &&
+                page.findChild<QFrame*>(QStringLiteral("settingsSearchHighlight")) != nullptr,
+            "search reveals encoding controls and highlights its exact destination");
+    auto* header = page.findChild<SectionHeaderWidget*>(
+        QStringLiteral("settings-section-screen-recording-encoding"));
+    require(header != nullptr, "encoding section header exists");
+    auto* expand =
+        header->findChild<adqt::widgets::AdButton*>(QStringLiteral("sectionExpandButton"));
+    require(expand == nullptr || expand->isHidden(),
+            "encoding uses the same expanded presentation as the other settings sections");
+
+    settings::SettingsLocation destination;
+    QObject::connect(
+        &page, &SettingsPageWidget::commandRequested, &page,
+        [&](const settings::SettingsCommand& command) { destination = command.location; });
+    auto* link = page.findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("settings-link-screen-recording-files-history-screen-recording-output"));
+    require(link != nullptr, "recording preferences link to the shared output settings");
+    TestTranslator translator;
+    QCoreApplication::installTranslator(&translator);
+    drainEvents();
+    require(link->text() == QStringLiteral("Translated: Video export") &&
+                link->accessibleName() == QStringLiteral("Translated: Video export"),
+            "related links retranslate accessibly");
+    link->click();
+    require(destination == settings::SettingsLocation{QStringLiteral("files-history"),
+                                                      QStringLiteral("screen-recording-output"),
+                                                      {}},
+            "related links navigate to the canonical section without duplicating controls");
+    QCoreApplication::removeTranslator(&translator);
+    drainEvents();
+
+    auto& configuration = snow_shot::storage::ApplicationStorage::instance().configuration();
+    const QString video = QStringLiteral("screen_recording/video_quality");
+    const QString animation = QStringLiteral("screen_recording/animated_image_frame_rate");
+    const QString codec = QStringLiteral("screen_recording/encoder");
+    const QString overlay = QStringLiteral("screen_recording/show_keyboard");
+    require(configuration.setValues(
+                {{video, 37}, {animation, 5}, {codec, QStringLiteral("h265")}, {overlay, true}}),
+            "prepare distinct recording preferences");
+    require(session.reset(settings::SettingsSectionReset::ScreenRecordingVideo) &&
+                configuration.value(video) ==
+                    snow_shot::storage::ConfigurationSchema::defaultValue(video) &&
+                configuration.value(animation).toInt() == 5 &&
+                configuration.value(codec).toString() == QStringLiteral("h265") &&
+                configuration.value(overlay).toBool(),
+            "video reset preserves animation, advanced encoding and recording overlay preferences");
+    require(session.reset(settings::SettingsSectionReset::ScreenRecordingAnimation) &&
+                configuration.value(animation) ==
+                    snow_shot::storage::ConfigurationSchema::defaultValue(animation) &&
+                configuration.value(codec).toString() == QStringLiteral("h265"),
+            "animation reset preserves the selected video encoder");
+    require(session.reset(settings::SettingsSectionReset::ScreenRecordingEncoding) &&
+                configuration.value(codec) ==
+                    snow_shot::storage::ConfigurationSchema::defaultValue(codec),
+            "encoding reset restores its own defaults");
+#ifndef Q_OS_MACOS
+    const QString cursor = QStringLiteral("screenshot/capture_cursor");
+    const QString captureApi = QStringLiteral("screenshot/api_mode");
+    const QString alternateApi =
+        snow_shot::storage::ConfigurationSchema::defaultValue(captureApi).toString() == u"gdi"
+            ? QStringLiteral("dxgi")
+            : QStringLiteral("gdi");
+    require(configuration.setValues({{cursor, true}, {captureApi, alternateApi}}) &&
+                session.reset(settings::SettingsSectionReset::ScreenshotCaptureBehavior) &&
+                !configuration.value(cursor).toBool() &&
+                configuration.value(captureApi).toString() == alternateApi,
+            "ordinary capture reset leaves the compatibility backend unchanged");
+    require(configuration.setValue(cursor, true) &&
+                session.reset(settings::SettingsSectionReset::ScreenshotCaptureCompatibility) &&
+                configuration.value(cursor).toBool() &&
+                configuration.value(captureApi) ==
+                    snow_shot::storage::ConfigurationSchema::defaultValue(captureApi),
+            "advanced capture reset preserves cursor visibility");
+#endif
 }
 } // namespace
 
@@ -436,6 +1011,21 @@ int main(int argc, char** argv) {
     settings::BuiltInSettingsBackend backend(shortcuts);
     const auto registry = settings::buildBuiltInSettingsRegistry();
     settings::SettingsRuntimeSession session(registry, backend);
+    if (application.arguments().contains(QStringLiteral("--action-toolbar-settings-only"))) {
+        screenshotActionToolbarSettings(registry, session);
+        recordingActionToolbarSettings(registry, session);
+        pinnedSettingsGroups(registry, session);
+        storage.shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--navigation-only"))) {
+        relatedSettingsLayoutAndKeyboard(registry, session);
+        reorganizedSettingsPreserveIndependentState(registry, session);
+        pinnedSettingsGroups(registry, session);
+        featureLinksAdvancedControlsAndResets(registry, session);
+        storage.shutdown();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--selects-only"))) {
         fontPreviewAndFiltering(registry, session);
         multiSettingsSelectsSearch(registry, session);
@@ -443,9 +1033,11 @@ int main(int argc, char** argv) {
         return 0;
     }
     deferredSections(registry, session);
+    settingsRowsHaveOnlySectionSpacing(registry, session);
     deferredStateAndKeyboard(registry, session);
     scrollingLoadsSections(registry, session);
     unchangedPresentation(registry, session);
+    skinControlsCommitAndRetranslate(registry, session);
     storage.shutdown();
     return 0;
 }

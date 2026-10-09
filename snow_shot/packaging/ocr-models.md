@@ -42,6 +42,21 @@ avoids enlarging short screenshots to a 736-pixel minimum side. Selecting `min`
 restores that earlier behavior for screenshots with very small text. Changing the
 setting replaces the model session in the existing process.
 
+Runtime **1.0.9**, protocol **5**, adds Text Detection Processing to session
+preparation. `text_recognition/text_detection_processing` defaults to
+`accuracy_first`, preserving the recognizer's 320-pixel input-width floor.
+Selecting `speed_first` lowers that floor to 48 before the existing 32-pixel
+alignment. This reduces work on short text but can change text and confidence;
+it is an explicit accuracy/speed tradeoff. Changing it replaces the session.
+Protocol 5 adds this byte after the detector policy and before model paths, so
+the app and runtime must be upgraded together.
+
+Runtime **1.0.10** keeps protocol **5** and refreshes both Windows architectures
+from the current release toolchain. The ARM64 archive includes the ONNX Runtime
+MLAS compiler workaround and passes the packaged stack-cookie return-path guard;
+the published 1.0.9 ARM64 archive predates that fix. Keep all earlier published
+archives unchanged and update both trusted descriptors to the new exact bytes.
+
 Recognition and callback delivery are FIFO across interactive and prefetch work.
 The single inference executor can overlap the next image transfer. Model/backend
 changes replace sessions in the existing child; waiting images use the newest
@@ -61,12 +76,17 @@ residency; automatic prefetch runs on demand while suspended. Background resourc
 acquisition retries after 5, 15, and then 60 seconds without showing settings
 errors. Warm-up failures are logged and retried on the next recognition.
 
-The locally verified artifact is
-`artifacts/snow-ocr-runtime-1.0.8-windows-x64.zip` (17,345,319 bytes), with SHA-256
-`39ea72ab8b72a7771c78d09514738399e5e7669a0d57810c5850c5ed001cb3af`.
-Publish the exact pinned archive before distributing this app revision. Published
-1.0.6 and earlier artifacts must remain unchanged. Existing verified model files
-remain reusable; the application and runtime must use matching protocol versions.
+The locally prepared artifacts are:
+
+| Architecture | Archive | Bytes | SHA-256 |
+| --- | --- | ---: | --- |
+| x64 | `artifacts/snow-ocr-runtime-1.0.10-windows-x64.zip` | 15,988,806 | `429ab6e8180c2781bc863218c470c931b6016d25cac3fe3b76536a4d3d77d020` |
+| ARM64 | `artifacts/windows-arm64/snow-ocr-runtime-1.0.10-windows-arm64.zip` | 15,543,068 | `05dde0d3a72d6877e592cc2dcac0bbb5174fa41591bf8639eade2ca9084e7241` |
+
+Preparation does not upload these archives. Publish the exact pinned bytes before
+distributing this app revision; earlier published artifacts must remain unchanged.
+Existing verified model files remain reusable; the application and runtime must
+use matching protocol versions.
 
 When changing models, update both the trusted asset manifest and the packaging
 descriptors, and regenerate/check
@@ -78,7 +98,8 @@ The release maintainer must publish the exact hash-pinned runtime archive before
 shipping the updated app or expecting clean development machines to download it:
 
 ```text
-https://www.modelscope.cn/models/mgchao/SnowShotOCR/resolve/master/runtime/1.0.8/windows-x64/snow-ocr-runtime-1.0.8-windows-x64.zip
+https://www.modelscope.cn/models/mgchao/SnowShotOCR/resolve/master/runtime/1.0.10/windows-x64/snow-ocr-runtime-1.0.10-windows-x64.zip
+https://www.modelscope.cn/models/mgchao/SnowShotOCR/resolve/master/runtime/1.0.10/windows-arm64/snow-ocr-runtime-1.0.10-windows-arm64.zip
 ```
 
 `scripts/package-snow-shot.ps1 -PrepareOcrRuntimeOnly` prepares the runtime ZIP,
@@ -104,13 +125,13 @@ cache reuse, failed acquisition/retry, and model changes during acquisition.
 
 For actual V4/V5 inference, place verified files under
 `<model-root>/<model-id>/<filename>`, as described by the trusted manifest. Then
-run the built test executable with the packaged 1.0.8 worker:
+run the built test executable with the packaged 1.0.10 worker:
 
 ```powershell
 $env:SNOW_TEST_OCR_TEXT_FIXTURE = (Resolve-Path snow_shot/tests/baselines/ocr-model-versions.png).Path
 $test = 'build/windows-msvc-debug/snow_shot/test-bin/Debug/snow-shot-ocr-recognition-service-tests.exe'
 $modelRoot = (Resolve-Path build/ocr-versioned-models).Path
-$worker = (Resolve-Path artifacts/snow-ocr-runtime-1.0.8/snow-ocr-process-1.0.8-windows-x64.exe).Path
+$worker = (Resolve-Path artifacts/snow-ocr-runtime-1.0.10/snow-ocr-process-1.0.10-windows-x64.exe).Path
 & $test "--model-root=$modelRoot" "--worker=$worker"
 & $test "--model-root=$modelRoot" "--worker=$worker" --directml
 ```
@@ -132,15 +153,20 @@ by deterministic unit tests.
 
 ## macOS ARM64 bundled runtime
 
-macOS 15+ Apple Silicon uses the same seven model IDs and protocol 4 with CPU
+macOS 15+ Apple Silicon uses the same seven model IDs and protocol 5 with CPU
 inference. The app supplies a generated schema-3 `macos-arm64` manifest with
 `delivery: bundled`; Windows schema-2 runtime archives and their pinned hashes
-remain separate. Small V6 works offline on first launch. Other model selections
-use the existing verified download cache and never download executable code.
+remain separate. Full bundles Small V6 for offline recognition on first launch.
+Mini bundles only the runtime and trusted model descriptors; it downloads the
+selected model on first use. Both editions reuse verified model caches and
+never download executable code.
 The macOS runtime is updated only with the application.
 
-`scripts/snow-shot-macos-ocr.py` stages pinned models and generates/verifies the
-manifest from finalized native binaries. Runtime hashes are generated after
+`scripts/snow-shot-macos-ocr.py` stages pinned models for Full and uses
+`--runtime-only` for Mini staging, bundle preparation, finalization and verification.
+Mini's model payload must be absent, including stale model directories in reused
+staging trees. The script generates/verifies the manifest from finalized native
+binaries. Runtime hashes are generated after
 Mach-O deployment and nested signing, before signing the outer app bundle.
 See `docs-macos-build.md` for the native seven-model, lifecycle, relocated-bundle,
 and performance checks required before delivery.

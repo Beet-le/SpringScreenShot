@@ -132,6 +132,161 @@
         </message>
     </context>
     <context>
+        <name>CloudUploadSettingsWidget</name>
+        <message>
+            <source>%1 (Copy %2)</source>
+            <translation>%1 (Copy %2)</translation>
+        </message>
+        <message>
+            <source>%1 (Copy)</source>
+            <translation>%1 (Copy)</translation>
+        </message>
+        <message>
+            <source>%1 configuration %2</source>
+            <translation>%1 configuration %2</translation>
+        </message>
+        <message>
+            <source>A configuration with this name already exists.</source>
+            <translation>A configuration with this name already exists.</translation>
+        </message>
+        <message>
+            <source>Access Key ID</source>
+            <translation>Access Key ID</translation>
+        </message>
+        <message>
+            <source>Add cloud upload configuration</source>
+            <translation>Add cloud upload configuration</translation>
+        </message>
+        <message>
+            <source>Add configuration</source>
+            <translation>Add configuration</translation>
+        </message>
+        <message>
+            <source>Addressing Style</source>
+            <translation>Addressing Style</translation>
+        </message>
+        <message>
+            <source>Bucket</source>
+            <translation>Bucket</translation>
+        </message>
+        <message>
+            <source>Cancel</source>
+            <translation>Cancel</translation>
+        </message>
+        <message>
+            <source>Check the region, bucket, addressing style, and credentials. Fields must not contain line breaks.</source>
+            <translation>Check the region, bucket, addressing style, and credentials. Fields must not contain line breaks.</translation>
+        </message>
+        <message>
+            <source>Choose the configuration used for cloud uploads</source>
+            <translation>Choose the configuration used for cloud uploads</translation>
+        </message>
+        <message>
+            <source>Configuration Name</source>
+            <translation>Configuration Name</translation>
+        </message>
+        <message>
+            <source>Copy</source>
+            <translation>Copy</translation>
+        </message>
+        <message>
+            <source>Default destination</source>
+            <translation>Default destination</translation>
+        </message>
+        <message>
+            <source>Delete</source>
+            <translation>Delete</translation>
+        </message>
+        <message>
+            <source>Delete configuration</source>
+            <translation>Delete configuration</translation>
+        </message>
+        <message>
+            <source>Delete this cloud upload configuration?</source>
+            <translation>Delete this cloud upload configuration?</translation>
+        </message>
+        <message>
+            <source>Edit</source>
+            <translation>Edit</translation>
+        </message>
+        <message>
+            <source>Edit cloud upload configuration</source>
+            <translation>Edit cloud upload configuration</translation>
+        </message>
+        <message>
+            <source>Enter a full HTTP or HTTPS URL without credentials, a query, or a fragment.</source>
+            <translation>Enter a full HTTP or HTTPS URL without credentials, a query, or a fragment.</translation>
+        </message>
+        <message>
+            <source>No cloud upload configurations added</source>
+            <translation>No cloud upload configurations added</translation>
+        </message>
+        <message>
+            <source>None</source>
+            <translation>None</translation>
+        </message>
+        <message>
+            <source>Object Key Prefix</source>
+            <translation>Object Key Prefix</translation>
+        </message>
+        <message>
+            <source>Optional bucket-root URL. Link access follows your bucket or CDN policy.</source>
+            <translation>Optional bucket-root URL. Link access follows your bucket or CDN policy.</translation>
+        </message>
+        <message>
+            <source>Path style</source>
+            <translation>Path style</translation>
+        </message>
+        <message>
+            <source>Protocol</source>
+            <translation>Protocol</translation>
+        </message>
+        <message>
+            <source>Public / CDN Base URL</source>
+            <translation>Public / CDN Base URL</translation>
+        </message>
+        <message>
+            <source>S3</source>
+            <translation>S3</translation>
+        </message>
+        <message>
+            <source>Save</source>
+            <translation>Save</translation>
+        </message>
+        <message>
+            <source>Secret Access Key</source>
+            <translation>Secret Access Key</translation>
+        </message>
+        <message>
+            <source>Service Endpoint</source>
+            <translation>Service Endpoint</translation>
+        </message>
+        <message>
+            <source>Session Token</source>
+            <translation>Session Token</translation>
+        </message>
+        <message>
+            <source>Signing Region</source>
+            <translation>Signing Region</translation>
+        </message>
+        <message>
+            <source>This field is required.</source>
+            <translation>This field is required.</translation>
+        </message>
+        <message>
+            <source>Unable to save configurations. Check that configuration storage is writable and try again.</source>
+            <translation>Unable to save configurations. Check that configuration storage is writable and try again.</translation>
+        </message>
+        <message>
+            <source>Upload Configurations</source>
+            <translation>Upload Configurations</translation>
+        </message>
+        <message>
+            <source>Virtual hosted</source>
+            <translation>Virtual hosted</translation>
+        </message>
+    </context>
+    <context>
         <name>CustomAiModelsSettingsWidget</name>
         <message>
             <source>%1 (Copy %2)</source>
@@ -289,16 +444,20 @@
     <context>
         <name>DrawingToolbarEditorSettingsWidget</name>
         <message>
+            <source>Annotation toolbar preview</source>
+            <translation>Annotation toolbar preview</translation>
+        </message>
+        <message>
             <source>Arrow</source>
             <translation>Arrow</translation>
         </message>
         <message>
-            <source>Drag tools here to hide them from the screenshot toolbar.</source>
-            <translation>Drag tools here to hide them from the screenshot toolbar.</translation>
+            <source>Distance annotation</source>
+            <translation>Distance annotation</translation>
         </message>
         <message>
-            <source>Drawing toolbar preview</source>
-            <translation>Drawing toolbar preview</translation>
+            <source>Drag tools here to hide them from the screenshot toolbar.</source>
+            <translation>Drag tools here to hide them from the screenshot toolbar.</translation>
         </message>
         <message>
             <source>Drop beside a tool to create a position. Drop above a tool to stack it. The bottom tool stays on the main toolbar row. Separator Component occupies its own position.</source>
@@ -313,8 +472,8 @@
             <translation>Filter</translation>
         </message>
         <message>
-            <source>Hidden drawing toolbar tools</source>
-            <translation>Hidden drawing toolbar tools</translation>
+            <source>Hidden annotation toolbar tools</source>
+            <translation>Hidden annotation toolbar tools</translation>
         </message>
         <message>
             <source>Hidden tools</source>
@@ -339,6 +498,10 @@
         <message>
             <source>Redo</source>
             <translation>Redo</translation>
+        </message>
+        <message>
+            <source>Select elements</source>
+            <translation>Select elements</translation>
         </message>
         <message>
             <source>Separator Component</source>
@@ -367,6 +530,33 @@
         <message>
             <source>Watermark</source>
             <translation>Watermark</translation>
+        </message>
+    </context>
+    <context>
+        <name>FloatingToolbarEditorSettingsWidget</name>
+        <message>
+            <source>Drag tools here to hide them from the floating toolbar.</source>
+            <translation>Drag tools here to hide them from the floating toolbar.</translation>
+        </message>
+        <message>
+            <source>Drop beside a tool to create a position. Drop above a tool to stack it. The bottom tool stays on the main toolbar row.</source>
+            <translation>Drop beside a tool to create a position. Drop above a tool to stack it. The bottom tool stays on the main toolbar row.</translation>
+        </message>
+        <message>
+            <source>Floating toolbar preview</source>
+            <translation>Floating toolbar preview</translation>
+        </message>
+        <message>
+            <source>Hidden floating toolbar tools</source>
+            <translation>Hidden floating toolbar tools</translation>
+        </message>
+        <message>
+            <source>Hidden tools</source>
+            <translation>Hidden tools</translation>
+        </message>
+        <message>
+            <source>No hidden tools</source>
+            <translation>No hidden tools</translation>
         </message>
     </context>
     <context>
@@ -471,6 +661,10 @@
     <context>
         <name>LoginItemService</name>
         <message>
+            <source>%1 needs a valid code signature to use launch at login. Reinstall the signed app.</source>
+            <translation>%1 needs a valid code signature to use launch at login. Reinstall the signed app.</translation>
+        </message>
+        <message>
             <source>A launch-at-login change is already in progress.</source>
             <translation>A launch-at-login change is already in progress.</translation>
         </message>
@@ -491,6 +685,10 @@
             <translation>Could not save the launch-at-login preference. The displayed macOS status is still current.</translation>
         </message>
         <message>
+            <source>Move the signed %1 app to /Applications or ~/Applications to use launch at login.</source>
+            <translation>Move the signed %1 app to /Applications or ~/Applications to use launch at login.</translation>
+        </message>
+        <message>
             <source>Move the signed Snow Shot app to /Applications or ~/Applications to use launch at login.</source>
             <translation>Move the signed Snow Shot app to /Applications or ~/Applications to use launch at login.</translation>
         </message>
@@ -499,12 +697,43 @@
             <translation>Snow Shot needs a valid code signature to use launch at login. Reinstall the signed app.</translation>
         </message>
         <message>
+            <source>macOS could not find %1's login item. Reinstall the app in Applications.</source>
+            <translation>macOS could not find %1's login item. Reinstall the app in Applications.</translation>
+        </message>
+        <message>
             <source>macOS could not find Snow Shot's login item. Reinstall the app in Applications.</source>
             <translation>macOS could not find Snow Shot's login item. Reinstall the app in Applications.</translation>
         </message>
         <message>
             <source>macOS did not apply the launch-at-login change. Check Login Items in System Settings.</source>
             <translation>macOS did not apply the launch-at-login change. Check Login Items in System Settings.</translation>
+        </message>
+    </context>
+    <context>
+        <name>MainWindowSkin</name>
+        <message>
+            <source>Choose a PNG, JPG, or WebP image.</source>
+            <translation>Choose a PNG, JPG, or WebP image.</translation>
+        </message>
+        <message>
+            <source>Loading skin...</source>
+            <translation>Loading skin...</translation>
+        </message>
+        <message>
+            <source>The skin image could not be decoded.</source>
+            <translation>The skin image could not be decoded.</translation>
+        </message>
+        <message>
+            <source>The skin image could not be opened.</source>
+            <translation>The skin image could not be opened.</translation>
+        </message>
+        <message>
+            <source>The skin image exceeds 64 MiB.</source>
+            <translation>The skin image exceeds 64 MiB.</translation>
+        </message>
+        <message>
+            <source>The skin image exceeds processing limits.</source>
+            <translation>The skin image exceeds processing limits.</translation>
         </message>
     </context>
     <context>
@@ -561,12 +790,20 @@
     <context>
         <name>PinnedToolbarEditorSettingsWidget</name>
         <message>
+            <source>Confirm edit</source>
+            <translation>Confirm edit</translation>
+        </message>
+        <message>
+            <source>Copy to clipboard</source>
+            <translation>Copy to clipboard</translation>
+        </message>
+        <message>
             <source>Drag tools here to hide them from the pinned toolbar.</source>
             <translation>Drag tools here to hide them from the pinned toolbar.</translation>
         </message>
         <message>
-            <source>Drop beside a tool to create a position. Drop above a tool to stack it. The bottom tool stays on the main toolbar row.</source>
-            <translation>Drop beside a tool to create a position. Drop above a tool to stack it. The bottom tool stays on the main toolbar row.</translation>
+            <source>Drop beside a tool to create a position. Drop above a tool to stack it. The bottom tool stays on the main toolbar row. Separator Component occupies its own position.</source>
+            <translation>Drop beside a tool to create a position. Drop above a tool to stack it. The bottom tool stays on the main toolbar row. Separator Component occupies its own position.</translation>
         </message>
         <message>
             <source>Hidden pinned toolbar tools</source>
@@ -586,7 +823,82 @@
         </message>
     </context>
     <context>
+        <name>RecordingToolbarEditorSettingsWidget</name>
+        <message>
+            <source>Close recording</source>
+            <translation>Close recording</translation>
+        </message>
+        <message>
+            <source>Copy recording content</source>
+            <translation>Copy recording content</translation>
+        </message>
+        <message>
+            <source>Drag tools here to hide them from the recording toolbar.</source>
+            <translation>Drag tools here to hide them from the recording toolbar.</translation>
+        </message>
+        <message>
+            <source>Drop beside a tool to create a position. Drop above a tool to stack it. The bottom tool stays on the main toolbar row. Recording duration and Separator Component occupy their own positions.</source>
+            <translation>Drop beside a tool to create a position. Drop above a tool to stack it. The bottom tool stays on the main toolbar row. Recording duration and Separator Component occupy their own positions.</translation>
+        </message>
+        <message>
+            <source>Hidden recording toolbar tools</source>
+            <translation>Hidden recording toolbar tools</translation>
+        </message>
+        <message>
+            <source>Hidden tools</source>
+            <translation>Hidden tools</translation>
+        </message>
+        <message>
+            <source>Microphone</source>
+            <translation>Microphone</translation>
+        </message>
+        <message>
+            <source>No hidden tools</source>
+            <translation>No hidden tools</translation>
+        </message>
+        <message>
+            <source>Open recording folder</source>
+            <translation>Open recording folder</translation>
+        </message>
+        <message>
+            <source>Pause / resume recording</source>
+            <translation>Pause / resume recording</translation>
+        </message>
+        <message>
+            <source>Recording duration</source>
+            <translation>Recording duration</translation>
+        </message>
+        <message>
+            <source>Recording toolbar preview</source>
+            <translation>Recording toolbar preview</translation>
+        </message>
+        <message>
+            <source>Save recording</source>
+            <translation>Save recording</translation>
+        </message>
+        <message>
+            <source>Separator Component</source>
+            <translation>Separator Component</translation>
+        </message>
+        <message>
+            <source>Start / stop recording</source>
+            <translation>Start / stop recording</translation>
+        </message>
+        <message>
+            <source>System audio</source>
+            <translation>System audio</translation>
+        </message>
+        <message>
+            <source>Trim recording</source>
+            <translation>Trim recording</translation>
+        </message>
+    </context>
+    <context>
         <name>ScreenshotMcpSettings</name>
+        <message>
+            <source>Add this configuration to your MCP client, then restart the client to connect. Keep %1 running while using MCP.</source>
+            <translation>Add this configuration to your MCP client, then restart the client to connect. Keep %1 running while using MCP.</translation>
+        </message>
         <message>
             <source>Add this configuration to your MCP client, then restart the client to connect. Keep Snow Shot running while using MCP.</source>
             <translation>Add this configuration to your MCP client, then restart the client to connect. Keep Snow Shot running while using MCP.</translation>
@@ -631,6 +943,10 @@
             <translation>Barcode recognition</translation>
         </message>
         <message>
+            <source>Cancel screenshot</source>
+            <translation>Cancel screenshot</translation>
+        </message>
+        <message>
             <source>Convert to HTML</source>
             <translation>Convert to HTML</translation>
         </message>
@@ -667,6 +983,10 @@
             <translation>Pin to screen</translation>
         </message>
         <message>
+            <source>Print</source>
+            <translation>Print</translation>
+        </message>
+        <message>
             <source>Quick save</source>
             <translation>Quick save</translation>
         </message>
@@ -698,6 +1018,10 @@
             <source>Text translation</source>
             <translation>Text translation</translation>
         </message>
+        <message>
+            <source>Upload to Cloud</source>
+            <translation>Upload to Cloud</translation>
+        </message>
     </context>
     <context>
         <name>SettingsBackend</name>
@@ -712,6 +1036,10 @@
         <message>
             <source>The configuration could not be imported.</source>
             <translation>The configuration could not be imported.</translation>
+        </message>
+        <message>
+            <source>Translation service is unavailable</source>
+            <translation>Translation service is unavailable</translation>
         </message>
     </context>
     <context>
@@ -781,20 +1109,12 @@
             <translation>83</translation>
         </message>
         <message>
-            <source>AI Model</source>
-            <translation>AI Model</translation>
-        </message>
-        <message>
             <source>API Configuration</source>
             <translation>API Configuration</translation>
         </message>
         <message>
             <source>API Key</source>
             <translation>API Key</translation>
-        </message>
-        <message>
-            <source>API Mode</source>
-            <translation>API Mode</translation>
         </message>
         <message>
             <source>API URL</source>
@@ -821,8 +1141,36 @@
             <translation>Accessibility</translation>
         </message>
         <message>
+            <source>Accuracy First</source>
+            <translation>Accuracy First</translation>
+        </message>
+        <message>
+            <source>Action Toolbar</source>
+            <translation>Action Toolbar</translation>
+        </message>
+        <message>
             <source>Active window</source>
             <translation>Active window</translation>
+        </message>
+        <message>
+            <source>Adjust MP4 quality and file size</source>
+            <translation>Adjust MP4 quality and file size</translation>
+        </message>
+        <message>
+            <source>Adjust the font size throughout the application</source>
+            <translation>Adjust the font size throughout the application</translation>
+        </message>
+        <message>
+            <source>Adjust the image opacity for all three skins.</source>
+            <translation>Adjust the image opacity for all three skins.</translation>
+        </message>
+        <message>
+            <source>Adjust the theme background opacity over all three skins to keep controls and text readable.</source>
+            <translation>Adjust the theme background opacity over all three skins to keep controls and text readable.</translation>
+        </message>
+        <message>
+            <source>Advanced capture</source>
+            <translation>Advanced capture</translation>
         </message>
         <message>
             <source>Age</source>
@@ -857,6 +1205,10 @@
             <translation>Always hide</translation>
         </message>
         <message>
+            <source>Always on Top</source>
+            <translation>Always on Top</translation>
+        </message>
+        <message>
             <source>Always show</source>
             <translation>Always show</translation>
         </message>
@@ -871,6 +1223,34 @@
         <message>
             <source>Animated image frame rate</source>
             <translation>Animated image frame rate</translation>
+        </message>
+        <message>
+            <source>Animated images</source>
+            <translation>Animated images</translation>
+        </message>
+        <message>
+            <source>Annotation</source>
+            <translation>Annotation</translation>
+        </message>
+        <message>
+            <source>Annotation mode</source>
+            <translation>Annotation mode</translation>
+        </message>
+        <message>
+            <source>Annotation shortcut</source>
+            <translation>Annotation shortcut</translation>
+        </message>
+        <message>
+            <source>Annotation toolbar</source>
+            <translation>Annotation toolbar</translation>
+        </message>
+        <message>
+            <source>Annotation toolbar settings</source>
+            <translation>Annotation toolbar settings</translation>
+        </message>
+        <message>
+            <source>Annotation tools</source>
+            <translation>Annotation tools</translation>
         </message>
         <message>
             <source>App Font</source>
@@ -893,8 +1273,12 @@
             <translation>Appearance</translation>
         </message>
         <message>
-            <source>Appearance and language settings</source>
-            <translation>Appearance and language settings</translation>
+            <source>Application language</source>
+            <translation>Application language</translation>
+        </message>
+        <message>
+            <source>Application performance</source>
+            <translation>Application performance</translation>
         </message>
         <message>
             <source>Application priority</source>
@@ -905,8 +1289,24 @@
             <translation>Application shortcuts</translation>
         </message>
         <message>
+            <source>Applies to all three skins. Overlay fills each surface and crops the edges. Contain shows the whole image.</source>
+            <translation>Applies to all three skins. Overlay fills each surface and crops the edges. Contain shows the whole image.</translation>
+        </message>
+        <message>
+            <source>Apply to recognized text when editing or copying</source>
+            <translation>Apply to recognized text when editing or copying</translation>
+        </message>
+        <message>
             <source>Arrow</source>
             <translation>Arrow</translation>
+        </message>
+        <message>
+            <source>Ask for confirmation before closing a pinned window.</source>
+            <translation>Ask for confirmation before closing a pinned window.</translation>
+        </message>
+        <message>
+            <source>Ask for confirmation before permanently destroying a pinned window.</source>
+            <translation>Ask for confirmation before permanently destroying a pinned window.</translation>
         </message>
         <message>
             <source>Ask for confirmation when using the Cancel screenshot shortcut.</source>
@@ -915,6 +1315,10 @@
         <message>
             <source>Auto</source>
             <translation>Auto</translation>
+        </message>
+        <message>
+            <source>Auto Exit After Recording Ends</source>
+            <translation>Auto Exit After Recording Ends</translation>
         </message>
         <message>
             <source>Auto execute after text recognition</source>
@@ -941,6 +1345,14 @@
             <translation>Auto-save image filename format</translation>
         </message>
         <message>
+            <source>Auto-update on next launch</source>
+            <translation>Auto-update on next launch</translation>
+        </message>
+        <message>
+            <source>Automatic disabling</source>
+            <translation>Automatic disabling</translation>
+        </message>
+        <message>
             <source>Automatic text recognition</source>
             <translation>Automatic text recognition</translation>
         </message>
@@ -949,16 +1361,32 @@
             <translation>Automatically disable when a focused fullscreen window exists</translation>
         </message>
         <message>
+            <source>Automatically exit screen recording after the recording is saved.</source>
+            <translation>Automatically exit screen recording after the recording is saved.</translation>
+        </message>
+        <message>
+            <source>Autostart</source>
+            <translation>Autostart</translation>
+        </message>
+        <message>
             <source>BMP</source>
             <translation>BMP</translation>
         </message>
         <message>
-            <source>Back up and restore application settings</source>
-            <translation>Back up and restore application settings</translation>
+            <source>Background</source>
+            <translation>Background</translation>
         </message>
         <message>
             <source>Background Fill</source>
             <translation>Background Fill</translation>
+        </message>
+        <message>
+            <source>Background image</source>
+            <translation>Background image</translation>
+        </message>
+        <message>
+            <source>Backup</source>
+            <translation>Backup</translation>
         </message>
         <message>
             <source>Backup settings</source>
@@ -985,6 +1413,18 @@
             <translation>Border color</translation>
         </message>
         <message>
+            <source>Bottom center</source>
+            <translation>Bottom center</translation>
+        </message>
+        <message>
+            <source>Bottom left</source>
+            <translation>Bottom left</translation>
+        </message>
+        <message>
+            <source>Bottom right</source>
+            <translation>Bottom right</translation>
+        </message>
+        <message>
             <source>Browse</source>
             <translation>Browse</translation>
         </message>
@@ -1005,8 +1445,20 @@
             <translation>Cancel screenshot</translation>
         </message>
         <message>
+            <source>Canvas Style Configuration</source>
+            <translation>Canvas Style Configuration</translation>
+        </message>
+        <message>
             <source>Capture</source>
             <translation>Capture</translation>
+        </message>
+        <message>
+            <source>Capture &amp; annotation</source>
+            <translation>Capture &amp; annotation</translation>
+        </message>
+        <message>
+            <source>Capture APIs, window detection and color compatibility</source>
+            <translation>Capture APIs, window detection and color compatibility</translation>
         </message>
         <message>
             <source>Capture UI during scrolling screenshots</source>
@@ -1021,12 +1473,16 @@
             <translation>Capture backend</translation>
         </message>
         <message>
-            <source>Capture cursor</source>
-            <translation>Capture cursor</translation>
+            <source>Capture content</source>
+            <translation>Capture content</translation>
         </message>
         <message>
             <source>Capture every monitor and copy the monitor under the pointer</source>
             <translation>Capture every monitor and copy the monitor under the pointer</translation>
+        </message>
+        <message>
+            <source>Capture interface</source>
+            <translation>Capture interface</translation>
         </message>
         <message>
             <source>Capture screenshots and record your screen and system audio.</source>
@@ -1041,20 +1497,40 @@
             <translation>Capture toolbar during recording</translation>
         </message>
         <message>
+            <source>Center</source>
+            <translation>Center</translation>
+        </message>
+        <message>
+            <source>Center left</source>
+            <translation>Center left</translation>
+        </message>
+        <message>
             <source>Center on mouse position</source>
             <translation>Center on mouse position</translation>
+        </message>
+        <message>
+            <source>Center right</source>
+            <translation>Center right</translation>
         </message>
         <message>
             <source>Check automatically</source>
             <translation>Check automatically</translation>
         </message>
         <message>
-            <source>Check for new versions and download updates from the official website</source>
-            <translation>Check for new versions and download updates from the official website</translation>
+            <source>Check for new versions on GitHub and Gitee</source>
+            <translation>Check for new versions on GitHub and Gitee</translation>
         </message>
         <message>
             <source>Child elements</source>
             <translation>Child elements</translation>
+        </message>
+        <message>
+            <source>Choose an image for Snow Shot's custom tray menu. Native system menus keep their system appearance. Clear the path to remove this skin.</source>
+            <translation>Choose an image for Snow Shot's custom tray menu. Native system menus keep their system appearance. Clear the path to remove this skin.</translation>
+        </message>
+        <message>
+            <source>Choose an image for the screenshot, pin-to-screen, full-screen canvas and screen recording toolbar rows. Clear the path to remove this skin.</source>
+            <translation>Choose an image for the screenshot, pin-to-screen, full-screen canvas and screen recording toolbar rows. Clear the path to remove this skin.</translation>
         </message>
         <message>
             <source>Choose how much execution time the application receives</source>
@@ -1073,6 +1549,10 @@
             <translation>Choose how the dragged selection border follows the mouse while resizing</translation>
         </message>
         <message>
+            <source>Choose how updates are downloaded and installed</source>
+            <translation>Choose how updates are downloaded and installed</translation>
+        </message>
+        <message>
             <source>Choose the OCR model version and size to balance recognition speed and accuracy</source>
             <translation>Choose the OCR model version and size to balance recognition speed and accuracy</translation>
         </message>
@@ -1081,16 +1561,16 @@
             <translation>Choose the action for double-clicking a draggable area of a pinned screenshot</translation>
         </message>
         <message>
-            <source>Choose the action for double-clicking while moving or drawing in a screenshot</source>
-            <translation>Choose the action for double-clicking while moving or drawing in a screenshot</translation>
+            <source>Choose the action for double-clicking while moving or annotating in a screenshot</source>
+            <translation>Choose the action for double-clicking while moving or annotating in a screenshot</translation>
         </message>
         <message>
             <source>Choose the action for middle-clicking a draggable area of a pinned screenshot</source>
             <translation>Choose the action for middle-clicking a draggable area of a pinned screenshot</translation>
         </message>
         <message>
-            <source>Choose the action for middle-clicking while moving or drawing in a screenshot</source>
-            <translation>Choose the action for middle-clicking while moving or drawing in a screenshot</translation>
+            <source>Choose the action for middle-clicking while moving or annotating in a screenshot</source>
+            <translation>Choose the action for middle-clicking while moving or annotating in a screenshot</translation>
         </message>
         <message>
             <source>Choose the bundled icon used in the system tray</source>
@@ -1129,6 +1609,10 @@
             <translation>Choose the functions shown in the system tray menu</translation>
         </message>
         <message>
+            <source>Choose the image alignment within this surface.</source>
+            <translation>Choose the image alignment within this surface.</translation>
+        </message>
+        <message>
             <source>Choose the page size for manually and automatically saved PDF files</source>
             <translation>Choose the page size for manually and automatically saved PDF files</translation>
         </message>
@@ -1137,8 +1621,20 @@
             <translation>Choose the preferred API for normal screenshots; Auto uses DXGI on HDR displays and GDI otherwise</translation>
         </message>
         <message>
+            <source>Choose the preferred capture API for screen recording</source>
+            <translation>Choose the preferred capture API for screen recording</translation>
+        </message>
+        <message>
             <source>Choose the primary color used throughout the theme</source>
             <translation>Choose the primary color used throughout the theme</translation>
+        </message>
+        <message>
+            <source>Choose the primary language for translation</source>
+            <translation>Choose the primary language for translation</translation>
+        </message>
+        <message>
+            <source>Choose the scheduling level for the interface and application workers. Changes take effect after restarting Snow Shot.</source>
+            <translation>Choose the scheduling level for the interface and application workers. Changes take effect after restarting Snow Shot.</translation>
         </message>
         <message>
             <source>Choose the server for built-in online services. Application updates are not affected.</source>
@@ -1149,12 +1645,24 @@
             <translation>Choose the size of the screenshot, pinned, and recording toolbars</translation>
         </message>
         <message>
+            <source>Choose the source language or detect it automatically</source>
+            <translation>Choose the source language or detect it automatically</translation>
+        </message>
+        <message>
+            <source>Choose the translation service or AI model</source>
+            <translation>Choose the translation service or AI model</translation>
+        </message>
+        <message>
             <source>Choose the video encoder</source>
             <translation>Choose the video encoder</translation>
         </message>
         <message>
             <source>Choose what happens automatically when text recognition completes</source>
             <translation>Choose what happens automatically when text recognition completes</translation>
+        </message>
+        <message>
+            <source>Choose what happens when the clipboard content or selected file is already pinned</source>
+            <translation>Choose what happens when the clipboard content or selected file is already pinned</translation>
         </message>
         <message>
             <source>Choose what left-clicking the tray icon does</source>
@@ -1241,6 +1749,10 @@
             <translation>Closed window count</translation>
         </message>
         <message>
+            <source>Cloud Upload</source>
+            <translation>Cloud Upload</translation>
+        </message>
+        <message>
             <source>Color mode</source>
             <translation>Color mode</translation>
         </message>
@@ -1257,10 +1769,6 @@
             <translation>Compression level</translation>
         </message>
         <message>
-            <source>Configuration</source>
-            <translation>Configuration</translation>
-        </message>
-        <message>
             <source>Configuration exported to the clipboard.</source>
             <translation>Configuration exported to the clipboard.</translation>
         </message>
@@ -1269,16 +1777,12 @@
             <translation>Configuration imported.</translation>
         </message>
         <message>
-            <source>Configure application process behavior</source>
-            <translation>Configure application process behavior</translation>
+            <source>Configure S3-compatible upload destinations</source>
+            <translation>Configure S3-compatible upload destinations</translation>
         </message>
         <message>
-            <source>Configure custom AI models and text translation services</source>
-            <translation>Configure custom AI models and text translation services</translation>
-        </message>
-        <message>
-            <source>Configure drawing tools and the screenshot drawing toolbar</source>
-            <translation>Configure drawing tools and the screenshot drawing toolbar</translation>
+            <source>Configure annotation tools and the screenshot annotation toolbar</source>
+            <translation>Configure annotation tools and the screenshot annotation toolbar</translation>
         </message>
         <message>
             <source>Configure mouse combinations for screenshot actions</source>
@@ -1289,20 +1793,20 @@
             <translation>Configure proxy use for network requests</translation>
         </message>
         <message>
-            <source>Configure screenshot behavior</source>
-            <translation>Configure screenshot behavior</translation>
-        </message>
-        <message>
-            <source>Configure screenshot editor shortcut keys</source>
-            <translation>Configure screenshot editor shortcut keys</translation>
-        </message>
-        <message>
             <source>Configure text recognition models and acceleration</source>
             <translation>Configure text recognition models and acceleration</translation>
         </message>
         <message>
             <source>Configure the screenshot, pinned, and recording toolbars</source>
             <translation>Configure the screenshot, pinned, and recording toolbars</translation>
+        </message>
+        <message>
+            <source>Confirm before closing window</source>
+            <translation>Confirm before closing window</translation>
+        </message>
+        <message>
+            <source>Confirm before destroying window</source>
+            <translation>Confirm before destroying window</translation>
         </message>
         <message>
             <source>Confirm before exiting screenshot via shortcut</source>
@@ -1313,12 +1817,16 @@
             <translation>Connect AI clients to Snow Shot</translation>
         </message>
         <message>
+            <source>Contain</source>
+            <translation>Contain</translation>
+        </message>
+        <message>
             <source>Control when the screenshot color picker is visible</source>
             <translation>Control when the screenshot color picker is visible</translation>
         </message>
         <message>
-            <source>Copy all application settings as a zip archive to the clipboard</source>
-            <translation>Copy all application settings as a zip archive to the clipboard</translation>
+            <source>Copy application settings as a zip archive to the clipboard</source>
+            <translation>Copy application settings as a zip archive to the clipboard</translation>
         </message>
         <message>
             <source>Copy color</source>
@@ -1369,10 +1877,6 @@
             <translation>Copy to clipboard</translation>
         </message>
         <message>
-            <source>Core</source>
-            <translation>Core</translation>
-        </message>
-        <message>
             <source>Core application settings</source>
             <translation>Core application settings</translation>
         </message>
@@ -1383,6 +1887,10 @@
         <message>
             <source>Cursor guide line color</source>
             <translation>Cursor guide line color</translation>
+        </message>
+        <message>
+            <source>Custom AI models</source>
+            <translation>Custom AI models</translation>
         </message>
         <message>
             <source>Custom DeepL, Baidu, and Youdao-compatible services</source>
@@ -1405,6 +1913,10 @@
             <translation>Custom pinned toolbar</translation>
         </message>
         <message>
+            <source>Custom recording toolbar</source>
+            <translation>Custom recording toolbar</translation>
+        </message>
+        <message>
             <source>Custom screenshot toolbar</source>
             <translation>Custom screenshot toolbar</translation>
         </message>
@@ -1413,12 +1925,44 @@
             <translation>Custom translation endpoints and concurrency</translation>
         </message>
         <message>
+            <source>Customize floating toolbar tools</source>
+            <translation>Customize floating toolbar tools</translation>
+        </message>
+        <message>
+            <source>Customize the main interface, toolbar rows and custom tray menu</source>
+            <translation>Customize the main interface, toolbar rows and custom tray menu</translation>
+        </message>
+        <message>
+            <source>Customize the pinned window toolbar</source>
+            <translation>Customize the pinned window toolbar</translation>
+        </message>
+        <message>
+            <source>Customize the quick-set buttons for annotation fill colors</source>
+            <translation>Customize the quick-set buttons for annotation fill colors</translation>
+        </message>
+        <message>
+            <source>Customize the quick-set buttons for annotation stroke colors</source>
+            <translation>Customize the quick-set buttons for annotation stroke colors</translation>
+        </message>
+        <message>
+            <source>Customize the screen recording action toolbar</source>
+            <translation>Customize the screen recording action toolbar</translation>
+        </message>
+        <message>
+            <source>Customize the screenshot action toolbar</source>
+            <translation>Customize the screenshot action toolbar</translation>
+        </message>
+        <message>
             <source>DXGI</source>
             <translation>DXGI</translation>
         </message>
         <message>
             <source>Dark</source>
             <translation>Dark</translation>
+        </message>
+        <message>
+            <source>Data storage</source>
+            <translation>Data storage</translation>
         </message>
         <message>
             <source>Decrease opacity by 10%</source>
@@ -1431,6 +1975,14 @@
         <message>
             <source>Default</source>
             <translation>Default</translation>
+        </message>
+        <message>
+            <source>Default Formatting</source>
+            <translation>Default Formatting</translation>
+        </message>
+        <message>
+            <source>Default Punctuation</source>
+            <translation>Default Punctuation</translation>
         </message>
         <message>
             <source>Delay %1s to execute</source>
@@ -1477,6 +2029,10 @@
             <translation>Delete temporary recording files?</translation>
         </message>
         <message>
+            <source>Desktop access to your capture tools</source>
+            <translation>Desktop access to your capture tools</translation>
+        </message>
+        <message>
             <source>Destroy</source>
             <translation>Destroy</translation>
         </message>
@@ -1509,8 +2065,16 @@
             <translation>Disk usage</translation>
         </message>
         <message>
+            <source>Display the original image beside recognition and translation results.</source>
+            <translation>Display the original image beside recognition and translation results.</translation>
+        </message>
+        <message>
             <source>Display translated text in the original image</source>
             <translation>Display translated text in the original image</translation>
+        </message>
+        <message>
+            <source>Distance annotation</source>
+            <translation>Distance annotation</translation>
         </message>
         <message>
             <source>Double-click Action</source>
@@ -1525,48 +2089,40 @@
             <translation>Download automatically</translation>
         </message>
         <message>
-            <source>Download new versions automatically and ask before restarting</source>
-            <translation>Download new versions automatically and ask before restarting</translation>
-        </message>
-        <message>
-            <source>Drag drawing tools to reorder them or stack them in the same toolbar position.</source>
-            <translation>Drag drawing tools to reorder them or stack them in the same toolbar position.</translation>
+            <source>Drag annotation tools to reorder them or stack them in the same toolbar position.</source>
+            <translation>Drag annotation tools to reorder them or stack them in the same toolbar position.</translation>
         </message>
         <message>
             <source>Drag pinned tools to reorder them or stack them in the same toolbar position.</source>
             <translation>Drag pinned tools to reorder them or stack them in the same toolbar position.</translation>
         </message>
         <message>
+            <source>Drag recording tools to reorder, stack, or hide them on the recording toolbar.</source>
+            <translation>Drag recording tools to reorder, stack, or hide them on the recording toolbar.</translation>
+        </message>
+        <message>
             <source>Drag screenshot tools to reorder them or stack them in the same toolbar position.</source>
             <translation>Drag screenshot tools to reorder them or stack them in the same toolbar position.</translation>
         </message>
         <message>
-            <source>Draw a dashed crosshair at the pointer while selecting</source>
-            <translation>Draw a dashed crosshair at the pointer while selecting</translation>
+            <source>Drag tools to reorder, group, or hide them on the floating toolbar.</source>
+            <translation>Drag tools to reorder, group, or hide them on the floating toolbar.</translation>
         </message>
         <message>
-            <source>Draw a solid crosshair at the active monitor center while selecting</source>
-            <translation>Draw a solid crosshair at the active monitor center while selecting</translation>
+            <source>Draw a dashed crosshair at the pointer while guides are enabled</source>
+            <translation>Draw a dashed crosshair at the pointer while guides are enabled</translation>
+        </message>
+        <message>
+            <source>Draw a solid crosshair at the active monitor center while guides are enabled</source>
+            <translation>Draw a solid crosshair at the active monitor center while guides are enabled</translation>
+        </message>
+        <message>
+            <source>Draw a solid crosshair at the screenshot selection center</source>
+            <translation>Draw a solid crosshair at the screenshot selection center</translation>
         </message>
         <message>
             <source>Draw four guide segments around the sampled center pixel</source>
             <translation>Draw four guide segments around the sampled center pixel</translation>
-        </message>
-        <message>
-            <source>Drawing</source>
-            <translation>Drawing</translation>
-        </message>
-        <message>
-            <source>Drawing mode</source>
-            <translation>Drawing mode</translation>
-        </message>
-        <message>
-            <source>Drawing shortcut</source>
-            <translation>Drawing shortcut</translation>
-        </message>
-        <message>
-            <source>Drawing toolbar settings</source>
-            <translation>Drawing toolbar settings</translation>
         </message>
         <message>
             <source>Edit selection</source>
@@ -1593,6 +2149,10 @@
             <translation>Encoder</translation>
         </message>
         <message>
+            <source>Encoding options</source>
+            <translation>Encoding options</translation>
+        </message>
+        <message>
             <source>Encoding preset</source>
             <translation>Encoding preset</translation>
         </message>
@@ -1613,6 +2173,10 @@
             <translation>Enter or browse to a PNG or ICO file; invalid files use the selected bundled icon</translation>
         </message>
         <message>
+            <source>Enter or browse to a PNG, JPG or WebP image for the main interface. Clear the path to remove this skin.</source>
+            <translation>Enter or browse to a PNG, JPG or WebP image for the main interface. Clear the path to remove this skin.</translation>
+        </message>
+        <message>
             <source>Eraser</source>
             <translation>Eraser</translation>
         </message>
@@ -1627,6 +2191,10 @@
         <message>
             <source>Export</source>
             <translation>Export</translation>
+        </message>
+        <message>
+            <source>Export &amp; storage</source>
+            <translation>Export &amp; storage</translation>
         </message>
         <message>
             <source>Export configuration</source>
@@ -1647,6 +2215,14 @@
         <message>
             <source>Fill Style</source>
             <translation>Fill Style</translation>
+        </message>
+        <message>
+            <source>Fill color preset %1</source>
+            <translation>Fill color preset %1</translation>
+        </message>
+        <message>
+            <source>Fill color presets</source>
+            <translation>Fill color presets</translation>
         </message>
         <message>
             <source>Filter</source>
@@ -1685,6 +2261,14 @@
             <translation>Flip vertically</translation>
         </message>
         <message>
+            <source>Floating toolbar</source>
+            <translation>Floating toolbar</translation>
+        </message>
+        <message>
+            <source>Floating toolbar settings</source>
+            <translation>Floating toolbar settings</translation>
+        </message>
+        <message>
             <source>Focused window</source>
             <translation>Focused window</translation>
         </message>
@@ -1699,6 +2283,10 @@
         <message>
             <source>Follow system</source>
             <translation>Follow system</translation>
+        </message>
+        <message>
+            <source>Font Size</source>
+            <translation>Font Size</translation>
         </message>
         <message>
             <source>Frame rate</source>
@@ -1723,6 +2311,18 @@
         <message>
             <source>GDI</source>
             <translation>GDI</translation>
+        </message>
+        <message>
+            <source>GIF</source>
+            <translation>GIF</translation>
+        </message>
+        <message>
+            <source>GIF frame rate</source>
+            <translation>GIF frame rate</translation>
+        </message>
+        <message>
+            <source>GIF, APNG and WebP resolution, frame rate and looping</source>
+            <translation>GIF, APNG and WebP resolution, frame rate and looping</translation>
         </message>
         <message>
             <source>GPU acceleration</source>
@@ -1755,6 +2355,10 @@
         <message>
             <source>Global mouse</source>
             <translation>Global mouse</translation>
+        </message>
+        <message>
+            <source>Global mouse gestures</source>
+            <translation>Global mouse gestures</translation>
         </message>
         <message>
             <source>Group recognized text before translating</source>
@@ -1805,12 +2409,20 @@
             <translation>Ignore global hotkeys while the focused window occupies an entire monitor</translation>
         </message>
         <message>
-            <source>Image Export</source>
-            <translation>Image Export</translation>
+            <source>Image Recognition</source>
+            <translation>Image Recognition</translation>
+        </message>
+        <message>
+            <source>Image export</source>
+            <translation>Image export</translation>
         </message>
         <message>
             <source>Image files (*.png *.ico);;PNG images (*.png);;Icon files (*.ico)</source>
             <translation>Image files (*.png *.ico);;PNG images (*.png);;Icon files (*.ico)</translation>
+        </message>
+        <message>
+            <source>Image files (*.png *.jpg *.jpeg *.webp);;PNG images (*.png);;JPG images (*.jpg *.jpeg);;WebP images (*.webp)</source>
+            <translation>Image files (*.png *.jpg *.jpeg *.webp);;PNG images (*.png);;JPG images (*.jpg *.jpeg);;WebP images (*.webp)</translation>
         </message>
         <message>
             <source>Image format</source>
@@ -1845,12 +2457,16 @@
             <translation>Import settings</translation>
         </message>
         <message>
+            <source>Include saved annotation styles in the configuration archive</source>
+            <translation>Include saved annotation styles in the configuration archive</translation>
+        </message>
+        <message>
             <source>Include the displayed text recognition or original-image translation result when saving an image.</source>
             <translation>Include the displayed text recognition or original-image translation result when saving an image.</translation>
         </message>
         <message>
-            <source>Include the mouse cursor in normal screenshots.</source>
-            <translation>Include the mouse cursor in normal screenshots.</translation>
+            <source>Include the pointer and capture controls in screenshots</source>
+            <translation>Include the pointer and capture controls in screenshots</translation>
         </message>
         <message>
             <source>Include the screen recording toolbar in the recorded video.</source>
@@ -1873,12 +2489,12 @@
             <translation>Input Monitoring</translation>
         </message>
         <message>
-            <source>Interface settings</source>
-            <translation>Interface settings</translation>
+            <source>Interaction</source>
+            <translation>Interaction</translation>
         </message>
         <message>
-            <source>Interface settings page</source>
-            <translation>Interface settings page</translation>
+            <source>Interface settings</source>
+            <translation>Interface settings</translation>
         </message>
         <message>
             <source>JPEG</source>
@@ -1897,6 +2513,10 @@
             <translation>Keep closed windows available for restoration; disabling does not delete existing records</translation>
         </message>
         <message>
+            <source>Keep group main buttons visible</source>
+            <translation>Keep group main buttons visible</translation>
+        </message>
+        <message>
             <source>Keep records permanently</source>
             <translation>Keep records permanently</translation>
         </message>
@@ -1909,8 +2529,20 @@
             <translation>Keep selection width and height consistent</translation>
         </message>
         <message>
+            <source>Keep the first button of each toolbar group visible instead of the last used button</source>
+            <translation>Keep the first button of each toolbar group visible instead of the last used button</translation>
+        </message>
+        <message>
             <source>Keep the recognition process running to avoid startup delays. Uses memory while idle.</source>
             <translation>Keep the recognition process running to avoid startup delays. Uses memory while idle.</translation>
+        </message>
+        <message>
+            <source>Keyboard shortcuts</source>
+            <translation>Keyboard shortcuts</translation>
+        </message>
+        <message>
+            <source>Keyboard shortcuts used within Snow Shot tools</source>
+            <translation>Keyboard shortcuts used within Snow Shot tools</translation>
         </message>
         <message>
             <source>Landscape A4</source>
@@ -1919,6 +2551,10 @@
         <message>
             <source>Language</source>
             <translation>Language</translation>
+        </message>
+        <message>
+            <source>Language, startup and updates</source>
+            <translation>Language, startup and updates</translation>
         </message>
         <message>
             <source>Last used tool</source>
@@ -1969,6 +2605,14 @@
             <translation>Locale</translation>
         </message>
         <message>
+            <source>Lock mode</source>
+            <translation>Lock mode</translation>
+        </message>
+        <message>
+            <source>Locked Border Color</source>
+            <translation>Locked Border Color</translation>
+        </message>
+        <message>
             <source>Loop Animated Images</source>
             <translation>Loop Animated Images</translation>
         </message>
@@ -1993,6 +2637,14 @@
             <translation>Magnifier visibility</translation>
         </message>
         <message>
+            <source>Main Interface Skin Path</source>
+            <translation>Main Interface Skin Path</translation>
+        </message>
+        <message>
+            <source>Main Interface Skin Position</source>
+            <translation>Main Interface Skin Position</translation>
+        </message>
+        <message>
             <source>Manage Snow Shot's login permission in macOS System Settings</source>
             <translation>Manage Snow Shot's login permission in macOS System Settings</translation>
         </message>
@@ -2007,6 +2659,10 @@
         <message>
             <source>Manual save image filename format</source>
             <translation>Manual save image filename format</translation>
+        </message>
+        <message>
+            <source>Mask Opacity</source>
+            <translation>Mask Opacity</translation>
         </message>
         <message>
             <source>Match your system appearance or choose a light or dark theme</source>
@@ -2077,6 +2733,10 @@
             <translation>Mouse combinations for screenshot actions</translation>
         </message>
         <message>
+            <source>Mouse pointer</source>
+            <translation>Mouse pointer</translation>
+        </message>
+        <message>
             <source>Mouse wheel zoom mode</source>
             <translation>Mouse wheel zoom mode</translation>
         </message>
@@ -2101,8 +2761,16 @@
             <translation>Move entire selection</translation>
         </message>
         <message>
-            <source>Network</source>
-            <translation>Network</translation>
+            <source>Network &amp; connections</source>
+            <translation>Network &amp; connections</translation>
+        </message>
+        <message>
+            <source>Network access and AI-client connections</source>
+            <translation>Network access and AI-client connections</translation>
+        </message>
+        <message>
+            <source>Network access, online providers and AI-client connections</source>
+            <translation>Network access, online providers and AI-client connections</translation>
         </message>
         <message>
             <source>Network proxy</source>
@@ -2133,12 +2801,20 @@
             <translation>Normal</translation>
         </message>
         <message>
+            <source>Notify after export completes</source>
+            <translation>Notify after export completes</translation>
+        </message>
+        <message>
             <source>OCR</source>
             <translation>OCR</translation>
         </message>
         <message>
             <source>OCR model</source>
             <translation>OCR model</translation>
+        </message>
+        <message>
+            <source>OCR models &amp; performance</source>
+            <translation>OCR models &amp; performance</translation>
         </message>
         <message>
             <source>Only when displayed</source>
@@ -2149,16 +2825,16 @@
             <translation>Open</translation>
         </message>
         <message>
-            <source>Open Function Settings</source>
-            <translation>Open Function Settings</translation>
-        </message>
-        <message>
             <source>Open Login Items Settings</source>
             <translation>Open Login Items Settings</translation>
         </message>
         <message>
             <source>Open a canvas on the current display or toggle click-through</source>
             <translation>Open a canvas on the current display or toggle click-through</translation>
+        </message>
+        <message>
+            <source>Open screenshot settings</source>
+            <translation>Open screenshot settings</translation>
         </message>
         <message>
             <source>Open selected text translation in a standalone window.</source>
@@ -2199,6 +2875,10 @@
         <message>
             <source>Other application shortcuts and actions</source>
             <translation>Other application shortcuts and actions</translation>
+        </message>
+        <message>
+            <source>Overlay</source>
+            <translation>Overlay</translation>
         </message>
         <message>
             <source>PDF</source>
@@ -2301,6 +2981,10 @@
             <translation>Pin to screen shortcuts and actions</translation>
         </message>
         <message>
+            <source>Pin-to-screen management</source>
+            <translation>Pin-to-screen management</translation>
+        </message>
+        <message>
             <source>Pinned screenshot window appearance settings</source>
             <translation>Pinned screenshot window appearance settings</translation>
         </message>
@@ -2313,12 +2997,28 @@
             <translation>Pinned window active border</translation>
         </message>
         <message>
+            <source>Pinned window behavior, appearance and tools</source>
+            <translation>Pinned window behavior, appearance and tools</translation>
+        </message>
+        <message>
             <source>Pinned window border</source>
             <translation>Pinned window border</translation>
         </message>
         <message>
+            <source>Pinned window locked border</source>
+            <translation>Pinned window locked border</translation>
+        </message>
+        <message>
+            <source>Pinned-window shortcuts</source>
+            <translation>Pinned-window shortcuts</translation>
+        </message>
+        <message>
             <source>Play a shutter sound when capturing the focused window or current display.</source>
             <translation>Play a shutter sound when capturing the focused window or current display.</translation>
+        </message>
+        <message>
+            <source>Play a shutter sound when screenshot capture starts.</source>
+            <translation>Play a shutter sound when screenshot capture starts.</translation>
         </message>
         <message>
             <source>Play saved GIF, APNG, and WebP recordings repeatedly.</source>
@@ -2341,16 +3041,36 @@
             <translation>Preview and manage saved screenshot history</translation>
         </message>
         <message>
+            <source>Preview window groups, then release the shortcut keys to switch</source>
+            <translation>Preview window groups, then release the shortcut keys to switch</translation>
+        </message>
+        <message>
             <source>Previous screenshot history</source>
             <translation>Previous screenshot history</translation>
+        </message>
+        <message>
+            <source>Primary Target Language</source>
+            <translation>Primary Target Language</translation>
+        </message>
+        <message>
+            <source>Print</source>
+            <translation>Print</translation>
         </message>
         <message>
             <source>Process priority</source>
             <translation>Process priority</translation>
         </message>
         <message>
+            <source>Prompt-capable models use this language when the input matches the primary target language</source>
+            <translation>Prompt-capable models use this language when the input matches the primary target language</translation>
+        </message>
+        <message>
             <source>Proxy</source>
             <translation>Proxy</translation>
+        </message>
+        <message>
+            <source>Quality of service (QoS)</source>
+            <translation>Quality of service (QoS)</translation>
         </message>
         <message>
             <source>Quick Selection Modification</source>
@@ -2373,6 +3093,14 @@
             <translation>Recapture</translation>
         </message>
         <message>
+            <source>Recognition output</source>
+            <translation>Recognition output</translation>
+        </message>
+        <message>
+            <source>Recognition shortcuts</source>
+            <translation>Recognition shortcuts</translation>
+        </message>
+        <message>
             <source>Recognize QR codes automatically after confirming the screenshot selection area.</source>
             <translation>Recognize QR codes automatically after confirming the screenshot selection area.</translation>
         </message>
@@ -2393,12 +3121,32 @@
             <translation>Recognize text in the confirmed screenshot selection</translation>
         </message>
         <message>
+            <source>Recognized text and language tools</source>
+            <translation>Recognized text and language tools</translation>
+        </message>
+        <message>
             <source>Record screen</source>
             <translation>Record screen</translation>
         </message>
         <message>
+            <source>Record separate audio tracks</source>
+            <translation>Record separate audio tracks</translation>
+        </message>
+        <message>
+            <source>Record video</source>
+            <translation>Record video</translation>
+        </message>
+        <message>
             <source>Record/Copy Video</source>
             <translation>Record/Copy Video</translation>
+        </message>
+        <message>
+            <source>Recording capture API</source>
+            <translation>Recording capture API</translation>
+        </message>
+        <message>
+            <source>Recording content</source>
+            <translation>Recording content</translation>
         </message>
         <message>
             <source>Recording folder</source>
@@ -2407,6 +3155,10 @@
         <message>
             <source>Recording output location and filename settings</source>
             <translation>Recording output location and filename settings</translation>
+        </message>
+        <message>
+            <source>Recording shortcuts</source>
+            <translation>Recording shortcuts</translation>
         </message>
         <message>
             <source>Recording temporary files</source>
@@ -2461,6 +3213,10 @@
             <translation>Remove the oldest screenshots when this limit is exceeded</translation>
         </message>
         <message>
+            <source>Repeat Action</source>
+            <translation>Repeat Action</translation>
+        </message>
+        <message>
             <source>Reset Zoom</source>
             <translation>Reset Zoom</translation>
         </message>
@@ -2479,6 +3235,14 @@
         <message>
             <source>Resize window</source>
             <translation>Resize window</translation>
+        </message>
+        <message>
+            <source>Responsive</source>
+            <translation>Responsive</translation>
+        </message>
+        <message>
+            <source>Responsiveness</source>
+            <translation>Responsiveness</translation>
         </message>
         <message>
             <source>Restart</source>
@@ -2553,8 +3317,28 @@
             <translation>Save history</translation>
         </message>
         <message>
+            <source>Save location</source>
+            <translation>Save location</translation>
+        </message>
+        <message>
+            <source>Save locations, clipboard behavior, history and cleanup</source>
+            <translation>Save locations, clipboard behavior, history and cleanup</translation>
+        </message>
+        <message>
             <source>Save recognition result as image</source>
             <translation>Save recognition result as image</translation>
+        </message>
+        <message>
+            <source>Save speaker and microphone audio as separate MP4 tracks for independent editing. Most players play one track at a time.</source>
+            <translation>Save speaker and microphone audio as separate MP4 tracks for independent editing. Most players play one track at a time.</translation>
+        </message>
+        <message>
+            <source>Save the confirmed screenshot selection to a file</source>
+            <translation>Save the confirmed screenshot selection to a file</translation>
+        </message>
+        <message>
+            <source>Save the confirmed screenshot selection to the configured folder</source>
+            <translation>Save the confirmed screenshot selection to the configured folder</translation>
         </message>
         <message>
             <source>Saved screenshots</source>
@@ -2565,6 +3349,10 @@
             <translation>Scale recordings that exceed the selected maximum resolution</translation>
         </message>
         <message>
+            <source>Scheduling</source>
+            <translation>Scheduling</translation>
+        </message>
+        <message>
             <source>Screen &amp; System Audio Recording</source>
             <translation>Screen &amp; System Audio Recording</translation>
         </message>
@@ -2573,16 +3361,16 @@
             <translation>Screen capture</translation>
         </message>
         <message>
-            <source>Screen capture settings</source>
-            <translation>Screen capture settings</translation>
-        </message>
-        <message>
             <source>Screen recording</source>
             <translation>Screen recording</translation>
         </message>
         <message>
             <source>Screen recording and animated image export settings</source>
             <translation>Screen recording and animated image export settings</translation>
+        </message>
+        <message>
+            <source>Screen recording behavior</source>
+            <translation>Screen recording behavior</translation>
         </message>
         <message>
             <source>Screen recording capture settings</source>
@@ -2605,6 +3393,10 @@
             <translation>Screen recording shortcuts and actions</translation>
         </message>
         <message>
+            <source>Screen recording toolbar settings</source>
+            <translation>Screen recording toolbar settings</translation>
+        </message>
+        <message>
             <source>Screenshot</source>
             <translation>Screenshot</translation>
         </message>
@@ -2617,8 +3409,20 @@
             <translation>Screenshot Area Type Hint</translation>
         </message>
         <message>
+            <source>Screenshot Sound Notification</source>
+            <translation>Screenshot Sound Notification</translation>
+        </message>
+        <message>
+            <source>Screenshot capture API</source>
+            <translation>Screenshot capture API</translation>
+        </message>
+        <message>
             <source>Screenshot count</source>
             <translation>Screenshot count</translation>
+        </message>
+        <message>
+            <source>Screenshot folder</source>
+            <translation>Screenshot folder</translation>
         </message>
         <message>
             <source>Screenshot history</source>
@@ -2645,6 +3449,10 @@
             <translation>Screenshot shortcut</translation>
         </message>
         <message>
+            <source>Screenshot shortcuts</source>
+            <translation>Screenshot shortcuts</translation>
+        </message>
+        <message>
             <source>Screenshot shortcuts and actions</source>
             <translation>Screenshot shortcuts and actions</translation>
         </message>
@@ -2661,8 +3469,16 @@
             <translation>Screenshot translation settings</translation>
         </message>
         <message>
+            <source>Screenshots</source>
+            <translation>Screenshots</translation>
+        </message>
+        <message>
             <source>Scrolling screenshot</source>
             <translation>Scrolling screenshot</translation>
+        </message>
+        <message>
+            <source>Secondary Target Language</source>
+            <translation>Secondary Target Language</translation>
         </message>
         <message>
             <source>Select child elements within a window while taking a screenshot</source>
@@ -2675,6 +3491,10 @@
         <message>
             <source>Select previously selected area</source>
             <translation>Select previously selected area</translation>
+        </message>
+        <message>
+            <source>Select skin image</source>
+            <translation>Select skin image</translation>
         </message>
         <message>
             <source>Select the language used throughout the application</source>
@@ -2697,6 +3517,14 @@
             <translation>Select window/window sub-element</translation>
         </message>
         <message>
+            <source>Selection Aspect Ratio Snap</source>
+            <translation>Selection Aspect Ratio Snap</translation>
+        </message>
+        <message>
+            <source>Selection Center Guide Color</source>
+            <translation>Selection Center Guide Color</translation>
+        </message>
+        <message>
             <source>Selection animation</source>
             <translation>Selection animation</translation>
         </message>
@@ -2713,6 +3541,10 @@
             <translation>Selection resize mode</translation>
         </message>
         <message>
+            <source>Selection, capture guides and annotation tools</source>
+            <translation>Selection, capture guides and annotation tools</translation>
+        </message>
+        <message>
             <source>Serial number</source>
             <translation>Serial number</translation>
         </message>
@@ -2723,6 +3555,10 @@
         <message>
             <source>Set quality for image files saved outside the Snow Shot dialog</source>
             <translation>Set quality for image files saved outside the Snow Shot dialog</translation>
+        </message>
+        <message>
+            <source>Set the border color of locked pinned screenshots</source>
+            <translation>Set the border color of locked pinned screenshots</translation>
         </message>
         <message>
             <source>Set the border color of pinned screenshots</source>
@@ -2739,6 +3575,10 @@
         <message>
             <source>Set the color and opacity outside the screenshot selection</source>
             <translation>Set the color and opacity outside the screenshot selection</translation>
+        </message>
+        <message>
+            <source>Set the floating toolbar opacity when the mouse is not hovering over it</source>
+            <translation>Set the floating toolbar opacity when the mouse is not hovering over it</translation>
         </message>
         <message>
             <source>Set the frame rate of exported animated images</source>
@@ -2781,12 +3621,16 @@
             <translation>Set up to two keys for this screenshot action</translation>
         </message>
         <message>
-            <source>Set up to two keys for this screenshot drawing tool</source>
-            <translation>Set up to two keys for this screenshot drawing tool</translation>
+            <source>Set up to two keys for this screenshot annotation tool</source>
+            <translation>Set up to two keys for this screenshot annotation tool</translation>
         </message>
         <message>
             <source>Settings</source>
             <translation>Settings</translation>
+        </message>
+        <message>
+            <source>Shake Window</source>
+            <translation>Shake Window</translation>
         </message>
         <message>
             <source>Shape tool</source>
@@ -2801,16 +3645,16 @@
             <translation>Shortcut hint opacity</translation>
         </message>
         <message>
-            <source>Shortcut keys for drawing tools</source>
-            <translation>Shortcut keys for drawing tools</translation>
+            <source>Shortcut keys for annotation tools</source>
+            <translation>Shortcut keys for annotation tools</translation>
+        </message>
+        <message>
+            <source>Shortcut keys for image recognition tools</source>
+            <translation>Shortcut keys for image recognition tools</translation>
         </message>
         <message>
             <source>Shortcut keys for pinned-to-screen windows</source>
             <translation>Shortcut keys for pinned-to-screen windows</translation>
-        </message>
-        <message>
-            <source>Shortcut keys for recognition and screenshot actions</source>
-            <translation>Shortcut keys for recognition and screenshot actions</translation>
         </message>
         <message>
             <source>Shortcut keys for recording controls</source>
@@ -2821,8 +3665,28 @@
             <translation>Shortcut keys for screenshot tools and cursor movement</translation>
         </message>
         <message>
+            <source>Show Cursor</source>
+            <translation>Show Cursor</translation>
+        </message>
+        <message>
+            <source>Show Edit Selection Toolbar</source>
+            <translation>Show Edit Selection Toolbar</translation>
+        </message>
+        <message>
+            <source>Show Guides by Default</source>
+            <translation>Show Guides by Default</translation>
+        </message>
+        <message>
             <source>Show a button in the text recognition toolbar that sends recognized text to the Translation page.</source>
             <translation>Show a button in the text recognition toolbar that sends recognized text to the Translation page.</translation>
+        </message>
+        <message>
+            <source>Show a system notification when export finishes. Click it to locate the exported file.</source>
+            <translation>Show a system notification when export finishes. Click it to locate the exported file.</translation>
+        </message>
+        <message>
+            <source>Show border</source>
+            <translation>Show border</translation>
         </message>
         <message>
             <source>Show main interface</source>
@@ -2833,8 +3697,20 @@
             <translation>Show main window</translation>
         </message>
         <message>
+            <source>Show original image preview</source>
+            <translation>Show original image preview</translation>
+        </message>
+        <message>
+            <source>Show screenshot guides when a capture starts</source>
+            <translation>Show screenshot guides when a capture starts</translation>
+        </message>
+        <message>
             <source>Show text recognition results</source>
             <translation>Show text recognition results</translation>
+        </message>
+        <message>
+            <source>Show the annotation and close buttons in the upper-right corner of pinned windows</source>
+            <translation>Show the annotation and close buttons in the upper-right corner of pinned windows</translation>
         </message>
         <message>
             <source>Show the application icon and menu in the system tray</source>
@@ -2845,8 +3721,44 @@
             <translation>Show the area type hint at the top of the screenshot window</translation>
         </message>
         <message>
+            <source>Show the captured mouse cursor by default in new normal screenshots.</source>
+            <translation>Show the captured mouse cursor by default in new normal screenshots.</translation>
+        </message>
+        <message>
+            <source>Show the floating toolbar on the desktop</source>
+            <translation>Show the floating toolbar on the desktop</translation>
+        </message>
+        <message>
+            <source>Show the sub-toolbar for the Edit Selection tool</source>
+            <translation>Show the sub-toolbar for the Edit Selection tool</translation>
+        </message>
+        <message>
+            <source>Show toolbar</source>
+            <translation>Show toolbar</translation>
+        </message>
+        <message>
+            <source>Show window buttons</source>
+            <translation>Show window buttons</translation>
+        </message>
+        <message>
             <source>Shutter Sound Notification</source>
             <translation>Shutter Sound Notification</translation>
+        </message>
+        <message>
+            <source>Skin Blur Level</source>
+            <translation>Skin Blur Level</translation>
+        </message>
+        <message>
+            <source>Skin Display Mode</source>
+            <translation>Skin Display Mode</translation>
+        </message>
+        <message>
+            <source>Skin Opacity</source>
+            <translation>Skin Opacity</translation>
+        </message>
+        <message>
+            <source>Skins</source>
+            <translation>Skins</translation>
         </message>
         <message>
             <source>Small</source>
@@ -2893,6 +3805,10 @@
             <translation>Snowflake light</translation>
         </message>
         <message>
+            <source>Soften all three skin images with blur.</source>
+            <translation>Soften all three skin images with blur.</translation>
+        </message>
+        <message>
             <source>Software updates</source>
             <translation>Software updates</translation>
         </message>
@@ -2901,12 +3817,24 @@
             <translation>Software version and license information</translation>
         </message>
         <message>
+            <source>Source Language</source>
+            <translation>Source Language</translation>
+        </message>
+        <message>
+            <source>Speed First</source>
+            <translation>Speed First</translation>
+        </message>
+        <message>
+            <source>Speed First reduces computation on short text and may change recognition results.</source>
+            <translation>Speed First reduces computation on short text and may change recognition results.</translation>
+        </message>
+        <message>
             <source>Spotlight</source>
             <translation>Spotlight</translation>
         </message>
         <message>
-            <source>Stack drawing tools</source>
-            <translation>Stack drawing tools</translation>
+            <source>Stack annotation tools</source>
+            <translation>Stack annotation tools</translation>
         </message>
         <message>
             <source>Stack screenshot tools</source>
@@ -2937,20 +3865,20 @@
             <translation>Start a screen recording, or stop and copy the current recording</translation>
         </message>
         <message>
-            <source>Start new screenshot sessions and pin drawing mode with the last used drawing tool instead of the move tool</source>
-            <translation>Start new screenshot sessions and pin drawing mode with the last used drawing tool instead of the move tool</translation>
+            <source>Start new screenshot sessions and pin-to-screen annotation mode with the last used annotation tool instead of the move tool</source>
+            <translation>Start new screenshot sessions and pin-to-screen annotation mode with the last used annotation tool instead of the move tool</translation>
         </message>
         <message>
             <source>Start/pause/resume recording</source>
             <translation>Start/pause/resume recording</translation>
         </message>
         <message>
-            <source>Storage and privacy</source>
-            <translation>Storage and privacy</translation>
+            <source>Startup &amp; updates</source>
+            <translation>Startup &amp; updates</translation>
         </message>
         <message>
-            <source>Storage and privacy settings page</source>
-            <translation>Storage and privacy settings page</translation>
+            <source>Storage and privacy</source>
+            <translation>Storage and privacy</translation>
         </message>
         <message>
             <source>Storage error</source>
@@ -2963,6 +3891,18 @@
         <message>
             <source>Storage status</source>
             <translation>Storage status</translation>
+        </message>
+        <message>
+            <source>Stroke color preset %1</source>
+            <translation>Stroke color preset %1</translation>
+        </message>
+        <message>
+            <source>Stroke color presets</source>
+            <translation>Stroke color presets</translation>
+        </message>
+        <message>
+            <source>Switch Window Group</source>
+            <translation>Switch Window Group</translation>
         </message>
         <message>
             <source>System</source>
@@ -2981,8 +3921,8 @@
             <translation>System tray</translation>
         </message>
         <message>
-            <source>System tray availability and icon settings</source>
-            <translation>System tray availability and icon settings</translation>
+            <source>System tray icon, actions and menu</source>
+            <translation>System tray icon, actions and menu</translation>
         </message>
         <message>
             <source>Table recognition</source>
@@ -3001,12 +3941,12 @@
             <translation>Text</translation>
         </message>
         <message>
-            <source>Text Recognition</source>
-            <translation>Text Recognition</translation>
+            <source>Text Detection Processing</source>
+            <translation>Text Detection Processing</translation>
         </message>
         <message>
-            <source>Text Translation</source>
-            <translation>Text Translation</translation>
+            <source>Text background</source>
+            <translation>Text background</translation>
         </message>
         <message>
             <source>Text detection scaling</source>
@@ -3017,12 +3957,16 @@
             <translation>Text recognition</translation>
         </message>
         <message>
+            <source>Text recognition &amp; translation</source>
+            <translation>Text recognition &amp; translation</translation>
+        </message>
+        <message>
             <source>Text recognition appearance</source>
             <translation>Text recognition appearance</translation>
         </message>
         <message>
-            <source>Text recognition image saving settings</source>
-            <translation>Text recognition image saving settings</translation>
+            <source>Text recognition output settings</source>
+            <translation>Text recognition output settings</translation>
         </message>
         <message>
             <source>Text selection on recognition results</source>
@@ -3037,8 +3981,24 @@
             <translation>Theme</translation>
         </message>
         <message>
+            <source>Theme &amp; skins</source>
+            <translation>Theme &amp; skins</translation>
+        </message>
+        <message>
             <source>Theme Primary Color</source>
             <translation>Theme Primary Color</translation>
+        </message>
+        <message>
+            <source>Theme configuration</source>
+            <translation>Theme configuration</translation>
+        </message>
+        <message>
+            <source>Theme, accent color and application font</source>
+            <translation>Theme, accent color and application font</translation>
+        </message>
+        <message>
+            <source>Theme, font, skins and toolbar size</source>
+            <translation>Theme, font, skins and toolbar size</translation>
         </message>
         <message>
             <source>Thumbnail Mode</source>
@@ -3057,6 +4017,14 @@
             <translation>Toggle Global/Relative Coordinates</translation>
         </message>
         <message>
+            <source>Toggle Guides</source>
+            <translation>Toggle Guides</translation>
+        </message>
+        <message>
+            <source>Toggle cursor visibility</source>
+            <translation>Toggle cursor visibility</translation>
+        </message>
+        <message>
             <source>Toggle hotkeys</source>
             <translation>Toggle hotkeys</translation>
         </message>
@@ -3065,8 +4033,16 @@
             <translation>Tool positions</translation>
         </message>
         <message>
-            <source>Toolbar</source>
-            <translation>Toolbar</translation>
+            <source>Toolbar Opacity</source>
+            <translation>Toolbar Opacity</translation>
+        </message>
+        <message>
+            <source>Toolbar Skin Path</source>
+            <translation>Toolbar Skin Path</translation>
+        </message>
+        <message>
+            <source>Toolbar Skin Position</source>
+            <translation>Toolbar Skin Position</translation>
         </message>
         <message>
             <source>Toolbar size</source>
@@ -3075,6 +4051,18 @@
         <message>
             <source>Tools that forbid quick selection of same-type elements</source>
             <translation>Tools that forbid quick selection of same-type elements</translation>
+        </message>
+        <message>
+            <source>Top center</source>
+            <translation>Top center</translation>
+        </message>
+        <message>
+            <source>Top left</source>
+            <translation>Top left</translation>
+        </message>
+        <message>
+            <source>Top right</source>
+            <translation>Top right</translation>
         </message>
         <message>
             <source>Translate Selected Text</source>
@@ -3105,8 +4093,40 @@
             <translation>Translation Page</translation>
         </message>
         <message>
+            <source>Translation Service</source>
+            <translation>Translation Service</translation>
+        </message>
+        <message>
+            <source>Translation Settings</source>
+            <translation>Translation Settings</translation>
+        </message>
+        <message>
+            <source>Translation extensions</source>
+            <translation>Translation extensions</translation>
+        </message>
+        <message>
+            <source>Translation services</source>
+            <translation>Translation services</translation>
+        </message>
+        <message>
+            <source>Translation services &amp; AI models</source>
+            <translation>Translation services &amp; AI models</translation>
+        </message>
+        <message>
             <source>Tray</source>
             <translation>Tray</translation>
+        </message>
+        <message>
+            <source>Tray &amp; floating toolbar</source>
+            <translation>Tray &amp; floating toolbar</translation>
+        </message>
+        <message>
+            <source>Tray Menu Skin Path</source>
+            <translation>Tray Menu Skin Path</translation>
+        </message>
+        <message>
+            <source>Tray Menu Skin Position</source>
+            <translation>Tray Menu Skin Position</translation>
         </message>
         <message>
             <source>Tray appearance</source>
@@ -3149,6 +4169,10 @@
             <translation>Updates</translation>
         </message>
         <message>
+            <source>Upload to Cloud</source>
+            <translation>Upload to Cloud</translation>
+        </message>
+        <message>
             <source>Use DirectML for GPU-accelerated text recognition when available</source>
             <translation>Use DirectML for GPU-accelerated text recognition when available</translation>
         </message>
@@ -3161,6 +4185,14 @@
             <translation>Use system proxy</translation>
         </message>
         <message>
+            <source>User initiated</source>
+            <translation>User initiated</translation>
+        </message>
+        <message>
+            <source>Utility</source>
+            <translation>Utility</translation>
+        </message>
+        <message>
             <source>Very fast</source>
             <translation>Very fast</translation>
         </message>
@@ -3169,8 +4201,24 @@
             <translation>Very slow</translation>
         </message>
         <message>
+            <source>Video &amp; audio</source>
+            <translation>Video &amp; audio</translation>
+        </message>
+        <message>
+            <source>Video encoder and compression speed</source>
+            <translation>Video encoder and compression speed</translation>
+        </message>
+        <message>
+            <source>Video export</source>
+            <translation>Video export</translation>
+        </message>
+        <message>
             <source>Video filename format</source>
             <translation>Video filename format</translation>
+        </message>
+        <message>
+            <source>Video quality</source>
+            <translation>Video quality</translation>
         </message>
         <message>
             <source>Video recording</source>
@@ -3179,6 +4227,10 @@
         <message>
             <source>Video save directory</source>
             <translation>Video save directory</translation>
+        </message>
+        <message>
+            <source>Video, audio and animated-image recording preferences</source>
+            <translation>Video, audio and animated-image recording preferences</translation>
         </message>
         <message>
             <source>View connection status and configure your MCP client.</source>
@@ -3205,6 +4257,10 @@
             <translation>When copying an image to the clipboard, also save it in the selected image format and save directory</translation>
         </message>
         <message>
+            <source>When pinning duplicate content</source>
+            <translation>When pinning duplicate content</translation>
+        </message>
+        <message>
             <source>Window Element API</source>
             <translation>Window Element API</translation>
         </message>
@@ -3215,6 +4271,10 @@
         <message>
             <source>Window grouping</source>
             <translation>Window grouping</translation>
+        </message>
+        <message>
+            <source>Window interface</source>
+            <translation>Window interface</translation>
         </message>
         <message>
             <source>Write the image to a file and copy that file to the clipboard</source>
@@ -3254,6 +4314,10 @@
         <message>
             <source>Permissions needed</source>
             <translation>Permissions needed</translation>
+        </message>
+        <message>
+            <source>Related settings</source>
+            <translation>Related settings</translation>
         </message>
         <message>
             <source>Review permissions</source>
@@ -3315,6 +4379,10 @@ Change the shortcut and try again</translation>
             <translation>Not configured</translation>
         </message>
         <message>
+            <source>Not set</source>
+            <translation>Not set</translation>
+        </message>
+        <message>
             <source>OK</source>
             <translation>OK</translation>
         </message>
@@ -3337,10 +4405,6 @@ Unavailable: %2</source>
             <translation>Some shortcuts are unavailable
 Available: %1
 Unavailable: %2</translation>
-        </message>
-        <message>
-            <source>Unset</source>
-            <translation>Unset</translation>
         </message>
         <message>
             <source>already used by another application or action</source>
@@ -3368,6 +4432,73 @@ Unavailable: %2</translation>
         </message>
     </context>
     <context>
+        <name>StorageDirectoryChange</name>
+        <message>
+            <source>An interrupted storage migration was detected. The last committed directory is in use; remaining copies have been preserved.</source>
+            <translation>An interrupted storage migration was detected. The last committed directory is in use; remaining copies have been preserved.</translation>
+        </message>
+        <message>
+            <source>Another storage migration is in progress.</source>
+            <translation>Another storage migration is in progress.</translation>
+        </message>
+        <message>
+            <source>Choose a new or empty directory.</source>
+            <translation>Choose a new or empty directory.</translation>
+        </message>
+        <message>
+            <source>Choose an absolute storage directory path.</source>
+            <translation>Choose an absolute storage directory path.</translation>
+        </message>
+        <message>
+            <source>Could not copy %1.</source>
+            <translation>Could not copy %1.</translation>
+        </message>
+        <message>
+            <source>Could not create the storage directory.</source>
+            <translation>Could not create the storage directory.</translation>
+        </message>
+        <message>
+            <source>Could not save the storage directory selection.</source>
+            <translation>Could not save the storage directory selection.</translation>
+        </message>
+        <message>
+            <source>Storage contains a link or unsupported file: %1</source>
+            <translation>Storage contains a link or unsupported file: %1</translation>
+        </message>
+        <message>
+            <source>Storage directory paths must not contain symbolic links or junctions.</source>
+            <translation>Storage directory paths must not contain symbolic links or junctions.</translation>
+        </message>
+        <message>
+            <source>Storage migration is in progress</source>
+            <translation>Storage migration is in progress</translation>
+        </message>
+        <message>
+            <source>The destination does not have enough writable disk space.</source>
+            <translation>The destination does not have enough writable disk space.</translation>
+        </message>
+        <message>
+            <source>The new directory must be separate from the current storage directory.</source>
+            <translation>The new directory must be separate from the current storage directory.</translation>
+        </message>
+        <message>
+            <source>The new storage directory is active, but some old files could not be removed: %1</source>
+            <translation>The new storage directory is active, but some old files could not be removed: %1</translation>
+        </message>
+        <message>
+            <source>The saved storage directory selection could not be read.</source>
+            <translation>The saved storage directory selection could not be read.</translation>
+        </message>
+        <message>
+            <source>The storage directory is not writable.</source>
+            <translation>The storage directory is not writable.</translation>
+        </message>
+        <message>
+            <source>Verification failed for %1.</source>
+            <translation>Verification failed for %1.</translation>
+        </message>
+    </context>
+    <context>
         <name>StorageStatusSettingsWidget</name>
         <message>
             <source>App storage usage</source>
@@ -3378,12 +4509,36 @@ Unavailable: %2</translation>
             <translation>Application data</translation>
         </message>
         <message>
+            <source>Cancel</source>
+            <translation>Cancel</translation>
+        </message>
+        <message>
+            <source>Change storage directory?</source>
+            <translation>Change storage directory?</translation>
+        </message>
+        <message>
+            <source>Choose directory</source>
+            <translation>Choose directory</translation>
+        </message>
+        <message>
+            <source>Choose storage directory</source>
+            <translation>Choose storage directory</translation>
+        </message>
+        <message>
             <source>Copy today's log file</source>
             <translation>Copy today's log file</translation>
         </message>
         <message>
             <source>Could not copy the log file: %1</source>
             <translation>Could not copy the log file: %1</translation>
+        </message>
+        <message>
+            <source>Current storage location: %1</source>
+            <translation>Current storage location: %1</translation>
+        </message>
+        <message>
+            <source>Custom directory</source>
+            <translation>Custom directory</translation>
         </message>
         <message>
             <source>Diagnostics status</source>
@@ -3400,6 +4555,10 @@ Unavailable: %2</translation>
         <message>
             <source>Effective storage mode</source>
             <translation>Effective storage mode</translation>
+        </message>
+        <message>
+            <source>Existing data will be migrated to %1. Verified files will be removed from the old directory after the switch. Continue?</source>
+            <translation>Existing data will be migrated to %1. Verified files will be removed from the old directory after the switch. Continue?</translation>
         </message>
         <message>
             <source>File logging active; crash capture unavailable</source>
@@ -3446,6 +4605,30 @@ Unavailable: %2</translation>
             <translation>Logs and crash reports disk usage</translation>
         </message>
         <message>
+            <source>Migrate existing data</source>
+            <translation>Migrate existing data</translation>
+        </message>
+        <message>
+            <source>Migrating OCR assets — %1/%2</source>
+            <translation>Migrating OCR assets — %1/%2</translation>
+        </message>
+        <message>
+            <source>Migrating logs — %1/%2</source>
+            <translation>Migrating logs — %1/%2</translation>
+        </message>
+        <message>
+            <source>Migrating other data — %1/%2</source>
+            <translation>Migrating other data — %1/%2</translation>
+        </message>
+        <message>
+            <source>Migrating pinned windows — %1/%2</source>
+            <translation>Migrating pinned windows — %1/%2</translation>
+        </message>
+        <message>
+            <source>Migrating screenshot history — %1/%2</source>
+            <translation>Migrating screenshot history — %1/%2</translation>
+        </message>
+        <message>
             <source>None</source>
             <translation>None</translation>
         </message>
@@ -3456,6 +4639,10 @@ Unavailable: %2</translation>
         <message>
             <source>OCR assets</source>
             <translation>OCR assets</translation>
+        </message>
+        <message>
+            <source>OK</source>
+            <translation>OK</translation>
         </message>
         <message>
             <source>Other app data disk usage</source>
@@ -3478,6 +4665,14 @@ Unavailable: %2</translation>
             <translation>Portable</translation>
         </message>
         <message>
+            <source>Preparing migration…</source>
+            <translation>Preparing migration…</translation>
+        </message>
+        <message>
+            <source>Proceed</source>
+            <translation>Proceed</translation>
+        </message>
+        <message>
             <source>Read-only (newer configuration)</source>
             <translation>Read-only (newer configuration)</translation>
         </message>
@@ -3498,6 +4693,10 @@ Unavailable: %2</translation>
             <translation>Refresh storage usage</translation>
         </message>
         <message>
+            <source>Removing old files — %1/%2</source>
+            <translation>Removing old files — %1/%2</translation>
+        </message>
+        <message>
             <source>Scanning…</source>
             <translation>Scanning…</translation>
         </message>
@@ -3510,12 +4709,28 @@ Unavailable: %2</translation>
             <translation>Screenshot history disk usage</translation>
         </message>
         <message>
+            <source>Settings and open pinned windows will be copied to %1. Screenshot and closed pinned history will stay in the old directory. Continue?</source>
+            <translation>Settings and open pinned windows will be copied to %1. Screenshot and closed pinned history will stay in the old directory. Continue?</translation>
+        </message>
+        <message>
+            <source>Storage directory</source>
+            <translation>Storage directory</translation>
+        </message>
+        <message>
             <source>Storage location</source>
             <translation>Storage location</translation>
         </message>
         <message>
+            <source>Storage migration complete.</source>
+            <translation>Storage migration complete.</translation>
+        </message>
+        <message>
             <source>Storage mode</source>
             <translation>Storage mode</translation>
+        </message>
+        <message>
+            <source>Switching storage directory…</source>
+            <translation>Switching storage directory…</translation>
         </message>
         <message>
             <source>Thumbnail cache</source>
@@ -3536,6 +4751,10 @@ Unavailable: %2</translation>
         <message>
             <source>Unavailable</source>
             <translation>Unavailable</translation>
+        </message>
+        <message>
+            <source>Verifying data — %1/%2</source>
+            <translation>Verifying data — %1/%2</translation>
         </message>
     </context>
     <context>
@@ -3698,6 +4917,25 @@ Unavailable: %2</translation>
         <message>
             <source>Global mouse input is unavailable. Check permissions and retry.</source>
             <translation>Global mouse input is unavailable. Check permissions and retry.</translation>
+        </message>
+    </context>
+    <context>
+        <name>snow_shot::storage::ApplicationStorage</name>
+        <message>
+            <source>Custom storage directories are only supported on Windows.</source>
+            <translation>Custom storage directories are only supported on Windows.</translation>
+        </message>
+        <message>
+            <source>File logging could not be restarted.</source>
+            <translation>File logging could not be restarted.</translation>
+        </message>
+        <message>
+            <source>Some pinned windows could not be prepared in the new directory.</source>
+            <translation>Some pinned windows could not be prepared in the new directory.</translation>
+        </message>
+        <message>
+            <source>Storage is busy or unavailable. Try again when current operations finish.</source>
+            <translation>Storage is busy or unavailable. Try again when current operations finish.</translation>
         </message>
     </context>
     <context>

@@ -4,6 +4,7 @@ project(snow_image VERSION 1.0.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
+include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/SnowPixelBuffer.cmake")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -143,7 +144,7 @@ if(SNOW_IMAGE_CODEC_PNG)
 endif()
 
 if(SNOW_IMAGE_CODEC_JPEG)
-    find_package(libjpeg-turbo CONFIG REQUIRED)
+    find_package(libjpeg-turbo 3.1 CONFIG REQUIRED)
     list(APPEND SNOW_IMAGE_SOURCES src/codecs/jpeg_codec.cpp src/codecs/jpeg_codec.h)
     list(APPEND SNOW_IMAGE_PRIVATE_LIBRARIES
         $<IF:$<TARGET_EXISTS:libjpeg-turbo::jpeg>,libjpeg-turbo::jpeg,libjpeg-turbo::jpeg-static>
@@ -252,6 +253,7 @@ endif()
 function(snow_image_configure_target target_name linkage)
     add_library(${target_name} ${linkage} ${SNOW_IMAGE_PUBLIC_HEADERS} ${SNOW_IMAGE_SOURCES})
     target_compile_features(${target_name} PUBLIC cxx_std_20)
+    target_link_libraries(${target_name} PRIVATE $<BUILD_INTERFACE:snow_pixel_buffer>)
     target_include_directories(${target_name}
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -278,7 +280,8 @@ function(snow_image_configure_target target_name linkage)
         # The bundled Qt library and its headers must be selected together.
         # Compiling with vcpkg's libjpeg-62 headers and resolving those symbols
         # to Qt's libjpeg-80 fails at jpeg_create_compress (the structs differ).
-        find_package(Qt6 REQUIRED COMPONENTS Core BundledLibjpeg)
+        include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/SnowQt.cmake")
+        snow_find_qt(COMPONENTS Core BundledLibjpeg)
         find_path(_snow_image_qt_jpeg_include NAMES jpeglib.h
             PATHS ${Qt6Core_INCLUDE_DIRS} PATH_SUFFIXES QtJpeg
             NO_DEFAULT_PATH NO_CACHE REQUIRED)

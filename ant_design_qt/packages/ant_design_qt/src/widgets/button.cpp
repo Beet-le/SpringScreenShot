@@ -1,4 +1,5 @@
 #include "button.h"
+#include "detail/focus_reason.h"
 #include "detail/pointer_region.h"
 
 #include "detail/popup_geometry.h"
@@ -50,7 +51,8 @@ bool buttonStyleInputsEqual(const detail::ButtonStyleInput& lhs,
   return lhs.buttonStyle == rhs.buttonStyle && lhs.accentRole == rhs.accentRole &&
          lhs.sizeClass == rhs.sizeClass && lhs.flat == rhs.flat &&
          lhs.defaultButton == rhs.defaultButton && lhs.hasMenu == rhs.hasMenu &&
-         lhs.baseFont == rhs.baseFont;
+         lhs.joinsEdges == rhs.joinsEdges &&
+         lhs.contentPaddingEnabled == rhs.contentPaddingEnabled && lhs.baseFont == rhs.baseFont;
 }
 
 struct ButtonIconRenderState {
@@ -81,10 +83,6 @@ QPainterPath roundedRectPath(const QRectF& rect, qreal topLeft, qreal topRight, 
 bool isTwoChineseCharacters(const QString& text) {
   static const QRegularExpression re(QStringLiteral("^[\\x{4e00}-\\x{9fa5}]{2}$"));
   return re.match(text).hasMatch();
-}
-
-bool isKeyboardFocusReason(Qt::FocusReason reason) {
-  return reason != Qt::MouseFocusReason && reason != Qt::NoFocusReason;
 }
 
 bool isActivationKey(int key) {
@@ -451,6 +449,7 @@ struct AdButton::Private {
   AccentRole accentRole = AccentRole::Neutral;
   Shape shape = Shape::Rounded;
   SizeClass sizeClass = SizeClass::Medium;
+  bool contentPaddingEnabled = true;
   IconPosition iconPosition = IconPosition::Leading;
   detail::SegmentPosition segmentPosition = detail::SegmentPosition::Standalone;
   bool interactionBackgroundVisible = true;
@@ -587,6 +586,8 @@ AdButton::AdButton(QWidget* parent) : QPushButton(parent), d_(std::make_unique<P
     updateInteractionFocusOverlay();
     update();
   });
+  connect(&adqt::theme::ThemeManager::instance(), &adqt::theme::ThemeManager::themeChanged, this,
+          qOverload<>(&QWidget::update));
 
   refreshAfterPropertyChange();
 }
@@ -645,6 +646,17 @@ void AdButton::setSizeClass(SizeClass value) {
   d_->sizeClass = value;
   refreshAfterPropertyChange();
   emit sizeClassChanged(d_->sizeClass);
+}
+
+bool AdButton::contentPaddingEnabled() const { return d_->contentPaddingEnabled; }
+
+void AdButton::setContentPaddingEnabled(bool value) {
+  if (d_->contentPaddingEnabled == value) {
+    return;
+  }
+  d_->contentPaddingEnabled = value;
+  refreshAfterPropertyChange();
+  emit contentPaddingEnabledChanged(value);
 }
 
 bool AdButton::interactionBackgroundVisible() const { return d_->interactionBackgroundVisible; }
@@ -794,13 +806,6 @@ void AdButton::paintEvent(QPaintEvent* event) {
   const Shape visualShape = effectiveShape(textToRender);
   const bool hasMenuIndicator = option.features.testFlag(QStyleOptionButton::HasMenu);
   const bool defaultButton = option.features.testFlag(QStyleOptionButton::DefaultButton);
-
-  if (style.role.buttonStyle == ButtonStyle::Tonal && (joinsLeftEdge() || joinsRightEdge()) &&
-      state.background.isValid() && state.background.alpha() < 255) {
-    const auto map = adqt::theme::ThemeManager::instance().resolveTheme(this);
-    const QColor containerBg = parseThemeColor(map.colorBgContainer, QColor("#ffffff"));
-    state.background = compositeOn(state.background, containerBg);
-  }
 
   QPainter painter(this);
   painter.setRenderHint(QPainter::Antialiasing, true);
@@ -1279,7 +1284,7 @@ bool AdButton::hitButton(const QPoint& pos) const {
 
 void AdButton::focusInEvent(QFocusEvent* event) {
   QPushButton::focusInEvent(event);
-  d_->focusVisible = event && isKeyboardFocusReason(event->reason());
+  d_->focusVisible = event && detail::isKeyboardFocusReason(event->reason());
   updateInteractionFocusOverlay();
   update();
 }
@@ -1377,6 +1382,8 @@ detail::ButtonStyleInput AdButton::buildStyleInput() const {
   input.flat = isFlat();
   input.defaultButton = isDefault();
   input.hasMenu = QPushButton::menu() != nullptr;
+  input.joinsEdges = joinsLeftEdge() || joinsRightEdge();
+  input.contentPaddingEnabled = d_->contentPaddingEnabled;
   input.baseFont = font();
   return input;
 }

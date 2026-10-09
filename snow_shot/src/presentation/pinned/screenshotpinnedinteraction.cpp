@@ -2,9 +2,11 @@
 #include "snow_shot/presentation/pinnedgeometry.h"
 #include "snow_shot/presentation/screenshotwheelinput.h"
 #include "snow_shot/presentation/screenshotpinnedwindow.h"
+#include "snow_shot/presentation/pinnedwindowselectioncontroller.h"
 #include "pinnedwindowplatform.h"
 #include "screenshotpinnednativegeometrycontroller.h"
 #include "screenshotpinnedresizegeometry.h"
+#include "screenshotpinneddragexport.h"
 #include "screenshotpinnedhidetotopcontroller.h"
 #include "snow_shot/presentation/screenshotpinnededitcontroller.h"
 #include "snow_shot/presentation/screenshotrecognitionsessioncontroller.h"
@@ -25,11 +27,6 @@
 namespace platform = snow_shot::presentation;
 namespace resize_geometry = screenshot_pinned_resize_geometry;
 namespace {
-constexpr int kPreciseWheelZoomStepDelta = 100;
-constexpr int kAngleWheelZoomStepDelta = 120;
-// Wheels without scroll phases need an idle boundary for a new immediate step.
-constexpr quint64 kWheelZoomBurstIntervalMs = 250;
-
 std::optional<int> resizeHandle(const QPointF& p, const QSize& size) {
     constexpr qreal margin = 6;
     if (!QRectF(QPointF(), QSizeF(size)).contains(p))
@@ -75,7 +72,99 @@ Qt::CursorShape resizeCursor(int handle) {
 }
 } // namespace
 
+bool ScreenshotPinnedWindow::exportDragEnabledAt(const QPoint& position) const {
+    return m_presented && !m_closing && !m_clickThroughActive && !m_geometryAnimating &&
+           !m_interactionPlacement && !m_windowDragActive && !m_ocrMode && m_canvas &&
+           rect().contains(position) && !isControlsPanelPosition(position) &&
+           (!interactiveResizingEnabled() || !resizeHandle(position, size()));
+}
+
+void ScreenshotPinnedWindow::cancelExportDrag() {
+    ++m_exportDragGeneration;
+    m_exportDragPreparing = false;
+    if (m_exportDragOrigin) {
+        m_exportDragOrigin.reset();
+        qApp->removeEventFilter(this);
+    }
+    if (m_dragExport)
+        m_dragExport->cancel();
+}
+
+bool ScreenshotPinnedWindow::handleExportDrag(QObject* watched, QEvent* event) {
+    if (!event)
+        return false;
+    if (!m_exportDragOrigin && m_selectionController &&
+        m_selectionController->usesSharedGeometry(this))
+        return false;
+    // Native dragging owns Escape/release and can deactivate its source window.
+    if (m_dragExport && m_dragExport->dragging())
+        return false;
+    if (m_exportDragOrigin) {
+        if ((event->type() == QEvent::Hide || event->type() == QEvent::WindowDeactivate ||
+             event->type() == QEvent::Close) &&
+            watched == this) {
+            cancelExportDrag();
+            return false;
+        }
+        if (event->type() == QEvent::ShortcutOverride || event->type() == QEvent::KeyPress ||
+            event->type() == QEvent::KeyRelease) {
+            auto* key = static_cast<QKeyEvent*>(event);
+            if (key->key() == Qt::Key_Escape) {
+                if (event->type() == QEvent::KeyRelease)
+                    cancelExportDrag();
+                else if (event->type() == QEvent::KeyPress) {
+                    m_exportDragAborted = true;
+                    if (m_dragExport)
+                        m_dragExport->cancel();
+                }
+                event->accept();
+                return true;
+            }
+        }
+        if (event->type() == QEvent::MouseButtonRelease &&
+            static_cast<QMouseEvent*>(event)->button() == Qt::LeftButton) {
+            cancelExportDrag();
+            return true;
+        }
+        if (event->type() == QEvent::MouseMove) {
+            auto* mouse = static_cast<QMouseEvent*>(event);
+            if (!mouse->buttons().testFlag(Qt::LeftButton)) {
+                cancelExportDrag();
+                return true;
+            }
+            if (!m_exportDragAborted && !m_exportDragPreparing &&
+                (!m_dragExport || !m_dragExport->busy()) &&
+                (mouse->globalPosition().toPoint() - *m_exportDragOrigin).manhattanLength() >=
+                    QApplication::startDragDistance())
+                beginExportDrag();
+            return true;
+        }
+        return false;
+    }
+    if ((watched != this && watched != m_canvas && watched != m_recognitionContent) ||
+        event->type() != QEvent::MouseButtonPress)
+        return false;
+    auto* mouse = static_cast<QMouseEvent*>(event);
+    if (mouse->button() != Qt::LeftButton || !mouse->modifiers().testFlag(Qt::ControlModifier) ||
+        !exportDragEnabledAt(windowPositionForEvent(watched, mouse->position()).toPoint()))
+        return false;
+    m_exportDragOrigin = mouse->globalPosition().toPoint();
+    m_exportDragAborted = false;
+    m_exportDragSpontaneous = mouse->spontaneous();
+    qApp->installEventFilter(this);
+    event->accept();
+    return true;
+}
+
 void ScreenshotPinnedWindow::reconcilePlatformEnvironment(bool layoutChanged) {
+    if (m_selectionGeometryActive) {
+        if (layoutChanged && m_selectionController)
+            m_selectionController->cancelGeometry();
+        else
+            return;
+    }
+    if (!m_platformApplying)
+        stopAttentionShake();
     if (!m_platform || !m_platform->usesControlledInteraction() || !m_presented || m_closing ||
         m_platformApplying)
         return;
@@ -85,6 +174,12 @@ void ScreenshotPinnedWindow::reconcilePlatformEnvironment(bool layoutChanged) {
     m_platformReconciliationPending = true;
     QTimer::singleShot(0, this, [this] {
         m_platformReconciliationPending = false;
+        if (m_selectionGeometryActive) {
+            if (m_platformRecoveryPending && m_selectionController)
+                m_selectionController->cancelGeometry();
+            else
+                return;
+        }
         if (m_closing || !m_nativeGeometryController || !m_platformPlacement || m_platformApplying)
             return;
         if (m_interactionPlacement) {
@@ -142,6 +237,11 @@ void ScreenshotPinnedWindow::reconcilePlatformEnvironment(bool layoutChanged) {
 
 bool ScreenshotPinnedWindow::beginControlledInteraction(const QPointF& desktopPosition,
                                                         std::optional<int> handle) {
+    if (m_lockedMode) {
+        showLockedReadout();
+        return false;
+    }
+    stopAttentionShake();
     if (m_interactionPlacement || m_closing || m_geometryAnimating || !screen())
         return false;
     const auto placement = m_platform->placement();
@@ -175,8 +275,8 @@ bool ScreenshotPinnedWindow::beginControlledInteraction(const QPointF& desktopPo
     if (m_editController) {
         if (handle && m_editController->editMode())
             static_cast<void>(m_editController->beginTemporaryResizeWindowTool());
-        m_editController->beginNativeWindowInteraction();
     }
+    beginAuxiliaryWindowInteraction();
     if (!m_clickThroughActive)
         static_cast<void>(m_platform->activate());
     m_interactionGrabber = QWidget::mouseGrabber();
@@ -303,7 +403,6 @@ void ScreenshotPinnedWindow::endControlledInteraction(bool cancel) {
     clearWindowDragCursor();
     if (m_editController) {
         m_editController->endTemporaryResizeWindowTool();
-        m_editController->endNativeWindowInteraction();
     }
     if (!m_closing) {
         updateCanvasViewport();
@@ -313,6 +412,28 @@ void ScreenshotPinnedWindow::endControlledInteraction(bool cancel) {
             reconcilePlatformEnvironment();
         schedulePersistence();
     }
+    endAuxiliaryWindowInteraction();
+}
+
+bool ScreenshotPinnedWindow::handleLockedPointer(QObject* watched, QEvent* event) {
+    if (!m_lockedMode || m_closing || !event || event->type() != QEvent::MouseButtonPress)
+        return false;
+    const bool moveControl = watched == m_clickThroughMoveButton.get();
+    if (watched != this && watched != m_canvas && watched != m_recognitionContent && !moveControl)
+        return false;
+    auto* mouse = static_cast<QMouseEvent*>(event);
+    if (mouse->button() != Qt::LeftButton)
+        return false;
+    if (!moveControl) {
+        const QPointF local = windowPositionForEvent(watched, mouse->position());
+        const bool resize =
+            !m_geometryAnimating && !m_thumbnailMode && resizeHandle(local, size()).has_value();
+        if (!resize && !windowDragEligibleAt(local.toPoint()))
+            return false;
+    }
+    showLockedReadout();
+    mouse->accept();
+    return true;
 }
 
 bool ScreenshotPinnedWindow::handleControlledPointer(QObject* watched, QEvent* event) {
@@ -394,10 +515,7 @@ bool ScreenshotPinnedWindow::handleControlledPointer(QObject* watched, QEvent* e
 }
 
 void ScreenshotPinnedWindow::resetPinnedGestures() {
-    m_scrollWheelRemainder = 0;
-    m_scrollWheelDirection = 0;
-    m_scrollWheelStepDelta = 0;
-    m_scrollWheelTimestamp = 0;
+    m_scrollWheelSteps.reset();
     m_scrollOpacity = 0;
     m_pinchActive = false;
 }
@@ -451,8 +569,7 @@ bool ScreenshotPinnedWindow::handlePinnedGesture(QObject* watched, QEvent* event
     const bool precise = platform::usesPreciseWheelDelta(*wheel);
     const int delta = precise ? wheel->pixelDelta().y() : wheel->angleDelta().y();
     if (wheel->modifiers().testFlag(Qt::ControlModifier)) {
-        m_scrollWheelRemainder = 0;
-        m_scrollWheelDirection = 0;
+        m_scrollWheelSteps.reset();
         if (!precise) {
             m_scrollOpacity = 0;
             return false;
@@ -463,24 +580,7 @@ bool ScreenshotPinnedWindow::handlePinnedGesture(QObject* watched, QEvent* event
         setOpacityPercent(qRound(m_scrollOpacity));
     } else if (delta != 0) {
         m_scrollOpacity = 0;
-        const int stepDelta = precise ? kPreciseWheelZoomStepDelta : kAngleWheelZoomStepDelta;
-        const int direction = delta > 0 ? 1 : -1;
-        const quint64 timestamp = wheel->timestamp();
-        const bool newBurst = wheel->phase() == Qt::NoScrollPhase &&
-                              timestamp > m_scrollWheelTimestamp &&
-                              timestamp - m_scrollWheelTimestamp >= kWheelZoomBurstIntervalMs;
-        if (direction != m_scrollWheelDirection || stepDelta != m_scrollWheelStepDelta ||
-            newBurst) {
-            // Advance on the first point, then once per full step of continued movement.
-            // Keeping this credit in the accumulator makes event coalescing irrelevant.
-            m_scrollWheelRemainder = direction * (stepDelta - 1);
-        }
-        m_scrollWheelDirection = direction;
-        m_scrollWheelStepDelta = stepDelta;
-        m_scrollWheelTimestamp = timestamp;
-        const qint64 accumulated = qint64(m_scrollWheelRemainder) + delta;
-        const int steps = int(accumulated / stepDelta);
-        m_scrollWheelRemainder = int(accumulated % stepDelta);
+        const int steps = m_scrollWheelSteps.consume(*wheel);
         if (steps != 0) {
             applyWheelScaleSteps(steps, nativePositionForWindowPosition(
                                             windowPositionForEvent(watched, wheel->position())));

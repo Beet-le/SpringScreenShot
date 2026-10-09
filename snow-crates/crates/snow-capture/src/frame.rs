@@ -1,3 +1,4 @@
+use snow_memory::RasterBuffer;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -38,12 +39,6 @@ pub enum ColorSpace {
     /// Hybrid Log-Gamma (BT.2020 primaries, ARIB STD-B67).
     Hlg,
 }
-
-/// Minimum allocation size to attempt large-page backing.
-/// 4K RGBA = 3840x2160x4 ~= 33 MB - well above the 2 MB large page size.
-/// We only bother for allocations >= 4 MB to avoid overhead on small captures.
-#[cfg(windows)]
-const LARGE_PAGE_MIN_BYTES: usize = 4 * 1024 * 1024;
 
 /// A rectangle describing a dirty (changed) region of the screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -228,172 +223,24 @@ impl Clone for Frame {
     }
 }
 
-/// Frame buffer that tries to use large pages (2 MB) via `VirtualAlloc`
-/// to reduce TLB misses during parallel pixel conversion. Buffers are
-/// reference-counted so screenshot mode can keep a cheap history clone;
-/// writes use copy-on-write when the pixels are still shared.
+/// Reference-counted CPU pixels. Large allocations own OS pages, while active
+/// captures recycle the same capacity. Writes detach only while pixels are shared.
 #[derive(Clone)]
 struct FrameBuffer {
-    storage: Arc<FrameBufferStorage>,
+    storage: Arc<RasterBuffer>,
 }
 
-enum FrameBufferStorage {
-    Vec(Vec<u8>),
-    #[cfg(target_os = "windows")]
-    LargePage(LargePageAlloc),
-}
-
-#[cfg(target_os = "windows")]
-struct LargePageAlloc {
-    ptr: *mut u8,
-    len: usize,
-    capacity: usize,
-}
-
-#[cfg(target_os = "windows")]
-unsafe impl Send for LargePageAlloc {}
-#[cfg(target_os = "windows")]
-unsafe impl Sync for LargePageAlloc {}
-
-#[cfg(target_os = "windows")]
-impl Drop for LargePageAlloc {
-    fn drop(&mut self) {
-        if !self.ptr.is_null() {
-            use windows::Win32::System::Memory::{MEM_RELEASE, VirtualFree};
-            unsafe {
-                let _ = VirtualFree(self.ptr as *mut _, 0, MEM_RELEASE);
-            }
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn try_alloc_large_pages(size: usize) -> Option<LargePageAlloc> {
-    use windows::Win32::System::Memory::{
-        GetLargePageMinimum, MEM_COMMIT, MEM_LARGE_PAGES, MEM_RESERVE, PAGE_READWRITE, VirtualAlloc,
-    };
-
-    if size < LARGE_PAGE_MIN_BYTES {
-        return None;
-    }
-
-    let large_page_size = unsafe { GetLargePageMinimum() };
-    if large_page_size == 0 {
-        return None;
-    }
-
-    let aligned_size = (size + large_page_size - 1) & !(large_page_size - 1);
-
-    let ptr = unsafe {
-        VirtualAlloc(
-            None,
-            aligned_size,
-            MEM_COMMIT | MEM_RESERVE | MEM_LARGE_PAGES,
-            PAGE_READWRITE,
-        )
-    };
-
-    if ptr.is_null() {
-        return None;
-    }
-
-    Some(LargePageAlloc {
-        ptr: ptr as *mut u8,
-        len: 0,
-        capacity: aligned_size,
-    })
-}
-
-impl FrameBufferStorage {
-    fn len(&self) -> usize {
-        match self {
-            FrameBufferStorage::Vec(v) => v.len(),
-            #[cfg(target_os = "windows")]
-            FrameBufferStorage::LargePage(lp) => lp.len,
-        }
-    }
-
-    fn capacity(&self) -> usize {
-        match self {
-            FrameBufferStorage::Vec(v) => v.capacity(),
-            #[cfg(target_os = "windows")]
-            FrameBufferStorage::LargePage(lp) => lp.capacity,
-        }
-    }
-
-    fn set_len(&mut self, len: usize) {
-        match self {
-            FrameBufferStorage::Vec(v) => unsafe { v.set_len(len) },
-            #[cfg(target_os = "windows")]
-            FrameBufferStorage::LargePage(lp) => lp.len = len,
-        }
-    }
-
-    #[cfg(windows)]
-    fn as_mut_ptr(&mut self) -> *mut u8 {
-        match self {
-            FrameBufferStorage::Vec(v) => v.as_mut_ptr(),
-            #[cfg(target_os = "windows")]
-            FrameBufferStorage::LargePage(lp) => lp.ptr,
-        }
-    }
-
-    fn as_slice(&self) -> &[u8] {
-        match self {
-            FrameBufferStorage::Vec(v) => v.as_slice(),
-            #[cfg(target_os = "windows")]
-            FrameBufferStorage::LargePage(lp) => unsafe {
-                std::slice::from_raw_parts(lp.ptr, lp.len)
-            },
-        }
-    }
-
-    fn as_mut_slice(&mut self) -> &mut [u8] {
-        match self {
-            FrameBufferStorage::Vec(v) => v.as_mut_slice(),
-            #[cfg(target_os = "windows")]
-            FrameBufferStorage::LargePage(lp) => unsafe {
-                std::slice::from_raw_parts_mut(lp.ptr, lp.len)
-            },
-        }
-    }
-}
-
-fn alloc_frame_buffer_storage(len: usize) -> FrameBufferStorage {
-    #[cfg(target_os = "windows")]
-    if len >= LARGE_PAGE_MIN_BYTES
-        && let Some(mut lp) = try_alloc_large_pages(len)
-    {
-        lp.len = len;
-        return FrameBufferStorage::LargePage(lp);
-    }
-
-    // Heap fallback. Verified empirically (Windows 11, classic NT heap):
-    // dropping freed monitor-sized buffers from this path does NOT leave
-    // private working set memory occupied. The NT heap serves multi-MB
-    // allocations from dedicated VirtualAlloc-backed segments and releases
-    // them fully on free, so commit charge and working set both return to
-    // baseline immediately. The 12.5% capacity headroom therefore costs
-    // nothing after the buffers are dropped.
-    let headroom = len / 8;
-    let mut v = Vec::with_capacity(len + headroom);
-    v.resize(len, 0);
-    FrameBufferStorage::Vec(v)
-}
-
-fn clone_frame_buffer_storage(source: &FrameBufferStorage, len: usize) -> FrameBufferStorage {
-    let copy_len = source.len().min(len);
-    let mut storage = alloc_frame_buffer_storage(len);
-    if copy_len != 0 {
-        storage.as_mut_slice()[..copy_len].copy_from_slice(&source.as_slice()[..copy_len]);
-    }
+fn allocate_frame_buffer_storage(len: usize) -> RasterBuffer {
+    let capacity = len.checked_add(len / 8).expect("frame capacity overflow");
+    let mut storage = RasterBuffer::with_capacity(capacity);
+    storage.resize_for_overwrite(len);
     storage
 }
 
 impl FrameBuffer {
     fn new() -> Self {
         Self {
-            storage: Arc::new(FrameBufferStorage::Vec(Vec::new())),
+            storage: Arc::new(RasterBuffer::new()),
         }
     }
 
@@ -401,7 +248,7 @@ impl FrameBuffer {
         self.storage.len()
     }
 
-    fn make_unique_with_len(&mut self, len: usize) {
+    fn make_unique_with_len(&mut self, len: usize, preserve_pixels: bool) {
         if let Some(storage) = Arc::get_mut(&mut self.storage) {
             if storage.len() == len {
                 #[cfg(feature = "stage-timing")]
@@ -409,23 +256,32 @@ impl FrameBuffer {
                 return;
             }
             if len <= storage.capacity() {
-                storage.set_len(len);
+                storage.resize_for_overwrite(len);
                 return;
             }
         }
 
         let allocation_started = crate::timing::stage_checkpoint();
-        self.storage = Arc::new(clone_frame_buffer_storage(self.storage.as_ref(), len));
+        let mut storage = allocate_frame_buffer_storage(len);
+        if preserve_pixels {
+            let copy_len = self.storage.len().min(len);
+            storage[..copy_len].copy_from_slice(&self.storage[..copy_len]);
+        }
+        self.storage = Arc::new(storage);
         crate::timing::stage_record_since("buffer.allocate", allocation_started);
     }
 
     fn ensure_len(&mut self, len: usize) {
-        self.make_unique_with_len(len);
+        self.make_unique_with_len(len, true);
+    }
+
+    fn prepare_for_overwrite(&mut self, len: usize) {
+        self.make_unique_with_len(len, false);
     }
 
     #[cfg(windows)]
     fn as_mut_ptr(&mut self) -> *mut u8 {
-        self.make_unique_with_len(self.len());
+        self.make_unique_with_len(self.len(), true);
         Arc::get_mut(&mut self.storage)
             .expect("frame buffer must be unique after make_unique_with_len")
             .as_mut_ptr()
@@ -436,7 +292,7 @@ impl FrameBuffer {
     }
 
     fn as_mut_slice(&mut self) -> &mut [u8] {
-        self.make_unique_with_len(self.len());
+        self.make_unique_with_len(self.len(), true);
         Arc::get_mut(&mut self.storage)
             .expect("frame buffer must be unique after make_unique_with_len")
             .as_mut_slice()
@@ -468,7 +324,7 @@ impl Frame {
 
         Ok(Self {
             data: FrameBuffer {
-                storage: Arc::new(FrameBufferStorage::Vec(data)),
+                storage: Arc::new(RasterBuffer::from(data)),
             },
             width,
             height,
@@ -491,11 +347,39 @@ impl Frame {
 
         Ok(Self {
             data: FrameBuffer {
-                storage: Arc::new(FrameBufferStorage::Vec(data)),
+                storage: Arc::new(RasterBuffer::from(data)),
             },
             width,
             height,
             pixel_format: CapturePixelFormat::Bgra8,
+            metadata: FrameMetadata::default(),
+        })
+    }
+
+    /// Transfer initialized packed pixels without converting their allocator.
+    pub fn from_buffer(
+        width: u32,
+        height: u32,
+        pixel_format: CapturePixelFormat,
+        data: RasterBuffer,
+    ) -> CaptureResult<Self> {
+        let expected = packed_8bit_len(width, height)?;
+        if data.len() != expected {
+            return Err(CaptureError::InvalidConfig(format!(
+                "frame data length mismatch: got {}, expected {} for {}x{}",
+                data.len(),
+                expected,
+                width,
+                height
+            )));
+        }
+        Ok(Self {
+            data: FrameBuffer {
+                storage: Arc::new(data),
+            },
+            width,
+            height,
+            pixel_format,
             metadata: FrameMetadata::default(),
         })
     }
@@ -518,6 +402,12 @@ impl Frame {
 
     pub fn as_bytes(&self) -> &[u8] {
         self.data.as_slice()
+    }
+
+    /// Lease the pixels without a copy. Writes through either frame detach
+    /// while this lease remains alive, preserving the captured contents.
+    pub fn shared_bytes(&self) -> Arc<RasterBuffer> {
+        Arc::clone(&self.data.storage)
     }
 
     pub fn as_mut_bytes(&mut self) -> &mut [u8] {
@@ -567,6 +457,26 @@ impl Frame {
         Ok(())
     }
 
+    /// Prepare initialized packed storage for a producer that replaces every pixel.
+    ///
+    /// Unshared storage is reused without clearing it. Shared storage detaches without
+    /// copying the old pixels, preserving every existing frame and pixel lease. The
+    /// destination's pixel contents are unspecified until the producer overwrites them;
+    /// callers that update only part of a frame must use `ensure_capacity` instead.
+    pub fn prepare_for_overwrite(
+        &mut self,
+        width: u32,
+        height: u32,
+        pixel_format: CapturePixelFormat,
+    ) -> CaptureResult<()> {
+        let len = packed_8bit_len(width, height)?;
+        self.data.prepare_for_overwrite(len);
+        self.width = width;
+        self.height = height;
+        self.pixel_format = pixel_format;
+        Ok(())
+    }
+
     /// Resize this frame's RGBA storage for `width` by `height` pixels while
     /// retaining an existing allocation when it is large enough.
     ///
@@ -579,7 +489,7 @@ impl Frame {
 
     #[cfg(test)]
     pub(crate) fn copy_from_frame(&mut self, source: &Frame) -> CaptureResult<()> {
-        self.ensure_capacity(source.width, source.height, source.pixel_format)?;
+        self.prepare_for_overwrite(source.width, source.height, source.pixel_format)?;
         self.as_mut_bytes().copy_from_slice(source.as_bytes());
         self.metadata = source.metadata.clone();
         Ok(())
@@ -846,6 +756,133 @@ mod tests {
     use crossbeam_channel as mpsc;
     use proptest::prelude::*;
     use snow_core::timestamp::TickFormat;
+
+    #[test]
+    fn overwrite_preparation_detaches_without_preserving_old_pixels_and_reuses_storage() {
+        for (width, height) in [(8, 16), (1024, 256)] {
+            let mut frame = Frame::empty();
+            frame
+                .prepare_for_overwrite(width, height, CapturePixelFormat::Rgba8)
+                .unwrap();
+            assert!(frame.as_bytes().iter().all(|&byte| byte == 0));
+            frame.as_mut_bytes().fill(0x5a);
+            let old = frame.clone();
+            let lease = frame.shared_bytes();
+            let old_pointer = frame.as_bytes().as_ptr();
+
+            frame
+                .prepare_for_overwrite(width, height, CapturePixelFormat::Bgra8)
+                .unwrap();
+            assert_ne!(frame.as_bytes().as_ptr(), old_pointer);
+            assert!(frame.as_bytes().iter().all(|&byte| byte == 0));
+            assert!(old.as_bytes().iter().all(|&byte| byte == 0x5a));
+            assert!(lease.iter().all(|&byte| byte == 0x5a));
+            assert_eq!(old.pixel_format(), CapturePixelFormat::Rgba8);
+            assert_eq!(frame.pixel_format(), CapturePixelFormat::Bgra8);
+
+            frame.as_mut_bytes().fill(0x7f);
+            let pointer = frame.as_bytes().as_ptr();
+            frame
+                .prepare_for_overwrite(width, height / 2, CapturePixelFormat::Bgra8)
+                .unwrap();
+            frame
+                .prepare_for_overwrite(width, height, CapturePixelFormat::Bgra8)
+                .unwrap();
+            assert_eq!(frame.as_bytes().as_ptr(), pointer);
+            assert!(frame.as_bytes().iter().all(|&byte| byte == 0x7f));
+
+            let old_len = frame.as_bytes().len();
+            frame
+                .prepare_for_overwrite(width, height + 1, CapturePixelFormat::Bgra8)
+                .unwrap();
+            // Both test dimensions have enough headroom for one more initialized row.
+            assert_eq!(frame.as_bytes().as_ptr(), pointer);
+            assert!(frame.as_bytes()[old_len..].iter().all(|&byte| byte == 0));
+        }
+    }
+
+    #[test]
+    fn preserving_edits_keep_shared_pixels_and_failed_overwrite_keeps_the_frame() {
+        let mut frame = Frame::from_rgba8(2, 2, vec![0x5a; 16]).unwrap();
+        let old = frame.clone();
+        frame.ensure_rgba_capacity(2, 2).unwrap();
+        frame.as_mut_bytes()[0] = 0x7f;
+        assert_eq!(old.as_bytes(), &[0x5a; 16]);
+        assert_eq!(&frame.as_bytes()[1..], &[0x5a; 15]);
+
+        let pointer = frame.as_bytes().as_ptr();
+        let pixels = frame.as_bytes().to_vec();
+        assert!(matches!(
+            frame.prepare_for_overwrite(u32::MAX, u32::MAX, CapturePixelFormat::Bgra8),
+            Err(CaptureError::BufferOverflow)
+        ));
+        assert_eq!(frame.dimensions(), (2, 2));
+        assert_eq!(frame.pixel_format(), CapturePixelFormat::Rgba8);
+        assert_eq!(frame.as_bytes().as_ptr(), pointer);
+        assert_eq!(frame.as_bytes(), pixels);
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn large_frame_shares_recycles_detaches_and_releases_pages() {
+        use crate::frame_pages::is_mapped;
+        const CHILD: &str = "SNOW_CAPTURE_RELEASE_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "frame::tests::large_frame_shares_recycles_detaches_and_releases_pages",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
+        }
+        let mut frame = Frame::empty();
+        frame
+            .ensure_capacity(1024, 512, CapturePixelFormat::Rgba8)
+            .unwrap();
+        frame.as_mut_bytes().fill(0x5a);
+        let pointer = frame.as_bytes().as_ptr();
+        let middle = unsafe { pointer.add(frame.as_bytes().len() / 2) };
+        frame
+            .ensure_capacity(1024, 512, CapturePixelFormat::Rgba8)
+            .unwrap();
+        assert_eq!(
+            frame.as_bytes().as_ptr(),
+            pointer,
+            "unshared frame must recycle storage"
+        );
+        let original = frame.clone();
+        frame.as_mut_bytes()[0] = 0x7f;
+        assert_ne!(frame.as_bytes().as_ptr(), pointer);
+        assert_eq!(original.as_bytes()[0], 0x5a);
+        assert_eq!(frame.as_bytes()[0], 0x7f);
+        assert!(is_mapped(middle));
+        drop(original);
+        assert!(
+            !is_mapped(middle),
+            "last shared frame must release its VM allocation"
+        );
+        let detached = unsafe { frame.as_bytes().as_ptr().add(frame.as_bytes().len() / 2) };
+        let retained = frame.shared_bytes();
+        frame
+            .prepare_for_overwrite(1024, 512, CapturePixelFormat::Rgba8)
+            .unwrap();
+        assert!(is_mapped(detached));
+        assert_eq!(retained[0], 0x7f);
+        assert!(frame.as_bytes().iter().all(|&byte| byte == 0));
+        drop(retained);
+        assert!(
+            !is_mapped(detached),
+            "overwrite detachment must release pages after the final old lease"
+        );
+        let overwritten = unsafe { frame.as_bytes().as_ptr().add(frame.as_bytes().len() / 2) };
+        drop(frame);
+        assert!(!is_mapped(overwritten));
+    }
 
     #[cfg(feature = "stage-timing")]
     #[test]

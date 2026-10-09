@@ -1,4 +1,5 @@
 #include "radio.h"
+#include "detail/focus_reason.h"
 #include "detail/pointer_region.h"
 
 #include "interaction_overlay_manager.h"
@@ -124,10 +125,6 @@ void mergeComponentTokens(AdRadio::ComponentTokens* target,
   }
   mergeColorTokens(&target->colors, source.colors);
   mergeMetricTokens(&target->metrics, source.metrics);
-}
-
-bool isKeyboardFocusReason(Qt::FocusReason reason) {
-  return reason != Qt::MouseFocusReason && reason != Qt::NoFocusReason;
 }
 
 QPoint mouseEventPos(const QMouseEvent* event) {
@@ -534,6 +531,8 @@ AdRadio::AdRadio(QWidget* parent) : QRadioButton(parent) {
     refreshAutomaticCursor();
     update();
   });
+  connect(&adqt::theme::ThemeManager::instance(), &adqt::theme::ThemeManager::themeChanged, this,
+          qOverload<>(&QWidget::update));
 }
 
 AdRadio::AdRadio(const QString& text, QWidget* parent) : AdRadio(parent) { setText(text); }
@@ -1176,7 +1175,7 @@ bool AdRadio::hitButton(const QPoint& pos) const {
 }
 
 void AdRadio::focusInEvent(QFocusEvent* event) {
-  focusVisible_ = isKeyboardFocusReason(event->reason());
+  focusVisible_ = detail::isKeyboardFocusReason(event->reason());
   bumpGroupZOrder();
   QRadioButton::focusInEvent(event);
   updateInteractionFocusOverlay();

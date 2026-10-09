@@ -25,6 +25,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <functional>
+#include <future>
 #include <iostream>
 #include <memory>
 #include <utility>
@@ -91,12 +92,13 @@ void stageSourceRuntime(const QString& directory) {
     sourceWorkerPath = executable == QStringLiteral(SNOW_TEST_OCR_EXECUTABLE)
                            ? application.filePath(kWorkerName)
                            : executable;
-    require(
-        QFileInfo(sourceWorkerPath).isExecutable() &&
-            QFileInfo(
+    require(QFileInfo(sourceWorkerPath).isExecutable(), "the native OCR worker must be staged");
+#if !defined(SNOW_SHOT_OCR_STATIC_ONNXRUNTIME)
+    require(QFileInfo(
                 QFileInfo(sourceWorkerPath).dir().filePath(QStringLiteral("libonnxruntime.dylib")))
                 .isFile(),
-        "the native worker and adjacent ONNX library must be staged");
+            "the dynamic OCR worker's adjacent ONNX library must be staged");
+#endif
 #else
     require(QFile::copy(executable, destination.filePath(kWorkerName)),
             "the source OCR worker must be copied from the build target into the test fixture");
@@ -371,8 +373,8 @@ void diskBackedEngineCompletesThroughTheQtWorker(bool directMlEnabled,
                        : options.processPath;
 #else
         managedRuntime ? QDir(QCoreApplication::applicationDirPath())
-                             .filePath(QStringLiteral("assets/ocr/runtimes/1.0.8/windows-x64/"
-                                                      "snow-ocr-process-1.0.8-windows-x64.exe"))
+                             .filePath(QStringLiteral("assets/ocr/runtimes/1.0.10/windows-x64/"
+                                                      "snow-ocr-process-1.0.10-windows-x64.exe"))
                        : options.processPath;
 #endif
     if (managedRuntime) {
@@ -1081,7 +1083,7 @@ void actualOcrCrashAfterInference() {
     const auto bytes = dump.readAll();
     dump.close();
     require(bytes.contains(diagnostics.status().sessionId.toUtf8()) &&
-                bytes.contains("ocr.operation_started") && bytes.contains("1.0.8"),
+                bytes.contains("ocr.operation_started") && bytes.contains("1.0.10"),
             "actual OCR dump retains parent session, operation and runtime version");
     require(diagnostics.flush(), "actual OCR final diagnostics flush");
     diagnostics.shutdown();
@@ -1092,8 +1094,31 @@ void actualOcrCrashAfterInference() {
 int runOcrLifecycleChild();
 void ocrProcessLifecycleTests();
 
+void storageRelocationPreservesServiceIdentity() {
+    QTemporaryDir root;
+    ScreenshotOcrRecognitionService::Options options;
+    options.offlineRoot = root.filePath(QStringLiteral("offline"));
+    options.cacheRoot = root.filePath(QStringLiteral("old"));
+    ScreenshotOcrRecognitionService service(options);
+    require(!service.storageBusy(), "idle OCR can suspend");
+    service.setBackendPreference(ScreenshotOcrBackendPreference::DirectMl);
+    service.suspendStorage();
+    auto drain = std::async(std::launch::async, [&] { service.drainStorage(); });
+    drain.get();
+    QCoreApplication::processEvents();
+    require(service.liveWorkerCount() == 0 && service.processId() == 0,
+            "old process fully drained without replacing service");
+    service.resumeStorage(root.filePath(QStringLiteral("new")));
+    QCoreApplication::processEvents();
+    require(!service.storageBusy(), "new OCR service is ready for requests");
+}
+
 int main(int argc, char** argv) {
     QCoreApplication application(argc, argv);
+    if (application.arguments().contains(QStringLiteral("--storage-relocation-only"))) {
+        storageRelocationPreservesServiceIdentity();
+        return 0;
+    }
     if (qEnvironmentVariableIsSet("SNOW_TEST_OCR_LIFECYCLE_CHILD"))
         return runOcrLifecycleChild();
     if (application.arguments().contains(QStringLiteral("--process-lifecycle"))) {

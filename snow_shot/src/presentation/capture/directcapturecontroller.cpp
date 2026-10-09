@@ -1,3 +1,5 @@
+#include "snow_draw_engine_qt/snow_canvas_image.h"
+#include "snow_shot/platform/applicationqos.h"
 #include "snow_shot/presentation/directcapturecontroller.h"
 #include "snow_shot/presentation/screenshotencodingsettings.h"
 
@@ -15,10 +17,8 @@
 
 #include <QApplication>
 #include <QDebug>
-#include <QFileInfo>
 #include <QMimeData>
 #include <QThread>
-#include <QUrl>
 
 #include <atomic>
 #include <exception>
@@ -43,9 +43,11 @@ class DirectCaptureController::Impl {
           workflow(DirectCapturePorts{
               [this](const auto& request, auto done) {
                   artifact.reset();
-                  return submit<DirectCaptureFrame>(
+                  emit owner.captureActivityChanged(QStringLiteral("direct"), true);
+                  const bool queued = submit<DirectCaptureFrame>(
                       [request]() { return captureDirectTarget(request); },
                       [this, request, done = std::move(done)](DirectCaptureFrame frame) mutable {
+                          emit owner.captureActivityChanged(QStringLiteral("direct"), false);
                           if (frame.isValid()) {
                               artifact = std::make_unique<ScreenshotExportArtifact>(
                                   ScreenshotExportSource::fromImage(frame.image),
@@ -53,6 +55,9 @@ class DirectCaptureController::Impl {
                           }
                           done(std::move(frame));
                       });
+                  if (!queued)
+                      emit owner.captureActivityChanged(QStringLiteral("direct"), false);
+                  return queued;
               },
               [this](const auto& request, const auto&, auto done) {
                   return artifact &&
@@ -65,8 +70,8 @@ class DirectCaptureController::Impl {
                              },
                              request.pdf, request.requestedAt);
               },
-              [this](const auto& request, const auto& frame, const auto& path, auto done) {
-                  return copy(request, frame, path, std::move(done));
+              [this](const auto& request, const auto&, auto done) {
+                  return copy(request, std::move(done));
               },
               [this](const auto& request, const auto& frame, auto done) {
                   return artifact &&
@@ -118,6 +123,7 @@ class DirectCaptureController::Impl {
         worker->moveToThread(&thread);
         QObject::connect(&thread, &QThread::finished, worker, &QObject::deleteLater);
         thread.setObjectName(QStringLiteral("direct-capture"));
+        snow_shot::platform::configureApplicationQoSThread(&thread);
         thread.start();
     }
 
@@ -155,17 +161,28 @@ class DirectCaptureController::Impl {
             Qt::QueuedConnection);
     }
 
-    bool copy(const DirectCaptureRequest&, const DirectCaptureFrame&, const QString& path,
-              DirectCapturePorts::Completion done) {
-        if (!path.isEmpty()) {
-            auto* mime = new QMimeData;
-            mime->setUrls({QUrl::fromLocalFile(QFileInfo(path).absoluteFilePath())});
-            clipboard = ScreenshotClipboardService::commitMimeData(
-                QApplication::clipboard(), &owner, mime,
-                [done](ScreenshotClipboardCommitResult result) {
-                    done(result.succeeded() ? QString() : result.errorString());
-                });
-            return clipboard.isValid();
+    bool copy(const DirectCaptureRequest& request, DirectCapturePorts::Completion done) {
+        if (request.copyFile) {
+            return artifact &&
+                   artifact->requestClipboardFile(
+                       &owner, ScreenshotImageFileService::formatForKey(request.imageFormat),
+                       request.filenameFormat, request.encoding,
+                       [this, done = std::move(done)](std::unique_ptr<QMimeData> mime,
+                                                      QString error) {
+                           if (!mime) {
+                               done(std::move(error));
+                               return;
+                           }
+                           clipboard = ScreenshotClipboardService::commitMimeData(
+                               QApplication::clipboard(), &owner, mime.release(),
+                               [done](ScreenshotClipboardCommitResult result) {
+                                   done(result.succeeded() ? QString() : result.errorString());
+                               });
+                           if (!clipboard.isValid())
+                               done(DirectCaptureController::tr(
+                                   "The clipboard publication could not be queued"));
+                       },
+                       request.pdf, request.requestedAt);
         }
         return artifact &&
                artifact->requestClipboard(
@@ -221,6 +238,8 @@ class DirectCaptureController::Impl {
             return;
         thread.quit();
         thread.wait();
+        emit owner.captureActivityChanged(QStringLiteral("direct"), false);
+        emit owner.captureActivityChanged(QStringLiteral("direct-mcp"), false);
     }
 
     DirectCaptureController& owner;
@@ -327,6 +346,7 @@ bool DirectCaptureController::mcpCapture(
     auto cancellation = std::make_shared<std::atomic_bool>(false);
     m_impl->mcpCancellation = cancellation;
     m_impl->mcpActive = true;
+    emit captureActivityChanged(QStringLiteral("direct-mcp"), true);
     const bool started = m_impl->submit<DirectCaptureFrame>(
         [request, scale, cancellation] {
             if (cancellation->load(std::memory_order_acquire))
@@ -340,13 +360,14 @@ bool DirectCaptureController::mcpCapture(
                 if (static_cast<qint64>(size.width()) * size.height() > 100000000) {
                     frame.image = {};
                 } else
-                    frame.image =
-                        frame.image.scaled(size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+                    frame.image = snowCanvasScaleImage(frame.image, size, Qt::IgnoreAspectRatio,
+                                                       Qt::SmoothTransformation);
             }
             return frame;
         },
         [this, cancellation, completion = std::move(completion)](DirectCaptureFrame frame) {
             m_impl->mcpActive = false;
+            emit captureActivityChanged(QStringLiteral("direct-mcp"), false);
             if (cancellation->load(std::memory_order_acquire))
                 return;
             QJsonObject metadata{
@@ -361,6 +382,7 @@ bool DirectCaptureController::mcpCapture(
             completion(std::move(frame.image), metadata, frame.error);
         });
     if (!started) {
+        emit captureActivityChanged(QStringLiteral("direct-mcp"), false);
         m_impl->mcpActive = false;
         m_impl->mcpCancellation.reset();
     }

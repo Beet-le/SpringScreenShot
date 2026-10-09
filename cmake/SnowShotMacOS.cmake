@@ -33,7 +33,14 @@ foreach(_framework IN ITEMS AppKit ApplicationServices AVFoundation AudioToolbox
     list(APPEND _snow_native_libraries "${SNOW_MACOS_${_framework}}")
 endforeach()
 if(TARGET snow_shot_rust_ffi_bundle)
-    target_link_libraries(snow_shot_rust_ffi_bundle INTERFACE ${_snow_native_libraries})
+    # Each feature variant is a complete Rust archive. Full hosts omit the
+    # default archive, so both variants need their native dependency closure.
+    foreach(_snow_rust_bundle IN ITEMS
+            snow_shot_rust_ffi_bundle snow_shot_full_rust_ffi_bundle)
+        if(TARGET ${_snow_rust_bundle})
+            target_link_libraries(${_snow_rust_bundle} INTERFACE ${_snow_native_libraries})
+        endif()
+    endforeach()
 else()
     target_link_libraries(snow_recording_c INTERFACE ${_snow_native_libraries})
     target_link_libraries(snow_capture_c INTERFACE ${_snow_native_libraries})
@@ -144,10 +151,15 @@ foreach(_snow_diagnostics_target snow_shot_diagnostics snow_shot_crash_bridge sn
 endforeach()
 
 set(SNOW_MACOS_OCR_ASSETS_ENABLED OFF)
+if(CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
+    set(SNOW_MACOS_OCR_ARCH x64)
+else()
+    set(SNOW_MACOS_OCR_ARCH arm64)
+endif()
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(SNOW_MACOS_OCR_TOOL "${CMAKE_CURRENT_LIST_DIR}/../scripts/snow-shot-macos-ocr.py")
 set(SNOW_MACOS_OCR_MANIFEST "${CMAKE_CURRENT_LIST_DIR}/../snow_shot/packaging/snow-shot-ocr-asset-manifest.json")
-if(CMAKE_OSX_ARCHITECTURES STREQUAL "arm64" AND TARGET snow_ocr_process)
+if(CMAKE_OSX_ARCHITECTURES MATCHES "^(arm64|x86_64)$" AND TARGET snow_ocr_process)
     set(SNOW_MACOS_OCR_ASSETS_ENABLED ON)
     set(_snow_macos_ocr_runtime_arguments)
     if(SNOW_SHOT_OCR_STATIC_ONNXRUNTIME)
@@ -162,6 +174,7 @@ if(CMAKE_OSX_ARCHITECTURES STREQUAL "arm64" AND TARGET snow_ocr_process)
             # relinking its Qt host. A host POST_BUILD hook would miss that update.
             add_custom_target(${_host}-ocr-assets
                 COMMAND "${Python3_EXECUTABLE}" "${SNOW_MACOS_OCR_TOOL}" stage
+                    --arch "${SNOW_MACOS_OCR_ARCH}"
                     --manifest "${SNOW_MACOS_OCR_MANIFEST}"
                     --runtime-dir "$<TARGET_FILE_DIR:${_host}>"
                     --worker "$<TARGET_FILE:snow_ocr_process>"
@@ -177,13 +190,15 @@ if(CMAKE_OSX_ARCHITECTURES STREQUAL "arm64" AND TARGET snow_ocr_process)
 endif()
 
 if(NOT SNOW_SHOT_QT_STATIC)
-    get_target_property(_snow_qmake Qt6::qmake IMPORTED_LOCATION)
-    get_filename_component(_snow_qt_bin "${_snow_qmake}" DIRECTORY)
-    find_file(SNOW_QT_OFFSCREEN_PLUGIN NAMES libqoffscreen.dylib
-        HINTS "${_snow_qt_bin}/../plugins/platforms" NO_DEFAULT_PATH REQUIRED)
-    install(FILES "${SNOW_QT_OFFSCREEN_PLUGIN}"
+    include("${CMAKE_CURRENT_LIST_DIR}/SnowQt.cmake")
+    snow_qt_bin_directory(_snow_qt_bin)
+    if(NOT TARGET Qt6::QOffscreenIntegrationPlugin)
+        message(FATAL_ERROR "The selected Qt kit does not provide the offscreen platform plugin")
+    endif()
+    install(FILES "$<TARGET_FILE:Qt6::QOffscreenIntegrationPlugin>"
         DESTINATION "snow_shot.app/Contents/PlugIns/platforms" COMPONENT SnowShot)
-    find_program(SNOW_MACDEPLOYQT NAMES macdeployqt HINTS "${_snow_qt_bin}" REQUIRED)
+    find_program(SNOW_MACDEPLOYQT NAMES macdeployqt HINTS "${_snow_qt_bin}"
+        NO_DEFAULT_PATH REQUIRED)
 else()
     set(SNOW_MACDEPLOYQT "")
 endif()
@@ -222,6 +237,8 @@ if(NOT SNOW_MACOS_CODESIGN_IDENTITY STREQUAL "-")
         COMMAND "${CMAKE_COMMAND}" -E rm -f "$<TARGET_FILE:snow_shot>.snow-signing"
         VERBATIM)
 endif()
+# Full includes its default model; Mini supplies its own runtime-only policy.
+set(SNOW_MACOS_OCR_RUNTIME_ONLY OFF)
 configure_file("${CMAKE_CURRENT_LIST_DIR}/DeploySnowShotMacOS.cmake.in"
     "${CMAKE_CURRENT_BINARY_DIR}/DeploySnowShotMacOS.cmake" @ONLY)
 install(SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/DeploySnowShotMacOS.cmake" COMPONENT SnowShot)

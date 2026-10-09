@@ -21,8 +21,20 @@ else()
 endif()
 
 add_test(NAME snow_image_core_tests COMMAND snow_image_core_tests)
+add_test(NAME snow_image_pixel_ownership_tests COMMAND snow_image_core_tests --ownership-only)
+add_test(NAME snow_image_buffer_paths_tests COMMAND snow_image_core_tests --buffer-paths-only)
+add_test(NAME snow_image_processing_tests COMMAND snow_image_core_tests --processing-only)
 add_test(NAME snow_image_heif_tests COMMAND snow_image_core_tests --heif-only)
 add_test(NAME snow_image_jpeg_tests COMMAND snow_image_core_tests --jpeg-only)
+add_test(NAME snow_image_jxl_tests COMMAND snow_image_core_tests --jxl-only)
+
+add_executable(snow_image_raster_conversion_tests raster_conversion_tests.cpp)
+target_link_libraries(snow_image_raster_conversion_tests
+    PRIVATE snow_image::snow_image ${SNOW_IMAGE_PRIVATE_LIBRARIES})
+target_compile_definitions(snow_image_raster_conversion_tests
+    PRIVATE ${SNOW_IMAGE_PRIVATE_DEFINITIONS})
+target_compile_features(snow_image_raster_conversion_tests PRIVATE cxx_std_20)
+add_test(NAME snow_image_raster_conversion_tests COMMAND snow_image_raster_conversion_tests)
 
 add_executable(snow_image_raster_export_tests raster_export_tests.cpp)
 target_link_libraries(snow_image_raster_export_tests PRIVATE snow_image::snow_image)
@@ -38,6 +50,38 @@ else()
     target_compile_options(snow_image_raster_export_tests PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 add_test(NAME snow_image_raster_export_tests COMMAND snow_image_raster_export_tests)
+
+add_executable(snow_image_resource_plan_tests resource_plan_tests.cpp)
+target_link_libraries(snow_image_resource_plan_tests PRIVATE snow_image::snow_image)
+if(NOT SNOW_IMAGE_LINK_PNG_DEPENDENCIES)
+    target_link_libraries(snow_image_resource_plan_tests PRIVATE PNG::PNG)
+endif()
+target_compile_features(snow_image_resource_plan_tests PRIVATE cxx_std_20)
+if(MSVC)
+    target_compile_options(snow_image_resource_plan_tests PRIVATE
+        /utf-8 /permissive- /Zc:__cplusplus /W4
+    )
+else()
+    target_compile_options(snow_image_resource_plan_tests PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+add_test(NAME snow_image_resource_plan_tests COMMAND snow_image_resource_plan_tests)
+
+if(SNOW_IMAGE_CODEC_HEIF)
+    add_executable(snow_image_avif_encoding_tests avif_encoding_tests.cpp)
+    target_link_libraries(snow_image_avif_encoding_tests PRIVATE snow_image::snow_image heif)
+    if(NOT SNOW_IMAGE_LINK_PNG_DEPENDENCIES)
+        target_link_libraries(snow_image_avif_encoding_tests PRIVATE PNG::PNG)
+    endif()
+    target_compile_features(snow_image_avif_encoding_tests PRIVATE cxx_std_20)
+    if(MSVC)
+        target_compile_options(snow_image_avif_encoding_tests PRIVATE
+            /utf-8 /permissive- /Zc:__cplusplus /W4
+        )
+    else()
+        target_compile_options(snow_image_avif_encoding_tests PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+    add_test(NAME snow_image_avif_encoding_tests COMMAND snow_image_avif_encoding_tests)
+endif()
 
 if(MSVC)
     # Regression coverage for the test CLI dialog guard (cmake/test-support):

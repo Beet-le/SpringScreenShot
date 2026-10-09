@@ -3,6 +3,10 @@
 
 #include "snow_draw_engine_qt/snow_canvas_widget.h"
 #include "snow_draw_engine_qt/snow_canvas_path_geometry.h"
+#include "snow_draw_engine_qt/snow_canvas_runtime.h"
+#include "snow_canvas_renderer.h"
+#include "snow_canvas_filter_tile_cache.h"
+#include "snow_canvas_render_diagnostics.h"
 #include "snow_shot/image/screenshotregionpoints.h"
 
 #include <QApplication>
@@ -11,6 +15,7 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QGuiApplication>
+#include <QInputMethodEvent>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -42,6 +47,22 @@ constexpr double kFrameBudgetMilliseconds = 16.67;
 constexpr int kDefaultIterations = 240;
 constexpr int kDefaultWarmup = 30;
 
+QRectF baseSelectionForSize(const QSize& size) {
+    return QRectF(-size.width() / 4.0, -size.height() / 4.0, size.width() / 2.0,
+                  size.height() / 2.0);
+}
+
+QImage screenshotTexture(const QSize& size) {
+    QImage image(size, QImage::Format_ARGB32_Premultiplied);
+    for (int y = 0; y < size.height(); ++y) {
+        auto* row = reinterpret_cast<QRgb*>(image.scanLine(y));
+        for (int x = 0; x < size.width(); ++x) {
+            row[x] = qRgb((x * 17 + y * 3) & 255, (x * 5 + y * 19) & 255, (x * 11 + y * 7) & 255);
+        }
+    }
+    return image;
+}
+
 class PaintProbe final : public QObject {
   public:
     void begin() {
@@ -66,10 +87,18 @@ class PaintProbe final : public QObject {
 };
 
 struct BenchmarkFixture {
-    explicit BenchmarkFixture(const QSize& size)
-        : canvas(std::make_unique<SnowCanvasWidget>(&window)),
+    explicit BenchmarkFixture(const QSize& size, bool translucent = false)
+        : canvas(std::make_unique<SnowCanvasWidget>(runtime, &window)),
           renderer(std::make_unique<ScreenshotCanvasRenderer>(*canvas)) {
         window.setWindowTitle(QStringLiteral("Snow Shot selection benchmark"));
+        // Match the screenshot overlay's native backing-store configuration before
+        // WA_NativeWindow creates a platform window. An opaque child would bypass
+        // the parent alpha surface and invalidate the presentation comparison.
+        if (translucent) {
+            window.setWindowFlag(Qt::FramelessWindowHint);
+            window.setAttribute(Qt::WA_TranslucentBackground);
+            canvas->setAttribute(Qt::WA_OpaquePaintEvent, false);
+        }
         window.setAttribute(Qt::WA_NativeWindow, true);
         window.resize(size);
         auto* layout = new QVBoxLayout(&window);
@@ -79,13 +108,14 @@ struct BenchmarkFixture {
         canvas->setCustomRenderer(renderer.get());
         static_cast<void>(canvas->setViewportCamera(0.0, 0.0, 1.0));
 
-        QImage screenshot(size, QImage::Format_RGBA8888);
-        screenshot.fill(QColor(0, 80, 240));
+        const qreal dpr = window.devicePixelRatioF();
+        const QSize pixelSize(static_cast<int>(std::ceil(size.width() * dpr)),
+                              static_cast<int>(std::ceil(size.height() * dpr)));
+        QImage screenshot = screenshotTexture(pixelSize);
         renderer->setImage(std::move(screenshot), QRectF(-size.width() / 2.0, -size.height() / 2.0,
                                                          size.width(), size.height()));
         renderer->setMaskVisible(true);
-        renderer->setSelection(QRectF(-960.0, -540.0, 1920.0, 1080.0), true, 0, 16,
-                               QColor(0x59, 0x59, 0x59));
+        renderer->setSelection(baseSelectionForSize(size), true, 0, 16, QColor(0x59, 0x59, 0x59));
         canvas->installEventFilter(&paintProbe);
         window.show();
         QApplication::processEvents();
@@ -96,6 +126,7 @@ struct BenchmarkFixture {
         canvas->setCustomRenderer(nullptr);
     }
 
+    SnowCanvasRuntime runtime;
     QWidget window;
     std::unique_ptr<SnowCanvasWidget> canvas;
     std::unique_ptr<ScreenshotCanvasRenderer> renderer;
@@ -106,6 +137,7 @@ struct FrameSample {
     double milliseconds = 0.0;
     double requestedPaintRegionRatio = 0.0;
     double paintedPaintRegionRatio = 0.0;
+    double paintedBoundingRectRatio = 0.0;
     double selectionDamageRegionRatio = 0.0;
     std::size_t shadowCacheHits = 0;
     std::size_t shadowCacheBuilds = 0;
@@ -113,10 +145,11 @@ struct FrameSample {
     std::size_t shadowTransientAllocations = 0;
     std::size_t selectionDamagePathFallbacks = 0;
     double mutationMs = 0;
-    double paintMs = 0;
+    double eventProcessingMs = 0;
     std::size_t regionMaskBuilds = 0;
     std::size_t regionShadowBuilds = 0;
     std::size_t regionScratchPeakBytes = 0;
+    snow_canvas_renderer::FilterRenderDiagnostics filter;
 };
 
 struct ScenarioResult {
@@ -168,6 +201,7 @@ double paintRegionRatio(const QRegion& region, const QSize& size) {
 FrameSample measureFrame(BenchmarkFixture& fixture, const std::function<void()>& mutation) {
     ScreenshotSelectionShadowRenderer::resetDiagnosticsForCurrentThread();
     resetSelectionRenderDiagnosticsForCurrentThread();
+    snow_canvas_renderer::resetFilterRenderDiagnosticsForCurrentThread();
     fixture.paintProbe.begin();
     QElapsedTimer timer;
     timer.start();
@@ -180,9 +214,10 @@ FrameSample measureFrame(BenchmarkFixture& fixture, const std::function<void()>&
     const auto shadowDiagnostics = ScreenshotSelectionShadowRenderer::diagnosticsForCurrentThread();
     const auto selectionDiagnostics = selectionRenderDiagnosticsForCurrentThread();
     return FrameSample{
-        elapsedNanoseconds / 1'000'000.0,
+        static_cast<double>(elapsedNanoseconds) / 1'000'000.0,
         paintRegionRatio(requested, fixture.canvas->size()),
         paintRegionRatio(painted, fixture.canvas->size()),
+        paintRegionRatio(QRegion(painted.boundingRect()), fixture.canvas->size()),
         static_cast<double>(selectionDiagnostics.requestedDamagePixels) /
             static_cast<double>(fixture.canvas->width()) /
             static_cast<double>(fixture.canvas->height()),
@@ -191,11 +226,12 @@ FrameSample measureFrame(BenchmarkFixture& fixture, const std::function<void()>&
         shadowDiagnostics.retainedBytes,
         shadowDiagnostics.selectionSizedTransientAllocations,
         selectionDiagnostics.pathFallbacks,
-        mutationNs / 1'000'000.0,
-        (elapsedNanoseconds - mutationNs) / 1'000'000.0,
+        static_cast<double>(mutationNs) / 1'000'000.0,
+        static_cast<double>(elapsedNanoseconds - mutationNs) / 1'000'000.0,
         shadowDiagnostics.regionMaskBuilds,
         shadowDiagnostics.regionShadowBuilds,
         shadowDiagnostics.regionScratchPeakBytes,
+        snow_canvas_renderer::filterRenderDiagnosticsForCurrentThread(),
     };
 }
 
@@ -222,7 +258,8 @@ double percentile(std::vector<double> values, double fraction) {
     }
     std::sort(values.begin(), values.end());
     const std::size_t index = std::min(
-        values.size() - 1, static_cast<std::size_t>(std::ceil(fraction * values.size())) - 1);
+        values.size() - 1,
+        static_cast<std::size_t>(std::ceil(fraction * static_cast<double>(values.size()))) - 1);
     return values[index];
 }
 
@@ -235,13 +272,15 @@ double mean(const std::vector<double>& values) {
 
 QJsonObject summarize(const ScenarioResult& result, const DwmSnapshot& beforeDwm,
                       const DwmSnapshot& afterDwm) {
-    std::vector<double> milliseconds, mutationMs, paintMs;
+    std::vector<double> milliseconds, mutationMs, eventProcessingMs;
     std::vector<double> requestedRegionRatios;
     std::vector<double> paintedRegionRatios;
+    std::vector<double> paintedBoundingRectRatios;
     std::vector<double> selectionDamageRatios;
     milliseconds.reserve(result.samples.size());
     requestedRegionRatios.reserve(result.samples.size());
     paintedRegionRatios.reserve(result.samples.size());
+    paintedBoundingRectRatios.reserve(result.samples.size());
     selectionDamageRatios.reserve(result.samples.size());
     std::size_t shadowHits = 0;
     std::size_t shadowBuilds = 0;
@@ -249,15 +288,21 @@ QJsonObject summarize(const ScenarioResult& result, const DwmSnapshot& beforeDwm
     std::size_t shadowTransientAllocations = 0;
     std::size_t selectionDamagePathFallbacks = 0;
     std::size_t regionMaskBuilds = 0, regionShadowBuilds = 0, regionScratchPeakBytes = 0;
+    snow_canvas_renderer::FilterRenderDiagnostics filterTotals;
+    std::size_t peakFilterDispatchCount = 0;
     for (const FrameSample& sample : result.samples) {
         regionMaskBuilds += sample.regionMaskBuilds;
         regionShadowBuilds += sample.regionShadowBuilds;
         regionScratchPeakBytes = std::max(regionScratchPeakBytes, sample.regionScratchPeakBytes);
         milliseconds.push_back(sample.milliseconds);
         mutationMs.push_back(sample.mutationMs);
-        paintMs.push_back(sample.paintMs);
+        eventProcessingMs.push_back(sample.eventProcessingMs);
+        snow_canvas_renderer::accumulateFilterRenderDiagnostics(filterTotals, sample.filter);
+        peakFilterDispatchCount =
+            std::max(peakFilterDispatchCount, sample.filter.effectDispatchCount);
         requestedRegionRatios.push_back(sample.requestedPaintRegionRatio);
         paintedRegionRatios.push_back(sample.paintedPaintRegionRatio);
+        paintedBoundingRectRatios.push_back(sample.paintedBoundingRectRatio);
         selectionDamageRatios.push_back(sample.selectionDamageRegionRatio);
         shadowHits += sample.shadowCacheHits;
         shadowBuilds += sample.shadowCacheBuilds;
@@ -273,11 +318,15 @@ QJsonObject summarize(const ScenarioResult& result, const DwmSnapshot& beforeDwm
     object.insert(QStringLiteral("sampleCount"), static_cast<qint64>(result.samples.size()));
     object.insert(QStringLiteral("p50Ms"), percentile(milliseconds, 0.50));
     object.insert(QStringLiteral("mutationP95Ms"), percentile(mutationMs, 0.95));
-    object.insert(QStringLiteral("paintP95Ms"), percentile(paintMs, 0.95));
+    object.insert(QStringLiteral("eventProcessingP95Ms"), percentile(eventProcessingMs, 0.95));
     object.insert(QStringLiteral("p95Ms"), p95);
     object.insert(QStringLiteral("p99Ms"), percentile(milliseconds, 0.99));
     object.insert(QStringLiteral("meanRequestedPaintRegionRatio"), mean(requestedRegionRatios));
     object.insert(QStringLiteral("meanPaintedPaintRegionRatio"), mean(paintedRegionRatios));
+    // Windows' translucent backing store presents the dirty region's bounding
+    // rectangle. This metric estimates that amplification; it does not measure
+    // compositor latency or prove the pixels were displayed.
+    object.insert(QStringLiteral("meanPaintedBoundingRectRatio"), mean(paintedBoundingRectRatios));
     object.insert(QStringLiteral("meanSelectionDamageRegionRatio"), mean(selectionDamageRatios));
     object.insert(QStringLiteral("meanPaintRegionRatio"), mean(paintedRegionRatios));
     object.insert(QStringLiteral("shadowCacheHits"), static_cast<qint64>(shadowHits));
@@ -290,6 +339,47 @@ QJsonObject summarize(const ScenarioResult& result, const DwmSnapshot& beforeDwm
     object.insert(QStringLiteral("regionMaskBuilds"), qint64(regionMaskBuilds));
     object.insert(QStringLiteral("regionShadowBuilds"), qint64(regionShadowBuilds));
     object.insert(QStringLiteral("regionScratchPeakBytes"), qint64(regionScratchPeakBytes));
+    object.insert(QStringLiteral("filterEffectDispatchCount"),
+                  static_cast<qint64>(filterTotals.effectDispatchCount));
+    object.insert(QStringLiteral("meanFilterEffectDispatchCount"),
+                  static_cast<double>(filterTotals.effectDispatchCount) /
+                      static_cast<double>(result.samples.size()));
+    object.insert(QStringLiteral("peakFilterEffectDispatchCount"),
+                  static_cast<qint64>(peakFilterDispatchCount));
+    object.insert(QStringLiteral("filterExposedPixelCount"),
+                  static_cast<qint64>(filterTotals.exposedPixelCount));
+    object.insert(QStringLiteral("filterTotalWorkingPixelCount"),
+                  static_cast<qint64>(filterTotals.totalWorkingPixelCount));
+    object.insert(QStringLiteral("meanFilterWorkingPixelCount"),
+                  static_cast<double>(filterTotals.totalWorkingPixelCount) /
+                      static_cast<double>(result.samples.size()));
+    object.insert(QStringLiteral("filterPeakWorkingPixelCount"),
+                  static_cast<qint64>(filterTotals.peakWorkingPixelCount));
+    object.insert(QStringLiteral("filterAllocatedBytes"),
+                  static_cast<qint64>(filterTotals.allocatedBytes));
+    object.insert(QStringLiteral("filterCopiedBytes"),
+                  static_cast<qint64>(filterTotals.copiedBytes));
+    object.insert(QStringLiteral("filterSourceTileCandidates"),
+                  static_cast<qint64>(filterTotals.sourceTileCandidates));
+    object.insert(QStringLiteral("filterSourceTileVisits"),
+                  static_cast<qint64>(filterTotals.sourceTileVisits));
+    object.insert(QStringLiteral("filterSourceTileHits"),
+                  static_cast<qint64>(filterTotals.sourceTileHits));
+    object.insert(QStringLiteral("filterSourceTileMisses"),
+                  static_cast<qint64>(filterTotals.sourceTileMisses));
+    QJsonObject filterStageTotalMs;
+    const auto stage = [&](const QString& name, std::uint64_t nanoseconds) {
+        filterStageTotalMs.insert(name, static_cast<double>(nanoseconds) / 1'000'000.0);
+    };
+    stage(QStringLiteral("planning"), filterTotals.planningNanoseconds);
+    stage(QStringLiteral("sceneReplay"), filterTotals.sceneReplayNanoseconds);
+    stage(QStringLiteral("maskConstruction"), filterTotals.maskConstructionNanoseconds);
+    stage(QStringLiteral("maskScan"), filterTotals.maskScanNanoseconds);
+    stage(QStringLiteral("downsample"), filterTotals.downsampleNanoseconds);
+    stage(QStringLiteral("reducedBlur"), filterTotals.reducedBlurNanoseconds);
+    stage(QStringLiteral("reconstruction"), filterTotals.reconstructionNanoseconds);
+    stage(QStringLiteral("presentation"), filterTotals.presentationNanoseconds);
+    object.insert(QStringLiteral("filterStageTotalMs"), filterStageTotalMs);
     object.insert(QStringLiteral("targetMs"), kFrameBudgetMilliseconds);
     object.insert(QStringLiteral("classification"), p95 <= kFrameBudgetMilliseconds
                                                         ? QStringLiteral("within-target")
@@ -323,9 +413,81 @@ void createSpotlightCutout(SnowCanvasWidget& canvas) {
     static_cast<void>(canvas.setCanvasTool(SnowCanvasTool::Select));
 }
 
+void applyResizeSelection(BenchmarkFixture& fixture, const QRectF& selection) {
+    ScreenshotSelectionVisualState state;
+    state.bounds = selection;
+    state.present = true;
+    state.shadowWidth = 16;
+    state.shadowColor = QColor(0x59, 0x59, 0x59);
+    fixture.renderer->applySelectionState(state);
+    fixture.canvas->setDecorationRenderAreas({selection, selection});
+}
+
+void createRectangleFilter(BenchmarkFixture& fixture, SnowCanvasFilterType type,
+                           const QRectF& canvasRect) {
+    auto& canvas = *fixture.canvas;
+    if (!fixture.runtime.setQuickSelectionDisabledTools({SnowCanvasTool::RectangleFilter}) ||
+        !canvas.setCanvasFilterStyle({type, 0.65, 1.0, 2.0},
+                                     SnowCanvasFilterStylePropertyType |
+                                         SnowCanvasFilterStylePropertyStrength |
+                                         SnowCanvasFilterStylePropertyOpacity) ||
+        !canvas.setCanvasTool(SnowCanvasTool::RectangleFilter)) {
+        throw std::runtime_error("unable to configure benchmark filter");
+    }
+    const QTransform transform = canvas.canvasToViewTransform();
+    const QPointF start = transform.map(canvasRect.topLeft());
+    const QPointF end = transform.map(canvasRect.bottomRight());
+    QMouseEvent press(QEvent::MouseButtonPress, start, start, Qt::LeftButton, Qt::LeftButton,
+                      Qt::NoModifier);
+    QCoreApplication::sendEvent(&canvas, &press);
+    QMouseEvent move(QEvent::MouseMove, end, end, Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(&canvas, &move);
+    QMouseEvent release(QEvent::MouseButtonRelease, end, end, Qt::LeftButton, Qt::NoButton,
+                        Qt::NoModifier);
+    QCoreApplication::sendEvent(&canvas, &release);
+    if (!canvas.resetEditingState() || !canvas.setCanvasTool(SnowCanvasTool::Select) ||
+        !canvas.canvasHistoryState().canUndo) {
+        throw std::runtime_error("unable to create benchmark filter annotation");
+    }
+    QApplication::processEvents();
+}
+
+void createGuideTextAnnotations(BenchmarkFixture& fixture, int count) {
+    if (count == 0) {
+        return;
+    }
+    auto& canvas = *fixture.canvas;
+    if (!fixture.runtime.setQuickSelectionDisabledTools({SnowCanvasTool::Text})) {
+        throw std::runtime_error("unable to configure benchmark text annotations");
+    }
+    const int columns = std::min(count, 10);
+    const int rows = (count + columns - 1) / columns;
+    for (int index = 0; index < count; ++index) {
+        if (!canvas.setCanvasTool(SnowCanvasTool::Text)) {
+            throw std::runtime_error("unable to select benchmark text tool");
+        }
+        const QPointF position(canvas.width() * (0.2 + 0.6 * (index % columns) / columns),
+                               canvas.height() * (0.2 + 0.6 * (index / columns) / rows));
+        QMouseEvent press(QEvent::MouseButtonPress, position, position, Qt::LeftButton,
+                          Qt::LeftButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(&canvas, &press);
+        QMouseEvent release(QEvent::MouseButtonRelease, position, position, Qt::LeftButton,
+                            Qt::NoButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(&canvas, &release);
+        QInputMethodEvent text;
+        text.setCommitString(QStringLiteral("Guide benchmark annotation %1").arg(index));
+        QCoreApplication::sendEvent(&canvas, &text);
+        if (!canvas.resetEditingState() || !canvas.canvasHistoryState().canUndo) {
+            throw std::runtime_error("unable to commit benchmark text annotation");
+        }
+    }
+    QApplication::processEvents();
+}
+
 QJsonObject writeReports(const QList<QJsonObject>& objects, const QString& jsonlPath,
                          const QString& summaryPath, const QString& htmlPath,
-                         const QSize& surfaceSize, qreal devicePixelRatio) {
+                         const QSize& surfaceSize, const QSize& actualCanvasSize,
+                         qreal devicePixelRatio, bool translucent) {
     QFile jsonl(jsonlPath);
     if (!jsonl.open(QIODevice::WriteOnly | QIODevice::Text)) {
         throw std::runtime_error("unable to open JSONL output");
@@ -341,10 +503,28 @@ QJsonObject writeReports(const QList<QJsonObject>& objects, const QString& jsonl
         scenarios.append(object);
     }
     QJsonObject summary;
-    summary.insert(QStringLiteral("schemaVersion"), 2);
-    summary.insert(QStringLiteral("surfaceWidth"), surfaceSize.width());
-    summary.insert(QStringLiteral("surfaceHeight"), surfaceSize.height());
+    summary.insert(QStringLiteral("schemaVersion"), 4);
+    summary.insert(QStringLiteral("requestedSurfaceWidth"), surfaceSize.width());
+    summary.insert(QStringLiteral("requestedSurfaceHeight"), surfaceSize.height());
+    summary.insert(QStringLiteral("surfaceWidth"), actualCanvasSize.width());
+    summary.insert(QStringLiteral("surfaceHeight"), actualCanvasSize.height());
     summary.insert(QStringLiteral("devicePixelRatio"), devicePixelRatio);
+    summary.insert(QStringLiteral("physicalSurfaceWidth"),
+                   static_cast<int>(std::ceil(actualCanvasSize.width() * devicePixelRatio)));
+    summary.insert(QStringLiteral("physicalSurfaceHeight"),
+                   static_cast<int>(std::ceil(actualCanvasSize.height() * devicePixelRatio)));
+    summary.insert(QStringLiteral("qtPlatform"), QGuiApplication::platformName());
+    summary.insert(QStringLiteral("qtScaleFactor"), qEnvironmentVariable("QT_SCALE_FACTOR"));
+    summary.insert(QStringLiteral("translucentWindow"), translucent);
+    summary.insert(QStringLiteral("timingScope"),
+                   QStringLiteral("API mutation plus QApplication::processEvents, including "
+                                  "synchronous backing-store flush; excludes compositor latency "
+                                  "and the screenshot presenter/input path"));
+    summary.insert(QStringLiteral("paintedBoundingRectScope"),
+                   QStringLiteral("bounding rectangle of observed canvas paint events; proxy "
+                                  "for Windows translucent backing-store presentation area"));
+    summary.insert(QStringLiteral("screenshotTexture"),
+                   QStringLiteral("deterministic-rgb-pattern"));
     summary.insert(QStringLiteral("targetMs"), kFrameBudgetMilliseconds);
     summary.insert(QStringLiteral("timingClassificationIsInformational"), true);
     summary.insert(QStringLiteral("scenarios"), scenarios);
@@ -374,9 +554,9 @@ QJsonObject writeReports(const QList<QJsonObject>& objects, const QString& jsonl
 
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
+    snow_canvas_render_diagnostics::setEnabled(true);
     QCommandLineParser parser;
-    parser.setApplicationDescription(
-        QStringLiteral("Native Windows Snow Shot selection rendering benchmark"));
+    parser.setApplicationDescription(QStringLiteral("Snow Shot selection rendering benchmark"));
     parser.addHelpOption();
     parser.addOption({QStringLiteral("jsonl"), QStringLiteral("JSONL output path"),
                       QStringLiteral("path"), QStringLiteral("selection-render-benchmark.jsonl")});
@@ -388,6 +568,15 @@ int main(int argc, char** argv) {
                       QStringLiteral("count"), QString::number(kDefaultIterations)});
     parser.addOption({QStringLiteral("warmup"), QStringLiteral("Warmup frames per scenario"),
                       QStringLiteral("count"), QString::number(kDefaultWarmup)});
+    parser.addOption({QStringLiteral("surface-width"), QStringLiteral("Logical surface width"),
+                      QStringLiteral("pixels"), QStringLiteral("3840")});
+    parser.addOption({QStringLiteral("surface-height"), QStringLiteral("Logical surface height"),
+                      QStringLiteral("pixels"), QStringLiteral("2160")});
+    parser.addOption({QStringLiteral("translucent"),
+                      QStringLiteral("Use the screenshot overlay's translucent native surface")});
+    parser.addOption({QStringLiteral("guide-text-annotations"),
+                      QStringLiteral("Text annotation count in guide and snap-target scenarios"),
+                      QStringLiteral("count"), QStringLiteral("0")});
     parser.addOption({QStringLiteral("list"), QStringLiteral("List benchmark scenarios and exit")});
     parser.addOption({QStringLiteral("scenario"), QStringLiteral("Run one scenario (repeatable)"),
                       QStringLiteral("name")});
@@ -408,13 +597,24 @@ int main(int argc, char** argv) {
         QStringLiteral("region-one-pass-presentation"),
         QStringLiteral("one-pixel-move"),
         QStringLiteral("one-pixel-resize"),
+        QStringLiteral("resize-filter-interior"),
+        QStringLiteral("resize-filter-edge"),
         QStringLiteral("smart-selection-animation"),
         QStringLiteral("rounded-corners"),
         QStringLiteral("hover-entry-exit"),
         QStringLiteral("shadow-width-sweep"),
         QStringLiteral("rounded-shadow-toggle"),
         QStringLiteral("cursor-and-monitor-guide-lines"),
+        QStringLiteral("cursor-guide-horizontal-move"),
+        QStringLiteral("cursor-guide-vertical-move"),
+        QStringLiteral("cursor-guide-diagonal-move"),
+        QStringLiteral("cursor-guide-complex-selection"),
         QStringLiteral("monitor-center-guide-line-only"),
+        QStringLiteral("snap-guide-targets-unchanged"),
+        QStringLiteral("snap-guide-targets-changed"),
+        QStringLiteral("selection-center-guide-horizontal-move"),
+        QStringLiteral("selection-center-guide-vertical-move"),
+        QStringLiteral("selection-center-guide-fixed-center-resize"),
         QStringLiteral("active-spotlight"),
         QStringLiteral("live-reanchored-watermark"),
         QStringLiteral("fractional-dpr"),
@@ -433,12 +633,34 @@ int main(int argc, char** argv) {
         QTextStream(stderr) << "iterations must be positive and warmup non-negative\n";
         return 2;
     }
+    bool guideTextAnnotationsOk = false;
+    const int guideTextAnnotations =
+        parser.value(QStringLiteral("guide-text-annotations")).toInt(&guideTextAnnotationsOk);
+    if (!guideTextAnnotationsOk || guideTextAnnotations < 0 || guideTextAnnotations > 1000) {
+        QTextStream(stderr) << "guide text annotation count must be between 0 and 1000\n";
+        return 2;
+    }
 
-    const QSize surfaceSize(3840, 2160);
-    BenchmarkFixture fixture(surfaceSize);
+    bool widthOk = false;
+    bool heightOk = false;
+    const int surfaceWidth = parser.value(QStringLiteral("surface-width")).toInt(&widthOk);
+    const int surfaceHeight = parser.value(QStringLiteral("surface-height")).toInt(&heightOk);
+    if (!widthOk || !heightOk || surfaceWidth < 640 || surfaceHeight < 480) {
+        QTextStream(stderr) << "surface width must be at least 640 and height at least 480\n";
+        return 2;
+    }
+    for (const QString& requested : parser.values(QStringLiteral("scenario"))) {
+        if (!scenarioNames.contains(requested)) {
+            QTextStream(stderr) << "unknown scenario: " << requested << '\n';
+            return 2;
+        }
+    }
+    const QSize surfaceSize(surfaceWidth, surfaceHeight);
+    const bool translucent = parser.isSet(QStringLiteral("translucent"));
+    BenchmarkFixture fixture(surfaceSize, translucent);
     auto& canvas = *fixture.canvas;
     auto& renderer = *fixture.renderer;
-    const QRectF baseSelection(-960.0, -540.0, 1920.0, 1080.0);
+    const QRectF baseSelection = baseSelectionForSize(surfaceSize);
     const QColor shadowColor(0x59, 0x59, 0x59);
     const ScreenshotRegionGeometry compoundRegion(
         QRegion(QRect(-960, -540, 1920, 1080)).subtracted(QRect(-120, -120, 240, 240)));
@@ -466,6 +688,9 @@ int main(int argc, char** argv) {
         report.insert(QStringLiteral("outlineCacheRetainedBytes"),
                       renderer.selectionOutlineCacheBytes());
         report.insert(QStringLiteral("maskCacheRetainedBytes"), renderer.selectionMaskCacheBytes());
+        report.insert(QStringLiteral("canvasWidth"), fixture.canvas->width());
+        report.insert(QStringLiteral("canvasHeight"), fixture.canvas->height());
+        report.insert(QStringLiteral("devicePixelRatio"), fixture.canvas->devicePixelRatioF());
         reports.append(report);
     };
 
@@ -606,7 +831,7 @@ int main(int argc, char** argv) {
     commitTimer.start();
     const auto committed = mixed.united(freehandRegion);
     const auto commitPath = committed.path();
-    const double commitMs = commitTimer.nsecsElapsed() / 1'000'000.0;
+    const double commitMs = static_cast<double>(commitTimer.nsecsElapsed()) / 1'000'000.0;
     for (auto& report : reports) {
         report.insert(QStringLiteral("freehandInputPoints"), freehand.size());
         report.insert(QStringLiteral("freehandRetainedPoints"), simplified.size());
@@ -628,6 +853,74 @@ int main(int argc, char** argv) {
                                      baseSelection.height() + ((index >> 1) & 1)),
                               true, 0, 16, shadowColor);
     });
+    const auto runFilterResize = [&](const QString& name, SnowCanvasFilterType type,
+                                     bool intersectsSelectionEdge) {
+        if (parser.isSet(QStringLiteral("scenario")) &&
+            !parser.values(QStringLiteral("scenario")).contains(name)) {
+            return;
+        }
+        // Fresh runtime, renderer, and canvas keep annotations and decoration state
+        // independent of the legacy spotlight/watermark scenarios and each other.
+        BenchmarkFixture filterFixture(surfaceSize, translucent);
+        applyResizeSelection(filterFixture, baseSelection);
+        const qreal dpr = filterFixture.canvas->devicePixelRatioF();
+        const qreal tileSize = snow_canvas_filter_tile_cache::kTilePhysicalSize / dpr;
+        const QRectF safeInterior = filterFixture.canvas->canvasToViewTransform()
+                                        .mapRect(baseSelection)
+                                        .adjusted(32.0, 32.0, -32.0, -32.0);
+        // Fit entirely inside tiles untouched by the selection border/handles. The
+        // interior scenario can therefore verify zero dispatches after tile culling.
+        const qreal left = std::ceil(safeInterior.left() / tileSize) * tileSize;
+        const qreal top = std::ceil(safeInterior.top() / tileSize) * tileSize;
+        const qreal right = std::floor(safeInterior.right() / tileSize) * tileSize;
+        const qreal bottom = std::floor(safeInterior.bottom() / tileSize) * tileSize;
+        if (!intersectsSelectionEdge && (right <= left || bottom <= top)) {
+            reports.append(QJsonObject{
+                {QStringLiteral("name"), name},
+                {QStringLiteral("available"), false},
+                {QStringLiteral("sampleCount"), 0},
+                {QStringLiteral("unavailableReason"),
+                 QStringLiteral("selection has no interior tile separated from border damage")},
+            });
+            return;
+        }
+        const QRectF filterRect =
+            intersectsSelectionEdge
+                ? QRectF(baseSelection.right() - baseSelection.width() * 0.15,
+                         baseSelection.top() + baseSelection.height() * 0.15,
+                         baseSelection.width() * 0.3, baseSelection.height() * 0.7)
+                : filterFixture.canvas->canvasToViewTransform().inverted().mapRect(
+                      QRectF(QPointF(left, top), QPointF(right, bottom))
+                          .adjusted(16.0 / dpr, 16.0 / dpr, -16.0 / dpr, -16.0 / dpr));
+        createRectangleFilter(filterFixture, type, filterRect);
+        applyResizeSelection(filterFixture, baseSelection);
+        QApplication::processEvents();
+        const DwmSnapshot before = dwmSnapshot(filterFixture.window);
+        const ScenarioResult result =
+            runScenario(filterFixture, name, warmup, iterations, [&](int index) {
+                applyResizeSelection(filterFixture,
+                                     QRectF(baseSelection.left(), baseSelection.top(),
+                                            baseSelection.width() + (index & 1),
+                                            baseSelection.height() + ((index >> 1) & 1)));
+            });
+        auto report = summarize(result, before, dwmSnapshot(filterFixture.window));
+        report.insert(QStringLiteral("filterType"), intersectsSelectionEdge
+                                                        ? QStringLiteral("gaussian-blur")
+                                                        : QStringLiteral("mosaic"));
+        report.insert(QStringLiteral("filterIntersectsSelectionEdge"), intersectsSelectionEdge);
+        report.insert(QStringLiteral("selectionWidth"), baseSelection.width());
+        report.insert(QStringLiteral("selectionHeight"), baseSelection.height());
+        report.insert(QStringLiteral("filterWidth"), filterRect.width());
+        report.insert(QStringLiteral("filterHeight"), filterRect.height());
+        report.insert(QStringLiteral("devicePixelRatio"),
+                      filterFixture.canvas->devicePixelRatioF());
+        report.insert(QStringLiteral("canvasWidth"), filterFixture.canvas->width());
+        report.insert(QStringLiteral("canvasHeight"), filterFixture.canvas->height());
+        reports.append(report);
+    };
+    runFilterResize(QStringLiteral("resize-filter-interior"), SnowCanvasFilterType::Mosaic, false);
+    runFilterResize(QStringLiteral("resize-filter-edge"), SnowCanvasFilterType::GaussianBlur, true);
+
     run(QStringLiteral("smart-selection-animation"), [&](int index) {
         const qreal amount = (index % 120) / 119.0;
         const QRectF target(-1200.0, -720.0, 2400.0, 1440.0);
@@ -647,7 +940,8 @@ int main(int argc, char** argv) {
     });
     run(QStringLiteral("shadow-width-sweep"), [&](int index) {
         static constexpr std::array<int, 8> widths = {1, 4, 16, 32, 64, 32, 16, 4};
-        renderer.setSelection(baseSelection, true, 16, widths[index % widths.size()], shadowColor);
+        renderer.setSelection(baseSelection, true, 16,
+                              widths[static_cast<std::size_t>(index) % widths.size()], shadowColor);
         renderer.setSelectionToolbarHovered(true);
     });
     run(QStringLiteral("rounded-shadow-toggle"), [&](int index) {
@@ -658,21 +952,114 @@ int main(int argc, char** argv) {
     const QPointF guideLineCenter(surfaceSize.width() / 2.0, surfaceSize.height() / 2.0);
     const QColor cursorGuideLineColor(220, 30, 40);
     const QColor monitorGuideLineColor(30, 80, 220);
-    renderer.setSelectionToolbarHovered(false);
-    renderer.setGuideLines(guideLineCenter, cursorGuideLineColor, monitorGuideLineColor);
-    QApplication::processEvents();
-    run(QStringLiteral("cursor-and-monitor-guide-lines"), [&](int index) {
-        renderer.setGuideLines(guideLineCenter + QPointF(index & 1, (index >> 1) & 1),
-                               cursorGuideLineColor, monitorGuideLineColor);
-    });
-    renderer.setGuideLines(guideLineCenter, Qt::transparent, monitorGuideLineColor);
-    QApplication::processEvents();
-    run(QStringLiteral("monitor-center-guide-line-only"), [&](int index) {
-        renderer.setGuideLines(guideLineCenter + QPointF(index & 1, (index >> 1) & 1),
-                               Qt::transparent, monitorGuideLineColor);
-    });
-    renderer.clearGuideLines();
-    QApplication::processEvents();
+    const auto runGuide = [&](const QString& name,
+                              const std::function<void(BenchmarkFixture&)>& prepare,
+                              const std::function<void(BenchmarkFixture&, int)>& mutation) {
+        if (parser.isSet(QStringLiteral("scenario")) &&
+            !parser.values(QStringLiteral("scenario")).contains(name)) {
+            return;
+        }
+        // Dedicated fixtures prevent guide settings and annotation/layout caches
+        // leaking between scenarios, even when only one scenario is requested.
+        BenchmarkFixture guideFixture(surfaceSize, translucent);
+        createGuideTextAnnotations(guideFixture, guideTextAnnotations);
+        prepare(guideFixture);
+        mutation(guideFixture, 3);
+        QApplication::processEvents();
+        const DwmSnapshot before = dwmSnapshot(guideFixture.window);
+        const ScenarioResult result =
+            runScenario(guideFixture, name, warmup, iterations,
+                        [&](int index) { mutation(guideFixture, index + 4); });
+        auto report = summarize(result, before, dwmSnapshot(guideFixture.window));
+        report.insert(QStringLiteral("canvasWidth"), guideFixture.canvas->width());
+        report.insert(QStringLiteral("canvasHeight"), guideFixture.canvas->height());
+        report.insert(QStringLiteral("devicePixelRatio"), guideFixture.canvas->devicePixelRatioF());
+        report.insert(QStringLiteral("guideTextAnnotations"), guideTextAnnotations);
+        report.insert(QStringLiteral("translucentWindow"), translucent);
+        reports.append(report);
+    };
+    const auto noPreparation = [](BenchmarkFixture&) {};
+    runGuide(QStringLiteral("cursor-and-monitor-guide-lines"), noPreparation,
+             [&](BenchmarkFixture& guideFixture, int index) {
+                 guideFixture.renderer->setGuideLines(guideLineCenter +
+                                                          QPointF(index & 1, (index >> 1) & 1),
+                                                      cursorGuideLineColor, monitorGuideLineColor);
+             });
+    // Moving away from the fixed monitor center exposes the full dirty strips.
+    // The legacy one-pixel scenario above overlaps the two crosshairs and hides
+    // whether the native presentation area expands for diagonal motion.
+    const auto largeMotion = [&](const QString& name, bool moveX, bool moveY) {
+        runGuide(name, noPreparation, [&](BenchmarkFixture& guideFixture, int index) {
+            const qreal amount = (index & 1) ? 0.75 : 0.25;
+            const QPointF position(surfaceSize.width() * (moveX ? amount : 0.35),
+                                   surfaceSize.height() * (moveY ? amount : 0.35));
+            guideFixture.renderer->setGuideLines(position, cursorGuideLineColor,
+                                                 monitorGuideLineColor);
+        });
+    };
+    largeMotion(QStringLiteral("cursor-guide-horizontal-move"), true, false);
+    largeMotion(QStringLiteral("cursor-guide-vertical-move"), false, true);
+    largeMotion(QStringLiteral("cursor-guide-diagonal-move"), true, true);
+    runGuide(
+        QStringLiteral("cursor-guide-complex-selection"),
+        [&](BenchmarkFixture& guideFixture) {
+            const auto region = mixed.united(freehandRegion);
+            guideFixture.renderer->setSelectionRegion(region, region, {}, false, Qt::red);
+        },
+        [&](BenchmarkFixture& guideFixture, int index) {
+            const qreal amount = (index & 1) ? 0.75 : 0.25;
+            guideFixture.renderer->setGuideLines(
+                QPointF(surfaceSize.width() * amount, surfaceSize.height() * amount),
+                cursorGuideLineColor, monitorGuideLineColor);
+        });
+    runGuide(QStringLiteral("monitor-center-guide-line-only"), noPreparation,
+             [&](BenchmarkFixture& guideFixture, int index) {
+                 guideFixture.renderer->setGuideLines(guideLineCenter +
+                                                          QPointF(index & 1, (index >> 1) & 1),
+                                                      Qt::transparent, monitorGuideLineColor);
+             });
+    const auto prepareSnap = [](BenchmarkFixture& guideFixture) {
+        SnowCanvasSnapConfig config;
+        config.enabled = true;
+        if (!guideFixture.canvas->setCanvasSnapConfig(config)) {
+            throw std::runtime_error("unable to configure benchmark snap guides");
+        }
+    };
+    const auto snapTargets = [&](int index) {
+        const qreal offset = index & 1;
+        return SnowCanvasSnapGuideTargets{{baseSelection.center().x() + offset, 240.0},
+                                          {baseSelection.center().y() + offset, 180.0}};
+    };
+    runGuide(QStringLiteral("snap-guide-targets-unchanged"), prepareSnap,
+             [&](BenchmarkFixture& guideFixture, int) {
+                 if (!guideFixture.canvas->setCanvasSnapGuideTargets(snapTargets(0))) {
+                     throw std::runtime_error("unable to apply unchanged benchmark snap targets");
+                 }
+             });
+    runGuide(QStringLiteral("snap-guide-targets-changed"), prepareSnap,
+             [&](BenchmarkFixture& guideFixture, int index) {
+                 if (!guideFixture.canvas->setCanvasSnapGuideTargets(snapTargets(index))) {
+                     throw std::runtime_error("unable to apply changed benchmark snap targets");
+                 }
+             });
+
+    const auto prepareSelectionCenterGuide = [](BenchmarkFixture& guideFixture) {
+        guideFixture.renderer->setSelectionCenterGuideLineColor(QColor(0x40, 0x96, 0xff));
+    };
+    runGuide(QStringLiteral("selection-center-guide-horizontal-move"), prepareSelectionCenterGuide,
+             [&](BenchmarkFixture& guideFixture, int index) {
+                 guideFixture.renderer->setSelection(baseSelection.translated(index & 1, 0), false);
+             });
+    runGuide(QStringLiteral("selection-center-guide-vertical-move"), prepareSelectionCenterGuide,
+             [&](BenchmarkFixture& guideFixture, int index) {
+                 guideFixture.renderer->setSelection(baseSelection.translated(0, index & 1), false);
+             });
+    runGuide(QStringLiteral("selection-center-guide-fixed-center-resize"),
+             prepareSelectionCenterGuide, [&](BenchmarkFixture& guideFixture, int index) {
+                 const qreal offset = index & 1;
+                 guideFixture.renderer->setSelection(
+                     baseSelection.adjusted(-offset, -offset, offset, offset), false);
+             });
 
     createSpotlightCutout(canvas);
     run(QStringLiteral("active-spotlight"), [&](int index) {
@@ -703,7 +1090,10 @@ int main(int argc, char** argv) {
 
     const QList<QScreen*> screens = QGuiApplication::screens();
     const bool hasSecondScreen = screens.size() > 1;
-    if (hasSecondScreen) {
+    const bool crossMonitorRequested = !parser.isSet(QStringLiteral("scenario")) ||
+                                       parser.values(QStringLiteral("scenario"))
+                                           .contains(QStringLiteral("cross-monitor-selection"));
+    if (hasSecondScreen && crossMonitorRequested) {
         fixture.window.move(screens.at(1)->availableGeometry().center() -
                             QPoint(surfaceSize.width() / 2, surfaceSize.height() / 2));
         QApplication::processEvents();
@@ -719,7 +1109,8 @@ int main(int argc, char** argv) {
     try {
         const QJsonObject summary = writeReports(
             reports, parser.value(QStringLiteral("jsonl")), parser.value(QStringLiteral("summary")),
-            parser.value(QStringLiteral("html")), surfaceSize, canvas.devicePixelRatioF());
+            parser.value(QStringLiteral("html")), surfaceSize, canvas.size(),
+            canvas.devicePixelRatioF(), translucent);
         QTextStream(stdout) << QJsonDocument(summary).toJson(QJsonDocument::Indented);
         return 0;
     } catch (const std::exception& error) {

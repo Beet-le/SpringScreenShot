@@ -6,6 +6,7 @@ mod pointer_idle;
 mod pointer_intent;
 mod pointer_selection;
 mod policy;
+mod quick_selection;
 
 impl Editor {
     pub fn process_input(
@@ -37,6 +38,17 @@ impl Editor {
         document: &DocumentModel,
         event: PointerEvent,
     ) -> Result<InteractionOutput, ErrorCode> {
+        if self.selection_pointer_button() == Some(PointerButton::Secondary) {
+            return self.process_selection_pointer_event(document, event);
+        }
+        if matches!(
+            event.event_type,
+            PointerEventType::Down | PointerEventType::DoubleClick
+        ) && event.button == Some(PointerButton::Secondary)
+            && self.can_start_quick_selection()
+        {
+            return self.handle_secondary_selection_pointer_down(document, event);
+        }
         if self.state.active_tool == ActiveTool::AutoFilter {
             return self.process_auto_filter_pointer_event(document, event);
         }
@@ -409,6 +421,47 @@ mod stroke_cursor_tests {
             );
             assert!(!editor.state.stroke_cursor_active);
         }
+    }
+
+    #[test]
+    fn eraser_filters_brush_hover_uses_native_cursor_without_invalidating_overlays() {
+        let document = DocumentModel::new();
+        let mut editor = Editor::new(EngineConfig::default()).unwrap();
+        editor.set_surface_size(200, 200).unwrap();
+        editor.set_active_tool(ActiveTool::BrushEraser).unwrap();
+        editor
+            .set_brush_eraser_creation_style(
+                crate::BrushEraserStyle { stroke_width: 31.0 },
+                crate::BRUSH_ERASER_STYLE_PROPERTY_STROKE_WIDTH,
+            )
+            .unwrap();
+        let revision = editor.overlay_input_revision();
+        for (event_type, position) in [
+            (PointerEventType::Enter, Point::new(120.0, 80.0)),
+            (PointerEventType::Move, Point::new(140.0, 90.0)),
+        ] {
+            let update = editor
+                .process_input(&document, pointer(event_type, position))
+                .unwrap();
+            assert_eq!(
+                update.interaction.cursor,
+                CursorCommand::Set(CursorStyle::Stroke)
+            );
+            assert!(editor.state.stroke_cursor_active);
+            assert_eq!(editor.overlay_input_revision(), revision);
+        }
+        let update = editor
+            .process_input(
+                &document,
+                pointer(PointerEventType::Leave, Point::new(140.0, 90.0)),
+            )
+            .unwrap();
+        assert_eq!(
+            update.interaction.cursor,
+            CursorCommand::Set(CursorStyle::Default)
+        );
+        assert!(!editor.state.stroke_cursor_active);
+        assert_eq!(editor.overlay_input_revision(), revision);
     }
 
     #[test]

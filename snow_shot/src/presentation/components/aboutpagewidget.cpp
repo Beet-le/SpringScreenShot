@@ -1,3 +1,4 @@
+#include "snow_shot/app/edition.h"
 #include "snow_shot/presentation/components/aboutpagewidget.h"
 #include "widgets/detail/pointer_region.h"
 
@@ -117,8 +118,8 @@ class AboutHeroSurface final : public QFrame {
         path.addRect(QRectF(0, m_radius, width(), height() - m_radius));
         path.setFillRule(Qt::WindingFill);
         QLinearGradient gradient(rect().topLeft(), QPointF(rect().left(), rect().bottom()));
-        gradient.setColorAt(0, m_start);
-        gradient.setColorAt(1, m_end);
+        gradient.setColorAt(0, styles::mainWindowBackgroundColor(this, m_start));
+        gradient.setColorAt(1, styles::mainWindowBackgroundColor(this, m_end));
         painter.fillPath(path, gradient);
     }
 
@@ -145,7 +146,10 @@ class AboutArtwork final : public QWidget {
         const auto translated = [](const char* source) {
             return QCoreApplication::translate("AboutPageWidget", source).toHtmlEscaped().toUtf8();
         };
-        svg.replace("{{product}}", translated(QT_TRANSLATE_NOOP("AboutPageWidget", "Snow Shot")));
+        svg.replace("{{product}}",
+                    snow_shot::app::edition::isMini
+                        ? snow_shot::app::edition::productName().toHtmlEscaped().toUtf8()
+                        : translated(QT_TRANSLATE_NOOP("AboutPageWidget", "Snow Shot")));
         svg.replace("{{moment}}",
                     translated(QT_TRANSLATE_NOOP("AboutPageWidget", "Make every moment clear.")));
         svg.replace("{{ocr}}",
@@ -315,6 +319,7 @@ QUrl aboutProjectUrl(const QString& suffix = {}) {
 
 struct AboutPageWidget::Ui {
     styles::ThemeColorScheme scheme;
+    qreal backgroundOpacity = 1.0;
     PageContainerWidget* container = nullptr;
     AboutHeroSurface* hero = nullptr;
     QBoxLayout* heroLayout = nullptr;
@@ -361,7 +366,7 @@ struct AboutPageWidget::Ui {
     QWidget* updateActionBlank = nullptr;
     QStackedLayout* updateActions = nullptr;
     QGridLayout* resourceLayout = nullptr;
-    std::array<AboutResourceButton*, 5> resources{};
+    std::array<AboutResourceButton*, 4> resources{};
     QLabel* linkError = nullptr;
     AdDivider* footerDivider = nullptr;
     QBoxLayout* footerLayout = nullptr;
@@ -557,9 +562,7 @@ AboutPageWidget::AboutPageWidget(QWidget* parent, UrlOpener urlOpener,
             switch (m_ui->updates->status().state) {
             case UpdateState::Available:
 #ifdef Q_OS_MACOS
-                openProjectLink(m_ui->updates->status().downloadUrl.isEmpty()
-                                    ? QUrl(QStringLiteral(SNOW_SHOT_WEBSITE_URL))
-                                    : m_ui->updates->status().downloadUrl);
+                openProjectLink(m_ui->updates->status().downloadUrl);
 #else
                 m_ui->updates->download();
 #endif
@@ -579,7 +582,6 @@ AboutPageWidget::AboutPageWidget(QWidget* parent, UrlOpener urlOpener,
         new AboutResourceButton(QStringLiteral("aboutWebsite"), outlined::Global(), m_ui->body),
         new AboutResourceButton(QStringLiteral("aboutSourceCode"), outlined::Code(), m_ui->body),
         new AboutResourceButton(QStringLiteral("aboutFeedback"), outlined::Comment(), m_ui->body),
-        new AboutResourceButton(QStringLiteral("aboutQqGroup2"), outlined::Qq(), m_ui->body),
         new AboutResourceButton(QStringLiteral("aboutQqGroup3"), outlined::Qq(), m_ui->body)};
     m_ui->bodyLayout->addLayout(m_ui->resourceLayout);
     m_ui->linkError = aboutLabel(QStringLiteral("aboutLinkError"), m_ui->body);
@@ -639,10 +641,10 @@ AboutPageWidget::AboutPageWidget(QWidget* parent, UrlOpener urlOpener,
     connect(m_ui->resources[2], &QAbstractButton::clicked, this,
             [this]() { openProjectLink(aboutProjectUrl(QStringLiteral("/issues"))); });
     connect(m_ui->resources[3], &QAbstractButton::clicked, this,
-            [this]() { openProjectLink(QUrl(QStringLiteral(SNOW_SHOT_QQ_GROUP_2_URL))); });
-    connect(m_ui->resources[4], &QAbstractButton::clicked, this,
             [this]() { openProjectLink(QUrl(QStringLiteral(SNOW_SHOT_QQ_GROUP_3_URL))); });
     connect(&themeManager, &styles::ThemeManager::themeChanged, this, &AboutPageWidget::applyTheme);
+    connect(&adqt::theme::ThemeManager::instance(), &adqt::theme::ThemeManager::themeChanged, this,
+            [this] { updateSkinBackgrounds(); });
     applyTheme(m_ui->scheme);
     content->installEventFilter(this);
     m_ui->container->scrollArea()->viewport()->installEventFilter(this);
@@ -655,6 +657,7 @@ AboutPageWidget::~AboutPageWidget() {
 
 void AboutPageWidget::applyTheme(const styles::ThemeColorScheme& scheme) {
     m_ui->scheme = scheme;
+    m_ui->backgroundOpacity = styles::mainWindowBackgroundOpacity(this);
     const auto& metric = scheme.metricAlias;
     const auto& colors = scheme.map;
     const QColor violet(scheme.appearance == styles::ThemeAppearance::Dark ? "#b58aec" : "#7052d8");
@@ -697,30 +700,8 @@ void AboutPageWidget::applyTheme(const styles::ThemeColorScheme& scheme) {
         m_ui->updateActions->setSpacing(metric.paddingXS);
         const int progressHeight = qMax(4, metric.paddingXXS);
         m_ui->updateProgress->setFixedHeight(progressHeight);
-        m_ui->updateProgress->setStyleSheet(
-            QStringLiteral("QProgressBar#aboutUpdateProgress { background: %1; border: none; "
-                           "border-radius: %3px; } QProgressBar#aboutUpdateProgress::chunk { "
-                           "background: %2; border-radius: %3px; }")
-                .arg(colors.colorFillSecondary.name(QColor::HexArgb),
-                     colors.colorPrimary.name(QColor::HexArgb))
-                .arg(progressHeight / 2));
     }
-    const QColor versionBackground =
-        blendAboutColor(colors.colorBgLayout, colors.colorBgContainer, 0.8);
-    m_ui->versionPanel->setStyleSheet(
-        QStringLiteral("QFrame#aboutVersionPanel { background-color: %1; border: 1px solid %2; "
-                       "border-radius: %3px; }")
-            .arg(versionBackground.name(QColor::HexArgb),
-                 colors.colorBorderSecondary.name(QColor::HexArgb))
-            .arg(metric.borderRadiusLG));
-    const QString badgeStyle =
-        QStringLiteral("QLabel { background-color: %1; border: 1px solid %2; "
-                       "border-radius: %3px; padding: 1px 8px; }")
-            .arg(blendAboutColor(violet, colors.colorBgContainer, 0.08).name(QColor::HexArgb),
-                 blendAboutColor(violet, colors.colorBgContainer, 0.22).name(QColor::HexArgb))
-            .arg(metric.borderRadiusSM);
-    m_ui->openSource->setStyleSheet(badgeStyle);
-    m_ui->previewBadge->setStyleSheet(badgeStyle);
+    updateBackgroundStyles();
     styleAboutLabel(m_ui->openSource, metric.fontSizeSM - 2, QFont::Normal, violet);
     styleAboutLabel(m_ui->previewBadge, metric.fontSizeSM - 2, QFont::Normal, violet);
     styleAboutLabel(m_ui->productName, metric.fontSizeXL, QFont::DemiBold, colors.colorText);
@@ -761,12 +742,65 @@ void AboutPageWidget::applyTheme(const styles::ThemeColorScheme& scheme) {
     retranslateUi();
 }
 
+void AboutPageWidget::updateSkinBackgrounds() {
+    const qreal opacity = styles::mainWindowBackgroundOpacity(this);
+    if (m_ui->backgroundOpacity == opacity) {
+        return;
+    }
+    m_ui->backgroundOpacity = opacity;
+    updateBackgroundStyles();
+    m_ui->hero->update();
+}
+
+void AboutPageWidget::updateBackgroundStyles() {
+    const auto& scheme = m_ui->scheme;
+    const auto& metric = scheme.metricAlias;
+    const auto& colors = scheme.map;
+    const QColor violet(scheme.appearance == styles::ThemeAppearance::Dark ? "#b58aec" : "#7052d8");
+    if (m_ui->updateStatus != nullptr) {
+        const int progressHeight = qMax(4, metric.paddingXXS);
+        m_ui->updateProgress->setStyleSheet(
+            QStringLiteral("QProgressBar#aboutUpdateProgress { background: %1; border: none; "
+                           "border-radius: %3px; } QProgressBar#aboutUpdateProgress::chunk { "
+                           "background: %2; border-radius: %3px; }")
+                .arg(styles::mainWindowBackgroundColor(m_ui->updateProgress,
+                                                       colors.colorFillSecondary)
+                         .name(QColor::HexArgb),
+                     styles::mainWindowBackgroundColor(m_ui->updateProgress, colors.colorPrimary)
+                         .name(QColor::HexArgb))
+                .arg(progressHeight / 2));
+    }
+    const QColor versionBackground =
+        blendAboutColor(colors.colorBgLayout, colors.colorBgContainer, 0.8);
+    m_ui->versionPanel->setStyleSheet(
+        QStringLiteral("QFrame#aboutVersionPanel { background-color: %1; border: 1px solid %2; "
+                       "border-radius: %3px; }")
+            .arg(styles::mainWindowBackgroundColor(m_ui->versionPanel, versionBackground)
+                     .name(QColor::HexArgb),
+                 colors.colorBorderSecondary.name(QColor::HexArgb))
+            .arg(metric.borderRadiusLG));
+    const QString badgeStyle =
+        QStringLiteral("QLabel { background-color: %1; border: 1px solid %2; "
+                       "border-radius: %3px; padding: 1px 8px; }")
+            .arg(styles::mainWindowBackgroundColor(
+                     m_ui->openSource, blendAboutColor(violet, colors.colorBgContainer, 0.08))
+                     .name(QColor::HexArgb),
+                 blendAboutColor(violet, colors.colorBgContainer, 0.22).name(QColor::HexArgb))
+            .arg(metric.borderRadiusSM);
+    m_ui->openSource->setStyleSheet(badgeStyle);
+    m_ui->previewBadge->setStyleSheet(badgeStyle);
+}
+
 void AboutPageWidget::retranslateUi() {
     refreshUpdateStatus();
     const bool hasVersion = !m_version.trimmed().isEmpty();
-    setAccessibleName(tr("About Snow Shot"));
-    m_ui->productName->setText(tr("Snow Shot"));
-    m_ui->logo->setAccessibleName(tr("Snow Shot logo"));
+    setAccessibleName(snow_shot::app::edition::isMini
+                          ? tr("About %1").arg(snow_shot::app::edition::productName())
+                          : tr("About Snow Shot"));
+    m_ui->productName->setText(snow_shot::app::edition::productName());
+    m_ui->logo->setAccessibleName(snow_shot::app::edition::isMini
+                                      ? tr("%1 logo").arg(snow_shot::app::edition::productName())
+                                      : tr("Snow Shot logo"));
     m_ui->openSource->setText(tr("Free · Open source"));
     const QColor violet(m_ui->scheme.appearance == styles::ThemeAppearance::Dark ? "#b58aec"
                                                                                  : "#7052d8");
@@ -809,10 +843,6 @@ void AboutPageWidget::retranslateUi() {
                                 tr("Make the next experience better"),
                                 aboutProjectUrl(QStringLiteral("/issues")));
     m_ui->resources[3]->setCopy(
-        tr("QQ Group 2"),
-        tr("Discussion and support · Group No. %1").arg(QStringLiteral("895818102")),
-        QUrl(QStringLiteral(SNOW_SHOT_QQ_GROUP_2_URL)));
-    m_ui->resources[4]->setCopy(
         tr("QQ Group 3"),
         tr("Discussion and support · Group No. %1").arg(QStringLiteral("1037819112")),
         QUrl(QStringLiteral(SNOW_SHOT_QQ_GROUP_3_URL)));
@@ -822,7 +852,10 @@ void AboutPageWidget::retranslateUi() {
                           tr("Free and open-source software. Distributed without any warranty.")));
     m_ui->copyright->setText(
         tr("Copyright © %1 %2").arg(QStringLiteral("2025–2026"), QStringLiteral("mg-chao")));
-    m_ui->slogan->setText(tr("Snow Shot · Make expression clearer"));
+    m_ui->slogan->setText(
+        snow_shot::app::edition::isMini
+            ? tr("%1 · Make expression clearer").arg(snow_shot::app::edition::productName())
+            : tr("Snow Shot · Make expression clearer"));
     m_ui->linkError->setText(m_failedUrl.isEmpty()
                                  ? QString()
                                  : tr("Could not open the link. Open %1 in your browser.")
@@ -888,7 +921,7 @@ void AboutPageWidget::updateLayout() {
         separator->setFixedHeight(separatorHeight);
     }
     // Wide layouts share a six-column grid: the three project links span two columns each
-    // and the two QQ group cards split the second row evenly. Narrow layouts stack.
+    // and the QQ group card spans the second row. Narrow layouts stack.
     const int resourceColumns = wide ? 6 : 1;
     if (m_ui->resourceColumns != resourceColumns) {
         for (auto* resource : m_ui->resources) {
@@ -902,11 +935,10 @@ void AboutPageWidget::updateLayout() {
                 m_ui->resourceLayout->addWidget(m_ui->resources[static_cast<size_t>(i)], 0, i * 2,
                                                 1, 2);
             }
-            m_ui->resourceLayout->addWidget(m_ui->resources[3], 1, 0, 1, 3);
-            m_ui->resourceLayout->addWidget(m_ui->resources[4], 1, 3, 1, 3);
+            m_ui->resourceLayout->addWidget(m_ui->resources[3], 1, 0, 1, 6);
         } else {
-            for (int i = 0; i < 5; ++i) {
-                m_ui->resourceLayout->addWidget(m_ui->resources[static_cast<size_t>(i)], i, 0);
+            for (size_t i = 0; i < m_ui->resources.size(); ++i) {
+                m_ui->resourceLayout->addWidget(m_ui->resources[i], static_cast<int>(i), 0);
             }
         }
         m_ui->resourceColumns = resourceColumns;
@@ -960,7 +992,10 @@ void AboutPageWidget::refreshUpdateStatus() {
         text = tr("Automatic updates are unavailable for this copy.");
         break;
     case UpdateState::Idle:
-        text = status.version.isEmpty() ? tr("Check for a newer version of Snow Shot.")
+        text = status.version.isEmpty() ? (snow_shot::app::edition::isMini
+                                               ? tr("Check for a newer version of %1.")
+                                                     .arg(snow_shot::app::edition::productName())
+                                               : tr("Check for a newer version of Snow Shot."))
                                         : tr("You are up to date.");
         if (!status.version.isEmpty()) {
             statusIcon = outlined::CheckCircle();
@@ -974,8 +1009,8 @@ void AboutPageWidget::refreshUpdateStatus() {
     case UpdateState::Available:
         text = tr("Update available: %1").arg(status.version);
 #ifdef Q_OS_MACOS
-        action =
-            status.downloadUrl.isEmpty() ? tr("Download from website") : tr("Download from GitHub");
+        action = status.downloadUrl.host() == u"gitee.com" ? tr("Download from Gitee")
+                                                           : tr("Download from GitHub");
 #else
         action = tr("Download update");
 #endif

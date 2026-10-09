@@ -1,5 +1,6 @@
 #include "../../presentation/pinned/pinnedwindowplatform.h"
 #include "snow_shot/presentation/screenshotpinnedwindow.h"
+#include "snow_shot/presentation/pinnedwindowselectioncontroller.h"
 #include "pinnedwindownative.h"
 #include "../../presentation/pinned/screenshotpinnednativegeometrycontroller.h"
 #include "../../presentation/pinned/screenshotpinnedgeometrymapping.h"
@@ -7,6 +8,7 @@
 #include "snow_shot/presentation/screenshotpinnededitcontroller.h"
 #include <QWindow>
 #include <QCursor>
+#include <QTimer>
 #include <qt_windows.h>
 #include <windowsx.h>
 #include <algorithm>
@@ -175,6 +177,47 @@ bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QBy
             }
         }
 
+        if ((nativeMessage->message == WM_NCLBUTTONDOWN ||
+             nativeMessage->message == WM_NCLBUTTONDBLCLK) &&
+            window.m_selectionController && window.m_selectionController->selectedCount() > 0 &&
+            !window.m_selectionController->isSelectable(&window) &&
+            (GetKeyState(VK_CONTROL) & 0x8000) == 0) {
+            // Excluded modes keep their native caption/resize behavior. Their
+            // plain press still clears the selection before USER32 starts it.
+            window.m_selectionController->clearSelection();
+        }
+
+        if (window.m_lockedMode) {
+            if (nativeMessage->message == WM_NCHITTEST) {
+                window.clearWindowDragCursor();
+                if (result)
+                    *result = HTCLIENT;
+                return true;
+            }
+            const WPARAM command = nativeMessage->wParam & 0xfff0;
+            const bool systemGeometryCommand = nativeMessage->message == WM_SYSCOMMAND &&
+                                               (command == SC_MOVE || command == SC_SIZE);
+            const bool geometryPress =
+                nativeMessage->message == WM_NCLBUTTONDOWN &&
+                (nativeMessage->wParam == HTCAPTION ||
+                 resizeEdgesForNativeHitTest(nativeMessage->wParam) != Qt::Edges());
+            if (systemGeometryCommand || geometryPress ||
+                nativeMessage->message == WM_ENTERSIZEMOVE) {
+                window.showLockedReadout();
+                if (result)
+                    *result = 0;
+                return true;
+            }
+            if (nativeMessage->message == WM_MOVING || nativeMessage->message == WM_SIZING) {
+                writeNativeRect(window.authoritativeNativeGeometry(),
+                                pointerFromLParam<RECT>(nativeMessage->lParam));
+                window.showLockedReadout();
+                if (result)
+                    *result = TRUE;
+                return true;
+            }
+        }
+
         // The draggable image and resize frame are non-client regions, so Qt's
         // widget Enter/Leave events alone do not cover them. Arm non-client
         // leave tracking after Qt dispatch, which may replace the registration.
@@ -217,6 +260,7 @@ bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QBy
         // WM_EXITSIZEMOVE and mouse release still finish the transaction.
         const bool pendingSystemMoveHandoff =
             nativeMessage->message == WM_CAPTURECHANGED && nativeMessage->lParam == 0 &&
+            !window.m_auxiliaryWindowInteractionActive &&
             window.m_nativeGeometryController != nullptr &&
             window.m_nativeGeometryController->phase() ==
                 ScreenshotPinnedNativeGeometryController::Phase::MovePending;
@@ -226,10 +270,21 @@ bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QBy
                                      reinterpret_cast<HWND>(nativeMessage->lParam) != pinnedHwnd));
         const bool resizeCancelled =
             window.m_systemSizingActive && nativeMessage->message == WM_CANCELMODE;
-        if (window.m_interactionPlacement &&
-            (nativeMessage->message == WM_CANCELMODE ||
-             (nativeMessage->message == WM_CAPTURECHANGED &&
-              reinterpret_cast<HWND>(nativeMessage->lParam) != pinnedHwnd))) {
+        const bool captureLost = nativeMessage->message == WM_CANCELMODE ||
+                                 (nativeMessage->message == WM_CAPTURECHANGED &&
+                                  reinterpret_cast<HWND>(nativeMessage->lParam) != pinnedHwnd);
+        // Qt releases its automatic capture before dispatching the button-up
+        // event. Keep a pending click alive for that release; explicit shared
+        // geometry owns capture until its transaction has ended instead.
+        const bool automaticButtonRelease = nativeMessage->message == WM_CAPTURECHANGED &&
+                                            nativeMessage->lParam == 0 &&
+                                            (GetKeyState(VK_LBUTTON) & 0x8000) == 0;
+        if (captureLost && (!automaticButtonRelease || window.m_selectionGeometryActive) &&
+            window.m_selectionController &&
+            window.m_selectionController->cancelPointerInteraction(&window)) {
+            return false;
+        }
+        if (window.m_interactionPlacement && captureLost) {
             window.endControlledInteraction(true);
         } else if (moveCancelled || resizeCancelled) {
             static_cast<void>(window.finishNativeGeometryInteraction());
@@ -239,8 +294,8 @@ bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QBy
             }
             if (window.m_editController != nullptr) {
                 window.m_editController->endTemporaryResizeWindowTool();
-                window.m_editController->endNativeWindowInteraction();
             }
+            window.endAuxiliaryWindowInteraction();
         }
         if (nativeMessage->message == WM_WINDOWPOSCHANGING &&
             window.m_nativeGeometryController != nullptr) {
@@ -278,15 +333,37 @@ bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QBy
                 if (!window.m_presented || (sizeRequested && window.m_systemSizingActive)) {
                     position->flags |= SWP_NOCOPYBITS;
                 }
+                if (window.m_nativeGeometryController->targetGeometry().isValid()) {
+                    // The controller owns physical geometry and the caller owns
+                    // pixel preservation. Qt's default handler re-rounds this
+                    // rectangle through DIPs and adds SWP_NOCOPYBITS on resize,
+                    // turning passive layered-surface corrections into a paint loop.
+                    if (result)
+                        *result = 0;
+                    return true;
+                }
             }
         }
 
         if (nativeMessage->message == WM_DPICHANGED &&
             window.m_nativeGeometryController != nullptr) {
             auto* suggestedRect = pointerFromLParam<RECT>(nativeMessage->lParam);
-            if (suggestedRect != nullptr && !window.m_presented) {
+            const bool shakingDuringApply =
+                window.m_attentionOrigin.isValid() && window.m_platformApplying;
+            if (!shakingDuringApply)
+                window.stopAttentionShake();
+            if (shakingDuringApply) {
+                // A transient offset can cross a display boundary. Finish the
+                // current native transaction before returning to its origin;
+                // never adopt a DPI resize as part of an attention animation.
+                if (suggestedRect)
+                    writeNativeRect(window.m_nativeGeometryController->targetGeometry(),
+                                    suggestedRect);
+                QTimer::singleShot(0, &window, [&window] { window.stopAttentionShake(); });
+            } else if (suggestedRect != nullptr && !window.m_presented) {
                 writeNativeRect(window.m_nativeGeometryController->targetGeometry(), suggestedRect);
-            } else if (suggestedRect != nullptr && window.m_interactionResizeHandle) {
+            } else if (suggestedRect != nullptr &&
+                       (window.m_interactionResizeHandle || window.m_selectionGeometryActive)) {
                 writeNativeRect(window.m_nativeGeometryController->targetGeometry(), suggestedRect);
             } else if (suggestedRect != nullptr &&
                        window.m_nativeGeometryController->adoptDpiTarget(
@@ -353,6 +430,17 @@ bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QBy
                                         GET_Y_LPARAM(nativeMessage->lParam));
             const ScreenshotPinnedGeometryMapping mapping(nativeGeometry, window.size(),
                                                           window.devicePixelRatioF());
+            const QPoint selectionPosition = mapping.localPosition(screenPosition).toPoint();
+            if (window.m_selectionController &&
+                window.m_selectionController->routesPointerToClient(window, selectionPosition)) {
+                // A click may clear/toggle selection. Keep the initial press in
+                // Qt until its drag threshold has chosen a geometry/export gesture.
+                if (!window.m_selectionGeometryActive)
+                    window.updateWindowDragCursor(selectionPosition);
+                if (result)
+                    *result = HTCLIENT;
+                return true;
+            }
             if (window.interactiveResizingEnabled() && nativeGeometry.isValid() &&
                 !nativeGeometry.isEmpty()) {
                 const QSize nativeHit = mapping.nativeHitSize(kResizeHitWidth);
@@ -402,11 +490,19 @@ bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QBy
                     }
                 }
             }
+            // Cursor ownership follows the interaction area. Ctrl only changes
+            // native input routing so Qt can start an export drag; clearing the
+            // host cursor for that client route would make every following Qt
+            // mouse move restore it, alternating the cursor on each movement.
             if (hitTest == HTCAPTION) {
                 window.setWindowDragCursor(window.m_windowDragActive ? Qt::ClosedHandCursor
                                                                      : Qt::OpenHandCursor);
             } else if (!window.m_windowDragActive) {
                 window.clearWindowDragCursor();
+            }
+            if (hitTest == HTCAPTION && (GetKeyState(VK_CONTROL) & 0x8000) &&
+                window.exportDragEnabledAt(mapping.localPosition(screenPosition).toPoint())) {
+                hitTest = HTCLIENT;
             }
             if (result != nullptr) {
                 *result = hitTest;
@@ -475,7 +571,7 @@ bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QBy
             return true;
         }
 
-        if (!window.m_interactionPlacement &&
+        if (!window.m_interactionPlacement && !window.m_selectionGeometryActive &&
             (nativeMessage->message == WM_NCLBUTTONUP || nativeMessage->message == WM_LBUTTONUP)) {
             static_cast<void>(window.finishNativeGeometryInteraction());
             if (nativeMessage->wParam == HTCAPTION || window.m_windowDragActive) {
@@ -483,8 +579,8 @@ bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QBy
             }
             if (window.m_editController != nullptr) {
                 window.m_editController->endTemporaryResizeWindowTool();
-                window.m_editController->endNativeWindowInteraction();
             }
+            window.endAuxiliaryWindowInteraction();
         }
 
         if (nativeMessage->message == WM_NCLBUTTONDOWN) {
@@ -513,9 +609,8 @@ bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QBy
         }
 
         if (nativeMessage->message == WM_ENTERSIZEMOVE) {
-            if (window.m_editController != nullptr && window.m_editController->editMode()) {
-                window.m_editController->beginNativeWindowInteraction();
-            }
+            window.stopAttentionShake();
+            window.beginAuxiliaryWindowInteraction();
             if (window.m_nativeGeometryController != nullptr) {
                 const auto phase = window.m_nativeGeometryController->phase();
                 if (phase == ScreenshotPinnedNativeGeometryController::Phase::ResizePending ||
@@ -572,7 +667,7 @@ bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QBy
             }
         }
 
-        if (nativeMessage->message == WM_EXITSIZEMOVE) {
+        if (nativeMessage->message == WM_EXITSIZEMOVE && !window.m_selectionGeometryActive) {
             static_cast<void>(window.finishNativeGeometryInteraction());
             window.m_systemSizingActive = false;
             if (window.m_windowDragActive) {
@@ -580,8 +675,8 @@ bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QBy
             }
             if (window.m_editController != nullptr) {
                 window.m_editController->endTemporaryResizeWindowTool();
-                window.m_editController->endNativeWindowInteraction();
             }
+            window.endAuxiliaryWindowInteraction();
         }
 
         if (nativeMessage->message == WM_WINDOWPOSCHANGED &&

@@ -213,6 +213,10 @@ class AdModal final : public QObject {
   // Optional window-surface geometry. Empty sizes retain content-driven sizing.
   QScreen* windowScreen() const;
   void setWindowScreen(QScreen* screen);
+  // Optional anchor in global logical coordinates, independent of window ownership.
+  // An empty rectangle restores centering on the owner or available screen.
+  QRect windowAnchorGeometry() const;
+  void setWindowAnchorGeometry(const QRect& geometry);
   QSize windowPreferredSize() const;
   void setWindowPreferredSize(const QSize& size);
   QSize windowMinimumSize() const;
@@ -449,8 +453,6 @@ class AdModal final : public QObject {
   [[nodiscard]] bool showsHeader() const;
   [[nodiscard]] bool showsFooter() const;
   void updateAccessibility();
-  void saveFocusBeforeOpen();
-  void restoreFocusAfterClose();
   bool focusNextPrevChildInModal(bool next);
   QWidget* firstFocusableWidget(bool reverse = false) const;
   QWidget* nextFocusableFrom(QWidget* start, bool next) const;
@@ -533,7 +535,6 @@ class AdModal final : public QObject {
   QPointer<QWidget> footerWidget_;
   QPointer<QShortcut> escShortcut_;
   QPointer<QWidget> initialFocusWidget_;
-  QPointer<QWidget> focusBeforeOpen_;
   QMetaObject::Connection contentWidgetDestroyedConnection_;
   QMetaObject::Connection footerWidgetDestroyedConnection_;
   QMetaObject::Connection ownerWindowDestroyedConnection_;
@@ -544,6 +545,7 @@ class AdModal final : public QObject {
   bool deletionScheduled_ = false;
   bool syncingWindowModeGeometry_ = false;
   QPointer<QScreen> windowScreen_;
+  QRect windowAnchorGeometry_;
   QSize windowPreferredSize_;
   QSize windowMinimumSize_;
   bool windowResizable_ = false;

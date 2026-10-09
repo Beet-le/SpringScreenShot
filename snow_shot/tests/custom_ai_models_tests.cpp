@@ -3,6 +3,7 @@
 #include "snow_shot/storage/configurationschema.h"
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/presentation/components/customaimodelssettingswidget.h"
+#include "snow_shot/presentation/components/formfields.h"
 #include "snow_shot/presentation/components/settingspagewidget.h"
 #include "snow_shot/presentation/components/sectionheaderwidget.h"
 #include "snow_shot/storage/settingsadapters.h"
@@ -10,6 +11,7 @@
 #include "snow_shot/presentation/globalshortcutmanager.h"
 #include "snow_shot/presentation/languagemanager.h"
 #include "snow_shot/presentation/styles/thememanager.h"
+#include "theme/theme_manager.h"
 #include "widgets/button.h"
 #include "widgets/form.h"
 #include "widgets/input_line_edit.h"
@@ -27,6 +29,7 @@
 #include <QTcpSocket>
 #include <QElapsedTimer>
 #include <QApplication>
+#include <QPointer>
 #include <QMouseEvent>
 #include <QDir>
 #include <QFile>
@@ -34,6 +37,8 @@
 #include <QJsonDocument>
 #include <QLabel>
 #include <QLayout>
+#include <QImage>
+#include <QPainter>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QEventLoop>
@@ -43,6 +48,7 @@
 using namespace snow_shot;
 using namespace adqt::widgets;
 namespace settings = snow_shot::presentation::settings;
+namespace form_fields = snow_shot::presentation::components::form_fields;
 namespace {
 void clickReset(QWidget* button) {
     const QPointF local = button->rect().center();
@@ -66,6 +72,74 @@ void flush() {
     settle.exec();
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     QCoreApplication::processEvents();
+}
+class SkinBackdrop final : public QWidget {
+  public:
+    QColor color = QColor(35, 90, 145);
+
+  protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        painter.fillRect(rect(), color);
+    }
+};
+
+void customAiModelRowsRespectSkinMask(const settings::SettingsRegistry& registry,
+                                      settings::SettingsRuntimeSession& session) {
+    SkinBackdrop backdrop;
+    backdrop.resize(880, 760);
+    SettingsPageWidget page(registry, QStringLiteral("connections-services"), session, &backdrop);
+    page.resize(backdrop.size());
+    backdrop.show();
+    page.show();
+    page.reveal({QStringLiteral("connections-services"), QStringLiteral("ai-model"), {}});
+    flush();
+    auto* row = page.findChild<QWidget*>(QStringLiteral("customAiModelRow:") +
+                                         session.customAiModels().first().id);
+    require(row != nullptr && row->width() > 100,
+            "seeded custom model mask fixture has a visible row");
+    const QColor fill =
+        presentation::styles::ThemeManager::instance().themeColorScheme().map.colorBgContainer;
+    auto& manager = adqt::theme::ThemeManager::instance();
+    for (const qreal opacity : {0.4, 0.0, 1.0}) {
+        adqt::theme::ThemeOverride overrideValue;
+        overrideValue.backgroundOpacity = opacity;
+        manager.setScopeOverride(&backdrop, overrideValue);
+        flush();
+        QImage rowImage(row->size(), QImage::Format_ARGB32_Premultiplied);
+        rowImage.fill(Qt::transparent);
+        row->render(&rowImage, QPoint(), QRegion(), QWidget::DrawChildren);
+        const QPoint sample(row->width() / 2, 5);
+        require(std::abs(rowImage.pixelColor(sample).alpha() - qRound(fill.alpha() * opacity)) <= 1,
+                "custom model row applies exactly one live scoped mask to its own fill");
+        QImage composite(row->size(), QImage::Format_ARGB32_Premultiplied);
+        composite.fill(backdrop.color);
+        {
+            QPainter painter(&composite);
+            painter.drawImage(QPoint(), rowImage);
+        }
+        const QColor actual = composite.pixelColor(sample);
+        const qreal alpha = static_cast<qreal>(fill.alphaF()) * opacity;
+        require(std::abs(actual.red() -
+                         qRound(fill.red() * alpha + backdrop.color.red() * (1 - alpha))) <= 1 &&
+                    std::abs(actual.green() - qRound(fill.green() * alpha +
+                                                     backdrop.color.green() * (1 - alpha))) <= 1 &&
+                    std::abs(actual.blue() - qRound(fill.blue() * alpha +
+                                                    backdrop.color.blue() * (1 - alpha))) <= 1,
+                "custom model row blends over the skin backdrop and reveals it at zero");
+        const QString reviewDirectory = qEnvironmentVariable("SNOW_SKIN_PAGE_REVIEW_DIR");
+        if (!reviewDirectory.isEmpty()) {
+            require(QDir().mkpath(reviewDirectory), "create seeded custom model review directory");
+            QImage rendered(backdrop.size(), QImage::Format_ARGB32_Premultiplied);
+            rendered.fill(Qt::transparent);
+            backdrop.render(&rendered);
+            require(rendered.save(QDir(reviewDirectory)
+                                      .filePath(QStringLiteral("seeded-ai-models-mask-%1.png")
+                                                    .arg(qRound(opacity * 100)))),
+                    "save seeded custom model skin review");
+        }
+    }
+    manager.clearScopeOverride(&backdrop);
 }
 class EditorPaintObserver final : public QObject {
   public:
@@ -108,7 +182,7 @@ void storageContracts() {
     require(!storage::ConfigurationSchema::normalize(key, QJsonArray{legacy}).valid,
             "reasoning setting requires a boolean");
     legacy.insert(QStringLiteral("supports_reasoning"), false);
-    for (const QJsonValue invalid :
+    for (const QJsonValue& invalid :
          {QJsonValue(0), QJsonValue(17), QJsonValue(1.5), QJsonValue(QStringLiteral("4"))}) {
         legacy.insert(QStringLiteral("concurrency"), invalid);
         require(!storage::ConfigurationSchema::normalize(key, QJsonArray{legacy}).valid,
@@ -204,13 +278,15 @@ void widgetContracts(QApplication& application) {
         settings::BuiltInSettingsBackend backend(shortcuts);
         const auto registry = settings::buildBuiltInSettingsRegistry();
         settings::SettingsRuntimeSession session(registry, backend);
-        SettingsPageWidget page(registry, QStringLiteral("api-configuration"), session);
+        SettingsPageWidget page(registry, QStringLiteral("connections-services"), session);
         page.resize(880, 760);
         page.show();
         flush();
         auto* widget = page.findChild<CustomAiModelsSettingsWidget*>();
         require(widget != nullptr, "page constructs custom model renderer");
-        auto* header = page.findChild<SectionHeaderWidget*>();
+        auto* header = page.findChild<SectionHeaderWidget*>(settings::generatedObjectName(
+            QStringLiteral("settings-section"), QStringLiteral("connections-services-ai-model")));
+        require(header != nullptr, "AI model category header exists");
         auto* reset = header->findChild<AdButton*>(QStringLiteral("sectionResetButton"));
         auto* confirmation = header->findChild<AdPopconfirm*>();
         require(reset != nullptr && reset->isVisible() && reset->isEnabled() &&
@@ -237,6 +313,18 @@ void widgetContracts(QApplication& application) {
         require(observer.frames.size() == 1, "editor geometry is stable from its first paint");
         auto* modal = widget->findChild<AdModal*>(QStringLiteral("customAiModelEditor"));
         require(modal != nullptr, "add opens form");
+        const auto sharedFields = modal->contentWidget()->findChildren<form_fields::FormField*>();
+        require(sharedFields.size() == 7, "AI editor uses seven shared fields");
+        int sharedEdits = 0;
+        int sharedCommits = 0;
+        for (auto* field : sharedFields) {
+            require(!field->item()->isTouched() && !field->item()->isDirty(),
+                    "AI editor initializes a clean AdForm baseline");
+            QObject::connect(field, &form_fields::FormField::valueEdited, modal,
+                             [&sharedEdits] { ++sharedEdits; });
+            QObject::connect(field, &form_fields::FormField::valueCommitted, modal,
+                             [&sharedCommits] { ++sharedCommits; });
+        }
         modal->acceptButton()->click();
         flush();
         require(session.customAiModels().isEmpty(), "empty submission does not create a record");
@@ -401,9 +489,12 @@ void widgetContracts(QApplication& application) {
             ->setChecked(true);
         reasoning->setChecked(true);
         concurrency->setValue(2);
+        require(sharedEdits >= 7 && sharedCommits == 0,
+                "AI form edits and model fetching must remain drafts until Save succeeds");
         modal->acceptButton()->click();
         flush();
         require(session.customAiModels().size() == 1, "create persists one model");
+        require(sharedCommits == 7, "successful AI save commits each changed shared field once");
         const auto original = session.customAiModels().first();
         auto* row = widget->findChild<QWidget*>(QStringLiteral("customAiModelRow:") + original.id);
         require(row != nullptr, "saved model has a list row");
@@ -438,6 +529,21 @@ void widgetContracts(QApplication& application) {
                     original.supportsReasoning && original.model == QStringLiteral("local-id") &&
                     original.concurrency == 2,
                 "key, capabilities, and concurrency persist");
+        QPointer<QWidget> originalRow(row);
+        auto* editAction = row->findChild<AdButton*>(QStringLiteral("edit:") + original.id);
+        page.activateWindow();
+        flush();
+        editAction->setFocus();
+        require(QApplication::focusWidget() == editAction, "focus the model action before theming");
+        auto& themes = presentation::styles::ThemeManager::instance();
+        const auto initialMode = themes.themeMode();
+        themes.setThemeMode(presentation::styles::ThemeMode::Dark);
+        flush();
+        require(originalRow, "theme changes do not rebuild existing model rows");
+        require(QApplication::focusWidget() == editAction,
+                "theme changes preserve the focused model action");
+        themes.setThemeMode(initialMode);
+        flush();
         widget->findChild<AdButton*>(QStringLiteral("copy:") + original.id)->click();
         flush();
         widget->findChild<AdButton*>(QStringLiteral("copy:") + original.id)->click();
@@ -449,6 +555,7 @@ void widgetContracts(QApplication& application) {
                     copied[1].name == QStringLiteral("Personal model (Copy)") &&
                     copied[2].name == QStringLiteral("Personal model (Copy 2)"),
                 "copy duplicates immediately with independent identity and name");
+        customAiModelRowsRespectSkinMask(registry, session);
         observer.frames.clear();
         application.installEventFilter(&observer);
         widget->findChild<AdButton*>(QStringLiteral("edit:") + original.id)->click();
@@ -501,8 +608,15 @@ void widgetContracts(QApplication& application) {
         flush();
         auto* deletion = widget->findChild<AdModal*>(QStringLiteral("customAiModelDeleteModal"));
         require(deletion != nullptr, "delete requests confirmation");
+        AdButton currentFocus(&page);
+        currentFocus.show();
+        page.activateWindow();
+        flush();
+        currentFocus.setFocus(Qt::MouseFocusReason);
+        require(currentFocus.hasFocus(), "establish focus before dismissing AI delete modal");
         deletion->reject();
         flush();
+        require(currentFocus.hasFocus(), "AI delete dismissal must not refocus Add");
         require(session.customAiModels().size() == 3, "cancel delete preserves list");
         widget->findChild<AdButton*>(QStringLiteral("delete:") + copied[2].id)->click();
         flush();
@@ -513,9 +627,21 @@ void widgetContracts(QApplication& application) {
         require(session.customAiModels().size() == 2, "confirmed deletion persists");
         add->click();
         flush();
-        widget->findChild<AdModal*>(QStringLiteral("customAiModelEditor"))->reject();
+        modal = widget->findChild<AdModal*>(QStringLiteral("customAiModelEditor"));
+        int cancelledCommits = 0;
+        for (auto* field : modal->contentWidget()->findChildren<form_fields::FormField*>())
+            QObject::connect(field, &form_fields::FormField::valueCommitted, modal,
+                             [&cancelledCommits] { ++cancelledCommits; });
+        modal->contentWidget()
+            ->findChild<AdLineEdit*>(QStringLiteral("modelName"))
+            ->setText(QStringLiteral("Cancelled draft"));
+        currentFocus.setFocus(Qt::MouseFocusReason);
+        require(currentFocus.hasFocus(), "establish focus before dismissing AI editor");
+        modal->reject();
         flush();
-        require(session.customAiModels().size() == 2, "cancel create preserves list");
+        require(currentFocus.hasFocus(), "AI editor dismissal must not refocus Add");
+        require(session.customAiModels().size() == 2 && cancelledCommits == 0,
+                "cancel create preserves the list and does not commit shared drafts");
 
         const auto beforeReset = session.customAiModels();
         require(storage::ExtendedFeaturesSettings().setTranslationPageEnabled(true),
@@ -531,13 +657,15 @@ void widgetContracts(QApplication& application) {
         flush();
         confirmation->button(AdPopconfirm::StandardButton::Ok)->click();
         flush();
-        require(
-            session.customAiModels().isEmpty() &&
-                storage::ApiConfigurationSettings().customModels().isEmpty() &&
-                widget->findChild<QLabel*>(QStringLiteral("customAiModelsEmpty")) != nullptr &&
-                !session.state(QStringLiteral("api.custom-models")).dirty &&
-                storage::ExtendedFeaturesSettings().translationPageEnabled(),
-            "confirmed reset persists defaults, refreshes custom UI, and stays category-scoped");
+        require(session.customAiModels().isEmpty(), "confirmed reset clears runtime custom models");
+        require(storage::ApiConfigurationSettings().customModels().isEmpty(),
+                "confirmed reset persists default custom models");
+        require(widget->findChild<QLabel*>(QStringLiteral("customAiModelsEmpty")) != nullptr,
+                "confirmed reset refreshes the custom model empty state");
+        require(!session.state(QStringLiteral("api.custom-models")).dirty,
+                "confirmed reset clears the custom model dirty state");
+        require(storage::ExtendedFeaturesSettings().translationPageEnabled(),
+                "confirmed reset preserves unrelated feature preferences");
         require(session.applyCustomAiModels(beforeReset), "restore models for preview");
         flush();
 

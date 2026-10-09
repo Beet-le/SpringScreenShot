@@ -197,6 +197,10 @@
             <translation>No pinned windows</translation>
         </message>
         <message>
+            <source>Not Closed</source>
+            <translation>Not Closed</translation>
+        </message>
+        <message>
             <source>Other / legacy</source>
             <translation>Other / legacy</translation>
         </message>
@@ -219,10 +223,6 @@
         <message>
             <source>Restore</source>
             <translation>Restore</translation>
-        </message>
-        <message>
-            <source>Retained</source>
-            <translation>Retained</translation>
         </message>
         <message>
             <source>Saved records and their open windows will be removed</source>
@@ -435,6 +435,10 @@
             <translation>Always on Top</translation>
         </message>
         <message>
+            <source>Annotation mode</source>
+            <translation>Annotation mode</translation>
+        </message>
+        <message>
             <source>Cancel</source>
             <translation>Cancel</translation>
         </message>
@@ -457,6 +461,14 @@
         <message>
             <source>Close other windows</source>
             <translation>Close other windows</translation>
+        </message>
+        <message>
+            <source>Close pinned window</source>
+            <translation>Close pinned window</translation>
+        </message>
+        <message>
+            <source>Close this pinned window?</source>
+            <translation>Close this pinned window?</translation>
         </message>
         <message>
             <source>Copy original content</source>
@@ -487,6 +499,10 @@
             <translation>Delete Specified Group</translation>
         </message>
         <message>
+            <source>Deselect window</source>
+            <translation>Deselect window</translation>
+        </message>
+        <message>
             <source>Destroy</source>
             <translation>Destroy</translation>
         </message>
@@ -503,12 +519,8 @@
             <translation>Display text recognition results</translation>
         </message>
         <message>
-            <source>Drawing mode</source>
-            <translation>Drawing mode</translation>
-        </message>
-        <message>
-            <source>Enable drawing mode</source>
-            <translation>Enable drawing mode</translation>
+            <source>Enable annotation mode</source>
+            <translation>Enable annotation mode</translation>
         </message>
         <message>
             <source>Exit click-through mode</source>
@@ -543,10 +555,6 @@
             <translation>Image file</translation>
         </message>
         <message>
-            <source>Image files (%1)</source>
-            <translation>Image files (%1)</translation>
-        </message>
-        <message>
             <source>Image size is too large.</source>
             <translation>Image size is too large.</translation>
         </message>
@@ -557,6 +565,14 @@
         <message>
             <source>Load new content</source>
             <translation>Load new content</translation>
+        </message>
+        <message>
+            <source>Lock mode</source>
+            <translation>Lock mode</translation>
+        </message>
+        <message>
+            <source>Locked</source>
+            <translation>Locked</translation>
         </message>
         <message>
             <source>Move window</source>
@@ -573,6 +589,10 @@
         <message>
             <source>Opacity: %1%</source>
             <translation>Opacity: %1%</translation>
+        </message>
+        <message>
+            <source>Preparing cloud upload...</source>
+            <translation>Preparing cloud upload...</translation>
         </message>
         <message>
             <source>Process image</source>
@@ -619,6 +639,10 @@
             <translation>Show main interface</translation>
         </message>
         <message>
+            <source>Supported files (%1)</source>
+            <translation>Supported files (%1)</translation>
+        </message>
+        <message>
             <source>The image could not be saved automatically: %1</source>
             <translation>The image could not be saved automatically: %1</translation>
         </message>
@@ -647,8 +671,43 @@
             <translation>Thumbnail mode</translation>
         </message>
         <message>
+            <source>Uploaded to cloud. Link copied to clipboard.</source>
+            <translation>Uploaded to cloud. Link copied to clipboard.</translation>
+        </message>
+        <message>
+            <source>Uploading to cloud... %1%</source>
+            <translation>Uploading to cloud... %1%</translation>
+        </message>
+        <message>
             <source>Window Management</source>
             <translation>Window Management</translation>
+        </message>
+    </context>
+    <context>
+        <name>WindowGroupSwitcher</name>
+        <message>
+            <source>%1, %2 not closed windows, %3 total</source>
+            <translation>%1, %2 not closed windows, %3 total</translation>
+        </message>
+        <message>
+            <source>Click a group to switch. Esc to cancel.</source>
+            <translation>Click a group to switch. Esc to cancel.</translation>
+        </message>
+        <message>
+            <source>Current</source>
+            <translation>Current</translation>
+        </message>
+        <message>
+            <source>Release shortcut keys or click a group to switch. Esc to cancel.</source>
+            <translation>Release shortcut keys or click a group to switch. Esc to cancel.</translation>
+        </message>
+        <message>
+            <source>Switch Window Group</source>
+            <translation>Switch Window Group</translation>
+        </message>
+        <message>
+            <source>Windows · not closed / total</source>
+            <translation>Windows · not closed / total</translation>
         </message>
     </context>
     <context>
@@ -716,6 +775,118 @@
         <message>
             <source>This group name is already in use</source>
             <translation>This group name is already in use</translation>
+        </message>
+        <message>
+            <source>Unable to create the group or move the selected windows. Try again.</source>
+            <translation>Unable to create the group or move the selected windows. Try again.</translation>
+        </message>
+    </context>
+    <context>
+        <name>snow_shot::presentation::PinnedWindowSelectionController</name>
+        <message numerus="yes">
+            <source>%n selected window(s)</source>
+            <translation>
+            <numerusform>%n selected window</numerusform>
+            <numerusform>%n selected windows</numerusform>
+        </translation>
+        </message>
+        <message>
+            <source>Align Position</source>
+            <translation>Align Position</translation>
+        </message>
+        <message>
+            <source>Align bottom</source>
+            <translation>Align bottom</translation>
+        </message>
+        <message>
+            <source>Align left</source>
+            <translation>Align left</translation>
+        </message>
+        <message>
+            <source>Align right</source>
+            <translation>Align right</translation>
+        </message>
+        <message>
+            <source>Align top</source>
+            <translation>Align top</translation>
+        </message>
+        <message>
+            <source>Cancel</source>
+            <translation>Cancel</translation>
+        </message>
+        <message>
+            <source>Center horizontally</source>
+            <translation>Center horizontally</translation>
+        </message>
+        <message>
+            <source>Center vertically</source>
+            <translation>Center vertically</translation>
+        </message>
+        <message>
+            <source>Close</source>
+            <translation>Close</translation>
+        </message>
+        <message>
+            <source>Close Other Windows</source>
+            <translation>Close Other Windows</translation>
+        </message>
+        <message>
+            <source>Delete Empty Groups</source>
+            <translation>Delete Empty Groups</translation>
+        </message>
+        <message>
+            <source>Delete Specified Group</source>
+            <translation>Delete Specified Group</translation>
+        </message>
+        <message>
+            <source>Destroy</source>
+            <translation>Destroy</translation>
+        </message>
+        <message numerus="yes">
+            <source>Destroy %n selected window(s)? This action cannot be undone.</source>
+            <translation>
+            <numerusform>Destroy %n selected window? This action cannot be undone.</numerusform>
+            <numerusform>Destroy %n selected windows? This action cannot be undone.</numerusform>
+        </translation>
+        </message>
+        <message>
+            <source>Destroy selected windows</source>
+            <translation>Destroy selected windows</translation>
+        </message>
+        <message>
+            <source>Distribute horizontally</source>
+            <translation>Distribute horizontally</translation>
+        </message>
+        <message>
+            <source>Distribute vertically</source>
+            <translation>Distribute vertically</translation>
+        </message>
+        <message>
+            <source>Group</source>
+            <translation>Group</translation>
+        </message>
+        <message>
+            <source>Lock</source>
+            <translation>Lock</translation>
+        </message>
+        <message>
+            <source>New Group</source>
+            <translation>New Group</translation>
+        </message>
+        <message>
+            <source>The selected windows could not be destroyed.</source>
+            <translation>The selected windows could not be destroyed.</translation>
+        </message>
+        <message>
+            <source>The selected windows could not be moved to the group.</source>
+            <translation>The selected windows could not be moved to the group.</translation>
+        </message>
+    </context>
+    <context>
+        <name>snow_shot::presentation::WindowGroupSwitcherController</name>
+        <message>
+            <source>Could not switch window group. Please try again.</source>
+            <translation>Could not switch window group. Please try again.</translation>
         </message>
     </context>
 </TS>

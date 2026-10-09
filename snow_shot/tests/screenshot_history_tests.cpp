@@ -1,5 +1,6 @@
 #include "physical_key_test_support.h"
 #include <QLineEdit>
+#include <QWheelEvent>
 #include "snow_shot/image/screenshotregionpoints.h"
 #include "snow_shot/presentation/screenshotselectorworkflow.h"
 #include "snow_shot/presentation/screenshotregionpreferences.h"
@@ -14,11 +15,14 @@
 #include "snow_shot/presentation/screenshotintelligentselectionmodel.h"
 #include "snow_shot/presentation/screenshotinteractionstate.h"
 #include "snow_shot/presentation/screenshotoverlayinputhandler.h"
+#include "snow_shot/presentation/screenshotoverlayinteractionadapter.h"
 #include "snow_shot/presentation/screenshotoverlayshortcutcontroller.h"
+#include "snow_shot/presentation/globalshortcuttypes.h"
 #include "snow_shot/presentation/screenshotselectionmodel.h"
 #include "snow_shot/presentation/screenshotshortcutexitconfirmation.h"
 #include "snow_shot/presentation/windowshortcutmanager.h"
 #include "snow_shot/storage/applicationstorage.h"
+#include "snow_shot/storage/configurationstore.h"
 #include "snow_shot/storage/settingsadapters.h"
 
 #include "snow_draw_engine_qt/snow_canvas_runtime.h"
@@ -27,6 +31,7 @@
 #include "widgets/modal.h"
 
 #include <QApplication>
+#include <QMouseEvent>
 #include <QUuid>
 #include <QDir>
 #include <QDirIterator>
@@ -39,6 +44,8 @@
 #include <QKeyEvent>
 #include <QPainterPath>
 #include <QShortcut>
+#include <QScopeGuard>
+#include <QTranslator>
 #include <QTemporaryDir>
 #include <QThread>
 #include <QVector>
@@ -46,11 +53,32 @@
 #include <QWindow>
 
 #include <cstdlib>
+#include <cstring>
+#include <chrono>
+#include <condition_variable>
 #include <iostream>
+#include <mutex>
 #include <optional>
 #include <utility>
 
 namespace storage = snow_shot::storage;
+
+class ScreenshotHistoryServiceTestAccess {
+  public:
+    static const QVector<storage::CaptureHistoryRecord>&
+    records(const ScreenshotHistoryService& history) {
+        return history.m_entries;
+    }
+
+    static std::size_t pendingWrites(const ScreenshotHistoryService& history) {
+        return history.m_pendingWrites.size();
+    }
+
+    static std::shared_future<storage::CaptureHistoryPublishResult>
+    lastWrite(const ScreenshotHistoryService& history) {
+        return history.m_pendingWrites.back().result;
+    }
+};
 
 namespace {
 using snow_shot::platform::PhysicalCursorDirection;
@@ -60,6 +88,11 @@ void require(bool condition, const char* message) {
         std::cerr << message << '\n';
         std::exit(1);
     }
+}
+
+QWheelEvent wheelInput(QPoint angles, QPoint pixels = {}) {
+    return QWheelEvent({}, {}, pixels, angles, Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase,
+                       false);
 }
 
 bool dispatchShortcut(QWidget& receiver, Qt::Key key,
@@ -93,6 +126,19 @@ ScreenshotHistoryEntry takeSnapshot(std::optional<ScreenshotHistoryEntry> snapsh
     return std::move(*snapshot);
 }
 
+bool equalPixels(const QImage& left, const QImage& right) {
+    if (left.size() != right.size())
+        return false;
+    const auto a = left.convertToFormat(QImage::Format_RGBA8888);
+    const auto b = right.convertToFormat(QImage::Format_RGBA8888);
+    for (int y = 0; y < a.height(); ++y) {
+        if (std::memcmp(a.constScanLine(y), b.constScanLine(y),
+                        static_cast<size_t>(a.width()) * 4) != 0)
+            return false;
+    }
+    return true;
+}
+
 void waitForNavigation(ScreenshotHistoryService& history, const char* timeoutMessage) {
     QElapsedTimer timer;
     timer.start();
@@ -102,6 +148,151 @@ void waitForNavigation(ScreenshotHistoryService& history, const char* timeoutMes
     }
     QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
     require(!history.navigationInProgress(), timeoutMessage);
+}
+
+void validationWorkersRetireAndRestart() {
+    struct Lifecycle {
+        std::mutex mutex;
+        std::condition_variable changed;
+        int starts = 0;
+        int exits = 0;
+        int maximumLive = 0;
+    };
+    struct ExitNotice {
+        std::shared_ptr<Lifecycle> lifecycle;
+        ~ExitNotice() {
+            {
+                const std::lock_guard lock(lifecycle->mutex);
+                ++lifecycle->exits;
+            }
+            lifecycle->changed.notify_all();
+        }
+    };
+    class ObservedRepository final : public storage::CaptureHistoryRepository {
+      public:
+        explicit ObservedRepository(std::shared_ptr<Lifecycle> lifecycle)
+            : m_lifecycle(std::move(lifecycle)) {}
+        QVector<storage::CaptureHistoryRecord> records() const override {
+            const std::lock_guard lock(m_mutex);
+            return m_records;
+        }
+        storage::CaptureHistoryUsage usage() const override {
+            return {};
+        }
+        storage::CaptureHistoryPolicy policy() const override {
+            return {};
+        }
+        std::shared_future<storage::CaptureHistoryPublishResult>
+        publish(storage::CaptureHistoryDraft draft) override {
+            thread_local std::unique_ptr<ExitNotice> exitNotice;
+            if (!exitNotice) {
+                exitNotice = std::make_unique<ExitNotice>(m_lifecycle);
+                const std::lock_guard lock(m_lifecycle->mutex);
+                ++m_lifecycle->starts;
+                m_lifecycle->maximumLive =
+                    std::max(m_lifecycle->maximumLive, m_lifecycle->starts - m_lifecycle->exits);
+            }
+            storage::CaptureHistoryRecord record;
+            record.id = draft.id;
+            record.createdUtc = draft.createdUtc;
+            record.canvasBounds = draft.canvasBounds;
+            record.selection = draft.selection;
+            {
+                const std::lock_guard lock(m_mutex);
+                m_records.push_back(record);
+            }
+            std::promise<storage::CaptureHistoryPublishResult> promise;
+            promise.set_value({storage::StorageResult::ok(), record});
+            return promise.get_future().share();
+        }
+        std::optional<storage::CaptureHistoryPayload>
+        load(const storage::CaptureHistoryRecord&) const override {
+            return {};
+        }
+        std::optional<storage::CaptureHistoryAssetSet>
+        displayAssets(const storage::CaptureHistoryRecord&) const override {
+            return {};
+        }
+        std::optional<QImage> loadResultImage(const storage::CaptureHistoryRecord&) const override {
+            return {};
+        }
+        std::optional<storage::PreparedPngImage>
+        loadResultPng(const storage::CaptureHistoryRecord&) const override {
+            return {};
+        }
+        void reportReadFailure(const storage::CaptureHistoryRecord&, const QString&) override {}
+        std::shared_future<storage::StorageResult> remove(const QString&) override {
+            return ready();
+        }
+        std::shared_future<storage::StorageResult> removeMany(QVector<QString>) override {
+            return ready();
+        }
+        std::shared_future<storage::StorageResult>
+        updatePolicy(storage::CaptureHistoryPolicy) override {
+            return ready();
+        }
+        std::shared_future<storage::StorageResult> requestClear() override {
+            return ready();
+        }
+        void drain() override {}
+        QString lastError() const override {
+            return {};
+        }
+
+      private:
+        static std::shared_future<storage::StorageResult> ready() {
+            std::promise<storage::StorageResult> promise;
+            promise.set_value(storage::StorageResult::ok());
+            return promise.get_future().share();
+        }
+        std::shared_ptr<Lifecycle> m_lifecycle;
+        mutable std::mutex m_mutex;
+        QVector<storage::CaptureHistoryRecord> m_records;
+    };
+
+    const auto lifecycle = std::make_shared<Lifecycle>();
+    ObservedRepository repository(lifecycle);
+    ScreenshotDisplaySession displays;
+    CapturedDisplayModel source;
+    source.stableId = QStringLiteral("validation-worker");
+    source.canvasRect = QRect(0, 0, 16, 16);
+    source.imageSourceCanvasRect = source.canvasRect;
+    source.logicalRect = QRect(0, 0, 16, 16);
+    source.physicalRect = QRect(0, 0, 16, 16);
+    source.image = QImage(16, 16, QImage::Format_RGBA8888);
+    source.image.fill(Qt::blue);
+    source.active = true;
+    displays.appendDisplay(std::move(source));
+    SnowCanvasRuntime runtime;
+    ScreenshotSelectionModel selection;
+    selection.setSelectionRect(QRectF(0, 0, 16, 16));
+    ScreenshotInteractionState interaction;
+    interaction.enterOverlayVisible(false);
+    ScreenshotIntelligentSelectionModel intelligent;
+    {
+        ScreenshotHistoryService history({displays, runtime, selection, interaction, intelligent},
+                                         repository);
+        for (int cycle = 1; cycle <= 2; ++cycle) {
+            history.commit(
+                takeSnapshot(history.snapshotCurrent(true), "validation worker snapshot failed"));
+            history.drainPendingWrites();
+            require(repository.records().size() == cycle,
+                    "validation worker restart lost an accepted publication");
+            std::unique_lock lock(lifecycle->mutex);
+            require(lifecycle->changed.wait_for(lock, std::chrono::seconds(7),
+                                                [&]() { return lifecycle->exits == cycle; }),
+                    "idle history validation worker did not actually terminate");
+            require(lifecycle->starts == cycle && lifecycle->maximumLive == 1,
+                    "history validation worker restart overlapped or duplicated workers");
+        }
+        history.commit(takeSnapshot(history.snapshotCurrent(true),
+                                    "shutdown validation worker snapshot failed"));
+    }
+    require(repository.records().size() == 3,
+            "shutdown abandoned an accepted validation job after idle restart");
+    const std::lock_guard lock(lifecycle->mutex);
+    require(lifecycle->starts == 3 && lifecycle->exits == 3 && lifecycle->maximumLive == 1,
+            "shutdown did not finish the restarted validation worker");
 }
 
 QImage solidImage(const QSize& size, QRgb color) {
@@ -125,6 +316,270 @@ CapturedDisplayModel display(QString stableId, QString name, QRect canvasRect, Q
     result.image = std::move(image);
     result.active = true;
     return result;
+}
+
+struct HistoryMetadataFixture {
+    ScreenshotDisplaySession displays;
+    SnowCanvasRuntime runtime;
+    ScreenshotSelectionModel selection;
+    ScreenshotInteractionState interaction;
+    ScreenshotIntelligentSelectionModel intelligent;
+
+    HistoryMetadataFixture() {
+        displays.appendDisplay(display(QStringLiteral("metadata"), QStringLiteral("Metadata"),
+                                       QRect(0, 0, 16, 16),
+                                       solidImage(QSize(16, 16), qRgb(10, 20, 30))));
+        selection.setSelectionRect(QRectF(0, 0, 16, 16));
+        interaction.enterOverlayVisible(false);
+    }
+
+    ScreenshotHistoryServiceContext context() {
+        return {displays, runtime, selection, interaction, intelligent};
+    }
+};
+
+void waitForHistoryWrites(ScreenshotHistoryService& history, std::size_t expected,
+                          const char* message) {
+    QElapsedTimer timer;
+    timer.start();
+    while (ScreenshotHistoryServiceTestAccess::pendingWrites(history) != expected &&
+           timer.elapsed() < 5000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        QThread::msleep(1);
+    }
+    require(ScreenshotHistoryServiceTestAccess::pendingWrites(history) == expected, message);
+}
+
+void idlePublicationsReconcileRepositoryLimits(const QString& root) {
+    storage::CaptureHistoryRepositoryOptions options;
+    options.policy.maxEntries = 3;
+    auto repository = storage::makeCaptureHistoryRepository(root, std::move(options));
+    HistoryMetadataFixture fixture;
+    ScreenshotHistoryService history(fixture.context(), *repository);
+    const auto started = QDateTime::currentDateTimeUtc();
+    for (int cycle = 0; cycle < 20; ++cycle) {
+        auto entry = takeSnapshot(history.snapshotCurrent(true), "metadata snapshot failed");
+        entry.createdUtc = started.addMSecs(cycle);
+        history.commit(std::move(entry));
+        history.resetCaptureNavigation();
+        waitForHistoryWrites(history, 0, "idle history did not reap its completed publication");
+        const auto persisted = repository->records();
+        const auto& metadata = ScreenshotHistoryServiceTestAccess::records(history);
+        require(persisted.size() == std::min(cycle + 1, 3),
+                "repository did not enforce its history limit");
+        require(metadata.size() == persisted.size(),
+                "idle history retained metadata pruned by the repository");
+        for (qsizetype index = 0; index < persisted.size(); ++index) {
+            require(metadata[index].id == persisted[index].id,
+                    "idle history metadata diverged from the repository");
+        }
+    }
+}
+
+void rejectedPublicationsPreservePendingMetadata(const QString& root) {
+    std::mutex gateMutex;
+    std::condition_variable gateChanged;
+    bool entered = false;
+    bool released = false;
+    storage::CaptureHistoryRepositoryOptions options;
+    options.policy.maxEntries = 1;
+    options.operationObserved = [&](storage::CaptureHistoryOperation operation) {
+        if (operation != storage::CaptureHistoryOperation::WorkerStarted)
+            return;
+        std::unique_lock lock(gateMutex);
+        entered = true;
+        gateChanged.notify_all();
+        require(gateChanged.wait_for(lock, std::chrono::seconds(5), [&]() { return released; }),
+                "history publication gate was not released");
+    };
+    auto repository = storage::makeCaptureHistoryRepository(root, std::move(options));
+    HistoryMetadataFixture fixture;
+    ScreenshotHistoryService history(fixture.context(), *repository);
+    QVector<QString> accepted;
+    auto commit = [&]() {
+        auto entry =
+            takeSnapshot(history.snapshotCurrent(true), "pending metadata snapshot failed");
+        const auto id = entry.id;
+        history.commit(std::move(entry));
+        return id;
+    };
+    accepted.push_back(commit());
+    {
+        std::unique_lock lock(gateMutex);
+        require(gateChanged.wait_for(lock, std::chrono::seconds(5), [&]() { return entered; }),
+                "history publication did not reach its gate");
+    }
+    accepted.push_back(commit());
+    accepted.push_back(commit());
+    const QString rejected = commit();
+    waitForHistoryWrites(history, 3, "rejected history placeholder survived while idle");
+    const auto& metadata = ScreenshotHistoryServiceTestAccess::records(history);
+    require(metadata.size() == 3, "refresh lost pending history metadata");
+    for (const auto& record : metadata) {
+        require(record.id != rejected && accepted.contains(record.id),
+                "refresh retained a rejected record or discarded an accepted placeholder");
+    }
+    {
+        const std::lock_guard lock(gateMutex);
+        released = true;
+    }
+    gateChanged.notify_all();
+    waitForHistoryWrites(history, 0, "accepted history publications did not settle");
+    require(repository->records().size() == 1 &&
+                ScreenshotHistoryServiceTestAccess::records(history).size() == 1,
+            "completed history metadata did not follow repository pruning");
+}
+
+void failedPublicationsReleaseMetadata(const QString& root) {
+    HistoryMetadataFixture fixture;
+    {
+        ScreenshotHistoryService history(fixture.context(),
+                                         QDir(root).filePath(QStringLiteral("validation")));
+        auto entry =
+            takeSnapshot(history.snapshotCurrent(true), "invalid metadata snapshot failed");
+        entry.canvasHistory = QByteArrayLiteral("invalid canvas history");
+        history.commit(std::move(entry));
+        waitForHistoryWrites(history, 0, "failed validation was not reaped while idle");
+        require(ScreenshotHistoryServiceTestAccess::records(history).isEmpty(),
+                "failed validation retained its history placeholder");
+    }
+    {
+        storage::CaptureHistoryRepositoryOptions options;
+        options.writeAvailable = false;
+        auto repository = storage::makeCaptureHistoryRepository(
+            QDir(root).filePath(QStringLiteral("publication")), std::move(options));
+        ScreenshotHistoryService history(fixture.context(), *repository);
+        history.commit(
+            takeSnapshot(history.snapshotCurrent(true), "unavailable publication snapshot failed"));
+        waitForHistoryWrites(history, 0, "failed publication was not reaped while idle");
+        require(ScreenshotHistoryServiceTestAccess::records(history).isEmpty(),
+                "failed publication retained its history placeholder");
+    }
+}
+
+void historyDestructionDiscardsQueuedCompletion(const QString& root) {
+    auto repository = storage::makeCaptureHistoryRepository(root);
+    HistoryMetadataFixture fixture;
+    {
+        ScreenshotHistoryService history(fixture.context(), *repository);
+        history.commit(takeSnapshot(history.snapshotCurrent(true), "shutdown snapshot failed"));
+        require(ScreenshotHistoryServiceTestAccess::lastWrite(history).get().storage.success,
+                "shutdown publication failed");
+        // Do not deliver the queued completion until its receiver has been destroyed.
+    }
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    require(repository->records().size() == 1,
+            "history destruction abandoned a completed publication");
+}
+
+void historyNavigationSurvivesIdlePublication(const QString& root, int maximumEntries) {
+    storage::CaptureHistoryRepositoryOptions options;
+    options.policy.maxEntries = maximumEntries;
+    auto repository = storage::makeCaptureHistoryRepository(root, std::move(options));
+    HistoryMetadataFixture fixture;
+    ScreenshotHistoryService history(fixture.context(), *repository);
+    const auto started = QDateTime::currentDateTimeUtc();
+    const QImage originalImage = fixture.displays.displayAt(0).image;
+    auto original =
+        takeSnapshot(history.snapshotCurrent(true), "navigation metadata snapshot failed");
+    original.createdUtc = started;
+    const auto originalId = original.id;
+    history.commit(std::move(original));
+    waitForHistoryWrites(history, 0, "navigation metadata publication did not settle");
+
+    const QImage liveImage = solidImage(QSize(16, 16), qRgb(40, 50, 60));
+    fixture.displays.displayAt(0).image = liveImage;
+    require(history.navigateToRecord(originalId), "could not browse original history record");
+    waitForNavigation(history, "original history record navigation timed out");
+    auto newer = takeSnapshot(history.snapshotCurrent(true), "newer navigation snapshot failed");
+    newer.createdUtc = started.addMSecs(1);
+    const QImage newerImage = solidImage(QSize(16, 16), qRgb(70, 80, 90));
+    newer.displays.front().image = newerImage;
+    history.commit(std::move(newer));
+    waitForHistoryWrites(history, 0, "newer navigation publication did not settle");
+    require(equalPixels(fixture.displays.displayAt(0).image, originalImage),
+            "metadata reconciliation replaced the displayed history snapshot");
+    require(repository->records().size() == std::min(maximumEntries, 2),
+            "navigation repository did not enforce its history limit");
+    require(!history.navigatePrevious(), "displayed oldest history moved past its boundary");
+    require(history.navigateNext(), "displayed history skipped the retained newer record");
+    waitForNavigation(history, "retained newer record navigation timed out");
+    require(equalPixels(fixture.displays.displayAt(0).image, newerImage),
+            "displayed history position referred to a different metadata row");
+    require(history.navigateNext() && equalPixels(fixture.displays.displayAt(0).image, liveImage),
+            "metadata reconciliation lost the original live endpoint");
+}
+
+void storageClearPreservesHistoryLiveEndpoint() {
+    HistoryMetadataFixture fixture;
+    auto& repository = storage::ApplicationStorage::instance().captureHistory();
+    ScreenshotHistoryService history(fixture.context());
+    history.commit(takeSnapshot(history.snapshotCurrent(true), "clear metadata snapshot failed"));
+    waitForHistoryWrites(history, 0, "history publication before clear did not settle");
+    require(!ScreenshotHistoryServiceTestAccess::records(history).isEmpty(),
+            "history publication before clear did not retain metadata");
+    const QImage liveImage = solidImage(QSize(16, 16), qRgb(40, 50, 60));
+    fixture.displays.displayAt(0).image = liveImage;
+    require(history.navigatePrevious(), "could not browse history before external clear");
+    waitForNavigation(history, "history navigation before external clear timed out");
+    require(repository.requestClear().get().success, "external history clear failed");
+    QElapsedTimer timer;
+    timer.start();
+    while (!ScreenshotHistoryServiceTestAccess::records(history).isEmpty() &&
+           timer.elapsed() < 5000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        QThread::msleep(1);
+    }
+    require(ScreenshotHistoryServiceTestAccess::records(history).isEmpty(),
+            "external storage clear retained idle history metadata");
+    require(history.navigateNext() && equalPixels(fixture.displays.displayAt(0).image, liveImage),
+            "external history clear lost the live endpoint");
+}
+
+void removedHistoryRecordRemainsADetachedSnapshot() {
+    HistoryMetadataFixture fixture;
+    auto& repository = storage::ApplicationStorage::instance().captureHistory();
+    ScreenshotHistoryService history(fixture.context());
+    const auto started = QDateTime::currentDateTimeUtc();
+    QVector<QString> ids;
+    QVector<QImage> images;
+    for (int index = 0; index < 3; ++index) {
+        images.push_back(solidImage(QSize(16, 16), qRgb(30 * index, 50, 60)));
+        fixture.displays.displayAt(0).image = images.back();
+        auto entry =
+            takeSnapshot(history.snapshotCurrent(true), "removed metadata snapshot failed");
+        entry.createdUtc = started.addMSecs(index);
+        ids.push_back(entry.id);
+        history.commit(std::move(entry));
+        waitForHistoryWrites(history, 0, "history publication before removal did not settle");
+    }
+    const QImage liveImage = solidImage(QSize(16, 16), qRgb(90, 100, 110));
+    fixture.displays.displayAt(0).image = liveImage;
+    require(history.navigateToRecord(ids[1]), "could not browse middle history record");
+    waitForNavigation(history, "middle history record navigation timed out");
+    require(repository.remove(ids[1]).get().success, "external middle history removal failed");
+    QElapsedTimer timer;
+    timer.start();
+    while (ScreenshotHistoryServiceTestAccess::records(history).size() != 2 &&
+           timer.elapsed() < 5000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+        QThread::msleep(1);
+    }
+    require(ScreenshotHistoryServiceTestAccess::records(history).size() == 2 &&
+                equalPixels(fixture.displays.displayAt(0).image, images[1]),
+            "external removal changed the displayed snapshot or retained its metadata");
+    // A removed snapshot uses the existing virtual position beyond retained history.
+    require(!history.navigatePrevious() && history.navigateNext(),
+            "removed snapshot did not become a detached history endpoint");
+    waitForNavigation(history, "oldest retained record navigation timed out");
+    require(equalPixels(fixture.displays.displayAt(0).image, images[0]),
+            "detached history skipped the retained oldest record");
+    require(history.navigateNext(), "detached history could not traverse newer retained records");
+    waitForNavigation(history, "newer retained record navigation timed out");
+    require(equalPixels(fixture.displays.displayAt(0).image, images[2]),
+            "detached history navigation applied a different retained record");
+    require(history.navigateNext() && equalPixels(fixture.displays.displayAt(0).image, liveImage),
+            "external history removal lost the live endpoint");
 }
 
 void requireCanvasHistoryPayload(const QByteArray& payload) {
@@ -203,8 +658,7 @@ void directImagesPersistWithoutTouchingTheEditor(
                                                : storage::CaptureHistorySource::CurrentMonitor),
             "direct history metadata did not survive restart");
     const auto restoredImage = repository->loadResultImage(records.front());
-    require(restoredImage.has_value() && restoredImage->convertToFormat(QImage::Format_ARGB32) ==
-                                             image.convertToFormat(QImage::Format_ARGB32),
+    require(restoredImage.has_value() && equalPixels(*restoredImage, image),
             "direct history pixels did not survive restart");
     ScreenshotDisplaySession displays;
     const QImage liveImage = solidImage(QSize(200, 120), qRgb(100, 120, 140));
@@ -233,8 +687,7 @@ void directImagesPersistWithoutTouchingTheEditor(
     const QRect expectedBounds = legacy ? QRect(QPoint(-100, -50), image.size()) : physicalBounds;
     require(selection.pixelSelection() == expectedBounds, "direct image selection was misplaced");
     for (int i = 0; i < 2; ++i) {
-        require(displays.displayAt(i).image.convertToFormat(QImage::Format_ARGB32) ==
-                        image.convertToFormat(QImage::Format_ARGB32) &&
+        require(equalPixels(displays.displayAt(i).image, image) &&
                     displays.displayAt(i).imageSourceCanvasRect == expectedBounds,
                 "direct image pixels and selection use different canvas origins");
     }
@@ -261,9 +714,7 @@ void directImagesPersistWithoutTouchingTheEditor(
     const QImage rendered =
         runtime.renderToImage(editedSelection, editedSelection.size(),
                               {{restoredDisplay.image, restoredDisplay.imageSourceCanvasRect}});
-    require(rendered.convertToFormat(QImage::Format_ARGB32) ==
-                image.copy(QRect(QPoint(3, 3), editedSelection.size()))
-                    .convertToFormat(QImage::Format_ARGB32),
+    require(equalPixels(rendered, image.copy(QRect(QPoint(3, 3), editedSelection.size()))),
             "edited direct capture exported pixels from the wrong region");
 }
 
@@ -450,8 +901,7 @@ void explicitHistoryEditSeesExternalPublications(const QString& root) {
             "Edit ignored a direct capture published after the editor was constructed");
     waitForNavigation(history, "external history edit timed out");
     require(selection.pixelSelection() == frame.physicalBounds &&
-                displays.displayAt(0).image.convertToFormat(QImage::Format_ARGB32) ==
-                    desktop.convertToFormat(QImage::Format_ARGB32),
+                equalPixels(displays.displayAt(0).image, desktop),
             "Edit did not load the externally published capture");
 }
 
@@ -502,8 +952,7 @@ void directCaptureRetainsTheWholeDesktop(const QString& root) {
         auto repository = storage::makeCaptureHistoryRepository(directory);
         const auto record = repository->records().front();
         const auto result = repository->loadResultImage(record);
-        require(result && result->convertToFormat(QImage::Format_ARGB32) ==
-                              frame.image.convertToFormat(QImage::Format_ARGB32),
+        require(result && equalPixels(*result, frame.image),
                 "direct history lost the separate window or monitor result image");
         ScreenshotDisplaySession displays;
         for (const auto& captured : capturedDisplays) {
@@ -528,8 +977,7 @@ void directCaptureRetainsTheWholeDesktop(const QString& root) {
                 geometry.canvasRectForPhysicalRect(displays, frame.physicalBounds).toAlignedRect(),
             "complete direct history restored the wrong target selection");
         for (qsizetype index = 0; index < capturedDisplays.size(); ++index) {
-            require(displays.displayAt(index).image.convertToFormat(QImage::Format_ARGB32) ==
-                            capturedDisplays[index].image.convertToFormat(QImage::Format_ARGB32) &&
+            require(equalPixels(displays.displayAt(index).image, capturedDisplays[index].image) &&
                         displays.displayAt(index).imageSourceCanvasRect ==
                             displays.displayAt(index).canvasRect,
                     "editing direct history lost a display image or its position");
@@ -558,6 +1006,11 @@ void navigationMatchesDisplaysAndRestoresLiveEndpoint(const QString& root) {
                                    QRect(100, 0, 100, 80),
                                    solidImage(QSize(80, 60), qRgba(0, 255, 0, 255))));
 
+    displays.cursorVisible = true;
+    displays.cursorAvailable = true;
+    displays.displayAt(1).cursorPixelRect = QRect(3, 4, 2, 2);
+    displays.displayAt(1).cursorPatch = solidImage(QSize(2, 2), qRgba(200, 100, 50, 255));
+    const QImage historicalCursor = displays.displayAt(1).cursorPatch;
     SnowCanvasRuntime runtime;
     ScreenshotSelectionModel selection;
     selection.setSelectionRect(QRectF(10, 10, 170, 60));
@@ -590,6 +1043,11 @@ void navigationMatchesDisplaysAndRestoresLiveEndpoint(const QString& root) {
     std::swap(displays.displayAt(0).name, displays.displayAt(1).name);
     displays.displayAt(0).image = solidImage(QSize(100, 80), qRgba(0, 0, 255, 255));
     displays.displayAt(1).image = solidImage(QSize(100, 80), qRgba(255, 255, 0, 255));
+    displays.cursorVisible = false;
+    displays.cursorAvailable = true;
+    displays.displayAt(0).cursorPatch = solidImage(QSize(2, 2), qRgba(10, 20, 30, 255));
+    displays.displayAt(0).cursorPixelRect = QRect(8, 9, 2, 2);
+    const QImage liveCursor = displays.displayAt(0).cursorPatch;
     const QImage liveFirst = displays.displayAt(0).image;
     const QImage liveSecond = displays.displayAt(1).image;
     selection.setSelectionRect(QRectF(20, 15, 40, 30));
@@ -601,6 +1059,12 @@ void navigationMatchesDisplaysAndRestoresLiveEndpoint(const QString& root) {
             "asynchronous history navigation changed displays before completion");
     require(!history.navigatePrevious(), "concurrent history navigation was accepted");
     waitForNavigation(history, "previous history navigation timed out");
+    require(displays.cursorVisible && displays.cursorAvailable,
+            "history must restore cursor visibility and availability");
+    require(equalPixels(displays.displayAt(0).cursorPatch, historicalCursor) &&
+                displays.displayAt(0).cursorPixelRect == QRect(3, 4, 2, 2),
+            "history must restore its cursor independently of the live screenshot");
+    displays.cursorVisible = false;
     require(interaction.manualSelecting(), "persistent entry did not enter manual mode");
     require(displays.displayAt(0).image.pixel(0, 0) == qRgba(0, 255, 0, 255),
             "stable-id monitor matching failed");
@@ -613,6 +1077,10 @@ void navigationMatchesDisplaysAndRestoresLiveEndpoint(const QString& root) {
             "historical entry unexpectedly requested intelligent selection");
 
     require(history.navigateNext(), "live endpoint navigation failed");
+    require(!displays.cursorVisible && displays.cursorAvailable &&
+                displays.displayAt(0).cursorPatch == liveCursor &&
+                displays.displayAt(0).cursorPixelRect == QRect(8, 9, 2, 2),
+            "returning to live must restore its cursor pixels and own visibility");
     require(interaction.intelligentSelecting(), "live intelligent mode was not restored");
     require(displays.displayAt(0).image == liveFirst, "first live image was not restored");
     require(displays.displayAt(1).image == liveSecond, "second live image was not restored");
@@ -795,13 +1263,18 @@ void persistenceAndExactRetentionCutoff(const QString& root) {
     reader.resetCaptureNavigation();
 }
 
-void corruptLazyEntryDoesNotBlockOlderEntries(const QString& root) {
+void corruptLazyEntryDoesNotBlockOlderEntries(const QString& root, bool cursorPatch = false) {
     QDateTime clock =
         QDateTime::fromString(QStringLiteral("2026-08-03T12:00:00.000Z"), Qt::ISODateWithMs);
     ScreenshotDisplaySession displays;
     displays.appendDisplay(display(QStringLiteral("only"), QStringLiteral("Only"),
                                    QRect(0, 0, 64, 64),
                                    solidImage(QSize(64, 64), qRgba(255, 0, 0, 255))));
+    if (cursorPatch) {
+        displays.cursorAvailable = true;
+        displays.displayAt(0).cursorPixelRect = QRect(4, 5, 2, 2);
+        displays.displayAt(0).cursorPatch = solidImage(QSize(2, 2), qRgb(20, 30, 40));
+    }
     const QRgb olderPixel = displays.displayAt(0).image.pixel(0, 0);
     SnowCanvasRuntime runtime;
     ScreenshotSelectionModel selection;
@@ -842,7 +1315,8 @@ void corruptLazyEntryDoesNotBlockOlderEntries(const QString& root) {
         historyDirectory(root).entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
     require(directories.size() == 2, "history entries were not persisted");
     QFile corrupt(QDir(historyDirectory(root).filePath(newerId))
-                      .filePath(QStringLiteral("canvas_history.json")));
+                      .filePath(cursorPatch ? QStringLiteral("cursor_0.png")
+                                            : QStringLiteral("canvas_history.json")));
     require(corrupt.open(QIODevice::WriteOnly | QIODevice::Truncate),
             "failed to open session for corruption");
     require(corrupt.write("{") == 1, "failed to corrupt session");
@@ -1300,7 +1774,7 @@ void manualSelectionUsesSharedMarqueeTransaction() {
     handler.handleMouseMove(nullptr, QPointF(30, 40));
     handler.handleMouseRelease(nullptr, QPointF(30, 40));
     require((handler.handleRightClick(nullptr, {}) == ScreenshotOverlayRightClickResult::Handled) &&
-                handler.handleWheel(nullptr, {}, {0, 120}, {}),
+                handler.handleWheel(nullptr, wheelInput({0, 120})),
             "external drags must consume ordinary right-click and wheel commands");
     handler.handleUnhandledMiddleClick();
     handler.handleUnhandledLeftDoubleClick();
@@ -1432,7 +1906,8 @@ void quickSelectionModificationControlsBorderResize() {
     require(settings.setQuickSelectionModification(false), "disable quick selection modification");
     for (const auto tool :
          {ScreenshotActiveTool::Shape, ScreenshotActiveTool::FreeDraw, ScreenshotActiveTool::Select,
-          ScreenshotActiveTool::Text, ScreenshotActiveTool::Ocr, ScreenshotActiveTool::Table,
+          ScreenshotActiveTool::Text, ScreenshotActiveTool::Ocr,
+          ScreenshotActiveTool::TextTranslation, ScreenshotActiveTool::Table,
           ScreenshotActiveTool::Qr, ScreenshotActiveTool::Latex, ScreenshotActiveTool::Markdown,
           ScreenshotActiveTool::Html}) {
         ScreenshotCaptureState captureState;
@@ -1553,6 +2028,7 @@ void nonMoveToolPermanentlySwitchesForSelectionResize() {
 void recognitionAndScrollingToolsResizeSelectionBorder() {
     const ScreenshotActiveTool recognitionTools[] = {
         ScreenshotActiveTool::Ocr,
+        ScreenshotActiveTool::TextTranslation,
         ScreenshotActiveTool::Table,
         ScreenshotActiveTool::Qr,
     };
@@ -1689,6 +2165,51 @@ void selectionResizeModeAdjustsGrabOffsetAtPress() {
             "follow-movement resize must keep the press-time grab offset on the dragged border");
 }
 
+void eraserWheelUsesBrushCreationWidthOnly() {
+    ScreenshotCaptureState captureState;
+    captureState.sessionState = ScreenshotSessionState::Editing;
+    ScreenshotDisplaySession displays;
+    ScreenshotGeometryMapper geometry;
+    ScreenshotSelectionModel selection;
+    selection.setSelectionRect(QRectF(0, 0, 200, 160));
+    ScreenshotIntelligentSelectionModel intelligent;
+    ScreenshotInteractionState interaction;
+    interaction.confirmSelection();
+    QList<int> directions;
+    ScreenshotOverlayInputActions actions;
+    actions.stepPenFilterStrokeWidth = [&](int direction) {
+        directions.append(direction);
+        return true;
+    };
+    actions.stepStrokeWidth = [](int) {
+        require(false, "eraser width must not use shape stroke editing");
+        return false;
+    };
+    ScreenshotOverlayInputHandler handler({captureState, interaction, selection, intelligent,
+                                           geometry, displays, std::move(actions)});
+    interaction.setCanvasTool(ScreenshotActiveTool::BrushEraser);
+    require(handler.handleWheel(nullptr, wheelInput({0, 120})) && directions == QList<int>{1},
+            "screenshot brush eraser wheel reaches the shared creation width route");
+    require(handler.handleWheel(nullptr, wheelInput({0, 120}, {0, -1})) &&
+                directions == QList<int>{1, -1},
+            "precise brush eraser wheel direction takes priority over estimated notches");
+    require(!handler.handleWheel(nullptr, wheelInput({})) && directions.size() == 2,
+            "zero wheel delta leaves brush eraser width unchanged");
+    handler.setExternalDragActive(true);
+    require(handler.handleWheel(nullptr, wheelInput({0, 120})) && directions.size() == 2,
+            "external drag consumes the wheel without changing brush eraser creation width");
+    handler.setExternalDragActive(false);
+    for (const auto tool : {ScreenshotActiveTool::Eraser, ScreenshotActiveTool::RectangleEraser}) {
+        interaction.setCanvasTool(tool);
+        require(!handler.handleWheel(nullptr, wheelInput({0, 120})) && directions.size() == 2,
+                "element and rectangle erasers do not expose a brush width wheel editor");
+    }
+    interaction.setCanvasTool(ScreenshotActiveTool::BrushEraser);
+    interaction.enterScrollingCapture();
+    require(!handler.handleWheel(nullptr, wheelInput({0, 120})) && directions.size() == 2,
+            "scrolling capture retains its wheel input instead of editing an eraser width");
+}
+
 void completionGesturesUseSharedEligibilityAcrossTools() {
     const storage::ScreenshotSettings settings;
     const QString originalDoubleClick = settings.doubleClickAction();
@@ -1764,6 +2285,8 @@ void completionGesturesUseSharedEligibilityAcrossTools() {
             ScreenshotActiveTool::RectangleHighlight,
             ScreenshotActiveTool::PenHighlight,
             ScreenshotActiveTool::Eraser,
+            ScreenshotActiveTool::RectangleEraser,
+            ScreenshotActiveTool::BrushEraser,
             ScreenshotActiveTool::RectangleFilter,
             ScreenshotActiveTool::Watermark,
             ScreenshotActiveTool::Text,
@@ -2045,6 +2568,389 @@ void sharedShiftShortcutChoosesResizeOrColorFormat() {
             "failed to restore the aspect shortcut after contextual input test");
 }
 
+void selectAllShortcutSelectsCurrentScreen() {
+    for (int stage = 0; stage < 4; ++stage) {
+        ScreenshotCaptureState capture;
+        capture.sessionState = ScreenshotSessionState::OverlayVisible;
+        ScreenshotDisplaySession displays;
+        auto left = display(QStringLiteral("left"), QStringLiteral("Left"),
+                            QRect(-800, -120, 800, 600), {});
+        left.logicalRect = left.physicalRect;
+        left.logicalToPhysicalScale = 1.0;
+        left.geometryResolved = true;
+        auto right = display(QStringLiteral("right"), QStringLiteral("Right"),
+                             QRect(0, -120, 1200, 800), {});
+        right.logicalRect = QRect(0, -60, 600, 400);
+        right.logicalToPhysicalScale = 2.0;
+        right.geometryResolved = true;
+        displays.appendDisplay(left);
+        displays.appendDisplay(right);
+        ScreenshotGeometryMapper geometry;
+        geometry.rebuild(displays);
+        ScreenshotSelectionModel selection;
+        require(
+            selection.setAspectRatioPreset(ScreenshotSelectionAspectRatioPreset::Square, {}, 1.0),
+            "arm a remembered aspect ratio for full-screen selection");
+        if (stage == 0)
+            selection.setSelectionRect(QRectF(820, 20, 100, 60));
+        if (stage == 2)
+            selection.setSelectionRegion(
+                QRegion(QRect(40, 20, 60, 40)).united(QRect(820, 20, 100, 60)));
+        if (stage == 3) {
+            QPainterPath triangle;
+            triangle.moveTo(820, 20);
+            triangle.lineTo(920, 20);
+            triangle.lineTo(870, 80);
+            triangle.closeSubpath();
+            selection.setSelectionRegion(
+                ScreenshotRegionGeometry::fromPath(triangle, ScreenshotRegionType::Polyline));
+        }
+        ScreenshotIntelligentSelectionModel intelligent;
+        intelligent.beginCaptureSession(true);
+        ScreenshotInteractionState interaction;
+        interaction.enterOverlayVisible(stage == 0);
+        if (stage >= 2)
+            interaction.setMoveTool(true, true);
+        QWidget receiver;
+        snow_shot::presentation::WindowShortcutManager manager;
+        manager.addScopeWindow(&receiver);
+        int preparations = 0;
+        int confirmations = 0;
+        int presentations = 0;
+        bool inputAllowed = true;
+        QPoint cursor(120, 80);
+        ScreenshotOverlayInputActions actions;
+        actions.currentLogicalCursorPosition = [&] { return cursor; };
+        actions.localShortcutInputAllowed = [&] { return inputAllowed; };
+        actions.prepareExplicitSelectionCommand = [&] { ++preparations; };
+        actions.showToolbar = [&] { ++presentations; };
+        actions.selectionConfirmed = [&] { ++confirmations; };
+        ScreenshotOverlayInputHandler handler(
+            {capture, interaction, selection, intelligent, geometry, displays, actions});
+        ScreenshotOverlayShortcutController shortcuts(manager, handler, interaction, intelligent,
+                                                      actions);
+        const QRect originalSelection = selection.pixelSelection();
+        inputAllowed = false;
+        static_cast<void>(dispatchShortcut(receiver, Qt::Key_A, Qt::ControlModifier));
+        require(selection.pixelSelection() == originalSelection && preparations == 0,
+                "text input ownership must suppress full-screen selection");
+        QLineEdit editor(&receiver);
+        editor.setText(QStringLiteral("editable text"));
+        editor.setCursorPosition(0);
+        static_cast<void>(dispatchShortcut(editor, Qt::Key_A, Qt::ControlModifier));
+        require(editor.selectedText() == editor.text() && preparations == 0,
+                "Ctrl+A must remain available to text editors");
+        inputAllowed = true;
+        static_cast<void>(
+            dispatchShortcut(receiver, Qt::Key_A, Qt::ControlModifier | Qt::AltModifier));
+        require(preparations == 0, "full-screen selection must require the exact shortcut");
+        for (const int slot : {1, 0}) {
+            cursor = displays.displayAt(slot).logicalRect.center();
+            require(dispatchShortcut(receiver, Qt::Key_A, Qt::ControlModifier),
+                    "Ctrl+A must select the current screen in each selection mode");
+            const QRect expected = displays.displayAt(slot).canvasRect;
+            require(selection.pixelSelection() == expected && selection.rectangular() &&
+                        selection.selectionRegion().boundingRect() == expected &&
+                        selection.aspectRatioPreset() ==
+                            ScreenshotSelectionAspectRatioPreset::Free &&
+                        interaction.movingSelection() && !interaction.dragging() &&
+                        capture.sessionState == ScreenshotSessionState::Editing &&
+                        !intelligent.pressActive(),
+                    "full-screen selection must replace the old region with exact display bounds");
+            const int count = slot == 1 ? 1 : 2;
+            require(preparations == count && confirmations == count && presentations == count,
+                    "full-screen selection must prepare and confirm exactly once");
+            static_cast<void>(dispatchShortcut(receiver, Qt::Key_A, Qt::ControlModifier, true));
+            require(confirmations == count, "held Ctrl+A must not repeat selection confirmation");
+            static_cast<void>(dispatchShortcutRelease(receiver, Qt::Key_A, Qt::ControlModifier));
+        }
+
+        const QRect confirmed = selection.pixelSelection();
+        const auto rejectShortcut = [&] {
+            static_cast<void>(dispatchShortcut(receiver, Qt::Key_A, Qt::ControlModifier));
+            require(selection.pixelSelection() == confirmed && confirmations == 2,
+                    "ineligible Ctrl+A must leave the current selection untouched");
+        };
+        interaction.enterScrollingCapture();
+        rejectShortcut();
+        interaction.reset();
+        rejectShortcut();
+        interaction.setCanvasTool(ScreenshotActiveTool::Shape);
+        rejectShortcut();
+        interaction.setMoveTool(true, false);
+        handler.setExternalDragActive(true);
+        rejectShortcut();
+        handler.setExternalDragActive(false);
+        require(interaction.enterSelectionDrag(ScreenshotSelectionDragMode::All),
+                "start an active selection move");
+        rejectShortcut();
+        interaction.cancelDrag();
+        selection.setDraftRegion(ScreenshotRegionGeometry(QRect(10, 10, 40, 40)));
+        static_cast<void>(dispatchShortcut(receiver, Qt::Key_A, Qt::ControlModifier));
+        require(selection.constructionActive() &&
+                    selection.pixelSelection() == QRect(10, 10, 40, 40) && confirmations == 2,
+                "Ctrl+A must leave an unfinished region draft untouched");
+        selection.clearDraftRegion();
+        selection.setSelectionRect(confirmed);
+        selection.beginRegionOperation(ScreenshotSelectionModel::RegionOperation::Add);
+        const QRect pending = selection.pixelSelection();
+        static_cast<void>(dispatchShortcut(receiver, Qt::Key_A, Qt::ControlModifier));
+        require(selection.regionOperationActive() && selection.pixelSelection() == pending &&
+                    confirmations == 2,
+                "Ctrl+A must not interrupt an active region operation");
+        selection.cancelRegionOperation();
+        displays.startup = std::make_shared<ScreenshotStartupContext>();
+        displays.startup->phase = ScreenshotStartupContext::Phase::Preparing;
+        rejectShortcut();
+        displays.startup.reset();
+        cursor = QPoint(900, 900);
+        rejectShortcut();
+        displays.displayAt(0).active = false;
+        cursor = left.logicalRect.center();
+        rejectShortcut();
+    }
+}
+
+void previousSelectionShortcutUsesSharedConfirmation() {
+    const storage::ScreenshotShortcutSettings settings;
+    const auto original = settings.allShortcuts();
+    const auto restoreShortcuts = qScopeGuard(
+        [&] { require(settings.setAllShortcutsAtomic(original), "restore selection shortcuts"); });
+    for (const Qt::Key key : {Qt::Key_R, Qt::Key_K}) {
+        auto configured = original;
+        configured.insert(QStringLiteral("select_previously_selected_area"),
+                          {key == Qt::Key_R ? QStringLiteral("R") : QStringLiteral("K")});
+        require(settings.setAllShortcutsAtomic(configured), "configure previous selection key");
+        for (int stage = 0; stage < 3; ++stage) {
+            for (const bool quickAction : {false, true}) {
+                for (const bool complexRegion : {false, true}) {
+                    ScreenshotCaptureState capture;
+                    capture.sessionState = ScreenshotSessionState::OverlayVisible;
+                    ScreenshotDisplaySession displays;
+                    displays.appendDisplay(display(QStringLiteral("main"), QStringLiteral("Main"),
+                                                   QRect(0, 0, 300, 200), {}));
+                    ScreenshotGeometryMapper geometry;
+                    geometry.rebuild(displays);
+                    ScreenshotSelectionModel selection;
+                    require(selection.setAspectRatioPreset(
+                                ScreenshotSelectionAspectRatioPreset::Square, {}, 1.0),
+                            "seed remembered aspect ratio before restoring selection");
+                    selection.setSelectionRect(QRectF(10, 10, 50, 50));
+                    ScreenshotIntelligentSelectionModel intelligent;
+                    intelligent.beginCaptureSession(true);
+                    ScreenshotInteractionState interaction;
+                    interaction.enterOverlayVisible(stage == 0);
+                    if (stage == 2) {
+                        interaction.setMoveTool(true, false);
+                        capture.sessionState = ScreenshotSessionState::Editing;
+                    }
+                    intelligent.beginPress(QPointF(20, 20), selection.normalizedSelection());
+                    ScreenshotSelectionParams previous;
+                    previous.selection = QRect(40, 30, 120, 60);
+                    previous.radius = 6;
+                    previous.shadowWidth = 8;
+                    previous.lockDragAspectRatio = true;
+                    if (complexRegion) {
+                        previous.region =
+                            QRegion(QRect(40, 30, 50, 60)).united(QRect(110, 30, 50, 60));
+                    }
+                    bool available = false;
+                    bool pending = quickAction;
+                    int confirmations = 0;
+                    int executions = 0;
+                    int presentations = 0;
+                    int preparations = 0;
+                    ScreenshotOverlayInputActions actions;
+                    actions.prepareExplicitSelectionCommand = [&] {
+                        ++preparations;
+                        pending = false;
+                    };
+                    actions.showToolbar = [&] {
+                        if (!quickAction)
+                            ++presentations;
+                    };
+                    actions.selectionConfirmed = [&] {
+                        require(
+                            capture.sessionState == ScreenshotSessionState::Editing &&
+                                interaction.movingSelection() && !intelligent.pressActive() &&
+                                selection.pixelSelection() == previous.selection &&
+                                selection.selectionRegion() ==
+                                    previous.region.value_or(
+                                        ScreenshotRegionGeometry(previous.selection)),
+                            "restoration must publish its committed geometry before notification");
+                        ++confirmations;
+                        if (std::exchange(pending, false))
+                            ++executions;
+                    };
+                    ScreenshotOverlayInputHandler handler({capture, interaction, selection,
+                                                           intelligent, geometry, displays,
+                                                           actions});
+                    actions.selectPreviousSelection = [&] {
+                        return available && handler.restorePreviousSelection(previous);
+                    };
+                    QWidget receiver;
+                    snow_shot::presentation::WindowShortcutManager manager;
+                    manager.addScopeWindow(&receiver);
+                    ScreenshotOverlayShortcutController shortcuts(manager, handler, interaction,
+                                                                  intelligent, actions);
+                    require(!dispatchShortcut(receiver, key) && confirmations == 0 &&
+                                pending == quickAction && intelligent.pressActive(),
+                            "missing previous selection must preserve the pending action");
+                    available = true;
+                    require(
+                        dispatchShortcut(receiver, key) && confirmations == 1 &&
+                            executions == (quickAction ? 1 : 0) && !pending && preparations == 0 &&
+                            presentations == (quickAction ? 0 : 1) &&
+                            selection.cornerRadius() == previous.radius &&
+                            selection.shadowWidth() == previous.shadowWidth,
+                        "R must confirm restored selection and execute its pending action once");
+                    static_cast<void>(dispatchShortcut(receiver, key, Qt::NoModifier, true));
+                    static_cast<void>(dispatchShortcutRelease(receiver, key));
+                    handler.handleMouseRelease(nullptr, QPointF(20, 20));
+                    require(
+                        confirmations == 1 && executions == (quickAction ? 1 : 0),
+                        "held R and stale mouse release must not reconfirm the restored selection");
+
+                    require(dispatchShortcut(receiver, key) && confirmations == 2 &&
+                                executions == (quickAction ? 1 : 0),
+                            "later restoration must not replay an already consumed quick action");
+                    static_cast<void>(dispatchShortcutRelease(receiver, key));
+
+                    pending = quickAction;
+                    previous.region = ScreenshotRegionGeometry(QRect(500, 500, 20, 20));
+                    require(!dispatchShortcut(receiver, key) && confirmations == 2 &&
+                                pending == quickAction && !selection.hasPixelSelection() &&
+                                interaction.manualSelecting(),
+                            "out-of-bounds saved region must not consume the pending action");
+                    selection.setSelectionRect(QRectF(40, 30, 120, 60));
+                    previous.region.reset();
+                    handler.confirmSelection();
+                    require(confirmations == 3 && executions == (quickAction ? 2 : 0),
+                            "normal confirmation after failed restoration must still execute the "
+                            "action");
+                }
+            }
+        }
+    }
+}
+
+void smartSelectionWheelAccumulatesMovement() {
+    ScreenshotCaptureState capture;
+    ScreenshotDisplaySession displays;
+    ScreenshotGeometryMapper geometry;
+    ScreenshotSelectionModel selection;
+    ScreenshotIntelligentSelectionModel intelligent;
+    ScreenshotInteractionState interaction;
+    interaction.enterOverlayVisible(true);
+    intelligent.beginCaptureSession(true);
+    QVector<QRectF> layers;
+    for (int i = 0; i < 16; ++i)
+        layers.append(QRectF(50 - i, 50 - i, 20 + i * 2, 20 + i * 2));
+    require(intelligent.applyCanvasHitPath(layers, QRectF(0, 0, 200, 200), 1),
+            "smart wheel fixture must expose nested layers");
+    selection.setSelectionRect(intelligent.currentSelection());
+    int requests = 0;
+    ScreenshotOverlayInputActions actions;
+    actions.requestUiSelectorHitTest = [&](const QPoint&) { ++requests; };
+    ScreenshotOverlayInputHandler handler(
+        {capture, interaction, selection, intelligent, geometry, displays, actions});
+    ScreenshotOverlayEventAdapter adapter;
+    adapter.setEventTargets(handler, [] {});
+    const auto scroll = [&](QPoint pixels, QPoint angles, Qt::ScrollPhase phase,
+                            quint64 timestamp = 0,
+                            Qt::MouseEventSource source = Qt::MouseEventNotSynthesized) {
+        QWheelEvent event(QPointF(60, 60), QPointF(60, 60), pixels, angles, Qt::NoButton,
+                          Qt::NoModifier, phase, false, source);
+        event.setTimestamp(timestamp);
+        require(adapter.handleOverlayWheel(nullptr, event),
+                "smart selection must consume its wheel gesture");
+    };
+    const auto expectLayer = [&](int index, const char* message) {
+        require(intelligent.index() == index && selection.normalizedSelection() == layers[index],
+                message);
+    };
+    scroll({}, {}, Qt::ScrollBegin);
+    scroll(QPoint(20, 0), {}, Qt::ScrollUpdate);
+    expectLayer(0, "empty and horizontal scroll input must not switch layers");
+    scroll(QPoint(0, 1), {}, Qt::ScrollUpdate);
+    expectLayer(1, "the first precise scroll point must switch one layer immediately");
+    for (int i = 0; i < 99; ++i)
+        scroll(QPoint(0, 1), {}, Qt::ScrollUpdate);
+    expectLayer(1, "small trackpad updates must accumulate without switching every event");
+    scroll(QPoint(0, 1), {}, Qt::ScrollUpdate);
+    expectLayer(2, "continued scrolling must switch after another 100 points");
+    scroll(QPoint(0, 250), {}, Qt::ScrollUpdate);
+    expectLayer(4, "coalesced movement must switch all accumulated layers");
+    scroll(QPoint(0, 50), {}, Qt::ScrollUpdate);
+    expectLayer(5, "coalesced movement must retain its remainder");
+    const int activeRequests = requests;
+    scroll(QPoint(0, 500), {}, Qt::ScrollMomentum);
+    scroll(QPoint(0, 500), {}, Qt::ScrollEnd);
+    expectLayer(5, "momentum and scroll-end deltas must not switch layers");
+    require(requests == activeRequests, "momentum and scroll end must not request hit tests");
+    scroll(QPoint(0, 1), {}, Qt::ScrollBegin);
+    expectLayer(6, "a new gesture must respond immediately in the same direction");
+    scroll(QPoint(0, -1), {}, Qt::ScrollUpdate);
+    expectLayer(5, "direction reversal must switch one layer immediately");
+    scroll({}, {}, Qt::ScrollEnd);
+    scroll({}, QPoint(0, 1), Qt::NoScrollPhase, 1000);
+    expectLayer(6, "a small angle-only wheel input must switch immediately");
+    scroll({}, QPoint(0, 119), Qt::NoScrollPhase, 1010);
+    expectLayer(6, "angle-only updates must accumulate within a burst");
+    scroll({}, QPoint(0, 1), Qt::NoScrollPhase, 1020);
+    expectLayer(7, "continued angle scrolling must advance once per notch");
+    scroll({}, QPoint(0, 1), Qt::NoScrollPhase, 2000);
+    expectLayer(8, "a wheel burst after an idle gap must switch immediately");
+    scroll({}, QPoint(0, -240), Qt::NoScrollPhase, 2010);
+    expectLayer(6, "angle reversal must apply every reverse notch");
+    scroll(QPoint(0, -1), {}, Qt::NoScrollPhase, 2020);
+    expectLayer(5, "switching delta units must start a fresh sequence");
+    handler.resetTransientShortcuts();
+    scroll(QPoint(0, -1), {}, Qt::NoScrollPhase, 2030);
+    expectLayer(4, "capture input reset must clear pending scroll state");
+    scroll(QPoint(0, 10000), {}, Qt::ScrollBegin);
+    expectLayer(15, "large scroll movement must clamp to the outermost layer");
+    scroll(QPoint(0, -1), {}, Qt::ScrollUpdate);
+    expectLayer(14, "reversal at the layer limit must respond immediately");
+    scroll(QPoint(0, -10000), {}, Qt::ScrollUpdate);
+    expectLayer(0, "large reverse movement must clamp to the deepest layer");
+#ifdef Q_OS_MACOS
+    scroll({}, {}, Qt::ScrollEnd);
+    scroll(QPoint(0, 2), QPoint(0, 120), Qt::NoScrollPhase, 3000);
+    expectLayer(1, "a Cocoa mouse notch must switch one layer");
+    scroll(QPoint(0, 2), QPoint(0, 120), Qt::NoScrollPhase, 3010);
+    expectLayer(2, "each rapid Cocoa mouse notch must switch one layer");
+    scroll(QPoint(0, 80), QPoint(0, 120), Qt::NoScrollPhase, 3020);
+    expectLayer(3, "estimated pixel acceleration must not change mouse notch selection");
+    for (quint64 i = 0; i < 2; ++i) {
+        scroll(QPoint(0, 2), QPoint(0, 4), Qt::NoScrollPhase, 3030 + i * 10,
+               Qt::MouseEventSynthesizedBySystem);
+        expectLayer(4, "phase-less precise Cocoa input must retain pixel accumulation");
+    }
+#endif
+    handler.setExternalDragActive(true);
+    const int beforeExternalDrag = intelligent.index();
+    scroll(QPoint(0, 100), {}, Qt::ScrollUpdate);
+    expectLayer(beforeExternalDrag, "external drags must consume wheel input without selecting");
+    handler.setExternalDragActive(false);
+    scroll(QPoint(0, 1), {}, Qt::ScrollUpdate);
+    expectLayer(beforeExternalDrag + 1, "leaving an external drag must start fresh scroll input");
+    handler.confirmSelection();
+    interaction.returnToSelectionMode(true);
+    scroll(QPoint(0, 1), {}, Qt::ScrollUpdate);
+    expectLayer(beforeExternalDrag + 2, "confirmed selection must clear its wheel remainder");
+    require(handler.toggleIntelligentSelectionTargetShortcut(),
+            "wheel fixture must allow switching to window selection");
+    scroll(QPoint(0, -1000), {}, Qt::ScrollBegin);
+    expectLayer(15, "wheel movement in window mode must retain the window selection");
+    require(handler.toggleIntelligentSelectionTargetShortcut(),
+            "wheel fixture must allow returning to element selection");
+    const int elementIndex = intelligent.index();
+    scroll(QPoint(0, -1), {}, Qt::ScrollUpdate);
+    expectLayer(std::max(0, elementIndex - 1),
+                "switching selection target must clear pending scroll state");
+}
+
 void configuredSelectionShortcutsRouteTabHistoryAndColorActions(bool targetSwitchOnly = false) {
     const storage::ScreenshotShortcutSettings shortcutSettings;
     const snow_shot::shortcuts::ShortcutBindingMap originalShortcuts =
@@ -2093,6 +2999,7 @@ void configuredSelectionShortcutsRouteTabHistoryAndColorActions(bool targetSwitc
     int copyColorCalls = 0;
     int coordinateToggles = 0;
     int coordinateCancelCalls = 0;
+    int printCalls = 0;
     int brushCalls = 0;
     bool coordinateInputAllowed = true;
     int selectorHitTestRequests = 0;
@@ -2132,6 +3039,13 @@ void configuredSelectionShortcutsRouteTabHistoryAndColorActions(bool targetSwitc
     };
     actions.cancelCapture = [&]() { ++coordinateCancelCalls; };
     actions.localShortcutInputAllowed = [&]() { return coordinateInputAllowed; };
+    actions.activateScreenshotShortcut = [&](const QString& id) {
+        if (id == QStringLiteral("print")) {
+            ++printCalls;
+            return true;
+        }
+        return false;
+    };
     actions.activateDrawingShortcut = [&](const QString& id) {
         if (id == QStringLiteral("brush")) {
             ++brushCalls;
@@ -2193,7 +3107,7 @@ void configuredSelectionShortcutsRouteTabHistoryAndColorActions(bool targetSwitc
                 intelligent.applyCanvasHitPath({windowSelection}, QRectF(0, 0, 100, 100), 1.0) &&
                 intelligent.currentSelection() == windowSelection && selectorHitTestRequests == 3,
             "window sub-element mode did not retain the original window fallback");
-    require(handler.handleWheel(nullptr, QPointF(), QPoint(0, 120), QPoint()) &&
+    require(handler.handleWheel(nullptr, wheelInput({0, 120})) &&
                 intelligent.selectionTarget() ==
                     ScreenshotIntelligentSelectionTarget::WindowSubElement &&
                 selectorHitTestRequests == 4,
@@ -2238,16 +3152,16 @@ void configuredSelectionShortcutsRouteTabHistoryAndColorActions(bool targetSwitc
     require(dispatchShortcut(shortcutWindow, Qt::Key_R) && previousSelectionCalls == 2 &&
                 !intelligent.pressActive(),
             "R did not request the previously selected area in Move mode");
-    require(!dispatchShortcut(shortcutWindow, Qt::Key_P, Qt::ShiftModifier) &&
-                coordinateToggles == 0,
-            "Shift+P must not toggle coordinates by default");
-    require(dispatchShortcut(shortcutWindow, Qt::Key_P, Qt::ControlModifier) &&
+    require(dispatchShortcut(shortcutWindow, Qt::Key_P, Qt::ControlModifier) && printCalls == 1 &&
+                coordinateToggles == 0 && coordinateCancelCalls == 0 && copyColorCalls == 0,
+            "Ctrl+P must print without toggling coordinates or copying color");
+    require(dispatchShortcut(shortcutWindow, Qt::Key_P, Qt::ShiftModifier) &&
                 coordinateToggles == 1 && coordinateCancelCalls == 0 && copyColorCalls == 0,
-            "Ctrl+P must toggle coordinates without copying or ending capture");
-    static_cast<void>(dispatchShortcut(shortcutWindow, Qt::Key_P, Qt::ControlModifier, true));
+            "Shift+P must toggle coordinates without copying or ending capture");
+    static_cast<void>(dispatchShortcut(shortcutWindow, Qt::Key_P, Qt::ShiftModifier, true));
     require(coordinateToggles == 1, "coordinate toggle must ignore auto-repeat");
     coordinateInputAllowed = false;
-    require(!dispatchShortcut(shortcutWindow, Qt::Key_P, Qt::ControlModifier) &&
+    require(!dispatchShortcut(shortcutWindow, Qt::Key_P, Qt::ShiftModifier) &&
                 coordinateToggles == 1,
             "coordinate shortcut must respect local input restrictions");
     coordinateInputAllowed = true;
@@ -2258,7 +3172,7 @@ void configuredSelectionShortcutsRouteTabHistoryAndColorActions(bool targetSwitc
             "C did not copy the color-picker color in Move mode");
 
     interaction.setCanvasTool(ScreenshotActiveTool::Shape);
-    require(!dispatchShortcut(shortcutWindow, Qt::Key_P, Qt::ControlModifier) &&
+    require(!dispatchShortcut(shortcutWindow, Qt::Key_P, Qt::ShiftModifier) &&
                 coordinateToggles == 1,
             "coordinate toggle must be inactive in drawing modes");
     require(!dispatchShortcut(shortcutWindow, Qt::Key_R) &&
@@ -2293,10 +3207,10 @@ void configuredSelectionShortcutsRouteTabHistoryAndColorActions(bool targetSwitc
                 dispatchShortcut(shortcutWindow, Qt::Key_J) && selectorHitTestRequests == 6,
             "remapped Tab shortcut did not replace the default key");
     interaction.confirmSelection();
-    require(!dispatchShortcut(shortcutWindow, Qt::Key_P, Qt::ControlModifier) &&
+    require(!dispatchShortcut(shortcutWindow, Qt::Key_P, Qt::ShiftModifier) &&
                 dispatchShortcut(shortcutWindow, Qt::Key_P, Qt::AltModifier) &&
                 coordinateToggles == 2,
-            "configured coordinate shortcut must replace Ctrl+P");
+            "configured coordinate shortcut must replace Shift+P");
     require(shortcutSettings.setShortcuts(QStringLiteral("toggle_coordinate_mode"), {}),
             "failed to disable coordinate shortcut");
     shortcutController.reloadConfiguredShortcuts();
@@ -2339,6 +3253,160 @@ void configuredSelectionShortcutsRouteTabHistoryAndColorActions(bool targetSwitc
 
     require(shortcutSettings.setAllShortcutsAtomic(originalShortcuts),
             "failed to restore selection shortcuts after route test");
+}
+
+void guideToggleShortcutFollowsSessionInputAndRemapping() {
+    const storage::ScreenshotShortcutSettings settings;
+    const auto original = settings.allShortcuts();
+    auto configured = original;
+    configured.insert(QStringLiteral("toggle_guides"), {QStringLiteral("Alt")});
+    configured.insert(QStringLiteral("toggle_cursor_visibility"), {QStringLiteral("`")});
+    require(settings.setAllShortcutsAtomic(configured),
+            "failed to configure the standalone guide shortcut");
+
+    ScreenshotCaptureState captureState;
+    ScreenshotDisplaySession displays;
+    ScreenshotGeometryMapper geometry;
+    ScreenshotSelectionModel selection;
+    ScreenshotIntelligentSelectionModel intelligent;
+    ScreenshotInteractionState interaction;
+    interaction.enterOverlayVisible(true);
+    QWidget window;
+    window.show();
+    snow_shot::presentation::WindowShortcutManager manager;
+    manager.addScopeWindow(&window);
+    bool inputAllowed = true;
+    int toggles = 0;
+    int cursorToggles = 0;
+    ScreenshotOverlayInputActions actions;
+    actions.localShortcutInputAllowed = [&] { return inputAllowed; };
+    actions.cursorVisibilityAvailable = [] { return true; };
+    actions.toggleCursorVisibility = [&] {
+        ++cursorToggles;
+        return true;
+    };
+    actions.toggleGuidesForCurrentSession = [&] {
+        ++toggles;
+        return true;
+    };
+    ScreenshotOverlayInputHandler handler(
+        {captureState, interaction, selection, intelligent, geometry, displays, actions});
+    ScreenshotOverlayShortcutController controller(manager, handler, interaction, intelligent,
+                                                   actions);
+
+    dispatchShortcut(window, Qt::Key_Alt, Qt::AltModifier);
+    require(toggles == 0, "guide shortcut must wait for Alt release");
+    dispatchShortcutRelease(window, Qt::Key_Alt);
+    require(toggles == 1 && cursorToggles == 0,
+            "standalone Alt must toggle guides without changing captured cursor visibility");
+    dispatchShortcut(window, Qt::Key_QuoteLeft);
+    require(toggles == 1 && cursorToggles == 1,
+            "the cursor shortcut must toggle captured cursor visibility without changing guides");
+    dispatchShortcutRelease(window, Qt::Key_QuoteLeft);
+    inputAllowed = false;
+    dispatchShortcut(window, Qt::Key_Alt, Qt::AltModifier);
+    dispatchShortcutRelease(window, Qt::Key_Alt);
+    dispatchShortcut(window, Qt::Key_QuoteLeft);
+    dispatchShortcutRelease(window, Qt::Key_QuoteLeft);
+    require(toggles == 1 && cursorToggles == 1,
+            "guide and cursor toggles must respect suspended local shortcut input");
+    inputAllowed = true;
+
+    configured.insert(QStringLiteral("toggle_guides"), {QStringLiteral("Ctrl+G")});
+    require(settings.setAllShortcutsAtomic(configured), "failed to remap the guide shortcut");
+    controller.reloadConfiguredShortcuts();
+    dispatchShortcut(window, Qt::Key_Alt, Qt::AltModifier);
+    dispatchShortcutRelease(window, Qt::Key_Alt);
+    require(toggles == 1, "remapping guides must retire the old Alt binding");
+    dispatchShortcut(window, Qt::Key_G, Qt::ControlModifier);
+    dispatchShortcutRelease(window, Qt::Key_G, Qt::ControlModifier);
+    require(toggles == 2, "remapped guide shortcut must toggle in the active session");
+
+    configured.insert(QStringLiteral("toggle_guides"), {});
+    require(settings.setAllShortcutsAtomic(configured), "failed to clear the guide shortcut");
+    controller.reloadConfiguredShortcuts();
+    dispatchShortcut(window, Qt::Key_G, Qt::ControlModifier);
+    dispatchShortcutRelease(window, Qt::Key_G, Qt::ControlModifier);
+    require(toggles == 2, "an unset guide shortcut must remain inactive");
+    dispatchShortcut(window, Qt::Key_QuoteLeft);
+    dispatchShortcutRelease(window, Qt::Key_QuoteLeft);
+    require(toggles == 2 && cursorToggles == 2,
+            "remapping and clearing the guide shortcut must preserve the cursor shortcut");
+    require(settings.setAllShortcutsAtomic(original),
+            "failed to restore screenshot shortcuts after guide test");
+}
+
+void screenshotTextEditingTakesPriorityOverCancelShortcut() {
+    ScreenshotCaptureState captureState;
+    ScreenshotDisplaySession displays;
+    ScreenshotGeometryMapper geometry;
+    ScreenshotSelectionModel selection;
+    ScreenshotIntelligentSelectionModel intelligent;
+    ScreenshotInteractionState interaction;
+    interaction.confirmSelection();
+    SnowCanvasRuntime runtime;
+    SnowCanvasWidget canvas(runtime);
+    canvas.resize(320, 240);
+    canvas.show();
+    QApplication::processEvents();
+    const QPointF position(80, 80);
+    snow_shot::presentation::WindowShortcutManager manager;
+    manager.addScopeWindow(&canvas);
+    QWidget toolbar;
+    toolbar.show();
+    manager.addScopeWindow(&toolbar);
+    int cancellations = 0;
+    ScreenshotOverlayInputActions actions;
+    actions.localShortcutInputAllowed = [&] { return !canvas.hasActiveTextEditing(); };
+    actions.cancelCaptureViaShortcut = [&] {
+        ++cancellations;
+        return true;
+    };
+    ScreenshotOverlayInputHandler handler(
+        {captureState, interaction, selection, intelligent, geometry, displays, actions});
+    ScreenshotOverlayShortcutController controller(manager, handler, interaction, intelligent,
+                                                   actions);
+    const storage::ScreenshotShortcutSettings settings;
+    const auto original = settings.allShortcuts();
+    auto configured = original;
+    for (const auto modifiers : {Qt::NoModifier, Qt::AltModifier}) {
+        configured.insert(
+            QStringLiteral("cancel_screenshot"),
+            {modifiers == Qt::NoModifier ? QStringLiteral("Esc") : QStringLiteral("Alt+Esc")});
+        require(settings.setAllShortcutsAtomic(configured), "configure screenshot cancellation");
+        require(canvas.setCanvasTool(SnowCanvasTool::Text), "activate text tool for cancellation");
+        QMouseEvent press(QEvent::MouseButtonPress, position, position, Qt::LeftButton,
+                          Qt::LeftButton, Qt::NoModifier);
+        QMouseEvent release(QEvent::MouseButtonRelease, position, position, Qt::LeftButton,
+                            Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &press);
+        QApplication::sendEvent(&canvas, &release);
+        require(canvas.hasActiveTextEditing(), "cancellation fixture must edit text");
+        require(dispatchShortcut(canvas, Qt::Key_A, Qt::ControlModifier),
+                "select the complete draft before replacement");
+        PhysicalKeyEvent insert(QEvent::KeyPress, Qt::Key_A, Qt::NoModifier,
+                                QStringLiteral("Keep this draft"));
+        QApplication::sendEvent(&canvas, &insert);
+        const int before = cancellations;
+        require(dispatchShortcut(canvas, Qt::Key_Escape, modifiers) && cancellations == before,
+                "Escape must finish text editing before screenshot cancellation");
+        require(!canvas.hasActiveTextEditing() &&
+                    !canvas.testAttribute(Qt::WA_InputMethodEnabled) &&
+                    canvas.canvasHistoryState().canUndo,
+                "Escape must commit text and end input mode in the screenshot window");
+        const QByteArray committed = runtime.serializeDocumentHistory();
+        require(committed.contains("Keep this draft"), "Escape must preserve the input content");
+        static_cast<void>(dispatchShortcut(canvas, Qt::Key_Escape, modifiers, true));
+        static_cast<void>(dispatchShortcutRelease(canvas, Qt::Key_Escape, modifiers, true));
+        static_cast<void>(dispatchShortcutRelease(toolbar, Qt::Key_Escape));
+        require(cancellations == before && runtime.serializeDocumentHistory() == committed,
+                "repeat and release after ending text editing must not terminate the screenshot");
+        require(dispatchShortcut(canvas, Qt::Key_Escape, modifiers) && cancellations == before,
+                "a fresh Escape press after editing must reserve screenshot cancellation");
+        require(dispatchShortcutRelease(toolbar, Qt::Key_Escape) && cancellations == before + 1,
+                "a fresh Escape release must still cancel the screenshot after editing ends");
+    }
+    require(settings.setAllShortcutsAtomic(original), "restore screenshot cancellation shortcuts");
 }
 
 void configuredScreenshotShortcutsControlMoveAndCursorNavigation() {
@@ -2406,6 +3474,13 @@ void configuredScreenshotShortcutsControlMoveAndCursorNavigation() {
     actions.physicalCursorMovementAvailable = []() { return true; };
     actions.localShortcutInputAllowed = [&localShortcutInputAllowed]() {
         return localShortcutInputAllowed;
+    };
+    bool cursorAvailable = true;
+    int cursorVisibilityToggles = 0;
+    actions.cursorVisibilityAvailable = [&cursorAvailable] { return cursorAvailable; };
+    actions.toggleCursorVisibility = [&cursorVisibilityToggles] {
+        ++cursorVisibilityToggles;
+        return true;
     };
     actions.recaptureAvailable = [&recaptureAvailable]() { return recaptureAvailable; };
     actions.moveCursorOnePixel = [&cursorMoves,
@@ -2487,6 +3562,25 @@ void configuredScreenshotShortcutsControlMoveAndCursorNavigation() {
     require(moveToolActivations == 1 && interaction.moveToolActive(),
             "default Move shortcut must activate the Move tool");
 
+    require(dispatchShortcut(shortcutWindow, Qt::Key_QuoteLeft) && cursorVisibilityToggles == 1,
+            "backtick must toggle captured cursor visibility");
+    interaction.setCanvasTool(ScreenshotActiveTool::Shape);
+    require(dispatchShortcut(shortcutWindow, Qt::Key_QuoteLeft) && cursorVisibilityToggles == 2,
+            "cursor visibility shortcut must work outside the move tool");
+    cursorAvailable = false;
+    require(!dispatchShortcut(shortcutWindow, Qt::Key_QuoteLeft) && cursorVisibilityToggles == 2,
+            "missing cursor data must not consume backtick");
+    cursorAvailable = true;
+    localShortcutInputAllowed = false;
+    require(!dispatchShortcut(shortcutWindow, Qt::Key_QuoteLeft),
+            "cursor visibility must respect text input and modal shortcut suspension");
+    localShortcutInputAllowed = true;
+    require(!dispatchShortcut(shortcutWindow, Qt::Key_QuoteLeft, Qt::ShiftModifier),
+            "shifted backtick must not activate the unmodified default");
+    require(!dispatchShortcut(shortcutWindow, Qt::Key_QuoteLeft, Qt::NoModifier, true) &&
+                cursorVisibilityToggles == 2,
+            "cursor visibility must disable autorepeat");
+    interaction.setMoveTool(true, false);
     require(dispatchShortcut(shortcutWindow, Qt::Key_R, Qt::AltModifier) &&
                 recaptureActivations == 1,
             "default recapture shortcut must dispatch through the screenshot action path");
@@ -2512,6 +3606,8 @@ void configuredScreenshotShortcutsControlMoveAndCursorNavigation() {
             "recapture shortcut must remain inactive during selection drags");
     interaction.finishDrag();
     interaction.enterScrollingCapture();
+    require(!dispatchShortcut(shortcutWindow, Qt::Key_QuoteLeft),
+            "scrolling capture must suppress cursor visibility shortcuts");
     require(!dispatchShortcut(shortcutWindow, Qt::Key_R, Qt::AltModifier) &&
                 recaptureActivations == 1,
             "recapture shortcut must remain inactive during scrolling capture");
@@ -2689,6 +3785,13 @@ void standardCloseExitsScreenshotSession() {
 #endif
 
 void shortcutExitConfirmationGatesCancellation() {
+    const storage::ScreenshotSettings settings;
+    const bool originalConfirmation = settings.confirmBeforeExitingViaShortcut();
+    const auto restore = qScopeGuard([&] {
+        require(settings.setConfirmBeforeExitingViaShortcut(originalConfirmation),
+                "restore screenshot exit confirmation preference");
+    });
+    require(settings.setConfirmBeforeExitingViaShortcut(true), "enable exit confirmation");
     QWidget owner;
     owner.show();
     snow_shot::presentation::WindowShortcutManager shortcutManager;
@@ -2755,7 +3858,8 @@ void shortcutExitConfirmationGatesCancellation() {
     QCoreApplication::processEvents();
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     require(exits == 0 && restores == 1 && restoredOwner == &owner &&
-                dispatchShortcut(owner, Qt::Key_F11) && unrelatedActivations == 1,
+                dispatchShortcut(owner, Qt::Key_F11) && unrelatedActivations == 1 &&
+                settings.confirmBeforeExitingViaShortcut(),
             "rejecting confirmation must preserve capture, restore its owner, and resume input");
 
     require(confirmation.request(true, &owner), "Escape confirmation request was declined");
@@ -2789,8 +3893,55 @@ void shortcutExitConfirmationGatesCancellation() {
     QCoreApplication::processEvents();
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     require(exits == 1 && restores == 2 && dispatchShortcut(owner, Qt::Key_F11) &&
-                unrelatedActivations == 2,
+                unrelatedActivations == 2 && settings.confirmBeforeExitingViaShortcut(),
             "accepting confirmation must exit exactly once and resume shortcut input");
+
+    require(confirmation.request(true, &owner), "open exit confirmation for Don't ask again");
+    QCoreApplication::processEvents();
+    modal = owner.findChild<adqt::widgets::AdModal*>(
+        QStringLiteral("screenshotShortcutExitConfirmation"));
+    auto* skip = modal->acceptButton()->parentWidget()->findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("confirmationDontAskAgainButton"));
+    require(skip != nullptr, "exit confirmation exposes Don't ask again");
+    require(skip->isVisible(), "Don't ask again is visible in the confirmation footer");
+    require(skip->text() == QStringLiteral("Don't ask again"), "Don't ask again uses English copy");
+    require(!skip->isDefault(), "Don't ask again must require an explicit choice");
+    class SkipTranslator final : public QTranslator {
+      public:
+        QString translate(const char* context, const char* source, const char*,
+                          int) const override {
+            if (QByteArray(context) == "ConfirmationSkipButton" &&
+                QByteArray(source) == "Don't ask again")
+                return QStringLiteral("Translated skip confirmation");
+            return {};
+        }
+    } translator;
+    QApplication::installTranslator(&translator);
+    QEvent languageChange(QEvent::LanguageChange);
+    QApplication::sendEvent(skip, &languageChange);
+    require(skip->text() == QStringLiteral("Translated skip confirmation"),
+            "Don't ask again retranslates while the confirmation is open");
+    QApplication::removeTranslator(&translator);
+    QApplication::sendEvent(skip, &languageChange);
+    skip->click();
+    QCoreApplication::processEvents();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    require(exits == 2 && restores == 2 && !settings.confirmBeforeExitingViaShortcut() &&
+                dispatchShortcut(owner, Qt::Key_F11) && unrelatedActivations == 3,
+            "Don't ask again disables exit confirmation, exits once, and resumes input");
+    auto& appStorage = storage::ApplicationStorage::instance();
+    require(appStorage.configuration().flushNow().success, "flush disabled exit confirmation");
+    storage::ConfigurationStore reloaded(
+        QDir(appStorage.configurationDirectory()).filePath(QStringLiteral("config.json")), true,
+        false);
+    require(
+        !reloaded.value(QStringLiteral("screenshot/confirm_before_exiting_via_shortcut")).toBool(),
+        "Don't ask again persists the disabled screenshot confirmation");
+    require(confirmation.request(settings.confirmBeforeExitingViaShortcut(), &owner) &&
+                exits == 3 &&
+                !owner.findChild<adqt::widgets::AdModal*>(
+                    QStringLiteral("screenshotShortcutExitConfirmation")),
+            "subsequent screenshot exits skip the confirmation");
 }
 
 void rightClickSeparatesDismissalFromSelectionChanges() {
@@ -2965,7 +4116,9 @@ void scrollingCaptureRoutesEveryToolbarShortcut() {
         inputAllowed = false;
         require(!dispatchShortcut(window, Qt::Key_F12, Qt::ControlModifier | Qt::AltModifier) &&
                     dispatched.size() == 1,
-                "text input must retain shortcuts while scrolling");
+                "text input must retain shortcuts while scrolling, including cancellation");
+        static_cast<void>(dispatchShortcutRelease(window, Qt::Key_F12));
+        require(dispatched.size() == 1, "blocked shortcuts must not activate on release");
         inputAllowed = true;
     }
     require(settings.setAllShortcutsAtomic(original), "failed to restore toolbar shortcuts");
@@ -3040,20 +4193,126 @@ void cursorMovementEligibilityFollowsInteractionState() {
     require(interaction.cursorMovementEnabled(),
             "a drawing tool must enable cursor movement while editing");
 
-    const ScreenshotActiveTool unsupportedTools[] = {
-        ScreenshotActiveTool::Eraser,    ScreenshotActiveTool::Spotlight,
-        ScreenshotActiveTool::Watermark, ScreenshotActiveTool::Ocr,
-        ScreenshotActiveTool::Table,     ScreenshotActiveTool::Qr,
-    };
-    for (ScreenshotActiveTool tool : unsupportedTools) {
-        interaction.setCanvasTool(tool);
-        require(!interaction.cursorMovementEnabled(),
-                "a cursor-ineligible tool enabled movement shortcuts");
-    }
+    interaction.enterOverlayVisible(false);
+    require(interaction.cursorMovementEnabled(), "manual selection must enable cursor movement");
+    interaction.confirmSelection();
+    require(interaction.cursorMovementEnabled(),
+            "a confirmed selection must enable cursor movement");
+    interaction.setOcrTool();
+    require(interaction.enterSelectionDrag(ScreenshotSelectionDragMode::Marquee) &&
+                interaction.cursorMovementEnabled(),
+            "recognition selection drags must retain cursor movement");
 
     interaction.enterScrollingCapture();
     require(!interaction.cursorMovementEnabled(),
             "scrolling capture must not enable cursor movement");
+}
+
+void cursorMovementShortcutsAreIndependentOfActiveTool() {
+    ScreenshotCaptureState captureState;
+    ScreenshotDisplaySession displays;
+    ScreenshotGeometryMapper geometry;
+    ScreenshotSelectionModel selection;
+    ScreenshotIntelligentSelectionModel intelligent;
+    ScreenshotInteractionState interaction;
+    QWidget shortcutWindow;
+    snow_shot::presentation::WindowShortcutManager shortcutManager;
+    shortcutManager.addScopeWindow(&shortcutWindow);
+
+    bool inputAllowed = true;
+    bool physicalCursorAvailable = true;
+    QVector<PhysicalCursorDirection> cursorMoves;
+    ScreenshotOverlayInputActions actions;
+    actions.localShortcutInputAllowed = [&] { return inputAllowed; };
+    actions.physicalCursorMovementAvailable = [&] { return physicalCursorAvailable; };
+    actions.moveCursorOnePixel = [&](PhysicalCursorDirection direction) {
+        cursorMoves.push_back(direction);
+        return true;
+    };
+    ScreenshotOverlayInputHandler handler(
+        {captureState, interaction, selection, intelligent, geometry, displays, actions});
+    ScreenshotOverlayShortcutController shortcuts(shortcutManager, handler, interaction,
+                                                  intelligent, actions);
+
+    const ScreenshotActiveTool tools[] = {
+        ScreenshotActiveTool::Move,
+        ScreenshotActiveTool::Select,
+        ScreenshotActiveTool::Shape,
+        ScreenshotActiveTool::Arrow,
+        ScreenshotActiveTool::Line,
+        ScreenshotActiveTool::FreeDraw,
+        ScreenshotActiveTool::RectangleHighlight,
+        ScreenshotActiveTool::PenHighlight,
+        ScreenshotActiveTool::Eraser,
+        ScreenshotActiveTool::RectangleFilter,
+        ScreenshotActiveTool::Watermark,
+        ScreenshotActiveTool::Text,
+        ScreenshotActiveTool::SerialNumber,
+        ScreenshotActiveTool::Ocr,
+        ScreenshotActiveTool::Table,
+        ScreenshotActiveTool::Qr,
+        ScreenshotActiveTool::PenFilter,
+        ScreenshotActiveTool::Spotlight,
+        ScreenshotActiveTool::Markdown,
+        ScreenshotActiveTool::Html,
+        ScreenshotActiveTool::AutoFilter,
+        ScreenshotActiveTool::Latex,
+        ScreenshotActiveTool::RectangleEraser,
+        ScreenshotActiveTool::BrushEraser,
+    };
+    const std::pair<Qt::Key, PhysicalCursorDirection> movements[] = {
+        {Qt::Key_W, PhysicalCursorDirection::Up},
+        {Qt::Key_S, PhysicalCursorDirection::Down},
+        {Qt::Key_A, PhysicalCursorDirection::Left},
+        {Qt::Key_D, PhysicalCursorDirection::Right},
+        {Qt::Key_Up, PhysicalCursorDirection::Up},
+        {Qt::Key_Down, PhysicalCursorDirection::Down},
+        {Qt::Key_Left, PhysicalCursorDirection::Left},
+        {Qt::Key_Right, PhysicalCursorDirection::Right},
+    };
+    for (const auto tool : tools) {
+        interaction.setCanvasTool(tool);
+        for (const auto& [key, direction] : movements) {
+            cursorMoves.clear();
+            require(dispatchShortcut(shortcutWindow, key) &&
+                        dispatchShortcut(shortcutWindow, key, Qt::NoModifier, true) &&
+                        cursorMoves == QVector<PhysicalCursorDirection>{direction, direction},
+                    "every tool must route cursor shortcuts and auto-repeat in every direction");
+            static_cast<void>(dispatchShortcutRelease(shortcutWindow, key));
+            require(interaction.activeTool() == tool && interaction.editing(),
+                    "cursor movement must preserve the current tool and interaction mode");
+
+            inputAllowed = false;
+            cursorMoves.clear();
+            require(!dispatchShortcut(shortcutWindow, key) && cursorMoves.isEmpty(),
+                    "text input must block cursor movement for every tool");
+            inputAllowed = true;
+
+            physicalCursorAvailable = false;
+            require(!dispatchShortcut(shortcutWindow, key) && cursorMoves.isEmpty(),
+                    "an unavailable physical cursor must not consume movement shortcuts");
+            physicalCursorAvailable = true;
+        }
+
+        cursorMoves.clear();
+        const auto suspension = shortcutManager.suspendInput();
+        require(!dispatchShortcut(shortcutWindow, Qt::Key_W) && cursorMoves.isEmpty(),
+                "modal input suspension must block cursor movement for every tool");
+        shortcutManager.resumeInput(suspension);
+    }
+
+    for (const bool scrolling : {false, true}) {
+        if (scrolling)
+            interaction.enterScrollingCapture();
+        else
+            interaction.reset();
+        cursorMoves.clear();
+        for (const auto& [key, direction] : movements) {
+            static_cast<void>(direction);
+            require(!dispatchShortcut(shortcutWindow, key) && cursorMoves.isEmpty(),
+                    "inactive and scrolling captures must not route cursor movement");
+        }
+    }
 }
 
 void selectionStagesActivateEveryToolbarShortcut() {
@@ -3202,6 +4461,377 @@ void selectionStagesActivateEveryToolbarShortcut() {
     require(screenshotSettings.setAllShortcutsAtomic(originalScreenshot) &&
                 drawingSettings.setAllShortcutsAtomic(originalDrawing),
             "restore toolbar shortcuts");
+}
+
+using GlobalAction = snow_shot::presentation::GlobalShortcutAction;
+constexpr std::pair<GlobalAction, const char*> kGlobalScreenshotTools[] = {
+    {GlobalAction::ScreenshotFixed, "pin_to_screen"},
+    {GlobalAction::ScreenshotOcr, "text_recognition"},
+    {GlobalAction::ScreenshotTranslation, "text_translation"},
+    {GlobalAction::ScreenshotCopy, "copy_to_clipboard"},
+    {GlobalAction::ScreenshotSave, "save_as_file"},
+    {GlobalAction::ScreenshotQuickSave, "quick_save"},
+    {GlobalAction::ScreenRecord, "video_recording"},
+    {GlobalAction::ScreenRecordCopy, "video_recording"},
+};
+
+void globalScreenshotShortcutsUseCurrentSelection() {
+    for (const auto& [globalAction, localAction] : kGlobalScreenshotTools) {
+        // Confirmed editing, smart hover/press, manual idle, marquee, move, and resize.
+        for (int stage = 0; stage < 7; ++stage) {
+            ScreenshotCaptureState capture;
+            capture.sessionId = 42;
+            capture.sessionState = stage == 0 ? ScreenshotSessionState::Editing
+                                              : ScreenshotSessionState::OverlayVisible;
+            ScreenshotDisplaySession displays;
+            ScreenshotGeometryMapper geometry;
+            ScreenshotSelectionModel selection;
+            selection.setSelectionRect(QRectF(10, 20, 80, 60));
+            const QRect bounds = selection.pixelSelection();
+            ScreenshotIntelligentSelectionModel intelligent;
+            ScreenshotInteractionState interaction;
+            interaction.enterOverlayVisible(stage == 1 || stage == 2);
+            if (stage == 0)
+                interaction.confirmSelection();
+            if (stage == 2)
+                intelligent.beginPress(QPointF(30, 40), selection.normalizedSelection());
+            if (stage >= 4)
+                require(interaction.enterSelectionDrag(
+                            stage == 4   ? ScreenshotSelectionDragMode::Marquee
+                            : stage == 5 ? ScreenshotSelectionDragMode::All
+                                         : ScreenshotSelectionDragMode::Right),
+                        "start global shortcut selection drag");
+            bool toolbarVisible = stage == 0;
+            bool pendingAction = stage != 0;
+            int preparations = 0;
+            int confirmations = 0;
+            int activations = 0;
+            ScreenshotOverlayInputActions actions;
+            actions.mainToolbarVisible = [&] { return toolbarVisible; };
+            actions.canActivateScreenshotShortcut = [&](const QString& id) {
+                return id == QLatin1String(localAction);
+            };
+            actions.prepareExplicitSelectionCommand = [&] {
+                ++preparations;
+                pendingAction = false;
+            };
+            actions.activateScreenshotShortcut = [&](const QString& id) {
+                require(id == QLatin1String(localAction) &&
+                            capture.sessionState == ScreenshotSessionState::Editing &&
+                            capture.sessionId == 42 && !interaction.selecting() &&
+                            !interaction.dragging() && selection.pixelSelection() == bounds &&
+                            !pendingAction && confirmations == 0,
+                        "global tool must use the committed current capture before presentation");
+                ++activations;
+                interaction.setCanvasTool(ScreenshotActiveTool::Shape);
+                return true;
+            };
+            actions.updateOverlayState = [&] {
+                require(activations == 1, "global tool must activate before overlay presentation");
+            };
+            actions.showToolbar = [&] {
+                require(activations == 1, "global tool must activate before toolbar presentation");
+                toolbarVisible = true;
+            };
+            actions.selectionConfirmed = [&] {
+                require(!pendingAction, "global tool must supersede the pending capture action");
+                ++confirmations;
+            };
+            ScreenshotOverlayInputHandler handler(
+                {capture, interaction, selection, intelligent, geometry, displays, actions});
+            snow_shot::presentation::WindowShortcutManager manager;
+            ScreenshotOverlayShortcutController shortcuts(manager, handler, interaction,
+                                                          intelligent, actions);
+            require(shortcuts.handleGlobalScreenshotShortcut(globalAction, true) &&
+                        activations == 1 && preparations == (stage == 0 ? 0 : 1) &&
+                        confirmations == (stage == 0 ? 0 : 1) && !intelligent.pressActive(),
+                    "global screenshot tool must confirm and activate exactly once");
+            if (stage == 2 || stage >= 4)
+                require(handler.shouldHandleMouseEvent(nullptr, QPointF(300, 300), true),
+                        "global shortcut must consume the pending selection release");
+            handler.handleMouseMove(nullptr, QPointF(300, 300));
+            handler.handleMouseRelease(nullptr, QPointF(300, 300));
+            QCoreApplication::processEvents();
+            require(capture.sessionId == 42 && selection.pixelSelection() == bounds &&
+                        activations == 1 && confirmations == (stage == 0 ? 0 : 1) &&
+                        interaction.activeTool() == ScreenshotActiveTool::Shape,
+                    "later release must not restart capture or repeat the global tool");
+        }
+    }
+}
+
+void rejectedGlobalScreenshotShortcutsPreserveSession() {
+    const storage::DrawingShortcutSettings drawingSettings;
+    const auto originalShapeShortcut = drawingSettings.shape();
+    const auto restore = qScopeGuard([&] {
+        require(drawingSettings.setShape(originalShapeShortcut), "restore shape shortcut");
+    });
+    require(drawingSettings.setShape({QStringLiteral("Alt+J")}), "configure shape shortcut");
+    enum class Rejection {
+        EmptySelection,
+        PolylineDraft,
+        FreehandDraft,
+        AddRegion,
+        SubtractRegion,
+        ExternalDrag,
+        TextInput,
+        UnavailableSelectionTool,
+        PreparingStartup,
+        Capturing,
+        Releasing,
+        Suspended,
+        ModalSelection,
+        ModalEditing,
+        CornerRadiusDrag,
+        ShadowDrag,
+        Inactive,
+        HiddenToolbar,
+        UnavailableEditingTool,
+    };
+    for (const auto& [globalAction, localAction] : kGlobalScreenshotTools) {
+        Q_UNUSED(localAction);
+        for (const auto reason :
+             {Rejection::EmptySelection, Rejection::PolylineDraft, Rejection::FreehandDraft,
+              Rejection::AddRegion, Rejection::SubtractRegion, Rejection::ExternalDrag,
+              Rejection::TextInput, Rejection::UnavailableSelectionTool,
+              Rejection::PreparingStartup, Rejection::Capturing, Rejection::Releasing,
+              Rejection::Suspended, Rejection::ModalSelection, Rejection::ModalEditing,
+              Rejection::CornerRadiusDrag, Rejection::ShadowDrag, Rejection::Inactive,
+              Rejection::HiddenToolbar, Rejection::UnavailableEditingTool}) {
+            ScreenshotCaptureState capture;
+            capture.sessionId = 42;
+            capture.sessionState = ScreenshotSessionState::OverlayVisible;
+            ScreenshotDisplaySession displays;
+            ScreenshotGeometryMapper geometry;
+            ScreenshotSelectionModel selection;
+            selection.setSelectionRect(QRectF(10, 20, 80, 60));
+            ScreenshotIntelligentSelectionModel intelligent;
+            ScreenshotInteractionState interaction;
+            interaction.enterOverlayVisible(true);
+            const bool available = reason != Rejection::UnavailableSelectionTool &&
+                                   reason != Rejection::UnavailableEditingTool;
+            const bool modal =
+                reason == Rejection::ModalSelection || reason == Rejection::ModalEditing;
+            const bool effectDrag =
+                reason == Rejection::CornerRadiusDrag || reason == Rejection::ShadowDrag;
+            int rollbacks = 0;
+            bool captureReady = true;
+            switch (reason) {
+            case Rejection::EmptySelection:
+                selection.setSelectionRect({});
+                break;
+            case Rejection::PolylineDraft:
+            case Rejection::FreehandDraft:
+                selection.setRegionType(reason == Rejection::PolylineDraft
+                                            ? ScreenshotRegionType::Polyline
+                                            : ScreenshotRegionType::Freehand);
+                selection.setDraftRegion(selection.selectionRegion());
+                break;
+            case Rejection::AddRegion:
+            case Rejection::SubtractRegion:
+                selection.beginRegionOperation(
+                    reason == Rejection::AddRegion
+                        ? ScreenshotSelectionModel::RegionOperation::Add
+                        : ScreenshotSelectionModel::RegionOperation::Subtract);
+                break;
+            case Rejection::PreparingStartup:
+                displays.startup = std::make_shared<ScreenshotStartupContext>();
+                displays.startup->phase = ScreenshotStartupContext::Phase::Preparing;
+                break;
+            case Rejection::Capturing:
+                capture.sessionState = ScreenshotSessionState::Capturing;
+                capture.captureInProgress = true;
+                captureReady = false;
+                break;
+            case Rejection::Releasing:
+                capture.sessionState = ScreenshotSessionState::Releasing;
+                captureReady = false;
+                break;
+            case Rejection::Suspended:
+                captureReady = false;
+                break;
+            case Rejection::Inactive:
+                interaction.reset();
+                break;
+            case Rejection::HiddenToolbar:
+            case Rejection::UnavailableEditingTool:
+            case Rejection::ModalEditing:
+            case Rejection::CornerRadiusDrag:
+            case Rejection::ShadowDrag:
+                interaction.confirmSelection();
+                capture.sessionState = ScreenshotSessionState::Editing;
+                break;
+            default:
+                break;
+            }
+            if (effectDrag) {
+                ScreenshotInteractionState::EffectGesture gesture;
+                gesture.handle = reason == Rejection::CornerRadiusDrag
+                                     ? ScreenshotSelectionEffectHandle::TopLeft
+                                     : ScreenshotSelectionEffectHandle::Shadow;
+                gesture.rollback = [&] { ++rollbacks; };
+                require(interaction.beginEffectDrag(std::move(gesture)),
+                        "start global shortcut effect drag");
+            }
+            int mutations = 0;
+            int activations = 0;
+            ScreenshotOverlayInputActions actions;
+            actions.mainToolbarVisible = [&] {
+                return reason == Rejection::UnavailableEditingTool ||
+                       reason == Rejection::ModalEditing || effectDrag;
+            };
+            actions.localShortcutInputAllowed = [&] { return reason != Rejection::TextInput; };
+            actions.canActivateScreenshotShortcut = [&](const QString&) { return available; };
+            actions.activateScreenshotShortcut = [&](const QString&) {
+                if (!available)
+                    return false;
+                ++mutations;
+                ++activations;
+                if (effectDrag)
+                    interaction.setCanvasTool(ScreenshotActiveTool::Shape);
+                return true;
+            };
+            actions.activateDrawingShortcut = [&](const QString&) {
+                ++mutations;
+                interaction.setCanvasTool(ScreenshotActiveTool::Shape);
+                return true;
+            };
+            actions.prepareExplicitSelectionCommand = [&] { ++mutations; };
+            actions.showToolbar = [&] { ++mutations; };
+            actions.selectionConfirmed = [&] { ++mutations; };
+            const auto region = selection.selectionRegion();
+            const auto state = capture.sessionState;
+            const auto mode = interaction.mode();
+            ScreenshotOverlayInputHandler handler(
+                {capture, interaction, selection, intelligent, geometry, displays, actions});
+            if (reason == Rejection::ExternalDrag)
+                handler.setExternalDragActive(true);
+            QWidget receiver;
+            snow_shot::presentation::WindowShortcutManager manager;
+            manager.addScopeWindow(&receiver);
+            ScreenshotOverlayShortcutController shortcuts(manager, handler, interaction,
+                                                          intelligent, actions);
+            const auto firstSuspension = modal ? manager.suspendInput() : 0;
+            const auto secondSuspension = modal ? manager.suspendInput() : 0;
+            if (effectDrag) {
+                require(!dispatchShortcut(receiver, Qt::Key_J, Qt::AltModifier) && mutations == 0 &&
+                            handler.effectDragActive() && rollbacks == 0,
+                        "drawing shortcuts must preserve an active effect drag");
+                static_cast<void>(dispatchShortcutRelease(receiver, Qt::Key_J, Qt::AltModifier));
+                for (const auto& undo : QKeySequence::keyBindings(QKeySequence::Undo)) {
+                    require(
+                        !dispatchShortcut(receiver, undo[0].key(), undo[0].keyboardModifiers()) &&
+                            mutations == 0 && handler.effectDragActive() && rollbacks == 0,
+                        "history shortcuts must preserve an active effect drag");
+                    static_cast<void>(dispatchShortcutRelease(receiver, undo[0].key(),
+                                                              undo[0].keyboardModifiers()));
+                }
+            }
+            require(shortcuts.handleGlobalScreenshotShortcut(globalAction, captureReady),
+                    "rejected global screenshot tool must be consumed without capture fallback");
+            QCoreApplication::processEvents();
+            require(mutations == 0 && activations == 0 && rollbacks == 0 &&
+                        handler.effectDragActive() == effectDrag && capture.sessionId == 42 &&
+                        capture.sessionState == state && interaction.mode() == mode &&
+                        selection.selectionRegion() == region,
+                    "rejected global screenshot tool must preserve the session and region");
+            if (modal) {
+                manager.resumeInput(firstSuspension);
+                require(shortcuts.handleGlobalScreenshotShortcut(globalAction, true) &&
+                            mutations == 0 && activations == 0 && capture.sessionState == state &&
+                            interaction.mode() == mode,
+                        "partial modal resume must keep global screenshot tools suspended");
+                manager.resumeInput(secondSuspension);
+                require(shortcuts.handleGlobalScreenshotShortcut(globalAction, true) &&
+                            activations == 1 && capture.sessionId == 42,
+                        "final modal resume must restore global screenshot tool activation");
+            } else if (effectDrag) {
+                require(handler.cancelEffectDrag() && rollbacks == 1 &&
+                            !handler.effectDragActive() &&
+                            shortcuts.handleGlobalScreenshotShortcut(globalAction, true) &&
+                            activations == 1 && rollbacks == 1,
+                        "finishing an effect gesture must restore global screenshot tools");
+            }
+        }
+    }
+}
+
+void unrelatedGlobalShortcutsLeaveScreenshotToolsUntouched() {
+    ScreenshotCaptureState capture;
+    capture.sessionId = 42;
+    capture.sessionState = ScreenshotSessionState::Editing;
+    ScreenshotDisplaySession displays;
+    ScreenshotGeometryMapper geometry;
+    ScreenshotSelectionModel selection;
+    selection.setSelectionRect(QRectF(10, 20, 80, 60));
+    ScreenshotIntelligentSelectionModel intelligent;
+    ScreenshotInteractionState interaction;
+    interaction.enterOverlayVisible(false);
+    interaction.confirmSelection();
+    int activations = 0;
+    ScreenshotOverlayInputActions actions;
+    actions.mainToolbarVisible = [] { return true; };
+    actions.activateScreenshotShortcut = [&](const QString&) {
+        ++activations;
+        return true;
+    };
+    ScreenshotOverlayInputHandler handler(
+        {capture, interaction, selection, intelligent, geometry, displays, actions});
+    snow_shot::presentation::WindowShortcutManager manager;
+    ScreenshotOverlayShortcutController shortcuts(manager, handler, interaction, intelligent,
+                                                  actions);
+    for (const auto action :
+         {GlobalAction::Screenshot, GlobalAction::ScreenshotDelay,
+          GlobalAction::ScreenshotFullScreen, GlobalAction::ScreenshotFocusedWindow,
+          GlobalAction::OpenScreenRecordingFolder, GlobalAction::OpenCaptureHistory,
+          GlobalAction::OpenSettings, GlobalAction::PinClipboardContent,
+          GlobalAction::TranslateSelectedText, GlobalAction::PinSelectedFiles,
+          GlobalAction::RestoreLastClosedWindows, GlobalAction::ToggleGlobalHotkeys,
+          GlobalAction::ToggleDisableOnFocusedFullscreenWindow,
+          GlobalAction::OpenPinToScreenManagement, GlobalAction::GlobalCanvas,
+          GlobalAction::SwitchWindowGroup})
+        require(!shortcuts.handleGlobalScreenshotShortcut(action, true) && activations == 0 &&
+                    capture.sessionId == 42 &&
+                    capture.sessionState == ScreenshotSessionState::Editing &&
+                    selection.pixelSelection() == QRect(10, 20, 80, 60),
+                "unrelated global actions must keep their existing application dispatch");
+}
+
+void globalCompletionShortcutsDoNotReopenCapture() {
+    for (const auto action : {GlobalAction::ScreenshotFixed, GlobalAction::ScreenshotCopy,
+                              GlobalAction::ScreenshotQuickSave, GlobalAction::ScreenRecord,
+                              GlobalAction::ScreenRecordCopy}) {
+        ScreenshotCaptureState capture;
+        capture.sessionState = ScreenshotSessionState::OverlayVisible;
+        ScreenshotDisplaySession displays;
+        ScreenshotGeometryMapper geometry;
+        ScreenshotSelectionModel selection;
+        selection.setSelectionRect(QRectF(10, 20, 80, 60));
+        ScreenshotIntelligentSelectionModel intelligent;
+        ScreenshotInteractionState interaction;
+        interaction.enterOverlayVisible(true);
+        int activations = 0;
+        int presentations = 0;
+        ScreenshotOverlayInputActions actions;
+        actions.canActivateScreenshotShortcut = [](const QString&) { return true; };
+        actions.activateScreenshotShortcut = [&](const QString&) {
+            ++activations;
+            interaction.reset();
+            capture.sessionState = ScreenshotSessionState::Releasing;
+            return true;
+        };
+        actions.showToolbar = [&] { ++presentations; };
+        actions.updateOverlayState = [&] { ++presentations; };
+        actions.selectionConfirmed = [&] { ++presentations; };
+        ScreenshotOverlayInputHandler handler(
+            {capture, interaction, selection, intelligent, geometry, displays, actions});
+        snow_shot::presentation::WindowShortcutManager manager;
+        ScreenshotOverlayShortcutController shortcuts(manager, handler, interaction, intelligent,
+                                                      actions);
+        require(shortcuts.handleGlobalScreenshotShortcut(action, true) && activations == 1 &&
+                    presentations == 0 && interaction.inactive(),
+                "completed global tool must not reopen its retired screenshot session");
+    }
 }
 
 void toolbarSelectionPreparationRejectsIncompleteRegions() {
@@ -4047,11 +5677,609 @@ void customRegionInputTransactions() {
     handler.setRegionType(ScreenshotRegionType::Rectangle);
 }
 
+void rememberedRatioNormalizesSmartPicksBeforePresentation() {
+    for (const auto preset : {ScreenshotSelectionAspectRatioPreset::Landscape16x9,
+                              ScreenshotSelectionAspectRatioPreset::Portrait3x4}) {
+        ScreenshotCaptureState capture;
+        ScreenshotDisplaySession displays;
+        CapturedDisplayModel display;
+        display.active = true;
+        display.physicalRect = QRect(-500, -200, 1920, 1080);
+        display.logicalRect = display.physicalRect;
+        displays.appendDisplay(display);
+        ScreenshotGeometryMapper geometry;
+        geometry.rebuild(displays);
+        const QRectF canvas = geometry.canvasBounds();
+        const QRectF detected(canvas.topLeft() + QPointF(50, 60), QSizeF(320, 100));
+        ScreenshotSelectionModel selection;
+        require(selection.setAspectRatioPreset(preset, {}, 1.0),
+                "remembered ratio must arm before smart selection");
+        selection.setSelectionRect(detected);
+        ScreenshotIntelligentSelectionModel intelligent;
+        intelligent.beginCaptureSession(true);
+        require(intelligent.applyCanvasHitPath({detected}, canvas, 1.0),
+                "smart selection fixture must accept its detected frame");
+        ScreenshotInteractionState interaction;
+        interaction.enterOverlayVisible(true);
+        int presentations = 0;
+        int confirmations = 0;
+        const auto assertFinalGeometry = [&] {
+            const QRectF rectangle = selection.normalizedSelection();
+            require(rectangle.width() == detected.width() &&
+                        qFuzzyCompare(rectangle.height() / rectangle.width(),
+                                      screenshotSelectionAspectRatioHeightOverWidth(preset)) &&
+                        selection.aspectRatioPreset() == preset && selection.aspectRatioLocked(),
+                    "the first confirmed presentation must already use the remembered ratio");
+        };
+        ScreenshotOverlayInputActions actions;
+        actions.updateOverlayState = assertFinalGeometry;
+        actions.showToolbar = [&] {
+            assertFinalGeometry();
+            ++presentations;
+        };
+        actions.selectionConfirmed = [&] { ++confirmations; };
+        ScreenshotOverlayInputHandler handler(
+            {capture, interaction, selection, intelligent, geometry, displays, actions});
+        require(selection.normalizedSelection() == detected,
+                "remembered ratio must leave smart hover previews at detected dimensions");
+        require(handler.activateKeepSelectionAspectRatioShortcut(false),
+                "idle aspect shortcut must not replace a smart pick's remembered preset");
+        handler.handleMousePress(nullptr, detected.center());
+        handler.handleMouseRelease(nullptr, detected.center());
+        require(presentations == 1 && confirmations == 1 && interaction.movingSelection() &&
+                    capture.sessionState == ScreenshotSessionState::Editing,
+                "smart pick must normalize and confirm exactly once");
+        interaction.enterOverlayVisible(true);
+        selection.setSelectionRect(detected);
+        int activations = 0;
+        require(handler.activateToolbarShortcutForSelection([&] {
+            assertFinalGeometry();
+            ++activations;
+            return true;
+        }),
+                "selection toolbar shortcuts must accept the smart-picked rectangle");
+        require(activations == 1 && presentations == 2 && confirmations == 2,
+                "toolbar actions must see the final ratio before the first presentation");
+    }
+}
+
+void rectangularRegionEditsPreserveExactGeometryWithRememberedRatio() {
+    struct RegionEdit {
+        ScreenshotSelectionModel::RegionOperation operation;
+        QRect original;
+        QRect operand;
+        QRect expected;
+    };
+    const RegionEdit edits[] = {
+        {ScreenshotSelectionModel::RegionOperation::Add, QRect(100, 100, 100, 100),
+         QRect(200, 100, 100, 100), QRect(100, 100, 200, 100)},
+        {ScreenshotSelectionModel::RegionOperation::Subtract, QRect(100, 100, 200, 200),
+         QRect(200, 100, 100, 200), QRect(100, 100, 100, 200)},
+    };
+    for (const auto& edit : edits) {
+        ScreenshotCaptureState capture;
+        ScreenshotDisplaySession displays;
+        CapturedDisplayModel display;
+        display.active = true;
+        display.physicalRect = QRect(0, 0, 1920, 1080);
+        display.logicalRect = display.physicalRect;
+        displays.appendDisplay(display);
+        ScreenshotGeometryMapper geometry;
+        geometry.rebuild(displays);
+        ScreenshotSelectionModel selection;
+        selection.setSelectionRect(QRectF(edit.original));
+        require(selection.setAspectRatioPreset(ScreenshotSelectionAspectRatioPreset::Square,
+                                               geometry.canvasBounds(), 1.0),
+                "region edit fixture must start with an explicit square preset");
+        selection.beginRegionOperation(edit.operation);
+        selection.setSelectionRect(QRectF(edit.operand));
+        require(selection.selectionRegion() == QRegion(edit.expected) &&
+                    selection.selectionRegion().rectCount() == 1,
+                "region edit fixture must collapse to a single exact rectangle");
+        ScreenshotIntelligentSelectionModel intelligent;
+        ScreenshotInteractionState interaction;
+        interaction.beginCapture();
+        int presentations = 0;
+        const auto assertExactReplacement = [&] {
+            require(selection.normalizedSelection() == QRectF(edit.expected) &&
+                        selection.selectionRegion() == QRegion(edit.expected) &&
+                        selection.aspectRatioPreset() ==
+                            ScreenshotSelectionAspectRatioPreset::Free &&
+                        selection.aspectRatioLocked(),
+                    "a rectangular Boolean result must retain exact geometry and a custom lock");
+        };
+        ScreenshotOverlayInputActions actions;
+        actions.updateOverlayState = assertExactReplacement;
+        actions.showToolbar = [&] {
+            assertExactReplacement();
+            ++presentations;
+        };
+        ScreenshotOverlayInputHandler handler(
+            {capture, interaction, selection, intelligent, geometry, displays, actions});
+        handler.confirmSelection();
+        require(presentations == 1 && !selection.regionOperationActive(),
+                "a rectangular Boolean result should confirm exactly once");
+        selection.beginMoveDrag(selection.normalizedSelection().bottomRight());
+        const QRectF resized = selection.selectionRectForDrag(
+            ScreenshotSelectionDragMode::Right,
+            selection.normalizedSelection().bottomRight() + QPointF(20, 0), geometry.canvasBounds(),
+            1.0);
+        require(qFuzzyCompare(resized.height() / resized.width(),
+                              static_cast<qreal>(edit.expected.height()) / edit.expected.width()),
+                "resizing a Boolean result should retain its new custom aspect ratio");
+    }
+}
+
+void aspectRatioDragConfirmationPreservesPreview() {
+    using Preset = ScreenshotSelectionAspectRatioPreset;
+    auto& configuration = storage::ApplicationStorage::instance().configuration();
+    const QString ratioKey = QStringLiteral("screenshot_selection/aspect_ratio");
+    const QString lockKey = QStringLiteral("screenshot_selection/lock_aspect_ratio");
+    enum class Completion { MouseRelease, ToolbarShortcut, MoveThenRelease, ReleaseThenShortcut };
+    struct Gesture {
+        bool marquee;
+        bool constrained;
+        Completion completion;
+    };
+    const Gesture gestures[] = {
+        {false, true, Completion::MouseRelease},
+        {true, true, Completion::MouseRelease},
+        {false, true, Completion::ToolbarShortcut},
+        {true, true, Completion::ToolbarShortcut},
+        {false, true, Completion::MoveThenRelease},
+        {true, true, Completion::MoveThenRelease},
+        {false, true, Completion::ReleaseThenShortcut},
+        {true, true, Completion::ReleaseThenShortcut},
+        {false, false, Completion::MouseRelease},
+        {true, false, Completion::MouseRelease},
+    };
+    for (const auto preset :
+         {Preset::Free, Preset::Square, Preset::Landscape3x2, Preset::Landscape4x3,
+          Preset::Landscape16x9, Preset::Portrait2x3, Preset::Portrait3x4, Preset::Portrait9x16}) {
+        const QString savedPreset = screenshotSelectionAspectRatioPresetId(preset);
+        require(
+            configuration.setValues({{ratioKey, savedPreset}, {lockKey, preset != Preset::Free}}),
+            "drag fixture must persist its next-capture aspect ratio preference");
+        for (const auto& gesture : gestures) {
+            ScreenshotCaptureState capture;
+            ScreenshotDisplaySession displays;
+            CapturedDisplayModel display;
+            display.active = true;
+            display.physicalRect = QRect(0, 0, 1920, 1080);
+            display.logicalRect = display.physicalRect;
+            displays.appendDisplay(display);
+            ScreenshotGeometryMapper geometry;
+            geometry.rebuild(displays);
+            ScreenshotSelectionModel selection;
+            static_cast<void>(selection.setAspectRatioPreset(preset, {}, 1.0));
+            ScreenshotIntelligentSelectionModel intelligent;
+            ScreenshotInteractionState interaction;
+            QPointF press(100, 100);
+            QPointF pointer(220, 150);
+            if (gesture.marquee) {
+                interaction.enterOverlayVisible(false);
+            } else {
+                selection.setSelectionRect(QRectF(300, 300, 320, 180));
+                static_cast<void>(selection.finalizeAspectRatio(geometry.canvasBounds(), 1.0));
+                interaction.confirmSelection();
+                press = QPointF(selection.normalizedSelection().right(),
+                                selection.normalizedSelection().center().y());
+                pointer = press + QPointF(40, 0);
+            }
+            const Preset expectedPreset =
+                gesture.constrained && preset != Preset::Free && preset != Preset::Square
+                    ? Preset::Free
+                    : preset;
+            std::optional<QRectF> committedPreview;
+            int confirmations = 0;
+            const auto assertCommittedPreview = [&] {
+                require(committedPreview.has_value(), "drag must provide a committed preview");
+                const QRectF current = selection.normalizedSelection();
+                require(qFuzzyCompare(1.0 + current.x(), 1.0 + committedPreview->x()) &&
+                            qFuzzyCompare(1.0 + current.y(), 1.0 + committedPreview->y()) &&
+                            qFuzzyCompare(1.0 + current.width(), 1.0 + committedPreview->width()) &&
+                            qFuzzyCompare(1.0 + current.height(), 1.0 + committedPreview->height()),
+                        "confirmation must preserve the completed drag's preview geometry");
+                require(selection.aspectRatioPreset() == expectedPreset &&
+                            selection.aspectRatioLocked() == (preset != Preset::Free),
+                        "overridden presets must become custom locks; matching presets remain");
+            };
+            ScreenshotOverlayInputActions actions;
+            actions.updateOverlayState = [&] {
+                if (committedPreview) {
+                    assertCommittedPreview();
+                }
+            };
+            actions.showToolbar = assertCommittedPreview;
+            actions.selectionConfirmed = [&] {
+                // The controller finalizes again after the input handler presents the selection.
+                static_cast<void>(selection.finalizeAspectRatio(geometry.canvasBounds(), 1.0));
+                assertCommittedPreview();
+                ++confirmations;
+            };
+            ScreenshotOverlayInputHandler handler(
+                {capture, interaction, selection, intelligent, geometry, displays, actions});
+            if (gesture.constrained) {
+                require(handler.activateKeepSelectionAspectRatioShortcut(false),
+                        "aspect shortcut must arm before the pointer drag");
+            }
+            handler.handleMousePress(nullptr, press);
+            handler.handleMouseMove(nullptr, pointer);
+            require(interaction.dragging(), "pointer fixture must start a selection drag");
+            if (gesture.constrained) {
+                const QSizeF size = selection.normalizedSelection().size();
+                require(qFuzzyCompare(size.width(), size.height()),
+                        "the aspect shortcut must preview a square for every preset");
+            }
+            require(selection.aspectRatioPreset() == preset,
+                    "a temporary preview must retain its preset until the drag is committed");
+            if (gesture.completion == Completion::MoveThenRelease) {
+                require(handler.activateMoveEntireSelectionShortcut(),
+                        "whole-selection shortcut must temporarily move the resized rectangle");
+                pointer += QPointF(20, 10);
+                handler.handleMouseMove(nullptr, pointer);
+            } else if (gesture.completion == Completion::ReleaseThenShortcut) {
+                require(handler.releaseKeepSelectionAspectRatioShortcut(),
+                        "aspect shortcut must release before committing through the toolbar");
+            }
+            committedPreview = selection.normalizedSelection();
+            if (gesture.completion == Completion::ToolbarShortcut ||
+                gesture.completion == Completion::ReleaseThenShortcut) {
+                require(handler.activateToolbarShortcutForSelection([&] {
+                    assertCommittedPreview();
+                    return true;
+                }),
+                        "toolbar commands must commit the displayed selection before activation");
+            }
+            handler.handleMouseRelease(nullptr, pointer);
+            assertCommittedPreview();
+            require(confirmations == 1 && !interaction.dragging() && interaction.movingSelection(),
+                    "each pointer gesture must confirm exactly once");
+            require(configuration.value(ratioKey) == savedPreset &&
+                        configuration.value(lockKey).toBool() == (preset != Preset::Free),
+                    "temporary aspect overrides must retain the next capture's saved preference");
+            selection.beginMoveDrag(selection.normalizedSelection().bottomRight());
+            const QRectF nextResize = selection.selectionRectForDrag(
+                ScreenshotSelectionDragMode::Right,
+                selection.normalizedSelection().bottomRight() + QPointF(10, 0),
+                geometry.canvasBounds(), 1.0);
+            if (preset != Preset::Free) {
+                require(qFuzzyCompare(nextResize.height() / nextResize.width(),
+                                      committedPreview->height() / committedPreview->width()),
+                        "subsequent resizing must retain the committed preset or custom lock");
+                static_cast<void>(selection.setAspectRatioPreset(preset, {}, 1.0));
+                selection.setSelectionRect(QRectF(100, 100, 240, 80));
+                static_cast<void>(selection.finalizeAspectRatio(geometry.canvasBounds(), 1.0));
+                require(selection.aspectRatioPreset() == preset &&
+                            qFuzzyCompare(selection.normalizedSelection().height() /
+                                              selection.normalizedSelection().width(),
+                                          screenshotSelectionAspectRatioHeightOverWidth(preset)),
+                        "a later smart-picked rectangle must still apply its remembered preset");
+            }
+        }
+    }
+}
+
+void configuredSnapTracksPresetsAndPersistsSelectionRatio() {
+    using Preset = ScreenshotSelectionAspectRatioPreset;
+    auto& configuration = storage::ApplicationStorage::instance().configuration();
+    const QString ratioKey = QStringLiteral("screenshot_selection/aspect_ratio");
+    const QString lockKey = QStringLiteral("screenshot_selection/lock_aspect_ratio");
+    require(configuration.setValues({{ratioKey, QStringLiteral("16:9")}, {lockKey, true}}),
+            "snap fixture must begin with a configured ratio");
+
+    ScreenshotCaptureState capture;
+    ScreenshotDisplaySession displays;
+    CapturedDisplayModel display;
+    display.active = true;
+    display.physicalRect = QRect(0, 0, 1920, 1080);
+    display.logicalRect = display.physicalRect;
+    displays.appendDisplay(display);
+    ScreenshotGeometryMapper geometry;
+    geometry.rebuild(displays);
+    ScreenshotSelectionModel selection;
+    static_cast<void>(selection.setAspectRatioPreset(Preset::Landscape16x9, {}, 1.0));
+    ScreenshotIntelligentSelectionModel intelligent;
+    ScreenshotInteractionState interaction;
+    interaction.enterOverlayVisible(false);
+    int saved = 0;
+    int confirmed = 0;
+    ScreenshotOverlayInputActions actions;
+    actions.persistSelectionAspectRatioPreference = [&](Preset preset, bool locked) {
+        ++saved;
+        require(configuration.setValues({{ratioKey, screenshotSelectionAspectRatioPresetId(preset)},
+                                         {lockKey, locked}}),
+                "snap must write the actual aspect ratio preference immediately");
+    };
+    actions.selectionConfirmed = [&] { ++confirmed; };
+    ScreenshotOverlayInputHandler handler(
+        {capture, interaction, selection, intelligent, geometry, displays, actions});
+    QWidget shortcutWindow;
+    shortcutWindow.show();
+    snow_shot::presentation::WindowShortcutManager manager;
+    manager.addScopeWindow(&shortcutWindow);
+    ScreenshotOverlayShortcutController shortcuts(manager, handler, interaction, intelligent,
+                                                  actions);
+
+    require(!dispatchShortcut(shortcutWindow, Qt::Key_Q) &&
+                !handler.canActivateSelectionAspectRatioSnapShortcut(),
+            "Q must not arm snapping before a rectangular marquee starts");
+    require(configuration.value(ratioKey) == QStringLiteral("16:9") && saved == 0,
+            "Q before a drag must leave an idle selection preference untouched");
+    handler.handleMousePress(nullptr, QPointF(100, 100));
+    handler.handleMouseMove(nullptr, QPointF(250, 200));
+    require(selection.aspectRatioPreset() == Preset::Landscape16x9 && saved == 0 &&
+                !dispatchShortcut(shortcutWindow, Qt::Key_Q, Qt::NoModifier, true),
+            "Q pressed before the drag must not start snapping on pointer movement or auto-repeat");
+    static_cast<void>(dispatchShortcutRelease(shortcutWindow, Qt::Key_Q));
+    require(!dispatchShortcut(shortcutWindow, Qt::Key_Control, Qt::ControlModifier) && saved == 0,
+            "starting a Ctrl or Command chord during a drag must not snap or save a ratio");
+    static_cast<void>(dispatchShortcutRelease(shortcutWindow, Qt::Key_Control));
+    require(dispatchShortcut(shortcutWindow, Qt::Key_Q),
+            "Q must snap a rectangular marquee already being adjusted");
+    require(selection.aspectRatioPreset() == Preset::Landscape3x2 &&
+                configuration.value(ratioKey) == QStringLiteral("3:2") && saved == 1,
+            "the unconstrained pointer ratio must override the configured preset immediately");
+    handler.handleMouseMove(nullptr, QPointF(250, 350));
+    require(selection.aspectRatioPreset() == Preset::Portrait9x16 &&
+                configuration.value(ratioKey) == QStringLiteral("9:16") && saved == 2,
+            "a held Q must track a changing nearest preset without repeated writes");
+    require(dispatchShortcutRelease(shortcutWindow, Qt::Key_Q),
+            "releasing Q must stop target tracking");
+    handler.handleMouseMove(nullptr, QPointF(350, 300));
+    require(selection.aspectRatioPreset() == Preset::Portrait9x16 && saved == 2 &&
+                qFuzzyCompare(selection.normalizedSelection().height() /
+                                  selection.normalizedSelection().width(),
+                              screenshotSelectionAspectRatioHeightOverWidth(Preset::Portrait9x16)),
+            "releasing Q must keep the last snapped ratio through the rest of the drag");
+    handler.handleMouseRelease(nullptr, QPointF(350, 300));
+    require(confirmed == 1 && selection.aspectRatioPreset() == Preset::Portrait9x16 &&
+                configuration.value(ratioKey) == QStringLiteral("9:16") &&
+                configuration.value(lockKey).toBool(),
+            "confirmation must preserve the selected snap and saved lock");
+
+    interaction.enterOverlayVisible(false);
+    selection.clearSelection();
+    require(handler.activateKeepSelectionAspectRatioShortcut(false),
+            "Shift must arm before the competing marquee drag");
+    handler.handleMousePress(nullptr, QPointF(100, 100));
+    handler.handleMouseMove(nullptr, QPointF(180, 240));
+    require(qFuzzyCompare(selection.normalizedSelection().width(),
+                          selection.normalizedSelection().height()),
+            "Shift must initially preview a square");
+    require(dispatchShortcut(shortcutWindow, Qt::Key_Q, Qt::ShiftModifier),
+            "Q pressed mid-drag must activate snapping");
+    require(selection.aspectRatioPreset() == Preset::Portrait9x16 &&
+                !qFuzzyCompare(selection.normalizedSelection().width(),
+                               selection.normalizedSelection().height()),
+            "Q must supersede Shift using the unconstrained current gesture");
+    handler.handleMouseMove(nullptr, QPointF(280, 200));
+    require(selection.aspectRatioPreset() == Preset::Landscape16x9 &&
+                configuration.value(ratioKey) == QStringLiteral("16:9"),
+            "Q plus Shift must continue tracking the nearest preset");
+    require(dispatchShortcutRelease(shortcutWindow, Qt::Key_Q, Qt::ShiftModifier),
+            "Q release must preserve the last target even while Shift remains held");
+    require(handler.activateToolbarShortcutForSelection(
+                [&] { return selection.aspectRatioPreset() == Preset::Landscape16x9; }),
+            "toolbar confirmation must see the snapped ratio before command activation");
+    handler.handleMouseRelease(nullptr, QPointF(280, 200));
+    require(confirmed == 2 && selection.aspectRatioPreset() == Preset::Landscape16x9 &&
+                configuration.value(ratioKey) == QStringLiteral("16:9"),
+            "toolbar confirmation must retain the final snapped preference");
+
+    const int savesBeforeMove = saved;
+    require(handler.activateMoveEntireSelectionShortcut(),
+            "the whole-selection modifier must arm for the move-only check");
+    const QPointF center = selection.normalizedSelection().center();
+    handler.handleMousePress(nullptr, center);
+    require(interaction.dragging() && interaction.dragMode() == ScreenshotSelectionDragMode::All,
+            "the retained rectangle must start a whole-selection move");
+    require(!dispatchShortcut(shortcutWindow, Qt::Key_Q) &&
+                !handler.activateSelectionAspectRatioSnapShortcut(),
+            "Q must not arm snapping during a whole-selection move");
+    handler.handleMouseMove(nullptr, center + QPointF(20, 10));
+    require(saved == savesBeforeMove && configuration.value(ratioKey) == QStringLiteral("16:9"),
+            "a whole-selection move must not choose or persist another snap preset");
+    handler.handleMouseRelease(nullptr, center + QPointF(20, 10));
+    static_cast<void>(dispatchShortcutRelease(shortcutWindow, Qt::Key_Q));
+    require(handler.releaseMoveEntireSelectionShortcut(),
+            "move-only modifiers must release after the gesture");
+
+    interaction.enterOverlayVisible(false);
+    selection.setRegionType(ScreenshotRegionType::Polyline);
+    require(!handler.activateSelectionAspectRatioSnapShortcut(),
+            "nonrectangular region input must not arm Q snapping");
+    selection.setRegionType(ScreenshotRegionType::Rectangle);
+    selection.beginRegionOperation(ScreenshotSelectionModel::RegionOperation::Add);
+    require(!handler.activateSelectionAspectRatioSnapShortcut(),
+            "Boolean region operations must not arm Q snapping");
+    selection.cancelRegionOperation();
+
+    handler.resetTransientShortcuts();
+    selection.clearSelection();
+    const QString snapId = QStringLiteral("selection_aspect_ratio_snap");
+    storage::ScreenshotShortcutSettings shortcutSettings;
+    require(
+        shortcutSettings.setShortcuts(snapId, {QStringLiteral("G"), QStringLiteral("Ctrl+Alt+G")}),
+        "snap must support two configured shortcuts through the settings adapter");
+    require(!dispatchShortcut(shortcutWindow, Qt::Key_G),
+            "a custom snap key must also be inactive before adjustment");
+    static_cast<void>(dispatchShortcutRelease(shortcutWindow, Qt::Key_G));
+    handler.handleMousePress(nullptr, QPointF(100, 100));
+    handler.handleMouseMove(nullptr, QPointF(250, 200));
+    const int savesBeforeRemappedSnap = saved;
+    require(!dispatchShortcut(shortcutWindow, Qt::Key_Q) && saved == savesBeforeRemappedSnap,
+            "remapping snap must immediately disable the Q default");
+    static_cast<void>(dispatchShortcutRelease(shortcutWindow, Qt::Key_Q));
+    require(dispatchShortcut(shortcutWindow, Qt::Key_G) &&
+                selection.aspectRatioPreset() == Preset::Landscape3x2 &&
+                saved == savesBeforeRemappedSnap + 1,
+            "the remapped key must snap an active adjustment without recreating the controller");
+    require(dispatchShortcutRelease(shortcutWindow, Qt::Key_G),
+            "the remapped snap key must release normally");
+    handler.handleMouseMove(nullptr, QPointF(250, 350));
+    require(dispatchShortcut(shortcutWindow, Qt::Key_G, Qt::ControlModifier | Qt::AltModifier) &&
+                selection.aspectRatioPreset() == Preset::Portrait9x16,
+            "the secondary configured chord must also snap during adjustment");
+    QEvent deactivate(QEvent::WindowDeactivate);
+    QCoreApplication::sendEvent(&shortcutWindow, &deactivate);
+    static_cast<void>(dispatchShortcutRelease(shortcutWindow, Qt::Key_G));
+    const int savesBeforeCancelledHold = saved;
+    handler.handleMouseMove(nullptr, QPointF(350, 300));
+    require(saved == savesBeforeCancelledHold &&
+                selection.aspectRatioPreset() == Preset::Portrait9x16,
+            "focus loss must stop snap tracking while retaining the last selected ratio");
+    handler.handleMouseRelease(nullptr, QPointF(350, 300));
+    require(!dispatchShortcut(shortcutWindow, Qt::Key_G),
+            "the remapped key must be inactive after adjustment ends");
+    static_cast<void>(dispatchShortcutRelease(shortcutWindow, Qt::Key_G));
+
+    QPointF heldKeyBorder = selection.normalizedSelection().bottomLeft() +
+                            QPointF(selection.normalizedSelection().width() / 2.0, 0);
+    handler.handleMousePress(nullptr, heldKeyBorder);
+    require(dispatchShortcut(shortcutWindow, Qt::Key_G),
+            "a fresh snap press must activate during a border adjustment");
+    handler.handleMouseRelease(nullptr, heldKeyBorder);
+    const int savesAfterFinishedDrag = saved;
+    heldKeyBorder = selection.normalizedSelection().bottomLeft() +
+                    QPointF(selection.normalizedSelection().width() / 2.0, 0);
+    handler.handleMousePress(nullptr, heldKeyBorder);
+    handler.handleMouseMove(nullptr, heldKeyBorder + QPointF(0, 200));
+    require(saved == savesAfterFinishedDrag,
+            "a snap key held past mouse release must not track ratios in the next adjustment");
+    static_cast<void>(dispatchShortcutRelease(shortcutWindow, Qt::Key_G));
+    handler.handleMouseRelease(nullptr, heldKeyBorder + QPointF(0, 200));
+
+    require(shortcutSettings.setShortcuts(snapId, {}), "snap shortcuts must support disabling");
+    const QPointF bottom = selection.normalizedSelection().bottomLeft() +
+                           QPointF(selection.normalizedSelection().width() / 2.0, 0);
+    handler.handleMousePress(nullptr, bottom);
+    require(handler.canActivateSelectionAspectRatioSnapShortcut() &&
+                !dispatchShortcut(shortcutWindow, Qt::Key_G) &&
+                !dispatchShortcut(shortcutWindow, Qt::Key_Q),
+            "clearing the configured shortcuts must disable snapping even during resizing");
+    handler.handleMouseRelease(nullptr, bottom);
+    require(shortcutSettings.setShortcuts(snapId, {QStringLiteral("Q")}),
+            "restore the default snap shortcut for subsequent fixtures");
+}
+
+void configuredSnapBorderResizePreservesDrivenEdge() {
+    using Preset = ScreenshotSelectionAspectRatioPreset;
+    auto& configuration = storage::ApplicationStorage::instance().configuration();
+    const QString ratioKey = QStringLiteral("screenshot_selection/aspect_ratio");
+    const QString lockKey = QStringLiteral("screenshot_selection/lock_aspect_ratio");
+    for (const bool followPosition : {false, true}) {
+        require(storage::ScreenshotSettings().setSelectionResizeMode(
+                    followPosition ? QStringLiteral("follow_mouse_position")
+                                   : QStringLiteral("follow_mouse_movement")),
+                "border snap fixture must select its grab behavior");
+        for (const bool snapAtPress : {false, true}) {
+            require(configuration.setValues({{ratioKey, QStringLiteral("free")}, {lockKey, false}}),
+                    "border snap fixture must begin with an unlocked selection");
+            ScreenshotCaptureState capture;
+            ScreenshotDisplaySession displays;
+            CapturedDisplayModel display;
+            display.active = true;
+            display.physicalRect = QRect(0, 0, 1920, 1080);
+            display.logicalRect = display.physicalRect;
+            displays.appendDisplay(display);
+            ScreenshotGeometryMapper geometry;
+            geometry.rebuild(displays);
+            ScreenshotSelectionModel selection;
+            selection.setSelectionRect(QRectF(100, 100, 150, 100));
+            ScreenshotIntelligentSelectionModel intelligent;
+            ScreenshotInteractionState interaction;
+            interaction.confirmSelection();
+            int saved = 0;
+            int confirmed = 0;
+            ScreenshotOverlayInputActions actions;
+            actions.persistSelectionAspectRatioPreference = [&](Preset preset, bool locked) {
+                ++saved;
+                require(configuration.setValues(
+                            {{ratioKey, screenshotSelectionAspectRatioPresetId(preset)},
+                             {lockKey, locked}}),
+                        "border snapping must persist the chosen ratio");
+            };
+            actions.selectionConfirmed = [&] { ++confirmed; };
+            ScreenshotOverlayInputHandler handler(
+                {capture, interaction, selection, intelligent, geometry, displays, actions});
+            QWidget shortcutWindow;
+            shortcutWindow.show();
+            snow_shot::presentation::WindowShortcutManager manager;
+            manager.addScopeWindow(&shortcutWindow);
+            ScreenshotOverlayShortcutController shortcuts(manager, handler, interaction,
+                                                          intelligent, actions);
+            handler.handleMousePress(nullptr, QPointF(175, 200));
+            require(interaction.dragMode() == ScreenshotSelectionDragMode::Bottom,
+                    "the bottom border must start a vertical resize");
+            if (snapAtPress) {
+                require(dispatchShortcut(shortcutWindow, Qt::Key_Q),
+                        "Q must snap after the border drag starts");
+                // The initial 3:2 snap is a separate preference change.
+                require(saved == 1, "snapping at mouse-down must save the initial ratio");
+                saved = 0;
+            }
+            handler.handleMouseMove(nullptr, QPointF(175, 250));
+            if (!snapAtPress)
+                require(dispatchShortcut(shortcutWindow, Qt::Key_Q),
+                        "Q must snap an in-progress border drag");
+            const qreal grabbedCellOffset = followPosition ? 1.0 : 0.0;
+            const QRectF square = selection.normalizedSelection();
+            require(selection.aspectRatioPreset() == Preset::Square && square.top() == 100 &&
+                        square.center().x() == 175 && square.bottom() == 250 + grabbedCellOffset &&
+                        square.width() == square.height(),
+                    "a square snap must preserve the dragged bottom edge and opposite anchor");
+            handler.handleMouseMove(nullptr, QPointF(175, 300));
+            require(selection.aspectRatioPreset() == Preset::Portrait3x4 && saved == 2 &&
+                        selection.normalizedSelection().bottom() == 300 + grabbedCellOffset &&
+                        selection.pixelSelection().bottom() + 1 == 300 + grabbedCellOffset &&
+                        configuration.value(ratioKey) == QStringLiteral("3:4"),
+                    "changing the nearest ratio must keep the bottom border on the pointer");
+            require(dispatchShortcutRelease(shortcutWindow, Qt::Key_Q),
+                    "Q must release during a border drag");
+            handler.handleMouseMove(nullptr, QPointF(175, 350));
+            const QRectF preview = selection.normalizedSelection();
+            require(selection.aspectRatioPreset() == Preset::Portrait3x4 && saved == 2 &&
+                        preview.top() == 100 && preview.center().x() == 175 &&
+                        preview.bottom() == 350 + grabbedCellOffset &&
+                        selection.pixelSelection().bottom() + 1 == 350 + grabbedCellOffset &&
+                        qFuzzyCompare(preview.height() / preview.width(), 4.0 / 3.0),
+                    "Q release must retain the snapped ratio while the border follows the pointer");
+            handler.handleMouseRelease(nullptr, QPointF(175, 350));
+            require(confirmed == 1 && selection.normalizedSelection() == preview &&
+                        selection.aspectRatioPreset() == Preset::Portrait3x4 &&
+                        configuration.value(lockKey).toBool(),
+                    "confirmation must preserve the border snap preview and persisted lock");
+        }
+    }
+    require(storage::ScreenshotSettings().setSelectionResizeMode(
+                QStringLiteral("follow_mouse_movement")),
+            "restore movement-follow resizing after the border snap fixture");
+}
+
 int main(int argc, char** argv) {
     if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) {
         qputenv("QT_QPA_PLATFORM", "offscreen");
     }
     QApplication application(argc, argv);
+    if (QCoreApplication::arguments().contains(QStringLiteral("--selection-aspect-ratio-only"))) {
+        QTemporaryDir temporary;
+        require(temporary.isValid(), "temporary settings directory unavailable");
+        auto& appStorage = storage::ApplicationStorage::instance();
+        appStorage.shutdown();
+        require(appStorage
+                    .initialize({temporary.filePath(QStringLiteral("bin")),
+                                 temporary.filePath(QStringLiteral("settings")), 0})
+                    .success,
+                "initialize isolated aspect ratio settings");
+        rememberedRatioNormalizesSmartPicksBeforePresentation();
+        rectangularRegionEditsPreserveExactGeometryWithRememberedRatio();
+        aspectRatioDragConfirmationPreservesPreview();
+        configuredSnapTracksPresetsAndPersistsSelectionRatio();
+        configuredSnapBorderResizePreservesDrivenEdge();
+        appStorage.shutdown();
+        return 0;
+    }
     if (QCoreApplication::arguments().contains(QStringLiteral("--canvas-color-sampling-only"))) {
         canvasColorSamplingConsumesOneCanvasClick();
         return 0;
@@ -4093,6 +6321,58 @@ int main(int argc, char** argv) {
     };
     require(storage::ApplicationStorage::instance().initialize(storageOptions).success,
             "failed to initialize isolated shortcut settings");
+    if (QCoreApplication::arguments().contains(
+            QStringLiteral("--global-screenshot-shortcuts-only"))) {
+        globalScreenshotShortcutsUseCurrentSelection();
+        rejectedGlobalScreenshotShortcutsPreserveSession();
+        unrelatedGlobalShortcutsLeaveScreenshotToolsUntouched();
+        globalCompletionShortcutsDoNotReopenCapture();
+        storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (QCoreApplication::arguments().contains(QStringLiteral("--cursor-shortcuts-only"))) {
+        cursorMovementShortcutsAreIndependentOfActiveTool();
+        cursorMovementEligibilityFollowsInteractionState();
+        intelligentSelectionSupportsCursorMovementShortcuts();
+        storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (QCoreApplication::arguments().contains(QStringLiteral("--eraser-wheel-only"))) {
+        eraserWheelUsesBrushCreationWidthOnly();
+        storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (QCoreApplication::arguments().contains(QStringLiteral("--smart-selection-wheel-only"))) {
+        smartSelectionWheelAccumulatesMovement();
+        storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    auto metadataLifecycle = [&]() {
+        const QDir root(temporary.path());
+        idlePublicationsReconcileRepositoryLimits(root.filePath(QStringLiteral("metadata-limits")));
+        rejectedPublicationsPreservePendingMetadata(
+            root.filePath(QStringLiteral("metadata-pending")));
+        failedPublicationsReleaseMetadata(root.filePath(QStringLiteral("metadata-failures")));
+        historyDestructionDiscardsQueuedCompletion(
+            root.filePath(QStringLiteral("metadata-shutdown")));
+        historyNavigationSurvivesIdlePublication(
+            root.filePath(QStringLiteral("metadata-navigation-pruned")), 1);
+        historyNavigationSurvivesIdlePublication(
+            root.filePath(QStringLiteral("metadata-navigation-retained")), 3);
+        storageClearPreservesHistoryLiveEndpoint();
+        removedHistoryRecordRemainsADetachedSnapshot();
+    };
+    if (QCoreApplication::arguments().contains(
+            QStringLiteral("--history-metadata-lifecycle-only"))) {
+        metadataLifecycle();
+        storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (QCoreApplication::arguments().contains(QStringLiteral("--history-worker-lifecycle-only"))) {
+        validationWorkersRetireAndRestart();
+        storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (QCoreApplication::arguments().contains(QStringLiteral("--mcp-transient-only"))) {
         transientMcpDocumentPreservesUndoAndSources(temporary.path());
         storage::ApplicationStorage::instance().shutdown();
@@ -4105,6 +6385,11 @@ int main(int argc, char** argv) {
         regionOperationsUseMarqueeAndRestoreOnCancel();
         complexRegionsMoveFromTheirBoundingRectangle();
         customRegionsMoveDuringManualSelection();
+        storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (QCoreApplication::arguments().contains(QStringLiteral("--previous-selection-only"))) {
+        previousSelectionShortcutUsesSharedConfirmation();
         storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
@@ -4135,7 +6420,15 @@ int main(int argc, char** argv) {
         storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
+    if (QCoreApplication::arguments().contains(
+            QStringLiteral("--shortcut-exit-confirmation-only"))) {
+        shortcutExitConfirmationGatesCancellation();
+        storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (QCoreApplication::arguments().contains(QStringLiteral("--shortcut-input-only"))) {
+        selectAllShortcutSelectsCurrentScreen();
+        previousSelectionShortcutUsesSharedConfirmation();
         startupInputWaitsForRevealAndIgnoresSyntheticEvents();
 #ifdef Q_OS_MACOS
         standardCloseExitsScreenshotSession();
@@ -4148,8 +6441,11 @@ int main(int argc, char** argv) {
         colorCopyEndsCaptureOnlyAfterSuccessfulCopy();
         sharedShiftShortcutChoosesResizeOrColorFormat();
         configuredSelectionShortcutsRouteTabHistoryAndColorActions();
+        guideToggleShortcutFollowsSessionInputAndRemapping();
         intelligentSelectionSupportsCursorMovementShortcuts();
         cursorMovementEligibilityFollowsInteractionState();
+        cursorMovementShortcutsAreIndependentOfActiveTool();
+        screenshotTextEditingTakesPriorityOverCancelShortcut();
         configuredScreenshotShortcutsControlMoveAndCursorNavigation();
         selectionStagesActivateEveryToolbarShortcut();
         toolbarSelectionPreparationRejectsIncompleteRegions();
@@ -4158,7 +6454,11 @@ int main(int argc, char** argv) {
         storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
+    selectAllShortcutSelectsCurrentScreen();
+    previousSelectionShortcutUsesSharedConfirmation();
     snapshotsRetainTheLiveDesktopGeometry();
+    metadataLifecycle();
+    validationWorkersRetireAndRestart();
     editorHistoryUsesConfiguredDisplayCompression(
         QDir(temporary.path()).filePath(QStringLiteral("compression")));
     pointHistorySurvivesDisplayRemoval();
@@ -4179,6 +6479,8 @@ int main(int argc, char** argv) {
         QDir(temporary.path()).filePath(QStringLiteral("retention")));
     corruptLazyEntryDoesNotBlockOlderEntries(
         QDir(temporary.path()).filePath(QStringLiteral("corrupt")));
+    corruptLazyEntryDoesNotBlockOlderEntries(
+        QDir(temporary.path()).filePath(QStringLiteral("corrupt-cursor")), true);
     expiredCurrentEntryCanReturnToConfirmedLiveSelection(
         QDir(temporary.path()).filePath(QStringLiteral("expired-navigation")));
     multipleValidEntriesCanBeTraversed(
@@ -4193,13 +6495,18 @@ int main(int argc, char** argv) {
     nonMoveToolPermanentlySwitchesForSelectionResize();
     recognitionAndScrollingToolsResizeSelectionBorder();
     selectionResizeModeAdjustsGrabOffsetAtPress();
+    eraserWheelUsesBrushCreationWidthOnly();
+    smartSelectionWheelAccumulatesMovement();
     completionGesturesUseSharedEligibilityAcrossTools();
     externalSelectionSupportsHeldShortcuts();
     colorCopyEndsCaptureOnlyAfterSuccessfulCopy();
     sharedShiftShortcutChoosesResizeOrColorFormat();
     configuredSelectionShortcutsRouteTabHistoryAndColorActions();
+    guideToggleShortcutFollowsSessionInputAndRemapping();
     intelligentSelectionSupportsCursorMovementShortcuts();
     cursorMovementEligibilityFollowsInteractionState();
+    cursorMovementShortcutsAreIndependentOfActiveTool();
+    screenshotTextEditingTakesPriorityOverCancelShortcut();
     configuredScreenshotShortcutsControlMoveAndCursorNavigation();
     shortcutExitConfirmationGatesCancellation();
     scrollingCaptureRoutesEveryToolbarShortcut();

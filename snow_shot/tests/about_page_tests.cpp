@@ -9,6 +9,7 @@
 #include "snow_shot/presentation/settings/settingssearchindex.h"
 #include "snow_shot/presentation/styles/thememanager.h"
 #include "snow_shot/storage/applicationstorage.h"
+#include "snow_shot/storage/configurationschema.h"
 #include "snow_shot/update/updateservice.h"
 
 #include "widgets/button.h"
@@ -17,6 +18,7 @@
 #include "theme/theme.h"
 #include "widgets/navigation_menu.h"
 #include "widgets/scroll_area.h"
+#include "widgets/select.h"
 #include "widgets/tabs.h"
 
 #include <QApplication>
@@ -28,11 +30,13 @@
 #include <QImage>
 #include <QFontDatabase>
 #include <QJsonObject>
+#include <QJsonArray>
 #include <QLabel>
 #include <QKeyEvent>
 #include <QPointer>
 #include <QProgressBar>
 #include <QScrollBar>
+#include <QStringList>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QTranslator>
@@ -75,6 +79,69 @@ void snapshot(QWidget& widget, const QString& name) {
         require(widget.grab().save(QDir(directory).filePath(name + QStringLiteral(".png"))),
                 "save About preview");
     }
+}
+
+class StyleChangeRecorder final : public QObject {
+  public:
+    QStringList styles;
+
+  protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (event->type() == QEvent::StyleChange) {
+            styles.push_back(static_cast<QWidget*>(watched)->styleSheet());
+        }
+        return false;
+    }
+};
+
+void themeAndSkinChangesUpdateOnlyAffectedBackgrounds() {
+    auto& themeManager = styles::ThemeManager::instance();
+    themeManager.setThemeAppearance(styles::ThemeAppearance::Light);
+    AboutPageWidget page;
+    page.resize(920, 680);
+    page.show();
+    flushEvents();
+    auto* panel = child<QWidget>(page, "aboutVersionPanel");
+    auto* name = child<QLabel>(page, "aboutProductName");
+    StyleChangeRecorder recorder;
+    panel->installEventFilter(&recorder);
+    for (const auto appearance : {styles::ThemeAppearance::Dark, styles::ThemeAppearance::Light}) {
+        const QString previous = panel->styleSheet();
+        recorder.styles.clear();
+        themeManager.setThemeAppearance(appearance);
+        require(recorder.styles.size() == 1 && recorder.styles.first() != previous,
+                "an unskinned About theme change must apply its new background exactly once");
+    }
+    auto& controlTheme = adqt::theme::ThemeManager::instance();
+    QWidget unrelated;
+    adqt::theme::ThemeOverride unrelatedOverride;
+    unrelatedOverride.backgroundOpacity = 0.4;
+    recorder.styles.clear();
+    controlTheme.setScopeOverride(&unrelated, unrelatedOverride);
+    require(recorder.styles.isEmpty(),
+            "an unrelated skin must not restyle the unskinned About backgrounds");
+    controlTheme.clearScopeOverride(&unrelated);
+    const QFont nameFont = name->font();
+    const QString opaque = panel->styleSheet();
+    for (const qreal opacity : {0.4, 0.0, 1.0}) {
+        adqt::theme::ThemeOverride overrideValue;
+        overrideValue.backgroundOpacity = opacity;
+        recorder.styles.clear();
+        controlTheme.setScopeOverride(&page, overrideValue);
+        require(!recorder.styles.isEmpty() && name->font() == nameFont,
+                "About skin opacity edits must update backgrounds without changing typography");
+        if (opacity == 1.0) {
+            require(panel->styleSheet() == opaque,
+                    "full About mask opacity must restore its original background style");
+        } else {
+            require(panel->styleSheet() != opaque,
+                    "About backgrounds must reflect a translucent skin mask");
+        }
+    }
+    recorder.styles.clear();
+    controlTheme.clearScopeOverride(&page);
+    require(recorder.styles.isEmpty(),
+            "removing an already opaque skin scope must not restyle About backgrounds");
 }
 
 void versionIsExactSelectableAndCopyable() {
@@ -148,8 +215,8 @@ void projectLinkSurfacesMatchStandardButtons() {
     for (const auto appearance : {styles::ThemeAppearance::Light, styles::ThemeAppearance::Dark}) {
         manager.setThemeAppearance(appearance);
         flushEvents();
-        for (const char* name : {"aboutWebsite", "aboutSourceCode", "aboutFeedback",
-                                 "aboutQqGroup2", "aboutQqGroup3"}) {
+        for (const char* name :
+             {"aboutWebsite", "aboutSourceCode", "aboutFeedback", "aboutQqGroup3"}) {
             auto* button = child<AdButton>(page, name);
             require(button->buttonStyle() == AdButton::ButtonStyle::Outline &&
                         button->accentRole() == AdButton::AccentRole::Neutral,
@@ -214,13 +281,22 @@ void projectLinksAreExplicitAccessibleAndRecoverable() {
     page.show();
     flushEvents();
     require(opened.isEmpty(), "About does not open links or check for updates on construction");
+    require(page.findChild<QAbstractButton*>(QStringLiteral("aboutQqGroup2")) == nullptr,
+            "About no longer offers QQ Group 2");
+    auto* group = child<QAbstractButton>(page, "aboutQqGroup3");
+    auto* website = child<QAbstractButton>(page, "aboutWebsite");
+    auto* feedback = child<QAbstractButton>(page, "aboutFeedback");
+    require(group->geometry().left() == website->geometry().left() &&
+                group->geometry().right() == feedback->geometry().right(),
+            "the remaining QQ group spans the full project link row width");
     snapshot(page, QStringLiteral("about-actions"));
     const QString project = QStringLiteral(SNOW_SHOT_TEST_PROJECT_URL);
-    const std::array<std::pair<const char*, QUrl>, 4> links{{
+    const std::array<std::pair<const char*, QUrl>, 5> links{{
         {"aboutWebsite", QUrl(QStringLiteral(SNOW_SHOT_TEST_WEBSITE_URL))},
         {"aboutSourceCode", QUrl(project)},
         {"aboutFeedback", QUrl(project + QStringLiteral("/issues"))},
         {"aboutReleaseNotes", QUrl(project + QStringLiteral("/releases"))},
+        {"aboutQqGroup3", QUrl(QStringLiteral(SNOW_SHOT_TEST_QQ_GROUP_3_URL))},
     }};
     for (const auto& [name, url] : links) {
         auto* button = child<QAbstractButton>(page, name);
@@ -297,9 +373,8 @@ void largerTypeKeepsEveryActionReachable() {
     auto* artwork = child<QWidget>(page, "aboutArtwork");
     require(artwork->width() <= scroll->viewport()->width() && artwork->height() > 0,
             "artwork scales down to the available width with larger fonts");
-    for (const char* name :
-         {"aboutCopyVersion", "aboutReleaseNotes", "aboutUpdateAction", "aboutWebsite",
-          "aboutSourceCode", "aboutFeedback", "aboutQqGroup2", "aboutQqGroup3"}) {
+    for (const char* name : {"aboutCopyVersion", "aboutReleaseNotes", "aboutUpdateAction",
+                             "aboutWebsite", "aboutSourceCode", "aboutFeedback", "aboutQqGroup3"}) {
         auto* button = child<QAbstractButton>(page, name);
         scroll->ensureWidgetVisible(button);
         flushEvents();
@@ -340,22 +415,27 @@ void updatePolicyAndUnavailableCopy() {
     require(child<adqt::widgets::AdButton>(page, "aboutUpdateAction")->isEnabled(),
             "macOS can check without installation metadata");
     auto& status = const_cast<snow_shot::update::UpdateStatus&>(updates.status());
-    status = {snow_shot::update::UpdateState::Available, QStringLiteral("2.0.0"), {}, 0, 0};
+    status = {
+        snow_shot::update::UpdateState::Available,
+        QStringLiteral("2.0.0"),
+        {},
+        0,
+        0,
+        QUrl(QStringLiteral("https://github.com/mg-chao/snow-apps/releases/tag/v2.0.0_snow-shot"))};
     updates.statusChanged();
     auto* action = child<adqt::widgets::AdButton>(page, "aboutUpdateAction");
-    require(action->text() == QStringLiteral("Download from website"),
+    require(action->text() == QStringLiteral("Download from GitHub"),
             "About explains external download");
     action->click();
-    require(opened == QList<QUrl>{QUrl(QStringLiteral(SNOW_SHOT_TEST_WEBSITE_URL))},
-            "About opens configured website");
+    require(opened == QList<QUrl>{status.downloadUrl}, "About opens the exact GitHub release");
     status.downloadUrl =
-        QUrl(QStringLiteral("https://github.com/mg-chao/snow-apps/releases/tag/v2.0.0_snow-shot"));
+        QUrl(QStringLiteral("https://gitee.com/mg-chao/snow-apps/releases/tag/v2.0.0_snow-shot"));
     emit updates.statusChanged();
     flushEvents();
-    require(action->text() == QStringLiteral("Download from GitHub"),
-            "About identifies GitHub fallback");
+    require(action->text() == QStringLiteral("Download from Gitee"),
+            "About identifies Gitee release");
     action->click();
-    require(opened.last() == status.downloadUrl, "About opens the exact fallback release");
+    require(opened.last() == status.downloadUrl, "About opens the exact Gitee release");
 #else
     require(backend.selectValue(binding).toString() == QStringLiteral("download"),
             "automatic download is the default update policy");
@@ -581,8 +661,7 @@ void traySettingsAndFunctionNavigation() {
     settings::SettingsRuntimeSession session(registry, backend);
     const auto left = settings::SettingsSelectBinding::TrayLeftClickAction;
     const auto middle = settings::SettingsSelectBinding::TrayMiddleClickAction;
-    require(backend.resetSection(settings::SettingsSectionReset::TrayBehavior),
-            "reset tray settings");
+    require(backend.resetSection(settings::SettingsSectionReset::Tray), "reset tray settings");
     require(backend.selectValue(left).toString() == QStringLiteral("screenshot") &&
                 backend.selectValue(middle).toString() == QStringLiteral("screenshot_fixed"),
             "tray reset must restore distinct defaults");
@@ -601,21 +680,40 @@ void traySettingsAndFunctionNavigation() {
     require(!backend.applySelectValue(middle, QStringLiteral("invalid")) &&
                 backend.selectValue(middle).toString() == QStringLiteral("open_function_settings"),
             "invalid writes must preserve the last valid setting");
-    require(backend.resetSection(settings::SettingsSectionReset::TrayBehavior) &&
+    auto& configuration = snow_shot::storage::ApplicationStorage::instance().configuration();
+    require(
+        configuration.setValues({{QStringLiteral("tray/enabled"), false},
+                                 {QStringLiteral("tray/icon"), QStringLiteral("dark")},
+                                 {QStringLiteral("tray/custom_icon"), QStringLiteral("test.ico")},
+                                 {QStringLiteral("tray/menu_options"), QJsonArray{}}}),
+        "modify the icon and menu settings in the merged tray section");
+    require(session.reset(settings::SettingsSectionReset::Tray) &&
                 backend.selectValue(left).toString() == QStringLiteral("screenshot") &&
                 backend.selectValue(middle).toString() == QStringLiteral("screenshot_fixed"),
             "reset must restore both modified tray settings");
+    for (const QString& key :
+         {QStringLiteral("tray/enabled"), QStringLiteral("tray/icon"),
+          QStringLiteral("tray/custom_icon"), QStringLiteral("tray/menu_options")}) {
+        require(configuration.value(key) ==
+                    snow_shot::storage::ConfigurationSchema::defaultValue(key),
+                "the merged tray reset also restores its icon and menu settings");
+    }
     MainWindow window(registry, session);
-    window.showInterfaceSettings();
+    window.showGeneralSettings();
+    auto* generalCard = window.findChild<ContentCardWidget*>();
+    require(generalCard != nullptr &&
+                generalCard->currentLocation().pageId == QStringLiteral("general") &&
+                generalCard->currentLocation().sectionId == QStringLiteral("language"),
+            "the General settings action opens the new General page");
     window.hide();
-    window.showFunctionSettings();
+    window.showScreenshotSettings();
     flushEvents();
     auto* card = window.findChild<ContentCardWidget*>();
     auto* sidebar = window.findChild<SidebarWidget*>();
     require(window.isVisible() && card != nullptr && sidebar != nullptr &&
-                card->currentLocation().pageId == QStringLiteral("function-settings") &&
+                card->currentLocation().pageId == QStringLiteral("screenshots") &&
                 card->currentLocation().sectionId == QStringLiteral("screenshot-settings") &&
-                sidebar->currentRoute() == QStringLiteral("/settings/functionSettings"),
+                sidebar->currentRoute() == QStringLiteral("/settings/screenshots"),
             "function settings action must show a hidden window and navigate from another page");
     window.hide();
     window.showPinToScreenManagement();
@@ -688,6 +786,7 @@ int main(int argc, char** argv) {
     require(storage.initialize({directory.path(), directory.path(), 8000}).success,
             "initialize isolated storage");
     styles::ThemeManager::instance().initialize(application);
+    themeAndSkinChangesUpdateOnlyAffectedBackgrounds();
     versionIsExactSelectableAndCopyable();
     absentVersionDoesNotInventARelease();
     stableVersionsDoNotClaimToBePreviews();
@@ -702,3 +801,4 @@ int main(int argc, char** argv) {
     storage.shutdown();
     return 0;
 }
+

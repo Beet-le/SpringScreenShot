@@ -40,7 +40,9 @@ class ScreenRecordingController final : public QObject {
     void detachAutomation();
 
   signals:
+    void captureActivityChanged(bool active);
     void finalized();
+    void exportNotificationRequested(const QString& path);
 
   private:
     struct Impl;

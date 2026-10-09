@@ -201,12 +201,76 @@ class FakeSettingsBackend final : public settings::SettingsBackend {
         return false;
     }
 
-    QString filePathValue(settings::SettingsFilePathBinding) const override {
+    QString filePathValue(settings::SettingsFilePathBinding binding) const override {
+        switch (binding) {
+        case settings::SettingsFilePathBinding::SkinPath:
+            return m_skinPath;
+        case settings::SettingsFilePathBinding::ToolbarSkinPath:
+            return m_toolbarSkinPath;
+        case settings::SettingsFilePathBinding::TrayMenuSkinPath:
+            return m_traySkinPath;
+        case settings::SettingsFilePathBinding::TrayCustomIcon:
+            return m_trayIconPath;
+        }
         return {};
     }
-    bool applyFilePathValue(settings::SettingsFilePathBinding, const QString&) override {
-        return false;
+    bool applyFilePathValue(settings::SettingsFilePathBinding binding,
+                            const QString& value) override {
+        QString fieldId;
+        switch (binding) {
+        case settings::SettingsFilePathBinding::SkinPath:
+            fieldId = QStringLiteral("interface.skin.path");
+            break;
+        case settings::SettingsFilePathBinding::ToolbarSkinPath:
+            fieldId = QStringLiteral("interface.skin.toolbar-path");
+            break;
+        case settings::SettingsFilePathBinding::TrayMenuSkinPath:
+            fieldId = QStringLiteral("interface.skin.tray-menu-path");
+            break;
+        case settings::SettingsFilePathBinding::TrayCustomIcon:
+            fieldId = QStringLiteral("interface.tray.custom-icon");
+            break;
+        }
+        return applyField(fieldId, value, [this, binding](const QVariant& next) {
+            switch (binding) {
+            case settings::SettingsFilePathBinding::SkinPath:
+                m_skinPath = next.toString();
+                break;
+            case settings::SettingsFilePathBinding::ToolbarSkinPath:
+                m_toolbarSkinPath = next.toString();
+                break;
+            case settings::SettingsFilePathBinding::TrayMenuSkinPath:
+                m_traySkinPath = next.toString();
+                break;
+            case settings::SettingsFilePathBinding::TrayCustomIcon:
+                m_trayIconPath = next.toString();
+                break;
+            }
+        });
     }
+    QString filePathStatus(settings::SettingsFilePathBinding binding) const override {
+        return binding == settings::SettingsFilePathBinding::SkinPath
+                   ? skinStatus
+                   : surfaceSkinStatuses.value(static_cast<int>(binding));
+    }
+    bool filePathStatusError(settings::SettingsFilePathBinding binding) const override {
+        return binding == settings::SettingsFilePathBinding::SkinPath
+                   ? skinStatusError
+                   : surfaceSkinStatusErrors.contains(static_cast<int>(binding));
+    }
+    void reloadFilePathValue(settings::SettingsFilePathBinding binding) override {
+        if (binding == settings::SettingsFilePathBinding::SkinPath)
+            ++skinReloadCount;
+        else if (binding != settings::SettingsFilePathBinding::TrayCustomIcon)
+            ++surfaceSkinReloadCounts[static_cast<int>(binding)];
+    }
+
+    QString skinStatus;
+    bool skinStatusError = false;
+    int skinReloadCount = 0;
+    QHash<int, QString> surfaceSkinStatuses;
+    QSet<int> surfaceSkinStatusErrors;
+    QHash<int, int> surfaceSkinReloadCounts;
 
     QString directoryPathValue(settings::SettingsDirectoryPathBinding) const override {
         return {};
@@ -226,6 +290,8 @@ class FakeSettingsBackend final : public settings::SettingsBackend {
     toolbarLayout(storage::ScreenshotToolbarLayoutKind kind) const override {
         if (kind == storage::ScreenshotToolbarLayoutKind::PinnedActionTools)
             return m_pinnedToolbar;
+        if (kind == storage::ScreenshotToolbarLayoutKind::RecordingActionTools)
+            return m_recordingToolbar;
         return kind == storage::ScreenshotToolbarLayoutKind::DrawingTools ? m_drawingToolbar
                                                                           : m_actionToolbar;
     }
@@ -294,8 +360,8 @@ class FakeSettingsBackend final : public settings::SettingsBackend {
         return {true, false};
     }
 
-    bool triggerAction(settings::SettingsActionBinding binding,
-                       const QString& filePath = {}) override {
+    bool triggerAction(settings::SettingsActionBinding binding, const QString& filePath = {},
+                       bool = false) override {
         if (binding == settings::SettingsActionBinding::ImportConfiguration) {
             m_importConfigurationPaths.push_back(filePath);
             return m_importConfigurationAccepted;
@@ -457,6 +523,8 @@ class FakeSettingsBackend final : public settings::SettingsBackend {
             m_pinnedToolbar = value.value<storage::ScreenshotToolbarLayout>();
         } else if (fieldId == QStringLiteral("action-toolbar")) {
             m_actionToolbar = value.value<storage::ScreenshotToolbarLayout>();
+        } else if (fieldId == QStringLiteral("recording-toolbar")) {
+            m_recordingToolbar = value.value<storage::ScreenshotToolbarLayout>();
         } else if (fieldId.startsWith(QStringLiteral("global-mouse."))) {
             for (const auto action : {
                      settings::SettingsGlobalMouseAction::ScreenshotCopy,
@@ -479,6 +547,8 @@ class FakeSettingsBackend final : public settings::SettingsBackend {
     static QString toolbarFieldId(storage::ScreenshotToolbarLayoutKind kind) {
         if (kind == storage::ScreenshotToolbarLayoutKind::PinnedActionTools)
             return QStringLiteral("pinned-toolbar");
+        if (kind == storage::ScreenshotToolbarLayoutKind::RecordingActionTools)
+            return QStringLiteral("recording-toolbar");
         return kind == storage::ScreenshotToolbarLayoutKind::DrawingTools
                    ? QStringLiteral("toolbar")
                    : QStringLiteral("action-toolbar");
@@ -488,11 +558,17 @@ class FakeSettingsBackend final : public settings::SettingsBackend {
     toolbarLayoutStorage(storage::ScreenshotToolbarLayoutKind kind) {
         if (kind == storage::ScreenshotToolbarLayoutKind::PinnedActionTools)
             return m_pinnedToolbar;
+        if (kind == storage::ScreenshotToolbarLayoutKind::RecordingActionTools)
+            return m_recordingToolbar;
         return kind == storage::ScreenshotToolbarLayoutKind::DrawingTools ? m_drawingToolbar
                                                                           : m_actionToolbar;
     }
 
     QString m_theme = QStringLiteral("system");
+    QString m_skinPath;
+    QString m_toolbarSkinPath;
+    QString m_traySkinPath;
+    QString m_trayIconPath;
     bool m_trayEnabled = true;
     bool m_keepPermanently = false;
     bool m_translationPageEnabled = false;
@@ -501,6 +577,8 @@ class FakeSettingsBackend final : public settings::SettingsBackend {
     storage::ScreenshotToolbarLayout m_drawingToolbar{{{QStringLiteral("select")}},
                                                       {QStringLiteral("eraser")}};
     storage::ScreenshotToolbarLayout m_pinnedToolbar;
+    storage::ScreenshotToolbarLayout m_recordingToolbar{
+        {{QStringLiteral("start-stop")}, {QStringLiteral("copy")}}, {QStringLiteral("duration")}};
     storage::ScreenshotToolbarLayout m_actionToolbar{
         {{QStringLiteral("table-recognition")}, {QStringLiteral("save-as-file")}},
         {QStringLiteral("barcode-recognition")}};
@@ -592,6 +670,13 @@ testRegistry(settings::SettingsSectionReset reset = settings::SettingsSectionRes
           {},
           QStringLiteral("screenshot_toolbar/action_tools_layout"),
           actionToolbar},
+         {QStringLiteral("recording-toolbar"),
+          text("Recording toolbar"),
+          text("Recording toolbar"),
+          {},
+          QStringLiteral("screen_recording/action_tools_layout"),
+          settings::SettingsCustomDefinition{
+              settings::SettingsCustomRenderer::RecordingToolbarEditor}},
          {QStringLiteral("storage-status"),
           text("Storage status"),
           text("Storage status"),
@@ -1125,6 +1210,50 @@ void toolbarLayoutsMaintainIndependentWriteState() {
                 session.toolbarLayout(storage::ScreenshotToolbarLayoutKind::DrawingTools) ==
                     drawingLayout,
             "retrying an action toolbar write must not rewrite the drawing layout");
+
+    const storage::ScreenshotToolbarLayout recordingLayout{
+        {{QStringLiteral("microphone"), QStringLiteral("start-stop")}, {QStringLiteral("copy")}},
+        {QStringLiteral("duration")}};
+    const auto previousRecording =
+        backend.toolbarLayout(storage::ScreenshotToolbarLayoutKind::RecordingActionTools);
+    backend.setMode(QStringLiteral("recording-toolbar"), WriteMode::Pending);
+    require(session.applyToolbarLayout(storage::ScreenshotToolbarLayoutKind::RecordingActionTools,
+                                       recordingLayout) &&
+                session.state(QStringLiteral("recording-toolbar")).busy &&
+                session.toolbarLayout(storage::ScreenshotToolbarLayoutKind::RecordingActionTools) ==
+                    recordingLayout &&
+                backend.toolbarLayout(storage::ScreenshotToolbarLayoutKind::RecordingActionTools) ==
+                    previousRecording &&
+                session.toolbarLayout(storage::ScreenshotToolbarLayoutKind::ActionTools) ==
+                    rejectedActionLayout,
+            "recording toolbar drafts must use their own descriptor and pending state");
+    backend.complete(QStringLiteral("recording-toolbar"));
+    flushEvents();
+    require(session.state(QStringLiteral("recording-toolbar")).phase ==
+                    settings::SettingsWritePhase::Clean &&
+                session.state(QStringLiteral("recording-toolbar"))
+                        .acceptedValue.value<storage::ScreenshotToolbarLayout>() == recordingLayout,
+            "recording toolbar completion must reconcile the structured accepted value");
+
+    const storage::ScreenshotToolbarLayout rejectedRecording{
+        {{QStringLiteral("copy"), QStringLiteral("pause-resume")}}, {QStringLiteral("microphone")}};
+    backend.setMode(QStringLiteral("recording-toolbar"), WriteMode::Reject);
+    require(!session.applyToolbarLayout(storage::ScreenshotToolbarLayoutKind::RecordingActionTools,
+                                        rejectedRecording) &&
+                session.state(QStringLiteral("recording-toolbar")).phase ==
+                    settings::SettingsWritePhase::Rejected &&
+                session.state(QStringLiteral("action-toolbar")).phase ==
+                    settings::SettingsWritePhase::Clean,
+            "recording layout rejection must not affect the screenshot action toolbar");
+    backend.setMode(QStringLiteral("recording-toolbar"), WriteMode::Immediate);
+    require(session.retry(QStringLiteral("recording-toolbar")) &&
+                session.toolbarLayout(storage::ScreenshotToolbarLayoutKind::RecordingActionTools) ==
+                    rejectedRecording &&
+                session.toolbarLayout(storage::ScreenshotToolbarLayoutKind::DrawingTools) ==
+                    drawingLayout &&
+                session.toolbarLayout(storage::ScreenshotToolbarLayoutKind::ActionTools) ==
+                    rejectedActionLayout,
+            "recording layout retry must preserve the drawing and screenshot action layouts");
 }
 
 void acceptedResetClearsDraftAndQuarantinesLateCompletion() {
@@ -1481,6 +1610,110 @@ void configurationImportsDelegateToBackend() {
             "every configuration import attempt must reach the backend");
 }
 
+void skinPathReloadAndStatusAreIndependentOfPersistence() {
+    FakeSettingsBackend backend;
+    const auto registry = settings::buildBuiltInSettingsRegistry();
+    settings::SettingsRuntimeSession session(registry, backend);
+    constexpr auto skin = settings::SettingsFilePathBinding::SkinPath;
+    int statusChanges = 0;
+    QObject::connect(&session, &settings::SettingsRuntimeSession::filePathStatusChanged, &session,
+                     [&statusChanges](settings::SettingsFilePathBinding binding) {
+                         if (binding == skin)
+                             ++statusChanges;
+                     });
+    session.refreshAll();
+    require(statusChanges == 0, "unchanged file path status must not notify the settings UI");
+    const QString fieldId = QStringLiteral("interface.skin.path");
+    const QString path = QStringLiteral("/skins/background.webp");
+    require(session.applyFilePathValue(skin, path) && backend.applyCount(fieldId) == 1 &&
+                backend.skinReloadCount == 0 && session.filePathValue(skin) == path,
+            "changing the skin path must commit once and use the configuration reload path");
+    require(session.applyFilePathValue(skin, QStringLiteral("  ") + path + QStringLiteral("  ")) &&
+                backend.skinReloadCount == 1 && backend.applyCount(fieldId) == 1,
+            "re-entering the normalized skin path must reload without another persistence write");
+    backend.skinStatus = QStringLiteral("Skin image is loading.");
+    backend.notify();
+    flushEvents();
+    require(statusChanges == 1 && session.filePathStatus(skin) == backend.skinStatus &&
+                !session.filePathStatusError(skin) && !session.state(fieldId).busy &&
+                !session.hasPendingWrites(),
+            "skin loading status must leave the editable setting and persistence state settled");
+    session.refreshAll();
+    session.refreshAll();
+    require(statusChanges == 1,
+            "generic refreshes must not repeat unchanged skin status notifications");
+    backend.skinStatus = QStringLiteral("The skin image could not be loaded.");
+    backend.skinStatusError = true;
+    backend.notify();
+    flushEvents();
+    require(
+        statusChanges == 2 && session.filePathStatusError(skin) &&
+            session.filePathStatus(skin) == backend.skinStatus && !session.state(fieldId).dirty &&
+            session.state(fieldId).error.isEmpty() && session.applyFilePathValue(skin, path) &&
+            backend.skinReloadCount == 2,
+        "skin loading errors must remain separate from committed configuration and allow reload");
+    backend.skinStatusError = false;
+    backend.notify();
+    flushEvents();
+    require(statusChanges == 3 && !session.filePathStatusError(skin),
+            "an error-style change must notify even when the status text is unchanged");
+    backend.skinStatus.clear();
+    backend.notify();
+    flushEvents();
+    require(statusChanges == 4 && session.filePathStatus(skin).isEmpty(),
+            "clearing the skin status must notify once to remove its description line");
+    constexpr auto tray = settings::SettingsFilePathBinding::TrayCustomIcon;
+    require(session.applyFilePathValue(tray, QStringLiteral("/icons/tray.png")) &&
+                session.applyFilePathValue(tray, QStringLiteral("/icons/tray.png")) &&
+                backend.applyCount(QStringLiteral("interface.tray.custom-icon")) == 1 &&
+                backend.skinReloadCount == 2 && session.filePathStatus(tray).isEmpty() &&
+                !session.filePathStatusError(tray),
+            "other file path settings must retain no-op behavior without skin status or reload");
+}
+
+void surfaceSkinPathsRemainIndependent() {
+    FakeSettingsBackend backend;
+    const auto registry = settings::buildBuiltInSettingsRegistry();
+    settings::SettingsRuntimeSession session(registry, backend);
+    const auto mainSkin = settings::SettingsFilePathBinding::SkinPath;
+    const QString mainPath = QStringLiteral("/skins/main.png");
+    require(session.applyFilePathValue(mainSkin, mainPath), "configure the main interface skin");
+    for (const auto binding : {settings::SettingsFilePathBinding::ToolbarSkinPath,
+                               settings::SettingsFilePathBinding::TrayMenuSkinPath}) {
+        const int key = static_cast<int>(binding);
+        const QString fieldId = registry.fieldForFilePath(binding)->id;
+        const QString path = binding == settings::SettingsFilePathBinding::ToolbarSkinPath
+                                 ? QStringLiteral("/skins/toolbar.png")
+                                 : QStringLiteral("/skins/tray-menu.webp");
+        require(session.applyFilePathValue(binding,
+                                           QStringLiteral("  ") + path + QStringLiteral("  ")) &&
+                    session.filePathValue(binding) == path && backend.applyCount(fieldId) == 1 &&
+                    session.applyFilePathValue(binding, path) && backend.applyCount(fieldId) == 1 &&
+                    backend.surfaceSkinReloadCounts.value(key) == 1 &&
+                    backend.skinReloadCount == 0 && session.filePathValue(mainSkin) == mainPath,
+                "each surface path must normalize, reload once and leave the main skin untouched");
+        backend.surfaceSkinStatuses.insert(key, QStringLiteral("The image could not be opened."));
+        backend.surfaceSkinStatusErrors.insert(key);
+        backend.notify();
+        flushEvents();
+        require(
+            session.filePathStatusError(binding) &&
+                session.filePathStatus(binding) == backend.surfaceSkinStatuses.value(key) &&
+                session.filePathStatus(mainSkin).isEmpty() &&
+                !session.filePathStatusError(mainSkin) && !session.state(fieldId).dirty &&
+                !session.hasPendingWrites(),
+            "skin load status must belong to its surface without becoming a persistence failure");
+        require(session.applyFilePathValue(binding, QString()) &&
+                    session.filePathValue(binding).isEmpty() &&
+                    session.filePathValue(mainSkin) == mainPath,
+                "clearing one surface skin must preserve the other configured image");
+        backend.surfaceSkinStatuses.remove(key);
+        backend.surfaceSkinStatusErrors.remove(key);
+        backend.notify();
+        flushEvents();
+    }
+}
+
 int main(int argc, char** argv) {
     QCoreApplication application(argc, argv);
     if (application.arguments().contains(QStringLiteral("--global-mouse-only"))) {
@@ -1512,5 +1745,7 @@ int main(int argc, char** argv) {
     auxiliaryIntegerValuesRemainReactiveWithoutSyntheticFields();
     globalMouseCombinationsUseTypedStateAndRejectDuplicates();
     configurationImportsDelegateToBackend();
+    skinPathReloadAndStatusAreIndependentOfPersistence();
+    surfaceSkinPathsRemainIndependent();
     return 0;
 }

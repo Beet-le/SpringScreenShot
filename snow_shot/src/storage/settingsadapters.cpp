@@ -1,4 +1,7 @@
 #include "snow_shot/storage/settingsadapters.h"
+#include "snow_shot/storage/floatingtoolbarsettings.h"
+
+#include "snow_shot/presentation/editionfeatures.h"
 
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/configurationschema.h"
@@ -13,6 +16,8 @@
 #include <QSet>
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
 
 namespace snow_shot::storage {
 namespace {
@@ -42,7 +47,9 @@ QJsonArray stringArray(const QStringList& values) {
 
 shortcuts::ShortcutBindingList shortcutValue(const QString& key) {
     const bool allowModifierOnlyShift = key.startsWith(QStringLiteral("screenshot_shortcuts/"));
-    return shortcuts::shortcutBindingsFromJson(cache().value(key), allowModifierOnlyShift);
+    const bool allowModifierOnlyAlt = key == QStringLiteral("screenshot_shortcuts/toggle_guides");
+    return shortcuts::shortcutBindingsFromJson(cache().value(key), allowModifierOnlyShift, -1,
+                                               nullptr, nullptr, allowModifierOnlyAlt);
 }
 
 bool setShortcutValue(const QString& key, const shortcuts::ShortcutBindingList& bindings) {
@@ -54,41 +61,54 @@ const QStringList& drawingShortcutToolIds() {
         QStringLiteral("select"),        QStringLiteral("shape"),     QStringLiteral("arrow"),
         QStringLiteral("brush"),         QStringLiteral("highlight"), QStringLiteral("text"),
         QStringLiteral("serial_number"), QStringLiteral("filter"),    QStringLiteral("eraser"),
-        QStringLiteral("watermark"),
+        QStringLiteral("watermark"),     QStringLiteral("line"),      QStringLiteral("spotlight"),
+        QStringLiteral("distance"),
     };
     return ids;
 }
 
 const QStringList& screenshotShortcutActionIds() {
-    static const QStringList ids = {
-        QStringLiteral("move_tool"),
-        QStringLiteral("move_cursor_up"),
-        QStringLiteral("move_cursor_down"),
-        QStringLiteral("move_cursor_left"),
-        QStringLiteral("move_cursor_right"),
-        QStringLiteral("move_entire_selection"),
-        QStringLiteral("keep_selection_width_and_height_consistent"),
-        QStringLiteral("switch_selection_between_window_and_window_sub_element"),
-        QStringLiteral("previous_screenshot_history"),
-        QStringLiteral("next_screenshot_history"),
-        QStringLiteral("select_previously_selected_area"),
-        QStringLiteral("recapture"),
-        QStringLiteral("copy_color"),
-        QStringLiteral("toggle_coordinate_mode"),
-        QStringLiteral("table_recognition"),
-        QStringLiteral("qr_code_recognition"),
-        QStringLiteral("video_recording"),
-        QStringLiteral("text_recognition"),
-        QStringLiteral("text_translation"),
-        QStringLiteral("scrolling_screenshot"),
-        QStringLiteral("quick_save"),
-        QStringLiteral("save_as_file"),
-        QStringLiteral("pin_to_screen"),
-        QStringLiteral("cancel_screenshot"),
-        QStringLiteral("copy_to_clipboard"),
-        QStringLiteral("undo"),
-        QStringLiteral("redo"),
-    };
+    static const QStringList ids = [] {
+        QStringList result = {
+            QStringLiteral("move_tool"),
+            QStringLiteral("move_cursor_up"),
+            QStringLiteral("move_cursor_down"),
+            QStringLiteral("move_cursor_left"),
+            QStringLiteral("move_cursor_right"),
+            QStringLiteral("move_entire_selection"),
+            QStringLiteral("keep_selection_width_and_height_consistent"),
+            QStringLiteral("selection_aspect_ratio_snap"),
+            QStringLiteral("switch_selection_between_window_and_window_sub_element"),
+            QStringLiteral("previous_screenshot_history"),
+            QStringLiteral("next_screenshot_history"),
+            QStringLiteral("select_previously_selected_area"),
+            QStringLiteral("recapture"),
+            QStringLiteral("toggle_cursor_visibility"),
+            QStringLiteral("copy_color"),
+            QStringLiteral("toggle_coordinate_mode"),
+            QStringLiteral("toggle_guides"),
+            QStringLiteral("table_recognition"),
+            QStringLiteral("qr_code_recognition"),
+            QStringLiteral("video_recording"),
+            QStringLiteral("text_recognition"),
+            QStringLiteral("text_translation"),
+            QStringLiteral("scrolling_screenshot"),
+            QStringLiteral("quick_save"),
+            QStringLiteral("print"),
+            QStringLiteral("save_as_file"),
+            QStringLiteral("upload_to_cloud"),
+            QStringLiteral("pin_to_screen"),
+            QStringLiteral("cancel_screenshot"),
+            QStringLiteral("copy_to_clipboard"),
+            QStringLiteral("undo"),
+            QStringLiteral("redo"),
+        };
+        result.removeIf([](const QString& id) {
+            return !snow_shot::presentation::editionConfigurationKeyAvailable(
+                QStringLiteral("screenshot_shortcuts/") + id);
+        });
+        return result;
+    }();
     return ids;
 }
 
@@ -96,13 +116,18 @@ const QStringList& pinToScreenShortcutActionIds() {
     static const QStringList ids = {
         QStringLiteral("copy_to_clipboard"),
         QStringLiteral("copy_original_content"),
+        QStringLiteral("print"),
         QStringLiteral("save_as_file"),
+        QStringLiteral("upload_to_cloud"),
         QStringLiteral("show_text_recognition_results"),
         QStringLiteral("drawing_mode"),
         QStringLiteral("resize_window"),
         QStringLiteral("thumbnail_mode"),
         QStringLiteral("hide_to_top"),
         QStringLiteral("toggle_click_through"),
+        QStringLiteral("toggle_lock"),
+        QStringLiteral("always_on_top"),
+        QStringLiteral("show_border"),
         QStringLiteral("close_window"),
         QStringLiteral("destroy_window"),
         QStringLiteral("move_cursor_up"),
@@ -153,6 +178,52 @@ QString pinToScreenShortcutKey(const QString& actionId) {
     return pinToScreenShortcutActionIds().contains(actionId)
                ? QStringLiteral("pin_to_screen_shortcuts/") + actionId
                : QString();
+}
+
+enum class LocalShortcutPolicy : std::uint8_t { Screenshot, Drawing, WindowCommand };
+
+struct LocalShortcutGroup {
+    QString prefix;
+    const QStringList& ids;
+    LocalShortcutPolicy policy;
+};
+
+const std::array<LocalShortcutGroup, 4>& localShortcutGroups() {
+    static const std::array<LocalShortcutGroup, 4> groups{{
+        {QStringLiteral("screenshot_shortcuts/"), screenshotShortcutActionIds(),
+         LocalShortcutPolicy::Screenshot},
+        {QStringLiteral("drawing_shortcuts/"), drawingShortcutToolIds(),
+         LocalShortcutPolicy::Drawing},
+        {QStringLiteral("pin_to_screen_shortcuts/"), pinToScreenShortcutActionIds(),
+         LocalShortcutPolicy::WindowCommand},
+        {QStringLiteral("screen_recording_shortcuts/"), screenRecordingShortcutActionIds(),
+         LocalShortcutPolicy::WindowCommand},
+    }};
+    return groups;
+}
+
+const LocalShortcutGroup* localShortcutGroup(const QString& key) {
+    for (const auto& group : localShortcutGroups()) {
+        if (key.startsWith(group.prefix) && group.ids.contains(key.mid(group.prefix.size()))) {
+            return &group;
+        }
+    }
+    return nullptr;
+}
+
+bool setAllLocalShortcutsAtomic(const QString& prefix, const QStringList& ids,
+                                const shortcuts::ShortcutBindingMap& bindings) {
+    if (bindings.size() != ids.size()) {
+        return false;
+    }
+    QMap<QString, QJsonValue> values;
+    for (const QString& id : ids) {
+        if (!bindings.contains(id)) {
+            return false;
+        }
+        values.insert(prefix + id, shortcuts::shortcutBindingsToJson(bindings.value(id)));
+    }
+    return setLocalShortcutValuesAtomic(values);
 }
 
 bool shortcutUsesKey(const shortcuts::ShortcutBinding& shortcut, Qt::Key key) {
@@ -223,7 +294,53 @@ QColor colorValue(const QString& key) {
 bool setColorValue(const QString& key, const QColor& color) {
     return color.isValid() && cache().setValue(key, colorToRgbaString(color));
 }
+
+QVector<QColor> colorPresetValues(const QString& key) {
+    QVector<QColor> colors;
+    for (const QJsonValue& value : cache().value(key).toArray()) {
+        colors.push_back(colorFromRgbaString(value.toString()));
+    }
+    return colors;
+}
+
+bool setColorPresetValues(const QString& key, const QVector<QColor>& colors) {
+    if (colors.size() != 5) {
+        return false;
+    }
+    QJsonArray values;
+    for (const QColor& color : colors) {
+        if (!color.isValid()) {
+            return false;
+        }
+        values.push_back(colorToRgbaString(color));
+    }
+    return cache().setValue(key, values);
+}
 } // namespace
+
+QVector<QColor> ScreenshotColorPresetSettings::strokeColors() const {
+    return colorPresetValues(QStringLiteral("screenshot/stroke_color_presets"));
+}
+
+bool ScreenshotColorPresetSettings::setStrokeColors(const QVector<QColor>& colors) const {
+    return setColorPresetValues(QStringLiteral("screenshot/stroke_color_presets"), colors);
+}
+
+QVector<QColor> ScreenshotColorPresetSettings::fillColors() const {
+    return colorPresetValues(QStringLiteral("screenshot/fill_color_presets"));
+}
+
+bool ScreenshotColorPresetSettings::setFillColors(const QVector<QColor>& colors) const {
+    return setColorPresetValues(QStringLiteral("screenshot/fill_color_presets"), colors);
+}
+
+CloudUploadSettings CloudUploadConfigurationSettings::settings() const {
+    return cloudUploadSettingsFromJson(cache().value(QStringLiteral("cloud_upload/configuration")));
+}
+bool CloudUploadConfigurationSettings::setSettings(const CloudUploadSettings& values) const {
+    return cache().setValue(QStringLiteral("cloud_upload/configuration"),
+                            cloudUploadSettingsToJson(values));
+}
 
 bool TextRecognitionSettings::saveRecognitionResultAsImage() const {
     return cache()
@@ -234,6 +351,31 @@ bool TextRecognitionSettings::saveRecognitionResultAsImage() const {
 bool TextRecognitionSettings::setSaveRecognitionResultAsImage(bool enabled) const {
     return cache().setValue(QStringLiteral("text_recognition/save_recognition_result_as_image"),
                             enabled);
+}
+
+bool TextRecognitionSettings::showOriginalImagePreview() const {
+    return cache().value(QStringLiteral("text_recognition/show_original_image_preview")).toBool();
+}
+
+bool TextRecognitionSettings::setShowOriginalImagePreview(bool enabled) const {
+    return cache().setValue(QStringLiteral("text_recognition/show_original_image_preview"),
+                            enabled);
+}
+
+QString TextRecognitionSettings::defaultFormatting() const {
+    return cache().value(QStringLiteral("text_recognition/default_formatting")).toString();
+}
+
+bool TextRecognitionSettings::setDefaultFormatting(const QString& value) const {
+    return cache().setValue(QStringLiteral("text_recognition/default_formatting"), value);
+}
+
+QString TextRecognitionSettings::defaultPunctuation() const {
+    return cache().value(QStringLiteral("text_recognition/default_punctuation")).toString();
+}
+
+bool TextRecognitionSettings::setDefaultPunctuation(const QString& value) const {
+    return cache().setValue(QStringLiteral("text_recognition/default_punctuation"), value);
 }
 
 QColor colorFromRgbaString(const QString& value) {
@@ -262,33 +404,45 @@ QString colorToRgbaString(const QColor& color) {
         .toUpper();
 }
 
+#if SNOW_SHOT_ENABLE_API_CONFIGURATION
 QString ApiConfigurationSettings::serverUrl() const {
     return cache().value(QStringLiteral("api_configuration/server_url")).toString();
 }
+#endif
 
+#if SNOW_SHOT_ENABLE_API_CONFIGURATION
 bool ApiConfigurationSettings::setServerUrl(const QString& value) const {
     return cache().setValue(QStringLiteral("api_configuration/server_url"), value);
 }
+#endif
 
+#if SNOW_SHOT_ENABLE_API_CONFIGURATION
 CustomAiModels ApiConfigurationSettings::customModels() const {
     return customAiModelsFromJson(cache().value(QStringLiteral("api_configuration/custom_models")));
 }
+#endif
 
+#if SNOW_SHOT_ENABLE_API_CONFIGURATION
 bool ApiConfigurationSettings::setCustomModels(const CustomAiModels& models) const {
     return cache().setValue(QStringLiteral("api_configuration/custom_models"),
                             customAiModelsToJson(models));
 }
+#endif
 
+#if SNOW_SHOT_ENABLE_API_CONFIGURATION
 TextTranslationConfigurations ApiConfigurationSettings::textTranslationConfigurations() const {
     return textTranslationConfigurationsFromJson(
         cache().value(QStringLiteral("api_configuration/text_translation")));
 }
+#endif
 
+#if SNOW_SHOT_ENABLE_API_CONFIGURATION
 bool ApiConfigurationSettings::setTextTranslationConfigurations(
     const TextTranslationConfigurations& models) const {
     return cache().setValue(QStringLiteral("api_configuration/text_translation"),
                             textTranslationConfigurationsToJson(models));
 }
+#endif
 
 QColor InterfaceSettings::themePrimaryColor() const {
     return colorValue(QStringLiteral("interface/theme_primary_color"));
@@ -306,6 +460,14 @@ bool InterfaceSettings::setAppFontFamily(const QString& family) const {
     return cache().setValue(QStringLiteral("interface/app_font"), family.trimmed());
 }
 
+int InterfaceSettings::appFontSizePercentage() const {
+    return cache().value(QStringLiteral("interface/app_font_size_percentage")).toInt(100);
+}
+
+bool InterfaceSettings::setAppFontSizePercentage(int percentage) const {
+    return cache().setValue(QStringLiteral("interface/app_font_size_percentage"), percentage);
+}
+
 QString InterfaceSettings::themeMode() const {
     return cache().value(QStringLiteral("interface/theme_mode")).toString();
 }
@@ -320,6 +482,86 @@ QString InterfaceSettings::language() const {
 
 bool InterfaceSettings::setLanguage(const QString& language) const {
     return cache().setValue(QStringLiteral("interface/language"), language);
+}
+
+QString InterfaceSettings::skinPath() const {
+    return cache().value(QStringLiteral("interface/skin_path")).toString();
+}
+
+bool InterfaceSettings::setSkinPath(const QString& path) const {
+    return cache().setValue(QStringLiteral("interface/skin_path"), path);
+}
+
+QString InterfaceSettings::skinPosition() const {
+    return cache().value(QStringLiteral("interface/skin_position")).toString();
+}
+
+bool InterfaceSettings::setSkinPosition(const QString& position) const {
+    return cache().setValue(QStringLiteral("interface/skin_position"), position);
+}
+
+QString InterfaceSettings::toolbarSkinPath() const {
+    return cache().value(QStringLiteral("interface/toolbar_skin_path")).toString();
+}
+
+bool InterfaceSettings::setToolbarSkinPath(const QString& path) const {
+    return cache().setValue(QStringLiteral("interface/toolbar_skin_path"), path);
+}
+
+QString InterfaceSettings::toolbarSkinPosition() const {
+    return cache().value(QStringLiteral("interface/toolbar_skin_position")).toString();
+}
+
+bool InterfaceSettings::setToolbarSkinPosition(const QString& position) const {
+    return cache().setValue(QStringLiteral("interface/toolbar_skin_position"), position);
+}
+
+QString InterfaceSettings::trayMenuSkinPath() const {
+    return cache().value(QStringLiteral("interface/tray_menu_skin_path")).toString();
+}
+
+bool InterfaceSettings::setTrayMenuSkinPath(const QString& path) const {
+    return cache().setValue(QStringLiteral("interface/tray_menu_skin_path"), path);
+}
+
+QString InterfaceSettings::trayMenuSkinPosition() const {
+    return cache().value(QStringLiteral("interface/tray_menu_skin_position")).toString();
+}
+
+bool InterfaceSettings::setTrayMenuSkinPosition(const QString& position) const {
+    return cache().setValue(QStringLiteral("interface/tray_menu_skin_position"), position);
+}
+
+QString InterfaceSettings::skinDisplayMode() const {
+    return cache().value(QStringLiteral("interface/skin_display_mode")).toString();
+}
+
+bool InterfaceSettings::setSkinDisplayMode(const QString& mode) const {
+    return cache().setValue(QStringLiteral("interface/skin_display_mode"), mode);
+}
+
+int InterfaceSettings::skinOpacity() const {
+    return cache().value(QStringLiteral("interface/skin_opacity")).toInt();
+}
+
+bool InterfaceSettings::setSkinOpacity(int opacity) const {
+    return cache().setValue(QStringLiteral("interface/skin_opacity"), opacity);
+}
+
+int InterfaceSettings::skinBlurLevel() const {
+    return cache().value(QStringLiteral("interface/skin_blur_level")).toInt();
+}
+
+bool InterfaceSettings::setSkinBlurLevel(int level) const {
+    return cache().setValue(QStringLiteral("interface/skin_blur_level"), level);
+}
+
+int InterfaceSettings::skinMaskOpacity() const {
+    return cache().value(QStringLiteral("interface/skin_mask_opacity")).toInt();
+}
+
+bool InterfaceSettings::setSkinMaskOpacity(int opacity) const {
+    return cache().setValue(QStringLiteral("interface/skin_mask_opacity"), opacity);
 }
 
 bool InterfaceSettings::sidebarCollapsed() const {
@@ -341,15 +583,19 @@ bool WindowMemorySettings::setMainWindowGeometry(const QRect& normalGeometry,
                             windowGeometryToJson(normalGeometry, maximized));
 }
 
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
 std::optional<QSize> WindowMemorySettings::translationWindowSize() const {
     return parseWindowSize(
         cache().value(QStringLiteral("interface/translation_window_size")).toObject());
 }
+#endif
 
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
 bool WindowMemorySettings::setTranslationWindowSize(const QSize& size) const {
     return cache().setValue(QStringLiteral("interface/translation_window_size"),
                             windowSizeToJson(size));
 }
+#endif
 
 shortcuts::ShortcutBindingList ShortcutSettings::screenshot() const {
     return shortcutValue(QStringLiteral("global_shortcuts/screenshot"));
@@ -383,14 +629,18 @@ bool ShortcutSettings::setScreenshotOcr(const shortcuts::ShortcutBindingList& bi
     return setShortcutValue(QStringLiteral("global_shortcuts/screenshot_ocr"), bindings);
 }
 
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
 shortcuts::ShortcutBindingList ShortcutSettings::screenshotTranslation() const {
     return shortcutValue(QStringLiteral("global_shortcuts/screenshot_translation"));
 }
+#endif
 
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
 bool ShortcutSettings::setScreenshotTranslation(
     const shortcuts::ShortcutBindingList& bindings) const {
     return setShortcutValue(QStringLiteral("global_shortcuts/screenshot_translation"), bindings);
 }
+#endif
 
 shortcuts::ShortcutBindingList ShortcutSettings::screenshotCopy() const {
     return shortcutValue(QStringLiteral("global_shortcuts/screenshot_copy"));
@@ -398,6 +648,23 @@ shortcuts::ShortcutBindingList ShortcutSettings::screenshotCopy() const {
 
 bool ShortcutSettings::setScreenshotCopy(const shortcuts::ShortcutBindingList& bindings) const {
     return setShortcutValue(QStringLiteral("global_shortcuts/screenshot_copy"), bindings);
+}
+
+shortcuts::ShortcutBindingList ShortcutSettings::screenshotSave() const {
+    return shortcutValue(QStringLiteral("global_shortcuts/screenshot_save"));
+}
+
+bool ShortcutSettings::setScreenshotSave(const shortcuts::ShortcutBindingList& bindings) const {
+    return setShortcutValue(QStringLiteral("global_shortcuts/screenshot_save"), bindings);
+}
+
+shortcuts::ShortcutBindingList ShortcutSettings::screenshotQuickSave() const {
+    return shortcutValue(QStringLiteral("global_shortcuts/screenshot_quick_save"));
+}
+
+bool ShortcutSettings::setScreenshotQuickSave(
+    const shortcuts::ShortcutBindingList& bindings) const {
+    return setShortcutValue(QStringLiteral("global_shortcuts/screenshot_quick_save"), bindings);
 }
 
 shortcuts::ShortcutBindingList ShortcutSettings::screenshotFullScreen() const {
@@ -452,6 +719,14 @@ bool ShortcutSettings::setOpenCaptureHistory(const shortcuts::ShortcutBindingLis
     return setShortcutValue(QStringLiteral("global_shortcuts/open_capture_history"), bindings);
 }
 
+shortcuts::ShortcutBindingList ShortcutSettings::switchWindowGroup() const {
+    return shortcutValue(QStringLiteral("global_shortcuts/switch_window_group"));
+}
+
+bool ShortcutSettings::setSwitchWindowGroup(const shortcuts::ShortcutBindingList& bindings) const {
+    return setShortcutValue(QStringLiteral("global_shortcuts/switch_window_group"), bindings);
+}
+
 shortcuts::ShortcutBindingList ShortcutSettings::globalCanvas() const {
     return shortcutValue(QStringLiteral("global_shortcuts/global_canvas"));
 }
@@ -498,43 +773,59 @@ bool ShortcutSettings::setToggleDisableOnFocusedFullscreenWindow(
         QStringLiteral("global_shortcuts/toggle_disable_on_focused_fullscreen_window"), bindings);
 }
 
+#if SNOW_SHOT_ENABLE_EXTENDED_FEATURES
 bool ExtendedFeaturesSettings::translationPageEnabled() const {
     return cache()
         .value(QStringLiteral("extended_features/translation_page_enabled"))
         .toBool(false);
 }
+#endif
 
+#if SNOW_SHOT_ENABLE_EXTENDED_FEATURES
 bool ExtendedFeaturesSettings::jumpToTranslationPage() const {
     return cache().value(QStringLiteral("extended_features/jump_to_translation_page")).toBool();
 }
+#endif
 
+#if SNOW_SHOT_ENABLE_EXTENDED_FEATURES
 bool ExtendedFeaturesSettings::setJumpToTranslationPage(bool enabled) const {
     return cache().setValue(QStringLiteral("extended_features/jump_to_translation_page"), enabled);
 }
+#endif
 
+#if SNOW_SHOT_ENABLE_EXTENDED_FEATURES
 bool ExtendedFeaturesSettings::standaloneTranslationWindow() const {
     return cache()
         .value(QStringLiteral("extended_features/standalone_translation_window"))
         .toBool();
 }
+#endif
 
+#if SNOW_SHOT_ENABLE_EXTENDED_FEATURES
 bool ExtendedFeaturesSettings::setStandaloneTranslationWindow(bool enabled) const {
     return cache().setValue(QStringLiteral("extended_features/standalone_translation_window"),
                             enabled);
 }
+#endif
 
+#if SNOW_SHOT_ENABLE_EXTENDED_FEATURES
 bool ExtendedFeaturesSettings::setTranslationPageEnabled(bool enabled) const {
     return cache().setValue(QStringLiteral("extended_features/translation_page_enabled"), enabled);
 }
+#endif
 
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
 shortcuts::ShortcutBindingList ShortcutSettings::translateSelectedText() const {
     return shortcutValue(QStringLiteral("global_shortcuts/translate_selected_text"));
 }
+#endif
 
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
 bool ShortcutSettings::setTranslateSelectedText(
     const shortcuts::ShortcutBindingList& bindings) const {
     return setShortcutValue(QStringLiteral("global_shortcuts/translate_selected_text"), bindings);
 }
+#endif
 
 shortcuts::ShortcutBindingList ShortcutSettings::pinClipboardContent() const {
     return shortcutValue(QStringLiteral("global_shortcuts/pin_clipboard_content"));
@@ -581,6 +872,15 @@ bool ScreenshotSettings::setShutterSoundNotification(bool enabled) const {
     return cache().setValue(QStringLiteral("screenshot/shutter_sound_notification"), enabled);
 }
 
+bool ScreenshotSettings::screenshotSoundNotification() const {
+    return cache().value(QStringLiteral("screenshot/screenshot_sound_notification")).toBool();
+}
+
+bool ScreenshotSettings::setScreenshotSoundNotification(bool enabled) const {
+    return cache().setValue(QStringLiteral("screenshot/screenshot_sound_notification"), enabled);
+}
+
+#if SNOW_SHOT_ENABLE_QR_RECOGNITION
 bool ScreenshotSettings::autoRecognizeQrCode() const {
     return cache().value(QStringLiteral("screenshot/auto_recognize_qr_code")).toBool();
 }
@@ -589,6 +889,7 @@ bool ScreenshotSettings::setAutoRecognizeQrCode(bool enabled) const {
     return cache().setValue(QStringLiteral("screenshot/auto_recognize_qr_code"), enabled);
 }
 
+#endif
 bool ScreenshotSettings::confirmBeforeExitingViaShortcut() const {
     return cache().value(QStringLiteral("screenshot/confirm_before_exiting_via_shortcut")).toBool();
 }
@@ -598,11 +899,11 @@ bool ScreenshotSettings::setConfirmBeforeExitingViaShortcut(bool enabled) const 
                             enabled);
 }
 
-bool ScreenshotSettings::captureCursor() const {
+bool ScreenshotSettings::showCursor() const {
     return cache().value(QStringLiteral("screenshot/capture_cursor")).toBool();
 }
 
-bool ScreenshotSettings::setCaptureCursor(bool enabled) const {
+bool ScreenshotSettings::setShowCursor(bool enabled) const {
     return cache().setValue(QStringLiteral("screenshot/capture_cursor"), enabled);
 }
 
@@ -838,6 +1139,15 @@ bool DrawingSettings::setRememberLastUsedTool(bool enabled) const {
     return cache().setValue(QStringLiteral("drawing/remember_last_used_tool"), enabled);
 }
 
+bool DrawingSettings::alwaysShowFirstToolbarGroupButton() const {
+    return cache().value(QStringLiteral("drawing/always_show_first_toolbar_group_button")).toBool();
+}
+
+bool DrawingSettings::setAlwaysShowFirstToolbarGroupButton(bool enabled) const {
+    return cache().setValue(QStringLiteral("drawing/always_show_first_toolbar_group_button"),
+                            enabled);
+}
+
 shortcuts::ShortcutBindingList ScreenshotShortcutSettings::moveTool() const {
     return shortcuts(QStringLiteral("move_tool"));
 }
@@ -911,6 +1221,10 @@ shortcuts::ShortcutBindingList ScreenshotShortcutSettings::toggleCoordinateMode(
     return shortcuts(QStringLiteral("toggle_coordinate_mode"));
 }
 
+shortcuts::ShortcutBindingList ScreenshotShortcutSettings::toggleGuides() const {
+    return shortcuts(QStringLiteral("toggle_guides"));
+}
+
 shortcuts::ShortcutBindingList ScreenshotShortcutSettings::copyColor() const {
     return shortcuts(QStringLiteral("copy_color"));
 }
@@ -972,20 +1286,71 @@ bool ScreenshotShortcutSettings::isReservedShortcutAllowed(
     return false;
 }
 
+bool setLocalShortcutValuesAtomic(const QMap<QString, QJsonValue>& values) {
+    auto& configuration = cache();
+    return configuration.mutateIfRevision(configuration.revision(), [&configuration, &values]() {
+        QMap<QString, QJsonValue> normalizedValues;
+        QSet<QString> affectedGroups;
+        for (auto it = values.cbegin(); it != values.cend(); ++it) {
+            const auto* group = localShortcutGroup(it.key());
+            if (group == nullptr) {
+                return false;
+            }
+            const auto normalized = ConfigurationSchema::normalize(it.key(), it.value());
+            if (!normalized.valid) {
+                return false;
+            }
+            normalizedValues.insert(it.key(), normalized.value);
+            affectedGroups.insert(group->prefix);
+        }
+
+        const auto current = configuration.snapshot();
+        for (const auto& group : localShortcutGroups()) {
+            if (!affectedGroups.contains(group.prefix)) {
+                continue;
+            }
+            shortcuts::ShortcutBindingList seen;
+            for (const QString& id : group.ids) {
+                const QString key = group.prefix + id;
+                const auto value = normalizedValues.contains(key) ? normalizedValues.value(key)
+                                                                  : current.value(key);
+                const auto bindings = shortcuts::shortcutBindingsFromJson(
+                    value, group.policy == LocalShortcutPolicy::Screenshot, -1, nullptr, nullptr,
+                    key == QStringLiteral("screenshot_shortcuts/toggle_guides"));
+                for (const auto& binding : bindings) {
+                    if (group.policy == LocalShortcutPolicy::Drawing &&
+                        DrawingShortcutSettings::isReservedShortcut(binding)) {
+                        return false;
+                    }
+                    if (group.policy == LocalShortcutPolicy::Screenshot &&
+                        ScreenshotShortcutSettings::isReservedShortcut(binding) &&
+                        !ScreenshotShortcutSettings::isReservedShortcutAllowed(id, binding)) {
+                        return false;
+                    }
+                    if (std::any_of(seen.cbegin(), seen.cend(), [&binding](const auto& existing) {
+                            return shortcuts::bindingsConflict(existing, binding);
+                        })) {
+                        return false;
+                    }
+                    seen.push_back(binding);
+                }
+            }
+        }
+        return configuration.setValues(normalizedValues);
+    });
+}
+
 shortcuts::ShortcutBindingList
 ScreenshotShortcutSettings::shortcuts(const QString& actionId) const {
     const QString key = screenshotShortcutKey(actionId);
     return key.isEmpty() ? shortcuts::ShortcutBindingList{} : shortcutValue(key);
 }
 
-bool ScreenshotShortcutSettings::setShortcuts(const QString& actionId,
-                                              const shortcuts::ShortcutBindingList& value) const {
-    if (screenshotShortcutKey(actionId).isEmpty()) {
-        return false;
-    }
-    shortcuts::ShortcutBindingMap next = allShortcuts();
-    next.insert(actionId, value);
-    return setAllShortcutsAtomic(next);
+bool ScreenshotShortcutSettings::setShortcuts(
+    const QString& actionId, const shortcuts::ShortcutBindingList& bindings) const {
+    const QString key = screenshotShortcutKey(actionId);
+    return !key.isEmpty() &&
+           setLocalShortcutValuesAtomic({{key, shortcuts::shortcutBindingsToJson(bindings)}});
 }
 
 shortcuts::ShortcutBindingMap ScreenshotShortcutSettings::allShortcuts() const {
@@ -998,36 +1363,8 @@ shortcuts::ShortcutBindingMap ScreenshotShortcutSettings::allShortcuts() const {
 
 bool ScreenshotShortcutSettings::setAllShortcutsAtomic(
     const shortcuts::ShortcutBindingMap& shortcutsByAction) const {
-    if (shortcutsByAction.size() != screenshotShortcutActionIds().size()) {
-        return false;
-    }
-    QMap<QString, QJsonValue> values;
-    shortcuts::ShortcutBindingList seen;
-    for (const QString& actionId : screenshotShortcutActionIds()) {
-        if (!shortcutsByAction.contains(actionId)) {
-            return false;
-        }
-        const QString key = screenshotShortcutKey(actionId);
-        const ConfigurationNormalization normalized = ConfigurationSchema::normalize(
-            key, shortcuts::shortcutBindingsToJson(shortcutsByAction.value(actionId)));
-        if (!normalized.valid) {
-            return false;
-        }
-        const auto normalizedBindings = shortcuts::shortcutBindingsFromJson(normalized.value, true);
-        for (const auto& binding : normalizedBindings) {
-            const bool duplicate =
-                std::any_of(seen.cbegin(), seen.cend(), [&binding](const auto& existing) {
-                    return shortcuts::bindingsConflict(existing, binding);
-                });
-            if ((isReservedShortcut(binding) && !isReservedShortcutAllowed(actionId, binding)) ||
-                duplicate) {
-                return false;
-            }
-            seen.push_back(binding);
-        }
-        values.insert(key, normalized.value);
-    }
-    return cache().setValues(values);
+    return setAllLocalShortcutsAtomic(QStringLiteral("screenshot_shortcuts/"),
+                                      screenshotShortcutActionIds(), shortcutsByAction);
 }
 
 shortcuts::ShortcutBindingList DrawingShortcutSettings::select() const {
@@ -1072,13 +1409,10 @@ shortcuts::ShortcutBindingList DrawingShortcutSettings::shortcuts(const QString&
 }
 
 bool DrawingShortcutSettings::setShortcuts(const QString& toolId,
-                                           const shortcuts::ShortcutBindingList& value) const {
-    if (drawingShortcutKey(toolId).isEmpty()) {
-        return false;
-    }
-    shortcuts::ShortcutBindingMap next = allShortcuts();
-    next.insert(toolId, value);
-    return setAllShortcutsAtomic(next);
+                                           const shortcuts::ShortcutBindingList& bindings) const {
+    const QString key = drawingShortcutKey(toolId);
+    return !key.isEmpty() &&
+           setLocalShortcutValuesAtomic({{key, shortcuts::shortcutBindingsToJson(bindings)}});
 }
 
 shortcuts::ShortcutBindingMap DrawingShortcutSettings::allShortcuts() const {
@@ -1091,39 +1425,8 @@ shortcuts::ShortcutBindingMap DrawingShortcutSettings::allShortcuts() const {
 
 bool DrawingShortcutSettings::setAllShortcutsAtomic(
     const shortcuts::ShortcutBindingMap& shortcutsByTool) const {
-    if (shortcutsByTool.size() != drawingShortcutToolIds().size()) {
-        return false;
-    }
-    QMap<QString, QJsonValue> values;
-    shortcuts::ShortcutBindingList seen;
-    for (const QString& toolId : drawingShortcutToolIds()) {
-        if (!shortcutsByTool.contains(toolId)) {
-            return false;
-        }
-        const QString key = drawingShortcutKey(toolId);
-        const ConfigurationNormalization normalized = ConfigurationSchema::normalize(
-            key, shortcuts::shortcutBindingsToJson(shortcutsByTool.value(toolId)));
-        if (!normalized.valid) {
-            return false;
-        }
-        const auto normalizedBindings =
-            shortcuts::shortcutBindingsFromJson(normalized.value, false);
-        for (const auto& binding : normalizedBindings) {
-            if (isReservedShortcut(binding)) {
-                return false;
-            }
-            const bool duplicate =
-                std::any_of(seen.cbegin(), seen.cend(), [&binding](const auto& existing) {
-                    return shortcuts::bindingsConflict(existing, binding);
-                });
-            if (duplicate) {
-                return false;
-            }
-            seen.push_back(binding);
-        }
-        values.insert(key, normalized.value);
-    }
-    return cache().setValues(values);
+    return setAllLocalShortcutsAtomic(QStringLiteral("drawing_shortcuts/"),
+                                      drawingShortcutToolIds(), shortcutsByTool);
 }
 
 shortcuts::ShortcutBindingList
@@ -1132,14 +1435,11 @@ PinToScreenShortcutSettings::shortcuts(const QString& actionId) const {
     return key.isEmpty() ? shortcuts::ShortcutBindingList{} : shortcutValue(key);
 }
 
-bool PinToScreenShortcutSettings::setShortcuts(const QString& actionId,
-                                               const shortcuts::ShortcutBindingList& value) const {
-    if (pinToScreenShortcutKey(actionId).isEmpty()) {
-        return false;
-    }
-    shortcuts::ShortcutBindingMap next = allShortcuts();
-    next.insert(actionId, value);
-    return setAllShortcutsAtomic(next);
+bool PinToScreenShortcutSettings::setShortcuts(
+    const QString& actionId, const shortcuts::ShortcutBindingList& bindings) const {
+    const QString key = pinToScreenShortcutKey(actionId);
+    return !key.isEmpty() &&
+           setLocalShortcutValuesAtomic({{key, shortcuts::shortcutBindingsToJson(bindings)}});
 }
 
 shortcuts::ShortcutBindingMap PinToScreenShortcutSettings::allShortcuts() const {
@@ -1152,36 +1452,8 @@ shortcuts::ShortcutBindingMap PinToScreenShortcutSettings::allShortcuts() const 
 
 bool PinToScreenShortcutSettings::setAllShortcutsAtomic(
     const shortcuts::ShortcutBindingMap& shortcutsByAction) const {
-    if (shortcutsByAction.size() != pinToScreenShortcutActionIds().size()) {
-        return false;
-    }
-    QMap<QString, QJsonValue> values;
-    shortcuts::ShortcutBindingList seen;
-    for (const QString& actionId : pinToScreenShortcutActionIds()) {
-        if (!shortcutsByAction.contains(actionId)) {
-            return false;
-        }
-        const QString key = pinToScreenShortcutKey(actionId);
-        const ConfigurationNormalization normalized = ConfigurationSchema::normalize(
-            key, shortcuts::shortcutBindingsToJson(shortcutsByAction.value(actionId)));
-        if (!normalized.valid) {
-            return false;
-        }
-        const auto normalizedBindings =
-            shortcuts::shortcutBindingsFromJson(normalized.value, false);
-        for (const auto& binding : normalizedBindings) {
-            const bool duplicate =
-                std::any_of(seen.cbegin(), seen.cend(), [&binding](const auto& existing) {
-                    return shortcuts::bindingsConflict(existing, binding);
-                });
-            if (duplicate) {
-                return false;
-            }
-            seen.push_back(binding);
-        }
-        values.insert(key, normalized.value);
-    }
-    return cache().setValues(values);
+    return setAllLocalShortcutsAtomic(QStringLiteral("pin_to_screen_shortcuts/"),
+                                      pinToScreenShortcutActionIds(), shortcutsByAction);
 }
 
 shortcuts::ShortcutBindingList
@@ -1191,13 +1463,10 @@ ScreenRecordingShortcutSettings::shortcuts(const QString& actionId) const {
 }
 
 bool ScreenRecordingShortcutSettings::setShortcuts(
-    const QString& actionId, const shortcuts::ShortcutBindingList& value) const {
-    if (screenRecordingShortcutKey(actionId).isEmpty()) {
-        return false;
-    }
-    shortcuts::ShortcutBindingMap next = allShortcuts();
-    next.insert(actionId, value);
-    return setAllShortcutsAtomic(next);
+    const QString& actionId, const shortcuts::ShortcutBindingList& bindings) const {
+    const QString key = screenRecordingShortcutKey(actionId);
+    return !key.isEmpty() &&
+           setLocalShortcutValuesAtomic({{key, shortcuts::shortcutBindingsToJson(bindings)}});
 }
 
 shortcuts::ShortcutBindingMap ScreenRecordingShortcutSettings::allShortcuts() const {
@@ -1210,36 +1479,8 @@ shortcuts::ShortcutBindingMap ScreenRecordingShortcutSettings::allShortcuts() co
 
 bool ScreenRecordingShortcutSettings::setAllShortcutsAtomic(
     const shortcuts::ShortcutBindingMap& shortcutsByAction) const {
-    if (shortcutsByAction.size() != screenRecordingShortcutActionIds().size()) {
-        return false;
-    }
-    QMap<QString, QJsonValue> values;
-    shortcuts::ShortcutBindingList seen;
-    for (const QString& actionId : screenRecordingShortcutActionIds()) {
-        if (!shortcutsByAction.contains(actionId)) {
-            return false;
-        }
-        const QString key = screenRecordingShortcutKey(actionId);
-        const ConfigurationNormalization normalized = ConfigurationSchema::normalize(
-            key, shortcuts::shortcutBindingsToJson(shortcutsByAction.value(actionId)));
-        if (!normalized.valid) {
-            return false;
-        }
-        const auto normalizedBindings =
-            shortcuts::shortcutBindingsFromJson(normalized.value, false);
-        for (const auto& binding : normalizedBindings) {
-            const bool duplicate =
-                std::any_of(seen.cbegin(), seen.cend(), [&binding](const auto& existing) {
-                    return shortcuts::bindingsConflict(existing, binding);
-                });
-            if (duplicate) {
-                return false;
-            }
-            seen.push_back(binding);
-        }
-        values.insert(key, normalized.value);
-    }
-    return cache().setValues(values);
+    return setAllLocalShortcutsAtomic(QStringLiteral("screen_recording_shortcuts/"),
+                                      screenRecordingShortcutActionIds(), shortcutsByAction);
 }
 
 QString ScreenshotUiSettings::toolbarSize() const {
@@ -1265,6 +1506,14 @@ QString ScreenshotUiSettings::selectionDisplayUnit() const {
 
 bool ScreenshotUiSettings::setSelectionDisplayUnit(const QString& unit) const {
     return cache().setValue(QStringLiteral("screenshot_ui/selection_display_unit"), unit);
+}
+
+bool ScreenshotUiSettings::selectionToolbarHidden() const {
+    return cache().value(QStringLiteral("screenshot_ui/selection_toolbar_hidden")).toBool();
+}
+
+bool ScreenshotUiSettings::setSelectionToolbarHidden(bool hidden) const {
+    return cache().setValue(QStringLiteral("screenshot_ui/selection_toolbar_hidden"), hidden);
 }
 
 QString ScreenshotUiSettings::colorPickerDisplayMode() const {
@@ -1323,12 +1572,28 @@ bool ScreenshotUiSettings::setScreenshotAreaTypeHintEnabled(bool enabled) const 
     return cache().setValue(QStringLiteral("screenshot_ui/area_type_hint_enabled"), enabled);
 }
 
+bool ScreenshotUiSettings::showGuidesByDefault() const {
+    return cache().value(QStringLiteral("screenshot_ui/show_guides_by_default")).toBool();
+}
+
+bool ScreenshotUiSettings::setShowGuidesByDefault(bool enabled) const {
+    return cache().setValue(QStringLiteral("screenshot_ui/show_guides_by_default"), enabled);
+}
+
 QColor ScreenshotUiSettings::cursorGuideLineColor() const {
     return colorValue(QStringLiteral("screenshot_ui/cursor_guide_line_color"));
 }
 
 bool ScreenshotUiSettings::setCursorGuideLineColor(const QColor& color) const {
     return setColorValue(QStringLiteral("screenshot_ui/cursor_guide_line_color"), color);
+}
+
+QColor ScreenshotUiSettings::selectionCenterGuideLineColor() const {
+    return colorValue(QStringLiteral("screenshot_ui/selection_center_guide_line_color"));
+}
+
+bool ScreenshotUiSettings::setSelectionCenterGuideLineColor(const QColor& color) const {
+    return setColorValue(QStringLiteral("screenshot_ui/selection_center_guide_line_color"), color);
 }
 
 QColor ScreenshotUiSettings::monitorCenterGuideLineColor() const {
@@ -1348,6 +1613,14 @@ bool ScreenshotUiSettings::setColorPickerCenterGuideLineColor(const QColor& colo
                          color);
 }
 
+bool ScreenshotUiSettings::showEditSelectionToolbar() const {
+    return cache().value(QStringLiteral("screenshot_ui/show_edit_selection_toolbar")).toBool();
+}
+
+bool ScreenshotUiSettings::setShowEditSelectionToolbar(bool show) const {
+    return cache().setValue(QStringLiteral("screenshot_ui/show_edit_selection_toolbar"), show);
+}
+
 bool RecordingSettings::microphoneEnabled() const {
     return cache().value(QStringLiteral("screen_recording/enable_microphone")).toBool();
 }
@@ -1362,6 +1635,22 @@ bool RecordingSettings::systemAudioEnabled() const {
 
 bool RecordingSettings::setSystemAudioEnabled(bool enabled) const {
     return cache().setValue(QStringLiteral("screen_recording/enable_system_audio"), enabled);
+}
+
+int RecordingSettings::microphoneGainDb() const {
+    return cache().value(QStringLiteral("screen_recording/microphone_gain_db")).toInt();
+}
+
+bool RecordingSettings::setMicrophoneGainDb(int gainDb) const {
+    return cache().setValue(QStringLiteral("screen_recording/microphone_gain_db"), gainDb);
+}
+
+int RecordingSettings::systemAudioGainDb() const {
+    return cache().value(QStringLiteral("screen_recording/system_audio_gain_db")).toInt();
+}
+
+bool RecordingSettings::setSystemAudioGainDb(int gainDb) const {
+    return cache().setValue(QStringLiteral("screen_recording/system_audio_gain_db"), gainDb);
 }
 
 QString RecordingSettings::screenRecordingClarity() const {
@@ -1397,6 +1686,22 @@ bool RecordingSettings::setAnimatedImageFrameRate(int frameRate) const {
                             frameRate);
 }
 
+bool RecordingSettings::separateAudioTracks() const {
+    return cache().value(QStringLiteral("screen_recording/separate_audio_tracks")).toBool();
+}
+
+bool RecordingSettings::setSeparateAudioTracks(bool enabled) const {
+    return cache().setValue(QStringLiteral("screen_recording/separate_audio_tracks"), enabled);
+}
+
+QString RecordingSettings::apiMode() const {
+    return cache().value(QStringLiteral("screen_recording/api_mode")).toString();
+}
+
+bool RecordingSettings::setApiMode(const QString& mode) const {
+    return cache().setValue(QStringLiteral("screen_recording/api_mode"), mode);
+}
+
 bool RecordingSettings::loopAnimatedImages() const {
     return cache().value(QStringLiteral("screen_recording/loop_animated_images")).toBool();
 }
@@ -1411,6 +1716,25 @@ QString RecordingSettings::outputFormat() const {
 
 bool RecordingSettings::setOutputFormat(const QString& format) const {
     return cache().setValue(QStringLiteral("screen_recording/output_format"), format);
+}
+
+bool RecordingSettings::postProcessingEnabled() const {
+    return cache().value(QStringLiteral("screen_recording/post_processing_enabled")).toBool();
+}
+bool RecordingSettings::setPostProcessingEnabled(bool enabled) const {
+    return cache().setValue(QStringLiteral("screen_recording/post_processing_enabled"), enabled);
+}
+QString RecordingSettings::postProcessingEffect() const {
+    return cache().value(QStringLiteral("screen_recording/post_processing_effect")).toString();
+}
+bool RecordingSettings::setPostProcessingEffect(const QString& effect) const {
+    return cache().setValue(QStringLiteral("screen_recording/post_processing_effect"), effect);
+}
+QColor RecordingSettings::progressBarColor() const {
+    return colorValue(QStringLiteral("screen_recording/progress_bar_color"));
+}
+bool RecordingSettings::setProgressBarColor(const QColor& color) const {
+    return setColorValue(QStringLiteral("screen_recording/progress_bar_color"), color);
 }
 
 int RecordingSettings::mouseTrailDurationMs() const {
@@ -1512,6 +1836,14 @@ bool RecordingSettings::setEncoder(const QString& encoder) const {
     return cache().setValue(QStringLiteral("screen_recording/encoder"), encoder);
 }
 
+int RecordingSettings::videoQuality() const {
+    return cache().value(QStringLiteral("screen_recording/video_quality")).toInt();
+}
+
+bool RecordingSettings::setVideoQuality(int quality) const {
+    return cache().setValue(QStringLiteral("screen_recording/video_quality"), quality);
+}
+
 QString RecordingSettings::encodingPreset() const {
     return cache().value(QStringLiteral("screen_recording/encoding_preset")).toString();
 }
@@ -1527,6 +1859,26 @@ bool RecordingSettings::captureToolbarInRecording() const {
 bool RecordingSettings::setCaptureToolbarInRecording(bool capture) const {
     return cache().setValue(QStringLiteral("screen_recording/capture_toolbar_in_recording"),
                             capture);
+}
+
+bool RecordingSettings::autoExitAfterRecordingEnds() const {
+    return cache()
+        .value(QStringLiteral("screen_recording/auto_exit_after_recording_ends"))
+        .toBool();
+}
+
+bool RecordingSettings::setAutoExitAfterRecordingEnds(bool enabled) const {
+    return cache().setValue(QStringLiteral("screen_recording/auto_exit_after_recording_ends"),
+                            enabled);
+}
+
+bool RecordingSettings::notifyAfterExportCompletes() const {
+    return cache().value(QStringLiteral("screen_recording/notify_after_export_completes")).toBool();
+}
+
+bool RecordingSettings::setNotifyAfterExportCompletes(bool enabled) const {
+    return cache().setValue(QStringLiteral("screen_recording/notify_after_export_completes"),
+                            enabled);
 }
 
 QString RecordingSettings::videoSaveDirectory() const {
@@ -1545,6 +1897,7 @@ bool RecordingSettings::setVideoFilenameFormat(const QString& format) const {
     return cache().setValue(QStringLiteral("screen_recording/video_filename_format"), format);
 }
 
+#if SNOW_SHOT_ENABLE_TABLE_RECOGNITION || SNOW_SHOT_ENABLE_QR_RECOGNITION
 QString ScreenshotToolbarSettings::tableQrTool() const {
     return cache().value(QStringLiteral("screenshot_toolbar/table_qr_tool")).toString();
 }
@@ -1553,6 +1906,7 @@ bool ScreenshotToolbarSettings::setTableQrTool(const QString& tool) const {
     return cache().setValue(QStringLiteral("screenshot_toolbar/table_qr_tool"), tool);
 }
 
+#endif
 QString ScreenshotToolbarSettings::lastFilterTool() const {
     return cache().value(QStringLiteral("screenshot_toolbar/last_filter_tool")).toString();
 }
@@ -1561,12 +1915,67 @@ bool ScreenshotToolbarSettings::setLastFilterTool(const QString& tool) const {
     return cache().setValue(QStringLiteral("screenshot_toolbar/last_filter_tool"), tool);
 }
 
+QString ScreenshotToolbarSettings::lastEraserTool() const {
+    return cache().value(QStringLiteral("screenshot_toolbar/last_eraser_tool")).toString();
+}
+
+bool ScreenshotToolbarSettings::setLastEraserTool(const QString& tool) const {
+    return cache().setValue(QStringLiteral("screenshot_toolbar/last_eraser_tool"), tool);
+}
+
 QString ScreenshotToolbarSettings::lastHighlightTool() const {
     return cache().value(QStringLiteral("screenshot_toolbar/last_highlight_tool")).toString();
 }
 
 bool ScreenshotToolbarSettings::setLastHighlightTool(const QString& tool) const {
     return cache().setValue(QStringLiteral("screenshot_toolbar/last_highlight_tool"), tool);
+}
+
+bool FloatingToolbarSettings::enabled() const {
+    return cache().value(QStringLiteral("floating_toolbar/enabled")).toBool();
+}
+
+bool FloatingToolbarSettings::setEnabled(bool value) const {
+    return cache().setValue(QStringLiteral("floating_toolbar/enabled"), value);
+}
+
+bool FloatingToolbarSettings::hideInFullscreen() const {
+    return cache().value(QStringLiteral("floating_toolbar/hide_in_fullscreen")).toBool();
+}
+
+bool FloatingToolbarSettings::setHideInFullscreen(bool value) const {
+    return cache().setValue(QStringLiteral("floating_toolbar/hide_in_fullscreen"), value);
+}
+
+bool FloatingToolbarSettings::hideDuringCapture() const {
+    return cache().value(QStringLiteral("floating_toolbar/hide_during_capture")).toBool();
+}
+
+bool FloatingToolbarSettings::setHideDuringCapture(bool value) const {
+    return cache().setValue(QStringLiteral("floating_toolbar/hide_during_capture"), value);
+}
+
+int FloatingToolbarSettings::opacity() const {
+    return cache().value(QStringLiteral("floating_toolbar/opacity")).toInt();
+}
+
+bool FloatingToolbarSettings::setOpacity(int value) const {
+    return cache().setValue(QStringLiteral("floating_toolbar/opacity"), value);
+}
+
+bool FloatingToolbarSettings::toolbarMode() const {
+    return cache().value(QStringLiteral("floating_toolbar/mode")).toString() ==
+           QStringLiteral("toolbar");
+}
+bool FloatingToolbarSettings::setToolbarMode(bool value) const {
+    return cache().setValue(QStringLiteral("floating_toolbar/mode"),
+                            value ? QStringLiteral("toolbar") : QStringLiteral("icon"));
+}
+QJsonObject FloatingToolbarSettings::placement() const {
+    return cache().value(QStringLiteral("floating_toolbar/placement")).toObject();
+}
+bool FloatingToolbarSettings::setPlacement(const QJsonObject& value) const {
+    return cache().setValue(QStringLiteral("floating_toolbar/placement"), value);
 }
 
 QString ScreenshotToolbarSettings::lastDrawingTool() const {
@@ -1580,12 +1989,16 @@ bool ScreenshotToolbarSettings::setLastDrawingTool(const QString& tool) const {
 namespace {
 QString screenshotToolbarLayoutKey(ScreenshotToolbarLayoutKind kind) {
     switch (kind) {
+    case ScreenshotToolbarLayoutKind::FloatingTools:
+        return QStringLiteral("floating_toolbar/layout");
     case ScreenshotToolbarLayoutKind::DrawingTools:
         return QStringLiteral("screenshot_toolbar/layout");
     case ScreenshotToolbarLayoutKind::ActionTools:
         return QStringLiteral("screenshot_toolbar/action_tools_layout");
     case ScreenshotToolbarLayoutKind::PinnedActionTools:
         return QStringLiteral("pin_to_screen/action_tools_layout");
+    case ScreenshotToolbarLayoutKind::RecordingActionTools:
+        return QStringLiteral("screen_recording/action_tools_layout");
     }
     return {};
 }
@@ -1597,50 +2010,71 @@ ScreenshotToolbarLayout ScreenshotToolbarSettings::layout(ScreenshotToolbarLayou
             stringList(object.value(QStringLiteral("hidden")))};
 }
 
+#if SNOW_SHOT_ENABLE_IMAGE_CONVERSION
 QString ScreenshotImageConversionSettings::visionModel() const {
     return cache().value(QStringLiteral("screenshot_conversion/vision_model")).toString();
 }
+#endif
 
+#if SNOW_SHOT_ENABLE_IMAGE_CONVERSION
 bool ScreenshotImageConversionSettings::setVisionModel(const QString& model) const {
     return cache().setValue(QStringLiteral("screenshot_conversion/vision_model"), model.trimmed());
 }
+#endif
 
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
 bool ScreenshotTranslationSettings::originalImageTranslationEnabled() const {
     return cache()
         .value(QStringLiteral("screenshot_translation/original_image_translation"))
         .toBool();
 }
+#endif
 
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
 bool ScreenshotTranslationSettings::setOriginalImageTranslationEnabled(bool enabled) const {
     return cache().setValue(QStringLiteral("screenshot_translation/original_image_translation"),
                             enabled);
 }
+#endif
 
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
 ScreenshotTranslationConfiguration ScreenshotTranslationSettings::configuration() const {
     return {cache().value(QStringLiteral("screenshot_translation/source_language")).toString(),
             cache().value(QStringLiteral("screenshot_translation/target_language")).toString(),
             cache().value(QStringLiteral("screenshot_translation/model")).toString(),
-            layoutProcessing()};
+            layoutProcessing(),
+            cache()
+                .value(QStringLiteral("screenshot_translation/secondary_target_language"))
+                .toString()};
 }
+#endif
 
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
 QString ScreenshotTranslationSettings::layoutProcessing() const {
     return cache().value(QStringLiteral("screenshot_translation/layout_processing")).toString();
 }
+#endif
 
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
 bool ScreenshotTranslationSettings::setLayoutProcessing(const QString& mode) const {
     return cache().setValue(QStringLiteral("screenshot_translation/layout_processing"), mode);
 }
+#endif
 
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
 bool ScreenshotTranslationSettings::setConfiguration(
     const ScreenshotTranslationConfiguration& configuration) const {
     return cache().setValues({
         {QStringLiteral("screenshot_translation/source_language"), configuration.sourceLanguage},
         {QStringLiteral("screenshot_translation/target_language"), configuration.targetLanguage},
+        {QStringLiteral("screenshot_translation/secondary_target_language"),
+         configuration.secondaryTargetLanguage},
         {QStringLiteral("screenshot_translation/model"), configuration.modelId},
         {QStringLiteral("screenshot_translation/layout_processing"),
          configuration.layoutProcessing},
     });
 }
+#endif
 
 bool ScreenshotToolbarSettings::setLayout(ScreenshotToolbarLayoutKind kind,
                                           const ScreenshotToolbarLayout& layout) const {
@@ -1710,6 +2144,31 @@ bool DrawTemplateSettings::setTemplates(const QVector<DrawTemplate>& templates) 
     return cache().setValue(QStringLiteral("drawing/draw_templates"), array);
 }
 
+bool PinToScreenSettings::showWindowButtons() const {
+    return cache().value(QStringLiteral("pin_to_screen/show_window_buttons")).toBool();
+}
+
+bool PinToScreenSettings::setShowWindowButtons(bool enabled) const {
+    return cache().setValue(QStringLiteral("pin_to_screen/show_window_buttons"), enabled);
+}
+
+bool PinToScreenSettings::confirmBeforeClosingWindow() const {
+    return cache().value(QStringLiteral("pin_to_screen/confirm_before_closing_window")).toBool();
+}
+
+bool PinToScreenSettings::setConfirmBeforeClosingWindow(bool enabled) const {
+    return cache().setValue(QStringLiteral("pin_to_screen/confirm_before_closing_window"), enabled);
+}
+
+bool PinToScreenSettings::confirmBeforeDestroyingWindow() const {
+    return cache().value(QStringLiteral("pin_to_screen/confirm_before_destroying_window")).toBool();
+}
+
+bool PinToScreenSettings::setConfirmBeforeDestroyingWindow(bool enabled) const {
+    return cache().setValue(QStringLiteral("pin_to_screen/confirm_before_destroying_window"),
+                            enabled);
+}
+
 QString PinToScreenSettings::doubleClickAction() const {
     return cache().value(QStringLiteral("pin_to_screen/double_click_action")).toString();
 }
@@ -1742,12 +2201,28 @@ bool PinToScreenSettings::setBorderActiveColor(const QColor& color) const {
     return setColorValue(QStringLiteral("pin_to_screen/border_active_color"), color);
 }
 
+QColor PinToScreenSettings::lockedBorderColor() const {
+    return colorValue(QStringLiteral("pin_to_screen/locked_border_color"));
+}
+
+bool PinToScreenSettings::setLockedBorderColor(const QColor& color) const {
+    return setColorValue(QStringLiteral("pin_to_screen/locked_border_color"), color);
+}
+
 QString PinToScreenSettings::mouseWheelZoomMode() const {
     return cache().value(QStringLiteral("pin_to_screen/mouse_wheel_zoom_mode")).toString();
 }
 
 bool PinToScreenSettings::setMouseWheelZoomMode(const QString& mode) const {
     return cache().setValue(QStringLiteral("pin_to_screen/mouse_wheel_zoom_mode"), mode);
+}
+
+QString PinToScreenSettings::duplicateContentAction() const {
+    return cache().value(QStringLiteral("pin_to_screen/duplicate_content_action")).toString();
+}
+
+bool PinToScreenSettings::setDuplicateContentAction(const QString& value) const {
+    return cache().setValue(QStringLiteral("pin_to_screen/duplicate_content_action"), value);
 }
 
 QString PinToScreenSettings::textSelectionOnRecognitionResults() const {

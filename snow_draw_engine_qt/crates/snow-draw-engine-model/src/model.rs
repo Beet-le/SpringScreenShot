@@ -51,6 +51,7 @@ impl DocumentModel {
     pub fn from_document(mut document: Document) -> Result<Self, ErrorCode> {
         document.normalize_filter_invariants();
         document.validate_session()?;
+        document.normalize_distance_label_invariants()?;
         let queries = QueryStore::new(&document);
         Ok(Self {
             document,
@@ -196,7 +197,10 @@ impl DocumentModel {
         self.document
             .element_states()
             .filter_map(|state| {
-                if !state.visible || self.document.arrow_id_for_text(state.id).is_some() {
+                if !state.visible
+                    || state.data.is_background_restore()
+                    || self.document.arrow_id_for_text(state.id).is_some()
+                {
                     return None;
                 }
                 let rect = overrides_by_id

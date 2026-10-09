@@ -1,5 +1,6 @@
 #include "snow_shot/presentation/screenshotocrrecognitionservice.h"
 #include "snow_shot/diagnostics/diagnostics.h"
+#include "../src/presentation/ocr/screenshotocrtransport.h"
 
 #include <QCoreApplication>
 #include <QDataStream>
@@ -15,12 +16,15 @@
 #include <QTemporaryDir>
 #include <QThread>
 
+#include <algorithm>
 #include <cstdio>
+#include <array>
 #include <cstdlib>
 #include <functional>
 #include <iostream>
 #include <thread>
 #include <mutex>
+#include <vector>
 #ifdef Q_OS_WIN
 #include <Windows.h>
 #include <fcntl.h>
@@ -61,6 +65,82 @@ QList<QJsonObject> recordsFor(const QString& event) {
 QList<QJsonObject> processExits() {
     return recordsFor(QStringLiteral("ocr.process_exit"));
 }
+
+void imageTransfersConvertDirectlyWithoutPublishingReady() {
+    using namespace snow_shot::ocr;
+    QImage fixture(17, 11, QImage::Format_RGBA8888);
+    for (int y = 0; y < fixture.height(); ++y)
+        for (int x = 0; x < fixture.width(); ++x)
+            fixture.setPixelColor(
+                x, y,
+                QColor((x * 17) % 256, (y * 23) % 256, (x + y) % 256, (x * 13 + y * 11) % 256));
+    const qsizetype bytes = fixture.width() * fixture.height() * 4;
+    constexpr qsizetype trailingGuard = 17;
+    constexpr uchar sentinel = 0xa9;
+    for (const auto format :
+         {QImage::Format_RGBA8888, QImage::Format_ARGB32_Premultiplied, QImage::Format_RGB888,
+          QImage::Format_RGBA64_Premultiplied, QImage::Format_RGBA32FPx4}) {
+        const QImage source = fixture.convertToFormat(format);
+        const QImage expected = source.convertToFormat(QImage::Format_RGBA8888);
+        std::vector<uchar> slot(static_cast<std::size_t>(kSlotHeaderBytes + bytes + trailingGuard),
+                                sentinel);
+        writeU32(slot.data() + kSlotStateOffset, kSlotReady);
+        require(transport_detail::copyImageToTransferSlot(source, slot.data(),
+                                                          kSlotHeaderBytes + bytes, 0xabcdef0123),
+                "OCR staging must directly convert every supported source format");
+        const QByteArray header(reinterpret_cast<const char*>(slot.data()), kSlotHeaderBytes);
+        const auto field = [&header](qsizetype offset) {
+            quint32 value = 0;
+            require(takeU32(header, offset, &value), "OCR slot field must fit its header");
+            return value;
+        };
+        qsizetype sequenceOffset = kSlotSequenceOffset;
+        quint64 sequence = 0;
+        require(takeU64(header, sequenceOffset, &sequence) && sequence == 0xabcdef0123 &&
+                    field(kSlotStateOffset) == kSlotFree &&
+                    field(kSlotWidthOffset) == static_cast<quint32>(source.width()) &&
+                    field(kSlotHeightOffset) == static_cast<quint32>(source.height()) &&
+                    field(kSlotStrideOffset) == static_cast<quint32>(source.width()) * 4 &&
+                    field(kSlotBytesOffset) == static_cast<quint32>(bytes) &&
+                    field(kSlotMagicOffset) == kSlotMagic,
+                "OCR staging must write exact geometry without publishing Ready");
+        for (int row = 0; row < source.height(); ++row)
+            require(std::memcmp(slot.data() + kSlotHeaderBytes + row * source.width() * 4,
+                                expected.constScanLine(row),
+                                static_cast<std::size_t>(source.width()) * 4) == 0,
+                    "direct OCR transfer must match Qt alpha and format conversion");
+        require(std::all_of(slot.end() - trailingGuard, slot.end(),
+                            [](uchar value) { return value == sentinel; }),
+                "OCR staging must stay within slot capacity");
+    }
+    std::array<uchar, 64> slot{};
+    const auto failUnpublished = [&](const QImage& source, qsizetype capacity) {
+        slot.fill(sentinel);
+        writeU32(slot.data() + kSlotStateOffset, kSlotReady);
+        require(!transport_detail::copyImageToTransferSlot(source, slot.data(), capacity, 7),
+                "invalid OCR transfer staging must fail");
+        const QByteArray header(reinterpret_cast<const char*>(slot.data()), kSlotHeaderBytes);
+        qsizetype stateOffset = kSlotStateOffset;
+        quint32 state = kSlotReady;
+        require(takeU32(header, stateOffset, &state) && state == kSlotFree,
+                "failed OCR staging must leave Ready unpublished");
+        require(std::all_of(slot.begin() + kSlotHeaderBytes, slot.end(),
+                            [](uchar value) { return value == sentinel; }),
+                "OCR capacity failure must not write pixel bytes");
+    };
+    failUnpublished(fixture, static_cast<qsizetype>(slot.size()));
+    failUnpublished({}, static_cast<qsizetype>(slot.size()));
+    // An independently wrapped shared slot must not be reused as its own
+    // conversion source. This fails after staging has marked the slot Free.
+    const QImage overlapping(static_cast<const uchar*>(slot.data() + kSlotHeaderBytes), 1, 1, 4,
+                             QImage::Format_RGBA8888);
+    failUnpublished(overlapping, static_cast<qsizetype>(slot.size()));
+    require(!transport_detail::copyImageToTransferSlot(fixture, nullptr, 0, 7),
+            "absent OCR mappings must reject staging");
+    require(
+        !transport_detail::copyImageToTransferSlot(fixture, slot.data(), kSlotHeaderBytes - 1, 7),
+        "OCR mappings shorter than a header must reject staging");
+}
 } // namespace
 
 // A real subprocess with the OCR wire handshake, but no model or inference timing.
@@ -78,7 +158,7 @@ int runOcrLifecycleChild() {
         QByteArray frame;
         QDataStream stream(&frame, QIODevice::WriteOnly);
         stream.setByteOrder(QDataStream::LittleEndian);
-        stream << quint32(0x52434f53) << quint16(4) << kind << token << quint32(payload.size());
+        stream << quint32(0x52434f53) << quint16(5) << kind << token << quint32(payload.size());
         frame.append(payload);
         std::fwrite(frame.constData(), 1, static_cast<std::size_t>(frame.size()), stdout);
         std::fflush(stdout);
@@ -106,7 +186,7 @@ int runOcrLifecycleChild() {
         quint16 version = 0, kind = 0;
         quint64 token = 0;
         input >> magic >> version >> kind >> token >> size;
-        if (magic != 0x52434f53 || version != 4 || size > 1024 * 1024)
+        if (magic != 0x52434f53 || version != 5 || size > 1024 * 1024)
             return 2;
         QByteArray payload(size, '\0');
         if (std::fread(payload.data(), 1, size, stdin) != size)
@@ -130,9 +210,9 @@ int runOcrLifecycleChild() {
             QByteArray ready;
             QDataStream output(&ready, QIODevice::WriteOnly);
             output.setByteOrder(QDataStream::LittleEndian);
-            output << quint8(1) << quint8(0) << quint32(0) << quint32(5);
-            output.writeRawData("1.0.8", 5);
-            output << quint32(4);
+            output << quint8(1) << quint8(0) << quint32(0) << quint32(6);
+            output.writeRawData("1.0.10", 6);
+            output << quint32(5);
             reply(2, 0, ready);
         } else if (kind == 8) {
             event("prepare " + payload.toHex());
@@ -234,7 +314,23 @@ int runOcrLifecycleChild() {
 }
 
 void ocrProcessLifecycleTests() {
+    imageTransfersConvertDirectlyWithoutPublishingReady();
     using namespace snow_shot::diagnostics;
+    require(ScreenshotOcrRuntimeConfiguration{}.textDetectionProcessing ==
+                    ScreenshotOcrTextDetectionProcessing::AccuracyFirst &&
+                ScreenshotOcrRecognitionService::Options{}.textDetectionProcessing ==
+                    ScreenshotOcrTextDetectionProcessing::AccuracyFirst,
+            "OCR processing must default to accuracy first for runtime and initial options");
+    require(
+        screenshotOcrTextDetectionProcessingFromValue(QStringLiteral("speed_first")) ==
+                ScreenshotOcrTextDetectionProcessing::SpeedFirst &&
+            screenshotOcrTextDetectionProcessingFromValue(QStringLiteral("accuracy_first")) ==
+                ScreenshotOcrTextDetectionProcessing::AccuracyFirst &&
+            screenshotOcrTextDetectionProcessingFromValue(QString()) ==
+                ScreenshotOcrTextDetectionProcessing::AccuracyFirst &&
+            screenshotOcrTextDetectionProcessingFromValue(QStringLiteral("invalid")) ==
+                ScreenshotOcrTextDetectionProcessing::AccuracyFirst,
+        "OCR processing values must preserve the accuracy default for missing or invalid settings");
     QTemporaryDir directory;
     require(directory.isValid(), "lifecycle fixture directory must exist");
     const auto markerPath = directory.filePath(QStringLiteral("submitted"));
@@ -277,6 +373,10 @@ void ocrProcessLifecycleTests() {
                 "recognize must return before asynchronous process startup is delivered");
         require(first != 0 && waitUntil([&] { return submitted(first); }),
                 "first inference must reach the controlled child");
+        const auto transports =
+            service.findChildren<QThread*>(QStringLiteral("snow-ocr-transport"));
+        require(transports.size() == 1 && transports.front()->isRunning(),
+                "an active OCR child must own exactly one running transport thread");
         require(
             waitUntil([&] { return !recordsFor(QStringLiteral("ocr.engine_ready")).isEmpty(); }),
             "worker stage events must be relayed as structured records");
@@ -422,6 +522,21 @@ void ocrProcessLifecycleTests() {
                                 .toObject();
         require(fields.value(QStringLiteral("shared_memory_bytes")).toInteger() == 32 * 32 * 4 + 32,
                 "replacement mapping must fit the largest queued image exactly");
+        require(waitUntil([&] {
+                    return service.findChildren<QThread*>(QStringLiteral("snow-ocr-transport"))
+                        .isEmpty();
+                }),
+                "nonresident idle OCR must release its transport thread");
+        submitImage(8);
+        require(waitUntil([&] { return completed.size() == 4 && service.processId() == 0; }),
+                "OCR must restart after its transport thread has retired");
+        require(recordsFor(QStringLiteral("ocr.process_started")).size() == initialStarts + 2,
+                "recognition after idle must create exactly one replacement child");
+        require(waitUntil([&] {
+                    return service.findChildren<QThread*>(QStringLiteral("snow-ocr-transport"))
+                        .isEmpty();
+                }),
+                "a restarted nonresident transport must also retire at idle");
     }
     const auto events = [&]() {
         QFile file(markerPath + QStringLiteral(".events"));
@@ -498,8 +613,9 @@ void ocrProcessLifecycleTests() {
         }
         require(releaseIndex >= 0 && releaseIndex < lastPrepare,
                 "the old engine must be released before the next warm session is created");
-        require(before.at(lastPrepare).startsWith("prepare 0000"),
-                "default warm session must request the max-side detector policy");
+        require(
+            before.at(lastPrepare).startsWith("prepare 000000"),
+            "default warm session must request max-side detection and accuracy-first processing");
         configuration.backend = ScreenshotOcrBackendPreference::DirectMl;
         service.setRuntimeConfiguration(configuration);
         require(waitUntil([&] { return countEvent("prepare ") == initialLoads + 3; }),
@@ -514,8 +630,32 @@ void ocrProcessLifecycleTests() {
             if (event.startsWith("prepare "))
                 latestPrepare = event;
         }
-        require(latestPrepare.startsWith("prepare 0101") && service.processId() == warmedPid,
+        require(latestPrepare.startsWith("prepare 010100") && service.processId() == warmedPid,
                 "the min-side detector policy must reach the existing worker process");
+        configuration.textDetectionProcessing = ScreenshotOcrTextDetectionProcessing::SpeedFirst;
+        service.setRuntimeConfiguration(configuration);
+        require(waitUntil([&] { return countEvent("prepare ") == initialLoads + 5; }),
+                "processing change must rebuild the idle warm session");
+        for (const auto& event : events()) {
+            if (event.startsWith("prepare "))
+                latestPrepare = event;
+        }
+        require(latestPrepare.startsWith("prepare 010101") && service.processId() == warmedPid,
+                "speed-first processing must reach the existing worker without changing detection");
+        service.setTextDetectionProcessing(ScreenshotOcrTextDetectionProcessing::SpeedFirst);
+        QCoreApplication::processEvents();
+        require(countEvent("prepare ") == initialLoads + 5,
+                "reapplying the selected processing mode must preserve the existing warm session");
+        configuration.textDetectionProcessing = ScreenshotOcrTextDetectionProcessing::AccuracyFirst;
+        service.setTextDetectionProcessing(configuration.textDetectionProcessing);
+        require(waitUntil([&] { return countEvent("prepare ") == initialLoads + 6; }),
+                "restoring accuracy first must rebuild the warm session");
+        for (const auto& event : events()) {
+            if (event.startsWith("prepare "))
+                latestPrepare = event;
+        }
+        require(latestPrepare.startsWith("prepare 010100") && service.processId() == warmedPid,
+                "accuracy-first processing must be restored without replacing the worker");
         configuration.modelHotStart = false;
         const int released = countEvent("release");
         service.setRuntimeConfiguration(configuration);
@@ -570,6 +710,7 @@ void ocrProcessLifecycleTests() {
                 "growth must use exactly the largest pending image capacity");
         configuration.backend = ScreenshotOcrBackendPreference::DirectMl;
         configuration.modelType = ScreenshotOcrModelType::Medium;
+        configuration.textDetectionProcessing = ScreenshotOcrTextDetectionProcessing::SpeedFirst;
         service.setRuntimeConfiguration(configuration);
         service.cancel(first);
         require(service.processId() == pid, "resident cancellation must preserve its child");
@@ -580,6 +721,14 @@ void ocrProcessLifecycleTests() {
         require(
             countEvent("prepare ") == initialLoads + 2,
             "queued inference must load the latest configuration after the old inference drains");
+        QByteArray latestPrepare;
+        for (const auto& event : events()) {
+            if (event.startsWith("prepare "))
+                latestPrepare = event;
+        }
+        require(
+            latestPrepare.startsWith("prepare 010001"),
+            "pending recognition must use the new processing mode after active inference drains");
         touch(QStringLiteral("finish-%1").arg(second));
         require(waitUntil([&] {
                     return completed == QList<int>({32}) &&

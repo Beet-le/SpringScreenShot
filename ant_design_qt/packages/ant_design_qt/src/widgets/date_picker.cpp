@@ -10,6 +10,7 @@
 #include "interaction_overlay_manager.h"
 #include "popup_placement.h"
 #include "theme/theme_manager.h"
+#include "theme/theme_color_utils.h"
 
 #include <QAbstractItemView>
 #include <QApplication>
@@ -61,11 +62,7 @@ namespace outlined_icons = adqt::icons::antd::outlined;
 namespace filled_icons = adqt::icons::antd::filled;
 
 QPoint mouseEventPos(const QMouseEvent* event) {
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
   return event ? event->position().toPoint() : QPoint();
-#else
-  return event ? event->pos() : QPoint();
-#endif
 }
 
 bool widgetInTree(const QWidget* candidate, const QWidget* root) {
@@ -81,11 +78,7 @@ void applyAccessibleIdentifier(QWidget* widget, const QString& value) {
   if (!widget) {
     return;
   }
-#if QT_VERSION >= QT_VERSION_CHECK(6, 9, 0)
   widget->setAccessibleIdentifier(value);
-#else
-  Q_UNUSED(value)
-#endif
 }
 
 detail::OverlayPopupPlacement toOverlayPopupPlacement(AdDatePicker::Placement placement) {
@@ -2113,7 +2106,8 @@ void applyDynamicStyleColor(QColor* target, const QObject* object, const char* n
 }
 
 detail::InputVisualStyle applyInputDynamicOverrides(detail::InputVisualStyle style,
-                                                    const QObject* object) {
+                                                    const QObject* object,
+                                                    qreal backgroundOpacity) {
   const QVariant heightValue = dynamicStyleProperty(object, kCompactHeightProperty);
   if (heightValue.isValid()) {
     style.metrics.height = std::max(18, heightValue.toInt());
@@ -2141,12 +2135,22 @@ detail::InputVisualStyle applyInputDynamicOverrides(detail::InputVisualStyle sty
   const QColor backgroundColor =
       dynamicStyleColorProperty(object, kSemanticBackgroundColorProperty);
   if (backgroundColor.isValid()) {
-    style.selectorBg = backgroundColor;
-    style.selectorHoverBg = backgroundColor;
-    style.selectorActiveBg = backgroundColor;
+    style.selectorBg = adqt::theme::applyBackgroundOpacity(backgroundColor, backgroundOpacity);
+    style.selectorHoverBg = style.selectorBg;
+    style.selectorActiveBg = style.selectorBg;
   }
-  applyDynamicStyleColor(&style.selectorHoverBg, object, kSemanticHoverBackgroundColorProperty);
-  applyDynamicStyleColor(&style.selectorActiveBg, object, kSemanticActiveBackgroundColorProperty);
+  const QColor hoverBackgroundColor =
+      dynamicStyleColorProperty(object, kSemanticHoverBackgroundColorProperty);
+  if (hoverBackgroundColor.isValid()) {
+    style.selectorHoverBg =
+        adqt::theme::applyBackgroundOpacity(hoverBackgroundColor, backgroundOpacity);
+  }
+  const QColor activeBackgroundColor =
+      dynamicStyleColorProperty(object, kSemanticActiveBackgroundColorProperty);
+  if (activeBackgroundColor.isValid()) {
+    style.selectorActiveBg =
+        adqt::theme::applyBackgroundOpacity(activeBackgroundColor, backgroundOpacity);
+  }
 
   const QColor borderColor = dynamicStyleColorProperty(object, kSemanticBorderColorProperty);
   if (borderColor.isValid()) {
@@ -2201,10 +2205,9 @@ detail::InputVisualStyle resolveRangeLineEditStyle(const AdLineEdit* lineEdit, b
     input.hovered = lineEdit->underMouse();
     input.baseFont = lineEdit->font();
   }
-  return applyInputDynamicOverrides(
-      detail::resolveInputVisualStyle(input,
-                                      adqt::theme::ThemeManager::instance().resolve(lineEdit)),
-      lineEdit);
+  const auto resolvedTheme = adqt::theme::ThemeManager::instance().resolve(lineEdit);
+  return applyInputDynamicOverrides(detail::resolveInputVisualStyle(input, resolvedTheme), lineEdit,
+                                    resolvedTheme.values.backgroundOpacity);
 }
 
 QWidget* wrappedPopupContent(QWidget* popup, QWidget* originPanel,

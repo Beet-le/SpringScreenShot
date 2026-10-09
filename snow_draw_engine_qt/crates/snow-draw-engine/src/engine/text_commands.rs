@@ -1,6 +1,9 @@
 use super::{Engine, MutationResult, ViewportId};
 use snow_draw_engine_core::{ErrorCode, Point};
-use snow_draw_engine_document::{ElementId, TextData, TextLayoutSize, resolve_text_layout_rect};
+use snow_draw_engine_document::{
+    ElementId, TextData, TextHorizontalAlign, TextLayoutSize, TextVerticalAlign,
+    resolve_text_layout_rect,
+};
 use snow_draw_engine_editor::{
     ActiveTextDraftPresentation, SerialNumberStyle, TextDraftCommit, TextLayoutOverride,
     TextResizeMeasurementRequest, TextStyle,
@@ -20,6 +23,8 @@ pub struct TextElementInfo {
     pub text: String,
     pub font_size: f64,
     pub font_family: Option<String>,
+    pub horizontal_align: TextHorizontalAlign,
+    pub vertical_align: TextVerticalAlign,
     pub auto_resize: bool,
     pub measure_natural_width: bool,
 }
@@ -38,6 +43,8 @@ fn text_element_info_from_resize_request(request: TextResizeMeasurementRequest) 
         text: request.text,
         font_size: request.font_size,
         font_family: request.font_family,
+        horizontal_align: request.horizontal_align,
+        vertical_align: request.vertical_align,
         auto_resize: request.auto_resize,
         measure_natural_width: request.measure_natural_width,
     }
@@ -57,6 +64,8 @@ fn text_element_info_from_active_draft(draft: &ActiveTextDraftPresentation) -> T
         text: draft.text.text.clone(),
         font_size: draft.text.font_size,
         font_family: draft.text.font_family.clone(),
+        horizontal_align: draft.text.horizontal_align,
+        vertical_align: draft.text.vertical_align,
         auto_resize: draft.text.auto_resize,
         measure_natural_width: draft.text.auto_resize,
     }
@@ -80,7 +89,7 @@ fn text_style_from_text(text: &TextData) -> TextStyle {
 
 impl Engine {
     pub fn arrow_text_count(&self) -> usize {
-        self.model.arrow_text_bindings().len()
+        self.model.arrow_label_bindings().len()
     }
 
     pub fn arrow_text_layout_requests(
@@ -97,21 +106,14 @@ impl Engine {
         layouts: &[(ElementId, u64, TextLayoutSize, f64)],
     ) -> Result<MutationResult, ErrorCode> {
         self.ensure_viewport(viewport)?;
-        let before = self.editor.snapshot();
-        let editor_before = self.editor.clone();
-        for (id, key, size, natural_width) in layouts {
-            if let Err(error) = self.editor.apply_arrow_text_measurement(
-                &self.model,
-                *id,
-                *key,
-                *size,
-                *natural_width,
-            ) {
-                self.editor = editor_before;
-                return Err(error);
-            }
+        if self
+            .editor
+            .apply_arrow_text_measurements(&self.model, layouts)?
+        {
+            self.refresh_all_viewports()
+        } else {
+            Ok(MutationResult::default())
         }
-        self.refresh_after_session_mutation(before)
     }
 
     /// Invalidate host metrics before obtaining and applying replacement layouts.
@@ -150,10 +152,7 @@ impl Engine {
             return Ok(None);
         };
         let meta = self.model.element(id)?.meta;
-        if arrow.linear_kind != snow_draw_engine_document::LinearElementKind::Arrow
-            || meta.locked
-            || !meta.visible
-        {
+        if !arrow.is_regular_arrow() || meta.locked || !meta.visible {
             return Ok(None);
         }
         if let Some(text_id) = arrow.text_element_id {
@@ -179,6 +178,8 @@ impl Engine {
                 text: String::new(),
                 font_size: style.font_size,
                 font_family: style.font_family.clone(),
+                horizontal_align: style.horizontal_align,
+                vertical_align: style.vertical_align,
                 auto_resize: true,
                 measure_natural_width: false,
             },
@@ -312,6 +313,8 @@ impl Engine {
             text: text.text.clone(),
             font_size: text.font_size,
             font_family: text.font_family.clone(),
+            horizontal_align: text.horizontal_align,
+            vertical_align: text.vertical_align,
             auto_resize: text.auto_resize,
             measure_natural_width: false,
         })

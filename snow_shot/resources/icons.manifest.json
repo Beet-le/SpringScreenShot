@@ -30,6 +30,22 @@
       "fit": "contain"
     },
     {
+      "variant": "brand",
+      "symbol": "SnowShotMiniLogo",
+      "name": "snow-shot-mini-logo",
+      "source": "../src/presentation/components/icons/resources/snow-shot-mini-logo.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "cursor",
+      "symbol": "SelectionShadowCursor",
+      "name": "selection-shadow-cursor",
+      "source": "../src/presentation/components/icons/resources/selection-shadow-cursor.svg",
+      "colorModel": "fullColor",
+      "fit": "contain"
+    },
+    {
       "variant": "outlined",
       "symbol": "AlignBottom",
       "name": "align-bottom",
@@ -415,6 +431,62 @@
     },
     {
       "variant": "outlined",
+      "symbol": "DistanceAnnotation",
+      "name": "distance-annotation",
+      "source": "../src/presentation/components/icons/resources/distance-annotation.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "DistanceUnitCm",
+      "name": "distance-unit-cm",
+      "source": "../src/presentation/components/icons/resources/distance-unit-cm.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "DistanceUnitKm",
+      "name": "distance-unit-km",
+      "source": "../src/presentation/components/icons/resources/distance-unit-km.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "DistanceUnitM",
+      "name": "distance-unit-m",
+      "source": "../src/presentation/components/icons/resources/distance-unit-m.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "DistanceUnitMm",
+      "name": "distance-unit-mm",
+      "source": "../src/presentation/components/icons/resources/distance-unit-mm.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "DistanceUnitPx",
+      "name": "distance-unit-px",
+      "source": "../src/presentation/components/icons/resources/distance-unit-px.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "DistanceValueScale",
+      "name": "distance-value-scale",
+      "source": "../src/presentation/components/icons/resources/distance-value-scale.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "DistributeHorizontal",
       "name": "distribute-horizontal",
       "source": "../src/presentation/components/icons/resources/distribute-horizontal.svg",
@@ -434,6 +506,22 @@
       "symbol": "Duplicate",
       "name": "duplicate",
       "source": "../src/presentation/components/icons/resources/duplicate.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "EraserTypeBrush",
+      "name": "eraser-type-brush",
+      "source": "../src/presentation/components/icons/resources/eraser-type-brush.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "EraserTypeRectangle",
+      "name": "eraser-type-rectangle",
+      "source": "../src/presentation/components/icons/resources/eraser-type-rectangle.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },
@@ -743,9 +831,33 @@
     },
     {
       "variant": "outlined",
+      "symbol": "RecordingPostProcessing",
+      "name": "recording-post-processing",
+      "source": "../src/presentation/components/icons/resources/recording-post-processing.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "RecordingRender",
       "name": "recording-render",
       "source": "../src/presentation/components/icons/resources/recording-render.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "RecordingRenderSettings",
+      "name": "recording-render-settings",
+      "source": "../src/presentation/components/icons/resources/recording-render-settings.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "RecordingReplay",
+      "name": "recording-replay",
+      "source": "../src/presentation/components/icons/resources/recording-replay.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },
@@ -770,6 +882,14 @@
       "symbol": "RecordingStop",
       "name": "recording-stop",
       "source": "../src/presentation/components/icons/resources/recording-stop.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "RecordingTrim",
+      "name": "recording-trim",
+      "source": "../src/presentation/components/icons/resources/recording-trim.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },
@@ -946,6 +1066,46 @@
       "symbol": "SequenceNumberCircle",
       "name": "sequence-number-circle",
       "source": "../src/presentation/components/icons/resources/sequence-number-circle.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "SequenceNumberNumericArabic",
+      "name": "sequence-number-numeric-arabic",
+      "source": "../src/presentation/components/icons/resources/sequence-number-numeric-arabic.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "SequenceNumberNumericChinese",
+      "name": "sequence-number-numeric-chinese",
+      "source": "../src/presentation/components/icons/resources/sequence-number-numeric-chinese.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "SequenceNumberNumericLowercaseLetters",
+      "name": "sequence-number-numeric-lowercase-letters",
+      "source": "../src/presentation/components/icons/resources/sequence-number-numeric-lowercase-letters.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "SequenceNumberNumericRoman",
+      "name": "sequence-number-numeric-roman",
+      "source": "../src/presentation/components/icons/resources/sequence-number-numeric-roman.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "SequenceNumberNumericUppercaseLetters",
+      "name": "sequence-number-numeric-uppercase-letters",
+      "source": "../src/presentation/components/icons/resources/sequence-number-numeric-uppercase-letters.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },
@@ -1162,6 +1322,14 @@
       "symbol": "Window",
       "name": "window",
       "source": "../src/presentation/components/icons/resources/window.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "WindowGroupSwitch",
+      "name": "window-group-switch",
+      "source": "../src/presentation/components/icons/resources/window-group-switch.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },

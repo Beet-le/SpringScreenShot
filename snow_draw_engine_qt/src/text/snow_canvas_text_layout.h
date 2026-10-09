@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QFont>
+#include <QColor>
 #include <QPointF>
 #include <QRectF>
 #include <QSizeF>
@@ -11,6 +12,7 @@
 #include <QVector>
 
 #include <memory>
+#include <optional>
 
 #include "snow_draw_engine.h"
 
@@ -72,6 +74,11 @@ QSizeF measureNaturalText(const QString& text, const QFont& baseFont,
                           const SnowSceneDisplayItem& item, double zoom = 1.0);
 TextMeasuredLayout measureNaturalTextLayout(const QString& text, const QFont& baseFont,
                                             const SnowSceneDisplayItem& item, double zoom = 1.0);
+// Resolves natural width and optional wrapping with one QTextDocument layout.
+TextMeasuredLayout measureAutomaticTextLayout(const QString& text, const QFont& baseFont,
+                                              const SnowSceneDisplayItem& item,
+                                              std::optional<double> maximumWidth = std::nullopt,
+                                              double zoom = 1.0);
 QSizeF measureWrappedText(const QString& text, const QFont& baseFont,
                           const SnowSceneDisplayItem& item, double width, double zoom = 1.0);
 TextMeasuredLayout measureWrappedTextLayout(const QString& text, const QFont& baseFont,
@@ -85,7 +92,8 @@ DocumentLayout createDocumentLayout(const SnowSceneDisplayItem& item, const QFon
 QTransform documentToViewTransform(const SnowSceneDisplayItem& item, const QPointF& centerView,
                                    const DocumentLayout& layout);
 QRectF documentContentsRect(const DocumentLayout& layout);
-void drawDocument(QPainter& painter, const DocumentLayout& layout);
+void drawDocument(QPainter& painter, const DocumentLayout& layout,
+                  const QColor& textColor = QColor());
 QRectF documentRectToLocalItemRect(const QRectF& documentRect, const DocumentLayout& layout);
 QVector<QRectF> rangeRectsInDocument(const QTextDocument& document, int rangeStart, int rangeEnd);
 QRectF cursorRectInDocument(const QTextDocument& document, int cursorPosition);

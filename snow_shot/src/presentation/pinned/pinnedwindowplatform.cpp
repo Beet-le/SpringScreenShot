@@ -1,4 +1,5 @@
 #include "pinnedwindowplatform.h"
+#include "pinneddisplayselection.h"
 #if defined(Q_OS_WIN)
 #include "../../platform/windows/pinnedwindownative.h"
 #include "snow_shot/presentation/screenshotpinnedwindow.h"
@@ -9,6 +10,8 @@
 #include <QPlatformSurfaceEvent>
 #include <QTimer>
 #include <QWindow>
+#include <QScopedValueRollback>
+#include <QVarLengthArray>
 #include <algorithm>
 
 namespace snow_shot::presentation {
@@ -39,14 +42,15 @@ QRectF pinnedDesktopRect(const PinnedPlacement& placement, const QScreen& screen
     return pinnedDesktopRect(placement, pinnedDisplayGeometry(screen));
 }
 QScreen* pinnedDisplay(const PinnedPlacement& placement, QScreen* fallback) {
-    for (QScreen* screen : QGuiApplication::screens()) {
-        if (!placement.displaySerial.isEmpty() && screen->serialNumber() == placement.displaySerial)
-            return screen;
-    }
-    for (QScreen* screen : QGuiApplication::screens()) {
-        if (screen->name() == placement.displayName)
-            return screen;
-    }
+    const auto screens = QGuiApplication::screens();
+    QVarLengthArray<PinnedDisplayIdentity, 4> identities;
+    identities.reserve(screens.size());
+    for (const QScreen* screen : screens)
+        identities.append({screen->name(), screen->serialNumber()});
+    const auto index = pinnedDisplayIndex(
+        placement, {identities.data(), static_cast<std::size_t>(identities.size())});
+    if (index)
+        return screens.at(static_cast<qsizetype>(*index));
     return fallback != nullptr ? fallback : QGuiApplication::primaryScreen();
 }
 QScreen* pinnedDisplayAt(const QPointF& desktopPosition) {
@@ -159,6 +163,39 @@ bool PinnedWindowPlatform::applyStablePlacement(PinnedPlacement requested, QScre
         requested.displayName = screen->name();
         requested.displaySerial = screen->serialNumber();
         requested.position = desktopAnchor - screen->geometry().topLeft();
+    }
+    return false;
+}
+bool PinnedWindowPlatform::applyExactPlacement(
+    PinnedPlacement requested, QScreen* screen, GeometryUpdate update,
+    const std::function<bool(const PinnedPlacement&, QScreen*)>& beforeApply) {
+    if (!screen || !requested.isValid())
+        return false;
+    const QPointF origin = pinnedDesktopRect(requested, *screen).topLeft();
+    const QScopedValueRollback<bool> preserveOrigin(m_preservePlacementOrigin, true);
+    const QSize windowSize = requested.windowSize;
+    const int attempts = requested.units == storage::PinnedGeometryUnits::LogicalPixels ? 1 : 3;
+    QPointer<QScreen> display = screen;
+    for (int attempt = 0; attempt < attempts; ++attempt) {
+        if (!display || (beforeApply && !beforeApply(requested, display)) || !display ||
+            !applyPlacement(requested, display, update) || !display)
+            return false;
+        const auto actual = placement();
+        if (!actual || !display)
+            return false;
+        display = pinnedDisplay(*actual, display);
+        if (!display)
+            return false;
+        if (actual->windowSize == windowSize) {
+            const QPointF difference = pinnedDesktopRect(*actual, *display).topLeft() - origin;
+            const qreal tolerance =
+                .51 / storage::pinnedGeometryScale(display->devicePixelRatio(), actual->units);
+            if (qAbs(difference.x()) <= tolerance && qAbs(difference.y()) <= tolerance)
+                return true;
+        }
+        requested.displayName = display->name();
+        requested.displaySerial = display->serialNumber();
+        requested.position = origin - display->geometry().topLeft();
     }
     return false;
 }

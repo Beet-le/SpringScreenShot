@@ -5,6 +5,7 @@ use crate::contract::{
 use crate::error::{Result, UpdateError, io_error, require};
 use crate::fsutil::{copy_and_persist, read_limited, sha256_file, verify_file, write_atomic};
 use crate::platform;
+use crate::progress::{Progress, ProgressPhase};
 use fs2::FileExt;
 use path_clean::PathClean;
 use serde::{Deserialize, Serialize};
@@ -18,12 +19,16 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-pub const INSTALLATION_RECORD: &str = "snow-shot-installation.json";
-pub const UPDATE_WORK: &str = ".snow-shot-update";
+pub const INSTALLATION_RECORD: &str = crate::edition::INSTALLATION_RECORD;
+pub const UPDATE_WORK: &str = crate::edition::UPDATE_WORK;
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct InstallationRecord {
     pub schema: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub product: String,
     pub variant: String,
     pub version: String,
     pub files: Vec<UpdateFile>,
@@ -62,6 +67,18 @@ fn registry_restore_default() -> bool {
 pub struct TransactionHooks<'a> {
     pub probe: Option<&'a dyn Fn() -> bool>,
     pub checkpoint: Option<&'a dyn Fn(&str)>,
+    pub progress: Option<&'a dyn Fn(Progress)>,
+}
+
+fn report_progress(
+    callback: Option<&dyn Fn(Progress)>,
+    phase: ProgressPhase,
+    completed: u64,
+    total: u64,
+) {
+    if let Some(callback) = callback {
+        callback(Progress::new(phase, completed, total));
+    }
 }
 
 fn work_path(root: &Path, leaf: impl AsRef<Path>) -> PathBuf {
@@ -109,7 +126,7 @@ fn no_links(path: &Path) -> Result<()> {
 }
 
 fn selected_data_root(root: &Path) -> Result<Option<PathBuf>> {
-    let marker = root.join("bin/__data_directory");
+    let marker = root.join(crate::edition::MARKER_PATH);
     let mut data = if marker.exists() {
         String::from_utf8(read_limited(&marker, 32_768)?).map_err(|_| {
             UpdateError::new(
@@ -187,9 +204,9 @@ fn selected_data_root_if_known(root: &Path) -> Option<PathBuf> {
 fn is_payload_relative(relative: &str) -> bool {
     safe_relative_path(relative)
         && (relative.starts_with("bin/")
-            || relative.starts_with("share/snow-shot/")
+            || relative.starts_with(crate::edition::SHARE_PREFIX)
             || relative == INSTALLATION_RECORD)
-        && !relative.eq_ignore_ascii_case("bin/__data_directory")
+        && !relative.eq_ignore_ascii_case(crate::edition::MARKER_PATH)
 }
 
 pub fn validate_root(root: &Path) -> Result<()> {
@@ -207,6 +224,11 @@ pub fn validate_root(root: &Path) -> Result<()> {
 }
 
 pub fn installation_record(root: &Path) -> Result<InstallationRecord> {
+    installation_record_for_platform(root, crate::edition::PLATFORM)
+}
+
+pub fn installation_record_for_platform(root: &Path, platform: &str) -> Result<InstallationRecord> {
+    crate::edition::validate_platform(platform)?;
     let bytes = read_limited(&root.join(INSTALLATION_RECORD), 8 * 1024 * 1024)?;
     let value: Value = serde_json::from_slice(&bytes).map_err(|_| {
         UpdateError::new(
@@ -235,7 +257,14 @@ pub fn installation_record(root: &Path) -> Result<InstallationRecord> {
         .unwrap_or_default()
         .to_owned();
     require(
-        schema == 1 && matches!(variant.as_str(), "online" | "offline" | "portable"),
+        schema == 1
+            && object
+                .get("platform")
+                .map_or(platform == "windows-x64", |value| {
+                    value.as_str() == Some(platform)
+                })
+            && crate::edition::product_matches(object.get("product"))
+            && crate::edition::installation_variant(&variant),
         "invalid_installation_metadata",
         "This copy does not have valid Snow Shot installation metadata",
     )?;
@@ -243,6 +272,15 @@ pub fn installation_record(root: &Path) -> Result<InstallationRecord> {
     let files = parse_file_inventory(object.get("files"))?;
     Ok(InstallationRecord {
         schema,
+        platform: object
+            .get("platform")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        product: object
+            .get("product")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
         variant,
         version,
         files,
@@ -291,7 +329,13 @@ fn acquire_lock(root: &Path, message: &'static str) -> Result<File> {
     Ok(lock)
 }
 
-fn atomic_copy(source: &Path, destination: &Path) -> Result<()> {
+fn retired_path(root: &Path) -> Result<PathBuf> {
+    let path = work_path(root, format!("retired-{}.file", Uuid::new_v4().simple()));
+    no_links(&path)?;
+    Ok(path)
+}
+
+fn atomic_copy(root: &Path, source: &Path, destination: &Path) -> Result<()> {
     no_links(destination)?;
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent).map_err(|error| {
@@ -311,7 +355,7 @@ fn atomic_copy(source: &Path, destination: &Path) -> Result<()> {
         Uuid::new_v4().simple()
     ));
     copy_and_persist(source, &temporary)?;
-    let result = platform::replace_file(&temporary, destination);
+    let result = platform::replace_application_file(&temporary, destination, &retired_path(root)?);
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
@@ -376,6 +420,15 @@ fn verify_record_inventory(record: &InstallationRecord, package: &UpdatePackage)
 }
 
 fn extract(archive_path: &Path, destination: &Path, package: &UpdatePackage) -> Result<()> {
+    extract_with_progress(archive_path, destination, package, None)
+}
+
+fn extract_with_progress(
+    archive_path: &Path,
+    destination: &Path,
+    package: &UpdatePackage,
+    progress: Option<&dyn Fn(Progress)>,
+) -> Result<()> {
     let archive_file = File::open(archive_path).map_err(|error| {
         io_error(
             "archive_open_failed",
@@ -440,6 +493,12 @@ fn extract(archive_path: &Path, destination: &Path, package: &UpdatePackage) -> 
         .iter()
         .map(|file| (file.path.as_str(), file))
         .collect();
+    let expected_bytes = package
+        .files
+        .iter()
+        .fold(0_u64, |total, file| total.saturating_add(file.size));
+    let mut extracted_bytes = 0_u64;
+    report_progress(progress, ProgressPhase::Extracting, 0, expected_bytes);
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).map_err(|error| {
             io_error(
@@ -507,6 +566,13 @@ fn extract(archive_path: &Path, destination: &Path, package: &UpdatePackage) -> 
                     error,
                 )
             })?;
+            extracted_bytes = extracted_bytes.saturating_add(count as u64);
+            report_progress(
+                progress,
+                ProgressPhase::Extracting,
+                extracted_bytes,
+                expected_bytes,
+            );
         }
         file.flush().map_err(|error| {
             io_error(
@@ -533,6 +599,10 @@ fn save_journal(root: &Path, journal: &Journal) -> Result<()> {
 }
 
 fn restore(root: &Path) -> Result<()> {
+    restore_with_progress(root, None)
+}
+
+fn restore_with_progress(root: &Path, progress: Option<&dyn Fn(Progress)>) -> Result<()> {
     let journal: Journal = serde_json::from_slice(&read_limited(
         &work_path(root, "journal.json"),
         8 * 1024 * 1024,
@@ -558,6 +628,8 @@ fn restore(root: &Path) -> Result<()> {
         })?;
         return Ok(());
     }
+    let total = journal.files.len() as u64;
+    report_progress(progress, ProgressPhase::Restoring, 0, total);
     for entry in &journal.files {
         validate_target_path(root, &entry.path)?;
         if entry.existed {
@@ -570,22 +642,36 @@ fn restore(root: &Path) -> Result<()> {
             )?;
         }
     }
-    for entry in &journal.files {
+    for (index, entry) in journal.files.iter().enumerate() {
         let destination = root.join(&entry.path);
         if entry.existed {
-            atomic_copy(
-                &work_path(root, Path::new("backup").join(&entry.path)),
+            // A failed replacement can leave this file untouched and still locked. Recovery
+            // restores contents, so an already verified original needs no replacement.
+            if verify_file(
                 &destination,
-            )?;
+                entry.size.unwrap_or(u64::MAX),
+                entry.sha256.as_deref().unwrap_or_default(),
+            )
+            .is_err()
+            {
+                atomic_copy(
+                    root,
+                    &work_path(root, Path::new("backup").join(&entry.path)),
+                    &destination,
+                )?;
+            }
         } else if destination.exists() {
-            fs::remove_file(&destination).map_err(|error| {
-                io_error(
-                    "incomplete_file_remove_failed",
-                    "Could not remove an incomplete update file",
-                    error,
-                )
-            })?;
+            platform::remove_application_file(&destination, &retired_path(root)?).map_err(
+                |error| {
+                    UpdateError::new(
+                        "incomplete_file_remove_failed",
+                        "Could not remove an incomplete update file",
+                    )
+                    .detail(error.detail.as_deref().unwrap_or(error.message.as_ref()))
+                },
+            )?;
         }
+        report_progress(progress, ProgressPhase::Restoring, index as u64 + 1, total);
     }
     if journal.restore_registry {
         platform::write_registered_version(root, &journal.previous_version)?;
@@ -604,10 +690,14 @@ fn restore(root: &Path) -> Result<()> {
 }
 
 pub fn recover_transaction(root: &Path) -> Result<()> {
+    recover_with_hooks(root, TransactionHooks::default())
+}
+
+pub fn recover_with_hooks(root: &Path, hooks: TransactionHooks<'_>) -> Result<()> {
     validate_root(root)?;
     let _lock = acquire_lock(root, "Another update transaction is running")?;
     if transaction_pending(root) {
-        restore(root)?;
+        restore_with_progress(root, hooks.progress)?;
     }
     Ok(())
 }
@@ -638,6 +728,12 @@ pub fn apply_transaction(
     release: &UpdateRelease,
     hooks: TransactionHooks<'_>,
 ) -> Result<()> {
+    require(
+        release.platform == crate::edition::PLATFORM,
+        "unsupported_update_release",
+        "Unsupported update release",
+    )?;
+    report_progress(hooks.progress, ProgressPhase::Preparing, 0, 0);
     validate_root(root)?;
     fs::create_dir_all(root.join(UPDATE_WORK)).map_err(|error| {
         io_error(
@@ -648,7 +744,7 @@ pub fn apply_transaction(
     })?;
     let _lock = acquire_lock(root, "Another update transaction is running")?;
     if transaction_pending(root) {
-        restore(root)?;
+        restore_with_progress(root, hooks.progress)?;
     }
     let installed = installation_record(root)?;
     require(
@@ -657,7 +753,9 @@ pub fn apply_transaction(
         "The update must be newer than the installed release",
     )?;
     let package = release.update_package(&installed.variant)?;
+    report_progress(hooks.progress, ProgressPhase::Verifying, 0, 0);
     verify_file(archive, package.size, &package.sha256)?;
+    report_progress(hooks.progress, ProgressPhase::Preparing, 0, 0);
     let needed = package.files.iter().try_fold(package.size, |total, file| {
         file.size
             .checked_mul(3)
@@ -679,7 +777,7 @@ pub fn apply_transaction(
             error,
         )
     })?;
-    extract(archive, &stage, package)?;
+    extract_with_progress(archive, &stage, package, hooks.progress)?;
     let staged_record = installation_record(&stage)?;
     verify_record_inventory(&staged_record, package)?;
     require(
@@ -693,7 +791,7 @@ pub fn apply_transaction(
     let mut previous_owned = BTreeSet::new();
     let mut paths = BTreeSet::new();
     for file in &package.files {
-        if file.path == "bin/__data_directory" {
+        if file.path == crate::edition::MARKER_PATH {
             continue;
         }
         validate_target_path(root, &file.path)?;
@@ -702,7 +800,7 @@ pub fn apply_transaction(
         next.insert(file.path.clone(), file);
     }
     for file in &installed.files {
-        if file.path == "bin/__data_directory" {
+        if file.path == crate::edition::MARKER_PATH {
             continue;
         }
         validate_target_path(root, &file.path)?;
@@ -716,7 +814,13 @@ pub fn apply_transaction(
     }
 
     let mut entries = Vec::with_capacity(paths.len());
-    for name in &paths {
+    report_progress(
+        hooks.progress,
+        ProgressPhase::BackingUp,
+        0,
+        paths.len() as u64,
+    );
+    for (index, name) in paths.iter().enumerate() {
         let original = root.join(name);
         let existed = original.exists();
         require(
@@ -755,6 +859,12 @@ pub fn apply_transaction(
             entry.sha256 = Some(hash);
         }
         entries.push(entry);
+        report_progress(
+            hooks.progress,
+            ProgressPhase::BackingUp,
+            index as u64 + 1,
+            paths.len() as u64,
+        );
     }
     let mut journal = Journal {
         schema: 1,
@@ -769,23 +879,29 @@ pub fn apply_transaction(
         if let Some(checkpoint) = hooks.checkpoint {
             checkpoint("prepared");
         }
-        for name in &paths {
+        report_progress(
+            hooks.progress,
+            ProgressPhase::Installing,
+            0,
+            paths.len() as u64,
+        );
+        for (index, name) in paths.iter().enumerate() {
             let destination = root.join(name);
             if let Some(file) = next.get(name) {
-                atomic_copy(&stage.join(name), &destination)?;
+                atomic_copy(root, &stage.join(name), &destination)?;
                 verify_file(&destination, file.size, &file.sha256)?;
             } else if destination.exists() {
-                fs::remove_file(&destination).map_err(|error| {
-                    io_error(
-                        "obsolete_file_remove_failed",
-                        "Could not remove obsolete application file",
-                        error,
-                    )
-                })?;
+                platform::remove_application_file(&destination, &retired_path(root)?)?;
             }
             if let Some(checkpoint) = hooks.checkpoint {
                 checkpoint(name);
             }
+            report_progress(
+                hooks.progress,
+                ProgressPhase::Installing,
+                index as u64 + 1,
+                paths.len() as u64,
+            );
         }
         journal.restore_registry = true;
         save_journal(root, &journal)?;
@@ -799,10 +915,11 @@ pub fn apply_transaction(
         if let Some(checkpoint) = hooks.checkpoint {
             checkpoint("registry");
         }
+        report_progress(hooks.progress, ProgressPhase::Probing, 0, 0);
         let ready = hooks.probe.map_or_else(
             || {
                 run_with_timeout(
-                    Command::new(root.join("bin/snow_shot.exe"))
+                    Command::new(root.join(crate::edition::APP_PATH))
                         .arg("--update-probe")
                         .arg(&release.version)
                         .stdout(Stdio::piped())
@@ -830,9 +947,11 @@ pub fn apply_transaction(
         Ok(())
     })();
     if let Err(error) = result {
-        restore(root)?;
+        restore_with_progress(root, hooks.progress)?;
+        report_progress(hooks.progress, ProgressPhase::Failed, 0, 0);
         return Err(error);
     }
+    report_progress(hooks.progress, ProgressPhase::Complete, 1, 1);
     Ok(())
 }
 
@@ -848,6 +967,7 @@ pub fn prune_update_work(root: &Path) -> Result<()> {
     let now = std::time::SystemTime::now();
     let pattern = regex::Regex::new(r"^(worker-[a-f0-9]{32}\.exe|input-[a-f0-9]{32}\.zip)$")
         .expect("valid regex");
+    let retired_pattern = regex::Regex::new(r"^retired-[a-f0-9]{32}\.file$").expect("valid regex");
     for entry in fs::read_dir(&work).into_iter().flatten().flatten() {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -857,7 +977,7 @@ pub fn prune_update_work(root: &Path) -> Result<()> {
             .ok()
             .and_then(|modified| now.duration_since(modified).ok())
             .is_some_and(|age| age > Duration::from_secs(86_400));
-        if old && pattern.is_match(&name) {
+        if (old && pattern.is_match(&name)) || retired_pattern.is_match(&name) {
             no_links(&path)?;
             let _ = fs::remove_file(path);
         }
@@ -911,11 +1031,21 @@ fn uninstall_owned_files(root: &Path) -> Result<()> {
         restore(root).ok();
     }
     let record = installation_record(root).unwrap_or_default();
+    let executing_image = std::env::current_exe().ok();
     for file in &record.files {
         if !uninstall_target_removable(root, &file.path) {
             continue;
         }
         let path = root.join(&file.path);
+        // NSIS falls back to this installed image if it cannot isolate a copy.
+        // Windows cannot delete a running executable. CPack owns the helper and
+        // deletes it after ExecWait returns, so leave that removal to the caller.
+        if executing_image
+            .as_ref()
+            .is_some_and(|image| platform::path_eq(&path, image))
+        {
+            continue;
+        }
         if path.is_file() {
             fs::remove_file(&path).map_err(|error| {
                 io_error(
@@ -944,7 +1074,109 @@ pub fn uninstall(root: &Path, remove_startup: bool) -> Result<()> {
     uninstall_owned_files(root)
 }
 
+fn installer_helper_source(root: &Path, backup: &Path) -> Result<PathBuf> {
+    installation_root_identity(root)?;
+    no_links(&root.join(crate::edition::UPDATER_PATH))?;
+    no_links(backup)?;
+    require(
+        backup.is_absolute() && !path_starts_with_case_insensitive(backup, root),
+        "invalid_updater_argument",
+        "Invalid updater command argument",
+    )?;
+    std::env::current_exe().map_err(|error| {
+        io_error(
+            "update_payload_read_failed",
+            "Could not read update payload",
+            error,
+        )
+    })
+}
+
+fn replace_installer_helper(root: &Path, source: &Path) -> Result<()> {
+    let target = root.join(crate::edition::UPDATER_PATH);
+    let parent = target.parent().expect("the updater is inside bin");
+    let temporary = tempfile::NamedTempFile::new_in(parent).map_err(|error| {
+        io_error(
+            "update_state_save_failed",
+            "Could not save update state",
+            error,
+        )
+    })?;
+    copy_and_persist(source, temporary.path())?;
+    // Publish on the same volume, without retiring a running image. An in-use
+    // helper must block preparation rather than being replaced underneath itself.
+    platform::replace_file(temporary.path(), &target)
+}
+
+pub fn prepare_installer_upgrade(root: &Path, backup: &Path) -> Result<()> {
+    let source = installer_helper_source(root, backup)?;
+    let _lock = acquire_uninstall_lock(root)?;
+    let target = root.join(crate::edition::UPDATER_PATH);
+    if !target.exists() {
+        return Ok(());
+    }
+    require(
+        uninstall_target_removable(root, crate::edition::UPDATER_PATH),
+        "selected_data_collision",
+        "An update file would overwrite the selected data directory",
+    )?;
+    // Old NSIS uninstallers always use this installed entry point. Substitute
+    // the bundled helper before calling them, including versions with broken
+    // cleanup logic, and keep the original for a failed uninstall.
+    copy_and_persist(&target, backup)?;
+    replace_installer_helper(root, &source)
+}
+
+pub fn restore_installer_upgrade(root: &Path, backup: &Path) -> Result<()> {
+    if !backup.is_file() || !root.join("bin").is_dir() {
+        return Ok(());
+    }
+    let source = installer_helper_source(root, backup)?;
+    let _lock = acquire_uninstall_lock(root)?;
+    let target = root.join(crate::edition::UPDATER_PATH);
+    if target.exists() {
+        // Restore only our replacement. Another operation may have changed the
+        // helper after preparation; its payload must not be rolled back here.
+        let size = fs::metadata(&source)
+            .map_err(|error| {
+                io_error(
+                    "update_payload_read_failed",
+                    "Could not read update payload",
+                    error,
+                )
+            })?
+            .len();
+        let hash = sha256_file(&source)?;
+        let target_size = fs::metadata(&target)
+            .map_err(|error| {
+                io_error(
+                    "update_payload_read_failed",
+                    "Could not read update payload",
+                    error,
+                )
+            })?
+            .len();
+        if target_size != size || sha256_file(&target)? != hash {
+            return Ok(());
+        }
+    }
+    replace_installer_helper(root, backup)
+}
+
 pub fn audit_release(directory: &Path, release: &UpdateRelease) -> Result<()> {
+    audit_release_with_options(directory, release, false)
+}
+
+pub fn audit_release_with_options(
+    directory: &Path,
+    release: &UpdateRelease,
+    static_only: bool,
+) -> Result<()> {
+    require(
+        static_only || release.platform == crate::edition::PLATFORM,
+        "unsupported_update_release",
+        "Unsupported update release",
+    )?;
     for package in &release.packages {
         let archive = directory.join(&package.path);
         verify_file(&archive, package.size, &package.sha256)?;
@@ -959,19 +1191,22 @@ pub fn audit_release(directory: &Path, release: &UpdateRelease) -> Result<()> {
             )
         })?;
         extract(&archive, temporary.path(), package)?;
-        let record = installation_record(temporary.path())?;
+        let record = installation_record_for_platform(temporary.path(), &release.platform)?;
         verify_record_inventory(&record, package)?;
         require(
             record.version == release.version && record.variant == package.variant,
             "release_record_mismatch",
             "Release archive installation metadata mismatch",
         )?;
+        if static_only {
+            continue;
+        }
         let manifest = temporary.path().join("release-audit.json");
         write_atomic(&manifest, &release.envelope)?;
         let helper = temporary.path().join(if cfg!(windows) {
-            "bin/snow-shot-updater.exe"
+            crate::edition::UPDATER_PATH
         } else {
-            "bin/snow-shot-updater"
+            crate::edition::UPDATER_NONWINDOWS_PATH
         });
         let trusted = run_with_timeout(
             Command::new(helper)
@@ -986,7 +1221,7 @@ pub fn audit_release(directory: &Path, release: &UpdateRelease) -> Result<()> {
             "Release signature is invalid or its signing key is not trusted",
         )?;
         let succeeded = run_with_timeout(
-            Command::new(temporary.path().join("bin/snow_shot.exe"))
+            Command::new(temporary.path().join(crate::edition::APP_PATH))
                 .arg("--update-probe")
                 .arg(&release.version),
             Duration::from_secs(60),
@@ -1008,6 +1243,28 @@ mod tests {
 
     fn hash(bytes: &[u8]) -> String {
         format!("{:x}", Sha256::digest(bytes))
+    }
+
+    #[test]
+    fn installation_platform_accepts_legacy_x64_and_rejects_cross_architecture() {
+        let root = tempfile::tempdir().unwrap();
+        let mut record = serde_json::json!({"schema":1,"product":crate::edition::PRODUCT,
+            "version":"1.0.0","variant":"online","files":[{"path":crate::edition::APP_PATH,"size":1,"sha256":"0".repeat(64)}]});
+        let path = root.path().join(INSTALLATION_RECORD);
+        fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+        assert!(installation_record_for_platform(root.path(), "windows-x64").is_ok());
+        assert!(installation_record_for_platform(root.path(), "windows-arm64").is_err());
+        for platform in ["windows-x64", "windows-arm64"] {
+            record["platform"] = serde_json::json!(platform);
+            fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+            assert!(installation_record_for_platform(root.path(), platform).is_ok());
+            let other = if platform == "windows-x64" {
+                "windows-arm64"
+            } else {
+                "windows-x64"
+            };
+            assert!(installation_record_for_platform(root.path(), other).is_err());
+        }
     }
 
     fn write_zip(path: &Path, entries: &[(&str, &[u8], Option<u32>)]) {
@@ -1037,11 +1294,66 @@ mod tests {
         UpdatePackage {
             variant: "online".to_owned(),
             kind: "update".to_owned(),
-            path: "setup/snow-shot_windows-x64-online-update.zip".to_owned(),
+            path: format!("{}online-update.zip", crate::edition::PACKAGE_PREFIX),
             size: 1,
             sha256: "0".repeat(64),
             files,
         }
+    }
+
+    #[test]
+    fn static_cross_architecture_audit_keeps_inventory_and_hash_checks() {
+        let directory = tempfile::tempdir().unwrap();
+        let platform = if crate::edition::PLATFORM == "windows-x64" {
+            "windows-arm64"
+        } else {
+            "windows-x64"
+        };
+        let app = b"inert executable fixture";
+        let record = InstallationRecord {
+            platform: Some(platform.to_owned()),
+            product: crate::edition::PRODUCT.to_owned(),
+            schema: 1,
+            variant: "online".to_owned(),
+            version: "2.0.0".to_owned(),
+            files: vec![descriptor(crate::edition::APP_PATH, app)],
+        };
+        let record_bytes = serde_json::to_vec(&record).unwrap();
+        let mut update_package = package(vec![
+            descriptor(crate::edition::APP_PATH, app),
+            descriptor(INSTALLATION_RECORD, &record_bytes),
+        ]);
+        update_package.path = format!(
+            "{}online-update.zip",
+            crate::edition::package_prefix(platform)
+        );
+        let archive = directory.path().join(&update_package.path);
+        fs::create_dir_all(archive.parent().unwrap()).unwrap();
+        write_zip(
+            &archive,
+            &[
+                (crate::edition::APP_PATH, app, None),
+                (INSTALLATION_RECORD, &record_bytes, None),
+            ],
+        );
+        update_package.size = fs::metadata(&archive).unwrap().len();
+        update_package.sha256 = sha256_file(&archive).unwrap();
+        let mut release = UpdateRelease {
+            platform: platform.to_owned(),
+            version: "2.0.0".to_owned(),
+            packages: vec![update_package],
+            envelope: Vec::new(),
+        };
+        assert!(audit_release_with_options(directory.path(), &release, true).is_ok());
+        assert_eq!(
+            audit_release(directory.path(), &release).unwrap_err().code,
+            "unsupported_update_release"
+        );
+        release.packages[0].sha256 = "0".repeat(64);
+        assert!(audit_release_with_options(directory.path(), &release, true).is_err());
+        release.packages[0].sha256 = sha256_file(&archive).unwrap();
+        release.packages[0].files[0].sha256 = "0".repeat(64);
+        assert!(audit_release_with_options(directory.path(), &release, true).is_err());
     }
 
     #[test]
@@ -1050,6 +1362,159 @@ mod tests {
             installation_root(Path::new("C:/SnowShot/bin")),
             PathBuf::from("C:/SnowShot")
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn recovery_leaves_unchanged_locked_files_in_place() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows::Win32::Storage::FileSystem::FILE_SHARE_READ;
+
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("SnowShot");
+        fs::create_dir_all(root.join("bin")).unwrap();
+        let old_app = b"old application";
+        let blocker = "bin/zz-locked.dll";
+        let unchanged = b"unchanged locked file";
+        fs::write(root.join(crate::edition::APP_PATH), b"partial update").unwrap();
+        fs::write(root.join(blocker), unchanged).unwrap();
+        let record = InstallationRecord {
+            schema: 1,
+            platform: Some(crate::edition::PLATFORM.to_owned()),
+            product: crate::edition::PRODUCT.to_owned(),
+            variant: "portable".to_owned(),
+            version: "1.0.0".to_owned(),
+            files: vec![
+                descriptor(crate::edition::APP_PATH, old_app),
+                descriptor(blocker, unchanged),
+            ],
+        };
+        fs::write(
+            root.join(INSTALLATION_RECORD),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+        let mut entries = Vec::new();
+        for (path, bytes) in [
+            (crate::edition::APP_PATH, old_app.as_slice()),
+            (blocker, unchanged.as_slice()),
+        ] {
+            let backup = work_path(&root, Path::new("backup").join(path));
+            fs::create_dir_all(backup.parent().unwrap()).unwrap();
+            fs::write(&backup, bytes).unwrap();
+            entries.push(JournalEntry {
+                path: path.to_owned(),
+                existed: true,
+                size: Some(bytes.len() as u64),
+                sha256: Some(sha256_file(&backup).unwrap()),
+            });
+        }
+        save_journal(
+            &root,
+            &Journal {
+                schema: 1,
+                state: "applying".to_owned(),
+                version: "2.0.0".to_owned(),
+                previous_version: "1.0.0".to_owned(),
+                restore_registry: false,
+                files: entries,
+            },
+        )
+        .unwrap();
+        let locked = OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ.0)
+            .open(root.join(blocker))
+            .unwrap();
+        let result = recover_transaction(&root);
+        drop(locked);
+        result.unwrap();
+        assert_eq!(
+            fs::read(root.join(crate::edition::APP_PATH)).unwrap(),
+            old_app
+        );
+        assert_eq!(fs::read(root.join(blocker)).unwrap(), unchanged);
+        assert!(!transaction_pending(&root));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn retired_files_are_pruned_after_their_handles_close() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows::Win32::Storage::FileSystem::FILE_SHARE_READ;
+
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("SnowShot");
+        fs::create_dir_all(root.join("bin")).unwrap();
+        fs::write(root.join(crate::edition::APP_PATH), b"app").unwrap();
+        fs::create_dir_all(root.join(UPDATE_WORK)).unwrap();
+        let retired = retired_path(&root).unwrap();
+        fs::write(&retired, b"retired image").unwrap();
+        let user_file = work_path(&root, "user-note.txt");
+        fs::write(&user_file, b"preserve").unwrap();
+        let locked = OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ.0)
+            .open(&retired)
+            .unwrap();
+        prune_update_work(&root).unwrap();
+        assert!(retired.exists());
+        drop(locked);
+        prune_update_work(&root).unwrap();
+        assert!(!retired.exists());
+        assert_eq!(fs::read(user_file).unwrap(), b"preserve");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn recovery_removes_a_running_image_introduced_by_the_update() {
+        use std::io::{BufRead, BufReader};
+
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("SnowShot");
+        fs::create_dir_all(root.join("bin")).unwrap();
+        fs::write(root.join(crate::edition::APP_PATH), b"old app").unwrap();
+        let introduced = "bin/introduced.exe";
+        let image = root.join(introduced);
+        let command = std::env::var_os("ComSpec").unwrap_or_else(|| "cmd.exe".into());
+        fs::copy(command, &image).unwrap();
+        save_journal(
+            &root,
+            &Journal {
+                schema: 1,
+                state: "applying".to_owned(),
+                version: "2.0.0".to_owned(),
+                previous_version: "1.0.0".to_owned(),
+                restore_registry: false,
+                files: vec![JournalEntry {
+                    path: introduced.to_owned(),
+                    existed: false,
+                    size: None,
+                    sha256: None,
+                }],
+            },
+        )
+        .unwrap();
+        let mut child = Command::new(&image)
+            .args(["/d", "/q", "/c", "echo ready & set /p input="])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut ready = String::new();
+        BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        assert_eq!(ready.trim(), "ready");
+        let result = recover_transaction(&root);
+        let still_running = child.try_wait().unwrap().is_none();
+        drop(child.stdin.take());
+        child.wait().unwrap();
+        result.unwrap();
+        assert!(still_running);
+        assert!(!image.exists());
+        assert!(!transaction_pending(&root));
+        prune_update_work(&root).unwrap();
     }
 
     #[test]
@@ -1119,7 +1584,25 @@ mod tests {
         )
         .unwrap();
 
-        recover_transaction(&root).unwrap();
+        let progress = std::cell::RefCell::new(Vec::new());
+        let report = |value| progress.borrow_mut().push(value);
+        recover_with_hooks(
+            &root,
+            TransactionHooks {
+                progress: Some(&report),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let progress = progress.into_inner();
+        assert!(
+            progress
+                .iter()
+                .all(|value| value.phase == ProgressPhase::Restoring)
+        );
+        assert_eq!(progress.first().unwrap().completed, 0);
+        assert_eq!(progress.last().unwrap().completed, 2);
+        assert_eq!(progress.last().unwrap().total, 2);
         assert_eq!(fs::read(root.join("bin/application.dat")).unwrap(), b"old");
         assert!(!root.join("bin/added.dat").exists());
         assert_eq!(
@@ -1145,12 +1628,14 @@ mod tests {
         let root = directory.path().join("雪图 SnowShot café 中文路径 🧊");
         fs::create_dir_all(root.join("bin")).unwrap();
         let old_app = b"old application";
-        fs::write(root.join("bin/snow_shot.exe"), old_app).unwrap();
+        fs::write(root.join(crate::edition::APP_PATH), old_app).unwrap();
         let old_record = InstallationRecord {
+            platform: Some(crate::edition::PLATFORM.to_owned()),
+            product: crate::edition::PRODUCT.to_owned(),
             schema: 1,
             variant: "online".to_owned(),
             version: "1.0.0".to_owned(),
-            files: vec![descriptor("bin/snow_shot.exe", old_app)],
+            files: vec![descriptor(crate::edition::APP_PATH, old_app)],
         };
         fs::write(
             root.join(INSTALLATION_RECORD),
@@ -1160,27 +1645,30 @@ mod tests {
 
         let new_app = b"new application";
         let new_record = InstallationRecord {
+            platform: Some(crate::edition::PLATFORM.to_owned()),
+            product: crate::edition::PRODUCT.to_owned(),
             schema: 1,
             variant: "online".to_owned(),
             version: "2.0.0".to_owned(),
-            files: vec![descriptor("bin/snow_shot.exe", new_app)],
+            files: vec![descriptor(crate::edition::APP_PATH, new_app)],
         };
         let new_record_bytes = serde_json::to_vec(&new_record).unwrap();
         let archive = directory.path().join("更新包 🧊.zip");
         write_zip(
             &archive,
             &[
-                ("bin/snow_shot.exe", new_app, None),
+                (crate::edition::APP_PATH, new_app, None),
                 (INSTALLATION_RECORD, &new_record_bytes, None),
             ],
         );
         let mut update_package = package(vec![
-            descriptor("bin/snow_shot.exe", new_app),
+            descriptor(crate::edition::APP_PATH, new_app),
             descriptor(INSTALLATION_RECORD, &new_record_bytes),
         ]);
         update_package.size = fs::metadata(&archive).unwrap().len();
         update_package.sha256 = sha256_file(&archive).unwrap();
         let release = UpdateRelease {
+            platform: crate::edition::PLATFORM.to_owned(),
             version: "2.0.0".to_owned(),
             packages: vec![update_package],
             envelope: Vec::new(),
@@ -1193,10 +1681,14 @@ mod tests {
             TransactionHooks {
                 probe: Some(&probe),
                 checkpoint: None,
+                progress: None,
             },
         )
         .unwrap();
-        assert_eq!(fs::read(root.join("bin/snow_shot.exe")).unwrap(), new_app);
+        assert_eq!(
+            fs::read(root.join(crate::edition::APP_PATH)).unwrap(),
+            new_app
+        );
         assert_eq!(
             serde_json::from_slice::<InstallationRecord>(
                 &fs::read(root.join(INSTALLATION_RECORD)).unwrap()
@@ -1216,15 +1708,17 @@ mod tests {
             fs::create_dir_all(root.join("bin")).unwrap();
             let old_app = b"old application";
             let old_helper = b"old helper";
-            fs::write(root.join("bin/snow_shot.exe"), old_app).unwrap();
-            fs::write(root.join("bin/snow-shot-updater.exe"), old_helper).unwrap();
+            fs::write(root.join(crate::edition::APP_PATH), old_app).unwrap();
+            fs::write(root.join(crate::edition::UPDATER_PATH), old_helper).unwrap();
             let old_record = InstallationRecord {
+                platform: Some(crate::edition::PLATFORM.to_owned()),
+                product: crate::edition::PRODUCT.to_owned(),
                 schema: 1,
                 variant: "online".to_owned(),
                 version: "1.0.0".to_owned(),
                 files: vec![
-                    descriptor("bin/snow_shot.exe", old_app),
-                    descriptor("bin/snow-shot-updater.exe", old_helper),
+                    descriptor(crate::edition::APP_PATH, old_app),
+                    descriptor(crate::edition::UPDATER_PATH, old_helper),
                 ],
             };
             fs::write(
@@ -1236,12 +1730,14 @@ mod tests {
             let new_app = b"new application";
             let new_helper = b"new helper";
             let new_record = InstallationRecord {
+                platform: Some(crate::edition::PLATFORM.to_owned()),
+                product: crate::edition::PRODUCT.to_owned(),
                 schema: 1,
                 variant: "online".to_owned(),
                 version: "2.0.0".to_owned(),
                 files: vec![
-                    descriptor("bin/snow_shot.exe", new_app),
-                    descriptor("bin/snow-shot-updater.exe", new_helper),
+                    descriptor(crate::edition::APP_PATH, new_app),
+                    descriptor(crate::edition::UPDATER_PATH, new_helper),
                 ],
             };
             let new_record_bytes = serde_json::to_vec(&new_record).unwrap();
@@ -1249,24 +1745,27 @@ mod tests {
             write_zip(
                 &archive,
                 &[
-                    ("bin/snow_shot.exe", new_app, None),
-                    ("bin/snow-shot-updater.exe", new_helper, None),
+                    (crate::edition::APP_PATH, new_app, None),
+                    (crate::edition::UPDATER_PATH, new_helper, None),
                     (INSTALLATION_RECORD, &new_record_bytes, None),
                 ],
             );
             let mut update_package = package(vec![
-                descriptor("bin/snow_shot.exe", new_app),
-                descriptor("bin/snow-shot-updater.exe", new_helper),
+                descriptor(crate::edition::APP_PATH, new_app),
+                descriptor(crate::edition::UPDATER_PATH, new_helper),
                 descriptor(INSTALLATION_RECORD, &new_record_bytes),
             ]);
             update_package.size = fs::metadata(&archive).unwrap().len();
             update_package.sha256 = sha256_file(&archive).unwrap();
             let release = UpdateRelease {
+                platform: crate::edition::PLATFORM.to_owned(),
                 version: "2.0.0".to_owned(),
                 packages: vec![update_package],
                 envelope: Vec::new(),
             };
             let probe = || probe_succeeds;
+            let progress = std::cell::RefCell::new(Vec::new());
+            let report = |value| progress.borrow_mut().push(value);
             let result = apply_transaction(
                 &root,
                 &archive,
@@ -1274,16 +1773,71 @@ mod tests {
                 TransactionHooks {
                     probe: Some(&probe),
                     checkpoint: None,
+                    progress: Some(&report),
                 },
+            );
+            let progress = progress.into_inner();
+            for phase in [
+                ProgressPhase::Preparing,
+                ProgressPhase::Verifying,
+                ProgressPhase::Extracting,
+                ProgressPhase::BackingUp,
+                ProgressPhase::Installing,
+                ProgressPhase::Probing,
+            ] {
+                assert!(
+                    progress.iter().any(|value| value.phase == phase),
+                    "missing {phase:?}"
+                );
+            }
+            for phase in [
+                ProgressPhase::Extracting,
+                ProgressPhase::BackingUp,
+                ProgressPhase::Installing,
+            ] {
+                let values: Vec<_> = progress
+                    .iter()
+                    .filter(|value| value.phase == phase)
+                    .collect();
+                assert_eq!(values.first().unwrap().completed, 0);
+                assert_eq!(
+                    values.last().unwrap().completed,
+                    values.last().unwrap().total
+                );
+                assert!(
+                    values
+                        .windows(2)
+                        .all(|pair| pair[0].completed <= pair[1].completed)
+                );
+            }
+            assert_eq!(
+                progress.last().unwrap().phase,
+                if probe_succeeds {
+                    ProgressPhase::Complete
+                } else {
+                    ProgressPhase::Failed
+                }
+            );
+            assert_eq!(
+                progress
+                    .iter()
+                    .any(|value| value.phase == ProgressPhase::Restoring),
+                !probe_succeeds
             );
             if probe_succeeds {
                 result.unwrap();
-                assert_eq!(fs::read(root.join("bin/snow_shot.exe")).unwrap(), new_app);
+                assert_eq!(
+                    fs::read(root.join(crate::edition::APP_PATH)).unwrap(),
+                    new_app
+                );
                 assert!(!transaction_pending(&root));
-                assert!(work_path(&root, "backup/bin/snow_shot.exe").is_file());
+                assert!(work_path(&root, format!("backup/{}", crate::edition::APP_PATH)).is_file());
             } else {
                 assert_eq!(result.unwrap_err().code, "startup_probe_failed");
-                assert_eq!(fs::read(root.join("bin/snow_shot.exe")).unwrap(), old_app);
+                assert_eq!(
+                    fs::read(root.join(crate::edition::APP_PATH)).unwrap(),
+                    old_app
+                );
                 assert_eq!(
                     fs::read_to_string(work_path(&root, "failed-version.txt")).unwrap(),
                     "2.0.0"
@@ -1299,13 +1853,13 @@ mod tests {
             let directory = tempfile::tempdir().unwrap();
             let root = directory.path().join("SnowShot");
             fs::create_dir_all(root.join("bin")).unwrap();
-            fs::write(root.join("bin/snow_shot.exe"), b"application").unwrap();
+            fs::write(root.join(crate::edition::APP_PATH), b"application").unwrap();
             if let Some(bytes) = damaged {
                 fs::write(root.join(INSTALLATION_RECORD), bytes).unwrap();
             }
 
             uninstall(&root, false).unwrap();
-            assert!(root.join("bin/snow_shot.exe").is_file());
+            assert!(root.join(crate::edition::APP_PATH).is_file());
             assert!(!root.join(UPDATE_WORK).exists());
         }
     }
@@ -1317,14 +1871,16 @@ mod tests {
         fs::create_dir_all(root.join("bin")).unwrap();
         let application = b"application";
         let helper = b"helper";
-        fs::write(root.join("bin/snow_shot.exe"), application).unwrap();
+        fs::write(root.join(crate::edition::APP_PATH), application).unwrap();
         let record = InstallationRecord {
+            platform: Some(crate::edition::PLATFORM.to_owned()),
+            product: crate::edition::PRODUCT.to_owned(),
             schema: 1,
             variant: "online".to_owned(),
             version: "1.0.0".to_owned(),
             files: vec![
-                descriptor("bin/snow_shot.exe", application),
-                descriptor("bin/snow-shot-updater.exe", helper),
+                descriptor(crate::edition::APP_PATH, application),
+                descriptor(crate::edition::UPDATER_PATH, helper),
             ],
         };
         fs::write(
@@ -1334,8 +1890,8 @@ mod tests {
         .unwrap();
 
         uninstall(&root, false).unwrap();
-        assert!(!root.join("bin/snow_shot.exe").exists());
-        assert!(!root.join("bin/snow-shot-updater.exe").exists());
+        assert!(!root.join(crate::edition::APP_PATH).exists());
+        assert!(!root.join(crate::edition::UPDATER_PATH).exists());
     }
 
     #[test]
@@ -1345,13 +1901,15 @@ mod tests {
         fs::create_dir_all(root.join("bin")).unwrap();
         fs::create_dir_all(work_path(&root, "backup/bin")).unwrap();
         let application = b"application";
-        fs::write(root.join("bin/snow_shot.exe"), application).unwrap();
+        fs::write(root.join(crate::edition::APP_PATH), application).unwrap();
         fs::write(root.join("bin/user-data.dat"), b"user data").unwrap();
         let record = InstallationRecord {
+            platform: Some(crate::edition::PLATFORM.to_owned()),
+            product: crate::edition::PRODUCT.to_owned(),
             schema: 1,
             variant: "online".to_owned(),
             version: "1.0.0".to_owned(),
-            files: vec![descriptor("bin/snow_shot.exe", application)],
+            files: vec![descriptor(crate::edition::APP_PATH, application)],
         };
         fs::write(
             root.join(INSTALLATION_RECORD),
@@ -1361,7 +1919,7 @@ mod tests {
         fs::write(work_path(&root, "journal.json"), b"damaged journal").unwrap();
 
         uninstall(&root, false).unwrap();
-        assert!(!root.join("bin/snow_shot.exe").exists());
+        assert!(!root.join(crate::edition::APP_PATH).exists());
         assert!(root.join("bin/user-data.dat").is_file());
         assert!(!root.join(UPDATE_WORK).exists());
     }
@@ -1372,16 +1930,18 @@ mod tests {
         let root = directory.path().join("SnowShot");
         fs::create_dir_all(root.join("bin")).unwrap();
         let application = b"application";
-        fs::write(root.join("bin/snow_shot.exe"), application).unwrap();
+        fs::write(root.join(crate::edition::APP_PATH), application).unwrap();
         // The selected data directory covers one claimed file; removing that
         // entry must not block removal of the remaining owned files.
-        fs::write(root.join("bin/__data_directory"), b"missing-data").unwrap();
+        fs::write(root.join(crate::edition::MARKER_PATH), b"missing-data").unwrap();
         let record = InstallationRecord {
+            platform: Some(crate::edition::PLATFORM.to_owned()),
+            product: crate::edition::PRODUCT.to_owned(),
             schema: 1,
             variant: "online".to_owned(),
             version: "1.0.0".to_owned(),
             files: vec![
-                descriptor("bin/snow_shot.exe", application),
+                descriptor(crate::edition::APP_PATH, application),
                 descriptor("bin/missing-data/plugin.dll", b"plugin"),
             ],
         };
@@ -1392,7 +1952,7 @@ mod tests {
         .unwrap();
 
         uninstall(&root, false).unwrap();
-        assert!(!root.join("bin/snow_shot.exe").exists());
+        assert!(!root.join(crate::edition::APP_PATH).exists());
         assert!(!root.join(UPDATE_WORK).exists());
     }
 
@@ -1401,7 +1961,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("SnowShot");
         fs::create_dir_all(root.join("bin/my-data")).unwrap();
-        fs::write(root.join("bin/__data_directory"), b"my-data").unwrap();
+        fs::write(root.join(crate::edition::MARKER_PATH), b"my-data").unwrap();
         assert_eq!(
             validate_target_path(&root, "bin/my-data/plugin.dll")
                 .unwrap_err()
@@ -1431,13 +1991,15 @@ mod tests {
         let root = directory.path().join("SnowShot");
         fs::create_dir_all(root.join("bin")).unwrap();
         let application = b"application";
-        fs::write(root.join("bin/snow_shot.exe"), application).unwrap();
-        fs::write(root.join("bin/__data_directory"), [0xff]).unwrap();
+        fs::write(root.join(crate::edition::APP_PATH), application).unwrap();
+        fs::write(root.join(crate::edition::MARKER_PATH), [0xff]).unwrap();
         let record = InstallationRecord {
+            platform: Some(crate::edition::PLATFORM.to_owned()),
+            product: crate::edition::PRODUCT.to_owned(),
             schema: 1,
             variant: "online".to_owned(),
             version: "1.0.0".to_owned(),
-            files: vec![descriptor("bin/snow_shot.exe", application)],
+            files: vec![descriptor(crate::edition::APP_PATH, application)],
         };
         fs::write(
             root.join(INSTALLATION_RECORD),
@@ -1450,7 +2012,7 @@ mod tests {
             "data_directory_invalid"
         );
         uninstall(&root, true).unwrap();
-        assert!(!root.join("bin/snow_shot.exe").exists());
+        assert!(!root.join(crate::edition::APP_PATH).exists());
     }
 
     #[test]
@@ -1459,15 +2021,21 @@ mod tests {
         let root = directory.path().join("SnowShot");
         fs::create_dir_all(root.join("bin")).unwrap();
         let application = b"application";
-        fs::write(root.join("bin/snow_shot.exe"), application).unwrap();
+        fs::write(root.join(crate::edition::APP_PATH), application).unwrap();
         fs::create_dir_all(work_path(&root, "user")).unwrap();
         fs::write(work_path(&root, "user/photo.png"), b"photo").unwrap();
-        fs::write(root.join("bin/__data_directory"), b"../.snow-shot-update").unwrap();
+        fs::write(
+            root.join(crate::edition::MARKER_PATH),
+            format!("../{}", crate::edition::UPDATE_WORK).as_bytes(),
+        )
+        .unwrap();
         let record = InstallationRecord {
+            platform: Some(crate::edition::PLATFORM.to_owned()),
+            product: crate::edition::PRODUCT.to_owned(),
             schema: 1,
             variant: "online".to_owned(),
             version: "1.0.0".to_owned(),
-            files: vec![descriptor("bin/snow_shot.exe", application)],
+            files: vec![descriptor(crate::edition::APP_PATH, application)],
         };
         fs::write(
             root.join(INSTALLATION_RECORD),
@@ -1480,7 +2048,7 @@ mod tests {
             "selected_data_collision"
         );
         uninstall(&root, false).unwrap();
-        assert!(!root.join("bin/snow_shot.exe").exists());
+        assert!(!root.join(crate::edition::APP_PATH).exists());
         assert_eq!(
             fs::read(work_path(&root, "user/photo.png")).unwrap(),
             b"photo"
@@ -1495,12 +2063,14 @@ mod tests {
         let root = directory.path().join("SnowShot");
         fs::create_dir_all(root.join("bin")).unwrap();
         let application = b"application";
-        fs::write(root.join("bin/snow_shot.exe"), application).unwrap();
+        fs::write(root.join(crate::edition::APP_PATH), application).unwrap();
         let record = InstallationRecord {
+            platform: Some(crate::edition::PLATFORM.to_owned()),
+            product: crate::edition::PRODUCT.to_owned(),
             schema: 1,
             variant: "online".to_owned(),
             version: "1.0.0".to_owned(),
-            files: vec![descriptor("bin/snow_shot.exe", application)],
+            files: vec![descriptor(crate::edition::APP_PATH, application)],
         };
         fs::write(
             root.join(INSTALLATION_RECORD),
@@ -1513,7 +2083,7 @@ mod tests {
             uninstall(&root, false).unwrap_err().code,
             "update_lock_failed"
         );
-        assert!(root.join("bin/snow_shot.exe").is_file());
+        assert!(root.join(crate::edition::APP_PATH).is_file());
     }
 
     #[test]
@@ -1522,13 +2092,15 @@ mod tests {
         let root = directory.path().join("SnowShot");
         fs::create_dir_all(root.join("bin/plugin.dll")).unwrap();
         let application = b"application";
-        fs::write(root.join("bin/snow_shot.exe"), application).unwrap();
+        fs::write(root.join(crate::edition::APP_PATH), application).unwrap();
         let record = InstallationRecord {
+            platform: Some(crate::edition::PLATFORM.to_owned()),
+            product: crate::edition::PRODUCT.to_owned(),
             schema: 1,
             variant: "online".to_owned(),
             version: "1.0.0".to_owned(),
             files: vec![
-                descriptor("bin/snow_shot.exe", application),
+                descriptor(crate::edition::APP_PATH, application),
                 descriptor("bin/plugin.dll", b"plugin"),
             ],
         };
@@ -1539,7 +2111,7 @@ mod tests {
         .unwrap();
 
         uninstall(&root, false).unwrap();
-        assert!(!root.join("bin/snow_shot.exe").exists());
+        assert!(!root.join(crate::edition::APP_PATH).exists());
         assert!(root.join("bin/plugin.dll").is_dir());
     }
 }

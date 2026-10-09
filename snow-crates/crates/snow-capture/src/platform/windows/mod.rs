@@ -106,6 +106,7 @@ struct AutomaticWindowsCapturer {
     wgc_update_mode: WgcUpdateMode,
     output_pixel_format: CapturePixelFormat,
     screen_color_transform: Option<crate::color_effect::ScreenColorTransform>,
+    pending_screen_color_transform: Option<crate::color_effect::PendingScreenColorTransform>,
     #[cfg(feature = "stage-timing")]
     record_stage_timings: bool,
 }
@@ -136,6 +137,7 @@ impl AutomaticWindowsCapturer {
             wgc_update_mode: WgcUpdateMode::Auto,
             output_pixel_format: CapturePixelFormat::Rgba8,
             screen_color_transform: None,
+            pending_screen_color_transform: None,
             #[cfg(feature = "stage-timing")]
             record_stage_timings: false,
         }
@@ -173,6 +175,8 @@ impl AutomaticWindowsCapturer {
             #[cfg(feature = "stage-timing")]
             capturer.set_record_stage_timings(self.record_stage_timings)?;
             capturer.set_screen_color_transform(self.screen_color_transform)?;
+            capturer
+                .set_pending_screen_color_transform(self.pending_screen_color_transform.clone())?;
             self.candidates[index].capturer = Some(capturer);
         }
         self.candidates[index]
@@ -284,7 +288,7 @@ impl AutomaticWindowsCapturer {
                     self.record_success(index);
                     return Ok(frame);
                 }
-                Err(error) if fallback_eligible(&error) => {
+                Err(error) if error.allows_backend_fallback() => {
                     self.discard_candidate(index);
                     reusable = rollback;
                     if continuous {
@@ -332,7 +336,7 @@ impl AutomaticWindowsCapturer {
                     self.record_success(index);
                     return Ok(sample);
                 }
-                Err(error) if fallback_eligible(&error) => {
+                Err(error) if error.allows_backend_fallback() => {
                     if let Some(rollback) = rollback {
                         *destination = rollback;
                     } else {
@@ -396,7 +400,7 @@ impl AutomaticWindowsCapturer {
                     self.record_success(index);
                     return Ok(sample);
                 }
-                Err(error) if fallback_eligible(&error) => {
+                Err(error) if error.allows_backend_fallback() => {
                     if let Some(rollback) = rollback {
                         *destination = rollback;
                     } else {
@@ -453,7 +457,7 @@ impl MonitorCapturer for AutomaticWindowsCapturer {
                     self.record_prepared(index);
                     return Ok(());
                 }
-                Err(error) if fallback_eligible(&error) => {
+                Err(error) if error.allows_backend_fallback() => {
                     self.discard_candidate(index);
                     errors.push((kind, error));
                 }
@@ -553,6 +557,16 @@ impl MonitorCapturer for AutomaticWindowsCapturer {
         self.apply_to_prepared(|capturer| capturer.set_screen_color_transform(transform))
     }
 
+    fn set_pending_screen_color_transform(
+        &mut self,
+        snapshot: Option<crate::color_effect::PendingScreenColorTransform>,
+    ) -> CaptureResult<()> {
+        self.pending_screen_color_transform = snapshot.clone();
+        self.apply_to_prepared(|capturer| {
+            capturer.set_pending_screen_color_transform(snapshot.clone())
+        })
+    }
+
     #[cfg(feature = "stage-timing")]
     fn set_record_stage_timings(&mut self, enabled: bool) -> CaptureResult<()> {
         self.record_stage_timings = enabled;
@@ -618,18 +632,6 @@ fn create_window_by_kind(
         )),
         CaptureBackendKind::Gdi => Ok(Box::new(gdi::WindowsWindowCapturer::new(window)?)),
     }
-}
-
-fn fallback_eligible(error: &CaptureError) -> bool {
-    matches!(
-        error,
-        CaptureError::BackendUnavailable(_)
-            | CaptureError::UnsupportedFormat(_)
-            | CaptureError::AccessLost
-            | CaptureError::Timeout
-            | CaptureError::WorkerDead
-            | CaptureError::Platform(_)
-    )
 }
 
 fn all_backends_failed(
@@ -969,6 +971,68 @@ mod tests {
             assert_eq!(dxgi.lock().unwrap().releases, 1);
             assert_eq!(wgc.lock().unwrap().calls, 1);
             assert_eq!(gdi.lock().unwrap().calls, usize::from(wgc_fails));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn region_capture_fallback_respects_each_backend_preference() -> CaptureResult<()> {
+        use CaptureBackendKind::{DxgiDuplication as Dxgi, Gdi, WindowsGraphicsCapture as Wgc};
+        for order in [
+            [Dxgi, Wgc, Gdi],
+            [Wgc, Dxgi, Gdi],
+            [Gdi, Dxgi, Wgc],
+            [Gdi, Wgc, Dxgi],
+        ] {
+            for failures in 0..=3 {
+                let scripts: Vec<_> = order
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, kind)| {
+                        (
+                            kind,
+                            Arc::new(Mutex::new(CandidateState {
+                                outcomes: VecDeque::from([if index < failures {
+                                    Err(CaptureError::BackendUnavailable(
+                                        "unavailable fixture".into(),
+                                    ))
+                                } else {
+                                    Ok(())
+                                }]),
+                                ..Default::default()
+                            })),
+                        )
+                    })
+                    .collect();
+                let mut capturer = scripted_auto(&scripts);
+                let mut destination = Frame::empty();
+                let result = capturer.capture_region_into(
+                    CaptureBlitRegion {
+                        src_x: 0,
+                        src_y: 0,
+                        width: 2,
+                        height: 2,
+                        dst_x: 0,
+                        dst_y: 0,
+                    },
+                    &mut destination,
+                    false,
+                );
+                if failures == 3 {
+                    assert!(matches!(result, Err(CaptureError::BackendUnavailable(_))));
+                } else {
+                    assert!(result?.is_some());
+                    assert_eq!(capturer.backend_kind(), order[failures]);
+                    assert_eq!(destination.dimensions(), (2, 2));
+                }
+                for (index, (_, state)) in scripts.iter().enumerate() {
+                    let state = state.lock().unwrap();
+                    assert_eq!(state.calls, usize::from(index <= failures));
+                    if index < failures {
+                        assert_eq!(state.releases, 1);
+                    }
+                }
+            }
         }
         Ok(())
     }

@@ -1,5 +1,7 @@
 #include "snow_shot/presentation/settings/settingsruntimesession.h"
+#if SNOW_SHOT_ENABLE_API_CONFIGURATION
 #include "snow_shot/serverconfiguration.h"
+#endif
 
 #include "snow_shot/presentation/settings/settingscatalog.h"
 #include "snow_shot/presentation/globalmousegesture.h"
@@ -11,6 +13,7 @@
 #include <QJsonObject>
 #include <QTimer>
 
+#include <algorithm>
 #include <utility>
 
 namespace snow_shot::presentation::settings {
@@ -21,8 +24,12 @@ SettingsCustomRenderer toolbarRenderer(storage::ScreenshotToolbarLayoutKind kind
         return SettingsCustomRenderer::DrawingToolbarEditor;
     case storage::ScreenshotToolbarLayoutKind::ActionTools:
         return SettingsCustomRenderer::ScreenshotToolbarEditor;
+    case storage::ScreenshotToolbarLayoutKind::FloatingTools:
+        return SettingsCustomRenderer::FloatingToolbarEditor;
     case storage::ScreenshotToolbarLayoutKind::PinnedActionTools:
         return SettingsCustomRenderer::PinnedToolbarEditor;
+    case storage::ScreenshotToolbarLayoutKind::RecordingActionTools:
+        return SettingsCustomRenderer::RecordingToolbarEditor;
     }
     Q_UNREACHABLE();
 }
@@ -53,8 +60,17 @@ QVariant globalMouseCombinationVariant(const SettingsGlobalMouseCombination& com
     return QVariant::fromValue(combination);
 }
 
+bool sameStoredColor(const QColor& first, const QColor& second) {
+    if (!first.isValid() || !second.isValid())
+        return first.isValid() == second.isValid();
+    // Settings persist eight-bit RGBA. Picker edits can use HSV/HSL or higher
+    // precision, which QColor::operator== distinguishes from the saved RGB value.
+    return first.rgba() == second.rgba();
+}
+
 bool sameStorageStatus(const storage::StorageStatus& first, const storage::StorageStatus& second) {
-    return first.requestedDirectory == second.requestedDirectory &&
+    return first.directoryChanging == second.directoryChanging &&
+           first.requestedDirectory == second.requestedDirectory &&
            first.effectiveDirectory == second.effectiveDirectory &&
            first.fallbackReason == second.fallbackReason &&
            first.effectiveMode == second.effectiveMode &&
@@ -87,6 +103,10 @@ SettingsRuntimeSession::SettingsRuntimeSession(const SettingsRegistry& registry,
     qRegisterMetaType<SettingsGlobalMouseCombination>();
     qRegisterMetaType<shortcuts::ShortcutBinding>();
     qRegisterMetaType<shortcuts::ShortcutBindingList>();
+    connect(&m_backend, &SettingsBackend::directoryChangeProgress, this,
+            &SettingsRuntimeSession::directoryChangeProgress);
+    connect(&m_backend, &SettingsBackend::directoryChangeFinished, this,
+            &SettingsRuntimeSession::directoryChangeFinished);
     connect(&m_backend, &SettingsBackend::operationMessage, this,
             &SettingsRuntimeSession::operationMessage);
     connect(&m_backend, &SettingsBackend::actionFinished, this,
@@ -122,6 +142,11 @@ SettingsRuntimeSession::SettingsRuntimeSession(const SettingsRegistry& registry,
 
 const SettingsRegistry& SettingsRuntimeSession::registry() const {
     return m_registry;
+}
+
+SettingsOptions SettingsRuntimeSession::options(const QString& fieldId) const {
+    const auto* descriptor = descriptorFor(fieldId);
+    return descriptor != nullptr ? buildOptions(*descriptor) : SettingsOptions{};
 }
 
 SettingsFieldState SettingsRuntimeSession::state(const QString& fieldId) const {
@@ -739,6 +764,9 @@ void SettingsRuntimeSession::refreshField(const QString& fieldId,
     } else {
         next.enabled = currentStatus.writeAvailable;
         if (const auto* select =
+                std::get_if<SettingsSelectDefinition>(&descriptor->definition->payload))
+            next.enabled = next.enabled && m_backend.selectEnabled(select->binding);
+        if (const auto* select =
                 std::get_if<SettingsSelectDefinition>(&descriptor->definition->payload);
             select != nullptr &&
             select->binding == SettingsSelectBinding::TranslationLayoutProcessing) {
@@ -787,6 +815,11 @@ void SettingsRuntimeSession::refreshAll() {
     for (const SettingsFieldDescriptor& descriptor : m_registry.fields()) {
         refreshField(descriptor.id);
         refreshOptions(descriptor);
+        if (descriptor.definition != nullptr) {
+            if (const auto* file =
+                    std::get_if<SettingsFilePathDefinition>(&descriptor.definition->payload))
+                refreshFilePathStatus(file->binding);
+        }
     }
     refreshAuxiliaryInteger(SettingsIntegerBinding::ScreenshotDelaySeconds);
     refreshCommandStates();
@@ -799,6 +832,18 @@ void SettingsRuntimeSession::refreshAll() {
         emit storageStateChanged(currentStatus);
     }
     emit refreshed();
+}
+
+void SettingsRuntimeSession::refreshFilePathStatus(SettingsFilePathBinding binding) {
+    const int key = static_cast<int>(binding);
+    const FilePathStatus next{m_backend.filePathStatus(binding),
+                              m_backend.filePathStatusError(binding)};
+    const auto current = m_filePathStatuses.constFind(key);
+    if (current != m_filePathStatuses.cend() && current->text == next.text &&
+        current->error == next.error)
+        return;
+    m_filePathStatuses.insert(key, next);
+    emit filePathStatusChanged(binding);
 }
 
 void SettingsRuntimeSession::refreshAuxiliaryInteger(SettingsIntegerBinding binding) {
@@ -851,6 +896,11 @@ SettingsRuntimeSession::descriptorForSlider(SettingsSliderBinding binding) const
 const SettingsFieldDescriptor*
 SettingsRuntimeSession::descriptorForColor(SettingsColorBinding binding) const {
     return m_registry.fieldForColor(binding);
+}
+
+const SettingsFieldDescriptor*
+SettingsRuntimeSession::descriptorForColorPalette(SettingsColorPaletteBinding binding) const {
+    return m_registry.fieldForColorPalette(binding);
 }
 
 const SettingsFieldDescriptor*
@@ -918,6 +968,8 @@ QVariant SettingsRuntimeSession::readValue(const SettingsFieldDescriptor& descri
                 return m_backend.sliderValue(payload.binding);
             } else if constexpr (std::is_same_v<Payload, SettingsColorDefinition>) {
                 return m_backend.colorValue(payload.binding);
+            } else if constexpr (std::is_same_v<Payload, SettingsColorPaletteDefinition>) {
+                return QVariant::fromValue(m_backend.colorPaletteValue(payload.binding));
             } else if constexpr (std::is_same_v<Payload, SettingsRadioDefinition>) {
                 return m_backend.radioValue(payload.binding);
             } else if constexpr (std::is_same_v<Payload, SettingsFilePathDefinition>) {
@@ -940,6 +992,8 @@ QVariant SettingsRuntimeSession::readValue(const SettingsFieldDescriptor& descri
                 return QVariantList{state.enabled, state.busy};
             } else if constexpr (std::is_same_v<Payload, SettingsCustomDefinition>) {
                 switch (payload.renderer) {
+                case SettingsCustomRenderer::CloudUploadConfigurations:
+                    return QVariant::fromValue(m_backend.cloudUploadSettings());
                 case SettingsCustomRenderer::McpStatus:
                 case SettingsCustomRenderer::PermissionScreenRecording:
                 case SettingsCustomRenderer::PermissionAccessibility:
@@ -949,18 +1003,32 @@ QVariant SettingsRuntimeSession::readValue(const SettingsFieldDescriptor& descri
                 case SettingsCustomRenderer::DrawingToolbarEditor:
                     return QVariant::fromValue(m_backend.toolbarLayout(
                         storage::ScreenshotToolbarLayoutKind::DrawingTools));
+                case SettingsCustomRenderer::FloatingToolbarEditor:
+                    return QVariant::fromValue(m_backend.toolbarLayout(
+                        storage::ScreenshotToolbarLayoutKind::FloatingTools));
                 case SettingsCustomRenderer::PinnedToolbarEditor:
                     return QVariant::fromValue(m_backend.toolbarLayout(
                         storage::ScreenshotToolbarLayoutKind::PinnedActionTools));
+                case SettingsCustomRenderer::RecordingToolbarEditor:
+                    return QVariant::fromValue(m_backend.toolbarLayout(
+                        storage::ScreenshotToolbarLayoutKind::RecordingActionTools));
                 case SettingsCustomRenderer::ScreenshotToolbarEditor:
                     return QVariant::fromValue(
                         m_backend.toolbarLayout(storage::ScreenshotToolbarLayoutKind::ActionTools));
                 case SettingsCustomRenderer::TrayMenuOptions:
                     return m_backend.multiSelectValue(SettingsMultiSelectBinding::TrayMenuOptions);
                 case SettingsCustomRenderer::CustomAiModels:
+#if SNOW_SHOT_ENABLE_API_CONFIGURATION
                     return QVariant::fromValue(m_backend.customAiModels());
+#else
+                    return {};
+#endif
                 case SettingsCustomRenderer::TextTranslationConfigurations:
+#if SNOW_SHOT_ENABLE_API_CONFIGURATION
                     return QVariant::fromValue(m_backend.textTranslationConfigurations());
+#else
+                    return {};
+#endif
                 case SettingsCustomRenderer::StorageStatus:
                     return QVariant::fromValue(m_backend.storageStatus());
                 }
@@ -992,6 +1060,10 @@ bool SettingsRuntimeSession::writeValue(const SettingsFieldDescriptor& descripto
                 return m_backend.applySliderValue(payload.binding, value.toInt());
             } else if constexpr (std::is_same_v<Payload, SettingsColorDefinition>) {
                 return m_backend.applyColorValue(payload.binding, value.value<QColor>());
+            } else if constexpr (std::is_same_v<Payload, SettingsColorPaletteDefinition>) {
+                return value.canConvert<QVector<QColor>>() &&
+                       m_backend.applyColorPaletteValue(payload.binding,
+                                                        value.value<QVector<QColor>>());
             } else if constexpr (std::is_same_v<Payload, SettingsRadioDefinition>) {
                 return m_backend.applyRadioValue(payload.binding, value);
             } else if constexpr (std::is_same_v<Payload, SettingsFilePathDefinition>) {
@@ -1019,10 +1091,20 @@ bool SettingsRuntimeSession::writeValue(const SettingsFieldDescriptor& descripto
                 case SettingsCustomRenderer::PermissionInputMonitoring:
                 case SettingsCustomRenderer::PermissionMicrophone:
                     return {};
+                case SettingsCustomRenderer::FloatingToolbarEditor:
+                    return value.canConvert<storage::ScreenshotToolbarLayout>() &&
+                           m_backend.applyToolbarLayout(
+                               storage::ScreenshotToolbarLayoutKind::FloatingTools,
+                               value.value<storage::ScreenshotToolbarLayout>());
                 case SettingsCustomRenderer::PinnedToolbarEditor:
                     return value.canConvert<storage::ScreenshotToolbarLayout>() &&
                            m_backend.applyToolbarLayout(
                                storage::ScreenshotToolbarLayoutKind::PinnedActionTools,
+                               value.value<storage::ScreenshotToolbarLayout>());
+                case SettingsCustomRenderer::RecordingToolbarEditor:
+                    return value.canConvert<storage::ScreenshotToolbarLayout>() &&
+                           m_backend.applyToolbarLayout(
+                               storage::ScreenshotToolbarLayoutKind::RecordingActionTools,
                                value.value<storage::ScreenshotToolbarLayout>());
                 case SettingsCustomRenderer::DrawingToolbarEditor:
                 case SettingsCustomRenderer::ScreenshotToolbarEditor:
@@ -1038,12 +1120,23 @@ bool SettingsRuntimeSession::writeValue(const SettingsFieldDescriptor& descripto
                     return m_backend.applyMultiSelectValue(
                         SettingsMultiSelectBinding::TrayMenuOptions, value.toList());
                 case SettingsCustomRenderer::CustomAiModels:
+#if SNOW_SHOT_ENABLE_API_CONFIGURATION
                     return value.canConvert<CustomAiModels>() &&
                            m_backend.applyCustomAiModels(value.value<CustomAiModels>());
+#else
+                    return false;
+#endif
                 case SettingsCustomRenderer::TextTranslationConfigurations:
+#if SNOW_SHOT_ENABLE_API_CONFIGURATION
                     return value.canConvert<TextTranslationConfigurations>() &&
                            m_backend.applyTextTranslationConfigurations(
                                value.value<TextTranslationConfigurations>());
+#else
+                    return false;
+#endif
+                case SettingsCustomRenderer::CloudUploadConfigurations:
+                    return value.canConvert<CloudUploadSettings>() &&
+                           m_backend.applyCloudUploadSettings(value.value<CloudUploadSettings>());
                 case SettingsCustomRenderer::StorageStatus:
                     return false;
                 }
@@ -1084,12 +1177,14 @@ bool SettingsRuntimeSession::isPending(const SettingsFieldDescriptor& descriptor
 }
 
 QString SettingsRuntimeSession::writeError(const SettingsFieldDescriptor& descriptor) const {
+#if SNOW_SHOT_ENABLE_API_CONFIGURATION
     if (descriptor.configurationKey == QStringLiteral("api_configuration/server_url") &&
         !normalizedServerUrl(state(descriptor.id).draftValue.toString())) {
         return QCoreApplication::translate("SettingsBackend",
                                            "Enter a valid HTTP or HTTPS server address without "
                                            "credentials, a query, or a fragment.");
     }
+#endif
     const QString currentError = backendError(descriptor);
     if (!currentError.isEmpty()) {
         return currentError;
@@ -1099,16 +1194,24 @@ QString SettingsRuntimeSession::writeError(const SettingsFieldDescriptor& descri
 
 bool SettingsRuntimeSession::valuesEqual(const SettingsFieldDescriptor& descriptor,
                                          const QVariant& first, const QVariant& second) const {
+#if SNOW_SHOT_ENABLE_API_CONFIGURATION
     if (descriptor.configurationKey == QStringLiteral("api_configuration/server_url")) {
         const auto a = normalizedServerUrl(first.toString());
         const auto b = normalizedServerUrl(second.toString());
         return a && b && *a == *b;
     }
+#endif
     if (descriptor.definition == nullptr) {
         return first == second;
     }
     if (std::holds_alternative<SettingsColorDefinition>(descriptor.definition->payload)) {
-        return first.value<QColor>() == second.value<QColor>();
+        return sameStoredColor(first.value<QColor>(), second.value<QColor>());
+    }
+    if (std::holds_alternative<SettingsColorPaletteDefinition>(descriptor.definition->payload)) {
+        const auto firstColors = first.value<QVector<QColor>>();
+        const auto secondColors = second.value<QVector<QColor>>();
+        return std::equal(firstColors.cbegin(), firstColors.cend(), secondColors.cbegin(),
+                          secondColors.cend(), sameStoredColor);
     }
     if (std::holds_alternative<SettingsGlobalMouseActionDefinition>(
             descriptor.definition->payload)) {
@@ -1126,7 +1229,9 @@ bool SettingsRuntimeSession::valuesEqual(const SettingsFieldDescriptor& descript
         const auto& custom = std::get<SettingsCustomDefinition>(descriptor.definition->payload);
         if (custom.renderer == SettingsCustomRenderer::DrawingToolbarEditor ||
             custom.renderer == SettingsCustomRenderer::ScreenshotToolbarEditor ||
-            custom.renderer == SettingsCustomRenderer::PinnedToolbarEditor) {
+            custom.renderer == SettingsCustomRenderer::PinnedToolbarEditor ||
+            custom.renderer == SettingsCustomRenderer::RecordingToolbarEditor ||
+            custom.renderer == SettingsCustomRenderer::FloatingToolbarEditor) {
             return first.value<storage::ScreenshotToolbarLayout>() ==
                    second.value<storage::ScreenshotToolbarLayout>();
         }
@@ -1169,6 +1274,8 @@ SettingsRuntimeSession::buildOptions(const SettingsFieldDescriptor& descriptor) 
             result.values.push_back({option.value, option.label.translated()});
         }
         result.values.append(dynamicSelectOptions(select->binding));
+        result.loading = m_backend.selectOptionsLoading(select->binding);
+        result.error = m_backend.selectOptionsError(select->binding);
     } else if (const auto* multi =
                    std::get_if<SettingsMultiSelectDefinition>(&descriptor.definition->payload)) {
         for (const SettingsOptionDefinition& option : multi->options) {
@@ -1347,6 +1454,19 @@ bool SettingsRuntimeSession::applyColorValue(SettingsColorBinding binding, const
     return descriptor != nullptr && submitDraft(descriptor->id, QVariant::fromValue(value));
 }
 
+QVector<QColor>
+SettingsRuntimeSession::colorPaletteValue(SettingsColorPaletteBinding binding) const {
+    const auto* descriptor = descriptorForColorPalette(binding);
+    return descriptor != nullptr ? state(descriptor->id).draftValue.value<QVector<QColor>>()
+                                 : QVector<QColor>();
+}
+
+bool SettingsRuntimeSession::applyColorPaletteValue(SettingsColorPaletteBinding binding,
+                                                    const QVector<QColor>& value) {
+    const auto* descriptor = descriptorForColorPalette(binding);
+    return descriptor != nullptr && submitDraft(descriptor->id, QVariant::fromValue(value));
+}
+
 QVariant SettingsRuntimeSession::radioValue(SettingsRadioBinding binding) const {
     const auto* descriptor = descriptorForRadio(binding);
     return descriptor != nullptr ? state(descriptor->id).draftValue : QVariant();
@@ -1365,7 +1485,27 @@ QString SettingsRuntimeSession::filePathValue(SettingsFilePathBinding binding) c
 bool SettingsRuntimeSession::applyFilePathValue(SettingsFilePathBinding binding,
                                                 const QString& value) {
     const auto* descriptor = descriptorForFile(binding);
-    return descriptor != nullptr && submitDraft(descriptor->id, value);
+    if (descriptor == nullptr)
+        return false;
+    const bool skinPath = binding == SettingsFilePathBinding::SkinPath ||
+                          binding == SettingsFilePathBinding::ToolbarSkinPath ||
+                          binding == SettingsFilePathBinding::TrayMenuSkinPath;
+    const QString normalizedValue = skinPath ? value.trimmed() : value;
+    const QString previousValue = m_backend.filePathValue(binding);
+    const bool accepted = submitDraft(descriptor->id, normalizedValue);
+    // Re-entering the same skin path explicitly reloads the file, including a
+    // file that was replaced or repaired without changing its name.
+    if (accepted && skinPath && previousValue == normalizedValue)
+        m_backend.reloadFilePathValue(binding);
+    return accepted;
+}
+
+QString SettingsRuntimeSession::filePathStatus(SettingsFilePathBinding binding) const {
+    return m_backend.filePathStatus(binding);
+}
+
+bool SettingsRuntimeSession::filePathStatusError(SettingsFilePathBinding binding) const {
+    return m_backend.filePathStatusError(binding);
 }
 
 QString SettingsRuntimeSession::directoryPathValue(SettingsDirectoryPathBinding binding) const {
@@ -1509,10 +1649,12 @@ SettingsActionState SettingsRuntimeSession::actionState(SettingsActionBinding bi
     return m_backend.actionState(binding);
 }
 
-bool SettingsRuntimeSession::triggerAction(SettingsActionBinding binding, const QString& filePath) {
-    return m_backend.triggerAction(binding, filePath);
+bool SettingsRuntimeSession::triggerAction(SettingsActionBinding binding, const QString& filePath,
+                                           bool includeToolbarStyles) {
+    return m_backend.triggerAction(binding, filePath, includeToolbarStyles);
 }
 
+#if SNOW_SHOT_ENABLE_API_CONFIGURATION
 CustomAiModels SettingsRuntimeSession::customAiModels() const {
     return state(QStringLiteral("api.custom-models")).acceptedValue.value<CustomAiModels>();
 }
@@ -1536,6 +1678,15 @@ bool SettingsRuntimeSession::applyTextTranslationConfigurations(
                        QVariant::fromValue(valid ? normalized : models));
 }
 
+#endif
+CloudUploadSettings SettingsRuntimeSession::cloudUploadSettings() const {
+    return state(QStringLiteral("screenshot-output.cloud-upload"))
+        .acceptedValue.value<CloudUploadSettings>();
+}
+bool SettingsRuntimeSession::applyCloudUploadSettings(const CloudUploadSettings& values) {
+    return submitDraft(QStringLiteral("screenshot-output.cloud-upload"),
+                       QVariant::fromValue(values));
+}
 storage::StorageStatus SettingsRuntimeSession::storageStatus() const {
     return m_backend.storageStatus();
 }

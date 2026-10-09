@@ -28,13 +28,6 @@
         </message>
     </context>
     <context>
-        <name>ScreenshotCaptureCoordinator</name>
-        <message>
-            <source>Could not snapshot the cursor</source>
-            <translation>無法擷取滑鼠游標</translation>
-        </message>
-    </context>
-    <context>
         <name>ScreenshotController</name>
         <message>
             <source>Allow Snow Shot to access Finder in System Settings &gt; Privacy &amp; Security &gt; Automation, then try again.</source>
@@ -49,8 +42,8 @@
             <translation>取消</translation>
         </message>
         <message>
-            <source>Could not insert the draw template</source>
-            <translation>無法插入繪圖範本</translation>
+            <source>Could not insert the annotation template</source>
+            <translation>無法插入標註範本</translation>
         </message>
         <message>
             <source>Could not read the selected files from Finder. Please try again.</source>
@@ -79,6 +72,10 @@
         <message>
             <source>No recognized result is available to copy</source>
             <translation>沒有可複製的辨識結果</translation>
+        </message>
+        <message>
+            <source>Preparing cloud upload...</source>
+            <translation>正在準備雲端上傳…</translation>
         </message>
         <message>
             <source>Save recognition text</source>
@@ -119,6 +116,14 @@
         <message>
             <source>The clipboard pin queue is full</source>
             <translation>將剪貼簿內容固定到螢幕的佇列已滿</translation>
+        </message>
+        <message>
+            <source>The dropped content could not be opened</source>
+            <translation>無法開啟拖放的內容</translation>
+        </message>
+        <message>
+            <source>The dropped content could not be queued</source>
+            <translation>無法將拖放的內容加入佇列</translation>
         </message>
         <message>
             <source>The pinned window could not be restored</source>
@@ -169,6 +174,14 @@
             <translation>此截圖無法固定到螢幕</translation>
         </message>
         <message>
+            <source>Uploaded to cloud. Link copied to clipboard.</source>
+            <translation>已上傳至雲端，連結已複製到剪貼簿。</translation>
+        </message>
+        <message>
+            <source>Uploading to cloud... %1%</source>
+            <translation>正在上傳至雲端… %1%</translation>
+        </message>
+        <message>
             <source>Your current screenshot will be discarded.</source>
             <translation>目前的截圖將被捨棄。</translation>
         </message>
@@ -185,6 +198,10 @@
         <message>
             <source>Loading screenshot history</source>
             <translation>正在載入截圖歷史</translation>
+        </message>
+        <message>
+            <source>Result Preview in Progress</source>
+            <translation>正在預覽結果</translation>
         </message>
     </context>
     <context>
@@ -358,12 +375,44 @@
     <context>
         <name>ScreenshotSelectionToolbarWidget</name>
         <message>
+            <source>16:9</source>
+            <translation>16:9</translation>
+        </message>
+        <message>
+            <source>1:1</source>
+            <translation>1:1</translation>
+        </message>
+        <message>
+            <source>2:3</source>
+            <translation>2:3</translation>
+        </message>
+        <message>
+            <source>3:2</source>
+            <translation>3:2</translation>
+        </message>
+        <message>
+            <source>3:4</source>
+            <translation>3:4</translation>
+        </message>
+        <message>
+            <source>4:3</source>
+            <translation>4:3</translation>
+        </message>
+        <message>
+            <source>9:16</source>
+            <translation>9:16</translation>
+        </message>
+        <message>
             <source>Corner radius</source>
             <translation>圓角半徑</translation>
         </message>
         <message>
             <source>Corner radius is unavailable for custom regions</source>
             <translation>自訂區域不支援圓角半徑</translation>
+        </message>
+        <message>
+            <source>Free</source>
+            <translation>自由</translation>
         </message>
         <message>
             <source>Height</source>
@@ -380,6 +429,10 @@
         <message>
             <source>Pixels</source>
             <translation>像素</translation>
+        </message>
+        <message>
+            <source>Selection aspect ratio</source>
+            <translation>選取範圍長寬比</translation>
         </message>
         <message>
             <source>Shadow width</source>
@@ -439,6 +492,10 @@
         <message>
             <source>Scale from center</source>
             <translation>從中心縮放</translation>
+        </message>
+        <message>
+            <source>Selection Aspect Ratio Snap</source>
+            <translation>選取範圍長寬比吸附</translation>
         </message>
         <message>
             <source>Switch color format</source>

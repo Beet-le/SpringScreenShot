@@ -4,11 +4,10 @@
 #include "snow_shot/presentation/settings/settingsregistry.h"
 
 #include <QFrame>
+#include <QColor>
 #include <QString>
 #include <QVector>
 
-class ApplicationSearchWidget;
-class QEvent;
 namespace adqt::widgets {
 class AdTabs;
 }
@@ -20,30 +19,28 @@ class MainContentHeaderWidget final : public QFrame {
     Q_OBJECT
 
   public:
-    MainContentHeaderWidget(const snow_shot::presentation::settings::SettingsRegistry& registry,
-                            const snow_shot::presentation::styles::ThemeAliasMetricToken& metric,
-                            QWidget* parent = nullptr);
+    explicit MainContentHeaderWidget(
+        const snow_shot::presentation::styles::ThemeAliasMetricToken& metric,
+        QWidget* parent = nullptr);
 
     [[nodiscard]] QString currentSection() const;
     void
     setSections(const QVector<snow_shot::presentation::settings::SettingsSectionSummary>& sections);
     void setCurrentSection(const QString& sectionId);
     void applyTheme(const snow_shot::presentation::styles::ThemeColorScheme& scheme);
-    void retranslateUi();
+    void setSkinMaskOpacity(qreal opacity);
 
   signals:
     void sectionRequested(const QString& sectionId);
-    void locationRequested(const snow_shot::presentation::settings::SettingsLocation& location);
-
-  protected:
-    void changeEvent(QEvent* event) override;
 
   private:
     void updateLayoutMargins(const snow_shot::presentation::styles::ThemeAliasMetricToken& metric);
+    void updateSkinMask();
 
     adqt::widgets::AdTabs* m_tabs = nullptr;
-    ApplicationSearchWidget* m_globalSearch = nullptr;
     QVector<snow_shot::presentation::settings::SettingsSectionSummary> m_sections;
+    qreal m_skinMaskOpacity = 1.0;
+    QColor m_surfaceColor;
 };
 
 #endif // SNOW_SHOT_PRESENTATION_COMPONENTS_MAINCONTENTHEADERWIDGET_H

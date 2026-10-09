@@ -1,4 +1,5 @@
 #include "switch.h"
+#include "detail/focus_reason.h"
 #include "detail/pointer_region.h"
 
 #include "detail/animated_scalar.h"
@@ -123,10 +124,6 @@ QString stripMnemonicMarkers(const QString& text) {
     }
   }
   return result;
-}
-
-bool isKeyboardFocusReason(Qt::FocusReason reason) {
-  return reason != Qt::MouseFocusReason && reason != Qt::NoFocusReason;
 }
 
 bool isEnterKey(int key) { return key == Qt::Key_Return || key == Qt::Key_Enter; }
@@ -594,6 +591,8 @@ AdSwitch::AdSwitch(QWidget* parent) : QAbstractButton(parent), d_(std::make_uniq
     refreshFocusOverlay();
     update();
   });
+  connect(&adqt::theme::ThemeManager::instance(), &adqt::theme::ThemeManager::themeChanged, this,
+          qOverload<>(&QWidget::update));
 
   d_->thumbAnimator->snapTo(isChecked() ? 1.0 : 0.0);
   d_->pressAnimator->snapTo(0.0);
@@ -1183,7 +1182,7 @@ void AdSwitch::keyReleaseEvent(QKeyEvent* event) {
 }
 
 void AdSwitch::focusInEvent(QFocusEvent* event) {
-  const bool focusVisible = event && isKeyboardFocusReason(event->reason());
+  const bool focusVisible = event && detail::isKeyboardFocusReason(event->reason());
   if (d_->focusVisible != focusVisible) {
     d_->focusVisible = focusVisible;
     invalidateResolvedTokensCache();

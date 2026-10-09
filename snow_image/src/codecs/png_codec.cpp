@@ -1,4 +1,6 @@
 #include "codecs/png_codec.h"
+
+#include <snow/memory/pixel_array.h>
 #include "exif_orientation.h"
 
 #include "snow/image/processing.h"
@@ -58,8 +60,8 @@ struct PngReadState final {
     std::stop_token stop;
     Status failure;
     DocumentInfo document;
-    std::vector<std::byte> pixels;
-    std::vector<std::byte> row;
+    snow::memory::PixelArray<std::byte> pixels;
+    snow::memory::PixelArray<std::byte> row;
     std::vector<png_bytep> rows;
 };
 
@@ -1012,7 +1014,7 @@ Result<EncodedArtifactReceipt> PngCodec::encode_raster_to_sink(const RasterSourc
                                  "PNG dimensions or stride exceed libpng limits.", "libpng");
         }
 
-        std::vector<std::byte> row(row_bytes);
+        snow::memory::PixelArray<std::byte> row(row_bytes);
         png_structp png = png_create_write_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
         if (!png) {
             return Status::error(ErrorCode::out_of_memory, "Could not create PNG writer.",
@@ -1067,6 +1069,13 @@ Result<EncodedArtifactReceipt> PngCodec::encode_raster_to_sink(const RasterSourc
             png_destroy_write_struct(&png, &info);
             return Codec::encode_raster_to_sink(source, output, options, stop);
         }
+        const bool strip_opaque_alpha = options.verified_alpha_content == AlphaContent::opaque &&
+                                        (plane.format.channels == ChannelLayout::gray_alpha ||
+                                         plane.format.channels == ChannelLayout::rgba ||
+                                         plane.format.channels == ChannelLayout::bgra);
+        if (strip_opaque_alpha)
+            color_type = plane.format.channels == ChannelLayout::gray_alpha ? PNG_COLOR_TYPE_GRAY
+                                                                            : PNG_COLOR_TYPE_RGB;
         png_set_IHDR(png, info, source_frame.width, source_frame.height,
                      plane.format.bits_per_channel, color_type,
                      options.interlaced ? PNG_INTERLACE_ADAM7 : PNG_INTERLACE_NONE,
@@ -1093,6 +1102,8 @@ Result<EncodedArtifactReceipt> PngCodec::encode_raster_to_sink(const RasterSourc
             std::endian::native == std::endian::little) {
             png_set_swap(png);
         }
+        if (strip_opaque_alpha)
+            png_set_filler(png, 0, PNG_FILLER_AFTER);
         const int passes = options.interlaced ? png_set_interlace_handling(png) : 1;
         for (int pass = 0; pass < passes; ++pass) {
             for (std::uint32_t y = 0; y < source_frame.height; ++y) {

@@ -2,9 +2,9 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use snow_draw_engine_core::{ErrorCode, Point, SnapGuide, arrow::ArrowEndpointEdge};
 use snow_draw_engine_document::{
     ArrowData, ArrowSuggestedBinding, ElementId, ElementKind, FilterData, PenFilterData,
-    RectangleData, SerialNumberData, TextData,
+    RectangleData, SerialNumberData, SerialNumberNumericType, TextData,
 };
-use snow_draw_engine_interaction::CursorStyle;
+use snow_draw_engine_interaction::{CursorStyle, PointerButton};
 use snow_draw_engine_model::DocumentModel;
 use std::collections::{HashMap, HashSet};
 
@@ -22,6 +22,7 @@ pub(crate) enum ToolSelectionScope {
     All,
     RectangleOnly,
     ArrowOnly,
+    DistanceOnly,
     LineOnly,
     FreeDrawOnly,
     RectangleHighlightOnly,
@@ -112,6 +113,7 @@ pub(crate) struct CreateArrowState {
     pub(crate) committed_points: Vec<Point<f64>>,
     pub(crate) press_view_position: Point<f64>,
     pub(crate) phase: ArrowCreationPhase,
+    pub(crate) distance_pixel_scale: Point<f64>,
     pub(crate) suggested_binding: Option<ArrowSuggestedBinding>,
 }
 
@@ -131,6 +133,8 @@ pub(crate) struct CreateFreeDrawState {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct CreatePenFilterState {
     pub(crate) pointer_id: u32,
+    /// Creation styles are latched for this gesture.
+    pub(crate) style: Option<crate::FilterStyle>,
     pub(crate) committed_points: Vec<Point<f64>>,
     pub(crate) pending_simplified_points: Vec<Point<f64>>,
     pub(crate) pending_raw_points: Vec<Point<f64>>,
@@ -218,6 +222,7 @@ pub(crate) enum SelectionEditMode {
 pub(crate) struct EditSelectionState {
     pub(crate) duplicate: bool,
     pub(crate) pointer_id: u32,
+    pub(crate) button: PointerButton,
     pub(crate) original_elements: Vec<SelectionRectState>,
     pub(crate) preview_elements: Vec<SelectionRectState>,
     pub(crate) original_arrows: Vec<SelectionArrowState>,
@@ -229,6 +234,7 @@ pub(crate) struct EditSelectionState {
 
 pub(crate) struct BeginSelectionEditRequest {
     pub(crate) pointer_id: u32,
+    pub(crate) button: PointerButton,
     pub(crate) original_elements: Vec<SelectionRectState>,
     pub(crate) original_arrows: Vec<SelectionArrowState>,
     pub(crate) original_bounds: SelectionBounds,
@@ -239,6 +245,7 @@ pub(crate) struct BeginSelectionEditRequest {
 
 pub(crate) struct BeginSelectionInteractionRequest {
     pub(crate) pointer_id: u32,
+    pub(crate) button: PointerButton,
     pub(crate) start_view_position: Point<f64>,
     pub(crate) original_elements: Vec<SelectionRectState>,
     pub(crate) original_arrows: Vec<SelectionArrowState>,
@@ -252,6 +259,7 @@ pub(crate) struct BeginSelectionInteractionRequest {
 pub(crate) struct PendingSelectionMoveState {
     pub(crate) duplicate: bool,
     pub(crate) pointer_id: u32,
+    pub(crate) button: PointerButton,
     pub(crate) original_elements: Vec<SelectionRectState>,
     pub(crate) original_arrows: Vec<SelectionArrowState>,
     pub(crate) original_bounds: SelectionBounds,
@@ -443,10 +451,13 @@ pub(crate) struct EditorState {
     pub(crate) active_text_draft: Option<ActiveTextDraftPresentation>,
     pub(crate) pending_text_edit: Option<ElementId>,
     pub(crate) pending_new_text_draft: bool,
-    pub(crate) arrow_text_measurements: Vec<crate::arrow_text::ArrowTextMeasurement>,
+    pub(crate) arrow_text_measurements: HashMap<ElementId, crate::arrow_text::ArrowTextMeasurement>,
     pub(crate) arrow_text_measurement_generation: u64,
     pub(crate) default_rectangle_shape_style: RectangleShapeStyle,
+    pub(crate) default_spotlight_shape: snow_draw_engine_document::HighlightShape,
     pub(crate) default_arrow_style: ArrowStyle,
+    pub(crate) default_distance_style: crate::DistanceStyle,
+    pub(crate) distance_creation_generation: u32,
     pub(crate) default_line_style: ShapeStyle,
     pub(crate) default_free_draw_style: ShapeStyle,
     pub(crate) default_rectangle_highlight_style: ShapeStyle,
@@ -454,8 +465,14 @@ pub(crate) struct EditorState {
     pub(crate) default_filter: FilterData,
     pub(crate) default_filter_stroke_width: f64,
     pub(crate) default_pen_filter: PenFilterData,
+    pub(crate) default_brush_eraser: crate::BrushEraserStyle,
     pub(crate) default_text: TextData,
     pub(crate) default_serial_number: SerialNumberData,
+    // Inactive numeric types retain their own creation values. The active type's
+    // authoritative value lives in default_serial_number, including explicit edits.
+    pub(crate) serial_number_values_by_numeric_type: [i64; 5],
+    // Explicit starts keep incrementing independently of existing canvas numbers.
+    pub(crate) serial_number_sequence_overridden: [bool; 5],
     pub(crate) eraser: EraserState,
     pub(crate) stroke_cursor_active: bool,
 }
@@ -467,6 +484,24 @@ impl Default for EditorState {
 }
 
 impl EditorState {
+    pub(crate) fn serial_number_values(&self) -> [i64; 5] {
+        let mut values = self.serial_number_values_by_numeric_type;
+        values[self.default_serial_number.numeric_type as usize] =
+            self.default_serial_number.number;
+        values
+    }
+
+    pub(crate) fn set_serial_number_value(
+        &mut self,
+        numeric_type: SerialNumberNumericType,
+        number: i64,
+    ) {
+        self.serial_number_values_by_numeric_type[numeric_type as usize] = number;
+        if self.default_serial_number.numeric_type == numeric_type {
+            self.default_serial_number.number = number;
+        }
+    }
+
     pub(crate) fn with_style_defaults(default_styles: &EditorStyleDefaults) -> Self {
         let default_filter = FilterData {
             filter_type: default_styles.rectangle_filter.filter_type,
@@ -510,6 +545,7 @@ impl EditorState {
         let default_serial_number = SerialNumberData {
             number: default_styles.serial_number.number,
             serial_number_type: default_styles.serial_number.serial_number_type,
+            numeric_type: default_styles.serial_number.numeric_type,
             color: default_styles.serial_number.color,
             fill: default_styles.serial_number.fill,
             fill_style: default_styles.serial_number.fill_style,
@@ -531,9 +567,12 @@ impl EditorState {
             active_text_draft: None,
             pending_text_edit: None,
             pending_new_text_draft: false,
-            arrow_text_measurements: Vec::new(),
+            arrow_text_measurements: HashMap::new(),
             arrow_text_measurement_generation: 0,
             default_rectangle_shape_style: default_styles.rectangle,
+            default_spotlight_shape: default_styles.spotlight_shape,
+            default_distance_style: default_styles.distance,
+            distance_creation_generation: 0,
             default_arrow_style: ArrowStyle {
                 arrow_ratio: snow_draw_engine_core::arrow::normalize_arrow_ratio(
                     default_styles.arrow.arrow_ratio,
@@ -552,8 +591,11 @@ impl EditorState {
             default_filter,
             default_filter_stroke_width: default_styles.rectangle_filter.stroke_width,
             default_pen_filter,
+            default_brush_eraser: default_styles.brush_eraser,
             default_text,
             default_serial_number,
+            serial_number_values_by_numeric_type: [1; 5],
+            serial_number_sequence_overridden: [false; 5],
             eraser: EraserState::default(),
             stroke_cursor_active: false,
         }
@@ -567,12 +609,12 @@ pub struct DocumentSyncSnapshot {
 
 impl DocumentSyncSnapshot {
     pub fn validate_session(&self, document: &DocumentModel) -> Result<(), ErrorCode> {
-        if self
-            .selection
-            .ids
-            .iter()
-            .any(|id| document.document().element(*id).is_err())
-        {
+        if self.selection.ids.iter().any(|id| {
+            document
+                .document()
+                .element(*id)
+                .map_or(true, |element| element.data.is_background_restore())
+        }) {
             return Err(ErrorCode::InvalidArgument);
         }
         Ok(())

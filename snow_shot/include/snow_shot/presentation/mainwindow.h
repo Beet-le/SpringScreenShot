@@ -20,6 +20,9 @@ class TitleBarWidget;
 namespace snow_shot::presentation::styles {
 struct ThemeColorScheme;
 }
+namespace snow_shot::presentation {
+class MainWindowSkinWidget;
+}
 namespace snow_shot::presentation::settings {
 class SettingsRegistry;
 class SettingsRuntimeSession;
@@ -34,8 +37,8 @@ class MainWindow : public QMainWindow {
                QWidget* parent = nullptr, SnowShotApiClient* translationClient = nullptr);
 
     void showAndActivate();
-    void showInterfaceSettings();
-    void showFunctionSettings();
+    void showGeneralSettings();
+    void showScreenshotSettings();
     void showSettingsLocation(const QString& pageId, const QString& sectionId = {});
     void showAppPermissions(const QString& permissionId = {});
     void showScreenshotHistory();
@@ -62,6 +65,8 @@ class MainWindow : public QMainWindow {
   private:
     void buildUi();
     void applyTheme(const snow_shot::presentation::styles::ThemeColorScheme& scheme);
+    void syncSkinBackground();
+    void applySkinAppearance();
     void syncTitleBarBottomShadowGeometry();
     void setupDwmShadow();
 #ifdef Q_OS_MACOS
@@ -75,6 +80,10 @@ class MainWindow : public QMainWindow {
     const snow_shot::presentation::settings::SettingsRegistry& m_settingsRegistry;
     snow_shot::presentation::settings::SettingsRuntimeSession& m_runtimeSession;
     QWidget* m_titleBarBottomShadow = nullptr;
+    snow_shot::presentation::MainWindowSkinWidget* m_skinBackground = nullptr;
+    QWidget* m_body = nullptr;
+    QWidget* m_contentShell = nullptr;
+    QWidget* m_contentArea = nullptr;
     // Member (not a QObject child) so the destructor still runs while QWidget is
     // alive and can persist visible-space geometry on shutdown delete.
     snow_shot::presentation::WindowGeometryMemory m_geometryMemory;

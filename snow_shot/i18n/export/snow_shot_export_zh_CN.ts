@@ -33,6 +33,33 @@
         </message>
     </context>
     <context>
+        <name>ScreenshotCloudUploadJob</name>
+        <message>
+            <source>Cloud upload failed (HTTP %1%2).</source>
+            <translation>云上传失败（HTTP %1%2）。</translation>
+        </message>
+        <message>
+            <source>Cloud upload failed because of a network error or timeout.</source>
+            <translation>云上传因网络错误或超时而失败。</translation>
+        </message>
+        <message>
+            <source>The cloud upload configuration or image is unavailable.</source>
+            <translation>云上传配置或图像不可用。</translation>
+        </message>
+        <message>
+            <source>The image could not be opened for upload.</source>
+            <translation>无法打开图像进行上传。</translation>
+        </message>
+        <message>
+            <source>The image could not be prepared for upload.</source>
+            <translation>无法准备要上传的图像。</translation>
+        </message>
+        <message>
+            <source>The screenshot export queue is full.</source>
+            <translation>截图导出队列已满。</translation>
+        </message>
+    </context>
+    <context>
         <name>ScreenshotExportArtifact</name>
         <message>
             <source>Image source unavailable</source>
@@ -103,6 +130,29 @@
         <message>
             <source>The PDF export was cancelled</source>
             <translation>PDF 导出已取消</translation>
+        </message>
+    </context>
+    <context>
+        <name>ScreenshotPrintService</name>
+        <message>
+            <source>The image could not be prepared for printing</source>
+            <translation>无法准备要打印的图像</translation>
+        </message>
+        <message>
+            <source>The image could not be printed: %1</source>
+            <translation>无法打印图像：%1</translation>
+        </message>
+        <message>
+            <source>The native print interface is unavailable</source>
+            <translation>系统打印接口不可用</translation>
+        </message>
+        <message>
+            <source>The native print operation failed</source>
+            <translation>系统打印操作失败</translation>
+        </message>
+        <message>
+            <source>Windows printing failed (%1)</source>
+            <translation>Windows 打印失败（%1）</translation>
         </message>
     </context>
     <context>

@@ -1,4 +1,4 @@
-use snow_draw_engine::{Point, Runtime, ViewportConfig};
+use snow_draw_engine::{Point, Runtime, SnapGuideTargets, ViewportConfig};
 
 use crate::abi::convert::*;
 use crate::abi::handles::*;
@@ -116,6 +116,68 @@ pub unsafe extern "C" fn snow_runtime_serialize_document_session(
         }
         SnowError::Ok
     })
+}
+
+/// Serializes once into an immutable snapshot independent of the runtime.
+///
+/// # Safety
+/// `runtime` must be a live runtime and `out_bytes` must be writable. Release the
+/// returned handle with `snow_serialized_bytes_destroy`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn snow_runtime_serialize_document_session_bytes(
+    runtime: SnowRuntime,
+    out_bytes: *mut SnowSerializedBytes,
+) -> SnowError {
+    ffi_error(|| {
+        if out_bytes.is_null() {
+            return SnowError::InvalidArgument;
+        }
+        write_out(out_bytes, std::ptr::null_mut());
+        let bytes = match with_runtime_ref(runtime, |runtime| {
+            runtime
+                .serialize_document_session()
+                .map_err(SnowError::from)
+        }) {
+            Ok(bytes) => bytes,
+            Err(error) => return error,
+        };
+        write_out(
+            out_bytes,
+            Box::into_raw(Box::new(SnowSerializedBytesImpl { bytes })),
+        );
+        SnowError::Ok
+    })
+}
+
+/// # Safety
+/// `bytes` must be a live snapshot handle. Output pointers must be writable.
+/// The returned data is read-only and remains valid until the handle is destroyed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn snow_serialized_bytes_data(
+    bytes: SnowSerializedBytes,
+    out_data: *mut *const u8,
+    out_size: *mut usize,
+) -> SnowError {
+    ffi_error(|| {
+        if bytes.is_null() || out_data.is_null() || out_size.is_null() {
+            return SnowError::InvalidArgument;
+        }
+        let bytes = unsafe { &(*bytes).bytes };
+        write_out(out_data, bytes.as_ptr());
+        write_out(out_size, bytes.len());
+        SnowError::Ok
+    })
+}
+
+/// # Safety
+/// A non-null handle must be live and must not have been destroyed previously.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn snow_serialized_bytes_destroy(bytes: SnowSerializedBytes) {
+    ffi_void(|| {
+        if !bytes.is_null() {
+            drop(unsafe { Box::from_raw(bytes) });
+        }
+    });
 }
 
 /// Serializes the selected editable elements as a versioned draw template.
@@ -278,6 +340,45 @@ pub unsafe extern "C" fn snow_runtime_destroy(runtime: SnowRuntime) {
         unsafe {
             drop(Box::from_raw(runtime));
         }
+    })
+}
+
+/// # Safety
+/// `runtime` must be a live runtime handle. Balance every successful begin
+/// with an end, including when a mutation or measurement fails.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn snow_runtime_begin_presentation_update(runtime: SnowRuntime) -> SnowError {
+    ffi_error(|| {
+        ffi_status(with_runtime_impl_mut(runtime, |state| {
+            state
+                .runtime
+                .begin_presentation_update()
+                .map_err(SnowError::from)
+        }))
+    })
+}
+
+/// # Safety
+/// `runtime` must be a live runtime handle and `out_changed_viewports` writable.
+/// Release the returned list with `snow_changed_viewports_destroy`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn snow_runtime_end_presentation_update_ex(
+    runtime: SnowRuntime,
+    out_changed_viewports: *mut SnowChangedViewportList,
+) -> SnowError {
+    ffi_error(|| {
+        if out_changed_viewports.is_null() {
+            return SnowError::InvalidArgument;
+        }
+        write_out(out_changed_viewports, std::ptr::null_mut());
+        ffi_status(with_runtime_impl_mut(runtime, |state| {
+            let result = state
+                .runtime
+                .end_presentation_update()
+                .map_err(SnowError::from)?;
+            write_changed_viewports(out_changed_viewports, result.changed_viewports);
+            Ok(())
+        }))
     })
 }
 
@@ -563,6 +664,48 @@ pub unsafe extern "C" fn snow_viewport_set_snap_config_ex(
 }
 
 /// # Safety
+/// Non-null arrays must be readable for their supplied lengths; the output must be writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn snow_viewport_set_snap_guide_targets_ex(
+    runtime: SnowRuntime,
+    viewport: SnowViewport,
+    vertical_xs: *const f64,
+    vertical_count: usize,
+    horizontal_ys: *const f64,
+    horizontal_count: usize,
+    out_changed_viewports: *mut SnowChangedViewportList,
+) -> SnowError {
+    ffi_error(|| {
+        if out_changed_viewports.is_null()
+            || vertical_count > 2
+            || horizontal_count > 2
+            || (vertical_count > 0 && vertical_xs.is_null())
+            || (horizontal_count > 0 && horizontal_ys.is_null())
+        {
+            return SnowError::InvalidArgument;
+        }
+        let mut targets = SnapGuideTargets::default();
+        for index in 0..vertical_count {
+            targets.vertical_xs[index] = Some(unsafe { *vertical_xs.add(index) });
+        }
+        for index in 0..horizontal_count {
+            targets.horizontal_ys[index] = Some(unsafe { *horizontal_ys.add(index) });
+        }
+        ffi_status(with_runtime_viewport_mut(
+            runtime,
+            viewport,
+            |runtime, id| {
+                let result = runtime
+                    .set_viewport_snap_guide_targets(id, targets)
+                    .map_err(SnowError::from)?;
+                write_changed_viewports(out_changed_viewports, result.changed_viewports);
+                Ok(())
+            },
+        ))
+    })
+}
+
+/// # Safety
 /// If `runtime` and `viewport` are non-null, they must be live handles created by this library.
 /// `out_config` must be valid for writes of one `SnowGridConfig` value.
 #[unsafe(no_mangle)]
@@ -676,6 +819,53 @@ pub unsafe extern "C" fn snow_changed_viewports_get(
 #[cfg(test)]
 mod session_tests {
     use super::*;
+
+    #[test]
+    fn session_bytes_snapshot_outlives_runtime_and_rejects_bad_input() {
+        unsafe {
+            let mut runtime = std::ptr::null_mut();
+            assert_eq!(snow_runtime_create(&mut runtime), SnowError::Ok);
+            let expected = (*runtime).runtime.serialize_document_session().unwrap();
+            let mut snapshot = std::ptr::null_mut();
+            assert_eq!(
+                snow_runtime_serialize_document_session_bytes(runtime, &mut snapshot),
+                SnowError::Ok
+            );
+            assert!(!snapshot.is_null());
+            assert_eq!(
+                snow_runtime_serialize_document_session_bytes(runtime, std::ptr::null_mut()),
+                SnowError::InvalidArgument
+            );
+            snow_runtime_destroy(runtime);
+            let mut data = std::ptr::null();
+            let mut size = 0;
+            assert_eq!(
+                snow_serialized_bytes_data(snapshot, &mut data, &mut size),
+                SnowError::Ok
+            );
+            assert_eq!(std::slice::from_raw_parts(data, size), expected);
+            assert_eq!(
+                snow_serialized_bytes_data(snapshot, std::ptr::null_mut(), &mut size),
+                SnowError::InvalidArgument
+            );
+            assert_eq!(
+                snow_serialized_bytes_data(snapshot, &mut data, std::ptr::null_mut()),
+                SnowError::InvalidArgument
+            );
+            assert_eq!(
+                snow_serialized_bytes_data(std::ptr::null_mut(), &mut data, &mut size),
+                SnowError::InvalidArgument
+            );
+            snow_serialized_bytes_destroy(snapshot);
+            // Failure must clear an output slot rather than leave a stale handle.
+            assert_eq!(
+                snow_runtime_serialize_document_session_bytes(std::ptr::null_mut(), &mut snapshot),
+                SnowError::InvalidArgument
+            );
+            assert!(snapshot.is_null());
+            snow_serialized_bytes_destroy(std::ptr::null_mut());
+        }
+    }
     use snow_draw_engine::ActiveTool;
 
     #[test]

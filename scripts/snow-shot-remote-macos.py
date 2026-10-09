@@ -18,6 +18,27 @@ def digest(path):
     return value.hexdigest()
 
 
+def symbols_inventory(build, products):
+    names = ['snow_shot', 'snow-ocr-process']
+    if 'snow-shot-mini' in products:
+        names.append('snow_shot_mini')
+    symbols = []
+    for name in names:
+        path = build / 'symbols' / (name + '.dSYM') / 'Contents/Resources/DWARF' / name
+        if name == 'snow-ocr-process':
+            # Cargo's packed dSYM retains its hashed executable filename when
+            # copied out of deps/. Record that actual file without renaming it.
+            files = list(path.parent.glob('*'))
+            if len(files) != 1:
+                raise ValueError(f'Release diagnostics symbols are missing or ambiguous: {name}')
+            path = files[0]
+        if not path.is_file() or not path.stat().st_size:
+            raise ValueError(f'Release diagnostics symbols are missing: {name}')
+        symbols.append({'file': str(path.relative_to(build)), 'sha256': digest(path),
+                        'size': path.stat().st_size})
+    return symbols
+
+
 def source_identity(repo):
     def git(*args):
         return subprocess.check_output(['git', '-C', str(repo), *args])
@@ -42,8 +63,19 @@ def package(request):
     match = re.search(r'set\(SNOW_SHOT_VERSION "([^"]+)"\)', source)
     if not match or match[1] != version:
         raise ValueError('Windows and macOS source versions must match')
-    if sys.platform != 'darwin' or os.uname().machine != 'arm64':
-        raise ValueError('The release host must be an Apple Silicon Mac')
+    architecture = request.get('architecture', 'arm64')
+    if architecture not in ('arm64', 'x64'):
+        raise ValueError('Invalid macOS release architecture')
+    if sys.platform != 'darwin' or os.uname().machine not in ('arm64', 'x86_64'):
+        raise ValueError('The release host must be a supported Mac')
+    if architecture == 'arm64' and os.uname().machine != 'arm64':
+        raise ValueError('ARM64 release builds require an Apple Silicon Mac')
+    asset_architecture = 'arm64' if architecture == 'arm64' else 'x86_64'
+    editions = request.get('editions', ['Full'])
+    if editions not in (['Full'], ['Full', 'Mini']):
+        raise ValueError('Invalid release editions')
+    if architecture == 'x64' and editions != ['Full']:
+        raise ValueError('macOS Intel supports the Full edition only')
     parallelism = int(request['parallelism'])
     if not 1 <= parallelism <= 256:
         raise ValueError('Invalid parallelism')
@@ -53,39 +85,56 @@ def package(request):
     lock.mkdir()  # Never compete with another coordinated release build.
     try:
         identity = source_identity(repo)
-        preset = 'snow-shot-macos-arm64-release'
+        preset = 'snow-shot-macos-' + architecture + '-release'
         build = repo / 'build' / preset
-        image = build / ('snow-shot-' + version + '-macos-arm64.dmg')
+        products = ['snow-shot'] + (['snow-shot-mini'] if 'Mini' in editions else [])
+        images = [build / (product + '-' + version + '-macos-' + asset_architecture + '.dmg')
+                  for product in products]
         receipt = build / 'remote-release-source.json'
         if request.get('skipBuild'):
             previous = json.loads(receipt.read_text())
+            # Receipts predating architecture selection describe ARM64 only.
+            if previous.get('architecture', 'arm64') != architecture:
+                raise ValueError('Cached DMG source receipt has a different architecture')
             if previous['version'] != version or previous['source'] != identity:
                 raise ValueError('Cached DMG source receipt differs; rebuild macOS')
-            if digest(image) != previous['sha256']:
-                raise ValueError('Cached DMG differs from its source receipt')
+            previous_images = previous.get('images', [previous])
+            if len(previous_images) != len(images):
+                raise ValueError('Cached DMG source receipt has different editions')
+            for image, product, item in zip(images, products, previous_images):
+                if item.get('product', 'snow-shot') != product or digest(image) != item['sha256']:
+                    raise ValueError('Cached DMG differs from its source receipt')
+            if previous.get('symbols') != symbols_inventory(build, products):
+                raise ValueError('Cached diagnostics symbols differ from their source receipt')
         else:
             env = os.environ.copy()
             env['PATH'] = str(Path.home() / '.cargo/bin') + ':/opt/homebrew/bin:/usr/local/bin:' + env['PATH']
             subprocess.run(['bash', str(repo / 'scripts/package-snow-shot.sh'), preset,
                             '--parallel', str(parallelism)], cwd=repo, env=env,
                            stdout=sys.stderr, check=True)
-        checksum = image.with_suffix('.dmg.sha256').read_text().split()[0].lower()
-        if not re.fullmatch('[a-f0-9]{64}', checksum) or digest(image) != checksum:
-            raise ValueError('CPack DMG checksum mismatch')
-        subprocess.run(['hdiutil', 'verify', str(image)], stdout=sys.stderr, check=True)
-        subprocess.run(['codesign', '--verify', '--verbose=2', str(image)], check=True)
+        descriptions = []
+        for image, product in zip(images, products):
+            checksum = image.with_suffix('.dmg.sha256').read_text().split()[0].lower()
+            if not re.fullmatch('[a-f0-9]{64}', checksum) or digest(image) != checksum:
+                raise ValueError('CPack DMG checksum mismatch')
+            subprocess.run(['hdiutil', 'verify', str(image)], stdout=sys.stderr, check=True)
+            subprocess.run(['codesign', '--verify', '--verbose=2', str(image)], check=True)
+            descriptions.append({'product': product, 'sha256': checksum, 'size': image.stat().st_size})
         if source_identity(repo) != identity:
             raise ValueError('macOS source changed during packaging; retry from a stable checkout')
-        result = {'version': version, 'source': identity, 'sha256': checksum,
-                  'size': image.stat().st_size}
+        result = {'version': version, 'architecture': architecture, 'source': identity,
+                  **descriptions[0], 'images': descriptions,
+                  'symbols': symbols_inventory(build, products)}
         receipt.write_text(json.dumps(result))
         staged = artifacts / ('remote-release-' + identifier)
         staged.mkdir()
-        target = staged / 'snow-shot_macos-arm64.dmg'
-        shutil.copyfile(image, target)
-        if digest(target) != checksum:
-            raise ValueError('Staged DMG checksum mismatch')
-        result['path'] = str(target)
+        for image, item in zip(images, descriptions):
+            target = staged / (item['product'] + '_macos-' + asset_architecture + '.dmg')
+            shutil.copyfile(image, target)
+            if digest(target) != item['sha256']:
+                raise ValueError('Staged DMG checksum mismatch')
+            item['path'] = str(target)
+        result['path'] = descriptions[0]['path']
         return result
     finally:
         lock.rmdir()

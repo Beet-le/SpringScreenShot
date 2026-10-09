@@ -1,7 +1,7 @@
 use super::*;
 use snow_draw_engine_core::arrow::{ArrowEndpointEdge, ArrowType, StrokeStyle};
 use snow_draw_engine_document::{
-    ArrowSuggestedBinding, ElementMeta, TextLayoutSize, arrow_is_degenerate,
+    ArrowSuggestedBinding, ElementMeta, FilterData, TextLayoutSize, arrow_is_degenerate,
     resolve_serial_number_data_diameter, text_with_measured_ink, text_with_measured_layout,
     text_with_pinned_alignment_layout, validate_text_layout_size,
 };
@@ -13,7 +13,17 @@ struct BoundArrowPreview {
 }
 
 impl Editor {
-    fn pen_highlight_preview(&self, start: Point<f64>, end: Point<f64>) -> Option<ArrowData> {
+    fn pen_highlight_preview(
+        &self,
+        start: Point<f64>,
+        end: Point<f64>,
+        modifiers: Modifiers,
+    ) -> Option<ArrowData> {
+        let end = if modifiers.shift {
+            lock_linear_point_to_discrete_angle(start, end)
+        } else {
+            end
+        };
         let style = self.state.default_pen_highlight_style;
         ArrowData::from_global_points(
             &[start, end],
@@ -41,7 +51,8 @@ impl Editor {
         match event.event_type {
             PointerEventType::Move | PointerEventType::Enter => {
                 let end = view_to_canvas(event.position, &self.camera(), self.surface_size());
-                let preview = self.pen_highlight_preview(state.start_canvas_position, end);
+                let preview =
+                    self.pen_highlight_preview(state.start_canvas_position, end, event.modifiers);
                 self.set_creation_preview(preview.map(ElementCreationPreview::Arrow), Vec::new());
                 Ok(InteractionOutput {
                     consumed: true,
@@ -51,7 +62,8 @@ impl Editor {
             }
             PointerEventType::Up => {
                 let end = view_to_canvas(event.position, &self.camera(), self.surface_size());
-                let preview = self.pen_highlight_preview(state.start_canvas_position, end);
+                let preview =
+                    self.pen_highlight_preview(state.start_canvas_position, end, event.modifiers);
                 self.cancel_interaction();
                 if let Some(pen) = preview.filter(|pen| !arrow_is_degenerate(pen)) {
                     let mut transaction = Transaction::new("create pen highlight");
@@ -106,11 +118,17 @@ impl Editor {
         start_canvas_position: Point<f64>,
         start_view_position: Point<f64>,
     ) {
+        self.state.distance_creation_generation = self
+            .state
+            .distance_creation_generation
+            .wrapping_add(1)
+            .max(1);
         self.state.interaction = InteractionState::CreatingArrow(CreateArrowState {
             pointer_id,
             committed_points: vec![start_canvas_position],
             press_view_position: start_view_position,
             phase: ArrowCreationPhase::InitialPress,
+            distance_pixel_scale: self.view.distance_pixel_scale,
             ..Default::default()
         });
         self.clear_transient_visuals();
@@ -173,19 +191,42 @@ impl Editor {
     pub(crate) fn queue_arrow_creation(
         &mut self,
         document: &DocumentModel,
-        arrow: ArrowData,
+        mut arrow: ArrowData,
     ) -> Result<(), ErrorCode> {
         validate_arrow(&arrow)?;
-        let mut transaction = Transaction::new(if arrow.is_line() {
+        let label = if arrow.is_distance() {
+            let text = snow_draw_engine_document::distance_label(&arrow, None)
+                .ok_or(ErrorCode::InvalidArgument)?;
+            Some(self.measured_distance_label(document.peek_next_element_id(), &arrow, &text))
+        } else {
+            None
+        };
+        let mut transaction = Transaction::new(if arrow.is_distance() {
+            "create distance"
+        } else if arrow.is_line() {
             "create line"
         } else {
             "create arrow"
         });
+        let text_id = if label.is_some() {
+            let mut text_id = document.peek_next_element_id();
+            text_id.index = text_id
+                .index
+                .checked_add(1)
+                .ok_or(ErrorCode::InvalidState)?;
+            arrow.text_element_id = Some(text_id);
+            Some(text_id)
+        } else {
+            None
+        };
         transaction.insert_arrow(
             document.peek_next_element_id(),
             ElementMeta::default(),
             arrow,
         );
+        if let Some((text_id, label)) = text_id.zip(label) {
+            transaction.insert_text(text_id, ElementMeta::default(), label);
+        }
         self.queue_command(EditorCommand::ApplyTransaction(
             ApplyTransactionCommand::new(transaction),
         ));
@@ -238,8 +279,11 @@ impl Editor {
             .default_serial_number
             .serial_number_type
             .supports_number()
+            && !self.state.serial_number_sequence_overridden
+                [self.state.default_serial_number.numeric_type as usize]
         {
-            next_serial_number(document).max(self.state.default_serial_number.number)
+            next_serial_number(document, self.state.default_serial_number.numeric_type)
+                .max(self.state.default_serial_number.number)
         } else {
             self.state.default_serial_number.number
         };
@@ -281,30 +325,7 @@ impl Editor {
         current: Point<f64>,
         modifiers: Modifiers,
     ) -> (Point<f64>, Vec<SnapGuide>) {
-        let snapping_mode = self.effective_snapping_mode(modifiers);
-        match snapping_mode {
-            SnappingMode::Grid => (
-                GRID_SNAP_SERVICE.snap_point(current, self.config.grid.size),
-                Vec::new(),
-            ),
-            SnappingMode::Object if self.config.snap.enable_point_snaps => {
-                let snap = document.snap_point(&snow_draw_engine_core::SnapQuery {
-                    point: current,
-                    threshold: self.zoom_adjusted_snap_distance(),
-                    include_grid: false,
-                    grid_size: self.config.grid.size,
-                });
-                (
-                    snap.point,
-                    if self.config.snap.show_guides {
-                        snap.guides
-                    } else {
-                        Vec::new()
-                    },
-                )
-            }
-            _ => (current, Vec::new()),
-        }
+        self.snap_creation_point(document, current, modifiers)
     }
 
     pub(crate) fn finalize_arrow_creation_from_points(
@@ -331,30 +352,7 @@ impl Editor {
         current: Point<f64>,
         modifiers: Modifiers,
     ) -> (Point<f64>, Vec<SnapGuide>) {
-        let snapping_mode = self.effective_snapping_mode(modifiers);
-        match snapping_mode {
-            SnappingMode::Grid => (
-                GRID_SNAP_SERVICE.snap_point(current, self.config.grid.size),
-                Vec::new(),
-            ),
-            SnappingMode::Object if self.config.snap.enable_point_snaps => {
-                let snap = document.snap_point(&snow_draw_engine_core::SnapQuery {
-                    point: current,
-                    threshold: self.zoom_adjusted_snap_distance(),
-                    include_grid: false,
-                    grid_size: self.config.grid.size,
-                });
-                (
-                    snap.point,
-                    if self.config.snap.show_guides {
-                        snap.guides
-                    } else {
-                        Vec::new()
-                    },
-                )
-            }
-            _ => (current, Vec::new()),
-        }
+        self.snap_creation_point(document, current, modifiers)
     }
 
     fn arrow_creation_preview(
@@ -498,9 +496,21 @@ impl Editor {
             current_canvas,
             event.modifiers,
         );
-        let preview = if self.active_tool() == ActiveTool::Filter {
+        let preview = if matches!(
+            self.active_tool(),
+            ActiveTool::RectangleFilter | ActiveTool::RectangleEraser
+        ) {
             preview.map(|rect| {
-                let mut filter = self.state.default_filter;
+                let mut filter = if self.active_tool() == ActiveTool::RectangleEraser {
+                    FilterData {
+                        filter_type: snow_draw_engine_document::CanvasFilterType::RestoreBackground,
+                        strength: 1.0,
+                        opacity: 1.0,
+                        ..FilterData::default()
+                    }
+                } else {
+                    self.state.default_filter
+                };
                 filter.center = rect.center;
                 filter.width = rect.width;
                 filter.height = rect.height;
@@ -542,14 +552,31 @@ impl Editor {
         self.cancel_interaction();
 
         if let Some(rect) = preview {
-            if self.active_tool() == ActiveTool::Filter {
-                let mut filter = self.state.default_filter;
+            if matches!(
+                self.active_tool(),
+                ActiveTool::RectangleFilter | ActiveTool::RectangleEraser
+            ) {
+                let mut filter = if self.active_tool() == ActiveTool::RectangleEraser {
+                    FilterData {
+                        filter_type: snow_draw_engine_document::CanvasFilterType::RestoreBackground,
+                        strength: 1.0,
+                        opacity: 1.0,
+                        ..FilterData::default()
+                    }
+                } else {
+                    self.state.default_filter
+                };
                 filter.center = rect.center;
                 filter.width = rect.width;
                 filter.height = rect.height;
                 filter.rotation = rect.rotation;
                 validate_filter(&filter)?;
-                let mut transaction = Transaction::new("create filter");
+                let mut transaction =
+                    Transaction::new(if self.active_tool() == ActiveTool::RectangleEraser {
+                        "create rectangle eraser"
+                    } else {
+                        "create filter"
+                    });
                 transaction.insert_filter(
                     document.peek_next_element_id(),
                     ElementMeta::default(),
@@ -615,6 +642,9 @@ impl Editor {
         document: &DocumentModel,
         event: PointerEvent,
     ) -> Result<InteractionOutput, ErrorCode> {
+        if self.state.active_tool == ActiveTool::Distance {
+            return self.process_distance_creation_pointer_event(document, event);
+        }
         match event.event_type {
             PointerEventType::Down => self.handle_arrow_pointer_down(document, event),
             PointerEventType::DoubleClick => self.handle_arrow_double_click(document, event),
@@ -941,7 +971,7 @@ impl Editor {
             // The drag label starts from the same definition the floating
             // toolbar's Create Text button uses, so both paths style and size
             // the bound label identically before the host measurement lands.
-            let mut text = crate::text::new_serial_bound_label(&serial, &self.state.default_text)?;
+            let mut text = crate::text::new_serial_bound_label(&self.state.default_text)?;
             text.center = current_canvas;
             serial.text_element_id = Some(text_id);
             let mut transaction = Transaction::new("create serial number text");
@@ -1739,6 +1769,99 @@ mod line_creation_tests {
         assert_eq!(pen.arrow_type, ArrowType::Straight);
         assert_eq!(pen.start_arrowhead, None);
         assert_eq!(pen.end_arrowhead, None);
+    }
+
+    #[test]
+    fn pen_highlight_shift_snaps_preview_and_release_to_fifteen_degree_angles() {
+        for zoom in [0.5, 1.0, 2.0] {
+            for degrees in [
+                -173.0_f64, -98.0, -52.0, -8.0, 8.0, 22.0, 38.0, 83.0, 142.0, 173.0,
+            ] {
+                let mut document = DocumentModel::new();
+                let id = document.peek_next_element_id();
+                let mut editor = Editor::new(EngineConfig::default()).unwrap();
+                editor.set_surface_size(800, 600).unwrap();
+                editor
+                    .set_camera(Camera {
+                        center: Point::new(-30.0, 40.0),
+                        zoom,
+                    })
+                    .unwrap();
+                editor.set_active_tool(ActiveTool::PenHighlight).unwrap();
+                let start = Point::new(10.0, 20.0);
+                let angle = degrees.to_radians();
+                let end = Point::new(start.x + 100.0 * angle.cos(), start.y + 100.0 * angle.sin());
+                let locked_angle = (degrees / 15.0).round() * 15.0;
+                let locked_angle = locked_angle.to_radians();
+                let projected_length = 100.0 * (angle - locked_angle).cos();
+                let expected = Point::new(
+                    start.x + projected_length * locked_angle.cos(),
+                    start.y + projected_length * locked_angle.sin(),
+                );
+                let event = |event_type, shift| PointerEvent {
+                    pointer_id: 7,
+                    event_type,
+                    device: PointerDevice::Mouse,
+                    position: snow_draw_engine_core::canvas_to_view(
+                        end,
+                        &editor.camera(),
+                        editor.surface_size(),
+                    ),
+                    button: Some(PointerButton::Primary),
+                    buttons: PointerButtons::default(),
+                    modifiers: Modifiers {
+                        shift,
+                        ..Modifiers::default()
+                    },
+                };
+                let move_event = event(PointerEventType::Move, true);
+                let free_event = event(PointerEventType::Move, false);
+                let up_event = event(PointerEventType::Up, true);
+                editor.state.interaction =
+                    InteractionState::CreatingPenHighlight(CreateRectangleState {
+                        pointer_id: 7,
+                        start_canvas_position: start,
+                    });
+                editor
+                    .process_pen_highlight_creation_pointer_event(&document, move_event)
+                    .unwrap();
+                let Some(ElementCreationPreview::Arrow(preview)) =
+                    editor.state.creation_preview.as_ref()
+                else {
+                    panic!("Shift pen drag should expose a preview");
+                };
+                let points = preview.global_points();
+                assert!(point_distance(points[0], start) < 1e-9);
+                assert!(
+                    point_distance(points[1], expected) < 1e-9,
+                    "zoom={zoom}, angle={degrees}"
+                );
+
+                // Releasing Shift restores the pointer angle; pressing it only
+                // at pointer-up must still constrain the committed stroke.
+                editor
+                    .process_pen_highlight_creation_pointer_event(&document, free_event)
+                    .unwrap();
+                let Some(ElementCreationPreview::Arrow(preview)) =
+                    editor.state.creation_preview.as_ref()
+                else {
+                    panic!("unconstrained pen drag should retain a preview");
+                };
+                assert!(point_distance(preview.global_points()[1], end) < 1e-9);
+                editor
+                    .process_pen_highlight_creation_pointer_event(&document, up_event)
+                    .unwrap();
+                let Some(EditorCommand::ApplyTransaction(command)) = editor.pending_command.take()
+                else {
+                    panic!("Shift pen release should queue a transaction");
+                };
+                document.apply_transaction(command.transaction).unwrap();
+                let pen = document.arrow(id).unwrap();
+                assert!(pen.is_pen_highlight());
+                assert!(point_distance(pen.global_points()[1], expected) < 1e-9);
+                assert!(editor.state.creation_preview.is_none());
+            }
+        }
     }
 
     #[test]

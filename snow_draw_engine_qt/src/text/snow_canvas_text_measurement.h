@@ -21,6 +21,7 @@ class NaturalTextLayoutCache {
     snow_canvas_text_layout::TextMeasuredLayout measure(const QString& text, const QFont& baseFont,
                                                         const SnowSceneDisplayItem& item);
     void clear();
+    qsizetype retainedBytes() const;
     std::uint64_t measurementCount() const;
 
   private:
@@ -39,27 +40,28 @@ struct SelectedTextLayoutMeasurementRequest {
     SnowTextStyle style{};
     QFont baseFont;
     std::uint32_t properties = SNOW_TEXT_STYLE_ALL_PROPERTIES;
+    std::optional<QRectF> textEditingBounds;
 };
 
 struct ResizeLayoutMeasurementRequest {
     SnowTextElementInfo info{};
     QFont baseFont;
     double zoom = 1.0;
+    std::optional<QRectF> textEditingBounds;
+    std::optional<QString> completeText;
 };
 
-TextLayoutOverrideMeasurement
-measureAutoResizeLayoutOverrides(const SnowTextElementInfo* infos, std::uint32_t infoCount,
-                                 const SnowTextStyle& style, const QFont& baseFont,
-                                 std::uint32_t properties = SNOW_TEXT_STYLE_ALL_PROPERTIES);
+TextLayoutOverrideMeasurement measureAutoResizeLayoutOverrides(
+    const SnowTextElementInfo* infos, std::uint32_t infoCount, const SnowTextStyle& style,
+    const QFont& baseFont, std::uint32_t properties = SNOW_TEXT_STYLE_ALL_PROPERTIES,
+    const std::optional<QRectF>& textEditingBounds = std::nullopt, SnowRuntime runtime = nullptr);
 TextLayoutOverrideMeasurement
 measureSelectedAutoResizeLayoutOverrides(const SelectedTextLayoutMeasurementRequest& request);
 SnowTextLayoutSize measureEmptyDraftLayout(const SnowTextStyle& style, const QFont& baseFont);
 SnowTextLayoutSize measureSerialLabelLayout(const SnowSerialLabelLayoutRequest& request,
                                             const QFont& baseFont);
-SnowTextLayoutSize
-measureSerialNumberBoundTextLayout(const SnowTextStyle& textStyle,
-                                   const SnowSerialNumberStyle& serialNumberStyle,
-                                   const QFont& baseFont);
+SnowTextLayoutSize measureSerialNumberBoundTextLayout(const SnowTextStyle& textStyle,
+                                                      const QFont& baseFont);
 SnowTextLayoutSize measureResizeLayout(const ResizeLayoutMeasurementRequest& request);
 double steppedFontSize(double current, bool increase);
 

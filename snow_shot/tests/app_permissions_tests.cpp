@@ -271,9 +271,10 @@ void freshSettingsActions() {
 }
 void routingPolicy() {
     using A = GlobalShortcutAction;
-    for (auto action : {A::Screenshot, A::ScreenshotDelay, A::ScreenshotFixed, A::ScreenshotOcr,
-                        A::ScreenshotTranslation, A::ScreenshotCopy, A::ScreenshotFullScreen,
-                        A::ScreenshotFocusedWindow})
+    for (auto action :
+         {A::Screenshot, A::ScreenshotDelay, A::ScreenshotFixed, A::ScreenshotOcr,
+          A::ScreenshotTranslation, A::ScreenshotCopy, A::ScreenshotSave, A::ScreenshotQuickSave,
+          A::ScreenshotFullScreen, A::ScreenshotFocusedWindow})
         require(requiredPermissions(action, true) == AppPermissions{P::ScreenRecording},
                 "capture must not require optional smart-selection access");
     for (auto action : {A::ScreenRecord, A::ScreenRecordCopy}) {
@@ -382,9 +383,9 @@ void pageAndAlerts() {
             if (const auto* group = std::get_if<settings::SettingsNavigationGroupDefinition>(&node))
                 for (int i = 1; i < group->pages.size(); ++i)
                     if (group->pages.at(i).pageId == u"app-permissions")
-                        followsSystem = group->pages.at(i - 1).pageId == u"system-settings";
+                        followsSystem = group->pages.at(i - 1).pageId == u"connections-services";
         }
-        require(followsSystem, "App Permissions must immediately follow System settings");
+        require(followsSystem, "App Permissions must follow the shared connection settings");
         settings::SettingsSearchIndex search(registry);
         const auto hits = search.search(QStringLiteral("Input Monitoring"));
         require(
@@ -610,7 +611,7 @@ void pageAndAlerts() {
                     "hiding permission alerts must restore the standard page top spacing");
         }
         require(native->requests == 0, "page navigation and refresh must never prompt");
-        SettingsPageWidget functions(registry, QStringLiteral("function-settings"), runtime);
+        SettingsPageWidget functions(registry, QStringLiteral("screenshots"), runtime);
         require(!functions.findChild<QWidget*>(QStringLiteral("smartSelectionPermission")),
                 "old permission widget must be removed");
 #else

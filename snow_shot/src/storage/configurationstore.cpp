@@ -1,6 +1,10 @@
 #include "snow_shot/storage/configurationstore.h"
+#include "snow_shot/clouduploadconfiguration.h"
+#include "snow_shot/app/edition.h"
+#if SNOW_SHOT_ENABLE_API_CONFIGURATION
 #include "snow_shot/customaimodelconfiguration.h"
 #include "snow_shot/texttranslationconfiguration.h"
+#endif
 
 #include "snow_shot/storage/configurationschema.h"
 #include "snow_shot/storage/storagelogging.h"
@@ -22,7 +26,9 @@
 namespace snow_shot::storage {
 namespace {
 const QString kSchemaVersionKey = QStringLiteral("storage/schema_version");
+#if SNOW_SHOT_ENABLE_API_CONFIGURATION
 const QString kCustomModelsKey = QStringLiteral("api_configuration/custom_models");
+#endif
 
 enum class ConfigurationOverlayPolicy {
     MergeFromDisk,
@@ -121,6 +127,16 @@ MaterializedConfiguration materializeConfiguration(const QMap<QString, QJsonValu
                 result.dirty = true;
             }
         }
+        if (entry.key == QStringLiteral("cloud_upload/configuration")) {
+            bool valid = false;
+            const auto canonical =
+                cloudUploadSettingsToJson(cloudUploadSettingsFromJson(raw, &valid));
+            result.values.insert(entry.key, canonical);
+            result.customConfigurationsRepaired = result.customConfigurationsRepaired || !valid;
+            if (replaceAll)
+                insertPath(&result.document, entry.key, canonical);
+            continue;
+        }
         bool migratedDestroyShortcut = false;
         if (entry.key == QStringLiteral("pin_to_screen_shortcuts/destroy_window") &&
             mutateDocument && schemaVersion < 3) {
@@ -132,6 +148,7 @@ MaterializedConfiguration materializeConfiguration(const QMap<QString, QJsonValu
                 migratedDestroyShortcut = true;
             }
         }
+#if SNOW_SHOT_ENABLE_API_CONFIGURATION
         if (entry.key == kCustomModelsKey ||
             entry.key == QStringLiteral("api_configuration/text_translation")) {
             bool valid = false;
@@ -148,6 +165,7 @@ MaterializedConfiguration materializeConfiguration(const QMap<QString, QJsonValu
             continue;
         }
 
+#endif
         const ConfigurationNormalization normalized =
             ConfigurationSchema::normalize(entry.key, raw);
         if (!normalized.valid) {
@@ -319,7 +337,8 @@ bool ConfigurationStore::setValues(const QMap<QString, QJsonValue>& values) {
     QVector<QPair<QString, QJsonValue>> changed;
     {
         QMutexLocker locker(&m_mutex);
-        if (!m_writeAvailable || m_compatibility == ConfigurationCompatibility::FutureVersion) {
+        if (m_suspended || !m_writeAvailable ||
+            m_compatibility == ConfigurationCompatibility::FutureVersion) {
             locker.unlock();
             rejectMutation(values.isEmpty() ? QString() : values.cbegin().key(),
                            QStringLiteral("Configuration storage is read-only"));
@@ -379,7 +398,8 @@ bool ConfigurationStore::applySnapshot(const QMap<QString, QJsonValue>& values, 
     QVector<QPair<QString, QJsonValue>> changed;
     {
         QMutexLocker locker(&m_mutex);
-        if (!m_writeAvailable || m_compatibility == ConfigurationCompatibility::FutureVersion) {
+        if (m_suspended || !m_writeAvailable ||
+            m_compatibility == ConfigurationCompatibility::FutureVersion) {
             locker.unlock();
             rejectMutation({}, QStringLiteral("Configuration storage is read-only"));
             return false;
@@ -459,6 +479,20 @@ StorageResult ConfigurationStore::flushNow() {
             }
         }
     }
+}
+
+void ConfigurationStore::suspendWrites(bool suspended) {
+    QMutexLocker mutationLock(&m_mutationMutex);
+    QMutexLocker lock(&m_mutex);
+    m_suspended = suspended;
+    if (suspended)
+        m_flushTimer.stop();
+}
+
+void ConfigurationStore::relocate(const QString& directory) {
+    QMutexLocker ioLock(&m_ioMutex);
+    QMutexLocker lock(&m_mutex);
+    m_configurationFile = QDir(directory).filePath(QStringLiteral("config.json"));
 }
 
 void ConfigurationStore::load() {

@@ -1,0 +1,13 @@
+cmake_minimum_required(VERSION 3.25)
+project(SnowQtTimeZoneContract LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/SnowQt.cmake")
+snow_find_qt(COMPONENTS Core)
+add_executable(snow-qt-timezone-tests timezone_tests.cpp)
+target_link_libraries(snow-qt-timezone-tests PRIVATE Qt6::Core)
+enable_testing()
+add_test(NAME snow-qt-timezone-tests COMMAND snow-qt-timezone-tests)
+set_tests_properties(snow-qt-timezone-tests PROPERTIES LABELS unit)

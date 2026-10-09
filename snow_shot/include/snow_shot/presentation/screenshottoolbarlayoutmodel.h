@@ -1,8 +1,11 @@
 #ifndef SNOW_SHOT_PRESENTATION_SCREENSHOTTOOLBARLAYOUTMODEL_H
 #define SNOW_SHOT_PRESENTATION_SCREENSHOTTOOLBARLAYOUTMODEL_H
 
+#include "snow_shot/presentation/editionfeatures.h"
+
 #include "snow_shot/presentation/components/icons/snowshoticons.h"
 #include "snow_shot/storage/settingsadapters.h"
+#include "snow_shot/storage/floatingtoolbarsettings.h"
 #include "antd_icons.h"
 
 #include <QSet>
@@ -40,6 +43,7 @@ template <typename IsAvailable>
 }
 
 enum class Item {
+    Select,
     Shape,
     Arrow,
     Line,
@@ -51,9 +55,13 @@ enum class Item {
     Filter,
     Eraser,
     Watermark,
+    Distance,
 };
 
 enum class Icon {
+    Screenshot,
+    ScreenshotDelay,
+    Select,
     Shape,
     Arrow,
     Line,
@@ -75,11 +83,24 @@ enum class Icon {
     TextRecognition,
     TextTranslation,
     ScrollingScreenshot,
+    Print,
     SaveAsFile,
+    UploadToCloud,
     QuickSave,
+    Cancel,
+    Copy,
+    Confirm,
     Latex,
     Markdown,
     Html,
+    RecordingStart,
+    RecordingPause,
+    RecordingDuration,
+    RecordingMicrophone,
+    RecordingSystemAudio,
+    RecordingFolder,
+    RecordingTrim,
+    Distance,
 };
 
 struct Descriptor {
@@ -98,10 +119,15 @@ struct EditorDescriptor {
 
 [[nodiscard]] inline const QVector<Descriptor>& descriptors() {
     static const QVector<Descriptor> value{
+        {Item::Select, "select",
+         QT_TRANSLATE_NOOP("DrawingToolbarEditorSettingsWidget", "Select elements"), Icon::Select},
         {Item::Shape, "shape", QT_TRANSLATE_NOOP("DrawingToolbarEditorSettingsWidget", "Shape"),
          Icon::Shape},
         {Item::Arrow, "arrow", QT_TRANSLATE_NOOP("DrawingToolbarEditorSettingsWidget", "Arrow"),
          Icon::Arrow},
+        {Item::Distance, "distance",
+         QT_TRANSLATE_NOOP("DrawingToolbarEditorSettingsWidget", "Distance annotation"),
+         Icon::Distance},
         {Item::Line, "line", QT_TRANSLATE_NOOP("DrawingToolbarEditorSettingsWidget", "Line"),
          Icon::Line},
         {Item::FreeDraw, "free-draw",
@@ -150,56 +176,85 @@ struct EditorDescriptor {
         result.push_back(QString::fromLatin1(candidate.id));
     }
     result.append({QStringLiteral("separator"), QStringLiteral("undo"), QStringLiteral("redo")});
+    result.insert(1, QStringLiteral("select-separator"));
     return result;
 }
 
 [[nodiscard]] inline const QVector<EditorDescriptor>& actionDescriptors() {
-    static const QVector<EditorDescriptor> value{
-        {"barcode-recognition", "ScreenshotToolbarEditorSettingsWidget",
-         QT_TRANSLATE_NOOP("ScreenshotToolbarEditorSettingsWidget", "Barcode recognition"),
-         Icon::BarcodeRecognition},
-        {"table-recognition", "ScreenshotToolbarEditorSettingsWidget",
-         QT_TRANSLATE_NOOP("ScreenshotToolbarEditorSettingsWidget", "Table recognition"),
-         Icon::TableRecognition},
-        {"convert-to-markdown", "ScreenshotToolbarEditorSettingsWidget",
-         QT_TRANSLATE_NOOP("ScreenshotToolbarEditorSettingsWidget", "Convert to Markdown"),
-         Icon::Markdown},
-        {"latex-recognition", "ScreenshotToolbarEditorSettingsWidget",
-         QT_TRANSLATE_NOOP("ScreenshotToolbarEditorSettingsWidget", "LaTeX Formula Recognition"),
-         Icon::Latex},
-        {"convert-to-html", "ScreenshotToolbarEditorSettingsWidget",
-         QT_TRANSLATE_NOOP("ScreenshotToolbarEditorSettingsWidget", "Convert to HTML"), Icon::Html},
-        {"record-screen", "ScreenshotToolbarEditorSettingsWidget",
-         QT_TRANSLATE_NOOP("ScreenshotToolbarEditorSettingsWidget", "Record screen"),
-         Icon::RecordScreen},
-        {"pin-to-screen", "ScreenshotToolbarEditorSettingsWidget",
-         QT_TRANSLATE_NOOP("ScreenshotToolbarEditorSettingsWidget", "Pin to screen"),
-         Icon::PinToScreen},
-        {"text-recognition", "ScreenshotToolbarEditorSettingsWidget",
-         QT_TRANSLATE_NOOP("ScreenshotToolbarEditorSettingsWidget", "Text recognition"),
-         Icon::TextRecognition},
-        {"text-translation", "ScreenshotToolbarEditorSettingsWidget",
-         QT_TRANSLATE_NOOP("ScreenshotToolbarEditorSettingsWidget", "Text translation"),
-         Icon::TextTranslation},
-        {"scrolling-screenshot", "ScreenshotToolbarEditorSettingsWidget",
-         QT_TRANSLATE_NOOP("ScreenshotToolbarEditorSettingsWidget", "Scrolling screenshot"),
-         Icon::ScrollingScreenshot},
-        {"quick-save", "ScreenshotToolbarEditorSettingsWidget",
-         QT_TRANSLATE_NOOP("ScreenshotToolbarEditorSettingsWidget", "Quick save"), Icon::QuickSave},
-        {"save-as-file", "ScreenshotToolbarEditorSettingsWidget",
-         QT_TRANSLATE_NOOP("ScreenshotToolbarEditorSettingsWidget", "Save as file"),
-         Icon::SaveAsFile},
-    };
+    static const QVector<EditorDescriptor> value = [] {
+        QVector<EditorDescriptor> result{
+            {"barcode-recognition", "ScreenshotToolbarEditorSettingsWidget",
+             QT_TRANSLATE_NOOP("ScreenshotToolbarEditorSettingsWidget", "Barcode recognition"),
+             Icon::BarcodeRecognition},
+            {"table-recognition", "ScreenshotToolbarEditorSettingsWidget",
+             QT_TRANSLATE_NOOP("ScreenshotToolbarEditorSettingsWidget", "Table recognition"),
+             Icon::TableRecognition},
+            {"convert-to-markdown", "ScreenshotToolbarEditorSettingsWidget",
+             QT_TRANSLATE_NOOP("ScreenshotToolbarEditorSettingsWidget", "Convert to Markdown"),
+             Icon::Markdown},
+            {"latex-recognition", "ScreenshotToolbarEditorSettingsWidget",
+             QT_TRANSLATE_NOOP("ScreenshotToolbarEditorSettingsWidget",
+                               "LaTeX Formula Recognition"),
+             Icon::Latex},
+            {"convert-to-html", "ScreenshotToolbarEditorSettingsWidget",
+             QT_TRANSLATE_NOOP("ScreenshotToolbarEditorSettingsWidget", "Convert to HTML"),
+             Icon::Html},
+            {"record-screen", "ScreenshotToolbarEditorSettingsWidget",
+             QT_TRANSLATE_NOOP("ScreenshotToolbarEditorSettingsWidget", "Record screen"),
+             Icon::RecordScreen},
+            {"pin-to-screen", "ScreenshotToolbarEditorSettingsWidget",
+             QT_TRANSLATE_NOOP("ScreenshotToolbarEditorSettingsWidget", "Pin to screen"),
+             Icon::PinToScreen},
+            {"text-recognition", "ScreenshotToolbarEditorSettingsWidget",
+             QT_TRANSLATE_NOOP("ScreenshotToolbarEditorSettingsWidget", "Text recognition"),
+             Icon::TextRecognition},
+            {"text-translation", "ScreenshotToolbarEditorSettingsWidget",
+             QT_TRANSLATE_NOOP("ScreenshotToolbarEditorSettingsWidget", "Text translation"),
+             Icon::TextTranslation},
+            {"scrolling-screenshot", "ScreenshotToolbarEditorSettingsWidget",
+             QT_TRANSLATE_NOOP("ScreenshotToolbarEditorSettingsWidget", "Scrolling screenshot"),
+             Icon::ScrollingScreenshot},
+            {"print", "ScreenshotToolbarEditorSettingsWidget",
+             QT_TRANSLATE_NOOP("ScreenshotToolbarEditorSettingsWidget", "Print"), Icon::Print},
+            {"quick-save", "ScreenshotToolbarEditorSettingsWidget",
+             QT_TRANSLATE_NOOP("ScreenshotToolbarEditorSettingsWidget", "Quick save"),
+             Icon::QuickSave},
+            {"upload-to-cloud", "ScreenshotToolbarEditorSettingsWidget",
+             QT_TRANSLATE_NOOP("ScreenshotToolbarEditorSettingsWidget", "Upload to Cloud"),
+             Icon::UploadToCloud},
+            {"save-as-file", "ScreenshotToolbarEditorSettingsWidget",
+             QT_TRANSLATE_NOOP("ScreenshotToolbarEditorSettingsWidget", "Save as file"),
+             Icon::SaveAsFile},
+            {"copy", "PinnedToolbarEditorSettingsWidget",
+             QT_TRANSLATE_NOOP("PinnedToolbarEditorSettingsWidget", "Copy to clipboard"),
+             Icon::Copy},
+            {"confirm", "PinnedToolbarEditorSettingsWidget",
+             QT_TRANSLATE_NOOP("PinnedToolbarEditorSettingsWidget", "Confirm edit"), Icon::Confirm},
+            {"cancel", "ScreenshotToolbarEditorSettingsWidget",
+             QT_TRANSLATE_NOOP("ScreenshotToolbarEditorSettingsWidget", "Cancel screenshot"),
+             Icon::Cancel},
+        };
+        result.removeIf([](const EditorDescriptor& descriptor) {
+            return !editionActionToolAvailable(QString::fromLatin1(descriptor.id));
+        });
+        return result;
+    }();
     return value;
 }
 
 [[nodiscard]] inline const QVector<EditorDescriptor>& drawingEditorDescriptors() {
     static const QVector<EditorDescriptor> value = [] {
         QVector<EditorDescriptor> result;
-        result.reserve(descriptors().size() + 3);
+        result.reserve(descriptors().size() + 4);
         for (const Descriptor& descriptor : descriptors()) {
             result.push_back({descriptor.id, "DrawingToolbarEditorSettingsWidget", descriptor.label,
                               descriptor.icon});
+            if (descriptor.item == Item::Select) {
+                result.push_back(
+                    {"select-separator", "DrawingToolbarEditorSettingsWidget",
+                     QT_TRANSLATE_NOOP("DrawingToolbarEditorSettingsWidget", "Separator Component"),
+                     Icon::Separator});
+            }
         }
         result.push_back(
             {"separator", "DrawingToolbarEditorSettingsWidget",
@@ -216,8 +271,84 @@ struct EditorDescriptor {
     return value;
 }
 
+[[nodiscard]] inline const QVector<EditorDescriptor>& recordingDescriptors() {
+    static const QVector<EditorDescriptor> value{
+        {"start-stop", "RecordingToolbarEditorSettingsWidget",
+         QT_TRANSLATE_NOOP("RecordingToolbarEditorSettingsWidget", "Start / stop recording"),
+         Icon::RecordingStart},
+        {"pause-resume", "RecordingToolbarEditorSettingsWidget",
+         QT_TRANSLATE_NOOP("RecordingToolbarEditorSettingsWidget", "Pause / resume recording"),
+         Icon::RecordingPause},
+        {"duration", "RecordingToolbarEditorSettingsWidget",
+         QT_TRANSLATE_NOOP("RecordingToolbarEditorSettingsWidget", "Recording duration"),
+         Icon::RecordingDuration},
+        {"microphone", "RecordingToolbarEditorSettingsWidget",
+         QT_TRANSLATE_NOOP("RecordingToolbarEditorSettingsWidget", "Microphone"),
+         Icon::RecordingMicrophone},
+        {"system-audio", "RecordingToolbarEditorSettingsWidget",
+         QT_TRANSLATE_NOOP("RecordingToolbarEditorSettingsWidget", "System audio"),
+         Icon::RecordingSystemAudio},
+        {"separator", "RecordingToolbarEditorSettingsWidget",
+         QT_TRANSLATE_NOOP("RecordingToolbarEditorSettingsWidget", "Separator Component"),
+         Icon::Separator},
+        {"open-folder", "RecordingToolbarEditorSettingsWidget",
+         QT_TRANSLATE_NOOP("RecordingToolbarEditorSettingsWidget", "Open recording folder"),
+         Icon::RecordingFolder},
+        {"close", "RecordingToolbarEditorSettingsWidget",
+         QT_TRANSLATE_NOOP("RecordingToolbarEditorSettingsWidget", "Close recording"),
+         Icon::Cancel},
+        {"trim", "RecordingToolbarEditorSettingsWidget",
+         QT_TRANSLATE_NOOP("RecordingToolbarEditorSettingsWidget", "Trim recording"),
+         Icon::RecordingTrim},
+        {"save", "RecordingToolbarEditorSettingsWidget",
+         QT_TRANSLATE_NOOP("RecordingToolbarEditorSettingsWidget", "Save recording"),
+         Icon::SaveAsFile},
+        {"copy", "RecordingToolbarEditorSettingsWidget",
+         QT_TRANSLATE_NOOP("RecordingToolbarEditorSettingsWidget", "Copy recording content"),
+         Icon::Copy},
+    };
+    return value;
+}
+
+[[nodiscard]] inline const EditorDescriptor* recordingDescriptor(const QString& id) {
+    for (const EditorDescriptor& candidate : recordingDescriptors()) {
+        if (id == QLatin1String(candidate.id)) {
+            return &candidate;
+        }
+    }
+    return nullptr;
+}
+
 [[nodiscard]] inline QVector<EditorDescriptor>
 editorDescriptors(storage::ScreenshotToolbarLayoutKind kind) {
+    if (kind == storage::ScreenshotToolbarLayoutKind::RecordingActionTools) {
+        return recordingDescriptors();
+    }
+    if (kind == storage::ScreenshotToolbarLayoutKind::FloatingTools) {
+        auto result = actionDescriptors();
+        const auto ids = storage::floatingToolbarItemIds();
+        result.removeIf([&ids](const EditorDescriptor& item) {
+            return !ids.contains(QString::fromLatin1(item.id));
+        });
+        for (auto& item : result) {
+            if (QLatin1String(item.id) == QLatin1String("barcode-recognition")) {
+                item.translationContext = "FloatingToolbar";
+                item.label = QT_TRANSLATE_NOOP("FloatingToolbar", "QR code recognition");
+            } else if (QLatin1String(item.id) == QLatin1String("latex-recognition")) {
+                item.translationContext = "FloatingToolbar";
+                item.label = QT_TRANSLATE_NOOP("FloatingToolbar", "Formula recognition");
+            } else if (QLatin1String(item.id) == QLatin1String("record-screen")) {
+                item.translationContext = "FloatingToolbar";
+                item.label = QT_TRANSLATE_NOOP("FloatingToolbar", "Screen recording");
+            }
+        }
+        result.prepend({"screenshot-delay", "FloatingToolbar",
+                        QT_TRANSLATE_NOOP("FloatingToolbar", "Delay %1 seconds to execute"),
+                        Icon::ScreenshotDelay});
+        result.prepend({"screenshot", "FloatingToolbar",
+                        QT_TRANSLATE_NOOP("FloatingToolbar", "Screenshot"), Icon::Screenshot});
+        return result;
+    }
     if (kind == storage::ScreenshotToolbarLayoutKind::PinnedActionTools) {
         QVector<EditorDescriptor> result;
         for (const auto& descriptor : actionDescriptors()) {
@@ -228,14 +359,33 @@ editorDescriptors(storage::ScreenshotToolbarLayoutKind kind) {
                 id == QStringLiteral("convert-to-markdown") ||
                 id == QStringLiteral("convert-to-html") ||
                 id == QStringLiteral("text-recognition") ||
-                id == QStringLiteral("text-translation")) {
+                id == QStringLiteral("text-translation") || id == QStringLiteral("save-as-file") ||
+                id == QStringLiteral("quick-save") || id == QStringLiteral("upload-to-cloud") ||
+                id == QStringLiteral("print") || id == QStringLiteral("copy") ||
+                id == QStringLiteral("confirm")) {
                 result.push_back(descriptor);
             }
         }
+        result.push_back(
+            {"confirm-separator", "DrawingToolbarEditorSettingsWidget",
+             QT_TRANSLATE_NOOP("DrawingToolbarEditorSettingsWidget", "Separator Component"),
+             Icon::Separator});
+        result.push_back(
+            {"separator", "DrawingToolbarEditorSettingsWidget",
+             QT_TRANSLATE_NOOP("DrawingToolbarEditorSettingsWidget", "Separator Component"),
+             Icon::Separator});
         return result;
     }
     if (kind == storage::ScreenshotToolbarLayoutKind::ActionTools) {
-        return actionDescriptors();
+        auto result = actionDescriptors();
+        result.removeIf([](const EditorDescriptor& descriptor) {
+            return QLatin1String(descriptor.id) == QLatin1String("confirm");
+        });
+        result.push_back(
+            {"separator", "DrawingToolbarEditorSettingsWidget",
+             QT_TRANSLATE_NOOP("DrawingToolbarEditorSettingsWidget", "Separator Component"),
+             Icon::Separator});
+        return result;
     }
     return drawingEditorDescriptors();
 }
@@ -251,17 +401,36 @@ editorDescriptors(storage::ScreenshotToolbarLayoutKind kind) {
 
 [[nodiscard]] inline QVector<QStringList> defaultPositions() {
     return {
-        {QStringLiteral("shape")},     {QStringLiteral("line"), QStringLiteral("arrow")},
-        {QStringLiteral("free-draw")}, {QStringLiteral("spotlight"), QStringLiteral("highlighter")},
-        {QStringLiteral("text")},      {QStringLiteral("serial-number")},
-        {QStringLiteral("filter")},    {QStringLiteral("eraser")},
-        {QStringLiteral("watermark")}, {QStringLiteral("separator")},
-        {QStringLiteral("undo")},      {QStringLiteral("redo")},
+        {QStringLiteral("select")},
+        {QStringLiteral("select-separator")},
+        {QStringLiteral("shape")},
+        {QStringLiteral("distance"), QStringLiteral("line"), QStringLiteral("arrow")},
+        {QStringLiteral("free-draw")},
+        {QStringLiteral("spotlight"), QStringLiteral("highlighter")},
+        {QStringLiteral("text")},
+        {QStringLiteral("serial-number")},
+        {QStringLiteral("filter")},
+        {QStringLiteral("eraser")},
+        {QStringLiteral("watermark")},
+        {QStringLiteral("separator")},
+        {QStringLiteral("undo")},
+        {QStringLiteral("redo")},
     };
 }
 
+[[nodiscard]] inline QVector<QStringList> editionActionPositions(QVector<QStringList> positions) {
+    for (QStringList& position : positions) {
+        position.removeIf([](const QString& id) {
+            return !editionActionToolAvailable(id) ||
+                   (app::edition::isMini && id == QStringLiteral("text-recognition"));
+        });
+    }
+    positions.removeIf([](const QStringList& position) { return position.isEmpty(); });
+    return positions;
+}
+
 [[nodiscard]] inline QVector<QStringList> actionDefaultPositions() {
-    return {
+    return editionActionPositions({
         {QStringLiteral("convert-to-html"), QStringLiteral("convert-to-markdown"),
          QStringLiteral("latex-recognition"), QStringLiteral("barcode-recognition"),
          QStringLiteral("table-recognition")},
@@ -270,20 +439,40 @@ editorDescriptors(storage::ScreenshotToolbarLayoutKind kind) {
         {QStringLiteral("text-recognition")},
         {QStringLiteral("text-translation")},
         {QStringLiteral("scrolling-screenshot")},
-        {QStringLiteral("quick-save"), QStringLiteral("save-as-file")},
-    };
+        {QStringLiteral("upload-to-cloud"), QStringLiteral("print"), QStringLiteral("quick-save"),
+         QStringLiteral("save-as-file")},
+        {QStringLiteral("separator")},
+        {QStringLiteral("cancel")},
+        {QStringLiteral("copy")},
+    });
 }
 
 [[nodiscard]] inline QVector<QStringList>
 defaultPositions(storage::ScreenshotToolbarLayoutKind kind) {
+    if (kind == storage::ScreenshotToolbarLayoutKind::RecordingActionTools) {
+        QVector<QStringList> positions;
+        positions.reserve(recordingDescriptors().size());
+        for (const EditorDescriptor& descriptor : recordingDescriptors()) {
+            positions.push_back({QString::fromLatin1(descriptor.id)});
+        }
+        return positions;
+    }
+    if (kind == storage::ScreenshotToolbarLayoutKind::FloatingTools)
+        return storage::defaultFloatingToolbarLayout().positions;
     if (kind == storage::ScreenshotToolbarLayoutKind::PinnedActionTools) {
-        return {
+        return editionActionPositions({
             {QStringLiteral("convert-to-html"), QStringLiteral("convert-to-markdown"),
              QStringLiteral("latex-recognition"), QStringLiteral("barcode-recognition"),
              QStringLiteral("table-recognition")},
             {QStringLiteral("text-recognition")},
             {QStringLiteral("text-translation")},
-        };
+            {QStringLiteral("separator")},
+            {QStringLiteral("upload-to-cloud"), QStringLiteral("print"),
+             QStringLiteral("quick-save"), QStringLiteral("save-as-file")},
+            {QStringLiteral("copy")},
+            {QStringLiteral("confirm-separator")},
+            {QStringLiteral("confirm")},
+        });
     }
     return kind == storage::ScreenshotToolbarLayoutKind::ActionTools ? actionDefaultPositions()
                                                                      : defaultPositions();
@@ -299,9 +488,22 @@ defaultPositions(storage::ScreenshotToolbarLayoutKind kind) {
     return result;
 }
 
+[[nodiscard]] inline bool isSeparator(const QString& itemId) {
+    return itemId == QStringLiteral("separator") || itemId == QStringLiteral("select-separator") ||
+           itemId == QStringLiteral("confirm-separator");
+}
+
+[[nodiscard]] inline bool requiresOwnPosition(const QString& itemId,
+                                              storage::ScreenshotToolbarLayoutKind kind) {
+    return isSeparator(itemId) ||
+           (kind == storage::ScreenshotToolbarLayoutKind::RecordingActionTools &&
+            itemId == QStringLiteral("duration"));
+}
+
 [[nodiscard]] inline storage::ScreenshotToolbarLayout
 normalizedLayout(const storage::ScreenshotToolbarLayout& input, const QStringList& defaults,
-                 const QVector<QStringList>& defaultLayout, bool migrateScreenshotLayout = false) {
+                 const QVector<QStringList>& defaultLayout, bool migrateScreenshotLayout = false,
+                 bool legacyDefaults = true, const QStringList& standaloneItemIds = {}) {
     const QSet<QString> known(defaults.cbegin(), defaults.cend());
     QSet<QString> positioned;
     storage::ScreenshotToolbarLayout result;
@@ -309,7 +511,7 @@ normalizedLayout(const storage::ScreenshotToolbarLayout& input, const QStringLis
         QStringList position;
         for (const QString& itemId : inputPosition) {
             if (known.contains(itemId) && !positioned.contains(itemId)) {
-                if (itemId == QStringLiteral("separator")) {
+                if (isSeparator(itemId) || standaloneItemIds.contains(itemId)) {
                     if (!position.isEmpty()) {
                         result.positions.push_back(position);
                         position.clear();
@@ -335,6 +537,30 @@ normalizedLayout(const storage::ScreenshotToolbarLayout& input, const QStringLis
         }
     }
 
+    if (legacyDefaults && app::edition::isMini &&
+        known.contains(QStringLiteral("text-recognition")) &&
+        !positioned.contains(QStringLiteral("text-recognition")) &&
+        !hidden.contains(QStringLiteral("text-recognition"))) {
+        result.hidden.push_back(QStringLiteral("text-recognition"));
+        hidden.insert(QStringLiteral("text-recognition"));
+    }
+
+    if (known.contains(QStringLiteral("upload-to-cloud")) &&
+        !positioned.contains(QStringLiteral("upload-to-cloud")) &&
+        !hidden.contains(QStringLiteral("upload-to-cloud"))) {
+        for (QStringList& position : result.positions) {
+            if (position.contains(QStringLiteral("save-as-file"))) {
+                position.prepend(QStringLiteral("upload-to-cloud"));
+                positioned.insert(QStringLiteral("upload-to-cloud"));
+                break;
+            }
+        }
+        if (!positioned.contains(QStringLiteral("upload-to-cloud")) &&
+            hidden.contains(QStringLiteral("save-as-file"))) {
+            result.hidden.push_back(QStringLiteral("upload-to-cloud"));
+            hidden.insert(QStringLiteral("upload-to-cloud"));
+        }
+    }
     if (known.contains(QStringLiteral("quick-save")) &&
         !positioned.contains(QStringLiteral("quick-save")) &&
         !hidden.contains(QStringLiteral("quick-save"))) {
@@ -352,21 +578,52 @@ normalizedLayout(const storage::ScreenshotToolbarLayout& input, const QStringLis
             hidden.insert(QStringLiteral("quick-save"));
         }
     }
+    if (known.contains(QStringLiteral("print")) && !positioned.contains(QStringLiteral("print")) &&
+        !hidden.contains(QStringLiteral("print"))) {
+        for (QStringList& position : result.positions) {
+            const qsizetype saveIndex = position.indexOf(QStringLiteral("save-as-file"));
+            if (saveIndex >= 0) {
+                const qsizetype quickIndex = position.indexOf(QStringLiteral("quick-save"));
+                position.insert(quickIndex >= 0 ? std::min(quickIndex, saveIndex) : saveIndex,
+                                QStringLiteral("print"));
+                positioned.insert(QStringLiteral("print"));
+                break;
+            }
+        }
+        if (!positioned.contains(QStringLiteral("print")) &&
+            hidden.contains(QStringLiteral("save-as-file"))) {
+            result.hidden.push_back(QStringLiteral("print"));
+            hidden.insert(QStringLiteral("print"));
+        }
+    }
     if (migrateScreenshotLayout && !result.positions.isEmpty() &&
         known.contains(QStringLiteral("convert-to-markdown"))) {
         // Upgrade earlier defaults without changing custom placements.
-        auto previousDefault = defaultLayout;
+        auto previousScreenshotDefault = defaultLayout;
+        if (known.contains(QStringLiteral("cancel"))) {
+            previousScreenshotDefault.removeIf([](const QStringList& position) {
+                return position == QStringList{QStringLiteral("separator")} ||
+                       position == QStringList{QStringLiteral("cancel")} ||
+                       position == QStringList{QStringLiteral("copy")};
+            });
+        }
+        auto previousDefault = previousScreenshotDefault;
         previousDefault[0] = {QStringLiteral("barcode-recognition"),
                               QStringLiteral("table-recognition")};
         previousDefault.insert(1, QStringList{QStringLiteral("convert-to-markdown")});
         previousDefault.insert(2, QStringList{QStringLiteral("convert-to-html")});
-        auto previousGroupedDefault = defaultLayout;
+        auto previousGroupedDefault = previousScreenshotDefault;
         previousGroupedDefault[0] = {
             QStringLiteral("table-recognition"), QStringLiteral("barcode-recognition"),
             QStringLiteral("convert-to-markdown"), QStringLiteral("convert-to-html")};
         if (result.hidden.isEmpty() &&
             (result.positions == previousDefault || result.positions == previousGroupedDefault)) {
             result.positions = defaultLayout;
+            for (const QStringList& position : defaultLayout) {
+                for (const QString& itemId : position) {
+                    positioned.insert(itemId);
+                }
+            }
         }
         qsizetype recognitionPosition = -1;
         for (const QString& anchor :
@@ -392,15 +649,15 @@ normalizedLayout(const storage::ScreenshotToolbarLayout& input, const QStringLis
     }
     // Upgrade the previous default recognition group, preserving custom arrangements.
     for (QStringList& position : result.positions) {
-        if (position == QStringList{QStringLiteral("convert-to-html"),
-                                    QStringLiteral("latex-recognition"),
-                                    QStringLiteral("convert-to-markdown"),
-                                    QStringLiteral("barcode-recognition"),
-                                    QStringLiteral("table-recognition")}) {
+        if (legacyDefaults && position == QStringList{QStringLiteral("convert-to-html"),
+                                                      QStringLiteral("latex-recognition"),
+                                                      QStringLiteral("convert-to-markdown"),
+                                                      QStringLiteral("barcode-recognition"),
+                                                      QStringLiteral("table-recognition")}) {
             position.swapItemsAt(1, 2);
         }
     }
-    if (known.contains(QStringLiteral("latex-recognition")) &&
+    if (legacyDefaults && known.contains(QStringLiteral("latex-recognition")) &&
         !positioned.contains(QStringLiteral("latex-recognition")) &&
         !hidden.contains(QStringLiteral("latex-recognition"))) {
         for (QStringList& position : result.positions) {
@@ -421,6 +678,13 @@ normalizedLayout(const storage::ScreenshotToolbarLayout& input, const QStringLis
             hidden.contains(QStringLiteral("convert-to-markdown"))) {
             result.hidden.push_back(QStringLiteral("latex-recognition"));
             hidden.insert(QStringLiteral("latex-recognition"));
+        }
+    }
+    // These controls used to be fixed ahead of the configurable drawing positions.
+    for (const QString& itemId : {QStringLiteral("select-separator"), QStringLiteral("select")}) {
+        if (known.contains(itemId) && !positioned.contains(itemId) && !hidden.contains(itemId)) {
+            result.positions.prepend({itemId});
+            positioned.insert(itemId);
         }
     }
     for (const QStringList& defaultPosition : defaultLayout) {
@@ -447,6 +711,22 @@ normalizedLayout(const storage::ScreenshotToolbarLayout& input) {
 [[nodiscard]] inline storage::ScreenshotToolbarLayout
 normalizedLayout(const storage::ScreenshotToolbarLayout& input,
                  storage::ScreenshotToolbarLayoutKind kind) {
+    if (kind == storage::ScreenshotToolbarLayoutKind::RecordingActionTools) {
+        return normalizedLayout(input, defaultOrder(kind), defaultPositions(kind), false, false,
+                                {QStringLiteral("duration")});
+    }
+    if (kind == storage::ScreenshotToolbarLayoutKind::FloatingTools) {
+        auto candidate = input;
+        for (const auto& id : storage::defaultFloatingToolbarLayout().hidden) {
+            const bool positioned =
+                std::any_of(candidate.positions.cbegin(), candidate.positions.cend(),
+                            [&id](const QStringList& position) { return position.contains(id); });
+            if (!positioned && !candidate.hidden.contains(id))
+                candidate.hidden.append(id);
+        }
+        return normalizedLayout(candidate, defaultOrder(kind), defaultPositions(kind), false,
+                                false);
+    }
     return normalizedLayout(input, defaultOrder(kind), defaultPositions(kind),
                             kind == storage::ScreenshotToolbarLayoutKind::ActionTools);
 }
@@ -506,9 +786,10 @@ stackItemInPosition(const storage::ScreenshotToolbarLayout& input,
                     storage::ScreenshotToolbarLayoutKind kind, const QString& itemId,
                     int targetPositionIndex, int targetItemIndex) {
     storage::ScreenshotToolbarLayout result = normalizedLayout(input, kind);
-    if (kind == storage::ScreenshotToolbarLayoutKind::DrawingTools &&
-        (itemId == QStringLiteral("separator") ||
-         result.positions.value(targetPositionIndex).contains(QStringLiteral("separator")))) {
+    const QStringList targetPosition = result.positions.value(targetPositionIndex);
+    if (requiresOwnPosition(itemId, kind) ||
+        std::any_of(targetPosition.cbegin(), targetPosition.cend(),
+                    [&kind](const QString& id) { return requiresOwnPosition(id, kind); })) {
         return moveItemToPosition(result, kind, itemId,
                                   targetPositionIndex + (targetItemIndex > 0 ? 1 : 0));
     }
@@ -575,10 +856,18 @@ moveItemToHidden(const storage::ScreenshotToolbarLayout& input,
 [[nodiscard]] inline adqt::icons::IconRef icon(Icon semantic) {
     namespace custom = snow_shot::presentation::icons::custom::outlined;
     switch (semantic) {
+    case Icon::Screenshot:
+        return snow_shot::presentation::icons::custom::twotone::ScreenshotFeature();
+    case Icon::ScreenshotDelay:
+        return custom::ScreenshotDelay();
+    case Icon::Select:
+        return custom::ToolSelect();
     case Icon::Shape:
         return custom::ToolRectangle();
     case Icon::Arrow:
         return custom::ToolArrow();
+    case Icon::Distance:
+        return custom::DistanceAnnotation();
     case Icon::Line:
         return custom::ToolLine();
     case Icon::FreeDraw:
@@ -625,8 +914,32 @@ moveItemToHidden(const storage::ScreenshotToolbarLayout& input,
         return custom::ScrollingScreenshot();
     case Icon::QuickSave:
         return custom::QuickSave();
+    case Icon::Copy:
+        return adqt::icons::antd::outlined::Copy();
+    case Icon::Confirm:
+        return adqt::icons::antd::outlined::Check();
+    case Icon::Cancel:
+        return adqt::icons::antd::outlined::Close();
+    case Icon::Print:
+        return adqt::icons::antd::outlined::Printer();
+    case Icon::UploadToCloud:
+        return adqt::icons::antd::outlined::CloudUpload();
     case Icon::SaveAsFile:
         return custom::Save();
+    case Icon::RecordingStart:
+        return custom::RecordingStart();
+    case Icon::RecordingPause:
+        return adqt::icons::antd::outlined::Pause();
+    case Icon::RecordingDuration:
+        return adqt::icons::antd::outlined::ClockCircle();
+    case Icon::RecordingMicrophone:
+        return custom::RecordingMicrophone();
+    case Icon::RecordingSystemAudio:
+        return adqt::icons::antd::outlined::Sound();
+    case Icon::RecordingFolder:
+        return custom::RecordingFolder();
+    case Icon::RecordingTrim:
+        return custom::RecordingTrim();
     }
     return {};
 }

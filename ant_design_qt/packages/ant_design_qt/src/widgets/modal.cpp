@@ -1,5 +1,6 @@
 #include "modal.h"
 #include "detail/pointer_region.h"
+#include "detail/native_window_chrome.h"
 
 #include "antd_icons.h"
 #include "theme/theme.h"
@@ -68,10 +69,22 @@ namespace {
 namespace filled_icons = adqt::icons::antd::filled;
 namespace outlined_icons = adqt::icons::antd::outlined;
 
-#if defined(Q_OS_WIN) || defined(_WIN32)
-constexpr int kWindowModeDwmFrameMargin = 1;
-#endif
 constexpr int kWindowModeFallbackDragHeight = 48;
+
+void activateWidgetLayouts(QWidget* widget) {
+  // A custom body/footer can contain several widget-owned layouts. Settle
+  // them from the leaves upwards so their current hints reach the surface
+  // before measuring it, rather than waiting for posted LayoutRequest events.
+  for (QObject* child : widget->children()) {
+    auto* childWidget = qobject_cast<QWidget*>(child);
+    if (childWidget && !childWidget->isWindow()) {
+      activateWidgetLayouts(childWidget);
+    }
+  }
+  if (QLayout* layout = widget->layout()) {
+    layout->activate();
+  }
+}
 
 QWidget* deepestChildAt(QWidget* root, const QPoint& rootLocalPos) {
   if (!root) {
@@ -314,6 +327,11 @@ class ModalOverlayWidget final : public QWidget {
       // the first presentation. Keep the session alive through native order-out.
       macModalSession_ = detail::createMacModalSession(this, windowModalBlocker_);
     }
+    if (!visible && macModalSession_) {
+      // Native order-out can activate the owner before QWidget clears its
+      // visible state. Stop redirecting focus before entering that transition.
+      macModalSession_->beginHide();
+    }
     QWidget::setVisible(visible);
     if (!visible) {
       macModalSession_.reset();
@@ -469,43 +487,14 @@ class ModalOverlayWidget final : public QWidget {
 #endif
 
   void applyWindowModeNativeChrome() {
+    if (!windowModeChromeEnabled_) return;
+    detail::applyNativeWindowChrome(this);
 #ifdef Q_OS_MACOS
-    if (windowModeChromeEnabled_ && QGuiApplication::platformName() == QStringLiteral("cocoa")) {
-      detail::applyMacModalChrome(this);
+    if (QGuiApplication::platformName() == QStringLiteral("cocoa")) {
       if (macModalSession_) {
         macModalSession_->synchronize();
       }
     }
-#endif
-#if defined(Q_OS_WIN) || defined(_WIN32)
-    if (!windowModeChromeEnabled_ || QGuiApplication::platformName() != QStringLiteral("windows")) {
-      return;
-    }
-
-    const HWND hwnd = hwndForWidget(this);
-    if (hwnd == nullptr) {
-      return;
-    }
-
-    LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);
-    style |= WS_CAPTION | WS_SYSMENU | WS_THICKFRAME;
-    style &= ~(WS_MAXIMIZEBOX | WS_MINIMIZEBOX);
-    SetWindowLongPtr(hwnd, GWL_STYLE, style);
-
-    LONG_PTR exStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
-    exStyle &= ~WS_EX_LAYERED;
-    SetWindowLongPtr(hwnd, GWL_EXSTYLE, exStyle);
-
-    const DWMNCRENDERINGPOLICY renderingPolicy = DWMNCRP_ENABLED;
-    DwmSetWindowAttribute(hwnd, DWMWA_NCRENDERING_POLICY, &renderingPolicy,
-                          sizeof(renderingPolicy));
-
-    const MARGINS margins = {kWindowModeDwmFrameMargin, kWindowModeDwmFrameMargin,
-                             kWindowModeDwmFrameMargin, kWindowModeDwmFrameMargin};
-    DwmExtendFrameIntoClientArea(hwnd, &margins);
-
-    SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
-                 SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 #endif
   }
 
@@ -1063,6 +1052,19 @@ void AdModal::setWindowScreen(QScreen* screen) {
   if (!open_) {
     windowGeometryInitialized_ = false;
   }
+}
+
+QRect AdModal::windowAnchorGeometry() const { return windowAnchorGeometry_; }
+
+void AdModal::setWindowAnchorGeometry(const QRect& geometry) {
+  if (windowAnchorGeometry_ == geometry) {
+    return;
+  }
+  windowAnchorGeometry_ = geometry;
+  if (!open_) {
+    windowGeometryInitialized_ = false;
+  }
+  syncOverlayGeometry();
 }
 
 QSize AdModal::windowPreferredSize() const { return windowPreferredSize_; }
@@ -1990,6 +1992,9 @@ QRect AdModal::windowModeAvailableGeometry() const {
 }
 
 QRect AdModal::windowModeAnchorGeometry() const {
+  if (windowAnchorGeometry_.isValid() && !windowAnchorGeometry_.isEmpty()) {
+    return windowAnchorGeometry_;
+  }
   if (windowScreen_ || !ownerWindow_) {
     return windowModeAvailableGeometry();
   }
@@ -2003,14 +2008,7 @@ QRect AdModal::windowModeAnchorGeometry() const {
 }
 
 Qt::WindowFlags AdModal::windowSurfaceFlags() const {
-#ifdef Q_OS_MACOS
-  // Keep a native titled frame so AppKit supplies corner clipping and shadow.
-  // The modal paints its own header and controls across the full content area.
-  Qt::WindowFlags flags = Qt::CustomizeWindowHint | Qt::WindowTitleHint |
-                          Qt::ExpandedClientAreaHint | Qt::NoTitleBarBackgroundHint;
-#else
-  Qt::WindowFlags flags = Qt::FramelessWindowHint;
-#endif
+  Qt::WindowFlags flags = detail::nativeWindowChromeFlags();
   // A taskbar-visible surface must be a plain window: Qt::Tool surfaces never
   // get a taskbar button and owned dialogs only appear while their owner does.
   flags |= windowTaskbarVisible_ ? Qt::Window : (windowModeDetached_ ? Qt::Tool : Qt::Dialog);
@@ -2370,6 +2368,9 @@ void AdModal::syncOverlayGeometry() {
   if (overlay_->geometry() != rect) {
     overlay_->setGeometry(rect);
   }
+  // Nested form layouts must propagate their minimum sizes before the panel
+  // is shown, just as they do for a window surface.
+  activateWidgetLayouts(overlay_);
 }
 
 void AdModal::syncWindowModeGeometry() {
@@ -2409,15 +2410,10 @@ void AdModal::syncWindowModeGeometry() {
   overlay_->setMinimumSize(QSize(0, 0));
   overlay_->setMaximumSize(QSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX));
 
-  if (overlayLayout_) {
-    overlayLayout_->activate();
-  }
-  if (panelLayout_) {
-    panelLayout_->activate();
-  }
-  if (panel_) {
-    panel_->adjustSize();
-  }
+  activateWidgetLayouts(overlay_);
+  // The overlay layout owns the panel geometry. adjustSize() would restore
+  // its width-independent hint height after wrapped content has been fitted
+  // to the window, and an unchanged window size would not relayout it.
 
   const QRect available = windowModeAvailableGeometry();
   const int horizontalPadding = 16;
@@ -2746,23 +2742,6 @@ void AdModal::updateAccessibility() {
                                                 ? tr("Cancel")
                                                 : rejectButtonControl_->text().trimmed());
   }
-}
-
-void AdModal::saveFocusBeforeOpen() {
-  QWidget* focusWidget = QApplication::focusWidget();
-  if (focusWidget && overlay_ && overlay_->isAncestorOf(focusWidget)) {
-    return;
-  }
-  focusBeforeOpen_ = focusWidget;
-}
-
-void AdModal::restoreFocusAfterClose() {
-  QWidget* target = focusBeforeOpen_.data();
-  focusBeforeOpen_.clear();
-  if (!target || !target->isVisible() || !target->isEnabled()) {
-    return;
-  }
-  target->setFocus(Qt::OtherFocusReason);
 }
 
 QWidget* AdModal::nextFocusableFrom(QWidget* start, bool next) const {
@@ -3226,7 +3205,6 @@ void AdModal::setOpenInternal(bool value, bool emitSignal) {
   open_ = value;
   windowGeometryInitialized_ = false;
   if (open_) {
-    saveFocusBeforeOpen();
     ensureOverlay();
     refreshTexts();
     refreshVisibility();
@@ -3261,7 +3239,6 @@ void AdModal::setOpenInternal(bool value, bool emitSignal) {
             ->setWindowModeModality(Qt::NonModal, nullptr);
       }
     }
-    restoreFocusAfterClose();
   }
 
   if (emitSignal) {

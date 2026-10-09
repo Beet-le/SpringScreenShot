@@ -6,6 +6,31 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
+#[test]
+fn operational_commands_reject_offline_architecture_overrides() {
+    let temporary = TempDir::new().unwrap();
+    let executable = env!("CARGO_BIN_EXE_snow-shot-updater");
+    let target = temporary.path().to_str().unwrap();
+    let baseline = Command::new(executable)
+        .args(["--transaction-state", "--target", target])
+        .output()
+        .unwrap();
+    assert!(baseline.status.success());
+    for extra in [
+        vec!["--platform", "windows-x64"],
+        vec!["--platform", "windows-arm64"],
+        vec!["--static-only"],
+    ] {
+        let result = Command::new(executable)
+            .args(["--transaction-state", "--target", target])
+            .args(extra)
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        assert!(String::from_utf8_lossy(&result.stderr).contains("invalid_updater_argument"));
+    }
+}
+
 struct ServiceProcess {
     child: Child,
     stdin: Option<ChildStdin>,
@@ -26,15 +51,17 @@ impl ServiceProcess {
             std::fs::write(cache.join("result.txt"), result).unwrap();
         }
         std::fs::create_dir_all(root.join("bin")).unwrap();
-        std::fs::write(root.join("bin/snow_shot.exe"), []).unwrap();
+        std::fs::write(root.join(snow_shot_updater::edition::APP_PATH), []).unwrap();
         std::fs::write(
-            root.join("snow-shot-installation.json"),
+            root.join(snow_shot_updater::edition::INSTALLATION_RECORD),
             serde_json::to_vec(&json!({
                 "schema": 1,
+                "platform": snow_shot_updater::edition::PLATFORM,
+                "product": snow_shot_updater::edition::PRODUCT,
                 "variant": "portable",
                 "version": "1.0.0",
                 "files": [{
-                    "path": "bin/snow_shot.exe",
+                    "path": snow_shot_updater::edition::APP_PATH,
                     "size": 0,
                     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
                 }]
@@ -49,7 +76,9 @@ impl ServiceProcess {
                 root.to_str().unwrap(),
                 "--cache",
                 cache.to_str().unwrap(),
-                "--base-url",
+                "--github-api-url",
+                "http://127.0.0.1:9",
+                "--gitee-api-url",
                 "http://127.0.0.1:9",
                 "--allow-local-http",
                 "--parent",
@@ -143,7 +172,7 @@ fn service_handshake_rejects_duplicate_ids_and_shuts_down_orderly() {
     let hello = service.read();
     assert_eq!(hello["protocol"], 2);
     assert_eq!(hello["type"], "hello");
-    assert_eq!(hello["platform"], "windows-x64");
+    assert_eq!(hello["platform"], snow_shot_updater::edition::PLATFORM);
     assert!(
         hello["capabilities"]
             .as_array()
@@ -165,6 +194,45 @@ fn service_handshake_rejects_duplicate_ids_and_shuts_down_orderly() {
     assert_eq!(service.read()["ok"], true);
     assert_eq!(service.read()["status"]["state"], "Idle");
     service.close_input();
+    assert!(service.wait().success());
+}
+
+#[test]
+fn next_launch_startup_without_a_cache_finishes_without_network_or_handoff() {
+    let (_temporary, mut service) = ServiceProcess::start();
+    assert_eq!(service.read()["type"], "hello");
+    assert_eq!(service.read()["status"]["state"], "Idle");
+    service.send(&json!({
+        "protocol": 2,
+        "id": 1,
+        "command": "configure",
+        "mode": "next_launch",
+        "progressTexts": { "title": "Translated updater title" },
+        "progressAppearance": {
+            "background": 0x141414,
+            "text": 0xffffff,
+            "primary": 0x52c41a,
+            "motion": false
+        }
+    }));
+    assert_eq!(service.read()["ok"], true);
+    assert_eq!(service.read()["status"]["state"], "Idle");
+    service.send(&json!({
+        "protocol": 2,
+        "id": 2,
+        "command": "execute",
+        "operation": "apply",
+        "trigger": "startup",
+        "mode": "next_launch",
+        "systemProxy": false,
+        "progressAppearance": { "fontSize": "malformed optional cosmetic value" }
+    }));
+    assert_eq!(service.read()["ok"], true);
+    assert_eq!(service.read()["status"]["state"], "Idle");
+    let completion = service.read();
+    assert_eq!(completion["type"], "operation_complete");
+    assert_eq!(completion["operation"], "apply");
+    assert_eq!(completion["outcome"], "success");
     assert!(service.wait().success());
 }
 

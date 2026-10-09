@@ -28,13 +28,6 @@
         </message>
     </context>
     <context>
-        <name>ScreenshotCaptureCoordinator</name>
-        <message>
-            <source>Could not snapshot the cursor</source>
-            <translation>Could not snapshot the cursor</translation>
-        </message>
-    </context>
-    <context>
         <name>ScreenshotController</name>
         <message>
             <source>Allow Snow Shot to access Finder in System Settings &gt; Privacy &amp; Security &gt; Automation, then try again.</source>
@@ -49,8 +42,8 @@
             <translation>Cancel</translation>
         </message>
         <message>
-            <source>Could not insert the draw template</source>
-            <translation>Could not insert the draw template</translation>
+            <source>Could not insert the annotation template</source>
+            <translation>Could not insert the annotation template</translation>
         </message>
         <message>
             <source>Could not read the selected files from Finder. Please try again.</source>
@@ -79,6 +72,10 @@
         <message>
             <source>No recognized result is available to copy</source>
             <translation>No recognized result is available to copy</translation>
+        </message>
+        <message>
+            <source>Preparing cloud upload...</source>
+            <translation>Preparing cloud upload...</translation>
         </message>
         <message>
             <source>Save recognition text</source>
@@ -119,6 +116,14 @@
         <message>
             <source>The clipboard pin queue is full</source>
             <translation>The clipboard pin queue is full</translation>
+        </message>
+        <message>
+            <source>The dropped content could not be opened</source>
+            <translation>The dropped content could not be opened</translation>
+        </message>
+        <message>
+            <source>The dropped content could not be queued</source>
+            <translation>The dropped content could not be queued</translation>
         </message>
         <message>
             <source>The pinned window could not be restored</source>
@@ -169,6 +174,14 @@
             <translation>This screenshot cannot be pinned</translation>
         </message>
         <message>
+            <source>Uploaded to cloud. Link copied to clipboard.</source>
+            <translation>Uploaded to cloud. Link copied to clipboard.</translation>
+        </message>
+        <message>
+            <source>Uploading to cloud... %1%</source>
+            <translation>Uploading to cloud... %1%</translation>
+        </message>
+        <message>
             <source>Your current screenshot will be discarded.</source>
             <translation>Your current screenshot will be discarded.</translation>
         </message>
@@ -185,6 +198,10 @@
         <message>
             <source>Loading screenshot history</source>
             <translation>Loading screenshot history</translation>
+        </message>
+        <message>
+            <source>Result Preview in Progress</source>
+            <translation>Result Preview in Progress</translation>
         </message>
     </context>
     <context>
@@ -358,12 +375,44 @@
     <context>
         <name>ScreenshotSelectionToolbarWidget</name>
         <message>
+            <source>16:9</source>
+            <translation>16:9</translation>
+        </message>
+        <message>
+            <source>1:1</source>
+            <translation>1:1</translation>
+        </message>
+        <message>
+            <source>2:3</source>
+            <translation>2:3</translation>
+        </message>
+        <message>
+            <source>3:2</source>
+            <translation>3:2</translation>
+        </message>
+        <message>
+            <source>3:4</source>
+            <translation>3:4</translation>
+        </message>
+        <message>
+            <source>4:3</source>
+            <translation>4:3</translation>
+        </message>
+        <message>
+            <source>9:16</source>
+            <translation>9:16</translation>
+        </message>
+        <message>
             <source>Corner radius</source>
             <translation>Corner radius</translation>
         </message>
         <message>
             <source>Corner radius is unavailable for custom regions</source>
             <translation>Corner radius is unavailable for custom regions</translation>
+        </message>
+        <message>
+            <source>Free</source>
+            <translation>Free</translation>
         </message>
         <message>
             <source>Height</source>
@@ -380,6 +429,10 @@
         <message>
             <source>Pixels</source>
             <translation>Pixels</translation>
+        </message>
+        <message>
+            <source>Selection aspect ratio</source>
+            <translation>Selection aspect ratio</translation>
         </message>
         <message>
             <source>Shadow width</source>
@@ -439,6 +492,10 @@
         <message>
             <source>Scale from center</source>
             <translation>Scale from center</translation>
+        </message>
+        <message>
+            <source>Selection Aspect Ratio Snap</source>
+            <translation>Selection Aspect Ratio Snap</translation>
         </message>
         <message>
             <source>Switch color format</source>

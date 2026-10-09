@@ -9,9 +9,13 @@
 #include <memory>
 
 #include "snow_shot/presentation/globalshortcuttypes.h"
+#include "snow_shot/platform/systemnotification.h"
 
 namespace snow_shot::presentation::settings {
 struct TrayCommandManifest;
+}
+namespace adqt::widgets {
+class AdContextMenu;
 }
 
 namespace snow_shot::presentation {
@@ -28,6 +32,8 @@ class SystemTrayController final : public QObject {
     SystemTrayController(const settings::TrayCommandManifest& manifest,
                          PinnedWindowGroupManager* groupManager, QObject* parent = nullptr);
     void setGroupManager(PinnedWindowGroupManager* groupManager);
+    // Creates a fresh popup session; the menu retires itself after hiding.
+    adqt::widgets::AdContextMenu* createContextMenu();
     ~SystemTrayController() override;
 
     void show();
@@ -35,7 +41,7 @@ class SystemTrayController final : public QObject {
     void showCaptureMessage(const QString& message, bool warning);
     void showWarningMessage(const QString& title, const QString& message);
     void showUpdateMessage(const QString& message);
-    [[nodiscard]] bool canShowMessages() const;
+    void showRecordingExportMessage(const QString& path);
     void setEnabled(bool enabled);
     [[nodiscard]] bool isEnabled() const;
     void setIconSelection(const QString& selection);
@@ -55,11 +61,14 @@ class SystemTrayController final : public QObject {
     void setQuickActionChecked(GlobalShortcutAction action, bool checked);
 
   signals:
+    void notificationDeliveryFinished(const snow_shot::platform::SystemNotificationRequest& request,
+                                      const snow_shot::platform::SystemNotificationResult& result);
     void screenshotRequested();
     void showMainWindowRequested();
     void restartRequested();
     void openFunctionSettingsRequested();
     void openAboutRequested();
+    void openRecordingFileRequested(const QString& path);
     void quickActionRequested(snow_shot::presentation::GlobalShortcutAction action);
     void exitRequested();
 

@@ -4,12 +4,24 @@
     <context>
         <name>AboutPageWidget</name>
         <message>
+            <source>%1 logo</source>
+            <translation>%1 標誌</translation>
+        </message>
+        <message>
             <source>%1 · %2</source>
             <translation>%1 · %2</translation>
         </message>
         <message>
+            <source>%1 · Make expression clearer</source>
+            <translation>%1 · 讓表達更清晰</translation>
+        </message>
+        <message>
             <source>, excellent work.</source>
             <translation>，出色工作。</translation>
+        </message>
+        <message>
+            <source>About %1</source>
+            <translation>關於 %1</translation>
         </message>
         <message>
             <source>About Snow Shot</source>
@@ -36,6 +48,10 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         <message>
             <source>Changelog</source>
             <translation>更新日誌</translation>
+        </message>
+        <message>
+            <source>Check for a newer version of %1.</source>
+            <translation>檢查 %1 是否有新版本。</translation>
         </message>
         <message>
             <source>Check for a newer version of Snow Shot.</source>
@@ -90,8 +106,8 @@ so every moment on screen can be expressed clearly and shared easily.</source>
             <translation>從 GitHub 下載</translation>
         </message>
         <message>
-            <source>Download from website</source>
-            <translation>前往官網下載</translation>
+            <source>Download from Gitee</source>
+            <translation>從 Gitee 下載</translation>
         </message>
         <message>
             <source>Download update</source>
@@ -156,10 +172,6 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         <message>
             <source>Preview</source>
             <translation>預覽版</translation>
-        </message>
-        <message>
-            <source>QQ Group 2</source>
-            <translation>QQ 群組 2</translation>
         </message>
         <message>
             <source>QQ Group 3</source>
@@ -270,6 +282,13 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         </message>
     </context>
     <context>
+        <name>ConfirmationSkipButton</name>
+        <message>
+            <source>Don't ask again</source>
+            <translation>不再詢問</translation>
+        </message>
+    </context>
+    <context>
         <name>DiagnosticsService</name>
         <message>
             <source>A log file could not be read.</source>
@@ -341,17 +360,76 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         </message>
     </context>
     <context>
+        <name>EditionMetadata</name>
+        <message>
+            <source>Snow Shot</source>
+            <translation>Snow Shot</translation>
+        </message>
+        <message>
+            <source>Snow Shot Mini</source>
+            <translation>Snow Shot Mini</translation>
+        </message>
+    </context>
+    <context>
+        <name>FloatingToolbar</name>
+        <message>
+            <source>Close</source>
+            <translation>關閉</translation>
+        </message>
+        <message>
+            <source>Customize toolbar</source>
+            <translation>自訂工具列</translation>
+        </message>
+        <message>
+            <source>Delay %1 seconds to execute</source>
+            <translation>延遲 %1 秒執行</translation>
+        </message>
+        <message>
+            <source>Formula recognition</source>
+            <translation>公式辨識</translation>
+        </message>
+        <message>
+            <source>Hide during screenshots</source>
+            <translation>擷取螢幕時隱藏</translation>
+        </message>
+        <message>
+            <source>Hide in fullscreen</source>
+            <translation>全螢幕時隱藏</translation>
+        </message>
+        <message>
+            <source>Icon mode</source>
+            <translation>圖示模式</translation>
+        </message>
+        <message>
+            <source>More tools</source>
+            <translation>更多工具</translation>
+        </message>
+        <message>
+            <source>QR code recognition</source>
+            <translation>QR 碼辨識</translation>
+        </message>
+        <message>
+            <source>Screen recording</source>
+            <translation>螢幕錄製</translation>
+        </message>
+        <message>
+            <source>Screenshot</source>
+            <translation>螢幕擷取</translation>
+        </message>
+        <message>
+            <source>Show toolbar</source>
+            <translation>顯示工具列</translation>
+        </message>
+        <message>
+            <source>Toolbar mode</source>
+            <translation>工具列模式</translation>
+        </message>
+    </context>
+    <context>
         <name>LanguageCatalog</name>
         <message>
             <source>Language name</source>
             <translation>繁體中文</translation>
-        </message>
-    </context>
-    <context>
-        <name>MainContentHeaderWidget</name>
-        <message>
-            <source>Search settings and functions</source>
-            <translation>搜尋設定與功能</translation>
         </message>
     </context>
     <context>
@@ -379,10 +457,6 @@ so every moment on screen can be expressed clearly and shared easily.</source>
             <translation>無法將 %1 註冊為全域快速鍵，請嘗試其他按鍵</translation>
         </message>
         <message>
-            <source>%1 cannot be used as a drawing shortcut, try another key</source>
-            <translation>%1 不能用作繪圖快速鍵，請嘗試其他按鍵</translation>
-        </message>
-        <message>
             <source>%1 cannot be used as a pinned window shortcut, try another key</source>
             <translation>%1 無法用作固定到螢幕視窗快速鍵，請嘗試其他快速鍵</translation>
         </message>
@@ -395,8 +469,12 @@ so every moment on screen can be expressed clearly and shared easily.</source>
             <translation>%1 不能用作截圖快速鍵，請嘗試其他按鍵</translation>
         </message>
         <message>
-            <source>%1 is already assigned to another drawing tool, try another key</source>
-            <translation>%1 已指派給另一個繪圖工具，請嘗試其他按鍵</translation>
+            <source>%1 cannot be used as an annotation shortcut, try another key</source>
+            <translation>%1 不能用作標註快速鍵，請嘗試其他按鍵</translation>
+        </message>
+        <message>
+            <source>%1 is already assigned to another annotation tool, try another key</source>
+            <translation>%1 已指派給另一個標註工具，請嘗試其他按鍵</translation>
         </message>
         <message>
             <source>%1 is already assigned to another pinned window action, try another key</source>
@@ -419,8 +497,8 @@ so every moment on screen can be expressed clearly and shared easily.</source>
             <translation>此平台不支援全域快速鍵</translation>
         </message>
         <message>
-            <source>Invalid drawing shortcut</source>
-            <translation>無效的繪圖快速鍵</translation>
+            <source>Invalid annotation shortcut</source>
+            <translation>無效的標註快速鍵</translation>
         </message>
         <message>
             <source>Invalid global shortcut</source>
@@ -447,10 +525,6 @@ so every moment on screen can be expressed clearly and shared easily.</source>
             <translation>無法將此按鍵註冊為全域快速鍵，請嘗試其他按鍵</translation>
         </message>
         <message>
-            <source>This key cannot be used as a drawing shortcut, try another key</source>
-            <translation>此按鍵不能用作繪圖快速鍵，請嘗試其他按鍵</translation>
-        </message>
-        <message>
             <source>This key cannot be used as a pinned window shortcut, try another key</source>
             <translation>此快速鍵無法用作固定到螢幕視窗快速鍵，請嘗試其他快速鍵</translation>
         </message>
@@ -463,8 +537,12 @@ so every moment on screen can be expressed clearly and shared easily.</source>
             <translation>此按鍵不能用作截圖快速鍵，請嘗試其他按鍵</translation>
         </message>
         <message>
-            <source>This key is already assigned to another drawing tool, try another key</source>
-            <translation>此按鍵已指派給另一個繪圖工具，請嘗試其他按鍵</translation>
+            <source>This key cannot be used as an annotation shortcut, try another key</source>
+            <translation>此按鍵不能用作標註快速鍵，請嘗試其他按鍵</translation>
+        </message>
+        <message>
+            <source>This key is already assigned to another annotation tool, try another key</source>
+            <translation>此按鍵已指派給另一個標註工具，請嘗試其他按鍵</translation>
         </message>
         <message>
             <source>This key is already assigned to another pinned window action, try another key</source>
@@ -485,6 +563,14 @@ so every moment on screen can be expressed clearly and shared easily.</source>
     </context>
     <context>
         <name>SectionHeaderWidget</name>
+        <message>
+            <source>Collapse %1</source>
+            <translation>收合%1</translation>
+        </message>
+        <message>
+            <source>Expand %1</source>
+            <translation>展開%1</translation>
+        </message>
         <message>
             <source>Refresh</source>
             <translation>重新整理</translation>
@@ -507,6 +593,10 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         <message>
             <source>Expand navigation</source>
             <translation>展開導覽</translation>
+        </message>
+        <message>
+            <source>Search Function</source>
+            <translation>搜尋功能</translation>
         </message>
     </context>
     <context>
@@ -673,6 +763,18 @@ so every moment on screen can be expressed clearly and shared easily.</source>
     <context>
         <name>snow_shot::app::ApplicationController</name>
         <message>
+            <source>%1 %2 is available. Open About for update options.</source>
+            <translation>%1 %2 已發布。請開啟「關於」查看更新選項。</translation>
+        </message>
+        <message>
+            <source>%1 will close and restart to install the update. Continue?</source>
+            <translation>%1 將關閉並重新啟動以安裝更新。是否繼續？</translation>
+        </message>
+        <message>
+            <source>An update is ready. Open About to restart and update %1.</source>
+            <translation>更新已就緒。請開啟「關於」重新啟動並更新 %1。</translation>
+        </message>
+        <message>
             <source>An update is ready. Open About to restart and update Snow Shot.</source>
             <translation>更新已準備就緒。請開啟「關於」頁面，重新啟動並更新 Snow Shot。</translation>
         </message>
@@ -687,6 +789,10 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         <message>
             <source>Feature unavailable</source>
             <translation>功能暫時無法使用</translation>
+        </message>
+        <message>
+            <source>Finish capturing, recording, exporting, recognizing text, or updating before changing storage.</source>
+            <translation>請先完成擷取、錄製、匯出、文字辨識或更新，再變更儲存目錄。</translation>
         </message>
         <message>
             <source>Finish capturing, recording, or exporting before updating.</source>
@@ -722,6 +828,10 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         <message>
             <source>Update</source>
             <translation>更新</translation>
+        </message>
+        <message>
+            <source>Video export completed</source>
+            <translation>影片匯出完成</translation>
         </message>
     </context>
 </TS>

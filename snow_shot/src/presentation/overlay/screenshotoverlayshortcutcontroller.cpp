@@ -1,6 +1,8 @@
+#include "snow_shot/presentation/canvashistoryshortcuts.h"
 #include "snow_shot/shortcuts/shortcutbinding.h"
 #include "snow_shot/presentation/screenshotoverlayshortcutcontroller.h"
 
+#include "snow_shot/presentation/globalshortcuttypes.h"
 #include "snow_shot/presentation/screenshotinteractionstate.h"
 #include "snow_shot/presentation/screenshotintelligentselectionmodel.h"
 #include "snow_shot/presentation/screenshotregiontypeshortcut.h"
@@ -18,6 +20,29 @@
 namespace {
 using ShortcutManager = snow_shot::presentation::WindowShortcutManager;
 using BindingHandle = ShortcutManager::BindingHandle;
+
+QString screenshotShortcutForGlobalAction(snow_shot::presentation::GlobalShortcutAction action) {
+    using Action = snow_shot::presentation::GlobalShortcutAction;
+    switch (action) {
+    case Action::ScreenshotFixed:
+        return QStringLiteral("pin_to_screen");
+    case Action::ScreenshotOcr:
+        return QStringLiteral("text_recognition");
+    case Action::ScreenshotTranslation:
+        return QStringLiteral("text_translation");
+    case Action::ScreenshotCopy:
+        return QStringLiteral("copy_to_clipboard");
+    case Action::ScreenshotSave:
+        return QStringLiteral("save_as_file");
+    case Action::ScreenshotQuickSave:
+        return QStringLiteral("quick_save");
+    case Action::ScreenRecord:
+    case Action::ScreenRecordCopy:
+        return QStringLiteral("video_recording");
+    default:
+        return {};
+    }
+}
 
 bool recognitionTool(ScreenshotActiveTool tool) {
     return isScreenshotRecognitionTool(tool);
@@ -70,6 +95,9 @@ struct ScreenshotOverlayShortcutController::Impl {
           intelligentSelection(intelligent), actions(std::move(inputActions)) {
         registerFixedBindings();
         registerConfiguredBindings();
+        new snow_shot::presentation::CanvasHistoryShortcuts(
+            shortcutManager, &q, [this](const auto&) { return canActivateToolbarShortcut(); },
+            [this](const QString& action) { return activateToolbarShortcut(action, false); });
         reloadConfiguredShortcuts();
 
         auto& storage = snow_shot::storage::ApplicationStorage::instance();
@@ -85,15 +113,16 @@ struct ScreenshotOverlayShortcutController::Impl {
         }
     }
 
-    [[nodiscard]] bool toolbarToolShortcutState() const {
-        return !inputHandler.externalDragActive() && !inputHandler.regionOperationActive() &&
-               actions.localShortcutInputAllowed() &&
+    [[nodiscard]] bool canActivateToolbarShortcut() const {
+        return !shortcutManager.inputSuspended() && !interaction.inactive() &&
+               !inputHandler.effectDragActive() && !inputHandler.externalDragActive() &&
+               !inputHandler.regionOperationActive() && actions.localShortcutInputAllowed() &&
                (interaction.selecting() ? inputHandler.canPrepareSelectionForToolbarShortcut()
                                         : actions.mainToolbarVisible());
     }
 
     bool activateToolbarShortcut(const QString& id, bool drawing) {
-        if (!inputHandler.acceptInput()) {
+        if (!canActivateToolbarShortcut() || !inputHandler.acceptInput()) {
             return false;
         }
         const auto activate = [&] {
@@ -132,6 +161,15 @@ struct ScreenshotOverlayShortcutController::Impl {
     }
 
     void registerFixedBindings() {
+        QList<QKeyCombination> selectAllKeys;
+        for (const auto& sequence : QKeySequence::keyBindings(QKeySequence::SelectAll))
+            selectAllKeys.append(sequence[0]);
+        static_cast<void>(shortcutManager.addBinding(
+            &q, fixedBinding(
+                    QStringLiteral("screenshot.select_current_screen"), std::move(selectAllKeys),
+                    ShortcutManager::StandardPriority::WindowCommand,
+                    [this] { return inputHandler.canSelectCurrentScreen(); },
+                    [this] { return inputHandler.selectCurrentScreen(); })));
 #ifdef Q_OS_MACOS
         QList<QKeyCombination> closeKeys;
         for (const auto& sequence : QKeySequence::keyBindings(QKeySequence::Close))
@@ -209,13 +247,16 @@ struct ScreenshotOverlayShortcutController::Impl {
             QStringLiteral("move_cursor_right"),
             QStringLiteral("move_entire_selection"),
             QStringLiteral("keep_selection_width_and_height_consistent"),
+            QStringLiteral("selection_aspect_ratio_snap"),
             QStringLiteral("switch_selection_between_window_and_window_sub_element"),
             QStringLiteral("previous_screenshot_history"),
             QStringLiteral("next_screenshot_history"),
             QStringLiteral("select_previously_selected_area"),
             QStringLiteral("recapture"),
+            QStringLiteral("toggle_cursor_visibility"),
             QStringLiteral("copy_color"),
             QStringLiteral("toggle_coordinate_mode"),
+            QStringLiteral("toggle_guides"),
             QStringLiteral("table_recognition"),
             QStringLiteral("qr_code_recognition"),
             QStringLiteral("video_recording"),
@@ -223,22 +264,33 @@ struct ScreenshotOverlayShortcutController::Impl {
             QStringLiteral("text_translation"),
             QStringLiteral("scrolling_screenshot"),
             QStringLiteral("quick_save"),
+            QStringLiteral("print"),
             QStringLiteral("save_as_file"),
+            QStringLiteral("upload_to_cloud"),
             QStringLiteral("pin_to_screen"),
             QStringLiteral("cancel_screenshot"),
             QStringLiteral("copy_to_clipboard"),
-            QStringLiteral("undo"),
-            QStringLiteral("redo"),
         };
         for (const QString& actionId : screenshotIds) {
             ShortcutManager::Binding binding;
             binding.id = QStringLiteral("screenshot.configured.") + actionId;
             if (actionId == QStringLiteral("cancel_screenshot")) {
                 binding.activationTrigger = ShortcutManager::Binding::ActivationTrigger::Release;
+            } else if (actionId == QStringLiteral("toggle_guides")) {
+                binding.activationTrigger = ShortcutManager::Binding::ActivationTrigger::Tap;
             }
             binding.priority = ShortcutManager::StandardPriority::ScreenshotShortcut;
             binding.autoRepeat = actionId.startsWith(QStringLiteral("move_cursor_"));
             binding.canActivate = [this, actionId](const auto&) {
+                if (inputHandler.effectDragActive() &&
+                    actionId != QStringLiteral("cancel_screenshot"))
+                    return false;
+                if (actionId == QStringLiteral("selection_aspect_ratio_snap")) {
+                    return inputHandler.canActivateSelectionAspectRatioSnapShortcut();
+                }
+                if (actionId == QStringLiteral("toggle_guides")) {
+                    return !interaction.inactive() && actions.localShortcutInputAllowed();
+                }
                 if (inputHandler.externalDragActive() &&
                     actionId != QStringLiteral("move_entire_selection") &&
                     actionId != QStringLiteral("keep_selection_width_and_height_consistent") &&
@@ -282,6 +334,11 @@ struct ScreenshotOverlayShortcutController::Impl {
                     return interaction.moveToolActive() && !interaction.dragging() &&
                            !interaction.scrollingCapture() && actions.localShortcutInputAllowed();
                 }
+                if (actionId == QStringLiteral("toggle_cursor_visibility")) {
+                    return !inputHandler.externalDragActive() && !interaction.dragging() &&
+                           !interaction.scrollingCapture() && actions.localShortcutInputAllowed() &&
+                           actions.cursorVisibilityAvailable();
+                }
                 if (actionId == QStringLiteral("recapture")) {
                     return interaction.moveToolActive() && !interaction.dragging() &&
                            !interaction.scrollingCapture() && actions.localShortcutInputAllowed() &&
@@ -294,7 +351,7 @@ struct ScreenshotOverlayShortcutController::Impl {
                 if (actionId.startsWith(QStringLiteral("move_cursor_"))) {
                     return cursorMovementShortcutState();
                 }
-                return toolbarToolShortcutState();
+                return canActivateToolbarShortcut();
             };
             if (actionId.startsWith(QStringLiteral("move_cursor_"))) {
                 binding.canActivateOutsideScope = [this](const auto&) {
@@ -320,6 +377,11 @@ struct ScreenshotOverlayShortcutController::Impl {
                     return actions.moveCursorOnePixel(
                         snow_shot::platform::PhysicalCursorDirection::Right);
                 }
+                if (actionId == QStringLiteral("selection_aspect_ratio_snap")) {
+                    return inputHandler.activateSelectionAspectRatioSnapShortcut();
+                }
+                if (actionId == QStringLiteral("toggle_cursor_visibility"))
+                    return actions.toggleCursorVisibility();
                 if (actionId == QStringLiteral("move_entire_selection")) {
                     return inputHandler.activateMoveEntireSelectionShortcut();
                 }
@@ -355,6 +417,9 @@ struct ScreenshotOverlayShortcutController::Impl {
                 if (actionId == QStringLiteral("toggle_coordinate_mode")) {
                     return actions.toggleColorPickerCoordinateMode();
                 }
+                if (actionId == QStringLiteral("toggle_guides")) {
+                    return actions.toggleGuidesForCurrentSession();
+                }
                 if (actionId == QStringLiteral("copy_color")) {
                     if (!actions.copyColorPickerColorToClipboard()) {
                         return false;
@@ -363,7 +428,8 @@ struct ScreenshotOverlayShortcutController::Impl {
                     return true;
                 }
                 if (actionId == QStringLiteral("cancel_screenshot")) {
-                    return inputHandler.cancelRegionOperation() ||
+                    return inputHandler.cancelEffectDrag() ||
+                           inputHandler.cancelRegionOperation() ||
                            actions.cancelCaptureViaShortcut();
                 }
                 return activateToolbarShortcut(actionId, false);
@@ -381,8 +447,14 @@ struct ScreenshotOverlayShortcutController::Impl {
                 binding.release = [this](const auto&) {
                     return inputHandler.releaseKeepSelectionAspectRatioShortcut();
                 };
+            } else if (actionId == QStringLiteral("selection_aspect_ratio_snap")) {
+                binding.allowedAdditionalModifiers = Qt::ShiftModifier;
+                binding.cancel = [this] { inputHandler.cancelSelectionAspectRatioSnapShortcut(); };
+                binding.release = [this](const auto&) {
+                    return inputHandler.releaseSelectionAspectRatioSnapShortcut();
+                };
             }
-            if (binding.release) {
+            if (binding.release && actionId != QStringLiteral("selection_aspect_ratio_snap")) {
                 // The initiating global mouse modifiers may still be held. Only these
                 // two held selection controls tolerate them, and only during that drag.
                 auto externalBinding = binding;
@@ -404,7 +476,7 @@ struct ScreenshotOverlayShortcutController::Impl {
             ShortcutManager::Binding binding;
             binding.id = QStringLiteral("drawing.configured.") + tool.key();
             binding.priority = ShortcutManager::StandardPriority::DrawingShortcut;
-            binding.canActivate = [this](const auto&) { return toolbarToolShortcutState(); };
+            binding.canActivate = [this](const auto&) { return canActivateToolbarShortcut(); };
             binding.activate = [this, toolId = tool.key()](const auto&) {
                 return activateToolbarShortcut(toolId, true);
             };
@@ -458,4 +530,14 @@ ScreenshotOverlayShortcutController::~ScreenshotOverlayShortcutController() = de
 
 void ScreenshotOverlayShortcutController::reloadConfiguredShortcuts() {
     m_impl->reloadConfiguredShortcuts();
+}
+
+bool ScreenshotOverlayShortcutController::handleGlobalScreenshotShortcut(
+    snow_shot::presentation::GlobalShortcutAction action, bool captureReady) {
+    const QString id = screenshotShortcutForGlobalAction(action);
+    if (id.isEmpty())
+        return false;
+    if (captureReady)
+        static_cast<void>(m_impl->activateToolbarShortcut(id, false));
+    return true;
 }

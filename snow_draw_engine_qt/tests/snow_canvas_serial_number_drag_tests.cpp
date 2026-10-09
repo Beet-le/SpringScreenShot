@@ -61,12 +61,70 @@ QJsonObject payload(const SnowCanvasRuntime& runtime, const QString& kind) {
     return found.first().toObject().value(QStringLiteral("data")).toObject().value(kind).toObject();
 }
 
+void numericTypeReachesExportAndSurvivesHistory() {
+    SnowCanvasRuntime runtime;
+    SnowCanvasWidget canvas(runtime);
+    canvas.resize(600, 360);
+    canvas.show();
+    QApplication::processEvents();
+    require(canvas.setCanvasTool(SnowCanvasTool::SerialNumber), "activate sequence creation");
+    SnowCanvasSerialNumberStyle style;
+    style.number = 27;
+    style.numericType = SnowCanvasSerialNumberNumericType::LowercaseLetters;
+    require(canvas.setCanvasSerialNumberStyle(style), "set numeric format before creation");
+    mouse(canvas, QEvent::MouseButtonPress, {300.0, 180.0}, Qt::LeftButton, Qt::LeftButton);
+    mouse(canvas, QEvent::MouseButtonRelease, {300.0, 180.0}, Qt::LeftButton, Qt::NoButton);
+    const auto serial = payload(runtime, QStringLiteral("SerialNumber"));
+    require(serial.value(QStringLiteral("numeric_type")).toString() ==
+                QStringLiteral("LowercaseLetters"),
+            "creation preserves numeric type");
+    const auto center = serial.value(QStringLiteral("center")).toObject();
+    const QRectF region(center.value(QStringLiteral("x")).toDouble() - 150,
+                        center.value(QStringLiteral("y")).toDouble() - 150, 300, 300);
+    const auto id = records(runtime, QStringLiteral("SerialNumber"))
+                        .first()
+                        .toObject()
+                        .value(QStringLiteral("id"))
+                        .toObject();
+    SnowCanvasRuntimeEditor editor(runtime);
+    require(editor.select(id.value(QStringLiteral("index")).toVariant().toUInt(),
+                          id.value(QStringLiteral("generation")).toVariant().toUInt()),
+            "select formatted annotation");
+    const QImage letters = runtime.renderToImage(region, QSize(300, 300), {});
+    require(!letters.isNull(), "formatted sequence exports successfully");
+    style.numericType = SnowCanvasSerialNumberNumericType::Roman;
+    require(editor.setSerialNumberStyleFromToolbar(style), "change numeric format");
+    auto expectedSerial = serial;
+    expectedSerial.insert(QStringLiteral("numeric_type"), QStringLiteral("Roman"));
+    require(payload(runtime, QStringLiteral("SerialNumber")) == expectedSerial,
+            "changing numeric format preserves badge geometry and font size");
+    const QImage roman = runtime.renderToImage(region, QSize(300, 300), {});
+    require(!roman.isNull() && roman != letters, "export reflects the formatted label");
+    require(runtime.undo() && runtime.renderToImage(region, QSize(300, 300), {}) == letters,
+            "undo restores original format and geometry in export");
+    require(runtime.redo() && runtime.renderToImage(region, QSize(300, 300), {}) == roman,
+            "redo restores the new formatted export");
+    require(payload(runtime, QStringLiteral("SerialNumber")) == expectedSerial,
+            "redo preserves the fixed badge size");
+    require(editor.adjustSelectedSerialNumbers(1), "increase the selected number");
+    expectedSerial.insert(QStringLiteral("number"), 28);
+    require(payload(runtime, QStringLiteral("SerialNumber")) == expectedSerial,
+            "increasing the number preserves badge geometry and font size");
+    require(editor.adjustSelectedSerialNumbers(-1), "decrease the selected number");
+    expectedSerial.insert(QStringLiteral("number"), 27);
+    require(payload(runtime, QStringLiteral("SerialNumber")) == expectedSerial,
+            "decreasing the number preserves badge geometry and font size");
+}
+
 void clickAndDragLifecycle() {
     SnowCanvasRuntime runtime;
     SnowCanvasWidget canvas(runtime);
     canvas.resize(600, 360);
     canvas.show();
     QApplication::processEvents();
+    SnowCanvasTextStyle textStyle;
+    textStyle.fontSize = 12.0;
+    require(canvas.setCanvasTextStyle(textStyle), "apply default text font size");
     require(canvas.setCanvasTool(SnowCanvasTool::SerialNumber), "activate serial number tool");
     mouse(canvas, QEvent::MouseButtonPress, {100.0, 100.0}, Qt::LeftButton, Qt::LeftButton);
     require(records(runtime, QStringLiteral("SerialNumber")).size() == 1,
@@ -91,6 +149,8 @@ void clickAndDragLifecycle() {
     require(canvas.hasActiveTextEditing(), "release enters text editing");
     require(canvas.testAttribute(Qt::WA_InputMethodEnabled), "release enables text input");
     const auto text = payload(runtime, QStringLiteral("Text"));
+    require(text.value(QStringLiteral("font_size")).toDouble() == textStyle.fontSize,
+            "drag-created label preserves the default text font size when editing starts");
     const auto center = text.value(QStringLiteral("center")).toObject();
     const QPointF expected = canvas.canvasToViewTransform().inverted().map(QPointF(220.0, 260.0));
     require(center.value(QStringLiteral("x")).toDouble() == expected.x() &&
@@ -99,11 +159,16 @@ void clickAndDragLifecycle() {
     require(text.value(QStringLiteral("width")).toDouble() > 1.0,
             "release persists the host-measured label layout, not the placeholder width");
     key(canvas, Qt::Key_A, Qt::NoModifier, QStringLiteral("Drag label"));
-    key(canvas, Qt::Key_Return, Qt::ControlModifier);
-    require(!canvas.hasActiveTextEditing(), "commit closes editor");
+    key(canvas, Qt::Key_Escape);
+    require(!canvas.hasActiveTextEditing() && !canvas.testAttribute(Qt::WA_InputMethodEnabled),
+            "Escape commits the serial number label and closes its editor");
     require(payload(runtime, QStringLiteral("Text")).value(QStringLiteral("text")).toString() ==
                 QStringLiteral("Drag label"),
             "typing after release updates the attached text");
+    require(
+        payload(runtime, QStringLiteral("Text")).value(QStringLiteral("font_size")).toDouble() ==
+            textStyle.fontSize,
+        "drag-created label preserves the default text font size after editing");
     require(records(runtime, QStringLiteral("Text")).size() == 1,
             "typing does not create another text element");
 }
@@ -179,6 +244,7 @@ void wheelResizesSelectedSerialBoundText() {
     canvas.resize(600, 360);
     canvas.show();
     QApplication::processEvents();
+    const double defaultTextFontSize = canvas.canvasStyleToolbarState().textStyle.fontSize;
     createBadgeWithEditedBoundText(canvas);
 
     const double badgeFontSize =
@@ -189,7 +255,8 @@ void wheelResizesSelectedSerialBoundText() {
     require(canvas.canvasStyleToolbarState().source == SnowCanvasStyleToolbarSource::SelectedText,
             "committed bound label is the style toolbar source");
     const double initialFontSize = boundTextFontSize(runtime);
-    require(initialFontSize == badgeFontSize, "bound label starts at the serial number font size");
+    require(initialFontSize == defaultTextFontSize,
+            "bound label starts at the default text font size");
 
     wheel(canvas, {380.0, 180.0}, 120);
     require(boundTextFontSize(runtime) == initialFontSize + 1.0,
@@ -323,6 +390,7 @@ void toolbarCreatedTextKeepsDefaultStyling() {
     QApplication::processEvents();
 
     SnowCanvasTextStyle style;
+    style.fontSize = 50.0;
     style.color = QColor(0xff, 0xff, 0xff, 0xff);
     style.fill = QColor(0x21, 0x6b, 0xa5, 0xff);
     require(canvas.setCanvasTextStyle(style), "apply default text style");
@@ -338,11 +406,17 @@ void toolbarCreatedTextKeepsDefaultStyling() {
     mouse(canvas, QEvent::MouseButtonRelease, {102.0, 100.0}, Qt::LeftButton, Qt::NoButton);
     require(canvas.createSerialNumberText(), "toolbar Create Text attaches a label");
     require(canvas.hasActiveTextEditing(), "Create Text starts editing the label");
+    require(
+        payload(runtime, QStringLiteral("Text")).value(QStringLiteral("font_size")).toDouble() ==
+            style.fontSize,
+        "toolbar-created label preserves the default text font size when editing starts");
     key(canvas, Qt::Key_T, Qt::NoModifier, QStringLiteral("Toolbar label"));
     key(canvas, Qt::Key_Return, Qt::ControlModifier);
     require(!canvas.hasActiveTextEditing(), "commit closes the editor");
 
     const auto toolbarText = payload(runtime, QStringLiteral("Text"));
+    require(toolbarText.value(QStringLiteral("font_size")).toDouble() == style.fontSize,
+            "toolbar-created label preserves the default text font size after editing");
     require(textRecordHasColor(toolbarText.value(QStringLiteral("fill")).toObject(), 0x21, 0x6b,
                                0xa5, 0xff),
             "toolbar-created label keeps the default fill color");
@@ -359,6 +433,7 @@ int main(int argc, char** argv) {
     }
 #endif
     QApplication app(argc, argv);
+    numericTypeReachesExportAndSurvivesHistory();
     clickAndDragLifecycle();
     releaseWithoutMoveAndCancellation();
     toolbarCreatedTextKeepsDefaultStyling();

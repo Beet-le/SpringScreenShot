@@ -2,6 +2,10 @@
 
 Snow Apps repository, providing source code for Snow Shot and Snow Image Viewer.
 
+For native Windows ARM64 builds and packages, see
+[Windows ARM64 build support](docs-windows-arm64-build.md), including cross compilation,
+OCR preparation, and release validation prerequisites.
+
 <div style="font-size: 128px">🏗️🚧🦺</div>
 
 ## Install Snow Shot on Windows
@@ -17,10 +21,25 @@ This package includes published beta versions and the default OCR resources. See
 [WinGet release support](docs/snow-shot-releases.md#winget) for upgrades, removal,
 and maintainer setup.
 
+Once [Snow Shot's submission](https://github.com/ScoopInstaller/Extras/issues/18870)
+is accepted into Scoop's official
+[Extras bucket](https://github.com/ScoopInstaller/Extras), install the portable
+Windows x64 package with [Scoop](https://scoop.sh):
+
+```powershell
+scoop bucket add extras
+scoop install extras/snowshot
+```
+
+The Scoop package follows stable releases and includes the default OCR resources.
+Quit Snow Shot before running `scoop update snowshot`; use Scoop rather than the
+app's built-in updater. Settings and history persist across upgrades and ordinary
+uninstall. See [Scoop release support](docs/snow-shot-releases.md#scoop) for removal,
+data locations, and maintainer setup.
+
 ## Install Snow Shot on macOS
 
-After the first stable Homebrew release is published, Apple Silicon Macs running
-macOS 15 or later can install with:
+Apple Silicon Macs running macOS 15 or later can install the stable release with:
 
 ```sh
 brew update
@@ -51,3 +70,7 @@ repository-level scope rules and third-party material policy.
 Synchronized and bundled third-party materials retain their upstream licenses.
 See [Ant Design Qt third-party notices](ant_design_qt/THIRD_PARTY_NOTICES.md)
 and [Snow Shot third-party notices](snow_shot/THIRD_PARTY_NOTICES.md).
+
+## Community
+
+[![LINUX DO](https://img.shields.io/badge/LINUX%20DO-Community-blue)](https://linux.do)

@@ -1154,6 +1154,7 @@ dependencies = [
  "snow-d3d11",
  "snow-macos",
  "snow-media",
+ "snow-memory",
  "windows",
 ]
 
@@ -1174,6 +1175,7 @@ name = "snow-core"
 version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
+ "rayon",
  "smallvec",
  "snow-media",
  "windows",
@@ -1317,7 +1319,15 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-core-video",
  "serde",
+ "snow-memory",
  "thiserror",
+]
+
+[[package]]
+name = "snow-memory"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -1340,6 +1350,7 @@ dependencies = [
  "snow-capture",
  "snow-macos",
  "snow-media",
+ "snow-memory",
  "snow-recording-export",
  "snow-screen-recorder",
 ]
@@ -1351,6 +1362,7 @@ dependencies = [
  "crossbeam-channel",
  "snow-core",
  "snow-macos",
+ "snow-recording-model",
  "windows",
 ]
 
@@ -1365,6 +1377,7 @@ dependencies = [
 name = "snow-recording-export"
 version = "0.1.0"
 dependencies = [
+ "bincode",
  "crossbeam-channel",
  "ffmpeg-next",
  "num_cpus",
@@ -1374,6 +1387,8 @@ dependencies = [
  "snow-core",
  "snow-d3d11",
  "snow-media",
+ "snow-memory",
+ "snow-recording-effects",
  "snow-recording-model",
  "tempfile",
  "thiserror",
@@ -1389,6 +1404,7 @@ dependencies = [
  "bincode",
  "serde",
  "snow-media",
+ "snow-memory",
  "thiserror",
 ]
 
@@ -1408,6 +1424,7 @@ dependencies = [
  "snow-d3d11",
  "snow-macos",
  "snow-media",
+ "snow-memory",
  "snow-pipeline",
  "snow-recording-effects",
  "snow-recording-export",
@@ -1438,6 +1455,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-foundation",
+ "snow-core",
  "windows",
 ]
 
@@ -1453,6 +1471,7 @@ name = "snow-shot-rust-ffi"
 version = "0.1.0"
 dependencies = [
  "snow-capture-c",
+ "snow-core",
  "snow-diagnostics",
  "snow-draw-engine-c",
  "snow-recording-c",
@@ -1472,6 +1491,7 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
+ "snow-memory",
  "thiserror",
 ]
 
@@ -1480,6 +1500,8 @@ name = "snow-stitch-images-c"
 version = "0.1.0"
 dependencies = [
  "png",
+ "snow-core",
+ "snow-memory",
  "snow-stitch-images",
  "tempfile",
 ]
@@ -1500,6 +1522,7 @@ dependencies = [
 name = "snow-ui-selector-c"
 version = "0.1.0"
 dependencies = [
+ "snow-core",
  "snow-ui-selector",
  "windows",
 ]
@@ -1608,6 +1631,7 @@ dependencies = [
  "image",
  "serde",
  "serde_json",
+ "snow-core",
 ]
 
 [[package]]

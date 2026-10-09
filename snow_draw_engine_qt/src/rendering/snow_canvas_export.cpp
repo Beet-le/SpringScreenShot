@@ -1,3 +1,4 @@
+#include "snow_draw_engine_qt/snow_canvas_image.h"
 #include "snow_canvas_smart_erase.h"
 #include "snow_canvas_export.h"
 
@@ -104,13 +105,21 @@ bool synchronizeRuntimeScene(SnowRuntime runtime, const ExportProjection& projec
     return true;
 }
 
-bool requiresFullCompositor(const SnowCanvasDisplayCache& displayCache) {
+bool requiresBackgroundRaster(const SnowCanvasDisplayCache& displayCache) {
+    // Filters and restorations sample the original background. Ordinary scene
+    // items and document decorations only paint over it and need no extra raster.
+    for (std::uint32_t index = 0; index < displayCache.sceneItemCount(); ++index) {
+        if (displayCache.sceneItems()[index].kind == SNOW_SCENE_DISPLAY_ITEM_FILTER)
+            return true;
+    }
+    return false;
+}
+
+bool hasDocumentDrawing(const SnowCanvasDisplayCache& displayCache) {
     const WatermarkDisplayInfo& watermark = displayCache.watermarkInfo();
-    const bool visibleWatermark =
-        watermark.watermark_text_len != 0 && watermark.watermark_color.a != 0 &&
-        std::isfinite(watermark.watermark_opacity) && watermark.watermark_opacity > 0.0;
-    return displayCache.sceneItemCount() != 0 || displayCache.overlayItemCount() != 0 ||
-           displayCache.spotlightInfo().active || visibleWatermark;
+    return displayCache.sceneItemCount() != 0 || displayCache.spotlightInfo().active ||
+           (watermark.watermark_text_len != 0 && watermark.watermark_color.a != 0 &&
+            std::isfinite(watermark.watermark_opacity) && watermark.watermark_opacity > 0.0);
 }
 
 void renderRuntimeScene(QPainter& painter, const ExportProjection& projection,
@@ -155,6 +164,8 @@ void renderRuntimeScene(QPainter& painter, const ExportProjection& projection,
         &displayCache,
         &penMaskAtlas,
     };
+    // Export sources are composed over transparency, including pixels restored by erasers.
+    request.clearBackgroundEnabled = false;
     request.smartErase = smartErase;
     request.executionPlan = &executionPlan;
     snow_canvas_renderer::renderSceneItems(request);
@@ -188,7 +199,7 @@ QImage renderToImage(SnowRuntime runtime, const QRectF& virtualSelectionRect,
         return {};
     }
 
-    QImage output(outputSize, QImage::Format_ARGB32_Premultiplied);
+    QImage output = snowCanvasAllocateImage(outputSize, QImage::Format_ARGB32_Premultiplied);
     output.fill(Qt::transparent);
     if (!projection.isValid()) {
         return output;
@@ -207,17 +218,23 @@ QImage renderToImage(SnowRuntime runtime, const QRectF& virtualSelectionRect,
     snow_canvas_state::Store state;
     const bool synchronized =
         synchronizeRuntimeScene(runtime, projection, viewport, displayCache, state);
-    if (synchronized && !requiresFullCompositor(displayCache) &&
-        !snow_canvas_smart_erase::hasItems(smartErase)) {
-        ++g_renderDiagnostics.directSourceFastPathCount;
+    if (!synchronized || (!requiresBackgroundRaster(displayCache) &&
+                          !snow_canvas_smart_erase::hasItems(smartErase))) {
         renderSources(painter, projection, sources);
+        if (synchronized) {
+            ++g_renderDiagnostics.directSourceFastPathCount;
+            if (hasDocumentDrawing(displayCache))
+                renderRuntimeScene(painter, projection, {}, displayCache, smartErase);
+        } else {
+            ++g_renderDiagnostics.unsynchronizedFallbackCount;
+        }
         painter.end();
         output.setDevicePixelRatio(1.0);
         return output;
     }
 
     const QSize sceneSize = outputSize;
-    QImage background(sceneSize, QImage::Format_ARGB32_Premultiplied);
+    QImage background = snowCanvasAllocateImage(sceneSize, QImage::Format_ARGB32_Premultiplied);
     background.fill(Qt::transparent);
     {
         QPainter backgroundPainter(&background);

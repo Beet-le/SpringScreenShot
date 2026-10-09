@@ -5,6 +5,7 @@
 #include "snow_canvas_viewport.h"
 #include "snow_draw_engine_qt/snow_canvas_runtime.h"
 #include "snow_draw_engine_qt/snow_canvas_types.h"
+#include "snow_draw_engine_qt/snow_canvas_style_edit.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -36,6 +37,13 @@ void filterStyleParticipatesInToolbarStateDiffs() {
 
     require(!snow_canvas_state::diffSnapshots(next, next).any(),
             "identical snapshots should not emit state synchronization");
+    auto brushChanged = next;
+    brushChanged.styleToolbarState.brush_eraser_style.stroke_width = 42.0;
+    require(snow_canvas_state::diffSnapshots(next, brushChanged).styleToolbarChanged,
+            "independent eraser creation width must trigger toolbar synchronization");
+    require(snow_canvas_types::toCanvasStyleToolbarState(brushChanged.styleToolbarState)
+                    .brushEraserStyle.strokeWidth == 42.0,
+            "C/Qt state conversion must preserve independent brush width");
 }
 
 template <typename T> void requireEqualPair(const T& value, const char* message) {
@@ -160,6 +168,7 @@ void publicCanvasDtosUseExactCompleteEquality() {
     } while (false)
     REQUIRE_SERIAL_CHANGE(number, 2);
     REQUIRE_SERIAL_CHANGE(type, SnowCanvasSerialNumberType::SolidSquare);
+    REQUIRE_SERIAL_CHANGE(numericType, SnowCanvasSerialNumberNumericType::Roman);
     REQUIRE_SERIAL_CHANGE(color, QColor(Qt::cyan));
     REQUIRE_SERIAL_CHANGE(fill, QColor(Qt::magenta));
     REQUIRE_SERIAL_CHANGE(fillStyle, SnowCanvasFillStyle::CrossLine);
@@ -216,6 +225,7 @@ void publicCanvasDtosUseExactCompleteEquality() {
     changedToolbar.filterStyle.strength = 0.25;
     requireUnequalPair(toolbar, changedToolbar, "filter style should participate");
     REQUIRE_TOOLBAR_CHANGE(filterStyleMixed, 8u);
+    REQUIRE_TOOLBAR_CHANGE(brushEraserStyle, (SnowCanvasBrushEraserStyle{42.0}));
 #undef REQUIRE_TOOLBAR_CHANGE
 
     SnowCanvasSerialNumberToolbarState serialToolbar;
@@ -283,6 +293,7 @@ SnowCanvasStyleDefaults customStyleDefaults() {
     defaults.watermark.opacity = 0.24;
     defaults.spotlight.color = ink;
     defaults.spotlight.opacity = 0.62;
+    defaults.spotlightShape = SnowCanvasRectangleShape::Diamond;
     return defaults;
 }
 
@@ -324,6 +335,9 @@ void configuredRuntimeProfileFollowsRestoreAndResetLifecycle() {
     require(toolbarState(runtime, viewport, SNOW_ACTIVE_TOOL_SHAPE).shape_style.stroke_width ==
                 defaults.rectangle.strokeWidth,
             "rectangle should expose its configured creation style");
+    require(toolbarState(runtime, viewport, SNOW_ACTIVE_TOOL_SPOTLIGHT).shape_style.shape ==
+                SNOW_RECTANGLE_SHAPE_DIAMOND,
+            "spotlight should expose its independent configured shape");
     require(toolbarState(runtime, viewport, SNOW_ACTIVE_TOOL_ARROW).shape_style.stroke_width ==
                 defaults.arrow.strokeWidth,
             "arrow should expose its configured creation style");
@@ -468,6 +482,14 @@ void configuredRuntimeProfileFollowsRestoreAndResetLifecycle() {
     require(!rejectedSerialType.isValid(),
             "an invalid sequence-number type should be rejected before C ABI conversion");
 
+    invalid = defaults;
+    // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange)
+    invalid.spotlightShape = static_cast<SnowCanvasRectangleShape>(99);
+    invalidConfig.styleDefaults = invalid;
+    SnowCanvasRuntime rejectedSpotlightShape(invalidConfig);
+    require(!rejectedSpotlightShape.isValid(),
+            "an invalid spotlight shape should be rejected before C ABI conversion");
+
     SnowCanvasStyleDefaults smartEraseDefaults = defaults;
     smartEraseDefaults.rectangleFilter.type = SnowCanvasFilterType::SmartErase;
     smartEraseDefaults.penFilter.type = SnowCanvasFilterType::SmartErase;
@@ -518,10 +540,29 @@ void watermarkConfigurationConversionsPreserveSnapshotsAndUtf8Boundaries() {
             "template application time must participate in C state diff detection");
 }
 
+void serialNumberStrokePatchesPreserveOtherProperties() {
+    const SnowCanvasSerialNumberStyle original;
+    auto requested = original;
+    requested.number = 27;
+    requested.numericType = SnowCanvasSerialNumberNumericType::Roman;
+    requested.strokeWidth = 4.0;
+    requested.strokeStyle = SnowCanvasStrokeStyle::Dashed;
+    auto actual = original;
+    auto expected = original;
+    expected.strokeWidth = requested.strokeWidth;
+    snowCanvasMergeStyle(actual, requested, SnowCanvasSerialNumberStyleMixedStrokeWidth);
+    require(actual == expected, "stroke width patches preserve all other serial properties");
+    expected.strokeStyle = requested.strokeStyle;
+    snowCanvasMergeStyle(actual, requested, SnowCanvasSerialNumberStyleMixedStrokeStyle);
+    require(actual == expected, "stroke style patches preserve all other serial properties");
+}
+
 void defaultRuntimeUsesGenericEngineDefaults() {
     SnowStyleDefaults expected{};
     require(snow_runtime_style_defaults_default(&expected) == SNOW_OK,
             "generic C defaults should be available");
+    require(expected.spotlight_shape == SNOW_RECTANGLE_SHAPE_RECTANGLE,
+            "generic spotlight defaults should remain rectangular");
     SnowCanvasRuntime runtime;
     require(runtime.isValid(), "default runtime creation should be valid");
     SnowViewport viewport = createViewport(runtime);
@@ -532,13 +573,41 @@ void defaultRuntimeUsesGenericEngineDefaults() {
                 state.shape_style.stroke_width == expected.rectangle.stroke_width,
             "default runtime creation should retain generic engine defaults");
 }
+
+void serializedSnapshotsOwnBytesAndPreserveUndoAndRedo() {
+    SnowCanvasRuntime runtime;
+    const QByteArray annotation =
+        R"({"version":1,"operations":[{"type":"rectangle","bounds":[10,20,30,40]}]})";
+    require(!runtime.applyAnnotationTransaction(annotation).isEmpty() &&
+                !runtime.applyAnnotationTransaction(annotation).isEmpty() && runtime.undo(),
+            "create a document with both undo and redo history");
+    const QByteArray snapshot = runtime.serializeDocumentSession();
+    const auto handle = snow_canvas_runtime::Access::handle(runtime);
+    std::size_t size = 0;
+    require(snow_runtime_serialize_document_session(handle, nullptr, 0, &size) == SNOW_OK,
+            "query legacy snapshot size");
+    QByteArray legacy(qsizetype(size), Qt::Uninitialized);
+    require(snow_runtime_serialize_document_session(
+                handle, reinterpret_cast<std::uint8_t*>(legacy.data()), size, &size) == SNOW_OK &&
+                snapshot == legacy,
+            "single-serialization snapshots preserve every legacy session byte");
+    runtime.destroyAsync();
+    SnowCanvasRuntime restored;
+    require(restored.restoreDocumentSession(snapshot) && restored.canUndo() && restored.canRedo(),
+            "snapshot owns independent bytes after its source runtime is destroyed");
+    require(restored.redo() && !restored.canRedo() && restored.undo() && restored.undo() &&
+                !restored.canUndo() && restored.redo() && restored.redo() && !restored.canRedo(),
+            "restored snapshots retain complete undo and redo transactions");
+}
 } // namespace
 
 int main() {
+    serialNumberStrokePatchesPreserveOtherProperties();
     filterStyleParticipatesInToolbarStateDiffs();
     publicCanvasDtosUseExactCompleteEquality();
     watermarkConfigurationConversionsPreserveSnapshotsAndUtf8Boundaries();
     configuredRuntimeProfileFollowsRestoreAndResetLifecycle();
     defaultRuntimeUsesGenericEngineDefaults();
+    serializedSnapshotsOwnBytesAndPreserveUndoAndRedo();
     return 0;
 }

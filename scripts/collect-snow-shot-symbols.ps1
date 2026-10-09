@@ -3,13 +3,20 @@ param(
     [Parameter(Mandatory = $true)][string]$BuildDirectory,
     [Parameter(Mandatory = $true)][string]$InstallDirectory,
     [string]$OcrAssetManifest,
-    [string]$UpdaterProfileDirectory
+    [string]$UpdaterProfileDirectory,
+    [ValidateSet('x64', 'arm64')][string]$Architecture = 'x64',
+    [ValidateSet('Full', 'Mini')][string]$Edition = 'Full'
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'snow-shot-editions.ps1')
+. (Join-Path $PSScriptRoot 'snow-build-environment.ps1')
+. (Join-Path $PSScriptRoot 'snow-shot-ocr-release-runtime.ps1')
+$target = Get-SnowWindowsTarget -Architecture $Architecture
+$product = Get-SnowShotEdition $Edition
 $buildRoot = (Resolve-Path -LiteralPath $BuildDirectory).Path
 $installRoot = (Resolve-Path -LiteralPath $InstallDirectory).Path
-$dumpbin = Join-Path $env:VCToolsInstallDir "bin\Hostx64\x64\dumpbin.exe"
+$dumpbin = (Get-Command dumpbin.exe -ErrorAction Stop).Source
 if (-not (Test-Path -LiteralPath $dumpbin -PathType Leaf)) {
     throw "Run symbol collection in the Snow build environment."
 }
@@ -71,7 +78,9 @@ $symbolRoot = Join-Path $buildRoot ("symbols-" + [guid]::NewGuid().ToString("N")
 New-Item -ItemType Directory -Path $symbolRoot | Out-Null
 $manifest = [ordered]@{
     schema = 1
+    product = $product.Product
     configuration = "Release"
+    platform = $target.Platform
     revision = (& git -C $PSScriptRoot rev-parse HEAD).Trim()
     binaries = @()
 }
@@ -83,6 +92,7 @@ if ($OcrAssetManifest) {
 foreach ($binary in Get-ChildItem -LiteralPath (Join-Path $installRoot "bin") -File) {
     if ($binary.Extension -notin @(".exe", ".dll")) { continue }
     if ($OcrAssetManifest -and $binary.Name -eq 'snow-ocr-process.exe') { continue }
+    Assert-SnowPeArchitecture -Path $binary.FullName -Architecture $Architecture
     $headers = @(& $dumpbin /nologo /headers $binary.FullName 2>&1)
     if ($LASTEXITCODE -ne 0) { throw "Unable to inspect $($binary.FullName)" }
     $destination = Join-Path $symbolRoot $binary.BaseName
@@ -102,10 +112,11 @@ foreach ($binary in Get-ChildItem -LiteralPath (Join-Path $installRoot "bin") -F
             $record.age = $Matches.age
             $pdb = $Matches.path.Trim()
             if (-not [System.IO.Path]::IsPathRooted($pdb)) {
-                if ($binary.Name -eq 'snow-shot-updater.exe' -and $UpdaterProfileDirectory) {
+                if ($binary.Name -eq "$($product.Product)-updater.exe" -and $UpdaterProfileDirectory) {
                     $pdb = Join-Path $UpdaterProfileDirectory $pdb
                 } else {
-                    $pdb = Join-Path $buildRoot "cargo\x86_64-pc-windows-msvc\release\$pdb"
+                    $cargoDirectory = if ($Edition -eq 'Mini') { 'cargo-mini' } else { 'cargo' }
+                    $pdb = Join-Path $buildRoot "$cargoDirectory\$($target.RustTarget)\release\$pdb"
                 }
             }
             if (Test-Path -LiteralPath $pdb -PathType Leaf) {
@@ -116,13 +127,13 @@ foreach ($binary in Get-ChildItem -LiteralPath (Join-Path $installRoot "bin") -F
             break
         }
     }
-    if ($binary.Name -in @("snow_shot.exe", "snow-shot-updater.exe", "snow-ocr-process.exe") -and -not $record.pdb) {
+    if ($binary.Name -in @("$($product.Executable).exe", "$($product.Product)-updater.exe", "snow-ocr-process.exe") -and -not $record.pdb) {
         throw "The matching PDB is missing for $($binary.Name); release symbols are incomplete."
     }
     $manifest.binaries += $record
 }
 $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $symbolRoot "manifest.json") -Encoding utf8
-$archive = Join-Path $buildRoot "snow-shot-symbols-windows-x64.zip"
+$archive = Join-Path $buildRoot "$($product.Product)-symbols-$($target.Platform).zip"
 if (Test-Path -LiteralPath $archive) { Remove-Item -LiteralPath $archive -Force }
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 [System.IO.Compression.ZipFile]::CreateFromDirectory($symbolRoot, $archive)

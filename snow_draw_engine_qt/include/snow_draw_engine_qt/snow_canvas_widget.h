@@ -17,6 +17,7 @@
 #include "snow_draw_engine_qt/snow_canvas_types.h"
 
 class QCursor;
+class QRegion;
 class QEnterEvent;
 class QEvent;
 class QFocusEvent;
@@ -67,9 +68,23 @@ class SnowCanvasWidget : public QWidget {
     SnowCanvasSpotlightConfig canvasSpotlightConfig() const;
     bool setCanvasSpotlightConfig(const SnowCanvasSpotlightConfig& config);
     void previewCanvasSpotlightConfig(const SnowCanvasSpotlightConfig& config);
+    SnowCanvasDistanceStyle canvasDistanceStyle() const;
+    bool setCanvasDistanceStyle(const SnowCanvasDistanceStyle& style,
+                                quint32 properties = SnowCanvasDistanceStyleAllProperties);
+    // Source-image pixels per canvas unit, captured when a distance draft begins.
+    bool setDistanceCreationPixelScale(const QSizeF& scale);
     bool setCanvasShapeStylePatch(const SnowCanvasShapeStyle& style, quint32 properties,
                                   SnowCanvasShapeKind kind);
     bool setCanvasFilterStyle(const SnowCanvasFilterStyle& style, quint32 properties);
+    // Updates shared creation defaults for RectangleFilter or PenFilter without
+    // changing this widget's active tool, selection, or existing elements.
+    // Strength remains shared by both filter families.
+    bool setCanvasFilterCreationStyle(const SnowCanvasFilterStyle& style, quint32 properties,
+                                      SnowCanvasTool filterTool);
+    // Changes only future brush erasers, preserving selection, tool and history.
+    bool setCanvasBrushEraserCreationStyle(
+        const SnowCanvasBrushEraserStyle& style,
+        quint32 properties = SnowCanvasBrushEraserStylePropertyStrokeWidth);
     bool setCanvasTextStyle(const SnowCanvasTextStyle& style,
                             quint32 properties = SnowCanvasTextStyleAllProperties);
     bool setCanvasSerialNumberStyle(const SnowCanvasSerialNumberStyle& style);
@@ -82,6 +97,7 @@ class SnowCanvasWidget : public QWidget {
 
     SnowCanvasSnapConfig canvasSnapConfig() const;
     bool setCanvasSnapConfig(const SnowCanvasSnapConfig& config);
+    bool setCanvasSnapGuideTargets(const SnowCanvasSnapGuideTargets& targets);
 
     SnowCanvasGridConfig canvasGridConfig() const;
     bool setCanvasGridConfig(const SnowCanvasGridConfig& config);
@@ -118,6 +134,10 @@ class SnowCanvasWidget : public QWidget {
     // selection.
     void clearRenderState();
     [[nodiscard]] bool hasActiveTextEditing() const;
+    // Limits automatic-width, unrotated text input to this canvas-space area's
+    // horizontal edges. Clearing the bounds restores natural-width input.
+    std::optional<QRectF> textEditingBounds() const;
+    void setTextEditingBounds(const std::optional<QRectF>& bounds);
     // Keeps an active inline text draft alive while a text-style popup owns focus.
     void beginTextStylePopupInteraction();
     // Ends a text-style popup interaction and restores text input when appropriate.
@@ -125,6 +145,9 @@ class SnowCanvasWidget : public QWidget {
 
     bool interactionEnabled() const;
     void setInteractionEnabled(bool enabled);
+    // Tests element bodies using the active tool and the requested button's policy.
+    [[nodiscard]] bool hasQuickSelectionTargetAt(const QPointF& viewPosition,
+                                                 Qt::MouseButton button) const;
     bool wheelZoomEnabled() const;
     void setWheelZoomEnabled(bool enabled);
     // Controls engine-owned scene, overlay, editor, and auxiliary content.
@@ -154,6 +177,8 @@ class SnowCanvasWidget : public QWidget {
     SnowCanvasCustomRenderer* customRenderer() const;
     void setCustomRenderer(SnowCanvasCustomRenderer* renderer);
     void setBaseImageSources(const QList<SnowCanvasBaseImageSource>& sources);
+    void setBaseImageSources(const QList<SnowCanvasBaseImageSource>& sources,
+                             const QRegion& damage);
     [[nodiscard]] QTransform canvasToViewTransform() const;
     QRect viewRectForCanvasRect(const QRectF& canvasRect, int paddingPx = 0) const;
 

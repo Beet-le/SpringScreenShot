@@ -8,6 +8,22 @@
             <translation>%1 (unavailable)</translation>
         </message>
         <message>
+            <source>1 decimal place</source>
+            <translation>1 decimal place</translation>
+        </message>
+        <message>
+            <source>2 decimal places</source>
+            <translation>2 decimal places</translation>
+        </message>
+        <message>
+            <source>3 decimal places</source>
+            <translation>3 decimal places</translation>
+        </message>
+        <message>
+            <source>Actual distance value</source>
+            <translation>Actual distance value</translation>
+        </message>
+        <message>
             <source>Add</source>
             <translation>Add</translation>
         </message>
@@ -62,6 +78,14 @@
         <message>
             <source>Animated recording formats do not contain audio</source>
             <translation>Animated recording formats do not contain audio</translation>
+        </message>
+        <message>
+            <source>Annotation Template</source>
+            <translation>Annotation Template</translation>
+        </message>
+        <message>
+            <source>Arabic numerals</source>
+            <translation>Arabic numerals</translation>
         </message>
         <message>
             <source>Arrow</source>
@@ -124,6 +148,14 @@
             <translation>Bring to front</translation>
         </message>
         <message>
+            <source>Brush Eraser</source>
+            <translation>Brush Eraser</translation>
+        </message>
+        <message>
+            <source>Brush eraser stroke width %1 (%2px)</source>
+            <translation>Brush eraser stroke width %1 (%2px)</translation>
+        </message>
+        <message>
             <source>Cancel</source>
             <translation>Cancel</translation>
         </message>
@@ -132,8 +164,8 @@
             <translation>Cancel screenshot</translation>
         </message>
         <message>
-            <source>Capture cursor</source>
-            <translation>Capture cursor</translation>
+            <source>Capture interface during scrolling screenshot</source>
+            <translation>Capture interface during scrolling screenshot</translation>
         </message>
         <message>
             <source>Center horizontally</source>
@@ -142,6 +174,10 @@
         <message>
             <source>Center vertically</source>
             <translation>Center vertically</translation>
+        </message>
+        <message>
+            <source>Chinese numerals</source>
+            <translation>Chinese numerals</translation>
         </message>
         <message>
             <source>Circle</source>
@@ -188,12 +224,12 @@
             <translation>Could not capture selected elements</translation>
         </message>
         <message>
-            <source>Could not delete the draw template</source>
-            <translation>Could not delete the draw template</translation>
+            <source>Could not delete the annotation template</source>
+            <translation>Could not delete the annotation template</translation>
         </message>
         <message>
-            <source>Could not save the draw template</source>
-            <translation>Could not save the draw template</translation>
+            <source>Could not save the annotation template</source>
+            <translation>Could not save the annotation template</translation>
         </message>
         <message>
             <source>Cross-line fill</source>
@@ -210,6 +246,14 @@
         <message>
             <source>Current arrow stroke width</source>
             <translation>Current arrow stroke width</translation>
+        </message>
+        <message>
+            <source>Current brush eraser stroke width</source>
+            <translation>Current brush eraser stroke width</translation>
+        </message>
+        <message>
+            <source>Current distance stroke width</source>
+            <translation>Current distance stroke width</translation>
         </message>
         <message>
             <source>Current pen filter stroke width</source>
@@ -236,6 +280,10 @@
             <translation>Current watermark font size</translation>
         </message>
         <message>
+            <source>Cursor data is unavailable for this screenshot.</source>
+            <translation>Cursor data is unavailable for this screenshot.</translation>
+        </message>
+        <message>
             <source>Curve region</source>
             <translation>Curve region</translation>
         </message>
@@ -256,6 +304,10 @@
             <translation>Dashed stroke</translation>
         </message>
         <message>
+            <source>Decimal places</source>
+            <translation>Decimal places</translation>
+        </message>
+        <message>
             <source>Default</source>
             <translation>Default</translation>
         </message>
@@ -268,12 +320,12 @@
             <translation>Delete</translation>
         </message>
         <message>
-            <source>Delete Draw Template</source>
-            <translation>Delete Draw Template</translation>
+            <source>Delete Annotation Template</source>
+            <translation>Delete Annotation Template</translation>
         </message>
         <message>
-            <source>Delete draw template "%1"? This action cannot be undone.</source>
-            <translation>Delete draw template "%1"? This action cannot be undone.</translation>
+            <source>Delete annotation template "%1"? This action cannot be undone.</source>
+            <translation>Delete annotation template "%1"? This action cannot be undone.</translation>
         </message>
         <message>
             <source>Delete selected elements</source>
@@ -290,6 +342,26 @@
         <message>
             <source>Diamond</source>
             <translation>Diamond</translation>
+        </message>
+        <message>
+            <source>Distance annotation</source>
+            <translation>Distance annotation</translation>
+        </message>
+        <message>
+            <source>Distance stroke color</source>
+            <translation>Distance stroke color</translation>
+        </message>
+        <message>
+            <source>Distance stroke color %1</source>
+            <translation>Distance stroke color %1</translation>
+        </message>
+        <message>
+            <source>Distance stroke width %1</source>
+            <translation>Distance stroke width %1</translation>
+        </message>
+        <message>
+            <source>Distance unit</source>
+            <translation>Distance unit</translation>
         </message>
         <message>
             <source>Distribute horizontally</source>
@@ -312,10 +384,6 @@
             <translation>Drag toolbar</translation>
         </message>
         <message>
-            <source>Draw Template</source>
-            <translation>Draw Template</translation>
-        </message>
-        <message>
             <source>Edit</source>
             <translation>Edit</translation>
         </message>
@@ -324,8 +392,16 @@
             <translation>Edit selection</translation>
         </message>
         <message>
+            <source>Effect Settings</source>
+            <translation>Effect Settings</translation>
+        </message>
+        <message>
             <source>Elbow arrow</source>
             <translation>Elbow arrow</translation>
+        </message>
+        <message>
+            <source>Element Eraser</source>
+            <translation>Element Eraser</translation>
         </message>
         <message>
             <source>Ellipse</source>
@@ -396,6 +472,14 @@
             <translation>End arrowhead triangle outline</translation>
         </message>
         <message>
+            <source>Endpoint scale (scroll to adjust)</source>
+            <translation>Endpoint scale (scroll to adjust)</translation>
+        </message>
+        <message>
+            <source>Endpoint style</source>
+            <translation>Endpoint style</translation>
+        </message>
+        <message>
             <source>Eraser</source>
             <translation>Eraser</translation>
         </message>
@@ -448,10 +532,6 @@
             <translation>Freehand region</translation>
         </message>
         <message>
-            <source>Full-width</source>
-            <translation>Full-width</translation>
-        </message>
-        <message>
             <source>Gaussian blur</source>
             <translation>Gaussian blur</translation>
         </message>
@@ -462,10 +542,6 @@
         <message>
             <source>Green</source>
             <translation>Green</translation>
-        </message>
-        <message>
-            <source>Half-width</source>
-            <translation>Half-width</translation>
         </message>
         <message>
             <source>Hide selection toolbar</source>
@@ -508,16 +584,16 @@
             <translation>Image</translation>
         </message>
         <message>
+            <source>Integers</source>
+            <translation>Integers</translation>
+        </message>
+        <message>
             <source>Inversion</source>
             <translation>Inversion</translation>
         </message>
         <message>
             <source>Jump to Translation Page</source>
             <translation>Jump to Translation Page</translation>
-        </message>
-        <message>
-            <source>Keep line breaks</source>
-            <translation>Keep line breaks</translation>
         </message>
         <message>
             <source>Keyboard Background Color</source>
@@ -554,6 +630,10 @@
         <message>
             <source>Logical Pixel Selection</source>
             <translation>Logical Pixel Selection</translation>
+        </message>
+        <message>
+            <source>Lowercase letters</source>
+            <translation>Lowercase letters</translation>
         </message>
         <message>
             <source>Mask color</source>
@@ -712,6 +792,18 @@
             <translation>Polyline region</translation>
         </message>
         <message>
+            <source>Post-processing effects</source>
+            <translation>Post-processing effects</translation>
+        </message>
+        <message>
+            <source>Print</source>
+            <translation>Print</translation>
+        </message>
+        <message>
+            <source>Progress Bar Color</source>
+            <translation>Progress Bar Color</translation>
+        </message>
+        <message>
             <source>Punctuation</source>
             <translation>Punctuation</translation>
         </message>
@@ -748,8 +840,16 @@
             <translation>Recording format</translation>
         </message>
         <message>
+            <source>Recording settings</source>
+            <translation>Recording settings</translation>
+        </message>
+        <message>
             <source>Rectangle</source>
             <translation>Rectangle</translation>
+        </message>
+        <message>
+            <source>Rectangle Eraser</source>
+            <translation>Rectangle Eraser</translation>
         </message>
         <message>
             <source>Rectangle filter</source>
@@ -772,10 +872,6 @@
             <translation>Redo</translation>
         </message>
         <message>
-            <source>Remove line breaks</source>
-            <translation>Remove line breaks</translation>
-        </message>
-        <message>
             <source>Reset</source>
             <translation>Reset</translation>
         </message>
@@ -788,12 +884,24 @@
             <translation>Resume recording</translation>
         </message>
         <message>
+            <source>Roman numerals</source>
+            <translation>Roman numerals</translation>
+        </message>
+        <message>
             <source>Save as file</source>
             <translation>Save as file</translation>
         </message>
         <message>
+            <source>Save to File</source>
+            <translation>Save to File</translation>
+        </message>
+        <message>
             <source>Scrolling screenshot</source>
             <translation>Scrolling screenshot</translation>
+        </message>
+        <message>
+            <source>Scrolling screenshot settings</source>
+            <translation>Scrolling screenshot settings</translation>
         </message>
         <message>
             <source>Select elements</source>
@@ -840,6 +948,10 @@
             <translation>Sequence number font size %1px</translation>
         </message>
         <message>
+            <source>Sequence number numeric type</source>
+            <translation>Sequence number numeric type</translation>
+        </message>
+        <message>
             <source>Sequence number type</source>
             <translation>Sequence number type</translation>
         </message>
@@ -854,6 +966,18 @@
         <message>
             <source>Shape</source>
             <translation>Shape</translation>
+        </message>
+        <message>
+            <source>Show Cursor</source>
+            <translation>Show Cursor</translation>
+        </message>
+        <message>
+            <source>Show Playback Time</source>
+            <translation>Show Playback Time</translation>
+        </message>
+        <message>
+            <source>Show Progress Bar</source>
+            <translation>Show Progress Bar</translation>
         </message>
         <message>
             <source>Show QR Code</source>
@@ -1016,6 +1140,10 @@
             <translation>Tapered shafts support standard, triangle, triangle outline, and indented triangle arrowheads.</translation>
         </message>
         <message>
+            <source>Target Language</source>
+            <translation>Target Language</translation>
+        </message>
+        <message>
             <source>Template</source>
             <translation>Template</translation>
         </message>
@@ -1112,8 +1240,24 @@
             <translation>Transparent</translation>
         </message>
         <message>
+            <source>Trim Video</source>
+            <translation>Trim Video</translation>
+        </message>
+        <message>
+            <source>Unable to save scrolling screenshot settings</source>
+            <translation>Unable to save scrolling screenshot settings</translation>
+        </message>
+        <message>
             <source>Undo</source>
             <translation>Undo</translation>
+        </message>
+        <message>
+            <source>Upload to Cloud</source>
+            <translation>Upload to Cloud</translation>
+        </message>
+        <message>
+            <source>Uppercase letters</source>
+            <translation>Uppercase letters</translation>
         </message>
         <message>
             <source>Vertical scrolling</source>
@@ -1154,6 +1298,22 @@
         <message>
             <source>Yellow</source>
             <translation>Yellow</translation>
+        </message>
+        <message>
+            <source>cm</source>
+            <translation>cm</translation>
+        </message>
+        <message>
+            <source>km</source>
+            <translation>km</translation>
+        </message>
+        <message>
+            <source>m</source>
+            <translation>m</translation>
+        </message>
+        <message>
+            <source>mm</source>
+            <translation>mm</translation>
         </message>
         <message>
             <source>ms</source>

@@ -131,9 +131,14 @@ pub(crate) const TOOLS: &[(&str, &str, bool)] = &[
     ),
     (
         "snow_shot_screenshot_recognize",
-        "Start text, table, QR, Markdown, or HTML recognition; poll the returned operation ID.",
+        if crate::edition::MINI {
+            "Start local text recognition; poll the returned operation ID."
+        } else {
+            "Start text, table, QR, Markdown, or HTML recognition; poll the returned operation ID."
+        },
         false,
     ),
+    #[cfg(not(feature = "mini"))]
     (
         "snow_shot_screenshot_translate",
         "Translate recognized text with the configured provider; poll the returned operation ID.",
@@ -151,7 +156,11 @@ pub(crate) const TOOLS: &[(&str, &str, bool)] = &[
     ),
     (
         "snow_shot_screenshot_edit_recognition",
-        "Edit recognized text and table cells.",
+        if crate::edition::MINI {
+            "Edit recognized text."
+        } else {
+            "Edit recognized text and table cells."
+        },
         false,
     ),
     (
@@ -189,6 +198,7 @@ impl SnowShotMcp {
             TOOLS
                 .iter()
                 .chain(schemas::domains::TOOLS.iter())
+                .filter(|(name, _, _)| crate::edition::method_enabled(name))
                 .map(|(name, description, read_only)| {
                     let mut tool = Tool::new(
                         Cow::Borrowed(*name),
@@ -413,13 +423,22 @@ fn output_schema() -> serde_json::Map<String, Value> {
 
 impl ServerHandler for SnowShotMcp {
     fn supported_protocol_versions(&self) -> Cow<'static, [rmcp::model::ProtocolVersion]> {
-        Cow::Borrowed(&[rmcp::model::ProtocolVersion::V_2026_07_28])
+        // 2026-07-28 drops the stdio `initialize` handshake in favour of
+        // per-request metadata, so rmcp's stdio negotiator can only answer a
+        // client when at least one legacy (<2026-07-28) version is available to
+        // fall back to. Keep a legacy revision alongside the newest one,
+        // otherwise every stdio client fails with -32022.
+        Cow::Borrowed(&[
+            rmcp::model::ProtocolVersion::V_2026_07_28,
+            rmcp::model::ProtocolVersion::V_2025_11_25,
+        ])
     }
 
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().enable_resources().enable_resources_subscribe().enable_prompts().enable_completions().enable_tasks().build()).with_protocol_version(rmcp::model::ProtocolVersion::V_2026_07_28).with_instructions(
-            "Snow Shot provides local application, screenshot, background document, recording and pinned-image workflows. ".to_owned()
-                + "Start with snow_shot_app_status. Keep returned resource IDs and revisions; refresh after conflicts. Background documents are silent and client-owned. The application must have MCP enabled. Credentials are write-only.",
+            format!("{} provides local application, screenshot, background document, recording and pinned-image workflows. ", crate::edition::PRODUCT_NAME)
+                + "Start with snow_shot_app_status. Keep returned resource IDs and revisions; refresh after conflicts. Background documents are silent and client-owned. The application must have MCP enabled."
+                + if crate::edition::MINI { "" } else { " Credentials are write-only." },
         )
     }
 
@@ -458,7 +477,11 @@ impl ServerHandler for SnowShotMcp {
     ) -> Result<rmcp::model::ReadResourceResponse, McpError> {
         let uri = request.uri;
         if uri == "snow-shot://capabilities" {
-            return Ok(discovery::resource_result(&uri, json!({"tools":Self::tools(),"coordinate_system":"canvas","credentials":"write_only"}), true).into());
+            let mut catalog = json!({"product":crate::edition::PRODUCT,"tools":Self::tools(),"coordinate_system":"canvas"});
+            if !crate::edition::MINI {
+                catalog["credentials"] = json!("write_only");
+            }
+            return Ok(discovery::resource_result(&uri, catalog, true).into());
         }
         let (method, arguments) = discovery::resource_request(&uri)?;
         let result = self.invoke(method, arguments, context).await?;
@@ -562,6 +585,7 @@ impl ServerHandler for SnowShotMcp {
         if !TOOLS
             .iter()
             .chain(schemas::domains::TOOLS.iter())
+            .filter(|(name, _, _)| crate::edition::method_enabled(name))
             .any(|(tool, _, _)| *tool == name)
         {
             return Err(McpError::new(
@@ -611,6 +635,55 @@ impl ServerHandler for SnowShotMcp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn eraser_discovery_exposes_tools_and_width_only_style_for_both_domains() {
+        let tools = SnowShotMcp::tools();
+        for (name, enumeration) in [
+            ("snow_shot_screenshot_set_tool", "CanvasTool"),
+            ("snow_shot_document_set_tool", "DocumentCanvasTool"),
+        ] {
+            let tool = tools.iter().find(|tool| tool.name == name).unwrap();
+            let values = tool.input_schema["$defs"][enumeration]["enum"]
+                .as_array()
+                .unwrap();
+            for id in ["eraser", "rectangle_eraser", "brush_eraser"] {
+                assert!(values.contains(&json!(id)), "{name}: {id}");
+            }
+        }
+        for name in [
+            "snow_shot_screenshot_set_tool_style",
+            "snow_shot_document_set_tool_style",
+        ] {
+            let tool = tools.iter().find(|tool| tool.name == name).unwrap();
+            let definitions = &tool.input_schema["$defs"];
+            assert_eq!(
+                definitions["BrushEraserTarget"]["enum"],
+                json!(["brush_eraser"])
+            );
+            let patch = &definitions["BrushEraserStylePatch"];
+            assert_eq!(patch["additionalProperties"], json!(false));
+            assert_eq!(patch["required"], json!(["stroke_width"]));
+            assert_eq!(patch["properties"].as_object().unwrap().len(), 1);
+            let width = &definitions["BrushEraserWidth"];
+            assert_eq!(width["type"], json!("number"));
+            assert_eq!(width["minimum"], json!(1.0));
+            assert_eq!(width["maximum"], json!(72.0));
+            assert!(
+                !definitions["StyleTarget"]["enum"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("brush_eraser"))
+            );
+            assert!(
+                !definitions["FilterKind"]["enum"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("restore_background"))
+            );
+        }
+    }
+
     #[test]
     fn artifact_raw_chunks_become_json_data_without_image_content() {
         for bytes in [Vec::new(), br#"{"text":"owned"}"#.to_vec()] {

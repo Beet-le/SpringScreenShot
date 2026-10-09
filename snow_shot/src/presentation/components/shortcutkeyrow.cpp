@@ -1,4 +1,5 @@
 #include "snow_shot/presentation/components/shortcutkeyrow.h"
+#include "snow_shot/presentation/components/formfields.h"
 #include "widgets/detail/pointer_region.h"
 #include "snow_shot/presentation/shortcutdisplaytext.h"
 
@@ -140,15 +141,16 @@ shortcutValidationMessage(const snow_shot::presentation::GlobalShortcutValidatio
         if (validation.failureReason ==
             snow_shot::presentation::GlobalShortcutFailureReason::AlreadyInUse) {
             return displayShortcut.isEmpty()
-                       ? QObject::tr("This key is already assigned to another drawing tool, try "
+                       ? QObject::tr("This key is already assigned to another annotation tool, try "
                                      "another key")
                        : QObject::tr(
-                             "%1 is already assigned to another drawing tool, try another key")
+                             "%1 is already assigned to another annotation tool, try another key")
                              .arg(displayShortcut);
         }
         return displayShortcut.isEmpty()
-                   ? QObject::tr("This key cannot be used as a drawing shortcut, try another key")
-                   : QObject::tr("%1 cannot be used as a drawing shortcut, try another key")
+                   ? QObject::tr(
+                         "This key cannot be used as an annotation shortcut, try another key")
+                   : QObject::tr("%1 cannot be used as an annotation shortcut, try another key")
                          .arg(displayShortcut);
     }
     if (validationScope == ShortcutKeyRowConfig::ValidationScope::PinnedWindowShortcut) {
@@ -207,7 +209,7 @@ class ShortcutConfigInfoButton final : public adqt::widgets::AdButton {
         if (validationScope == ShortcutKeyRowConfig::ValidationScope::ScreenshotShortcut) {
             m_info->setAccessibleName(QObject::tr("Invalid screenshot shortcut"));
         } else if (validationScope == ShortcutKeyRowConfig::ValidationScope::DrawingShortcut) {
-            m_info->setAccessibleName(QObject::tr("Invalid drawing shortcut"));
+            m_info->setAccessibleName(QObject::tr("Invalid annotation shortcut"));
         } else if (validationScope == ShortcutKeyRowConfig::ValidationScope::PinnedWindowShortcut) {
             m_info->setAccessibleName(QObject::tr("Invalid pinned window shortcut"));
         } else if (validationScope == ShortcutKeyRowConfig::ValidationScope::RecordingShortcut) {
@@ -399,10 +401,12 @@ class ShortcutKeyConfigContent final : public QWidget {
         std::function<snow_shot::presentation::GlobalShortcutValidationResult(
             const snow_shot::shortcuts::ShortcutBinding&)>
             shortcutValidator,
-        ShortcutKeyRowConfig::ValidationScope validationScope, QWidget* parent = nullptr)
+        ShortcutKeyRowConfig::ValidationScope validationScope, bool allowModifierOnlyAlt,
+        QWidget* parent = nullptr)
         : QWidget(parent), m_colorScheme(colorScheme),
           m_maxShortcutCount(std::max(1, maxShortcutCount)),
-          m_shortcutValidator(std::move(shortcutValidator)), m_validationScope(validationScope) {
+          m_shortcutValidator(std::move(shortcutValidator)), m_validationScope(validationScope),
+          m_allowModifierOnlyAlt(allowModifierOnlyAlt) {
         setObjectName(QStringLiteral("shortcutConfigContent"));
         setFocusPolicy(Qt::StrongFocus);
 
@@ -459,20 +463,32 @@ class ShortcutKeyConfigContent final : public QWidget {
     }
 
     snow_shot::shortcuts::ShortcutBindingList selectedShortcuts() const {
-        snow_shot::shortcuts::ShortcutBindingList bindings;
-        for (const KeyConfig& keyConfig : m_keyConfigs) {
-            if (keyConfig.binding.portableText.isEmpty()) {
-                continue;
+        return collectShortcuts(false);
+    }
+
+    snow_shot::shortcuts::ShortcutBindingList draftShortcuts() const {
+        return collectShortcuts(true);
+    }
+
+    void setDraftShortcuts(const snow_shot::shortcuts::ShortcutBindingList& shortcuts) {
+        if (draftShortcuts() == shortcuts) {
+            return;
+        }
+        stopRecording();
+        m_keyConfigs.clear();
+        for (const auto& shortcut : shortcuts) {
+            if (m_keyConfigs.size() >= m_maxShortcutCount) {
+                break;
             }
-            const bool duplicate =
-                std::any_of(bindings.cbegin(), bindings.cend(), [&keyConfig](const auto& existing) {
-                    return snow_shot::shortcuts::bindingsConflict(existing, keyConfig.binding);
-                });
-            if (!duplicate) {
-                bindings.push_back(keyConfig.binding);
+            if (!shortcut.portableText.isEmpty()) {
+                m_keyConfigs.push_back({shortcut, m_nextConfigIndex++});
             }
         }
-        return bindings;
+        if (m_keyConfigs.isEmpty()) {
+            m_keyConfigs.push_back({{}, m_nextConfigIndex++});
+            m_recordingConfigIndex = m_keyConfigs.first().index;
+        }
+        rebuildKeyConfigRows();
     }
 
     bool canAcceptDialog() const {
@@ -490,7 +506,39 @@ class ShortcutKeyConfigContent final : public QWidget {
         ensureKeyboardGrabbed();
     }
 
+    void retranslateUi() {
+        m_addButton->setText(QObject::tr("Add key config"));
+        if (!m_validationMessage.isEmpty()) {
+            m_validationMessage = shortcutValidationMessage(m_rejectedValidation,
+                                                            m_rejectedShortcut, m_validationScope);
+        }
+        rebuildKeyConfigRows();
+    }
+
     std::function<void(bool)> acceptanceAvailabilityChanged;
+    std::function<void(const QString&)> validationFeedbackChanged;
+    std::function<void()> draftValueChanged;
+
+  private:
+    snow_shot::shortcuts::ShortcutBindingList collectShortcuts(bool includePending) const {
+        snow_shot::shortcuts::ShortcutBindingList bindings;
+        for (const KeyConfig& keyConfig : m_keyConfigs) {
+            const auto& shortcut = includePending && keyConfig.index == m_recordingConfigIndex
+                                       ? m_pendingShortcut
+                                       : keyConfig.binding;
+            if (shortcut.portableText.isEmpty()) {
+                continue;
+            }
+            const bool duplicate =
+                std::any_of(bindings.cbegin(), bindings.cend(), [&shortcut](const auto& existing) {
+                    return snow_shot::shortcuts::bindingsConflict(existing, shortcut);
+                });
+            if (!duplicate) {
+                bindings.push_back(shortcut);
+            }
+        }
+        return bindings;
+    }
 
   protected:
     void hideEvent(QHideEvent* event) override {
@@ -515,6 +563,15 @@ class ShortcutKeyConfigContent final : public QWidget {
             return;
         }
 
+        if (m_allowModifierOnlyAlt && event->key() == Qt::Key_Alt && event->isAutoRepeat()) {
+            event->accept();
+            return;
+        }
+
+        m_altTapPending =
+            m_allowModifierOnlyAlt && event->key() == Qt::Key_Alt &&
+            (event->modifiers() == Qt::NoModifier || event->modifiers() == Qt::AltModifier) &&
+            !event->isAutoRepeat();
         if (m_printScreenRecorder == nullptr || !m_printScreenRecorder->handleKeyEvent(*event)) {
             recordKeyEvent(*event);
             rebuildKeyConfigRows();
@@ -526,6 +583,12 @@ class ShortcutKeyConfigContent final : public QWidget {
         if (m_recordingConfigIndex >= 0) {
             if (m_printScreenRecorder != nullptr) {
                 m_printScreenRecorder->handleKeyEvent(*event);
+            }
+            if (m_allowModifierOnlyAlt && m_altTapPending && event->key() == Qt::Key_Alt &&
+                !event->isAutoRepeat()) {
+                m_altTapPending = false;
+                recordKeyEvent(*event, true);
+                rebuildKeyConfigRows();
             }
             event->accept();
             return;
@@ -647,6 +710,7 @@ class ShortcutKeyConfigContent final : public QWidget {
         }
 
         m_recordingConfigIndex = configIndex;
+        m_altTapPending = false;
         m_pendingShortcut = {};
         m_rejectedShortcut = {};
         m_validationMessage.clear();
@@ -682,6 +746,7 @@ class ShortcutKeyConfigContent final : public QWidget {
     void stopRecording() {
         releaseInputCapture();
         m_recordingConfigIndex = -1;
+        m_altTapPending = false;
         m_pendingShortcut = {};
         m_rejectedShortcut = {};
         m_validationMessage.clear();
@@ -707,11 +772,11 @@ class ShortcutKeyConfigContent final : public QWidget {
         }
     }
 
-    void recordKeyEvent(const QKeyEvent& event) {
+    void recordKeyEvent(const QKeyEvent& event, bool modifierOnlyAltRelease = false) {
         if (m_printScreenRecorder != nullptr) {
             m_printScreenRecorder->cancelPendingCapture();
         }
-        if (isModifierOnlyKey(event.key())) {
+        if (isModifierOnlyKey(event.key()) && !modifierOnlyAltRelease) {
             m_pendingShortcut = {};
             m_rejectedShortcut = {};
             m_validationMessage.clear();
@@ -721,7 +786,8 @@ class ShortcutKeyConfigContent final : public QWidget {
         const bool allowModifierOnlyShift =
             m_validationScope == ShortcutKeyRowConfig::ValidationScope::ScreenshotShortcut;
         const snow_shot::shortcuts::ShortcutBinding shortcut =
-            snow_shot::shortcuts::bindingFromKeyEvent(event, allowModifierOnlyShift);
+            snow_shot::shortcuts::bindingFromKeyEvent(event, allowModifierOnlyShift,
+                                                      m_allowModifierOnlyAlt);
         snow_shot::presentation::GlobalShortcutValidationResult validation{
             shortcut.portableText,
             !shortcut.portableText.isEmpty(),
@@ -754,6 +820,7 @@ class ShortcutKeyConfigContent final : public QWidget {
 
         m_pendingShortcut = {};
         m_rejectedShortcut = shortcut;
+        m_rejectedValidation = validation;
         m_validationMessage = shortcutValidationMessage(validation, shortcut, m_validationScope);
     }
 
@@ -791,6 +858,16 @@ class ShortcutKeyConfigContent final : public QWidget {
     }
 
     void notifyShortcutAvailabilityChanged() {
+        const auto draft = draftShortcuts();
+        if (m_lastReportedDraft != draft) {
+            m_lastReportedDraft = draft;
+            if (draftValueChanged) {
+                draftValueChanged();
+            }
+        }
+        if (validationFeedbackChanged) {
+            validationFeedbackChanged(m_validationMessage);
+        }
         if (acceptanceAvailabilityChanged) {
             acceptanceAvailabilityChanged(canAcceptDialog());
         }
@@ -830,8 +907,10 @@ class ShortcutKeyConfigContent final : public QWidget {
     adqt::widgets::AdButton* m_addButton = nullptr;
     std::unique_ptr<snow_shot::shortcuts::ShortcutRecorder> m_printScreenRecorder;
     QVector<KeyConfig> m_keyConfigs;
+    snow_shot::shortcuts::ShortcutBindingList m_lastReportedDraft;
     snow_shot::shortcuts::ShortcutBinding m_pendingShortcut;
     snow_shot::shortcuts::ShortcutBinding m_rejectedShortcut;
+    snow_shot::presentation::GlobalShortcutValidationResult m_rejectedValidation;
     QString m_validationMessage;
     int m_maxShortcutCount = 2;
     int m_recordingConfigIndex = -1;
@@ -842,6 +921,8 @@ class ShortcutKeyConfigContent final : public QWidget {
         m_shortcutValidator;
     ShortcutKeyRowConfig::ValidationScope m_validationScope =
         ShortcutKeyRowConfig::ValidationScope::GlobalShortcut;
+    bool m_allowModifierOnlyAlt = false;
+    bool m_altTapPending = false;
 };
 
 } // namespace
@@ -866,6 +947,7 @@ ShortcutKeyRow::ShortcutKeyRow(
       m_resumeGlobalShortcuts(config.resumeGlobalShortcuts) {
     m_showRegistrationStatus = config.showRegistrationStatus;
     m_validationScope = config.validationScope;
+    m_allowModifierOnlyAlt = config.allowModifierOnlyAlt;
     if (m_registrationState.shortcuts.isEmpty() && !config.shortcuts.isEmpty()) {
         m_registrationState.shortcuts = config.shortcuts;
     }
@@ -1059,10 +1141,11 @@ void ShortcutKeyRow::syncDelayUnderline() {
 void ShortcutKeyRow::openShortcutConfigDialog() {
     QWidget* const hostWindow = window();
     auto* modal = new adqt::widgets::AdModal(this);
-    auto* content =
-        new ShortcutKeyConfigContent(m_registrationState.shortcuts, m_colorScheme,
-                                     m_maxShortcutCount, m_shortcutValidator, m_validationScope);
+    auto* content = new ShortcutKeyConfigContent(m_registrationState.shortcuts, m_colorScheme,
+                                                 m_maxShortcutCount, m_shortcutValidator,
+                                                 m_validationScope, m_allowModifierOnlyAlt);
     const QPointer<ShortcutKeyConfigContent> contentGuard(content);
+    const QPointer<ShortcutKeyRow> rowGuard(this);
     std::optional<quint64> suspension;
     if (m_validationScope == ShortcutKeyRowConfig::ValidationScope::GlobalShortcut &&
         m_suspendGlobalShortcuts) {
@@ -1093,7 +1176,57 @@ void ShortcutKeyRow::openShortcutConfigDialog() {
     modal->setRejectText(tr("Cancel"));
     modal->setStandardButtons(adqt::widgets::AdModal::StandardButton::Ok |
                               adqt::widgets::AdModal::StandardButton::Cancel);
-    modal->setContentWidget(content);
+    namespace fields = snow_shot::presentation::components::form_fields;
+    fields::Metadata metadata;
+    metadata.id = QStringLiteral("shortcutConfiguration");
+    auto* form = new adqt::widgets::AdForm;
+    fields::configureForm(form);
+    fields::CustomBinding binding;
+    binding.control = content;
+    binding.focusWidget = content;
+    binding.readValue = [contentGuard]() -> QVariant {
+        return QVariant::fromValue(contentGuard ? contentGuard->draftShortcuts()
+                                                : snow_shot::shortcuts::ShortcutBindingList());
+    };
+    binding.writeValue = [contentGuard](const QVariant& value) {
+        if (contentGuard) {
+            contentGuard->setDraftShortcuts(
+                value.value<snow_shot::shortcuts::ShortcutBindingList>());
+        }
+    };
+    binding.retranslate = [contentGuard, rowGuard, modal] {
+        if (rowGuard) {
+            modal->setWindowTitle(tr("Key configuration for \"%1\"")
+                                      .arg(rowGuard->m_titleLabel != nullptr
+                                               ? rowGuard->m_titleLabel->text()
+                                               : QString()));
+            modal->setAcceptText(tr("OK"));
+            modal->setRejectText(tr("Cancel"));
+        }
+        if (contentGuard) {
+            contentGuard->retranslateUi();
+        }
+    };
+    fields::Options fieldOptions;
+    fieldOptions.parent = form;
+    fieldOptions.form = form;
+    fieldOptions.commitPolicy = fields::CommitPolicy::Explicit;
+    const auto shortcutField = fields::custom(metadata, std::move(binding), fieldOptions);
+    content->setObjectName(QStringLiteral("shortcutConfigContent"));
+    const QPointer<fields::FormField> fieldGuard(shortcutField.field);
+    form->setInitialValues(form->values());
+    form->resetFields();
+    content->draftValueChanged = [fieldGuard] {
+        if (fieldGuard) {
+            fieldGuard->notifyEdited();
+        }
+    };
+    content->validationFeedbackChanged = [fieldGuard](const QString& message) {
+        if (fieldGuard) {
+            fieldGuard->setFeedback(message.isEmpty() ? QStringList() : QStringList{message});
+        }
+    };
+    modal->setContentWidget(form);
     content->acceptanceAvailabilityChanged = [modal](bool available) {
         if (modal->acceptButton() != nullptr) {
             modal->acceptButton()->setEnabled(available);
@@ -1101,7 +1234,7 @@ void ShortcutKeyRow::openShortcutConfigDialog() {
     };
 
     connect(modal, &adqt::widgets::AdModal::closeRequested, modal,
-            [modal, contentGuard](adqt::widgets::AdModal::CloseReason reason) {
+            [modal, contentGuard, fieldGuard](adqt::widgets::AdModal::CloseReason reason) {
                 if (reason != adqt::widgets::AdModal::CloseReason::OkAction) {
                     modal->reject();
                     return;
@@ -1112,6 +1245,9 @@ void ShortcutKeyRow::openShortcutConfigDialog() {
                         return;
                     }
                     contentPtr->commitPendingShortcut();
+                    if (fieldGuard) {
+                        fieldGuard->notifyCommitted();
+                    }
                     modal->accept();
                 }
             });
@@ -1153,14 +1289,10 @@ void ShortcutKeyRow::syncRegistrationStatus() {
 
     if (m_shortcutButton != nullptr) {
         auto* const button = static_cast<ShortcutConfigurationButton*>(m_shortcutButton);
-        button->setText(m_compactPresentation
-                            ? shortcutText
-                            : (shortcutText.isEmpty() ? tr("Unset") : shortcutText));
+        button->setText(shortcutText.isEmpty() ? tr("Not set") : shortcutText);
         button->setRegistrationStatus(status);
         if (!m_showRegistrationStatus) {
-            button->setAccentRole(shortcutText.isEmpty()
-                                      ? adqt::widgets::AdButton::AccentRole::Danger
-                                      : adqt::widgets::AdButton::AccentRole::Neutral);
+            button->setAccentRole(adqt::widgets::AdButton::AccentRole::Neutral);
         }
         button->setTheme(m_colorScheme);
     }

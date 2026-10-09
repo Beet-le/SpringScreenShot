@@ -4,12 +4,24 @@
     <context>
         <name>AboutPageWidget</name>
         <message>
+            <source>%1 logo</source>
+            <translation>%1 标志</translation>
+        </message>
+        <message>
             <source>%1 · %2</source>
             <translation>%1 · %2</translation>
         </message>
         <message>
+            <source>%1 · Make expression clearer</source>
+            <translation>%1 · 让表达更清晰</translation>
+        </message>
+        <message>
             <source>, excellent work.</source>
             <translation>，出色工作。</translation>
+        </message>
+        <message>
+            <source>About %1</source>
+            <translation>关于 %1</translation>
         </message>
         <message>
             <source>About Snow Shot</source>
@@ -30,12 +42,16 @@
         <message>
             <source>Capture, annotate, recognize text, and record your screen,
 so every moment on screen can be expressed clearly and shared easily.</source>
-            <translation>截图、标注、文字识别和录屏，
+            <translation>截图、标注、文字识别和屏幕录制，
 让屏幕上的每一刻都能清晰表达、轻松分享。</translation>
         </message>
         <message>
             <source>Changelog</source>
             <translation>更新日志</translation>
+        </message>
+        <message>
+            <source>Check for a newer version of %1.</source>
+            <translation>检查 %1 是否有新版本。</translation>
         </message>
         <message>
             <source>Check for a newer version of Snow Shot.</source>
@@ -90,8 +106,8 @@ so every moment on screen can be expressed clearly and shared easily.</source>
             <translation>从 GitHub 下载</translation>
         </message>
         <message>
-            <source>Download from website</source>
-            <translation>前往官网下载</translation>
+            <source>Download from Gitee</source>
+            <translation>从 Gitee 下载</translation>
         </message>
         <message>
             <source>Download update</source>
@@ -156,10 +172,6 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         <message>
             <source>Preview</source>
             <translation>预览版</translation>
-        </message>
-        <message>
-            <source>QQ Group 2</source>
-            <translation>QQ 交流群 2</translation>
         </message>
         <message>
             <source>QQ Group 3</source>
@@ -270,6 +282,13 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         </message>
     </context>
     <context>
+        <name>ConfirmationSkipButton</name>
+        <message>
+            <source>Don't ask again</source>
+            <translation>不再询问</translation>
+        </message>
+    </context>
+    <context>
         <name>DiagnosticsService</name>
         <message>
             <source>A log file could not be read.</source>
@@ -341,17 +360,76 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         </message>
     </context>
     <context>
+        <name>EditionMetadata</name>
+        <message>
+            <source>Snow Shot</source>
+            <translation>Snow Shot</translation>
+        </message>
+        <message>
+            <source>Snow Shot Mini</source>
+            <translation>Snow Shot Mini</translation>
+        </message>
+    </context>
+    <context>
+        <name>FloatingToolbar</name>
+        <message>
+            <source>Close</source>
+            <translation>关闭</translation>
+        </message>
+        <message>
+            <source>Customize toolbar</source>
+            <translation>自定义工具栏</translation>
+        </message>
+        <message>
+            <source>Delay %1 seconds to execute</source>
+            <translation>延迟 %1 秒执行</translation>
+        </message>
+        <message>
+            <source>Formula recognition</source>
+            <translation>公式识别</translation>
+        </message>
+        <message>
+            <source>Hide during screenshots</source>
+            <translation>截图时隐藏</translation>
+        </message>
+        <message>
+            <source>Hide in fullscreen</source>
+            <translation>全屏时隐藏</translation>
+        </message>
+        <message>
+            <source>Icon mode</source>
+            <translation>图标模式</translation>
+        </message>
+        <message>
+            <source>More tools</source>
+            <translation>更多工具</translation>
+        </message>
+        <message>
+            <source>QR code recognition</source>
+            <translation>二维码识别</translation>
+        </message>
+        <message>
+            <source>Screen recording</source>
+            <translation>屏幕录制</translation>
+        </message>
+        <message>
+            <source>Screenshot</source>
+            <translation>截图</translation>
+        </message>
+        <message>
+            <source>Show toolbar</source>
+            <translation>显示工具栏</translation>
+        </message>
+        <message>
+            <source>Toolbar mode</source>
+            <translation>工具栏模式</translation>
+        </message>
+    </context>
+    <context>
         <name>LanguageCatalog</name>
         <message>
             <source>Language name</source>
             <translation>简体中文</translation>
-        </message>
-    </context>
-    <context>
-        <name>MainContentHeaderWidget</name>
-        <message>
-            <source>Search settings and functions</source>
-            <translation>搜索设置和功能</translation>
         </message>
     </context>
     <context>
@@ -379,24 +457,24 @@ so every moment on screen can be expressed clearly and shared easily.</source>
             <translation>无法将 %1 注册为全局快捷键，请尝试其他按键</translation>
         </message>
         <message>
-            <source>%1 cannot be used as a drawing shortcut, try another key</source>
-            <translation>%1 不能用作绘制快捷键，请尝试其他按键</translation>
-        </message>
-        <message>
             <source>%1 cannot be used as a pinned window shortcut, try another key</source>
             <translation>%1 不能用作固定到屏幕窗口快捷键，请尝试其他快捷键</translation>
         </message>
         <message>
             <source>%1 cannot be used as a recording shortcut, try another key</source>
-            <translation>%1 不能用作录屏快捷键，请尝试其他按键</translation>
+            <translation>%1 不能用作屏幕录制快捷键，请尝试其他按键</translation>
         </message>
         <message>
             <source>%1 cannot be used as a screenshot shortcut, try another key</source>
             <translation>%1 不能用作截图快捷键，请尝试其他按键</translation>
         </message>
         <message>
-            <source>%1 is already assigned to another drawing tool, try another key</source>
-            <translation>%1 已分配给另一个绘制工具，请尝试其他按键</translation>
+            <source>%1 cannot be used as an annotation shortcut, try another key</source>
+            <translation>%1 不能用作标注快捷键，请尝试其他按键</translation>
+        </message>
+        <message>
+            <source>%1 is already assigned to another annotation tool, try another key</source>
+            <translation>%1 已分配给另一个标注工具，请尝试其他按键</translation>
         </message>
         <message>
             <source>%1 is already assigned to another pinned window action, try another key</source>
@@ -404,7 +482,7 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         </message>
         <message>
             <source>%1 is already assigned to another recording action, try another key</source>
-            <translation>%1 已分配给其他录屏操作，请尝试其他按键</translation>
+            <translation>%1 已分配给其他屏幕录制操作，请尝试其他按键</translation>
         </message>
         <message>
             <source>%1 is already assigned to another shortcut, try another key</source>
@@ -419,8 +497,8 @@ so every moment on screen can be expressed clearly and shared easily.</source>
             <translation>此平台不支持全局快捷键</translation>
         </message>
         <message>
-            <source>Invalid drawing shortcut</source>
-            <translation>无效的绘制快捷键</translation>
+            <source>Invalid annotation shortcut</source>
+            <translation>无效的标注快捷键</translation>
         </message>
         <message>
             <source>Invalid global shortcut</source>
@@ -432,7 +510,7 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         </message>
         <message>
             <source>Invalid recording shortcut</source>
-            <translation>无效的录屏快捷键</translation>
+            <translation>无效的屏幕录制快捷键</translation>
         </message>
         <message>
             <source>Invalid screenshot shortcut</source>
@@ -447,24 +525,24 @@ so every moment on screen can be expressed clearly and shared easily.</source>
             <translation>无法将此按键注册为全局快捷键，请尝试其他按键</translation>
         </message>
         <message>
-            <source>This key cannot be used as a drawing shortcut, try another key</source>
-            <translation>此按键不能用作绘制快捷键，请尝试其他按键</translation>
-        </message>
-        <message>
             <source>This key cannot be used as a pinned window shortcut, try another key</source>
             <translation>此快捷键不能用作固定到屏幕窗口快捷键，请尝试其他快捷键</translation>
         </message>
         <message>
             <source>This key cannot be used as a recording shortcut, try another key</source>
-            <translation>此按键不能用作录屏快捷键，请尝试其他按键</translation>
+            <translation>此按键不能用作屏幕录制快捷键，请尝试其他按键</translation>
         </message>
         <message>
             <source>This key cannot be used as a screenshot shortcut, try another key</source>
             <translation>此按键不能用作截图快捷键，请尝试其他按键</translation>
         </message>
         <message>
-            <source>This key is already assigned to another drawing tool, try another key</source>
-            <translation>此按键已分配给另一个绘制工具，请尝试其他按键</translation>
+            <source>This key cannot be used as an annotation shortcut, try another key</source>
+            <translation>此按键不能用作标注快捷键，请尝试其他按键</translation>
+        </message>
+        <message>
+            <source>This key is already assigned to another annotation tool, try another key</source>
+            <translation>此按键已分配给另一个标注工具，请尝试其他按键</translation>
         </message>
         <message>
             <source>This key is already assigned to another pinned window action, try another key</source>
@@ -472,7 +550,7 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         </message>
         <message>
             <source>This key is already assigned to another recording action, try another key</source>
-            <translation>此按键已分配给其他录屏操作，请尝试其他按键</translation>
+            <translation>此按键已分配给其他屏幕录制操作，请尝试其他按键</translation>
         </message>
         <message>
             <source>This key is already assigned to another shortcut, try another key</source>
@@ -485,6 +563,14 @@ so every moment on screen can be expressed clearly and shared easily.</source>
     </context>
     <context>
         <name>SectionHeaderWidget</name>
+        <message>
+            <source>Collapse %1</source>
+            <translation>收起%1</translation>
+        </message>
+        <message>
+            <source>Expand %1</source>
+            <translation>展开%1</translation>
+        </message>
         <message>
             <source>Refresh</source>
             <translation>刷新</translation>
@@ -507,6 +593,10 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         <message>
             <source>Expand navigation</source>
             <translation>展开导航</translation>
+        </message>
+        <message>
+            <source>Search Function</source>
+            <translation>搜索功能</translation>
         </message>
     </context>
     <context>
@@ -673,6 +763,18 @@ so every moment on screen can be expressed clearly and shared easily.</source>
     <context>
         <name>snow_shot::app::ApplicationController</name>
         <message>
+            <source>%1 %2 is available. Open About for update options.</source>
+            <translation>%1 %2 已发布。请打开“关于”查看更新选项。</translation>
+        </message>
+        <message>
+            <source>%1 will close and restart to install the update. Continue?</source>
+            <translation>%1 将关闭并重新启动以安装更新。是否继续？</translation>
+        </message>
+        <message>
+            <source>An update is ready. Open About to restart and update %1.</source>
+            <translation>更新已就绪。请打开“关于”重新启动并更新 %1。</translation>
+        </message>
+        <message>
             <source>An update is ready. Open About to restart and update Snow Shot.</source>
             <translation>更新已准备就绪。请打开“关于”页面，重启并更新 Snow Shot。</translation>
         </message>
@@ -689,8 +791,12 @@ so every moment on screen can be expressed clearly and shared easily.</source>
             <translation>功能暂不可用</translation>
         </message>
         <message>
+            <source>Finish capturing, recording, exporting, recognizing text, or updating before changing storage.</source>
+            <translation>请先完成截图、录制、导出、文字识别或更新，再更改存储目录。</translation>
+        </message>
+        <message>
             <source>Finish capturing, recording, or exporting before updating.</source>
-            <translation>请先完成截图、录屏或导出，再进行更新。</translation>
+            <translation>请先完成截图、屏幕录制或导出，再进行更新。</translation>
         </message>
         <message>
             <source>Restart and update</source>
@@ -722,6 +828,10 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         <message>
             <source>Update</source>
             <translation>更新</translation>
+        </message>
+        <message>
+            <source>Video export completed</source>
+            <translation>视频导出完成</translation>
         </message>
     </context>
 </TS>

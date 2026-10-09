@@ -1,4 +1,5 @@
 #include "snowimagecodecbridge.h"
+#include "../../test-support/virtualmemory.h"
 
 #include <array>
 #include <cstdint>
@@ -10,6 +11,10 @@
 
 namespace {
 struct StreamContext final {
+    explicit StreamContext(const uint8_t* source = nullptr, uint32_t imageWidth = 3,
+                           uint32_t imageHeight = 2)
+        : pixels(source), width(imageWidth), height(imageHeight) {}
+
     const uint8_t* pixels = nullptr;
     uint32_t width = 3;
     uint32_t height = 2;
@@ -130,6 +135,44 @@ SnowShotImageCodecEncodeResult encodeResult() {
     return result;
 }
 
+bool pngDeclaresSrgb(const uint8_t* bytes, uint64_t size) {
+    for (uint64_t offset = 8; bytes != nullptr && offset <= size && size - offset >= 12;) {
+        const uint32_t length = (uint32_t(bytes[offset]) << 24) |
+                                (uint32_t(bytes[offset + 1]) << 16) |
+                                (uint32_t(bytes[offset + 2]) << 8) | bytes[offset + 3];
+        if (uint64_t(length) > size - offset - 12)
+            return false;
+        if (std::memcmp(bytes + offset + 4, "sRGB", 4) == 0)
+            return length == 1 && bytes[offset + 8] <= 3;
+        offset += uint64_t(length) + 12;
+    }
+    return false;
+}
+
+bool srgbEncodingsRetainColorDescription(const std::array<uint8_t, 3U * 2U * 4U>& pixels,
+                                         SnowShotImageCodecEncodeOptions options,
+                                         std::array<char, 512>* error) {
+    options.format = SNOW_SHOT_IMAGE_CODEC_FORMAT_PNG;
+    options.preserve_metadata = 1;
+    SnowShotImageCodecBuffer encoded{};
+    const bool packed =
+        snow_shot_image_codec_encode_rgba8(pixels.data(), pixels.size(), 3, 2, 12, &options,
+                                           &encoded, error->data(), error->size()) != 0 &&
+        pngDeclaresSrgb(encoded.data, encoded.size);
+    snow_shot_image_codec_release_buffer(&encoded);
+    StreamContext context{pixels.data()};
+    const auto source = bridgeSource(&context);
+    const auto sink = bridgeSink(&context);
+    auto receipt = encodeResult();
+    const bool streamed =
+        snow_shot_image_codec_encode_rgba8_stream(&source, &sink, &options, &receipt, error->data(),
+                                                  error->size()) != 0 &&
+        pngDeclaresSrgb(context.output.data(), context.output.size());
+    if (!packed || !streamed)
+        std::cerr << "Packed and streamed screenshot PNGs must declare sRGB\n";
+    return packed && streamed;
+}
+
 bool roundTripRequiredFormats(const std::array<uint8_t, 3U * 2U * 4U>& pixels,
                               SnowShotImageCodecEncodeOptions options,
                               std::array<char, 512>* error) {
@@ -207,7 +250,51 @@ bool roundTripRequiredFormats(const std::array<uint8_t, 3U * 2U * 4U>& pixels,
 }
 } // namespace
 
+bool largeBuffersReleaseAcrossCodecBoundary() {
+    constexpr uint32_t width = 1025;
+    constexpr uint32_t height = 513;
+    std::vector<uint8_t> pixels(static_cast<std::size_t>(width) * height * 4);
+    uint32_t random = 0x12345678;
+    for (std::size_t index = 0; index < pixels.size(); ++index) {
+        random ^= random << 13;
+        random ^= random >> 17;
+        random ^= random << 5;
+        pixels[index] = static_cast<uint8_t>(random);
+    }
+    SnowShotImageCodecEncodeOptions options{};
+    options.struct_size = sizeof(options);
+    options.abi_version = SNOW_SHOT_IMAGE_CODEC_ABI_VERSION;
+    options.format = SNOW_SHOT_IMAGE_CODEC_FORMAT_PNG;
+    options.compression_level = 1;
+    std::array<char, 512> error{};
+    SnowShotImageCodecBuffer encoded{};
+    SnowShotImageCodecBuffer decoded{};
+    if (!snow_shot_image_codec_encode_rgba8(pixels.data(), pixels.size(), width, height,
+                                            uint64_t(width) * 4, &options, &encoded, error.data(),
+                                            error.size()) ||
+        encoded.size < 1024 * 1024) {
+        snow_shot_image_codec_release_buffer(&encoded);
+        return false;
+    }
+    const bool valid = snow_shot_image_codec_decode_rgba8(
+                           encoded.data, encoded.size, SNOW_SHOT_IMAGE_CODEC_FORMAT_PNG, &decoded,
+                           error.data(), error.size()) != 0 &&
+                       decoded.size == pixels.size() &&
+                       std::memcmp(decoded.data, pixels.data(), pixels.size()) == 0;
+    const auto* encodedMiddle = encoded.data + encoded.size / 2;
+    const auto* decodedMiddle = decoded.data ? decoded.data + decoded.size / 2 : nullptr;
+    snow_shot_image_codec_release_buffer(&encoded);
+    snow_shot_image_codec_release_buffer(&decoded);
+    return valid && !snow::test_support::virtualMemoryMapped(encodedMiddle) &&
+           !snow::test_support::virtualMemoryMapped(decodedMiddle) && !encoded.data &&
+           !decoded.data;
+}
+
 int main() {
+    if (!largeBuffersReleaseAcrossCodecBoundary()) {
+        std::cerr << "Large codec buffers must preserve pixels and unmap on release\n";
+        return EXIT_FAILURE;
+    }
     constexpr std::array<uint8_t, 12> resizePixels{0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 255};
     std::array<uint8_t, 20> resized{};
     std::array<char, 512> resizeError{};
@@ -373,12 +460,13 @@ int main() {
     snow_shot_image_codec_release_buffer(&output);
     snow_shot_image_codec_release_buffer(&output);
     const bool requiredFormatsRoundTrip = roundTripRequiredFormats(pixels, options, &error);
+    const bool retainedSrgb = srgbEncodingsRetainColorDescription(pixels, options, &error);
     if (snow_shot_image_codec_abi_version() != SNOW_SHOT_IMAGE_CODEC_ABI_VERSION ||
         succeeded == 0 || !hasPngSignature || !rejectedUnsafeReuse || output.data != nullptr ||
         output.size != 0 || !rejectedInvalidResult || !rejectedInvalidSource ||
         !rejectedInvalidResizeSource || !tallResizeStreamed || !streamedPng ||
         !tallPngStreamedRows || !tallJpegStreamedRows || !propagatedCancellation ||
-        !requiredFormatsRoundTrip || !hasBgraPixels) {
+        !requiredFormatsRoundTrip || !hasBgraPixels || !retainedSrgb) {
         std::cerr << (error[0] == '\0' ? "The C ABI PNG smoke test failed." : error.data()) << '\n';
         return EXIT_FAILURE;
     }

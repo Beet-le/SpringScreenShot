@@ -29,6 +29,10 @@ class ScreenshotOverlayEventAdapter final : public ScreenshotOverlayEventSink {
     void handleOverlayMouseRelease(ScreenshotOverlayWindow* overlay,
                                    const QPointF& localPosition) override;
     void completeRightClickCancellation() override;
+    bool effectDragActive() const override;
+    void leaveEffectEditors() override;
+    void cancelEffectDrag() override;
+    bool handleEffectDoubleClick(ScreenshotOverlayWindow*, const QPointF&) override;
     [[nodiscard]] ScreenshotOverlayRightClickResult
     handleOverlayRightClick(ScreenshotOverlayWindow* overlay,
                             const QPointF& localPosition) override;
@@ -36,8 +40,7 @@ class ScreenshotOverlayEventAdapter final : public ScreenshotOverlayEventSink {
     void handleUnhandledLeftDoubleClick() override;
     void handleUnhandledMiddleClick() override;
     [[nodiscard]] bool handleOverlayWheel(ScreenshotOverlayWindow* overlay,
-                                          const QPointF& localPosition, const QPoint& angleDelta,
-                                          const QPoint& pixelDelta) override;
+                                          const QWheelEvent& event) override;
     [[nodiscard]] bool shouldBlockUnhandledOverlayKeyInput() const override;
     void raiseToolbarForCanvasInteraction() override;
 

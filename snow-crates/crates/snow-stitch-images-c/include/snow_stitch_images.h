@@ -160,6 +160,9 @@ SnowStitchFramePool* snow_stitch_frame_pool_create(uint32_t width, uint32_t heig
 void snow_stitch_frame_pool_destroy(SnowStitchFramePool* pool);
 /* Returns NULL while all bounded slots are owned by the pipeline. */
 SnowStitchFrameBuffer* snow_stitch_frame_pool_acquire(SnowStitchFramePool* pool);
+/* Same bounded acquisition, with initialized but unspecified pixels. The caller must
+ * overwrite every packed RGBA byte before submitting the frame. */
+SnowStitchFrameBuffer* snow_stitch_frame_pool_acquire_for_overwrite(SnowStitchFramePool* pool);
 /* The writable pixel pointer remains valid until the frame is consumed/destroyed. */
 uint8_t snow_stitch_frame_buffer_info(SnowStitchFrameBuffer* frame,
                                       SnowStitchMutableImageInfo* out_info);
@@ -173,6 +176,18 @@ uint8_t snow_stitch_session_reset(SnowStitchSession* session);
 uint8_t snow_stitch_session_push_owned(SnowStitchSession* session,
                                        SnowStitchFrameBuffer** inout_frame,
                                        SnowStitchFrameOutcome* out_outcome);
+/* Retains tightly packed immutable RGBA pixels without copying them.
+ * A non-NULL release callback
+ * transfers context even on failure. It runs exactly
+ * once after the last input lease, possibly
+ * on another thread. Pixels must remain
+ * immutable and valid until that call. A NULL callback
+ * rejects the call without
+ * taking context. */
+uint8_t snow_stitch_session_push_external_rgba(SnowStitchSession* session, uint32_t width,
+                                               uint32_t height, const uint8_t* rgba_bytes,
+                                               size_t rgba_len, void (*release)(void*),
+                                               void* context, SnowStitchFrameOutcome* out_outcome);
 uint8_t snow_stitch_session_copy_rows(const SnowStitchSession* session, uint32_t top, uint32_t rows,
                                       uint8_t* destination, size_t destination_len);
 SnowStitchOwnedImage* snow_stitch_session_materialize_rows(const SnowStitchSession* session,

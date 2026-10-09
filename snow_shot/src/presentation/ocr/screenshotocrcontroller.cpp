@@ -5,6 +5,8 @@
 #include <QDataStream>
 #include <QIODevice>
 
+#include "snow_shot/presentation/editionfeatures.h"
+
 #include "snow_shot/presentation/screenshotcapturestate.h"
 #include "snow_shot/presentation/screenshotdisplaysession.h"
 #include "snow_shot/presentation/screenshotgeometry.h"
@@ -47,6 +49,8 @@ ScreenshotToolPalette::Tool paletteTool(ScreenshotActiveTool tool) {
         return ScreenshotToolPalette::Tool::Shape;
     case ScreenshotActiveTool::Arrow:
         return ScreenshotToolPalette::Tool::Arrow;
+    case ScreenshotActiveTool::Distance:
+        return ScreenshotToolPalette::Tool::Distance;
     case ScreenshotActiveTool::Line:
         return ScreenshotToolPalette::Tool::Line;
     case ScreenshotActiveTool::FreeDraw:
@@ -57,6 +61,10 @@ ScreenshotToolPalette::Tool paletteTool(ScreenshotActiveTool tool) {
         return ScreenshotToolPalette::Tool::PenHighlight;
     case ScreenshotActiveTool::Eraser:
         return ScreenshotToolPalette::Tool::Eraser;
+    case ScreenshotActiveTool::RectangleEraser:
+        return ScreenshotToolPalette::Tool::RectangleEraser;
+    case ScreenshotActiveTool::BrushEraser:
+        return ScreenshotToolPalette::Tool::BrushEraser;
     case ScreenshotActiveTool::AutoFilter:
         return ScreenshotToolPalette::Tool::AutoFilter;
     case ScreenshotActiveTool::RectangleFilter:
@@ -69,6 +77,8 @@ ScreenshotToolPalette::Tool paletteTool(ScreenshotActiveTool tool) {
         return ScreenshotToolPalette::Tool::SerialNumber;
     case ScreenshotActiveTool::Ocr:
         return ScreenshotToolPalette::Tool::Ocr;
+    case ScreenshotActiveTool::TextTranslation:
+        return ScreenshotToolPalette::Tool::TextTranslation;
     case ScreenshotActiveTool::Table:
         return ScreenshotToolPalette::Tool::Table;
     case ScreenshotActiveTool::Qr:
@@ -107,7 +117,7 @@ ScreenshotOcrController::ScreenshotOcrController(ScreenshotOcrControllerContext 
           m_context.displaySession, m_context.geometry, m_context.selection,
           [this]() { return m_context.overlayCoordinator.toolbar(); })) {
     m_session = std::make_unique<ScreenshotRecognitionSessionController>(
-        &m_context.recognition, &m_context.qrRecognition, m_context.tableRecognition,
+        &m_context.recognition, m_context.qrRecognition, m_context.tableRecognition,
         ScreenshotRecognitionSessionActions{
             [this]() -> ScreenshotRecognitionWindow* {
                 if (m_context.captureState.presentationSuppressed)
@@ -133,7 +143,10 @@ ScreenshotOcrController::ScreenshotOcrController(ScreenshotOcrControllerContext 
                 if (ScreenshotToolbarWindow* toolbar = m_context.overlayCoordinator.toolbar()) {
                     const auto tool =
                         mode == static_cast<int>(ScreenshotRecognitionSessionController::Mode::Text)
-                            ? ScreenshotActiveTool::Ocr
+                            ? (m_context.interaction.activeTool() ==
+                                       ScreenshotActiveTool::TextTranslation
+                                   ? ScreenshotActiveTool::TextTranslation
+                                   : ScreenshotActiveTool::Ocr)
                         : mode == static_cast<int>(
                                       ScreenshotRecognitionSessionController::Mode::Table)
                             ? ScreenshotActiveTool::Table
@@ -157,6 +170,10 @@ ScreenshotOcrController::ScreenshotOcrController(ScreenshotOcrControllerContext 
             },
             [this](bool available, bool translating, bool streaming, bool canUndo, bool canRedo,
                    bool canReset, bool originalImage) {
+                if (translating && m_active && m_mode == Mode::Text &&
+                    m_context.interaction.activeTool() != ScreenshotActiveTool::TextTranslation) {
+                    m_context.interaction.setCanvasTool(ScreenshotActiveTool::TextTranslation);
+                }
                 if (ScreenshotToolbarWindow* toolbar = m_context.overlayCoordinator.toolbar()) {
                     toolbar->setTextTranslationState(available, translating, streaming, canUndo,
                                                      canRedo, canReset, originalImage);
@@ -250,6 +267,10 @@ ScreenshotOcrController::ScreenshotOcrController(ScreenshotOcrControllerContext 
                         }
                     });
             },
+            [this](const QString& language) {
+                if (auto* toolbar = m_context.overlayCoordinator.toolbar())
+                    toolbar->setTextTargetLanguage(language);
+            },
         },
         this);
     connect(m_session.get(), &ScreenshotRecognitionSessionController::textEditingChanged, this,
@@ -303,6 +324,12 @@ void ScreenshotOcrController::activate() {
     activateMode(Mode::Text);
 }
 
+void ScreenshotOcrController::activateTextTranslation() {
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
+    activateMode(Mode::Text, true);
+#endif
+}
+
 void ScreenshotOcrController::activateTable() {
     activateMode(Mode::Table);
 }
@@ -351,7 +378,15 @@ QString ScreenshotOcrController::currentCacheKey() const {
             QCryptographicHash::hash(geometry, QCryptographicHash::Sha256).toHex()));
 }
 
-void ScreenshotOcrController::activateMode(Mode mode) {
+void ScreenshotOcrController::activateMode(Mode mode, bool textTranslation) {
+    const int sessionMode = mode == Mode::Text       ? 0
+                            : mode == Mode::Table    ? 1
+                            : mode == Mode::Qr       ? 2
+                            : mode == Mode::Markdown ? 3
+                            : mode == Mode::Html     ? 4
+                                                     : 5;
+    if (!snow_shot::presentation::editionRecognitionModeAvailable(sessionMode))
+        return;
     const QRect selection = m_context.selection.pixelSelection();
     if (selection.width() < 1 || selection.height() < 1) {
         if (ScreenshotToolbarWindow* toolbar = m_context.overlayCoordinator.toolbar()) {
@@ -405,26 +440,16 @@ void ScreenshotOcrController::activateMode(Mode mode) {
         m_recognitionWindow->clearTableSession();
         m_recognitionWindow->clearQrContents();
     }
-    if (mode == Mode::Text) {
-        m_context.interaction.setOcrTool();
-    } else if (mode == Mode::Table) {
-        m_context.interaction.setTableTool();
-    } else if (mode == Mode::Latex) {
-        m_context.interaction.setCanvasTool(ScreenshotActiveTool::Latex);
-    } else if (mode == Mode::Markdown || mode == Mode::Html) {
-        m_context.interaction.setCanvasTool(mode == Mode::Markdown ? ScreenshotActiveTool::Markdown
-                                                                   : ScreenshotActiveTool::Html);
-    } else {
-        m_context.interaction.setQrTool();
-    }
+    const ScreenshotActiveTool activeTool =
+        mode == Mode::Text
+            ? (textTranslation ? ScreenshotActiveTool::TextTranslation : ScreenshotActiveTool::Ocr)
+        : mode == Mode::Table    ? ScreenshotActiveTool::Table
+        : mode == Mode::Markdown ? ScreenshotActiveTool::Markdown
+        : mode == Mode::Latex    ? ScreenshotActiveTool::Latex
+        : mode == Mode::Html     ? ScreenshotActiveTool::Html
+                                 : ScreenshotActiveTool::Qr;
+    m_context.interaction.setCanvasTool(activeTool);
     if (ScreenshotToolbarWindow* toolbar = m_context.overlayCoordinator.toolbar()) {
-        const ScreenshotActiveTool activeTool = mode == Mode::Text    ? ScreenshotActiveTool::Ocr
-                                                : mode == Mode::Table ? ScreenshotActiveTool::Table
-                                                : mode == Mode::Markdown
-                                                    ? ScreenshotActiveTool::Markdown
-                                                : mode == Mode::Latex ? ScreenshotActiveTool::Latex
-                                                : mode == Mode::Html  ? ScreenshotActiveTool::Html
-                                                                      : ScreenshotActiveTool::Qr;
         toolbar->setActiveTool(paletteTool(activeTool));
     }
 
@@ -534,6 +559,10 @@ void ScreenshotOcrController::resetTextEditing() {
 
 void ScreenshotOcrController::applyTextFormatting(const QString& value) {
     m_session->applyTextFormatting(value);
+}
+
+void ScreenshotOcrController::applyTextTargetLanguage(const QString& language) {
+    m_session->applyTextTargetLanguage(language);
 }
 
 void ScreenshotOcrController::applyTextPunctuation(const QString& value) {
@@ -827,6 +856,8 @@ bool ScreenshotOcrController::ensureRecognitionWindow() {
         },
         nullptr, ScreenshotRecognitionWindow::PresentationMode::TopLevelWindow,
         m_context.shortcutManager);
+    window->setOriginalImagePreviewAboveSiblingProvider(
+        [this]() -> QWidget* { return m_context.overlayCoordinator.toolbar(); });
     if (!window->present(config)) {
         delete window;
         showStatus(tr("Unable to read the selected screenshot"), true);

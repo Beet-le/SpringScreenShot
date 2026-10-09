@@ -13,7 +13,6 @@ pub const MIN_SERIAL_NUMBER_FONT_SIZE: f64 = MIN_TEXT_FONT_SIZE;
 const MIN_SERIAL_NUMBER_BOUND_TEXT_GAP: f64 = 18.0;
 const SERIAL_NUMBER_BOUND_TEXT_GAP_PER_FONT_SIZE: f64 = MIN_SERIAL_NUMBER_BOUND_TEXT_GAP / 21.0;
 const SERIAL_NUMBER_CANONICAL_FONT_SIZE: f64 = 16.0;
-const SERIAL_NUMBER_LABEL_WIDTH_PER_EM: f64 = 0.6;
 const SERIAL_NUMBER_DIAMETER_PADDING_PER_LINE_HEIGHT: f64 = 0.20;
 const SERIAL_NUMBER_STROKE_REFERENCE_FONT_SIZE: f64 = 20.0;
 const SERIAL_NUMBER_SQUARE_CORNER_RADIUS_PER_FONT_SIZE: f64 = 0.20;
@@ -159,6 +158,7 @@ impl Default for SerialNumberData {
             rotation: 0.0,
             number: 1,
             serial_number_type: crate::SerialNumberType::OutlinedCircle,
+            numeric_type: crate::SerialNumberNumericType::Arabic,
             color: ColorRgba8 {
                 r: 0xf4,
                 g: 0x21,
@@ -739,7 +739,7 @@ pub fn resolve_serial_number_stroke_width(serial: &SerialNumberData) -> f64 {
 
 pub fn resolve_serial_number_data_diameter(serial: &SerialNumberData, min_diameter: f64) -> f64 {
     if serial.serial_number_type.supports_number() {
-        resolve_serial_number_diameter(serial.number, serial.font_size, min_diameter)
+        resolve_serial_number_badge_diameter(serial.font_size, min_diameter)
     } else {
         sanitize_non_negative(serial.font_size) * 0.5
     }
@@ -749,8 +749,8 @@ pub fn resolve_serial_number_square_corner_radius(serial: &SerialNumberData) -> 
     sanitize_non_negative(serial.font_size) * SERIAL_NUMBER_SQUARE_CORNER_RADIUS_PER_FONT_SIZE
 }
 
-pub fn resolve_serial_number_style_diameter(number: i64, font_size: f64) -> f64 {
-    resolve_serial_number_diameter(number, font_size, SerialNumberData::default().diameter)
+pub fn resolve_serial_number_style_diameter(_number: i64, font_size: f64) -> f64 {
+    resolve_serial_number_badge_diameter(font_size, SerialNumberData::default().diameter)
 }
 
 pub fn serial_number_with_label_style(
@@ -763,29 +763,36 @@ pub fn serial_number_with_label_style(
         updated.number = number.max(0);
     }
     updated.font_size = font_size;
-    updated.diameter =
-        resolve_serial_number_data_diameter(&updated, SerialNumberData::default().diameter);
+    // Content changes keep the stored geometry, including manually resized
+    // and legacy badges. Only an explicit font-size change resets the size.
+    if serial.font_size != font_size {
+        updated.diameter =
+            resolve_serial_number_data_diameter(&updated, SerialNumberData::default().diameter);
+    }
     updated
 }
 
-pub fn resolve_serial_number_diameter(number: i64, font_size: f64, min_diameter: f64) -> f64 {
-    let (width, height) =
-        serial_number_label_size(number.max(0), SERIAL_NUMBER_CANONICAL_FONT_SIZE);
-    let line_height = text_line_height(SERIAL_NUMBER_CANONICAL_FONT_SIZE);
-    let base = width.max(height.max(line_height));
-    let padding = line_height * SERIAL_NUMBER_DIAMETER_PADDING_PER_LINE_HEIGHT;
-    let scale = sanitize_non_negative(font_size).max(1.0) / SERIAL_NUMBER_CANONICAL_FONT_SIZE;
-    sanitize_positive((base + padding * 2.0) * scale, min_diameter.max(0.0))
-        .max(min_diameter.max(0.0))
+pub fn resolve_serial_number_diameter(_number: i64, font_size: f64, min_diameter: f64) -> f64 {
+    resolve_serial_number_badge_diameter(font_size, min_diameter)
 }
 
-fn serial_number_label_size(number: i64, font_size: f64) -> (f64, f64) {
-    let digit_count = number.to_string().chars().count().max(1) as f64;
-    let line_height = text_line_height(font_size);
-    (
-        digit_count * font_size.max(1.0) * SERIAL_NUMBER_LABEL_WIDTH_PER_EM,
-        line_height,
-    )
+pub fn resolve_serial_number_formatted_diameter(
+    _number: i64,
+    _numeric_type: crate::SerialNumberNumericType,
+    font_size: f64,
+    min_diameter: f64,
+) -> f64 {
+    resolve_serial_number_badge_diameter(font_size, min_diameter)
+}
+
+/// Numbered badges follow the single-digit line-height baseline. The host
+/// renderer fits measured glyphs into this size without changing geometry.
+pub fn resolve_serial_number_badge_diameter(font_size: f64, min_diameter: f64) -> f64 {
+    let line_height = text_line_height(SERIAL_NUMBER_CANONICAL_FONT_SIZE);
+    let padding = line_height * SERIAL_NUMBER_DIAMETER_PADDING_PER_LINE_HEIGHT;
+    let scale = sanitize_non_negative(font_size).max(1.0) / SERIAL_NUMBER_CANONICAL_FONT_SIZE;
+    sanitize_positive((line_height + padding * 2.0) * scale, min_diameter.max(0.0))
+        .max(min_diameter.max(0.0))
 }
 
 pub fn text_hit_test(text: &TextData, point: Point<f64>, hit_tolerance: f64) -> bool {
@@ -922,8 +929,22 @@ fn sanitize_positive(value: f64, fallback: f64) -> f64 {
 pub fn rectangle_hit_test(rect: &RectangleData, point: Point<f64>, hit_tolerance: f64) -> bool {
     if rect.is_spotlight() {
         let local = canvas_to_rect_local(rect.center, rect.rotation, point);
-        return local.x.abs() <= rect.width / 2.0 + hit_tolerance.max(0.0)
-            && local.y.abs() <= rect.height / 2.0 + hit_tolerance.max(0.0);
+        let half_width = rect.width / 2.0 + hit_tolerance.max(0.0);
+        let half_height = rect.height / 2.0 + hit_tolerance.max(0.0);
+        if half_width <= 0.0 || half_height <= 0.0 {
+            return false;
+        }
+        return match rect.highlight_shape {
+            crate::HighlightShape::Rectangle => {
+                local.x.abs() <= half_width && local.y.abs() <= half_height
+            }
+            crate::HighlightShape::Ellipse => {
+                (local.x / half_width).powi(2) + (local.y / half_height).powi(2) <= 1.0
+            }
+            crate::HighlightShape::Diamond => {
+                local.x.abs() / half_width + local.y.abs() / half_height <= 1.0
+            }
+        };
     }
     if rect.is_highlight() {
         return highlight_hit_test(rect, point, hit_tolerance);
@@ -991,6 +1012,11 @@ pub fn filter_hit_test(filter: &FilterData, point: Point<f64>, hit_tolerance: f6
 }
 
 pub fn validate_filter(filter: &FilterData) -> Result<(), ErrorCode> {
+    if filter.filter_type == crate::CanvasFilterType::RestoreBackground
+        && (filter.opacity != 1.0 || filter.strength != 1.0 || filter.auto_region_id.is_some())
+    {
+        return Err(ErrorCode::InvalidArgument);
+    }
     let scalar_fields = [
         filter.center.x,
         filter.center.y,
@@ -1069,6 +1095,11 @@ pub fn pen_filter_hit_test(filter: &PenFilterData, point: Point<f64>, hit_tolera
 }
 
 pub fn validate_pen_filter(filter: &PenFilterData) -> Result<(), ErrorCode> {
+    if filter.filter_type == crate::CanvasFilterType::RestoreBackground
+        && (filter.opacity != 1.0 || filter.strength != 1.0)
+    {
+        return Err(ErrorCode::InvalidArgument);
+    }
     let scalars = [
         filter.x,
         filter.y,
@@ -1085,16 +1116,18 @@ pub fn validate_pen_filter(filter: &PenFilterData) -> Result<(), ErrorCode> {
         || !(0.0..=1.0).contains(&filter.strength)
         || !(1.0..=72.0).contains(&filter.stroke_width)
         || !(0.0..=1.0).contains(&filter.opacity)
-        || filter.points.len() < 2
+        || filter.points.is_empty()
+        || (filter.points.len() < 2
+            && filter.filter_type != crate::CanvasFilterType::RestoreBackground)
         || filter.points.iter().any(|point| {
             point
                 .iter()
                 .any(|value| !value.is_finite() || !(0.0..=1.0).contains(value))
         })
-        || !filter
-            .global_points()
-            .windows(2)
-            .any(|segment| (segment[1].x - segment[0].x).hypot(segment[1].y - segment[0].y) > 0.0)
+        || (filter.filter_type != crate::CanvasFilterType::RestoreBackground
+            && !filter.global_points().windows(2).any(|segment| {
+                (segment[1].x - segment[0].x).hypot(segment[1].y - segment[0].y) > 0.0
+            }))
     {
         return Err(ErrorCode::InvalidArgument);
     }
@@ -1356,13 +1389,65 @@ mod tests {
     fn serial_number_diameter_scales_from_canonical_line_height() {
         let font_size = 24.0;
         let line_height = text_line_height(SERIAL_NUMBER_CANONICAL_FONT_SIZE);
-        let (width, height) = serial_number_label_size(1, SERIAL_NUMBER_CANONICAL_FONT_SIZE);
-        let base = width.max(height.max(line_height));
         let padding = line_height * SERIAL_NUMBER_DIAMETER_PADDING_PER_LINE_HEIGHT;
-        let expected = (base + padding * 2.0) * (font_size / SERIAL_NUMBER_CANONICAL_FONT_SIZE);
+        let expected =
+            (line_height + padding * 2.0) * (font_size / SERIAL_NUMBER_CANONICAL_FONT_SIZE);
 
         assert!((resolve_serial_number_style_diameter(1, font_size) - expected).abs() < 1e-9);
         assert!((expected - font_size * 1.68).abs() < 1e-9);
+    }
+
+    #[test]
+    fn serial_number_diameter_is_independent_of_number_and_numeric_type() {
+        use crate::SerialNumberNumericType;
+        for font_size in [6.0_f64, 24.0, 48.0] {
+            for min_diameter in [0.0_f64, 24.0, 100.0] {
+                let expected = (font_size * 1.68).max(min_diameter);
+                for number in [0, 1, 9, 10, 888, 3999, i64::MAX] {
+                    assert!(
+                        (resolve_serial_number_diameter(number, font_size, min_diameter)
+                            - expected)
+                            .abs()
+                            < 1e-9
+                    );
+                    for numeric_type in [
+                        SerialNumberNumericType::Arabic,
+                        SerialNumberNumericType::Roman,
+                        SerialNumberNumericType::Chinese,
+                        SerialNumberNumericType::LowercaseLetters,
+                        SerialNumberNumericType::UppercaseLetters,
+                    ] {
+                        assert!(
+                            (resolve_serial_number_formatted_diameter(
+                                number,
+                                numeric_type,
+                                font_size,
+                                min_diameter,
+                            ) - expected)
+                                .abs()
+                                < 1e-9
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn serial_number_label_changes_preserve_manually_resized_geometry() {
+        let serial = SerialNumberData {
+            center: Point::new(123.0, 456.0),
+            diameter: 97.0,
+            rotation: 0.3,
+            number: 9,
+            ..SerialNumberData::default()
+        };
+        let mut expected = serial.clone();
+        expected.number = 10;
+        assert_eq!(
+            serial_number_with_label_style(&serial, 10, serial.font_size),
+            expected
+        );
     }
 
     #[test]
@@ -1382,6 +1467,7 @@ mod tests {
             let circle = SerialNumberData {
                 serial_number_type: crate::SerialNumberType::Circle,
                 font_size,
+                diameter: font_size * 0.5,
                 number: 987654321,
                 font_family: Some("Unused font".to_owned()),
                 stroke_width: 2.0,
@@ -2132,5 +2218,42 @@ mod tests {
         assert!(filter_hit_test(&filter, filter.center, 0.0));
         assert!(!filter_hit_test(&filter, Point::new(60.0, 20.0), 0.0));
         assert!(filter_hit_test(&filter, Point::new(60.0, 20.0), 30.0));
+    }
+
+    #[test]
+    fn spotlight_shapes_hit_the_transparent_interior_and_exclude_corners() {
+        for shape in [
+            crate::HighlightShape::Rectangle,
+            crate::HighlightShape::Ellipse,
+            crate::HighlightShape::Diamond,
+        ] {
+            let rect = RectangleData {
+                rectangle_kind: crate::RectangleElementKind::Rectangle,
+                highlight_shape: shape,
+                center: Point::new(30.0, 40.0),
+                width: 80.0,
+                height: 40.0,
+                rotation: std::f64::consts::FRAC_PI_2,
+                fill: ColorRgba8::default(),
+                fill_style: FillStyle::Solid,
+                stroke: ColorRgba8::default(),
+                stroke_width: 0.0,
+                stroke_style: StrokeStyle::Solid,
+                corner_radii: CornerRadii::default(),
+                opacity: 1.0,
+            }
+            .into_spotlight();
+            assert_eq!(rect.highlight_shape, shape);
+            assert!(validate_rectangle(&rect).is_ok());
+            assert!(rectangle_hit_test(&rect, rect.center, 0.0));
+            let corner = Point::new(15.0, 75.0);
+            assert_eq!(
+                rectangle_hit_test(&rect, corner, 0.0),
+                shape == crate::HighlightShape::Rectangle
+            );
+            let edge = Point::new(30.0, 81.0);
+            assert!(!rectangle_hit_test(&rect, edge, 0.0));
+            assert!(rectangle_hit_test(&rect, edge, 2.0));
+        }
     }
 }

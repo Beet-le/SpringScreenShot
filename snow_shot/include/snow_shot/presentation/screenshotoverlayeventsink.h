@@ -7,6 +7,7 @@
 #include <Qt>
 
 class ScreenshotOverlayWindow;
+class QWheelEvent;
 
 enum class ScreenshotOverlayRightClickResult { Ignored, Handled, CancelCapture };
 
@@ -30,6 +31,14 @@ class ScreenshotOverlayEventSink {
     [[nodiscard]] virtual ScreenshotOverlayRightClickResult
     handleOverlayRightClick(ScreenshotOverlayWindow* overlay, const QPointF& localPosition) = 0;
     virtual void completeRightClickCancellation() {}
+    virtual bool effectDragActive() const {
+        return false;
+    }
+    virtual void leaveEffectEditors() {}
+    virtual void cancelEffectDrag() {}
+    virtual bool handleEffectDoubleClick(ScreenshotOverlayWindow*, const QPointF&) {
+        return false;
+    }
     // Optional completion-gesture notifications. Lightweight event sinks can
     // keep the defaults when they only handle the mouse and keyboard surface.
     virtual bool handleRegionDoubleClick(ScreenshotOverlayWindow*, const QPointF&) {
@@ -38,9 +47,7 @@ class ScreenshotOverlayEventSink {
     virtual void handleUnhandledLeftDoubleClick() {}
     virtual void handleUnhandledMiddleClick() {}
     [[nodiscard]] virtual bool handleOverlayWheel(ScreenshotOverlayWindow* overlay,
-                                                  const QPointF& localPosition,
-                                                  const QPoint& angleDelta,
-                                                  const QPoint& pixelDelta) = 0;
+                                                  const QWheelEvent& event) = 0;
     [[nodiscard]] virtual bool shouldBlockUnhandledOverlayKeyInput() const = 0;
     virtual void raiseToolbarForCanvasInteraction() = 0;
 };

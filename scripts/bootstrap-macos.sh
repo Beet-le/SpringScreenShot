@@ -2,8 +2,9 @@
 set -euo pipefail
 source "$(dirname "$0")/snow-build-environment.sh"
 if [[ "${1:-}" == --help ]]; then
+    snow_load_qt_policy
     echo 'Usage: bootstrap-macos.sh [macOS-preset] [--skip-dependency-install] [--skip-qt-validation]'
-    echo 'Requires Xcode command-line tools, Rust (rustup), Qt 6.11.1, CMake >= 4.2, Ninja and pkg-config.'
+    printf 'Requires Xcode command-line tools, Rust (rustup), Qt %s, CMake >= 4.2, Ninja and pkg-config.\n' "$snow_qt_version"
     exit 0
 fi
 snow_require_macos
@@ -26,6 +27,7 @@ if [[ "$skip_qt" == 1 ]]; then
     for tool in cmake ninja cargo rustup pkg-config; do
         command -v "$tool" >/dev/null || snow_die "Missing $tool. Install the prerequisites listed in docs-macos-build.md."
     done
+    snow_require_target_tools "$snow_arch"
 else
     snow_setup_tools
 fi

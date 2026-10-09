@@ -5,6 +5,7 @@
 #include "snow_canvas_render_geometry.h"
 #include "snow_canvas_text.h"
 #include "snow_canvas_text_layout.h"
+#include "snow_canvas_text_render.h"
 #include "snow_canvas_text_edit_target.h"
 #include "snow_canvas_text_editor_connector.h"
 #include "snow_canvas_text_measurement.h"
@@ -90,9 +91,36 @@ const SnowCanvasTextEditorSession& SnowCanvasWidgetTextInteraction::session() co
     return m_session;
 }
 
+snow_canvas_commands::MutationResult SnowCanvasWidgetTextInteraction::setTextEditingBounds(
+    const std::optional<QRectF>& bounds, SnowRuntime runtime, SnowViewport viewport,
+    const SnowCanvasDisplayCache& displayCache, const QFont& baseFont) {
+    snow_canvas_commands::MutationResult result;
+    result.success = true;
+    if (m_session.textEditingBounds() == bounds) {
+        return result;
+    }
+    QRegion updateRegion = editingRegion(displayCache, baseFont);
+    if (!m_session.setTextEditingBounds(bounds, baseFont)) {
+        return result;
+    }
+
+    updateRegion += editingRegion(displayCache, baseFont);
+    result = publishActiveDraftPresentation(runtime, viewport);
+    updateRegion += resetCaretBlink(displayCache, baseFont);
+    snow_canvas_widget_repaint::updateCoalesced(m_widget, updateRegion);
+    updateInputMethod();
+    return result;
+}
+
 void SnowCanvasWidgetTextInteraction::invalidateArrowTextMetrics() {
     m_arrowNaturalLayouts.clear();
+    snow_canvas_text_render::resetLayoutCacheForCurrentThread();
     m_arrowMetricsInvalid = true;
+}
+
+void SnowCanvasWidgetTextInteraction::resetDocumentRetainedState() {
+    m_session.releaseRetainedState();
+    invalidateArrowTextMetrics();
 }
 
 snow_canvas_commands::MutationResult
@@ -124,6 +152,7 @@ SnowCanvasWidgetTextInteraction::measureArrowText(SnowRuntime runtime, SnowViewp
         return result;
     }
     std::vector<SnowArrowTextLayoutMetrics> layouts;
+    layouts.reserve(requests.size());
     for (const auto& request : requests) {
         SnowCanvasSceneItem item = snow_canvas_text::defaultPreviewItem(request.info);
         snow_canvas_text::applyTextStyleToSceneItem(item, request.style);
@@ -148,7 +177,9 @@ SnowCanvasWidgetTextInteraction::measureArrowText(SnowRuntime runtime, SnowViewp
             m_arrowNaturalLayouts.measure(text, m_widget.font(), item);
         const double width = qMin(natural.layout.width(), request.max_width);
         const snow_canvas_text_layout::TextMeasuredLayout wrapped =
-            snow_canvas_text_layout::measureWrappedTextLayout(text, m_widget.font(), item, width);
+            width == natural.layout.width() ? natural
+                                            : snow_canvas_text_layout::measureWrappedTextLayout(
+                                                  text, m_widget.font(), item, width);
         layouts.push_back(SnowArrowTextLayoutMetrics{
             request.info.id,
             request.key,
@@ -284,6 +315,7 @@ SnowCanvasWidgetTextInteraction::StyleChangeResult SnowCanvasWidgetTextInteracti
                 style,
                 m_widget.font(),
                 properties,
+                m_session.textEditingBounds(),
             });
     if (!layoutOverrides.success) {
         return result;
@@ -491,12 +523,11 @@ SnowCanvasWidgetTextInteraction::BeginResult SnowCanvasWidgetTextInteraction::be
 }
 
 snow_canvas_commands::CreateSerialNumberTextResult
-SnowCanvasWidgetTextInteraction::createSerialNumberText(
-    SnowRuntime runtime, SnowViewport viewport, const SnowTextStyle& textStyle,
-    const SnowSerialNumberStyle& serialNumberStyle) {
+SnowCanvasWidgetTextInteraction::createSerialNumberText(SnowRuntime runtime, SnowViewport viewport,
+                                                        const SnowTextStyle& textStyle) {
     const SnowTextLayoutSize layout =
-        snow_canvas_text_measurement::measureSerialNumberBoundTextLayout(
-            textStyle, serialNumberStyle, m_widget.font());
+        snow_canvas_text_measurement::measureSerialNumberBoundTextLayout(textStyle,
+                                                                         m_widget.font());
     return snow_canvas_commands::createSerialNumberText(runtime, viewport, layout);
 }
 
@@ -571,11 +602,22 @@ SnowCanvasWidgetTextInteraction::applyActiveResizeMeasurementIfNeeded(
         return result;
     }
 
+    // An active draft can differ from the committed element, or have no ID yet.
+    // Its editor owns the complete text, including input-method preedit.
+    const auto completeText =
+        m_session.isActive()
+            ? std::optional<QString>(m_session.presentationText())
+            : snow_canvas_text::completeTextFromElementInfo(measurement.info, runtime);
+    if (!completeText.has_value()) {
+        return result;
+    }
     const SnowTextLayoutSize layout = snow_canvas_text_measurement::measureResizeLayout(
         snow_canvas_text_measurement::ResizeLayoutMeasurementRequest{
             measurement.info,
             m_widget.font(),
             displayCache.sceneInfo().camera_zoom,
+            m_session.textEditingBounds(),
+            completeText,
         });
     snow_canvas_commands::MutationResult mutation =
         snow_canvas_commands::applyActiveTextResizeMeasurement(runtime, viewport, layout);
@@ -783,12 +825,6 @@ SnowCanvasWidgetTextInteraction::handleKeyPress(QKeyEvent* event, SnowRuntime ru
         result.finishedExistingEdit = commitResult.finishedExistingEdit;
         result.changedViewports = std::move(commitResult.changedViewports);
         result.sessionEnded = commitResult.sessionEnded;
-        return result;
-    }
-    case SnowCanvasTextEditorSession::EventCommand::Cancel: {
-        CancelResult cancelResult = cancel(runtime, viewport, displayCache);
-        result.changedViewports = std::move(cancelResult.changedViewports);
-        result.sessionEnded = cancelResult.sessionEnded;
         return result;
     }
     case SnowCanvasTextEditorSession::EventCommand::None:

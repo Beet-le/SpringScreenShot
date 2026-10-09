@@ -33,6 +33,7 @@ class ScreenshotScrollingCaptureController final : public QObject {
     Q_OBJECT
   public:
     using SnapshotResultCallback = std::function<void(ScreenshotScrollingSnapshot)>;
+    using SnapshotCancellationCallback = std::function<void()>;
 
     explicit ScreenshotScrollingCaptureController(
         ScreenshotScrollingCaptureControllerContext context, QObject* parent = nullptr);
@@ -41,6 +42,7 @@ class ScreenshotScrollingCaptureController final : public QObject {
     [[nodiscard]] bool
     start(const QRect& canvasSelection,
           ScreenshotScrollingRecognitionMode mode = ScreenshotScrollingRecognitionMode::Vertical);
+    [[nodiscard]] bool restart();
     [[nodiscard]] bool setRecognitionMode(ScreenshotScrollingRecognitionMode mode);
     [[nodiscard]] ScreenshotScrollingRecognitionMode recognitionMode() const;
     void stop(bool restoreScreenshotPresentation);
@@ -60,7 +62,10 @@ class ScreenshotScrollingCaptureController final : public QObject {
     [[nodiscard]] bool movingSelection() const;
     [[nodiscard]] QSize trimmedSize() const;
     [[nodiscard]] qreal sourceScale() const;
-    [[nodiscard]] bool requestTrimmedSnapshot(SnapshotResultCallback callback);
+    // Cancellation releases preparation state when capture discards a pending request.
+    // Detached exports keep their accepted completion through capture teardown.
+    [[nodiscard]] bool requestTrimmedSnapshot(SnapshotResultCallback callback,
+                                              SnapshotCancellationCallback cancelled = {});
     void detachPendingResultRequest();
     [[nodiscard]] QRect canvasSelection() const;
 

@@ -71,6 +71,7 @@ impl Editor {
         EditSelectionState {
             duplicate: false,
             pointer_id: request.pointer_id,
+            button: request.button,
             preview_elements: request.original_elements.clone(),
             preview_arrows: request.original_arrows.clone(),
             original_elements: request.original_elements,
@@ -623,18 +624,19 @@ impl Editor {
                         context.original_arrows,
                     ),
                     &excluded,
-                    snapping_mode,
+                    modifiers,
                 ) {
                     let anchors_x = resize_snap_anchors_for_sign(dragged_x_sign);
                     let anchors_y = resize_snap_anchors_for_sign(dragged_y_sign);
-                    let snap_result = OBJECT_SNAP_SERVICE.snap_resize(
-                        unsnapped_rect,
-                        &plan.references,
-                        plan.snap_distance,
-                        &anchors_x,
-                        &anchors_y,
-                        plan.enable_point_snaps,
-                    );
+                    let snap_result = plan.snap_rect(ObjectSnapRectRequest {
+                        target_rect: unsnapped_rect,
+                        reference_rects: &plan.references,
+                        snap_distance: plan.snap_distance,
+                        target_anchors_x: &anchors_x,
+                        target_anchors_y: &anchors_y,
+                        enable_point_snaps: plan.enable_point_snaps,
+                        enable_gap_snaps: false,
+                    });
                     (
                         DrawRect::new(
                             unsnapped_rect.min_x + if snap_min_x { snap_result.dx } else { 0.0 },
@@ -811,6 +813,8 @@ impl Editor {
             text: text.text.clone(),
             font_size,
             font_family: text.font_family.clone(),
+            horizontal_align: text.horizontal_align,
+            vertical_align: text.vertical_align,
             auto_resize: text.auto_resize,
             measure_natural_width: text.auto_resize && !changes_width_only,
         })
@@ -975,6 +979,7 @@ mod tests {
         let state = EditSelectionState {
             duplicate: false,
             pointer_id: 1,
+            button: snow_draw_engine_interaction::PointerButton::Primary,
             original_elements: vec![SelectionRectState {
                 id: ElementId::default(),
                 rect,
@@ -1499,6 +1504,7 @@ mod tests {
         editor.state.interaction = InteractionState::EditingSelection(EditSelectionState {
             duplicate: false,
             pointer_id: 1,
+            button: snow_draw_engine_interaction::PointerButton::Primary,
             original_elements: vec![SelectionRectState {
                 id: text_id,
                 rect: original_rect,
@@ -1570,6 +1576,7 @@ mod tests {
         editor.state.interaction = InteractionState::EditingSelection(EditSelectionState {
             duplicate: false,
             pointer_id: 1,
+            button: snow_draw_engine_interaction::PointerButton::Primary,
             original_elements: vec![SelectionRectState {
                 id: text_id,
                 rect: original_rect,
@@ -1647,6 +1654,7 @@ mod tests {
         editor.state.interaction = InteractionState::EditingSelection(EditSelectionState {
             duplicate: false,
             pointer_id: 1,
+            button: snow_draw_engine_interaction::PointerButton::Primary,
             original_elements: vec![SelectionRectState {
                 id: text_id,
                 rect: original_rect,
@@ -1819,6 +1827,7 @@ mod tests {
         editor.state.interaction = InteractionState::EditingSelection(EditSelectionState {
             duplicate: false,
             pointer_id: 1,
+            button: snow_draw_engine_interaction::PointerButton::Primary,
             original_elements: vec![SelectionRectState {
                 id: text_id,
                 rect: original_rect,

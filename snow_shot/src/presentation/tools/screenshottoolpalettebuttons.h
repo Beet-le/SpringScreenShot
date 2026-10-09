@@ -239,11 +239,11 @@ class ColorSwatchButton : public adqt::widgets::AdButton {
     void setSwatchBorderVisible(bool visible);
     void setPhysicalScale(qreal scale);
     void commitControlScale(const adqt::widgets::AdControlScaleContext& context) override;
+    [[nodiscard]] QColor swatchColor() const;
 
   protected:
     void paintEvent(QPaintEvent* event) override;
 
-    [[nodiscard]] QColor swatchColor() const;
     [[nodiscard]] qreal swatchPhysicalScale() const;
 
   private:
@@ -384,6 +384,9 @@ void setScreenshotToolPaletteAccessibleNameSource(QWidget* widget, const char* s
 void setScreenshotToolPalettePlaceholderSource(QWidget* widget, const char* source);
 
 void setScreenshotToolPaletteItemTranslationSource(QStandardItem* item, const char* source);
+
+void setScreenshotToolPaletteItemTranslationSource(QStandardItem* item, const char* source,
+                                                   const char* context);
 
 void setScreenshotToolPaletteItemTranslationSource(
     QStandardItem* item, const ScreenshotToolPaletteTranslationText& text);

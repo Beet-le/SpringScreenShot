@@ -15,6 +15,7 @@ pub(super) fn eligible(config: &DirectRecordingConfig) -> bool {
     config.format == ExportFormat::Mp4
         && config.codec == VideoCodec::H264
         && config.prefer_hardware_encoder
+        && !crate::capture_policy::recording_gpu_backends(config.capture_backend).is_empty()
 }
 
 /// Probe the actual capture adapter, compositor and vendor encoder together.
@@ -38,18 +39,9 @@ pub(super) fn prepare(
         SharedDevice,
     )>,
 > {
-    use snow_capture::gpu::{GpuCaptureEvent, GpuCaptureStream};
-    diagnostics.stage = Some("capture_startup".into());
-    let stream = GpuCaptureStream::spawn(
-        snow_capture::CaptureRegion {
-            x: config.region.x,
-            y: config.region.y,
-            width: config.region.width,
-            height: config.region.height,
-        },
-        config.capture_backend,
-        capture::stream_config(config, include_cursor),
-    )?;
+    let Some((stream, observation)) = prepare_capture(config, include_cursor, diagnostics)? else {
+        return Ok(None);
+    };
     let device = stream.device().clone();
     diagnostics.adapter = Some(device.identity().description.clone());
     diagnostics.stage = Some("compositor_startup".into());
@@ -59,18 +51,6 @@ pub(super) fn prepare(
         config.output_dimensions(),
         config.output_fps,
     )?;
-    diagnostics.stage = Some("capture_probe".into());
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let observation = loop {
-        match stream.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-            Ok(GpuCaptureEvent::Frame(frame)) => break frame,
-            Ok(GpuCaptureEvent::Error(error)) => return Err(error.into()),
-            Ok(GpuCaptureEvent::StreamEnded) | Err(_) => {
-                return Err(gpu_error("capture startup probe produced no image"));
-            }
-            _ => {}
-        }
-    };
     struct ProbeFile(PathBuf);
     impl Drop for ProbeFile {
         fn drop(&mut self) {
@@ -82,7 +62,7 @@ pub(super) fn prepare(
     );
     let mut settings = config.streaming_config();
     settings.output_path = path.0.clone();
-    settings.audio = None;
+    settings.audio.clear();
     diagnostics.stage = Some("encoder_startup".into());
     if let Some(name) = snow_d3d11::h264_encoder(device.identity().vendor) {
         diagnostics.encoder_attempts.push(name.into());
@@ -143,9 +123,44 @@ pub(super) fn prepare(
     }
     drop(media);
     diagnostics.stage = None;
-    state.trail.clear();
+    state.input_effects.trail.clear();
     compositor.overlay_upload_bytes = 0;
     Ok(Some((stream, compositor, device)))
+}
+
+fn prepare_capture(
+    config: &DirectRecordingConfig,
+    include_cursor: bool,
+    diagnostics: &mut Negotiation,
+) -> snow_capture::error::CaptureResult<
+    Option<(snow_capture::gpu::GpuCaptureStream, GpuCapturedFrame)>,
+> {
+    use snow_capture::error::CaptureError;
+    use snow_capture::gpu::{GpuCaptureEvent, GpuCaptureStream};
+    crate::capture_policy::try_recording_gpu_capture(config.capture_backend, |backend| {
+        diagnostics.stage = Some("capture_startup".into());
+        let stream = GpuCaptureStream::spawn(
+            snow_capture::CaptureRegion {
+                x: config.region.x,
+                y: config.region.y,
+                width: config.region.width,
+                height: config.region.height,
+            },
+            backend,
+            capture::stream_config(config, include_cursor),
+        )?;
+        diagnostics.stage = Some("capture_probe".into());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match stream.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(GpuCaptureEvent::Frame(frame)) => return Ok((stream, frame)),
+                Ok(GpuCaptureEvent::Error(error)) => return Err(error),
+                Ok(GpuCaptureEvent::StreamEnded) => return Err(CaptureError::WorkerDead),
+                Err(_) => return Err(CaptureError::Timeout),
+                _ => {}
+            }
+        }
+    })
 }
 
 fn gpu_error(error: impl std::fmt::Display) -> ScreenRecorderError {
@@ -487,9 +502,12 @@ impl GpuVisualCompositor {
             index = 1 - index;
         }
         self.tiles.clear();
-        state.trail.set_lifetime_ms(config.mouse_trail_duration_ms);
+        state
+            .input_effects
+            .trail
+            .set_lifetime_ms(config.mouse_trail_duration_ms);
         if config.mouse_trail_rgba[3] != 0 {
-            state.trail.observe(
+            state.input_effects.trail.observe(
                 cursor
                     .filter(|cursor| cursor.visible)
                     .map(|cursor| (cursor.x, cursor.y)),
@@ -498,21 +516,23 @@ impl GpuVisualCompositor {
                 timestamp,
             );
             state
+                .input_effects
                 .trail
                 .draw_to(&mut self.tiles, timestamp, config.mouse_trail_rgba);
         } else {
-            state.trail.clear();
+            state.input_effects.trail.clear();
         }
         while state
+            .input_effects
             .clicks
             .front()
             .is_some_and(|click| timestamp.saturating_sub(click.timestamp_ms) > CLICK_ANIMATION_MS)
         {
-            state.clicks.pop_front();
+            state.input_effects.clicks.pop_front();
         }
         snow_recording_effects::mouse_effects::draw_clicks_to(
             &mut self.tiles,
-            &state.clicks,
+            &state.input_effects.clicks,
             timestamp,
             config.mouse_click_rgba,
             source_size,
@@ -533,16 +553,7 @@ impl GpuVisualCompositor {
         if config.show_cursor
             && let Some(cursor) = cursor
         {
-            let shape = match &cursor.shape {
-                CursorShapeState::Embedded(shape) => {
-                    state
-                        .cursor_shapes
-                        .insert(shape.shape_id.get(), shape.clone());
-                    Some(shape.clone())
-                }
-                CursorShapeState::Cached(id) => state.cursor_shapes.get(&id.get()).cloned(),
-                CursorShapeState::Unavailable => None,
-            };
+            let shape = resolve_cursor_shape(&mut state.cursor_shape, cursor).cloned();
             if cursor.visible
                 && let Some(shape) = shape
             {
@@ -551,16 +562,8 @@ impl GpuVisualCompositor {
             }
         }
         self.tiles.clear();
-        if let Some(keyboard) = state.keyboard.as_mut() {
-            while state
-                .pending_keys
-                .front()
-                .is_some_and(|event| event.at_ms <= timestamp)
-            {
-                keyboard
-                    .model
-                    .event(state.pending_keys.pop_front().expect("pending key"));
-            }
+        state.input_effects.advance_keys(timestamp);
+        if let Some(keyboard) = state.input_effects.keyboard.as_mut() {
             keyboard
                 .draw_to(&mut self.tiles, timestamp)
                 .map_err(gpu_error)?;
@@ -788,6 +791,9 @@ mod tests {
 
     fn config(path: PathBuf, backend: CaptureBackendKind) -> DirectRecordingConfig {
         DirectRecordingConfig {
+            audio_mode: Default::default(),
+            system_audio_gain_db: 0,
+            microphone_gain_db: 0,
             excluded_windows: Default::default(),
             excluded_processes: Default::default(),
             loop_animated_images: true,
@@ -806,6 +812,7 @@ mod tests {
             maximum_height: None,
             codec: VideoCodec::H264,
             preset: VideoEncodingSpeed::VeryFast,
+            quality: 80,
             prefer_hardware_encoder: true,
             enable_microphone: false,
             enable_system_audio: false,
@@ -898,9 +905,9 @@ mod tests {
         let mut cpu_state = VisualCompositor::new(size);
         let mut gpu_state = VisualCompositor::new(size);
         for state in [&mut cpu_state, &mut gpu_state] {
-            state.keyboard = Some(KeyboardOverlay::new(size, Box::new(Rasterizer)));
+            state.input_effects.keyboard = Some(KeyboardOverlay::new(size, Box::new(Rasterizer)));
             for (at_ms, down) in [(0, true), (150, false)] {
-                state.pending_keys.push_back(KeyEvent {
+                state.input_effects.pending_keys.push_back(KeyEvent {
                     at_ms,
                     key: 65,
                     down,
@@ -908,7 +915,7 @@ mod tests {
                     modifiers: vec![],
                 });
             }
-            state.clicks.push_back(RenderClick {
+            state.input_effects.clicks.push_back(RenderClick {
                 timestamp_ms: 50,
                 x: 160,
                 y: 150,
@@ -1218,7 +1225,7 @@ mod tests {
                         shape: CursorShapeState::Embedded(shape.clone()),
                     };
                     let mut expected = reference.clone();
-                    draw_cursor(&mut expected, size, source, &sample, &mut HashMap::new());
+                    draw_cursor(&mut expected, size, source, &sample, &mut None);
                     compositor.cursor(&background, &sample, &shape, source)?;
                     unsafe {
                         device
@@ -1360,7 +1367,8 @@ mod tests {
             let directory = tempfile::tempdir()?;
             let path = directory.path().join("hardware.mp4");
             let config = config(path.clone(), backend);
-            // Fail with the precise stage instead of accepting startup fallback.
+            // Probe GPU startup before accepting a CPU fallback. The report
+            // below must still prove that both native backends were exercised.
             let mut state = VisualCompositor::new(config.output_dimensions());
             drop(prepare(
                 &config,
@@ -1377,6 +1385,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(600));
             let report = session.stop()?;
             assert_eq!(report.selected_pipeline, "d3d11", "{report:?}");
+            assert_eq!(report.capture_backend, backend.as_str(), "{report:?}");
             assert!(report.used_hardware_video_encoder, "{report:?}");
             let mut media = ffmpeg_next::format::input(&path).map_err(gpu_error)?;
             let stream = media

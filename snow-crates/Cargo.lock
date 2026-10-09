@@ -2680,10 +2680,13 @@ dependencies = [
  "ort-sys",
  "rayon",
  "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "serde_yaml",
  "sha2",
+ "snow-memory",
+ "tempfile",
  "thiserror 2.0.20",
  "turbojpeg",
  "unicode-bidi",
@@ -2902,9 +2905,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.43"
+version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
+checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
  "once_cell",
  "ring",
@@ -2926,9 +2929,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.13"
+version = "0.103.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
+checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -3193,6 +3196,7 @@ dependencies = [
  "snow-d3d11",
  "snow-macos",
  "snow-media",
+ "snow-memory",
  "windows",
 ]
 
@@ -3204,6 +3208,7 @@ dependencies = [
  "objc2",
  "snow-capture",
  "snow-core",
+ "snow-cursor",
  "snow-macos",
  "snow-media",
  "windows",
@@ -3215,6 +3220,7 @@ version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
  "proptest",
+ "rayon",
  "smallvec",
  "snow-media",
  "windows",
@@ -3244,6 +3250,7 @@ version = "0.1.0"
 name = "snow-diagnostics-test"
 version = "0.1.0"
 dependencies = [
+ "snow-core",
  "snow-diagnostics",
 ]
 
@@ -3282,12 +3289,22 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-core-video",
  "serde",
+ "snow-memory",
  "thiserror 2.0.20",
 ]
 
 [[package]]
+name = "snow-memory"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "snow-ocr-process"
-version = "1.0.8"
+version = "1.0.10"
 dependencies = [
  "memmap2",
  "num_cpus",
@@ -3295,6 +3312,7 @@ dependencies = [
  "serde",
  "serde_json",
  "snow-diagnostics",
+ "snow-memory",
  "windows-sys 0.61.2",
  "winres",
 ]
@@ -3320,6 +3338,7 @@ dependencies = [
  "snow-capture",
  "snow-macos",
  "snow-media",
+ "snow-memory",
  "snow-recording-export",
  "snow-screen-recorder",
 ]
@@ -3331,6 +3350,7 @@ dependencies = [
  "crossbeam-channel",
  "snow-core",
  "snow-macos",
+ "snow-recording-model",
  "windows",
 ]
 
@@ -3346,8 +3366,10 @@ name = "snow-recording-export"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bincode",
  "crossbeam-channel",
  "ffmpeg-next",
+ "gif",
  "num_cpus",
  "proptest",
  "rayon",
@@ -3357,6 +3379,8 @@ dependencies = [
  "snow-d3d11",
  "snow-macos",
  "snow-media",
+ "snow-memory",
+ "snow-recording-effects",
  "snow-recording-model",
  "symphonia",
  "tempfile",
@@ -3374,6 +3398,7 @@ dependencies = [
  "proptest",
  "serde",
  "snow-media",
+ "snow-memory",
  "thiserror 2.0.20",
  "uuid",
 ]
@@ -3396,6 +3421,7 @@ dependencies = [
  "snow-d3d11",
  "snow-macos",
  "snow-media",
+ "snow-memory",
  "snow-pipeline",
  "snow-recording-effects",
  "snow-recording-export",
@@ -3432,6 +3458,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-foundation",
+ "snow-core",
  "windows",
 ]
 
@@ -3452,6 +3479,7 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
+ "snow-memory",
  "tempfile",
  "thiserror 2.0.20",
 ]
@@ -3461,6 +3489,8 @@ name = "snow-stitch-images-c"
 version = "0.1.0"
 dependencies = [
  "png",
+ "snow-core",
+ "snow-memory",
  "snow-stitch-images",
  "tempfile",
 ]
@@ -3481,6 +3511,7 @@ dependencies = [
 name = "snow-ui-selector-c"
 version = "0.1.0"
 dependencies = [
+ "snow-core",
  "snow-ui-selector",
  "windows",
 ]
@@ -4017,6 +4048,7 @@ dependencies = [
  "opencv",
  "serde",
  "serde_json",
+ "snow-core",
 ]
 
 [[package]]

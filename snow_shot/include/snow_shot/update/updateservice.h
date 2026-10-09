@@ -1,7 +1,9 @@
 #pragma once
 
 #include <QObject>
+#include <QJsonObject>
 #include <QString>
+#include <QStringList>
 #include <QUrl>
 #include <chrono>
 #include <memory>
@@ -30,8 +32,8 @@ struct UpdateStatus {
     QUrl downloadUrl = {};
 };
 
-// Windows delegates installation to the updater helper. macOS checks versions over HTTPS
-// and leaves package downloads and installation to the website or GitHub Releases.
+// Windows delegates installation to the updater helper. macOS checks releases over HTTPS
+// and leaves package downloads and installation to the selected release host.
 class UpdateService final : public QObject {
     Q_OBJECT
   public:
@@ -39,7 +41,6 @@ class UpdateService final : public QObject {
         QString applicationDirectory;
         QString root;
         QString cacheDirectory;
-        QUrl baseUrl;
         bool allowLocalHttp = false;
         std::chrono::milliseconds startupCheckDelay = std::chrono::seconds(30);
         std::chrono::milliseconds automaticCheckInterval = std::chrono::hours(24);
@@ -48,6 +49,8 @@ class UpdateService final : public QObject {
         // Production discovery endpoint; loopback overrides require allowLocalHttp.
         QUrl githubApiUrl =
             QUrl(QStringLiteral("https://api.github.com/repos/mg-chao/snow-apps/releases"));
+        QUrl giteeApiUrl =
+            QUrl(QStringLiteral("https://gitee.com/api/v5/repos/mg-chao/snow-apps/releases"));
         std::chrono::milliseconds requestTimeout = std::chrono::seconds(30);
     };
 
@@ -55,14 +58,20 @@ class UpdateService final : public QObject {
     ~UpdateService() override;
     const UpdateStatus& status() const;
     bool busy() const;
+    bool handoffPending() const;
     void start();
     void setMode(const QString& mode);
     void setSystemProxy(bool enabled);
+    void setProgressAppearance(const QJsonObject& appearance);
     void check(bool manual = true);
     void download();
     void cancel();
     void requestRestart();
     void beginApply();
+    // Applies only an update that was already verified and ready before this launch.
+    // Does not start network checks, downloads, or the background schedule.
+    void applyAtStartup();
+    void setRelaunchArguments(const QStringList& arguments);
     void reportBlocked(const QString& reason);
 
   signals:
@@ -72,6 +81,8 @@ class UpdateService final : public QObject {
     void automaticUpdateAvailable(const QString& version);
     void restartRequested();
     void handoffReady();
+    void handoffPendingChanged(bool pending);
+    void handoffCommitted();
 
   protected:
     bool event(QEvent* event) override;

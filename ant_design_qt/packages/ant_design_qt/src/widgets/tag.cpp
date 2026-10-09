@@ -1,4 +1,5 @@
 #include "tag.h"
+#include "detail/focus_reason.h"
 #include "detail/pointer_region.h"
 
 #include "antd_icons.h"
@@ -142,10 +143,6 @@ void mergeSemanticStyles(AdTag::SemanticStyles* target, const AdTag::SemanticSty
   mergeSemanticSlotStyle(&target->closeIcon, source.closeIcon);
 }
 
-bool isKeyboardFocusReason(Qt::FocusReason reason) {
-  return reason != Qt::MouseFocusReason && reason != Qt::NoFocusReason;
-}
-
 bool isInteractiveKey(int key) {
   return key == Qt::Key_Space || key == Qt::Key_Return || key == Qt::Key_Enter;
 }
@@ -185,6 +182,8 @@ AdTag::AdTag(QWidget* parent) : QAbstractButton(parent) {
   setCursor(Qt::PointingHandCursor);
 
   connect(this, &QAbstractButton::toggled, this, [this](bool) { refreshAfterStateChange(false); });
+  connect(&adqt::theme::ThemeManager::instance(), &adqt::theme::ThemeManager::themeChanged, this,
+          qOverload<>(&QWidget::update));
 }
 
 AdTag::AdTag(const QString& text, QWidget* parent) : AdTag(parent) { setText(text); }
@@ -627,7 +626,7 @@ void AdTag::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void AdTag::focusInEvent(QFocusEvent* event) {
-  focusVisible_ = event && isKeyboardFocusReason(event->reason());
+  focusVisible_ = event && detail::isKeyboardFocusReason(event->reason());
   QAbstractButton::focusInEvent(event);
   update();
 }

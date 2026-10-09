@@ -1,3 +1,5 @@
+#include "snow_draw_engine_qt/snow_canvas_image.h"
+#include "snow_shot/platform/applicationqos.h"
 #include "snow_shot/presentation/screenshotocrrecognitionservice.h"
 #include "screenshotocrtransport.h"
 
@@ -69,6 +71,8 @@ QImage renderFilteredImage(QImage source, const QRectF& canvasRect,
         *filteredImageCanvasRect = {};
     if (source.isNull() || presentation == nullptr || !canvasRect.isValid() || canvasRect.isEmpty())
         return {};
+    if (source.devicePixelRatio() != 1.0 && !snowCanvasDetachImage(source))
+        return {};
     source.setDevicePixelRatio(1.0);
     const QRectF normalized = canvasRect.normalized();
     QRect filteredPixels;
@@ -86,6 +90,8 @@ using snow_shot::ocr::ScreenshotOcrTransport;
 } // namespace
 
 class ScreenshotOcrRecognitionService::Impl final {
+    friend class ScreenshotOcrRecognitionService;
+
   public:
     Impl(ScreenshotOcrRecognitionService* owner, const Options& options,
          ScreenshotOcrBackendPreference preference)
@@ -97,8 +103,8 @@ class ScreenshotOcrRecognitionService::Impl final {
         m_configuration.modelType = options.modelType;
         m_configuration.backend = preference;
         m_configuration.detectorResizePolicy = options.detectorResizePolicy;
+        m_configuration.textDetectionProcessing = options.textDetectionProcessing;
         m_queueClock.start();
-        m_transportThread.setObjectName(QStringLiteral("snow-ocr-transport"));
         m_localPool->setMaxThreadCount(1);
         if (!options.processPath.trimmed().isEmpty() &&
             !options.detectorModelPath.trimmed().isEmpty() &&
@@ -142,6 +148,16 @@ class ScreenshotOcrRecognitionService::Impl final {
                         scheduleAssetRetry();
                     });
         }
+    }
+
+    bool storageBusy() const {
+        return !m_jobs.isEmpty() || m_assetPreparing;
+    }
+    ScreenshotOcrRuntimeConfiguration configuration() const {
+        return m_configuration;
+    }
+    QString proxyUrl() const {
+        return m_proxyUrl;
     }
 
     ~Impl() {
@@ -222,6 +238,7 @@ class ScreenshotOcrRecognitionService::Impl final {
         const auto alive = m_alive;
         m_localPool->start(
             QRunnable::create([service, job, alive, beforeRender = m_beforeLocalRender]() {
+                snow_shot::platform::applyApplicationQoSToCurrentThread();
                 if (alive->load(std::memory_order_acquire) && beforeRender)
                     beforeRender();
                 SnowCanvasRegionFilterScratch scratch;
@@ -336,13 +353,20 @@ class ScreenshotOcrRecognitionService::Impl final {
         setRuntimeConfiguration(configuration);
     }
 
+    void setTextDetectionProcessing(ScreenshotOcrTextDetectionProcessing processing) {
+        auto configuration = m_configuration;
+        configuration.textDetectionProcessing = processing;
+        setRuntimeConfiguration(configuration);
+    }
+
     void setRuntimeConfiguration(const ScreenshotOcrRuntimeConfiguration& configuration) {
         if (m_configuration == configuration)
             return;
         const bool modelChanged = m_modelType != configuration.modelType;
         const bool sessionChanged =
             modelChanged || m_backendPreference != configuration.backend ||
-            m_configuration.detectorResizePolicy != configuration.detectorResizePolicy;
+            m_configuration.detectorResizePolicy != configuration.detectorResizePolicy ||
+            m_configuration.textDetectionProcessing != configuration.textDetectionProcessing;
         if (sessionChanged)
             ++m_configurationGeneration;
         if (m_configuration.modelHotStart &&
@@ -505,9 +529,21 @@ class ScreenshotOcrRecognitionService::Impl final {
                  if (valid())
                      processFailed(stage.toLatin1().constData());
              }});
-        m_transport->moveToThread(&m_transportThread);
-        if (!m_transportThread.isRunning())
-            m_transportThread.start();
+        // Each transport owns one child-process lifetime. Retiring its thread
+        // also releases the I/O stack when nonresident OCR returns to idle.
+        m_transportThreads.erase(std::remove_if(m_transportThreads.begin(),
+                                                m_transportThreads.end(),
+                                                [](const auto& thread) { return thread.isNull(); }),
+                                 m_transportThreads.end());
+        m_transportThread = new QThread(m_owner);
+        m_transportThread->setObjectName(QStringLiteral("snow-ocr-transport"));
+        m_transportThreads.emplace_back(m_transportThread);
+        m_transport->moveToThread(m_transportThread);
+        QObject::connect(m_transportThread, &QThread::finished, m_transport, &QObject::deleteLater);
+        QObject::connect(m_transportThread, &QThread::finished, m_transportThread,
+                         &QObject::deleteLater);
+        snow_shot::platform::configureApplicationQoSThread(m_transportThread);
+        m_transportThread->start();
         const auto& diagnostics = snow_shot::diagnostics::DiagnosticsService::instance();
         auto environment = QProcessEnvironment::systemEnvironment();
         environment.insert(QStringLiteral("SNOW_SHOT_CRASHPAD_PIPE"), diagnostics.crashPipeName());
@@ -544,6 +580,10 @@ class ScreenshotOcrRecognitionService::Impl final {
         if (m_transport != nullptr) {
             m_transport->deleteLater();
             m_transport = nullptr;
+        }
+        if (m_transportThread != nullptr) {
+            m_transportThread->quit();
+            m_transportThread = nullptr;
         }
         ++m_processGeneration;
     }
@@ -625,7 +665,9 @@ class ScreenshotOcrRecognitionService::Impl final {
         if (m_reconcileScheduled || m_stopping)
             return;
         m_reconcileScheduled = true;
-        QTimer::singleShot(0, m_owner, [this]() {
+        QTimer::singleShot(0, m_owner, [this, alive = m_alive]() {
+            if (!alive->load())
+                return;
             m_reconcileScheduled = false;
             reconcile();
         });
@@ -635,12 +677,15 @@ class ScreenshotOcrRecognitionService::Impl final {
             return;
         m_retryPending = true;
         const auto generation = ++m_retryGeneration;
-        QTimer::singleShot(seconds * m_retryTimeUnit, m_owner, [this, generation]() {
-            if (generation != m_retryGeneration || !residentEffective() || m_stopping)
-                return;
-            m_retryPending = false;
-            scheduleReconcile();
-        });
+        QTimer::singleShot(
+            seconds * m_retryTimeUnit, m_owner, [this, generation, alive = m_alive]() {
+                if (!alive->load())
+                    return;
+                if (generation != m_retryGeneration || !residentEffective() || m_stopping)
+                    return;
+                m_retryPending = false;
+                scheduleReconcile();
+            });
     }
     void scheduleAssetRetry() {
         const int seconds = m_assetRetryCount == 0 ? 5 : m_assetRetryCount == 1 ? 15 : 60;
@@ -674,6 +719,10 @@ class ScreenshotOcrRecognitionService::Impl final {
         appendU8(
             payload,
             m_configuration.detectorResizePolicy == ScreenshotOcrDetectorResizePolicy::Min ? 1 : 0);
+        appendU8(payload, m_configuration.textDetectionProcessing ==
+                                  ScreenshotOcrTextDetectionProcessing::SpeedFirst
+                              ? 1
+                              : 0);
         appendString(payload, m_assets.detectorModelPath);
         appendString(payload, m_assets.recognizerModelPath);
         appendString(payload, m_assets.dictionaryPath);
@@ -1032,6 +1081,7 @@ class ScreenshotOcrRecognitionService::Impl final {
             m_localPool->start(QRunnable::create(
                 [service, job, alive, beforeRender = m_beforeLocalRender,
                  result = std::move(result), source, canvasRect, background]() mutable {
+                    snow_shot::platform::applyApplicationQoSToCurrentThread();
                     if (alive->load(std::memory_order_acquire) && beforeRender)
                         beforeRender();
                     SnowCanvasRegionFilterScratch scratch;
@@ -1189,7 +1239,7 @@ class ScreenshotOcrRecognitionService::Impl final {
                 ? QCoreApplication::translate(
                       "ScreenshotOcrController",
                       "The bundled text recognition runtime is damaged or incompatible. Reinstall "
-                      "Snow Shot for Apple Silicon.")
+                      "Snow Shot for this Mac.")
                 : QCoreApplication::translate("ScreenshotOcrController",
                                               "Text recognition components could not be prepared");
         const auto failed = m_pending;
@@ -1217,7 +1267,7 @@ class ScreenshotOcrRecognitionService::Impl final {
         scheduleReconcile();
     }
 
-    void shutdown() {
+    void beginShutdown() {
         m_alive->store(false, std::memory_order_release);
         {
             m_stopping = true;
@@ -1230,23 +1280,35 @@ class ScreenshotOcrRecognitionService::Impl final {
             m_localRenderingCount = 0;
             releaseTransport();
         }
+    }
+
+    void drainShutdown() {
         // Deleting the pool would wait for in-flight renders unconditionally;
         // orphan it past the deadline. Its runnables hold only shared state, a
         // QPointer to the service and the liveness flag, so completing after
         // destruction is safe.
-        if (!m_localPool->waitForDone(m_shutdownTimeoutMilliseconds)) {
+        if (m_localPool && !m_localPool->waitForDone(m_shutdownTimeoutMilliseconds)) {
             qWarning("OCR render workers did not stop within %d milliseconds; abandoning them",
                      m_shutdownTimeoutMilliseconds);
             m_localPool.release();
         }
-        m_transportThread.quit();
-        if (!m_transportThread.wait(kTransportStopTimeoutMilliseconds)) {
-            qWarning("OCR transport thread did not stop within %lu milliseconds; still waiting",
-                     kTransportStopTimeoutMilliseconds);
-            // A running QThread must never be destroyed, so keep waiting past
-            // the deadline once the stall is visible in diagnostics.
-            m_transportThread.wait();
+        for (const auto& thread : m_transportThreads) {
+            if (thread.isNull())
+                continue;
+            thread->quit();
+            if (!thread->wait(kTransportStopTimeoutMilliseconds)) {
+                qWarning("OCR transport thread did not stop within %lu milliseconds; still waiting",
+                         kTransportStopTimeoutMilliseconds);
+                // A running QThread must never be destroyed. Retiring threads
+                // are included so an earlier child cannot outlive the service.
+                thread->wait();
+            }
         }
+    }
+
+    void shutdown() {
+        beginShutdown();
+        drainShutdown();
     }
 
     ScreenshotOcrRecognitionService* m_owner = nullptr;
@@ -1264,7 +1326,8 @@ class ScreenshotOcrRecognitionService::Impl final {
     std::unique_ptr<QThreadPool> m_localPool = std::make_unique<QThreadPool>();
     QElapsedTimer m_queueClock;
     std::shared_ptr<std::atomic_bool> m_alive = std::make_shared<std::atomic_bool>(true);
-    QThread m_transportThread;
+    QThread* m_transportThread = nullptr;
+    std::vector<QPointer<QThread>> m_transportThreads;
     ScreenshotOcrTransport* m_transport = nullptr;
     ProcessStopReason m_processStopReason = ProcessStopReason::None;
     qsizetype m_slotBytes = 0;
@@ -1296,7 +1359,7 @@ ScreenshotOcrRecognitionService::ScreenshotOcrRecognitionService(QObject* parent
 ScreenshotOcrRecognitionService::ScreenshotOcrRecognitionService(
     const Options& options, ScreenshotOcrBackendPreference preference, QObject* parent)
     : ScreenshotOcrRecognitionPort(parent),
-      m_impl(std::make_unique<Impl>(this, options, preference)) {}
+      m_impl(std::make_unique<Impl>(this, options, preference)), m_storageOptions(options) {}
 ScreenshotOcrRecognitionService::~ScreenshotOcrRecognitionService() = default;
 
 ScreenshotOcrRecognitionPort::RequestToken
@@ -1360,6 +1423,12 @@ void ScreenshotOcrRecognitionService::setDetectorResizePolicy(
     if (m_impl != nullptr)
         m_impl->setDetectorResizePolicy(policy);
 }
+
+void ScreenshotOcrRecognitionService::setTextDetectionProcessing(
+    ScreenshotOcrTextDetectionProcessing processing) {
+    if (m_impl != nullptr)
+        m_impl->setTextDetectionProcessing(processing);
+}
 int ScreenshotOcrRecognitionService::liveWorkerCount() const {
     return m_impl != nullptr ? m_impl->liveWorkerCount() : 0;
 }
@@ -1375,4 +1444,27 @@ void ScreenshotOcrRecognitionService::setRuntimeConfiguration(
     const ScreenshotOcrRuntimeConfiguration& configuration) {
     if (m_impl != nullptr)
         m_impl->setRuntimeConfiguration(configuration);
+}
+
+bool ScreenshotOcrRecognitionService::storageBusy() const {
+    return m_impl && m_impl->storageBusy();
+}
+void ScreenshotOcrRecognitionService::suspendStorage() {
+    if (!m_impl)
+        return;
+    m_storageConfiguration = m_impl->configuration();
+    m_storageOptions.proxyUrl = m_impl->proxyUrl();
+    m_impl->beginShutdown();
+    m_suspendedImpl = std::move(m_impl);
+}
+void ScreenshotOcrRecognitionService::drainStorage() {
+    if (m_suspendedImpl)
+        m_suspendedImpl->drainShutdown();
+}
+void ScreenshotOcrRecognitionService::resumeStorage(const QString& cacheRoot) {
+    m_suspendedImpl.reset();
+    m_storageOptions.cacheRoot = cacheRoot;
+    m_storageOptions.modelType = m_storageConfiguration.modelType;
+    m_impl = std::make_unique<Impl>(this, m_storageOptions, m_storageConfiguration.backend);
+    m_impl->setRuntimeConfiguration(m_storageConfiguration);
 }

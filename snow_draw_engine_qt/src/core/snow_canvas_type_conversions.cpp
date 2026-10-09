@@ -3,6 +3,7 @@
 #include "snow_canvas_utf8.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <iterator>
 #include <type_traits>
@@ -99,6 +100,12 @@ SnowCanvasTool toCanvasTool(SnowActiveTool tool) {
         return SnowCanvasTool::AutoFilter;
     case SNOW_ACTIVE_TOOL_SPOTLIGHT:
         return SnowCanvasTool::Spotlight;
+    case SNOW_ACTIVE_TOOL_RECTANGLE_ERASER:
+        return SnowCanvasTool::RectangleEraser;
+    case SNOW_ACTIVE_TOOL_BRUSH_ERASER:
+        return SnowCanvasTool::BrushEraser;
+    case SNOW_ACTIVE_TOOL_DISTANCE:
+        return SnowCanvasTool::Distance;
     }
     return SnowCanvasTool::Select;
 }
@@ -135,6 +142,12 @@ SnowActiveTool toEngineTool(SnowCanvasTool tool) {
         return SNOW_ACTIVE_TOOL_AUTO_FILTER;
     case SnowCanvasTool::Spotlight:
         return SNOW_ACTIVE_TOOL_SPOTLIGHT;
+    case SnowCanvasTool::RectangleEraser:
+        return SNOW_ACTIVE_TOOL_RECTANGLE_ERASER;
+    case SnowCanvasTool::BrushEraser:
+        return SNOW_ACTIVE_TOOL_BRUSH_ERASER;
+    case SnowCanvasTool::Distance:
+        return SNOW_ACTIVE_TOOL_DISTANCE;
     }
     return SNOW_ACTIVE_TOOL_SELECT;
 }
@@ -189,6 +202,14 @@ SnowCanvasStyleToolbarSource toCanvasStyleToolbarSource(SnowStyleToolbarSource s
         return SnowCanvasStyleToolbarSource::DefaultSpotlight;
     case SNOW_STYLE_TOOLBAR_SOURCE_SELECTED_SPOTLIGHT:
         return SnowCanvasStyleToolbarSource::SelectedSpotlight;
+    case SNOW_STYLE_TOOLBAR_SOURCE_DEFAULT_RECTANGLE_ERASER:
+        return SnowCanvasStyleToolbarSource::DefaultRectangleEraser;
+    case SNOW_STYLE_TOOLBAR_SOURCE_DEFAULT_BRUSH_ERASER:
+        return SnowCanvasStyleToolbarSource::DefaultBrushEraser;
+    case SNOW_STYLE_TOOLBAR_SOURCE_DEFAULT_DISTANCE:
+        return SnowCanvasStyleToolbarSource::DefaultDistance;
+    case SNOW_STYLE_TOOLBAR_SOURCE_SELECTED_DISTANCE:
+        return SnowCanvasStyleToolbarSource::SelectedDistance;
     }
     return SnowCanvasStyleToolbarSource::DefaultRectangle;
 }
@@ -455,8 +476,7 @@ SnowShapeStyle toEngineShapeStyle(const SnowCanvasShapeStyle& style) {
     engineStyle.stroke_style = toEngineStrokeStyle(style.strokeStyle);
     engineStyle.arrow_type = toEngineArrowType(style.arrowType);
     engineStyle.arrow_shaft_type = static_cast<SnowArrowShaftType>(style.arrowShaftType);
-    engineStyle.arrow_ratio =
-        std::isfinite(style.arrowRatio) ? std::clamp(style.arrowRatio, 1.0, 3.0) : 1.0;
+    engineStyle.arrow_ratio = snowCanvasNormalizeArrowRatio(style.arrowRatio);
     engineStyle.opacity = style.opacity;
     engineStyle.highlight_shape = style.highlightShape == SnowCanvasHighlightShape::Ellipse
                                       ? SNOW_HIGHLIGHT_SHAPE_ELLIPSE
@@ -466,6 +486,40 @@ SnowShapeStyle toEngineShapeStyle(const SnowCanvasShapeStyle& style) {
         : style.shape == SnowCanvasRectangleShape::Diamond ? SNOW_RECTANGLE_SHAPE_DIAMOND
                                                            : SNOW_RECTANGLE_SHAPE_RECTANGLE;
     return engineStyle;
+}
+
+bool validDistanceStyle(const SnowCanvasDistanceStyle& style) {
+    return style.stroke.isValid() && std::isfinite(style.strokeWidth) && style.strokeWidth >= 1.0 &&
+           style.strokeWidth <= 72.0 && std::isfinite(style.factor) && style.factor >= 0.01 &&
+           style.factor <= 1000.0 &&
+           enumInRange(style.unit, SnowCanvasDistanceUnit::Px, SnowCanvasDistanceUnit::Mm) &&
+           style.decimalPlaces >= 0 && style.decimalPlaces <= 3 &&
+           std::isfinite(style.endpointScale) && style.endpointScale >= 0.5 &&
+           style.endpointScale <= 3.0 &&
+           enumInRange(style.endpointStyle, SnowCanvasArrowhead::None,
+                       SnowCanvasArrowhead::IndentedTriangle);
+}
+
+SnowCanvasDistanceStyle toCanvasDistanceStyle(const SnowDistanceStyle& style) {
+    return {toQColor(style.stroke),
+            style.stroke_width,
+            style.factor,
+            static_cast<SnowCanvasDistanceUnit>(style.unit),
+            static_cast<int>(style.decimal_places),
+            style.endpoint_scale,
+            toCanvasArrowhead(style.endpoint_style)};
+}
+
+SnowDistanceStyle toEngineDistanceStyle(const SnowCanvasDistanceStyle& style) {
+    SnowDistanceStyle result{};
+    result.stroke = toEngineColor(style.stroke);
+    result.stroke_width = style.strokeWidth;
+    result.factor = style.factor;
+    result.unit = static_cast<SnowDistanceUnit>(style.unit);
+    result.decimal_places = static_cast<std::uint32_t>(style.decimalPlaces);
+    result.endpoint_scale = style.endpointScale;
+    result.endpoint_style = toEngineArrowhead(style.endpointStyle);
+    return result;
 }
 
 SnowCanvasTextStyle toCanvasTextStyle(const SnowTextStyle& style) {
@@ -507,6 +561,7 @@ SnowCanvasSerialNumberStyle toCanvasSerialNumberStyle(const SnowSerialNumberStyl
     return SnowCanvasSerialNumberStyle{
         static_cast<qint64>(style.number),
         static_cast<SnowCanvasSerialNumberType>(style.serial_number_type),
+        static_cast<SnowCanvasSerialNumberNumericType>(style.numeric_type),
         toQColor(style.color),
         toQColor(style.fill),
         toCanvasFillStyle(style.fill_style),
@@ -523,6 +578,7 @@ SnowSerialNumberStyle toEngineSerialNumberStyle(const SnowCanvasSerialNumberStyl
     SnowSerialNumberStyle engineStyle{};
     engineStyle.number = static_cast<std::int64_t>(style.number);
     engineStyle.serial_number_type = static_cast<SnowSerialNumberType>(style.type);
+    engineStyle.numeric_type = static_cast<SnowSerialNumberNumericType>(style.numericType);
     engineStyle.color = toEngineColor(style.color);
     engineStyle.fill = toEngineColor(style.fill);
     engineStyle.fill_style = toEngineFillStyle(style.fillStyle);
@@ -553,6 +609,11 @@ SnowCanvasStyleToolbarState toCanvasStyleToolbarState(const SnowStyleToolbarStat
             state.filter_style.stroke_width,
         },
         state.filter_style_mixed,
+        false,
+        SnowCanvasBrushEraserStyle{state.brush_eraser_style.stroke_width},
+        toCanvasDistanceStyle(state.distance_style),
+        state.distance_style_mixed,
+        state.distance_measured_length,
     };
 }
 
@@ -683,6 +744,10 @@ bool toEngineStyleDefaults(const SnowCanvasStyleDefaults& defaults,
     if (std::any_of(
             std::begin(shapes), std::end(shapes),
             [](const SnowCanvasShapeStyle* style) { return !validShapeStyleEnums(*style); }) ||
+        !enumInRange(defaults.spotlightShape, SnowCanvasRectangleShape::Rectangle,
+                     SnowCanvasRectangleShape::Diamond) ||
+        !std::isfinite(defaults.brushEraser.strokeWidth) ||
+        defaults.brushEraser.strokeWidth < 1.0 || defaults.brushEraser.strokeWidth > 72.0 ||
         !enumInRange(defaults.rectangleFilter.type, SnowCanvasFilterType::Mosaic,
                      SnowCanvasFilterType::Brightness) ||
         !enumInRange(defaults.penFilter.type, SnowCanvasFilterType::Mosaic,
@@ -729,6 +794,8 @@ bool toEngineStyleDefaults(const SnowCanvasStyleDefaults& defaults,
         }
     }
 
+    if (!validDistanceStyle(defaults.distance))
+        return false;
     engineDefaults = SnowStyleDefaults{};
     engineDefaults.rectangle = toEngineShapeStyle(defaults.rectangle);
     engineDefaults.arrow = toEngineShapeStyle(defaults.arrow);
@@ -752,6 +819,9 @@ bool toEngineStyleDefaults(const SnowCanvasStyleDefaults& defaults,
     engineDefaults.serial_number = toEngineSerialNumberStyle(defaults.serialNumber);
     engineDefaults.watermark = toEngineWatermarkConfig(defaults.watermark);
     engineDefaults.spotlight = toEngineSpotlightConfig(defaults.spotlight);
+    engineDefaults.brush_eraser = SnowBrushEraserStyle{defaults.brushEraser.strokeWidth};
+    engineDefaults.spotlight_shape = static_cast<SnowRectangleShape>(defaults.spotlightShape);
+    engineDefaults.distance = toEngineDistanceStyle(defaults.distance);
     return true;
 }
 

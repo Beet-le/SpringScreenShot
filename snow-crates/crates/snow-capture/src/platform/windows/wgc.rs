@@ -1114,6 +1114,17 @@ impl WgcWorker {
         D3D11_TEXTURE2D_DESC,
         Option<HdrFrameContext>,
     )> {
+        self.effective_canonical_source_into(None)
+    }
+
+    fn effective_canonical_source_into(
+        &mut self,
+        output: Option<&snow_d3d11::Texture>,
+    ) -> CaptureResult<(
+        ID3D11Texture2D,
+        D3D11_TEXTURE2D_DESC,
+        Option<HdrFrameContext>,
+    )> {
         let source = self
             .canonical
             .texture()
@@ -1132,6 +1143,18 @@ impl WgcWorker {
                 let tonemapper = self.gpu_tonemapper.as_mut().ok_or_else(|| {
                     CaptureError::platform(anyhow::anyhow!("failed to initialize WGC tonemapper"))
                 })?;
+                if let Some(output) = output {
+                    tonemapper.tonemap_into(
+                        &self.device,
+                        &self.context,
+                        &source,
+                        &source_desc,
+                        params,
+                        None,
+                        output,
+                    )?;
+                    return Ok((output.raw().clone(), output.desc(), None));
+                }
                 let output = tonemapper
                     .tonemap(
                         &self.device,
@@ -1151,6 +1174,17 @@ impl WgcWorker {
             let converter = self.gpu_f16_converter.as_mut().ok_or_else(|| {
                 CaptureError::platform(anyhow::anyhow!("failed to initialize WGC F16 converter"))
             })?;
+            if let Some(output) = output {
+                converter.convert_into(
+                    &self.device,
+                    &self.context,
+                    &source,
+                    &source_desc,
+                    None,
+                    output,
+                )?;
+                return Ok((output.raw().clone(), output.desc(), None));
+            }
             let output = converter
                 .convert(&self.device, &self.context, &source, &source_desc, None)?
                 .clone();
@@ -1390,8 +1424,19 @@ impl WgcWorker {
 
 impl Drop for WgcWorker {
     fn drop(&mut self) {
+        // Close/StopCapture can wait for outstanding capture frames. Seal the
+        // callback transport and return every checked-out buffer first; field
+        // destruction after Close would be too late if native shutdown waits.
+        self.transport.shutdown();
+        self.pending_complete_snapshot = None;
         let _ = self.frame_pool.RemoveFrameArrived(self.frame_arrived_token);
         let _ = self.item.RemoveClosed(self.closed_token);
+        {
+            // Submit pending copies while the device and COM apartment are
+            // alive. Never hold the shared context lock across WGC Close.
+            let _lock = self.shared_device.as_ref().map(|device| device.lock());
+            unsafe { self.context.Flush() };
+        }
         let _ = self.session.Close();
         let _ = self.frame_pool.Close();
     }
@@ -1590,6 +1635,106 @@ impl crate::backend::MonitorCapturer for WindowsWindowCapturer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires an interactive Windows desktop and WGC"]
+    fn wgc_shutdown_returns_with_unconsumed_frames() {
+        for shared in [false, true] {
+            let (finished, completion) = crossbeam_channel::bounded(1);
+            let worker = thread::spawn(move || {
+                let result = (|| -> CaptureResult<()> {
+                    validate_support()?;
+                    let monitor = super::super::monitor::enumerate_resolved()?
+                        .into_iter()
+                        .next()
+                        .ok_or(CaptureError::MonitorLost)?;
+                    let device = shared
+                        .then(|| snow_d3d11::SharedDevice::create(&monitor.adapter))
+                        .transpose()
+                        .map_err(CaptureError::platform)?;
+                    let mut capture = WgcWorker::new_with_device(
+                        WorkerTarget::Monitor {
+                            adapter_luid: monitor.key.adapter_luid,
+                            monitor: monitor.handle.0 as usize,
+                            hdr_metadata: monitor.hdr_metadata,
+                        },
+                        device.as_ref(),
+                    )?;
+                    capture
+                        .frame_notifications
+                        .recv_timeout(Duration::from_secs(5))
+                        .map_err(|_| CaptureError::Timeout)?;
+                    if !shared {
+                        capture.coalesce_complete_snapshot()?;
+                        assert!(capture.pending_complete_snapshot.is_some());
+                    }
+                    // CPU snapshots retain a cached frame; the shared-device
+                    // path retains the callback's queued frame instead.
+                    drop(capture);
+                    Ok(())
+                })();
+                let _ = finished.send(result);
+            });
+            completion
+                .recv_timeout(Duration::from_secs(15))
+                .expect("WGC shutdown must return with retained frames")
+                .expect("WGC capture and shutdown should succeed");
+            worker.join().unwrap();
+        }
+    }
+
+    #[test]
+    #[ignore = "requires an interactive Windows desktop and WGC"]
+    fn wgc_repeated_drain_pause_resume_and_shutdown_returns() {
+        let (finished, completion) = crossbeam_channel::bounded(1);
+        let worker = thread::spawn(move || {
+            let result = (|| -> CaptureResult<()> {
+                validate_support()?;
+                let monitor = super::super::monitor::enumerate_resolved()?
+                    .into_iter()
+                    .next()
+                    .ok_or(CaptureError::MonitorLost)?;
+                for shared in [false, true] {
+                    let device = shared
+                        .then(|| snow_d3d11::SharedDevice::create(&monitor.adapter))
+                        .transpose()
+                        .map_err(CaptureError::platform)?;
+                    for _ in 0..4 {
+                        let mut capture = WgcWorker::new_with_device(
+                            WorkerTarget::Monitor {
+                                adapter_luid: monitor.key.adapter_luid,
+                                monitor: monitor.handle.0 as usize,
+                                hdr_metadata: monitor.hdr_metadata,
+                            },
+                            device.as_ref(),
+                        )?;
+                        capture
+                            .frame_notifications
+                            .recv_timeout(Duration::from_secs(5))
+                            .map_err(|_| CaptureError::Timeout)?;
+                        for _ in 0..4 {
+                            capture.pump_frames()?;
+                            capture.transport.pause()?;
+                            capture.transport.resume_and_drain(&capture.frame_pool)?;
+                            capture.configure_update_mode(WgcUpdateMode::OrderedIncremental)?;
+                            capture.pump_frames()?;
+                            capture.configure_update_mode(WgcUpdateMode::default())?;
+                        }
+                        // Reap native capture with callbacks and retained frames
+                        // after both preserve-and-drain and discard-and-resume.
+                        drop(capture);
+                    }
+                }
+                Ok(())
+            })();
+            let _ = finished.send(result);
+        });
+        completion
+            .recv_timeout(Duration::from_secs(30))
+            .expect("repeated WGC frame transport transitions and shutdown must return")
+            .expect("WGC frame transport transitions should succeed");
+        worker.join().unwrap();
+    }
 
     #[test]
     fn default_update_policy_is_complete_surface() {

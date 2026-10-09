@@ -25,6 +25,24 @@ struct SnowCanvasSmartEraseSnapshot::Data {
     std::vector<Entry> entries;
 };
 
+QByteArray SnowCanvasSmartEraseSnapshot::cacheKey() const {
+    if (!data || data->entries.empty())
+        return {};
+    QByteArray bytes;
+    QDataStream stream(&bytes, QIODevice::WriteOnly);
+    stream << static_cast<quint64>(data->entries.size());
+    for (const auto& entry : data->entries) {
+        stream << entry.item.element_id.index << entry.item.element_id.generation << entry.geometry
+               << entry.item.opacity << entry.item.filter.render_phase
+               << static_cast<bool>(entry.result);
+        if (entry.result) {
+            stream << entry.result->original.cacheKey() << entry.result->filled.cacheKey()
+                   << entry.result->canvasRect << entry.result->success;
+        }
+    }
+    return bytes;
+}
+
 namespace snow_canvas_smart_erase {
 namespace {
 quint64 elementKey(const SnowCanvasSceneItem& item) {
@@ -144,7 +162,8 @@ Coordinator::Coordinator(std::function<void()> repaint, Compute compute)
     : m_impl(std::make_unique<Impl>(std::move(repaint), std::move(compute))) {}
 Coordinator::~Coordinator() = default;
 
-void Coordinator::setSources(const void* owner, const QList<SnowCanvasBaseImageSource>& sources) {
+void Coordinator::setSources(const void* owner, const QList<SnowCanvasBaseImageSource>& sources,
+                             bool notify) {
     auto& state = *m_impl;
     state.owners[owner] = sources;
     QList<SnowCanvasBaseImageSource> combined;
@@ -185,7 +204,8 @@ void Coordinator::setSources(const void* owner, const QList<SnowCanvasBaseImageS
         (void)id;
         record.entry.result.reset();
     }
-    state.repaint();
+    if (notify)
+        state.repaint();
 }
 
 void Coordinator::removeSources(const void* owner) {
@@ -202,6 +222,13 @@ void Coordinator::reset() {
     state.retainedBytes = 0;
     state.frozen = {};
     ++state.sourceRevision;
+}
+
+void Coordinator::clearCache() {
+    auto& state = *m_impl;
+    state.cache.clear();
+    std::vector<QByteArray>().swap(state.cacheOrder);
+    state.retainedBytes = 0;
 }
 
 void Coordinator::sync(SnowRuntime runtime) {

@@ -6,14 +6,15 @@ use snow_draw_engine::{
     ActiveTool, ArrowPathCommand, ArrowType, Arrowhead, ArrowheadDisplayDashMode,
     ArrowheadDisplayFillMode, ArrowheadDisplayPrimitive, ArrowheadDisplayPrimitiveKind,
     CanvasFilterType, ColorRgba8, CornerRadii, CursorCommand, CursorStyle, DisplayFillStyle,
-    DisplayTextHorizontalAlign, DisplayTextVerticalAlign, ElementId, EngineConfig, FillStyle,
-    FilterStyle, GridConfig, HistoryState, InputEvent, InteractionOutput, KeyCode, KeyEvent,
-    KeyEventType, Modifiers, Point, PointerButton, PointerButtons, PointerCaptureCommand,
-    PointerDevice, PointerEvent, PointerEventType, RectangleShapeStyle, RuntimeConfig,
-    SerialNumberStyle, SerialNumberType, ShapeKind, ShapeStyle, SnapConfig, SpotlightConfig,
-    StrokeStyle, StyleDefaults, StyleToolbarSource, TextElementInfo, TextHorizontalAlign,
-    TextLayoutOverride, TextLayoutSize, TextStyle, TextVerticalAlign, Vector2, WatermarkConfig,
-    WatermarkTemplateApplicationTime, WheelDeltaKind, WheelEvent, ZoomFocus, normalize_font_family,
+    DisplayTextHorizontalAlign, DisplayTextVerticalAlign, DistanceStyle, DistanceUnit, ElementId,
+    EngineConfig, FillStyle, FilterStyle, GridConfig, HistoryState, InputEvent, InteractionOutput,
+    KeyCode, KeyEvent, KeyEventType, Modifiers, Point, PointerButton, PointerButtons,
+    PointerCaptureCommand, PointerDevice, PointerEvent, PointerEventType, RectangleShapeStyle,
+    RuntimeConfig, SerialNumberStyle, SerialNumberType, ShapeKind, ShapeStyle, SnapConfig,
+    SpotlightConfig, StrokeStyle, StyleDefaults, StyleToolbarSource, TextElementInfo,
+    TextHorizontalAlign, TextLayoutOverride, TextLayoutSize, TextStyle, TextVerticalAlign, Vector2,
+    WatermarkConfig, WatermarkTemplateApplicationTime, WheelDeltaKind, WheelEvent, ZoomFocus,
+    normalize_font_family,
 };
 
 use crate::abi::text::{
@@ -515,6 +516,8 @@ pub(crate) fn snow_text_element_info_from_rust(value: TextElementInfo) -> SnowTe
         rotation: value.rotation,
         font_size: value.font_size,
         auto_resize: u8::from(value.auto_resize),
+        horizontal_align: snow_document_text_horizontal_align_from_rust(value.horizontal_align),
+        vertical_align: snow_document_text_vertical_align_from_rust(value.vertical_align),
         measure_natural_width: u8::from(value.measure_natural_width),
         ..SnowTextElementInfo::default()
     };
@@ -611,6 +614,52 @@ impl From<CornerRadii> for SnowCornerRadii {
     }
 }
 
+impl From<SnowDistanceStyle> for DistanceStyle {
+    fn from(value: SnowDistanceStyle) -> Self {
+        Self {
+            stroke: value.stroke.into(),
+            stroke_width: value.stroke_width,
+            factor: value.factor,
+            unit: match value.unit {
+                SnowDistanceUnit::Px => DistanceUnit::Px,
+                SnowDistanceUnit::Cm => DistanceUnit::Cm,
+                SnowDistanceUnit::M => DistanceUnit::M,
+                SnowDistanceUnit::Km => DistanceUnit::Km,
+                SnowDistanceUnit::Mm => DistanceUnit::Mm,
+            },
+            decimal_places: value.decimal_places.min(255) as u8,
+            endpoint_ratio: value.endpoint_scale,
+            endpoint_style: snow_arrowhead_to_rust(value.endpoint_style),
+        }
+    }
+}
+
+impl From<DistanceStyle> for SnowDistanceStyle {
+    fn from(value: DistanceStyle) -> Self {
+        Self {
+            stroke: value.stroke.into(),
+            stroke_width: value.stroke_width,
+            factor: value.factor,
+            unit: match value.unit {
+                DistanceUnit::Px => SnowDistanceUnit::Px,
+                DistanceUnit::Cm => SnowDistanceUnit::Cm,
+                DistanceUnit::M => SnowDistanceUnit::M,
+                DistanceUnit::Km => SnowDistanceUnit::Km,
+                DistanceUnit::Mm => SnowDistanceUnit::Mm,
+            },
+            decimal_places: value.decimal_places as u32,
+            endpoint_scale: value.endpoint_ratio,
+            endpoint_style: snow_arrowhead_from_rust(value.endpoint_style),
+        }
+    }
+}
+
+impl Default for SnowDistanceStyle {
+    fn default() -> Self {
+        DistanceStyle::default().into()
+    }
+}
+
 impl From<SnowShapeStyle> for ShapeStyle {
     fn from(value: SnowShapeStyle) -> Self {
         Self {
@@ -649,6 +698,7 @@ impl From<SnowFilterStyle> for FilterStyle {
                 SnowFilterType::Inversion => CanvasFilterType::Inversion,
                 SnowFilterType::Emboss => CanvasFilterType::Emboss,
                 SnowFilterType::Brightness => CanvasFilterType::Brightness,
+                SnowFilterType::RestoreBackground => CanvasFilterType::RestoreBackground,
                 SnowFilterType::SmartErase => CanvasFilterType::SmartErase,
             },
             strength: value.strength,
@@ -668,6 +718,7 @@ impl From<FilterStyle> for SnowFilterStyle {
                 CanvasFilterType::Inversion => SnowFilterType::Inversion,
                 CanvasFilterType::Emboss => SnowFilterType::Emboss,
                 CanvasFilterType::Brightness => SnowFilterType::Brightness,
+                CanvasFilterType::RestoreBackground => SnowFilterType::RestoreBackground,
                 CanvasFilterType::SmartErase => SnowFilterType::SmartErase,
             },
             strength: value.strength,
@@ -786,6 +837,32 @@ impl From<TextStyle> for SnowTextStyle {
     }
 }
 
+pub(crate) fn snow_serial_number_numeric_type_to_rust(
+    value: SnowSerialNumberNumericType,
+) -> snow_draw_engine_document::SerialNumberNumericType {
+    use snow_draw_engine_document::SerialNumberNumericType as Numeric;
+    match value {
+        SnowSerialNumberNumericType::Arabic => Numeric::Arabic,
+        SnowSerialNumberNumericType::Roman => Numeric::Roman,
+        SnowSerialNumberNumericType::LowercaseLetters => Numeric::LowercaseLetters,
+        SnowSerialNumberNumericType::UppercaseLetters => Numeric::UppercaseLetters,
+        SnowSerialNumberNumericType::Chinese => Numeric::Chinese,
+    }
+}
+
+fn snow_serial_number_numeric_type_from_rust(
+    value: snow_draw_engine_document::SerialNumberNumericType,
+) -> SnowSerialNumberNumericType {
+    use snow_draw_engine_document::SerialNumberNumericType as Numeric;
+    match value {
+        Numeric::Arabic => SnowSerialNumberNumericType::Arabic,
+        Numeric::Roman => SnowSerialNumberNumericType::Roman,
+        Numeric::LowercaseLetters => SnowSerialNumberNumericType::LowercaseLetters,
+        Numeric::UppercaseLetters => SnowSerialNumberNumericType::UppercaseLetters,
+        Numeric::Chinese => SnowSerialNumberNumericType::Chinese,
+    }
+}
+
 pub(crate) fn snow_serial_number_type_to_rust(value: SnowSerialNumberType) -> SerialNumberType {
     match value {
         SnowSerialNumberType::OutlinedCircle => SerialNumberType::OutlinedCircle,
@@ -801,6 +878,7 @@ impl From<SnowSerialNumberStyle> for SerialNumberStyle {
         Self {
             number: value.number.max(0),
             serial_number_type: snow_serial_number_type_to_rust(value.serial_number_type),
+            numeric_type: snow_serial_number_numeric_type_to_rust(value.numeric_type),
             color: value.color.into(),
             fill: value.fill.into(),
             fill_style: snow_fill_style_to_rust(value.fill_style),
@@ -817,6 +895,7 @@ impl From<SerialNumberStyle> for SnowSerialNumberStyle {
     fn from(value: SerialNumberStyle) -> Self {
         let mut out = Self {
             number: value.number.max(0),
+            numeric_type: snow_serial_number_numeric_type_from_rust(value.numeric_type),
             serial_number_type: match value.serial_number_type {
                 SerialNumberType::OutlinedCircle => SnowSerialNumberType::OutlinedCircle,
                 SerialNumberType::SolidCircle => SnowSerialNumberType::SolidCircle,
@@ -889,7 +968,9 @@ fn strict_string_from_c_char_field<const N: usize>(
     string_from_c_char_field(bytes, len).ok_or(SnowError::InvalidArgument)
 }
 
-unsafe fn raw_c_enum_is_valid<E: crate::abi::raw_enum::SnowRawEnum>(value: *const E) -> bool {
+pub(crate) unsafe fn raw_c_enum_is_valid<E: crate::abi::raw_enum::SnowRawEnum>(
+    value: *const E,
+) -> bool {
     let raw = unsafe { std::ptr::read_unaligned(value.cast::<i32>()) };
     E::from_raw(raw).is_some()
 }
@@ -919,11 +1000,16 @@ unsafe fn runtime_style_default_enums_are_valid(defaults: *const SnowStyleDefaul
     }
 
     unsafe {
-        raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).rectangle_filter.filter_type))
+        raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).distance.unit))
+            && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).distance.endpoint_style))
+            && (*defaults).distance.decimal_places <= 3
+            && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).spotlight_shape))
+            && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).rectangle_filter.filter_type))
             && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).pen_filter.filter_type))
             && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).text.fill_style))
             && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).text.horizontal_align))
             && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).text.vertical_align))
+            && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).serial_number.numeric_type))
             && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).serial_number.fill_style))
             && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).serial_number.stroke_style))
             && raw_c_enum_is_valid(std::ptr::addr_of!(
@@ -974,6 +1060,11 @@ pub(crate) fn runtime_config_from_c(
     Ok(RuntimeConfig {
         style_defaults: StyleDefaults {
             editor: snow_draw_engine::EditorStyleDefaults {
+                spotlight_shape: match defaults.spotlight_shape {
+                    SnowRectangleShape::Rectangle => snow_draw_engine::HighlightShape::Rectangle,
+                    SnowRectangleShape::Ellipse => snow_draw_engine::HighlightShape::Ellipse,
+                    SnowRectangleShape::Diamond => snow_draw_engine::HighlightShape::Diamond,
+                },
                 rectangle: rectangle.rectangle_shape_style(),
                 arrow: arrow.arrow_style(),
                 line: defaults.line.into(),
@@ -982,6 +1073,8 @@ pub(crate) fn runtime_config_from_c(
                 pen_highlight: defaults.pen_highlight.into(),
                 rectangle_filter: defaults.rectangle_filter.into(),
                 pen_filter: defaults.pen_filter.into(),
+                brush_eraser: defaults.brush_eraser.into(),
+                distance: defaults.distance.into(),
                 text: TextStyle {
                     color: defaults.text.color.into(),
                     font_size: defaults.text.font_size,
@@ -999,6 +1092,9 @@ pub(crate) fn runtime_config_from_c(
                 },
                 serial_number: SerialNumberStyle {
                     number: defaults.serial_number.number,
+                    numeric_type: snow_serial_number_numeric_type_to_rust(
+                        defaults.serial_number.numeric_type,
+                    ),
                     serial_number_type: match defaults.serial_number.serial_number_type {
                         SnowSerialNumberType::OutlinedCircle => SerialNumberType::OutlinedCircle,
                         SnowSerialNumberType::SolidCircle => SerialNumberType::SolidCircle,
@@ -1088,6 +1184,13 @@ impl From<StyleDefaults> for SnowStyleDefaults {
             serial_number: value.editor.serial_number.into(),
             watermark: value.watermark.into(),
             spotlight: value.spotlight.into(),
+            brush_eraser: value.editor.brush_eraser.into(),
+            distance: value.editor.distance.into(),
+            spotlight_shape: match value.editor.spotlight_shape {
+                snow_draw_engine::HighlightShape::Rectangle => SnowRectangleShape::Rectangle,
+                snow_draw_engine::HighlightShape::Ellipse => SnowRectangleShape::Ellipse,
+                snow_draw_engine::HighlightShape::Diamond => SnowRectangleShape::Diamond,
+            },
         }
     }
 }
@@ -1105,6 +1208,10 @@ impl Default for SnowStyleToolbarState {
             shape_style_mixed: 0,
             filter_style: SnowFilterStyle::default(),
             filter_style_mixed: 0,
+            brush_eraser_style: SnowBrushEraserStyle::default(),
+            distance_style: SnowDistanceStyle::default(),
+            distance_style_mixed: 0,
+            distance_measured_length: 0.0,
         }
     }
 }
@@ -1150,6 +1257,9 @@ pub(crate) fn snow_active_tool_to_rust(value: SnowActiveTool) -> ActiveTool {
         SnowActiveTool::PenFilter => ActiveTool::PenFilter,
         SnowActiveTool::Spotlight => ActiveTool::Spotlight,
         SnowActiveTool::AutoFilter => ActiveTool::AutoFilter,
+        SnowActiveTool::RectangleEraser => ActiveTool::RectangleEraser,
+        SnowActiveTool::BrushEraser => ActiveTool::BrushEraser,
+        SnowActiveTool::Distance => ActiveTool::Distance,
         SnowActiveTool::Watermark => ActiveTool::Watermark,
         SnowActiveTool::Text => ActiveTool::Text,
         SnowActiveTool::SerialNumber => ActiveTool::SerialNumber,
@@ -1170,6 +1280,9 @@ pub(crate) fn snow_active_tool_from_rust(value: ActiveTool) -> SnowActiveTool {
         ActiveTool::PenFilter => SnowActiveTool::PenFilter,
         ActiveTool::Spotlight => SnowActiveTool::Spotlight,
         ActiveTool::AutoFilter => SnowActiveTool::AutoFilter,
+        ActiveTool::RectangleEraser => SnowActiveTool::RectangleEraser,
+        ActiveTool::BrushEraser => SnowActiveTool::BrushEraser,
+        ActiveTool::Distance => SnowActiveTool::Distance,
         ActiveTool::Watermark => SnowActiveTool::Watermark,
         ActiveTool::Text => SnowActiveTool::Text,
         ActiveTool::SerialNumber => SnowActiveTool::SerialNumber,
@@ -1177,7 +1290,7 @@ pub(crate) fn snow_active_tool_from_rust(value: ActiveTool) -> SnowActiveTool {
 }
 
 pub(crate) fn snow_active_tool_mask_to_rust(value: u64) -> u64 {
-    const TOOLS: [SnowActiveTool; 15] = [
+    const TOOLS: [SnowActiveTool; 18] = [
         SnowActiveTool::Select,
         SnowActiveTool::Shape,
         SnowActiveTool::Arrow,
@@ -1193,6 +1306,9 @@ pub(crate) fn snow_active_tool_mask_to_rust(value: u64) -> u64 {
         SnowActiveTool::PenFilter,
         SnowActiveTool::Spotlight,
         SnowActiveTool::AutoFilter,
+        SnowActiveTool::RectangleEraser,
+        SnowActiveTool::BrushEraser,
+        SnowActiveTool::Distance,
     ];
 
     TOOLS.into_iter().fold(0, |mask, tool| {
@@ -1225,6 +1341,12 @@ pub(crate) fn snow_style_toolbar_source_from_rust(
         StyleToolbarSource::DefaultPenHighlight => SnowStyleToolbarSource::DefaultPenHighlight,
         StyleToolbarSource::SelectedPenHighlight => SnowStyleToolbarSource::SelectedPenHighlight,
         StyleToolbarSource::Eraser => SnowStyleToolbarSource::Eraser,
+        StyleToolbarSource::DefaultRectangleEraser => {
+            SnowStyleToolbarSource::DefaultRectangleEraser
+        }
+        StyleToolbarSource::DefaultBrushEraser => SnowStyleToolbarSource::DefaultBrushEraser,
+        StyleToolbarSource::DefaultDistance => SnowStyleToolbarSource::DefaultDistance,
+        StyleToolbarSource::SelectedDistance => SnowStyleToolbarSource::SelectedDistance,
         StyleToolbarSource::DefaultRectangleFilter => {
             SnowStyleToolbarSource::DefaultRectangleFilter
         }
@@ -1395,6 +1517,21 @@ pub(crate) fn snow_cursor_style_from_rust(value: CursorStyle) -> SnowCursorStyle
     }
 }
 
+impl From<SnowBrushEraserStyle> for snow_draw_engine::BrushEraserStyle {
+    fn from(value: SnowBrushEraserStyle) -> Self {
+        Self {
+            stroke_width: value.stroke_width,
+        }
+    }
+}
+impl From<snow_draw_engine::BrushEraserStyle> for SnowBrushEraserStyle {
+    fn from(value: snow_draw_engine::BrushEraserStyle) -> Self {
+        Self {
+            stroke_width: value.stroke_width,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1485,12 +1622,16 @@ mod tests {
             text,
             font_size: 21.0,
             font_family: Some(family),
+            horizontal_align: TextHorizontalAlign::Right,
+            vertical_align: TextVerticalAlign::Bottom,
             auto_resize: true,
             measure_natural_width: false,
         });
 
         assert_eq!(info.content_width, 84.0);
         assert_eq!(info.content_height, 27.0);
+        assert_eq!(info.horizontal_align, SnowTextHorizontalAlign::Right);
+        assert_eq!(info.vertical_align, SnowTextVerticalAlign::Bottom);
         assert_eq!(info.text_utf8_len, (SNOW_TEXT_UTF8_CAPACITY - 1) as u32);
         assert_eq!(info.text_truncated, 1);
         assert_eq!(
@@ -1543,6 +1684,7 @@ mod tests {
         let serial_style: SnowSerialNumberStyle = SerialNumberStyle {
             number: 1,
             serial_number_type: SerialNumberType::OutlinedCircle,
+            numeric_type: snow_draw_engine_document::SerialNumberNumericType::Arabic,
             color: ColorRgba8::default(),
             fill: ColorRgba8::default(),
             fill_style: FillStyle::Solid,
@@ -1620,9 +1762,11 @@ mod tests {
         expected.watermark.font_family = "C Watermark Font".to_owned();
         expected.watermark.opacity = 0.24;
         expected.spotlight.opacity = 0.62;
+        expected.editor.spotlight_shape = snow_draw_engine::HighlightShape::Diamond;
 
         let c_defaults: SnowStyleDefaults = expected.clone().into();
         assert_eq!(c_defaults.rectangle.fill.a, 0);
+        assert_eq!(c_defaults.spotlight_shape, SnowRectangleShape::Diamond);
         assert_eq!(
             c_defaults.rectangle_filter.filter_type,
             SnowFilterType::Emboss

@@ -1,6 +1,8 @@
+#include "snow_draw_engine_qt/snow_canvas_image.h"
+#include "snow_shot/platform/applicationqos.h"
 #include "screenshotscrollingpipeline.h"
 #include "screenshotscrollingdiagnostics.h"
-#include "latestbridgemailbox.h"
+#include "latestframemailbox.h"
 #include "../pinned/screenshotpintoperfinstrumentation.h"
 #include "snow_stitch_images.h"
 
@@ -8,6 +10,7 @@
 #include <QMetaObject>
 #include <QPointer>
 #include <QThread>
+#include <QColorSpace>
 
 #include <algorithm>
 #include <atomic>
@@ -60,40 +63,45 @@ struct ScrollCaptureResult {
 class OwnedScrollFrame {
   public:
     OwnedScrollFrame() = default;
-    explicit OwnedScrollFrame(SnowStitchFrameBuffer* frameValue) : frame(frameValue) {}
+    explicit OwnedScrollFrame(QImage imageValue) : image(std::move(imageValue)) {}
     ~OwnedScrollFrame() {
-        if (frame != nullptr) {
-            SNOW_SCROLL_TRACE(trace, trace->disposition = "mailbox_cancelled");
-            snow_stitch_frame_buffer_destroy(frame);
-        }
+        discard("mailbox_cancelled");
     }
     OwnedScrollFrame(const OwnedScrollFrame&) = delete;
     OwnedScrollFrame& operator=(const OwnedScrollFrame&) = delete;
     OwnedScrollFrame(OwnedScrollFrame&& other) noexcept
-        : trace(std::move(other.trace)), frame(std::exchange(other.frame, nullptr)) {}
+        : trace(std::move(other.trace)), image(std::exchange(other.image, {})) {}
     OwnedScrollFrame& operator=(OwnedScrollFrame&& other) noexcept {
         if (this != &other) {
-            if (frame != nullptr) {
-                SNOW_SCROLL_TRACE(trace, trace->disposition = "mailbox_cancelled");
-                snow_stitch_frame_buffer_destroy(frame);
-            }
+            discard("mailbox_cancelled");
             trace = std::move(other.trace);
-            frame = std::exchange(other.frame, nullptr);
+            image = std::exchange(other.image, {});
         }
         return *this;
     }
     scrolling_perf::FrameTrace trace;
 
-    SnowStitchFrameBuffer* release() {
-        return std::exchange(frame, nullptr);
+    QImage release() {
+        return std::exchange(image, {});
+    }
+
+    void discard(const char* disposition) {
+        Q_UNUSED(disposition);
+        if (!image.isNull()) {
+            SNOW_SCROLL_TRACE(trace, trace->disposition = disposition);
+            image = {};
+        }
     }
 
   private:
-    SnowStitchFrameBuffer* frame = nullptr;
+    QImage image;
 };
 
-using ScrollFrameMailbox =
-    snow_shot::capture_detail::LatestBridgeMailbox<OwnedScrollFrame, quint64>;
+using ScrollFrameMailbox = snow_shot::capture_detail::LatestFrameMailbox<OwnedScrollFrame, quint64>;
+
+void releaseScrollSourceImage(void* image) {
+    delete static_cast<QImage*>(image);
+}
 
 void releaseStitchOwnedImage(void* image) {
     snow_stitch_owned_image_destroy(static_cast<SnowStitchOwnedImage*>(image));
@@ -149,7 +157,7 @@ class ScreenshotScrollingCaptureWorker final : public QObject {
         }
     }
 
-    ScrollWorkerFrame process(quint64 generation, SnowStitchFrameBuffer* stitchFrame,
+    ScrollWorkerFrame process(quint64 generation, QImage sourceImage,
                               scrolling_perf::FrameTrace trace) {
         ScrollWorkerFrame result;
         result.generation = generation;
@@ -158,10 +166,7 @@ class ScreenshotScrollingCaptureWorker final : public QObject {
         snow_stitch_perf_reset_thread();
         PerfResultReader perfReader(result.trace);
 #endif
-        if (generation != m_generation || stitchFrame == nullptr || !ensureStitchSession()) {
-            if (stitchFrame != nullptr) {
-                snow_stitch_frame_buffer_destroy(stitchFrame);
-            }
+        if (generation != m_generation || sourceImage.isNull() || !ensureStitchSession()) {
             return result;
         }
 
@@ -169,7 +174,16 @@ class ScreenshotScrollingCaptureWorker final : public QObject {
         int pushed = 0;
         {
             SNOW_SCROLL_SCOPE(result.trace, Stitch);
-            pushed = snow_stitch_session_push_owned(m_stitchSession, &stitchFrame, &outcome);
+            // The native frame remains immutable until the stitcher's last reference releases
+            // this QImage. Mailbox replacements never copy pixels or reach the stitcher.
+            auto input = std::make_unique<QImage>(std::move(sourceImage));
+            const auto* pixels = input->constBits();
+            const auto bytes = static_cast<std::size_t>(input->sizeInBytes());
+            const auto width = static_cast<std::uint32_t>(input->width());
+            const auto height = static_cast<std::uint32_t>(input->height());
+            pushed = snow_stitch_session_push_external_rgba(m_stitchSession, width, height, pixels,
+                                                            bytes, &releaseScrollSourceImage,
+                                                            input.release(), &outcome);
         }
         if (pushed == 0) {
             qWarning("Scrolling screenshot stitching failed: %s", snow_stitch_last_error_message());
@@ -271,6 +285,64 @@ class ScreenshotScrollingCaptureWorker final : public QObject {
         }
         return ScreenshotScrollingSnapshot::adoptNative(
             snapshot, QSize(static_cast<int>(info.width), static_cast<int>(info.height)));
+    }
+
+    QImage viewportPreview(quint64 generation, int start, int end) const {
+        if (generation != m_generation || m_stitchSession == nullptr ||
+            m_lastOutputSize.isEmpty() || end <= start ||
+            static_cast<qint64>(end) - start > std::numeric_limits<int>::max()) {
+            return {};
+        }
+        const bool horizontal = m_mode == ScreenshotScrollingRecognitionMode::Horizontal;
+        const int extent = horizontal ? m_lastOutputSize.width() : m_lastOutputSize.height();
+        const QSize size = horizontal ? QSize(end - start, m_lastOutputSize.height())
+                                      : QSize(m_lastOutputSize.width(), end - start);
+        const int sourceStart = std::clamp(start, 0, extent);
+        const int sourceEnd = std::clamp(end, 0, extent);
+        QImage padded;
+        if (sourceStart != start || sourceEnd != end) {
+            padded = snowCanvasAllocateImage(size, QImage::Format_RGBA8888);
+            if (padded.isNull())
+                return {};
+            padded.fill(Qt::black);
+        }
+        if (sourceStart == sourceEnd)
+            return padded;
+        const QSize sourceSize = horizontal ? QSize(sourceEnd - sourceStart, size.height())
+                                            : QSize(size.width(), sourceEnd - sourceStart);
+        SnowStitchOwnedImage* image = snow_stitch_session_materialize_axis(
+            m_stitchSession, static_cast<std::uint32_t>(sourceStart),
+            static_cast<std::uint32_t>(sourceEnd));
+        if (image == nullptr) {
+            return {};
+        }
+        SnowStitchImageInfo info{};
+        if (snow_stitch_owned_image_info(image, &info) == 0 || info.rgba_bytes == nullptr ||
+            info.width != static_cast<std::uint32_t>(sourceSize.width()) ||
+            info.height != static_cast<std::uint32_t>(sourceSize.height()) ||
+            info.width > static_cast<std::uint32_t>(std::numeric_limits<int>::max() / 4) ||
+            info.stride_bytes != info.width * 4) {
+            snow_stitch_owned_image_destroy(image);
+            return {};
+        }
+        QImage result(info.rgba_bytes, sourceSize.width(), sourceSize.height(),
+                      static_cast<int>(info.stride_bytes), QImage::Format_RGBA8888,
+                      &releaseStitchOwnedImage, image);
+        if (result.isNull()) {
+            snow_stitch_owned_image_destroy(image);
+            return {};
+        }
+        if (padded.isNull())
+            return result;
+        const int offset = sourceStart - start;
+        for (int row = 0; row < result.height(); ++row) {
+            auto* destination = horizontal
+                                    ? padded.scanLine(row) + static_cast<qsizetype>(offset) * 4
+                                    : padded.scanLine(row + offset);
+            std::memcpy(destination, result.constScanLine(row),
+                        static_cast<size_t>(result.width()) * 4);
+        }
+        return padded;
     }
 
   private:
@@ -405,21 +477,22 @@ class ScreenshotScrollingCaptureProducer final : public QObject {
         reset(generation);
         m_viewport = viewport;
         m_cadence = AdaptiveScrollCadence(config);
-        m_pool = snow_stitch_frame_pool_create(static_cast<std::uint32_t>(viewport.width()),
-                                               static_cast<std::uint32_t>(viewport.height()), 6);
         logScrollingEvent("scrolling.source_initializing", generation,
                           {{QStringLiteral("width"), viewport.width()},
                            {QStringLiteral("height"), viewport.height()}});
         m_diagnostics = {};
         m_source = factory();
-        if (!m_pool || !m_source) {
+        if (!m_source) {
             m_callback({generation, false, false, true,
-                        QStringLiteral("could not initialize scrolling frame source or pool")});
+                        QStringLiteral("could not initialize scrolling frame source")});
             return;
         }
         logScrollingEvent("scrolling.source_ready", generation, m_diagnostics.fields());
         m_active.store(true);
-        m_consumer = std::thread([this, generation]() { consume(generation); });
+        m_consumer = std::thread([this, generation]() {
+            snow_shot::platform::applyApplicationQoSToCurrentThread();
+            consume(generation);
+        });
     }
     void reset(quint64 generation) {
         m_active.store(false);
@@ -428,8 +501,6 @@ class ScreenshotScrollingCaptureProducer final : public QObject {
         if (m_consumer.joinable())
             m_consumer.join();
         m_source.reset();
-        if (m_pool)
-            snow_stitch_frame_pool_destroy(std::exchange(m_pool, nullptr));
         m_generation = generation;
     }
     void pause(quint64 generation) {
@@ -521,14 +592,11 @@ class ScreenshotScrollingCaptureProducer final : public QObject {
             return;
         }
 #endif
-        const auto expected = static_cast<std::size_t>(m_viewport.width()) *
-                              static_cast<std::size_t>(m_viewport.height()) * 4U;
         const bool valid = !source.image.isNull() && source.image.size() == m_viewport &&
                            source.image.format() == QImage::Format_RGBA8888 &&
                            source.image.bytesPerLine() == m_viewport.width() * 4;
-        const bool capacity = m_mailbox->hasPendingCapacity();
         SNOW_SCROLL_TRACE(trace, trace->queueDepth = m_mailbox->pendingDepth());
-        if (!valid || source.duplicate || !capacity) {
+        if (!valid || source.duplicate) {
             if (!valid) {
                 if (++m_diagnostics.invalid == 1) {
                     logScrollingEvent(
@@ -541,53 +609,31 @@ class ScreenshotScrollingCaptureProducer final : public QObject {
                          {QStringLiteral("stride_bytes"), source.image.bytesPerLine()}},
                         QtWarningMsg);
                 }
-            } else if (source.duplicate) {
-                ++m_diagnostics.duplicates;
             } else {
-                ++m_diagnostics.mailboxDropped;
+                ++m_diagnostics.duplicates;
             }
-            result.streamPressure = !capacity;
-            SNOW_SCROLL_TRACE(trace, trace->disposition = !valid             ? "invalid"
-                                                          : source.duplicate ? "duplicate"
-                                                                             : "mailbox_dropped");
+            SNOW_SCROLL_TRACE(trace, trace->disposition = !valid ? "invalid" : "duplicate");
             return;
-        }
-        SnowStitchFrameBuffer* frame = nullptr;
-        SnowStitchMutableImageInfo input{};
-        {
-            SNOW_SCROLL_SCOPE(trace, PoolAcquire);
-            frame = snow_stitch_frame_pool_acquire(m_pool);
-        }
-        const bool acquired = frame && snow_stitch_frame_buffer_info(frame, &input) != 0 &&
-                              input.rgba_bytes && input.rgba_len >= expected &&
-                              input.width == static_cast<std::uint32_t>(m_viewport.width()) &&
-                              input.height == static_cast<std::uint32_t>(m_viewport.height()) &&
-                              input.stride_bytes == input.width * 4;
-        if (!acquired) {
-            ++m_diagnostics.poolUnavailable;
-            if (frame)
-                snow_stitch_frame_buffer_destroy(frame);
-            SNOW_SCROLL_TRACE(trace, trace->disposition = "pool_unavailable");
-            return;
-        }
-        {
-            SNOW_SCROLL_SCOPE(trace, RgbaCopy);
-            std::memcpy(input.rgba_bytes, source.image.constBits(), expected);
         }
         ++m_diagnostics.accepted;
-        OwnedScrollFrame owned(frame);
+        OwnedScrollFrame owned(std::move(source.image));
         owned.trace = trace;
         SNOW_SCROLL_TRACE(trace, trace->publishedAt = scrolling_perf::now());
         SNOW_SCROLL_TRACE(trace, trace->disposition = "queued");
         {
             SNOW_SCROLL_SCOPE(trace, MailboxAdmission);
-            result.wakeConsumer = m_mailbox->publish(generation, std::move(owned));
+            auto publication = m_mailbox->publish(generation, std::move(owned));
+            result.wakeConsumer = publication.wakeConsumer;
+            if (publication.replaced.has_value()) {
+                ++m_diagnostics.mailboxReplaced;
+                publication.replaced->discard("mailbox_replaced");
+                result.streamPressure = true;
+            }
         }
     }
     std::shared_ptr<ScrollFrameMailbox> m_mailbox;
     Callback m_callback;
     std::unique_ptr<ScrollingFrameSource> m_source;
-    SnowStitchFramePool* m_pool = nullptr;
     QSize m_viewport;
     ScrollingCaptureDiagnostics m_diagnostics;
     quint64 m_generation = 0;
@@ -638,7 +684,9 @@ struct ScreenshotScrollingPipeline::Impl {
         QObject::connect(&stitchThread, &QThread::finished, worker, &QObject::deleteLater);
         captureThread.setObjectName(QStringLiteral("snow-shot-scrolling-capture"));
         stitchThread.setObjectName(QStringLiteral("snow-shot-scrolling-stitch"));
+        snow_shot::platform::configureApplicationQoSThread(&captureThread);
         captureThread.start();
+        snow_shot::platform::configureApplicationQoSThread(&stitchThread);
         stitchThread.start();
     }
     ~Impl() {
@@ -795,12 +843,43 @@ void ScreenshotScrollingPipeline::reset(quint64 generation) {
         m_impl->worker, [target = m_impl->worker, generation]() { target->reset(generation); },
         Qt::QueuedConnection);
 }
-void ScreenshotScrollingPipeline::pause(quint64 generation) {
-    ++m_impl->controlRevision;
+void ScreenshotScrollingPipeline::pause(quint64 generation, std::function<void()> acknowledged) {
+    if (generation != m_impl->generation)
+        return;
+    const auto revision = ++m_impl->controlRevision;
     m_impl->active = false;
     m_impl->mailbox->reset(generation);
+    const QPointer<ScreenshotScrollingPipeline> receiver(this);
     QMetaObject::invokeMethod(
-        m_impl->producer, [target = m_impl->producer, generation]() { target->pause(generation); },
+        m_impl->producer,
+        [target = m_impl->producer, worker = m_impl->worker, receiver, generation, revision,
+         acknowledged = std::move(acknowledged)]() mutable {
+            target->pause(generation);
+            if (!receiver || !acknowledged)
+                return;
+            // The source has stopped and joined. This worker barrier posts to the same GUI
+            // receiver as stitch results, so their extent/trim updates precede acknowledgment.
+            QMetaObject::invokeMethod(
+                worker,
+                [receiver, generation, revision, acknowledged = std::move(acknowledged)]() mutable {
+                    if (!receiver)
+                        return;
+                    QMetaObject::invokeMethod(
+                        receiver,
+                        [receiver, generation, revision,
+                         acknowledged = std::move(acknowledged)]() mutable {
+                            if (!receiver || receiver->m_impl->generation != generation ||
+                                receiver->m_impl->controlRevision != revision)
+                                return;
+                            // A consumer already copying a frame may publish after the first
+                            // reset. It is now joined, so this removes every race-admitted frame.
+                            receiver->m_impl->mailbox->reset(generation);
+                            acknowledged();
+                        },
+                        Qt::QueuedConnection);
+                },
+                Qt::QueuedConnection);
+        },
         Qt::QueuedConnection);
 }
 void ScreenshotScrollingPipeline::resume(quint64 generation, QSize viewport,
@@ -887,6 +966,38 @@ bool ScreenshotScrollingPipeline::requestSnapshot(int top, int bottom, QObject* 
         },
         Qt::QueuedConnection);
 }
+
+bool ScreenshotScrollingPipeline::requestViewportPreview(int start, int end, QObject* receiver,
+                                                         ViewportPreviewCallback callback) {
+    if (end <= start || static_cast<qint64>(end) - start > std::numeric_limits<int>::max() ||
+        receiver == nullptr || !callback)
+        return false;
+    const QPointer<QObject> guarded(receiver);
+    const QPointer<ScreenshotScrollingPipeline> pipeline(this);
+    const auto generation = m_impl->generation;
+    const auto revision = m_impl->controlRevision;
+    return QMetaObject::invokeMethod(
+        m_impl->worker,
+        [target = m_impl->worker, pipeline, generation, revision, start, end, guarded,
+         callback = std::move(callback)]() mutable {
+            if (!guarded || !pipeline)
+                return;
+            QImage result = target->viewportPreview(generation, start, end);
+            QMetaObject::invokeMethod(
+                guarded,
+                [pipeline, generation, revision, guarded, callback = std::move(callback),
+                 result = std::move(result)]() mutable {
+                    if (!pipeline || !guarded)
+                        return;
+                    if (pipeline->m_impl->generation != generation ||
+                        pipeline->m_impl->controlRevision != revision)
+                        result = {};
+                    callback(std::move(result));
+                },
+                Qt::QueuedConnection);
+        },
+        Qt::QueuedConnection);
+}
 } // namespace snow_shot::capture_detail
 
 namespace {
@@ -935,9 +1046,30 @@ ScreenshotScrollingSnapshot::rowSource(std::function<bool()> cancellationRequest
     return source;
 }
 
-QImage ScreenshotScrollingSnapshot::materialize() const {
+QImage ScreenshotScrollingSnapshot::materialize(std::function<bool()> cancellationRequested) const {
     if (!isValid()) {
         return {};
+    }
+    if (cancellationRequested) {
+        if (cancellationRequested())
+            return {};
+        QImage result = snowCanvasAllocateImage(m_size, QImage::Format_RGBA8888);
+        if (result.isNull())
+            return {};
+        const auto source = rowSource(cancellationRequested);
+        const int batch =
+            static_cast<int>(qMax(qsizetype{1}, qsizetype{1024 * 1024} / result.bytesPerLine()));
+        for (int row = 0; row < m_size.height(); row += batch) {
+            const int count = qMin(batch, m_size.height() - row);
+            if (cancellationRequested() ||
+                !source.readRows(row, count, result.bytesPerLine(), result.scanLine(row),
+                                 result.bytesPerLine() * count))
+                return {};
+        }
+        if (cancellationRequested())
+            return {};
+        result.setColorSpace(QColorSpace::SRgb);
+        return result;
     }
     SnowStitchOwnedImage* image =
         snow_stitch_snapshot_materialize(static_cast<const SnowStitchSnapshot*>(m_snapshot.get()));
@@ -957,6 +1089,8 @@ QImage ScreenshotScrollingSnapshot::materialize() const {
                   &releaseSnapshotImage, image);
     if (result.isNull()) {
         snow_stitch_owned_image_destroy(image);
+    } else {
+        result.setColorSpace(QColorSpace::SRgb);
     }
     return result;
 }

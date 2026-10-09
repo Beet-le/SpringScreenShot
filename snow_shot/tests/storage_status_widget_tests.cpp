@@ -1,6 +1,10 @@
 #include "snow_shot/presentation/screenshottoolbarlayoutmodel.h"
 #include "snow_shot/presentation/components/storagestatussettingswidget.h"
+#include "snow_shot/presentation/components/formfields.h"
+#include "snow_shot/presentation/components/customaimodelssettingswidget.h"
 #include "snow_shot/presentation/components/settingscustomwidget.h"
+#include "snow_shot/presentation/components/pathinput.h"
+#include "snow_shot/presentation/styles/thememanager.h"
 #include "snow_shot/presentation/settings/settingsregistry.h"
 #include "snow_shot/presentation/settings/settingsruntimesession.h"
 #include "snow_shot/storage/applicationstorage.h"
@@ -8,7 +12,17 @@
 
 #include "antd_icons.h"
 #include "theme/theme_manager.h"
+#include "widgets/alert.h"
 #include "widgets/descriptions.h"
+#include "widgets/field_group.h"
+#include "widgets/form.h"
+#include "widgets/modal.h"
+#include "widgets/message.h"
+#include "widgets/input.h"
+#include "widgets/switch.h"
+#include <QPushButton>
+#include <QToolButton>
+#include <QKeyEvent>
 
 #include <QAbstractButton>
 #include <QApplication>
@@ -24,17 +38,21 @@
 #include <QUrl>
 #include <QLabel>
 #include <QLayout>
+#include <QHBoxLayout>
 #include <QTemporaryDir>
 #include <QTranslator>
+#include <QWindow>
 
 #include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <utility>
 
 namespace presentation = snow_shot::presentation;
 namespace settings = snow_shot::presentation::settings;
 namespace storage = snow_shot::storage;
+namespace fields = presentation::components::form_fields;
 
 namespace {
 void require(bool condition, const char* message) {
@@ -44,10 +62,43 @@ void require(bool condition, const char* message) {
     }
 }
 
+struct FieldEvents {
+    int edits = 0;
+    int commits = 0;
+};
+
+#ifdef Q_OS_WIN
+void observeField(QObject& owner, const char* id, FieldEvents& events) {
+    fields::FormField* field = nullptr;
+    for (auto* candidate : owner.findChildren<fields::FormField*>()) {
+        if (candidate->metadata().id == QString::fromLatin1(id))
+            field = candidate;
+    }
+    require(field != nullptr, "storage configuration field exposes its shared controller");
+    QObject::connect(field, &fields::FormField::valueEdited, field, [&events] { ++events.edits; });
+    QObject::connect(field, &fields::FormField::valueCommitted, field,
+                     [&events] { ++events.commits; });
+}
+#endif
+
 void flushEvents() {
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     QCoreApplication::processEvents();
 }
+
+class WindowBlockObserver final : public QObject {
+  public:
+    bool blocked = false;
+
+  protected:
+    bool eventFilter(QObject*, QEvent* event) override {
+        if (event->type() == QEvent::WindowBlocked)
+            blocked = true;
+        else if (event->type() == QEvent::WindowUnblocked)
+            blocked = false;
+        return false;
+    }
+};
 
 settings::TranslatableText text(const char* source) {
     return {"StorageStatusWidgetTests", source};
@@ -55,25 +106,48 @@ settings::TranslatableText text(const char* source) {
 
 class ToolbarEditorTranslator final : public QTranslator {
   public:
+    bool isEmpty() const override {
+        return false;
+    }
+
     QString translate(const char* context, const char* sourceText, const char*,
                       int) const override {
         const QString translationContext = QString::fromLatin1(context);
         const QString source = QString::fromUtf8(sourceText);
+        if (translationContext == QStringLiteral("RecordingToolbarEditorSettingsWidget"))
+            return QStringLiteral("Translated: ") + source;
         if (translationContext == QStringLiteral("DrawingToolbarEditorSettingsWidget")) {
+            if (source == QStringLiteral("Select elements")) {
+                return QStringLiteral("Translated select elements");
+            }
+            if (source == QStringLiteral("Separator Component")) {
+                return QStringLiteral("Translated separator");
+            }
             if (source == QStringLiteral("Shape")) {
                 return QStringLiteral("Translated drawing shape");
             }
-            if (source == QStringLiteral("Drawing toolbar preview")) {
+            if (source == QStringLiteral("Annotation toolbar preview")) {
                 return QStringLiteral("Translated drawing preview");
             }
         }
         if (translationContext == QStringLiteral("ScreenshotToolbarEditorSettingsWidget")) {
+            if (source == QStringLiteral("Cancel screenshot")) {
+                return QStringLiteral("Translated cancel screenshot");
+            }
             if (source == QStringLiteral("Barcode recognition")) {
                 return QStringLiteral("Translated barcode recognition");
             }
             if (source == QStringLiteral("Screenshot toolbar preview")) {
                 return QStringLiteral("Translated screenshot preview");
             }
+        }
+        if (translationContext == QStringLiteral("PinnedToolbarEditorSettingsWidget") &&
+            source == QStringLiteral("Confirm edit")) {
+            return QStringLiteral("Translated confirm edit");
+        }
+        if (translationContext == QStringLiteral("PinnedToolbarEditorSettingsWidget") &&
+            source == QStringLiteral("Copy to clipboard")) {
+            return QStringLiteral("Translated copy to clipboard");
         }
         return {};
     }
@@ -201,7 +275,8 @@ class FakeSettingsBackend final : public settings::SettingsBackend {
             return {!m_status.diagnostics.exporting, m_status.diagnostics.exporting};
         return {true, false};
     }
-    bool triggerAction(settings::SettingsActionBinding, const QString& = {}) override {
+    bool triggerAction(settings::SettingsActionBinding, const QString& = {},
+                       bool = false) override {
         return true;
     }
     storage::StorageStatus storageStatus() const override {
@@ -230,6 +305,15 @@ class FakeSettingsBackend final : public settings::SettingsBackend {
         emit synchronized();
     }
 
+    int migrations = 0;
+    bool requestedMigration = false;
+    QString requestedDirectory;
+    storage::StorageResult changeStorageDirectory(const QString& directory, bool migrate) override {
+        ++migrations;
+        requestedDirectory = directory;
+        requestedMigration = migrate;
+        return storage::StorageResult::ok();
+    }
     void notify() {
         emit synchronized();
     }
@@ -420,7 +504,13 @@ void pinnedToolbarSectionResetRefreshesEditor() {
                 !table->property("screenshotToolbarMainButton").toBool(),
             "accepted hidden layout must update the editor preview");
     require(backend.resetSection(settings::SettingsSectionReset::PinToScreen),
-            "Pin to Screen section reset must succeed");
+            "pinned window appearance reset must succeed");
+    flushEvents();
+    require(backend.toolbarLayout(kind) == hidden && session.toolbarLayout(kind) == hidden &&
+                !table->property("screenshotToolbarMainButton").toBool(),
+            "appearance reset must preserve the customized pinned toolbar");
+    require(backend.resetSection(settings::SettingsSectionReset::PinToScreenToolbar),
+            "pinned toolbar section reset must succeed");
     flushEvents();
     require(backend.toolbarLayout(kind) == layout::normalizedLayout({}, kind) &&
                 session.toolbarLayout(kind) == backend.toolbarLayout(kind) &&
@@ -475,16 +565,16 @@ void toolbarEditorsUseSeparateDefinitionsAndRetranslate() {
     for (const QString& id :
          {QStringLiteral("table-recognition"), QStringLiteral("barcode-recognition"),
           QStringLiteral("convert-to-markdown"), QStringLiteral("convert-to-html"),
-          QStringLiteral("text-recognition"), QStringLiteral("text-translation")}) {
+          QStringLiteral("text-recognition"), QStringLiteral("text-translation"),
+          QStringLiteral("latex-recognition"), QStringLiteral("separator"),
+          QStringLiteral("save-as-file"), QStringLiteral("quick-save"), QStringLiteral("copy")}) {
         require(pinnedEditor->findChild<QAbstractButton*>(
                     QStringLiteral("settings-pinned-toolbar-item-%1").arg(id)) != nullptr,
-                "the pinned editor must expose each of its six tools");
+                "the pinned editor must expose each configurable tool");
     }
     require(pinnedEditor->findChild<QAbstractButton*>(
-                QStringLiteral("settings-pinned-toolbar-item-save-as-file")) == nullptr &&
-                pinnedEditor->findChild<QAbstractButton*>(
-                    QStringLiteral("settings-pinned-toolbar-item-record-screen")) == nullptr,
-            "the pinned editor must not offer fixed or screenshot-only actions");
+                QStringLiteral("settings-pinned-toolbar-item-record-screen")) == nullptr,
+            "the pinned editor must not offer screenshot-only actions");
     auto* pinnedTable = pinnedEditor->findChild<QAbstractButton*>(
         QStringLiteral("settings-pinned-toolbar-item-table-recognition"));
     require(pinnedTable->property("screenshotToolbarMainButton").toBool(),
@@ -530,6 +620,10 @@ void drawingToolbarSeparatorCanMoveAndHideByDrop() {
     flushEvents();
     auto* separator = editor->findChild<QAbstractButton*>(
         QStringLiteral("settings-drawing-toolbar-item-separator"));
+    auto* selectSeparator = editor->findChild<QAbstractButton*>(
+        QStringLiteral("settings-drawing-toolbar-item-select-separator"));
+    auto* select =
+        editor->findChild<QAbstractButton*>(QStringLiteral("settings-drawing-toolbar-item-select"));
     auto* undo =
         editor->findChild<QAbstractButton*>(QStringLiteral("settings-drawing-toolbar-item-undo"));
     auto* redo =
@@ -538,20 +632,50 @@ void drawingToolbarSeparatorCanMoveAndHideByDrop() {
         editor->findChild<QWidget*>(QStringLiteral("settings-drawing-toolbar-surface"));
     QWidget* hidden =
         editor->findChild<QWidget*>(QStringLiteral("settings-drawing-toolbar-hidden-zone"));
-    require(separator != nullptr && undo != nullptr && redo != nullptr && surface != nullptr &&
-                hidden != nullptr &&
-                separator->accessibleName() == QStringLiteral("Separator Component"),
-            "drawing editor must expose the separator and both history actions");
+    require(separator != nullptr && selectSeparator != nullptr && select != nullptr &&
+                undo != nullptr && redo != nullptr && surface != nullptr && hidden != nullptr &&
+                separator->accessibleName() == QStringLiteral("Separator Component") &&
+                selectSeparator->accessibleName() == QStringLiteral("Separator Component") &&
+                selectSeparator->text() == separator->text() &&
+                select->accessibleName() == QStringLiteral("Select elements"),
+            "drawing editor must expose Select, both separators and both history actions");
 
     const auto drop = [](QWidget* target, const QString& itemId, const QPoint& point) {
         QMimeData mime;
         mime.setData("application/x-snow-shot-toolbar-item", itemId.toUtf8());
-        QDragEnterEvent enter(point, Qt::MoveAction, &mime, Qt::LeftButton, Qt::NoModifier);
+        QDragEnterEvent enter(QPointF(point), Qt::MoveAction, &mime, Qt::LeftButton,
+                              Qt::NoModifier);
         QCoreApplication::sendEvent(target, &enter);
         QDropEvent event(QPointF(point), Qt::MoveAction, &mime, Qt::LeftButton, Qt::NoModifier);
         QCoreApplication::sendEvent(target, &event);
         return event.isAccepted();
     };
+    for (const auto& id : {QStringLiteral("select"), QStringLiteral("select-separator")}) {
+        require(drop(surface, id, QPoint(surface->width() - 1, surface->height() - 1)),
+                "Select and its separator must accept a move to the toolbar end");
+        flushEvents();
+        require(backend.toolbarLayout(kind).positions.constLast() == QStringList{id},
+                "Select and its separator must move into their own toolbar positions");
+        require(drop(hidden, id, QPoint(1, 1)), "Select and its separator must accept hiding");
+        flushEvents();
+        require(backend.toolbarLayout(kind).hidden.contains(id),
+                "Select and its separator must persist in Hidden tools");
+        require(drop(surface, id, QPoint(1, surface->height() - 1)),
+                "Select and its separator must accept restoration from Hidden tools");
+        flushEvents();
+        require(backend.toolbarLayout(kind).positions.constFirst() == QStringList{id},
+                "restoring Select and its separator must preserve the drop position");
+    }
+    ToolbarEditorTranslator translator;
+    QCoreApplication::installTranslator(&translator);
+    QEvent languageChange(QEvent::LanguageChange);
+    QCoreApplication::sendEvent(editor.get(), &languageChange);
+    require(select->accessibleName() == QStringLiteral("Translated select elements") &&
+                selectSeparator->accessibleName() == QStringLiteral("Translated separator") &&
+                separator->accessibleName() == QStringLiteral("Translated separator"),
+            "Select and both separator labels must refresh on LanguageChange");
+    QCoreApplication::removeTranslator(&translator);
+    QCoreApplication::sendEvent(editor.get(), &languageChange);
     require(drop(surface, QStringLiteral("separator"), QPoint(1, surface->height() - 1)),
             "separator drop into the toolbar must be accepted");
     flushEvents();
@@ -604,6 +728,368 @@ void drawingToolbarSeparatorCanMoveAndHideByDrop() {
             "dragging Redo into Hidden tools must hide it");
     require(settingsStore.setLayout(kind, original),
             "drawing toolbar editor test must restore the original layout");
+}
+
+void screenshotToolbarResultToolsCanMoveAndHideByDrop() {
+    const auto kind = storage::ScreenshotToolbarLayoutKind::ActionTools;
+    const storage::ScreenshotToolbarSettings settingsStore;
+    const auto original = settingsStore.layout(kind);
+    presentation::GlobalShortcutManager shortcuts;
+    settings::BuiltInSettingsBackend backend(shortcuts);
+    const auto& registry = settings::builtInSettingsRegistry();
+    settings::SettingsRuntimeSession session(registry, backend);
+    const auto renderer = settings::SettingsCustomRenderer::ScreenshotToolbarEditor;
+    const auto* field = registry.fieldForCustom(renderer);
+    require(field != nullptr, "screenshot editor field must exist");
+    std::unique_ptr<SettingsCustomWidget> editor(
+        createSettingsCustomWidget(renderer, registry, *field->definition, session));
+    editor->show();
+    flushEvents();
+    QWidget* surface =
+        editor->findChild<QWidget*>(QStringLiteral("settings-screenshot-toolbar-surface"));
+    QWidget* hidden =
+        editor->findChild<QWidget*>(QStringLiteral("settings-screenshot-toolbar-hidden-zone"));
+    auto* save = editor->findChild<QAbstractButton*>(
+        QStringLiteral("settings-screenshot-toolbar-item-save-as-file"));
+    require(surface != nullptr && hidden != nullptr && save != nullptr,
+            "screenshot editor must expose the preview, hidden zone, and stacking target");
+    const auto drop = [](QWidget* target, const QString& itemId, const QPoint& point) {
+        QMimeData mime;
+        mime.setData("application/x-snow-shot-toolbar-item", itemId.toUtf8());
+        QDragEnterEvent enter(QPointF(point), Qt::MoveAction, &mime, Qt::LeftButton,
+                              Qt::NoModifier);
+        QCoreApplication::sendEvent(target, &enter);
+        QDropEvent event(QPointF(point), Qt::MoveAction, &mime, Qt::LeftButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(target, &event);
+        return event.isAccepted();
+    };
+    for (const QString& id :
+         {QStringLiteral("separator"), QStringLiteral("cancel"), QStringLiteral("copy")}) {
+        auto* button = editor->findChild<QAbstractButton*>(
+            QStringLiteral("settings-screenshot-toolbar-item-%1").arg(id));
+        require(button != nullptr && button->property("screenshotToolbarMainButton").toBool(),
+                "each screenshot result tool must appear in its default main position");
+        require(drop(surface, id, QPoint(1, surface->height() - 1)),
+                "result tool drop into the first position must be accepted");
+        flushEvents();
+        require(backend.toolbarLayout(kind).positions.constFirst() == QStringList{id},
+                "result tools must be movable to standalone toolbar positions");
+        require(drop(hidden, id, QPoint(1, 1)), "result tool drop into Hidden must be accepted");
+        flushEvents();
+        require(backend.toolbarLayout(kind).hidden.contains(id) &&
+                    !button->property("screenshotToolbarMainButton").toBool(),
+                "each result tool must be hideable");
+        const QPoint aboveSave = save->mapTo(surface, QPoint(save->width() / 2, 1));
+        require(drop(surface, id, aboveSave), "result tool stack drop must be accepted");
+        flushEvents();
+        const auto restored = backend.toolbarLayout(kind);
+        require(!restored.hidden.contains(id), "stack drops must restore hidden result tools");
+        require(std::any_of(restored.positions.cbegin(), restored.positions.cend(),
+                            [&id](const QStringList& position) {
+                                return id == QStringLiteral("separator")
+                                           ? position == QStringList{id}
+                                           : position.contains(id) &&
+                                                 position.contains(QStringLiteral("save-as-file"));
+                            }),
+                "result actions must stack while separators keep their own positions");
+    }
+    ToolbarEditorTranslator translator;
+    require(QCoreApplication::installTranslator(&translator), "install result tool translations");
+    QEvent languageChange(QEvent::LanguageChange);
+    QCoreApplication::sendEvent(editor.get(), &languageChange);
+    for (const auto& item : {std::pair{"separator", "Translated separator"},
+                             std::pair{"cancel", "Translated cancel screenshot"},
+                             std::pair{"copy", "Translated copy to clipboard"}}) {
+        auto* button = editor->findChild<QAbstractButton*>(
+            QStringLiteral("settings-screenshot-toolbar-item-%1").arg(QLatin1String(item.first)));
+        require(button->accessibleName() == QLatin1String(item.second),
+                "result tool labels must refresh on LanguageChange");
+    }
+    QCoreApplication::removeTranslator(&translator);
+    require(settingsStore.setLayout(kind, original), "restore the screenshot action layout");
+}
+
+void recordingToolbarToolsCanMoveStackHideAndReset() {
+    namespace layout = snow_shot::presentation::toolbar_layout;
+    const auto kind = storage::ScreenshotToolbarLayoutKind::RecordingActionTools;
+    const storage::ScreenshotToolbarSettings settingsStore;
+    const auto original = settingsStore.layout(kind);
+    presentation::GlobalShortcutManager shortcuts;
+    settings::BuiltInSettingsBackend backend(shortcuts);
+    const auto& registry = settings::builtInSettingsRegistry();
+    settings::SettingsRuntimeSession session(registry, backend);
+    const auto renderer = settings::SettingsCustomRenderer::RecordingToolbarEditor;
+    const auto* field = registry.fieldForCustom(renderer);
+    require(field != nullptr, "recording toolbar editor field must exist");
+    std::unique_ptr<SettingsCustomWidget> editor(
+        createSettingsCustomWidget(renderer, registry, *field->definition, session));
+    require(editor != nullptr, "recording toolbar renderer must create an editor");
+    editor->show();
+    flushEvents();
+    auto* surface =
+        editor->findChild<QWidget*>(QStringLiteral("settings-recording-toolbar-surface"));
+    auto* hidden =
+        editor->findChild<QWidget*>(QStringLiteral("settings-recording-toolbar-hidden-zone"));
+    auto* guidance =
+        editor->findChild<QLabel*>(QStringLiteral("settings-recording-toolbar-instruction"));
+    require(
+        surface != nullptr && hidden != nullptr && guidance != nullptr &&
+            surface->accessibleName() == QStringLiteral("Recording toolbar preview") &&
+            guidance->text().contains(QStringLiteral("Recording duration and Separator Component")),
+        "recording editor must explain its two standalone controls");
+    const auto buttonFor = [&editor](const QString& id) {
+        auto* button = editor->findChild<QAbstractButton*>(
+            QStringLiteral("settings-recording-toolbar-item-%1").arg(id));
+        require(button != nullptr, "recording editor exposes every configurable action");
+        return button;
+    };
+    require(editor->findChild<QAbstractButton*>(
+                QStringLiteral("settings-recording-toolbar-item-shape")) == nullptr,
+            "recording toolbar customization must not include annotation controls");
+    const auto drop = [](QWidget* target, const QString& itemId, const QPoint& point) {
+        QMimeData mime;
+        mime.setData("application/x-snow-shot-toolbar-item", itemId.toUtf8());
+        QDragEnterEvent enter(QPointF(point), Qt::MoveAction, &mime, Qt::LeftButton,
+                              Qt::NoModifier);
+        QCoreApplication::sendEvent(target, &enter);
+        QDropEvent event(QPointF(point), Qt::MoveAction, &mime, Qt::LeftButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(target, &event);
+        return event.isAccepted();
+    };
+    const auto positionFor = [&backend, kind](const QString& id) {
+        for (const auto& position : backend.toolbarLayout(kind).positions) {
+            if (position.contains(id))
+                return position;
+        }
+        return QStringList{};
+    };
+    require(session.applyToolbarLayout(kind, layout::normalizedLayout({}, kind)),
+            "restore recording defaults before editor checks");
+    flushEvents();
+    for (const QString& id : layout::defaultOrder(kind)) {
+        auto* button = buttonFor(id);
+        require(button->property("screenshotToolbarMainButton").toBool(),
+                "each recording action starts in its own main position");
+        require(drop(surface, id, QPoint(1, surface->height() - 1)),
+                "recording action can move to the first position");
+        flushEvents();
+        require(backend.toolbarLayout(kind).positions.constFirst() == QStringList{id},
+                "recording reorder persists the requested position");
+        require(drop(hidden, id, QPoint(1, 1)), "every recording action can be hidden");
+        flushEvents();
+        require(backend.toolbarLayout(kind).hidden.contains(id) &&
+                    !button->property("screenshotToolbarMainButton").toBool(),
+                "hiding recording actions persists and removes their preview position");
+        const QString targetId =
+            id == QStringLiteral("save") ? QStringLiteral("trim") : QStringLiteral("save");
+        auto* target = buttonFor(targetId);
+        const QPoint aboveTarget = target->mapTo(surface, QPoint(target->width() / 2, 1));
+        require(drop(surface, id, aboveTarget), "recording hidden action can be restored by drop");
+        flushEvents();
+        const auto position = positionFor(id);
+        require(!backend.toolbarLayout(kind).hidden.contains(id) &&
+                    (layout::requiresOwnPosition(id, kind) ? position == QStringList{id}
+                                                           : position.contains(targetId)),
+                "recording actions stack while duration and separator stay standalone");
+    }
+    for (const QString& targetId : {QStringLiteral("duration"), QStringLiteral("separator")}) {
+        auto* target = buttonFor(targetId);
+        require(drop(surface, QStringLiteral("microphone"),
+                     target->mapTo(surface, QPoint(target->width() / 2, 1))),
+                "drop beside a standalone recording control must be accepted");
+        flushEvents();
+        require(positionFor(targetId) == QStringList{targetId} &&
+                    !positionFor(QStringLiteral("microphone")).contains(targetId),
+                "duration and separator cannot receive another action in their position");
+    }
+    require(session.applyToolbarLayout(kind,
+                                       {{{QStringLiteral("start-stop"), QStringLiteral("duration"),
+                                          QStringLiteral("pause-resume")},
+                                         {QStringLiteral("microphone"), QStringLiteral("separator"),
+                                          QStringLiteral("system-audio")}},
+                                        {}}),
+            "stored layouts containing standalone controls are accepted after normalization");
+    flushEvents();
+    require(
+        positionFor(QStringLiteral("duration")) == QStringList{QStringLiteral("duration")} &&
+            positionFor(QStringLiteral("separator")) == QStringList{QStringLiteral("separator")} &&
+            !positionFor(QStringLiteral("start-stop")).contains(QStringLiteral("pause-resume")) &&
+            !positionFor(QStringLiteral("microphone")).contains(QStringLiteral("system-audio")),
+        "normalization splits stacks around duration and separator before rendering");
+    ToolbarEditorTranslator translator;
+    require(QCoreApplication::installTranslator(&translator),
+            "install recording editor translations");
+    QEvent languageChange(QEvent::LanguageChange);
+    QCoreApplication::sendEvent(editor.get(), &languageChange);
+    require(buttonFor(QStringLiteral("start-stop"))->accessibleName() ==
+                    QStringLiteral("Translated: Start / stop recording") &&
+                buttonFor(QStringLiteral("copy"))->toolTip() ==
+                    QStringLiteral("Translated: Copy recording content") &&
+                surface->accessibleName() ==
+                    QStringLiteral("Translated: Recording toolbar preview") &&
+                guidance->text().startsWith(QStringLiteral("Translated: ")),
+            "recording editor action labels, preview and guidance retranslate on LanguageChange");
+    QCoreApplication::removeTranslator(&translator);
+    const auto screenshot =
+        backend.toolbarLayout(storage::ScreenshotToolbarLayoutKind::ActionTools);
+    const auto pinned =
+        backend.toolbarLayout(storage::ScreenshotToolbarLayoutKind::PinnedActionTools);
+    const auto drawing = backend.toolbarLayout(storage::ScreenshotToolbarLayoutKind::DrawingTools);
+    require(session.reset(settings::SettingsSectionReset::ScreenRecordingActionToolbar),
+            "recording action toolbar category reset succeeds");
+    flushEvents();
+    require(
+        backend.toolbarLayout(kind) == layout::normalizedLayout({}, kind) &&
+            session.toolbarLayout(kind) == backend.toolbarLayout(kind) &&
+            buttonFor(QStringLiteral("start-stop"))
+                ->property("screenshotToolbarMainButton")
+                .toBool() &&
+            backend.toolbarLayout(storage::ScreenshotToolbarLayoutKind::ActionTools) ==
+                screenshot &&
+            backend.toolbarLayout(storage::ScreenshotToolbarLayoutKind::PinnedActionTools) ==
+                pinned &&
+            backend.toolbarLayout(storage::ScreenshotToolbarLayoutKind::DrawingTools) == drawing,
+        "recording category reset restores its preview and preserves unrelated toolbar layouts");
+    require(settingsStore.setLayout(kind, original), "restore recording toolbar layout");
+}
+
+void pinnedToolbarExportToolsCanMoveAndHideByDrop() {
+    const auto kind = storage::ScreenshotToolbarLayoutKind::PinnedActionTools;
+    const storage::ScreenshotToolbarSettings settingsStore;
+    const storage::ScreenshotToolbarLayout original = settingsStore.layout(kind);
+    presentation::GlobalShortcutManager shortcuts;
+    settings::BuiltInSettingsBackend backend(shortcuts);
+    const auto& registry = settings::builtInSettingsRegistry();
+    settings::SettingsRuntimeSession session(registry, backend);
+    const auto renderer = settings::SettingsCustomRenderer::PinnedToolbarEditor;
+    const auto* field = registry.fieldForCustom(renderer);
+    require(field != nullptr, "pinned editor field must exist");
+    std::unique_ptr<SettingsCustomWidget> editor(
+        createSettingsCustomWidget(renderer, registry, *field->definition, session));
+    editor->show();
+    flushEvents();
+    require(editor->findChild<QAbstractButton*>(
+                QStringLiteral("settings-pinned-toolbar-item-drawing-separator")) == nullptr,
+            "the operation toolbar editor must not offer the annotation section boundary");
+    auto* separator = editor->findChild<QAbstractButton*>(
+        QStringLiteral("settings-pinned-toolbar-item-separator"));
+    auto* copy =
+        editor->findChild<QAbstractButton*>(QStringLiteral("settings-pinned-toolbar-item-copy"));
+    auto* quickSave = editor->findChild<QAbstractButton*>(
+        QStringLiteral("settings-pinned-toolbar-item-quick-save"));
+    auto* confirm =
+        editor->findChild<QAbstractButton*>(QStringLiteral("settings-pinned-toolbar-item-confirm"));
+    QWidget* surface =
+        editor->findChild<QWidget*>(QStringLiteral("settings-pinned-toolbar-surface"));
+    QWidget* hidden =
+        editor->findChild<QWidget*>(QStringLiteral("settings-pinned-toolbar-hidden-zone"));
+    require(separator != nullptr && copy != nullptr && quickSave != nullptr && confirm != nullptr &&
+                confirm->accessibleName() == QStringLiteral("Confirm edit") && surface != nullptr &&
+                hidden != nullptr &&
+                separator->accessibleName() == QStringLiteral("Separator Component"),
+            "pinned editor must expose the separator and both export actions");
+
+    const auto drop = [](QWidget* target, const QString& itemId, const QPoint& point) {
+        QMimeData mime;
+        mime.setData("application/x-snow-shot-toolbar-item", itemId.toUtf8());
+        QDragEnterEvent enter(QPointF(point), Qt::MoveAction, &mime, Qt::LeftButton,
+                              Qt::NoModifier);
+        QCoreApplication::sendEvent(target, &enter);
+        QDropEvent event(QPointF(point), Qt::MoveAction, &mime, Qt::LeftButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(target, &event);
+        return event.isAccepted();
+    };
+    require(drop(surface, QStringLiteral("separator"), QPoint(1, surface->height() - 1)),
+            "separator drop into the toolbar must be accepted");
+    flushEvents();
+    require(backend.toolbarLayout(kind).positions.constFirst() ==
+                QStringList{QStringLiteral("separator")},
+            "dragging separator to the start must move its standalone position");
+    require(drop(hidden, QStringLiteral("separator"), QPoint(1, 1)),
+            "separator drop into Hidden tools must be accepted");
+    flushEvents();
+    require(backend.toolbarLayout(kind).hidden.contains(QStringLiteral("separator")) &&
+                !separator->property("screenshotToolbarMainButton").toBool(),
+            "dragging separator into Hidden tools must remove it from the preview");
+    require(drop(surface, QStringLiteral("separator"), QPoint(1, surface->height() - 1)),
+            "restoring separator from Hidden tools must be accepted");
+    flushEvents();
+    require(backend.toolbarLayout(kind).positions.constFirst() ==
+                    QStringList{QStringLiteral("separator")} &&
+                separator->property("screenshotToolbarMainButton").toBool(),
+            "restored separator must return as its own toolbar position");
+
+    auto* save = editor->findChild<QAbstractButton*>(
+        QStringLiteral("settings-pinned-toolbar-item-save-as-file"));
+    require(save != nullptr, "pinned editor must expose a target for export stacking");
+    const auto stackWithSave = [&](const QString& itemId) {
+        const QPoint aboveSave = save->mapTo(surface, QPoint(save->width() / 2, 1));
+        require(drop(surface, itemId, aboveSave), "export action stack drop must be accepted");
+        flushEvents();
+        const auto updated = backend.toolbarLayout(kind);
+        return std::any_of(updated.positions.cbegin(), updated.positions.cend(),
+                           [&itemId](const QStringList& position) {
+                               return position.contains(itemId) &&
+                                      position.contains(QStringLiteral("save-as-file"));
+                           });
+    };
+    require(stackWithSave(QStringLiteral("copy")),
+            "Copy must be draggable into an ordinary export tool stack");
+    require(drop(hidden, QStringLiteral("copy"), QPoint(1, 1)),
+            "Copy drop into Hidden tools must be accepted");
+    flushEvents();
+    require(backend.toolbarLayout(kind).hidden.contains(QStringLiteral("copy")) &&
+                !copy->property("screenshotToolbarMainButton").toBool(),
+            "dragging Copy into Hidden tools must hide it");
+    require(stackWithSave(QStringLiteral("quick-save")),
+            "Quick Save must be draggable into an ordinary export tool stack");
+    require(drop(hidden, QStringLiteral("quick-save"), QPoint(1, 1)),
+            "Quick Save drop into Hidden tools must be accepted");
+    flushEvents();
+    require(backend.toolbarLayout(kind).hidden.contains(QStringLiteral("quick-save")) &&
+                !quickSave->property("screenshotToolbarMainButton").toBool(),
+            "dragging Quick Save into Hidden tools must hide it");
+    require(stackWithSave(QStringLiteral("confirm")),
+            "Confirm Edit must be draggable into an ordinary export tool stack");
+    require(drop(hidden, QStringLiteral("confirm"), QPoint(1, 1)),
+            "Confirm Edit drop into Hidden tools must be accepted");
+    flushEvents();
+    require(backend.toolbarLayout(kind).hidden.contains(QStringLiteral("confirm")) &&
+                !confirm->property("screenshotToolbarMainButton").toBool(),
+            "dragging Confirm Edit into Hidden tools must hide it");
+    require(drop(surface, QStringLiteral("confirm"), QPoint(1, surface->height() - 1)),
+            "Confirm Edit must be restorable from Hidden tools");
+    flushEvents();
+    require(backend.toolbarLayout(kind).positions.first() == QStringList{QStringLiteral("confirm")},
+            "restored Confirm Edit must support an independent position");
+    for (const QString& id : {QStringLiteral("separator"), QStringLiteral("confirm-separator")}) {
+        auto* divider = editor->findChild<QAbstractButton*>(
+            QStringLiteral("settings-pinned-toolbar-item-%1").arg(id));
+        require(divider && divider->accessibleName() == QStringLiteral("Separator Component"),
+                "pinned editor must expose the export and Confirm section dividers");
+        require(drop(hidden, id, QPoint(1, 1)), "section divider must be hideable");
+        flushEvents();
+        require(backend.toolbarLayout(kind).hidden.contains(id),
+                "hidden section dividers must remain hidden in storage");
+        require(drop(surface, id, confirm->mapTo(surface, QPoint(confirm->width() / 2, 1))),
+                "section divider must be restorable beside Confirm Edit");
+        flushEvents();
+        const auto updated = backend.toolbarLayout(kind);
+        require(
+            std::any_of(updated.positions.cbegin(), updated.positions.cend(),
+                        [&id](const QStringList& position) { return position == QStringList{id}; }),
+            "section dividers must always occupy independent positions");
+    }
+    ToolbarEditorTranslator translator;
+    require(QCoreApplication::installTranslator(&translator), "editor translator must install");
+    QEvent languageChange(QEvent::LanguageChange);
+    QCoreApplication::sendEvent(editor.get(), &languageChange);
+    require(confirm->accessibleName() == QStringLiteral("Translated confirm edit") &&
+                separator->accessibleName() == QStringLiteral("Translated separator"),
+            "pinned Confirm Edit and separator labels must refresh after a language change");
+    QCoreApplication::removeTranslator(&translator);
+    require(settingsStore.setLayout(kind, original),
+            "pinned toolbar editor test must restore the original layout");
 }
 
 void diagnosticsStateAndCopyFeedback() {
@@ -701,6 +1187,341 @@ void copyPublishesStableFileAndPreservesClipboardOnFailure() {
     diagnostics.shutdown();
     QApplication::clipboard()->clear();
 }
+
+class StorageDirectoryTranslator final : public QTranslator {
+  public:
+    QString translate(const char* context, const char* sourceText, const char*,
+                      int) const override {
+        if (QString::fromLatin1(context) == QStringLiteral("StorageStatusSettingsWidget"))
+            return QStringLiteral("Translated: ") + QString::fromUtf8(sourceText);
+        return {};
+    }
+};
+
+void directoryDialogMatchesApiEditor() {
+#ifdef Q_OS_WIN
+    using namespace adqt::widgets;
+    const auto registry = storageStatusRegistry();
+    FakeSettingsBackend backend;
+    settings::SettingsRuntimeSession session(registry, backend);
+    StorageStatusSettingsWidget storageWidget(session);
+    storageWidget.resize(650, 850);
+    storageWidget.show();
+    storageWidget.findChild<QAbstractButton*>(QStringLiteral("settings-storage-directory-choose"))
+        ->click();
+    flushEvents();
+
+    CustomAiModelsSettingsWidget apiWidget(session);
+    apiWidget.applyTheme(presentation::styles::ThemeManager::instance().themeColorScheme());
+    apiWidget.resize(880, 760);
+    apiWidget.show();
+    apiWidget.findChild<QAbstractButton*>(QStringLiteral("customAiModelAdd"))->click();
+    flushEvents();
+
+    auto* storageModal =
+        storageWidget.findChild<AdModal*>(QStringLiteral("settings-storage-directory-modal"));
+    auto* apiModal = apiWidget.findChild<AdModal*>(QStringLiteral("customAiModelEditor"));
+    require(storageModal && apiModal, "storage and API configuration editors open");
+    auto* storageBody = storageModal->contentWidget();
+    auto* apiBody = apiModal->contentWidget();
+    auto* migrate = storageBody->findChild<AdSwitch*>(QStringLiteral("storage-directory-migrate"));
+    auto* vision = apiBody->findChild<AdSwitch*>(QStringLiteral("visionSupport"));
+    require(migrate && vision && migrate->controlSize() == vision->controlSize() &&
+                migrate->size() == vision->size(),
+            "storage migration switch matches the API configuration switch size");
+
+    const auto bottomSpace = [](QWidget* body) {
+        QWidget* form = body->layout()->itemAt(0)->widget();
+        return body->height() - form->mapTo(body, QPoint(0, form->height())).y();
+    };
+    require(bottomSpace(storageBody) == bottomSpace(apiBody),
+            "storage form has the same bottom spacing as the API configuration form");
+    auto* error = storageBody->findChild<QWidget*>(QStringLiteral("storage-directory-error"));
+    require(error && error->isHidden(), "empty storage error feedback takes no layout space");
+    storageModal->rejectButton()->click();
+    apiModal->rejectButton()->click();
+    flushEvents();
+#endif
+}
+
+void directoryDialogLifecycle() {
+#ifdef Q_OS_WIN
+    using namespace adqt::widgets;
+    const auto registry = storageStatusRegistry();
+    FakeSettingsBackend backend;
+    settings::SettingsRuntimeSession session(registry, backend);
+    StorageStatusSettingsWidget widget(session);
+    widget.resize(650, 850);
+    widget.show();
+    flushEvents();
+    WindowBlockObserver ownerState;
+    require(widget.windowHandle(), "settings window has a native surface");
+    widget.windowHandle()->installEventFilter(&ownerState);
+    QPointer<AdMessageHandle> notification;
+    QObject::connect(AdMessageService::instance(&widget), &AdMessage::messageOpened, &widget,
+                     [&notification](AdMessageHandle* handle) { notification = handle; });
+    auto* choose =
+        widget.findChild<QAbstractButton*>(QStringLiteral("settings-storage-directory-choose"));
+    require(choose && choose->isEnabled(), "Windows directory setting available");
+    auto* row = widget.findChild<QWidget*>(QStringLiteral("settings-storage-directory-row"));
+    auto* title = widget.findChild<QLabel*>(QStringLiteral("settings-storage-directory-title"));
+    auto* description =
+        widget.findChild<QLabel*>(QStringLiteral("settings-storage-directory-location"));
+    const auto scheme = presentation::styles::ThemeManager::instance().themeColorScheme();
+    require(row && title && description && choose->parentWidget() == row &&
+                row->layout()->contentsMargins().isNull() &&
+                row->layout()->spacing() == scheme.metricAlias.marginLG &&
+                title->font().pixelSize() == scheme.metricAlias.fontSizeLG &&
+                title->font().weight() == QFont::Medium &&
+                description->palette().color(QPalette::WindowText) == scheme.map.colorTextSecondary,
+            "directory setting uses the standard row layout and theme");
+    auto unavailable = backend.storageStatus();
+    unavailable.writeAvailable = false;
+    backend.publish(unavailable);
+    flushEvents();
+    flushEvents();
+    require(!choose->isEnabled(), "directory action disabled when storage is read-only");
+    unavailable.writeAvailable = true;
+    unavailable.directoryChanging = true;
+    backend.publish(unavailable);
+    flushEvents();
+    flushEvents();
+    require(!choose->isEnabled(), "directory action disabled during migration");
+    unavailable.directoryChanging = false;
+    backend.publish(unavailable);
+    flushEvents();
+    flushEvents();
+    choose->click();
+    flushEvents();
+    auto* modal = widget.findChild<AdModal*>(QStringLiteral("settings-storage-directory-modal"));
+    require(modal && modal->isOpen(), "directory modal opened");
+    require(modal->mode() == AdModal::Mode::Overlay &&
+                modal->contentWidget()->window() == widget.window(),
+            "directory modal is a widget overlay in the settings window");
+    choose->click();
+    require(
+        widget.findChildren<AdModal*>(QStringLiteral("settings-storage-directory-modal")).size() ==
+            1,
+        "repeated directory action reuses the open modal");
+    auto* form =
+        modal->contentWidget()->findChild<QWidget*>(QStringLiteral("storage-directory-form"));
+    auto* directoryItem = form->findChild<AdFormItem*>(QStringLiteral("storage-directory-field"));
+    auto* migrateItem =
+        form->findChild<AdFormItem*>(QStringLiteral("storage-directory-migrate-field"));
+    auto* path = modal->contentWidget()->findChild<DirectoryPathInput*>(
+        QStringLiteral("storage-directory-path-input"));
+    auto* field =
+        modal->contentWidget()->findChild<AdLineEdit*>(QStringLiteral("storage-directory-input"));
+    auto* migrate =
+        modal->contentWidget()->findChild<AdSwitch*>(QStringLiteral("storage-directory-migrate"));
+    require(field && migrate && migrate->isChecked(), "migration defaults on");
+    require(form && directoryItem && migrateItem && path && path->lineEdit() == field &&
+                path->fieldGroup()->controlCount() == 2 &&
+                path->fieldGroup()->controlAt(1) == path->browseButton() &&
+                path->browseButton()->text().isEmpty() &&
+                path->browseButtonText() == QStringLiteral("Choose storage directory") &&
+                directoryItem->itemLayout() == AdFormItem::ItemLayout::Vertical &&
+                migrateItem->itemLayout() == AdFormItem::ItemLayout::Vertical &&
+                directoryItem->controlWidget() == path &&
+                migrateItem->controlWidget()->isAncestorOf(migrate) &&
+                migrateItem->value().toBool(),
+            "directory and migration controls use the API editor's vertical Ant Design fields");
+    FieldEvents directoryEvents;
+    FieldEvents migrateEvents;
+    observeField(*modal->contentWidget(), "directory", directoryEvents);
+    observeField(*modal->contentWidget(), "migrate", migrateEvents);
+    field->setText(QStringLiteral("relative"));
+    require(directoryEvents.edits == 1 && directoryEvents.commits == 0,
+            "storage path edits publish a draft without committing before confirmation");
+    modal->acceptButton()->click();
+    require(!widget.findChild<AdModal*>(QStringLiteral("storage-directory-confirmation")),
+            "invalid form does not confirm");
+    require(directoryItem->validateStatus() == AdFormItem::ValidateStatus::Error &&
+                !directoryItem->errorMessages().isEmpty() && field->hasFocus(),
+            "invalid directory uses form field validation feedback");
+    QTemporaryDir destination;
+    field->setText(destination.path());
+    modal->acceptButton()->click();
+    flushEvents();
+    auto* confirm = widget.findChild<AdModal*>(QStringLiteral("storage-directory-confirmation"));
+    require(ownerState.blocked, "storage confirmation blocks input to the settings window");
+    require(confirm && confirm->mode() == AdModal::Mode::Window &&
+                confirm->acceptButton()->window()->windowType() == Qt::Dialog &&
+                confirm->acceptButton()->window()->parentWidget() == widget.window() &&
+                confirm->acceptButton()->window()->windowModality() == Qt::WindowModal &&
+                confirm->acceptButton()->window()->windowHandle()->transientParent() ==
+                    widget.windowHandle() &&
+                QGuiApplication::modalWindow() ==
+                    confirm->acceptButton()->window()->windowHandle() &&
+                confirm->ownerWindow() == widget.window() &&
+                confirm->acceptAccentRole() == AdButton::AccentRole::Danger,
+            "second confirmation uses an owned modal dialog with a dangerous action");
+    confirm->rejectButton()->click();
+    flushEvents();
+    require(!ownerState.blocked && !QGuiApplication::modalWindow(),
+            "cancel releases the settings window's input block");
+    require(modal->isOpen() && backend.migrations == 0 && field->text() == destination.path(),
+            "cancel retains form without starting migration");
+    require(directoryEvents.edits == 2 && directoryEvents.commits == 0 &&
+                migrateEvents.commits == 0,
+            "cancelling storage confirmation never commits pending field drafts");
+    modal->acceptButton()->click();
+    flushEvents();
+    confirm = widget.findChild<AdModal*>(QStringLiteral("storage-directory-confirmation"));
+    require(confirm && ownerState.blocked, "reopened confirmation blocks the settings window");
+    QKeyEvent dismiss(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QCoreApplication::sendEvent(confirm->acceptButton()->window(), &dismiss);
+    flushEvents();
+    require(!ownerState.blocked && !QGuiApplication::modalWindow() && modal->isOpen() &&
+                backend.migrations == 0 && field->text() == destination.path(),
+            "Escape releases the input block and retains the unconfirmed form");
+    modal->acceptButton()->click();
+    flushEvents();
+    confirm = widget.findChild<AdModal*>(QStringLiteral("storage-directory-confirmation"));
+    require(confirm && ownerState.blocked, "confirmation can reopen after Escape");
+    confirm->closeButton()->click();
+    flushEvents();
+    require(!ownerState.blocked && !QGuiApplication::modalWindow() && modal->isOpen() &&
+                backend.migrations == 0 && field->text() == destination.path(),
+            "close releases the input block and retains the unconfirmed form");
+    modal->acceptButton()->click();
+    flushEvents();
+    confirm = widget.findChild<AdModal*>(QStringLiteral("storage-directory-confirmation"));
+    require(confirm && ownerState.blocked, "confirmation can reopen after close");
+    confirm->acceptButton()->click();
+    flushEvents();
+    require(!ownerState.blocked && !QGuiApplication::modalWindow(),
+            "proceed releases the confirmation's input block");
+    require(backend.migrations == 1 && backend.requestedMigration, "confirmed form starts once");
+    require(!modal->acceptButton()->isEnabled() && !modal->rejectButton()->isEnabled() &&
+                !modal->closeButtonVisible() && !modal->closeOnEscape() &&
+                !modal->closeOnMaskClick(),
+            "all close controls locked");
+    modal->acceptButton()->click();
+    modal->rejectButton()->click();
+    modal->closeButton()->click();
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QCoreApplication::sendEvent(modal->contentWidget(), &escape);
+    flushEvents();
+    require(modal->isOpen() && backend.migrations == 1,
+            "close escape and duplicate submit ignored");
+    emit backend.directoryChangeProgress(
+        {storage::StorageDirectoryProgress::Stage::Copying, QStringLiteral("history"), 3, 5});
+    auto* progress =
+        modal->contentWidget()->findChild<QLabel*>(QStringLiteral("storage-directory-progress"));
+    require(progress && progress->text().contains(QStringLiteral("3/5")) && progress->isVisible(),
+            "real progress replaces form");
+    require(!field->isVisible(), "form hidden while migrating");
+    StorageDirectoryTranslator translator;
+    QCoreApplication::installTranslator(&translator);
+    QEvent language(QEvent::LanguageChange);
+    QCoreApplication::sendEvent(&widget, &language);
+    require(progress->text() == QStringLiteral("Translated: Migrating screenshot history — 3/5") &&
+                choose->text() == QStringLiteral("Translated: Choose directory") &&
+                modal->windowTitle() == QStringLiteral("Translated: Storage directory") &&
+                directoryItem->label() == QStringLiteral("Translated: Storage directory") &&
+                migrateItem->label() == QStringLiteral("Translated: Migrate existing data") &&
+                path->browseButtonText() == QStringLiteral("Translated: Choose storage directory"),
+            "language changes update setting, modal, and live progress");
+    require(directoryEvents.edits == 2 && migrateEvents.edits == 0 &&
+                directoryEvents.commits == 0 && migrateEvents.commits == 0,
+            "storage retranslation produces no shared edits or commits during migration");
+    emit backend.directoryChangeFinished({false, QStringLiteral("copy failed"), {}});
+    require(modal->isOpen() && modal->acceptButton()->isEnabled() && field->isVisible(),
+            "failure returns to editable form");
+    require(notification && notification->type() == AdMessage::Type::Error &&
+                notification->content() == QStringLiteral("copy failed"),
+            "failure uses Message notification");
+    auto* error =
+        modal->contentWidget()->findChild<AdAlert*>(QStringLiteral("storage-directory-error"));
+    require(error && error->isVisible() && error->severity() == AdAlert::Severity::Error &&
+                error->text() == QStringLiteral("copy failed"),
+            "migration failure displays the same error alert as the API editor");
+    require(directoryEvents.commits == 0 && migrateEvents.commits == 0,
+            "failed storage operations do not commit field drafts");
+    migrate->setChecked(false);
+    require(!migrate->isChecked() && !migrateItem->value().toBool(),
+            "migration switch reflects form values");
+    require(migrateEvents.edits == 1 && migrateEvents.commits == 0,
+            "changing migration preference stays pending until the operation succeeds");
+    modal->acceptButton()->click();
+    flushEvents();
+    confirm = widget.findChild<AdModal*>(QStringLiteral("storage-directory-confirmation"));
+    require(error->isHidden() && error->text().isEmpty(),
+            "retry clears the error alert and its layout space");
+    confirm->acceptButton()->click();
+    flushEvents();
+    require(backend.migrations == 2 && !backend.requestedMigration, "migration-off forwarded");
+    QPointer<AdModal> lifetime(modal);
+    emit backend.directoryChangeFinished({true, {}, {}});
+    flushEvents();
+    require(directoryEvents.commits == 1 && migrateEvents.commits == 1,
+            "successful storage confirmation commits each changed field exactly once");
+    require(!lifetime || !lifetime->isOpen(), "success dismisses modal automatically");
+    require(notification && notification->type() == AdMessage::Type::Success &&
+                notification->content() ==
+                    QStringLiteral("Translated: Storage migration complete."),
+            "completion uses translated Message notification");
+    QCoreApplication::removeTranslator(&translator);
+    choose->click();
+    flushEvents();
+    modal = widget.findChild<AdModal*>(QStringLiteral("settings-storage-directory-modal"));
+    form = modal->contentWidget()->findChild<QWidget*>(QStringLiteral("storage-directory-form"));
+    migrateItem = form->findChild<AdFormItem*>(QStringLiteral("storage-directory-migrate-field"));
+    require(migrateItem->value().toBool(), "reopened form defaults migration on");
+    FieldEvents cancelled;
+    observeField(*modal->contentWidget(), "directory", cancelled);
+    modal->contentWidget()
+        ->findChild<AdLineEdit*>(QStringLiteral("storage-directory-input"))
+        ->setText(destination.path());
+    modal->rejectButton()->click();
+    flushEvents();
+    require(!widget.findChild<AdModal*>(QStringLiteral("settings-storage-directory-modal")) &&
+                backend.migrations == 2,
+            "cancel closes the overlay without starting migration");
+    require(cancelled.edits == 1 && cancelled.commits == 0,
+            "cancelling the storage editor discards its changed field without a commit");
+
+    choose->click();
+    flushEvents();
+    modal = widget.findChild<AdModal*>(QStringLiteral("settings-storage-directory-modal"));
+    form = modal->contentWidget()->findChild<QWidget*>(QStringLiteral("storage-directory-form"));
+    directoryItem = form->findChild<AdFormItem*>(QStringLiteral("storage-directory-field"));
+    directoryItem->setValue(destination.path());
+    modal->acceptButton()->click();
+    flushEvents();
+    require(widget.findChild<AdModal*>(QStringLiteral("storage-directory-confirmation")),
+            "confirmation opens before hiding the owner");
+    widget.hide();
+    flushEvents();
+    require(!ownerState.blocked && !QGuiApplication::modalWindow(),
+            "hiding the owner releases the confirmation's input block");
+    require(!widget.findChild<AdModal*>(QStringLiteral("settings-storage-directory-modal")) &&
+                !widget.findChild<AdModal*>(QStringLiteral("storage-directory-confirmation")) &&
+                backend.migrations == 2,
+            "hiding the settings window dismisses the form and unconfirmed dialog");
+
+    widget.show();
+    choose->click();
+    flushEvents();
+    modal = widget.findChild<AdModal*>(QStringLiteral("settings-storage-directory-modal"));
+    form = modal->contentWidget()->findChild<QWidget*>(QStringLiteral("storage-directory-form"));
+    directoryItem = form->findChild<AdFormItem*>(QStringLiteral("storage-directory-field"));
+    directoryItem->setValue(destination.path());
+    modal->acceptButton()->click();
+    flushEvents();
+    confirm = widget.findChild<AdModal*>(QStringLiteral("storage-directory-confirmation"));
+    require(confirm, "confirmed migration can reopen after hiding the owner");
+    confirm->acceptButton()->click();
+    widget.hide();
+    flushEvents();
+    require(backend.migrations == 3 && backend.requestedDirectory == destination.path() &&
+                backend.requestedMigration &&
+                !widget.findChild<AdModal*>(QStringLiteral("settings-storage-directory-modal")),
+            "queued migration retains form values after the settings window hides");
+    emit backend.directoryChangeFinished({true, {}, {}});
+#endif
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -711,11 +1532,30 @@ int main(int argc, char** argv) {
     require(storageDirectory.isValid(), "temporary storage directory should be available");
     static_cast<void>(storage::ApplicationStorage::instance().initialize(
         {storageDirectory.path(), storageDirectory.path(), 8000}));
+    if (application.arguments().contains(QStringLiteral("--toolbar-editor-only"))) {
+        toolbarEditorsUseSeparateDefinitionsAndRetranslate();
+        drawingToolbarSeparatorCanMoveAndHideByDrop();
+        screenshotToolbarResultToolsCanMoveAndHideByDrop();
+        recordingToolbarToolsCanMoveStackHideAndReset();
+        pinnedToolbarExportToolsCanMoveAndHideByDrop();
+        pinnedToolbarSectionResetRefreshesEditor();
+        storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    directoryDialogMatchesApiEditor();
+    directoryDialogLifecycle();
+    if (application.arguments().contains(QStringLiteral("--storage-directory-only"))) {
+        storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     widgetUsesDescriptionsTitleAndThemeSpacing();
     widgetRendersAppUsageBreakdown();
     widgetShowsScanningStateAndForwardsRefresh();
     toolbarEditorsUseSeparateDefinitionsAndRetranslate();
     drawingToolbarSeparatorCanMoveAndHideByDrop();
+    screenshotToolbarResultToolsCanMoveAndHideByDrop();
+    recordingToolbarToolsCanMoveStackHideAndReset();
+    pinnedToolbarExportToolsCanMoveAndHideByDrop();
     pinnedToolbarSectionResetRefreshesEditor();
     diagnosticsStateAndCopyFeedback();
     copyPublishesStableFileAndPreservesClipboardOnFailure();

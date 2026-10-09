@@ -2,7 +2,10 @@
   "core": [
     "AboutPageWidget",
     "ApplicationRestart",
+    "ConfirmationSkipButton",
     "DiagnosticsService",
+    "EditionMetadata",
+    "FloatingToolbar",
     "LanguageCatalog",
     "MainContentHeaderWidget",
     "MainWindow",
@@ -19,21 +22,27 @@
   "settings": [
     "AdministratorLaunch",
     "AppPermissions",
+    "CloudUploadSettingsWidget",
     "CustomAiModelsSettingsWidget",
     "DrawingToolbarEditorSettingsWidget",
+    "FloatingToolbarEditorSettingsWidget",
     "GlobalMouseRow",
     "LoginItemService",
+    "MainWindowSkin",
     "PermissionGuide",
     "PinnedToolbarEditorSettingsWidget",
+    "RecordingToolbarEditorSettingsWidget",
     "ScreenshotMcpSettings",
     "ScreenshotToolbarEditorSettingsWidget",
     "SettingsBackend",
     "SettingsCatalog",
     "SettingsPageWidget",
     "ShortcutKeyRow",
+    "StorageDirectoryChange",
     "StorageStatusSettingsWidget",
     "TextTranslationSettingsWidget",
     "snow_shot::presentation::GlobalMouseManager",
+    "snow_shot::storage::ApplicationStorage",
     "snow_shot::storage::ConfigurationArchive",
     "snow_shot::storage::ConfigurationStore"
   ],
@@ -60,19 +69,28 @@
   ],
   "export": [
     "ScreenshotClipboardService",
+    "ScreenshotCloudUploadJob",
     "ScreenshotExportArtifact",
     "ScreenshotImageFileService",
     "ScreenshotPdfExport",
+    "ScreenshotPrintService",
     "ScreenshotRecognitionFileExport",
     "ScreenshotSaveAsFileDialog",
     "ScreenshotSavePreviewCanvas"
   ],
   "recording": [
+    "RecordingAudioGainPopover",
     "RecordingEffectPreview",
     "RecordingKeyboardLabels",
-    "ScreenRecordingController"
+    "RecordingRegionDragHandle",
+    "RecordingRenderDialog",
+    "RecordingTrimSession",
+    "RecordingTrimToolbar",
+    "ScreenRecordingController",
+    "ScreenRecordingSettingsDialog"
   ],
   "recognition": [
+    "OcrTextOptions",
     "ScreenshotImageConversionController",
     "ScreenshotImageConversionView",
     "ScreenshotOcrController",
@@ -92,13 +110,17 @@
   ],
   "history": [
     "HistoryEntryWidget",
-    "ScreenshotHistoryPageWidget",
     "PinnedWindowManagementPageWidget",
+    "snow_shot::presentation::PinnedWindowSelectionController",
+    "ScreenshotHistoryPageWidget",
     "ScreenshotPinnedWindow",
-    "snow_shot::presentation::PinnedWindowGroupManager"
+    "WindowGroupSwitcher",
+    "snow_shot::presentation::PinnedWindowGroupManager",
+    "snow_shot::presentation::WindowGroupSwitcherController"
   ],
   "updates": [
     "UpdateErrors",
+    "UpdateProgress",
     "UpdateService",
     "snow_shot::update::UpdateService"
   ]

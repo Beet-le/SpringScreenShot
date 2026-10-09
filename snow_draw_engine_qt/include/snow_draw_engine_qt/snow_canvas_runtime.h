@@ -6,6 +6,7 @@
 #include <QJsonArray>
 #include <QRectF>
 #include <QSize>
+#include <QSizeF>
 
 #include <memory>
 #include <functional>
@@ -41,6 +42,8 @@ class SnowCanvasRuntime {
     bool restoreDocumentHistory(const QByteArray& payload);
     bool restoreDocumentHistoryPreservingEditorStyles(const QByteArray& payload);
     bool clearDocumentPreservingViewports();
+    // Releases derived drawing caches without changing the document, history, or viewports.
+    void clearRenderState();
     bool setQuickSelectionDisabledTools(const QSet<SnowCanvasTool>& tools);
     QByteArray applyAnnotationTransaction(const QByteArray& payload);
     bool undo();
@@ -48,7 +51,11 @@ class SnowCanvasRuntime {
     bool canUndo() const;
     bool canRedo() const;
     quint64 documentRevision() const;
+    // Includes hidden elements and watermark content, but excludes creation styles and history.
+    bool hasDocumentContent() const;
     void setDocumentChangedHandler(std::function<void()> handler);
+    // Detaches clients immediately. Engine storage is released by the process cleanup worker,
+    // without waiting in the runtime owner's destructor.
     void destroyAsync();
     void setBaseImageSources(const QList<SnowCanvasBaseImageSource>& sources);
     SnowCanvasSmartEraseSnapshot smartEraseSnapshot() const;
@@ -77,17 +84,25 @@ class SnowCanvasRuntimeEditor final {
     SnowCanvasStyleToolbarState canvasStyleToolbarState() const;
     SnowCanvasWatermarkConfig canvasWatermarkConfig() const;
     SnowCanvasSpotlightConfig canvasSpotlightConfig() const;
+    bool setDistanceStyleFromToolbar(const SnowCanvasDistanceStyle&, quint32);
+    bool setDistanceCreationPixelScale(const QSizeF&);
     bool setShapeStyleFromToolbar(const SnowCanvasShapeStyle&, quint32, SnowCanvasShapeKind);
     bool setTextStyleFromToolbar(const SnowCanvasTextStyle&,
                                  quint32 properties = SnowCanvasTextStyleAllProperties);
     bool setSerialNumberStyleFromToolbar(const SnowCanvasSerialNumberStyle&);
+    bool setSerialNumberStyleFromToolbar(const SnowCanvasSerialNumberStyle&, quint32 properties);
     bool setFilterStyleFromToolbar(const SnowCanvasFilterStyle&, quint32);
+    bool
+    setBrushEraserCreationStyle(const SnowCanvasBrushEraserStyle&,
+                                quint32 properties = SnowCanvasBrushEraserStylePropertyStrokeWidth);
     bool setWatermarkConfigFromToolbar(const SnowCanvasWatermarkConfig&);
     bool setSpotlightConfigFromToolbar(const SnowCanvasSpotlightConfig&);
     bool select(quint32 index, quint32 generation);
     bool deleteSelected();
     bool deleteAllElements();
-    bool erasePath(const QList<QPointF>& points);
+    // Rectangle Eraser uses two corners; Brush Eraser accepts a stroke or a single dot.
+    bool erasePath(const QList<QPointF>& points,
+                   SnowCanvasTool eraserTool = SnowCanvasTool::Eraser);
     bool duplicateSelected(QPointF offset = QPointF(20, 20));
     bool reorderSelected(SnowCanvasSelectionOrder);
     bool alignSelected(SnowCanvasSelectionAlignment);

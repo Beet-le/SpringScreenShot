@@ -3,16 +3,21 @@
 #include "snow_draw_engine_qt/snow_canvas_runtime.h"
 #include "snow_draw_engine_qt/snow_canvas_widget.h"
 #include "snow_canvas_runtime_access.h"
+#include "snow_canvas_mat_allocator.h"
+#include "../../test-support/virtualmemory.h"
+#include <opencv2/imgproc.hpp>
 
 #include <QApplication>
 #include <QElapsedTimer>
 #include <QPainter>
 #include <QMouseEvent>
 #include <QThread>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 
 namespace {
 void require(bool value, const char* message) {
@@ -42,6 +47,59 @@ SnowCanvasSceneItem rectangle() {
     item.filter = snow_filter_render_spec_resolve(5, 0.9);
     return SnowCanvasSceneItem(item);
 }
+
+void reconstructionBuffersReturnMappedPages() {
+    using namespace snow_canvas_smart_erase;
+    using snow::test_support::virtualMemoryMapped;
+    auto source = pixelMatrix<cv::Vec3f>(cv::Size(1024, 1024), cv::Vec3f(0.2F, 0.4F, 0.6F));
+    const auto* originalMiddle = source.data + source.total() * source.elemSize() / 2;
+    auto converted = pixelMatrix<cv::Vec3f>();
+    cv::cvtColor(source, converted, cv::COLOR_RGB2Lab);
+    require(converted.u != nullptr && converted.u->currAllocator == &pixelMatAllocator(),
+            "OpenCV output creation must use the local pixel allocator");
+    auto copied = pixelMatrixCopy(converted);
+    require(copied(0, 0) == converted(0, 0) && copied.data != converted.data,
+            "matrix copies must preserve pixels with independent ownership");
+    const auto* convertedMiddle = converted.data + converted.total() * converted.elemSize() / 2;
+    const auto* copiedMiddle = copied.data + copied.total() * copied.elemSize() / 2;
+    auto roi = source(cv::Rect(1, 1, 100, 100));
+    source.release();
+    require(virtualMemoryMapped(originalMiddle), "matrix ROI must retain its original allocation");
+    roi.release();
+    require(!virtualMemoryMapped(originalMiddle), "final matrix ROI release must unmap its pixels");
+    converted.release();
+    require(!virtualMemoryMapped(convertedMiddle),
+            "conversion matrix release must unmap its pixels");
+    copied.release();
+    require(!virtualMemoryMapped(copiedMiddle), "matrix clone release must unmap its pixels");
+
+    QImage background(QSize(1024, 1024), QImage::Format_ARGB32);
+    background.fill(Qt::green);
+    {
+        QPainter painter(&background);
+        painter.fillRect(QRect(162, 162, 700, 700), Qt::blue);
+    }
+    auto item = rectangle();
+    item.center_x = item.center_y = 512;
+    item.width = item.height = 700;
+    item.rebuildLocalRectangleGeometry();
+    std::atomic_bool cancelled{false};
+    auto result = reconstruct(item, {{background, QRectF(0, 0, 1024, 1024), {}}}, cancelled);
+    require(result.success && result.original.size() == QSize(700, 700) &&
+                result.filled.size() == result.original.size(),
+            "reconstruction must publish only the affected before and after crops");
+    require(result.original.pixelColor(350, 350) == QColor(Qt::blue) &&
+                result.filled.pixelColor(350, 350) == QColor(Qt::green),
+            "mapped reconstruction must preserve original pixels and restore the surface");
+    const auto* beforeMiddle = result.original.constBits() + result.original.sizeInBytes() / 2;
+    const auto* afterMiddle = result.filled.constBits() + result.filled.sizeInBytes() / 2;
+    QImage retained = result.filled;
+    result = {};
+    require(!virtualMemoryMapped(beforeMiddle), "released original crop must unmap immediately");
+    require(virtualMemoryMapped(afterMiddle), "export sharing must retain the reconstructed crop");
+    retained = {};
+    require(!virtualMemoryMapped(afterMiddle), "final reconstructed crop owner must unmap pixels");
+}
 QImage render(const SnowCanvasSceneItem& item, const SnowCanvasSmartEraseSnapshot& snapshot = {},
               qreal dpr = 1) {
     QImage image(QSize(qRound(64 * dpr), qRound(64 * dpr)), QImage::Format_ARGB32_Premultiplied);
@@ -63,6 +121,22 @@ snow_canvas_smart_erase::Result fakeResult(const SnowCanvasSceneItem& item) {
     QImage filled = base;
     filled.fill(Qt::blue);
     return {base, filled, snow_canvas_smart_erase::path(item).boundingRect(), true};
+}
+QImage trackedResultImage(std::atomic_int& released, QRgb color) {
+    struct Pixels {
+        explicit Pixels(std::atomic_int& counter) : released(counter) {}
+        ~Pixels() {
+            ++released;
+        }
+        std::array<QRgb, 12 * 12> values;
+        std::atomic_int& released;
+    };
+    auto pixels = std::make_unique<Pixels>(released);
+    pixels->values.fill(color);
+    auto* data = reinterpret_cast<uchar*>(pixels->values.data());
+    return QImage(
+        data, 12, 12, 12 * static_cast<int>(sizeof(QRgb)), QImage::Format_ARGB32,
+        [](void* context) { delete static_cast<Pixels*>(context); }, pixels.release());
 }
 void placeholders() {
     auto rect = rectangle();
@@ -121,6 +195,9 @@ void asynchronousLifecycle() {
     coordinator.syncItems({item});
     until([&] { return calls == 1; });
     const auto pending = coordinator.snapshot();
+    require(!pending.cacheKey().isEmpty() &&
+                pending.cacheKey() == coordinator.snapshot().cacheKey(),
+            "equivalent snapshots must retain their appearance key");
     require(render(item, pending).pixelColor(32, 32) == QColor(255, 219, 220),
             "running job must display placeholder");
     for (int i = 0; i < 20; ++i)
@@ -129,12 +206,17 @@ void asynchronousLifecycle() {
     released = true;
     until([&] { return repaints == 1; });
     const auto ready = coordinator.snapshot();
+    require(ready.cacheKey() != pending.cacheKey() &&
+                ready.cacheKey() == coordinator.snapshot().cacheKey(),
+            "reconstruction completion must change the appearance key");
     require(render(item, ready).pixelColor(32, 32) == Qt::blue, "completed result must render");
     require(render(item, pending).pixelColor(32, 32) == QColor(255, 219, 220),
             "captured pending export must remain immutable");
     item.opacity = 0.5;
     coordinator.syncItems({item});
     require(calls == 1, "opacity and selection-only sync must reuse computation");
+    require(ready.cacheKey() != coordinator.snapshot().cacheKey(),
+            "opacity changes must change the appearance key");
     const QColor blended = render(item, coordinator.snapshot()).pixelColor(32, 32);
     require(blended.blue() == 255 && std::abs(blended.red() - 128) <= 1,
             "opacity must blend reconstruction with base pixels");
@@ -179,6 +261,94 @@ void asynchronousLifecycle() {
     require(exported.size() == 1 &&
                 render(exported.front(), worker.snapshot()).pixelColor(32, 32) == Qt::blue,
             "worker restoration must preserve ready appearance without computation");
+}
+void reconstructionAppearanceKeys() {
+    using namespace snow_canvas_smart_erase;
+    auto item = rectangle();
+    Result result = fakeResult(item);
+    int repaints = 0;
+    Coordinator coordinator([&] { ++repaints; },
+                            [&](const auto&, const auto&, const auto&) { return result; });
+    QImage base(64, 64, QImage::Format_ARGB32);
+    base.fill(Qt::white);
+    coordinator.setSources(&coordinator, {{base, QRectF(0, 0, 64, 64), {}}});
+    repaints = 0;
+    coordinator.syncItems({item});
+    until([&] { return repaints == 1; });
+    // Retain only the value key, as a rendered pixel cache can release its donors.
+    const QByteArray originalKey = coordinator.snapshot().cacheKey();
+    coordinator.reset();
+    coordinator.syncItems({item});
+    until([&] { return repaints == 2; });
+    require(coordinator.snapshot().cacheKey() == originalKey,
+            "copied reconstruction results with shared images must retain their appearance key");
+    coordinator.reset();
+    result.filled = QImage(result.filled.size(), result.filled.format());
+    result.filled.fill(Qt::green);
+    coordinator.syncItems({item});
+    until([&] { return repaints == 3; });
+    require(coordinator.snapshot().cacheKey() != originalKey &&
+                render(item, coordinator.snapshot()).pixelColor(32, 32) == Qt::green,
+            "replacement reconstruction pixels must invalidate a key after donors are released");
+}
+void historicalCacheCleanup() {
+    using namespace snow_canvas_smart_erase;
+    std::array<std::atomic_int, 3> originalReleased{};
+    std::array<std::atomic_int, 3> filledReleased{};
+    const std::array<QRgb, 3> colors{qRgb(0, 0, 255), qRgb(0, 255, 0), qRgb(255, 0, 0)};
+    std::atomic_int calls{0};
+    int repaints = 0;
+    Coordinator coordinator(
+        [&] { ++repaints; },
+        [&](const auto& item, const auto&, const std::atomic_bool& cancelled) {
+            require(!cancelled.load(), "cache cleanup must not cancel current reconstruction");
+            const auto index = static_cast<std::size_t>(calls.fetch_add(1));
+            require(index < colors.size(), "cache cleanup must only reconstruct evicted geometry");
+            return Result{trackedResultImage(originalReleased[index], qRgb(255, 255, 255)),
+                          trackedResultImage(filledReleased[index], colors[index]),
+                          path(item).boundingRect(), true};
+        });
+    QImage base(64, 64, QImage::Format_ARGB32);
+    base.fill(Qt::white);
+    coordinator.setSources(&coordinator, {{base, QRectF(0, 0, 64, 64), {}}});
+    repaints = 0;
+    auto original = rectangle();
+    coordinator.syncItems({original});
+    until([&] { return calls == 1 && repaints == 1; });
+    require(render(original, coordinator.snapshot()).pixelColor(32, 32) == Qt::blue,
+            "first reconstruction must render before becoming historical");
+    auto current = original;
+    current.center_x += 4;
+    coordinator.syncItems({current});
+    until([&] { return calls == 2 && repaints == 2; });
+    require(originalReleased[0] == 0 && filledReleased[0] == 0,
+            "historical cache must retain both result images before cleanup");
+    auto currentSnapshot = coordinator.snapshot();
+    coordinator.clearCache();
+    require(originalReleased[0] == 1 && filledReleased[0] == 1,
+            "cache cleanup must release both obsolete result images immediately");
+    require(originalReleased[1] == 0 && filledReleased[1] == 0,
+            "cache cleanup must preserve current reconstruction images");
+    require(render(current, coordinator.snapshot()).pixelColor(36, 32) == Qt::green &&
+                render(current, currentSnapshot).pixelColor(36, 32) == Qt::green,
+            "current drawing and captured export must survive cache cleanup");
+    coordinator.syncItems({current});
+    require(calls == 2, "current reconstruction must remain reusable after cache cleanup");
+    coordinator.syncItems({original});
+    until([&] { return calls == 3 && repaints == 3; });
+    require(render(original, coordinator.snapshot()).pixelColor(32, 32) == Qt::red,
+            "returning to evicted geometry must render its newly computed result");
+    require(render(current, currentSnapshot).pixelColor(36, 32) == Qt::green,
+            "captured current result must remain immutable after recomputation");
+    currentSnapshot = {};
+    require(originalReleased[1] == 1 && filledReleased[1] == 1,
+            "replaced current result must release when its final export snapshot is dropped");
+    coordinator.clearCache();
+    require(originalReleased[2] == 0 && filledReleased[2] == 0,
+            "recomputed current result must survive subsequent cache cleanup");
+    coordinator.reset();
+    require(originalReleased[2] == 1 && filledReleased[2] == 1,
+            "reset must release the final current result after cache cleanup");
 }
 void reconstruction() {
     using namespace snow_canvas_smart_erase;
@@ -358,8 +528,15 @@ void widgetAndWorkerExport() {
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
+    if (app.arguments().contains(QStringLiteral("--memory-ownership-only"))) {
+        reconstructionBuffersReturnMappedPages();
+        return 0;
+    }
+    reconstructionBuffersReturnMappedPages();
     placeholders();
     asynchronousLifecycle();
+    reconstructionAppearanceKeys();
+    historicalCacheCleanup();
     reconstruction();
     widgetAndWorkerExport();
     std::cout << "Smart Erase tests passed\n";
