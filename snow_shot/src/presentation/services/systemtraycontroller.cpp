@@ -397,7 +397,7 @@ class SystemTrayController::Impl {
         q.setObjectName(QStringLiteral("systemTrayController"));
         trayIcon->setObjectName(QStringLiteral("snowShotSystemTrayIcon"));
         trayIcon->setToolTip(app::edition::isMini ? app::edition::productName()
-                                                  : QStringLiteral("SnowShot"));
+                                                  : QStringLiteral("SpringScreenShot"));
 #ifdef Q_OS_MACOS
         notifications = std::make_unique<platform::macos::SystemNotificationService>(&q);
         using NotificationService = platform::macos::SystemNotificationService;
