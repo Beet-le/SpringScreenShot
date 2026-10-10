@@ -291,22 +291,22 @@ void toolbarLayoutSectionResetsRemainIndependent() {
     const auto defaultActionLayout =
         backend.toolbarLayout(storage::ScreenshotToolbarLayoutKind::ActionTools);
     const storage::ScreenshotToolbarLayout expectedDefaultActionLayout{
-        {{QStringLiteral("convert-to-html"), QStringLiteral("convert-to-markdown"),
-          QStringLiteral("latex-recognition"), QStringLiteral("barcode-recognition"),
-          QStringLiteral("table-recognition")},
+        {{QStringLiteral("barcode-recognition")},
          {QStringLiteral("record-screen")},
          {QStringLiteral("pin-to-screen")},
          {QStringLiteral("text-recognition")},
-         {QStringLiteral("text-translation")},
          {QStringLiteral("scrolling-screenshot")},
-         {QStringLiteral("upload-to-cloud"), QStringLiteral("print"), QStringLiteral("quick-save"),
-          QStringLiteral("save-as-file")},
+         {QStringLiteral("quick-save"), QStringLiteral("save-as-file")},
          {QStringLiteral("separator")},
          {QStringLiteral("cancel")},
          {QStringLiteral("copy")}},
-        {}};
+        {QStringLiteral("print"), QStringLiteral("upload-to-cloud"),
+         QStringLiteral("latex-recognition"), QStringLiteral("convert-to-markdown"),
+         QStringLiteral("convert-to-html"), QStringLiteral("text-translation"),
+         QStringLiteral("table-recognition")}};
     require(defaultActionLayout == expectedDefaultActionLayout,
-            "the default action layout must include conversions and quick-save");
+            "the default action layout must hide conversions, translation and extra recognition "
+            "tools while keeping quick-save and save-as-file visible");
     const storage::ScreenshotToolbarLayout drawingLayout{
         {{QStringLiteral("watermark")}},
         {QStringLiteral("shape"), QStringLiteral("arrow"), QStringLiteral("line"),

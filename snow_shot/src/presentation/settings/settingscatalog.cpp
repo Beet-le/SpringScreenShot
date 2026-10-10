@@ -412,9 +412,10 @@ QVector<SettingsItemDefinition> skinItems() {
                  SettingsFilePathBinding::TrayMenuSkinPath,
                  settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Tray Menu Skin Path")),
                  settingsText(QT_TRANSLATE_NOOP(
-                     "SettingsCatalog", "Choose an image for Snow Shot's custom tray menu. Native "
-                                        "system menus keep their system appearance. Clear the path "
-                                        "to remove this skin."))),
+                     "SettingsCatalog",
+                     "Choose an image for Spring ScreenShot's custom tray menu. Native "
+                     "system menus keep their system appearance. Clear the path "
+                     "to remove this skin."))),
         positionItem(QStringLiteral("interface.skin.tray-menu-position"),
                      QStringLiteral("interface/tray_menu_skin_position"),
                      SettingsSelectBinding::TrayMenuSkinPosition,
@@ -823,7 +824,7 @@ SettingsItemDefinition applicationQoSItem() {
         settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Quality of service (QoS)")),
         settingsText(QT_TRANSLATE_NOOP(
             "SettingsCatalog", "Choose the scheduling level for the interface and application "
-                               "workers. Changes take effect after restarting Snow Shot.")),
+                               "workers. Changes take effect after restarting Spring ScreenShot.")),
         {settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Scheduling")),
          settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Responsiveness"))},
         QStringLiteral("system/application_qos"),
@@ -1169,7 +1170,8 @@ SettingsItemDefinition screenshotImageQualityItem() {
         QStringLiteral("screenshot-output.image-quality"),
         settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Image quality")),
         settingsText(QT_TRANSLATE_NOOP(
-            "SettingsCatalog", "Set quality for image files saved outside the Snow Shot dialog")),
+            "SettingsCatalog",
+            "Set quality for image files saved outside the Spring ScreenShot dialog")),
         {},
         QStringLiteral("screenshot/image_quality"),
         SettingsSliderDefinition{SettingsSliderBinding::ScreenshotImageQuality,
@@ -1198,7 +1200,7 @@ SettingsItemDefinition screenshotSaveAsFileDialogItem() {
         SettingsSelectBinding::ScreenshotSaveAsFileDialog,
         {{QStringLiteral("system"), settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "System"))},
          {QStringLiteral("snow_shot"),
-          settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Snow Shot"))}});
+          settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Spring ScreenShot"))}});
 }
 
 SettingsItemDefinition screenshotAutoSaveAfterCopyItem() {
@@ -1967,7 +1969,7 @@ SettingsItemDefinition launchAsAdministratorItem() {
         QStringLiteral("system.launch-as-administrator"),
         QT_TRANSLATE_NOOP("SettingsCatalog", "Launch as administrator"),
         QT_TRANSLATE_NOOP("SettingsCatalog",
-                          "Start Snow Shot with administrator privileges when you sign in"),
+                          "Start Spring ScreenShot with administrator privileges when you sign in"),
         QStringLiteral("system/launch_as_administrator"),
         SettingsSwitchBinding::LaunchAsAdministrator);
 }
@@ -1978,8 +1980,8 @@ SettingsItemDefinition restartAsAdministratorItem() {
     payload.buttonText = settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Restart"));
     return {QStringLiteral("system.restart-as-administrator"),
             settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Restart as administrator")),
-            settingsText(QT_TRANSLATE_NOOP("SettingsCatalog",
-                                           "Restart Snow Shot with administrator privileges")),
+            settingsText(QT_TRANSLATE_NOOP(
+                "SettingsCatalog", "Restart Spring ScreenShot with administrator privileges")),
             {},
             {},
             payload};
@@ -1994,7 +1996,8 @@ SettingsItemDefinition loginItemSettingsItem() {
     return {QStringLiteral("system.login-item-settings"),
             settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Open Login Items Settings")),
             settingsText(QT_TRANSLATE_NOOP(
-                "SettingsCatalog", "Manage Snow Shot's login permission in macOS System Settings")),
+                "SettingsCatalog",
+                "Manage Spring ScreenShot's login permission in macOS System Settings")),
             {},
             {},
             payload};
@@ -2005,11 +2008,12 @@ SettingsItemDefinition autoStartItem() {
         QStringLiteral("system.auto-start-at-boot"),
 #ifdef Q_OS_MACOS
         QT_TRANSLATE_NOOP("SettingsCatalog", "Launch at login"),
-        QT_TRANSLATE_NOOP("SettingsCatalog", "Start Snow Shot in the background when you log in."),
+        QT_TRANSLATE_NOOP("SettingsCatalog",
+                          "Start Spring ScreenShot in the background when you log in."),
 #else
         QT_TRANSLATE_NOOP("SettingsCatalog", "Auto start at boot"),
         QT_TRANSLATE_NOOP("SettingsCatalog",
-                          "Start Snow Shot in the background when Windows starts"),
+                          "Start Spring ScreenShot in the background when Windows starts"),
 #endif
         QStringLiteral("system/auto_start_at_boot"), SettingsSwitchBinding::AutoStartAtBoot);
 }
@@ -2019,7 +2023,7 @@ SettingsItemDefinition mcpEnabledItem() {
                       QT_TRANSLATE_NOOP("SettingsCatalog", "Enable MCP integration"),
                       QT_TRANSLATE_NOOP("SettingsCatalog",
                                         "Allow MCP clients running as your OS user to control "
-                                        "Snow Shot. Snow Shot must be running."),
+                                        "Spring ScreenShot. Spring ScreenShot must be running."),
                       QStringLiteral("mcp/enabled"), SettingsSwitchBinding::McpEnabled);
 }
 
@@ -3283,7 +3287,7 @@ QVector<SettingsPageDefinition> builtInPages() {
          QStringLiteral("/settings/shortcuts-mouse"),
          settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Application shortcuts")),
          settingsText(QT_TRANSLATE_NOOP("SettingsCatalog",
-                                        "Keyboard shortcuts used within Snow Shot tools")),
+                                        "Keyboard shortcuts used within Spring ScreenShot tools")),
          {
              {
                  QStringLiteral("screenshot-shortcuts"),
@@ -3575,7 +3579,7 @@ QVector<SettingsPageDefinition> builtInPages() {
 
 #if SNOW_SHOT_ENABLE_API_CONFIGURATION
              {QStringLiteral("snow-shot-server"),
-              settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Snow Shot server")),
+              settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Spring ScreenShot server")),
               settingsText(QT_TRANSLATE_NOOP("SettingsCatalog",
                                              "Choose the server for built-in online services. "
                                              "Application updates are not affected.")),
@@ -3600,8 +3604,8 @@ QVector<SettingsPageDefinition> builtInPages() {
              {
                  QStringLiteral("mcp"),
                  settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "MCP")),
-                 settingsText(
-                     QT_TRANSLATE_NOOP("SettingsCatalog", "Connect AI clients to Snow Shot")),
+                 settingsText(QT_TRANSLATE_NOOP("SettingsCatalog",
+                                                "Connect AI clients to Spring ScreenShot")),
                  SettingsSectionReset::None,
                  {mcpEnabledItem(), mcpStatusItem()},
              },
@@ -3619,8 +3623,8 @@ QVector<SettingsPageDefinition> builtInPages() {
         {QStringLiteral("app-permissions"),
          QStringLiteral("/settings/appPermissions"),
          settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "App Permissions")),
-         settingsText(
-             QT_TRANSLATE_NOOP("SettingsCatalog", "Manage macOS permissions for Snow Shot")),
+         settingsText(QT_TRANSLATE_NOOP("SettingsCatalog",
+                                        "Manage macOS permissions for Spring ScreenShot")),
          {{QStringLiteral("permissions"),
            settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "App Permissions")),
            settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Permission status and access")),

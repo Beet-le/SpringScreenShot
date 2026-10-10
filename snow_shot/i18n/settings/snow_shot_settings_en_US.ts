@@ -1189,8 +1189,8 @@
             <translation>All screenshot history will be removed</translation>
         </message>
         <message>
-            <source>Allow MCP clients running as your OS user to control Snow Shot. Snow Shot must be running.</source>
-            <translation>Allow MCP clients running as your OS user to control Snow Shot. Snow Shot must be running.</translation>
+            <source>Allow MCP clients running as your OS user to control Spring ScreenShot. Spring ScreenShot must be running.</source>
+            <translation>Allow MCP clients running as your OS user to control Spring ScreenShot. Spring ScreenShot must be running.</translation>
         </message>
         <message>
             <source>Allow resizing the selection from its borders while non-move tools are active</source>
@@ -1525,8 +1525,8 @@
             <translation>Child elements</translation>
         </message>
         <message>
-            <source>Choose an image for Snow Shot's custom tray menu. Native system menus keep their system appearance. Clear the path to remove this skin.</source>
-            <translation>Choose an image for Snow Shot's custom tray menu. Native system menus keep their system appearance. Clear the path to remove this skin.</translation>
+            <source>Choose an image for Spring ScreenShot's custom tray menu. Native system menus keep their system appearance. Clear the path to remove this skin.</source>
+            <translation>Choose an image for Spring ScreenShot's custom tray menu. Native system menus keep their system appearance. Clear the path to remove this skin.</translation>
         </message>
         <message>
             <source>Choose an image for the screenshot, pin-to-screen, full-screen canvas and screen recording toolbar rows. Clear the path to remove this skin.</source>
@@ -1633,8 +1633,8 @@
             <translation>Choose the primary language for translation</translation>
         </message>
         <message>
-            <source>Choose the scheduling level for the interface and application workers. Changes take effect after restarting Snow Shot.</source>
-            <translation>Choose the scheduling level for the interface and application workers. Changes take effect after restarting Snow Shot.</translation>
+            <source>Choose the scheduling level for the interface and application workers. Changes take effect after restarting Spring ScreenShot.</source>
+            <translation>Choose the scheduling level for the interface and application workers. Changes take effect after restarting Spring ScreenShot.</translation>
         </message>
         <message>
             <source>Choose the server for built-in online services. Application updates are not affected.</source>
@@ -1813,8 +1813,8 @@
             <translation>Confirm before exiting screenshot via shortcut</translation>
         </message>
         <message>
-            <source>Connect AI clients to Snow Shot</source>
-            <translation>Connect AI clients to Snow Shot</translation>
+            <source>Connect AI clients to Spring ScreenShot</source>
+            <translation>Connect AI clients to Spring ScreenShot</translation>
         </message>
         <message>
             <source>Contain</source>
@@ -2541,8 +2541,8 @@
             <translation>Keyboard shortcuts</translation>
         </message>
         <message>
-            <source>Keyboard shortcuts used within Snow Shot tools</source>
-            <translation>Keyboard shortcuts used within Snow Shot tools</translation>
+            <source>Keyboard shortcuts used within Spring ScreenShot tools</source>
+            <translation>Keyboard shortcuts used within Spring ScreenShot tools</translation>
         </message>
         <message>
             <source>Landscape A4</source>
@@ -2645,12 +2645,12 @@
             <translation>Main Interface Skin Position</translation>
         </message>
         <message>
-            <source>Manage Snow Shot's login permission in macOS System Settings</source>
-            <translation>Manage Snow Shot's login permission in macOS System Settings</translation>
+            <source>Manage Spring ScreenShot's login permission in macOS System Settings</source>
+            <translation>Manage Spring ScreenShot's login permission in macOS System Settings</translation>
         </message>
         <message>
-            <source>Manage macOS permissions for Snow Shot</source>
-            <translation>Manage macOS permissions for Snow Shot</translation>
+            <source>Manage macOS permissions for Spring ScreenShot</source>
+            <translation>Manage macOS permissions for Spring ScreenShot</translation>
         </message>
         <message>
             <source>Manual</source>
@@ -3253,8 +3253,8 @@
             <translation>Restart App</translation>
         </message>
         <message>
-            <source>Restart SpringScreenShot with administrator privileges</source>
-            <translation>Restart SpringScreenShot with administrator privileges</translation>
+            <source>Restart Spring ScreenShot with administrator privileges</source>
+            <translation>Restart Spring ScreenShot with administrator privileges</translation>
         </message>
         <message>
             <source>Restart as administrator</source>
@@ -3553,8 +3553,8 @@
             <translation>Server address</translation>
         </message>
         <message>
-            <source>Set quality for image files saved outside the Snow Shot dialog</source>
-            <translation>Set quality for image files saved outside the Snow Shot dialog</translation>
+            <source>Set quality for image files saved outside the Spring ScreenShot dialog</source>
+            <translation>Set quality for image files saved outside the Spring ScreenShot dialog</translation>
         </message>
         <message>
             <source>Set the border color of locked pinned screenshots</source>
@@ -3785,12 +3785,12 @@
             <translation>Smart selection</translation>
         </message>
         <message>
-            <source>Snow Shot</source>
-            <translation>Snow Shot</translation>
+            <source>Spring ScreenShot</source>
+            <translation>Spring ScreenShot</translation>
         </message>
         <message>
-            <source>Snow Shot server</source>
-            <translation>Snow Shot server</translation>
+            <source>Spring ScreenShot server</source>
+            <translation>Spring ScreenShot server</translation>
         </message>
         <message>
             <source>Snowflake</source>
@@ -3845,16 +3845,16 @@
             <translation>Standalone Translation Window</translation>
         </message>
         <message>
-            <source>Start SpringScreenShot in the background when Windows starts</source>
-            <translation>Start SpringScreenShot in the background when Windows starts</translation>
+            <source>Start Spring ScreenShot in the background when Windows starts</source>
+            <translation>Start Spring ScreenShot in the background when Windows starts</translation>
         </message>
         <message>
-            <source>Start SpringScreenShot in the background when you log in.</source>
-            <translation>Start SpringScreenShot in the background when you log in.</translation>
+            <source>Start Spring ScreenShot in the background when you log in.</source>
+            <translation>Start Spring ScreenShot in the background when you log in.</translation>
         </message>
         <message>
-            <source>Start SpringScreenShot with administrator privileges when you sign in</source>
-            <translation>Start SpringScreenShot with administrator privileges when you sign in</translation>
+            <source>Start Spring ScreenShot with administrator privileges when you sign in</source>
+            <translation>Start Spring ScreenShot with administrator privileges when you sign in</translation>
         </message>
         <message>
             <source>Start a screen recording from a confirmed selection</source>

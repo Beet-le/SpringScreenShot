@@ -119,20 +119,29 @@ QVector<QStringList> defaultDrawingToolbarPositions() {
 
 QVector<QStringList> defaultActionToolbarPositions() {
     return editionActionPositions({
-        {QStringLiteral("convert-to-html"), QStringLiteral("convert-to-markdown"),
-         QStringLiteral("latex-recognition"), QStringLiteral("barcode-recognition"),
-         QStringLiteral("table-recognition")},
+        {QStringLiteral("barcode-recognition")},
         {QStringLiteral("record-screen")},
         {QStringLiteral("pin-to-screen")},
         {QStringLiteral("text-recognition")},
-        {QStringLiteral("text-translation")},
         {QStringLiteral("scrolling-screenshot")},
-        {QStringLiteral("upload-to-cloud"), QStringLiteral("print"), QStringLiteral("quick-save"),
-         QStringLiteral("save-as-file")},
+        {QStringLiteral("quick-save"), QStringLiteral("save-as-file")},
         {QStringLiteral("separator")},
         {QStringLiteral("cancel")},
         {QStringLiteral("copy")},
     });
+}
+
+// Tools kept out of the default screenshot action toolbar; users can drag them back.
+QStringList defaultActionToolbarHidden() {
+    QStringList ids{QStringLiteral("print"),
+                    QStringLiteral("upload-to-cloud"),
+                    QStringLiteral("latex-recognition"),
+                    QStringLiteral("convert-to-markdown"),
+                    QStringLiteral("convert-to-html"),
+                    QStringLiteral("text-translation"),
+                    QStringLiteral("table-recognition")};
+    ids.removeIf([](const QString& id) { return !presentation::editionActionToolAvailable(id); });
+    return ids;
 }
 
 const QStringList kPinnedActionToolbarItemIds = editionActionIds(
@@ -160,11 +169,19 @@ QVector<QStringList> defaultPinnedActionToolbarPositions() {
     });
 }
 
-QJsonObject defaultToolbarLayout(const QVector<QStringList>& positions, bool actionTools = false) {
+QJsonObject defaultToolbarLayout(const QVector<QStringList>& positions, bool actionTools = false,
+                                 const QStringList& extraHidden = {}) {
+    QStringList hidden;
+    if (actionTools && app::edition::isMini) {
+        hidden.push_back(QStringLiteral("text-recognition"));
+    }
+    for (const QString& id : extraHidden) {
+        if (!hidden.contains(id)) {
+            hidden.push_back(id);
+        }
+    }
     return {{QStringLiteral("positions"), jsonArray(positions)},
-            {QStringLiteral("hidden"), actionTools && app::edition::isMini
-                                           ? QJsonArray{QStringLiteral("text-recognition")}
-                                           : QJsonArray()}};
+            {QStringLiteral("hidden"), jsonArray(hidden)}};
 }
 
 const QStringList kRecordingActionToolbarItemIds = {
@@ -682,7 +699,8 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
     {QStringLiteral("screen_recording/video_save_directory"),
      defaultOutputDirectory(QStandardPaths::MoviesLocation), ConfigurationValueKind::String},
     {QStringLiteral("screen_recording/video_filename_format"),
-     QStringLiteral("SpringScreenShot_Video_{YYYY-MM-DD_HH-mm-ss}"), ConfigurationValueKind::String},
+     QStringLiteral("SpringScreenShot_Video_{YYYY-MM-DD_HH-mm-ss}"),
+     ConfigurationValueKind::String},
     {QStringLiteral("drawing/quick_selection_disabled_tools"),
      QJsonArray{QStringLiteral("free-draw"), QStringLiteral("pen-filter")},
      ConfigurationValueKind::StringList,
@@ -1222,7 +1240,7 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      defaultToolbarLayout(defaultPinnedActionToolbarPositions(), true),
      ConfigurationValueKind::Structured},
     {QStringLiteral("screenshot_toolbar/action_tools_layout"),
-     defaultToolbarLayout(defaultActionToolbarPositions(), true),
+     defaultToolbarLayout(defaultActionToolbarPositions(), true, defaultActionToolbarHidden()),
      ConfigurationValueKind::Structured},
     {QStringLiteral("screen_recording/action_tools_layout"),
      defaultToolbarLayout(defaultRecordingActionToolbarPositions()),
@@ -2434,7 +2452,7 @@ ConfigurationNormalization ConfigurationSchema::normalize(const QString& key,
     }
     if (key == QStringLiteral("screenshot_toolbar/action_tools_layout")) {
         return normalizeToolbarLayout(value, kActionToolbarItemIds, defaultActionToolbarPositions(),
-                                      true);
+                                      true, defaultActionToolbarHidden());
     }
     if (key == QStringLiteral("screen_recording/action_tools_layout")) {
         return normalizeToolbarLayout(value, kRecordingActionToolbarItemIds,

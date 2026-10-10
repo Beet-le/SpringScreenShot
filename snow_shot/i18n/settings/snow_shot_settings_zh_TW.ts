@@ -1189,8 +1189,8 @@
             <translation>所有截圖歷史都將被移除</translation>
         </message>
         <message>
-            <source>Allow MCP clients running as your OS user to control Snow Shot. Snow Shot must be running.</source>
-            <translation>允許以目前系統使用者身分執行的 MCP 用戶端控制 Snow Shot。Snow Shot 必須保持執行。</translation>
+            <source>Allow MCP clients running as your OS user to control Spring ScreenShot. Spring ScreenShot must be running.</source>
+            <translation>允許以目前系統使用者身分執行的 MCP 用戶端控制 Spring ScreenShot。Spring ScreenShot 必須保持執行。</translation>
         </message>
         <message>
             <source>Allow resizing the selection from its borders while non-move tools are active</source>
@@ -1525,8 +1525,8 @@
             <translation>子元素</translation>
         </message>
         <message>
-            <source>Choose an image for Snow Shot's custom tray menu. Native system menus keep their system appearance. Clear the path to remove this skin.</source>
-            <translation>為 Snow Shot 自訂系統匣選單選擇影像。系統原生選單保留系統外觀。清空路徑可移除此皮膚。</translation>
+            <source>Choose an image for Spring ScreenShot's custom tray menu. Native system menus keep their system appearance. Clear the path to remove this skin.</source>
+            <translation>為 Spring ScreenShot 自訂系統匣選單選擇影像。系統原生選單保留系統外觀。清空路徑可移除此皮膚。</translation>
         </message>
         <message>
             <source>Choose an image for the screenshot, pin-to-screen, full-screen canvas and screen recording toolbar rows. Clear the path to remove this skin.</source>
@@ -1633,8 +1633,8 @@
             <translation>選擇翻譯的主要目標語言</translation>
         </message>
         <message>
-            <source>Choose the scheduling level for the interface and application workers. Changes take effect after restarting Snow Shot.</source>
-            <translation>選擇介面及應用程式工作執行緒的排程等級。變更將於重新啟動 Snow Shot 後生效。</translation>
+            <source>Choose the scheduling level for the interface and application workers. Changes take effect after restarting Spring ScreenShot.</source>
+            <translation>選擇介面及應用程式工作執行緒的排程等級。變更將於重新啟動 Spring ScreenShot 後生效。</translation>
         </message>
         <message>
             <source>Choose the server for built-in online services. Application updates are not affected.</source>
@@ -1813,8 +1813,8 @@
             <translation>使用快速鍵結束截圖前確認</translation>
         </message>
         <message>
-            <source>Connect AI clients to Snow Shot</source>
-            <translation>將 AI 用戶端連線至 Snow Shot</translation>
+            <source>Connect AI clients to Spring ScreenShot</source>
+            <translation>將 AI 用戶端連線至 Spring ScreenShot</translation>
         </message>
         <message>
             <source>Contain</source>
@@ -2541,8 +2541,8 @@
             <translation>鍵盤快捷鍵</translation>
         </message>
         <message>
-            <source>Keyboard shortcuts used within Snow Shot tools</source>
-            <translation>Snow Shot 工具內使用的鍵盤快速鍵</translation>
+            <source>Keyboard shortcuts used within Spring ScreenShot tools</source>
+            <translation>Spring ScreenShot 工具內使用的鍵盤快速鍵</translation>
         </message>
         <message>
             <source>Landscape A4</source>
@@ -2645,12 +2645,12 @@
             <translation>主介面皮膚位置</translation>
         </message>
         <message>
-            <source>Manage Snow Shot's login permission in macOS System Settings</source>
-            <translation>在 macOS 系統設定中管理 Snow Shot 的登入權限</translation>
+            <source>Manage Spring ScreenShot's login permission in macOS System Settings</source>
+            <translation>在 macOS 系統設定中管理 Spring ScreenShot 的登入權限</translation>
         </message>
         <message>
-            <source>Manage macOS permissions for Snow Shot</source>
-            <translation>管理 Snow Shot 的 macOS 權限</translation>
+            <source>Manage macOS permissions for Spring ScreenShot</source>
+            <translation>管理 Spring ScreenShot 的 macOS 權限</translation>
         </message>
         <message>
             <source>Manual</source>
@@ -3253,8 +3253,8 @@
             <translation>重新啟動應用程式</translation>
         </message>
         <message>
-            <source>Restart SpringScreenShot with administrator privileges</source>
-            <translation>以系統管理員權限重新啟動 SpringScreenShot</translation>
+            <source>Restart Spring ScreenShot with administrator privileges</source>
+            <translation>以系統管理員權限重新啟動 Spring ScreenShot</translation>
         </message>
         <message>
             <source>Restart as administrator</source>
@@ -3553,8 +3553,8 @@
             <translation>伺服器位址</translation>
         </message>
         <message>
-            <source>Set quality for image files saved outside the Snow Shot dialog</source>
-            <translation>設定在 Snow Shot 對話框以外儲存的影像檔案品質</translation>
+            <source>Set quality for image files saved outside the Spring ScreenShot dialog</source>
+            <translation>設定在 Spring ScreenShot 對話框以外儲存的影像檔案品質</translation>
         </message>
         <message>
             <source>Set the border color of locked pinned screenshots</source>
@@ -3785,12 +3785,12 @@
             <translation>智慧選取</translation>
         </message>
         <message>
-            <source>Snow Shot</source>
-            <translation>Snow Shot</translation>
+            <source>Spring ScreenShot</source>
+            <translation>Spring ScreenShot</translation>
         </message>
         <message>
-            <source>Snow Shot server</source>
-            <translation>Snow Shot 伺服器</translation>
+            <source>Spring ScreenShot server</source>
+            <translation>Spring ScreenShot 伺服器</translation>
         </message>
         <message>
             <source>Snowflake</source>
@@ -3845,16 +3845,16 @@
             <translation>獨立翻譯視窗</translation>
         </message>
         <message>
-            <source>Start SpringScreenShot in the background when Windows starts</source>
-            <translation>Windows 啟動時在背景啟動 SpringScreenShot</translation>
+            <source>Start Spring ScreenShot in the background when Windows starts</source>
+            <translation>Windows 啟動時在背景啟動 Spring ScreenShot</translation>
         </message>
         <message>
-            <source>Start SpringScreenShot in the background when you log in.</source>
-            <translation>登入時在背景啟動 SpringScreenShot。</translation>
+            <source>Start Spring ScreenShot in the background when you log in.</source>
+            <translation>登入時在背景啟動 Spring ScreenShot。</translation>
         </message>
         <message>
-            <source>Start SpringScreenShot with administrator privileges when you sign in</source>
-            <translation>登入時以系統管理員權限啟動 SpringScreenShot</translation>
+            <source>Start Spring ScreenShot with administrator privileges when you sign in</source>
+            <translation>登入時以系統管理員權限啟動 Spring ScreenShot</translation>
         </message>
         <message>
             <source>Start a screen recording from a confirmed selection</source>
