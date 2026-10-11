@@ -2078,6 +2078,9 @@ void ScreenshotController::Impl::createOverlayInputPipeline() {
     actions.requestSelectionDragPresentation = [this] {
         m_presentationServices->requestSelectionDragPresentation();
     };
+    actions.adjustSelectionFromToolbar = [this](int minDx, int minDy, int maxDx, int maxDy) {
+        m_selectionEditWorkflow->adjustSelectionFromToolbar(minDx, minDy, maxDx, maxDy);
+    };
     m_overlayInputHandler =
         std::make_unique<ScreenshotOverlayInputHandler>(ScreenshotOverlayInputHandlerContext{
             m_captureState,

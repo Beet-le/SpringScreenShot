@@ -458,6 +458,7 @@ void ScreenshotOverlayInputHandler::beginSelectionDrag(ScreenshotOverlayWindow* 
         return;
     }
     m_selectionWheelSteps.reset();
+    m_selectionResizeWheelSteps.reset();
     m_angleWheelSteps.reset();
     m_snappedDuringSelectionDrag = false;
     if (m_keepSelectionAspectRatioShortcut) {
@@ -817,10 +818,17 @@ bool ScreenshotOverlayInputHandler::handleWheel(ScreenshotOverlayWindow* overlay
     const bool smartSelection =
         m_context.selection.regionType() == ScreenshotRegionType::Rectangle &&
         m_context.interaction.intelligentSelecting();
+    const bool resizeSelection =
+        m_context.interaction.moveToolActive() && m_context.interaction.canResizeSelection() &&
+        !m_context.interaction.dragging() && m_context.selection.rectangular() &&
+        !m_context.selection.regionOperationActive() && m_context.selection.hasPixelSelection();
     if (!smartSelection || m_externalDragActive)
         m_selectionWheelSteps.reset();
+    if (!resizeSelection || m_externalDragActive)
+        m_selectionResizeWheelSteps.reset();
     if (!acceptInput()) {
         m_selectionWheelSteps.reset();
+        m_selectionResizeWheelSteps.reset();
         return true;
     }
     if (m_externalDragActive)
@@ -829,6 +837,33 @@ bool ScreenshotOverlayInputHandler::handleWheel(ScreenshotOverlayWindow* overlay
         return false;
     }
     if (recognitionTool(m_context.interaction.activeTool())) {
+        return true;
+    }
+    if (resizeSelection) {
+        m_angleWheelSteps.reset();
+        const int steps = m_selectionResizeWheelSteps.consume(event);
+        if (steps == 0)
+            return true;
+
+        const QRectF selection = m_context.selection.normalizedSelection();
+        const qreal maximumInset = std::max<qreal>(
+            0, std::floor((std::min(selection.width(), selection.height()) -
+                           snow_shot::presentation::kScreenshotSelectionMinimumSize) /
+                          2.0));
+        qreal delta = std::max<qreal>(steps, -maximumInset);
+        const QRectF bounds = m_context.geometry.canvasBounds();
+        if (delta > 0 && !bounds.isNull()) {
+            const qreal maximumOutset = std::floor(std::min(
+                {selection.left() - bounds.left(), selection.top() - bounds.top(),
+                 bounds.right() - selection.right(), bounds.bottom() - selection.bottom()}));
+            delta = std::min(delta, std::max<qreal>(0, maximumOutset));
+        }
+        const int adjustment = static_cast<int>(delta);
+        if (adjustment != 0) {
+            // Move every edge by whole canvas units, keeping the center fixed without scaling.
+            m_context.actions.adjustSelectionFromToolbar(-adjustment, -adjustment, adjustment,
+                                                         adjustment);
+        }
         return true;
     }
     if (overlay != nullptr && overlay->canvas() != nullptr &&
@@ -1441,6 +1476,7 @@ void ScreenshotOverlayInputHandler::restoreScrollingCaptureAfterFailedResize() {
 
 void ScreenshotOverlayInputHandler::resetTransientShortcuts() {
     m_selectionWheelSteps.reset();
+    m_selectionResizeWheelSteps.reset();
     m_angleWheelSteps.reset();
     static_cast<void>(cancelEffectDrag());
     leaveEffectEditors();

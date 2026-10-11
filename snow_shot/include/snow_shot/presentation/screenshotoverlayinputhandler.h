@@ -139,6 +139,8 @@ struct ScreenshotOverlayInputActions {
     std::function<QPoint()> currentLogicalCursorPosition = [] { return QCursor::pos(); };
     // Only continuous drag geometry uses this request; gesture boundaries and commands stay direct.
     std::function<void()> requestSelectionDragPresentation = {};
+    std::function<void(int minDx, int minDy, int maxDx, int maxDy)> adjustSelectionFromToolbar =
+        [](int, int, int, int) {};
 };
 
 struct ScreenshotOverlayInputHandlerContext {
@@ -288,6 +290,7 @@ class ScreenshotOverlayInputHandler final {
     bool m_consumeRegionRelease = false;
     ScreenshotOverlayInputHandlerContext m_context;
     snow_shot::presentation::WheelStepAccumulator m_selectionWheelSteps;
+    snow_shot::presentation::WheelStepAccumulator m_selectionResizeWheelSteps;
     snow_shot::presentation::WheelStepAccumulator m_angleWheelSteps;
     QPointer<SnowCanvasWidget> m_angleWheelCanvas;
     QMetaObject::Connection m_angleTargetConnection;

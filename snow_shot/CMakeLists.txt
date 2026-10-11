@@ -6247,6 +6247,17 @@ if(SNOW_SHOT_BUILD_TESTS)
     snow_shot_import_offscreen_platform(snow-shot-selection-presentation-tests)
     add_test(NAME snow-shot-selection-presentation-tests
         COMMAND snow-shot-selection-presentation-tests -platform offscreen)
+    add_executable(snow-shot-selection-wheel-tests
+        tests/screenshot_selection_wheel_tests.cpp)
+    target_link_libraries(snow-shot-selection-wheel-tests PRIVATE
+        snow-shot-selection-presentation-runtime)
+    snow_shot_import_offscreen_platform(snow-shot-selection-wheel-tests)
+    add_test(NAME snow-shot-selection-wheel-tests
+        COMMAND snow-shot-selection-wheel-tests -platform offscreen)
+    set_tests_properties(snow-shot-selection-wheel-tests PROPERTIES
+        LABELS "unit" TIMEOUT 60 SNOW_TEST_CROSS_PLATFORM TRUE
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_executable(snow-shot-selection-quick-set-tests
         tests/screenshot_selection_quick_sets_tests.cpp)
     target_link_libraries(snow-shot-selection-quick-set-tests PRIVATE
