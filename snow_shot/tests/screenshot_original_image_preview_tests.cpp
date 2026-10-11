@@ -1,4 +1,5 @@
 #include "snow_shot/presentation/screenshotoriginalimagepreviewwindow.h"
+#include "snow_shot/presentation/canvasstatusreadout.h"
 
 #include <QApplication>
 #include <QEventLoop>
@@ -8,6 +9,10 @@
 #include <QScreen>
 #include <QtMath>
 #include <QWindow>
+#include <QWheelEvent>
+#include <QTimer>
+#include <QTranslator>
+#include <QScopeGuard>
 
 #include <cmath>
 #include <array>
@@ -25,7 +30,6 @@
 #ifdef Q_OS_MACOS
 #include "snow_shot/platform/screenshotnative.h"
 #include <QElapsedTimer>
-#include <QTimer>
 #import <AppKit/AppKit.h>
 #endif
 
@@ -51,6 +55,28 @@ class ScreenshotOriginalImagePreviewWindowTestAccess final {
     }
     static void endDrag(ScreenshotOriginalImagePreviewWindow& window) {
         window.endDrag();
+    }
+    static qreal scalePercent(const ScreenshotOriginalImagePreviewWindow& window) {
+        return window.m_scalePercent;
+    }
+    static CanvasStatusReadout* scaleLabel(const ScreenshotOriginalImagePreviewWindow& window) {
+        return window.m_scaleLabel;
+    }
+    static QTimer* scaleLabelTimer(const ScreenshotOriginalImagePreviewWindow& window) {
+        return window.m_scaleLabelTimer;
+    }
+    static bool hasHintSurface(const ScreenshotOriginalImagePreviewWindow& window) {
+        return bool(window.m_hintSurface);
+    }
+    static QRect workArea(const ScreenshotOriginalImagePreviewWindow& window) {
+        return window.m_placementWorkArea;
+    }
+    static void invalidateWorkArea(ScreenshotOriginalImagePreviewWindow& window) {
+        window.m_placementWorkArea.translate(1, 0);
+    }
+    static bool scaleSteps(ScreenshotOriginalImagePreviewWindow& window, int steps,
+                           const QPointF& cursor) {
+        return window.applyWheelScaleSteps(steps, cursor);
     }
 };
 
@@ -117,27 +143,42 @@ bool sendMouseEvent(QWidget& widget, QEvent::Type type, const QPointF& globalPos
 void placementHonorsTheResultMonitorAndPriority() {
     using Preview = ScreenshotOriginalImagePreviewWindow;
     const QRect work(0, 0, 1000, 800);
-    require(Preview::placement(QRect(400, 300, 200, 100), work, 4) == QRect(196, 300, 200, 100),
-            "left placement must have priority and align to the result top");
-    require(Preview::placement(QRect(20, 300, 200, 100), work, 4) == QRect(20, 196, 200, 100),
-            "above placement must follow insufficient space on the left");
-    require(Preview::placement(QRect(20, 20, 200, 100), work, 4) == QRect(224, 20, 200, 100),
-            "right placement must follow insufficient space on the left and above");
-    require(Preview::placement(QRect(20, 20, 200, 100), QRect(0, 0, 230, 120), 4) ==
-                QRect(-184, 20, 200, 100),
-            "fallback must keep the left rectangle without shrinking or clamping");
-    require(Preview::placement(QRect(204, 0, 200, 100), work, 4) == QRect(0, 0, 200, 100),
-            "an exact fit on the work-area edge must be accepted");
-    require(Preview::placement(QRect(20, 20, 200, 100), QRect(0, 0, 1000, 80), 4) ==
-                QRect(-184, 20, 200, 100),
-            "candidate fit must check both dimensions");
-    require(Preview::placement(QRect(-1200, -200, 200, 100), QRect(-1600, -300, 1600, 900), 4) ==
-                QRect(-1404, -200, 200, 100),
-            "negative monitor coordinates must retain the same placement priority");
-    require(Preview::placement(QRect(20, 20, 200, 100), QRect(0, 0, 1000, 800), -10) ==
-                QRect(220, 20, 200, 100),
-            "negative gaps must be normalized to zero");
-    require(Preview::placement({}, work, 4).isEmpty(), "empty results must not produce a preview");
+    const auto check = [](const QRect& result, const QRect& workArea, int gap,
+                          const QRect& expected, qreal scale, const char* message) {
+        const auto actual = Preview::placement(result, workArea, gap);
+        require(actual.geometry == expected && qAbs(actual.scale - scale) < 0.000001, message);
+    };
+    check(QRect(400, 300, 200, 100), work, 4, QRect(196, 300, 200, 100), 1.0,
+          "left placement must have priority and align to the result top");
+    check(QRect(20, 300, 200, 100), work, 4, QRect(20, 196, 200, 100), 1.0,
+          "above placement must follow insufficient space on the left");
+    check(QRect(20, 20, 200, 100), work, 4, QRect(224, 20, 200, 100), 1.0,
+          "right placement must follow insufficient space on the left and above");
+    check(QRect(20, 20, 200, 100), QRect(0, 0, 230, 120), 4, QRect(20, -84, 200, 100), 1.0,
+          "a fit below fifty percent must retain full size in the best direction");
+    check(QRect(204, 0, 200, 100), work, 4, QRect(0, 0, 200, 100), 1.0,
+          "an exact fit on the work-area edge must be accepted");
+    check(QRect(20, 20, 200, 100), QRect(0, 0, 1000, 80), 4, QRect(224, 0, 160, 80), 0.8,
+          "automatic fitting must include both dimensions and clamp the vertical position");
+    check(QRect(-1200, -200, 200, 100), QRect(-1600, -300, 1600, 900), 4,
+          QRect(-1404, -200, 200, 100), 1.0,
+          "negative monitor coordinates must retain the same placement priority");
+    check(QRect(20, 20, 200, 100), work, -10, QRect(220, 20, 200, 100), 1.0,
+          "negative gaps must be normalized to zero");
+    check(QRect(400, 300, 500, 400), work, 4, QRect(0, 300, 396, 317), 0.792,
+          "the left side must use its greatest fitting scale");
+    check(QRect(304, 84, 600, 100), QRect(0, 0, 1000, 1000), 4, QRect(304, 0, 480, 80), 0.8,
+          "the best fit must win even when another direction has greater free area");
+    check(QRect(20, 20, 400, 200), QRect(0, 0, 624, 400), 4, QRect(424, 20, 200, 100), 0.5,
+          "an exact fifty-percent fit must be applied automatically");
+    check(QRect(20, 20, 400, 200), QRect(0, 0, 623, 400), 4, QRect(424, 20, 400, 200), 1.0,
+          "a fit just below fifty percent must retain full-size overflow on the winning side");
+    check(QRect(204, 104, 400, 200), QRect(0, 0, 604, 304), 4, QRect(0, 104, 200, 100), 0.5,
+          "equal fitting scales must use left, above, right priority");
+    check(QRect(400, 750, 200, 100), work, 4, QRect(196, 700, 200, 100), 1.0,
+          "a full-size side fit must clamp the orthogonal position near the bottom edge");
+    require(Preview::placement({}, work, 4).geometry.isEmpty(),
+            "empty results must not produce a preview");
 }
 
 void viewportRasterPreservesClippingAndLetterboxing() {
@@ -438,6 +479,536 @@ void formulaErrorsFitTheCompleteImageAboveTheFooter() {
         "tiny selections contract padding while retaining formula pixels and accessible errors");
 }
 
+bool sendWheelEvent(QWidget& widget, const QPointF& position, const QPoint& angleDelta,
+                    const QPoint& pixelDelta = {}, Qt::ScrollPhase phase = Qt::NoScrollPhase,
+                    quint64 timestamp = 0) {
+    QWheelEvent event(position, QPointF(widget.mapToGlobal(position.toPoint())), pixelDelta,
+                      angleDelta, Qt::NoButton, Qt::NoModifier, phase, false);
+    event.setTimestamp(timestamp);
+    event.ignore();
+    QApplication::sendEvent(&widget, &event);
+    return event.isAccepted();
+}
+
+void wheelZoomUsesPinnedLevelsAndShowsAnEphemeralHint() {
+    if (ScreenshotOriginalImagePreviewWindow::usesPhysicalGeometry())
+        return;
+    using Access = ScreenshotOriginalImagePreviewWindowTestAccess;
+    ScreenshotOriginalImagePreviewWindow preview;
+    auto state = stateFor();
+    state.resultRect = QRect(300, 180, 100, 80);
+    state.mouseWheelZoomMode = QStringLiteral("top_left");
+    require(preview.present(state), "preparing the wheel input fixture failed");
+    settle();
+    const QPoint topLeft = preview.geometry().topLeft();
+    const QPointF position(25, 20);
+    require(sendWheelEvent(preview, position, QPoint(0, 120)) &&
+                qFuzzyCompare(Access::scalePercent(preview), qreal(110)) &&
+                preview.size() == QSize(110, 88) && preview.geometry().topLeft() == topLeft,
+            "one wheel notch must resize the preview to the next ten-percent level");
+    require(sendWheelEvent(preview, position, QPoint(0, 60)) &&
+                qFuzzyCompare(Access::scalePercent(preview), qreal(120)),
+            "the first partial wheel delta after a complete notch must react immediately");
+    require(sendWheelEvent(preview, position, QPoint(0, 60)) &&
+                qFuzzyCompare(Access::scalePercent(preview), qreal(120)),
+            "remaining partial angle movement must accumulate without duplicating a step");
+    require(sendWheelEvent(preview, position, QPoint(0, -240)) &&
+                qFuzzyCompare(Access::scalePercent(preview), qreal(100)),
+            "multiple wheel notches must apply every ten-percent step");
+    require(sendWheelEvent(preview, position, QPoint(), QPoint(0, 1)) &&
+                qFuzzyCompare(Access::scalePercent(preview), qreal(110)) &&
+                sendWheelEvent(preview, position, QPoint(), QPoint(0, -1)) &&
+                qFuzzyCompare(Access::scalePercent(preview), qreal(100)),
+            "vertical pixel deltas must zoom one level in either direction");
+    sendWheelEvent(preview, position, QPoint(120, 0));
+    require(qFuzzyCompare(Access::scalePercent(preview), qreal(100)),
+            "horizontal-only wheel input must not change the preview scale");
+    auto* label = Access::scaleLabel(preview);
+    auto* timer = Access::scaleLabelTimer(preview);
+    require(label && timer && label->isVisible() && timer->isActive() &&
+                label->accessibleName() == QStringLiteral("Scale: 100%") &&
+                preview.rect().contains(label->geometry()) && label->geometry().left() <= 8 &&
+                preview.height() - label->geometry().bottom() <= 9 &&
+                label->testAttribute(Qt::WA_TransparentForMouseEvents),
+            "zooming must show a passive percentage hint inside the bottom-left corner");
+    const quint64 generation = Access::generation(preview);
+    const uchar* const pixels = Access::raster(preview).constBits();
+    preview.repaint();
+    settle();
+    require(Access::generation(preview) == generation &&
+                Access::raster(preview).constBits() == pixels,
+            "drawing the zoom hint must reuse the cached preview raster");
+    timer->stop();
+    require(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection),
+            "dispatching the deterministic zoom hint timeout failed");
+    require(label->isHidden() && Access::generation(preview) == generation &&
+                Access::raster(preview).constBits() == pixels,
+            "the percentage hint timeout must hide the hint without rebuilding preview pixels");
+    require(Access::scaleSteps(preview, 100, QPointF(preview.geometry().center())) &&
+                qFuzzyCompare(Access::scalePercent(preview), qreal(500)),
+            "manual zoom must clamp at five hundred percent");
+    require(Access::scaleSteps(preview, -100, QPointF(preview.geometry().center())) &&
+                qFuzzyCompare(Access::scalePercent(preview), qreal(10)),
+            "manual zoom must clamp at ten percent");
+}
+
+void visibleScaleHintRetranslatesWithoutChangingZoom() {
+    if (ScreenshotOriginalImagePreviewWindow::usesPhysicalGeometry())
+        return;
+    class ScaleHintTranslator final : public QTranslator {
+      public:
+        bool isEmpty() const override {
+            return false;
+        }
+        QString translate(const char* context, const char* source, const char*,
+                          int) const override {
+            if (qstrcmp(context, "ScreenshotOriginalImagePreviewWindow") == 0 &&
+                qstrcmp(source, "Scale: %1%") == 0)
+                return QStringLiteral("Translated scale: %1%");
+            return {};
+        }
+    } translator;
+    using Access = ScreenshotOriginalImagePreviewWindowTestAccess;
+    ScreenshotOriginalImagePreviewWindow preview;
+    auto state = stateFor();
+    state.resultRect = QRect(300, 180, 100, 80);
+    require(preview.present(state) &&
+                Access::scaleSteps(preview, 1, QPointF(preview.geometry().center())),
+            "preparing the live language zoom hint fixture failed");
+    const QRect geometry = preview.geometry();
+    const quint64 generation = Access::generation(preview);
+    const uchar* const pixels = Access::raster(preview).constBits();
+    require(QCoreApplication::installTranslator(&translator),
+            "installing the zoom hint translator failed");
+    const auto restore = qScopeGuard([&] { QCoreApplication::removeTranslator(&translator); });
+    settle();
+    require(
+        Access::scaleLabel(preview)->isVisible() &&
+            Access::scaleLabel(preview)->accessibleName() ==
+                QStringLiteral("Translated scale: 110%") &&
+            preview.geometry() == geometry && Access::generation(preview) == generation &&
+            Access::raster(preview).constBits() == pixels,
+        "language changes must retranslate a visible scale hint while preserving zoom and pixels");
+    QCoreApplication::removeTranslator(&translator);
+    settle();
+    require(Access::scaleLabel(preview)->accessibleName() == QStringLiteral("Scale: 110%"),
+            "removing the translator must restore the source-language hint");
+}
+
+void wheelGesturesRespectBoundariesAndIgnoreMomentum() {
+    if (ScreenshotOriginalImagePreviewWindow::usesPhysicalGeometry())
+        return;
+    using Access = ScreenshotOriginalImagePreviewWindowTestAccess;
+    ScreenshotOriginalImagePreviewWindow preview;
+    auto state = stateFor();
+    state.resultRect = QRect(300, 180, 100, 80);
+    require(preview.present(state), "preparing the wheel gesture fixture failed");
+    const QPointF position(25, 20);
+    require(sendWheelEvent(preview, position, QPoint(0, 60), {}, Qt::ScrollBegin) &&
+                qFuzzyCompare(Access::scalePercent(preview), qreal(110)),
+            "a gesture's first partial wheel delta must react immediately");
+    require(sendWheelEvent(preview, position, QPoint(0, 60), {}, Qt::ScrollUpdate) &&
+                qFuzzyCompare(Access::scalePercent(preview), qreal(110)) &&
+                sendWheelEvent(preview, position, QPoint(0, 60), {}, Qt::ScrollUpdate) &&
+                qFuzzyCompare(Access::scalePercent(preview), qreal(120)),
+            "a wheel gesture must retain the coalesced partial angle movement");
+    require(sendWheelEvent(preview, position, QPoint(0, 120), {}, Qt::ScrollMomentum) &&
+                qFuzzyCompare(Access::scalePercent(preview), qreal(120)) &&
+                sendWheelEvent(preview, position, QPoint(0, 120), {}, Qt::ScrollEnd) &&
+                qFuzzyCompare(Access::scalePercent(preview), qreal(120)),
+            "momentum and scroll-end deltas must be consumed without changing scale");
+    require(sendWheelEvent(preview, position, {}, QPoint(0, 1), Qt::ScrollBegin) &&
+                qFuzzyCompare(Access::scalePercent(preview), qreal(130)) &&
+                sendWheelEvent(preview, position, {}, QPoint(0, 50), Qt::ScrollUpdate) &&
+                qFuzzyCompare(Access::scalePercent(preview), qreal(130)),
+            "precise wheel gestures must react immediately and retain their pixel remainder");
+    sendWheelEvent(preview, position, {}, {}, Qt::ScrollEnd);
+    require(sendWheelEvent(preview, position, QPoint(0, 1), {}, Qt::NoScrollPhase, 100) &&
+                qFuzzyCompare(Access::scalePercent(preview), qreal(140)) &&
+                sendWheelEvent(preview, position, QPoint(0, 1), {}, Qt::NoScrollPhase, 400) &&
+                qFuzzyCompare(Access::scalePercent(preview), qreal(150)),
+            "separate wheel bursts must each respond to their first partial delta");
+}
+
+void automaticScaleAdvancesToPinnedWheelLevels() {
+    if (ScreenshotOriginalImagePreviewWindow::usesPhysicalGeometry())
+        return;
+    using Access = ScreenshotOriginalImagePreviewWindowTestAccess;
+    QScreen* screen = QGuiApplication::primaryScreen();
+    require(screen != nullptr, "automatic scale fixture requires a screen");
+    const QRect work = screen->availableGeometry();
+    ScreenshotOriginalImagePreviewWindow preview;
+    auto state = stateFor();
+    state.resultRect =
+        QRect(work.topLeft() + QPoint(4, 4),
+              QSize(qRound((work.width() - 8) / 1.83), std::min(200, work.height() - 8)));
+    state.mouseWheelZoomMode = QStringLiteral("top_left");
+    require(preview.present(state), "preparing the arbitrary auto-fit scale failed");
+    const qreal automaticPercent = Access::scalePercent(preview);
+    require(automaticPercent >= 50 && automaticPercent < 100 && work.contains(preview.geometry()),
+            "automatic fitting must use the available right-side space");
+    const int displayed = qRound(automaticPercent);
+    const int nextUp = (displayed / 10 + 1) * 10;
+    require(Access::scaleSteps(preview, 1, QPointF(preview.geometry().center())) &&
+                qFuzzyCompare(Access::scalePercent(preview), qreal(nextUp)),
+            "an arbitrary automatic scale must advance to the next pinned zoom level");
+    preview.clear();
+    require(preview.present(state), "restoring the arbitrary auto-fit scale failed");
+    const int nextDown = ((displayed + 9) / 10 - 1) * 10;
+    require(Access::scaleSteps(preview, -1, QPointF(preview.geometry().center())) &&
+                qFuzzyCompare(Access::scalePercent(preview), qreal(nextDown)),
+            "an arbitrary automatic scale must decrease to the preceding pinned zoom level");
+}
+
+void wheelZoomUsesConfiguredAnchors() {
+    if (ScreenshotOriginalImagePreviewWindow::usesPhysicalGeometry())
+        return;
+    using Access = ScreenshotOriginalImagePreviewWindowTestAccess;
+    for (const QString& mode : {QStringLiteral("top_left"), QStringLiteral("top_right"),
+                                QStringLiteral("bottom_left"), QStringLiteral("bottom_right"),
+                                QStringLiteral("center"), QStringLiteral("mouse_position")}) {
+        ScreenshotOriginalImagePreviewWindow preview;
+        auto state = stateFor();
+        state.resultRect = QRect(300, 180, 100, 80);
+        state.mouseWheelZoomMode = mode;
+        require(preview.present(state), "preparing the configured zoom anchor failed");
+        const QRect initial = preview.geometry();
+        const QPointF cursor(initial.topLeft() + QPoint(25, 20));
+        require(Access::scaleSteps(preview, 2, cursor) && preview.size() == QSize(120, 96),
+                "configured anchor zoom failed");
+        if (mode == QStringLiteral("top_left")) {
+            require(preview.geometry().topLeft() == initial.topLeft(),
+                    "top-left zoom must preserve the window's top-left corner");
+        } else if (mode == QStringLiteral("top_right")) {
+            require(preview.geometry().topRight() == initial.topRight(),
+                    "top-right zoom must preserve the window's top-right corner");
+        } else if (mode == QStringLiteral("bottom_left")) {
+            require(preview.geometry().bottomLeft() == initial.bottomLeft(),
+                    "bottom-left zoom must preserve the window's bottom-left corner");
+        } else if (mode == QStringLiteral("bottom_right")) {
+            require(preview.geometry().bottomRight() == initial.bottomRight(),
+                    "bottom-right zoom must preserve the window's bottom-right corner");
+        } else if (mode == QStringLiteral("center")) {
+            require(preview.geometry().topLeft() == initial.topLeft() - QPoint(10, 8),
+                    "center zoom must preserve the window's center");
+        } else {
+            require(preview.geometry().topLeft() == initial.topLeft() - QPoint(5, 4),
+                    "mouse-position zoom must preserve the source point below the cursor");
+        }
+    }
+}
+
+void zoomScalesTheViewportMappingAndFormulaPlaceholders() {
+    if (ScreenshotOriginalImagePreviewWindow::usesPhysicalGeometry())
+        return;
+    using Access = ScreenshotOriginalImagePreviewWindowTestAccess;
+    ScreenshotOriginalImagePreviewWindow preview;
+    auto state = stateFor();
+    state.resultRect = QRect(300, 180, 80, 60);
+    state.image.fill(QColor(210, 30, 40));
+    state.imageRectInViewport = QRectF(4, 3, 16, 12);
+    state.mouseWheelZoomMode = QStringLiteral("top_left");
+    require(preview.present(state) &&
+                Access::scaleSteps(preview, 5, QPointF(preview.geometry().center())),
+            "zooming the mapped original image failed");
+    const qreal dpr = preview.devicePixelRatioF();
+    const QImage& raster = Access::raster(preview);
+    require(preview.size() == QSize(120, 90) &&
+                raster.size() == QSize(qRound(120 * dpr), qRound(90 * dpr)) &&
+                raster.pixelColor(qRound(10 * dpr), qRound(10 * dpr)) == QColor(210, 30, 40) &&
+                raster.pixelColor(qRound(2 * dpr), qRound(2 * dpr)).alpha() == 0 &&
+                raster.pixelColor(qRound(35 * dpr), qRound(10 * dpr)).alpha() == 0,
+            "zoom must resize the complete clipped and letterboxed viewport mapping");
+    const quint64 generation = Access::generation(preview);
+    require(preview.present(state) && preview.size() == QSize(120, 90) &&
+                Access::generation(preview) == generation,
+            "content refresh must not compound the stored source mapping or zoom");
+    state.formula = true;
+    state.image = {};
+    state.background = QColor(35, 75, 115);
+    state.statusColor = Qt::white;
+    state.status = QStringLiteral("Rendering formula...");
+    require(preview.present(state) && preview.size() == QSize(120, 90) &&
+                Access::source(preview).isNull() &&
+                Access::raster(preview).pixelColor(0, 0) == state.background &&
+                preview.accessibleDescription() == state.status,
+            "zoomed formula placeholders must remain visible without a source image");
+    state.image = sourceImage();
+    state.dimmed = true;
+    state.status = QStringLiteral("Invalid formula source");
+    require(preview.present(state) && preview.size() == QSize(120, 90) &&
+                preview.accessibleDescription() == state.status &&
+                Access::source(preview).constBits() == state.image.constBits(),
+            "zoomed formula errors must retain the source and status footer");
+}
+
+void rejectedZoomPreservesGeometryRasterAndScale() {
+    if (ScreenshotOriginalImagePreviewWindow::usesPhysicalGeometry())
+        return;
+    using Access = ScreenshotOriginalImagePreviewWindowTestAccess;
+    ScreenshotOriginalImagePreviewWindow preview;
+    auto state = stateFor();
+    state.resultRect = QRect(0, 0, 1000, 1000);
+    state.formula = true;
+    state.image = {};
+    state.imageRectInViewport = QRectF(0, 0, 1000, 1000);
+    state.background = QColor(35, 75, 115);
+    state.mouseWheelZoomMode = QStringLiteral("top_left");
+    require(preview.present(state) &&
+                Access::scaleSteps(preview, -1, QPointF(preview.geometry().center())),
+            "preparing the formula allocation limit fixture and prior zoom hint failed");
+    const QRect geometry = preview.geometry();
+    const qreal scale = Access::scalePercent(preview);
+    const quint64 generation = Access::generation(preview);
+    const uchar* const pixels = Access::raster(preview).constBits();
+    require(
+        !Access::scaleSteps(preview, 100, QPointF(geometry.center())) && preview.isVisible() &&
+            preview.geometry() == geometry && qFuzzyCompare(Access::scalePercent(preview), scale) &&
+            Access::generation(preview) == generation &&
+            Access::raster(preview).constBits() == pixels &&
+            Access::scaleLabel(preview)->isVisible() &&
+            Access::scaleLabelTimer(preview)->isActive() &&
+            Access::scaleLabel(preview)->accessibleName() == QStringLiteral("Scale: 90%") &&
+            preview.present(state) && preview.geometry() == geometry &&
+            qFuzzyCompare(Access::scalePercent(preview), scale),
+        "a zoom exceeding the raster limit must preserve the visible geometry and cached state");
+}
+
+void rejectedAutomaticPresentationPreservesThePriorValidPreview() {
+    if (ScreenshotOriginalImagePreviewWindow::usesPhysicalGeometry())
+        return;
+    using Access = ScreenshotOriginalImagePreviewWindowTestAccess;
+    ScreenshotOriginalImagePreviewWindow preview;
+    auto state = stateFor();
+    state.resultRect = QRect(300, 180, 100, 80);
+    state.formula = true;
+    state.background = QColor(35, 75, 115);
+    require(preview.present(state), "preparing the automatic presentation rollback fixture failed");
+    const QRect geometry = preview.geometry();
+    const qreal scale = Access::scalePercent(preview);
+    const quint64 generation = Access::generation(preview);
+    const uchar* const pixels = Access::raster(preview).constBits();
+    const uchar* const sourcePixels = Access::source(preview).constBits();
+    auto oversized = state;
+    oversized.resultRect.setSize(QSize(20000, 20000));
+    oversized.imageRectInViewport = QRectF(0, 0, 20000, 20000);
+    oversized.image.fill(Qt::blue);
+    oversized.status = QStringLiteral("Replacement status");
+    require(
+        preview.present(oversized) && preview.isVisible() && preview.geometry() == geometry &&
+            qFuzzyCompare(Access::scalePercent(preview), scale) &&
+            Access::generation(preview) == generation &&
+            Access::raster(preview).constBits() == pixels &&
+            Access::source(preview).constBits() == sourcePixels &&
+            preview.accessibleDescription().isEmpty(),
+        "a failed automatic raster must preserve the prior geometry, source, pixels and status");
+    require(preview.present(state) && preview.geometry() == geometry &&
+                Access::generation(preview) == generation,
+            "a rejected replacement must leave the prior presentation context reusable");
+}
+
+QScreen* mixedDpiScreen(const QString& name, qreal dpr) {
+    for (QScreen* screen : QGuiApplication::screens()) {
+        if (screen->name() == name) {
+            require(qFuzzyCompare(screen->devicePixelRatio(), dpr),
+                    "the mixed-DPI fixture must expose the requested output DPR");
+            return screen;
+        }
+    }
+    throw std::runtime_error("the mixed-DPI fixture screen is missing");
+}
+
+void mixedDpiPresentationUsesTheDestinationRasterLimit() {
+    using Access = ScreenshotOriginalImagePreviewWindowTestAccess;
+    QScreen* const lowDpi = mixedDpiScreen(QStringLiteral("external"), 1);
+    QScreen* const highDpi = mixedDpiScreen(QStringLiteral("retina"), 2);
+    QWidget owner;
+    owner.setScreen(lowDpi);
+    owner.setGeometry(lowDpi->geometry().x() + 1000, 100, 100, 80);
+    owner.show();
+    ScreenshotOriginalImagePreviewWindow preview(&owner);
+    auto state = stateFor(&owner);
+    state.resultRect = owner.geometry();
+    state.formula = true;
+    state.background = QColor(35, 75, 115);
+    require(preview.present(state), "preparing the owned mixed-DPI preview failed");
+    settle();
+    const QPointF cursor(preview.geometry().center());
+    require(Access::beginDrag(preview, cursor), "starting the mixed-DPI preview drag failed");
+    Access::moveDrag(preview, QPointF(highDpi->geometry().center()));
+    Access::endDrag(preview);
+    settle();
+    require(preview.screen() == highDpi && qFuzzyCompare(preview.devicePixelRatioF(), qreal(2)),
+            "dragging must move the owned preview onto the high-DPI display");
+    const quint64 generation = Access::generation(preview);
+    state.resultRect = QRect(lowDpi->geometry().x() + 20, 1200, 3800, 1100);
+    state.image = sourceImage(QSize(20, 18));
+    state.imageRectInViewport = QRectF(0, 0, 3800, 1100);
+    const QRect target = ScreenshotOriginalImagePreviewWindow::placement(
+                             state.resultRect, lowDpi->availableGeometry(), 4)
+                             .geometry;
+    require(target.size() == QSize(3800, 1100),
+            "the mixed-DPI regression must retain the complete result viewport");
+    require(preview.present(state), "presenting the valid low-DPI replacement failed");
+    settle();
+    require(
+        preview.isVisible() && preview.geometry() == target && preview.screen() == lowDpi &&
+            qFuzzyCompare(preview.devicePixelRatioF(), qreal(1)) &&
+            Access::raster(preview).size() == target.size() &&
+            qFuzzyCompare(Access::raster(preview).devicePixelRatio(), qreal(1)) &&
+            Access::source(preview).constBits() == state.image.constBits() &&
+            Access::generation(preview) == generation + 1,
+        "a valid 1x replacement must use its destination DPR after a preview was dragged to 2x");
+}
+
+void mixedDpiRejectedPresentationPreservesTheWindowAndCache() {
+    using Access = ScreenshotOriginalImagePreviewWindowTestAccess;
+    QScreen* const lowDpi = mixedDpiScreen(QStringLiteral("external"), 1);
+    QScreen* const highDpi = mixedDpiScreen(QStringLiteral("retina"), 2);
+    QWidget owner;
+    owner.setScreen(lowDpi);
+    owner.setGeometry(lowDpi->geometry().x() + 1000, 100, 100, 80);
+    owner.show();
+    ScreenshotOriginalImagePreviewWindow preview(&owner);
+    auto state = stateFor(&owner);
+    state.resultRect = owner.geometry();
+    state.formula = true;
+    state.background = QColor(35, 75, 115);
+    state.mouseWheelZoomMode = QStringLiteral("top_left");
+    require(preview.present(state) &&
+                Access::scaleSteps(preview, -1, QPointF(preview.geometry().center())),
+            "preparing the low-DPI rollback fixture and zoom hint failed");
+    settle();
+    const QRect geometry = preview.geometry();
+    const quint64 generation = Access::generation(preview);
+    const uchar* const pixels = Access::raster(preview).constBits();
+    const uchar* const sourcePixels = Access::source(preview).constBits();
+    ResizeCounter resizeCounter;
+    preview.installEventFilter(&resizeCounter);
+    int screenChanges = 0;
+    const QMetaObject::Connection connection =
+        QObject::connect(preview.windowHandle(), &QWindow::screenChanged, &preview,
+                         [&screenChanges] { ++screenChanges; });
+    const auto disconnect = qScopeGuard([connection] { QObject::disconnect(connection); });
+    auto oversized = state;
+    // A full-size fallback can overflow a display; this target overlaps only the 2x screen.
+    oversized.resultRect = QRect(-3000, 600, 3800, 1100);
+    oversized.image = sourceImage(QSize(20, 18));
+    oversized.imageRectInViewport = QRectF(0, 0, 3800, 1100);
+    oversized.background = QColor(180, 30, 40);
+    oversized.status = QStringLiteral("Replacement status");
+    const QRect target = ScreenshotOriginalImagePreviewWindow::placement(
+                             oversized.resultRect, highDpi->availableGeometry(), 4)
+                             .geometry;
+    require(target.size() == QSize(3800, 1100) &&
+                !target.intersected(highDpi->geometry()).isEmpty() &&
+                target.intersected(lowDpi->geometry()).isEmpty(),
+            "the rejected mixed-DPI target must select the 2x display and exceed its raster limit");
+    require(preview.present(oversized), "rejecting a replacement must retain the valid preview");
+    settle();
+    require(preview.isVisible() && preview.geometry() == geometry && preview.screen() == lowDpi &&
+                qFuzzyCompare(preview.devicePixelRatioF(), qreal(1)) &&
+                qFuzzyCompare(Access::scalePercent(preview), qreal(90)) &&
+                Access::generation(preview) == generation &&
+                Access::raster(preview).constBits() == pixels &&
+                Access::source(preview).constBits() == sourcePixels &&
+                preview.accessibleDescription().isEmpty() &&
+                Access::scaleLabel(preview)->isVisible() &&
+                Access::scaleLabelTimer(preview)->isActive() && resizeCounter.count == 0 &&
+                screenChanges == 0,
+            "an over-limit 2x replacement must be rejected before changing the valid 1x window");
+    require(preview.present(state) && preview.geometry() == geometry &&
+                Access::generation(preview) == generation,
+            "a rejected cross-DPI replacement must preserve the reusable presentation context");
+}
+
+void mixedDpiWheelZoomPreparesOneRasterForTheDestination() {
+    using Access = ScreenshotOriginalImagePreviewWindowTestAccess;
+    QScreen* const lowDpi = mixedDpiScreen(QStringLiteral("external"), 1);
+    QScreen* const highDpi = mixedDpiScreen(QStringLiteral("retina"), 2);
+    QWidget owner;
+    owner.setScreen(highDpi);
+    owner.setGeometry(50, 50, 100, 80);
+    owner.show();
+    ScreenshotOriginalImagePreviewWindow preview(&owner);
+    auto state = stateFor(&owner);
+    // Both logical and native geometry centers stay on the intended fixture display.
+    state.resultRect = QRect(0, 0, 1000, 333);
+    state.imageRectInViewport = QRectF(0, 0, 1000, 333);
+    state.formula = true;
+    state.background = QColor(35, 75, 115);
+    state.mouseWheelZoomMode = QStringLiteral("top_left");
+    require(preview.present(state), "preparing the high-DPI wheel fixture failed");
+    settle();
+    const QPointF cursor(preview.geometry().center());
+    require(Access::beginDrag(preview, cursor), "starting the wheel fixture placement drag failed");
+    Access::moveDrag(preview, cursor + QPointF(QPoint(200, 0) - preview.geometry().topLeft()));
+    Access::endDrag(preview);
+    settle();
+    require(preview.screen() == highDpi && preview.geometry() == QRect(200, 0, 1000, 333) &&
+                Access::raster(preview).size() == QSize(2000, 666),
+            "the initial wheel fixture must use a valid high-DPI raster");
+    const quint64 generation = Access::generation(preview);
+    require(Access::scaleSteps(preview, 26, QPointF(preview.geometry().center())),
+            "a wheel target valid at its low-DPI destination must not use the old high-DPI limit");
+    settle();
+    require(preview.geometry() == QRect(200, 0, 3600, 1199) && preview.screen() == lowDpi &&
+                qFuzzyCompare(Access::scalePercent(preview), qreal(360)) &&
+                Access::raster(preview).size() == QSize(3600, 1199) &&
+                qFuzzyCompare(Access::raster(preview).devicePixelRatio(), qreal(1)) &&
+                Access::source(preview).constBits() == state.image.constBits() &&
+                Access::generation(preview) == generation + 1,
+            "cross-screen wheel growth must compose exactly one raster at the destination DPR");
+    const uchar* const pixels = Access::raster(preview).constBits();
+    require(preview.present(state) && preview.geometry() == QRect(200, 0, 3600, 1199) &&
+                Access::raster(preview).constBits() == pixels &&
+                Access::generation(preview) == generation + 1,
+            "content refresh after cross-DPI zoom must reuse the retained viewport raster");
+    require(Access::scaleSteps(preview, -26, QPointF(preview.geometry().center())),
+            "returning the zoomed preview to the high-DPI display failed");
+    settle();
+    require(preview.geometry() == QRect(200, 0, 1000, 333) && preview.screen() == highDpi &&
+                Access::raster(preview).size() == QSize(2000, 666) &&
+                qFuzzyCompare(Access::raster(preview).devicePixelRatio(), qreal(2)) &&
+                Access::generation(preview) == generation + 2,
+            "cross-screen wheel shrinkage must compose one raster at the new high-DPI extent");
+}
+
+void mixedDpiImagePresentationReusesTheDestinationRaster() {
+    using Access = ScreenshotOriginalImagePreviewWindowTestAccess;
+    QScreen* const lowDpi = mixedDpiScreen(QStringLiteral("external"), 1);
+    QScreen* const highDpi = mixedDpiScreen(QStringLiteral("retina"), 2);
+    QWidget owner;
+    owner.setScreen(highDpi);
+    owner.setGeometry(300, 180, 100, 80);
+    owner.show();
+    ScreenshotOriginalImagePreviewWindow preview(&owner);
+    auto state = stateFor(&owner);
+    state.resultRect = owner.geometry();
+    require(preview.present(state), "preparing the ordinary high-DPI image fixture failed");
+    settle();
+    const quint64 generation = Access::generation(preview);
+    state.resultRect.translate(lowDpi->geometry().x(), 0);
+    require(preview.present(state), "moving the ordinary preview to the low-DPI screen failed");
+    settle();
+    require(preview.screen() == lowDpi && Access::raster(preview).size() == QSize(100, 80) &&
+                qFuzzyCompare(Access::raster(preview).devicePixelRatio(), qreal(1)) &&
+                Access::generation(preview) == generation + 1,
+            "ordinary image presentation must compose only the destination raster");
+    const uchar* const pixels = Access::raster(preview).constBits();
+    state.resultRect.translate(80, 20);
+    require(preview.present(state) && Access::raster(preview).constBits() == pixels &&
+                Access::generation(preview) == generation + 1,
+            "movement within the destination display must reuse the ordinary image raster");
+    state.resultRect = owner.geometry();
+    require(preview.present(state), "moving the ordinary image back to the high-DPI screen failed");
+    settle();
+    require(preview.screen() == highDpi && Access::raster(preview).size() == QSize(200, 160) &&
+                qFuzzyCompare(Access::raster(preview).devicePixelRatio(), qreal(2)) &&
+                Access::generation(preview) == generation + 2,
+            "returning an image to high DPI must rebuild once using the correct output extent");
+}
+
 void mouseDraggingPreservesTheViewportAndOwner() {
     if (ScreenshotOriginalImagePreviewWindow::usesPhysicalGeometry())
         return;
@@ -527,55 +1098,102 @@ void clickingDoesNotDetachAutomaticPlacement() {
 void draggedPlacementSurvivesContentAndBackingRefreshes() {
     if (ScreenshotOriginalImagePreviewWindow::usesPhysicalGeometry())
         return;
+    using Access = ScreenshotOriginalImagePreviewWindowTestAccess;
     ScreenshotOriginalImagePreviewWindow preview;
     auto state = stateFor();
+    state.resultRect = QRect(300, 180, 100, 80);
+    state.mouseWheelZoomMode = QStringLiteral("top_left");
     require(preview.present(state), "preparing the retained placement fixture failed");
     settle();
+    require(Access::scaleSteps(preview, 2, QPointF(preview.geometry().center())),
+            "zooming the retained placement fixture failed");
     const QPointF cursor(preview.geometry().topLeft() + QPoint(5, 4));
-    require(ScreenshotOriginalImagePreviewWindowTestAccess::beginDrag(preview, cursor),
-            "starting the retained placement drag failed");
-    ScreenshotOriginalImagePreviewWindowTestAccess::moveDrag(preview, cursor + QPointF(93, 67));
-    ScreenshotOriginalImagePreviewWindowTestAccess::endDrag(preview);
-    const QPoint draggedPosition = preview.geometry().topLeft();
-    const quint64 generation = ScreenshotOriginalImagePreviewWindowTestAccess::generation(preview);
-    const uchar* const pixels =
-        ScreenshotOriginalImagePreviewWindowTestAccess::raster(preview).constBits();
-    state.resultRect.translate(200, 100);
-    require(preview.present(state) && preview.geometry().topLeft() == draggedPosition &&
-                ScreenshotOriginalImagePreviewWindowTestAccess::generation(preview) == generation &&
-                ScreenshotOriginalImagePreviewWindowTestAccess::raster(preview).constBits() ==
-                    pixels,
-            "moving the recognition result must retain the user's preview position and pixels");
+    require(Access::beginDrag(preview, cursor), "starting the retained placement drag failed");
+    Access::moveDrag(preview, cursor + QPointF(93, 67));
+    Access::endDrag(preview);
+    const QRect adjustedGeometry = preview.geometry();
+    const quint64 generation = Access::generation(preview);
+    const uchar* const pixels = Access::raster(preview).constBits();
+    require(preview.present(state) && preview.geometry() == adjustedGeometry &&
+                qFuzzyCompare(Access::scalePercent(preview), qreal(120)) &&
+                Access::generation(preview) == generation &&
+                Access::raster(preview).constBits() == pixels,
+            "ordinary content refreshes must retain manual placement, zoom and cached pixels");
     QEvent screenChange(QEvent::ScreenChangeInternal);
     QApplication::sendEvent(&preview, &screenChange);
     QEvent backingChange(QEvent::DevicePixelRatioChange);
     QApplication::sendEvent(&preview, &backingChange);
     settle();
-    require(preview.geometry().topLeft() == draggedPosition &&
-                ScreenshotOriginalImagePreviewWindowTestAccess::generation(preview) == generation,
-            "queued screen and backing refreshes must retain the dragged position and pixels");
+    require(preview.geometry() == adjustedGeometry && Access::generation(preview) == generation &&
+                qFuzzyCompare(Access::scalePercent(preview), qreal(120)),
+            "backing events with unchanged result context must retain the manual adjustment");
     state.imageRectInViewport.translate(1, 0);
-    require(preview.present(state) && preview.geometry().topLeft() == draggedPosition &&
-                ScreenshotOriginalImagePreviewWindowTestAccess::generation(preview) ==
-                    generation + 1,
-            "changing the source mapping must refresh pixels without resetting user placement");
-    state.resultRect.setSize(QSize(23, 19));
-    require(preview.present(state) && preview.geometry() == QRect(draggedPosition, QSize(23, 19)) &&
-                ScreenshotOriginalImagePreviewWindowTestAccess::generation(preview) ==
-                    generation + 2,
-            "resizing the recognition result must retain the dragged preview's top-left position");
+    require(preview.present(state) && preview.geometry() == adjustedGeometry &&
+                Access::generation(preview) == generation + 1,
+            "source mapping changes must refresh pixels without resetting manual adjustment");
     state.image.setPixelColor(1, 1, Qt::red);
-    require(preview.present(state) && preview.geometry().topLeft() == draggedPosition &&
-                ScreenshotOriginalImagePreviewWindowTestAccess::generation(preview) ==
-                    generation + 3,
-            "replacing source pixels must refresh the retained preview at its chosen position");
+    require(preview.present(state) && preview.geometry() == adjustedGeometry &&
+                Access::generation(preview) == generation + 2,
+            "source pixels must update without resetting the chosen geometry");
+    state.resultRect.translate(130, 90);
     ScreenshotOriginalImagePreviewWindow automaticPreview;
-    require(automaticPreview.present(state), "preparing the automatic reset placement failed");
-    settle();
-    const QRect automaticGeometry = automaticPreview.geometry();
+    require(automaticPreview.present(state), "preparing the geometry reset fixture failed");
+    require(preview.present(state) && preview.geometry() == automaticPreview.geometry() &&
+                qFuzzyCompare(Access::scalePercent(preview), qreal(100)),
+            "moving the result must resume automatic placement and scale");
+    require(Access::scaleSteps(preview, -1, QPointF(preview.geometry().center())),
+            "zooming before the result resize failed");
+    state.resultRect.setSize(QSize(90, 70));
+    require(automaticPreview.present(state) && preview.present(state) &&
+                preview.geometry() == automaticPreview.geometry() &&
+                qFuzzyCompare(Access::scalePercent(preview), qreal(100)),
+            "resizing the result must resume automatic placement and scale");
+    require(Access::scaleSteps(preview, 1, QPointF(preview.geometry().center())),
+            "zooming before the clear reset failed");
     preview.clear();
-    require(preview.present(state) && preview.geometry() == automaticGeometry,
-            "clearing the preview must reset user placement to automatic result placement");
+    require(preview.present(state) && preview.geometry() == automaticPreview.geometry() &&
+                qFuzzyCompare(Access::scalePercent(preview), qreal(100)),
+            "clearing the preview must reset manual placement and zoom");
+}
+
+void availableSpaceChangesResumeAutomaticPlacementAfterDragging() {
+    if (ScreenshotOriginalImagePreviewWindow::usesPhysicalGeometry())
+        return;
+    using Access = ScreenshotOriginalImagePreviewWindowTestAccess;
+    ScreenshotOriginalImagePreviewWindow preview;
+    auto state = stateFor();
+    state.resultRect = QRect(300, 180, 100, 80);
+    require(preview.present(state), "preparing the work-area change fixture failed");
+    const QRect initial = preview.geometry();
+    require(Access::scaleSteps(preview, 2, QPointF(initial.center())),
+            "zooming before the work-area change failed");
+    const QPointF cursor(preview.geometry().topLeft() + QPoint(5, 4));
+    require(Access::beginDrag(preview, cursor), "starting the work-area change drag failed");
+    Access::moveDrag(preview, cursor + QPointF(40, 30));
+    const QRect dragged = preview.geometry();
+    // Simulate the prior cached work area differing from the current display bounds.
+    Access::invalidateWorkArea(preview);
+    require(preview.present(state) && preview.geometry() == dragged &&
+                qFuzzyCompare(Access::scalePercent(preview), qreal(120)),
+            "changed available space must defer automatic fitting while dragging");
+    Access::endDrag(preview);
+    settle();
+    require(preview.geometry() == initial &&
+                qFuzzyCompare(Access::scalePercent(preview), qreal(100)),
+            "ending a drag must resume automatic fitting for changed available space");
+    const QPointF nextCursor(initial.topLeft() + QPoint(5, 4));
+    require(Access::beginDrag(preview, nextCursor), "starting the result change drag failed");
+    Access::moveDrag(preview, nextCursor + QPointF(20, 15));
+    const QRect beforeResultChange = preview.geometry();
+    state.resultRect.translate(50, 30);
+    state.resultRect.setSize(QSize(110, 90));
+    require(preview.present(state) && preview.geometry() == beforeResultChange,
+            "result geometry changes must defer resizing and placement until drag release");
+    Access::endDrag(preview);
+    settle();
+    ScreenshotOriginalImagePreviewWindow automaticPreview;
+    require(automaticPreview.present(state) && preview.geometry() == automaticPreview.geometry(),
+            "drag release must apply deferred automatic fitting for changed result geometry");
 }
 
 void hidingAndLosingMouseGrabCancelDragging() {
@@ -918,7 +1536,8 @@ void nativeWindowMatchesOddResultExtentsAfterRepaints() {
         const QRect work(info.rcWork.left, info.rcWork.top, info.rcWork.right - info.rcWork.left,
                          info.rcWork.bottom - info.rcWork.top);
         require(ScreenshotOriginalImagePreviewWindow::nativeClientRect(&preview) ==
-                    ScreenshotOriginalImagePreviewWindow::placement(state.resultRect, work, gap),
+                    ScreenshotOriginalImagePreviewWindow::placement(state.resultRect, work, gap)
+                        .geometry,
                 "placement must use the result monitor's physical work area");
     }
     for (QScreen* destination : QGuiApplication::screens()) {
@@ -933,12 +1552,12 @@ void nativeWindowMatchesOddResultExtentsAfterRepaints() {
         state.resultRect = QRect(work.topLeft() + QPoint(17, 19), largeOddExtent);
         state.imageRectInViewport = QRectF(QPointF(), QSizeF(largeOddExtent));
         const int gap = qRound(4 * destination->devicePixelRatio());
-        const QRect fallback(work.left() + 17 - largeOddExtent.width() - gap, work.top() + 19,
-                             largeOddExtent.width(), largeOddExtent.height());
-        require(ScreenshotOriginalImagePreviewWindow::placement(state.resultRect, work, gap) ==
-                        fallback &&
-                    fallback.left() < work.left(),
-                "an oversized result near the monitor corner must fall back to the left");
+        const auto placement =
+            ScreenshotOriginalImagePreviewWindow::placement(state.resultRect, work, gap);
+        const QRect fallback = placement.geometry;
+        require(placement.scale >= 0.5 && placement.scale <= 1.0 && work.contains(fallback) &&
+                    fallback.left() >= state.resultRect.x() + state.resultRect.width() + gap,
+                "an oversized corner preview must fit in the best available direction");
         require(preview.present(state), "native off-monitor fallback presentation failed");
         const quint64 fallbackGeneration =
             ScreenshotOriginalImagePreviewWindowTestAccess::generation(preview);
@@ -946,12 +1565,93 @@ void nativeWindowMatchesOddResultExtentsAfterRepaints() {
             preview.repaint();
             settle();
             require(ScreenshotOriginalImagePreviewWindow::nativeClientRect(&preview) == fallback,
-                    "off-monitor fallback must retain the result monitor's exact native rectangle");
+                    "automatically fitted previews must retain the exact native rectangle");
             require(ScreenshotOriginalImagePreviewWindowTestAccess::generation(preview) ==
                         fallbackGeneration,
                     "a fallback onto a different DPI grid must retain its viewport pixels");
         }
     }
+}
+
+void nativeZoomHintSurvivesRepaintsWithoutChangingCachedPixels() {
+    using Access = ScreenshotOriginalImagePreviewWindowTestAccess;
+    QScreen* screen = QGuiApplication::primaryScreen();
+    require(screen != nullptr, "native zoom hint fixture requires a monitor");
+    const auto* native = screen->nativeInterface<QNativeInterface::QWindowsScreen>();
+    MONITORINFO info{};
+    info.cbSize = sizeof(info);
+    require(native && GetMonitorInfoW(native->handle(), &info) != FALSE,
+            "native zoom hint monitor geometry unavailable");
+    const QRect work(info.rcWork.left, info.rcWork.top, info.rcWork.right - info.rcWork.left,
+                     info.rcWork.bottom - info.rcWork.top);
+    ScreenshotOriginalImagePreviewWindow preview;
+    auto state = stateFor();
+    state.resultRect =
+        QRect(work.topLeft() + QPoint(work.width() / 2, 113),
+              QSize(std::min(421, work.width() / 3), std::min(239, work.height() / 3)));
+    state.image.fill(QColor(210, 30, 40));
+    state.imageRectInViewport = QRectF(QPointF(), QSizeF(state.resultRect.size()));
+    state.mouseWheelZoomMode = QStringLiteral("top_left");
+    require(
+        preview.present(state) &&
+            Access::scaleSteps(
+                preview, 1,
+                QPointF(ScreenshotOriginalImagePreviewWindow::nativeClientRect(&preview).center())),
+        "presenting and zooming the native hint fixture failed");
+    const QRect target = ScreenshotOriginalImagePreviewWindow::nativeClientRect(&preview);
+    const quint64 generation = Access::generation(preview);
+    const uchar* const pixels = Access::raster(preview).constBits();
+    auto* label = Access::scaleLabel(preview);
+    require(label && label->isVisible() && Access::hasHintSurface(preview),
+            "native zooming must show and compose the scale hint");
+    const qreal dpr = preview.devicePixelRatioF();
+    const QRect hint(qRound(label->x() * dpr), qRound(label->y() * dpr),
+                     qRound(label->width() * dpr), qRound(label->height() * dpr));
+    const auto displayedImage = [&] {
+        const QImage desktop = preview.windowHandle()->screen()->grabWindow(0).toImage();
+        return desktop.copy(target.translated(-QPoint(info.rcMonitor.left, info.rcMonitor.top)));
+    };
+    for (int pass = 0; pass < 3; ++pass) {
+        preview.repaint();
+        QEvent update(QEvent::UpdateRequest);
+        QApplication::sendEvent(&preview, &update);
+        QEvent backingChange(QEvent::DevicePixelRatioChange);
+        QApplication::sendEvent(&preview, &backingChange);
+        settle();
+        const QImage displayed = displayedImage();
+        bool hintVisible = false;
+        const QRect visibleHint = hint.intersected(displayed.rect());
+        for (int y = visibleHint.top(); y <= visibleHint.bottom() && !hintVisible; ++y) {
+            for (int x = visibleHint.left(); x <= visibleHint.right(); ++x) {
+                if (displayed.pixelColor(x, y).rgb() !=
+                    Access::raster(preview).pixelColor(x, y).rgb()) {
+                    hintVisible = true;
+                    break;
+                }
+            }
+        }
+        require(hintVisible && Access::hasHintSurface(preview) &&
+                    ScreenshotOriginalImagePreviewWindow::nativeClientRect(&preview) == target &&
+                    Access::generation(preview) == generation &&
+                    Access::raster(preview).constBits() == pixels,
+                "native repaints must preserve the hint, exact extent and original cached pixels");
+    }
+    auto* timer = Access::scaleLabelTimer(preview);
+    require(timer != nullptr, "native zoom hint must own its timeout timer");
+    timer->stop();
+    require(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection),
+            "dispatching the native hint timeout failed");
+    preview.repaint();
+    settle();
+    const QImage displayed = displayedImage();
+    const QPoint sample = hint.center();
+    require(label->isHidden() && !Access::hasHintSurface(preview) &&
+                displayed.rect().contains(sample) &&
+                displayed.pixelColor(sample).rgb() ==
+                    Access::raster(preview).pixelColor(sample).rgb() &&
+                Access::generation(preview) == generation &&
+                Access::raster(preview).constBits() == pixels,
+            "the native timeout must restore the original pixels without invalidating the raster");
 }
 
 void nativeFormulaPlaceholderPreservesOddPhysicalExtents() {
@@ -1241,7 +1941,7 @@ void macDraggingPreservesLogicalExtentsAcrossMonitors() {
     }
 }
 
-void macOversizedPreviewRetainsTheUnconstrainedLeftFallback() {
+void macOversizedPreviewUsesTheBestAvailableDirection() {
     QWidget owner(nullptr, Qt::Tool | Qt::FramelessWindowHint | Qt::WindowDoesNotAcceptFocus);
     owner.setAttribute(Qt::WA_ShowWithoutActivating);
     owner.resize(180, 100);
@@ -1261,10 +1961,12 @@ void macOversizedPreviewRetainsTheUnconstrainedLeftFallback() {
             state.resultRect =
                 QRect(ownerRect.topLeft(), destination->geometry().size() + QSize(17, 17));
             state.imageRectInViewport = QRectF(QPointF(), QSizeF(state.resultRect.size()));
-            const QRect fallback(state.resultRect.x() - state.resultRect.width() - 4,
-                                 state.resultRect.y(), state.resultRect.width(),
-                                 state.resultRect.height());
             require(preview.present(state), "presenting the oversized Cocoa fallback failed");
+            const QRect fallback =
+                ScreenshotOriginalImagePreviewWindow::placement(
+                    state.resultRect,
+                    ScreenshotOriginalImagePreviewWindowTestAccess::workArea(preview), 4)
+                    .geometry;
             for (int pass = 0; pass < 3; ++pass) {
                 preview.repaint();
                 settleMacNative();
@@ -1280,7 +1982,7 @@ void macOversizedPreviewRetainsTheUnconstrainedLeftFallback() {
                                 fallback.x() - ownerRect.x() &&
                             qRound(NSMaxY(frame) - NSMaxY(ownerFrame)) ==
                                 ownerRect.y() - fallback.y(),
-                        "Cocoa must preserve the exact oversized borderless left fallback and "
+                        "Cocoa must preserve the selected oversized borderless placement and "
                         "native frame");
             }
         }
@@ -1383,18 +2085,33 @@ void macSiblingStackingPreservesActivationAndVisibility() {
 } // namespace
 
 int main(int argc, char** argv) {
+    for (int index = 1; index < argc; ++index) {
+        if (QByteArray(argv[index]) == QByteArrayLiteral("--mixed-dpi-only")) {
+            qputenv("QT_SCALE_FACTOR", "1");
+            qputenv("QT_SCREEN_SCALE_FACTORS", "retina=2;external=1");
+            qunsetenv("QT_SCALE_FACTOR_ROUNDING_POLICY");
+            qunsetenv("QT_WIDGETS_HIGHDPI_DOWNSCALE");
+            break;
+        }
+    }
     QApplication application(argc, argv);
     try {
-        if (application.arguments().contains(QStringLiteral("--native-only"))) {
+        if (application.arguments().contains(QStringLiteral("--mixed-dpi-only"))) {
+            mixedDpiPresentationUsesTheDestinationRasterLimit();
+            mixedDpiImagePresentationReusesTheDestinationRaster();
+            mixedDpiRejectedPresentationPreservesTheWindowAndCache();
+            mixedDpiWheelZoomPreparesOneRasterForTheDestination();
+        } else if (application.arguments().contains(QStringLiteral("--native-only"))) {
 #if defined(Q_OS_WIN) || defined(_WIN32)
             nativePreviewPreservesAlienRecognitionAndCanvasChildren();
             nativeWindowMatchesOddResultExtentsAfterRepaints();
             nativeFormulaPlaceholderPreservesOddPhysicalExtents();
+            nativeZoomHintSurvivesRepaintsWithoutChangingCachedPixels();
             nativeOverlappingSiblingRemainsAboveWithoutActivation();
             nativeDraggingPreservesOddPhysicalExtentsAcrossMonitors();
 #elif defined(Q_OS_MACOS)
             macPreviewPreservesLogicalGeometryAndAlienChildren();
-            macOversizedPreviewRetainsTheUnconstrainedLeftFallback();
+            macOversizedPreviewUsesTheBestAvailableDirection();
             macSiblingStackingPreservesActivationAndVisibility();
             macDraggingPreservesLogicalExtentsAcrossMonitors();
 #endif
@@ -1408,9 +2125,18 @@ int main(int argc, char** argv) {
             formulaStateSurvivesQueuedBackingRefreshes();
             formulaPlaceholdersRetainNullImagesAndExactSmallExtents();
             formulaErrorsFitTheCompleteImageAboveTheFooter();
+            wheelZoomUsesPinnedLevelsAndShowsAnEphemeralHint();
+            visibleScaleHintRetranslatesWithoutChangingZoom();
+            wheelGesturesRespectBoundariesAndIgnoreMomentum();
+            automaticScaleAdvancesToPinnedWheelLevels();
+            wheelZoomUsesConfiguredAnchors();
+            zoomScalesTheViewportMappingAndFormulaPlaceholders();
+            rejectedZoomPreservesGeometryRasterAndScale();
+            rejectedAutomaticPresentationPreservesThePriorValidPreview();
             mouseDraggingPreservesTheViewportAndOwner();
             clickingDoesNotDetachAutomaticPlacement();
             draggedPlacementSurvivesContentAndBackingRefreshes();
+            availableSpaceChangesResumeAutomaticPlacementAfterDragging();
             hidingAndLosingMouseGrabCancelDragging();
             passiveWindowKeepsOwnershipAndClearsInvalidState();
 #ifdef Q_OS_MACOS

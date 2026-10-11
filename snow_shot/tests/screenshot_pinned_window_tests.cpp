@@ -187,6 +187,19 @@ class ScreenshotOriginalImagePreviewWindowTestAccess {
     static quint64 rasterGeneration(const ScreenshotOriginalImagePreviewWindow& window) {
         return window.m_rasterGeneration;
     }
+    static QRect workArea(const ScreenshotOriginalImagePreviewWindow& window) {
+        return window.m_placementWorkArea;
+    }
+    static int gap(const ScreenshotOriginalImagePreviewWindow& window) {
+        return window.m_placementGap;
+    }
+    static QString zoomMode(const ScreenshotOriginalImagePreviewWindow& window) {
+        return window.m_mouseWheelZoomMode;
+    }
+    static bool scaleSteps(ScreenshotOriginalImagePreviewWindow& window, int steps,
+                           const QPointF& cursor) {
+        return window.applyWheelScaleSteps(steps, cursor);
+    }
 };
 
 class FailingPinnedPlatform final : public snow_shot::presentation::PinnedWindowPlatform {
@@ -729,6 +742,7 @@ class ScreenshotPinnedWindowTestAccess {
         window.m_resultSurfaceCanvasRect = config.canvasSourceRect;
         window.m_resultStyle = ScreenshotResultCompositor::normalizedStyle(config.resultStyle);
         window.m_initialWindowSize = config.initialWindowSize;
+        window.m_mouseWheelZoomMode = config.mouseWheelZoomMode;
         window.m_originalImage = config.imageSource.materializedImage;
         window.m_originalPixelSize = window.m_originalImage.size();
         window.m_transformedImage = window.m_originalImage;
@@ -1888,6 +1902,7 @@ void pinnedOriginalImagePreviewFollowsViewAndAuxiliaryLifecycle() {
             "enable hidden text selection for the preview fixture");
 
     auto config = cachedOcrPinConfig(nullptr);
+    config.mouseWheelZoomMode = QStringLiteral("bottom_right");
     config.initialWindowSize = QSize(321, 181);
     config.nativeGeometry.setSize(config.initialWindowSize);
     QImage image(config.imageSource.materializedImage.size(), QImage::Format_RGB32);
@@ -1927,6 +1942,14 @@ void pinnedOriginalImagePreviewFollowsViewAndAuxiliaryLifecycle() {
         QStringLiteral("screenshotOriginalImagePreviewWindow"));
     require(preview != nullptr && preview->isVisible(),
             "showing the pinned toolbar must show the comparison image");
+    const QRect initialPreview = ScreenshotOriginalImagePreviewWindow::nativeClientRect(preview);
+    const QRect initialPin = window.currentNativeGeometry();
+    require(PreviewAccess::zoomMode(*preview) == QStringLiteral("bottom_right") &&
+                PreviewAccess::scaleSteps(*preview, 1, QPointF(initialPreview.center())) &&
+                ScreenshotOriginalImagePreviewWindow::nativeClientRect(preview).bottomRight() ==
+                    initialPreview.bottomRight() &&
+                window.currentNativeGeometry() == initialPin,
+            "a pinned companion must inherit its configured wheel anchor without resizing the pin");
     const auto requirePreviewDestroyed = [&](const char* message) {
         require(!preview || preview->isHidden(), "a dismissed pin preview must hide immediately");
         waitForUi(20);
@@ -1986,34 +2009,39 @@ void pinnedOriginalImagePreviewFollowsViewAndAuxiliaryLifecycle() {
         const QRect result = physical
                                  ? window.currentNativeGeometry()
                                  : ScreenshotOriginalImagePreviewWindow::nativeClientRect(&window);
+        const auto placement = ScreenshotOriginalImagePreviewWindow::placement(
+            result, PreviewAccess::workArea(*preview), PreviewAccess::gap(*preview));
+        const QSize expectedSize = placement.geometry.size();
         if (ScreenshotOriginalImagePreviewWindow::nativeClientRect(preview).size() !=
-            result.size()) {
+            expectedSize) {
             const QSize observed =
                 ScreenshotOriginalImagePreviewWindow::nativeClientRect(preview).size();
             const QRect target = Access::originalPreviewTargetGeometry(window);
             std::cerr << "pin projection pass " << projectionPass << ": expected extent "
-                      << result.width() << 'x' << result.height() << "; observed extent "
-                      << observed.width() << 'x' << observed.height() << "; target "
-                      << target.width() << 'x' << target.height() << "; phase "
+                      << expectedSize.width() << 'x' << expectedSize.height()
+                      << "; observed extent " << observed.width() << 'x' << observed.height()
+                      << "; target " << target.width() << 'x' << target.height() << "; phase "
                       << Access::originalPreviewGeometryPhase(window) << "; logical sizes "
                       << window.width() << 'x' << window.height() << '/' << canvas->width() << 'x'
                       << canvas->height() << '\n';
         }
         require(ScreenshotOriginalImagePreviewWindow::nativeClientRect(preview).size() ==
-                    result.size(),
-                "the preview and recognition result must have matching native dimensions");
+                    expectedSize,
+                "the preview must use the automatically fitted recognition viewport dimensions");
         const QImage& raster = PreviewAccess::raster(*preview);
         require(!raster.isNull(), "the original-image preview needs a painted viewport");
         if (physical) {
-            require(raster.size() == result.size(),
+            require(raster.size() == expectedSize,
                     "the pin preview raster must retain every odd native client pixel");
         }
         const qreal rasterScale = physical ? 1.0 : preview->devicePixelRatioF();
+        const qreal scaleX = qreal(expectedSize.width()) / result.width() * rasterScale;
+        const qreal scaleY = qreal(expectedSize.height()) / result.height() * rasterScale;
         for (const QPointF fraction :
              {QPointF(.25, .25), QPointF(.75, .25), QPointF(.25, .75), QPointF(.75, .75)}) {
             const QPoint pixel(
-                qRound((expectedRect.x() + expectedRect.width() * fraction.x()) * rasterScale),
-                qRound((expectedRect.y() + expectedRect.height() * fraction.y()) * rasterScale));
+                qRound((expectedRect.x() + expectedRect.width() * fraction.x()) * scaleX),
+                qRound((expectedRect.y() + expectedRect.height() * fraction.y()) * scaleY));
             const QPoint sourcePixel(qRound(source.materializedImage.width() * fraction.x()),
                                      qRound(source.materializedImage.height() * fraction.y()));
             require(raster.rect().contains(pixel) &&
@@ -2038,7 +2066,7 @@ void pinnedOriginalImagePreviewFollowsViewAndAuxiliaryLifecycle() {
             require(painted == expectedPaint &&
                         PreviewAccess::rasterGeneration(*preview) == generation &&
                         ScreenshotOriginalImagePreviewWindow::nativeClientRect(preview).size() ==
-                            result.size(),
+                            expectedSize,
                     "repainting must preserve the preview pixels, cache, and native extent");
         }
     };

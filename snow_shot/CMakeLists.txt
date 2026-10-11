@@ -10552,8 +10552,8 @@ add_library(snow_shot_original_image_preview STATIC
     src/presentation/ocr/screenshotoriginalimagepreviewwindow.cpp
     src/presentation/overlay/screenshotimagerendering.cpp)
 target_include_directories(snow_shot_original_image_preview PUBLIC include)
-target_link_libraries(snow_shot_original_image_preview PUBLIC Qt6::Widgets
-    PRIVATE snow_canvas_image adqt::dpi_window)
+target_link_libraries(snow_shot_original_image_preview PUBLIC Qt6::Widgets snow_canvas_image
+    PRIVATE adqt::dpi_window)
 snow_shot_link_macos_window_platform(snow_shot_original_image_preview)
 if(WIN32)
     target_link_libraries(snow_shot_original_image_preview PRIVATE user32 gdi32)
@@ -10577,6 +10577,12 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-original-image-preview-tests -platform offscreen)
     set_tests_properties(snow-shot-original-image-preview-tests PROPERTIES LABELS "unit"
         TIMEOUT 60 ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    add_test(NAME snow-shot-original-image-preview-mixed-dpi-tests
+        COMMAND snow-shot-original-image-preview-tests --mixed-dpi-only
+            -platform offscreen:configfile=original_image_preview_mixed_dpi_screens.json)
+    set_tests_properties(snow-shot-original-image-preview-mixed-dpi-tests PROPERTIES
+        LABELS "unit" TIMEOUT 60 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     if(APPLE)
         set_source_files_properties(tests/screenshot_original_image_preview_tests.cpp
             PROPERTIES LANGUAGE OBJCXX)

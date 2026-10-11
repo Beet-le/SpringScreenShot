@@ -110,8 +110,11 @@ function(snow_shot_add_translations target)
             snow_shot_print
             snow_shot_diagnostics
             snow_shot_updates
+        # Include companion-preview sources defined after this translation target.
         # Preserve macOS-only messages when extracting on Windows as well.
-        SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/macos/loginitembackend.mm"
+        SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/include/snow_shot/presentation/screenshotoriginalimagepreviewwindow.h"
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/presentation/ocr/screenshotoriginalimagepreviewwindow.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/macos/loginitembackend.mm"
                 "${CMAKE_CURRENT_SOURCE_DIR}/src/update/macosupdateservice.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/src/update/updateservice.cpp"
                 "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/windows/nativeprint.cpp"

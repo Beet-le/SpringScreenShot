@@ -551,6 +551,7 @@ void ScreenshotRecognitionWindow::updateOriginalImagePreview() {
         state = m_originalImagePreviewProvider();
     } else {
         state.emplace();
+        state->mouseWheelZoomMode = snow_shot::storage::PinToScreenSettings().mouseWheelZoomMode();
         state->image = m_originalImagePreviewSource;
         state->imageRectInViewport =
             canvasToLocalTransform().mapRect(m_originalImagePreviewCanvasRect);

@@ -53,6 +53,7 @@
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWindow>
+#include <QWheelEvent>
 
 #include <cstdlib>
 #include <algorithm>
@@ -91,6 +92,39 @@ void require(bool condition, const char* message) {
         std::cerr << message << '\n';
         std::exit(EXIT_FAILURE);
     }
+}
+
+void companionWheelZoomPreservesRecognition(ScreenshotOriginalImagePreviewWindow& preview,
+                                            QWidget& owner, QTextDocument& document,
+                                            bool bottomRight = false) {
+    const QRect originalGeometry = preview.geometry();
+    const QRect ownerGeometry = owner.geometry();
+    const QString originalText = document.toPlainText();
+    QWidget* const focus = QApplication::focusWidget();
+    const auto wheel = [&](int angle) {
+        const QPointF localPosition;
+        QWheelEvent event(localPosition, QPointF(preview.mapToGlobal(QPoint())), QPoint(),
+                          QPoint(0, angle), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        event.ignore();
+        QApplication::sendEvent(&preview, &event);
+        require(event.isAccepted(), "wheel input over the companion must be consumed");
+    };
+    wheel(120);
+    require(preview.size() == QSize(qRound(originalGeometry.width() * 1.1),
+                                    qRound(originalGeometry.height() * 1.1)) &&
+                (bottomRight ? preview.geometry().bottomRight() == originalGeometry.bottomRight()
+                             : preview.geometry().topLeft() == originalGeometry.topLeft()) &&
+                owner.geometry() == ownerGeometry && document.toPlainText() == originalText &&
+                QApplication::focusWidget() == focus && !preview.hasFocus(),
+            "companion wheel zoom must preserve recognition geometry, text and focus");
+    wheel(-120);
+    require(preview.geometry() == originalGeometry,
+            "reversing companion wheel zoom must return to the initial selection-sized preview");
+    const auto timers = preview.findChildren<QTimer*>(QString(), Qt::FindDirectChildrenOnly);
+    require(timers.size() == 1, "the companion must own its zoom hint timer");
+    timers.front()->stop();
+    require(QMetaObject::invokeMethod(timers.front(), "timeout", Qt::DirectConnection),
+            "hiding the integration fixture zoom hint failed");
 }
 
 void clickCell(ScreenshotTableEditor& editor, int row, int column) {
@@ -2467,6 +2501,12 @@ void tableCommandsUsePhysicalKeys() {
 }
 
 void originalImagePreviewPreservesSelectionAndOwnerLifecycle() {
+    const snow_shot::storage::PinToScreenSettings settings;
+    const QString previousAnchor = settings.mouseWheelZoomMode();
+    const auto restoreAnchor =
+        qScopeGuard([&] { static_cast<void>(settings.setMouseWheelZoomMode(previousAnchor)); });
+    require(settings.setMouseWheelZoomMode(QStringLiteral("bottom_right")),
+            "configure the ordinary companion wheel anchor");
     QScreen* screen = QGuiApplication::primaryScreen();
     require(screen != nullptr, "preview fixture requires a screen");
     auto* window = new ScreenshotRecognitionWindow(ScreenshotRecognitionWindowActions{});
@@ -2522,6 +2562,11 @@ void originalImagePreviewPreservesSelectionAndOwnerLifecycle() {
     window->showTextEditor(&document);
     flush();
     require(preview->isVisible(), "text editing preserves the separate preview");
+    companionWheelZoomPreservesRecognition(*preview, *window, document, true);
+    window->refreshOriginalImagePreview();
+    flush();
+    require(preview->size() == geometry.size(),
+            "ordinary recognition refresh must preserve the manually selected preview zoom");
     window->setShowOriginalImage(true);
     require(preview->isHidden(), "original-image mode must hide the preview immediately");
     requirePreviewDestroyed("showing the original image destroys its separate preview");
@@ -2632,6 +2677,7 @@ void latexPreviewUsesPassiveCompanionAndSurvivesEditing() {
             state.imageRectInViewport = QRectF(0, 0, 200, 100);
             state.resultRect = geometry;
             state.transientOwner = &window;
+            state.mouseWheelZoomMode = QStringLiteral("top_left");
             return state;
         },
         &window);
@@ -2675,6 +2721,7 @@ void latexPreviewUsesPassiveCompanionAndSurvivesEditing() {
     require(window.geometry() == geometry && preview()->size() == geometry.size() &&
                 preview()->geometry().right() < window.geometry().left() && !preview()->hasFocus(),
             "formula companion preserves selection size, left placement and passive focus");
+    companionWheelZoomPreservesRecognition(*preview(), window, document);
     const QImage valid = preview()->grab().toImage();
     require(valid.pixelColor(0, 0) != QColor(Qt::blue),
             "host preview provider contributes geometry rather than original image pixels");

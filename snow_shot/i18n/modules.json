@@ -94,6 +94,7 @@
     "ScreenshotImageConversionController",
     "ScreenshotImageConversionView",
     "ScreenshotOcrController",
+    "ScreenshotOriginalImagePreviewWindow",
     "ScreenshotRecognitionWindow",
     "ScreenshotRecognitionSessionController",
     "ScreenshotTableEditor"
