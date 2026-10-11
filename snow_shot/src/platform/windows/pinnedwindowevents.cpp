@@ -460,6 +460,8 @@ bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QBy
 
         if (nativeMessage->message == WM_NCHITTEST) {
             int hitTest = HTCLIENT;
+            const Qt::KeyboardModifiers modifiers =
+                (GetKeyState(VK_MENU) & 0x8000) ? Qt::AltModifier : Qt::NoModifier;
             const QRect nativeGeometry =
                 native::currentClientGeometry(reinterpret_cast<WId>(pinnedHwnd));
             const QPoint screenPosition(GET_X_LPARAM(nativeMessage->lParam),
@@ -472,7 +474,7 @@ bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QBy
                 // A click may clear/toggle selection. Keep the initial press in
                 // Qt until its drag threshold has chosen a geometry/export gesture.
                 if (!window.m_selectionGeometryActive)
-                    window.updateWindowDragCursor(selectionPosition);
+                    window.updateWindowDragCursor(selectionPosition, modifiers);
                 if (result)
                     *result = HTCLIENT;
                 return true;
@@ -488,14 +490,15 @@ bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QBy
 
                 if (hitTest == HTCLIENT) {
                     const QPoint clientPosition = mapping.localPosition(screenPosition).toPoint();
-                    if (window.windowDragEnabledAt(clientPosition) && !window.m_geometryAnimating) {
+                    if (window.windowDragEnabledAt(clientPosition, modifiers) &&
+                        !window.m_geometryAnimating) {
                         hitTest = HTCAPTION;
                     }
                 }
             } else if (window.windowDragEnabled()) {
                 if (nativeGeometry.isValid() && !nativeGeometry.isEmpty()) {
                     const QPoint clientPosition = mapping.localPosition(screenPosition).toPoint();
-                    if (window.windowDragEnabledAt(clientPosition)) {
+                    if (window.windowDragEnabledAt(clientPosition, modifiers)) {
                         hitTest = HTCAPTION;
                     }
                 }
@@ -528,7 +531,12 @@ bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QBy
                 const ScreenshotPinnedGeometryMapping mapping(nativeGeometry, window.size(),
                                                               window.devicePixelRatioF());
                 const QPoint position = mapping.localPosition(nativePosition).toPoint();
-                static_cast<void>(window.handleDoubleClick(position));
+                if ((GetKeyState(VK_MENU) & 0x8000) &&
+                    window.windowDragEnabledAt(position, Qt::AltModifier)) {
+                    static_cast<void>(window.startWindowMove());
+                } else {
+                    static_cast<void>(window.handleDoubleClick(position));
+                }
             }
             // The image is a synthetic caption. Never let USER32 maximize it,
             // including when the configured action is None or dragging is disabled.

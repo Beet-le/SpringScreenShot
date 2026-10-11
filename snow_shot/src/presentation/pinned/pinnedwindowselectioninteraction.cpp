@@ -674,7 +674,8 @@ bool PinnedWindowSelectionController::handlePointer(ScreenshotPinnedWindow* wind
     const auto handle = selectable && window->interactiveResizingEnabled() && !controls
                             ? window->resizeHandleAt(local)
                             : std::optional<int>{};
-    const bool move = selectable && !controls && window->windowDragEligibleAt(local.toPoint());
+    const bool move = selectable && !controls &&
+                      window->windowDragEligibleAt(local.toPoint(), mouse->modifiers());
     state = std::make_shared<GeometryState>();
     state->owner = window;
     GeometryState::Press press;

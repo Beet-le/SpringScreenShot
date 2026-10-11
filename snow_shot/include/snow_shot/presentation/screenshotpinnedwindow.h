@@ -473,11 +473,14 @@ class ScreenshotPinnedWindow final : public QWidget {
     void finishWindowMove();
     bool windowDragEnabled() const;
     bool windowDragEligible() const;
-    bool windowDragEligibleAt(const QPoint& position) const;
-    bool windowDragEnabledAt(const QPoint& position) const;
+    bool windowDragEligibleAt(const QPoint& position,
+                              Qt::KeyboardModifiers modifiers = Qt::NoModifier) const;
+    bool windowDragEnabledAt(const QPoint& position,
+                             Qt::KeyboardModifiers modifiers = Qt::NoModifier) const;
     bool handleDoubleClick(const QPoint& position);
     bool handleMiddleClick(const QPoint& position);
-    void updateWindowDragCursor(const QPoint& position);
+    void updateWindowDragCursor(const QPoint& position,
+                                Qt::KeyboardModifiers modifiers = Qt::NoModifier);
     void setWindowDragCursor(Qt::CursorShape shape);
     void clearWindowDragCursor();
     bool nativeTrackSizeConstraintsEnabled() const;

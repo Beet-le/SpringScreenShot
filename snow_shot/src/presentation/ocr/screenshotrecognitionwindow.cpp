@@ -2066,7 +2066,8 @@ bool ScreenshotRecognitionWindow::forwardFormattedTextPointerEvent(QObject* watc
     }
     auto* mouse = static_cast<QMouseEvent*>(event);
     const QPointF local = m_formattedTextLayer->viewport()->mapTo(this, mouse->position());
-    if (!isOcrBackgroundAt(local) && !mouse->modifiers().testFlag(Qt::ControlModifier)) {
+    if (!isOcrBackgroundAt(local) &&
+        !mouse->modifiers().testAnyFlags(Qt::ControlModifier | Qt::AltModifier)) {
         return false;
     }
     // Blank document space belongs to the host's pin gestures, including double-clicks.

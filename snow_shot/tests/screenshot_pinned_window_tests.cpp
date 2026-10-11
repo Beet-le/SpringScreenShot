@@ -822,8 +822,9 @@ class ScreenshotPinnedWindowTestAccess {
     static std::unique_ptr<QMimeData> automationClipboard(const ScreenshotPinnedWindow& window) {
         return window.automationClipboardMimeData(false);
     }
-    static bool draggableAt(const ScreenshotPinnedWindow& window, const QPoint& point) {
-        return window.windowDragEnabledAt(point);
+    static bool draggableAt(const ScreenshotPinnedWindow& window, const QPoint& point,
+                            Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+        return window.windowDragEnabledAt(point, modifiers);
     }
     static void editSelectionOffscreen(ScreenshotPinnedWindow& window, bool enabled) {
         window.setEditMode(enabled);
@@ -13180,6 +13181,157 @@ void pinnedHiddenTextSelectionOffscreen() {
             "restore default selection setting");
 }
 
+void pinnedAltDragIgnoresTextSelectionOffscreen() {
+    using Access = ScreenshotPinnedWindowTestAccess;
+    IsolatedPinnedStorage storage;
+#ifdef Q_OS_WIN
+    require(QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/segoeui.ttf")) >= 0,
+            "load offscreen Alt-drag selection font");
+    QApplication::setFont(QFont(QStringLiteral("Segoe UI")));
+#endif
+    const snow_shot::storage::PinToScreenSettings settings;
+    require(settings.setTextSelectionOnRecognitionResults(QStringLiteral("always")),
+            "enable hidden selection for Alt dragging");
+    for (int scenario = 0; scenario < 3; ++scenario) {
+        auto config = cachedOcrPinConfig(nullptr);
+        if (scenario == 2) {
+            QMimeData mime;
+            mime.setHtml(QStringLiteral("<p><b>Selectable</b> pinned HTML</p>"));
+            auto snapshot =
+                ScreenshotClipboardContentReader::snapshotMimeData(&mime, 1.0, Qt::white);
+            require(snapshot.has_value(), "snapshot the Alt-drag formatted fixture");
+            auto decoded = decodeScreenshotDropContent(std::move(*snapshot));
+            require(decoded && decoded->isFormattedText(), "decode the Alt-drag document");
+            config.recognitionResults = {};
+            config.canvasSourceRect = QRectF(QPointF(), QSizeF(decoded->image.size()));
+            config.imageSource =
+                ScreenshotImageSource::fromImage(decoded->image, config.canvasSourceRect);
+            config.formattedTextDocument = decoded->formattedDocument;
+            config.formattedPlainText = decoded->plainText;
+            config.formattedTextDevicePixelRatio = decoded->formattedTextDevicePixelRatio;
+        }
+        ScreenshotPinnedWindow window;
+        auto* session = Access::hiddenSelectionOffscreen(window, config);
+        Access::installFailingPlatform(window);
+        if (scenario == 1)
+            session->activate(ScreenshotRecognitionSessionController::Mode::Text);
+        auto* content = window.findChild<ScreenshotRecognitionWindow*>(
+            QStringLiteral("screenshotPinnedRecognitionContent"));
+        require(content && content->isVisible(), "Alt-drag fixture has a text input surface");
+        QWidget* target = content;
+        QPoint textStart(48, 60);
+        QPoint textEnd(205, 60);
+        QGraphicsTextItem* item = nullptr;
+        if (scenario == 2) {
+            auto* layer =
+                window.findChild<QGraphicsView*>(QStringLiteral("screenshotClipboardText"));
+            require(layer && layer->isVisible(), "Alt dragging targets the formatted viewport");
+            target = layer->viewport();
+            for (auto* candidate : layer->scene()->items())
+                if (auto* text = dynamic_cast<QGraphicsTextItem*>(candidate))
+                    item = text;
+            require(item != nullptr, "Alt-drag fixture retains native formatted text");
+            const auto block = item->document()->firstBlock();
+            const auto line = block.layout()->lineAt(0);
+            const auto point = [&](int character) {
+                return layer->mapFromScene(item->mapToScene(
+                    block.layout()->position() +
+                    QPointF(line.cursorToX(character), line.y() + line.height() / 2)));
+            };
+            textStart = point(1);
+            textEnd = point(7);
+        }
+        const auto selectedText = [&] {
+            return item ? item->textCursor().selectedText()
+                        : Access::displayedRecognition(window).selectedText();
+        };
+        const auto mouse = [&](QEvent::Type type, const QPoint& global,
+                               Qt::KeyboardModifiers modifiers, Qt::MouseButtons held) {
+            const auto changed = type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton;
+            QMouseEvent event(type, target->mapFromGlobal(global), global, changed, held,
+                              modifiers);
+            QApplication::sendEvent(target, &event);
+        };
+        window.activateWindow();
+        QApplication::processEvents();
+        const QPoint localText = target->mapTo(&window, textStart);
+        const QPoint contentText =
+            target == content ? textStart : target->mapTo(content, textStart);
+        require(!content->isOcrBackgroundAt(contentText) &&
+                    !Access::draggableAt(window, localText) &&
+                    Access::draggableAt(window, localText, Qt::AltModifier),
+                "Alt must reserve text hits for window movement");
+        const QRect geometry = window.currentNativeGeometry();
+        const QPoint origin = target->mapToGlobal(textStart);
+        const QPoint delta(24, 18);
+        mouse(QEvent::MouseButtonPress, origin, Qt::AltModifier, Qt::LeftButton);
+        require(Access::interactionActive(window) && !content->textSelectionActive() &&
+                    selectedText().isEmpty() && !Access::exportGesture(window),
+                "Alt text press starts a window move without selecting text or exporting");
+        mouse(QEvent::MouseMove, origin + delta, Qt::AltModifier, Qt::LeftButton);
+        const qreal dpr = window.screen()->devicePixelRatio();
+        const QPoint physicalDelta(qRound(delta.x() * dpr), qRound(delta.y() * dpr));
+        require(window.currentNativeGeometry() == geometry.translated(physicalDelta),
+                "Alt drag moves the window with its size preserved");
+        mouse(QEvent::MouseButtonRelease, origin + delta, Qt::NoModifier, Qt::NoButton);
+        require(!Access::interactionActive(window) && !content->textSelectionActive() &&
+                    selectedText().isEmpty() &&
+                    window.currentNativeGeometry() == geometry.translated(physicalDelta) &&
+                    session->active() == (scenario == 1),
+                "releasing Alt before the mouse finishes movement without starting selection");
+
+        const QPoint selectionStart = target->mapToGlobal(textStart);
+        const QPoint selectionEnd = target->mapToGlobal(textEnd);
+        mouse(QEvent::MouseButtonPress, selectionStart, Qt::NoModifier, Qt::LeftButton);
+        require(content->textSelectionActive(), "ordinary text presses retain selection ownership");
+        mouse(QEvent::MouseMove, selectionEnd, Qt::AltModifier, Qt::LeftButton);
+        require(!Access::interactionActive(window),
+                "pressing Alt during a text gesture must not turn it into a window move");
+        mouse(QEvent::MouseButtonRelease, selectionEnd, Qt::NoModifier, Qt::NoButton);
+        require(!content->textSelectionActive() && !selectedText().isEmpty() &&
+                    window.currentNativeGeometry() == geometry.translated(physicalDelta),
+                "ordinary text selection still completes after an Alt drag");
+
+        content->clearTextSelection();
+        const QPoint doubleClickPosition = target->mapToGlobal(textStart);
+        mouse(QEvent::MouseButtonDblClick, doubleClickPosition, Qt::AltModifier, Qt::LeftButton);
+        require(Access::interactionActive(window) && !content->textSelectionActive() &&
+                    selectedText().isEmpty() && !window.persistenceSnapshot().thumbnailMode,
+                "Alt double-click starts movement without text selection or the pin action");
+        mouse(QEvent::MouseButtonRelease, doubleClickPosition, Qt::NoModifier, Qt::NoButton);
+        require(!Access::interactionActive(window) && !content->textSelectionActive() &&
+                    selectedText().isEmpty() &&
+                    window.currentNativeGeometry() == geometry.translated(physicalDelta),
+                "Alt double-click release finishes movement without selecting text");
+
+        Access::setLock(window, true);
+        const QRect lockedGeometry = window.currentNativeGeometry();
+        mouse(QEvent::MouseButtonPress, selectionStart, Qt::AltModifier, Qt::LeftButton);
+        mouse(QEvent::MouseMove, selectionEnd, Qt::AltModifier, Qt::LeftButton);
+        mouse(QEvent::MouseButtonRelease, selectionEnd, Qt::NoModifier, Qt::NoButton);
+        require(
+            !Access::interactionActive(window) &&
+                !Access::draggableAt(window, target->mapTo(&window, textStart), Qt::AltModifier) &&
+                window.currentNativeGeometry() == lockedGeometry &&
+                !content->textSelectionActive() && selectedText().isEmpty(),
+            "Alt text dragging must respect the window lock without selecting text");
+        Access::setLock(window, false);
+        content->clearTextSelection();
+    }
+    QScreen* screen = QGuiApplication::primaryScreen();
+    require(screen != nullptr, "the Alt controls boundary fixture requires a screen");
+    ScreenshotPinnedWindow controlsWindow;
+    Access::restoreOffscreen(controlsWindow, clickThroughTestConfig(*screen));
+    controlsWindow.show();
+    setPinnedWindowHovered(controlsWindow, true);
+    auto* controls =
+        controlsWindow.findChild<QFrame*>(QStringLiteral("screenshotPinnedControlsPanel"));
+    require(
+        controls && controls->isVisible() &&
+            !Access::draggableAt(controlsWindow, controls->geometry().center(), Qt::AltModifier),
+        "Alt must preserve the visible controls panel boundary");
+}
+
 void pinnedHiddenFormattedTextSelectionOffscreen() {
     using Access = ScreenshotPinnedWindowTestAccess;
     const snow_shot::storage::PinToScreenSettings settings;
@@ -14573,15 +14725,16 @@ void pinnedDragExportNativeHitTest() {
     BYTE originalKeys[256]{};
     require(GetKeyboardState(originalKeys), "capture thread keyboard state");
     const auto restoreKeys = qScopeGuard([&] { SetKeyboardState(originalKeys); });
-    const auto hit = [&](QPoint local, bool control) {
+    const auto hit = [&](QPoint local, bool control, bool alt = false) {
         BYTE keys[256]{};
         keys[VK_CONTROL] = control ? 0x80 : 0;
+        keys[VK_MENU] = alt ? 0x80 : 0;
         require(SetKeyboardState(keys), "set thread-local hit-test modifier");
         const QPoint point = Access::nativePoint(window, local);
         return SendMessageW(toNativeHwnd(window.winId()), WM_NCHITTEST, 0,
                             MAKELPARAM(static_cast<WORD>(point.x()), static_cast<WORD>(point.y())));
     };
-    const QPoint imagePoint(12, 12);
+    const QPoint imagePoint = Access::contentViewport(window).center().toPoint();
     require(Access::exportEligible(window, imagePoint),
             "native fixture targets the image interior");
     require(hit(imagePoint, false) == HTCAPTION, "ordinary image drag uses native caption");
@@ -14609,10 +14762,15 @@ void pinnedDragExportNativeHitTest() {
             "native drag fixture maps text and background through the current display scale");
     require(hit(text, false) == HTCLIENT && hit(text, true) == HTCLIENT,
             "hidden text receives Qt input for selection and Ctrl image dragging");
+    require(hit(text, false, true) == HTCAPTION,
+            "Alt over hidden text routes directly to native window movement");
+    require(hit(text, false) == HTCLIENT, "releasing Alt restores native text-selection routing");
     require(hit(blank, false) == HTCAPTION && hit(blank, true) == HTCLIENT,
             "Ctrl routes hidden selection background to Qt instead of native window movement");
     require(hit(QPoint(1, 1), true) == HTTOPLEFT,
             "hidden selection Ctrl dragging preserves native resize borders");
+    require(hit(QPoint(1, 1), false, true) == HTTOPLEFT,
+            "Alt text dragging preserves native resize borders");
     window.close();
 }
 #endif
@@ -22116,6 +22274,7 @@ int main(int argc, char* argv[]) {
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--hidden-text-selection-only"))) {
+            pinnedAltDragIgnoresTextSelectionOffscreen();
             pinnedHiddenFormattedBackgroundDoubleClickUsesPinAction();
             pinnedHiddenFormattedSelectionFollowsImageCoordinates();
             pinnedHiddenTextSelectionOffscreen();

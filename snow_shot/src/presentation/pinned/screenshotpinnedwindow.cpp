@@ -2853,6 +2853,7 @@ bool ScreenshotPinnedWindow::eventFilter(QObject* watched, QEvent* event) {
     if (event->type() == QEvent::MouseButtonDblClick) {
         auto* mouseEvent = static_cast<QMouseEvent*>(event);
         if (mouseEvent->button() == Qt::LeftButton &&
+            !mouseEvent->modifiers().testFlag(Qt::AltModifier) &&
             handleDoubleClick(windowPositionForEvent(watched, mouseEvent->position()).toPoint())) {
             mouseEvent->accept();
             return true;
@@ -2863,8 +2864,9 @@ bool ScreenshotPinnedWindow::eventFilter(QObject* watched, QEvent* event) {
             auto* mouseEvent = static_cast<QMouseEvent*>(event);
             const QPoint position =
                 windowPositionForEvent(watched, mouseEvent->position()).toPoint();
-            updateWindowDragCursor(position);
-            if (watched == m_recognitionContent && windowDragEnabledAt(position)) {
+            updateWindowDragCursor(position, mouseEvent->modifiers());
+            if (watched == m_recognitionContent &&
+                windowDragEnabledAt(position, mouseEvent->modifiers())) {
                 mouseEvent->accept();
                 return true;
             }
@@ -2872,11 +2874,14 @@ bool ScreenshotPinnedWindow::eventFilter(QObject* watched, QEvent* event) {
             if (!m_windowDragActive) {
                 clearWindowDragCursor();
             }
-        } else if (event->type() == QEvent::MouseButtonPress) {
+        } else if (event->type() == QEvent::MouseButtonPress ||
+                   (event->type() == QEvent::MouseButtonDblClick &&
+                    static_cast<QMouseEvent*>(event)->modifiers().testFlag(Qt::AltModifier))) {
             auto* mouseEvent = static_cast<QMouseEvent*>(event);
             if (mouseEvent->button() == Qt::LeftButton &&
                 windowDragEnabledAt(
-                    windowPositionForEvent(watched, mouseEvent->position()).toPoint())) {
+                    windowPositionForEvent(watched, mouseEvent->position()).toPoint(),
+                    mouseEvent->modifiers())) {
                 if (startWindowMove()) {
                     mouseEvent->accept();
                     return true;
@@ -3129,7 +3134,7 @@ void ScreenshotPinnedWindow::mousePressEvent(QMouseEvent* event) {
         return;
     }
     if (event != nullptr && event->button() == Qt::LeftButton &&
-        windowDragEnabledAt(event->position().toPoint()) && startWindowMove()) {
+        windowDragEnabledAt(event->position().toPoint(), event->modifiers()) && startWindowMove()) {
         event->accept();
         return;
     }
@@ -3137,6 +3142,11 @@ void ScreenshotPinnedWindow::mousePressEvent(QMouseEvent* event) {
 }
 
 void ScreenshotPinnedWindow::mouseDoubleClickEvent(QMouseEvent* event) {
+    if (event != nullptr && event->button() == Qt::LeftButton &&
+        event->modifiers().testFlag(Qt::AltModifier)) {
+        mousePressEvent(event);
+        return;
+    }
     if (event != nullptr && event->button() == Qt::MiddleButton &&
         handleMiddleClick(event->position().toPoint())) {
         event->accept();
@@ -8480,17 +8490,20 @@ bool ScreenshotPinnedWindow::windowDragEligible() const {
            m_editController->resizeWindowToolActive();
 }
 
-bool ScreenshotPinnedWindow::windowDragEnabledAt(const QPoint& position) const {
-    return !m_lockedMode && windowDragEligibleAt(position);
+bool ScreenshotPinnedWindow::windowDragEnabledAt(const QPoint& position,
+                                                 Qt::KeyboardModifiers modifiers) const {
+    return !m_lockedMode && windowDragEligibleAt(position, modifiers);
 }
 
-bool ScreenshotPinnedWindow::windowDragEligibleAt(const QPoint& position) const {
+bool ScreenshotPinnedWindow::windowDragEligibleAt(const QPoint& position,
+                                                  Qt::KeyboardModifiers modifiers) const {
     if (!windowDragEligible() || !rect().contains(position) || isControlsPanelPosition(position)) {
         return false;
     }
     if (!contentViewRect().contains(position))
         return true;
-    return !(m_ocrMode || m_hiddenTextSelection) ||
+    // Alt reserves the press for moving the pin, including over selectable text.
+    return modifiers.testFlag(Qt::AltModifier) || !(m_ocrMode || m_hiddenTextSelection) ||
            (m_recognitionContent != nullptr && m_recognitionContent->isVisible() &&
             m_recognitionContent->isOcrBackgroundAt(m_recognitionContent->mapFrom(this, position)));
 }
@@ -8536,12 +8549,13 @@ bool ScreenshotPinnedWindow::handleMiddleClick(const QPoint& position) {
     return true;
 }
 
-void ScreenshotPinnedWindow::updateWindowDragCursor(const QPoint& position) {
+void ScreenshotPinnedWindow::updateWindowDragCursor(const QPoint& position,
+                                                    Qt::KeyboardModifiers modifiers) {
     if (m_windowDragActive) {
         setWindowDragCursor(Qt::ClosedHandCursor);
         return;
     }
-    if (windowDragEnabledAt(position)) {
+    if (windowDragEnabledAt(position, modifiers)) {
         setWindowDragCursor(Qt::OpenHandCursor);
         return;
     }

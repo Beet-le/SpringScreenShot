@@ -392,19 +392,21 @@ void ScreenshotPinnedWindow::endControlledInteraction(bool cancel) {
 }
 
 bool ScreenshotPinnedWindow::handleLockedPointer(QObject* watched, QEvent* event) {
-    if (!m_lockedMode || m_closing || !event || event->type() != QEvent::MouseButtonPress)
+    if (!m_lockedMode || m_closing || !event ||
+        (event->type() != QEvent::MouseButtonPress && event->type() != QEvent::MouseButtonDblClick))
         return false;
     const bool moveControl = watched == m_clickThroughMoveButton.get();
     if (watched != this && watched != m_canvas && watched != m_recognitionContent && !moveControl)
         return false;
     auto* mouse = static_cast<QMouseEvent*>(event);
-    if (mouse->button() != Qt::LeftButton)
+    if (mouse->button() != Qt::LeftButton || (event->type() == QEvent::MouseButtonDblClick &&
+                                              !mouse->modifiers().testFlag(Qt::AltModifier)))
         return false;
     if (!moveControl) {
         const QPointF local = windowPositionForEvent(watched, mouse->position());
         const bool resize =
             !m_geometryAnimating && !m_thumbnailMode && resizeHandleAt(local).has_value();
-        if (!resize && !windowDragEligibleAt(local.toPoint()))
+        if (!resize && !windowDragEligibleAt(local.toPoint(), mouse->modifiers()))
             return false;
     }
     showLockedReadout();
@@ -467,9 +469,13 @@ bool ScreenshotPinnedWindow::handleControlledPointer(QObject* watched, QEvent* e
         clearWindowDragCursor();
         return false;
     }
-    if (event->type() != QEvent::MouseMove && event->type() != QEvent::MouseButtonPress)
+    if (event->type() != QEvent::MouseMove && event->type() != QEvent::MouseButtonPress &&
+        event->type() != QEvent::MouseButtonDblClick)
         return false;
     auto* mouse = static_cast<QMouseEvent*>(event);
+    if (event->type() == QEvent::MouseButtonDblClick &&
+        !mouse->modifiers().testFlag(Qt::AltModifier))
+        return false;
     if (event->type() == QEvent::MouseMove && mouse->buttons() != Qt::NoButton) {
         // A canvas/OCR press inside content owns its subsequent movement, even
         // when the captured pointer enters the reserved frame or an edge band.
@@ -487,11 +493,11 @@ bool ScreenshotPinnedWindow::handleControlledPointer(QObject* watched, QEvent* e
         // Edge resizing owns the host cursor even when a drawing tool disables
         // window dragging. Release that ownership outside the edge so the canvas
         // tool (or the window move policy) can resolve the cursor again.
-        updateWindowDragCursor(local.toPoint());
+        updateWindowDragCursor(local.toPoint(), mouse->modifiers());
         return false;
     }
     if (mouse->button() == Qt::LeftButton &&
-        (handle || moveControl || windowDragEnabledAt(local.toPoint())))
+        (handle || moveControl || windowDragEnabledAt(local.toPoint(), mouse->modifiers())))
         return beginControlledInteraction(mouse->globalPosition(), handle);
     return false;
 }
