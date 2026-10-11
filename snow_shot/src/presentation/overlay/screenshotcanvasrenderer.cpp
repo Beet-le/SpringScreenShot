@@ -1198,13 +1198,6 @@ void ScreenshotCanvasRenderer::setPinnedResultSurface(const QRectF& contentCanva
     }
 }
 
-void ScreenshotCanvasRenderer::setBakedSelectionPath(const QPainterPath& path) {
-    if (m_bakedSelectionPath != path) {
-        m_bakedSelectionPath = path;
-        m_canvas.update();
-    }
-}
-
 void ScreenshotCanvasRenderer::setPinnedBackgroundColor(const QColor& color) {
     const QColor normalized = color.isValid() ? color : QColor();
     if (m_pinnedBackgroundColor == normalized) {
@@ -1604,7 +1597,6 @@ void ScreenshotCanvasRenderer::reset() {
     m_pinnedSurfaceCanvasRect = {};
     m_pinnedResultStyle = {};
     m_pinnedBackgroundColor = {};
-    m_bakedSelectionPath = {};
     m_pinnedCheckerboardEnabled = false;
     m_selectionState = ScreenshotSelectionVisualState{};
     m_renderMode = RenderMode::Standard;
@@ -2035,18 +2027,6 @@ void ScreenshotCanvasRenderer::renderAfterCanvas(QPainter& painter,
         }
         QPainterStateGuard viewportGuard(&painter);
         painter.setClipRect(viewport, Qt::IntersectClip);
-        if (!m_bakedSelectionPath.isEmpty() && m_imageSource.isMaterialized()) {
-            QPainterPath outside;
-            outside.addRect(viewport);
-            outside = outside.subtracted(context.canvasToViewTransform.map(m_bakedSelectionPath));
-            painter.save();
-            painter.setClipPath(outside, Qt::IntersectClip);
-            painter.setCompositionMode(QPainter::CompositionMode_Source);
-            painter.drawImage(
-                context.canvasToViewTransform.mapRect(m_imageSource.materializedCanvasRect),
-                m_imageSource.materializedImage);
-            painter.restore();
-        }
         const QRectF contentView = context.canvasToViewTransform.mapRect(m_pinnedContentCanvasRect);
         ScreenshotResultCompositor::finishLiveSurface(
             painter, viewport, contentView, m_pinnedResultStyle, context.devicePixelRatio,

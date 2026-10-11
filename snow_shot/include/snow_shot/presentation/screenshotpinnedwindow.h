@@ -324,7 +324,6 @@ class ScreenshotPinnedWindow final : public QWidget {
     void updateCanvasViewport();
     void updateBorderOutline();
     void updateChildStackingOrder();
-    [[nodiscard]] QPainterPath bakedSelectionPath(const QSize& pixelSize) const;
     void updateControlsGeometry();
     void refreshControlsPointerPresence();
     void setControlsPointerInside(bool inside);

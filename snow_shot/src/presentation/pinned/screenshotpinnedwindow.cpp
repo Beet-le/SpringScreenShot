@@ -3943,7 +3943,6 @@ void ScreenshotPinnedWindow::updateBorderOutline() {
 
     QRectF borderOutline;
     QSizeF cornerRadii(0, 0);
-    QPainterPath bakedPath;
     if (m_borderAppearance && !m_borderAppearance->sourceSize.isEmpty() &&
         !m_originalPixelSize.isEmpty()) {
         const auto& appearance = *m_borderAppearance;
@@ -3976,25 +3975,11 @@ void ScreenshotPinnedWindow::updateBorderOutline() {
                                                           2.0);
                 cornerRadii = mapping.mapRect(QRectF(0, 0, radius, radius)).size();
             }
-            if (appearance.region) {
-                const QTransform sourceToView = sourceToCanvas * m_canvas->canvasToViewTransform();
-                const qreal contourScale =
-                    m_canvas->devicePixelRatioF() *
-                    std::max(std::hypot(sourceToView.m11(), sourceToView.m12()),
-                             std::hypot(sourceToView.m21(), sourceToView.m22()));
-                QPainterPath source =
-                    appearance.region->custom()
-                        ? appearance.region->path(contourScale)
-                        : screenshotRegionPath(*appearance.region, appearance.cornerRadius);
-                source.translate(appearance.contentRect.topLeft());
-                bakedPath = sourceToCanvas.map(source);
-            }
         }
     }
-    m_screenshotRenderer->setBakedSelectionPath(bakedPath);
     // Thumbnail presentation fills the entire viewport with an opaque background.
     // Its rim must enclose that surface, not the fitted source image (which can
-    // leave letterboxing or rounded corners). Keep the baked image clip intact.
+    // leave letterboxing or rounded corners).
     if (m_thumbnailMode) {
         borderOutline = {};
         cornerRadii = QSizeF(0, 0);
@@ -5555,7 +5540,7 @@ ScreenshotPinnedWindow::cachedPinnedExportSource(ScreenshotPinnedViewportExportS
     stream << m_presentationGeneration << m_runtime.documentRevision()
            << request.backgroundImage.cacheKey() << request.backgroundCanvasRect
            << request.contentPixelSize << encodeScreenshotResultStyle(request.resultStyle)
-           << request.outputOpacity << request.bakedSelectionPath << request.smartErase.cacheKey();
+           << request.outputOpacity << request.smartErase.cacheKey();
     if (!m_pinnedRenderCache)
         m_pinnedRenderCache = std::make_unique<PinnedRenderCache>();
     std::shared_ptr<ScreenshotExportArtifact> pixels;
@@ -5657,9 +5642,7 @@ ScreenshotPinnedWindow::viewportArtifact(bool applyWindowOpacity) {
         appearance.resultStyle,
         m_runtime.smartEraseSnapshot(),
         appearance.outputOpacity,
-        {},
     };
-    request.bakedSelectionPath = bakedSelectionPath(contentPixelSize);
     const QRect geometry =
         hideToTopActive() ? m_hideToTop->shownGeometry() : authoritativeContentNativeGeometry();
     request.clipboardPlacement =
@@ -5983,7 +5966,6 @@ std::shared_ptr<ScreenshotExportArtifact> ScreenshotPinnedWindow::fileSaveArtifa
             m_screenshotRenderer->ocrFilteredCanvasRect(), appearance.resultStyle);
         if (snapshot) {
             snapshot->outputOpacity = appearance.outputOpacity;
-            snapshot->bakedSelectionPath = bakedSelectionPath(snapshot->image.size());
             return std::make_shared<ScreenshotExportArtifact>(
                 ScreenshotExportSource::fromRecognitionImage(std::move(*snapshot)));
         }
@@ -5994,9 +5976,7 @@ std::shared_ptr<ScreenshotExportArtifact> ScreenshotPinnedWindow::fileSaveArtifa
                                                  m_transformedImage.size(),
                                                  appearance.resultStyle,
                                                  m_runtime.smartEraseSnapshot(),
-                                                 appearance.outputOpacity,
-                                                 {}};
-    request.bakedSelectionPath = bakedSelectionPath(m_transformedImage.size());
+                                                 appearance.outputOpacity};
     return std::make_shared<ScreenshotExportArtifact>(cachedPinnedExportSource(std::move(request)));
 }
 
@@ -8582,30 +8562,6 @@ void ScreenshotPinnedWindow::requestAutoFilterSource(std::function<void(QImage)>
         completion(success ? (m_transformedImage.isNull() ? m_originalImage : m_transformedImage)
                            : QImage());
     });
-}
-
-QPainterPath ScreenshotPinnedWindow::bakedSelectionPath(const QSize& pixelSize) const {
-    if (!m_borderAppearance || !m_borderAppearance->region || pixelSize.isEmpty() ||
-        m_originalPixelSize.isEmpty() || m_borderAppearance->sourceSize.isEmpty())
-        return {};
-    const auto& appearance = *m_borderAppearance;
-    QTransform scale;
-    scale.scale(qreal(m_originalPixelSize.width()) / appearance.sourceSize.width(),
-                qreal(m_originalPixelSize.height()) / appearance.sourceSize.height());
-    const QTransform rotation = QImage::trueMatrix(m_imageTransform, m_originalPixelSize.width(),
-                                                   m_originalPixelSize.height());
-    const auto transformed = rotation.mapRect(QRectF(QPointF(), QSizeF(m_originalPixelSize)));
-    QTransform outputScale;
-    outputScale.scale(pixelSize.width() / transformed.width(),
-                      pixelSize.height() / transformed.height());
-    const auto mapping = scale * rotation * outputScale;
-    const qreal contourScale = std::max(std::hypot(mapping.m11(), mapping.m12()),
-                                        std::hypot(mapping.m21(), mapping.m22()));
-    auto path = appearance.region->custom()
-                    ? appearance.region->path(contourScale)
-                    : screenshotRegionPath(*appearance.region, appearance.cornerRadius);
-    path.translate(appearance.contentRect.topLeft());
-    return mapping.map(path);
 }
 
 QJsonObject ScreenshotPinnedWindow::automationState() const {

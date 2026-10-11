@@ -19,8 +19,8 @@ namespace snow_shot::storage {
 
 // Outline in a reference screenshot raster of sourceSize pixels. The displayed
 // image may have a higher backing resolution (for example, a Retina capture).
-// Effects are baked into the source image. This outline also clips subsequent edits,
-// preserving the baked exterior without composing those effects a second time.
+// Effects are baked into the source image. Retain the outline for window decoration
+// and the source's transparency policy independently of subsequent canvas edits.
 struct PinnedBorderAppearance final {
     QSize sourceSize;
     QRectF contentRect;

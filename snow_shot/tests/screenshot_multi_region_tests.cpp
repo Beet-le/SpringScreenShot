@@ -388,17 +388,6 @@ void outlinesAndEffects() {
                 separatedOutput.pixelColor(100, 20).alpha() == 0 &&
                 separatedOutput.pixelColor(37, 20).alpha() > 0,
             "sparse export retains both regions and their local shadows");
-    QImage annotated = effected;
-    {
-        QPainter painter(&annotated);
-        painter.fillRect(QRect(42, 35, 20, 20), Qt::magenta);
-    }
-    auto bakedPath = screenshotRegionPath(shape, style.cornerRadius);
-    bakedPath.translate(6, 6);
-    ScreenshotResultCompositor::restoreBakedExterior(annotated, effected, bakedPath);
-    require(annotated.pixelColor(56, 46).alpha() == 0 &&
-                annotated.pixelColor(37, 46) == effected.pixelColor(37, 46),
-            "pinned edits must preserve transparent cutouts and baked shadows");
     const auto repeated = ScreenshotResultCompositor::compose(content, style);
     require(repeated == effected, "cached effects must match initial composition");
     style.regionScale = 2;

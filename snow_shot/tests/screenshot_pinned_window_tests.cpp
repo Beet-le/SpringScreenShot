@@ -11079,6 +11079,136 @@ void pinnedCompoundSelectionOffscreen(bool curved = false) {
     window.close();
 }
 
+void pinnedAnnotationsIgnoreSelectionShape() {
+    using Access = ScreenshotPinnedWindowTestAccess;
+    IsolatedPinnedStorage storage;
+#if defined(Q_OS_WIN)
+    require(QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/segoeui.ttf")) >= 0,
+            "load offscreen recognition font");
+    QApplication::setFont(QFont(QStringLiteral("Segoe UI")));
+#endif
+    QScreen* screen = QGuiApplication::primaryScreen();
+    require(screen != nullptr, "selection annotation fixture needs a screen");
+    const auto pixels = [](ScreenshotPinnedWindow& window,
+                           const std::shared_ptr<ScreenshotExportArtifact>& artifact) {
+        QImage result;
+        bool complete = false;
+        require(artifact &&
+                    artifact->requestImage(&window,
+                                           [&](ScreenshotExportImageResult image) {
+                                               require(image.succeeded(),
+                                                       "selection annotation export succeeds");
+                                               result = std::move(image.image);
+                                               complete = true;
+                                           }),
+                "selection annotation export starts");
+        QElapsedTimer timer;
+        timer.start();
+        while (!complete && timer.elapsed() < 10000)
+            waitForUi(5);
+        require(complete, "selection annotation export completes");
+        return result;
+    };
+    for (int scenario = 0; scenario < 3; ++scenario) {
+        auto config = clickThroughTestConfig(*screen);
+        ScreenshotResultStyle style;
+        style.cornerRadius = scenario == 2 ? 120 : 12;
+        style.region = QRegion(0, 0, 400, 400);
+        if (scenario == 1) {
+            QPainterPath ellipse;
+            ellipse.addEllipse(QRectF(0, 0, 400, 400));
+            style.region = ScreenshotRegionGeometry::fromPath(ellipse, ScreenshotRegionType::Curve);
+        }
+        if (scenario != 2)
+            style.region = style.region->subtracted(QRect(120, 120, 160, 160));
+        const QImage source =
+            ScreenshotResultCompositor::compose(config.imageSource.materializedImage, style);
+        config.imageSource = ScreenshotImageSource::fromImage(source, config.canvasSourceRect);
+        config.borderAppearance = screenshotSelectionBorderAppearance(source.size(), style);
+        config.checkerboardEnabled = false;
+        config.initialBorderVisible = false;
+        config.initialShadowVisible = false;
+        ScreenshotPinnedWindow window;
+        Access::prepareReplacement(window, config);
+        window.show();
+        waitForUi(20);
+        require(pixels(window, Access::fileSave(window)) == source,
+                "an unedited pin preserves its original transparent selection pixels");
+        require(
+            !Access::applyAnnotationTransaction(
+                 window,
+                 R"({"version":1,"operations":[{"type":"rectangle","bounds":[60,180,280,40],"style":{"stroke":[255,0,255,255],"fill":[255,0,255,255]}},{"type":"rectangle","bounds":[12,12,48,48],"style":{"stroke":[255,0,255,255],"fill":[255,0,255,255]}}]})")
+                 .isEmpty(),
+            "draw annotations across the selection boundary and into transparent corners");
+        const auto verify = [&](ScreenshotPinnedWindow& target, int scalePercent) {
+            auto* canvas = target.findChild<SnowCanvasWidget*>();
+            require(canvas != nullptr, "selection annotation fixture has a canvas");
+            const auto live = renderWholeWidget(*canvas);
+            for (const QPoint point : {QPoint(200, 200), QPoint(32, 32)}) {
+                const QPoint view = canvas->canvasToViewTransform().map(QPointF(point)).toPoint();
+                requireColorNear(
+                    live.pixelColor(view), QColor(Qt::magenta), 0,
+                    "live pinned annotations must remain visible outside the selection");
+            }
+            const QImage saved = pixels(target, Access::fileSave(target));
+            const QImage viewport = pixels(target, Access::viewportExport(target));
+            for (const QPoint point : {QPoint(200, 200), QPoint(32, 32)}) {
+                require(saved.pixelColor(point) == QColor(Qt::magenta),
+                        "file exports retain pinned annotations outside the selection");
+                require(viewport.pixelColor(point * scalePercent / 100) == QColor(Qt::magenta),
+                        "viewport exports retain pinned annotations outside the selection");
+            }
+            require(saved.pixelColor(4, 4) == source.pixelColor(4, 4),
+                    "annotations leave untouched source transparency unchanged");
+        };
+        verify(window, 100);
+        Access::transformReplacement(window);
+        Access::scaleBorderFixture(window, 150);
+        verify(window, 150);
+        const auto snapshot = window.persistenceSnapshot();
+        config.restorePersistentState = true;
+        config.persistedShowBorder = false;
+        config.persistedCanvasSession = snapshot.canvasSession;
+        ScreenshotPinnedWindow restored;
+        Access::prepareReplacement(restored, config);
+        restored.show();
+        waitForUi(20);
+        verify(restored, 100);
+        restored.close();
+
+        if (scenario == 0) {
+            const snow_shot::storage::TextRecognitionSettings settings;
+            require(settings.setSaveRecognitionResultAsImage(true),
+                    "save pinned recognition image");
+            auto recognitionConfig = config;
+            recognitionConfig.recognitionResults = cachedOcrPinConfig(nullptr).recognitionResults;
+            auto presentation = std::make_shared<ScreenshotOcrPresentation>();
+            presentation->selection = config.canvasSourceRect.toRect();
+            ScreenshotOcrLine line;
+            line.text = QStringLiteral("Pinned OCR");
+            line.quad = {{140, 125}, {260, 125}, {260, 165}, {140, 165}};
+            presentation->lines.push_back(line);
+            presentation->prepareForRendering();
+            recognitionConfig.recognitionResults.text->presentation = std::move(presentation);
+            Access::recognitionOffscreen(window, recognitionConfig);
+            QImage filtered(40, 40, QImage::Format_ARGB32_Premultiplied);
+            filtered.fill(Qt::green);
+            Access::renderer(window).setOcrFilteredImage(filtered, QRectF(180, 180, 40, 40));
+            const auto recognized = pixels(window, Access::fileSave(window));
+            require(recognized.pixelColor(200, 200) == QColor(Qt::green),
+                    "pinned recognition backgrounds may fill a transparent selection hole");
+            const QRect textBounds =
+                Access::displayedRecognition(window).lines[0].quad.boundingRect().toAlignedRect();
+            bool textVisible = false;
+            for (int y = textBounds.top(); y <= textBounds.bottom(); ++y)
+                for (int x = textBounds.left(); x <= textBounds.right(); ++x)
+                    textVisible = textVisible || recognized.pixelColor(x, y).alpha() > 0;
+            require(textVisible, "pinned recognized text may appear inside a selection hole");
+        }
+        window.close();
+    }
+}
+
 void pinnedCheckerboardTracksContentSource() {
     using Access = ScreenshotPinnedWindowTestAccess;
     QScreen* screen = QGuiApplication::primaryScreen();
@@ -20953,6 +21083,10 @@ int main(int argc, char* argv[]) {
         }
         if (app.arguments().contains(QStringLiteral("--checkerboard-only"))) {
             pinnedCheckerboardTracksContentSource();
+            return 0;
+        }
+        if (app.arguments().contains(QStringLiteral("--selection-annotations-only"))) {
+            pinnedAnnotationsIgnoreSelectionShape();
             return 0;
         }
 #if defined(Q_OS_WIN) || defined(_WIN32)

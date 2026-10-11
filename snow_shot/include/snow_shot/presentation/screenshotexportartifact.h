@@ -27,7 +27,6 @@ struct ScreenshotPinnedViewportExportSource final {
     ScreenshotResultStyle resultStyle;
     SnowCanvasSmartEraseSnapshot smartErase;
     qreal outputOpacity = 1.0;
-    QPainterPath bakedSelectionPath;
     std::optional<ScreenshotClipboardPlacement> clipboardPlacement = std::nullopt;
     std::optional<ScreenshotClipboardAppearance> clipboardAppearance = std::nullopt;
 };

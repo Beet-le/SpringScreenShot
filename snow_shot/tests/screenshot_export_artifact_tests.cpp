@@ -1424,7 +1424,6 @@ void pinnedViewportSourceRendersExpectedPixels() {
     background.fill(QColor(12, 24, 36, 255));
     ScreenshotPinnedViewportExportSource source{
         session, std::move(background), QRectF(0.0, 0.0, 64.0, 48.0), QSize(64, 48), {}, {}, 1.0,
-        {},
     };
     ScreenshotExportArtifact artifact(
         ScreenshotExportSource::fromPinnedViewport(std::move(source)));
@@ -1459,7 +1458,7 @@ void emptyPinnedSourceMatchesCanvasProjection() {
         const QRectF rect(-17.25, 4.5, 37.25, 19.75);
         QImage expected = runtime.renderToImage(rect, size, {{background, rect}});
         expected.setColorSpace(background.colorSpace());
-        ScreenshotPinnedViewportExportSource source{{}, background, rect, size, {}, {}, 1.0, {}};
+        ScreenshotPinnedViewportExportSource source{{}, background, rect, size, {}, {}, 1.0};
         ScreenshotExportArtifact artifact(
             ScreenshotExportSource::fromPinnedViewport(std::move(source)));
         QImage rendered;
@@ -1502,7 +1501,6 @@ void pinnedViewportExportsReleaseImportedSnapshots() {
                 {},
                 std::move(smartErase),
                 1.0,
-                {},
             };
             const auto exportSource = ScreenshotExportSource::fromPinnedViewport(std::move(source));
             ScreenshotExportArtifact artifact(exportSource);

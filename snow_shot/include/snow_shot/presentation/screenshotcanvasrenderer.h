@@ -130,7 +130,6 @@ class ScreenshotCanvasRenderer final : public SnowCanvasCustomRenderer {
     void setPinnedViewportRect(const QRectF& rect);
     void setPinnedResultSurface(const QRectF& contentCanvasRect, const QRectF& surfaceCanvasRect,
                                 const ScreenshotResultStyle& style);
-    void setBakedSelectionPath(const QPainterPath& path);
     qsizetype selectionOutlineCacheBytes() const {
         return m_outlineCache.bytes();
     }
@@ -279,7 +278,6 @@ class ScreenshotCanvasRenderer final : public SnowCanvasCustomRenderer {
     QRectF m_pinnedSurfaceCanvasRect;
     ScreenshotResultStyle m_pinnedResultStyle;
     QColor m_pinnedBackgroundColor;
-    QPainterPath m_bakedSelectionPath;
     PathRasterCache m_outlineCache;
     PathRasterCache m_maskCache;
     std::optional<ScreenshotRegionGeometry> m_regionHoverCacheRegion;

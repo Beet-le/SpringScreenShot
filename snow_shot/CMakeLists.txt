@@ -4468,6 +4468,10 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-pinned-window-tests --checkerboard-only -platform offscreen)
     set_tests_properties(snow-shot-pinned-checkerboard-tests PROPERTIES LABELS "unit"
         RUN_SERIAL TRUE TIMEOUT 60)
+    add_test(NAME snow-shot-pinned-selection-annotations-tests
+        COMMAND snow-shot-pinned-window-tests --selection-annotations-only -platform offscreen)
+    set_tests_properties(snow-shot-pinned-selection-annotations-tests PROPERTIES LABELS "unit"
+        RUN_SERIAL TRUE TIMEOUT 60)
     add_test(NAME snow-shot-pinned-eraser-tests
         COMMAND snow-shot-pinned-window-tests --eraser-only -platform offscreen)
     set_tests_properties(snow-shot-pinned-eraser-tests PROPERTIES LABELS "unit" RUN_SERIAL TRUE TIMEOUT 60

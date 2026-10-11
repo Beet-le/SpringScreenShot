@@ -896,27 +896,3 @@ void ScreenshotSelectionShadowRenderer::resetCacheForCurrentThread() {
     g_regionPathCache = {};
     g_regionCompositionCache = {};
 }
-
-void ScreenshotResultCompositor::restoreBakedExterior(QImage& image, const QImage& background,
-                                                      const QPainterPath& path) {
-    if (image.isNull() || background.isNull() || path.isEmpty())
-        return;
-    const QImage mask = regionMask(image.size(), path);
-    QImage outside =
-        normalizeImage(background.size() == image.size()
-                           ? background
-                           : snowCanvasScaleImage(background, image.size(), Qt::IgnoreAspectRatio,
-                                                  Qt::SmoothTransformation));
-    if (!snowCanvasDetachImage(outside) || !snowCanvasDetachImage(image))
-        return;
-    {
-        QPainter painter(&outside);
-        painter.setCompositionMode(QPainter::CompositionMode_DestinationOut);
-        painter.drawImage(QPoint(), mask);
-    }
-    QPainter painter(&image);
-    painter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
-    painter.drawImage(QPoint(), mask);
-    painter.setCompositionMode(QPainter::CompositionMode_Plus);
-    painter.drawImage(QPoint(), outside);
-}

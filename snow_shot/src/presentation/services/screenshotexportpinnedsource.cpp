@@ -62,10 +62,6 @@ QImage renderPinnedViewport(const ScreenshotPinnedViewportExportSource& source,
     if (cancellation.isCancellationRequested())
         return {};
     content.setColorSpace(source.backgroundImage.colorSpace());
-    ScreenshotResultCompositor::restoreBakedExterior(content, source.backgroundImage,
-                                                     source.bakedSelectionPath);
-    if (cancellation.isCancellationRequested())
-        return {};
     return content.isNull() ? QImage{}
                             : ScreenshotResultCompositor::compose(content, source.resultStyle, 1.0,
                                                                   source.outputOpacity);

@@ -37,8 +37,7 @@ inline QByteArray encodeScreenshotResultStyle(const ScreenshotResultStyle& style
     return bytes;
 }
 
-// An invalid extension rejects the record: silently dropping its geometry would
-// expose pixels outside the selected outline when editing a restored pin.
+// An invalid extension rejects the record rather than discarding persisted selection geometry.
 inline std::optional<ScreenshotResultStyle> decodeScreenshotResultStyle(const QByteArray& bytes) {
     ScreenshotResultStyle style;
     if (bytes.isEmpty())
@@ -88,8 +87,6 @@ class ScreenshotResultCompositor final {
     [[nodiscard]] static ScreenshotResultLayout layoutForContent(const QSize& contentPixelSize,
                                                                  const ScreenshotResultStyle& style,
                                                                  qreal devicePixelRatio = 1.0);
-    static void restoreBakedExterior(QImage& image, const QImage& background,
-                                     const QPainterPath& path);
     [[nodiscard]] static QImage normalizeImage(const QImage& image);
     [[nodiscard]] static QImage compose(const QImage& content, const ScreenshotResultStyle& style,
                                         qreal devicePixelRatio = 1.0, qreal outputOpacity = 1.0);
