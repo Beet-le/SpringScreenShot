@@ -1,5 +1,6 @@
 #include "../src/presentation/pinned/screenshotpinnedhidetotopcontroller.h"
 #include "../src/presentation/pinned/screenshotpinnedpointerpresence.h"
+#include "../src/presentation/pinned/pinnedwindowplatform.h"
 #include "theme/theme_color_utils.h"
 #include "theme/theme_manager.h"
 
@@ -10,6 +11,8 @@
 #include <QPainter>
 #include <QScreen>
 #include <QWidget>
+#include <qpa/qplatformscreen.h>
+#include <qpa/qwindowsysteminterface.h>
 
 #include <algorithm>
 #include <initializer_list>
@@ -26,6 +29,7 @@ class ScreenshotPinnedHideToTopControllerTestAccess {
 
 namespace {
 namespace geometry = screenshot_pinned_hide_to_top;
+namespace platform = snow_shot::presentation;
 using Controller = ScreenshotPinnedHideToTopController;
 
 void require(bool condition, const char* message) {
@@ -101,6 +105,200 @@ struct Fixture {
         controller.animation().setCurrentTime(250);
     }
 };
+
+class MutableTestScreen final : public QPlatformScreen {
+  public:
+    QRect bounds{1200, 0, 1000, 800};
+    QRect usableBounds{1200, 40, 1000, 720};
+
+    QRect geometry() const override {
+        return bounds;
+    }
+    QRect availableGeometry() const override {
+        return usableBounds;
+    }
+    int depth() const override {
+        return 32;
+    }
+    QImage::Format format() const override {
+        return QImage::Format_ARGB32_Premultiplied;
+    }
+    QString name() const override {
+        return QStringLiteral("PinnedHideToTopTestDisplay");
+    }
+};
+
+class TestDisplay final {
+  public:
+    TestDisplay() : native(new MutableTestScreen) {
+        QWindowSystemInterface::handleScreenAdded(native);
+    }
+    ~TestDisplay() {
+        QWindowSystemInterface::handleScreenRemoved(native);
+        QApplication::processEvents();
+    }
+    void queueGeometry(const QRect& bounds, const QRect& usableBounds) {
+        native->bounds = bounds;
+        native->usableBounds = usableBounds;
+        QWindowSystemInterface::handleScreenGeometryChange(native->screen(), bounds, usableBounds);
+    }
+    static void settleGeometry() {
+        QWindowSystemInterface::flushWindowSystemEvents();
+        QApplication::processEvents();
+    }
+
+    MutableTestScreen* native;
+};
+
+// Cocoa accepts placement only after a QScreen geometry snapshot matches a current NSScreen.
+// Keep the real offscreen backend, adding that native display contract at its boundary.
+class CurrentDisplayPlatform final : public platform::PinnedWindowPlatform {
+  public:
+    CurrentDisplayPlatform(QWidget* window, std::unique_ptr<PinnedWindowPlatform> delegate,
+                           MutableTestScreen& native)
+        : PinnedWindowPlatform(window, Role::Auxiliary), m_delegate(std::move(delegate)),
+          m_native(native) {}
+    bool attach() override {
+        return m_delegate->attach();
+    }
+    void detach() override {
+        m_delegate->detach();
+    }
+    bool applyPlacement(const platform::PinnedPlacement& placement, QScreen* screen,
+                        GeometryUpdate update) override {
+        if (screen == nullptr || screen->geometry() != m_native.bounds) {
+            ++rejectedPlacements;
+            return false;
+        }
+        return m_delegate->applyPlacement(placement, screen, update);
+    }
+    std::optional<platform::PinnedPlacement> placement() const override {
+        return m_delegate->placement();
+    }
+    bool setInputTransparent(bool transparent) override {
+        return m_delegate->setInputTransparent(transparent);
+    }
+    bool activate() override {
+        return m_delegate->activate();
+    }
+    bool usesControlledInteraction() const override {
+        return m_delegate->usesControlledInteraction();
+    }
+
+    int rejectedPlacements = 0;
+
+  private:
+    std::unique_ptr<PinnedWindowPlatform> m_delegate;
+    MutableTestScreen& m_native;
+};
+
+CurrentDisplayPlatform& requireCurrentDisplay(QWidget* handle, MutableTestScreen& native) {
+    auto* original = platform::configurePinnedAuxiliary(handle);
+    original->setParent(nullptr);
+    auto* strict = new CurrentDisplayPlatform(
+        handle, std::unique_ptr<platform::PinnedWindowPlatform>(original), native);
+    strict->setObjectName(QStringLiteral("snowPinnedWindowPlatform"));
+    strict->setParent(handle);
+    return *strict;
+}
+
+void displayGeometrySnapshots() {
+    TestDisplay display;
+    for (const bool revealed : {false, true}) {
+        Fixture f;
+        f.nativeGeometry.moveLeft(1300);
+        auto& backend = requireCurrentDisplay(f.controller.handleWidget(), *display.native);
+        require(f.controller.enter(geometry::screenGeometry(display.native->screen())),
+                "display change fixture must enter on its injected screen");
+        f.controller.animation().pause();
+        f.finish();
+        if (revealed) {
+            f.pointer(f.controller.handleGeometry().center());
+        }
+        const int accent = f.controller.accentIndex();
+        const auto expectRetained = [&] {
+            require(f.controller.active() &&
+                        f.controller.state() ==
+                            (revealed ? Controller::State::Revealed : Controller::State::Hidden) &&
+                        f.controller.accentIndex() == accent && f.allocations == 1 &&
+                        f.controller.handleWidget()->isVisible() &&
+                        f.owner.isVisible() == revealed &&
+                        qAbs(f.owner.windowOpacity() - (revealed ? 0.8 : 0.0)) < 0.01,
+                    "resolution changes must preserve the hidden or revealed mode and its accent");
+            require(backend.rejectedPlacements == 0,
+                    "handle placement must use the latest native display geometry");
+            require(f.controller.handleGeometry() ==
+                        geometry::placeHandle(display.native->usableBounds, 1300, 1.0, {}),
+                    "resolution changes must reposition the handle on the final work-area top");
+            if (revealed) {
+                require(f.nativeGeometry.topLeft() ==
+                            QPoint(f.controller.handleGeometry().left(),
+                                   f.controller.handleGeometry().bottom() + 1),
+                        "revealed content must remain anchored below the relocated handle");
+            }
+        };
+
+        display.queueGeometry(QRect(1200, 0, 900, 760), QRect(1200, 48, 900, 672));
+        TestDisplay::settleGeometry();
+        expectRetained();
+
+        // Both native notifications precede Qt's event drain. The first QScreen snapshot is
+        // obsolete by the time its signals run, just as during a Cocoa display mode change.
+        display.queueGeometry(QRect(1200, 0, 840, 720), QRect(1200, 52, 840, 628));
+        display.queueGeometry(QRect(1200, 0, 800, 700), QRect(1200, 64, 800, 596));
+        TestDisplay::settleGeometry();
+        expectRetained();
+    }
+
+    {
+        Fixture f;
+        f.nativeGeometry.moveLeft(1300);
+        auto& backend = requireCurrentDisplay(f.controller.handleWidget(), *display.native);
+        require(f.controller.enter(geometry::screenGeometry(display.native->screen())),
+                "suppressed display change fixture must enter");
+        f.controller.animation().pause();
+        f.finish();
+        const int accent = f.controller.accentIndex();
+        display.queueGeometry(QRect(1200, 0, 860, 720), QRect(1200, 72, 860, 608));
+        QWindowSystemInterface::flushWindowSystemEvents();
+        f.controller.setSuppressed(true);
+        TestDisplay::settleGeometry();
+        require(f.controller.active() && !f.controller.handleWidget()->isVisible(),
+                "suppression must cancel a pending screen update without publishing the handle");
+        display.queueGeometry(QRect(1200, 0, 880, 740), QRect(1200, 80, 880, 620));
+        TestDisplay::settleGeometry();
+        f.controller.setSuppressed(false);
+        require(f.controller.state() == Controller::State::Hidden && !f.owner.isVisible() &&
+                    f.controller.handleWidget()->isVisible() &&
+                    f.controller.handleGeometry() ==
+                        geometry::placeHandle(display.native->usableBounds, 1300, 1.0, {}) &&
+                    f.controller.accentIndex() == accent && backend.rejectedPlacements == 0,
+                "unsuppression must refresh display geometry while preserving the hidden mode");
+    }
+
+    for (const bool shutdown : {false, true}) {
+        Fixture f;
+        f.nativeGeometry.moveLeft(1300);
+        require(f.controller.enter(geometry::screenGeometry(display.native->screen())),
+                "pending display change fixture must enter");
+        f.controller.animation().pause();
+        f.finish();
+        display.queueGeometry(QRect(1200, 0, shutdown ? 820 : 810, 710),
+                              QRect(1200, shutdown ? 58 : 56, shutdown ? 820 : 810, 610));
+        QWindowSystemInterface::flushWindowSystemEvents();
+        const QRect handleBefore = f.controller.handleGeometry();
+        if (shutdown) {
+            f.controller.shutdown();
+        } else {
+            f.controller.exit();
+        }
+        QApplication::processEvents();
+        require(
+            !f.controller.handleWidget()->isVisible() && f.controller.active() == shutdown &&
+                f.controller.handleGeometry() == handleBefore,
+            "exit and shutdown must cancel pending display updates without publishing a handle");
+    }
+}
 
 void placement() {
     const QRect work(-1200, -780, 1200, 740);
@@ -391,6 +589,7 @@ void runPinnedHideToTopControllerTests() {
     animationAndHover();
     debouncedHandlePresence();
     reservationsAndRestore();
+    displayGeometrySnapshots();
     themeAndActions();
     handleBorderPainting();
 }

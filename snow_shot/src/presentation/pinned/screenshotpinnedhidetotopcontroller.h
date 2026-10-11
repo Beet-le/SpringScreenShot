@@ -5,6 +5,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QRect>
+#include <QTimer>
 #include <QVariantAnimation>
 #include <QVector>
 
@@ -110,6 +111,7 @@ class ScreenshotPinnedHideToTopController final : public QObject {
     bool m_suppressed = false;
     bool m_shutdown = false;
     bool m_changing = false;
+    QTimer m_screenReconciliationTimer;
     QVector<QMetaObject::Connection> m_screenConnections;
 };
 
