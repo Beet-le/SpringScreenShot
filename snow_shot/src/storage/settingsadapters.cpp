@@ -63,6 +63,7 @@ const QStringList& drawingShortcutToolIds() {
         QStringLiteral("serial_number"), QStringLiteral("filter"),    QStringLiteral("eraser"),
         QStringLiteral("watermark"),     QStringLiteral("line"),      QStringLiteral("spotlight"),
         QStringLiteral("distance"),      QStringLiteral("angle"),     QStringLiteral("magnifier"),
+        QStringLiteral("reset_canvas"),
     };
     return ids;
 }
@@ -1330,7 +1331,8 @@ bool setLocalShortcutValuesAtomic(const QMap<QString, QJsonValue>& values) {
                     key == QStringLiteral("screenshot_shortcuts/toggle_guides"));
                 for (const auto& binding : bindings) {
                     if (group.policy == LocalShortcutPolicy::Drawing &&
-                        DrawingShortcutSettings::isReservedShortcut(binding)) {
+                        DrawingShortcutSettings::isReservedShortcut(binding) &&
+                        !DrawingShortcutSettings::isReservedShortcutAllowed(id, binding)) {
                         return false;
                     }
                     if (group.policy == LocalShortcutPolicy::Screenshot &&
@@ -1412,6 +1414,13 @@ bool DrawingShortcutSettings::setWatermark(const shortcuts::ShortcutBindingList&
 
 bool DrawingShortcutSettings::isReservedShortcut(const shortcuts::ShortcutBinding& shortcut) {
     return isReservedLocalShortcut(shortcut);
+}
+
+bool DrawingShortcutSettings::isReservedShortcutAllowed(
+    const QString& toolId, const shortcuts::ShortcutBinding& shortcut) {
+    return toolId == QStringLiteral("reset_canvas") && shortcutUsesKey(shortcut, Qt::Key_Z) &&
+           shortcuts::effectiveIdentity(shortcut).modifiers ==
+               (Qt::ControlModifier | Qt::ShiftModifier);
 }
 
 shortcuts::ShortcutBindingList DrawingShortcutSettings::shortcuts(const QString& toolId) const {

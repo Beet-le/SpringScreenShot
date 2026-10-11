@@ -1687,8 +1687,11 @@ BuiltInSettingsBackend::validateLocalShortcut(SettingsLocalShortcutScope scope,
     if (scope != SettingsLocalShortcutScope::PinToScreen &&
         scope != SettingsLocalShortcutScope::ScreenRecording &&
         storage::ScreenshotShortcutSettings::isReservedShortcut(canonical) &&
-        (scope != SettingsLocalShortcutScope::Screenshot ||
-         !storage::ScreenshotShortcutSettings::isReservedShortcutAllowed(shortcutId, canonical))) {
+        (scope == SettingsLocalShortcutScope::Screenshot
+             ? !storage::ScreenshotShortcutSettings::isReservedShortcutAllowed(shortcutId,
+                                                                               canonical)
+             : !storage::DrawingShortcutSettings::isReservedShortcutAllowed(shortcutId,
+                                                                            canonical))) {
         return {canonical.portableText, false, GlobalShortcutFailureReason::InvalidShortcut,
                 canonical};
     }

@@ -3285,6 +3285,10 @@
             <translation>Reset Zoom</translation>
         </message>
         <message>
+            <source>Reset canvas</source>
+            <translation>Reset canvas</translation>
+        </message>
+        <message>
             <source>Reset transform</source>
             <translation>Reset transform</translation>
         </message>

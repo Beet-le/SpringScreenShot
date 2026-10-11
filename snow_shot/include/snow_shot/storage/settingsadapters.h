@@ -336,6 +336,8 @@ class ScreenshotShortcutSettings final {
 class DrawingShortcutSettings final {
   public:
     [[nodiscard]] static bool isReservedShortcut(const shortcuts::ShortcutBinding& shortcut);
+    [[nodiscard]] static bool isReservedShortcutAllowed(const QString& toolId,
+                                                        const shortcuts::ShortcutBinding& shortcut);
 
     [[nodiscard]] shortcuts::ShortcutBindingList select() const;
     bool setSelect(const shortcuts::ShortcutBindingList& bindings) const;

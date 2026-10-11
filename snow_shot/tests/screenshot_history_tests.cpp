@@ -3457,11 +3457,14 @@ void configuredScreenshotShortcutsControlMoveAndCursorNavigation() {
         shortcuts.value().clear();
     }
     collidingDrawingShortcuts.insert(QStringLiteral("shape"), {QStringLiteral("W")});
+    collidingDrawingShortcuts.insert(QStringLiteral("reset_canvas"),
+                                     {QStringLiteral("Ctrl+Shift+Z")});
     require(drawingShortcutSettings.setAllShortcutsAtomic(collidingDrawingShortcuts),
             "failed to establish a cross-category shortcut collision");
 
     int moveToolActivations = 0;
     int drawingToolActivations = 0;
+    int resetCanvasActivations = 0;
     int pinActivations = 0;
     int cancelActivations = 0;
     int genericCancelActivations = 0;
@@ -3494,7 +3497,11 @@ void configuredScreenshotShortcutsControlMoveAndCursorNavigation() {
         cursorMoves.push_back(direction);
         return true;
     };
-    actions.activateDrawingShortcut = [&drawingToolActivations](const QString& toolId) {
+    actions.activateDrawingShortcut = [&](const QString& toolId) {
+        if (toolId == QStringLiteral("reset_canvas")) {
+            ++resetCanvasActivations;
+            return true;
+        }
         if (toolId != QStringLiteral("shape")) {
             return false;
         }
@@ -3625,6 +3632,28 @@ void configuredScreenshotShortcutsControlMoveAndCursorNavigation() {
                 pinActivations == 1 && cancelActivations == 1 && copyActivations == 1 &&
                 genericCancelActivations == 0 && undoActivations == 1 && redoActivations == 1,
             "default toolbar command shortcuts must invoke their configured actions");
+
+    require(dispatchShortcut(shortcutWindow, Qt::Key_Z, Qt::ControlModifier | Qt::ShiftModifier) &&
+                resetCanvasActivations == 1 && undoActivations == 1 && redoActivations == 1,
+            "canvas reset must dispatch separately from Undo and Redo");
+    localShortcutInputAllowed = false;
+    require(!dispatchShortcut(shortcutWindow, Qt::Key_Z, Qt::ControlModifier | Qt::ShiftModifier) &&
+                resetCanvasActivations == 1,
+            "canvas reset must preserve annotations when local shortcut input is blocked");
+    localShortcutInputAllowed = true;
+    require(drawingShortcutSettings.setShortcuts(QStringLiteral("reset_canvas"),
+                                                 {QStringLiteral("Ctrl+Alt+F12")}),
+            "customize the screenshot canvas reset shortcut");
+    require(
+        !dispatchShortcut(shortcutWindow, Qt::Key_Z, Qt::ControlModifier | Qt::ShiftModifier) &&
+            dispatchShortcut(shortcutWindow, Qt::Key_F12, Qt::ControlModifier | Qt::AltModifier) &&
+            resetCanvasActivations == 2,
+        "screenshot canvas reset shortcut changes must apply immediately");
+    require(
+        drawingShortcutSettings.setShortcuts(QStringLiteral("reset_canvas"), {}) &&
+            !dispatchShortcut(shortcutWindow, Qt::Key_F12, Qt::ControlModifier | Qt::AltModifier) &&
+            resetCanvasActivations == 2,
+        "clearing the screenshot canvas reset shortcut must disable it");
 
     require(dispatchShortcut(shortcutWindow, Qt::Key_W) &&
                 dispatchShortcut(shortcutWindow, Qt::Key_Up),

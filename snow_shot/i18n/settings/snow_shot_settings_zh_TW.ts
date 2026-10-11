@@ -3285,6 +3285,10 @@
             <translation>重設縮放</translation>
         </message>
         <message>
+            <source>Reset canvas</source>
+            <translation>重設畫布</translation>
+        </message>
+        <message>
             <source>Reset transform</source>
             <translation>重設變換</translation>
         </message>

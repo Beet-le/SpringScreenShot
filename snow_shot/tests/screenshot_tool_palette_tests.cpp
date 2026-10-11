@@ -15259,9 +15259,11 @@ void eraserResetRemainsAvailableWithoutSelection() {
                 "canvas reset should be available without a selection");
         require(reset->accentRole() == adqt::widgets::AdButton::AccentRole::Danger,
                 "canvas reset should use the danger accent");
-        require(reset->toolTip() == QStringLiteral("Reset") &&
+        require(reset->toolTip() == QStringLiteral("Reset (%1)")
+                                        .arg(snow_shot::shortcuts::formatShortcutListDisplayText(
+                                            {QStringLiteral("Ctrl+Shift+Z")})) &&
                     reset->accessibleName() == QStringLiteral("Reset"),
-                "canvas reset should have a tooltip and accessible name");
+                "canvas reset should expose its default shortcut and accessible name");
         auto* layout = qobject_cast<QBoxLayout*>(controls->layout());
         const int index = layout->indexOf(reset);
         require(index >= 2, "canvas reset should follow the eraser controls");
@@ -15282,6 +15284,38 @@ void eraserResetRemainsAvailableWithoutSelection() {
         reset->click();
     }
     require(resetCount == 3, "each reset click should emit exactly one canvas reset command");
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Select);
+    require(palette.canActivateDrawingShortcut(QStringLiteral("reset_canvas")) &&
+                palette.activateDrawingShortcut(QStringLiteral("reset_canvas")) &&
+                resetCount == 4 && palette.activeTool() == ScreenshotToolPalette::Tool::Select,
+            "canvas reset shortcut must work without selecting an eraser or changing tools");
+    const snow_shot::storage::DrawingShortcutSettings settings;
+    const auto original = settings.shortcuts(QStringLiteral("reset_canvas"));
+    palette.setActiveTool(ScreenshotToolPalette::Tool::BrushEraser);
+    for (const auto& bindings :
+         {snow_shot::shortcuts::ShortcutBindingList{QStringLiteral("Ctrl+Alt+F12")},
+          snow_shot::shortcuts::ShortcutBindingList{}}) {
+        require(settings.setShortcuts(QStringLiteral("reset_canvas"), bindings),
+                "customize or disable the canvas reset shortcut");
+        static_cast<void>(palette.setPhysicalScale(bindings.isEmpty() ? 1.0 : 1.5));
+        palette.prepareForDisplay();
+        QEvent languageChange(QEvent::LanguageChange);
+        QApplication::sendEvent(&palette, &languageChange);
+        for (auto* reset : palette.findChildren<adqt::widgets::AdButton*>(
+                 QStringLiteral("screenshotResetCanvasButton"))) {
+            const QString hint = snow_shot::shortcuts::formatShortcutListDisplayText(bindings);
+            require(reset->toolTip() == (hint.isEmpty() ? QStringLiteral("Reset")
+                                                        : QStringLiteral("Reset (%1)").arg(hint)),
+                    "every materialized eraser reset tooltip must follow live shortcut changes");
+        }
+    }
+    require(settings.setShortcuts(QStringLiteral("reset_canvas"), original),
+            "restore the canvas reset shortcut");
+    options.showEraserTool = false;
+    ScreenshotToolPalette unavailable(options);
+    require(!unavailable.canActivateDrawingShortcut(QStringLiteral("reset_canvas")) &&
+                !unavailable.activateDrawingShortcut(QStringLiteral("reset_canvas")),
+            "canvas reset shortcut must respect eraser availability");
 }
 
 void selectionAlignmentActionsFollowSelectionUnitCount() {

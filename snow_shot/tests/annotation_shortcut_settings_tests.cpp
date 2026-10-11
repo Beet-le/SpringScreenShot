@@ -82,6 +82,55 @@ void annotationShortcutsPersistValidateAndReset(const QString& configurationPath
         "resetting Annotation must restore every tool and history binding independently");
 }
 
+void canvasResetShortcutPersistsValidatesAndResets(const QString& configurationPath) {
+    snow_shot::presentation::GlobalShortcutManager manager;
+    settings::BuiltInSettingsBackend backend(manager);
+    constexpr auto scope = settings::SettingsLocalShortcutScope::Drawing;
+    const QString id = QStringLiteral("reset_canvas");
+    const shortcuts::ShortcutBindingList defaults{QStringLiteral("Ctrl+Shift+Z")};
+    require(backend.localShortcuts(scope, id) == defaults &&
+                backend.validateLocalShortcut(scope, id, defaults.constFirst()).supported &&
+                backend.applyLocalShortcuts(scope, id, defaults),
+            "canvas reset must default to Ctrl+Shift+Z");
+    const QString magnifierId = QStringLiteral("magnifier");
+    const shortcuts::ShortcutBindingList magnifier{QStringLiteral("Ctrl+Alt+M")};
+    require(
+        backend.applyLocalShortcuts(scope, magnifierId, magnifier) &&
+            !backend.validateLocalShortcut(scope, magnifierId, defaults.constFirst()).supported &&
+            !backend.applyLocalShortcuts(scope, magnifierId, defaults) &&
+            !backend.applyLocalShortcuts(scope, id, magnifier) &&
+            backend.localShortcuts(scope, magnifierId) == magnifier &&
+            backend.localShortcuts(scope, id) == defaults,
+        "magnifier and canvas reset must coexist and reject collisions without mutations");
+    const shortcuts::ShortcutBindingList custom{QStringLiteral("Ctrl+Alt+F11"),
+                                                QStringLiteral("Ctrl+Alt+F12")};
+    require(backend.applyLocalShortcuts(scope, id, custom) &&
+                backend.localShortcuts(scope, id) == custom,
+            "canvas reset must support two custom shortcuts");
+    require(!backend.applyLocalShortcuts(scope, id, {QStringLiteral("E")}) &&
+                !backend.applyLocalShortcuts(scope, id, {QStringLiteral("Ctrl+C")}) &&
+                !backend.applyLocalShortcuts(scope, id, {QStringLiteral("Ctrl+Z")}) &&
+                !backend.applyLocalShortcuts(scope, id, {QStringLiteral("Ctrl+Alt+Z")}) &&
+                backend.localShortcuts(scope, id) == custom,
+            "canvas reset must reject conflicting and reserved shortcuts without mutations");
+    require(storage::ApplicationStorage::instance().configuration().flushNow().success,
+            "persist canvas reset shortcuts");
+    storage::ConfigurationStore reloaded(configurationPath, true, true, 60000);
+    require(
+        shortcuts::shortcutBindingsFromJson(
+            reloaded.value(QStringLiteral("drawing_shortcuts/reset_canvas")), false) == custom &&
+            shortcuts::shortcutBindingsFromJson(
+                reloaded.value(QStringLiteral("drawing_shortcuts/magnifier")), false) == magnifier,
+        "magnifier and canvas reset shortcuts must both survive configuration reload");
+    require(backend.applyLocalShortcuts(scope, id, {}) &&
+                backend.localShortcuts(scope, id).isEmpty(),
+            "canvas reset shortcut must be disableable");
+    require(backend.resetSection(settings::SettingsSectionReset::DrawingShortcuts) &&
+                backend.localShortcuts(scope, id) == defaults &&
+                backend.localShortcuts(scope, magnifierId).isEmpty(),
+            "resetting Drawing shortcuts must restore both magnifier and canvas reset defaults");
+}
+
 void annotationResetRejectsHistoryCollisionsAtomically() {
     snow_shot::presentation::GlobalShortcutManager manager;
     settings::BuiltInSettingsBackend backend(manager);
@@ -252,6 +301,8 @@ int main(int argc, char** argv) {
                 .success,
             "failed to initialize isolated annotation settings");
     annotationShortcutsPersistValidateAndReset(
+        temporary.filePath(QStringLiteral("data/config.json")));
+    canvasResetShortcutPersistsValidatesAndResets(
         temporary.filePath(QStringLiteral("data/config.json")));
     annotationResetRejectsHistoryCollisionsAtomically();
     screenshotSectionResetsRejectPreservedShortcutCollisions();

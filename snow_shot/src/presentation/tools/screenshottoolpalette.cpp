@@ -708,6 +708,9 @@ QString drawingShortcutToolIdForTooltipSource(const QString& source) {
     if (source == QStringLiteral("Eraser")) {
         return QStringLiteral("eraser");
     }
+    if (source == QStringLiteral("Reset")) {
+        return QStringLiteral("reset_canvas");
+    }
     if (source == QStringLiteral("Watermark")) {
         return QStringLiteral("watermark");
     }
@@ -3821,7 +3824,7 @@ void ScreenshotToolPalette::applyStyleMetricsForScope(QWidget* scope) {
 
     if (auto* reset = scope->findChild<adqt::widgets::AdButton*>(
             QStringLiteral("screenshotResetCanvasButton"))) {
-        configureScreenshotToolPaletteStyleButton(reset, "Reset", metrics);
+        configureScreenshotToolPaletteStyleButton(reset, nullptr, metrics);
     }
 
     if (scope == m_filterStyleControlsWidget) {
@@ -4440,8 +4443,7 @@ void ScreenshotToolPalette::refreshShortcutTooltips() {
         m_globalCanvasClickThroughButton->setAccessibleName(title);
     }
     if (m_mainPanel != nullptr) {
-        for (adqt::widgets::AdButton* button :
-             m_mainPanel->findChildren<adqt::widgets::AdButton*>()) {
+        for (adqt::widgets::AdButton* button : findChildren<adqt::widgets::AdButton*>()) {
             if (button == nullptr) {
                 continue;
             }
@@ -4966,7 +4968,7 @@ bool ScreenshotToolPalette::activateToolFromToolbar(Tool tool, bool toggleVisibl
         toolbar_settings::DrawingSettings().alwaysShowFirstToolbarGroupButton();
     const bool alreadyActive =
         !toggleVisibleButton || fixedGroupButton ? m_activeTool.has_value() && *m_activeTool == tool
-        : requestedButton != nullptr             ? m_activeToolButton == requestedButton
+        : requestedButton != nullptr ? m_activeToolButton == requestedButton
                                      : m_activeTool.has_value() && *m_activeTool == tool;
     const Tool requestedTool = alreadyActive && tool != Tool::Select ? Tool::Select : tool;
     activateDrawingTool(requestedTool);
@@ -6360,11 +6362,21 @@ ScreenshotToolPalette::drawingShortcutTool(const QString& toolId) const {
 }
 
 bool ScreenshotToolPalette::canActivateDrawingShortcut(const QString& toolId) const {
+    if (toolId == QStringLiteral("reset_canvas")) {
+        return canActivateToolShortcut(Tool::Eraser);
+    }
     const auto tool = drawingShortcutTool(toolId);
     return tool.has_value() && canActivateToolShortcut(*tool);
 }
 
 bool ScreenshotToolPalette::activateDrawingShortcut(const QString& toolId) {
+    if (toolId == QStringLiteral("reset_canvas")) {
+        if (!canActivateDrawingShortcut(toolId)) {
+            return false;
+        }
+        emit resetCanvasRequested();
+        return true;
+    }
     const auto tool = drawingShortcutTool(toolId);
     return tool.has_value() && activateToolShortcut(*tool);
 }
@@ -9279,6 +9291,7 @@ void ScreenshotToolPalette::createStyleFamily(Tool tool) {
                                                               outlined_icons::Reload(), true, false,
                                                               styleButtonMetrics(m_physicalScale));
         reset->setObjectName(QStringLiteral("screenshotResetCanvasButton"));
+        applyDrawingShortcutTooltip(reset, QStringLiteral("Reset"));
         layout->addWidget(reset);
         connect(reset, &adqt::widgets::AdButton::clicked, this,
                 &ScreenshotToolPalette::resetCanvasRequested);
