@@ -1016,6 +1016,253 @@ ScreenshotOverlayInputActions pickerInputActions(Fixture& fixture) {
     return actions;
 }
 
+void externalSelectionInitializationCommitsTheCompleteHiddenStateOnce() {
+    for (const bool batched : {false, true}) {
+        Fixture fixture(QSize(1200, 800), false);
+        fixture.overlay.hide();
+        fixture.coordinator.setSelectionToolbarHidden(true);
+        fixture.interaction.returnToSelectionMode(false);
+        fixture.selection.clearSelection();
+        fixture.services->updateOverlayState();
+        fixture.flushFrame();
+        fixture.processEvents();
+        fixture.resetCounters();
+
+        const QPointF start(100, 100);
+        const QPointF latestEnd(160, 140);
+        const QRectF complete(100, 100, 61, 41);
+        QVector<QRectF> committedSelections;
+        QVector<QPointF> pickerPositions;
+        int cursorUpdates = 0;
+        int toolbarHides = 0;
+        fixture.onStateChanged = [&] {
+            require(fixture.interaction.marqueeSelecting() && fixture.interaction.dragging(),
+                    "initial global selection must commit an unconfirmed marquee gesture");
+            committedSelections.append(fixture.displayedSelection());
+        };
+        auto actions = pickerInputActions(fixture);
+        actions.hideMainToolbar = [&] { ++toolbarHides; };
+        actions.setOverlayCursor = [&](ScreenshotOverlayWindow*, ScreenshotSelectionDragMode mode) {
+            require(mode == ScreenshotSelectionDragMode::Marquee,
+                    "initial global selection must retain its marquee cursor");
+            ++cursorUpdates;
+        };
+        actions.updateColorPickerForSelectionDrag = [&](const QPointF& position) {
+            pickerPositions.append(position);
+        };
+        ScreenshotOverlayInputHandler input(
+            {fixture.captureState, fixture.interaction, fixture.selection,
+             fixture.intelligentSelection, fixture.geometry, fixture.displays, std::move(actions)});
+        input.setExternalDragActive(true);
+        if (batched) {
+            input.beginExternalSelectionDrag(start, latestEnd);
+        } else {
+            input.beginExternalSelectionDrag(start);
+            input.updateExternalSelectionDrag(latestEnd);
+        }
+
+        require(fixture.displayedSelection() == complete &&
+                    fixture.selection.normalizedSelection() == complete,
+                "the hidden initial frame must synchronously contain the latest inclusive pixels");
+        require(fixture.selection.moveOriginalSelection() == QRectF(start, QSizeF(0, 0)),
+                "batched initialization must preserve the original empty press geometry");
+        require(fixture.stateNotifications == (batched ? 1 : 2) &&
+                    committedSelections.size() == (batched ? 1 : 2) &&
+                    committedSelections.last() == complete,
+                "batched initialization must replace two semantic commits with one final commit");
+        if (batched) {
+            require(committedSelections.first() == complete &&
+                        pickerPositions == QVector<QPointF>{latestEnd},
+                    "batched initialization must publish and sample only the complete endpoint");
+        } else {
+            require(committedSelections.first().isEmpty() &&
+                        pickerPositions == QVector<QPointF>{start, latestEnd},
+                    "the legacy sequence must expose the redundant empty initial commit");
+        }
+        require(cursorUpdates == 1 && toolbarHides == 1,
+                "initializing the complete gesture must retain its cursor and toolbar boundary");
+        fixture.advanceClock(17);
+        fixture.flushFrame();
+        fixture.processEvents();
+        require(
+            fixture.stateNotifications == (batched ? 1 : 2) &&
+                fixture.paintObserver.canvasPaints == 0,
+            "the committed hidden state must leave no duplicate presentation at the next frame");
+    }
+}
+
+void batchedExternalSelectionPreservesPointerGeometryAndEmptyGestures() {
+    struct Case {
+        QPointF start;
+        QPointF end;
+        QRectF expected;
+    };
+    const Case cases[] = {
+        {QPointF(100.49, 100.49), QPointF(160.49, 140.49), QRectF(100, 100, 61, 41)},
+        {QPointF(160.49, 140.49), QPointF(100.49, 100.49), QRectF(100, 100, 61, 41)},
+        {QPointF(100, 100), QPointF(160, 100), QRectF(100, 100, 61, 1)},
+        {QPointF(100, 100), QPointF(100, 140), QRectF(100, 100, 1, 41)},
+        {QPointF(100, 100), QPointF(-20, -30), QRectF(0, 0, 101, 101)},
+        {QPointF(1100, 700), QPointF(1300, 900), QRectF(1100, 700, 100, 100)},
+        {QPointF(100.1, 100.2), QPointF(100.4, 100.3), QRectF(100, 100, 0, 0)},
+    };
+    for (const Case& scenario : cases) {
+        Fixture fixture(QSize(1200, 800), false);
+        fixture.displays.startup->resumeLiveInput();
+        fixture.interaction.returnToSelectionMode(false);
+        fixture.selection.clearSelection();
+        fixture.services->updateOverlayState();
+        fixture.resetCounters();
+        int confirmations = 0;
+        auto actions = pickerInputActions(fixture);
+        actions.selectionConfirmed = [&] { ++confirmations; };
+        ScreenshotOverlayInputHandler input(
+            {fixture.captureState, fixture.interaction, fixture.selection,
+             fixture.intelligentSelection, fixture.geometry, fixture.displays, std::move(actions)});
+        input.setExternalDragActive(true);
+        input.beginExternalSelectionDrag(scenario.start, scenario.end);
+        require(fixture.selection.normalizedSelection() == scenario.expected &&
+                    fixture.stateNotifications == 1,
+                "batched global selection must preserve rounded, reversed and bounded pixels");
+        require(fixture.selection.hasPixelSelection() == !scenario.expected.isEmpty(),
+                "pointer movement inside the pressed pixel must remain an empty gesture");
+        input.handleMouseRelease(&fixture.overlay, scenario.end);
+        require(fixture.interaction.dragging() && confirmations == 0,
+                "local mouse release must not finish an externally owned gesture");
+        fixture.interaction.finishDrag();
+        input.setExternalDragActive(false);
+        input.confirmSelection();
+        require(
+            confirmations == (scenario.expected.isEmpty() ? 0 : 1),
+            "external release must confirm usable selections and leave empty gestures unconfirmed");
+        require(fixture.selection.normalizedSelection() == scenario.expected,
+                "external confirmation must preserve the initialized drag geometry");
+    }
+}
+
+void batchedExternalSelectionPreservesContinuedDraggingAndHeldShortcuts() {
+    Fixture fixture(QSize(1200, 800), false);
+    fixture.displays.startup->resumeLiveInput();
+    fixture.interaction.returnToSelectionMode(false);
+    fixture.selection.clearSelection();
+    fixture.services->updateOverlayState();
+    auto actions = pickerInputActions(fixture);
+    int confirmations = 0;
+    actions.selectionConfirmed = [&] { ++confirmations; };
+    ScreenshotOverlayInputHandler input({fixture.captureState, fixture.interaction,
+                                         fixture.selection, fixture.intelligentSelection,
+                                         fixture.geometry, fixture.displays, std::move(actions)});
+    input.setExternalDragActive(true);
+    input.beginExternalSelectionDrag(QPointF(100, 100), QPointF(160, 140));
+    const QRectF initial(100, 100, 61, 41);
+    fixture.resetCounters();
+    input.updateExternalSelectionDrag(QPointF(170, 150));
+    require(fixture.selection.normalizedSelection() == QRectF(100, 100, 71, 51) &&
+                fixture.displayedSelection() == initial && fixture.stateNotifications == 0,
+            "continued external dragging must retain the original anchor and remain frame paced");
+    fixture.advanceClock(17);
+    fixture.flushFrame();
+    require(fixture.displayedSelection() == QRectF(100, 100, 71, 51) &&
+                fixture.stateNotifications == 1,
+            "the next drag frame must commit geometry from the batched gesture's original anchor");
+    require(input.activateMoveEntireSelectionShortcut(),
+            "the batched external gesture must accept Space movement");
+    input.updateExternalSelectionDrag(QPointF(190, 180));
+    require(fixture.selection.normalizedSelection() == QRectF(120, 130, 71, 51),
+            "Space must rebase movement at the latest endpoint without resizing the selection");
+    require(input.releaseMoveEntireSelectionShortcut(),
+            "Space release must restore the original marquee drag mode");
+    input.updateExternalSelectionDrag(QPointF(210, 190));
+    require(fixture.selection.normalizedSelection() == QRectF(120, 130, 91, 61),
+            "resizing after Space release must retain the translated original anchor");
+    require(input.activateKeepSelectionAspectRatioShortcut(false),
+            "the continued external gesture must accept Shift resizing");
+    input.updateExternalSelectionDrag(QPointF(230, 200));
+    const QRectF square(120, 130, 111, 111);
+    require(fixture.selection.normalizedSelection() == square,
+            "Shift must constrain the continued batched external gesture to a square");
+    require(input.releaseKeepSelectionAspectRatioShortcut(),
+            "the external gesture's Shift shortcut must release normally");
+    fixture.interaction.finishDrag();
+    input.setExternalDragActive(false);
+    input.confirmSelection();
+    require(fixture.displayedSelection() == square && confirmations == 1 &&
+                fixture.captureState.sessionState == ScreenshotSessionState::Editing,
+            "external release must synchronously confirm the latest pending drag geometry once");
+}
+
+void batchedExternalSelectionConsumesSpaceHeldBeforeInitialization() {
+    Fixture fixture(QSize(1200, 800), false);
+    fixture.interaction.returnToSelectionMode(false);
+    fixture.selection.clearSelection();
+    require(fixture.interaction.enterSelectionDrag(ScreenshotSelectionDragMode::Marquee),
+            "capture preparation must allow Space to arm before usable global geometry arrives");
+    fixture.services->updateOverlayState();
+    ScreenshotOverlayInputHandler input(
+        {fixture.captureState, fixture.interaction, fixture.selection, fixture.intelligentSelection,
+         fixture.geometry, fixture.displays, pickerInputActions(fixture)});
+    input.setExternalDragActive(true);
+    require(input.activateMoveEntireSelectionShortcut() &&
+                fixture.interaction.dragMode() == ScreenshotSelectionDragMode::Marquee,
+            "Space held over an empty marquee must defer movement until usable geometry exists");
+    fixture.resetCounters();
+    input.beginExternalSelectionDrag(QPointF(100, 100), QPointF(160, 140));
+    require(fixture.interaction.dragMode() == ScreenshotSelectionDragMode::All &&
+                fixture.selection.normalizedSelection() == QRectF(100, 100, 61, 41) &&
+                fixture.displayedSelection() == QRectF(100, 100, 61, 41) &&
+                fixture.stateNotifications == 1,
+            "batched initialization must commit usable geometry already rebased for held Space");
+    input.updateExternalSelectionDrag(QPointF(180, 170));
+    require(fixture.selection.normalizedSelection() == QRectF(120, 130, 61, 41),
+            "Space held before initialization must translate from the complete latest endpoint");
+    require(input.releaseMoveEntireSelectionShortcut() &&
+                fixture.interaction.dragMode() == ScreenshotSelectionDragMode::Marquee,
+            "releasing pre-initialization Space must restore marquee resizing");
+    input.updateExternalSelectionDrag(QPointF(200, 180));
+    require(fixture.selection.normalizedSelection() == QRectF(120, 130, 81, 51),
+            "marquee resizing after pre-initialization Space must retain the translated anchor");
+}
+
+void batchedExternalSelectionPreservesRememberedRatioAndShiftOverrideOnRelease() {
+    for (const bool shiftHeld : {false, true}) {
+        Fixture fixture(QSize(1200, 800), false);
+        fixture.interaction.returnToSelectionMode(false);
+        fixture.selection.clearSelection();
+        require(fixture.selection.setAspectRatioPreset(
+                    ScreenshotSelectionAspectRatioPreset::Landscape16x9,
+                    fixture.geometry.canvasBounds(),
+                    snow_shot::presentation::kScreenshotSelectionMinimumSize),
+                "the next global gesture must retain its remembered aspect ratio preset");
+        fixture.services->updateOverlayState();
+        ScreenshotOverlayInputHandler input({fixture.captureState, fixture.interaction,
+                                             fixture.selection, fixture.intelligentSelection,
+                                             fixture.geometry, fixture.displays,
+                                             pickerInputActions(fixture)});
+        if (shiftHeld)
+            require(input.activateKeepSelectionAspectRatioShortcut(false),
+                    "Shift must arm before the complete external gesture is initialized");
+        input.setExternalDragActive(true);
+        input.beginExternalSelectionDrag(QPointF(100, 100), QPointF(160, 140));
+        const QRectF preview = fixture.selection.normalizedSelection();
+        require(preview.topLeft() == QPointF(100, 100) &&
+                    qFuzzyCompare(preview.height() / preview.width(), shiftHeld ? 1.0 : 9.0 / 16.0),
+                "batched geometry must apply the remembered ratio or the held Shift override");
+        if (shiftHeld)
+            require(preview == QRectF(100, 100, 61, 61),
+                    "a held Shift override must use the inclusive pointer-cell square span");
+        fixture.interaction.finishDrag();
+        input.setExternalDragActive(false);
+        input.confirmSelection();
+        require(fixture.selection.normalizedSelection() == preview &&
+                    fixture.displayedSelection() == preview,
+                "release must preserve the drag preview after transient shortcut state resets");
+        require(fixture.selection.aspectRatioPreset() ==
+                    (shiftHeld ? ScreenshotSelectionAspectRatioPreset::Free
+                               : ScreenshotSelectionAspectRatioPreset::Landscape16x9),
+                "the drag marker must retain a Shift override without reshaping to the preset");
+    }
+}
+
 void selectionDragFramesShareTheLatestGeometryAndPickerAnchor() {
     Fixture fixture(QSize(1200, 800), false);
     fixture.displays.startup->resumeLiveInput();
@@ -1485,6 +1732,11 @@ int main(int argc, char* argv[]) {
     shortcutContentStillRetranslatesOnLanguageChange();
     queuedPickerInputSurvivesSelectionConfirmation();
     queuedPickerHoverYieldsToSelectionDrag();
+    externalSelectionInitializationCommitsTheCompleteHiddenStateOnce();
+    batchedExternalSelectionPreservesPointerGeometryAndEmptyGestures();
+    batchedExternalSelectionPreservesContinuedDraggingAndHeldShortcuts();
+    batchedExternalSelectionConsumesSpaceHeldBeforeInitialization();
+    batchedExternalSelectionPreservesRememberedRatioAndShiftOverrideOnRelease();
     selectionDragFramesShareTheLatestGeometryAndPickerAnchor();
     explicitAspectRatioSnapCommitsQueuedDragWork();
     selectionDragPickerWorkIsDiscardedAtInteractionBoundaries();

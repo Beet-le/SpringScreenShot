@@ -142,6 +142,172 @@ QJsonObject distribution(std::vector<double> values) {
         {"max", values.back()}};
 }
 
+#if !defined(SNOW_SHOT_SELECTION_PRESENTATION_BASELINE)
+struct ExternalInitializationSamples {
+    std::vector<double> initializationUs;
+    std::vector<double> pendingFrameFlushUs;
+    std::vector<double> completeUs;
+    qint64 synchronousNotifications = 0;
+    qint64 completeNotifications = 0;
+    qint64 synchronousPickerSamples = 0;
+    qint64 completePickerSamples = 0;
+    qint64 completePickerPreviews = 0;
+
+    QJsonObject report(const char* implementation, int iterations) const {
+        return {{"implementation", QString::fromLatin1(implementation)},
+                {"iterations", iterations},
+                {"synchronous_init_us", distribution(initializationUs)},
+                {"pending_frame_flush_us", distribution(pendingFrameFlushUs)},
+                {"init_plus_pending_delivery_us", distribution(completeUs)},
+                {"synchronous_semantic_notifications", synchronousNotifications},
+                {"complete_semantic_notifications", completeNotifications},
+                {"synchronous_picker_samples", synchronousPickerSamples},
+                {"complete_picker_samples", completePickerSamples},
+                {"complete_picker_preview_rebuilds", completePickerPreviews}};
+    }
+};
+
+QJsonObject runExternalInitializationCase(const QSize& logicalSize, int iterations, int warmup,
+                                          bool pickerEnabled, FrameBackend frameBackend) {
+#ifndef NDEBUG
+    throw std::runtime_error("external initialization measurements require a Release build");
+#endif
+    Fixture fixture(logicalSize, false, true, frameBackend);
+    if (pickerEnabled)
+        fixture.enableColorPicker(ScreenshotColorPickerDisplayMode::AlwaysShow);
+    fixture.overlay.hide();
+    fixture.services->hideToolbar();
+    fixture.coordinator.hideColorPicker();
+    fixture.displays.startup->phase = ScreenshotStartupContext::Phase::Preparing;
+
+    ScreenshotOverlayInputActions actions;
+    actions.hideMainToolbar = [&fixture] { fixture.services->hideMainToolbar(); };
+    actions.updateOverlayState = [&fixture] { fixture.services->updateOverlayState(); };
+    actions.requestSelectionDragPresentation = [&fixture] {
+        fixture.services->requestSelectionDragPresentation();
+    };
+    actions.setOverlayCursor = [&fixture](ScreenshotOverlayWindow* owner,
+                                          ScreenshotSelectionDragMode mode) {
+        fixture.coordinator.setOverlayCursor(owner, mode);
+    };
+    if (pickerEnabled) {
+        actions.updateColorPickerForSelectionDrag = [&fixture](const QPointF& position) {
+            fixture.services->requestSelectionDragColorPickerPresentation(position);
+        };
+    }
+    ScreenshotOverlayInputHandler input({fixture.captureState, fixture.interaction,
+                                         fixture.selection, fixture.intelligentSelection,
+                                         fixture.geometry, fixture.displays, std::move(actions)});
+    const auto reset = [&](const QPointF& start) {
+        input.setExternalDragActive(false);
+        fixture.selection.clearSelection();
+        fixture.interaction.enterOverlayVisible(false);
+        static_cast<void>(
+            fixture.interaction.enterSelectionDrag(ScreenshotSelectionDragMode::Marquee));
+        fixture.intelligentSelection.clearTransientState();
+        fixture.displays.startup->logicalPosition =
+            fixture.geometry.logicalPositionForCanvasPoint(fixture.displays.displayAt(0), start)
+                .toPoint();
+        fixture.services->resetPresentation();
+        fixture.services->updateOverlayState();
+        fixture.flushFrame();
+        fixture.services->hideToolbar();
+        if (pickerEnabled) {
+            fixture.colorPickerController->reset();
+            fixture.coordinator.colorPicker()->resetForNewCapture();
+            fixture.coordinator.prepareColorPickerSurface(fixture.displays);
+        }
+        fixture.processEvents();
+        input.setExternalDragActive(true);
+        fixture.resetCounters();
+    };
+
+    std::array<ExternalInitializationSamples, 2> samples;
+    std::vector<double> pairedReductionPercent;
+    pairedReductionPercent.reserve(static_cast<std::size_t>(iterations));
+    for (int sample = 0; sample < iterations + warmup; ++sample) {
+        const QPointF start(std::floor(logicalSize.width() * 0.1) + sample % 7,
+                            std::floor(logicalSize.height() * 0.1) + sample % 5);
+        const QPointF end(std::floor(logicalSize.width() * 0.65) + sample % 11,
+                          std::floor(logicalSize.height() * 0.6) + sample % 13);
+        const QRectF expected(QRect(start.toPoint(), end.toPoint()));
+        std::array<double, 2> pairUs{};
+        std::array<QRectF, 2> finalGeometry;
+        for (int order = 0; order < 2; ++order) {
+            const int implementation = (sample + order) % 2;
+            const bool batched = implementation == 1;
+            reset(start);
+            QElapsedTimer timer;
+            timer.start();
+            if (batched) {
+                input.beginExternalSelectionDrag(start, end);
+            } else {
+                input.beginExternalSelectionDrag(start);
+                input.updateExternalSelectionDrag(end);
+            }
+            const qint64 initializationNs = timer.nsecsElapsed();
+            const qint64 synchronousNotifications = fixture.stateNotifications;
+            const auto synchronousPicker = pickerEnabled
+                                               ? fixture.coordinator.colorPicker()->workCounters()
+                                               : ScreenshotColorPickerWindow::WorkCounters{};
+            finalGeometry[static_cast<std::size_t>(implementation)] =
+                fixture.selection.normalizedSelection();
+            if (finalGeometry[static_cast<std::size_t>(implementation)] != expected ||
+                fixture.displayedSelection() != expected || fixture.overlay.isVisible() ||
+                !input.externalDragActive() || !fixture.interaction.dragging() ||
+                fixture.interaction.dragMode() != ScreenshotSelectionDragMode::Marquee ||
+                synchronousNotifications != (batched ? 1 : 2)) {
+                throw std::runtime_error(
+                    "external initialization must commit the same hidden inclusive marquee; "
+                    "two-step initialization notifies twice and batched initialization once");
+            }
+
+            // The old endpoint picker request can remain queued. Report its delivery separately
+            // so the main interval measures precisely the production before-reveal calls.
+            timer.restart();
+            fixture.flushFrame();
+            const qint64 pendingFrameFlushNs = timer.nsecsElapsed();
+            const auto completePicker = pickerEnabled
+                                            ? fixture.coordinator.colorPicker()->workCounters()
+                                            : ScreenshotColorPickerWindow::WorkCounters{};
+            const double initializationUs = static_cast<double>(initializationNs) / 1000.0;
+            pairUs[static_cast<std::size_t>(implementation)] = initializationUs;
+            if (sample >= warmup) {
+                auto& measured = samples[static_cast<std::size_t>(implementation)];
+                measured.initializationUs.push_back(initializationUs);
+                measured.pendingFrameFlushUs.push_back(static_cast<double>(pendingFrameFlushNs) /
+                                                       1000.0);
+                measured.completeUs.push_back(
+                    static_cast<double>(initializationNs + pendingFrameFlushNs) / 1000.0);
+                measured.synchronousNotifications += synchronousNotifications;
+                measured.completeNotifications += fixture.stateNotifications;
+                measured.synchronousPickerSamples += static_cast<qint64>(synchronousPicker.samples);
+                measured.completePickerSamples += static_cast<qint64>(completePicker.samples);
+                measured.completePickerPreviews += static_cast<qint64>(completePicker.previews);
+            }
+        }
+        if (finalGeometry[0] != finalGeometry[1])
+            throw std::runtime_error("external initialization A/B geometry must match");
+        if (sample >= warmup)
+            pairedReductionPercent.push_back((pairUs[0] - pairUs[1]) / pairUs[0] * 100.0);
+    }
+    return {{"scenario", pickerEnabled ? "external_initialization_picker"
+                                       : "external_initialization_no_picker"},
+            {"overlay_count", 1},
+            {"overlay_hidden", true},
+            {"build_type", "Release"},
+            {"capture_in_progress", fixture.captureState.captureInProgress},
+            {"guide_lines_enabled", fixture.guidesEnabled},
+            {"shortcut_hints_included", true},
+            {"picker_included", pickerEnabled},
+            {"sample_order", "alternating_two_step_then_batched_and_batched_then_two_step"},
+            {"geometry_guard", "matching_model_and_rendered_inclusive_marquee_before_reveal"},
+            {"paired_synchronous_time_reduction_percent", distribution(pairedReductionPercent)},
+            {"implementations", QJsonArray{samples[0].report("two_step", iterations),
+                                           samples[1].report("batched", iterations)}}};
+}
+#endif
+
 QJsonObject runCase(const Case& benchmarkCase, const QSize& logicalSize, int iterations, int warmup,
                     int requestedFrameIntervalMs, FrameBackend frameBackend) {
     const bool animation = benchmarkCase.scenario == Scenario::AnimationFrames ||
@@ -529,6 +695,8 @@ int main(int argc, char* argv[]) {
     parser.addOption({QStringLiteral("native"), QStringLiteral("Use the native Qt platform")});
     parser.addOption(
         {QStringLiteral("offscreen"), QStringLiteral("Use the offscreen Qt platform")});
+    parser.addOption({QStringLiteral("external-initialization"),
+                      QStringLiteral("Compare two-step and batched hidden global mouse setup")});
     parser.addOption({QStringLiteral("iterations"), QStringLiteral("Measured frames"),
                       QStringLiteral("count"), QStringLiteral("240")});
     parser.addOption({QStringLiteral("warmup"), QStringLiteral("Warmup frames"),
@@ -565,16 +733,29 @@ int main(int argc, char* argv[]) {
                                     : 0;
     selection_presentation_test::IsolatedStorage storage;
     QJsonArray results;
+    const bool externalInitialization = parser.isSet(QStringLiteral("external-initialization"));
     const QString selected = parser.value(QStringLiteral("scenario"));
-    for (const Case& benchmarkCase : kCases) {
-        const bool optimizationCase = booleanOperation(benchmarkCase.scenario) ||
-                                      benchmarkCase.scenario == Scenario::ManualMarquee ||
-                                      benchmarkCase.scenario == Scenario::ManualResize ||
-                                      benchmarkCase.scenario == Scenario::ManualMarqueeMagnifier;
-        if (selected == QStringLiteral("all") || selected == QLatin1String(benchmarkCase.name) ||
-            (selected == QStringLiteral("optimizations") && optimizationCase))
-            results.append(runCase(benchmarkCase, logicalSize, iterations, warmup, frameIntervalMs,
-                                   frameBackend));
+    if (externalInitialization) {
+#if defined(SNOW_SHOT_SELECTION_PRESENTATION_BASELINE)
+        throw std::runtime_error("external initialization comparison requires the current runtime");
+#else
+        for (const bool pickerEnabled : {false, true})
+            results.append(runExternalInitializationCase(logicalSize, iterations, warmup,
+                                                         pickerEnabled, frameBackend));
+#endif
+    } else {
+        for (const Case& benchmarkCase : kCases) {
+            const bool optimizationCase =
+                booleanOperation(benchmarkCase.scenario) ||
+                benchmarkCase.scenario == Scenario::ManualMarquee ||
+                benchmarkCase.scenario == Scenario::ManualResize ||
+                benchmarkCase.scenario == Scenario::ManualMarqueeMagnifier;
+            if (selected == QStringLiteral("all") ||
+                selected == QLatin1String(benchmarkCase.name) ||
+                (selected == QStringLiteral("optimizations") && optimizationCase))
+                results.append(runCase(benchmarkCase, logicalSize, iterations, warmup,
+                                       frameIntervalMs, frameBackend));
+        }
     }
     if (results.isEmpty())
         throw std::runtime_error("unknown selection presentation benchmark scenario");
@@ -597,28 +778,47 @@ int main(int argc, char* argv[]) {
         {"screen_refresh_hz", QGuiApplication::primaryScreen()->refreshRate()},
         {"animation_sample_interval_ms", frameIntervalMs > 0 ? frameIntervalMs : 17},
         {"measurement",
-         "Request submission and explicit frame commit are measured separately; preparation "
-         "includes both phases. Scheduled animation frame_commit_ms is zero, with timer commits "
-         "included in Qt event processing. "
-         "Controlled cases commit once per supplied frame; animation uses each implementation's "
-         "event-driven timer with event pumping and requested idle waits of at most 1ms. "
-         "Event-processing work and counters cover the entire input interval. Compare animation "
-         "costs with observed paint and geometry counts. Magnifier cases include pointer "
-         "presentation and the real picker controller/window. The optional archived legacy "
-         "baseline target updates hover magnifiers immediately and reports internal "
-         "sampling/preview "
-         "counters as null; the current target batches hover magnifiers with the presentation "
-         "frame. "
-         "Picker paint/move/owner-change event counts are comparable. Combined cases include "
-         "animated "
-         "selection, guides, and magnifier bursts. "
-         "Manual cases deliver coordinates through the real input handler and include constrained "
-         "drag geometry; manual magnifier cases also include the real drag anchor sampler. "
-         "Boolean cases use a concave freehand contour with two holes; pixel reuse "
-         "keeps sixteen subpixel requests inside one integer marquee per frame, and animation "
-         "allows displayed marquees to evolve between target requests. "
-         "Idle waits, selector workers, native mouse delivery, and input-to-photon latency "
-         "are excluded from work timings."},
+         externalInitialization
+             ? "Same-process alternating A/B comparison of the real external drag "
+               "input handler and presentation services on a captured hidden "
+               "overlay. Both paths start in the workflow's committed empty "
+               "manual marquee state. synchronous_init_us measures exactly the "
+               "before-reveal initialization calls on the GUI thread. "
+               "pending_frame_flush_us measures explicit delivery of remaining "
+               "presentation and picker requests separately. Reset, queued Qt "
+               "events, capture, selector workers, native mouse delivery, reveal "
+               "painting, and input-to-photon latency are excluded. Picker cases "
+               "include the real controller and window, reset identically before "
+               "each sample. Geometry and notification guards apply to every "
+               "warmup and measured pair."
+             : "Request submission and explicit frame commit are measured separately; preparation "
+               "includes both phases. Scheduled animation frame_commit_ms is zero, with timer "
+               "commits "
+               "included in Qt event processing. "
+               "Controlled cases commit once per supplied frame; animation uses each "
+               "implementation's "
+               "event-driven timer with event pumping and requested idle waits of at most 1ms. "
+               "Event-processing work and counters cover the entire input interval. Compare "
+               "animation "
+               "costs with observed paint and geometry counts. Magnifier cases include pointer "
+               "presentation and the real picker controller/window. The optional archived legacy "
+               "baseline target updates hover magnifiers immediately and reports internal "
+               "sampling/preview "
+               "counters as null; the current target batches hover magnifiers with the "
+               "presentation "
+               "frame. "
+               "Picker paint/move/owner-change event counts are comparable. Combined cases include "
+               "animated "
+               "selection, guides, and magnifier bursts. "
+               "Manual cases deliver coordinates through the real input handler and include "
+               "constrained "
+               "drag geometry; manual magnifier cases also include the real drag anchor sampler. "
+               "Boolean cases use a concave freehand contour with two holes; pixel reuse "
+               "keeps sixteen subpixel requests inside one integer marquee per frame, and "
+               "animation "
+               "allows displayed marquees to evolve between target requests. "
+               "Idle waits, selector workers, native mouse delivery, and input-to-photon latency "
+               "are excluded from work timings."},
         {"results", results}};
     const QByteArray json = QJsonDocument(report).toJson(QJsonDocument::Indented);
     if (parser.isSet(QStringLiteral("output"))) {

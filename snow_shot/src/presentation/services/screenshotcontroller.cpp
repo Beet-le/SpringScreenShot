@@ -325,6 +325,7 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
         PendingSelectionAction action = PendingSelectionAction::None,
         ScreenshotCaptureWorkflow::StartMode mode = ScreenshotCaptureWorkflow::StartMode::Normal);
     void applyGlobalMouseDrag(bool finishReleased);
+    void finishGlobalMouseDragIfReleased(bool finishReleased);
     void refreshGlobalMouseDragFromLiveCursor();
     QPointF globalMouseCanvasPosition(const QPointF& point) const;
     void endGlobalMouseDrag();
@@ -1657,8 +1658,9 @@ void ScreenshotController::Impl::createCaptureWorkflow() {
                         m_globalMouseDrag.setReady();
                         refreshGlobalMouseDragFromLiveCursor();
                         m_overlayInputHandler->beginExternalSelectionDrag(
-                            globalMouseCanvasPosition(m_globalMouseDrag.start()));
-                        applyGlobalMouseDrag(false);
+                            globalMouseCanvasPosition(m_globalMouseDrag.start()),
+                            globalMouseCanvasPosition(m_globalMouseDrag.end()));
+                        finishGlobalMouseDragIfReleased(false);
                     }
                 },
                 [this]() { m_presentationServices->resetPresentation(); },
@@ -5674,6 +5676,10 @@ void ScreenshotController::Impl::applyGlobalMouseDrag(bool finishReleased) {
         return;
     const QPointF end = globalMouseCanvasPosition(m_globalMouseDrag.end());
     m_overlayInputHandler->updateExternalSelectionDrag(end);
+    finishGlobalMouseDragIfReleased(finishReleased);
+}
+
+void ScreenshotController::Impl::finishGlobalMouseDragIfReleased(bool finishReleased) {
     if (!m_globalMouseDrag.released())
         return;
     if (!m_selection.hasPixelSelection()) {

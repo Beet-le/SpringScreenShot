@@ -432,6 +432,13 @@ void ScreenshotOverlayInputHandler::beginExternalSelectionDrag(const QPointF& ca
     }
 }
 
+void ScreenshotOverlayInputHandler::beginExternalSelectionDrag(const QPointF& start,
+                                                               const QPointF& latestEnd) {
+    if (m_externalDragActive) {
+        beginSelectionDrag(nullptr, start, ScreenshotSelectionDragMode::Marquee, latestEnd);
+    }
+}
+
 void ScreenshotOverlayInputHandler::updateExternalSelectionDrag(const QPointF& canvasPosition) {
     if (m_externalDragActive && m_context.interaction.dragging()) {
         updateSelectionDrag(canvasPosition);
@@ -440,7 +447,8 @@ void ScreenshotOverlayInputHandler::updateExternalSelectionDrag(const QPointF& c
 
 void ScreenshotOverlayInputHandler::beginSelectionDrag(ScreenshotOverlayWindow* overlay,
                                                        const QPointF& virtualPosition,
-                                                       ScreenshotSelectionDragMode dragMode) {
+                                                       ScreenshotSelectionDragMode dragMode,
+                                                       const std::optional<QPointF>& latestEnd) {
     if (dragMode == ScreenshotSelectionDragMode::None) {
         return;
     }
@@ -489,10 +497,16 @@ void ScreenshotOverlayInputHandler::beginSelectionDrag(ScreenshotOverlayWindow* 
             snow_shot::presentation::kScreenshotSelectionMinimumSize));
     }
     m_context.selection.beginMoveDrag(virtualPosition);
+    // Global capture already has a buffered endpoint when its hidden first frame is ready.
+    // Apply the shared drag transaction before publishing any initial presentation state.
+    if (latestEnd) {
+        updateSelectionDragState(*latestEnd);
+        dragMode = m_context.interaction.dragMode();
+    }
     m_context.actions.hideMainToolbar();
     m_context.actions.updateOverlayState();
     m_context.actions.setOverlayCursor(overlay, dragMode);
-    m_context.actions.updateColorPickerForSelectionDrag(virtualPosition);
+    m_context.actions.updateColorPickerForSelectionDrag(latestEnd.value_or(virtualPosition));
 }
 
 void ScreenshotOverlayInputHandler::handleIntelligentSelectionPress(
@@ -633,6 +647,15 @@ void ScreenshotOverlayInputHandler::handleHoverMove(ScreenshotOverlayWindow* ove
 }
 
 void ScreenshotOverlayInputHandler::updateSelectionDrag(const QPointF& virtualPosition) {
+    updateSelectionDragState(virtualPosition);
+    if (m_context.actions.requestSelectionDragPresentation)
+        m_context.actions.requestSelectionDragPresentation();
+    else
+        m_context.actions.updateOverlayState();
+    m_context.actions.updateColorPickerForSelectionDrag(virtualPosition);
+}
+
+void ScreenshotOverlayInputHandler::updateSelectionDragState(const QPointF& virtualPosition) {
     const QRectF previousSelection = m_context.selection.normalizedSelection();
     m_lastMoveDragPosition = virtualPosition;
     if (m_keepSelectionAspectRatioShortcut && m_context.interaction.dragging()) {
@@ -656,11 +679,6 @@ void ScreenshotOverlayInputHandler::updateSelectionDrag(const QPointF& virtualPo
         static_cast<void>(
             m_context.interaction.enterSelectionDrag(ScreenshotSelectionDragMode::All));
     }
-    if (m_context.actions.requestSelectionDragPresentation)
-        m_context.actions.requestSelectionDragPresentation();
-    else
-        m_context.actions.updateOverlayState();
-    m_context.actions.updateColorPickerForSelectionDrag(virtualPosition);
 }
 
 void ScreenshotOverlayInputHandler::handleMouseRelease(ScreenshotOverlayWindow* overlay,

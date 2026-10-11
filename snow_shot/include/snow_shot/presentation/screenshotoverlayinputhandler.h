@@ -176,6 +176,7 @@ class ScreenshotOverlayInputHandler final {
     }
     [[nodiscard]] bool acceptInput(bool genuine = true);
     void beginExternalSelectionDrag(const QPointF& canvasPosition);
+    void beginExternalSelectionDrag(const QPointF& start, const QPointF& latestEnd);
     void updateExternalSelectionDrag(const QPointF& canvasPosition);
 
     void handleMousePress(ScreenshotOverlayWindow* overlay, const QPointF& localPosition);
@@ -228,7 +229,8 @@ class ScreenshotOverlayInputHandler final {
     bool m_consumeEffectRelease = false;
     void executeConfiguredCompletionAction(const QString& action);
     void beginSelectionDrag(ScreenshotOverlayWindow* overlay, const QPointF& virtualPosition,
-                            ScreenshotSelectionDragMode dragMode);
+                            ScreenshotSelectionDragMode dragMode,
+                            const std::optional<QPointF>& latestEnd = std::nullopt);
     void handleIntelligentSelectionPress(const QPointF& virtualPosition);
     void handleIntelligentSelectionMove(ScreenshotOverlayWindow* overlay,
                                         const QPointF& localPosition,
@@ -236,6 +238,7 @@ class ScreenshotOverlayInputHandler final {
     void handleHoverMove(ScreenshotOverlayWindow* overlay, const QPointF& localPosition);
     void updateGuideLines(ScreenshotOverlayWindow* overlay, const QPointF& localPosition) const;
     void updateSelectionDrag(const QPointF& virtualPosition);
+    void updateSelectionDragState(const QPointF& virtualPosition);
     void handleIntelligentSelectionRelease(const QPointF& virtualPosition);
     void finishSelectionDrag(ScreenshotOverlayWindow* overlay, const QPointF& localPosition,
                              const QPointF& virtualPosition);

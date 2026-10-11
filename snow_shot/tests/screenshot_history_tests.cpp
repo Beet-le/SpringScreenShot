@@ -1691,36 +1691,43 @@ void externalSelectionSupportsHeldShortcuts() {
         {captureState, interaction, selection, intelligent, geometry, displays, actions});
     ScreenshotOverlayShortcutController shortcuts(manager, handler, interaction, intelligent,
                                                   actions);
-    for (const auto modifiers : {Qt::NoModifier, Qt::ControlModifier, Qt::AltModifier,
-                                 Qt::MetaModifier, Qt::ShiftModifier}) {
-        interaction.enterOverlayVisible(false);
-        handler.setExternalDragActive(true);
-        handler.beginExternalSelectionDrag(QPointF(100, 100));
-        handler.updateExternalSelectionDrag(QPointF(160, 140));
-        require(selection.normalizedSelection() == QRectF(100, 100, 61, 41),
-                "external drag must initialize a shared marquee");
-        require(dispatchShortcut(window, Qt::Key_Space, modifiers),
-                "external selection must accept Space with the activation modifier still held");
-        handler.updateExternalSelectionDrag(QPointF(180, 170));
-        require(selection.normalizedSelection() == QRectF(120, 130, 61, 41),
-                "Space must translate the external selection without resizing it");
-        require(dispatchShortcutRelease(window, Qt::Key_Space, modifiers),
-                "Space release must restore the external marquee");
-        handler.updateExternalSelectionDrag(QPointF(200, 180));
-        require(selection.normalizedSelection() == QRectF(120, 130, 81, 51),
-                "resumed external resizing must retain the translated anchor");
-        require(dispatchShortcut(window, Qt::Key_Shift, Qt::ShiftModifier | modifiers),
-                "external selection must accept the aspect ratio shortcut");
-        handler.updateExternalSelectionDrag(QPointF(220, 190));
-        require(selection.normalizedSelection().width() == selection.normalizedSelection().height(),
-                "Shift must constrain external selection to a square");
-        require(dispatchShortcutRelease(window, Qt::Key_Shift),
-                "external aspect shortcut must release after activation modifiers change");
-        require(!dispatchShortcut(window, Qt::Key_Comma) &&
-                    !dispatchShortcut(window, Qt::Key_Return),
-                "external drag must not allow history or premature confirmation");
-        handler.setExternalDragActive(false);
-        interaction.finishDrag();
+    for (const bool batched : {false, true}) {
+        for (const auto modifiers : {Qt::NoModifier, Qt::ControlModifier, Qt::AltModifier,
+                                     Qt::MetaModifier, Qt::ShiftModifier}) {
+            interaction.enterOverlayVisible(false);
+            handler.setExternalDragActive(true);
+            if (batched) {
+                handler.beginExternalSelectionDrag(QPointF(100, 100), QPointF(160, 140));
+            } else {
+                handler.beginExternalSelectionDrag(QPointF(100, 100));
+                handler.updateExternalSelectionDrag(QPointF(160, 140));
+            }
+            require(selection.normalizedSelection() == QRectF(100, 100, 61, 41),
+                    "external drag must initialize a shared marquee");
+            require(dispatchShortcut(window, Qt::Key_Space, modifiers),
+                    "external selection must accept Space with the activation modifier still held");
+            handler.updateExternalSelectionDrag(QPointF(180, 170));
+            require(selection.normalizedSelection() == QRectF(120, 130, 61, 41),
+                    "Space must translate the external selection without resizing it");
+            require(dispatchShortcutRelease(window, Qt::Key_Space, modifiers),
+                    "Space release must restore the external marquee");
+            handler.updateExternalSelectionDrag(QPointF(200, 180));
+            require(selection.normalizedSelection() == QRectF(120, 130, 81, 51),
+                    "resumed external resizing must retain the translated anchor");
+            require(dispatchShortcut(window, Qt::Key_Shift, Qt::ShiftModifier | modifiers),
+                    "external selection must accept the aspect ratio shortcut");
+            handler.updateExternalSelectionDrag(QPointF(220, 190));
+            require(selection.normalizedSelection().width() ==
+                        selection.normalizedSelection().height(),
+                    "Shift must constrain external selection to a square");
+            require(dispatchShortcutRelease(window, Qt::Key_Shift),
+                    "external aspect shortcut must release after activation modifiers change");
+            require(!dispatchShortcut(window, Qt::Key_Comma) &&
+                        !dispatchShortcut(window, Qt::Key_Return),
+                    "external drag must not allow history or premature confirmation");
+            handler.setExternalDragActive(false);
+            interaction.finishDrag();
+        }
     }
     handler.setExternalDragActive(true);
     interaction.enterOverlayVisible(false);
