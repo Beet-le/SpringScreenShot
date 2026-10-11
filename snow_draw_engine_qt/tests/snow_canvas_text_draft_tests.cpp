@@ -841,10 +841,16 @@ void serialNumberFormattedLabelsRenderAndFitBadges() {
     require(QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/msyh.ttc")) >= 0,
             "Chinese number rendering requires a CJK fallback font");
 #endif
-    const QList<QByteArray> labels = {"1",         "27",
-                                      "XXVII",     "aa",
-                                      "AA",        QByteArray::fromHex("e4ba8ce58d81e4b883"),
-                                      "MMMCMXCIX", "CRPXNLSKVLJFHG"};
+    const QList<QByteArray> labels = {"1",
+                                      "27",
+                                      "104",
+                                      "XXVII",
+                                      "aa",
+                                      "AA",
+                                      QByteArray::fromHex("e4ba8ce58d81e4b883"),
+                                      "MMMCMXCIX",
+                                      "CRPXNLSKVLJFHG",
+                                      "9223372036854775807"};
     SceneDisplayInfo info{};
     info.surface_width = 240;
     info.surface_height = 240;
@@ -853,7 +859,7 @@ void serialNumberFormattedLabelsRenderAndFitBadges() {
          {SNOW_SERIAL_NUMBER_TYPE_OUTLINED_CIRCLE, SNOW_SERIAL_NUMBER_TYPE_OUTLINED_SQUARE,
           SNOW_SERIAL_NUMBER_TYPE_SOLID_CIRCLE, SNOW_SERIAL_NUMBER_TYPE_SOLID_SQUARE}) {
         QSize shortLabelInkSize;
-        for (double diameter : {40.0, 100.0}) {
+        for (double diameter : {6.0, 40.0, 100.0}) {
             QList<QImage> rendered;
             for (const QByteArray& label : labels) {
                 SnowCanvasSceneItem item;
@@ -877,10 +883,20 @@ void serialNumberFormattedLabelsRenderAndFitBadges() {
                     {&painter, &info, &item, 1, QRegion(image.rect())});
                 painter.end();
                 const QRect ink = darkPixelBounds(image);
+                const double contentDiameter = diameter * 0.9 - 2.0 * item.stroke_width;
+                if (contentDiameter <= 0.0) {
+                    require(ink.isEmpty(),
+                            "badges consumed by stroke and padding must not paint a label");
+                    continue;
+                }
                 require(!ink.isEmpty(), "each numeric label paints visible glyphs");
-                const double contentDiameter = diameter - 2.0 * item.stroke_width;
                 require(ink.width() <= contentDiameter + 2 && ink.height() <= contentDiameter + 2,
-                        "long and Chinese labels fit the stroke-adjusted badge content area");
+                        "long and Chinese labels leave inner padding inside the badge stroke");
+                if (shape == SNOW_SERIAL_NUMBER_TYPE_OUTLINED_CIRCLE ||
+                    shape == SNOW_SERIAL_NUMBER_TYPE_SOLID_CIRCLE) {
+                    require(std::hypot(ink.width(), ink.height()) <= contentDiameter + 3.0,
+                            "circular labels leave padding at the glyph rectangle corners");
+                }
                 if (label == "1") {
                     if (shortLabelInkSize.isEmpty()) {
                         shortLabelInkSize = ink.size();
@@ -944,9 +960,9 @@ void bahnschriftCondensedSerialNumberUsesResolvedGlyphBounds() {
     const QRect paintedBounds = darkPixelBounds(image);
     require(!paintedBounds.isEmpty(), "Bahnschrift Condensed serial number should paint text");
     const QSizeF resolvedVisualSize = layout.visualBounds.size() * layout.resolution.scale;
-    const double contentSize = item.width * zoom;
-    const double fitScale = qMin(1.0, qMin(contentSize / resolvedVisualSize.width(),
-                                           contentSize / resolvedVisualSize.height()));
+    const double contentSize = item.width * 0.9 * zoom;
+    const double fitScale = qMin(
+        1.0, contentSize / std::hypot(resolvedVisualSize.width(), resolvedVisualSize.height()));
     const QSizeF measuredViewSize = resolvedVisualSize * fitScale;
     require(std::abs(paintedBounds.width() - measuredViewSize.width()) <= 2.0,
             "serial-number painted width should match resolved glyph width");
@@ -959,12 +975,18 @@ void bahnschriftCondensedSerialNumberUsesResolvedGlyphBounds() {
 }
 
 void serialNumberGlyphBaselinesRemainCentered() {
+    // The largest badge, including its stroke at maximum zoom, fits within 160
+    // logical pixels. Keep the canvas tight to bound pixel scanning in this matrix.
+    constexpr int kSurfaceSize = 160;
     const QList<QByteArray> labels = {
         "1",
         "3",
         "7",
         "8",
         "27",
+        "104",
+        "888",
+        "9223372036854775807",
         "a",
         "g",
         "j",
@@ -981,7 +1003,7 @@ void serialNumberGlyphBaselinesRemainCentered() {
     const QList<QFont> fonts = {QApplication::font(),
                                 QFontDatabase::systemFont(QFontDatabase::FixedFont)};
     SceneDisplayInfo info{};
-    info.surface_width = info.surface_height = 240;
+    info.surface_width = info.surface_height = kSurfaceSize;
     info.camera_center_x = -10.25;
     info.camera_center_y = 33.5;
     for (const QFont& font : fonts) {
@@ -1008,14 +1030,16 @@ void serialNumberGlyphBaselinesRemainCentered() {
                                 item.fill_style = SNOW_FILL_STYLE_SOLID;
                                 item.text_color = SnowColorRgba8{0, 0, 0, 255};
                                 item.setTextUtf8(label);
-                                QImage image(QSize(qRound(240 * dpr), qRound(240 * dpr)),
-                                             QImage::Format_ARGB32_Premultiplied);
+                                QImage image(
+                                    QSize(qRound(kSurfaceSize * dpr), qRound(kSurfaceSize * dpr)),
+                                    QImage::Format_ARGB32_Premultiplied);
                                 image.setDevicePixelRatio(dpr);
                                 image.fill(Qt::transparent);
                                 QPainter painter(&image);
                                 painter.setFont(font);
                                 snow_canvas_renderer::renderSceneItems(
-                                    {&painter, &info, &item, 1, QRegion(QRect(0, 0, 240, 240))});
+                                    {&painter, &info, &item, 1,
+                                     QRegion(QRect(0, 0, kSurfaceSize, kSurfaceSize))});
                                 painter.end();
                                 const QRect ink = darkPixelBounds(image);
                                 require(!ink.isEmpty(),
@@ -1029,10 +1053,17 @@ void serialNumberGlyphBaselinesRemainCentered() {
                                         "digits, descenders and CJK fallback glyphs stay centered "
                                         "across zoom, rotation and pixel density");
                                 const double contentSize =
-                                    (diameter - 2.0 * item.stroke_width) * zoom * dpr;
+                                    (diameter * 0.9 - 2.0 * item.stroke_width) * zoom * dpr;
                                 require(ink.width() <= contentSize + 2.0 &&
                                             ink.height() <= contentSize + 2.0,
-                                        "baseline variants fit the badge content area");
+                                        "baseline variants preserve inner padding at every scale");
+                                if (shape == SNOW_SERIAL_NUMBER_TYPE_OUTLINED_CIRCLE ||
+                                    shape == SNOW_SERIAL_NUMBER_TYPE_SOLID_CIRCLE) {
+                                    require(std::hypot(ink.width(), ink.height()) <=
+                                                contentSize + 3.0,
+                                            "circular glyph corners preserve inner padding across "
+                                            "zoom, rotation and pixel density");
+                                }
                             }
                         }
                     }

@@ -111,7 +111,7 @@ fn serial_number_selected_appearance_edits_preserve_creation_sequence() {
 }
 
 #[test]
-fn serial_number_selected_value_edits_use_preserved_creation_counters() {
+fn serial_number_selected_value_edits_continue_from_edited_value() {
     use snow_draw_engine_editor::SERIAL_NUMBER_STYLE_MIXED_NUMBER;
 
     for numeric_type in [
@@ -125,7 +125,7 @@ fn serial_number_selected_value_edits_use_preserved_creation_counters() {
             let (mut engine, viewport) = setup(1.0);
             set_numeric_type(&mut engine, viewport, numeric_type);
             let first = click_serial_number(&mut engine, viewport, 100.0);
-            let defaults = engine.editor.serial_number_style(&engine.model);
+            let mut defaults = engine.editor.serial_number_style(&engine.model);
             engine
                 .select_element_with_viewport_changes(viewport, first)
                 .unwrap();
@@ -147,6 +147,7 @@ fn serial_number_selected_value_edits_use_preserved_creation_counters() {
                     .unwrap(),
             };
             assert_eq!(engine.model.serial_number(first).unwrap().number, 55);
+            defaults.number = 56;
             engine
                 .reset_editing_state_with_viewport_changes(viewport)
                 .unwrap();
@@ -175,7 +176,10 @@ fn serial_number_selected_value_edits_use_preserved_creation_counters() {
                     defaults.number
                 );
                 assert_eq!(current.model.serial_number(first).unwrap().number, 55);
-                assert_eq!(current.editor.serial_number_style(&current.model).number, 3);
+                assert_eq!(
+                    current.editor.serial_number_style(&current.model).number,
+                    57
+                );
             }
         }
     }
@@ -320,7 +324,9 @@ fn serial_number_selected_style_edits_preserve_creation_defaults() {
                     SerialNumberNumericType::Chinese,
                 ] {
                     set_numeric_type(&mut restored, restored_viewport, other_type);
-                    let expected_number = if other_type == numeric_type {
+                    let expected_number = if other_type == selected.numeric_type {
+                        56
+                    } else if other_type == numeric_type {
                         defaults.number
                     } else {
                         1
@@ -330,6 +336,60 @@ fn serial_number_selected_style_edits_preserve_creation_defaults() {
                         expected_number
                     );
                 }
+            }
+        }
+    }
+}
+
+#[test]
+fn serial_number_selected_value_edits_restart_below_canvas_maximum_and_saturate() {
+    use snow_draw_engine_editor::SERIAL_NUMBER_STYLE_MIXED_NUMBER;
+
+    for edit_path in 0..3 {
+        for number in [0, 3, 52, i64::MAX] {
+            let (mut engine, viewport) = setup(1.0);
+            let mut style = engine.editor.serial_number_style(&engine.model);
+            style.number = 50;
+            engine
+                .set_viewport_serial_number_style(viewport, style)
+                .unwrap();
+            let first = click_serial_number(&mut engine, viewport, 100.0);
+            let second = click_serial_number(&mut engine, viewport, 250.0);
+            engine
+                .select_element_with_viewport_changes(viewport, first)
+                .unwrap();
+            let mut style = engine.editor.serial_number_style(&engine.model);
+            style.number = number;
+            match edit_path {
+                0 => engine
+                    .set_viewport_serial_number_style_patch(
+                        viewport,
+                        style,
+                        SERIAL_NUMBER_STYLE_MIXED_NUMBER,
+                    )
+                    .unwrap(),
+                1 => engine
+                    .set_viewport_serial_number_style(viewport, style)
+                    .unwrap(),
+                _ => engine
+                    .adjust_selected_serial_numbers_with_viewport_changes(viewport, number - 50)
+                    .unwrap(),
+            };
+            assert_eq!(engine.model.serial_number(first).unwrap().number, number);
+            assert_eq!(engine.model.serial_number(second).unwrap().number, 51);
+            engine
+                .reset_editing_state_with_viewport_changes(viewport)
+                .unwrap();
+            engine
+                .set_viewport_active_tool(viewport, ActiveTool::SerialNumber)
+                .unwrap();
+            for offset in 1..=2 {
+                let next =
+                    click_serial_number(&mut engine, viewport, 250.0 + offset as f64 * 150.0);
+                assert_eq!(
+                    engine.model.serial_number(next).unwrap().number,
+                    number.saturating_add(offset)
+                );
             }
         }
     }

@@ -314,9 +314,13 @@ void drawSerialNumberText(QPainter& painter, const SnowSceneDisplayItem& item,
     }
     const QRectF visualBounds = layout.visualBounds;
 
-    const double inset = qMax(0.0, strokeWidth);
+    constexpr double kTextPaddingPerDiameter = 0.05;
+    const double inset = qMax(0.0, strokeWidth) + localRect.width() * kTextPaddingPerDiameter;
     const QRectF contentRect = localRect.adjusted(inset, inset, -inset, -inset);
-    const QSizeF contentSize = contentRect.isEmpty() ? localRect.size() : contentRect.size();
+    if (contentRect.isEmpty()) {
+        return;
+    }
+    const QSizeF contentSize = contentRect.size();
     const double resolvedScale = layout.resolution.scale;
     const double widthScale =
         contentSize.width() > 0.0
@@ -326,7 +330,14 @@ void drawSerialNumberText(QPainter& painter, const SnowSceneDisplayItem& item,
         contentSize.height() > 0.0
             ? contentSize.height() / qMax(1.0, visualBounds.height() * resolvedScale)
             : 1.0;
-    const double fitScale = qMin(1.0, qMin(widthScale, heightScale));
+    double fitScale = qMin(1.0, qMin(widthScale, heightScale));
+    if (!serialNumberIsSquare(item)) {
+        // Fit the glyph rectangle inside the padded circle so its corners also
+        // stay clear of the border, even for wide numbers or tall fallback glyphs.
+        const double diagonal =
+            std::hypot(visualBounds.width(), visualBounds.height()) * resolvedScale;
+        fitScale = qMin(fitScale, contentSize.width() / qMax(1.0, diagonal));
+    }
 
     painter.save();
     painter.setPen(serialNumberIsSolid(item) ? solidSerialNumberTextColor(item.stroke)

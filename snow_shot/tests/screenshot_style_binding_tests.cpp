@@ -22,6 +22,7 @@
 #include <QWheelEvent>
 #include <QScopeGuard>
 #include <QTimeZone>
+#include <QToolButton>
 #include <limits>
 #include <cstdlib>
 #include <iostream>
@@ -261,7 +262,91 @@ void serialNumberAppearanceDefaultsPreserveSessionSequences() {
         }
     }
 }
-void selectedSerialNumberEditsPreserveCreationDefaults() {
+void selectedSerialNumberToolbarEditsContinueCreationSequence() {
+    for (int editPath = 0; editPath < 3; ++editPath) {
+        SnowCanvasRuntime runtime;
+        SnowCanvasWidget canvas(runtime);
+        ScreenshotToolPalette palette(options());
+        ScreenshotStyleBinding binding(palette, canvas, &palette, {},
+                                       [](const SnowCanvasStyleEdit&) { return true; });
+        QObject::connect(&canvas, &SnowCanvasWidget::styleToolbarStateChanged, &palette,
+                         [&] { palette.setStyleToolbarState(canvas.canvasStyleToolbarState()); });
+        auto defaults = screenshotCanvasToolStyleDefaults();
+        defaults.serialNumber = SnowCanvasSerialNumberStyle{};
+        applyScreenshotCanvasToolStyles(canvas, defaults);
+        canvas.resize(800, 600);
+        canvas.show();
+        require(canvas.setViewportCamera(400, 300, 1) &&
+                    canvas.setCanvasTool(SnowCanvasTool::SerialNumber),
+                "prepare sequence toolbar fixture");
+        const auto creationStyle = canvas.canvasStyleToolbarState().serialNumberStyle;
+        palette.setActiveTool(ScreenshotToolPalette::Tool::SerialNumber);
+        palette.show();
+        QApplication::processEvents();
+        for (const QPointF point : {QPointF(80, 80), QPointF(250, 80), QPointF(420, 80)}) {
+            mouse(canvas, QEvent::MouseButtonPress, point);
+            mouse(canvas, QEvent::MouseButtonRelease, point);
+        }
+        const QPointF point(80, 80);
+        QMouseEvent press(QEvent::MouseButtonPress, point, canvas.mapToGlobal(point.toPoint()),
+                          Qt::RightButton, Qt::RightButton, Qt::NoModifier);
+        QMouseEvent release(QEvent::MouseButtonRelease, point, canvas.mapToGlobal(point.toPoint()),
+                            Qt::RightButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &press);
+        QApplication::sendEvent(&canvas, &release);
+        require(canvas.canvasStyleToolbarState().source ==
+                    SnowCanvasStyleToolbarSource::SelectedSerialNumber,
+                "select the first sequence number for editing");
+        qint64 editedNumber = 0;
+        if (editPath < 2) {
+            const QString name = editPath == 0
+                                     ? QStringLiteral("snowSerialNumberToolbarIncreaseButton")
+                                     : QStringLiteral("snowSerialNumberToolbarDecreaseButton");
+            auto* button = canvas.findChild<QToolButton*>(name);
+            require(button != nullptr && button->isVisible() && button->isEnabled(),
+                    "floating sequence toolbar exposes an enabled adjustment button");
+            button->click();
+            editedNumber = editPath == 0 ? 2 : 0;
+        } else {
+            adqt::widgets::AdLineEdit* input = nullptr;
+            for (auto* candidate : palette.findChildren<adqt::widgets::AdLineEdit*>()) {
+                if (candidate->toolTip() == QStringLiteral("Sequence number (scroll to adjust)")) {
+                    input = candidate;
+                    break;
+                }
+            }
+            require(input != nullptr, "sequence style toolbar exposes its value editor");
+            input->setText(QStringLiteral("55"));
+            require(QMetaObject::invokeMethod(input, "editingFinished", Qt::DirectConnection),
+                    "commit the selected sequence value from its input");
+            editedNumber = 55;
+        }
+        require(canvas.canvasStyleToolbarState().serialNumberStyle.number == editedNumber,
+                "toolbar edit updates the selected annotation");
+        require(canvas.resetEditingState() && canvas.setCanvasTool(SnowCanvasTool::SerialNumber),
+                "return to sequence creation after editing");
+        auto expected = creationStyle;
+        expected.number = editedNumber + 1;
+        require(canvas.canvasStyleToolbarState().serialNumberStyle == expected &&
+                    palette.creationStyleDefaults().serialNumber == expected,
+                "canvas and style toolbar continue from the edited number");
+        mouse(canvas, QEvent::MouseButtonPress, {600, 300});
+        mouse(canvas, QEvent::MouseButtonRelease, {600, 300});
+        require(documentSlots(runtime)
+                        .last()
+                        .toObject()
+                        .value(QStringLiteral("data"))
+                        .toObject()
+                        .value(QStringLiteral("SerialNumber"))
+                        .toObject()
+                        .value(QStringLiteral("number"))
+                        .toVariant()
+                        .toLongLong() == editedNumber + 1,
+                "the next created annotation uses the successor of the toolbar value");
+    }
+}
+
+void selectedSerialNumberEditsPreserveCreationAppearance() {
     constexpr quint32 properties =
         SnowCanvasSerialNumberStyleMixedNumber | SnowCanvasSerialNumberStyleMixedColor |
         SnowCanvasSerialNumberStyleMixedFill | SnowCanvasSerialNumberStyleMixedFillStyle |
@@ -354,9 +439,11 @@ void selectedSerialNumberEditsPreserveCreationDefaults() {
     for (int repeat = 0; repeat < 2; ++repeat) {
         require(canvas.redo(), "redo selected sequence number styling");
     }
+    auto expectedCreation = creationDefaults.serialNumber;
+    expectedCreation.number = 56;
     require(canvas.setCanvasTool(SnowCanvasTool::SerialNumber) &&
-                canvas.canvasStyleToolbarState().serialNumberStyle == creationDefaults.serialNumber,
-            "selection styling and history preserve the next sequence number and appearance");
+                canvas.canvasStyleToolbarState().serialNumberStyle == expectedCreation,
+            "selection value edits continue the sequence while styling preserves appearance");
     mouse(canvas, QEvent::MouseButtonPress, {250, 180});
     mouse(canvas, QEvent::MouseButtonRelease, {250, 180});
     require(documentSlots(runtime)
@@ -367,8 +454,8 @@ void selectedSerialNumberEditsPreserveCreationDefaults() {
                     .value(QStringLiteral("SerialNumber"))
                     .toObject()
                     .value(QStringLiteral("number"))
-                    .toInt() == creationDefaults.serialNumber.number,
-            "new sequence number uses the creation counter from before selection styling");
+                    .toInt() == expectedCreation.number,
+            "new sequence number follows the explicitly edited selection value");
     auto creation = canvas.canvasStyleToolbarState().serialNumberStyle;
     creation.fontSize = 32;
     require(canvas.commitStyleEdit(
@@ -972,7 +1059,8 @@ void runScreenshotStyleBindingTests() {
 }
 
 void runScreenshotSerialNumberRestartTests() {
-    selectedSerialNumberEditsPreserveCreationDefaults();
+    selectedSerialNumberToolbarEditsContinueCreationSequence();
+    selectedSerialNumberEditsPreserveCreationAppearance();
     serialNumberAppearanceDefaultsPreserveSessionSequences();
     newScreenshotDocumentRestartsSerialNumberSequences();
     const auto original = screenshotCanvasToolStyleDefaults();

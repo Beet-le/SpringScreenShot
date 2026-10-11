@@ -2272,10 +2272,13 @@ impl Editor {
                 }
             }
 
-            // Selection edits belong to the document. Creation appearance and
-            // per-format counters change only when editing without a selection.
             if transaction.is_empty() {
                 return Ok(None);
+            }
+            // Selection appearance stays in the document. Explicit value edits also
+            // continue the affected creation sequences after the edited numbers.
+            if explicit_number {
+                self.continue_serial_number_sequences_after_value_edits(document, &transaction);
             }
             self.state.selection.elements = next_selection_elements;
             self.state.selection.arrows = next_selection_arrows;
@@ -3897,7 +3900,7 @@ mod tests {
         assert_eq!(*document.rectangle(rectangle_id).unwrap(), rectangle);
     }
     #[test]
-    fn serial_number_selected_value_edits_preserve_all_creation_sequences() {
+    fn serial_number_selected_value_edits_continue_only_edited_numeric_sequences() {
         use snow_draw_engine_document::SerialNumberNumericType;
         let mut document = DocumentModel::new();
         let mut insert = Transaction::new("insert mixed numeric types");
@@ -3921,10 +3924,22 @@ mod tests {
         document.apply_transaction(insert).unwrap();
         let mut editor = Editor::new(Default::default()).unwrap();
         editor.state.default_serial_number.number = 7;
-        let values = editor.state.serial_number_values();
-        let overrides = editor.state.serial_number_sequence_overridden;
+        let mut values = editor.state.serial_number_values();
+        let mut overrides = editor.state.serial_number_sequence_overridden;
         editor.set_selection_state(ids.clone(), Some(ids[0]));
         let mut style = editor.serial_number_style(&document);
+        assert!(
+            editor
+                .set_serial_number_style_patch(
+                    &document,
+                    style.clone(),
+                    SERIAL_NUMBER_STYLE_MIXED_NUMBER
+                )
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(editor.state.serial_number_values(), values);
+        assert_eq!(editor.state.serial_number_sequence_overridden, overrides);
         style.number = 55;
         let Some(EditorCommand::ApplyTransaction(command)) = editor
             .set_serial_number_style_patch(&document, style, SERIAL_NUMBER_STYLE_MIXED_NUMBER)
@@ -3935,6 +3950,13 @@ mod tests {
         document.apply_transaction(command.transaction).unwrap();
         for id in ids {
             assert_eq!(document.serial_number(id).unwrap().number, 55);
+        }
+        for numeric_type in [
+            SerialNumberNumericType::Roman,
+            SerialNumberNumericType::Chinese,
+        ] {
+            values[numeric_type as usize] = 56;
+            overrides[numeric_type as usize] = true;
         }
         assert_eq!(editor.state.serial_number_values(), values);
         assert_eq!(editor.state.serial_number_sequence_overridden, overrides);
@@ -3953,7 +3975,7 @@ mod tests {
                     SERIAL_NUMBER_STYLE_MIXED_NUMERIC_TYPE,
                 )
                 .unwrap();
-            assert_eq!(editor.serial_number_style(&document).number, 1);
+            assert_eq!(editor.serial_number_style(&document).number, 56);
         }
     }
 

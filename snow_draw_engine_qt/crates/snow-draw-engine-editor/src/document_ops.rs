@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use snow_draw_engine_core::{DrawRect, ErrorCode, Point};
 use snow_draw_engine_document::{
-    ElementData, ElementId, ElementMeta, SerialNumberNumericType, TextLayoutSize, Transaction,
-    serial_number_with_label_style, serial_number_with_selection_rect, text_hit_test,
+    ElementData, ElementId, ElementMeta, Operation, SerialNumberNumericType, TextLayoutSize,
+    Transaction, serial_number_with_label_style, serial_number_with_selection_rect, text_hit_test,
     text_with_auto_resize_layout, text_with_content_and_layout, validate_arrow, validate_filter,
     validate_free_draw, validate_pen_filter, validate_rectangle, validate_serial_number,
     validate_text,
@@ -1081,6 +1081,42 @@ impl Editor {
         )))
     }
 
+    pub(crate) fn continue_serial_number_sequences_after_value_edits(
+        &mut self,
+        document: &DocumentModel,
+        transaction: &Transaction,
+    ) {
+        let mut next_values: [Option<(SerialNumberNumericType, i64)>; 5] = [None; 5];
+        for operation in transaction.operations() {
+            let Operation::UpdateElementData {
+                id,
+                data: ElementData::SerialNumber(serial),
+            } = operation
+            else {
+                continue;
+            };
+            if !serial.serial_number_type.supports_number()
+                || document
+                    .serial_number(*id)
+                    .is_ok_and(|current| current.number == serial.number)
+            {
+                continue;
+            }
+            // A mixed selection continues after its largest edited value in each format.
+            let next = &mut next_values[serial.numeric_type as usize];
+            let number = serial.number.saturating_add(1);
+            *next = Some((
+                serial.numeric_type,
+                next.map_or(number, |(_, value)| value.max(number)),
+            ));
+        }
+        for (numeric_type, number) in next_values.into_iter().flatten() {
+            self.state.set_serial_number_value(numeric_type, number);
+            // Explicit edits may restart below numbers already present on the canvas.
+            self.state.serial_number_sequence_overridden[numeric_type as usize] = true;
+        }
+    }
+
     pub fn adjust_selected_serial_numbers(
         &mut self,
         document: &DocumentModel,
@@ -1117,6 +1153,7 @@ impl Editor {
         if transaction.is_empty() {
             return Ok(None);
         }
+        self.continue_serial_number_sequences_after_value_edits(document, &transaction);
         Ok(Some(EditorCommand::ApplyTransaction(
             ApplyTransactionCommand::with_history_undo_snapshot(transaction, history_undo_snapshot),
         )))
@@ -1283,8 +1320,7 @@ mod tests {
         let numbered = editor
             .serial_number_creation_preview(Point::default())
             .unwrap();
-        // Adjusting an existing numbered badge leaves the creation sequence alone.
-        assert_eq!(numbered.number, 6);
+        assert_eq!(numbered.number, 7);
         assert!(numbered.diameter > 12.0);
     }
 
@@ -1293,6 +1329,73 @@ mod tests {
             panic!("expected transaction command");
         };
         document.apply_transaction(command.transaction).unwrap();
+    }
+
+    #[test]
+    fn serial_number_adjustment_continues_each_selected_format_independently_of_order() {
+        for reverse_selection in [false, true] {
+            let mut document = DocumentModel::new();
+            let mut editor = Editor::new(EngineConfig::default()).unwrap();
+            let defaults = editor.state.default_serial_number.clone();
+            let mut ids = Vec::new();
+            for (numeric_type, number) in [
+                (SerialNumberNumericType::Arabic, 10),
+                (SerialNumberNumericType::Arabic, 3),
+                (SerialNumberNumericType::Roman, 20),
+            ] {
+                ids.push(insert_serial_number(
+                    &mut document,
+                    SerialNumberData {
+                        numeric_type,
+                        number,
+                        ..Default::default()
+                    },
+                ));
+            }
+            if reverse_selection {
+                ids.reverse();
+            }
+            editor.set_selection_state(ids.clone(), Some(ids[0]));
+            let command = editor
+                .adjust_selected_serial_numbers(&document, -2)
+                .unwrap()
+                .unwrap();
+            apply_editor_command(&mut document, command);
+            editor.clear_selection();
+            let mut expected = defaults;
+            expected.number = 9;
+            assert_eq!(editor.state.default_serial_number, expected);
+            assert_eq!(editor.state.serial_number_values(), [9, 19, 1, 1, 1]);
+            assert_eq!(
+                editor.state.serial_number_sequence_overridden,
+                [true, true, false, false, false]
+            );
+        }
+    }
+
+    #[test]
+    fn serial_number_adjustment_noops_preserve_creation_sequences() {
+        for (number, delta) in [(0, -1), (i64::MAX, 1), (3, 0)] {
+            let mut document = DocumentModel::new();
+            let mut editor = Editor::new(EngineConfig::default()).unwrap();
+            let id = insert_serial_number(
+                &mut document,
+                SerialNumberData {
+                    number,
+                    ..Default::default()
+                },
+            );
+            editor.set_selection_state(vec![id], Some(id));
+            assert!(
+                editor
+                    .adjust_selected_serial_numbers(&document, delta)
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(editor.state.serial_number_values(), [1; 5]);
+            assert_eq!(editor.state.serial_number_sequence_overridden, [false; 5]);
+            assert_eq!(document.serial_number(id).unwrap().number, number);
+        }
     }
 
     fn insert_rectangle(document: &mut DocumentModel, rectangle: RectangleData) -> ElementId {

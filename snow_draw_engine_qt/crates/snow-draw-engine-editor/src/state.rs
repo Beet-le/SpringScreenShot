@@ -536,7 +536,7 @@ pub(crate) struct EditorState {
     // Inactive numeric types retain their own creation values. The active type's
     // authoritative value lives in default_serial_number, including explicit edits.
     pub(crate) serial_number_values_by_numeric_type: [i64; 5],
-    // Explicit starts keep incrementing independently of existing canvas numbers.
+    // Explicit value edits keep incrementing independently of existing canvas numbers.
     pub(crate) serial_number_sequence_overridden: [bool; 5],
     pub(crate) eraser: EraserState,
     pub(crate) stroke_cursor_active: bool,
