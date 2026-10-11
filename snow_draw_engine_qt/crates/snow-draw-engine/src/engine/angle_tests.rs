@@ -208,6 +208,91 @@ fn angle_wheel_closed_interval_retains_full_turn_after_session_round_trip() {
 }
 
 #[test]
+fn interior_angle_creation_wheel_limits_type_switching_and_history() {
+    use crate::{ANGLE_STYLE_PROPERTY_TYPE, AngleType};
+    let (mut engine, viewport) = setup();
+    engine
+        .set_viewport_angle_style_patch(
+            viewport,
+            AngleStyle {
+                angle_type: AngleType::Interior,
+                ..Default::default()
+            },
+            ANGLE_STYLE_PROPERTY_TYPE,
+        )
+        .unwrap();
+    click(&mut engine, viewport, Point::new(100.0, 0.0));
+    click(&mut engine, viewport, Point::new(0.0, 0.0));
+    let position = Point::new(0.0, 100.0);
+    pointer(&mut engine, viewport, PointerEventType::Move, position);
+    engine
+        .adjust_viewport_angle_value(viewport, 15_f64.to_radians())
+        .unwrap();
+    pointer(&mut engine, viewport, PointerEventType::Move, position);
+    click(&mut engine, viewport, position);
+    let id = engine.model.paint_order()[0];
+    assert_eq!(label(&engine, id).text, "105°");
+    assert!(engine.model.arrow(id).unwrap().global_points()[2].y > 0.0);
+    engine
+        .set_viewport_active_tool(viewport, ActiveTool::Select)
+        .unwrap();
+    select(&mut engine, &[id]);
+    engine
+        .set_viewport_angle_style_patch(viewport, AngleStyle::default(), ANGLE_STYLE_PROPERTY_TYPE)
+        .unwrap();
+    assert_eq!(label(&engine, id).text, "255°");
+    engine.undo().unwrap();
+    assert_eq!(label(&engine, id).text, "105°");
+    assert_eq!(
+        engine.model.arrow(id).unwrap().angle.unwrap().angle_type,
+        AngleType::Interior
+    );
+    engine
+        .adjust_viewport_angle_value(viewport, 1000_f64.to_radians())
+        .unwrap();
+    assert_eq!(label(&engine, id).text, "180°");
+    let restored = Engine::from_serialized_document_session_with_config(
+        &engine.serialize_document_session().unwrap(),
+        EngineConfig::default(),
+    )
+    .unwrap();
+    assert_eq!(label(&restored, id).text, "180°");
+    assert_eq!(
+        restored.model.arrow(id).unwrap().angle.unwrap().angle_type,
+        AngleType::Interior
+    );
+    engine
+        .adjust_viewport_angle_value(viewport, -1000_f64.to_radians())
+        .unwrap();
+    assert_eq!(label(&engine, id).text, "0°");
+    assert!(!engine.model.arrow(id).unwrap().angle.unwrap().full_turn);
+}
+
+#[test]
+fn interior_angle_annotations_expose_type_and_reject_full_turn() {
+    let (mut engine, _) = setup();
+    let ids = apply(
+        &mut engine,
+        json!([{
+            "type":"angle", "points":[[100,0],[0,0],[0,100]],
+            "style":{"angle_type":"interior"}
+        }]),
+    )
+    .unwrap();
+    assert_eq!(label(&engine, ids[0]).text, "90°");
+    assert!(
+        apply(
+            &mut engine,
+            json!([{
+                "type":"angle", "points":[[100,0],[0,0],[100,0]], "full_turn":true,
+                "style":{"angle_type":"interior"}
+            }])
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn angle_selected_style_patches_preserve_creation_defaults() {
     let (mut engine, viewport) = setup();
     let defaults = engine
@@ -220,6 +305,7 @@ fn angle_selected_style_patches_preserve_creation_defaults() {
         .unwrap();
     select(&mut engine, &[id]);
     let style = AngleStyle {
+        angle_type: crate::AngleType::Directed,
         unit: AngleUnit::Radians,
         decimal_places: 3,
         stroke_width: 4.0,
@@ -352,7 +438,7 @@ fn angle_invalid_annotations_and_style_patches_are_atomic() {
     );
     assert!(
         engine
-            .set_viewport_angle_style_patch(viewport, AngleStyle::default(), 16)
+            .set_viewport_angle_style_patch(viewport, AngleStyle::default(), 32)
             .is_err()
     );
     engine
@@ -637,7 +723,7 @@ fn angle_measured_label_clearance_survives_scene_composition_commit_and_geometry
         .unwrap()
         .remove(0);
     let size = TextLayoutSize::new(180.0, 24.0);
-    let expected_offset = 27.0 + 180_f64.hypot(24.0) / 2.0 + 7.0;
+    let expected_offset = 40.5 + 180_f64.hypot(24.0) / 2.0 + 7.0;
     let cursors: Vec<_> = [viewport, second]
         .into_iter()
         .map(|id| {
@@ -1557,7 +1643,7 @@ fn angle_arc_drag_commits_one_history_step_and_restores_canceled_and_legacy_stat
     let edited = engine.model.arrow(id).unwrap().clone();
     let edited_text = label(&engine, id).clone();
     assert_eq!(edited.points, original.points);
-    assert!((edited.angle.unwrap().arc_radius.unwrap() - 57.0).abs() < 1e-9);
+    assert!((edited.angle.unwrap().arc_radius.unwrap() - 70.5).abs() < 1e-9);
     assert_eq!(edited_text.text, original_text.text);
     assert_eq!(edited_text.layout, original_text.layout);
     assert!((edited_text.center.x - original_text.center.x - 30.0 * direction.x).abs() < 1e-9);

@@ -12,12 +12,20 @@
             <translation>1 位小數</translation>
         </message>
         <message>
+            <source>180° angle</source>
+            <translation>180° 角</translation>
+        </message>
+        <message>
             <source>2 decimal places</source>
             <translation>2 位小數</translation>
         </message>
         <message>
             <source>3 decimal places</source>
             <translation>3 位小數</translation>
+        </message>
+        <message>
+            <source>360° angle</source>
+            <translation>360° 角</translation>
         </message>
         <message>
             <source>Actual distance value</source>
@@ -90,6 +98,10 @@
         <message>
             <source>Angle stroke width %1</source>
             <translation>角度線條寬度 %1</translation>
+        </message>
+        <message>
+            <source>Angle type</source>
+            <translation>角度類型</translation>
         </message>
         <message>
             <source>Angle unit</source>

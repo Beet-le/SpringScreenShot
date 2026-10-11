@@ -329,13 +329,15 @@ inline bool operator!=(const SnowCanvasCornerRadii& lhs, const SnowCanvasCornerR
 }
 
 enum class SnowCanvasAngleUnit { Degrees, Radians };
+enum class SnowCanvasAngleType { Directed, Interior };
 
 enum class SnowCanvasAngleStyleProperty : quint32 {
     Stroke = 1u << 0,
     StrokeWidth = 1u << 1,
     Unit = 1u << 2,
     DecimalPlaces = 1u << 3,
-    All = (1u << 4) - 1u,
+    Type = 1u << 4,
+    All = (1u << 5) - 1u,
 };
 
 struct SnowCanvasAngleStyle {
@@ -343,12 +345,13 @@ struct SnowCanvasAngleStyle {
     double strokeWidth = 2.0;
     SnowCanvasAngleUnit unit = SnowCanvasAngleUnit::Degrees;
     quint32 decimalPlaces = 0;
+    SnowCanvasAngleType angleType = SnowCanvasAngleType::Directed;
 };
 
 inline bool operator==(const SnowCanvasAngleStyle& lhs, const SnowCanvasAngleStyle& rhs) {
     return lhs.stroke == rhs.stroke &&
            snowCanvasExactDoubleEqual(lhs.strokeWidth, rhs.strokeWidth) && lhs.unit == rhs.unit &&
-           lhs.decimalPlaces == rhs.decimalPlaces;
+           lhs.decimalPlaces == rhs.decimalPlaces && lhs.angleType == rhs.angleType;
 }
 
 inline bool operator!=(const SnowCanvasAngleStyle& lhs, const SnowCanvasAngleStyle& rhs) {

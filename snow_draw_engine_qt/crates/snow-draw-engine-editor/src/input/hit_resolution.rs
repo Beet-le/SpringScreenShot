@@ -295,8 +295,8 @@ mod tests {
             Some(ArrowHitTarget::AngleArc)
         );
         let arc_body = Point::new(
-            27.0 * 20.0_f64.to_radians().cos(),
-            -27.0 * 20.0_f64.to_radians().sin(),
+            40.5 * 20.0_f64.to_radians().cos(),
+            -40.5 * 20.0_f64.to_radians().sin(),
         );
         assert_eq!(
             editor.arrow_hit_target(&document, id, &arrow, arc_body),

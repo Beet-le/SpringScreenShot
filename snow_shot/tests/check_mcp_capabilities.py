@@ -111,6 +111,8 @@ def check_angle_contracts(matrix):
     for path in ("include/snow_shot/app/mcp/mcpstylepatch.h", "src/app/mcp/mcpdocumentservice.cpp"):
         assert re.search(r'\{QStringLiteral\("angle"\),\s*SnowCanvasTool::Angle\}', read(path)), \
             f"{path} has no Angle dispatch mapping"
+    assert enum_members(qt_types, "SnowCanvasAngleType") == {"Directed", "Interior"}
+    assert enum_members(schemas, "AngleType") == {"Directed", "Interior"}
     assert enum_members(qt_types, "SnowCanvasAngleUnit") == {"Degrees", "Radians"}
     assert enum_members(schemas, "AngleUnit") == {"Degrees", "Radians"}
     assert re.search(r'#\[serde\(rename_all = "snake_case"\)\]\s*enum AngleUnit', schemas), \
@@ -120,7 +122,8 @@ def check_angle_contracts(matrix):
     fields = {name: re.sub(r"\s", "", kind) for name, kind in
               re.findall(r"^\s*([a-z_]+)\s*:\s*([^\n,]+),", style, re.M)}
     expected = {"stroke": "Option<[u8;4]>", "stroke_width": "Option<AngleStrokeWidth>",
-                "unit": "Option<AngleUnit>", "decimal_places": "Option<AngleDecimals>"}
+                "unit": "Option<AngleUnit>", "decimal_places": "Option<AngleDecimals>",
+                "angle_type": "Option<AngleType>"}
     assert fields == expected, f"Angle style fields changed: {fields}"
     assert re.search(r'#\[serde\(default, deny_unknown_fields\)\]\s*struct AngleAnnotationStyle', schemas), \
         "Angle style must default missing fields and reject unrelated fields"

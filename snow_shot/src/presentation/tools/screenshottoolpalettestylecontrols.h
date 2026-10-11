@@ -527,6 +527,7 @@ class ScreenshotToolPaletteStyleControls final {
     std::unique_ptr<ScreenshotToolPaletteColorEditor> m_distanceColorEditor;
     std::unique_ptr<ScreenshotToolPaletteColorEditor> m_angleColorEditor;
     std::unique_ptr<ScreenshotToolPaletteNumericPresetEditor> m_angleWidthEditor;
+    QPointer<adqt::widgets::AdRadioButtonGroup> m_angleTypeGroup;
     QPointer<adqt::widgets::AdRadioButtonGroup> m_angleUnitGroup;
     ScreenshotToolPaletteSelectEditor m_angleDecimalsEditor;
     std::unique_ptr<ScreenshotToolPaletteNumericPresetEditor> m_distanceWidthEditor;

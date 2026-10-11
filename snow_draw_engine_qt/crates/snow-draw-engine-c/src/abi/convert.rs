@@ -3,7 +3,7 @@ mod patch_payloads;
 pub(crate) use patch_payloads::*;
 
 use snow_draw_engine::{
-    ActiveTool, AngleStyle, AngleUnit, ArrowPathCommand, ArrowType, Arrowhead,
+    ActiveTool, AngleStyle, AngleType, AngleUnit, ArrowPathCommand, ArrowType, Arrowhead,
     ArrowheadDisplayDashMode, ArrowheadDisplayFillMode, ArrowheadDisplayPrimitive,
     ArrowheadDisplayPrimitiveKind, CanvasFilterType, ColorRgba8, CornerRadii, CursorCommand,
     CursorStyle, DisplayFillStyle, DisplayTextHorizontalAlign, DisplayTextVerticalAlign,
@@ -619,6 +619,10 @@ impl From<CornerRadii> for SnowCornerRadii {
 impl From<SnowAngleStyle> for AngleStyle {
     fn from(value: SnowAngleStyle) -> Self {
         Self {
+            angle_type: match value.angle_type {
+                SnowAngleType::Directed => AngleType::Directed,
+                SnowAngleType::Interior => AngleType::Interior,
+            },
             stroke: value.stroke.into(),
             stroke_width: value.stroke_width,
             unit: match value.unit {
@@ -632,6 +636,10 @@ impl From<SnowAngleStyle> for AngleStyle {
 impl From<AngleStyle> for SnowAngleStyle {
     fn from(value: AngleStyle) -> Self {
         Self {
+            angle_type: match value.angle_type {
+                AngleType::Directed => SnowAngleType::Directed,
+                AngleType::Interior => SnowAngleType::Interior,
+            },
             stroke: value.stroke.into(),
             stroke_width: value.stroke_width,
             unit: match value.unit {
@@ -1040,6 +1048,7 @@ unsafe fn runtime_style_default_enums_are_valid(defaults: *const SnowStyleDefaul
     unsafe {
         raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).distance.unit))
             && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).angle.unit))
+            && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).angle.angle_type))
             && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).distance.endpoint_style))
             && (*defaults).distance.decimal_places <= 3
             && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).spotlight_shape))

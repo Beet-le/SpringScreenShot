@@ -32,6 +32,7 @@ void persistedAngleDefaultsAreIndependent() {
             "empty configuration restores angle defaults");
     auto changed = initial.angle;
     changed.stroke = QColor(17, 89, 141, 201);
+    changed.angleType = SnowCanvasAngleType::Interior;
     changed.unit = SnowCanvasAngleUnit::Radians;
     changed.decimalPlaces = 3;
     require(persistScreenshotCanvasStyleEdit(SnowCanvasAngleStyleEdit{
@@ -127,20 +128,23 @@ void angleMcpStyleValidationMatchesTheControls() {
                               {QStringLiteral("style"), style}});
     };
     require(apply({{QStringLiteral("stroke_width"), 72},
+                   {QStringLiteral("angle_type"), QStringLiteral("interior")},
                    {QStringLiteral("unit"), QStringLiteral("radians")},
                    {QStringLiteral("decimal_places"), 3}}),
             "MCP accepts all angle controls");
     const auto accepted = editor.canvasStyleToolbarState().angleStyle;
     require(accepted.strokeWidth == 72 && accepted.unit == SnowCanvasAngleUnit::Radians &&
-                accepted.decimalPlaces == 3,
+                accepted.decimalPlaces == 3 && accepted.angleType == SnowCanvasAngleType::Interior,
             "angle MCP styles reach creation defaults");
-    for (const auto& invalid : {QJsonObject{{QStringLiteral("unit"), QStringLiteral("cm")}},
-                                QJsonObject{{QStringLiteral("decimal_places"), 1.5}},
-                                QJsonObject{{QStringLiteral("decimal_places"), 4}},
-                                QJsonObject{{QStringLiteral("stroke_width"), 0}},
-                                QJsonObject{{QStringLiteral("stroke_width"), 73}},
-                                QJsonObject{{QStringLiteral("fill"), QJsonArray{0, 0, 0, 255}}},
-                                QJsonObject{{QStringLiteral("factor"), 2}}}) {
+    for (const auto& invalid :
+         {QJsonObject{{QStringLiteral("angle_type"), QStringLiteral("unknown")}},
+          QJsonObject{{QStringLiteral("unit"), QStringLiteral("cm")}},
+          QJsonObject{{QStringLiteral("decimal_places"), 1.5}},
+          QJsonObject{{QStringLiteral("decimal_places"), 4}},
+          QJsonObject{{QStringLiteral("stroke_width"), 0}},
+          QJsonObject{{QStringLiteral("stroke_width"), 73}},
+          QJsonObject{{QStringLiteral("fill"), QJsonArray{0, 0, 0, 255}}},
+          QJsonObject{{QStringLiteral("factor"), 2}}}) {
         require(!apply(invalid) && editor.canvasStyleToolbarState().angleStyle == accepted,
                 "unsupported angle styles reject atomically");
     }

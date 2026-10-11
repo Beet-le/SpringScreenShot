@@ -635,18 +635,26 @@ typedef enum SnowAngleUnit {
     SNOW_ANGLE_UNIT_RADIANS = 1
 } SnowAngleUnit;
 
+typedef enum SnowAngleType {
+    SNOW_ANGLE_TYPE_DIRECTED = 0,
+    SNOW_ANGLE_TYPE_INTERIOR = 1,
+} SnowAngleType;
+
 typedef struct SnowAngleStyle {
     SnowColorRgba8 stroke;
     double stroke_width;
     SnowAngleUnit unit;
     uint32_t decimal_places;
+    SnowAngleType angle_type;
 } SnowAngleStyle;
 
 #define SNOW_ANGLE_STYLE_PROPERTY_STROKE (1u << 0)
 #define SNOW_ANGLE_STYLE_PROPERTY_STROKE_WIDTH (1u << 1)
 #define SNOW_ANGLE_STYLE_PROPERTY_UNIT (1u << 2)
 #define SNOW_ANGLE_STYLE_PROPERTY_DECIMAL_PLACES (1u << 3)
-#define SNOW_ANGLE_STYLE_PROPERTY_ALL ((1u << 4) - 1u)
+#define SNOW_ANGLE_STYLE_PROPERTY_TYPE (1u << 4)
+#define SNOW_ANGLE_STYLE_MIXED_TYPE SNOW_ANGLE_STYLE_PROPERTY_TYPE
+#define SNOW_ANGLE_STYLE_PROPERTY_ALL ((1u << 5) - 1u)
 #define SNOW_ANGLE_STYLE_MIXED_STROKE SNOW_ANGLE_STYLE_PROPERTY_STROKE
 #define SNOW_ANGLE_STYLE_MIXED_STROKE_WIDTH SNOW_ANGLE_STYLE_PROPERTY_STROKE_WIDTH
 #define SNOW_ANGLE_STYLE_MIXED_UNIT SNOW_ANGLE_STYLE_PROPERTY_UNIT

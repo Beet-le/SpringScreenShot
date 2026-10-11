@@ -22,8 +22,27 @@ pub enum AngleUnit {
     Radians,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AngleType {
+    #[default]
+    Directed,
+    Interior,
+}
+
+impl AngleType {
+    pub fn maximum(self) -> f64 {
+        match self {
+            Self::Directed => TAU,
+            Self::Interior => std::f64::consts::PI,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AngleAnnotation {
+    #[serde(default)]
+    pub angle_type: AngleType,
     pub unit: AngleUnit,
     pub decimal_places: u8,
     /// Coincident rays normally measure zero; wheel adjustment can explicitly
@@ -37,6 +56,7 @@ pub struct AngleAnnotation {
 
 pub fn validate_angle_annotation(angle: AngleAnnotation) -> Result<(), ErrorCode> {
     if angle.decimal_places > 3
+        || (angle.angle_type == AngleType::Interior && angle.full_turn)
         || angle
             .arc_radius
             .is_some_and(|radius| !radius.is_finite() || radius <= 0.0)
@@ -249,15 +269,23 @@ pub fn normalize_angle_in_place(arrow: &mut ArrowData) -> Result<(), ErrorCode> 
 
 pub fn angle_with_sweep(arrow: &ArrowData, sweep: f64) -> Option<ArrowData> {
     crate::validate_arrow(arrow).ok()?;
-    if !sweep.is_finite() || !(0.0..=TAU).contains(&sweep) {
+    if !sweep.is_finite() || !(0.0..=arrow.angle?.angle_type.maximum()).contains(&sweep) {
         return None;
     }
     let mut points = angle_points(arrow)?;
     let mut shape = AngleShape::from_points(points, arrow.angle?.full_turn)?;
-    if shape.sweep == sweep {
+    if angle_value(arrow)? == sweep {
         return Some(arrow.clone());
     }
-    shape.sweep = sweep;
+    // Keep the second ray on its current side of the first ray for interior angles.
+    shape.sweep = if arrow.angle?.angle_type == AngleType::Interior
+        && shape.sweep > std::f64::consts::PI
+        && sweep > 0.0
+    {
+        TAU - sweep
+    } else {
+        sweep
+    };
     points[2] = shape.second_point(points[0]);
     rebuilt_angle(arrow, points, sweep == TAU, shape.side_length)
 }
@@ -305,7 +333,8 @@ pub fn angle_with_moved_point(
     if index != 2 || snap_sweep {
         points[2] = shape.second_point(points[0]);
     }
-    let full_turn = shape.sweep == TAU || (shape.sweep == 0.0 && arrow.angle?.full_turn);
+    let full_turn = arrow.angle?.angle_type == AngleType::Directed
+        && (shape.sweep == TAU || (shape.sweep == 0.0 && arrow.angle?.full_turn));
     rebuilt_angle(arrow, points, full_turn, shape.side_length)
 }
 
@@ -347,13 +376,19 @@ pub fn angle_geometry(arrow: &ArrowData) -> Option<AngleGeometry> {
     if !equal {
         return None;
     }
-    let start_direction = rays.start_direction;
-    let end_direction = if rays.sweep == 0.0 || rays.sweep == TAU {
+    let mut start_direction = rays.start_direction;
+    let mut end_direction = if rays.sweep == 0.0 || rays.sweep == TAU {
         start_direction
     } else {
         rays.end_direction
     };
-    let sweep = rays.sweep;
+    let mut sweep = rays.sweep;
+    // Render the shorter arc counterclockwise, swapping only the render directions.
+    // Stored endpoints retain their identity for selection and dragging.
+    if annotation.angle_type == AngleType::Interior && sweep > std::f64::consts::PI {
+        std::mem::swap(&mut start_direction, &mut end_direction);
+        sweep = TAU - sweep;
+    }
     let (sin, cos) = (sweep / 2.0).sin_cos();
     let bisector = Point::new(
         start_direction.x * cos + start_direction.y * sin,
@@ -362,7 +397,7 @@ pub fn angle_geometry(arrow: &ArrowData) -> Option<AngleGeometry> {
     let font_size = annotation_font_size(arrow);
     let maximum_radius = rays.side_length;
     let automatic_radius =
-        (0.30 * maximum_radius).min(24.0_f64.max(1.25 * font_size + arrow.stroke_width));
+        (0.45 * maximum_radius).min(36.0_f64.max(1.875 * font_size + 1.5 * arrow.stroke_width));
     let radius = annotation
         .arc_radius
         .unwrap_or(automatic_radius)

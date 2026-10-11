@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none" stroke="currentColor" stroke-width="72" stroke-linecap="round" stroke-linejoin="round" data-adqt-slot="primary">
+  <title>Directed angle up to 360 degrees</title>
+  <circle cx="512" cy="512" r="368"/>
+  <path d="M512 512l192-192"/>
+</svg>

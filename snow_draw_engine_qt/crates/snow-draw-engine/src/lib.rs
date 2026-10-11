@@ -10,15 +10,16 @@ pub use snow_draw_engine_core::arrow::{ArrowPathCommand, ArrowType, Arrowhead, S
 pub use snow_draw_engine_core::*;
 pub use snow_draw_engine_display::*;
 pub use snow_draw_engine_document::{
-    AngleAnnotation, AngleUnit, CanvasFilterType, DistanceAnnotation, DistanceUnit, ElementId,
-    FillStyle, HighlightShape, InkBox, SerialNumberType, SpotlightConfig, TextData,
+    AngleAnnotation, AngleType, AngleUnit, CanvasFilterType, DistanceAnnotation, DistanceUnit,
+    ElementId, FillStyle, HighlightShape, InkBox, SerialNumberType, SpotlightConfig, TextData,
     TextHorizontalAlign, TextLayoutSize, TextVerticalAlign, WatermarkConfig,
     WatermarkTemplateApplicationTime, normalize_font_family,
 };
 pub use snow_draw_engine_editor::{
     ANGLE_STYLE_MIXED_DECIMAL_PLACES, ANGLE_STYLE_MIXED_STROKE, ANGLE_STYLE_MIXED_STROKE_WIDTH,
-    ANGLE_STYLE_MIXED_UNIT, ANGLE_STYLE_PROPERTY_ALL, ANGLE_STYLE_PROPERTY_DECIMAL_PLACES,
-    ANGLE_STYLE_PROPERTY_STROKE, ANGLE_STYLE_PROPERTY_STROKE_WIDTH, ANGLE_STYLE_PROPERTY_UNIT,
+    ANGLE_STYLE_MIXED_TYPE, ANGLE_STYLE_MIXED_UNIT, ANGLE_STYLE_PROPERTY_ALL,
+    ANGLE_STYLE_PROPERTY_DECIMAL_PLACES, ANGLE_STYLE_PROPERTY_STROKE,
+    ANGLE_STYLE_PROPERTY_STROKE_WIDTH, ANGLE_STYLE_PROPERTY_TYPE, ANGLE_STYLE_PROPERTY_UNIT,
     ActiveTextDraftPresentation, ActiveTextDraftTarget, ActiveTool, AngleStyle,
     ApplyTransactionCommand, ArrowStyle, BRUSH_ERASER_STYLE_PROPERTY_STROKE_WIDTH,
     BrushEraserStyle, DISTANCE_STYLE_MIXED_DECIMAL_PLACES, DISTANCE_STYLE_MIXED_ENDPOINT_RATIO,

@@ -6,11 +6,13 @@ fn angle_abi_values_layout_round_trip_and_tool_masks() {
     assert_eq!(SnowActiveTool::Angle as u32, 18);
     assert_eq!(SnowStyleToolbarSource::DefaultAngle as u32, 28);
     assert_eq!(SnowStyleToolbarSource::SelectedAngle as u32, 29);
-    assert_eq!(std::mem::size_of::<SnowAngleStyle>(), 24);
+    assert_eq!(std::mem::size_of::<SnowAngleStyle>(), 32);
     assert_eq!(std::mem::offset_of!(SnowAngleStyle, stroke_width), 8);
     assert_eq!(std::mem::offset_of!(SnowAngleStyle, unit), 16);
     assert_eq!(std::mem::offset_of!(SnowAngleStyle, decimal_places), 20);
+    assert_eq!(std::mem::offset_of!(SnowAngleStyle, angle_type), 24);
     let style = AngleStyle {
+        angle_type: snow_draw_engine::AngleType::Interior,
         unit: AngleUnit::Radians,
         decimal_places: 3,
         stroke_width: 5.0,
@@ -154,6 +156,20 @@ fn angle_ffi_style_validation_is_atomic_and_adjustment_rejects_nonfinite_delta()
                 .angle_style
                 .unit,
             AngleUnit::Radians
+        );
+        let mut invalid = valid;
+        std::ptr::addr_of_mut!(invalid.angle_type)
+            .cast::<i32>()
+            .write(999);
+        assert_eq!(
+            snow_viewport_set_angle_style_patch_ex(
+                &mut runtime,
+                &mut viewport,
+                &invalid,
+                SNOW_ANGLE_STYLE_PROPERTY_TYPE,
+                &mut changed,
+            ),
+            SnowError::InvalidArgument
         );
         let mut invalid = valid;
         std::ptr::addr_of_mut!(invalid.unit)

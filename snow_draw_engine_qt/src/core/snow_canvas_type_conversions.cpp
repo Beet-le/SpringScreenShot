@@ -500,18 +500,22 @@ bool validAngleStyle(const SnowCanvasAngleStyle& style) {
     return style.stroke.isValid() && std::isfinite(style.strokeWidth) && style.strokeWidth >= 1.0 &&
            style.strokeWidth <= 72.0 &&
            enumInRange(style.unit, SnowCanvasAngleUnit::Degrees, SnowCanvasAngleUnit::Radians) &&
-           style.decimalPlaces <= 3;
+           style.decimalPlaces <= 3 &&
+           enumInRange(style.angleType, SnowCanvasAngleType::Directed,
+                       SnowCanvasAngleType::Interior);
 }
 
 SnowCanvasAngleStyle toCanvasAngleStyle(const SnowAngleStyle& style) {
     return {toQColor(style.stroke), style.stroke_width,
-            static_cast<SnowCanvasAngleUnit>(style.unit), style.decimal_places};
+            static_cast<SnowCanvasAngleUnit>(style.unit), style.decimal_places,
+            static_cast<SnowCanvasAngleType>(style.angle_type)};
 }
 
 SnowAngleStyle toEngineAngleStyle(const SnowCanvasAngleStyle& style) {
     SnowAngleStyle result{};
     result.stroke = toEngineColor(style.stroke);
     result.stroke_width = style.strokeWidth;
+    result.angle_type = static_cast<SnowAngleType>(style.angleType);
     result.unit = static_cast<SnowAngleUnit>(style.unit);
     result.decimal_places = style.decimalPlaces;
     return result;

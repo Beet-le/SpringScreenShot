@@ -83,7 +83,9 @@ pub unsafe extern "C" fn snow_viewport_set_angle_style_patch_ex(
             return SnowError::InvalidArgument;
         }
         if !unsafe {
-            raw_c_enum_is_valid(std::ptr::addr_of!((*style).unit)) && (*style).decimal_places <= 3
+            raw_c_enum_is_valid(std::ptr::addr_of!((*style).unit))
+                && raw_c_enum_is_valid(std::ptr::addr_of!((*style).angle_type))
+                && (*style).decimal_places <= 3
         } {
             return SnowError::InvalidArgument;
         }

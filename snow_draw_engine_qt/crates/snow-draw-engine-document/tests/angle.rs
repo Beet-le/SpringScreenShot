@@ -45,6 +45,52 @@ fn close(actual: f64, expected: f64) {
 }
 
 #[test]
+fn interior_angle_uses_the_smaller_arc_in_both_directions_and_survives_serialization() {
+    use snow_draw_engine_document::{AngleType, angle_arc_control_point, angle_with_sweep};
+    for (degrees, expected) in [(0.0, 0.0), (90.0, 90.0), (180.0, 180.0), (270.0, 90.0)] {
+        let mut arrow = angle(degrees);
+        arrow.angle.as_mut().unwrap().angle_type = AngleType::Interior;
+        let original_points = arrow.points.clone();
+        close(angle_value(&arrow).unwrap().to_degrees(), expected);
+        assert!(validate_arrow(&arrow).is_ok());
+        assert!(angle_geometry(&arrow).unwrap().sweep <= PI);
+        assert_eq!(arrow.points, original_points);
+        let saved = serde_json::to_string(&arrow).unwrap();
+        let restored: ArrowData = serde_json::from_str(&saved).unwrap();
+        assert_eq!(restored.angle.unwrap().angle_type, AngleType::Interior);
+        close(angle_value(&restored).unwrap().to_degrees(), expected);
+        assert!(angle_with_sweep(&arrow, PI + 0.01).is_none());
+        if degrees == 270.0 {
+            let handle = angle_arc_control_point(&arrow).unwrap();
+            assert!(handle.x > 0.0 && handle.y > 0.0);
+            assert!(arrow_hit_test(&arrow, handle, 1.0));
+            let adjusted = angle_with_sweep(&arrow, PI / 3.0).unwrap();
+            assert!(adjusted.global_points()[2].y > 0.0);
+            close(angle_value(&adjusted).unwrap(), PI / 3.0);
+            let moved = snow_draw_engine_document::angle_with_moved_point(
+                &arrow,
+                2,
+                Point::new(-100.0, 100.0),
+                true,
+            )
+            .unwrap();
+            close(angle_value(&moved).unwrap().to_degrees(), 135.0);
+        }
+    }
+    let legacy: AngleAnnotation =
+        serde_json::from_str(r#"{"unit":"degrees","decimal_places":0}"#).unwrap();
+    assert_eq!(legacy.angle_type, AngleType::Directed);
+    assert!(
+        validate_angle_annotation(AngleAnnotation {
+            angle_type: AngleType::Interior,
+            full_turn: true,
+            ..Default::default()
+        })
+        .is_err()
+    );
+}
+
+#[test]
 fn angle_measures_visual_counterclockwise_sweeps_and_preserves_zero_full_turn_identity() {
     for (degrees, expected) in [
         (0.0, 0.0),
@@ -267,7 +313,7 @@ fn angle_measured_labels_clear_the_arc_and_remain_horizontal_on_the_sweep_bisect
         short
     })
     .unwrap();
-    close(angle_geometry(&short).unwrap().radius, 0.3);
+    close(angle_geometry(&short).unwrap().radius, 0.45);
     assert!(
         angle_label(&short, Some(TextLayoutSize::new(200.0, 24.0)))
             .unwrap()
@@ -354,10 +400,12 @@ fn angle_document_synchronizes_owned_label_layout_style_content_and_history() {
         angle_value(restored_owner).unwrap(),
         angle_value(&owner).unwrap(),
     );
-    assert_eq!(
-        restored.text(text_id).unwrap(),
-        document.text(text_id).unwrap()
-    );
+    let original_text = document.text(text_id).unwrap();
+    let mut restored_text = restored.text(text_id).unwrap().clone();
+    close(restored_text.center.x, original_text.center.x);
+    close(restored_text.center.y, original_text.center.y);
+    restored_text.center = original_text.center;
+    assert_eq!(&restored_text, original_text);
     let mut update = Transaction::new("style angle");
     owner.angle.as_mut().unwrap().unit = AngleUnit::Radians;
     owner.angle.as_mut().unwrap().decimal_places = 3;
@@ -376,6 +424,31 @@ fn angle_document_synchronizes_owned_label_layout_style_content_and_history() {
     document.apply(&created.inverse).unwrap();
     assert!(document.element(owner_id).is_err());
     assert!(document.element(text_id).is_err());
+}
+
+#[test]
+fn angle_automatic_arc_radius_scales_for_short_rays_and_stroke_based_caps() {
+    use snow_draw_engine_document::{AngleType, angle_with_moved_point};
+    for (side_length, stroke_width, expected) in [
+        (1.0, 2.0, 0.45),
+        (50.0, 2.0, 22.5),
+        (100.0, 2.0, 40.5),
+        (1000.0, 1.0, 36.0),
+        (1000.0, 2.0, 40.5),
+        (1000.0, 18.0, 139.5),
+        (1000.0, 72.0, 333.0),
+    ] {
+        let mut arrow =
+            angle_with_moved_point(&angle(90.0), 0, Point::new(side_length, 0.0), false).unwrap();
+        arrow.stroke_width = stroke_width;
+        for angle_type in [AngleType::Directed, AngleType::Interior] {
+            arrow.angle.as_mut().unwrap().angle_type = angle_type;
+            let geometry = angle_geometry(&arrow).unwrap();
+            close(geometry.automatic_radius, expected);
+            close(geometry.radius, expected);
+            close(geometry.maximum_radius, side_length);
+        }
+    }
 }
 
 #[test]
@@ -400,7 +473,7 @@ fn angle_arc_radius_validates_and_legacy_annotations_keep_automatic_geometry() {
         assert!(validate_arrow(&invalid).is_err());
     }
     let mut arrow = angle(90.0);
-    close(angle_geometry(&arrow).unwrap().radius, 27.0);
+    close(angle_geometry(&arrow).unwrap().radius, 40.5);
     for (requested, expected) in [(10.0, 10.0), (80.0, 80.0), (200.0, 100.0)] {
         arrow.angle.as_mut().unwrap().arc_radius = Some(requested);
         close(angle_geometry(&arrow).unwrap().radius, expected);
@@ -430,8 +503,8 @@ fn angle_custom_arc_updates_paths_bounds_picking_and_label_anchor_together() {
         assert!(control.x >= bounds.min_x && control.x <= bounds.max_x);
         assert!(control.y >= bounds.min_y && control.y <= bounds.max_y);
         let moved = angle_label(&arrow, Some(layout)).unwrap();
-        close(moved.center.x - old.center.x, 48.0 * geometry.bisector.x);
-        close(moved.center.y - old.center.y, 48.0 * geometry.bisector.y);
+        close(moved.center.x - old.center.x, 34.5 * geometry.bisector.x);
+        close(moved.center.y - old.center.y, 34.5 * geometry.bisector.y);
         assert_eq!(moved.layout, old.layout);
         assert_eq!(moved.text, old.text);
         assert_eq!(moved.rotation, 0.0);

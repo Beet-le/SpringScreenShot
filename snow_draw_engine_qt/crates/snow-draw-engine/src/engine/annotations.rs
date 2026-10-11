@@ -137,6 +137,7 @@ fn default_distance_pixel_scale() -> [f64; 2] {
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct AngleAnnotationStyle {
+    angle_type: snow_draw_engine_document::AngleType,
     stroke: [u8; 4],
     stroke_width: f64,
     unit: snow_draw_engine_document::AngleUnit,
@@ -145,6 +146,7 @@ struct AngleAnnotationStyle {
 impl Default for AngleAnnotationStyle {
     fn default() -> Self {
         Self {
+            angle_type: Default::default(),
             stroke: [245, 34, 45, 255],
             stroke_width: 2.0,
             unit: Default::default(),
@@ -155,6 +157,7 @@ impl Default for AngleAnnotationStyle {
 impl AngleAnnotationStyle {
     fn into_style(self) -> Result<snow_draw_engine_editor::AngleStyle, ErrorCode> {
         let style = snow_draw_engine_editor::AngleStyle {
+            angle_type: self.angle_type,
             stroke: rgba(self.stroke),
             stroke_width: self.stroke_width,
             unit: self.unit,

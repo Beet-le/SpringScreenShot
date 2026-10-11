@@ -111,6 +111,22 @@
     },
     {
       "variant": "outlined",
+      "symbol": "AngleType180",
+      "name": "angle-type-180",
+      "source": "../src/presentation/components/icons/resources/angle-type-180.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "AngleType360",
+      "name": "angle-type-360",
+      "source": "../src/presentation/components/icons/resources/angle-type-360.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "AngleUnitDegrees",
       "name": "angle-unit-degrees",
       "source": "../src/presentation/components/icons/resources/angle-unit-degrees.svg",

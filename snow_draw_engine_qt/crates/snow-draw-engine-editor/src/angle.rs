@@ -7,7 +7,7 @@ use snow_draw_engine_core::{
     arrow::{ArrowType, StrokeStyle},
 };
 use snow_draw_engine_document::{
-    AngleAnnotation, AngleShape, AngleUnit, ArrowData, LinearElementKind, Transaction,
+    AngleAnnotation, AngleShape, AngleType, AngleUnit, ArrowData, LinearElementKind, Transaction,
 };
 use snow_draw_engine_model::DocumentModel;
 
@@ -15,7 +15,9 @@ pub const ANGLE_STYLE_PROPERTY_STROKE: u32 = 1;
 pub const ANGLE_STYLE_PROPERTY_STROKE_WIDTH: u32 = 2;
 pub const ANGLE_STYLE_PROPERTY_UNIT: u32 = 4;
 pub const ANGLE_STYLE_PROPERTY_DECIMAL_PLACES: u32 = 8;
-pub const ANGLE_STYLE_PROPERTY_ALL: u32 = 15;
+pub const ANGLE_STYLE_PROPERTY_TYPE: u32 = 16;
+pub const ANGLE_STYLE_PROPERTY_ALL: u32 = 31;
+pub const ANGLE_STYLE_MIXED_TYPE: u32 = ANGLE_STYLE_PROPERTY_TYPE;
 pub const ANGLE_STYLE_MIXED_STROKE: u32 = ANGLE_STYLE_PROPERTY_STROKE;
 pub const ANGLE_STYLE_MIXED_STROKE_WIDTH: u32 = ANGLE_STYLE_PROPERTY_STROKE_WIDTH;
 pub const ANGLE_STYLE_MIXED_UNIT: u32 = ANGLE_STYLE_PROPERTY_UNIT;
@@ -23,6 +25,8 @@ pub const ANGLE_STYLE_MIXED_DECIMAL_PLACES: u32 = ANGLE_STYLE_PROPERTY_DECIMAL_P
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AngleStyle {
+    #[serde(default)]
+    pub angle_type: AngleType,
     pub stroke: ColorRgba8,
     pub stroke_width: f64,
     pub unit: AngleUnit,
@@ -38,6 +42,7 @@ impl Default for AngleStyle {
                 a: 255,
             },
             stroke_width: 2.0,
+            angle_type: AngleType::Directed,
             unit: AngleUnit::Degrees,
             decimal_places: 0,
         }
@@ -58,6 +63,7 @@ impl AngleStyle {
         Some(Self {
             stroke: arrow.stroke,
             stroke_width: arrow.stroke_width,
+            angle_type: angle.angle_type,
             unit: angle.unit,
             decimal_places: angle.decimal_places,
         })
@@ -77,11 +83,20 @@ impl AngleStyle {
         arrow.end_binding = None;
         arrow.text_path_fraction = None;
         let angle = arrow.angle.get_or_insert_with(AngleAnnotation::default);
+        angle.angle_type = self.angle_type;
+        if self.angle_type == AngleType::Interior {
+            angle.full_turn = false;
+        }
         angle.unit = self.unit;
         angle.decimal_places = self.decimal_places;
     }
     pub fn merged(self, value: Self, properties: u32) -> Self {
         Self {
+            angle_type: if properties & ANGLE_STYLE_PROPERTY_TYPE != 0 {
+                value.angle_type
+            } else {
+                self.angle_type
+            },
             stroke: if properties & 1 != 0 {
                 value.stroke
             } else {
@@ -109,6 +124,7 @@ impl AngleStyle {
             | (u32::from(self.stroke_width != other.stroke_width) << 1)
             | (u32::from(self.unit != other.unit) << 2)
             | (u32::from(self.decimal_places != other.decimal_places) << 3)
+            | (u32::from(self.angle_type != other.angle_type) << 4)
     }
 }
 
@@ -146,7 +162,7 @@ pub(crate) fn angle_with_dragged_arc(
 
 fn adjusted_angle(arrow: &ArrowData, delta_radians: f64) -> Option<ArrowData> {
     let current = snow_draw_engine_document::angle_value(arrow)?;
-    let next_value = (current + delta_radians).clamp(0.0, std::f64::consts::TAU);
+    let next_value = (current + delta_radians).clamp(0.0, arrow.angle?.angle_type.maximum());
     if next_value == current {
         return Some(arrow.clone());
     }
@@ -326,7 +342,12 @@ impl Editor {
             if let crate::InteractionState::CreatingArrow(state) = &mut self.state.interaction {
                 state.angle_wheel_lock = Some((
                     lock_position,
-                    snow_draw_engine_document::angle_value(&next).unwrap(),
+                    AngleShape::from_points(
+                        [0, 1, 2].map(|i| Point::new(next.points[i][0], next.points[i][1])),
+                        next.angle.unwrap().full_turn,
+                    )
+                    .unwrap()
+                    .sweep,
                 ));
             }
             self.set_creation_preview(Some(ElementCreationPreview::Arrow(next)), Vec::new());
@@ -424,7 +445,8 @@ impl Editor {
                     None,
                 )?;
                 style.apply_to_arrow(&mut arrow);
-                arrow.angle.as_mut()?.full_turn = shape.sweep == std::f64::consts::TAU;
+                arrow.angle.as_mut()?.full_turn =
+                    style.angle_type == AngleType::Directed && shape.sweep == std::f64::consts::TAU;
                 snow_draw_engine_document::validate_arrow(&arrow).ok()?;
                 Some(arrow)
             })
@@ -573,7 +595,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(next.global_points(), original.global_points());
-        assert!((next.angle.unwrap().arc_radius.unwrap() - 57.0).abs() < 1e-9);
+        assert!((next.angle.unwrap().arc_radius.unwrap() - 70.5).abs() < 1e-9);
         let tangent = Point::new(start.x - direction.y * 10.0, start.y + direction.x * 10.0);
         assert_eq!(
             angle_with_dragged_arc(&original, start, tangent).unwrap(),

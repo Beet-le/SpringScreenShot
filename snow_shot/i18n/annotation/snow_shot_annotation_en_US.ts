@@ -12,12 +12,20 @@
             <translation>1 decimal place</translation>
         </message>
         <message>
+            <source>180° angle</source>
+            <translation>180° angle</translation>
+        </message>
+        <message>
             <source>2 decimal places</source>
             <translation>2 decimal places</translation>
         </message>
         <message>
             <source>3 decimal places</source>
             <translation>3 decimal places</translation>
+        </message>
+        <message>
+            <source>360° angle</source>
+            <translation>360° angle</translation>
         </message>
         <message>
             <source>Actual distance value</source>
@@ -90,6 +98,10 @@
         <message>
             <source>Angle stroke width %1</source>
             <translation>Angle stroke width %1</translation>
+        </message>
+        <message>
+            <source>Angle type</source>
+            <translation>Angle type</translation>
         </message>
         <message>
             <source>Angle unit</source>

@@ -11421,6 +11421,26 @@ void angleSettingsAndWheelPreserveIndependentProperties() {
         palette.rememberStyleEdit(edit);
         return true;
     });
+    auto* typeContainer =
+        palette.findChild<QWidget*>(QStringLiteral("screenshotAngleTypeButtonGroup"));
+    auto* types =
+        typeContainer ? typeContainer->findChild<adqt::widgets::AdRadioButtonGroup*>() : nullptr;
+    require(types && types->buttons().size() == 2 &&
+                types->checkedId() == static_cast<int>(SnowCanvasAngleType::Directed),
+            "angle types retain the existing 360-degree default");
+    for (auto type : {SnowCanvasAngleType::Interior, SnowCanvasAngleType::Directed}) {
+        auto* button = types->button(static_cast<int>(type));
+        require(button && !button->icon().isNull() &&
+                    button->accessibleName() == (type == SnowCanvasAngleType::Interior
+                                                     ? QStringLiteral("180° angle")
+                                                     : QStringLiteral("360° angle")),
+                "angle type buttons expose distinct icons and accessible labels");
+        button->click();
+        require(emitted.angleType == type &&
+                    properties == bit(SnowCanvasAngleStyleProperty::Type) &&
+                    emitted.unit == initial.unit && emitted.decimalPlaces == initial.decimalPlaces,
+                "angle type changes preserve independent display preferences");
+    }
     for (SnowCanvasAngleUnit unit : {SnowCanvasAngleUnit::Radians, SnowCanvasAngleUnit::Degrees}) {
         auto* button = units->button(static_cast<int>(unit));
         require(button != nullptr && !button->icon().isNull() &&
@@ -11471,6 +11491,10 @@ void angleSettingsAndWheelPreserveIndependentProperties() {
     }
     units = unitGroup();
     decimals = decimalsSelect();
+    typeContainer = palette.findChild<QWidget*>(QStringLiteral("screenshotAngleTypeButtonGroup"));
+    types =
+        typeContainer ? typeContainer->findChild<adqt::widgets::AdRadioButtonGroup*>() : nullptr;
+    require(types != nullptr, "angle type controls are restored with the angle tool");
     require(units != nullptr && decimals != nullptr, "angle controls should rebuild on demand");
     SnowCanvasStyleToolbarState selected;
     selected.source = SnowCanvasStyleToolbarSource::SelectedAngle;
@@ -11478,10 +11502,12 @@ void angleSettingsAndWheelPreserveIndependentProperties() {
     selected.angleStyle = remembered;
     selected.angleStyle.unit = SnowCanvasAngleUnit::Radians;
     selected.angleStyle.decimalPlaces = 3;
-    selected.angleStyleMixed =
-        bit(SnowCanvasAngleStyleProperty::Unit) | bit(SnowCanvasAngleStyleProperty::DecimalPlaces);
+    selected.angleStyleMixed = bit(SnowCanvasAngleStyleProperty::Unit) |
+                               bit(SnowCanvasAngleStyleProperty::DecimalPlaces) |
+                               bit(SnowCanvasAngleStyleProperty::Type);
     palette.setStyleToolbarState(selected);
-    require(units->checkedId() == -1 && !decimals->currentValue().isValid() &&
+    require(types->checkedId() == -1 && units->checkedId() == -1 &&
+                !decimals->currentValue().isValid() &&
                 palette.creationStyleDefaults().angle == remembered,
             "mixed selected values should clear controls without replacing creation defaults");
     const int beforeResolving = edits;
@@ -11556,6 +11582,10 @@ void angleSettingsAndWheelPreserveIndependentProperties() {
     decimals = decimalsSelect();
     require(units != nullptr && decimals != nullptr,
             "angle tool should expose selected angle style controls");
+    typeContainer = palette.findChild<QWidget*>(QStringLiteral("screenshotAngleTypeButtonGroup"));
+    types =
+        typeContainer ? typeContainer->findChild<adqt::widgets::AdRadioButtonGroup*>() : nullptr;
+    require(types != nullptr, "angle type controls are available for retranslation");
     const int beforeLanguage = edits;
     const auto beforeLanguageDefaults = palette.creationStyleDefaults().angle;
     for (const QString& locale :
@@ -11563,7 +11593,9 @@ void angleSettingsAndWheelPreserveIndependentProperties() {
         require(mutableLanguage.setLanguage(locale), "angle controls should support every locale");
         QCoreApplication::processEvents();
         require(
-            units->button(static_cast<int>(SnowCanvasAngleUnit::Degrees))->accessibleName() ==
+            types->button(static_cast<int>(SnowCanvasAngleType::Interior))->accessibleName() ==
+                    QCoreApplication::translate("ScreenshotToolPalette", "180° angle") &&
+                units->button(static_cast<int>(SnowCanvasAngleUnit::Degrees))->accessibleName() ==
                     QCoreApplication::translate("ScreenshotToolPalette", "Degrees") &&
                 decimals->model()->index(3, 0).data(decimals->labelRole()).toString() ==
                     QCoreApplication::translate("ScreenshotToolPalette", "3 decimal places") &&

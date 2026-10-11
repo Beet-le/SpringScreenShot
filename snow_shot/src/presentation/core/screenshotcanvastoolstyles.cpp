@@ -214,6 +214,7 @@ void readDistanceValue(const QJsonObject& object, SnowCanvasDistanceStyle* style
 
 QJsonObject angleValue(const SnowCanvasAngleStyle& style) {
     QJsonObject value;
+    putEnum(&value, QStringLiteral("angle_type"), style.angleType);
     value.insert(QStringLiteral("stroke"), colorValue(style.stroke));
     putDouble(&value, QStringLiteral("stroke_width"), style.strokeWidth);
     putEnum(&value, QStringLiteral("unit"), style.unit);
@@ -224,6 +225,8 @@ QJsonObject angleValue(const SnowCanvasAngleStyle& style) {
 void readAngleValue(const QJsonObject& object, SnowCanvasAngleStyle* style) {
     if (style == nullptr)
         return;
+    readEnum(object, QStringLiteral("angle_type"), static_cast<int>(SnowCanvasAngleType::Interior),
+             &style->angleType);
     QColor color;
     if (colorValue(object.value(QStringLiteral("stroke")), &color))
         style->stroke = color;

@@ -92,6 +92,8 @@ inline void snowCanvasMergeStyle(SnowCanvasAngleStyle& target, const SnowCanvasA
         target.stroke = value.stroke;
     if (properties & static_cast<quint32>(SnowCanvasAngleStyleProperty::StrokeWidth))
         target.strokeWidth = value.strokeWidth;
+    if (properties & static_cast<quint32>(SnowCanvasAngleStyleProperty::Type))
+        target.angleType = value.angleType;
     if (properties & static_cast<quint32>(SnowCanvasAngleStyleProperty::Unit))
         target.unit = value.unit;
     if (properties & static_cast<quint32>(SnowCanvasAngleStyleProperty::DecimalPlaces))

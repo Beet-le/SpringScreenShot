@@ -774,9 +774,17 @@ enum AngleUnit {
     Radians,
 }
 
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum AngleType {
+    Directed,
+    Interior,
+}
+
 #[derive(Default, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 struct AngleAnnotationStyle {
+    angle_type: Option<AngleType>,
     stroke: Option<[u8; 4]>,
     stroke_width: Option<AngleStrokeWidth>,
     unit: Option<AngleUnit>,
@@ -1303,6 +1311,20 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn angle_types_accept_both_ranges_and_reject_unknown_values() {
+        for angle_type in ["directed", "interior", "unknown"] {
+            let result = schema(
+                "snow_shot_screenshot_set_tool_style",
+                Some(json!({
+                    "session_id":"owned", "expected_revision":1, "target":"angle",
+                    "style":{"angle_type":angle_type}
+                })),
+            );
+            assert_eq!(result.is_ok(), angle_type != "unknown");
+        }
     }
 
     #[test]

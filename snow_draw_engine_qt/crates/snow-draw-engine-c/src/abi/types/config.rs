@@ -164,6 +164,14 @@ snow_c_enum! {
         Radians = 1,
     }
 }
+snow_c_enum! {
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub enum SnowAngleType {
+        #[default]
+        Directed = 0,
+        Interior = 1,
+    }
+}
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SnowAngleStyle {
@@ -171,12 +179,15 @@ pub struct SnowAngleStyle {
     pub stroke_width: f64,
     pub unit: SnowAngleUnit,
     pub decimal_places: u32,
+    pub angle_type: SnowAngleType,
 }
 pub const SNOW_ANGLE_STYLE_PROPERTY_STROKE: u32 = 1;
 pub const SNOW_ANGLE_STYLE_PROPERTY_STROKE_WIDTH: u32 = 2;
 pub const SNOW_ANGLE_STYLE_PROPERTY_UNIT: u32 = 4;
 pub const SNOW_ANGLE_STYLE_PROPERTY_DECIMAL_PLACES: u32 = 8;
-pub const SNOW_ANGLE_STYLE_PROPERTY_ALL: u32 = 15;
+pub const SNOW_ANGLE_STYLE_PROPERTY_TYPE: u32 = 16;
+pub const SNOW_ANGLE_STYLE_MIXED_TYPE: u32 = 16;
+pub const SNOW_ANGLE_STYLE_PROPERTY_ALL: u32 = 31;
 pub const SNOW_ANGLE_STYLE_MIXED_STROKE: u32 = 1;
 pub const SNOW_ANGLE_STYLE_MIXED_STROKE_WIDTH: u32 = 2;
 pub const SNOW_ANGLE_STYLE_MIXED_UNIT: u32 = 4;
