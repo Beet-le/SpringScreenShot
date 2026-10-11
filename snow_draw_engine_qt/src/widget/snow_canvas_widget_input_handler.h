@@ -40,6 +40,7 @@ class SnowCanvasWidgetInputHandler final {
     bool interactionEnabled() const;
     void setInteractionEnabled(bool enabled);
     void clearTransientState();
+    void syncPointerCapture(bool active);
 
     ProcessResult process(const Context& context, const SnowInputEvent& event);
     ProcessResult processBatch(const Context& context, const std::vector<SnowInputEvent>& events);

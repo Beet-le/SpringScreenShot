@@ -25,6 +25,10 @@ void SnowCanvasWidgetInputHandler::clearTransientState() {
     m_interaction.clearTransientState(m_widget, m_cursorController);
 }
 
+void SnowCanvasWidgetInputHandler::syncPointerCapture(bool active) {
+    m_interaction.syncPointerCapture(m_widget, active);
+}
+
 SnowCanvasWidgetInputHandler::ProcessResult
 SnowCanvasWidgetInputHandler::process(const Context& context, const SnowInputEvent& event) {
     ProcessResult output;

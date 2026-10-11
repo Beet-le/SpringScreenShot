@@ -1,4 +1,5 @@
 use super::*;
+use snow_draw_engine_interaction::PointerCaptureCommand;
 
 impl Engine {
     pub fn hit_quick_selection_at(
@@ -35,6 +36,7 @@ impl Engine {
         let before_overlay_revision = self.editor.overlay_input_revision();
         let before_view = self.viewport_slot(id)?.view;
         let mut interaction = InteractionOutput::default();
+        let mut capture = PointerCaptureCommand::NoChange;
         for event in events.iter().copied() {
             let update = {
                 let model = &self.model;
@@ -44,8 +46,12 @@ impl Engine {
             if update.command.is_some() {
                 return Err(ErrorCode::InvalidArgument);
             }
+            if update.interaction.capture != PointerCaptureCommand::NoChange {
+                capture = update.interaction.capture;
+            }
             interaction = update.interaction;
         }
+        interaction.capture = capture;
 
         let changed_viewports = if self.editor.scene_input_revision() != before_scene_revision
             || self.editor.overlay_input_revision() != before_overlay_revision

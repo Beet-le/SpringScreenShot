@@ -20,6 +20,7 @@ impl Engine {
         let Some(history_result) = self.history.undo(&mut self.model)? else {
             return Ok(MutationResult::default());
         };
+        self.editor.reset_magnifier_wheel_input();
         if serial_number_population_changed(&self.model, &history_result.apply_result) {
             self.editor.sync_serial_number_types_after_document_change(
                 &self.model,
@@ -48,6 +49,7 @@ impl Engine {
         let Some(history_result) = self.history.redo(&mut self.model)? else {
             return Ok(MutationResult::default());
         };
+        self.editor.reset_magnifier_wheel_input();
         if serial_number_population_changed(&self.model, &history_result.apply_result) {
             self.editor.sync_serial_number_types_after_document_change(
                 &self.model,

@@ -96,6 +96,14 @@ impl Editor {
             if !Self::selection_scope_matches_document(document, scope, *id, kind) {
                 continue;
             }
+            if let Ok(value) = document.magnifier(*id) {
+                if rectangle_intersects_axis_aligned_bounds(&value.source_rect(), bounds)
+                    || rectangle_intersects_axis_aligned_bounds(&value.magnified_rect(), bounds)
+                {
+                    ids.push(*id);
+                }
+                continue;
+            }
             if let Some(rect) = document.element_rect_proxy(*id)
                 && rectangle_intersects_axis_aligned_bounds(&rect, bounds)
             {

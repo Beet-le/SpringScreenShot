@@ -4,6 +4,17 @@
 
 namespace snow_canvas_wheel {
 
+inline bool usesPreciseDelta(const QWheelEvent& event) {
+#ifdef Q_OS_MACOS
+    // Cocoa supplies estimated pixels for ordinary mouse notches. The source
+    // distinguishes those estimates from actual precise scrolling input.
+    if (event.source() == Qt::MouseEventNotSynthesized && event.phase() == Qt::NoScrollPhase &&
+        !event.angleDelta().isNull())
+        return false;
+#endif
+    return !event.pixelDelta().isNull();
+}
+
 // Discrete tool adjustments respond immediately and retain coalesced movement.
 class StepAccumulator final {
   public:
@@ -26,12 +37,7 @@ class StepAccumulator final {
             reset();
             m_modifiers = event.modifiers();
         }
-        bool precise = !event.pixelDelta().isNull();
-#ifdef Q_OS_MACOS
-        if (event.source() == Qt::MouseEventNotSynthesized && event.phase() == Qt::NoScrollPhase &&
-            !event.angleDelta().isNull())
-            precise = false;
-#endif
+        const bool precise = usesPreciseDelta(event);
         const int delta = precise ? event.pixelDelta().y() : event.angleDelta().y();
         if (delta == 0)
             return 0;

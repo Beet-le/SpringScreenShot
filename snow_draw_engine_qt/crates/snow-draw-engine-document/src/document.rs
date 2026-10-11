@@ -767,7 +767,7 @@ impl RectangleData {
     }
 
     pub fn supports_corner_radius(&self) -> bool {
-        !self.is_highlight() && self.highlight_shape == HighlightShape::Rectangle
+        !self.is_highlight() && self.highlight_shape != HighlightShape::Ellipse
     }
 
     pub fn element_kind(&self) -> ElementKind {
@@ -895,6 +895,7 @@ pub struct SerialNumberData {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ElementData {
     Rectangle(RectangleData),
+    Magnifier(crate::MagnifierData),
     Filter(FilterData),
     PenFilter(PenFilterData),
     Arrow(ArrowData),
@@ -917,6 +918,7 @@ impl ElementData {
     pub fn kind(&self) -> ElementKind {
         match self {
             Self::Rectangle(rect) => rect.element_kind(),
+            Self::Magnifier(_) => ElementKind::Magnifier,
             Self::Filter(filter) => {
                 if filter.auto_region_id.is_some() {
                     ElementKind::AutoFilter
@@ -936,9 +938,24 @@ impl ElementData {
         self.kind().is_filter()
     }
 
+    /// Tests geometry only; callers choose visibility, locking, and filter eligibility.
+    pub fn hit_test(&self, point: Point<f64>, hit_tolerance: f64) -> bool {
+        match self {
+            Self::Rectangle(rect) => rectangle_hit_test(rect, point, hit_tolerance),
+            Self::Magnifier(value) => crate::magnifier_hit_test(value, point, hit_tolerance),
+            Self::Filter(filter) => crate::filter_hit_test(filter, point, hit_tolerance),
+            Self::PenFilter(filter) => crate::pen_filter_hit_test(filter, point, hit_tolerance),
+            Self::Arrow(arrow) => arrow_hit_test(arrow, point, hit_tolerance),
+            Self::FreeDraw(free_draw) => free_draw_hit_test(free_draw, point, hit_tolerance),
+            Self::Text(text) => text_hit_test(text, point, hit_tolerance),
+            Self::SerialNumber(serial) => serial_number_hit_test(serial, point, hit_tolerance),
+        }
+    }
+
     pub(crate) fn bounds(&self) -> DrawRect {
         match self {
             Self::Rectangle(rect) => rect_bounds(rect),
+            Self::Magnifier(value) => crate::magnifier_interaction_bounds(value),
             Self::Filter(filter) => filter_bounds(filter),
             Self::PenFilter(filter) => pen_filter_bounds(filter),
             Self::Arrow(arrow) => arrow_bounds(arrow),
@@ -953,6 +970,7 @@ impl ElementData {
     pub fn state_rect(&self) -> DrawRect {
         match self {
             Self::Rectangle(rect) => centered_rect(rect.center, rect.width, rect.height),
+            Self::Magnifier(value) => centered_rect(value.source_center, value.width, value.height),
             Self::Filter(filter) => centered_rect(filter.center, filter.width, filter.height),
             Self::PenFilter(filter) => DrawRect::new(
                 filter.x,
@@ -992,6 +1010,7 @@ impl ElementData {
     pub fn rotation(&self) -> f64 {
         match self {
             Self::Rectangle(rect) => rect.rotation,
+            Self::Magnifier(value) => value.rotation,
             Self::Filter(filter) => filter.rotation,
             Self::PenFilter(filter) => filter.rotation,
             Self::Arrow(arrow) => arrow.rotation,
@@ -1004,6 +1023,7 @@ impl ElementData {
     pub fn opacity(&self) -> f64 {
         match self {
             Self::Rectangle(rect) => rect.opacity,
+            Self::Magnifier(value) => value.opacity,
             Self::Filter(filter) => filter.opacity,
             Self::PenFilter(filter) => filter.opacity,
             Self::Arrow(arrow) => arrow.opacity,
@@ -1026,6 +1046,7 @@ fn centered_rect(center: Point<f64>, width: f64, height: f64) -> DrawRect {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ElementKind {
     Rectangle,
+    Magnifier,
     Arrow,
     Line,
     FreeDraw,
@@ -1047,6 +1068,7 @@ impl ElementKind {
         match self {
             Self::Filter | Self::AutoFilter | Self::PenFilter => true,
             Self::Rectangle
+            | Self::Magnifier
             | Self::Arrow
             | Self::Line
             | Self::FreeDraw
@@ -1519,6 +1541,13 @@ impl Document {
         }
     }
 
+    pub fn magnifier(&self, id: ElementId) -> Result<&crate::MagnifierData, ErrorCode> {
+        match &self.element(id)?.data {
+            ElementData::Magnifier(value) => Ok(value),
+            _ => Err(ErrorCode::InvalidArgument),
+        }
+    }
+
     pub fn filter(&self, id: ElementId) -> Result<&FilterData, ErrorCode> {
         match &self.element(id)?.data {
             ElementData::Filter(filter) => Ok(filter),
@@ -1568,6 +1597,9 @@ impl Document {
     pub fn element_rect_proxy(&self, id: ElementId) -> Option<RectangleData> {
         if let Ok(rect) = self.rectangle(id) {
             return Some(*rect);
+        }
+        if let Ok(value) = self.magnifier(id) {
+            return Some(value.source_rect());
         }
         if let Ok(filter) = self.filter(id) {
             return Some(filter_rect_proxy(filter));
@@ -1726,31 +1758,17 @@ impl Document {
     ) -> Option<(ElementId, ElementKind)> {
         self.paint_order.iter().rev().find_map(|id| {
             let element = self.element(*id).ok()?;
-            if !element.meta.visible {
+            if !element.meta.visible || element.data.is_filter() {
                 return None;
             }
-            match &element.data {
-                ElementData::Rectangle(rect) if rectangle_hit_test(rect, point, hit_tolerance) => {
-                    Some((*id, ElementKind::Rectangle))
-                }
-                ElementData::Arrow(arrow) if arrow_hit_test(arrow, point, hit_tolerance) => {
-                    Some((*id, arrow.element_kind()))
-                }
-                ElementData::FreeDraw(free_draw)
-                    if free_draw_hit_test(free_draw, point, hit_tolerance) =>
-                {
-                    Some((*id, ElementKind::FreeDraw))
-                }
-                ElementData::Text(text) if text_hit_test(text, point, hit_tolerance) => {
-                    Some((*id, ElementKind::Text))
-                }
-                ElementData::SerialNumber(serial)
-                    if serial_number_hit_test(serial, point, hit_tolerance) =>
-                {
-                    Some((*id, ElementKind::SerialNumber))
-                }
-                _ => None,
-            }
+            let kind = match &element.data {
+                ElementData::Rectangle(_) => ElementKind::Rectangle,
+                data => data.kind(),
+            };
+            element
+                .data
+                .hit_test(point, hit_tolerance)
+                .then_some((*id, kind))
         })
     }
 

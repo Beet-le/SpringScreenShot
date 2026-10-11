@@ -87,6 +87,8 @@ bool stepScreenshotStyle(ScreenshotToolPalette& palette, SnowCanvasWidget& canva
         return palette.stepStrokeWidth(direction);
     case SnowCanvasTool::Select:
         return palette.stepSelectionOpacity(direction);
+    case SnowCanvasTool::Magnifier:
+        return palette.stepMagnifierFactor(direction);
     case SnowCanvasTool::Spotlight:
         return palette.stepSpotlightOpacity(direction);
     case SnowCanvasTool::RectangleFilter:
@@ -117,6 +119,8 @@ bool handleScreenshotStyleWheel(ScreenshotToolPalette& palette, SnowCanvasWidget
         return true;
     }
     accumulator.reset();
+    if (canvas.hasMagnifierAdjustmentTarget())
+        return canvas.adjustMagnifierFromWheel(event);
     if (event.modifiers() != Qt::NoModifier)
         return false;
     const int delta =

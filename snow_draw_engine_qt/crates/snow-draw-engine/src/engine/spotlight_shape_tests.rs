@@ -175,7 +175,13 @@ fn spotlight_radius_patch_preserves_shape_and_clamps_small_cutouts() {
         radius_patch(&mut engine, viewport, 250.0);
         let rect = engine.model.rectangle(id).unwrap();
         assert_eq!(rect.highlight_shape, shape);
-        assert_eq!(rect.corner_radii, CornerRadii::splat(100.0));
+        let expected = snow_draw_engine_document::normalize_shape_corner_radii(
+            shape,
+            200.0,
+            200.0,
+            CornerRadii::splat(250.0),
+        );
+        assert_eq!(rect.corner_radii, expected);
         let style = engine
             .viewport_style_toolbar_state(viewport)
             .unwrap()

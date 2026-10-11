@@ -63,6 +63,36 @@ pub(crate) fn preview_rect_for_corner_radius(
 ) -> RectangleData {
     let mut rect = *original_rect;
     let local_point = canvas_to_rect_local(rect.center, rect.rotation, canvas_point);
+    if rect.highlight_shape == snow_draw_engine_document::HighlightShape::Diamond {
+        rect.corner_radii = snow_draw_engine_document::normalize_shape_corner_radii(
+            rect.highlight_shape,
+            rect.width,
+            rect.height,
+            rect.corner_radii,
+        );
+        let mut desired = snow_draw_engine_document::diamond_corner_radius_from_local_point(
+            rect.width,
+            rect.height,
+            rect.corner_radii,
+            zoom,
+            diamond_corner_index(corner),
+            local_point,
+        );
+        if uniform {
+            let limit = max_corner_radius_for(&rect, corner);
+            desired = if limit > 0.0 {
+                desired / limit * uniform_corner_radius_limit(&rect)
+            } else {
+                0.0
+            };
+        }
+        rect.corner_radii = if uniform {
+            CornerRadii::splat(desired)
+        } else {
+            set_corner_radius(rect.corner_radii, corner, desired)
+        };
+        return rect;
+    }
     let corner_point = rect_corner_point(rect.width, rect.height, corner);
     let inward_x = if corner.x_sign() < 0.0 {
         local_point.x - corner_point.x

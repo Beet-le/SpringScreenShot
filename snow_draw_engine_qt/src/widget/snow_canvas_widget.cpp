@@ -80,6 +80,7 @@ std::optional<SnowCursorStyle> baselineCursorForCanvasTool(SnowCanvasTool tool) 
     case SnowCanvasTool::Arrow:
     case SnowCanvasTool::Distance:
     case SnowCanvasTool::Angle:
+    case SnowCanvasTool::Magnifier:
     case SnowCanvasTool::Line:
     case SnowCanvasTool::RectangleHighlight:
     case SnowCanvasTool::RectangleFilter:
@@ -115,6 +116,63 @@ bool hasFilter(const SnowCanvasSceneItem* sceneItems, std::uint32_t sceneItemCou
         if (sceneItems[index].kind == SNOW_SCENE_DISPLAY_ITEM_FILTER) {
             return true;
         }
+    }
+    return false;
+}
+
+struct BaseImageSamplingFootprint {
+    QRectF canvasRect;
+    QRectF coverage;
+    QSize pixelSize;
+};
+
+std::vector<BaseImageSamplingFootprint>
+baseImageSamplingFootprints(const QList<SnowCanvasBaseImageSource>& sources) {
+    std::vector<BaseImageSamplingFootprint> footprints;
+    footprints.reserve(static_cast<std::size_t>(sources.size()));
+    for (const auto& source : sources) {
+        if (!source.image.isNull())
+            footprints.push_back({source.canvasRect, source.coverage, source.image.size()});
+    }
+    return footprints;
+}
+
+bool magnifierSamplesDamage(const SnowCanvasSceneItem& item,
+                            const snow_canvas_render_geometry::ViewProjection& projection,
+                            const std::vector<BaseImageSamplingFootprint>& footprints,
+                            const QRegion& damage) {
+    const auto& geometry = item.magnifier;
+    const QRectF sourceBounds = snow_canvas_render_geometry::rotatedRectBounds(
+        snow_canvas_render_geometry::canvasToView(projection, geometry.source_center_x,
+                                                  geometry.source_center_y),
+        geometry.source_width * projection.cameraZoom,
+        geometry.source_height * projection.cameraZoom, item.rotation, 0.0);
+    for (const auto& footprint : footprints) {
+        const QRectF& source = footprint.canvasRect;
+        if (!source.isValid() || !std::isfinite(source.x()) || !std::isfinite(source.y()) ||
+            !std::isfinite(source.width()) || !std::isfinite(source.height()) ||
+            !std::isfinite(footprint.coverage.x()) || !std::isfinite(footprint.coverage.y()) ||
+            !std::isfinite(footprint.coverage.width()) ||
+            !std::isfinite(footprint.coverage.height()) || footprint.pixelSize.isEmpty())
+            continue;
+        const QRectF coverage =
+            footprint.coverage.isEmpty() ? source : source.intersected(footprint.coverage);
+        const QRectF coverageBounds(
+            snow_canvas_render_geometry::canvasToView(projection, coverage.left(), coverage.top()),
+            snow_canvas_render_geometry::canvasToView(projection, coverage.right(),
+                                                      coverage.bottom()));
+        const QRectF sampledBounds = sourceBounds.intersected(coverageBounds);
+        if (sampledBounds.isEmpty())
+            continue;
+        // Bilinear enlargement can read a neighboring original pixel outside the outline.
+        // Its support scales with source density and camera zoom, independently of the lens.
+        const double pixelWidth =
+            source.width() * projection.cameraZoom / footprint.pixelSize.width();
+        const double pixelHeight =
+            source.height() * projection.cameraZoom / footprint.pixelSize.height();
+        if (damage.intersects(snow_canvas_render_geometry::alignedRectForBounds(
+                sampledBounds.adjusted(-pixelWidth, -pixelHeight, pixelWidth, pixelHeight))))
+            return true;
     }
     return false;
 }
@@ -332,6 +390,7 @@ struct SnowCanvasWidget::Impl : public snow_canvas_runtime::Client {
     void resetDocumentRetainedState() override;
     void setBaseImageSources(const QList<SnowCanvasBaseImageSource>& sources,
                              const QRegion& damage = {}, bool partialDamage = false);
+    void updateBaseImageContent(const QRegion& damage);
     void smartEraseChanged() override {
         clearRenderState();
         widget.update();
@@ -366,7 +425,11 @@ struct SnowCanvasWidget::Impl : public snow_canvas_runtime::Client {
     SnowCanvasStyleToolbarState canvasStyleToolbarState() const;
     bool setCanvasDistanceStyle(const SnowCanvasDistanceStyle& style, quint32 properties);
     bool setCanvasAngleStyle(const SnowCanvasAngleStyle& style, quint32 properties);
+    bool setCanvasMagnifierStyle(const SnowCanvasMagnifierStyle& style, quint32 properties,
+                                 bool creationDefaults);
     bool adjustAngleValue(double deltaRadians);
+    bool hasMagnifierAdjustmentTarget() const;
+    bool adjustMagnifierFromWheel(const QWheelEvent& event);
     snow_canvas_wheel::StepAccumulator angleWheelSteps;
     std::uint64_t angleAdjustmentTarget = 0;
     Qt::KeyboardModifiers angleWheelModifiers = Qt::NoModifier;
@@ -535,6 +598,7 @@ struct SnowCanvasWidget::Impl : public snow_canvas_runtime::Client {
     bool suppressMouseContextMenu = false;
     SnowCanvasTool requestedCanvasTool = SnowCanvasTool::Select;
     SnowCanvasCustomRenderer* installedCustomRenderer = nullptr;
+    std::vector<BaseImageSamplingFootprint> paintedBaseImageSamplingFootprints;
     std::optional<SnowCanvasSnapGuideTargets> snapGuideTargets;
     std::optional<QRectF> configuredWatermarkRenderArea;
     std::optional<QRectF> configuredSpotlightRenderArea;
@@ -996,6 +1060,79 @@ bool SnowCanvasWidget::Impl::adjustAngleValue(double deltaRadians) {
 
 SnowCanvasDistanceStyle SnowCanvasWidget::canvasDistanceStyle() const {
     return canvasStyleToolbarState().distanceStyle;
+}
+
+SnowCanvasMagnifierStyle SnowCanvasWidget::canvasMagnifierStyle() const {
+    return canvasStyleToolbarState().magnifierStyle;
+}
+
+bool SnowCanvasWidget::adjustMagnifierFromWheel(const QWheelEvent& event) {
+    return m_impl->adjustMagnifierFromWheel(event);
+}
+
+bool SnowCanvasWidget::hasMagnifierAdjustmentTarget() const {
+    return m_impl->hasMagnifierAdjustmentTarget();
+}
+
+bool SnowCanvasWidget::Impl::hasMagnifierAdjustmentTarget() const {
+    if (!interactionEnabled() || textInteraction.isActive())
+        return false;
+    const auto tool = canvasTool();
+    const auto source = displayState.snapshot().styleToolbarState.source;
+    return tool != SnowCanvasTool::Angle && source != SNOW_STYLE_TOOLBAR_SOURCE_SELECTED_ANGLE &&
+           (tool == SnowCanvasTool::Magnifier ||
+            source == SNOW_STYLE_TOOLBAR_SOURCE_SELECTED_MAGNIFIER);
+}
+
+bool SnowCanvasWidget::Impl::adjustMagnifierFromWheel(const QWheelEvent& event) {
+    if (!hasMagnifierAdjustmentTarget())
+        return false;
+    const auto before = canvasStyleToolbarState();
+
+    auto input = snow_canvas_input::makeWheelInput(event);
+    if (!snow_canvas_wheel::usesPreciseDelta(event)) {
+        input.wheel.delta_x = event.angleDelta().x();
+        input.wheel.delta_y = event.angleDelta().y();
+        input.wheel.delta_kind = SNOW_WHEEL_DELTA_ANGLE;
+    }
+    if ((event.modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier)) !=
+        Qt::NoModifier) {
+        // Modified input ends the factor adjustment without enabling camera zoom
+        // when the host has disabled it. Leave the original event for normal routing.
+        input.wheel.delta_x = 0;
+        input.wheel.delta_y = 0;
+        static_cast<void>(processInput(input));
+        return false;
+    }
+    if (!dispatchInput(nullptr, input))
+        return false;
+    const auto after = canvasStyleToolbarState();
+    if (before.magnifierStyle.factor != after.magnifierStyle.factor ||
+        ((before.magnifierStyleMixed ^ after.magnifierStyleMixed) &
+         SnowCanvasMagnifierStylePropertyFactor) != 0) {
+        emit widget.styleEditCommitted(SnowCanvasMagnifierEdit{
+            after.magnifierStyle, SnowCanvasMagnifierStylePropertyFactor,
+            before.source != SnowCanvasStyleToolbarSource::SelectedMagnifier});
+    }
+    return true;
+}
+
+bool SnowCanvasWidget::setCanvasMagnifierStyle(const SnowCanvasMagnifierStyle& style,
+                                               quint32 properties) {
+    const bool creationDefaults =
+        canvasStyleToolbarState().source != SnowCanvasStyleToolbarSource::SelectedMagnifier;
+    return m_impl->setCanvasMagnifierStyle(style, properties, creationDefaults);
+}
+
+bool SnowCanvasWidget::Impl::setCanvasMagnifierStyle(const SnowCanvasMagnifierStyle& style,
+                                                     quint32 properties, bool creationDefaults) {
+    if (!snow_canvas_types::validMagnifierStyle(style))
+        return false;
+    return applyMutation([&]() {
+        return snow_canvas_commands::setMagnifierStylePatch(
+            runtimeBinding.engine(), runtimeBinding.viewportHandle(),
+            snow_canvas_types::toEngineMagnifierStyle(style), properties, creationDefaults);
+    });
 }
 
 bool SnowCanvasWidget::setCanvasDistanceStyle(const SnowCanvasDistanceStyle& style,
@@ -1718,6 +1855,7 @@ void SnowCanvasWidget::Impl::setCustomRenderer(SnowCanvasCustomRenderer* rendere
         return;
     }
     referenceScene.reset();
+    paintedBaseImageSamplingFootprints.clear();
     installedCustomRenderer = renderer;
     snow_canvas_filter_tile_cache::invalidateNamespace(&widget);
     widget.update();
@@ -1786,6 +1924,7 @@ void SnowCanvasWidget::Impl::clearRetainedDisplayState() {
     distanceCreationPixelScale.reset();
     snapGuideTargets.reset();
     referenceScene.reset();
+    paintedBaseImageSamplingFootprints.clear();
     if (pendingLiveStrokePreservesEverySample && hasViewport()) {
         flushLiveStrokeMoves();
     }
@@ -1831,6 +1970,7 @@ void SnowCanvasWidget::Impl::clearRenderState() {
 void SnowCanvasWidget::Impl::resetDocumentRetainedState() {
     distanceCreationPixelScale.reset();
     snapGuideTargets.reset();
+    paintedBaseImageSamplingFootprints.clear();
     displayState.resetDocumentRetainedState();
     textInteraction.resetDocumentRetainedState();
     std::vector<SnowInputEvent>().swap(pendingLiveStrokeMoves);
@@ -2271,6 +2411,11 @@ void SnowCanvasWidget::Impl::syncAfterEngineMutation() {
 
 void SnowCanvasWidget::Impl::syncAfterEngineMutation(bool emitSignals) {
     distanceCreationPixelScale.reset();
+    std::uint8_t captureActive = 0;
+    if (hasViewport() &&
+        snow_runtime_has_pointer_capture(runtimeBinding.engine(), &captureActive) == SNOW_OK) {
+        inputHandler.syncPointerCapture(captureActive != 0);
+    }
     if (auto* owner = runtimeBinding.runtimeOwner())
         snow_canvas_runtime::Access::smartErase(*owner).sync(runtimeBinding.engine());
     const std::uint64_t previousSceneRevision =
@@ -2487,6 +2632,10 @@ bool SnowCanvasWidget::Impl::paint(QPainter& painter, const QRegion& exposedRegi
     snow_canvas_compositor::Frame frame = buildPaintFrame();
     if (canvasContentIsVisible) {
         const SnowCanvasRenderContext tileContext = renderContext(painter, exposedRegion);
+        const QList<SnowCanvasBaseImageSource> baseImageSources =
+            installedCustomRenderer != nullptr ? installedCustomRenderer->baseImageSources()
+                                               : QList<SnowCanvasBaseImageSource>{};
+        paintedBaseImageSamplingFootprints = baseImageSamplingFootprints(baseImageSources);
         const auto reference = installedCustomRenderer != nullptr
                                    ? installedCustomRenderer->filterRenderReference()
                                    : std::nullopt;
@@ -2514,6 +2663,7 @@ bool SnowCanvasWidget::Impl::paint(QPainter& painter, const QRegion& exposedRegi
         };
         if (auto* owner = runtimeBinding.runtimeOwner())
             sceneRequest.smartErase = owner->smartEraseSnapshot();
+        sceneRequest.baseImageSources = &baseImageSources;
         if (!reference.has_value())
             referenceScene.reset();
         const bool referenceRendered =
@@ -3035,6 +3185,11 @@ bool SnowCanvasWidget::Impl::handleWheel(QWheelEvent* event) {
     }
     angleWheelSteps.reset();
 
+    if (adjustMagnifierFromWheel(*event)) {
+        event->accept();
+        return true;
+    }
+
     const snow_canvas_text_editor_input::FontSizeWheelPlan plan =
         snow_canvas_text_editor_input::planFontSizeWheel(
             snow_canvas_text_editor_input::FontSizeWheelRequest{
@@ -3145,6 +3300,12 @@ bool SnowCanvasWidget::Impl::applyStyleEdit(const SnowCanvasStyleEdit& edit) {
                 if (patch.creationDefaults == editsSelection)
                     return false;
                 return widget.setCanvasAngleStyle(patch.style, patch.properties);
+            } else if constexpr (std::is_same_v<T, SnowCanvasMagnifierEdit>) {
+                if (!patch.creationDefaults && canvasStyleToolbarState().source !=
+                                                   SnowCanvasStyleToolbarSource::SelectedMagnifier)
+                    return false;
+                return setCanvasMagnifierStyle(patch.style, patch.properties,
+                                               patch.creationDefaults);
             } else if constexpr (std::is_same_v<T, SnowCanvasTextEdit>) {
                 return setCanvasTextStyle(patch.style, patch.properties);
             } else if constexpr (std::is_same_v<T, SnowCanvasSerialNumberEdit>) {
@@ -3515,8 +3676,7 @@ void SnowCanvasWidget::Impl::setBaseImageSources(const QList<SnowCanvasBaseImage
         if (!partialDamage)
             smartEraseChanged();
         else {
-            clearRenderState();
-            widget.update(damage);
+            widget.updateBaseImageContent(damage);
         }
     }
 }
@@ -3528,4 +3688,56 @@ void SnowCanvasWidget::setBaseImageSources(const QList<SnowCanvasBaseImageSource
 void SnowCanvasWidget::setBaseImageSources(const QList<SnowCanvasBaseImageSource>& sources,
                                            const QRegion& damage) {
     m_impl->setBaseImageSources(sources, damage, true);
+}
+
+void SnowCanvasWidget::updateBaseImageContent(const QRegion& damage) {
+    m_impl->updateBaseImageContent(damage);
+}
+
+void SnowCanvasWidget::Impl::updateBaseImageContent(const QRegion& damage) {
+    // A magnifier can feed later filters far from the changed original pixels.
+    // Invalidate both replay and filter tile caches before repainting that lens.
+    clearRenderState();
+    if (damage.isEmpty()) {
+        widget.update();
+        return;
+    }
+    QRegion repaint = damage;
+    const auto& cache = displayState.displayCache();
+    const auto& info = cache.sceneInfo();
+    const auto projection = snow_canvas_render_geometry::sceneProjection(info);
+    const auto currentFootprints = baseImageSamplingFootprints(
+        installedCustomRenderer != nullptr ? installedCustomRenderer->baseImageSources()
+                                           : QList<SnowCanvasBaseImageSource>{});
+    const auto& plan = cache.executionPlan(widget.devicePixelRatioF());
+    int activePass = -1;
+    QRegion entering;
+    for (std::uint32_t index = 0; index < cache.sceneItemCount(); ++index) {
+        const auto& item = cache.sceneItems()[index];
+        if (item.kind == SNOW_SCENE_DISPLAY_ITEM_MAGNIFIER) {
+            // Lenses sample pristine originals, never another lens or an earlier filter.
+            // Keep the previous footprint for removal/replacement until the next paint.
+            if (magnifierSamplesDamage(item, projection, currentFootprints, damage) ||
+                magnifierSamplesDamage(item, projection, paintedBaseImageSamplingFootprints,
+                                       damage))
+                repaint += snow_canvas_render_geometry::alignedRectForBounds(item.viewBounds);
+        } else if (item.kind == SNOW_SCENE_DISPLAY_ITEM_FILTER && plan.passForItem[index] >= 0) {
+            const int pass = plan.passForItem[index];
+            if (pass != activePass) {
+                activePass = pass;
+                entering = repaint;
+            }
+            const auto& filter = plan.filter(index);
+            if (!filter.effective)
+                continue;
+            const QRect output =
+                snow_canvas_render_geometry::alignedRectForBounds(filter.logicalBounds);
+            const int radius = filter.logicalSamplingRadius + 1;
+            // Sibling filters share the same entering source. A subsequent source pass
+            // receives their expanded output, closing damage through chained effects.
+            for (const QRect& rect : entering)
+                repaint += rect.adjusted(-radius, -radius, radius, radius).intersected(output);
+        }
+    }
+    widget.update(repaint.intersected(widget.rect()));
 }

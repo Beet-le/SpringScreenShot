@@ -18,6 +18,7 @@ use crate::{
         selection_bounds_to_draw_rect,
     },
     polyline_simplification::simplify_pen_filter_geometry,
+    snapping::BindableElementOverride,
     state::ResizeHandle,
     style::stepped_font_size,
     text::{
@@ -35,6 +36,17 @@ pub(crate) fn append_selection_element_update(
     single_text_resize: bool,
     measured_resize: Option<MeasuredTextResize>,
 ) -> Result<(), ErrorCode> {
+    if let Ok(value) = document.magnifier(preview.id) {
+        let next = value.translated(Point::new(
+            preview.rect.center.x - value.source_center.x,
+            preview.rect.center.y - value.source_center.y,
+        ));
+        snow_draw_engine_document::validate_magnifier(&next)?;
+        if next != *value {
+            transaction.update_magnifier(preview.id, next);
+        }
+        return Ok(());
+    }
     if document.rectangle(preview.id).is_ok() {
         validate_rectangle(&preview.rect)?;
         transaction.update_rectangle(preview.id, preview.rect);
@@ -253,6 +265,9 @@ pub(crate) fn duplicate_selection_transaction(
                 validate_rectangle(&duplicate)?;
                 transaction.insert_rectangle(new_id, element.meta, duplicate);
             }
+            ElementData::Magnifier(value) => {
+                transaction.insert_magnifier(new_id, element.meta, value.translated(offset));
+            }
             ElementData::Filter(filter) => {
                 let mut duplicate = *filter;
                 duplicate.center.x += offset.x;
@@ -451,6 +466,8 @@ fn align_unit_bounds(document: &DocumentModel, id: ElementId) -> Option<DrawRect
                 arrow: arrow.clone(),
             }],
         )?)
+    } else if let Ok(value) = document.magnifier(id) {
+        rotated_rectangle_aabb(&value.group_rect())
     } else {
         rotated_rectangle_aabb(&document.element_rect_proxy(id)?)
     };
@@ -881,8 +898,15 @@ impl Editor {
         let deltas = alignment_deltas(alignment, &unit_bounds, reference);
         let history_undo_snapshot = self.capture_document_sync_snapshot(document);
         let mut transaction = Transaction::new("align selection");
-        let mut next_elements: Vec<SelectionRectState> = Vec::with_capacity(selected.len());
+        let mut next_elements = Self::selection_elements_from_ids(document, &selected);
+        for element in &mut next_elements {
+            let owner = label_owner.get(&element.id).copied().unwrap_or(element.id);
+            let delta = deltas.get(&owner).copied().unwrap_or(Point::new(0.0, 0.0));
+            element.rect.center.x += delta.x;
+            element.rect.center.y += delta.y;
+        }
         let mut next_arrows: Vec<SelectionArrowState> = Vec::new();
+        let mut binding_overrides = Vec::new();
         for id in &selected {
             let owner = label_owner.get(id).copied().unwrap_or(*id);
             let delta = deltas.get(&owner).copied().unwrap_or(Point::new(0.0, 0.0));
@@ -906,7 +930,7 @@ impl Editor {
             };
             rect.center.x += delta.x;
             rect.center.y += delta.y;
-            next_elements.push(SelectionRectState { id: *id, rect });
+            binding_overrides.push(BindableElementOverride { id: *id, rect });
             // A selected label rides along with its owner's update; an
             // unselected one is appended by the owner instead.
             if !label_owner.contains_key(id) {
@@ -927,7 +951,7 @@ impl Editor {
         // the new geometry.
         let selected_arrow_ids: Vec<ElementId> = next_arrows.iter().map(|state| state.id).collect();
         for (arrow_id, arrow, reorder_targets) in self
-            .recompute_bound_arrows(document, &next_elements)
+            .recompute_bound_arrows(document, &binding_overrides)
             .into_iter()
             .filter(|(arrow_id, _, _)| !selected_arrow_ids.contains(arrow_id))
         {
@@ -996,6 +1020,13 @@ impl Editor {
                     updated.opacity = opacity;
                     if updated != *value {
                         transaction.update_rectangle(*id, updated);
+                    }
+                }
+                ElementData::Magnifier(value) => {
+                    let mut next = *value;
+                    next.opacity = opacity;
+                    if next != *value {
+                        transaction.update_magnifier(*id, next);
                     }
                 }
                 ElementData::Filter(value) => {
@@ -2403,6 +2434,158 @@ mod tests {
             document.rectangle(second_id).unwrap().center,
             Point::new(300.0, 150.0)
         );
+    }
+
+    #[test]
+    fn magnifier_alignment_uses_both_regions_and_caches_compound_selection_bounds() {
+        for mode in [2, 0, 1, 3, 4, 5] {
+            for rotation in [0.0, std::f64::consts::FRAC_PI_3] {
+                let mut document = DocumentModel::new();
+                let magnifier_id = document.allocate_element_id();
+                let original = snow_draw_engine_document::MagnifierData {
+                    source_center: Point::new(0.0, 0.0),
+                    magnified_center: Point::new(200.0, 100.0),
+                    width: 100.0,
+                    height: 80.0,
+                    rotation,
+                    factor: 2.0,
+                    ..Default::default()
+                };
+                let mut transaction = Transaction::new("alignment fixture");
+                transaction.insert_magnifier(magnifier_id, ElementMeta::default(), original);
+                document.apply_transaction(transaction).unwrap();
+                let rectangle_id = insert_rectangle(
+                    &mut document,
+                    rectangle_at(Point::new(500.0, 400.0), 100.0, 60.0, 0.0),
+                );
+                let mut editor = Editor::new(EngineConfig::default()).unwrap();
+                editor.set_selection_state_with_document(
+                    Some(&document),
+                    vec![magnifier_id, rectangle_id],
+                    Some(magnifier_id),
+                );
+                let command = editor.align_selected(&document, mode).unwrap().unwrap();
+                let cached = editor.state.selection.clone();
+                apply_editor_command(&mut document, command);
+
+                let updated = document.magnifier(magnifier_id).unwrap();
+                let source = rotated_rectangle_aabb(&updated.source_rect());
+                let lens = rotated_rectangle_aabb(&updated.magnified_rect());
+                let compound = DrawRect::new(
+                    source.min_x.min(lens.min_x),
+                    source.min_y.min(lens.min_y),
+                    source.max_x.max(lens.max_x),
+                    source.max_y.max(lens.max_y),
+                );
+                let other = rotated_rectangle_aabb(document.rectangle(rectangle_id).unwrap());
+                let coordinate = |bounds: DrawRect| match mode {
+                    0 => bounds.min_x,
+                    1 => f64::midpoint(bounds.min_x, bounds.max_x),
+                    2 => bounds.max_x,
+                    3 => bounds.min_y,
+                    4 => f64::midpoint(bounds.min_y, bounds.max_y),
+                    _ => bounds.max_y,
+                };
+                assert!(
+                    (coordinate(compound) - coordinate(other)).abs() < 1e-9,
+                    "mode {mode}, rotation {rotation}: both regions must align as one unit"
+                );
+                assert!(
+                    (updated.magnified_center.x - updated.source_center.x - 200.0).abs() < 1e-9
+                );
+                assert!(
+                    (updated.magnified_center.y - updated.source_center.y - 100.0).abs() < 1e-9
+                );
+                let proxy = cached
+                    .elements
+                    .iter()
+                    .find(|value| value.id == magnifier_id)
+                    .unwrap();
+                let cached_compound = rotated_rectangle_aabb(&proxy.rect);
+                for (actual, expected) in [
+                    (cached_compound.min_x, compound.min_x),
+                    (cached_compound.min_y, compound.min_y),
+                    (cached_compound.max_x, compound.max_x),
+                    (cached_compound.max_y, compound.max_y),
+                ] {
+                    assert!(
+                        (actual - expected).abs() < 1e-9,
+                        "cached compound bounds drifted"
+                    );
+                }
+                let cached_bounds = selection_bounds_to_draw_rect(&cached.bounds.unwrap());
+                assert!((cached_bounds.min_x - compound.min_x.min(other.min_x)).abs() < 1e-9);
+                assert!((cached_bounds.min_y - compound.min_y.min(other.min_y)).abs() < 1e-9);
+                assert!((cached_bounds.max_x - compound.max_x.max(other.max_x)).abs() < 1e-9);
+                assert!((cached_bounds.max_y - compound.max_y.max(other.max_y)).abs() < 1e-9);
+            }
+        }
+    }
+
+    #[test]
+    fn magnifier_distribution_spaces_compound_regions_on_both_axes() {
+        for mode in [6, 7] {
+            let mut document = DocumentModel::new();
+            let first_id = insert_rectangle(
+                &mut document,
+                rectangle_at(Point::new(50.0, 50.0), 40.0, 20.0, 0.0),
+            );
+            let magnifier_id = document.allocate_element_id();
+            let original = snow_draw_engine_document::MagnifierData {
+                source_center: Point::new(200.0, 200.0),
+                magnified_center: Point::new(260.0, 220.0),
+                width: 20.0,
+                height: 30.0,
+                factor: 2.0,
+                ..Default::default()
+            };
+            let mut transaction = Transaction::new("distribution fixture");
+            transaction.insert_magnifier(magnifier_id, ElementMeta::default(), original);
+            document.apply_transaction(transaction).unwrap();
+            let last_id = insert_rectangle(
+                &mut document,
+                rectangle_at(Point::new(600.0, 600.0), 60.0, 40.0, 0.0),
+            );
+            let mut editor = Editor::new(EngineConfig::default()).unwrap();
+            editor.set_selection_state_with_document(
+                Some(&document),
+                vec![first_id, magnifier_id, last_id],
+                Some(magnifier_id),
+            );
+            let command = editor.align_selected(&document, mode).unwrap().unwrap();
+            apply_editor_command(&mut document, command);
+            let updated = document.magnifier(magnifier_id).unwrap();
+            let source = rotated_rectangle_aabb(&updated.source_rect());
+            let lens = rotated_rectangle_aabb(&updated.magnified_rect());
+            let first = document.rectangle(first_id).unwrap();
+            let last = document.rectangle(last_id).unwrap();
+            let (first_end, middle_start, middle_end, last_start) = if mode == 6 {
+                (
+                    first.center.x + first.width / 2.0,
+                    source.min_x.min(lens.min_x),
+                    source.max_x.max(lens.max_x),
+                    last.center.x - last.width / 2.0,
+                )
+            } else {
+                (
+                    first.center.y + first.height / 2.0,
+                    source.min_y.min(lens.min_y),
+                    source.max_y.max(lens.max_y),
+                    last.center.y - last.height / 2.0,
+                )
+            };
+            assert!((middle_start - first_end - (last_start - middle_end)).abs() < 1e-9);
+            assert_eq!(first.center, Point::new(50.0, 50.0));
+            assert_eq!(last.center, Point::new(600.0, 600.0));
+            assert_eq!(
+                updated.magnified_center.x - updated.source_center.x,
+                original.magnified_center.x - original.source_center.x
+            );
+            assert_eq!(
+                updated.magnified_center.y - updated.source_center.y,
+                original.magnified_center.y - original.source_center.y
+            );
+        }
     }
 
     #[test]

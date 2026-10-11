@@ -71,5 +71,6 @@ QRectF overlayItemBounds(const OverlayDisplayInfo& displayInfo, const SnowOverla
 
 ViewCornerRadii toViewCornerRadii(const SnowCornerRadii& radii, double zoom, const QRectF& rect);
 QPainterPath roundedRectPath(const QRectF& rect, const ViewCornerRadii& radii);
+QPainterPath roundedDiamondPath(const QRectF& rect, const SnowCornerRadii& radii);
 
 } // namespace snow_canvas_render_geometry

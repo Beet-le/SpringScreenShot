@@ -40,6 +40,8 @@ pub struct PersistedEditorSession {
     distance: crate::DistanceStyle,
     #[serde(default)]
     angle: crate::AngleStyle,
+    #[serde(default)]
+    magnifier: crate::MagnifierStyle,
     line: super::ShapeStyle,
     free_draw: super::ShapeStyle,
     rectangle_highlight: super::ShapeStyle,
@@ -189,6 +191,7 @@ impl EditorSession {
             arrow: state.default_arrow_style,
             distance: state.default_distance_style,
             angle: state.default_angle_style,
+            magnifier: state.default_magnifier_style,
             line: state.default_line_style,
             free_draw: state.default_free_draw_style,
             rectangle_highlight: state.default_rectangle_highlight_style,
@@ -226,6 +229,7 @@ impl EditorSession {
         state.default_arrow_style = persisted.arrow;
         state.default_distance_style = persisted.distance;
         state.default_angle_style = persisted.angle;
+        state.default_magnifier_style = persisted.magnifier;
         crate::validate_angle_style(persisted.angle)?;
         state.default_line_style = ShapeStyle {
             arrow_type: crate::style::normalized_line_arrow_type(persisted.line.arrow_type),
@@ -318,6 +322,22 @@ impl EditorSession {
         self.editor.reset_editing_state();
     }
 
+    /// Discard fractional input at history replay or document-session transfer boundaries.
+    pub fn reset_magnifier_wheel_input(&mut self) {
+        self.editor.magnifier_wheel = None;
+    }
+
+    /// Native pointer capture belongs to the current runtime, not its persisted document.
+    pub fn has_pointer_capture(&self) -> bool {
+        self.editor.captured_pointer.is_some()
+    }
+
+    /// A cloned document session does not inherit native pointer ownership or queued releases.
+    pub fn reset_pointer_capture_state(&mut self) {
+        self.editor.captured_pointer = None;
+        self.editor.pending_capture_release = false;
+    }
+
     /// Discards measurements, numbering sequences, and transient storage from the old document.
     pub fn reset_document_retained_state(&mut self, initial_serial_number: &SerialNumberStyle) {
         self.editor.reset_editing_state();
@@ -341,6 +361,23 @@ impl EditorSession {
 
     pub fn selected_element_count(&self, document: &DocumentModel) -> usize {
         self.editor.selected_element_count(document)
+    }
+
+    pub fn magnifier_style(&self, document: &DocumentModel) -> crate::MagnifierStyle {
+        self.editor.magnifier_style(document)
+    }
+    pub fn magnifier_style_mixed(&self, document: &DocumentModel) -> u32 {
+        self.editor.magnifier_style_mixed(document)
+    }
+    pub fn set_magnifier_style_patch(
+        &mut self,
+        document: &DocumentModel,
+        style: crate::MagnifierStyle,
+        properties: u32,
+        creation_defaults: bool,
+    ) -> Result<Option<EditorCommand>, ErrorCode> {
+        self.editor
+            .set_magnifier_style_patch(document, style, properties, creation_defaults)
     }
 
     pub fn shape_style(&self, document: &DocumentModel) -> ShapeStyle {
@@ -984,6 +1021,7 @@ mod borrowed_view_query_tests {
 }
 
 pub fn validate_editor_style_defaults(defaults: &EditorStyleDefaults) -> Result<(), ErrorCode> {
+    crate::validate_magnifier_style(defaults.magnifier)?;
     super::style::validate_rectangle_shape_style(defaults.rectangle)?;
     super::style::validate_rectangle_shape_style(RectangleShapeStyle {
         corner_radii: defaults.spotlight_corner_radii,
@@ -1029,6 +1067,7 @@ pub fn validate_editor_style_defaults(defaults: &EditorStyleDefaults) -> Result<
 }
 
 fn validate_persisted_editor_styles(persisted: &PersistedEditorSession) -> Result<(), ErrorCode> {
+    crate::validate_magnifier_style(persisted.magnifier)?;
     crate::validate_distance_style(persisted.distance)?;
     crate::validate_angle_style(persisted.angle)?;
     fn finite_non_negative(value: f64) -> bool {

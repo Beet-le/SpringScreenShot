@@ -6,6 +6,8 @@ mod auto_filter_workflow;
 pub use arrow_text::ArrowTextLayoutRequest;
 mod creation_workflow;
 pub use creation_workflow::SerialNumberLabelLayoutRequest;
+mod magnifier;
+pub use magnifier::*;
 mod angle;
 mod defaults;
 pub use angle::*;
@@ -87,8 +89,8 @@ use snow_draw_engine_core::{
 use snow_draw_engine_document::{
     ArrowData, DEFAULT_ARROW_MAX_COORDINATE, ElementId, ElementKind, PenFilterData, RectangleData,
     RectangleElementKind, SerialNumberData, TextData, Transaction, arrow_bounds,
-    arrow_length as document_arrow_length, normalize_corner_radii, validate_arrow, validate_filter,
-    validate_rectangle, validate_serial_number, validate_text, validate_text_layout_size,
+    arrow_length as document_arrow_length, validate_arrow, validate_filter, validate_rectangle,
+    validate_serial_number, validate_text, validate_text_layout_size,
 };
 use snow_draw_engine_interaction::{
     CursorCommand, CursorStyle, InputEvent, InteractionOutput, KeyCode, KeyEvent, KeyEventType,
@@ -152,6 +154,9 @@ pub struct Editor {
     scene_state_revision: u64,
     overlay_state_revision: u64,
     pending_command: Option<EditorCommand>,
+    magnifier_wheel: Option<magnifier::MagnifierWheelAccumulator>,
+    captured_pointer: Option<u32>,
+    pending_capture_release: bool,
 }
 
 impl Editor {
@@ -169,6 +174,9 @@ impl Editor {
             scene_state_revision: 0,
             overlay_state_revision: 0,
             pending_command: None,
+            magnifier_wheel: None,
+            captured_pointer: None,
+            pending_capture_release: false,
         })
     }
 
@@ -298,6 +306,7 @@ impl Editor {
     ) {
         self.invalidate_auto_filter_gesture(document);
         self.sync_selection_after_document_change(document, &snapshot.selection);
+        self.sync_magnifier_interaction_styles(document);
         self.bump_scene_state_revision();
         self.bump_overlay_state_revision();
     }
@@ -323,6 +332,10 @@ impl Editor {
     }
 
     fn cancel_interaction(&mut self) {
+        // Direct document mutations cannot return an input output. Drop ownership for native
+        // reconciliation immediately, and retain a release command for the next input output.
+        self.pending_capture_release |= self.captured_pointer.take().is_some();
+        self.magnifier_wheel = None;
         self.state.ui.free_draw_hover_position = None;
         self.state.pending_text_edit = None;
         self.state.pending_new_text_draft = false;
@@ -333,6 +346,7 @@ impl Editor {
             InteractionState::PendingSelectionMove(_)
                 | InteractionState::EditingSelection(_)
                 | InteractionState::EditingArrow(_)
+                | InteractionState::EditingMagnifier(_)
                 | InteractionState::CreatingSerialNumber(_)
                 | InteractionState::CreatingFreeDraw(_)
         );

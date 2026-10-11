@@ -29,6 +29,7 @@ pub enum SnowActiveTool {
     BrushEraser = 16,
     Distance = 17,
     Angle = 18,
+    Magnifier = 19,
 }
 
 impl SnowActiveTool {
@@ -69,6 +70,8 @@ pub enum SnowStyleToolbarSource {
     SelectedDistance = 27,
     DefaultAngle = 28,
     SelectedAngle = 29,
+    DefaultMagnifier = 30,
+    SelectedMagnifier = 31,
 }
 
 impl SnowStyleToolbarSource {
@@ -442,6 +445,34 @@ pub struct SnowSerialNumberStyle {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SnowMagnifierStyle {
+    pub shape: SnowRectangleShape,
+    pub stroke: SnowColorRgba8,
+    pub stroke_width: f64,
+    pub factor: f64,
+    pub show_leader: u8,
+    pub reserved: [u8; 3],
+    pub leader_arrowhead: SnowArrowhead,
+    pub corner_radii: SnowCornerRadii,
+    pub arrow_ratio: f64,
+}
+impl Default for SnowMagnifierStyle {
+    fn default() -> Self {
+        snow_draw_engine::MagnifierStyle::default().into()
+    }
+}
+pub const SNOW_MAGNIFIER_STYLE_PROPERTY_SHAPE: u32 = 1;
+pub const SNOW_MAGNIFIER_STYLE_PROPERTY_STROKE: u32 = 2;
+pub const SNOW_MAGNIFIER_STYLE_PROPERTY_STROKE_WIDTH: u32 = 4;
+pub const SNOW_MAGNIFIER_STYLE_PROPERTY_FACTOR: u32 = 8;
+pub const SNOW_MAGNIFIER_STYLE_PROPERTY_SHOW_LEADER: u32 = 16;
+pub const SNOW_MAGNIFIER_STYLE_PROPERTY_LEADER_ARROWHEAD: u32 = 32;
+pub const SNOW_MAGNIFIER_STYLE_PROPERTY_CORNER_RADII: u32 = 64;
+pub const SNOW_MAGNIFIER_STYLE_PROPERTY_ARROW_RATIO: u32 = 128;
+pub const SNOW_MAGNIFIER_STYLE_PROPERTY_ALL: u32 = 255;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SnowStyleToolbarState {
     pub source: SnowStyleToolbarSource,
     pub selected_element_count: u32,
@@ -459,6 +490,8 @@ pub struct SnowStyleToolbarState {
     pub angle_style: SnowAngleStyle,
     pub angle_style_mixed: u32,
     pub distance_measured_length: f64,
+    pub magnifier_style: SnowMagnifierStyle,
+    pub magnifier_style_mixed: u32,
 }
 
 #[repr(C)]
@@ -481,6 +514,7 @@ pub struct SnowStyleDefaults {
     pub distance: SnowDistanceStyle,
     pub angle: SnowAngleStyle,
     pub spotlight_corner_radii: SnowCornerRadii,
+    pub magnifier: SnowMagnifierStyle,
 }
 
 #[repr(C)]

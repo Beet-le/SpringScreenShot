@@ -15,10 +15,13 @@ class Controller final {
 
     void setEnabled(QWidget& widget, SnowCanvasCursorController& cursorController, bool enabled);
     void clearTransientState(QWidget& widget, SnowCanvasCursorController& cursorController);
+    void syncPointerCapture(QWidget& widget, bool active);
     void applyOutput(QWidget& widget, SnowCanvasCursorController& cursorController,
                      const SnowInteractionOutput& output);
 
   private:
+    void releasePointerCapture(QWidget& widget);
+
     bool m_enabled = true;
     std::uint32_t m_capturedPointerId = 0;
 };

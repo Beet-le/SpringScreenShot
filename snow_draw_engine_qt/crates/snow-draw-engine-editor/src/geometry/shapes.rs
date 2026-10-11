@@ -26,7 +26,12 @@ pub(crate) fn rectangle_from_draw_rect(
         stroke: template.stroke,
         stroke_width: template.stroke_width,
         stroke_style: template.stroke_style,
-        corner_radii: normalize_corner_radii(width, height, template.corner_radii),
+        corner_radii: snow_draw_engine_document::normalize_shape_corner_radii(
+            template.highlight_shape,
+            width,
+            height,
+            template.corner_radii,
+        ),
         opacity: template.opacity,
     }
 }

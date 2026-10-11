@@ -7,7 +7,19 @@ impl Editor {
         event: WheelEvent,
     ) -> Result<InteractionOutput, ErrorCode> {
         if self.surface_size().width == 0 || self.surface_size().height == 0 {
+            self.magnifier_wheel = None;
             return Ok(InteractionOutput::default());
+        }
+
+        let adjusts_magnifier = !event.modifiers.ctrl
+            && !event.modifiers.alt
+            && !event.modifiers.meta
+            && self.state.active_tool != ActiveTool::Angle
+            && !self.has_homogeneous_angle_selection(document)
+            && (self.state.active_tool == ActiveTool::Magnifier
+                || self.has_homogeneous_magnifier_selection(document));
+        if !adjusts_magnifier {
+            self.magnifier_wheel = None;
         }
 
         if !event.modifiers.ctrl
@@ -33,6 +45,10 @@ impl Editor {
                 capture: PointerCaptureCommand::NoChange,
                 cursor: CursorCommand::NoChange,
             });
+        }
+
+        if adjusts_magnifier {
+            return self.process_magnifier_wheel_event(document, event);
         }
 
         let delta_y = match event.delta_kind {

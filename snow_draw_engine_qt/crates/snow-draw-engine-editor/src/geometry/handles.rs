@@ -39,12 +39,65 @@ pub(crate) struct ResizeDragGeometry {
     pub(crate) scale_y: f64,
 }
 
+/// The document transform cannot be reconstructed from a proxy's positive extents.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) enum SelectionTransform {
+    #[default]
+    Identity,
+    Move {
+        delta: Point<f64>,
+    },
+    Resize {
+        anchor_local: Point<f64>,
+        scale_x: f64,
+        scale_y: f64,
+    },
+    Rotate {
+        angle: f64,
+    },
+}
+
+impl SelectionTransform {
+    pub(crate) fn map_point(self, bounds: &SelectionBounds, point: Point<f64>) -> Point<f64> {
+        match self {
+            Self::Identity => point,
+            Self::Move { delta } => Point::new(point.x + delta.x, point.y + delta.y),
+            Self::Resize {
+                anchor_local,
+                scale_x,
+                scale_y,
+            } => rect_local_to_canvas(
+                bounds.center,
+                bounds.rotation,
+                scaled_point_from_anchor(
+                    canvas_to_rect_local(bounds.center, bounds.rotation, point),
+                    anchor_local,
+                    scale_x,
+                    scale_y,
+                ),
+            ),
+            Self::Rotate { angle } => rotate_point_around(point, bounds.center, angle),
+        }
+    }
+}
+
+impl ResizeDragGeometry {
+    pub(crate) fn transform(self) -> SelectionTransform {
+        SelectionTransform::Resize {
+            anchor_local: self.anchor_local,
+            scale_x: self.scale_x,
+            scale_y: self.scale_y,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SelectionEditPreview {
     pub(crate) elements: Vec<SelectionRectState>,
     pub(crate) arrows: Vec<SelectionArrowState>,
     pub(crate) bounds: SelectionBounds,
     pub(crate) snap_guides: Vec<SnapGuide>,
+    pub(crate) transform: SelectionTransform,
 }
 
 #[derive(Clone, Debug, PartialEq)]

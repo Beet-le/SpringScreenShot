@@ -25,11 +25,21 @@ void Controller::setEnabled(QWidget& widget, SnowCanvasCursorController& cursorC
 
 void Controller::clearTransientState(QWidget& widget,
                                      SnowCanvasCursorController& cursorController) {
+    releasePointerCapture(widget);
+    cursorController.clearCursor(SnowCanvasCursorLayer::CanvasTool);
+}
+
+void Controller::releasePointerCapture(QWidget& widget) {
     if (m_capturedPointerId != 0) {
         widget.releaseMouse();
         m_capturedPointerId = 0;
     }
-    cursorController.clearCursor(SnowCanvasCursorLayer::CanvasTool);
+}
+
+void Controller::syncPointerCapture(QWidget& widget, bool active) {
+    if (!active) {
+        releasePointerCapture(widget);
+    }
 }
 
 void Controller::applyOutput(QWidget& widget, SnowCanvasCursorController& cursorController,
@@ -46,10 +56,7 @@ void Controller::applyOutput(QWidget& widget, SnowCanvasCursorController& cursor
         m_capturedPointerId = output.capture_pointer_id;
         break;
     case SNOW_POINTER_CAPTURE_RELEASE:
-        if (m_capturedPointerId != 0) {
-            widget.releaseMouse();
-        }
-        m_capturedPointerId = 0;
+        releasePointerCapture(widget);
         break;
     case SNOW_POINTER_CAPTURE_NO_CHANGE:
     default:

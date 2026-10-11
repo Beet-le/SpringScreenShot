@@ -5,9 +5,9 @@ use snow_draw_engine_core::{
 use snow_draw_engine_document::{
     ArrowData, FillStyle, FilterData, MIN_SERIAL_NUMBER_FONT_SIZE, MIN_TEXT_FONT_SIZE,
     RectangleData, SerialNumberData, SpotlightConfig, TextData, Transaction, WatermarkConfig,
-    normalize_corner_radii, normalize_font_family, resolve_serial_number_data_diameter,
-    serial_number_rect_proxy, serial_number_with_label_style, text_with_auto_resize_layout,
-    text_with_wrapped_layout, validate_serial_number, validate_text,
+    normalize_font_family, resolve_serial_number_data_diameter, serial_number_rect_proxy,
+    serial_number_with_label_style, text_with_auto_resize_layout, text_with_wrapped_layout,
+    validate_serial_number, validate_text,
 };
 use snow_draw_engine_interaction::Modifiers;
 use snow_draw_engine_model::DocumentModel;
@@ -547,7 +547,12 @@ pub(crate) fn rectangle_with_style(
         stroke: style.stroke,
         stroke_width: style.stroke_width,
         stroke_style: style.stroke_style,
-        corner_radii: normalize_corner_radii(rect.width, rect.height, style.corner_radii),
+        corner_radii: snow_draw_engine_document::normalize_shape_corner_radii(
+            style.shape,
+            rect.width,
+            rect.height,
+            style.corner_radii,
+        ),
         opacity: rect.opacity,
     }
 }
@@ -886,6 +891,10 @@ impl Editor {
             ActiveTool::RectangleFilter | ActiveTool::AutoFilter
         ) {
             StyleToolbarSource::DefaultRectangleFilter
+        } else if self.has_homogeneous_magnifier_selection(document) {
+            StyleToolbarSource::SelectedMagnifier
+        } else if self.state.active_tool == ActiveTool::Magnifier {
+            StyleToolbarSource::DefaultMagnifier
         } else if self.state.active_tool == ActiveTool::Angle {
             StyleToolbarSource::DefaultAngle
         } else if self.state.active_tool == ActiveTool::Distance {

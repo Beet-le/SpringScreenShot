@@ -55,6 +55,134 @@ fn setup() -> (Engine, ViewportId, ElementId) {
     (engine, viewport, id)
 }
 
+#[test]
+fn magnifier_hit_queries_block_arrow_text_through_source_and_lens() {
+    use snow_draw_engine_document::{ElementKind, HighlightShape, MagnifierData};
+
+    for shape in [
+        HighlightShape::Rectangle,
+        HighlightShape::Ellipse,
+        HighlightShape::Diamond,
+    ] {
+        for rotation in [0.0, 0.37] {
+            let (mut engine, viewport, arrow_id) = setup();
+            let id = engine.model.peek_next_element_id();
+            let value = MagnifierData {
+                source_center: Point::new(-120.0, 0.0),
+                magnified_center: Point::new(0.0, 0.0),
+                width: 60.0,
+                height: 40.0,
+                rotation,
+                shape,
+                show_leader: false,
+                ..Default::default()
+            };
+            let mut transaction = Transaction::new("cover arrow with magnifier");
+            transaction.insert_magnifier(id, ElementMeta::default(), value);
+            engine
+                .commit_transaction(
+                    viewport,
+                    ApplyTransactionCommand {
+                        transaction,
+                        history_undo_snapshot: None,
+                    },
+                )
+                .unwrap();
+
+            for locked in [false, true] {
+                let mut transaction = Transaction::new("magnifier metadata");
+                transaction.update_element_meta(
+                    id,
+                    ElementMeta {
+                        locked,
+                        ..Default::default()
+                    },
+                );
+                engine
+                    .commit_transaction(
+                        viewport,
+                        ApplyTransactionCommand {
+                            transaction,
+                            history_undo_snapshot: None,
+                        },
+                    )
+                    .unwrap();
+                for point in [value.source_center, value.magnified_center] {
+                    assert_eq!(
+                        engine.model.topmost_element_at_with_tolerance(point, 0.0),
+                        Some((id, ElementKind::Magnifier))
+                    );
+                    assert_eq!(
+                        engine
+                            .model
+                            .document()
+                            .topmost_element_at_with_tolerance(point, 0.0),
+                        Some((id, ElementKind::Magnifier))
+                    );
+                    assert_eq!(
+                        engine.model.topmost_element_matching_at_with_tolerance(
+                            point,
+                            0.0,
+                            |_, kind| kind == ElementKind::Magnifier,
+                        ),
+                        Some((id, ElementKind::Magnifier))
+                    );
+                    assert_eq!(
+                        engine
+                            .model
+                            .elements_at_with_tolerance(point, 0.0)
+                            .iter()
+                            .any(|(hit, _)| *hit == id),
+                        !locked
+                    );
+                    assert!(
+                        engine
+                            .arrow_text_target(viewport, Some(point))
+                            .unwrap()
+                            .is_none()
+                    );
+                }
+            }
+
+            assert_eq!(
+                engine
+                    .arrow_text_target(viewport, Some(Point::new(150.0, 0.0)))
+                    .unwrap()
+                    .unwrap()
+                    .0
+                    .arrow_id,
+                Some(arrow_id)
+            );
+            let mut transaction = Transaction::new("hide magnifier");
+            transaction.update_element_meta(
+                id,
+                ElementMeta {
+                    visible: false,
+                    ..Default::default()
+                },
+            );
+            engine
+                .commit_transaction(
+                    viewport,
+                    ApplyTransactionCommand {
+                        transaction,
+                        history_undo_snapshot: None,
+                    },
+                )
+                .unwrap();
+            assert_eq!(
+                engine
+                    .arrow_text_target(viewport, Some(value.magnified_center))
+                    .unwrap()
+                    .unwrap()
+                    .0
+                    .arrow_id,
+                Some(arrow_id)
+            );
+        }
+    }
+}
+
 fn label(engine: &mut Engine, viewport: ViewportId, owner: ElementId, text: &str) -> ElementId {
     let style = engine.arrow_text_target(viewport, None).unwrap().unwrap().1;
     engine

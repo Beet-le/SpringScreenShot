@@ -6,6 +6,7 @@
 #include <QString>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace snow_canvas_render_geometry {
@@ -541,6 +542,16 @@ QPainterPath arrowPathFromCommands(const ViewProjection& projection,
 QRectF sceneItemBounds(const SceneDisplayInfo& displayInfo, const SnowSceneDisplayItem& item) {
     const ViewProjection projection = sceneProjection(displayInfo);
     switch (item.kind) {
+    case SNOW_SCENE_DISPLAY_ITEM_MAGNIFIER: {
+        SnowSceneDisplayItem lens = item;
+        lens.kind = SNOW_SCENE_DISPLAY_ITEM_DRAW_RECT;
+        QRectF bounds = sceneItemBounds(displayInfo, lens);
+        if (item.arrow_point_count >= 2) {
+            lens.kind = SNOW_SCENE_DISPLAY_ITEM_ARROW;
+            bounds = bounds.united(sceneItemBounds(displayInfo, lens));
+        }
+        return bounds;
+    }
     case SNOW_SCENE_DISPLAY_ITEM_DRAW_RECT:
     case SNOW_SCENE_DISPLAY_ITEM_FILTER: {
         const QPointF center = canvasToView(projection, item.center_x, item.center_y);
@@ -727,6 +738,62 @@ ViewCornerRadii toViewCornerRadii(const SnowCornerRadii& radii, double zoom, con
     scaled.bottomRight *= factor;
     scaled.bottomLeft *= factor;
     return scaled;
+}
+
+QPainterPath roundedDiamondPath(const QRectF& rect, const SnowCornerRadii& radii) {
+    QPainterPath path;
+    if (rect.isEmpty() || !std::isfinite(rect.width()) || !std::isfinite(rect.height())) {
+        return path;
+    }
+    const double a = rect.width() / 2.0;
+    const double b = rect.height() / 2.0;
+    const double edge = std::hypot(a, b);
+    const auto normalized = toViewCornerRadii(radii, 1.0, rect);
+    std::array<double, 4> values{normalized.topLeft, normalized.topRight, normalized.bottomRight,
+                                 normalized.bottomLeft};
+    const std::array<double, 4> cotangents{b / a, a / b, b / a, a / b};
+    double scale = 1.0;
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        const auto next = (index + 1) % values.size();
+        const double sum = values[index] * cotangents[index] + values[next] * cotangents[next];
+        if (sum > edge) {
+            scale = std::min(scale, edge / sum);
+        }
+    }
+    const QPointF origin = rect.center();
+    const std::array<QPointF, 4> vertices{origin + QPointF(0.0, -b), origin + QPointF(a, 0.0),
+                                          origin + QPointF(0.0, b), origin + QPointF(-a, 0.0)};
+    const std::array<QPointF, 4> inward{QPointF(0.0, 1.0), QPointF(-1.0, 0.0), QPointF(0.0, -1.0),
+                                        QPointF(1.0, 0.0)};
+    constexpr double radiansToDegrees = 180.0 / 3.14159265358979323846;
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        const double radius = values[index] * scale;
+        const QPointF vertex = vertices[index];
+        const double trim = radius * cotangents[index] / edge;
+        const QPointF entry = vertex + (vertices[(index + 3) % 4] - vertex) * trim;
+        const QPointF exit = vertex + (vertices[(index + 1) % 4] - vertex) * trim;
+        if (index == 0) {
+            path.moveTo(entry);
+        } else {
+            path.lineTo(entry);
+        }
+        if (radius > 0.0) {
+            const double sine = (index % 2 == 0 ? a : b) / edge;
+            const QPointF center = vertex + inward[index] * (radius / sine);
+            const QPointF start = (entry - center) / radius;
+            const QPointF end = (exit - center) / radius;
+            const double startAngle = std::atan2(-start.y(), start.x()) * radiansToDegrees;
+            const double sweep =
+                -std::acos(std::clamp(QPointF::dotProduct(start, end), -1.0, 1.0)) *
+                radiansToDegrees;
+            path.arcTo(QRectF(center.x() - radius, center.y() - radius, radius * 2.0, radius * 2.0),
+                       startAngle, sweep);
+        } else {
+            path.lineTo(exit);
+        }
+    }
+    path.closeSubpath();
+    return path;
 }
 
 QPainterPath roundedRectPath(const QRectF& rect, const ViewCornerRadii& radii) {

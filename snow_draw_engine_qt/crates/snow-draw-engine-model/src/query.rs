@@ -9,10 +9,7 @@ pub use spatial_index::SpatialIndex;
 use snow_draw_engine_core::{
     Point, SnapQuery, SnapResult, ViewportQuery, canvas_viewport, rectangle_intersects_viewport,
 };
-use snow_draw_engine_document::{
-    Document, DocumentDelta, ElementId, ElementKind, RectangleData, arrow_hit_test,
-    filter_hit_test, rectangle_hit_test, serial_number_hit_test, text_hit_test,
-};
+use snow_draw_engine_document::{Document, DocumentDelta, ElementId, ElementKind, RectangleData};
 
 #[derive(Clone, Debug, Default)]
 pub struct QueryStore {
@@ -186,37 +183,7 @@ impl QueryStore {
                         {
                             return None;
                         }
-                        let hit = match &element.data {
-                            snow_draw_engine_document::ElementData::Rectangle(rect) => {
-                                rectangle_hit_test(rect, point, hit_tolerance)
-                            }
-                            snow_draw_engine_document::ElementData::Filter(filter) => {
-                                filter_hit_test(filter, point, hit_tolerance)
-                            }
-                            snow_draw_engine_document::ElementData::PenFilter(filter) => {
-                                snow_draw_engine_document::pen_filter_hit_test(
-                                    filter,
-                                    point,
-                                    hit_tolerance,
-                                )
-                            }
-                            snow_draw_engine_document::ElementData::Arrow(arrow) => {
-                                arrow_hit_test(arrow, point, hit_tolerance)
-                            }
-                            snow_draw_engine_document::ElementData::FreeDraw(free_draw) => {
-                                snow_draw_engine_document::free_draw_hit_test(
-                                    free_draw,
-                                    point,
-                                    hit_tolerance,
-                                )
-                            }
-                            snow_draw_engine_document::ElementData::Text(text) => {
-                                text_hit_test(text, point, hit_tolerance)
-                            }
-                            snow_draw_engine_document::ElementData::SerialNumber(serial) => {
-                                serial_number_hit_test(serial, point, hit_tolerance)
-                            }
-                        };
+                        let hit = element.data.hit_test(point, hit_tolerance);
                         hit.then_some((id, element.data.kind()))
                     })
                     .collect()
@@ -238,41 +205,10 @@ impl QueryStore {
                         return None;
                     }
                     let element = document.element(*id).ok()?;
-                    if !element.meta.visible {
+                    if !element.meta.visible || element.data.is_filter() {
                         return None;
                     }
-                    let hit = match &element.data {
-                        snow_draw_engine_document::ElementData::Rectangle(rect)
-                            if rectangle_hit_test(rect, point, hit_tolerance) =>
-                        {
-                            true
-                        }
-                        snow_draw_engine_document::ElementData::Arrow(arrow)
-                            if arrow_hit_test(arrow, point, hit_tolerance) =>
-                        {
-                            true
-                        }
-                        snow_draw_engine_document::ElementData::FreeDraw(free_draw)
-                            if snow_draw_engine_document::free_draw_hit_test(
-                                free_draw,
-                                point,
-                                hit_tolerance,
-                            ) =>
-                        {
-                            true
-                        }
-                        snow_draw_engine_document::ElementData::Text(text)
-                            if text_hit_test(text, point, hit_tolerance) =>
-                        {
-                            true
-                        }
-                        snow_draw_engine_document::ElementData::SerialNumber(serial)
-                            if serial_number_hit_test(serial, point, hit_tolerance) =>
-                        {
-                            true
-                        }
-                        _ => return None,
-                    };
+                    let hit = element.data.hit_test(point, hit_tolerance);
                     let kind = element.data.kind();
                     if hit && include(*id, kind) {
                         Some((*id, kind))

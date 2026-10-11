@@ -7750,6 +7750,7 @@ void repeatingDrawingShortcutsReturnsToSelect() {
     ScreenshotToolPalette::Options options;
     options.showLineTool = true;
     options.showSpotlightTool = true;
+    options.showMagnifierTool = true;
     options.showFreeDrawTool = true;
     options.showHighlightTool = true;
     options.showTextTool = true;
@@ -7764,11 +7765,17 @@ void repeatingDrawingShortcutsReturnsToSelect() {
                      [&selectRequests]() { ++selectRequests; });
 
     const std::pair<const char*, Tool> shortcuts[] = {
-        {"line", Tool::Line},           {"spotlight", Tool::Spotlight},
-        {"shape", Tool::Shape},         {"arrow", Tool::Arrow},
-        {"brush", Tool::FreeDraw},      {"highlight", Tool::PenHighlight},
-        {"text", Tool::Text},           {"serial_number", Tool::SerialNumber},
-        {"filter", Tool::PenFilter},    {"eraser", Tool::Eraser},
+        {"magnifier", Tool::Magnifier},
+        {"line", Tool::Line},
+        {"spotlight", Tool::Spotlight},
+        {"shape", Tool::Shape},
+        {"arrow", Tool::Arrow},
+        {"brush", Tool::FreeDraw},
+        {"highlight", Tool::PenHighlight},
+        {"text", Tool::Text},
+        {"serial_number", Tool::SerialNumber},
+        {"filter", Tool::PenFilter},
+        {"eraser", Tool::Eraser},
         {"watermark", Tool::Watermark},
     };
     for (const auto& [id, tool] : shortcuts) {
@@ -10934,6 +10941,7 @@ void spotlightCornerRadiusEditorReusesShapeBehavior() {
     ScreenshotToolPalette::Options options;
     options.showSpotlightTool = true;
     options.styleDefaults = snow_shot::presentation::screenshotCanvasStyleDefaults();
+    options.styleDefaults.rectangle.shape = SnowCanvasRectangleShape::Diamond;
     options.styleDefaults.spotlightCornerRadii = SnowCanvasCornerRadii{17, 17, 17, 17};
     ScreenshotToolPalette palette(options);
     palette.setActiveTool(Tool::Shape);
@@ -10964,6 +10972,8 @@ void spotlightCornerRadiusEditorReusesShapeBehavior() {
                 "Spotlight must reuse Shape's radius editor with its independent value");
         SnowCanvasStyleToolbarState state;
         state.source = SnowCanvasStyleToolbarSource::SelectedSpotlight;
+        state.shapeStyle.shape = iteration % 2 == 0 ? SnowCanvasRectangleShape::Diamond
+                                                    : SnowCanvasRectangleShape::Rectangle;
         state.shapeStyle.cornerRadii = SnowCanvasCornerRadii{23, 23, 23, 23};
         state.shapeStyleMixed = SnowCanvasShapeStyleMixedCornerRadii;
         const int before = edits;
@@ -10974,8 +10984,12 @@ void spotlightCornerRadiusEditorReusesShapeBehavior() {
         const QPoint local = radius->rect().center();
         QWheelEvent wheel(QPointF(local), radius->mapToGlobal(local), QPoint(), QPoint(0, 120),
                           Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        auto* selectedShape = qobject_cast<QAbstractButton*>(controlWithTooltip(
+            palette,
+            state.shapeStyle.shape == SnowCanvasRectangleShape::Diamond ? "Diamond" : "Rectangle"));
         require(palette.handleToolbarWheel(&wheel) && edits == before + 1 &&
                     radius->value() == 24 && radius->valueText() == QStringLiteral("24") &&
+                    selectedShape != nullptr && selectedShape->isChecked() &&
                     lastStyle.cornerRadii == SnowCanvasCornerRadii{24, 24, 24, 24},
                 "Spotlight scrolling must adjust the radius one pixel and resolve mixed state");
         radius->click();
@@ -11369,6 +11383,660 @@ void lineStyleControlsExposeStraightAndCurveTypes() {
     palette.setActiveTool(ScreenshotToolPalette::Tool::FreeDraw);
     require(palette.findChild<QWidget*>(QStringLiteral("screenshotLineTypeButtonGroup")) == nullptr,
             "Free Draw should not expose the Line type editor");
+}
+
+void magnifierLayoutMigrationPreservesCustomization() {
+    namespace layout = snow_shot::presentation::toolbar_layout;
+    using snow_shot::storage::ScreenshotToolbarLayout;
+    const QString magnifier = QStringLiteral("magnifier");
+    const QStringList grouped{magnifier, QStringLiteral("spotlight"),
+                              QStringLiteral("highlighter")};
+    const auto checkSchema = [](const ScreenshotToolbarLayout& input,
+                                const ScreenshotToolbarLayout& expected) {
+        QJsonArray positions;
+        for (const auto& position : input.positions)
+            positions.append(QJsonArray::fromStringList(position));
+        const auto normalized = snow_shot::storage::ConfigurationSchema::normalize(
+            QStringLiteral("screenshot_toolbar/layout"),
+            QJsonObject{{QStringLiteral("positions"), positions},
+                        {QStringLiteral("hidden"), QJsonArray::fromStringList(input.hidden)}});
+        QJsonArray expectedPositions;
+        for (const auto& position : expected.positions)
+            expectedPositions.append(QJsonArray::fromStringList(position));
+        require(normalized.valid &&
+                    normalized.value.toObject().value(QStringLiteral("positions")) ==
+                        expectedPositions &&
+                    normalized.value.toObject().value(QStringLiteral("hidden")) ==
+                        QJsonArray::fromStringList(expected.hidden),
+                "storage and presentation must agree on the magnifier layout migration");
+    };
+    ScreenshotToolbarLayout current{layout::defaultPositions(), {}};
+    require(current.positions.contains(grouped) &&
+                layout::stackPresentation(grouped, [](const QString&) { return true; })
+                        .popoverItemIds == QStringList{QStringLiteral("highlighter"),
+                                                       QStringLiteral("spotlight"), magnifier},
+            "the magnifier must appear at the right of the Highlight and Spotlight popup");
+    auto legacy = current;
+    for (auto& position : legacy.positions)
+        position.removeAll(magnifier);
+    auto migrated = layout::normalizedLayout(legacy);
+    require(migrated == current, "a previous default layout must upgrade in place");
+    checkSchema(legacy, migrated);
+    auto customized = legacy;
+    std::swap(customized.positions[2], customized.positions[3]);
+    migrated = layout::normalizedLayout(customized);
+    auto expected = customized;
+    for (auto& position : expected.positions) {
+        if (position.contains(QStringLiteral("highlighter")) &&
+            position.contains(QStringLiteral("spotlight")))
+            position.prepend(magnifier);
+    }
+    require(migrated == expected, "a customized layout must retain its existing stacks and order");
+    checkSchema(customized, migrated);
+    auto split = customized;
+    for (qsizetype index = 0; index < split.positions.size(); ++index) {
+        if (split.positions[index].contains(QStringLiteral("spotlight"))) {
+            split.positions[index].removeAll(QStringLiteral("spotlight"));
+            split.positions.insert(index + 1, {QStringLiteral("spotlight")});
+            break;
+        }
+    }
+    expected = split;
+    for (qsizetype index = 0; index < expected.positions.size(); ++index) {
+        if (expected.positions[index] == QStringList{QStringLiteral("spotlight")}) {
+            expected.positions.insert(index + 1, {magnifier});
+            break;
+        }
+    }
+    migrated = layout::normalizedLayout(split);
+    require(migrated == expected,
+            "separated customized tools must keep their individual positions");
+    checkSchema(split, migrated);
+    auto hidden = legacy;
+    hidden.hidden.append(magnifier);
+    require(layout::normalizedLayout(hidden) == hidden,
+            "explicitly hidden magnifiers must stay hidden");
+    checkSchema(hidden, hidden);
+    auto relocated = legacy;
+    relocated.positions.prepend({magnifier});
+    require(layout::normalizedLayout(relocated) == relocated,
+            "an explicit magnifier placement must be retained");
+    checkSchema(relocated, relocated);
+}
+
+void magnifierControlsPatchIndependentProperties() {
+    using Tool = ScreenshotToolPalette::Tool;
+    ScreenshotToolPalette::Options options;
+    options.showMagnifierTool = true;
+    options.showSpotlightTool = true;
+    options.showPenHighlightTool = true;
+    options.styleDefaults = snow_shot::presentation::screenshotCanvasStyleDefaults();
+    options.styleDefaults.rectangle.stroke = QColor(QStringLiteral("#1677ff"));
+    options.styleDefaults.rectangle.strokeWidth = 9;
+    ScreenshotToolPalette palette(options);
+    int activations = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::magnifierRequested, [&] { ++activations; });
+    require(palette.activateDrawingShortcut(QStringLiteral("magnifier")) && activations == 1 &&
+                palette.activeTool() == Tool::Magnifier,
+            "the magnifier must use the common tool activation path");
+    palette.show();
+    QCoreApplication::processEvents();
+    const auto shapes = [&]() {
+        auto* root =
+            palette.findChild<QWidget*>(QStringLiteral("screenshotMagnifierShapeButtonGroup"));
+        return root ? root->findChild<adqt::widgets::AdRadioButtonGroup*>() : nullptr;
+    };
+    const auto factor = [&]() {
+        return dynamic_cast<IconNumericValuePreviewButton*>(
+            palette.findChild<QWidget*>(QStringLiteral("screenshotMagnifierFactorButton")));
+    };
+    const auto radius = [&]() {
+        return dynamic_cast<CornerRadiusEditorButton*>(
+            palette.findChild<QWidget*>(QStringLiteral("screenshotMagnifierCornerRadiusButton")));
+    };
+    const auto ratio = [&]() {
+        return dynamic_cast<IconNumericValuePreviewButton*>(
+            palette.findChild<QWidget*>(QStringLiteral("screenshotMagnifierArrowRatioButton")));
+    };
+    const auto toggle = [&]() {
+        return palette.findChild<adqt::widgets::AdButton*>(
+            QStringLiteral("screenshotMagnifierShowLeaderButton"));
+    };
+    const auto leader = [&]() { return controlWithAccessibleName(palette, "Leader line type"); };
+    const auto initial = palette.creationStyleDefaults().magnifier;
+    require(
+        shapes() && shapes()->buttons().size() == 3 && factor() && radius() && ratio() &&
+            toggle() && leader() && initial.stroke == QColor(QStringLiteral("#f5222d")) &&
+            initial.strokeWidth == 2 && initial.factor == 2 && initial.showLeader &&
+            initial.leaderArrowhead == SnowCanvasArrowhead::None && initial.arrowRatio == 1.0 &&
+            ratio()->valueText() == QStringLiteral("1.0") &&
+            initial.cornerRadii == SnowCanvasCornerRadii{6, 6, 6, 6} && radius()->value() == 6 &&
+            factor()->valueText() == QStringLiteral("2.0×") &&
+            toggle()->accentRole() == adqt::widgets::AdButton::AccentRole::Primary &&
+            leader()->isEnabled(),
+        "magnifier controls must use independent Shape-like defaults and an active leader toggle");
+    const auto verifyLayout = [&]() {
+        QLayout* row = radius()->parentWidget()->layout();
+        QList<QWidget*> widgets;
+        for (int index = 0; index < row->count(); ++index) {
+            if (QWidget* widget = row->itemAt(index)->widget())
+                widgets.append(widget);
+        }
+        const qsizetype factorIndex = widgets.indexOf(factor());
+        const qsizetype leaderIndex = widgets.indexOf(
+            palette.findChild<QWidget*>(QStringLiteral("screenshotMagnifierLeaderTypeButton")));
+        require(factorIndex >= 0 && factorIndex + 1 < widgets.size() &&
+                    widgets.at(factorIndex + 1) == toggle(),
+                "magnifier factor must directly precede the leader toggle without a separator");
+        require(leaderIndex > 0 && widgets.at(leaderIndex - 1) == ratio(),
+                "magnifier arrow proportions must directly precede the arrowhead editor");
+        require(leaderIndex >= 0 && leaderIndex + 2 == widgets.size() - 1 &&
+                    qobject_cast<QFrame*>(widgets.at(leaderIndex + 1)) != nullptr &&
+                    widgets.constLast() == radius(),
+                "magnifier corner radius must be the last control with a separator to its left");
+    };
+    verifyLayout();
+    SnowCanvasMagnifierStyle emitted = initial;
+    quint32 properties = 0;
+    bool creationDefaults = true;
+    palette.setStyleEditHandler([&](const SnowCanvasStyleEdit& edit) {
+        const auto* magnifier = std::get_if<SnowCanvasMagnifierEdit>(&edit);
+        require(magnifier != nullptr, "magnifier controls must emit magnifier style patches");
+        emitted = magnifier->style;
+        properties = magnifier->properties;
+        creationDefaults = magnifier->creationDefaults;
+        palette.rememberStyleEdit(edit);
+        return true;
+    });
+    for (auto shape : {SnowCanvasRectangleShape::Ellipse, SnowCanvasRectangleShape::Diamond,
+                       SnowCanvasRectangleShape::Rectangle}) {
+        shapes()->button(static_cast<int>(shape))->click();
+        require(emitted.shape == shape && properties == SnowCanvasMagnifierStylePropertyShape,
+                "magnifier shape choices must patch only shape");
+        require(radius()->isHidden() == (shape == SnowCanvasRectangleShape::Ellipse),
+                "magnifier radius editing applies to rectangle and diamond lenses");
+        verifyLayout();
+    }
+    const auto wheel = [&](QWidget* control, int delta) {
+        const QPoint point = control->rect().center();
+        QWheelEvent event(QPointF(point), control->mapToGlobal(point), QPoint(), QPoint(0, delta),
+                          Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        return palette.handleToolbarWheel(&event) && event.isAccepted();
+    };
+    require(wheel(ratio(), 120) && emitted.arrowRatio == 1.1 &&
+                properties == SnowCanvasMagnifierStylePropertyArrowRatio && creationDefaults &&
+                emitted.factor == 2 && emitted.strokeWidth == 2,
+            "magnifier proportions must use the Arrow control's tenths and independent patch");
+    for (int index = 0; index < 40; ++index)
+        wheel(ratio(), 120);
+    require(emitted.arrowRatio == 3.0 && ratio()->valueText() == QStringLiteral("3.0"),
+            "magnifier arrow proportions must stop at the Arrow control's maximum");
+    for (int index = 0; index < 40; ++index)
+        wheel(ratio(), -120);
+    require(emitted.arrowRatio == 0.5, "magnifier arrow proportions must stop at one half");
+    ratio()->click();
+    require(emitted.arrowRatio == 1.0,
+            "clicking magnifier proportions must restore the Arrow control's default");
+    shapes()->button(static_cast<int>(SnowCanvasRectangleShape::Diamond))->click();
+    require(wheel(radius(), 120) && emitted.shape == SnowCanvasRectangleShape::Diamond &&
+                emitted.cornerRadii == SnowCanvasCornerRadii{7, 7, 7, 7} &&
+                properties == SnowCanvasMagnifierStylePropertyCornerRadius && creationDefaults &&
+                emitted.factor == 2,
+            "radius wheel adjustments must patch only magnifier corners in one-pixel steps");
+    for (int index = 0; index < 100; ++index)
+        wheel(radius(), -120);
+    require(emitted.cornerRadii == SnowCanvasCornerRadii{},
+            "magnifier corner radii must stop at zero");
+    for (int index = 0; index < 100; ++index)
+        wheel(radius(), 120);
+    require(emitted.cornerRadii == SnowCanvasCornerRadii{83, 83, 83, 83},
+            "magnifier radius must use the Shape control's upper limit");
+    radius()->click();
+    require(emitted.cornerRadii == SnowCanvasCornerRadii{6, 6, 6, 6},
+            "clicking magnifier radius must restore the six-pixel default");
+    require(wheel(factor(), 120) && emitted.factor == 2.1 &&
+                properties == SnowCanvasMagnifierStylePropertyFactor && creationDefaults,
+            "factor wheel adjustments must use tenths and patch only the factor");
+    for (int index = 0; index < 100; ++index)
+        palette.stepMagnifierFactor(1);
+    require(emitted.factor == 10 && factor()->valueText() == QStringLiteral("10.0×"),
+            "factor adjustments must stop at ten");
+    for (int index = 0; index < 100; ++index)
+        palette.stepMagnifierFactor(-1);
+    require(emitted.factor == 1, "factor adjustments must stop at one");
+    factor()->click();
+    require(emitted.factor == 2, "clicking the numeric factor must restore its default");
+    clickStyleControl(palette, "Magnifier stroke width 4");
+    require(emitted.strokeWidth == 4 && properties == SnowCanvasMagnifierStylePropertyStrokeWidth,
+            "magnifier width presets must commit independently");
+    auto* color = palette.findChild<adqt::widgets::AdColorPicker*>(
+        QStringLiteral("screenshotMagnifierColorPicker"));
+    require(color && color->alphaChannelEnabled(), "magnifier border colors must support alpha");
+    color->commitValue(adqt::widgets::AdColorValue::solid(QColor(23, 67, 109, 128)));
+    require(emitted.stroke == QColor(23, 67, 109, 128) &&
+                properties == SnowCanvasMagnifierStylePropertyStrokeColor,
+            "magnifier border color must preserve alpha and patch only color");
+    toggle()->click();
+    require(!emitted.showLeader && properties == SnowCanvasMagnifierStylePropertyShowLeader &&
+                !leader()->isEnabled() && !ratio()->isEnabled() &&
+                toggle()->accentRole() == adqt::widgets::AdButton::AccentRole::Neutral,
+            "hiding the leader must disable its type control and clear the active toggle style");
+    require(!wheel(ratio(), 120) && emitted.arrowRatio == 1.0,
+            "disabled magnifier proportion controls must ignore wheel input");
+    toggle()->click();
+    require(emitted.showLeader && leader()->isEnabled() && ratio()->isEnabled(),
+            "enabling the leader must restore type editing");
+    const char* arrowheadTooltips[] = {
+        "End arrowhead none",
+        "End arrowhead standard",
+        "End arrowhead bar",
+        "End arrowhead dot",
+        "End arrowhead circle",
+        "End arrowhead circle outline",
+        "End arrowhead triangle",
+        "End arrowhead triangle outline",
+        "End arrowhead diamond",
+        "End arrowhead diamond outline",
+        "End arrowhead crowfoot one",
+        "End arrowhead crowfoot many",
+        "End arrowhead crowfoot one or many",
+        "End arrowhead indented triangle",
+    };
+    for (int iteration = 0; iteration < static_cast<int>(std::size(arrowheadTooltips));
+         ++iteration) {
+        const int index = (iteration + 1) % static_cast<int>(std::size(arrowheadTooltips));
+        auto* popup = showPopoverForTrigger(leader());
+        require(popoverButtonWithTooltip(popup, arrowheadTooltips[index]) != nullptr,
+                "every Arrow endpoint type must be available for the magnifier leader");
+        clickPopoverStyleControl(popup, arrowheadTooltips[index]);
+        require(emitted.leaderArrowhead == static_cast<SnowCanvasArrowhead>(index) &&
+                    properties == SnowCanvasMagnifierStylePropertyLeaderArrowhead,
+                "leader endpoint choices must commit only the endpoint");
+    }
+    wheel(ratio(), 120);
+    const auto remembered = palette.creationStyleDefaults().magnifier;
+    require(palette.creationStyleDefaults().rectangle == options.styleDefaults.rectangle,
+            "magnifier edits must leave the saved Shape style independent");
+    require(palette.creationStyleDefaults().arrow == options.styleDefaults.arrow,
+            "magnifier proportions must leave Arrow defaults independent");
+    for (int index = 0; index < 4; ++index) {
+        palette.setActiveTool(Tool::Shape);
+        palette.setActiveTool(Tool::Arrow);
+        palette.setActiveTool(Tool::Magnifier);
+        require(factor() && shapes() && leader() && radius() && ratio() && radius()->value() == 6 &&
+                    ratio()->valueText() == QStringLiteral("1.1") &&
+                    palette.creationStyleDefaults().magnifier == remembered,
+                "rebuilding the magnifier row must retain its own controls and defaults");
+        verifyLayout();
+    }
+    SnowCanvasStyleToolbarState selected;
+    selected.source = SnowCanvasStyleToolbarSource::SelectedMagnifier;
+    selected.selectedElementCount = 2;
+    selected.magnifierStyle = remembered;
+    selected.magnifierStyle.factor = 3;
+    selected.magnifierStyleMixed =
+        SnowCanvasMagnifierStylePropertyShape | SnowCanvasMagnifierStylePropertyFactor |
+        SnowCanvasMagnifierStylePropertyArrowRatio | SnowCanvasMagnifierStylePropertyCornerRadius;
+    palette.setStyleToolbarState(selected);
+    require(shapes()->checkedId() == -1 && factor()->valueText() == QStringLiteral("-×") &&
+                ratio()->valueText() == QStringLiteral("-") &&
+                palette.creationStyleDefaults().magnifier == remembered,
+            "mixed selected magnifiers must clear their controls and preserve creation defaults");
+    verifyLayout();
+    ratio()->click();
+    require(!creationDefaults && emitted.arrowRatio == 1.0 &&
+                properties == SnowCanvasMagnifierStylePropertyArrowRatio &&
+                ratio()->valueText() == QStringLiteral("1.0") &&
+                factor()->valueText() == QStringLiteral("-×") && shapes()->checkedId() == -1 &&
+                palette.creationStyleDefaults().magnifier == remembered,
+            "selected proportion edits clear only their mixed flag and preserve saved defaults");
+    factor()->click();
+    require(
+        !creationDefaults && emitted.factor == 2 &&
+            properties == SnowCanvasMagnifierStylePropertyFactor && shapes()->checkedId() == -1 &&
+            palette.creationStyleDefaults().magnifier == remembered,
+        "a selected factor edit must preserve the other mixed properties and creation defaults");
+    require(radius()->valueText() == QStringLiteral("-"),
+            "mixed magnifier corner values must be shown in the control");
+    radius()->click();
+    require(
+        !creationDefaults && radius()->valueText() == QStringLiteral("6") &&
+            emitted.cornerRadii == SnowCanvasCornerRadii{6, 6, 6, 6} &&
+            properties == SnowCanvasMagnifierStylePropertyCornerRadius &&
+            shapes()->checkedId() == -1 && palette.creationStyleDefaults().magnifier == remembered,
+        "selected corner edits must clear only their mixed flag and preserve creation defaults");
+}
+
+void magnifierStylesPersistAndIgnoreSelectedEdits() {
+    using namespace snow_shot::presentation;
+    const auto original = screenshotCanvasToolStyleDefaults();
+    const auto restore =
+        qScopeGuard([&] { static_cast<void>(persistScreenshotCanvasToolStyles(original)); });
+    auto defaults = screenshotCanvasStyleDefaults();
+    defaults.rectangle.strokeWidth = 9;
+    defaults.magnifier.cornerRadii = {3, 6, 9, 12};
+    defaults.magnifier.arrowRatio = 2.3;
+    require(persistScreenshotCanvasToolStyles(defaults), "prepare independent magnifier defaults");
+    ScreenshotToolPalette::Options options;
+    options.showMagnifierTool = true;
+    options.styleDefaults = screenshotCanvasToolStyleDefaults();
+    ScreenshotToolPalette palette(options);
+    SnowCanvasWidget canvas;
+    ScreenshotStyleBinding binding(palette, canvas, &palette);
+    applyScreenshotCanvasToolStyles(canvas, options.styleDefaults);
+    QObject::connect(&canvas, &SnowCanvasWidget::styleToolbarStateChanged, &palette,
+                     [&] { palette.setStyleToolbarState(canvas.canvasStyleToolbarState()); });
+    require(canvas.setCanvasTool(SnowCanvasTool::Magnifier),
+            "activate a magnifier for style persistence");
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Magnifier);
+    palette.setStyleToolbarState(canvas.canvasStyleToolbarState());
+    palette.stepMagnifierFactor(1);
+    clickStyleControl(palette, "Magnifier stroke width 4");
+    auto saved = screenshotCanvasToolStyleDefaults();
+    require(
+        binding.lastSaveSucceeded() == true && saved.magnifier.factor == 2.1 &&
+            saved.magnifier.strokeWidth == 4 &&
+            saved.magnifier.cornerRadii == SnowCanvasCornerRadii{3, 6, 9, 12} &&
+            saved.magnifier.arrowRatio == 2.3 && saved.rectangle.strokeWidth == 9,
+        "bound magnifier controls must persist their properties without changing Shape defaults");
+    auto selected = saved.magnifier;
+    selected.factor = 7;
+    selected.arrowRatio = 0.5;
+    require(persistScreenshotCanvasStyleEdit(
+                SnowCanvasMagnifierEdit{selected, SnowCanvasMagnifierStyleAllProperties, false}) &&
+                screenshotCanvasToolStyleDefaults().magnifier == saved.magnifier,
+            "selected magnifier style edits must never replace creation preferences");
+    auto& storage = snow_shot::storage::ApplicationStorage::instance();
+    require(storage.configuration().flushNow().success, "flush magnifier preferences to disk");
+    snow_shot::storage::ConfigurationStore reopened(
+        QDir(storage.configurationDirectory()).filePath(QStringLiteral("config.json")), true,
+        false);
+    require(reopened.value(QStringLiteral("drawing/magnifier_style")) ==
+                storage.configuration().value(QStringLiteral("drawing/magnifier_style")),
+            "magnifier preferences must survive reopening configuration");
+    SnowCanvasWidget restored;
+    applyScreenshotCanvasToolStyles(restored, saved);
+    require(restored.canvasMagnifierStyle() == saved.magnifier,
+            "restoring tool styles must apply all magnifier defaults to a new canvas");
+    require(storage.configuration().setValue(
+                QStringLiteral("drawing/magnifier_style"),
+                QJsonObject{{QStringLiteral("factor"), 100},
+                            {QStringLiteral("arrow_ratio"), 100},
+                            {QStringLiteral("stroke_width"), -2},
+                            {QStringLiteral("shape"), 500},
+                            {QStringLiteral("stroke"), QStringLiteral("invalid")}}),
+            "prepare malformed saved magnifier fields");
+    const auto normalized = screenshotCanvasToolStyleDefaults().magnifier;
+    require(
+        normalized.factor == 10 && normalized.strokeWidth == 0 && normalized.arrowRatio == 3.0 &&
+            normalized.shape == SnowCanvasRectangleShape::Rectangle &&
+            normalized.stroke == defaults.magnifier.stroke,
+        "saved magnifier values must clamp numeric ranges and retain defaults for invalid fields");
+}
+
+void magnifierStyleWheelsPersistCompletedSteps() {
+    using namespace snow_shot::presentation;
+    const auto original = screenshotCanvasToolStyleDefaults();
+    const auto restore =
+        qScopeGuard([&] { static_cast<void>(persistScreenshotCanvasToolStyles(original)); });
+    auto defaults = original;
+    defaults.magnifier.factor = 2;
+    require(persistScreenshotCanvasToolStyles(defaults), "prepare magnifier wheel preferences");
+    ScreenshotToolPalette::Options options;
+    options.showMagnifierTool = true;
+    options.styleDefaults = defaults;
+    ScreenshotToolPalette palette(options);
+    SnowCanvasRuntime runtime;
+    SnowCanvasWidget canvas(runtime);
+    canvas.resize(400, 300);
+    canvas.show();
+    QApplication::processEvents();
+    applyScreenshotCanvasToolStyles(canvas, defaults);
+    ScreenshotStyleBinding binding(palette, canvas, &palette);
+    QObject::connect(&canvas, &SnowCanvasWidget::styleToolbarStateChanged, &palette,
+                     [&] { palette.setStyleToolbarState(canvas.canvasStyleToolbarState()); });
+    int opacityEdits = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::selectionOpacityChanged, &canvas,
+                     [&](qreal opacity) {
+                         ++opacityEdits;
+                         require(canvas.setSelectedOpacity(opacity),
+                                 "selection opacity commands must reach the canvas");
+                     });
+    require(canvas.setViewportCamera(200, 150, 1) &&
+                canvas.setCanvasTool(SnowCanvasTool::Magnifier),
+            "activate the pinned-style magnifier wheel fixture");
+    canvas.setWheelZoomEnabled(false);
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Magnifier);
+    palette.setStyleToolbarState(canvas.canvasStyleToolbarState());
+    int commits = 0;
+    QObject::connect(&canvas, &SnowCanvasWidget::styleEditCommitted, &palette,
+                     [&](const SnowCanvasStyleEdit& edit) {
+                         const auto* patch = std::get_if<SnowCanvasMagnifierEdit>(&edit);
+                         require(patch &&
+                                     patch->properties == SnowCanvasMagnifierStylePropertyFactor,
+                                 "style wheel commits must patch only the magnifier factor");
+                         ++commits;
+                     });
+    WheelStepAccumulator accumulator;
+    const auto wheel = [&](int pixels, int angle) {
+        QWheelEvent event(QPointF(40, 35), canvas.mapToGlobal(QPoint(40, 35)), QPoint(0, pixels),
+                          QPoint(0, angle), Qt::NoButton, Qt::NoModifier, Qt::ScrollUpdate, false);
+        require(handleScreenshotStyleWheel(palette, canvas, event, accumulator),
+                "pinned style wheels must route magnifier input even with camera zoom disabled");
+    };
+    const auto camera = canvas.canvasToViewTransform();
+    for (int index = 0; index < 9; ++index)
+        wheel(10, 120);
+    require(commits == 0 && !binding.lastSaveSucceeded().has_value() &&
+                screenshotCanvasToolStyleDefaults().magnifier == defaults.magnifier,
+            "incomplete precise gestures must not save magnifier preferences");
+    wheel(10, 120);
+    require(commits == 1 && binding.lastSaveSucceeded() == true &&
+                canvas.canvasMagnifierStyle().factor == 2.1 &&
+                screenshotCanvasToolStyleDefaults().magnifier.factor == 2.1 &&
+                palette.creationStyleDefaults().magnifier.factor == 2.1,
+            "completed precise gestures must save and remember the actual engine factor");
+    wheel(0, 360);
+    require(commits == 2 && canvas.canvasMagnifierStyle().factor == 2.4 &&
+                screenshotCanvasToolStyleDefaults().magnifier.factor == 2.4 &&
+                canvas.canvasToViewTransform() == camera,
+            "coalesced wheel input must save one completed edit and preserve the camera");
+    const auto saved = screenshotCanvasToolStyleDefaults();
+    const auto mouse = [&](QEvent::Type type, QPointF point, Qt::MouseButton button,
+                           Qt::MouseButtons buttons) {
+        QMouseEvent event(type, point, point, point, button, buttons, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &event);
+    };
+    mouse(QEvent::MouseButtonPress, {20, 20}, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseMove, {60, 50}, Qt::NoButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, {60, 50}, Qt::LeftButton, Qt::NoButton);
+    mouse(QEvent::MouseButtonPress, {40, 35}, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, {40, 35}, Qt::LeftButton, Qt::NoButton);
+    require(canvas.canvasStyleToolbarState().source ==
+                SnowCanvasStyleToolbarSource::SelectedMagnifier,
+            "select the magnifier before editing its factor through pinned style wheels");
+    wheel(100, 0);
+    require(commits == 3 && canvas.canvasMagnifierStyle().factor == 2.5 &&
+                screenshotCanvasToolStyleDefaults() == saved &&
+                palette.creationStyleDefaults().magnifier == saved.magnifier,
+            "selected magnifier wheel edits must preserve saved creation preferences");
+    require(canvas.setCanvasTool(SnowCanvasTool::Select),
+            "select pinned magnifiers through the Select tool");
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Select);
+    mouse(QEvent::MouseButtonPress, {40, 35}, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, {40, 35}, Qt::LeftButton, Qt::NoButton);
+    require(canvas.canvasStyleToolbarState().source ==
+                SnowCanvasStyleToolbarSource::SelectedMagnifier,
+            "the pinned Select tool must expose the selected magnifier factor");
+    const auto magnifier = [&] {
+        const auto elementSlots = QJsonDocument::fromJson(runtime.serializeDocumentSession())
+                                      .object()
+                                      .value(QStringLiteral("document"))
+                                      .toObject()
+                                      .value(QStringLiteral("slots"))
+                                      .toArray();
+        for (const auto& slot : elementSlots) {
+            const auto data = slot.toObject().value(QStringLiteral("data")).toObject();
+            if (data.contains(QStringLiteral("Magnifier")))
+                return data.value(QStringLiteral("Magnifier")).toObject();
+        }
+        require(false, "the pinned wheel fixture must retain its magnifier");
+        return QJsonObject();
+    };
+    const auto beforeSelectedWheel = magnifier();
+    wheel(-90, -120);
+    require(commits == 3 && opacityEdits == 0 && magnifier() == beforeSelectedWheel,
+            "partial Select-tool wheel gestures must leave magnifier factor and opacity unchanged");
+    wheel(-10, -120);
+    require(commits == 4 && canvas.canvasMagnifierStyle().factor == 2.4 && opacityEdits == 0 &&
+                magnifier().value(QStringLiteral("opacity")) ==
+                    beforeSelectedWheel.value(QStringLiteral("opacity")) &&
+                screenshotCanvasToolStyleDefaults() == saved &&
+                palette.creationStyleDefaults().magnifier == saved.magnifier,
+            "pinned Select-tool wheels must adjust factors without changing opacity or defaults");
+    wheel(30, 0);
+    const auto beforeModifiedWheel = magnifier();
+    for (const auto modifiers : {Qt::ControlModifier, Qt::AltModifier, Qt::MetaModifier}) {
+        QWheelEvent event(QPointF(40, 35), canvas.mapToGlobal(QPoint(40, 35)), QPoint(0, 100),
+                          QPoint(0, 120), Qt::NoButton, modifiers, Qt::ScrollUpdate, false);
+        require(!handleScreenshotStyleWheel(palette, canvas, event, accumulator) &&
+                    magnifier() == beforeModifiedWheel && commits == 4 && opacityEdits == 0 &&
+                    canvas.canvasToViewTransform() == camera,
+                "modified pinned magnifier wheels must preserve factors, opacity and camera");
+    }
+    wheel(70, 0);
+    require(commits == 4 && canvas.canvasMagnifierStyle().factor == 2.4,
+            "modified pinned input must discard incomplete selected factor gestures");
+    wheel(30, 0);
+    require(commits == 5 && canvas.canvasMagnifierStyle().factor == 2.5 && opacityEdits == 0,
+            "pinned selected factor gestures must resume after modified input");
+    require(canvas.resetEditingState(), "clear the pinned magnifier adjustment target");
+    const auto withoutTarget = magnifier();
+    QWheelEvent event(QPointF(100, 100), canvas.mapToGlobal(QPoint(100, 100)), QPoint(),
+                      QPoint(0, -120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+    require(!handleScreenshotStyleWheel(palette, canvas, event, accumulator) &&
+                magnifier() == withoutTarget && commits == 5 && opacityEdits == 0,
+            "Select-tool wheels without an adjustment target must not edit magnifiers or opacity");
+}
+
+void disabledSelectionOpacityRejectsWheelSteps() {
+    ScreenshotToolPalette palette(ScreenshotToolPalette::Options{});
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Select);
+    int edits = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::selectionOpacityChanged, &palette,
+                     [&](qreal) { ++edits; });
+    auto* slider = palette.findChild<adqt::widgets::AdSlider*>(
+        QStringLiteral("screenshotSelectionOpacitySlider"));
+    require(slider != nullptr, "Select must materialize the selection opacity control");
+    SnowCanvasStyleToolbarState rectangle;
+    rectangle.source = SnowCanvasStyleToolbarSource::SelectedRectangle;
+    rectangle.selectedElementCount = 1;
+    rectangle.shapeStyle.opacity = 0.5;
+    palette.setStyleToolbarState(rectangle);
+    require(slider->isEnabled() && slider->value() == 50,
+            "a selected rectangle must enable its opacity control");
+    for (const auto source : {SnowCanvasStyleToolbarSource::SelectedMagnifier,
+                              SnowCanvasStyleToolbarSource::SelectedSpotlight}) {
+        SnowCanvasStyleToolbarState selected;
+        selected.source = source;
+        selected.selectedElementCount = 1;
+        palette.setStyleToolbarState(selected);
+        require(!slider->isEnabled(),
+                "changing the selected kind must disable opacity even with the same item count");
+        palette.setSelectionOpacity(0.65, true);
+        const auto before = slider->value();
+        require(!palette.stepSelectionOpacity(-1) && !palette.stepSelectionOpacity(1) &&
+                    slider->value() == before && slider->property("mixed").toBool() && edits == 0,
+                "disabled opacity steps must preserve mixed values without emitting commands");
+    }
+    palette.setStyleToolbarState(rectangle);
+    require(slider->isEnabled() && palette.stepSelectionOpacity(-1) && slider->value() == 45 &&
+                edits == 1,
+            "enabled selection opacity controls must retain their ordinary five-percent steps");
+}
+
+void magnifierControlsRetranslateAndRenderPreviews() {
+    using namespace snow_shot::presentation;
+    auto& language = LanguageManager::instance();
+    auto& theme = styles::ThemeManager::instance();
+    const auto previousTheme = theme.themeMode();
+    const auto restore = qScopeGuard([&] {
+        theme.setThemeMode(previousTheme);
+        adqt::theme::ThemeManager::instance().applyTo(*qApp);
+        require(language.setLanguage(QStringLiteral("en_US")),
+                "restore the magnifier test language");
+    });
+    ScreenshotToolPalette::Options options;
+    options.showMagnifierTool = true;
+    options.showSpotlightTool = true;
+    options.showPenHighlightTool = true;
+    ScreenshotToolPalette palette(options);
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Magnifier);
+    palette.show();
+    for (const auto& locale :
+         {QStringLiteral("en_US"), QStringLiteral("zh_CN"), QStringLiteral("zh_TW")}) {
+        require(language.setLanguage(locale), "magnifier translations must load");
+        QCoreApplication::processEvents();
+        auto* factor =
+            palette.findChild<QWidget*>(QStringLiteral("screenshotMagnifierFactorButton"));
+        auto* leader =
+            palette.findChild<QWidget*>(QStringLiteral("screenshotMagnifierShowLeaderButton"));
+        auto* ratio =
+            palette.findChild<QWidget*>(QStringLiteral("screenshotMagnifierArrowRatioButton"));
+        require(factor && leader && ratio &&
+                    ratio->toolTip() ==
+                        QCoreApplication::translate("ScreenshotToolPalette",
+                                                    "Arrow ratio (scroll to adjust)") &&
+                    factor->toolTip() ==
+                        QCoreApplication::translate("ScreenshotToolPalette",
+                                                    "Magnification factor (scroll to adjust)") &&
+                    leader->accessibleName() ==
+                        QCoreApplication::translate("ScreenshotToolPalette", "Show leader line"),
+                "magnifier tooltip and accessible names must retranslate in place");
+    }
+    require(language.setLanguage(QStringLiteral("en_US")),
+            "restore English for magnifier previews");
+    const QString directory = qEnvironmentVariable("SNOW_TEST_MAGNIFIER_PREVIEW_DIR");
+    if (!directory.isEmpty())
+        require(QDir::isAbsolutePath(directory) && QDir().mkpath(directory),
+                "create the magnifier preview directory");
+    for (bool dark : {false, true}) {
+        theme.setThemeMode(dark ? styles::ThemeMode::Dark : styles::ThemeMode::Light);
+        adqt::theme::ThemeManager::instance().applyTo(*qApp);
+        const auto scheme = styles::generateThemeColorScheme();
+        for (qreal dpr : {1.0, 1.25, 1.5, 2.0}) {
+            palette.setPhysicalScale(dpr);
+            palette.prepareForDisplay();
+            QCoreApplication::processEvents();
+            const QString suffix = QStringLiteral("%1-%2").arg(
+                dark ? QStringLiteral("dark") : QStringLiteral("light"), QString::number(dpr));
+            const QVector<adqt::icons::IconRef> icons{
+                snow_shot::presentation::icons::custom::outlined::ToolMagnifier(),
+                snow_shot::presentation::icons::custom::outlined::MagnificationFactor(),
+                snow_shot::presentation::icons::custom::outlined::ShowLeaderLine()};
+            QImage sheet(QSize(qRound(120 * dpr), qRound(40 * dpr)), QImage::Format_RGBA8888);
+            sheet.setDevicePixelRatio(dpr);
+            sheet.fill(scheme.map.colorBgContainer);
+            QPainter painter(&sheet);
+            for (qsizetype index = 0; index < icons.size(); ++index) {
+                const auto pixmap = snow_shot::presentation::icons::renderTintedIconPixmap(
+                    icons[index], QSize(20, 20), dpr, scheme.map.colorText);
+                require(!pixmap.isNull() && pixmap.width() == qRound(20 * dpr),
+                        "magnifier icons must render at every supported display scale");
+                painter.drawPixmap(QPoint(static_cast<int>(index) * 40 + 10, 10), pixmap);
+            }
+            painter.end();
+            if (!directory.isEmpty()) {
+                require(palette.grab().save(QDir(directory).filePath(
+                            QStringLiteral("toolbar-") + suffix + QStringLiteral(".png"))) &&
+                            palette.stylePanel()->grab().save(QDir(directory).filePath(
+                                QStringLiteral("settings-") + suffix + QStringLiteral(".png"))) &&
+                            sheet.save(QDir(directory).filePath(QStringLiteral("icons-") + suffix +
+                                                                QStringLiteral(".png"))),
+                        "save current magnifier toolbar and icons in each theme and scale");
+            }
+        }
+    }
 }
 
 void angleSettingsAndWheelPreserveIndependentProperties() {
@@ -17295,6 +17963,26 @@ int main(int argc, char** argv) {
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
+    if (application.arguments().contains(QStringLiteral("--selected-magnifier-wheel-only"))) {
+        magnifierStyleWheelsPersistCompletedSteps();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--disabled-selection-opacity-only"))) {
+        disabledSelectionOpacityRejectsWheelSteps();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--magnifier-only"))) {
+        magnifierLayoutMigrationPreservesCustomization();
+        magnifierControlsPatchIndependentProperties();
+        magnifierStylesPersistAndIgnoreSelectedEdits();
+        magnifierStyleWheelsPersistCompletedSteps();
+        disabledSelectionOpacityRejectsWheelSteps();
+        magnifierControlsRetranslateAndRenderPreviews();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--angle-only"))) {
         angleSettingsAndWheelPreserveIndependentProperties();
         runAngleStyleBindingTests();
@@ -17628,6 +18316,12 @@ int main(int argc, char** argv) {
     shapeSelectorIsExclusiveToTheShapeTool();
     arrowStyleUsesScreenshotCreationColorOverride();
     distanceSettingsExposeIndependentPropertiesAndHoverWheel();
+    magnifierLayoutMigrationPreservesCustomization();
+    magnifierControlsPatchIndependentProperties();
+    magnifierStylesPersistAndIgnoreSelectedEdits();
+    magnifierStyleWheelsPersistCompletedSteps();
+    disabledSelectionOpacityRejectsWheelSteps();
+    magnifierControlsRetranslateAndRenderPreviews();
     angleSettingsAndWheelPreserveIndependentProperties();
     distanceActualValueUpdatesTheCanvasAndUndo();
     arrowRatioEditorAdjustsAndResets();

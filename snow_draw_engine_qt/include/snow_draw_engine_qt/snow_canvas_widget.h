@@ -70,12 +70,20 @@ class SnowCanvasWidget : public QWidget {
     void previewCanvasSpotlightConfig(const SnowCanvasSpotlightConfig& config);
     SnowCanvasDistanceStyle canvasDistanceStyle() const;
     SnowCanvasAngleStyle canvasAngleStyle() const;
+    SnowCanvasMagnifierStyle canvasMagnifierStyle() const;
+    bool setCanvasMagnifierStyle(const SnowCanvasMagnifierStyle& style,
+                                 quint32 properties = SnowCanvasMagnifierStyleAllProperties);
     bool setCanvasAngleStyle(
         const SnowCanvasAngleStyle& style,
         quint32 properties = static_cast<quint32>(SnowCanvasAngleStyleProperty::All));
     bool setCanvasAngleStylePatch(const SnowCanvasAngleStyle& style, quint32 properties);
     // Adjusts the third-point preview, otherwise an angle-only selection, in radians.
     bool adjustAngleValue(double deltaRadians);
+    // Factor-wheel ownership follows the active tool or selection, including in host routers.
+    bool hasMagnifierAdjustmentTarget() const;
+    // Accumulates wheel input for the active or selected magnifier independently of camera zoom.
+    // Publishes completed factor edits so hosts can remember creation preferences.
+    bool adjustMagnifierFromWheel(const QWheelEvent& event);
     bool setCanvasDistanceStyle(const SnowCanvasDistanceStyle& style,
                                 quint32 properties = SnowCanvasDistanceStyleAllProperties);
     // Source-image pixels per canvas unit, captured when a distance draft begins.
@@ -186,6 +194,8 @@ class SnowCanvasWidget : public QWidget {
     void setBaseImageSources(const QList<SnowCanvasBaseImageSource>& sources);
     void setBaseImageSources(const QList<SnowCanvasBaseImageSource>& sources,
                              const QRegion& damage);
+    // Repaint changed original pixels and magnifier destinations that sample them.
+    void updateBaseImageContent(const QRegion& damage);
     [[nodiscard]] QTransform canvasToViewTransform() const;
     QRect viewRectForCanvasRect(const QRectF& canvasRect, int paddingPx = 0) const;
 

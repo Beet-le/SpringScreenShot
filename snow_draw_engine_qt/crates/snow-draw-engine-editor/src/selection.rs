@@ -1,4 +1,6 @@
-use snow_draw_engine_document::{ArrowData, ElementId, FreeDrawData, PenFilterData, RectangleData};
+use snow_draw_engine_document::{
+    ArrowData, ElementId, FreeDrawData, MagnifierData, PenFilterData, RectangleData,
+};
 use snow_draw_engine_model::DocumentModel;
 
 use crate::{
@@ -121,12 +123,16 @@ impl Editor {
             arrows: next_arrows,
         };
         if self.state.selection != next {
+            if self.state.selection.ids != next.ids {
+                self.magnifier_wheel = None;
+            }
             if !matches!(&self.state.interaction, InteractionState::Idle) {
                 self.cancel_interaction();
             }
             self.state.selection = next;
             if document.is_none_or(|document| {
                 self.hovered_rect(document).is_none()
+                    && self.hovered_magnifier(document).is_none()
                     && self.hovered_free_draw(document).is_none()
                     && self.hovered_pen_filter(document).is_none()
                     && self.hovered_text_rect(document).is_none()
@@ -142,37 +148,11 @@ impl Editor {
         document: &DocumentModel,
         previous_selection: &SelectionState,
     ) {
-        let interaction_contains_missing = match &self.state.interaction {
-            InteractionState::CreatingSerialNumber(state) => {
-                document.serial_number(state.serial_id).is_err()
-                    || state
-                        .text
-                        .as_ref()
-                        .is_some_and(|(id, _)| document.text(*id).is_err())
-            }
-            InteractionState::PendingSelectionMove(state) => {
-                state
-                    .original_elements
-                    .iter()
-                    .any(|element| document.element(element.id).is_err())
-                    || state
-                        .original_arrows
-                        .iter()
-                        .any(|arrow| document.element(arrow.id).is_err())
-            }
-            InteractionState::EditingSelection(state) => {
-                state
-                    .original_elements
-                    .iter()
-                    .any(|element| document.element(element.id).is_err())
-                    || state
-                        .original_arrows
-                        .iter()
-                        .any(|arrow| document.element(arrow.id).is_err())
-            }
-            _ => false,
-        };
-        if interaction_contains_missing {
+        if self
+            .state
+            .interaction
+            .contains_missing_document_target(document)
+        {
             self.cancel_interaction();
         }
 
@@ -198,6 +178,9 @@ impl Editor {
         let current_arrows = Self::selection_arrows_from_ids(document, &filtered_ids);
         let selection_changed = previous_selection.ids != filtered_ids
             || previous_selection.primary != filtered_primary;
+        if selection_changed {
+            self.magnifier_wheel = None;
+        }
         let selection_members_changed = previous_selection.elements != current_elements
             || previous_selection.arrows != current_arrows;
         let next_elements = current_elements;
@@ -223,6 +206,7 @@ impl Editor {
         if self.state.selection != next {
             self.state.selection = next;
             if self.hovered_rect(document).is_none()
+                && self.hovered_magnifier(document).is_none()
                 && self.hovered_free_draw(document).is_none()
                 && self.hovered_pen_filter(document).is_none()
                 && self.hovered_text_rect(document).is_none()
@@ -249,7 +233,10 @@ impl Editor {
         if self.state.selection.contains(hovered_id) {
             return None;
         }
-        if document.pen_filter(hovered_id).is_ok() || document.free_draw(hovered_id).is_ok() {
+        if document.pen_filter(hovered_id).is_ok()
+            || document.free_draw(hovered_id).is_ok()
+            || document.magnifier(hovered_id).is_ok()
+        {
             return None;
         }
         let rect = document.element_rect_proxy(hovered_id)?;
@@ -257,6 +244,14 @@ impl Editor {
             .text(hovered_id)
             .is_err()
             .then(|| selection_outline_for_rect(&rect, self.camera().zoom))
+    }
+
+    pub(crate) fn hovered_magnifier(&self, document: &DocumentModel) -> Option<MagnifierData> {
+        let hovered_id = self.state.ui.hovered_element?;
+        if self.state.selection.contains(hovered_id) {
+            return None;
+        }
+        document.magnifier(hovered_id).ok().copied()
     }
 
     pub(crate) fn hovered_free_draw(&self, document: &DocumentModel) -> Option<FreeDrawData> {
@@ -345,6 +340,14 @@ impl Editor {
     ) -> Vec<SelectionRectState> {
         ids.iter()
             .filter_map(|id| {
+                if ids.len() > 1
+                    && let Ok(value) = document.magnifier(*id)
+                {
+                    return Some(SelectionRectState {
+                        id: *id,
+                        rect: value.group_rect(),
+                    });
+                }
                 document
                     .element_rect_proxy(*id)
                     .map(|rect| SelectionRectState { id: *id, rect })
@@ -371,7 +374,7 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use snow_draw_engine_core::EngineConfig;
+    use snow_draw_engine_core::{EngineConfig, Point};
     use snow_draw_engine_document::{
         ElementMeta, SerialNumberData, Transaction, resolve_serial_number_diameter,
     };
@@ -381,6 +384,50 @@ mod tests {
             (actual - expected).abs() <= f64::EPSILON,
             "expected {actual} to equal {expected}"
         );
+    }
+
+    #[test]
+    fn magnifier_hover_survives_other_selection_changes_and_hides_when_selected() {
+        let mut document = DocumentModel::new();
+        let magnifier_id = document.allocate_element_id();
+        let rectangle_id = document.allocate_element_id();
+        let value = MagnifierData::default();
+        let mut rectangle = value.source_rect();
+        rectangle.center = Point::new(200.0, 0.0);
+        let mut transaction = Transaction::new("insert magnifier and rectangle");
+        transaction.insert_magnifier(magnifier_id, ElementMeta::default(), value);
+        transaction.insert_rectangle(rectangle_id, ElementMeta::default(), rectangle);
+        document.apply_transaction(transaction).unwrap();
+
+        let mut editor = Editor::new(EngineConfig::default()).unwrap();
+        editor.set_hovered_element(Some(magnifier_id));
+        let presentation = editor.presentation_state(&document);
+        assert_eq!(presentation.hovered_rect, None);
+        assert_eq!(presentation.hovered_magnifier, Some(value));
+
+        editor.set_selection_state_with_document(
+            Some(&document),
+            vec![rectangle_id],
+            Some(rectangle_id),
+        );
+        assert_eq!(editor.hovered_magnifier(&document), Some(value));
+
+        let snapshot = editor.capture_document_sync_snapshot(&document);
+        rectangle.width += 10.0;
+        let mut transaction = Transaction::new("resize rectangle");
+        transaction.update_rectangle(rectangle_id, rectangle);
+        document.apply_transaction(transaction).unwrap();
+        editor.sync_selection_after_document_change(&document, &snapshot.selection);
+        assert_eq!(editor.hovered_magnifier(&document), Some(value));
+
+        editor.set_selection_state_with_document(
+            Some(&document),
+            vec![magnifier_id],
+            Some(magnifier_id),
+        );
+        let presentation = editor.presentation_state(&document);
+        assert_eq!(presentation.hovered_magnifier, None);
+        assert_eq!(presentation.selected_magnifiers.len(), 1);
     }
 
     #[test]

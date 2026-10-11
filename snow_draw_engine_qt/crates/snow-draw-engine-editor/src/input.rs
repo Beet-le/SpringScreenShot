@@ -17,12 +17,24 @@ impl Editor {
         self.pending_command = None;
         self.state.pending_text_edit = None;
         self.state.pending_new_text_draft = false;
-        let interaction = match event {
+        let mut interaction = match event {
             InputEvent::Pointer(pointer) => self.process_pointer_event(document, pointer),
             InputEvent::Wheel(wheel) => self.process_wheel_event(document, wheel),
             InputEvent::Key(key) => self.process_key_event(document, key),
             InputEvent::FocusLost => self.handle_focus_lost(document),
         }?;
+        if std::mem::take(&mut self.pending_capture_release)
+            && interaction.capture == PointerCaptureCommand::NoChange
+        {
+            interaction.capture = PointerCaptureCommand::Release;
+        }
+        match interaction.capture {
+            PointerCaptureCommand::Capture(pointer_id) => {
+                self.captured_pointer = Some(pointer_id);
+            }
+            PointerCaptureCommand::Release => self.captured_pointer = None,
+            PointerCaptureCommand::NoChange => {}
+        }
         Ok(EditorUpdate {
             interaction,
             command: self.pending_command.take(),
@@ -57,6 +69,9 @@ impl Editor {
         }
         let uses_stroke_cursor = self.state.active_tool.uses_stroke_cursor();
         let mut output = match &self.state.interaction {
+            InteractionState::EditingMagnifier(_) => {
+                self.process_magnifier_pointer_event(document, event)
+            }
             InteractionState::CreatingRectangle(_) => {
                 self.process_rectangle_creation_pointer_event(document, event)
             }

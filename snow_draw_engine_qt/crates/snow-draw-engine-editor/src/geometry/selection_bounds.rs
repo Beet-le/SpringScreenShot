@@ -922,12 +922,10 @@ mod tests {
     }
 
     #[test]
-    fn ellipse_and_diamond_corner_radius_controls_are_not_hittable() {
+    fn ellipse_corner_radius_controls_are_not_hittable() {
         let bounds = selection_bounds();
-        for shape in [
-            snow_draw_engine_document::HighlightShape::Ellipse,
-            snow_draw_engine_document::HighlightShape::Diamond,
-        ] {
+        {
+            let shape = snow_draw_engine_document::HighlightShape::Ellipse;
             let mut selected_rect = text_rect(bounds);
             selected_rect.highlight_shape = shape;
             let handle = rect_local_to_canvas(

@@ -32,9 +32,21 @@ mod filter_snap_tests;
 #[cfg(test)]
 mod free_draw_continuation_tests;
 mod input;
+#[cfg(test)]
+mod magnifier_binding_tests;
+#[cfg(test)]
+mod magnifier_drag_style_tests;
+#[cfg(test)]
+mod magnifier_group_move_tests;
+#[cfg(test)]
+mod magnifier_lifecycle_tests;
+#[cfg(test)]
+mod magnifier_tests;
 mod mutations;
 #[cfg(test)]
 mod pen_highlight_angle_tests;
+#[cfg(test)]
+mod rounded_diamond_tests;
 #[cfg(test)]
 mod spotlight_shape_tests;
 mod text_commands;
@@ -100,6 +112,10 @@ impl Default for Engine {
 }
 
 impl Engine {
+    pub fn has_pointer_capture(&self) -> bool {
+        self.editor.has_pointer_capture()
+    }
+
     pub fn new(config: EngineConfig) -> Self {
         Self::try_new(config).expect("runtime config should be valid")
     }
@@ -194,6 +210,8 @@ impl Engine {
             presentation_update_depth: 0,
             pending_viewports: BTreeSet::new(),
         };
+        engine.editor.reset_magnifier_wheel_input();
+        engine.editor.reset_pointer_capture_state();
         engine.scene_cache.sync(&engine.model, None);
         let _ = engine.refresh_all_viewports();
         engine
@@ -294,6 +312,8 @@ impl Engine {
             distance_style_mixed: self.editor.distance_style_mixed(&self.model),
             angle_style: self.editor.angle_style(&self.model),
             angle_style_mixed: self.editor.angle_style_mixed(&self.model),
+            magnifier_style: self.editor.magnifier_style(&self.model),
+            magnifier_style_mixed: self.editor.magnifier_style_mixed(&self.model),
             distance_measured_length: self.editor.distance_measured_length(&self.model),
         })
     }
@@ -314,6 +334,27 @@ impl Engine {
     ) -> Result<RectangleShapeStyle, ErrorCode> {
         self.ensure_viewport(id)?;
         Ok(self.editor.rectangle_shape_style(&self.model))
+    }
+
+    pub fn set_viewport_magnifier_style_patch(
+        &mut self,
+        id: ViewportId,
+        style: snow_draw_engine_editor::MagnifierStyle,
+        properties: u32,
+        creation_defaults: bool,
+    ) -> Result<MutationResult, ErrorCode> {
+        self.ensure_viewport(id)?;
+        let before = self.editor.snapshot();
+        if let Some(command) = self.editor.set_magnifier_style_patch(
+            &self.model,
+            style,
+            properties,
+            creation_defaults,
+        )? {
+            self.apply_editor_command(id, command)
+        } else {
+            self.refresh_after_session_mutation(before)
+        }
     }
 
     pub fn set_viewport_angle_style_patch(
