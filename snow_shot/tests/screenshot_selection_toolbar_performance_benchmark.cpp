@@ -84,7 +84,7 @@ int main(int argc, char* argv[]) {
     const QRect selection(120, 140, 320, 180);
     const auto synchronize = [&toolbar](const QRect& rectangle) {
         toolbar.setPointerInteractionEnabled(true);
-        toolbar.setSelectionResizable(true);
+        toolbar.setSelectionEditCapabilities(true, true);
         toolbar.setCornerRadiusApplicable(true);
         toolbar.setSelectionState(rectangle, false, 8, 4,
                                   ScreenshotSelectionToolbarWidget::DisplayMode::Full, false,
@@ -104,7 +104,7 @@ int main(int argc, char* argv[]) {
     });
     const auto synchronizeSmart = [&toolbar](const QRect& rectangle) {
         toolbar.setPointerInteractionEnabled(true);
-        toolbar.setSelectionResizable(false);
+        toolbar.setSelectionEditCapabilities(false, false);
         toolbar.setCornerRadiusApplicable(true);
         toolbar.setSelectionState(rectangle, false, 8, 4,
                                   ScreenshotSelectionToolbarWidget::DisplayMode::SizeOnly, false,

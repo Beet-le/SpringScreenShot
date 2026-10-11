@@ -1206,12 +1206,8 @@ bool ScreenshotOverlayInputHandler::restorePreviousSelection(
         return false;
     }
     const QRect bounds = ScreenshotHalfOpenRect::fromRectF(canvasBounds).toAlignedQRect();
-    if (!m_context.selection.applyParams(params, bounds)) {
-        if (!m_context.selection.hasPixelSelection()) {
-            m_context.interaction.returnToSelectionMode(false);
-            m_context.actions.hideMainToolbar();
-            m_context.actions.updateOverlayState();
-        }
+    const auto restored = clampScreenshotSelectionParamsForRestore(params, bounds);
+    if (!restored || !m_context.selection.applyParams(*restored, bounds)) {
         return false;
     }
     m_context.intelligentSelection.clearTransientState();

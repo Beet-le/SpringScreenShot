@@ -3,12 +3,16 @@
 
 #include "snow_shot/presentation/screenshotselectiondisplayunit.h"
 #include "snow_shot/presentation/screenshotselectionaspectratio.h"
+#include "snow_shot/presentation/screenshotselectionparams.h"
 #include "snow_draw_engine_qt/snow_canvas_style_edit.h"
 #include "snow_shot/presentation/screenshotscrollingtypes.h"
 
 #include <QString>
 #include <QByteArray>
 #include <QPoint>
+#include <QVector>
+
+#include <optional>
 
 namespace adqt::widgets {
 class AdColorPicker;
@@ -141,6 +145,11 @@ class ScreenshotToolbarCommandSink {
     virtual void beginCanvasColorSampling(adqt::widgets::AdColorPicker*) {}
 };
 
+struct ScreenshotSelectionToolbarQuickSets {
+    std::optional<ScreenshotSelectionParams> previous;
+    QVector<ScreenshotSelectionPreset> presets;
+};
+
 class ScreenshotSelectionToolbarCommandSink {
   public:
     virtual ~ScreenshotSelectionToolbarCommandSink() = default;
@@ -148,6 +157,10 @@ class ScreenshotSelectionToolbarCommandSink {
     virtual void toggleSelectionAspectRatioLockFromToolbar() = 0;
     virtual void
     setSelectionAspectRatioPresetFromToolbar(ScreenshotSelectionAspectRatioPreset preset) = 0;
+    virtual ScreenshotSelectionToolbarQuickSets selectionQuickSetsForToolbar() const {
+        return {};
+    }
+    virtual void applySelectionParamsFromToolbar(const ScreenshotSelectionParams&) {}
     virtual void openSelectionResizeModalFromToolbar() = 0;
     virtual void hideColorPickersForScreenshotUi() = 0;
     virtual void adjustSelectionFromToolbar(int minDx, int minDy, int maxDx, int maxDy) = 0;

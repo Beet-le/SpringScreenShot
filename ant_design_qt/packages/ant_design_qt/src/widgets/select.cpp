@@ -1579,14 +1579,7 @@ QVariantList AdSelect::selectedModelValues() const {
     return values;
   }
 
-  QModelIndexList selectedRows = selectionModel_->selectedRows(modelColumn_);
-  std::sort(selectedRows.begin(), selectedRows.end(),
-            [](const QModelIndex& lhs, const QModelIndex& rhs) {
-              if (lhs.row() == rhs.row()) {
-                return lhs.column() < rhs.column();
-              }
-              return lhs.row() < rhs.row();
-            });
+  const QModelIndexList selectedRows = selectedModelIndexes();
 
   detail::SelectRoleConfig roles;
   roles.valueRole = valueRole_;
@@ -2336,7 +2329,33 @@ QModelIndexList AdSelect::selectedModelIndexes() const {
     return {};
   }
 
-  QModelIndexList selectedRows = selectionModel_->selectedRows(modelColumn_);
+  // Qt's selectedRows() omits disabled items. Read the stored selection ranges so
+  // disabling a choice prevents activation without erasing its selected value.
+  const QItemSelection selection = selectionModel_->selection();
+  QModelIndexList selectedRows;
+  for (const QItemSelectionRange& range : selection) {
+    if (!range.isValid() || modelColumn_ < range.left() || modelColumn_ > range.right()) {
+      continue;
+    }
+    const auto* model = range.model();
+    const QModelIndex parent = range.parent();
+    const int columns = model->columnCount(parent);
+    for (int row = range.top(); row <= range.bottom(); ++row) {
+      bool fullRow = true;
+      for (int column = 0; column < columns; ++column) {
+        if (!std::any_of(selection.cbegin(), selection.cend(),
+                         [row, column, &parent](const QItemSelectionRange& selectedRange) {
+                           return selectedRange.contains(row, column, parent);
+                         })) {
+          fullRow = false;
+          break;
+        }
+      }
+      if (fullRow) {
+        selectedRows.append(model->index(row, modelColumn_, parent));
+      }
+    }
+  }
   std::sort(selectedRows.begin(), selectedRows.end(),
             [](const QModelIndex& lhs, const QModelIndex& rhs) {
               if (lhs.row() == rhs.row()) {
@@ -2344,6 +2363,7 @@ QModelIndexList AdSelect::selectedModelIndexes() const {
               }
               return lhs.row() < rhs.row();
             });
+  selectedRows.erase(std::unique(selectedRows.begin(), selectedRows.end()), selectedRows.end());
   return selectedRows;
 }
 
@@ -2453,11 +2473,7 @@ void AdSelect::setOptions(const QVector<Option>& options) {
     item->setFlags(flags);
     model->appendRow(item);
   }
-  if (ownedModel_ && ownedModel_ != model && ownedModel_ != sourceModel_) {
-    ownedModel_->deleteLater();
-  }
-  ownedModel_ = model;
-  setModel(model);
+  setModelInternal(model, true);
 }
 
 void AdSelect::appendOption(const Option& option) {
@@ -2471,12 +2487,6 @@ void AdSelect::clearOptions() {
     return;
   }
   const SelectionSnapshot previous = captureSelectionSnapshot();
-  if (ownedModel_) {
-    if (ownedModel_ != sourceModel_) {
-      ownedModel_->deleteLater();
-    }
-    ownedModel_.clear();
-  }
   clearOverlayModel();
   setModel(nullptr);
   options_.clear();
@@ -2491,21 +2501,26 @@ void AdSelect::clearOptions() {
 QAbstractItemModel* AdSelect::model() const { return sourceModel_.data(); }
 
 void AdSelect::setModel(QAbstractItemModel* model) {
+  setModelInternal(model, ownedModel_ == model);
+}
+
+void AdSelect::setModelInternal(QAbstractItemModel* model, bool ownsModel) {
   if (sourceModel_ == model) {
     return;
   }
   const SelectionSnapshot previous = captureSelectionSnapshot();
 
-  if (ownedModel_ && ownedModel_ == sourceModel_ && ownedModel_ != model) {
-    ownedModel_->deleteLater();
-    ownedModel_.clear();
-  }
-
   if (sourceModel_) {
     disconnect(sourceModel_, nullptr, this, nullptr);
   }
 
+  const QPointer<QAbstractItemModel> previousOwnedModel = ownedModel_;
   sourceModel_ = model;
+  // Establish ownership before model-change callbacks can replace the source again.
+  ownedModel_ = ownsModel ? model : nullptr;
+  if (previousOwnedModel && previousOwnedModel != model) {
+    previousOwnedModel->deleteLater();
+  }
   if (compositeModel_) {
     compositeModel_->setPrimaryModel(sourceModel_);
     compositeModel_->setPrimaryColumn(modelColumn_);
@@ -2612,7 +2627,7 @@ void AdSelect::setSelectionModel(QItemSelectionModel* model) {
     connect(
         selectionModel_, &QItemSelectionModel::currentChanged, this,
         [this](const QModelIndex&, const QModelIndex&) { syncSelectionStateFromSelectionModel(); });
-    if (!selectionModel_->selectedRows(modelColumn_).isEmpty()) {
+    if (!selectedModelIndexes().isEmpty()) {
       syncSelectionStateFromSelectionModel();
       selectionSignalsHandled = true;
     } else {

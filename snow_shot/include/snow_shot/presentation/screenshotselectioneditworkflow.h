@@ -41,6 +41,7 @@ class ScreenshotSelectionEditWorkflow final {
     void commitSelectionEffects();
     void toggleSelectionAspectRatioLockFromToolbar();
     void setSelectionAspectRatioPresetFromToolbar(ScreenshotSelectionAspectRatioPreset preset);
+    void applySelectionParamsFromToolbar(const ScreenshotSelectionParams& params);
     void openSelectionResizeModalFromToolbar();
     void repositionToolbarForContentChange();
     void hideColorPickersForScreenshotUi() const;

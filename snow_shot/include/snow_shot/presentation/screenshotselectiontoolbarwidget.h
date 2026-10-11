@@ -3,6 +3,7 @@
 
 #include "snow_shot/presentation/screenshotselectiondisplayunit.h"
 #include "snow_shot/presentation/screenshotselectionaspectratio.h"
+#include "snow_shot/presentation/screenshotselectionparams.h"
 
 #include <optional>
 #include <QList>
@@ -12,6 +13,7 @@
 #include <QRect>
 #include <QSize>
 #include <QString>
+#include <QVector>
 #include <QWidget>
 
 class QLabel;
@@ -20,6 +22,7 @@ class QHideEvent;
 class QPaintEvent;
 class QShowEvent;
 class QListView;
+class QTimer;
 class ScreenshotSelectionToolbarCommandSink;
 namespace adqt::widgets {
 class AdSelect;
@@ -41,7 +44,7 @@ class ScreenshotSelectionToolbarWidget final : public QWidget {
     void resetForNewCapture();
     void prepareForDisplay();
     void prewarm();
-    void setSelectionResizable(bool enabled);
+    void setSelectionEditCapabilities(bool editable, bool resizable);
     void setPointerInteractionEnabled(bool enabled);
     void setCornerRadiusApplicable(bool enabled);
     void
@@ -80,6 +83,7 @@ class ScreenshotSelectionToolbarWidget final : public QWidget {
     void setToolbarHovered(bool hovered);
     void scheduleToolbarHoverSync();
     void updateAspectRatioOptions();
+    void refreshSelectionQuickSets();
     void prepareAspectRatioPopupInput();
     void updateAspectRatioSelectStyle();
     void updateAspectRatioSelectAvailability();
@@ -96,6 +100,7 @@ class ScreenshotSelectionToolbarWidget final : public QWidget {
     void updateDisplayMode();
     void updateMouseEventTransparency();
     bool pointerInteractionEnabled() const;
+    bool selectionInputEnabled() const;
     void updateWindowSize();
     QPoint contentOffset() const;
 
@@ -103,6 +108,7 @@ class ScreenshotSelectionToolbarWidget final : public QWidget {
     QWidget* m_panel = nullptr;
     QLabel* m_xLabel = nullptr;
     QLabel* m_yLabel = nullptr;
+    bool m_selectionEditable = true;
     bool m_selectionResizable = true;
     bool m_pointerInteractionEnabled = true;
     bool m_cornerRadiusApplicable = true;
@@ -123,7 +129,12 @@ class ScreenshotSelectionToolbarWidget final : public QWidget {
     std::optional<bool> m_aspectRatioSelectHighlight;
     QPointer<QWidget> m_focusBeforeAspectRatioPopup;
     QPointer<QListView> m_aspectRatioPopupView;
+    QPointer<QWidget> m_aspectRatioPopupWindow;
+    QTimer* m_aspectRatioHoverCloseTimer = nullptr;
+    bool m_aspectRatioPopupHovered = false;
     QString m_aspectRatioValueBeforePopupActivation;
+    std::optional<ScreenshotSelectionParams> m_previousQuickSet;
+    QVector<ScreenshotSelectionPreset> m_savedQuickSets;
     QList<QWidget*> m_positionWidgets;
     QList<QWidget*> m_sizeWidgets;
     QList<QWidget*> m_editingWidgets;

@@ -51,6 +51,13 @@ ScreenshotSelectionParams ScreenshotSelectionSettingsStore::previousSelectionPar
         .value_or(ScreenshotSelectionParams{});
 }
 
+std::optional<ScreenshotSelectionParams>
+ScreenshotSelectionSettingsStore::previousSelectionParams(const QRect& bounds) const {
+    const auto params = selectionFromJson(
+        configuration().value(QStringLiteral("screenshot_selection/previous_selection")));
+    return params ? clampScreenshotSelectionParamsForRestore(*params, bounds) : std::nullopt;
+}
+
 void ScreenshotSelectionSettingsStore::setPreviousSelectionParams(
     const ScreenshotSelectionParams& params) {
     static_cast<void>(

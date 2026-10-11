@@ -558,6 +558,8 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     void toggleSelectionAspectRatioLockFromToolbar() override;
     void
     setSelectionAspectRatioPresetFromToolbar(ScreenshotSelectionAspectRatioPreset preset) override;
+    ScreenshotSelectionToolbarQuickSets selectionQuickSetsForToolbar() const override;
+    void applySelectionParamsFromToolbar(const ScreenshotSelectionParams& params) override;
     void openSelectionResizeModalFromToolbar() override;
     void hideColorPickersForScreenshotUi() override;
     void hideColorPicker();
@@ -5409,6 +5411,27 @@ void ScreenshotController::Impl::toggleSelectionAspectRatioLockFromToolbar() {
 void ScreenshotController::Impl::setSelectionAspectRatioPresetFromToolbar(
     ScreenshotSelectionAspectRatioPreset preset) {
     m_selectionEditWorkflow->setSelectionAspectRatioPresetFromToolbar(preset);
+}
+
+ScreenshotSelectionToolbarQuickSets
+ScreenshotController::Impl::selectionQuickSetsForToolbar() const {
+    ScreenshotSelectionToolbarQuickSets quickSets;
+    if (m_selectionSettings == nullptr) {
+        return quickSets;
+    }
+    const QRect bounds =
+        ScreenshotHalfOpenRect::fromRectF(m_geometry.canvasBounds()).toAlignedQRect();
+    if (bounds.isEmpty()) {
+        return quickSets;
+    }
+    quickSets.previous = m_selectionSettings->previousSelectionParams(bounds);
+    quickSets.presets = sanitizeScreenshotSelectionPresets(m_selectionSettings->presets(), bounds);
+    return quickSets;
+}
+
+void ScreenshotController::Impl::applySelectionParamsFromToolbar(
+    const ScreenshotSelectionParams& params) {
+    m_selectionEditWorkflow->applySelectionParamsFromToolbar(params);
 }
 
 void ScreenshotController::Impl::setSelectionToolbarPopupVisible(bool visible) {

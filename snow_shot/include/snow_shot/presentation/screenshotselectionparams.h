@@ -46,6 +46,11 @@ struct ScreenshotSelectionPreset {
 [[nodiscard]] ScreenshotSelectionParams
 clampScreenshotSelectionParams(const ScreenshotSelectionParams& params, const QRect& bounds);
 
+// Restore commands must validate available geometry before replacing the current selection.
+[[nodiscard]] std::optional<ScreenshotSelectionParams>
+clampScreenshotSelectionParamsForRestore(const ScreenshotSelectionParams& params,
+                                         const QRect& bounds);
+
 [[nodiscard]] QVector<ScreenshotSelectionPreset>
 sanitizeScreenshotSelectionPresets(const QVector<ScreenshotSelectionPreset>& presets,
                                    const QRect& bounds);

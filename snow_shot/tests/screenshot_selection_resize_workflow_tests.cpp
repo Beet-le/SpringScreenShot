@@ -11,6 +11,7 @@
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QPainterPath>
 #include <QPointer>
 #include <QString>
 #include <QWidget>
@@ -100,6 +101,46 @@ void resizingDoesNotReplacePreviousScreenshotSelection(
             require(settingsStore.previousSelectionParams() == previous,
                     "resizing must preserve the previous exported selection");
         }
+    }
+    settingsStore.clear();
+}
+
+void unavailablePreviousGeometryIsDisabled(ScreenshotSelectionResizeWorkflow& workflow,
+                                           ScreenshotSelectionSettingsStore& settingsStore) {
+    for (const bool custom : {false, true}) {
+        settingsStore.clear();
+        ScreenshotSelectionParams previous;
+        previous.selection = QRect(500, 500, 100, 80);
+        if (custom) {
+            QPainterPath path;
+            path.addEllipse(QRectF(previous.selection));
+            previous.region = ScreenshotRegionGeometry::fromPath(path, ScreenshotRegionType::Curve);
+        } else {
+            previous.region = QRegion(previous.selection).subtracted(QRect(530, 520, 20, 20));
+        }
+        settingsStore.setPreviousSelectionParams(previous);
+        QWidget owner;
+        ScreenshotSelectionResizeRequest request;
+        request.currentParams.selection = QRect(20, 30, 160, 100);
+        request.selectionBounds = QRect(0, 0, 300, 200);
+        request.ownerWindow = &owner;
+        require(workflow.open(&owner, request, [](const ScreenshotSelectionParams&) {}),
+                "resize must open even when Previous is unavailable in the current canvas");
+        auto* modal = owner.findChild<adqt::widgets::AdModal*>();
+        require(modal != nullptr, "resize workflow must create its modal");
+        auto* quickSets = modal->contentWidget()->findChild<adqt::widgets::AdSelect*>(
+            QStringLiteral("selectionPresetSelect"));
+        require(quickSets != nullptr, "resize modal must expose selection presets");
+        bool previousDisabled = false;
+        for (const auto& option : quickSets->options()) {
+            if (option.value == QStringLiteral("previous"))
+                previousDisabled = option.disabled;
+        }
+        require(previousDisabled, "an empty clipped Previous must be disabled in the resize modal");
+        modal->reject();
+        flushEvents();
+        require(settingsStore.previousSelectionParams() == previous,
+                "canvas-specific availability must preserve the stored previous geometry");
     }
     settingsStore.clear();
 }
@@ -261,6 +302,7 @@ int main(int argc, char* argv[]) {
 
     selectionResizeModalUsesApplicationModality(workflow);
     resizingDoesNotReplacePreviousScreenshotSelection(workflow, settingsStore);
+    unavailablePreviousGeometryIsDisabled(workflow, settingsStore);
     confirmedPresetCreationPersistsBeforeResizeCloses(workflow, settingsStore);
     presetCreateModalRetranslatesInPlace(workflow, settingsStore);
 

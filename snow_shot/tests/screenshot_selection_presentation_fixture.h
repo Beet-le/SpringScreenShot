@@ -117,13 +117,29 @@ class NoopToolbarCommands final : public ScreenshotToolbarCommandSink,
         hideColorPickers();
     }
     void toggleSelectionAspectRatioLockFromToolbar() override {}
-    void setSelectionAspectRatioPresetFromToolbar(ScreenshotSelectionAspectRatioPreset) override {}
+    void
+    setSelectionAspectRatioPresetFromToolbar(ScreenshotSelectionAspectRatioPreset preset) override {
+        setSelectionAspectRatioPreset(preset);
+    }
+    ScreenshotSelectionToolbarQuickSets selectionQuickSetsForToolbar() const override {
+        return readSelectionQuickSets();
+    }
+    void applySelectionParamsFromToolbar(const ScreenshotSelectionParams& params) override {
+        applySelectionParams(params);
+    }
     void openSelectionResizeModalFromToolbar() override {}
     void adjustSelectionFromToolbar(int, int, int, int) override {}
     void setSelectionCornerRadiusFromToolbar(int) override {}
     void setSelectionShadowWidthFromToolbar(int) override {}
     void setSelectionToolbarHovered(bool) override {}
     std::function<void()> hideColorPickers = [] {};
+    std::function<ScreenshotSelectionToolbarQuickSets()> readSelectionQuickSets = [] {
+        return ScreenshotSelectionToolbarQuickSets{};
+    };
+    std::function<void(const ScreenshotSelectionParams&)> applySelectionParams =
+        [](const ScreenshotSelectionParams&) {};
+    std::function<void(ScreenshotSelectionAspectRatioPreset)> setSelectionAspectRatioPreset =
+        [](ScreenshotSelectionAspectRatioPreset) {};
 };
 
 // Count observable translation requests to distinguish content rebuilding from movement.

@@ -14,6 +14,8 @@ class ScreenshotSelectionSettingsStore final : public ScreenshotSelectionParamsS
 
     [[nodiscard]] bool hasPreviousSelectionParams() const;
     [[nodiscard]] ScreenshotSelectionParams previousSelectionParams() const;
+    [[nodiscard]] std::optional<ScreenshotSelectionParams>
+    previousSelectionParams(const QRect& bounds) const;
     void setPreviousSelectionParams(const ScreenshotSelectionParams& params) override;
 
     ScreenshotRegionType regionType() const;

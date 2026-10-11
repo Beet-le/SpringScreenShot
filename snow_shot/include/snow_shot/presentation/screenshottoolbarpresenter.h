@@ -26,6 +26,7 @@ struct ScreenshotToolbarPresentationState {
     bool selectionDragging = false;
     bool editing = false;
     bool ocrAvailable = true;
+    bool selectionEditable = true;
     bool selectionResizable = true;
     bool cornerRadiusApplicable = true;
     bool aspectRatioLocked = false;

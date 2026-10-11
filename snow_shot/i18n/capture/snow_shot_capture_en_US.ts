@@ -407,6 +407,10 @@
             <translation>9:16</translation>
         </message>
         <message>
+            <source>Aspect ratio presets</source>
+            <translation>Aspect ratio presets</translation>
+        </message>
+        <message>
             <source>Corner radius</source>
             <translation>Corner radius</translation>
         </message>
@@ -435,8 +439,16 @@
             <translation>Pixels</translation>
         </message>
         <message>
+            <source>Previous selection</source>
+            <translation>Previous selection</translation>
+        </message>
+        <message>
             <source>Selection aspect ratio</source>
             <translation>Selection aspect ratio</translation>
+        </message>
+        <message>
+            <source>Selection presets</source>
+            <translation>Selection presets</translation>
         </message>
         <message>
             <source>Shadow width</source>

@@ -407,6 +407,10 @@
             <translation>9:16</translation>
         </message>
         <message>
+            <source>Aspect ratio presets</source>
+            <translation>宽高比预设</translation>
+        </message>
+        <message>
             <source>Corner radius</source>
             <translation>圆角半径</translation>
         </message>
@@ -435,8 +439,16 @@
             <translation>像素</translation>
         </message>
         <message>
+            <source>Previous selection</source>
+            <translation>上一个选区</translation>
+        </message>
+        <message>
             <source>Selection aspect ratio</source>
             <translation>选区宽高比</translation>
+        </message>
+        <message>
+            <source>Selection presets</source>
+            <translation>选区预设</translation>
         </message>
         <message>
             <source>Shadow width</source>

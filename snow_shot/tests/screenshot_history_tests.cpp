@@ -2817,11 +2817,14 @@ void previousSelectionShortcutUsesSharedConfirmation() {
                     static_cast<void>(dispatchShortcutRelease(receiver, key));
 
                     pending = quickAction;
+                    const auto beforeUnavailable = selection.params(QRect(0, 0, 300, 200));
                     previous.region = ScreenshotRegionGeometry(QRect(500, 500, 20, 20));
                     require(!dispatchShortcut(receiver, key) && confirmations == 2 &&
-                                pending == quickAction && !selection.hasPixelSelection() &&
-                                interaction.manualSelecting(),
-                            "out-of-bounds saved region must not consume the pending action");
+                                pending == quickAction &&
+                                selection.params(QRect(0, 0, 300, 200)) == beforeUnavailable &&
+                                interaction.movingSelection() &&
+                                capture.sessionState == ScreenshotSessionState::Editing,
+                            "unavailable Previous must preserve the selection and pending action");
                     selection.setSelectionRect(QRectF(40, 30, 120, 60));
                     previous.region.reset();
                     handler.confirmSelection();

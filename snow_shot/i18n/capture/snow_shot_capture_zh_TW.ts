@@ -407,6 +407,10 @@
             <translation>9:16</translation>
         </message>
         <message>
+            <source>Aspect ratio presets</source>
+            <translation>長寬比預設</translation>
+        </message>
+        <message>
             <source>Corner radius</source>
             <translation>圓角半徑</translation>
         </message>
@@ -435,8 +439,16 @@
             <translation>像素</translation>
         </message>
         <message>
+            <source>Previous selection</source>
+            <translation>上一個選取範圍</translation>
+        </message>
+        <message>
             <source>Selection aspect ratio</source>
             <translation>選取範圍長寬比</translation>
+        </message>
+        <message>
+            <source>Selection presets</source>
+            <translation>選取範圍預設</translation>
         </message>
         <message>
             <source>Shadow width</source>

@@ -38,6 +38,20 @@ ScreenshotSelectionParams clampScreenshotSelectionParams(const ScreenshotSelecti
     return result;
 }
 
+std::optional<ScreenshotSelectionParams>
+clampScreenshotSelectionParamsForRestore(const ScreenshotSelectionParams& params,
+                                         const QRect& bounds) {
+    if (!bounds.isValid() || bounds.isEmpty() ||
+        (!params.region && params.selection.normalized().isEmpty())) {
+        return std::nullopt;
+    }
+    auto clamped = clampScreenshotSelectionParams(params, bounds);
+    if (clamped.selection.isEmpty()) {
+        return std::nullopt;
+    }
+    return clamped;
+}
+
 QVector<ScreenshotSelectionPreset>
 sanitizeScreenshotSelectionPresets(const QVector<ScreenshotSelectionPreset>& presets,
                                    const QRect& bounds) {

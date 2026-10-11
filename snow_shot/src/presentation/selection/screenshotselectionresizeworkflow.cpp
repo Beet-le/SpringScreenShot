@@ -28,16 +28,12 @@ bool ScreenshotSelectionResizeWorkflow::open(QObject* modalParent,
 
     auto* modal = new adqt::widgets::AdModal(modalParent);
 
-    ScreenshotSelectionParams previousParams;
-    const bool hasPreviousParams = m_settingsStore.hasPreviousSelectionParams();
-    if (hasPreviousParams) {
-        previousParams = clampScreenshotSelectionParams(m_settingsStore.previousSelectionParams(),
-                                                        request.selectionBounds);
-    }
+    const auto previousParams = m_settingsStore.previousSelectionParams(request.selectionBounds);
 
     auto* content = new ScreenshotSelectionResizeModalContent(
-        request.currentParams, request.selectionBounds, hasPreviousParams, previousParams,
-        m_settingsStore.presets(), nullptr, request.canvasUsesPoints);
+        request.currentParams, request.selectionBounds, previousParams.has_value(),
+        previousParams.value_or(ScreenshotSelectionParams{}), m_settingsStore.presets(), nullptr,
+        request.canvasUsesPoints);
     const QPointer<ScreenshotSelectionResizeModalContent> contentGuard(content);
     ScreenshotSelectionSettingsStore* settingsStore = &m_settingsStore;
     QObject::connect(content, &ScreenshotSelectionResizeModalContent::presetsUpdated, modal,
