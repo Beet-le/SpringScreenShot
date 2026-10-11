@@ -833,6 +833,111 @@ void conversionSessionRoutesSourceAndClearsOldViews() {
             "session deactivation keeps completed source but not visible state");
 }
 
+void conversionClipboardPreservesFormats() {
+    using Format = SnowShotImageConversionFormat;
+    using Mode = ScreenshotRecognitionSessionController::Mode;
+    const snow_shot::storage::ScreenshotImageConversionSettings settings;
+    const QString previousModel = settings.visionModel();
+    const auto restoreModel = qScopeGuard([&] { settings.setVisionModel(previousModel); });
+    settings.setVisionModel(QStringLiteral("vision-clipboard"));
+    const QString html = QStringLiteral("<p><b>Snow \u96ea \u03a9</b> &amp; HTML</p>\n"
+                                        "<table><tr><th>Name</th><th>Value</th></tr>"
+                                        "<tr><td>Item</td><td>42</td></tr></table>");
+    const QString markdown = QStringLiteral("# Snow \u96ea\n\n**Markdown**");
+    int captureCopies = 0;
+    ScreenshotRecognitionWindowActions windowActions;
+    windowActions.handleCopy = [&] { ++captureCopies; };
+    ScreenshotRecognitionWindow window(windowActions);
+    ScreenshotRecognitionSessionActions actions;
+    actions.ensureContent = [&] { return &window; };
+    ScreenshotRecognitionSessionController session(nullptr, nullptr, nullptr, actions);
+    session.setTarget({QStringLiteral("clipboard"), sampleImage(), QRectF(0, 0, 240, 120)});
+    ScreenshotRecognitionResults results;
+    results.key = QStringLiteral("clipboard");
+    results.conversions = {{Format::Html, QStringLiteral("vision-clipboard"), html},
+                           {Format::Markdown, QStringLiteral("vision-clipboard"), markdown}};
+    session.seedRecognitionResults(results);
+    session.activate(Mode::Html);
+    const auto sourceMime = session.recognitionClipboardMimeData();
+    require(sourceMime && sourceMime->hasFormat(QStringLiteral("text/html")) &&
+                sourceMime->html() == html && sourceMime->text() == html,
+            "HTML toolbar Copy publishes exact HTML with the existing source text fallback");
+    window.show();
+    window.activateWindow();
+    auto* view = window.findChild<ScreenshotImageConversionView*>();
+    auto* browser = view ? view->findChild<QTextBrowser*>() : nullptr;
+    require(browser != nullptr, "cached HTML displays its preview without a provider");
+    require(window.copyVisibleContentToClipboard() &&
+                QApplication::clipboard()->mimeData()->html() == html &&
+                QApplication::clipboard()->text() == html,
+            "HTML preview Copy without a selection publishes exact HTML source");
+    QTextCursor selected = browser->document()->find(QStringLiteral("Snow \u96ea \u03a9"));
+    require(selected.hasSelection(), "find the formatted Unicode HTML selection");
+    browser->setTextCursor(selected);
+    require(view->copyToClipboard() && QApplication::clipboard()->text() == selected.selectedText(),
+            "HTML selection Copy preserves the selected Unicode text fallback");
+    const auto requireSelectedHtml = [&] {
+        const auto* mime = QApplication::clipboard()->mimeData();
+        require(mime->hasHtml(), "HTML selection Copy publishes a dedicated HTML format");
+        QTextDocument copied;
+        copied.setHtml(mime->html());
+        require(copied.toPlainText() == selected.selectedText() &&
+                    copied.find(selected.selectedText()).charFormat().fontWeight() > QFont::Normal,
+                "selected HTML includes only the selected content and preserves bold formatting");
+    };
+    requireSelectedHtml();
+    browser->setFocus();
+    QCoreApplication::processEvents();
+    QApplication::clipboard()->setText(QStringLiteral("keyboard sentinel"));
+    QKeyEvent copy(QEvent::KeyPress, Qt::Key_C, Qt::ControlModifier);
+    QApplication::sendEvent(browser, &copy);
+    require(copy.isAccepted() && captureCopies == 0,
+            "HTML preview keyboard Copy stays local to recognition");
+    requireSelectedHtml();
+    QTimer::singleShot(0, view, [&] {
+        auto* menu = view->findChild<adqt::widgets::AdContextMenu*>(
+            QStringLiteral("screenshotImageConversionContextMenu"));
+        require(menu && !menu->actions().isEmpty(), "HTML preview exposes context Copy");
+        menu->actions().first()->trigger();
+        menu->close();
+    });
+    QApplication::clipboard()->setText(QStringLiteral("context sentinel"));
+    browser->customContextMenuRequested(browser->viewport()->rect().center());
+    requireSelectedHtml();
+    browser->selectAll();
+    require(view->copyToClipboard() &&
+                QApplication::clipboard()->mimeData()->html().contains(QStringLiteral("<table")),
+            "multi-block HTML selection Copy preserves table structure");
+    const auto selectedSourceMime = session.recognitionClipboardMimeData();
+    require(selectedSourceMime && selectedSourceMime->html() == html &&
+                selectedSourceMime->text() == html,
+            "HTML toolbar Copy exports full source independently of preview selection");
+    ScreenshotRecognitionSessionController transferred(nullptr, nullptr, nullptr, {});
+    transferred.setTarget({results.key, sampleImage(), QRectF(0, 0, 240, 120)});
+    transferred.seedRecognitionResults(session.recognitionResultsSnapshot());
+    transferred.activate(Mode::Html);
+    const auto transferredMime = transferred.recognitionClipboardMimeData();
+    require(transferredMime && transferredMime->html() == html,
+            "HTML recognition transferred to a pin retains its clipboard format without a view");
+    session.activate(Mode::Markdown);
+    const auto markdownMime = session.recognitionClipboardMimeData();
+    require(markdownMime && markdownMime->text() == markdown && !markdownMime->hasHtml(),
+            "Markdown toolbar Copy retains its plain source format");
+    browser = window.findChild<QTextBrowser*>(QStringLiteral("screenshotImageConversionPreview"));
+    QTextCursor clear(browser->document());
+    browser->setTextCursor(clear);
+    require(window.copyVisibleContentToClipboard() &&
+                QApplication::clipboard()->text() == markdown &&
+                !QApplication::clipboard()->mimeData()->hasHtml(),
+            "Markdown preview Copy replaces HTML with plain source text");
+    view = window.findChild<ScreenshotImageConversionView*>();
+    view->setContent(Format::Html, {}, true, {});
+    require(!view->copyToClipboard() && QApplication::clipboard()->text() == markdown,
+            "an empty HTML conversion leaves the clipboard unchanged");
+    session.deactivate();
+    window.hide();
+}
+
 void recognitionFileSnapshotTracksPartialConversionAndQrValues() {
     using Mode = ScreenshotRecognitionSessionController::Mode;
     ConversionServer server;
@@ -862,6 +967,11 @@ void recognitionFileSnapshotTracksPartialConversionAndQrValues() {
                                                    ? ScreenshotRecognitionFileKind::Markdown
                                                    : ScreenshotRecognitionFileKind::Html),
                 "conversion file snapshot preserves active format and partial source");
+        const auto mime = session.recognitionClipboardMimeData();
+        require(mime && mime->text() == snapshot->source &&
+                    mime->hasHtml() == (mode == Mode::Html) &&
+                    (mode != Mode::Html || mime->html() == snapshot->source),
+                "partial conversions retain their active clipboard format");
     }
     session.activate(Mode::Qr);
     const auto qr = session.fileExportSnapshot();
@@ -1156,11 +1266,17 @@ void runImageConversionNetworkTests() {
 
 void runImageConversionTests() {
     runImageConversionNetworkTests();
+    conversionClipboardPreservesFormats();
     conversionSessionRoutesSourceAndClearsOldViews();
     recognitionFileSnapshotTracksPartialConversionAndQrValues();
     conversionUsesRecognitionMessages();
     previewThemesAndLongDocuments();
     conversionToolbarMigration();
+}
+
+void runImageConversionClipboardTests() {
+    conversionClipboardPreservesFormats();
+    recognitionFileSnapshotTracksPartialConversionAndQrValues();
 }
 
 void latexSessionRequestsAreIsolated() {

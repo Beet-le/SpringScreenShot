@@ -1,4 +1,5 @@
 #include "snow_shot/presentation/screenshotimageconversionview.h"
+#include "snow_shot/presentation/screenshotimageconversionclipboard.h"
 
 #include "theme/theme_manager.h"
 #include "antd_icons.h"
@@ -15,7 +16,6 @@
 #include <QScrollBar>
 #include <QTextBrowser>
 #include <QTextDocument>
-#include <QTextDocumentFragment>
 #include <QTextTable>
 #include <QTextBlock>
 #include <QUrl>
@@ -203,12 +203,12 @@ void ScreenshotImageConversionView::render() {
 }
 
 bool ScreenshotImageConversionView::copyToClipboard() const {
-    if (m_source.isEmpty()) {
+    auto mimeData = snow_shot::presentation::imageConversionClipboardMimeData(
+        m_format, m_source, m_browser->textCursor());
+    if (mimeData == nullptr) {
         return false;
     }
-    const QTextCursor cursor = m_browser->textCursor();
-    QApplication::clipboard()->setText(
-        cursor.hasSelection() ? QTextDocumentFragment(cursor).toPlainText() : m_source);
+    QApplication::clipboard()->setMimeData(mimeData.release(), QClipboard::Clipboard);
     return true;
 }
 

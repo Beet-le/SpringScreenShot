@@ -3357,8 +3357,9 @@ void pinnedImageConversionsSurviveRestartWithoutProvider() {
                         !session->busy(session->mode()),
                     "the completed conversion opens on request without a model provider");
             const auto mime = session->recognitionClipboardMimeData();
-            require(mime && mime->text() == source,
-                    "restored toolbar Copy preserves exact format source");
+            require(mime && mime->text() == source && mime->hasHtml() == (format == Format::Html) &&
+                        (format != Format::Html || mime->html() == source),
+                    "restored toolbar Copy preserves exact source and its HTML clipboard format");
             const auto results = session->recognitionResultsSnapshot();
             require(results.text.has_value() == (format == Format::Html) &&
                         results.conversions.size() == 1 && results.visibleConversion == format,

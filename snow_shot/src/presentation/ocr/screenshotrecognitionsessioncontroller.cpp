@@ -16,6 +16,7 @@
 #include "snow_shot/presentation/screenshotrecognitionwindow.h"
 #if SNOW_SHOT_ENABLE_IMAGE_CONVERSION
 #include "snow_shot/presentation/screenshotimageconversioncontroller.h"
+#include "snow_shot/presentation/screenshotimageconversionclipboard.h"
 #endif
 #if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
 #include "snow_shot/presentation/screenshottabledocument.h"
@@ -2111,16 +2112,13 @@ ScreenshotRecognitionSessionController::fileExportSnapshot() const {
 
 std::unique_ptr<QMimeData> ScreenshotRecognitionSessionController::recognitionClipboardMimeData(
     const ScreenshotOcrPresentation* displayedPresentation) const {
-    auto mimeData = std::make_unique<QMimeData>();
 #if SNOW_SHOT_ENABLE_IMAGE_CONVERSION
     if (conversionModeActive()) {
-        if (m_conversion->source().isEmpty()) {
-            return {};
-        }
-        mimeData->setText(m_conversion->source());
-        return mimeData;
+        return snow_shot::presentation::imageConversionClipboardMimeData(m_conversion->format(),
+                                                                         m_conversion->source());
     }
 #endif
+    auto mimeData = std::make_unique<QMimeData>();
 #if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
     if (m_mode == Mode::Latex) {
         if (!m_latexResults.contains(recognitionCacheKey(Mode::Latex)))

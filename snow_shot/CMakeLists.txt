@@ -7577,6 +7577,10 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-recognition-session-controller-tests --image-conversion-network-only -platform offscreen)
     set_tests_properties(snow-shot-image-conversion-network-tests PROPERTIES TIMEOUT 60
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    add_test(NAME snow-shot-image-conversion-clipboard-tests
+        COMMAND snow-shot-recognition-session-controller-tests --image-conversion-clipboard-only -platform offscreen)
+    set_tests_properties(snow-shot-image-conversion-clipboard-tests PROPERTIES LABELS "unit" TIMEOUT 60
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-image-conversion-storage-tests
         COMMAND snow-shot-application-storage-tests --image-conversion-only)
     set_tests_properties(snow-shot-image-conversion-storage-tests PROPERTIES TIMEOUT 60
@@ -9506,6 +9510,7 @@ foreach(_conversion_view_target IN ITEMS snow_shot snow-shot-recognition-window-
     if(TARGET ${_conversion_view_target})
         target_sources(${_conversion_view_target} PRIVATE
             include/snow_shot/presentation/screenshotimageconversion.h
+            include/snow_shot/presentation/screenshotimageconversionclipboard.h
             include/snow_shot/presentation/screenshotimageconversionview.h
             src/presentation/ocr/screenshotimageconversionview.cpp)
     endif()
@@ -10184,6 +10189,10 @@ if(SNOW_SHOT_BUILD_TESTS)
         add_test(NAME snow-shot-macos-clipboard-roundtrip-tests
             COMMAND snow-shot-macos-clipboard-roundtrip-tests -platform cocoa)
         set_tests_properties(snow-shot-macos-clipboard-roundtrip-tests PROPERTIES
+            LABELS "unit;macos" RUN_SERIAL TRUE TIMEOUT 60)
+        add_test(NAME snow-shot-macos-html-clipboard-tests
+            COMMAND snow-shot-macos-clipboard-roundtrip-tests --html-only -platform cocoa)
+        set_tests_properties(snow-shot-macos-html-clipboard-tests PROPERTIES
             LABELS "unit;macos" RUN_SERIAL TRUE TIMEOUT 60)
     endif()
     unset(_snow_clipboard_qpa_environment)

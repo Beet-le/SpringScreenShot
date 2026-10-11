@@ -42,6 +42,7 @@
 void runOriginalImageTranslationTests();
 void runImageConversionTests();
 void runImageConversionNetworkTests();
+void runImageConversionClipboardTests();
 void runRecognitionModelTests();
 
 class SnowShotApiClientTestAccess {
@@ -1129,6 +1130,11 @@ int main(int argc, char** argv) {
     }
     if (application.arguments().contains(QStringLiteral("--image-conversion-only"))) {
         runImageConversionTests();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--image-conversion-clipboard-only"))) {
+        runImageConversionClipboardTests();
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
