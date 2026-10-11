@@ -3,6 +3,7 @@
 
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QMap>
 #include <QString>
 #include <QStringList>
 #include <QVector>
@@ -48,6 +49,8 @@ class ConfigurationSchema final {
     [[nodiscard]] static QJsonValue defaultValue(const QString& key);
     [[nodiscard]] static ConfigurationNormalization normalize(const QString& key,
                                                               const QJsonValue& value);
+    [[nodiscard]] static QMap<QString, QJsonValue>
+    migrateLegacyValues(QMap<QString, QJsonValue> values);
     // Accepts a JSON number that is a finite integer in [1, INT_MAX].
     [[nodiscard]] static bool parseIntegerVersion(const QJsonValue& value, int* version);
     [[nodiscard]] static int currentVersion();

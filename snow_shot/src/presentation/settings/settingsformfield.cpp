@@ -60,6 +60,7 @@ struct SettingsFormField::Impl {
                                          });
                     }
                 } else if constexpr (std::is_same_v<Payload, SettingsMultiSelectDefinition>) {
+                    metadata.placeholder = payload.placeholder;
                     const auto handle = fields::multiSelect(metadata, {}, options);
                     field = handle.field;
                     editor = handle.editor;

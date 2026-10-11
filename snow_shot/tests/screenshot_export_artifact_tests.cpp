@@ -19,9 +19,11 @@
 #include <QImage>
 #include <QThread>
 #include <QScopeGuard>
+#include <QSemaphore>
 #include <QColorSpace>
 #include <QCryptographicHash>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
@@ -546,6 +548,124 @@ void automaticSavesUseRequestedEncoding() {
     require(save(ScreenshotImageFileFormat::Pdf, 35, ScreenshotCompressionLevel::High)
                 .contains("/DCTDecode"),
             "automatic save PDF ignored the configured quality");
+}
+
+void configuredAutomaticDirectoryResolvesInTheSaveWorker() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "configured directory fixture unavailable");
+    QObject receiver;
+    const QImage image = testImage();
+    ScreenshotExportArtifact artifact(ScreenshotExportSource::fromImage(image),
+                                      ScreenshotCompressionLevel::Medium);
+    ScreenshotExportArtifact cancelled(ScreenshotExportSource::fromImage(image),
+                                       ScreenshotCompressionLevel::Medium);
+    const auto warm = [&](ScreenshotExportArtifact& source) {
+        bool ready = false;
+        require(source.requestCanonicalPng(&receiver,
+                                           [&](ScreenshotExportEncodingResult result) {
+                                               require(result.succeeded(),
+                                                       "configured directory PNG fixture failed");
+                                               ready = true;
+                                           }),
+                "configured directory PNG fixture rejected");
+        processUntil([&] { return ready; });
+        require(source.cachedPng(ScreenshotCompressionLevel::Medium).isValid(),
+                "configured directory fixture must retain its encoded PNG");
+    };
+    warm(artifact);
+    warm(cancelled);
+
+    auto& coordinator = ScreenshotExportCoordinator::shared();
+    processUntil([&] { return coordinator.pendingJobCount() == 0; });
+    const int workerCount = std::clamp(QThread::idealThreadCount(), 1, 2);
+    auto entered = std::make_shared<std::atomic_int>(0);
+    auto release = std::make_shared<QSemaphore>();
+    const auto unblock = qScopeGuard([release, workerCount] { release->release(workerCount); });
+    for (int index = 0; index < workerCount; ++index) {
+        require(coordinator
+                    .submit(
+                        &receiver, ScreenshotExportCoordinator::Priority::Foreground,
+                        [entered, release](const ScreenshotExportCancellation&) {
+                            entered->fetch_add(1, std::memory_order_release);
+                            release->acquire();
+                            return ScreenshotExportTaskResult{};
+                        },
+                        [](ScreenshotExportTaskResult) {})
+                    .isValid(),
+                "configured directory worker blocker rejected");
+    }
+    processUntil([&] { return entered->load(std::memory_order_acquire) == workerCount; });
+
+    const QString configured = directory.filePath(QStringLiteral("configured"));
+    const QString explicitDirectory = directory.filePath(QStringLiteral("explicit"));
+    const QString cancelledDirectory = directory.filePath(QStringLiteral("cancelled"));
+    QString requestedDirectory = configured;
+    std::optional<ScreenshotExportTaskResult> saved;
+    std::optional<ScreenshotExportTaskResult> explicitSaved;
+    bool cancelledCallback = false;
+    require(!QFileInfo::exists(configured) && !QFileInfo::exists(explicitDirectory),
+            "configured directory fixture must start without output folders");
+    require(artifact.requestAutomaticSaveToConfiguredDirectory(
+                &receiver, requestedDirectory, ScreenshotImageFileFormat::Png,
+                QStringLiteral("configured-output"), {},
+                [&](ScreenshotExportTaskResult result) { saved = std::move(result); }),
+            "configured directory save rejected");
+    requestedDirectory = directory.filePath(QStringLiteral("later-settings"));
+    require(artifact.requestAutomaticSave(
+                &receiver, {explicitDirectory}, ScreenshotImageFileFormat::Png,
+                QStringLiteral("explicit-output"), {},
+                [&](ScreenshotExportTaskResult result) { explicitSaved = std::move(result); }),
+            "explicit directory save rejected");
+    require(cancelled.requestAutomaticSaveToConfiguredDirectory(
+                &receiver, cancelledDirectory, ScreenshotImageFileFormat::Png,
+                QStringLiteral("cancelled-output"), {},
+                [&](ScreenshotExportTaskResult) { cancelledCallback = true; }),
+            "cancelled directory save fixture rejected");
+    // Cached rows and PNG bytes let the GUI finish scheduling while every export
+    // worker is occupied. Eligibility must remain unresolved until the save runs.
+    processUntil([&] { return coordinator.pendingJobCount() == workerCount + 3; });
+    require(!saved && !explicitSaved && !QFileInfo::exists(configured) &&
+                !QFileInfo::exists(explicitDirectory),
+            "queued saves must not create directories on the GUI thread");
+    cancelled.cancel();
+    require(coordinator.pendingJobCount() == workerCount + 2,
+            "cancelled configured save must release its queued worker slot");
+    require(!cancelled.requestAutomaticSaveToConfiguredDirectory(
+                &receiver, cancelledDirectory, ScreenshotImageFileFormat::Png,
+                QStringLiteral("rejected-output"), {},
+                [&](ScreenshotExportTaskResult) { cancelledCallback = true; }) &&
+                !artifact.requestAutomaticSaveToConfiguredDirectory(
+                    nullptr, cancelledDirectory, ScreenshotImageFileFormat::Png,
+                    QStringLiteral("rejected-output"), {},
+                    [&](ScreenshotExportTaskResult) { cancelledCallback = true; }) &&
+                !artifact.requestAutomaticSaveToConfiguredDirectory(
+                    &receiver, cancelledDirectory, ScreenshotImageFileFormat::Png,
+                    QStringLiteral("rejected-output"), {}, {}),
+            "invalid configured save requests must be rejected without output work");
+    require(QDir().mkpath(configured), "configured output folder fixture could not be created");
+    release->release(workerCount);
+    processUntil([&] {
+        return saved.has_value() && explicitSaved.has_value() && coordinator.pendingJobCount() == 0;
+    });
+    QCoreApplication::processEvents();
+    const auto removeOutputs = qScopeGuard([&] {
+        if (saved)
+            static_cast<void>(QFile::remove(saved->savedPath));
+        if (explicitSaved)
+            static_cast<void>(QFile::remove(explicitSaved->savedPath));
+    });
+    require(saved->succeeded() &&
+                saved->savedPath ==
+                    QDir(configured).filePath(QStringLiteral("configured-output.png")) &&
+                QImage(saved->savedPath).convertToFormat(QImage::Format_RGBA8888) == image,
+            "configured save must resolve its captured directory inside the save worker");
+    require(explicitSaved->succeeded() &&
+                explicitSaved->savedPath ==
+                    QDir(explicitDirectory).filePath(QStringLiteral("explicit-output.png")),
+            "explicit directory saves must retain their missing-folder creation behavior");
+    require(!cancelledCallback && !QFileInfo::exists(cancelledDirectory) &&
+                !QFileInfo::exists(requestedDirectory),
+            "cancelled, rejected, and later directory values must not produce output");
 }
 
 void clipboardAndSavesShareConfiguredEncoding(ScreenshotCompressionLevel saveCompression,
@@ -1906,6 +2026,10 @@ int main(int argc, char** argv) {
             quickSaveUsesOnlyConfiguredOutput();
             return EXIT_SUCCESS;
         }
+        if (application.arguments().contains(QStringLiteral("--configured-directory-only"))) {
+            configuredAutomaticDirectoryResolvesInTheSaveWorker();
+            return EXIT_SUCCESS;
+        }
         if (application.arguments().contains(QStringLiteral("--row-source-only"))) {
             rowRequestsCoalesceAndReuseBackingImage();
             convertedRowSourcesRetainOriginalPixelsWithoutMaterializing();
@@ -1915,6 +2039,7 @@ int main(int argc, char** argv) {
         quickSaveUsesOnlyConfiguredOutput();
         clipboardFilesUseTemporaryStorageAndKeepExportOptions();
         automaticSavesUseRequestedEncoding();
+        configuredAutomaticDirectoryResolvesInTheSaveWorker();
         clipboardUsesConfiguredCompression();
         manualPngSavesUseTheirRequestedCompression();
         clipboardSharesPendingConfiguredEncoding();

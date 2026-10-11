@@ -203,6 +203,85 @@ void queuedCopiesRetainCaptureTargets() {
     }
 }
 
+void selectedExecutionActionsControlEachCaptureTarget() {
+    struct Selection {
+        QStringList actions;
+        bool focusedWindow;
+        bool currentMonitor;
+    };
+    const QVector<Selection> selections{
+        {{}, false, false},
+        {{QStringLiteral("copy_screenshot")}, false, false},
+        {{QStringLiteral("copy_scrolling_screenshot")}, false, false},
+        {{QStringLiteral("copy_pinned_image")}, false, false},
+        {{QStringLiteral("capture_focused_window")}, true, false},
+        {{QStringLiteral("capture_current_monitor")}, false, true},
+        {{QStringLiteral("pin_to_screen")}, false, false},
+        {{QStringLiteral("capture_focused_window"), QStringLiteral("copy_scrolling_screenshot")},
+         true,
+         false},
+        {{QStringLiteral("capture_current_monitor"), QStringLiteral("pin_to_screen")}, false, true},
+        {{QStringLiteral("capture_focused_window"), QStringLiteral("capture_current_monitor")},
+         true,
+         true},
+        {{QStringLiteral("copy_screenshot"), QStringLiteral("copy_scrolling_screenshot"),
+          QStringLiteral("copy_pinned_image"), QStringLiteral("capture_focused_window"),
+          QStringLiteral("capture_current_monitor"), QStringLiteral("pin_to_screen")},
+         true,
+         true},
+    };
+    const DirectCaptureTarget targets[] = {
+        DirectCaptureTarget::FocusedWindow, DirectCaptureTarget::CurrentMonitor,
+        DirectCaptureTarget::FocusedWindow, DirectCaptureTarget::CurrentMonitor};
+    require(!directCaptureAutoSaveEnabled(static_cast<DirectCaptureTarget>(-1),
+                                          selections.back().actions),
+            "an unknown capture target must not select an automatic-save action");
+    for (const Selection& selection : selections) {
+        for (const bool copyFile : {false, true}) {
+            Fixture f;
+            QStringList selectedActions = selection.actions;
+            for (const DirectCaptureTarget target : targets) {
+                DirectCaptureRequest request;
+                request.target = target;
+                request.autoSave = directCaptureAutoSaveEnabled(target, selectedActions);
+                request.copyFile = copyFile;
+                request.historyEnabled = true;
+                f.workflow.enqueue(request);
+            }
+            selectedActions.clear();
+            selectedActions.push_back(QStringLiteral("pin_to_screen"));
+            int expectedSaveCount = 0;
+            for (const DirectCaptureTarget target : targets) {
+                const bool expectedAutoSave = target == DirectCaptureTarget::FocusedWindow
+                                                  ? selection.focusedWindow
+                                                  : selection.currentMonitor;
+                QCoreApplication::processEvents();
+                require(f.requests.back().target == target &&
+                            f.requests.back().autoSave == expectedAutoSave,
+                        "changing selected actions must not change a queued capture snapshot");
+                f.acquired(frame());
+                require(f.copyRequests.back().target == target &&
+                            f.copyRequests.back().autoSave == expectedAutoSave &&
+                            f.copyRequests.back().copyFile == copyFile,
+                        "each direct target must use only its selected execution action");
+                f.copied({});
+                if (expectedAutoSave) {
+                    ++expectedSaveCount;
+                    require(f.events.back() == "save" && f.saveRequests.back().target == target,
+                            "selected direct captures must save after clipboard completion");
+                    f.saved(QStringLiteral("saved.png"), {});
+                }
+                require(f.saveRequests.size() == expectedSaveCount && f.events.back() == "history",
+                        "unselected direct captures must skip saving and still publish history");
+                f.recorded({});
+            }
+            require(f.copyRequests.size() == 4 && f.events.count("history") == 4 &&
+                        f.completed == 4 && f.workflow.pendingCount() == 0,
+                    "execution selections must preserve all queued copies and history entries");
+        }
+    }
+}
+
 void clipboardFailureStillAttemptsAutomaticSave() {
     for (bool copyFile : {false, true}) {
         for (bool accepted : {false, true}) {
@@ -322,7 +401,7 @@ void queuedRequestsRetainTargetsAndOutputSettings() {
     request.autoSave = true;
     request.copyFile = true;
     request.historyEnabled = true;
-    request.directories = {QStringLiteral("original-directory")};
+    request.configuredSaveDirectory = QStringLiteral("original-directory");
     request.imageFormat = QStringLiteral("pdf");
     request.encoding.quality = 42;
     request.encoding.compressionLevel = ScreenshotCompressionLevel::High;
@@ -344,7 +423,7 @@ void queuedRequestsRetainTargetsAndOutputSettings() {
                     queued.window == static_cast<quintptr>(8765 + i) && queued.autoSave &&
                     queued.copyFile && queued.historyEnabled &&
                     queued.requestedAt.toMSecsSinceEpoch() == 123456 &&
-                    queued.directories == QStringList{QStringLiteral("original-directory")} &&
+                    queued.configuredSaveDirectory == QStringLiteral("original-directory") &&
                     queued.imageFormat == QStringLiteral("pdf") && queued.encoding.quality == 42 &&
                     queued.encoding.compressionLevel == ScreenshotCompressionLevel::High &&
                     queued.pdf.pageSize == ScreenshotPdfPageSize::LandscapeA4 &&
@@ -401,6 +480,7 @@ int main(int argc, char** argv) {
     shutterPreferenceAppliesToEachRequest();
     outputsKeepRawPixelsAndProcessEveryRequest();
     queuedCopiesRetainCaptureTargets();
+    selectedExecutionActionsControlEachCaptureTarget();
     failuresDoNotBlockLaterRequests();
     clipboardFailureStillAttemptsAutomaticSave();
     fileCopyHistoryFailureAndLateCallbacks();

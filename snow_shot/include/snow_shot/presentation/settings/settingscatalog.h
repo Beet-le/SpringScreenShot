@@ -138,7 +138,6 @@ enum class SettingsSwitchBinding {
     ShowEditSelectionToolbar,
     TrayEnabled,
     FloatingToolbarEnabled,
-    ScreenshotAutoSaveAfterCopy,
     ScreenshotQuickSelectionModification,
     ScreenshotShowCursor,
     ScreenshotCaptureUiInScrollingScreenshot,
@@ -192,12 +191,14 @@ enum class SettingsIntegerBinding {
 enum class SettingsMultiSelectBinding {
     DrawingQuickSelectionDisabledTools,
     TrayMenuOptions,
+    ScreenshotAutoSaveAfterExecution,
 };
 
 struct SettingsMultiSelectDefinition {
     SettingsMultiSelectBinding binding =
         SettingsMultiSelectBinding::DrawingQuickSelectionDisabledTools;
     QVector<SettingsOptionDefinition> options;
+    TranslatableText placeholder = {};
 };
 
 struct SettingsIntegerDefinition {

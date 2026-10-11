@@ -16,6 +16,9 @@
 namespace snow_shot::presentation {
 enum class DirectCaptureTarget { FocusedWindow, CurrentMonitor };
 
+[[nodiscard]] bool directCaptureAutoSaveEnabled(DirectCaptureTarget target,
+                                                const QStringList& actions);
+
 struct DirectCaptureDisplay {
     QImage image;
     QRect physicalBounds;
@@ -33,7 +36,7 @@ struct DirectCaptureRequest {
     bool autoSave = false;
     bool copyFile = false;
     bool historyEnabled = false;
-    QStringList directories;
+    QString configuredSaveDirectory;
     QString imageFormat;
     ScreenshotImageEncodingOptions encoding;
     ScreenshotCompressionLevel historyDisplayCompressionLevel = ScreenshotCompressionLevel::Medium;

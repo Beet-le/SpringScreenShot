@@ -1939,6 +1939,11 @@ if(SNOW_SHOT_BUILD_TESTS)
             -DTEST_COMMAND=$<TARGET_FILE:snow-shot-application-storage-tests>
             -P ${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_flaky_test_with_retry.cmake
     )
+    add_test(NAME snow-shot-auto-save-execution-storage-tests
+        COMMAND snow-shot-application-storage-tests --auto-save-after-execution-only)
+    set_tests_properties(snow-shot-auto-save-execution-storage-tests PROPERTIES
+        LABELS "unit" TIMEOUT 60
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-storage-quit-lifetime-tests
         COMMAND snow-shot-application-storage-tests --quit-lifetime-only)
     add_test(NAME snow-shot-draw-template-storage-tests
@@ -2739,6 +2744,11 @@ if(SNOW_SHOT_BUILD_TESTS)
     )
     add_test(NAME snow-shot-configuration-archive-tests
              COMMAND snow-shot-configuration-archive-tests)
+    add_test(NAME snow-shot-auto-save-execution-archive-tests
+        COMMAND snow-shot-configuration-archive-tests --auto-save-after-execution-only)
+    set_tests_properties(snow-shot-auto-save-execution-archive-tests PROPERTIES
+        LABELS "unit" TIMEOUT 60
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-selection-aspect-ratio-archive-tests
         COMMAND snow-shot-configuration-archive-tests --selection-aspect-ratio-only)
     set_tests_properties(snow-shot-selection-aspect-ratio-archive-tests PROPERTIES LABELS "unit"
@@ -5185,6 +5195,11 @@ if(SNOW_SHOT_BUILD_TESTS)
         target_link_libraries(snow-shot-export-artifact-tests PRIVATE user32)
     endif()
     add_test(NAME snow-shot-export-artifact-tests COMMAND snow-shot-export-artifact-tests)
+    add_test(NAME snow-shot-configured-save-directory-tests
+        COMMAND snow-shot-export-artifact-tests --configured-directory-only)
+    set_tests_properties(snow-shot-configured-save-directory-tests PROPERTIES
+        LABELS "unit" TIMEOUT 30
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-pinned-export-lifetime-tests
         COMMAND snow-shot-export-artifact-tests --pinned-lifetime-only)
     set_tests_properties(snow-shot-pinned-export-lifetime-tests PROPERTIES
@@ -5269,6 +5284,11 @@ if(SNOW_SHOT_BUILD_TESTS)
     set_tests_properties(snow-shot-pinned-recognition-save-tests PROPERTIES LABELS "unit" TIMEOUT 90)
     add_test(NAME snow-shot-pinned-shared-image-export-tests
         COMMAND snow-shot-pinned-window-tests --shared-image-export-only -platform offscreen)
+    add_test(NAME snow-shot-pin-execution-autosave-tests
+        COMMAND snow-shot-pinned-window-tests --pin-execution-autosave-only -platform offscreen)
+    set_tests_properties(snow-shot-pin-execution-autosave-tests PROPERTIES
+        LABELS "unit" TIMEOUT 90
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(snow-shot-pinned-shared-image-export-tests PROPERTIES
         LABELS "unit" TIMEOUT 90
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")

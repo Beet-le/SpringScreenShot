@@ -996,12 +996,18 @@ bool ScreenshotSettings::setSelectionResizeMode(const QString& mode) const {
     return cache().setValue(QStringLiteral("screenshot/selection_resize_mode"), mode);
 }
 
-bool ScreenshotSettings::autoSaveAfterCopy() const {
-    return cache().value(QStringLiteral("screenshot/auto_save_after_copy")).toBool();
+QStringList ScreenshotSettings::autoSaveAfterExecutionActions() const {
+    return stringList(
+        cache().value(QStringLiteral("screenshot/auto_save_after_execution_actions")));
 }
 
-bool ScreenshotSettings::setAutoSaveAfterCopy(bool enabled) const {
-    return cache().setValue(QStringLiteral("screenshot/auto_save_after_copy"), enabled);
+bool ScreenshotSettings::setAutoSaveAfterExecutionActions(const QStringList& actions) const {
+    return cache().setValue(QStringLiteral("screenshot/auto_save_after_execution_actions"),
+                            stringArray(actions));
+}
+
+bool ScreenshotSettings::autoSaveAfterExecution(const QString& action) const {
+    return autoSaveAfterExecutionActions().contains(action);
 }
 
 bool ScreenshotSettings::copyImageFileToClipboard() const {

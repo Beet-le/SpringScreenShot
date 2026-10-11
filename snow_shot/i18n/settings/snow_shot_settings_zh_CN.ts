@@ -1341,16 +1341,16 @@
             <translation>自动调整窗口大小</translation>
         </message>
         <message>
-            <source>Auto save after copy</source>
-            <translation>复制后自动保存</translation>
-        </message>
-        <message>
             <source>Auto start at boot</source>
             <translation>开机时自动启动</translation>
         </message>
         <message>
             <source>Auto-recognize QR Code</source>
             <translation>自动识别二维码</translation>
+        </message>
+        <message>
+            <source>Auto-save after execution</source>
+            <translation>执行后自动保存</translation>
         </message>
         <message>
             <source>Auto-save image filename format</source>
@@ -1701,6 +1701,10 @@
             <translation>选择网络请求是否使用系统代理</translation>
         </message>
         <message>
+            <source>Choose which actions also save an image in the selected image format and save directory</source>
+            <translation>选择执行哪些操作时，同时以所选图像格式保存到指定目录</translation>
+        </message>
+        <message>
             <source>Clear</source>
             <translation>清除</translation>
         </message>
@@ -1845,6 +1849,14 @@
             <translation>复制颜色</translation>
         </message>
         <message>
+            <source>Copy current monitor</source>
+            <translation>复制当前显示器</translation>
+        </message>
+        <message>
+            <source>Copy focused window</source>
+            <translation>复制焦点窗口</translation>
+        </message>
+        <message>
             <source>Copy image file to clipboard</source>
             <translation>将图像文件复制到剪贴板</translation>
         </message>
@@ -1853,12 +1865,20 @@
             <translation>复制原始内容</translation>
         </message>
         <message>
+            <source>Copy pinned window</source>
+            <translation>复制固定到屏幕窗口</translation>
+        </message>
+        <message>
             <source>Copy recording</source>
             <translation>复制录制内容</translation>
         </message>
         <message>
             <source>Copy screenshot</source>
             <translation>复制截图</translation>
+        </message>
+        <message>
+            <source>Copy scrolling screenshot</source>
+            <translation>复制滚动截图</translation>
         </message>
         <message>
             <source>Copy text</source>
@@ -2989,6 +3009,10 @@
             <translation>将剪贴板中的图像、图像文件、格式化文本或 HTML 固定到屏幕</translation>
         </message>
         <message>
+            <source>Pin screenshot to screen</source>
+            <translation>固定截图到屏幕</translation>
+        </message>
+        <message>
             <source>Pin selected image files from File Explorer or the desktop to the screen</source>
             <translation>将文件资源管理器或桌面中选中的图像文件固定到屏幕</translation>
         </message>
@@ -3559,6 +3583,10 @@
         <message>
             <source>Select previously selected area</source>
             <translation>选择之前选中的区域</translation>
+        </message>
+        <message>
+            <source>Select scenarios</source>
+            <translation>选择场景</translation>
         </message>
         <message>
             <source>Select skin image</source>
@@ -4371,10 +4399,6 @@
         <message>
             <source>WebP</source>
             <translation>WebP</translation>
-        </message>
-        <message>
-            <source>When copying an image to the clipboard, also save it in the selected image format and save directory</source>
-            <translation>将图像复制到剪贴板时，同时按所选图像格式保存到指定目录</translation>
         </message>
         <message>
             <source>When pinning duplicate content</source>

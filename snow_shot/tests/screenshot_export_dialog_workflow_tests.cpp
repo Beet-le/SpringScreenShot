@@ -330,13 +330,30 @@ void persistence(const QTemporaryDir& temp) {
     require(backend.applySelectValue(settings::SettingsSelectBinding::ScreenshotSaveAsFileDialog,
                                      QStringLiteral("snow_shot")),
             "settings backend failed to write dialog selection");
-    require(adapter.setAutoSaveAfterCopy(true) && adapter.setCopyImageFileToClipboard(true) &&
+    constexpr auto autoSaveBinding =
+        settings::SettingsMultiSelectBinding::ScreenshotAutoSaveAfterExecution;
+    const QStringList executionActions{
+        QStringLiteral("copy_screenshot"),         QStringLiteral("copy_scrolling_screenshot"),
+        QStringLiteral("copy_pinned_image"),       QStringLiteral("capture_focused_window"),
+        QStringLiteral("capture_current_monitor"), QStringLiteral("pin_to_screen")};
+    for (const QString& action : executionActions) {
+        require(backend.applyMultiSelectValue(autoSaveBinding, {action}) &&
+                    adapter.autoSaveAfterExecutionActions() == QStringList{action} &&
+                    backend.multiSelectValue(autoSaveBinding) == QVariantList{action},
+                "each automatic save scenario must round-trip through the settings backend");
+    }
+    const QStringList autoSaveActions{QStringLiteral("copy_screenshot"),
+                                      QStringLiteral("pin_to_screen")};
+    require(adapter.setAutoSaveAfterExecutionActions(autoSaveActions) &&
+                adapter.setCopyImageFileToClipboard(true) &&
                 backend.resetSection(settings::SettingsSectionReset::ScreenshotSettings) &&
-                adapter.autoSaveAfterCopy() && adapter.copyImageFileToClipboard() &&
+                adapter.autoSaveAfterExecutionActions() == autoSaveActions &&
+                adapter.copyImageFileToClipboard() &&
                 adapter.saveAsFileDialog() == QStringLiteral("snow_shot"),
             "function reset must preserve screenshot output settings");
     require(backend.resetSection(settings::SettingsSectionReset::ScreenshotOutput) &&
-                !adapter.autoSaveAfterCopy() && !adapter.copyImageFileToClipboard() &&
+                adapter.autoSaveAfterExecutionActions().isEmpty() &&
+                !adapter.copyImageFileToClipboard() &&
                 adapter.saveAsFileDialog() == QStringLiteral("system"),
             "output reset must restore all moved screenshot settings");
 
@@ -1251,10 +1268,8 @@ void shortcutPopupInteraction(QWidget& owner, const QTemporaryDir& temp) {
     QCursor::setPos(outside);
     leave(trigger);
     settle();
-    require(menu != nullptr, "hover popup was unexpectedly replaced during pointer movement");
-    std::cerr << "Shortcut popup width: " << popupWidth
-              << "; visible after leaving trigger: " << menu->isVisible() << '\n';
-    require(!menu->isVisible(), "leaving the trigger without entering its menu must hide it");
+    require(menu.isNull(),
+            "leaving the trigger without entering its menu must retire the popup session");
     require(!trigger->isHidden(), "leaving a custom save path must keep its menu button visible");
     require(popupWidth < 160, "two-action shortcut popup must size to its content");
     flush();
@@ -1265,7 +1280,8 @@ void shortcutPopupInteraction(QWidget& owner, const QTemporaryDir& temp) {
     leave(trigger);
     enter(menu);
     settle();
-    require(menu->isVisible(), "moving from the shortcut arrow into its menu must keep it open");
+    require(menu && menu->isVisible(),
+            "moving from the shortcut arrow into its menu must keep its session open");
     auto requireLabelsFit = [&] {
         const auto theme = adqt::theme::ThemeManager::instance().resolve(menu, trigger).values;
         QFont font = menu->font();
@@ -1299,7 +1315,8 @@ void shortcutPopupInteraction(QWidget& owner, const QTemporaryDir& temp) {
     leave(menu);
     enter(trigger);
     settle();
-    require(menu->isVisible(), "returning to the shortcut arrow must cancel pending dismissal");
+    require(menu && menu->isVisible(),
+            "returning to the shortcut arrow must cancel pending dismissal");
 
     // A native popup can grab mouse moves outside its bounds without another Leave event.
     QCursor::setPos(outside);
@@ -1307,8 +1324,8 @@ void shortcutPopupInteraction(QWidget& owner, const QTemporaryDir& temp) {
                      Qt::NoButton, Qt::NoModifier);
     QApplication::sendEvent(menu, &move);
     settle();
-    require(!menu->isVisible(),
-            "grabbed mouse movement outside the hover region must hide the menu");
+    require(menu.isNull(),
+            "grabbed mouse movement outside the hover region must retire the popup session");
     flush();
 
     enter(trigger);
@@ -1318,7 +1335,7 @@ void shortcutPopupInteraction(QWidget& owner, const QTemporaryDir& temp) {
     QCursor::setPos(outside);
     leave(menu);
     settle();
-    require(!menu->isVisible(), "leaving the popup must hide it without a click");
+    require(menu.isNull(), "leaving the popup must retire its session without a click");
 
     flush();
     trigger->click();
@@ -1338,8 +1355,8 @@ void shortcutPopupInteraction(QWidget& owner, const QTemporaryDir& temp) {
                             Qt::NoButton, Qt::NoButton, Qt::NoModifier);
     QApplication::sendEvent(menu, &coveredMove);
     settle();
-    require(!menu->isVisible(),
-            "a covered trigger must not keep the hover popup open after pointer movement");
+    require(menu.isNull(),
+            "a covered trigger must retire its hover popup session after pointer movement");
     const QPoint triggerCenter = trigger->rect().center();
     QEnterEvent coveredEnter(triggerCenter, triggerCenter, coveredTrigger);
     QApplication::sendEvent(trigger, &coveredEnter);

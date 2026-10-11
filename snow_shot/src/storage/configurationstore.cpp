@@ -84,6 +84,13 @@ QMap<QString, QJsonValue> overlayFromDocument(const QJsonObject& document) {
             overlay.insert(entry.key, raw);
         }
     }
+    const QString legacyAutoSaveKey = QStringLiteral("screenshot/auto_save_after_copy");
+    bool legacyAutoSavePresent = false;
+    const QJsonValue legacyAutoSave =
+        valueAtPath(document, legacyAutoSaveKey, &legacyAutoSavePresent);
+    if (legacyAutoSavePresent) {
+        overlay.insert(legacyAutoSaveKey, legacyAutoSave);
+    }
     return overlay;
 }
 
@@ -143,6 +150,16 @@ MaterializedConfiguration materializeConfiguration(const QMap<QString, QJsonValu
     result.document = std::move(document);
     const bool mutateDocument = compatibility != ConfigurationCompatibility::FutureVersion;
     const bool replaceAll = policy == ConfigurationOverlayPolicy::ReplaceAll;
+    const QMap<QString, QJsonValue> currentOverlay =
+        mutateDocument ? ConfigurationSchema::migrateLegacyValues(overlay) : overlay;
+    if (mutateDocument) {
+        QJsonObject screenshot = result.document.value(QStringLiteral("screenshot")).toObject();
+        if (screenshot.contains(QStringLiteral("auto_save_after_copy"))) {
+            screenshot.remove(QStringLiteral("auto_save_after_copy"));
+            result.document.insert(QStringLiteral("screenshot"), screenshot);
+            result.dirty = !replaceAll;
+        }
+    }
     QSet<QString> defaultedShortcutKeys;
 
     for (const ConfigurationSchemaEntry& entry : ConfigurationSchema::entries()) {
@@ -150,7 +167,7 @@ MaterializedConfiguration materializeConfiguration(const QMap<QString, QJsonValu
             continue;
         }
 
-        const bool present = overlay.contains(entry.key);
+        const bool present = currentOverlay.contains(entry.key);
         if (!present) {
             result.values.insert(entry.key, entry.defaultValue);
             if (entry.valueKind == ConfigurationValueKind::ShortcutList)
@@ -164,10 +181,11 @@ MaterializedConfiguration materializeConfiguration(const QMap<QString, QJsonValu
             continue;
         }
 
-        QJsonValue raw = overlay.value(entry.key);
+        QJsonValue raw = currentOverlay.value(entry.key);
         // Upgrade only the untouched previous tray default. A customized list keeps its order.
         if (entry.key == QStringLiteral("tray/menu_options") && mutateDocument &&
-            !overlay.contains(QStringLiteral("global_shortcuts/restore_last_closed_windows"))) {
+            !currentOverlay.contains(
+                QStringLiteral("global_shortcuts/restore_last_closed_windows"))) {
             QJsonArray previousDefault = entry.defaultValue.toArray();
             for (qsizetype i = previousDefault.size(); i > 0; --i) {
                 if (previousDefault.at(i - 1).toString() ==
@@ -235,9 +253,12 @@ MaterializedConfiguration materializeConfiguration(const QMap<QString, QJsonValu
         }
 
         result.values.insert(entry.key, normalized.value);
-        if (mutateDocument && (replaceAll || normalized.changed || migratedDestroyShortcut)) {
+        const bool migratedLegacyValue = !overlay.contains(entry.key);
+        if (mutateDocument &&
+            (replaceAll || normalized.changed || migratedDestroyShortcut || migratedLegacyValue)) {
             insertPath(&result.document, entry.key, normalized.value);
-            if ((normalized.changed || migratedDestroyShortcut) && !replaceAll) {
+            if ((normalized.changed || migratedDestroyShortcut || migratedLegacyValue) &&
+                !replaceAll) {
                 result.dirty = true;
             }
         }

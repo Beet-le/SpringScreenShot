@@ -62,8 +62,8 @@ class DirectCaptureController::Impl {
               },
               [this](const auto& request, const auto&, auto done) {
                   return artifact &&
-                         artifact->requestAutomaticSave(
-                             &owner, request.directories,
+                         artifact->requestAutomaticSaveToConfiguredDirectory(
+                             &owner, request.configuredSaveDirectory,
                              ScreenshotImageFileService::formatForKey(request.imageFormat),
                              request.filenameFormat, request.encoding,
                              [done = std::move(done)](ScreenshotExportTaskResult result) {
@@ -212,12 +212,12 @@ class DirectCaptureController::Impl {
         result.shutterSoundNotification = settings.shutterSoundNotification();
         result.restoreOriginalScreenColors = settings.restoreOriginalScreenColors();
         result.requestedAt = QDateTime::currentDateTime();
-        result.autoSave = settings.autoSaveAfterCopy();
+        result.autoSave =
+            directCaptureAutoSaveEnabled(target, settings.autoSaveAfterExecutionActions());
         result.copyFile = settings.copyImageFileToClipboard();
         result.historyEnabled =
             storage::ApplicationStorage::instance().captureHistory().policy().enabled;
-        result.directories =
-            ScreenshotImageFileService::automaticDirectories(settings.imageSaveDirectory());
+        result.configuredSaveDirectory = settings.imageSaveDirectory();
         result.imageFormat = settings.imageFormat();
         result.encoding = screenshotEncodingOptions(settings);
         result.historyDisplayCompressionLevel = ScreenshotImageFileService::compressionLevelForKey(

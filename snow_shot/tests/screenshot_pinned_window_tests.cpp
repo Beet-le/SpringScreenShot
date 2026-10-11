@@ -148,6 +148,8 @@
 #include <QVariantAnimation>
 #include <QWheelEvent>
 #include <QWindow>
+#include <atomic>
+#include <cstring>
 
 #include <algorithm>
 #include <array>
@@ -14235,6 +14237,297 @@ void pinnedDragExportNativeHitTest() {
 }
 #endif
 
+void pinnedExecutionAutomaticSaveOffscreen() {
+    IsolatedPinnedStorage storage;
+    QTemporaryDir directory;
+    QTemporaryDir laterDirectory;
+    require(directory.isValid() && laterDirectory.isValid(), "pin auto-save directories");
+    require(snow_shot::storage::ScreenshotSettings().setAutoSaveAfterExecutionActions(
+                {QStringLiteral("pin_to_screen")}),
+            "enable screenshot pin automatic saving");
+    QObject receiver;
+    QScreen* screen = QGuiApplication::primaryScreen();
+    require(screen != nullptr, "pin auto-save requires a screen");
+    QImage image(QSize(64, 48), QImage::Format_ARGB32_Premultiplied);
+    image.fill(QColor(36, 132, 204));
+    ScreenshotPinnedSelectionRequest selection;
+    selection.selection = QRect(QPoint(80, 80), image.size());
+    selection.contentCanvasRect = selection.selection;
+    selection.surfaceCanvasRect = selection.selection;
+    selection.initialWindowSize = image.size();
+    selection.geometry = ScreenshotGeometryMapper::pinnedImageGeometry(
+        physicalPinGeometry(*screen, selection.selection.topLeft(), image.size()), image.size());
+    selection.geometry.canvasSourceRect = selection.surfaceCanvasRect;
+    selection.screen = screen;
+    const auto wait = [](auto predicate, const char* message) {
+        QElapsedTimer timer;
+        timer.start();
+        while (!predicate() && timer.elapsed() < 10000) {
+            waitForUi(5);
+        }
+        require(predicate(), message);
+    };
+    enum class Scenario { NoRequest, Save, RenderFailure, Cancelled, SaveFailure };
+    for (bool scrolling : {false, true}) {
+        for (const auto scenario : {Scenario::NoRequest, Scenario::Save, Scenario::RenderFailure,
+                                    Scenario::Cancelled, Scenario::SaveFailure}) {
+            ScreenshotSelectionExportUiServices services;
+            std::function<void(QImage)> deliver;
+            QSemaphore encodingStarted;
+            QSemaphore encodingRelease;
+            const auto releaseEncoding = qScopeGuard([&] { encodingRelease.release(); });
+            ScreenshotExportArtifact::PngCachePolicy policy;
+            if (scenario == Scenario::Save) {
+                policy.fileEncodingStarted = [&](ScreenshotImageFileFormat format) {
+                    if (format == ScreenshotImageFileFormat::Bmp) {
+                        encodingStarted.release();
+                        encodingRelease.acquire();
+                    }
+                };
+            }
+            auto artifact = std::make_shared<ScreenshotExportArtifact>(
+                ScreenshotExportSource::fromImageLoader(
+                    [&deliver](QObject*, std::function<void(QImage)> ready) {
+                        deliver = std::move(ready);
+                        return true;
+                    }),
+                ScreenshotCompressionLevel::Medium, std::move(policy));
+            const std::weak_ptr<ScreenshotExportArtifact> weakArtifact = artifact;
+            int saveCompletions = 0;
+            std::optional<ScreenshotExportTaskResult> saved;
+            ScreenshotAutomaticSaveRequest automatic;
+            automatic.receiver = &receiver;
+            automatic.configuredSaveDirectory = directory.path();
+            automatic.format = ScreenshotImageFileFormat::Bmp;
+            automatic.filenameFormat =
+                scenario == Scenario::SaveFailure
+                    ? QString(300, QLatin1Char('x'))
+                    : QStringLiteral("pin-%1-%2").arg(scrolling).arg(static_cast<int>(scenario));
+            automatic.encoding = {42, ScreenshotCompressionLevel::High};
+            automatic.requestedAt = QDateTime(QDate(2026, 1, 2), QTime(3, 4, 5));
+            automatic.completion = [&](ScreenshotExportTaskResult result) {
+                ++saveCompletions;
+                saved = std::move(result);
+            };
+            const QString expectedPath =
+                directory.filePath(automatic.filenameFormat + QStringLiteral(".bmp"));
+            std::optional<ScreenshotAutomaticSaveRequest> request;
+            if (scenario != Scenario::NoRequest) {
+                request = automatic;
+            }
+            int presentationCompletions = 0;
+            bool presentedSuccessfully = false;
+            const auto completed = [&](bool success, QImage) {
+                ++presentationCompletions;
+                presentedSuccessfully = success;
+            };
+            require(scrolling
+                        ? services.presentPinnedImageArtifact(artifact, screen,
+                                                              selection.geometry.nativeGeometry,
+                                                              image.size(), completed, request)
+                        : services.presentPinnedArtifact(selection, artifact, completed, request),
+                    "pin auto-save presentation accepted");
+            QPointer<ScreenshotPinnedWindow> window(onlyVisiblePinnedWindow());
+            require(window != nullptr, "pin auto-save creates a loading window");
+            const auto closeWindow = qScopeGuard([&] {
+                if (window != nullptr) {
+                    window->close();
+                    static_cast<void>(processUntilDeleted(window, 2000));
+                }
+            });
+            wait([&] { return static_cast<bool>(deliver); }, "pin auto-save image loader starts");
+            require(presentationCompletions == 0 && saveCompletions == 0 &&
+                        !QFileInfo::exists(expectedPath),
+                    "pin auto-save waits for a successful first frame");
+            automatic.configuredSaveDirectory = laterDirectory.path();
+            automatic.format = ScreenshotImageFileFormat::Png;
+            automatic.filenameFormat = QStringLiteral("later-request");
+            request = automatic;
+            if (scenario == Scenario::Cancelled) {
+                window->close();
+                deliver(image);
+            } else {
+                deliver(scenario == Scenario::RenderFailure ? QImage{} : image);
+            }
+            wait([&] { return presentationCompletions == 1; }, "pin first frame completes once");
+            if (scenario == Scenario::RenderFailure || scenario == Scenario::Cancelled) {
+                require(!presentedSuccessfully && saveCompletions == 0 &&
+                            !QFileInfo::exists(expectedPath),
+                        "failed or cancelled pin does not auto-save");
+                continue;
+            }
+            require(presentedSuccessfully, "pin auto-save preserves successful presentation");
+            if (scenario == Scenario::NoRequest) {
+                require(saveCompletions == 0 && !QFileInfo::exists(expectedPath),
+                        "history and other pins without an explicit request do not auto-save");
+                continue;
+            }
+            if (scenario == Scenario::Save) {
+                wait([&] { return encodingStarted.available() > 0; }, "pin file encoding starts");
+                require(saveCompletions == 0,
+                        "pin first frame completes without waiting for automatic saving");
+                artifact.reset();
+                window->close();
+                require(processUntilDeleted(window, 2000), "successful pin can close during save");
+                require(!weakArtifact.expired(), "automatic save retains its export artifact");
+                encodingRelease.release();
+            }
+            wait([&] { return saveCompletions == 1; }, "pin automatic save completes once");
+            if (scenario == Scenario::Save) {
+                wait([&] { return weakArtifact.expired(); },
+                     "completed automatic save releases its export artifact");
+            }
+            if (scenario == Scenario::SaveFailure) {
+                require(!saved->succeeded() && window != nullptr && window->isVisible(),
+                        "automatic save failure preserves the successful pin");
+            } else {
+                require(saved->succeeded() && saved->savedPath == expectedPath &&
+                            QImage(expectedPath).convertToFormat(QImage::Format_ARGB32) ==
+                                image.convertToFormat(QImage::Format_ARGB32) &&
+                            QDir(laterDirectory.path()).entryList(QDir::Files).isEmpty(),
+                        "pin auto-save retains invocation options and native image pixels");
+                require(QDir(directory.path())
+                                .entryList({QFileInfo(expectedPath).completeBaseName() +
+                                            QStringLiteral("*")},
+                                           QDir::Files)
+                                .size() == 1,
+                        "pin automatic saving writes exactly one file");
+            }
+        }
+    }
+
+    ScreenshotSelectionExportUiServices services;
+    std::atomic<int> rowReads = 0;
+    QImage rowImage = image;
+    rowImage.setColorSpace(QColorSpace::SRgb);
+    const QImage rgba = rowImage.convertToFormat(QImage::Format_RGBA8888);
+    auto rowArtifact = std::make_shared<ScreenshotExportArtifact>(
+        ScreenshotExportSource::fromProducer(
+            [rowImage](const ScreenshotExportCancellation&) { return rowImage; },
+            [rgba, &rowReads](std::function<bool()> cancelled) {
+                ScreenshotImageRowSource rows;
+                rows.size = rgba.size();
+                rows.cancellationRequested = std::move(cancelled);
+                rows.readRows = [rgba, &rowReads](int firstRow, int rowCount,
+                                                  qsizetype destinationStride, uchar* destination,
+                                                  qsizetype destinationSize) {
+                    const qsizetype rowBytes = qsizetype(rgba.width()) * 4;
+                    if (firstRow < 0 || rowCount <= 0 || firstRow + rowCount > rgba.height() ||
+                        destinationStride < rowBytes ||
+                        destinationSize < destinationStride * rowCount) {
+                        return false;
+                    }
+                    for (int index = 0; index < rowCount; ++index) {
+                        std::memcpy(destination + qsizetype(index) * destinationStride,
+                                    rgba.constScanLine(firstRow + index), size_t(rowBytes));
+                    }
+                    ++rowReads;
+                    return true;
+                };
+                return rows;
+            }),
+        ScreenshotCompressionLevel::Medium, ScreenshotExportArtifact::PngCachePolicy{1, {}});
+    std::optional<ScreenshotExportTaskResult> rowSaved;
+    ScreenshotAutomaticSaveRequest automatic;
+    automatic.receiver = &receiver;
+    automatic.configuredSaveDirectory = directory.path();
+    automatic.filenameFormat = QStringLiteral("scrolling-rows");
+    automatic.encoding.compressionLevel = ScreenshotCompressionLevel::High;
+    automatic.completion = [&](ScreenshotExportTaskResult result) { rowSaved = std::move(result); };
+    bool rowPresented = false;
+    require(services.presentPinnedImageArtifact(
+                rowArtifact, screen, selection.geometry.nativeGeometry, image.size(),
+                [&](bool success, QImage) { rowPresented = success; }, automatic),
+            "row-backed scrolling pin is accepted");
+    QPointer<ScreenshotPinnedWindow> rowWindow(onlyVisiblePinnedWindow());
+    const auto closeRowWindow = qScopeGuard([&] {
+        if (rowWindow != nullptr) {
+            rowWindow->close();
+            static_cast<void>(processUntilDeleted(rowWindow, 2000));
+        }
+    });
+    wait([&] { return rowSaved.has_value(); }, "row-backed scrolling pin auto-save completes");
+    require(rowPresented, "row-backed scrolling pin presents successfully");
+    require(rowSaved->succeeded(), qPrintable(rowSaved->error));
+    require(rowReads > 0, "scrolling pin automatic saving streams immutable source rows");
+    const QImage rowOutput = QImage(rowSaved->savedPath).convertToFormat(QImage::Format_ARGB32);
+    if (rowOutput != rowImage.convertToFormat(QImage::Format_ARGB32)) {
+        std::cerr << "row save pixels " << rowOutput.width() << 'x' << rowOutput.height()
+                  << " expected " << image.width() << 'x' << image.height() << " center "
+                  << rowOutput.pixelColor(rowOutput.rect().center()).name().toStdString()
+                  << " expected "
+                  << rowImage.pixelColor(rowImage.rect().center()).name().toStdString()
+                  << " color space " << rowOutput.colorSpace().isValid() << ' '
+                  << rowImage.colorSpace().isValid() << '\n';
+    }
+    require(rowOutput == rowImage.convertToFormat(QImage::Format_ARGB32),
+            "scrolling pin automatic saving retains native image pixels");
+}
+
+void pinnedLazyCopyOptionsSnapshotOffscreen() {
+    IsolatedPinnedStorage storage;
+    QTemporaryDir directory;
+    QTemporaryDir laterDirectory;
+    require(directory.isValid() && laterDirectory.isValid(), "lazy copy save directories");
+    const QString configuredDirectory = directory.filePath(QStringLiteral("configured"));
+    require(!QFileInfo::exists(configuredDirectory), "lazy copy directory starts unavailable");
+    const snow_shot::storage::ScreenshotSettings settings;
+    require(settings.setAutoSaveAfterExecutionActions({QStringLiteral("copy_pinned_image")}) &&
+                settings.setImageSaveDirectory(configuredDirectory) &&
+                settings.setImageFormat(QStringLiteral("bmp")) &&
+                settings.setAutoSaveFilenameFormat(QStringLiteral("lazy-snapshot")) &&
+                settings.setCopyImageFileToClipboard(true),
+            "configure lazy pinned copy invocation");
+    auto config = cachedOcrPinConfig(nullptr);
+    config.recognitionResults = {};
+    config.recognitionVisible = false;
+    config.enableEditing = false;
+    ScreenshotImageLoadCallback deliver;
+    config.imageLoader = [&deliver](QObject*, ScreenshotImageLoadCallback ready) {
+        deliver = std::move(ready);
+    };
+    ScreenshotPinnedWindow window;
+    require(window.present(config), "lazy pinned copy presentation accepted");
+    window.setAttribute(Qt::WA_DeleteOnClose, false);
+    const auto closeWindow = qScopeGuard([&] { window.close(); });
+    const auto wait = [](auto predicate, const char* message) {
+        QElapsedTimer timer;
+        timer.start();
+        while (!predicate() && timer.elapsed() < 10000) {
+            waitForUi(5);
+        }
+        require(predicate(), message);
+    };
+    wait([&] { return static_cast<bool>(deliver); }, "lazy pinned image loader starts");
+    require(ScreenshotPinnedWindowTestAccess::originalImage(window).isNull(),
+            "lazy pinned copy begins before materialization");
+    ScreenshotPinnedWindowTestAccess::copyCurrentViewport(window);
+    require(settings.setAutoSaveAfterExecutionActions({QStringLiteral("pin_to_screen")}) &&
+                settings.setImageSaveDirectory(laterDirectory.path()) &&
+                settings.setImageFormat(QStringLiteral("png")) &&
+                settings.setAutoSaveFilenameFormat(QStringLiteral("lazy-later")) &&
+                settings.setCopyImageFileToClipboard(false),
+            "change pinned copy settings while materialization is pending");
+    require(QDir().mkpath(configuredDirectory),
+            "lazy copy directory becomes available before save");
+    deliver(config.imageSource.materializedImage);
+    const QString expectedPath =
+        QDir(configuredDirectory).filePath(QStringLiteral("lazy-snapshot.bmp"));
+    wait(
+        [&] {
+            return QFileInfo::exists(expectedPath) &&
+                   !ScreenshotPinnedWindowTestAccess::exportArtifact(window);
+        },
+        "lazy pinned copy retains invocation auto-save selection");
+    const auto urls = QApplication::clipboard()->mimeData()->urls();
+    require(urls.size() == 1 && urls.front().isLocalFile() &&
+                QFileInfo(urls.front().toLocalFile()).fileName() ==
+                    QStringLiteral("lazy-snapshot.bmp") &&
+                QImage(expectedPath).size() == config.imageSource.materializedImage.size() &&
+                QDir(laterDirectory.path()).entryList(QDir::Files).isEmpty(),
+            "lazy pinned copy snapshots file mode, directory, format, and filename");
+}
+
 void pinnedSharedImageExportOffscreen() {
     using Access = ScreenshotPinnedWindowTestAccess;
     IsolatedPinnedStorage storage;
@@ -14248,9 +14541,13 @@ void pinnedSharedImageExportOffscreen() {
     const auto wait = [](auto predicate, const char* message) {
         QElapsedTimer timer;
         timer.start();
-        while (!predicate() && timer.elapsed() < 10000)
+        while (timer.elapsed() < 10000) {
+            if (predicate()) {
+                return;
+            }
             waitForUi(5);
-        require(predicate(), message);
+        }
+        require(false, message);
     };
     const auto normalized = [](const QImage& image) {
         return image.convertToFormat(QImage::Format_ARGB32);
@@ -14258,8 +14555,12 @@ void pinnedSharedImageExportOffscreen() {
     QImage sentinel(3, 3, QImage::Format_ARGB32);
     sentinel.fill(Qt::magenta);
     const auto seedClipboard = [&] {
-        require(ScreenshotClipboardService::publishImage(QApplication::clipboard(), sentinel),
-                "seed image clipboard");
+        wait(
+            [&] {
+                return ScreenshotClipboardService::publishImage(QApplication::clipboard(),
+                                                                sentinel);
+            },
+            "seed image clipboard");
         QApplication::clipboard()->setText(QStringLiteral("unchanged"));
     };
     ScreenshotPinnedWindow window;
@@ -14293,10 +14594,27 @@ void pinnedSharedImageExportOffscreen() {
     require(changed.constBits() != first.constBits() && changed != first,
             "pinned opacity change reused stale export pixels");
     Access::setGeneralOpacity(window, 75);
-    for (bool autoSave : {false, true}) {
+    struct AutoSaveCase final {
+        QStringList actions;
+        bool expected = false;
+    };
+    const QList<AutoSaveCase> autoSaveCases = {
+        {{}, false},
+        {{QStringLiteral("copy_screenshot")}, false},
+        {{QStringLiteral("copy_scrolling_screenshot")}, false},
+        {{QStringLiteral("copy_pinned_image")}, true},
+        {{QStringLiteral("capture_focused_window")}, false},
+        {{QStringLiteral("capture_current_monitor")}, false},
+        {{QStringLiteral("pin_to_screen")}, false},
+        {{QStringLiteral("copy_pinned_image"), QStringLiteral("pin_to_screen")}, true},
+        {{QStringLiteral("copy_screenshot"), QStringLiteral("capture_current_monitor")}, false},
+    };
+    for (qsizetype caseIndex = 0; caseIndex < autoSaveCases.size(); ++caseIndex) {
+        const auto& autoSaveCase = autoSaveCases[caseIndex];
+        const bool autoSave = autoSaveCase.expected;
         for (bool copyFile : {false, true}) {
-            const QString name = QStringLiteral("export-%1-%2").arg(autoSave).arg(copyFile);
-            require(settings.setAutoSaveAfterCopy(autoSave) &&
+            const QString name = QStringLiteral("export-%1-%2").arg(caseIndex).arg(copyFile);
+            require(settings.setAutoSaveAfterExecutionActions(autoSaveCase.actions) &&
                         settings.setCopyImageFileToClipboard(copyFile) &&
                         settings.setAutoSaveFilenameFormat(name),
                     "configure copy option combination");
@@ -14329,9 +14647,20 @@ void pinnedSharedImageExportOffscreen() {
             auto clipboard = exportedClipboardSnapshot(copyFile);
             require(clipboard.has_value(), "viewport clipboard snapshot is missing");
             auto copied = ScreenshotClipboardContentReader::decode(std::move(*clipboard));
-            require(copied && copied->appearance && copied->placement &&
-                        copied->placement->windowRect == window.currentNativeGeometry(),
-                    "viewport image or file copy loses appearance and position");
+            require(copied.has_value(), "viewport image or file copy decodes successfully");
+            require(copied->appearance.has_value(),
+                    "viewport image or file copy retains appearance");
+            require(copied->placement.has_value(), "viewport image or file copy retains position");
+            if (copied->placement->windowRect != Access::contentGeometry(window)) {
+                const auto actual = copied->placement->windowRect;
+                const auto expected = Access::contentGeometry(window);
+                std::cerr << "copy mode " << autoSave << ' ' << copyFile << " placement "
+                          << actual.x() << ',' << actual.y() << ' ' << actual.width() << 'x'
+                          << actual.height() << " expected " << expected.x() << ',' << expected.y()
+                          << ' ' << expected.width() << 'x' << expected.height() << '\n';
+            }
+            require(copied->placement->windowRect == Access::contentGeometry(window),
+                    "viewport image or file copy retains its content window geometry");
             if (copyFile) {
                 const auto urls = QApplication::clipboard()->mimeData()->urls();
                 require(urls.size() == 1 && urls.front().isLocalFile(),
@@ -14358,7 +14687,7 @@ void pinnedSharedImageExportOffscreen() {
 
     // A component longer than the filesystem limit fails in every fallback directory.
     require(settings.setAutoSaveFilenameFormat(QString(300, QLatin1Char('x'))) &&
-                settings.setAutoSaveAfterCopy(true),
+                settings.setAutoSaveAfterExecutionActions({QStringLiteral("copy_pinned_image")}),
             "configure deterministic save failure");
     for (bool copyFile : {false, true}) {
         require(settings.setCopyImageFileToClipboard(copyFile), "configure failing copy mode");
@@ -21416,8 +21745,13 @@ int main(int argc, char* argv[]) {
             pinnedRecognitionSaveSnapshotsAndRoutesOffscreen();
             return 0;
         }
+        if (app.arguments().contains(QStringLiteral("--pin-execution-autosave-only"))) {
+            pinnedExecutionAutomaticSaveOffscreen();
+            return 0;
+        }
         if (app.arguments().contains(QStringLiteral("--shared-image-export-only"))) {
             pinnedSharedImageExportOffscreen();
+            pinnedLazyCopyOptionsSnapshotOffscreen();
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--opacity-export-only"))) {

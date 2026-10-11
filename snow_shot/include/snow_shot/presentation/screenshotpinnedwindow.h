@@ -374,6 +374,8 @@ class ScreenshotPinnedWindow final : public QWidget {
     QPointF canvasPositionForViewPosition(const QPointF& position) const;
     void copyEditToolbarContent();
     void copyCurrentViewport();
+    struct CopyOutputOptions;
+    void copyCurrentViewportWithOptions(CopyOutputOptions output);
     void copyOriginalContent();
     void loadImageFile();
     void loadClipboardContent();
@@ -393,6 +395,8 @@ class ScreenshotPinnedWindow final : public QWidget {
     void quickSave();
     void invalidatePendingCopy();
     void copyRenderedImage(std::shared_ptr<ScreenshotExportArtifact> artifact);
+    void copyRenderedImage(std::shared_ptr<ScreenshotExportArtifact> artifact,
+                           const CopyOutputOptions& output);
     void applyImageOperation(const QTransform& operation, int quarterTurnDelta = 0);
     void resetImageTransform();
     void applyImageTransform(const QTransform& transform, int quarterTurns);

@@ -30,6 +30,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QLabel>
+#include <QMap>
 #include <QProxyStyle>
 #include <QResizeEvent>
 #include <QPixmap>
@@ -887,6 +888,27 @@ void multiSettingsSelectsSearch(const settings::SettingsRegistry& registry,
         require(select != nullptr && select->searchEnabled(),
                 "every settings multi-select supports input filtering");
         const auto selected = select->selectedValues();
+        if (field.id == QStringLiteral("screenshot.auto-save-after-execution")) {
+            require(selected.isEmpty() &&
+                        select->placeholder() == QStringLiteral("Select scenarios"),
+                    "empty automatic saving selection displays its scenario placeholder");
+            auto& languages = snow_shot::presentation::LanguageManager::instance();
+            const QMap<QString, QString> placeholders{
+                {QStringLiteral("zh_CN"), QStringLiteral("选择场景")},
+                {QStringLiteral("zh_TW"), QStringLiteral("選擇場景")},
+            };
+            for (auto it = placeholders.cbegin(); it != placeholders.cend(); ++it) {
+                require(languages.setLanguage(it.key()), "load the scenario placeholder language");
+                drainEvents();
+                require(select->placeholder() == it.value() && select->selectedValues() == selected,
+                        "language changes update the placeholder while preserving empty selection");
+            }
+            require(languages.setLanguage(QStringLiteral("en_US")),
+                    "restore English scenario placeholder");
+            drainEvents();
+            require(select->placeholder() == QStringLiteral("Select scenarios"),
+                    "restoring English updates the existing placeholder");
+        }
         select->setSearchText(QStringLiteral("no-matching-setting-option-1937"));
         require(!hasSelectableOption(select->view()->model()) &&
                     select->selectedValues() == selected,

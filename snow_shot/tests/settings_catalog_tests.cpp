@@ -1040,9 +1040,9 @@ void builtInCatalogIsCompleteAndValid() {
     const auto* imageDirectory =
         catalog.item({QStringLiteral("files-history"), QStringLiteral("screenshots"),
                       QStringLiteral("screenshot-output.image-save-directory")});
-    const auto* autoSaveAfterCopy =
+    const auto* autoSaveAfterExecution =
         catalog.item({QStringLiteral("files-history"), QStringLiteral("screenshots"),
-                      QStringLiteral("screenshot.auto-save-after-copy")});
+                      QStringLiteral("screenshot.auto-save-after-execution")});
     const auto* copyImageFile =
         catalog.item({QStringLiteral("files-history"), QStringLiteral("screenshots"),
                       QStringLiteral("screenshot.copy-image-file-to-clipboard")});
@@ -1059,22 +1059,28 @@ void builtInCatalogIsCompleteAndValid() {
                 QStringLiteral("Screenshot history") &&
             storagePage->sections.at(3).id == QStringLiteral("pinned-history") &&
             storagePage->sections.at(4).id == QStringLiteral("storage-status") &&
-            imageFormat != nullptr && imageDirectory != nullptr && autoSaveAfterCopy != nullptr &&
-            copyImageFile != nullptr && saveDialog != nullptr && videoFilename != nullptr &&
+            imageFormat != nullptr && imageDirectory != nullptr &&
+            autoSaveAfterExecution != nullptr && copyImageFile != nullptr &&
+            saveDialog != nullptr && videoFilename != nullptr &&
             storagePage->sections.at(0).title.translated() == QStringLiteral("Image export") &&
             storagePage->sections.at(0).searchDescription.translated() ==
                 QStringLiteral(
                     "Shared image export settings for screenshot and pin-to-screen windows") &&
             storagePage->sections.at(0).reset == settings::SettingsSectionReset::ScreenshotOutput &&
-            storagePage->sections.at(0).items.at(0).id == autoSaveAfterCopy->id &&
+            storagePage->sections.at(0).items.at(0).id == autoSaveAfterExecution->id &&
             storagePage->sections.at(0).items.at(1).id == copyImageFile->id &&
             storagePage->sections.at(0).items.at(2).id == saveDialog->id &&
             storagePage->sections.at(0).items.at(3).id == imageDirectory->id &&
-            autoSaveAfterCopy->description.translated() ==
-                QStringLiteral("When copying an image to the clipboard, also save it in "
-                               "the selected image format and save directory") &&
-            std::get<settings::SettingsSwitchDefinition>(autoSaveAfterCopy->payload).binding ==
-                settings::SettingsSwitchBinding::ScreenshotAutoSaveAfterCopy &&
+            autoSaveAfterExecution->title.translated() ==
+                QStringLiteral("Auto-save after execution") &&
+            autoSaveAfterExecution->description.translated() ==
+                QStringLiteral("Choose which actions also save an image in the selected image "
+                               "format and save directory") &&
+            autoSaveAfterExecution->configurationKey ==
+                QStringLiteral("screenshot/auto_save_after_execution_actions") &&
+            std::get<settings::SettingsMultiSelectDefinition>(autoSaveAfterExecution->payload)
+                    .binding ==
+                settings::SettingsMultiSelectBinding::ScreenshotAutoSaveAfterExecution &&
             std::get<settings::SettingsSwitchDefinition>(copyImageFile->payload).binding ==
                 settings::SettingsSwitchBinding::ScreenshotCopyImageFileToClipboard &&
             std::get<settings::SettingsSelectDefinition>(imageFormat->payload).options.size() ==
@@ -1087,6 +1093,26 @@ void builtInCatalogIsCompleteAndValid() {
             std::get<settings::SettingsTextDefinition>(videoFilename->payload).binding ==
                 settings::SettingsTextBinding::ScreenRecordingVideoFilenameFormat,
         "Storage and privacy must expose ordered screenshot and recording output settings");
+
+    const auto& autoSaveActions =
+        std::get<settings::SettingsMultiSelectDefinition>(autoSaveAfterExecution->payload);
+    require(autoSaveActions.placeholder.translated() == QStringLiteral("Select scenarios"),
+            "automatic image saving must prompt for execution scenarios when none are selected");
+    const QStringList actionValues{
+        QStringLiteral("copy_screenshot"),        QStringLiteral("copy_scrolling_screenshot"),
+        QStringLiteral("copy_pinned_image"),      QStringLiteral("capture_current_monitor"),
+        QStringLiteral("capture_focused_window"), QStringLiteral("pin_to_screen")};
+    const QStringList actionLabels{
+        QStringLiteral("Copy screenshot"),     QStringLiteral("Copy scrolling screenshot"),
+        QStringLiteral("Copy pinned window"),  QStringLiteral("Copy current monitor"),
+        QStringLiteral("Copy focused window"), QStringLiteral("Pin screenshot to screen")};
+    require(autoSaveActions.options.size() == actionValues.size(),
+            "automatic image saving must expose each execution scenario");
+    for (qsizetype i = 0; i < actionValues.size(); ++i) {
+        require(autoSaveActions.options.at(i).value == actionValues.at(i) &&
+                    autoSaveActions.options.at(i).label.translated() == actionLabels.at(i),
+                "automatic image saving actions must preserve their specified order and labels");
+    }
 
     const auto* configurationSection =
         catalog.section(QStringLiteral("files-history"), QStringLiteral("storage-status"));

@@ -29,6 +29,17 @@ class QTextDocument;
 struct ScreenshotPinnedRecognitionProviders;
 struct ScreenshotHistoryEntry;
 
+struct ScreenshotAutomaticSaveRequest final {
+    QPointer<QObject> receiver;
+    QString configuredSaveDirectory;
+    ScreenshotImageFileFormat format = ScreenshotImageFileFormat::Png;
+    QString filenameFormat;
+    ScreenshotImageEncodingOptions encoding;
+    ScreenshotPdfOptions pdf;
+    QDateTime requestedAt;
+    ScreenshotExportCoordinator::Completion completion;
+};
+
 namespace snow_shot::presentation {
 class PinnedWindowGroupManager;
 class PinnedWindowSelectionController;
@@ -86,13 +97,16 @@ class ScreenshotSelectionExportUiServices final : public ScreenshotSelectionExpo
                                              const QRect& nativeGeometry,
                                              const ScreenshotHistoryEntry& entry,
                                              PinnedCompletion completion);
-    [[nodiscard]] bool presentPinnedArtifact(const ScreenshotPinnedSelectionRequest& request,
-                                             std::shared_ptr<ScreenshotExportArtifact> artifact,
-                                             PinnedCompletion completion = {});
+    [[nodiscard]] bool
+    presentPinnedArtifact(const ScreenshotPinnedSelectionRequest& request,
+                          std::shared_ptr<ScreenshotExportArtifact> artifact,
+                          PinnedCompletion completion = {},
+                          std::optional<ScreenshotAutomaticSaveRequest> automaticSave = {});
     [[nodiscard]] bool
     presentPinnedImageArtifact(std::shared_ptr<ScreenshotExportArtifact> artifact, QScreen* screen,
                                const QRect& nativeGeometry, const QSize& initialWindowSize,
-                               PinnedCompletion completion = {});
+                               PinnedCompletion completion = {},
+                               std::optional<ScreenshotAutomaticSaveRequest> automaticSave = {});
     void restorePersistedWindows();
     // Returns whether restoration was queued; completion and failures are asynchronous.
     bool restoreRecord(const QString& id, bool activateGroup = true);

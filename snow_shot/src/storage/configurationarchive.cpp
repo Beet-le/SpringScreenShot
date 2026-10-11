@@ -19,6 +19,8 @@
 #include <mz_zip.h>
 #include <mz_zip_rw.h>
 
+#include <utility>
+
 namespace snow_shot::storage {
 namespace {
 
@@ -109,7 +111,9 @@ QString ConfigurationArchive::write(const QString& archivePath,
     } temporaryGuard{temporary};
 
     QJsonObject configuration;
-    for (auto it = values.cbegin(); it != values.cend(); ++it) {
+    const QMap<QString, QJsonValue> currentValues =
+        ConfigurationSchema::migrateLegacyValues(values);
+    for (auto it = currentValues.cbegin(); it != currentValues.cend(); ++it) {
         if (it.key() == QLatin1String("storage/schema_version")) {
             continue;
         }
@@ -319,7 +323,12 @@ ConfigurationArchiveReadResult ConfigurationArchive::read(const QString& archive
     if (!configurationOk) {
         return fail(invalidArchive);
     }
+    QMap<QString, QJsonValue> values;
     for (auto it = configuration.begin(); it != configuration.end(); ++it) {
+        values.insert(it.key(), it.value());
+    }
+    values = ConfigurationSchema::migrateLegacyValues(std::move(values));
+    for (auto it = values.cbegin(); it != values.cend(); ++it) {
         if (it.key() == QLatin1String("storage/schema_version") ||
             !ConfigurationSchema::contains(it.key())) {
             continue;

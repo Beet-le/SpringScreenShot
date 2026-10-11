@@ -1124,6 +1124,27 @@ class NativePinnedClipboard final : public ScreenshotPinnedClipboard {
 };
 } // namespace
 
+struct ScreenshotPinnedWindow::CopyOutputOptions {
+    explicit CopyOutputOptions(const snow_shot::storage::ScreenshotSettings& settings)
+        : autoSave(settings.autoSaveAfterExecution(QStringLiteral("copy_pinned_image"))),
+          copyFile(settings.copyImageFileToClipboard()),
+          configuredSaveDirectory(settings.imageSaveDirectory()),
+          format(ScreenshotImageFileService::formatForKey(settings.imageFormat())),
+          filenameFormat(settings.autoSaveFilenameFormat()),
+          encoding(snow_shot::presentation::screenshotEncodingOptions(settings)),
+          pdf{screenshot_pdf::pageSizeForKey(settings.pdfPageSize())},
+          requestedAt(QDateTime::currentDateTime()) {}
+
+    bool autoSave;
+    bool copyFile;
+    QString configuredSaveDirectory;
+    ScreenshotImageFileFormat format;
+    QString filenameFormat;
+    ScreenshotImageEncodingOptions encoding;
+    ScreenshotPdfOptions pdf;
+    QDateTime requestedAt;
+};
+
 struct ScreenshotPinnedWindow::PinnedRenderCache final {
     struct Entry {
         QByteArray key;
@@ -5753,10 +5774,16 @@ void ScreenshotPinnedWindow::copyCurrentViewport() {
         copyEditToolbarContent();
         return;
     }
+    copyCurrentViewportWithOptions(CopyOutputOptions(snow_shot::storage::ScreenshotSettings()));
+}
+
+void ScreenshotPinnedWindow::copyCurrentViewportWithOptions(CopyOutputOptions output) {
+    if (m_closing)
+        return;
     if (m_originalImage.isNull()) {
-        requestMaterializedImage([this](bool succeeded) {
+        requestMaterializedImage([this, output](bool succeeded) {
             if (succeeded && !m_closing) {
-                copyCurrentViewport();
+                copyCurrentViewportWithOptions(output);
             } else if (!succeeded) {
                 showPinnedRecognitionMessage(
                     this, translatePinnedText("The pinned image could not be prepared"), true);
@@ -5767,17 +5794,22 @@ void ScreenshotPinnedWindow::copyCurrentViewport() {
     auto artifact = viewportArtifact();
     if (!artifact)
         return;
-    copyRenderedImage(std::move(artifact));
+    copyRenderedImage(std::move(artifact), output);
 }
 
 void ScreenshotPinnedWindow::copyRenderedImage(std::shared_ptr<ScreenshotExportArtifact> artifact) {
+    copyRenderedImage(std::move(artifact),
+                      CopyOutputOptions(snow_shot::storage::ScreenshotSettings()));
+}
+
+void ScreenshotPinnedWindow::copyRenderedImage(std::shared_ptr<ScreenshotExportArtifact> artifact,
+                                               const CopyOutputOptions& output) {
     if (m_closing || !artifact)
         return;
     invalidatePendingCopy();
     m_exportArtifact = artifact;
-    const snow_shot::storage::ScreenshotSettings settings;
-    const bool copyFile = settings.copyImageFileToClipboard();
-    const bool autoSave = settings.autoSaveAfterCopy();
+    const bool copyFile = output.copyFile;
+    const bool autoSave = output.autoSave;
     // Image publication and automatic saving finish independently. Keep the artifact
     // cancellable until both complete, even when the clipboard wins the race.
     const auto pending = std::make_shared<int>(autoSave ? 2 : 1);
@@ -5801,10 +5833,10 @@ void ScreenshotPinnedWindow::copyRenderedImage(std::shared_ptr<ScreenshotExportA
             copyError(result.errorString());
         finish();
     };
-    const auto format = ScreenshotImageFileService::formatForKey(settings.imageFormat());
-    const QString filenameFormat = settings.autoSaveFilenameFormat();
-    const auto encoding = snow_shot::presentation::screenshotEncodingOptions(settings);
-    const ScreenshotPdfOptions pdf{screenshot_pdf::pageSizeForKey(settings.pdfPageSize())};
+    const auto format = output.format;
+    const QString filenameFormat = output.filenameFormat;
+    const auto encoding = output.encoding;
+    const auto pdf = output.pdf;
     if (autoSave) {
         const auto saved = [this, current, finish](ScreenshotExportTaskResult result) {
             if (!current())
@@ -5820,10 +5852,9 @@ void ScreenshotPinnedWindow::copyRenderedImage(std::shared_ptr<ScreenshotExportA
             }
             finish();
         };
-        if (!artifact->requestAutomaticSave(
-                this,
-                ScreenshotImageFileService::automaticDirectories(settings.imageSaveDirectory()),
-                format, filenameFormat, encoding, saved, pdf)) {
+        if (!artifact->requestAutomaticSaveToConfiguredDirectory(
+                this, output.configuredSaveDirectory, format, filenameFormat, encoding, saved, pdf,
+                output.requestedAt)) {
             saved(ScreenshotExportTaskResult::failure(
                 ScreenshotExportFailureStage::Queue,
                 QCoreApplication::translate("ScreenshotController",
@@ -5850,7 +5881,7 @@ void ScreenshotPinnedWindow::copyRenderedImage(std::shared_ptr<ScreenshotExportA
                         finish();
                     }
                 },
-                pdf)) {
+                pdf, output.requestedAt)) {
             copyError(translatePinnedText("The pinned image copy could not be started"));
             finish();
         }

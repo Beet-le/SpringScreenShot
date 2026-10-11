@@ -1341,16 +1341,16 @@
             <translation>Auto resize window</translation>
         </message>
         <message>
-            <source>Auto save after copy</source>
-            <translation>Auto save after copy</translation>
-        </message>
-        <message>
             <source>Auto start at boot</source>
             <translation>Auto start at boot</translation>
         </message>
         <message>
             <source>Auto-recognize QR Code</source>
             <translation>Auto-recognize QR Code</translation>
+        </message>
+        <message>
+            <source>Auto-save after execution</source>
+            <translation>Auto-save after execution</translation>
         </message>
         <message>
             <source>Auto-save image filename format</source>
@@ -1701,6 +1701,10 @@
             <translation>Choose whether network requests use the system proxy</translation>
         </message>
         <message>
+            <source>Choose which actions also save an image in the selected image format and save directory</source>
+            <translation>Choose which actions also save an image in the selected image format and save directory</translation>
+        </message>
+        <message>
             <source>Clear</source>
             <translation>Clear</translation>
         </message>
@@ -1845,6 +1849,14 @@
             <translation>Copy color</translation>
         </message>
         <message>
+            <source>Copy current monitor</source>
+            <translation>Copy current monitor</translation>
+        </message>
+        <message>
+            <source>Copy focused window</source>
+            <translation>Copy focused window</translation>
+        </message>
+        <message>
             <source>Copy image file to clipboard</source>
             <translation>Copy image file to clipboard</translation>
         </message>
@@ -1853,12 +1865,20 @@
             <translation>Copy original content</translation>
         </message>
         <message>
+            <source>Copy pinned window</source>
+            <translation>Copy pinned window</translation>
+        </message>
+        <message>
             <source>Copy recording</source>
             <translation>Copy recording</translation>
         </message>
         <message>
             <source>Copy screenshot</source>
             <translation>Copy screenshot</translation>
+        </message>
+        <message>
+            <source>Copy scrolling screenshot</source>
+            <translation>Copy scrolling screenshot</translation>
         </message>
         <message>
             <source>Copy text</source>
@@ -2989,6 +3009,10 @@
             <translation>Pin images, image files, formatted text, or HTML from the clipboard to the screen</translation>
         </message>
         <message>
+            <source>Pin screenshot to screen</source>
+            <translation>Pin screenshot to screen</translation>
+        </message>
+        <message>
             <source>Pin selected image files from File Explorer or the desktop to the screen</source>
             <translation>Pin selected image files from File Explorer or the desktop to the screen</translation>
         </message>
@@ -3559,6 +3583,10 @@
         <message>
             <source>Select previously selected area</source>
             <translation>Select previously selected area</translation>
+        </message>
+        <message>
+            <source>Select scenarios</source>
+            <translation>Select scenarios</translation>
         </message>
         <message>
             <source>Select skin image</source>
@@ -4371,10 +4399,6 @@
         <message>
             <source>WebP</source>
             <translation>WebP</translation>
-        </message>
-        <message>
-            <source>When copying an image to the clipboard, also save it in the selected image format and save directory</source>
-            <translation>When copying an image to the clipboard, also save it in the selected image format and save directory</translation>
         </message>
         <message>
             <source>When pinning duplicate content</source>

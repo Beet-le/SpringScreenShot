@@ -822,8 +822,6 @@ bool BuiltInSettingsBackend::switchValue(SettingsSwitchBinding binding) const {
         return storage::FloatingToolbarSettings().enabled();
     case SettingsSwitchBinding::TrayEnabled:
         return storage::TraySettings().enabled();
-    case SettingsSwitchBinding::ScreenshotAutoSaveAfterCopy:
-        return storage::ScreenshotSettings().autoSaveAfterCopy();
     case SettingsSwitchBinding::ScreenshotQuickSelectionModification:
         return storage::ScreenshotSettings().quickSelectionModification();
     case SettingsSwitchBinding::ScreenshotShowCursor:
@@ -1066,9 +1064,6 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     if (binding == SettingsSwitchBinding::TrayEnabled) {
         return storage::TraySettings().setEnabled(value);
     }
-    if (binding == SettingsSwitchBinding::ScreenshotAutoSaveAfterCopy) {
-        return storage::ScreenshotSettings().setAutoSaveAfterCopy(value);
-    }
     if (binding == SettingsSwitchBinding::ScreenshotCopyImageFileToClipboard) {
         return storage::ScreenshotSettings().setCopyImageFileToClipboard(value);
     }
@@ -1212,7 +1207,6 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     case SettingsSwitchBinding::ShowEditSelectionToolbar:
     case SettingsSwitchBinding::FloatingToolbarEnabled:
     case SettingsSwitchBinding::TrayEnabled:
-    case SettingsSwitchBinding::ScreenshotAutoSaveAfterCopy:
     case SettingsSwitchBinding::ScreenshotQuickSelectionModification:
     case SettingsSwitchBinding::ScreenshotShowCursor:
     case SettingsSwitchBinding::ScreenshotCaptureUiInScrollingScreenshot:
@@ -1328,6 +1322,10 @@ QVariantList BuiltInSettingsBackend::multiSelectValue(SettingsMultiSelectBinding
         for (const QString& value : storage::TraySettings().menuOptions()) {
             values.push_back(value);
         }
+    } else if (binding == SettingsMultiSelectBinding::ScreenshotAutoSaveAfterExecution) {
+        for (const QString& value : storage::ScreenshotSettings().autoSaveAfterExecutionActions()) {
+            values.push_back(value);
+        }
     }
     return values;
 }
@@ -1344,6 +1342,9 @@ bool BuiltInSettingsBackend::applyMultiSelectValue(SettingsMultiSelectBinding bi
     }
     if (binding == SettingsMultiSelectBinding::TrayMenuOptions) {
         return storage::TraySettings().setMenuOptions(tools);
+    }
+    if (binding == SettingsMultiSelectBinding::ScreenshotAutoSaveAfterExecution) {
+        return storage::ScreenshotSettings().setAutoSaveAfterExecutionActions(tools);
     }
     return false;
 }
@@ -2358,9 +2359,9 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
             {QStringLiteral("cloud_upload/configuration"),
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("cloud_upload/configuration"))},
-            {QStringLiteral("screenshot/auto_save_after_copy"),
+            {QStringLiteral("screenshot/auto_save_after_execution_actions"),
              storage::ConfigurationSchema::defaultValue(
-                 QStringLiteral("screenshot/auto_save_after_copy"))},
+                 QStringLiteral("screenshot/auto_save_after_execution_actions"))},
             {QStringLiteral("screenshot/copy_image_file_to_clipboard"),
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("screenshot/copy_image_file_to_clipboard"))},

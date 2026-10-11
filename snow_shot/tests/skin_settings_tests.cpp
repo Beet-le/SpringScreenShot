@@ -244,8 +244,9 @@ void missingSkinKeysUseDefaults(const QString& path) {
             configuration.value(QStringLiteral("interface/skin_mask_opacity")).toInt() == 80 &&
             configuration.value(QStringLiteral("interface/theme_mode")).toString() ==
                 QStringLiteral("dark") &&
-            configuration.value(QStringLiteral("storage/schema_version")).toInt() == 3,
-        "existing configurations must gain skin defaults without a migration or theme change");
+            configuration.value(QStringLiteral("storage/schema_version")).toInt() ==
+                storage::ConfigurationSchema::currentVersion(),
+        "existing configurations must gain skin defaults while preserving the theme");
 }
 
 void invalidStoredSkinValuesUseDefaults(const QString& path) {
