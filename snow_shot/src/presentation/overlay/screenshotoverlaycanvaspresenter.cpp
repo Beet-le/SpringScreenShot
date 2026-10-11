@@ -143,11 +143,6 @@ void activateAndFocusOverlayWindow(ScreenshotOverlayWindow& overlay, quint64 gen
     }
 }
 
-void activateOverlayWindow(ScreenshotOverlayWindow& overlay, quint64 generation) {
-    raiseOverlayWindow(overlay);
-    activateAndFocusOverlayWindow(overlay, generation);
-}
-
 void scheduleOverlayActivation(ScreenshotOverlayWindow* overlay, quint64 generation) {
     if (overlay == nullptr) {
         return;
@@ -188,10 +183,9 @@ void scheduleFramePacedOverlayActivation(ScreenshotOverlayWindow* overlay, quint
     if (overlay == nullptr) {
         return;
     }
-    // Foreground and focus negotiation is slow on Windows and is not needed
-    // while a global-mouse drag runs on hook input. Keep the cursor sprite and
-    // the raise() above immediate, but run activation one frame after the
-    // reveal so the first paced drag updates are not queued behind it.
+    // Hook-driven pointer input does not need focus, but held keyboard shortcuts
+    // still need one active canvas. Delay the group's only activation by one
+    // frame so its first paced drag updates avoid Windows foreground negotiation.
     QTimer::singleShot(
         framePacedActivationDelayMs(overlay->screen()), overlay,
         [overlay, generation]() { activateAndFocusOverlayWindow(*overlay, generation); });
@@ -241,12 +235,8 @@ void showCapturedImageOverlayNow(ScreenshotOverlayWindow& overlay, bool framePac
         return;
     }
     raiseOverlayWindow(overlay);
-    if (framePaced) {
-        commitInitialSelectionCursorOn(&overlay, generation);
-        scheduleFramePacedOverlayActivation(&overlay, generation);
-        return;
-    }
-    scheduleOverlayActivation(&overlay, generation);
+    // Every display needs its selection cursor, independently of keyboard ownership.
+    commitInitialSelectionCursorOn(&overlay, generation);
 }
 
 void showCapturedImageOverlayDeferred(ScreenshotOverlayWindow* overlay, bool framePaced,
@@ -260,20 +250,22 @@ void showCapturedImageOverlayDeferred(ScreenshotOverlayWindow* overlay, bool fra
     });
 }
 
-void showCapturedImageOverlaysForDisplaySession(const ScreenshotDisplaySession& displaySession,
-                                                bool framePaced) {
-    QVector<ActiveOverlayEntry> entries = activeOverlayEntries(displaySession);
-    const qsizetype preferredIndex =
-        preferredOverlayEntryIndex(entries, displaySession.logicalCursorPosition());
-    // Reserve the whole group before synchronous first-show callbacks can retire it.
-    for (auto& entry : entries) {
-        entry.generation = entry.overlay->beginPresentation();
-    }
-
+void showCapturedImageOverlays(const QVector<ActiveOverlayEntry>& entries, qsizetype preferredIndex,
+                               bool framePaced) {
     if (preferredIndex >= 0 && preferredIndex < entries.size()) {
         const auto& entry = entries.at(preferredIndex);
         if (entry.overlay != nullptr) {
             showCapturedImageOverlayNow(*entry.overlay, framePaced, entry.generation);
+            // Secondary reveals must not take focus from this group's keyboard owner.
+            if (entry.overlay != nullptr &&
+                entry.overlay->isPresentationCurrent(entry.generation) &&
+                entry.overlay->isVisible()) {
+                if (framePaced) {
+                    scheduleFramePacedOverlayActivation(entry.overlay, entry.generation);
+                } else {
+                    scheduleOverlayActivation(entry.overlay, entry.generation);
+                }
+            }
         }
     }
 
@@ -295,28 +287,43 @@ void showOverlayWindowsForDisplaySession(const ScreenshotDisplaySession& display
             });
         return;
     }
+
+    QVector<ActiveOverlayEntry> entries = activeOverlayEntries(displaySession);
+    const qsizetype preferredIndex =
+        preferredOverlayEntryIndex(entries, displaySession.logicalCursorPosition());
+    // Reserve the whole group before synchronous first-show callbacks can retire it.
+    for (auto& entry : entries) {
+        entry.generation = entry.overlay->beginPresentation();
+    }
+
     if (mode == ScreenshotOverlayShowMode::CapturedImage ||
         mode == ScreenshotOverlayShowMode::CapturedImageFramePaced) {
-        showCapturedImageOverlaysForDisplaySession(
-            displaySession, mode == ScreenshotOverlayShowMode::CapturedImageFramePaced);
+        showCapturedImageOverlays(entries, preferredIndex,
+                                  mode == ScreenshotOverlayShowMode::CapturedImageFramePaced);
         return;
     }
 
-    displaySession.forEachActiveOverlay(
-        [mode](qsizetype, const CapturedDisplayModel&, ScreenshotOverlayWindow* overlay) {
-            const bool wasVisible = overlay->isVisible();
-            const quint64 generation = overlay->beginPresentation();
+    for (const auto& entry : entries) {
+        if (entry.overlay == nullptr || !entry.overlay->isPresentationCurrent(entry.generation)) {
+            continue;
+        }
+        if (!entry.overlay->isVisible() &&
+            !showOverlayWindow(*entry.overlay, false, entry.generation)) {
+            continue;
+        }
+        if (entry.overlay != nullptr && entry.overlay->isPresentationCurrent(entry.generation) &&
+            entry.overlay->isVisible()) {
+            raiseOverlayWindow(*entry.overlay);
+        }
+    }
 
-            if (!wasVisible) {
-                if (!showOverlayWindow(*overlay, false, generation)) {
-                    return;
-                }
-            }
-
-            if (mode == ScreenshotOverlayShowMode::PreparedPreview) {
-                activateOverlayWindow(*overlay, generation);
-            }
-        });
+    if (mode == ScreenshotOverlayShowMode::PreparedPreview && preferredIndex >= 0 &&
+        preferredIndex < entries.size()) {
+        const auto& entry = entries.at(preferredIndex);
+        if (entry.overlay != nullptr) {
+            activateAndFocusOverlayWindow(*entry.overlay, entry.generation);
+        }
+    }
 }
 } // namespace
 

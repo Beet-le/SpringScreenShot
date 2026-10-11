@@ -6167,6 +6167,12 @@ if(SNOW_SHOT_BUILD_TESTS)
             LABELS "interactive;macos" RUN_SERIAL TRUE TIMEOUT 60)
     endif()
     snow_shot_import_offscreen_platform(snow-shot-color-picker-lifecycle-tests)
+    add_test(NAME snow-shot-overlay-reveal-tests
+        COMMAND snow-shot-color-picker-lifecycle-tests --overlay-reveal-only -platform offscreen)
+    set_tests_properties(snow-shot-overlay-reveal-tests PROPERTIES
+        LABELS "unit" SNOW_TEST_CROSS_PLATFORM TRUE TIMEOUT 60
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-color-picker-lifecycle-tests
         COMMAND snow-shot-color-picker-lifecycle-tests)
     add_test(NAME snow-shot-toolbar-picker-hover-tests
