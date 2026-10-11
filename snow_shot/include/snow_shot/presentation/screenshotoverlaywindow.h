@@ -7,6 +7,7 @@
 
 #include <QColor>
 #include <QJsonObject>
+#include <QPointer>
 #include <QRectF>
 #include <QRegion>
 #include "snow_shot/image/screenshotregiongeometry.h"
@@ -23,6 +24,7 @@ class QMouseEvent;
 class QPaintEvent;
 class QRectF;
 class QResizeEvent;
+class QScreen;
 class QWheelEvent;
 class SnowCanvasWidget;
 class ScreenshotCanvasRenderer;
@@ -34,6 +36,20 @@ class ScreenshotRegionTypeControl;
 struct ScreenshotSelectionVisualState;
 
 struct ScreenshotImageSource;
+
+#if defined(SNOW_SHOT_BENCH_INTERNALS)
+enum class ScreenshotBackingStorePreparationMode { Disabled, AllocationOnly, PageTouch };
+
+struct ScreenshotBackingStorePreparationCounters {
+    quint64 allocationRequests = 0;
+    quint64 pageTouchSlices = 0;
+    quint64 touchedBytes = 0;
+    quint64 pageWrites = 0;
+    quint64 maximumSliceBytes = 0;
+    quint64 completedPreparations = 0;
+    quint64 canceledPreparations = 0;
+};
+#endif
 
 class ScreenshotOverlayWindow final : public QWidget {
     Q_OBJECT
@@ -113,7 +129,16 @@ class ScreenshotOverlayWindow final : public QWidget {
     [[nodiscard]] quint64 windowMaskApplicationCountForTesting() const;
     [[nodiscard]] quint64 transparentClearCountForTesting() const;
     [[nodiscard]] ScreenshotCanvasRenderer* screenshotRendererForTesting() const;
+    void setBackingStorePreparationModeForTesting(ScreenshotBackingStorePreparationMode mode);
+    void resetBackingStorePreparationCountersForTesting();
+    [[nodiscard]] ScreenshotBackingStorePreparationCounters
+    backingStorePreparationCountersForTesting() const;
+    [[nodiscard]] bool isBackingStorePreparationPendingForTesting() const;
 #endif
+    // Allocate hidden raster pixels and fault in their pages in bounded event-loop slices.
+    // Preparation never paints the screenshot, shows the window, or flushes its store.
+    void prepareBackingStore();
+    void cancelBackingStorePreparation();
     void warmPresentationSurface();
     void showPreparedFrame(bool deferFirstPaint = false);
     // Deferred reveal/focus work belongs to a presentation, not the pooled widget lifetime.
@@ -153,6 +178,8 @@ class ScreenshotOverlayWindow final : public QWidget {
     void updateScrollingInputTransparency();
     void updateScrollingResultPreviewReadout();
     void retirePresentation();
+    void continueBackingStorePreparation(quint64 generation);
+    void postBackingStorePreparation();
 
     ScreenshotOverlayEventSink& m_eventSink;
     QMargins m_captureFrameMargins;
@@ -178,9 +205,21 @@ class ScreenshotOverlayWindow final : public QWidget {
     quint64 m_presentationGeneration = 0;
     bool m_presentationActive = false;
     bool m_showingPreparedFrame = false;
+    quint64 m_backingStorePreparationGeneration = 0;
+    QSize m_backingStorePreparationSize;
+    QPointer<QScreen> m_backingStorePreparationScreen;
+    qreal m_backingStorePreparationDevicePixelRatio = 0.0;
+    WId m_backingStorePreparationNativeId = 0;
+    qsizetype m_backingStorePreparationNextByte = 0;
+    bool m_backingStorePreparationActive = false;
+    bool m_backingStorePreparationAllocated = false;
+    bool m_backingStorePreparationComplete = false;
 #if defined(SNOW_SHOT_BENCH_INTERNALS)
     quint64 m_windowMaskApplicationCount = 0;
     quint64 m_transparentClearCount = 0;
+    ScreenshotBackingStorePreparationMode m_backingStorePreparationMode =
+        ScreenshotBackingStorePreparationMode::PageTouch;
+    ScreenshotBackingStorePreparationCounters m_backingStorePreparationCounters;
 #endif
 };
 

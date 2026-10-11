@@ -121,7 +121,18 @@ class CaptureRuntime final : public ScreenshotCaptureRuntimePort {
     void resetForNewCapture(ScreenshotDisplaySession&) override {
         ++resetForNewCaptureCalls;
     }
-    void prepareDisplayModels(ScreenshotDisplaySession&) override {}
+    void prepareDisplayModels(ScreenshotDisplaySession&) override {
+        operations.push_back(QStringLiteral("prepare-models"));
+    }
+    void prepareOverlayBackingStores(const ScreenshotDisplaySession& displaySession) override {
+        ++prepareOverlayBackingStoreCalls;
+        operations.push_back(QStringLiteral("prepare-backing-store"));
+        backingStoreSawResolvedLayout =
+            displaySession.startup && displaySession.startup->displays != nullptr;
+        displaySession.forEachActiveDisplay([&](qsizetype, const CapturedDisplayModel& display) {
+            backingStoreSawResolvedLayout &= display.geometryResolved && display.image.isNull();
+        });
+    }
     void applyDisplayModels(ScreenshotDisplaySession&) override {
         ++applyDisplayModelsCalls;
     }
@@ -214,6 +225,8 @@ class CaptureRuntime final : public ScreenshotCaptureRuntimePort {
     QVector<ScreenshotOverlayShowMode> showOverlayModes;
     int applyDisplayModelsCalls = 0;
     int preparePreCaptureOverlayCalls = 0;
+    int prepareOverlayBackingStoreCalls = 0;
+    bool backingStoreSawResolvedLayout = false;
     int hideOverlayCalls = 0;
     int hideOverlayImmediatelyCalls = 0;
     int releaseSelectionPreviewCacheCalls = 0;
@@ -998,7 +1011,7 @@ void overlayCapturePrewarmsToolbarSurfaceAfterCaptureDispatch() {
             "session retired it");
 }
 
-void overlayCaptureDoesNotWarmNativeSurfaceAfterCaptureDispatch() {
+void overlayCaptureDoesNotShowWarmSurfaceAfterCaptureDispatch() {
     ScreenshotCaptureState state;
     state.sessionState = ScreenshotSessionState::IdlePrepared;
     ScreenshotDisplaySession displaySession;
@@ -1028,7 +1041,7 @@ void overlayCaptureDoesNotWarmNativeSurfaceAfterCaptureDispatch() {
     workflow.startCapture();
     require(runtime.captureAllAsyncCalls == 1 && runtime.showOverlayCalls == 0 &&
                 runtime.showOverlayModes.isEmpty(),
-            "an overlay capture must not warm the native surface after capture is dispatched");
+            "an overlay capture must not show a warmup surface after capture is dispatched");
     require(runtime.prewarmToolbarSawDispatchedCapture,
             "hidden toolbar preparation must still overlap the dispatched capture");
 
@@ -1047,7 +1060,57 @@ void overlayCaptureDoesNotWarmNativeSurfaceAfterCaptureDispatch() {
                 runtime.showOverlayCalls == 1 && capturePresentedCalls == 1 &&
                 runtime.showOverlayModes.size() == 1 &&
                 runtime.showOverlayModes.constLast() == ScreenshotOverlayShowMode::CapturedImage,
-            "reveal must present the captured overlay once without an earlier surface warmup");
+            "reveal must present the captured overlay once without an earlier warmup show");
+}
+
+void backingStorePreparationRequiresValidatedVisibleCapture() {
+    using Workflow = ScreenshotCaptureWorkflow;
+    for (const auto mode : {Workflow::StartMode::Normal, Workflow::StartMode::ExternalDrag}) {
+        for (const auto presentation :
+             {Workflow::PresentationMode::Visible, Workflow::PresentationMode::Silent}) {
+            ScreenshotCaptureState state;
+            ScreenshotDisplaySession displays;
+            ScreenshotGeometryMapper geometry;
+            ScreenshotInteractionState interaction;
+            ScreenshotSelectionModel selection;
+            ScreenshotIntelligentSelectionModel intelligent;
+            CaptureRuntime runtime;
+            runtime.seedActiveDisplayOnPrepare = false;
+            auto workflow = makeWorkflow(state, displays, geometry, interaction, selection,
+                                         intelligent, runtime);
+            workflow.prewarmResources();
+            workflow.startCapture(mode, Workflow::ToolbarPreparation::OnDemand,
+                                  Workflow::ToolbarVisibility::ShowAfterSelection, presentation);
+            require(runtime.captureAllAsyncCalls == 1 &&
+                        runtime.prepareOverlayBackingStoreCalls == 0,
+                    "idle preparation and capture dispatch must not allocate backing pixels "
+                    "before layout validation");
+            const quint64 session = state.sessionId;
+            runtime.eventSink->handleLayoutReady({session - 1, session - 1, {}});
+            require(runtime.prepareOverlayBackingStoreCalls == 0,
+                    "stale layouts must not start backing-store preparation");
+            runtime.deliverLayout();
+            const int expectedPreparations = presentation == Workflow::PresentationMode::Visible;
+            require(runtime.prepareOverlayBackingStoreCalls == expectedPreparations &&
+                        runtime.showOverlayCalls == 0 && state.captureInProgress,
+                    "only a visible capture with a validated layout may prepare hidden pixels");
+            if (expectedPreparations != 0) {
+                require(runtime.backingStoreSawResolvedLayout &&
+                            runtime.operations.indexOf(QStringLiteral("capture-dispatched")) <
+                                runtime.operations.indexOf(QStringLiteral("prepare-models")) &&
+                            runtime.operations.indexOf(QStringLiteral("prepare-models")) <
+                                runtime.operations.indexOf(QStringLiteral("prepare-backing-store")),
+                        "backing pixels must prepare during acquisition after final geometry");
+            }
+            runtime.deliverLayout();
+            require(runtime.prepareOverlayBackingStoreCalls == expectedPreparations,
+                    "duplicate layouts must not restart preparation");
+            workflow.cancelCapture();
+            runtime.eventSink->handleLayoutReady({session, session, {}});
+            require(runtime.prepareOverlayBackingStoreCalls == expectedPreparations,
+                    "canceled startup must not prepare pixels for a retired session");
+        }
+    }
 }
 
 void displayChangesRefreshWithoutCancelingIdleOrActiveCapture() {
@@ -2268,7 +2331,8 @@ int main() {
     capturePresentedRunsAfterCapturedOverlayIsShown();
     capturedOverlayWaitsForImageAndSelectionInEitherOrder();
     overlayCapturePrewarmsToolbarSurfaceAfterCaptureDispatch();
-    overlayCaptureDoesNotWarmNativeSurfaceAfterCaptureDispatch();
+    overlayCaptureDoesNotShowWarmSurfaceAfterCaptureDispatch();
+    backingStorePreparationRequiresValidatedVisibleCapture();
     displayChangesRefreshWithoutCancelingIdleOrActiveCapture();
     capturedImagePlacementFollowsNormalizedCanvasGeometry();
     intelligentSelectionTargetsPreserveElementPathBehavior();

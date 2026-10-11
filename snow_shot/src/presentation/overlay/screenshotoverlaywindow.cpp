@@ -9,11 +9,15 @@
 #include "snow_shot/presentation/screenshotscrollingthumbnailwidget.h"
 #include "snow_draw_engine_qt/snow_canvas_widget.h"
 #include <QEvent>
+#include <QBackingStore>
+#include <QCoreApplication>
 #include "snow_shot/platform/windows/windowchrome.h"
 #ifdef Q_OS_MACOS
 #include "snow_shot/platform/screenshotnative.h"
 #endif
 #include <QGuiApplication>
+#include <QImage>
+#include <QScreen>
 #include "../capture/screenshotscrollingdiagnostics.h"
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -35,6 +39,22 @@ namespace {
 constexpr int kScrollingThumbnailGap = 8;
 constexpr int kScrollingThumbnailMargin = 8;
 constexpr auto kHistoryLoadingMessageKey = "screenshot-history-loading";
+constexpr qsizetype kBackingStorePreparationSliceBytes = 1024 * 1024;
+// A conservative stride also covers platforms with larger (for example, 16 KiB) pages.
+constexpr qsizetype kBackingStorePreparationPageBytes = 4096;
+
+QEvent::Type backingStorePreparationEventType() {
+    static const auto type = static_cast<QEvent::Type>(QEvent::registerEventType());
+    return type;
+}
+
+class BackingStorePreparationEvent final : public QEvent {
+  public:
+    explicit BackingStorePreparationEvent(quint64 preparationGeneration)
+        : QEvent(backingStorePreparationEventType()), generation(preparationGeneration) {}
+
+    const quint64 generation;
+};
 
 #if defined(SNOW_SHOT_CAPTURE_PERF_INSTRUMENTATION)
 qint64 paintRegionArea(const QRegion& region) {
@@ -97,6 +117,7 @@ ScreenshotOverlayWindow::ScreenshotOverlayWindow(ScreenshotOverlayEventSink& eve
 }
 
 ScreenshotOverlayWindow::~ScreenshotOverlayWindow() {
+    cancelBackingStorePreparation();
     setScrollingCaptureMode(false);
     if (m_canvas != nullptr) {
         m_canvas->setTextEditingBounds(std::nullopt);
@@ -117,8 +138,10 @@ void ScreenshotOverlayWindow::setCaptureGeometry(const QRect& displayGeometry) {
 #endif
     layout()->setContentsMargins(m_captureFrameMargins);
     const QRect frame = displayGeometry.marginsAdded(m_captureFrameMargins);
-    if (geometry() != frame)
+    if (geometry() != frame) {
+        cancelBackingStorePreparation();
         setGeometry(frame);
+    }
     layout()->activate();
 }
 
@@ -131,6 +154,7 @@ QPoint ScreenshotOverlayWindow::canvasLocalPosition(const QPoint& globalPosition
 }
 
 void ScreenshotOverlayWindow::setScreenshotImage(QImage image, const QRectF& canvasRect) {
+    cancelBackingStorePreparation();
     if (m_screenshotRenderer != nullptr) {
         m_screenshotRenderer->setImage(std::move(image), canvasRect);
     }
@@ -144,6 +168,7 @@ void ScreenshotOverlayWindow::setScreenshotImageSource(ScreenshotImageSource sou
 void ScreenshotOverlayWindow::setScreenshotImageSource(
     ScreenshotImageSource source, const QRectF& damage,
     const ScreenshotImageSource& samplingSource) {
+    cancelBackingStorePreparation();
     if (m_screenshotRenderer)
         m_screenshotRenderer->setImageSource(std::move(source), damage, samplingSource);
 }
@@ -605,7 +630,158 @@ quint64 ScreenshotOverlayWindow::transparentClearCountForTesting() const {
 ScreenshotCanvasRenderer* ScreenshotOverlayWindow::screenshotRendererForTesting() const {
     return m_screenshotRenderer.get();
 }
+
+void ScreenshotOverlayWindow::setBackingStorePreparationModeForTesting(
+    ScreenshotBackingStorePreparationMode mode) {
+    cancelBackingStorePreparation();
+    m_backingStorePreparationMode = mode;
+}
+
+void ScreenshotOverlayWindow::resetBackingStorePreparationCountersForTesting() {
+    m_backingStorePreparationCounters = {};
+}
+
+ScreenshotBackingStorePreparationCounters
+ScreenshotOverlayWindow::backingStorePreparationCountersForTesting() const {
+    return m_backingStorePreparationCounters;
+}
+
+bool ScreenshotOverlayWindow::isBackingStorePreparationPendingForTesting() const {
+    return m_backingStorePreparationActive;
+}
 #endif
+
+void ScreenshotOverlayWindow::prepareBackingStore() {
+#if defined(SNOW_SHOT_BENCH_INTERNALS)
+    if (m_backingStorePreparationMode == ScreenshotBackingStorePreparationMode::Disabled)
+        return;
+#endif
+    if (isVisible() || size().isEmpty() || internalWinId() == 0)
+        return;
+
+    const qreal dpr = devicePixelRatioF();
+    if ((m_backingStorePreparationActive || m_backingStorePreparationComplete) &&
+        m_backingStorePreparationSize == size() && m_backingStorePreparationScreen == screen() &&
+        qFuzzyCompare(m_backingStorePreparationDevicePixelRatio, dpr) &&
+        m_backingStorePreparationNativeId == internalWinId()) {
+        return;
+    }
+
+    cancelBackingStorePreparation();
+    m_backingStorePreparationSize = size();
+    m_backingStorePreparationScreen = screen();
+    m_backingStorePreparationDevicePixelRatio = dpr;
+    m_backingStorePreparationNativeId = internalWinId();
+    m_backingStorePreparationActive = true;
+    postBackingStorePreparation();
+}
+
+void ScreenshotOverlayWindow::cancelBackingStorePreparation() {
+#if defined(SNOW_SHOT_BENCH_INTERNALS)
+    if (m_backingStorePreparationActive)
+        ++m_backingStorePreparationCounters.canceledPreparations;
+#endif
+    ++m_backingStorePreparationGeneration;
+    m_backingStorePreparationActive = false;
+    m_backingStorePreparationAllocated = false;
+    m_backingStorePreparationComplete = false;
+    m_backingStorePreparationNextByte = 0;
+    m_backingStorePreparationSize = {};
+    m_backingStorePreparationScreen = nullptr;
+    m_backingStorePreparationDevicePixelRatio = 0.0;
+    m_backingStorePreparationNativeId = 0;
+}
+
+void ScreenshotOverlayWindow::postBackingStorePreparation() {
+    // Ready capture results and input outrank speculative page preparation.
+    QCoreApplication::postEvent(
+        this, new BackingStorePreparationEvent(m_backingStorePreparationGeneration),
+        Qt::LowEventPriority);
+}
+
+void ScreenshotOverlayWindow::continueBackingStorePreparation(quint64 generation) {
+    if (!m_backingStorePreparationActive || generation != m_backingStorePreparationGeneration)
+        return;
+    if (isVisible() || internalWinId() == 0 ||
+        m_backingStorePreparationNativeId != internalWinId() ||
+        m_backingStorePreparationSize != size() || m_backingStorePreparationScreen != screen() ||
+        !qFuzzyCompare(m_backingStorePreparationDevicePixelRatio, devicePixelRatioF())) {
+        cancelBackingStorePreparation();
+        return;
+    }
+
+    SNOW_SHOT_CAPTURE_PERF_SCOPE("presentation.window.backing_store_prepare_slice");
+    QBackingStore* store = backingStore();
+    if (store == nullptr) {
+        cancelBackingStorePreparation();
+        return;
+    }
+    if (!m_backingStorePreparationAllocated) {
+        store->resize(size());
+#if defined(SNOW_SHOT_BENCH_INTERNALS)
+        ++m_backingStorePreparationCounters.allocationRequests;
+#endif
+    }
+
+    // Cocoa allocates its IOSurface in beginPaint, rather than resize. An empty
+    // region avoids clearing a desktop-sized alpha surface in each slice and
+    // leaves its dirty state intact for Qt's complete first visible paint.
+    store->beginPaint(QRegion());
+    m_backingStorePreparationAllocated = true;
+    bool preparePages = true;
+#if defined(SNOW_SHOT_BENCH_INTERNALS)
+    preparePages =
+        m_backingStorePreparationMode != ScreenshotBackingStorePreparationMode::AllocationOnly;
+#endif
+    QPaintDevice* device = store->paintDevice();
+    if (preparePages && device != nullptr && device->devType() == QInternal::Image) {
+        auto* image = static_cast<QImage*>(device);
+        const qsizetype totalBytes = image->sizeInBytes();
+        const qsizetype sliceEnd = std::min(totalBytes, m_backingStorePreparationNextByte +
+                                                            kBackingStorePreparationSliceBytes);
+        const qsizetype sliceBytes = sliceEnd - m_backingStorePreparationNextByte;
+        volatile uchar* pixels = image->bits();
+        if (pixels != nullptr && sliceBytes > 0) {
+            quint64 pageWrites = 0;
+            for (qsizetype offset = m_backingStorePreparationNextByte; offset < sliceEnd;
+                 offset += kBackingStorePreparationPageBytes) {
+                pixels[offset] = 0;
+                ++pageWrites;
+            }
+            // The final allocation page can extend beyond the last stride, including
+            // when the image's address is not aligned to a system page boundary.
+            pixels[sliceEnd - 1] = 0;
+            ++pageWrites;
+            m_backingStorePreparationNextByte = sliceEnd;
+#if defined(SNOW_SHOT_BENCH_INTERNALS)
+            ++m_backingStorePreparationCounters.pageTouchSlices;
+            m_backingStorePreparationCounters.touchedBytes += static_cast<quint64>(sliceBytes);
+            m_backingStorePreparationCounters.pageWrites += pageWrites;
+            m_backingStorePreparationCounters.maximumSliceBytes =
+                std::max(m_backingStorePreparationCounters.maximumSliceBytes,
+                         static_cast<quint64>(sliceBytes));
+#else
+            Q_UNUSED(pageWrites);
+#endif
+            preparePages = sliceEnd < totalBytes;
+        } else {
+            preparePages = false;
+        }
+    } else {
+        preparePages = false;
+    }
+    store->endPaint();
+
+    if (preparePages) {
+        postBackingStorePreparation();
+    } else {
+        m_backingStorePreparationActive = false;
+        m_backingStorePreparationComplete = true;
+#if defined(SNOW_SHOT_BENCH_INTERNALS)
+        ++m_backingStorePreparationCounters.completedPreparations;
+#endif
+    }
+}
 
 void ScreenshotOverlayWindow::warmPresentationSurface() {
     retirePresentation();
@@ -619,6 +795,7 @@ void ScreenshotOverlayWindow::showPreparedFrame(bool deferFirstPaint) {
 }
 
 quint64 ScreenshotOverlayWindow::beginPresentation() {
+    cancelBackingStorePreparation();
     ++m_presentationGeneration;
     m_presentationActive = true;
     return m_presentationGeneration;
@@ -633,6 +810,7 @@ bool ScreenshotOverlayWindow::isPresentationCurrent(quint64 generation) const {
 }
 
 void ScreenshotOverlayWindow::retirePresentation() {
+    cancelBackingStorePreparation();
     ++m_presentationGeneration;
     m_presentationActive = false;
 }
@@ -728,6 +906,17 @@ void ScreenshotOverlayWindow::initializeScreenshotSurface() {
 }
 
 bool ScreenshotOverlayWindow::event(QEvent* event) {
+    if (event != nullptr && event->type() == backingStorePreparationEventType()) {
+        continueBackingStorePreparation(
+            static_cast<BackingStorePreparationEvent*>(event)->generation);
+        return true;
+    }
+    if (event != nullptr &&
+        (event->type() == QEvent::Resize || event->type() == QEvent::ScreenChangeInternal ||
+         event->type() == QEvent::DevicePixelRatioChange ||
+         event->type() == QEvent::PlatformSurface)) {
+        cancelBackingStorePreparation();
+    }
     if (event != nullptr &&
         (event->type() == QEvent::Hide || event->type() == QEvent::WindowDeactivate)) {
         m_eventSink.cancelEffectDrag();

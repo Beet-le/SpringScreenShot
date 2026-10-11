@@ -85,7 +85,21 @@ void ScreenshotOverlayCoordinator::prepareDisplayModels(ScreenshotDisplaySession
     m_canvasPresenter.prepareDisplayModels(displaySession);
 }
 
+void ScreenshotOverlayCoordinator::prepareOverlayBackingStores(
+    const ScreenshotDisplaySession& displaySession) {
+    displaySession.forEachActiveOverlay(
+        [](qsizetype, const CapturedDisplayModel&, ScreenshotOverlayWindow* overlay) {
+            overlay->prepareBackingStore();
+        });
+}
+
 void ScreenshotOverlayCoordinator::applyDisplayModels(ScreenshotDisplaySession& displaySession) {
+    // Acquisition has finished. Let image attachment and the first complete frame
+    // take priority over any queued page preparation, even if selection is pending.
+    displaySession.forEachOverlay([](qsizetype, ScreenshotOverlayWindow* overlay) {
+        if (overlay != nullptr)
+            overlay->cancelBackingStorePreparation();
+    });
     m_canvasPresenter.applyDisplayModels(displaySession);
     ++m_presentationRevision;
 }

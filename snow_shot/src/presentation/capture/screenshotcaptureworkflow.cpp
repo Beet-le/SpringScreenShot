@@ -756,8 +756,15 @@ void ScreenshotCaptureWorkflow::handleLayoutReady(const ScreenshotCaptureLayout&
     if (!m_state.presentationSuppressed && m_startMode != StartMode::ExternalDrag &&
         m_context.selection.regionType() == ScreenshotRegionType::Rectangle)
         m_context.runtime.startWorkflowRefresh();
-    if (beginCapturePresentation(layout.requestId))
+    if (beginCapturePresentation(layout.requestId)) {
         prepareOverlayPresentation(layout.requestId);
+        // Native acquisition is already running and the native/Qt layout now
+        // agrees. Prepare the real hidden pixels without delaying capture dispatch
+        // or publishing an incomplete screenshot/selection frame.
+        if (!m_state.presentationSuppressed && m_state.captureInProgress &&
+            layout.requestId == m_state.sessionId)
+            m_context.runtime.prepareOverlayBackingStores(m_context.displaySession);
+    }
 }
 
 void ScreenshotCaptureWorkflow::handleCapturePrepared(quint64, bool ok) {

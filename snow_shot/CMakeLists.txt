@@ -4091,6 +4091,14 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_test(NAME snow-shot-overlay-boundary-input-tests
         COMMAND snow-shot-screenshot-canvas-renderer-tests --overlay-boundary-input -platform offscreen)
     set_tests_properties(snow-shot-overlay-boundary-input-tests PROPERTIES LABELS "unit")
+    add_test(NAME snow-shot-overlay-backing-store-tests
+        COMMAND snow-shot-screenshot-canvas-renderer-tests --overlay-backing-store-only -platform offscreen)
+    add_test(NAME snow-shot-overlay-backing-store-dpr2-tests
+        COMMAND snow-shot-screenshot-canvas-renderer-tests --overlay-backing-store-only -platform offscreen)
+    set_tests_properties(snow-shot-overlay-backing-store-tests
+        snow-shot-overlay-backing-store-dpr2-tests PROPERTIES LABELS "unit" TIMEOUT 60)
+    set_tests_properties(snow-shot-overlay-backing-store-dpr2-tests PROPERTIES
+        ENVIRONMENT "QT_SCALE_FACTOR=2")
     if(APPLE)
         target_sources(snow-shot-screenshot-canvas-renderer-tests PRIVATE
             ../cmake/test-support/macos_native_input.mm)
@@ -6291,6 +6299,15 @@ if(SNOW_SHOT_BUILD_TESTS)
         SNOW_TEST_CROSS_PLATFORM TRUE ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     if(SNOW_SHOT_BUILD_BENCHMARKS)
+        if(APPLE)
+            # Opt-in native startup timing; intentionally not registered with CTest.
+            add_executable(snow-shot-backing-store-startup-benchmark
+                tests/screenshot_backing_store_startup_performance_benchmark.cpp)
+            target_include_directories(snow-shot-backing-store-startup-benchmark PRIVATE
+                "${SNOW_SHOT_CAPTURE_CRATES_DIR}/crates/snow-capture-c/include")
+            target_link_libraries(snow-shot-backing-store-startup-benchmark PRIVATE
+                snow-shot-selection-presentation-runtime snow_capture_c)
+        endif()
         add_executable(snow-shot-selection-presentation-benchmark
             tests/screenshot_selection_presentation_performance_benchmark.cpp)
         target_link_libraries(snow-shot-selection-presentation-benchmark PRIVATE

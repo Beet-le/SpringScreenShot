@@ -50,6 +50,7 @@ class ScreenshotOverlayCoordinator final : public ScreenshotOverlayExclusionPort
     void destroyDisplayPool(ScreenshotDisplaySession& displaySession);
     void resetForNewCapture(ScreenshotDisplaySession& displaySession);
     void prepareDisplayModels(ScreenshotDisplaySession& displaySession);
+    void prepareOverlayBackingStores(const ScreenshotDisplaySession& displaySession);
     void applyDisplayModels(ScreenshotDisplaySession& displaySession);
     // Applying capture sources can replace retained renderer state without changing selection.
     [[nodiscard]] quint64 presentationRevision() const {

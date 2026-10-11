@@ -38,11 +38,13 @@
 #include "widgets/tooltip.h"
 
 #include <QApplication>
+#include <QBackingStore>
 #include <QColor>
 #include <QCursor>
 #include <QEvent>
 #include <QElapsedTimer>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QThread>
 #include <QFontDatabase>
 #include <QGraphicsItem>
@@ -6306,6 +6308,195 @@ void overlayPoolPrewarmRestoresRetainedNativeSurfaces() {
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 }
 
+class BackingStorePreparationPaintProbe final : public QObject {
+  public:
+    int shows = 0;
+    int paints = 0;
+
+  protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (event->type() == QEvent::Show)
+            ++shows;
+        if (event->type() == QEvent::Paint)
+            ++paints;
+        return QObject::eventFilter(watched, event);
+    }
+};
+
+void finishHiddenBackingStorePreparation(ScreenshotOverlayWindow& overlay) {
+    for (int slice = 0; overlay.isBackingStorePreparationPendingForTesting() && slice < 1024;
+         ++slice) {
+        QCoreApplication::sendPostedEvents(&overlay);
+    }
+    require(!overlay.isBackingStorePreparationPendingForTesting(),
+            "bounded hidden backing-store preparation must eventually finish");
+}
+
+void overlayBackingStorePreparationStaysHiddenAndBounded() {
+    NoopOverlayEventSink eventSink;
+    ScreenshotOverlayWindow overlay(eventSink, new SnowCanvasWidget);
+    overlay.resize(1024, 769);
+    overlay.restoreNativeSurface();
+    BackingStorePreparationPaintProbe probe;
+    overlay.installEventFilter(&probe);
+    overlay.canvas()->installEventFilter(&probe);
+    const auto initialRevision = overlay.screenshotRendererForTesting()->contentRevision();
+
+    overlay.prepareBackingStore();
+    overlay.prepareBackingStore();
+    require(overlay.isBackingStorePreparationPendingForTesting() &&
+                overlay.backingStorePreparationCountersForTesting().allocationRequests == 0,
+            "hidden preparation must queue once and yield before allocating pixels");
+    QCoreApplication::sendPostedEvents(&overlay);
+    const auto firstSlice = overlay.backingStorePreparationCountersForTesting();
+    require(firstSlice.allocationRequests == 1 && firstSlice.pageTouchSlices == 1 &&
+                firstSlice.maximumSliceBytes <= 1024 * 1024 &&
+                overlay.isBackingStorePreparationPendingForTesting(),
+            "a preparation dispatch must fault at most 1 MiB before yielding");
+    finishHiddenBackingStorePreparation(overlay);
+    const auto prepared = overlay.backingStorePreparationCountersForTesting();
+    QBackingStore* store = overlay.backingStore();
+    require(store != nullptr && store->size() == overlay.size(),
+            "hidden preparation must allocate the complete native frame dimensions");
+    store->beginPaint(QRegion());
+    QPaintDevice* device = store->paintDevice();
+    require(device != nullptr && device->devType() == QInternal::Image,
+            "the screenshot overlay must use a raster backing store");
+    const auto* pixels = static_cast<QImage*>(device);
+    const quint64 expectedBytes = static_cast<quint64>(pixels->sizeInBytes());
+    const bool matchesNativePixelSize =
+        pixels->size() == overlay.size() * overlay.devicePixelRatioF();
+    store->endPaint();
+    require(matchesNativePixelSize,
+            "hidden preparation must allocate physical pixels at the overlay's current DPR");
+    require(prepared.completedPreparations == 1 && prepared.pageTouchSlices > 1 &&
+                prepared.touchedBytes == expectedBytes && prepared.maximumSliceBytes <= 1024 * 1024,
+            "hidden preparation must cover the final partial page and stay bounded per slice");
+    require(!overlay.isVisible() && probe.shows == 0 && probe.paints == 0 &&
+                overlay.screenshotRendererForTesting()->contentRevision() == initialRevision,
+            "preparing pixels must neither show the overlay nor render screenshot content");
+
+    overlay.prepareBackingStore();
+    QCoreApplication::sendPostedEvents(&overlay);
+    require(!overlay.isBackingStorePreparationPendingForTesting() &&
+                overlay.backingStorePreparationCountersForTesting().touchedBytes ==
+                    prepared.touchedBytes &&
+                overlay.backingStorePreparationCountersForTesting().allocationRequests == 1,
+            "completed preparation must be idempotent for an unchanged hidden surface");
+}
+
+void overlayBackingStorePreparationCancelsObsoleteWork() {
+    NoopOverlayEventSink eventSink;
+    ScreenshotOverlayWindow overlay(eventSink, new SnowCanvasWidget);
+    overlay.resize(1024, 768);
+    overlay.restoreNativeSurface();
+    const auto startPartialPreparation = [&]() {
+        overlay.prepareBackingStore();
+        QCoreApplication::sendPostedEvents(&overlay);
+        require(overlay.isBackingStorePreparationPendingForTesting(),
+                "the cancellation fixture must retain queued preparation work");
+    };
+    const auto verifyCanceled = [&]() {
+        const auto before = overlay.backingStorePreparationCountersForTesting();
+        require(!overlay.isBackingStorePreparationPendingForTesting(),
+                "surface retirement must synchronously cancel preparation");
+        QCoreApplication::sendPostedEvents(&overlay);
+        const auto after = overlay.backingStorePreparationCountersForTesting();
+        require(before.touchedBytes == after.touchedBytes &&
+                    before.allocationRequests == after.allocationRequests,
+                "obsolete queued events must not acquire or touch a backing store");
+    };
+
+    overlay.prepareBackingStore();
+    overlay.cancelBackingStorePreparation();
+    verifyCanceled();
+    require(overlay.backingStorePreparationCountersForTesting().allocationRequests == 0,
+            "cancellation before dispatch must avoid speculative allocation");
+
+    overlay.prepareBackingStore();
+    QTimer::singleShot(0, &overlay, [&overlay]() {
+        QImage readyImage(16, 16, QImage::Format_ARGB32_Premultiplied);
+        readyImage.fill(Qt::blue);
+        overlay.setScreenshotImage(readyImage, readyImage.rect());
+    });
+    QCoreApplication::sendPostedEvents(&overlay);
+    require(!overlay.isBackingStorePreparationPendingForTesting() &&
+                overlay.backingStorePreparationCountersForTesting().allocationRequests == 0,
+            "a ready capture result must outrank queued speculative pixel allocation");
+    overlay.resetScreenshotRendering();
+
+    startPartialPreparation();
+    overlay.hide();
+    verifyCanceled();
+    startPartialPreparation();
+    static_cast<void>(overlay.beginPresentation());
+    verifyCanceled();
+    startPartialPreparation();
+    overlay.resize(1025, 768);
+    // A hidden QWidget defers its Resize event until show; the slice must also
+    // check the current dimensions rather than relying exclusively on events.
+    QCoreApplication::sendPostedEvents(&overlay);
+    verifyCanceled();
+
+    for (const auto type : {QEvent::DevicePixelRatioChange, QEvent::ScreenChangeInternal}) {
+        startPartialPreparation();
+        QEvent changed(type);
+        QApplication::sendEvent(&overlay, &changed);
+        verifyCanceled();
+    }
+    startPartialPreparation();
+    QImage screenshot(1025, 768, QImage::Format_ARGB32_Premultiplied);
+    screenshot.fill(Qt::blue);
+    overlay.setScreenshotImage(screenshot, screenshot.rect());
+    verifyCanceled();
+    startPartialPreparation();
+    overlay.setScreenshotImageSource(ScreenshotImageSource{});
+    verifyCanceled();
+
+    startPartialPreparation();
+    const auto beforeRelease = overlay.backingStorePreparationCountersForTesting();
+    overlay.releaseNativeSurface();
+    require(overlay.internalWinId() == 0 && overlay.backingStore() == nullptr,
+            "surface retirement must release the prepared pixels");
+    verifyCanceled();
+    overlay.restoreNativeSurface();
+    overlay.prepareBackingStore();
+    finishHiddenBackingStorePreparation(overlay);
+    require(overlay.backingStorePreparationCountersForTesting().allocationRequests ==
+                beforeRelease.allocationRequests + 1,
+            "restored native surfaces must receive fresh backing-store preparation");
+
+    auto destroyed = std::make_unique<ScreenshotOverlayWindow>(eventSink, new SnowCanvasWidget);
+    destroyed->resize(1024, 768);
+    destroyed->restoreNativeSurface();
+    destroyed->prepareBackingStore();
+    destroyed.reset();
+    QCoreApplication::sendPostedEvents();
+}
+
+void overlayBackingStorePreparationModesUseTheSameSurface() {
+    NoopOverlayEventSink eventSink;
+    ScreenshotOverlayWindow overlay(eventSink, new SnowCanvasWidget);
+    overlay.resize(320, 240);
+    overlay.restoreNativeSurface();
+    overlay.setBackingStorePreparationModeForTesting(
+        ScreenshotBackingStorePreparationMode::Disabled);
+    overlay.prepareBackingStore();
+    QCoreApplication::sendPostedEvents(&overlay);
+    require(!overlay.isBackingStorePreparationPendingForTesting() &&
+                overlay.backingStorePreparationCountersForTesting().allocationRequests == 0,
+            "disabled preparation must perform no speculative surface work");
+    overlay.setBackingStorePreparationModeForTesting(
+        ScreenshotBackingStorePreparationMode::AllocationOnly);
+    overlay.prepareBackingStore();
+    finishHiddenBackingStorePreparation(overlay);
+    const auto allocationOnly = overlay.backingStorePreparationCountersForTesting();
+    require(allocationOnly.allocationRequests == 1 && allocationOnly.completedPreparations == 1 &&
+                allocationOnly.pageTouchSlices == 0 && allocationOnly.touchedBytes == 0 &&
+                overlay.backingStore()->size() == overlay.size() && !overlay.isVisible(),
+            "allocation-only comparison must prepare native storage without page writes");
+}
+
 void clearingDisplaysReleasesRestoredHistoryImages() {
     NoopOverlayEventSink eventSink;
     SnowCanvasRuntime canvasRuntime;
@@ -7525,6 +7716,12 @@ int main(int argc, char** argv) {
     if (application.arguments().contains(QStringLiteral("--overlay-pool-prewarm"))) {
         overlayPoolPrewarmRestoresRetainedNativeSurfaces();
         clearingDisplaysReleasesRestoredHistoryImages();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--overlay-backing-store-only"))) {
+        overlayBackingStorePreparationStaysHiddenAndBounded();
+        overlayBackingStorePreparationCancelsObsoleteWork();
+        overlayBackingStorePreparationModesUseTheSameSurface();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--large-image-slice-rendering"))) {

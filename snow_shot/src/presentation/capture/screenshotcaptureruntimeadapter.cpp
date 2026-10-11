@@ -159,6 +159,11 @@ void ScreenshotCaptureRuntimeAdapter::prepareDisplayModels(
     m_context.overlayCoordinator.prepareDisplayModels(displaySession);
 }
 
+void ScreenshotCaptureRuntimeAdapter::prepareOverlayBackingStores(
+    const ScreenshotDisplaySession& displaySession) {
+    m_context.overlayCoordinator.prepareOverlayBackingStores(displaySession);
+}
+
 void ScreenshotCaptureRuntimeAdapter::applyDisplayModels(ScreenshotDisplaySession& displaySession) {
     m_context.overlayCoordinator.applyDisplayModels(displaySession);
 }

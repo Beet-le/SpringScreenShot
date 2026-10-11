@@ -48,6 +48,7 @@ class ScreenshotCaptureRuntimePort {
     virtual void destroyDisplayPool(ScreenshotDisplaySession& displaySession) = 0;
     virtual void resetForNewCapture(ScreenshotDisplaySession& displaySession) = 0;
     virtual void prepareDisplayModels(ScreenshotDisplaySession& displaySession) = 0;
+    virtual void prepareOverlayBackingStores(const ScreenshotDisplaySession& displaySession) = 0;
     virtual void applyDisplayModels(ScreenshotDisplaySession& displaySession) = 0;
     [[nodiscard]] virtual bool
     preparePreCaptureOverlayWindows(ScreenshotDisplaySession& displaySession) = 0;
