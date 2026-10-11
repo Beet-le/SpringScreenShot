@@ -10957,6 +10957,15 @@ if(SNOW_SHOT_BUILD_TESTS)
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     if(TARGET snow-shot-pinned-window-tests)
+        foreach(_snow_pinned_toolbar_dpr IN ITEMS 1 1.25 1.5 1.75 2)
+            set(_snow_pinned_toolbar_test
+                "snow-shot-pinned-toolbar-placement-${_snow_pinned_toolbar_dpr}-tests")
+            add_test(NAME ${_snow_pinned_toolbar_test}
+                COMMAND snow-shot-pinned-window-tests --toolbar-placement-only -platform offscreen)
+            set_tests_properties(${_snow_pinned_toolbar_test} PROPERTIES
+                LABELS "unit" RUN_SERIAL TRUE TIMEOUT 90
+                ENVIRONMENT "QT_SCALE_FACTOR=${_snow_pinned_toolbar_dpr};${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
+        endforeach()
         add_test(NAME snow-shot-pinned-show-shadow-tests
             COMMAND snow-shot-pinned-window-tests --show-shadow-only -platform offscreen)
         add_test(NAME snow-shot-pinned-shadow-geometry-tests

@@ -719,22 +719,23 @@ void ScreenshotPinnedEditController::updatePlacement() {
         if (!toolbarGeometry.bottom.isValid()) {
             return;
         }
-        const QRect pinnedGeometry =
-            m_pinnedWindow.frameGeometry().isValid() && !m_pinnedWindow.frameGeometry().isEmpty()
-                ? m_pinnedWindow.frameGeometry()
-                : m_pinnedWindow.geometry();
+        // The outer window reserves shadow padding even when shadows are hidden.
+        // Anchor the toolbar to the visible content in the screen's logical coordinates.
+        const QRect pinnedContentGeometry = snow_shot::presentation::pinnedLogicalRect(
+            m_pinnedWindow.currentContentNativeGeometry(), placementScreen());
         QRect placementBounds;
         if (const QScreen* screen = placementScreen()) {
             placementBounds = screen->geometry();
         }
         if (!placementBounds.isValid() || placementBounds.isEmpty()) {
-            placementBounds = pinnedGeometry;
+            placementBounds = pinnedContentGeometry;
         }
         const ScreenshotAnchoredToolbarPlacement placement =
             ScreenshotGeometryMapper::anchoredToolbarPlacement(
-                QPoint(pinnedGeometry.left() + pinnedGeometry.width(),
-                       pinnedGeometry.top() + pinnedGeometry.height()),
-                QPoint(pinnedGeometry.left() + pinnedGeometry.width(), pinnedGeometry.top()),
+                QPoint(pinnedContentGeometry.left() + pinnedContentGeometry.width(),
+                       pinnedContentGeometry.top() + pinnedContentGeometry.height()),
+                QPoint(pinnedContentGeometry.left() + pinnedContentGeometry.width(),
+                       pinnedContentGeometry.top()),
                 toolbarGeometry.bottom, toolbarGeometry.top, placementBounds, kToolbarGap);
         m_toolbarWindow->setStyleToolbarAboveMain(placement.usesTopRightPlacement);
         m_globalContentPosition = placement.contentPosition;

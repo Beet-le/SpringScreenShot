@@ -159,6 +159,7 @@
 #include <stdexcept>
 #include <utility>
 #include <vector>
+#include <qpa/qplatformscreen.h>
 #include <qpa/qwindowsysteminterface.h>
 
 #if defined(Q_OS_WIN) || defined(_WIN32)
@@ -20324,6 +20325,100 @@ void pinnedCloudUploadHiddenToolbar() {
                                  "clipboard observer destruction cleans uploaded file");
 }
 
+void pinnedToolbarAnchorsToContentOffscreen() {
+    using Access = ScreenshotPinnedWindowTestAccess;
+    using snow_shot::presentation::pinnedLogicalRect;
+    using snow_shot::presentation::pinnedScreenGeometry;
+    require(QGuiApplication::platformName() == QStringLiteral("offscreen"),
+            "toolbar placement fixture requires the offscreen platform");
+    QScreen* screen = QGuiApplication::primaryScreen();
+    require(screen && screen->handle(), "toolbar placement fixture requires a screen");
+    const QRect originalBounds = screen->handle()->geometry();
+    const QRect originalAvailable = screen->handle()->availableGeometry();
+    const auto restoreScreen = qScopeGuard([&] {
+        QWindowSystemInterface::handleScreenGeometryChange(screen, originalBounds,
+                                                           originalAvailable);
+        QWindowSystemInterface::flushWindowSystemEvents();
+        QApplication::processEvents();
+    });
+    // Leave room for the real toolbar at every scale so screen clamping cannot
+    // hide an incorrect anchor. The QPA notification takes native pixels.
+    const qreal dpr = screen->devicePixelRatio();
+    const QRect nativeBounds(0, 0, qRound(1800 * dpr), qRound(1200 * dpr));
+    QWindowSystemInterface::handleScreenGeometryChange(screen, nativeBounds, nativeBounds);
+    QWindowSystemInterface::flushWindowSystemEvents();
+    QApplication::processEvents();
+    const QRect bounds = screen->geometry();
+    require(bounds.width() >= 1700 && bounds.height() >= 1100,
+            "toolbar placement fixture must have an unclamped work area");
+
+    for (const bool above : {false, true}) {
+        auto config = clickThroughTestConfig(*screen);
+        const QRect logicalContent(bounds.right() - 800,
+                                   above ? bounds.bottom() - 240 : bounds.top() + 200, 500, 220);
+        config.nativeGeometry = ScreenshotGeometryMapper::nativeRectForLogicalRect(
+            logicalContent, bounds, pinnedScreenGeometry(*screen));
+        config.initialWindowSize = config.nativeGeometry.size();
+        QImage image(config.initialWindowSize, QImage::Format_RGB32);
+        image.fill(QColor(42, 84, 126));
+        config.canvasSourceRect = QRectF(image.rect());
+        config.imageSource = ScreenshotImageSource::fromImage(image, config.canvasSourceRect);
+        config.initialBorderVisible = true;
+        config.initialShadowVisible = false;
+        config.mouseWheelZoomMode = QStringLiteral("window_center");
+        ScreenshotPinnedWindow window;
+        Access::prepareReplacement(window, config);
+        window.show();
+        Access::editSelectionOffscreen(window, true);
+        waitForUi(10);
+        auto* controller = window.findChild<ScreenshotPinnedEditController*>();
+        auto* toolbar = controller ? controller->toolbarWindow() : nullptr;
+        auto* panel = toolbar && toolbar->palette() ? toolbar->palette()->mainPanel() : nullptr;
+        require(toolbar && panel && toolbar->isVisible() && panel->isVisible(),
+                "toolbar placement fixture must show the real main toolbar surface");
+        const auto verifyPlacement = [&] {
+            const QRect content = pinnedLogicalRect(Access::contentGeometry(window), screen);
+            const QRect visibleMain(panel->mapToGlobal(QPoint()), panel->size());
+            // The shared placement API receives half-open right/bottom anchors
+            // and preserves its existing gap + 1 convention.
+            require(
+                visibleMain.right() == content.left() + content.width(),
+                "pinned toolbar must align with the content right edge, excluding shadow margin");
+            require(above ? visibleMain.bottom() == content.top() - 5
+                          : visibleMain.top() == content.top() + content.height() + 5,
+                    "pinned toolbar must preserve its content gap above and below, excluding "
+                    "shadow margin");
+        };
+        verifyPlacement();
+        const QRect originalContent = Access::contentGeometry(window);
+        for (const bool border : {false, true}) {
+            for (const bool shadow : {false, true}) {
+                Access::shadowState(window, border, shadow);
+                waitForUi(5);
+                require(Access::contentGeometry(window) == originalContent,
+                        "decoration toggles must preserve the toolbar's content anchor");
+                verifyPlacement();
+            }
+        }
+        require(Access::moveWindow(window, window.currentNativeGeometry().translated(-23, -19)),
+                "toolbar placement fixture must accept a pin move");
+        waitForUi(10);
+        require(Access::contentGeometry(window) != originalContent,
+                "toolbar placement fixture must move its content");
+        verifyPlacement();
+        const QSize originalContentSize = Access::contentGeometry(window).size();
+        QString error;
+        require(window.automationUpdate({{QStringLiteral("scale_percent"), 125}}, &error),
+                "toolbar placement fixture must accept a pin resize");
+        waitForUi(10);
+        require(Access::contentGeometry(window).size() != originalContentSize,
+                "toolbar placement fixture must resize its content");
+        verifyPlacement();
+        Access::editSelectionOffscreen(window, false);
+        window.hide();
+    }
+}
+
 void pinnedShadowStateAndMarginsOffscreen() {
     using Access = ScreenshotPinnedWindowTestAccess;
     using snow_shot::presentation::pinnedOuterRect;
@@ -20621,6 +20716,10 @@ int main(int argc, char* argv[]) {
         // without this, lazily initialized storage lands in the developer's
         // real AppData (see IsolatedPinnedStorage).
         IsolatedPinnedStorage processStorage;
+        if (app.arguments().contains(QStringLiteral("--toolbar-placement-only"))) {
+            pinnedToolbarAnchorsToContentOffscreen();
+            return 0;
+        }
         if (app.arguments().contains(QStringLiteral("--memory-idle-only"))) {
             pinnedMemoryIdleSafety();
             return 0;
