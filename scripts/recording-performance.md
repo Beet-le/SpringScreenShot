@@ -25,8 +25,9 @@ executables in `build/recording-throughput/binaries/`. Do not overwrite a binary
 that an earlier result identifies by hash.
 
 Baseline and candidate must use the same harness, Release configuration and
-timing features. Screen one mechanism at a time. The default benchmark path
-keeps every experimental optimization disabled; switches select experiments.
+timing features. Screen one mechanism at a time. Optional benchmark experiments
+remain disabled by default; required recording clarity filtering stays enabled.
+Switches select optional experiments.
 Omit `-EncodeThreads` / `--encode-threads` to preserve the application policy.
 Explicit zero requests the exporter's automatic worker count; 1, 2 or 4 requests that count.
 The exporter resolves its automatic count from physical cores before opening
@@ -199,3 +200,66 @@ python -m unittest scripts/test_compare_recording_results.py `
 Current experiment status and interruptions are recorded in
 `build/recording-throughput/STATE.md`. Prototypes and screening results do not
 by themselves authorize new production defaults.
+
+## Recording clarity
+
+Recording backgrounds use pixel-area coverage on each shrinking axis. CPU
+composition uses `RecordingResizePlan`; native GPU composition filters RGB before
+NV12 conversion. Cropped and rotated native GPU placement uses exact texture loads.
+Same-size CPU pixels are copied exactly, and enlargement retains the existing
+selection policy. Video export selects FFmpeg AREA for reductions in which neither
+axis enlarges, including RGB48 HDR intermediates. Cursor masks keep their existing
+nearest-pixel semantics. Filtering preserves thin-stroke coverage and avoids
+ringing; it cannot recover source detail beyond the output resolution.
+
+The realtime benchmark's `--half-resize` switch remains for older command
+compatibility. Its metadata records the requested flag, while the filtered 2:1
+specialization is always enabled. Toggling this flag is not an active-kernel
+comparison. The standalone resize benchmark compares the complete nearest and
+filtered implementations instead.
+
+In the configured `windows-msvc-performance` environment, with the repository
+FFmpeg DLLs on PATH, build from `snow-crates`:
+
+```powershell
+cargo build -p snow-recording-export --release --target x86_64-pc-windows-msvc `
+  --target-dir ../build/windows-msvc-performance/cargo `
+  --example recording_resize_benchmark
+```
+
+Then run from the repository root, separately from builds and other benchmarks:
+
+```powershell
+./build/windows-msvc-performance/cargo/x86_64-pc-windows-msvc/release/examples/recording_resize_benchmark.exe `
+  --quality --output build/recording-clarity/quality
+./build/windows-msvc-performance/cargo/x86_64-pc-windows-msvc/release/examples/recording_resize_benchmark.exe `
+  --output build/recording-clarity/performance
+```
+
+The performance benchmark defaults to five rounds of 500 ms per variant, rotating
+and reversing order. It covers exact 2:1, portrait, fractional, stronger reduction,
+odd geometry and native output. `--pairs` and `--milliseconds` allow shorter
+screening. `area_parallel2` and `area_parallel4` name the requested bounded pools;
+native identity copies do not use those workers.
+
+Two focused Release stage comparisons can be run from `snow-crates`:
+
+```powershell
+cargo test -p snow-recording-export --lib --release --target x86_64-pc-windows-msvc `
+  --target-dir ../build/windows-msvc-performance/cargo `
+  resize::recording::tests::fractional_area_kernel_performance_comparison `
+  -- --ignored --nocapture --exact
+cargo test -p snow-recording-runtime --lib --release --target x86_64-pc-windows-msvc `
+  --target-dir ../build/windows-msvc-performance/cargo `
+  direct::gpu::tests::hardware_area_resize_stage_benchmark `
+  -- --ignored --nocapture --exact
+```
+
+The quality CSV compares synthetic RGB fixtures with an independent continuous
+pixel-square coverage reference; it does not measure encoded perceptual quality.
+Decoded export regressions and offscreen GPU readback checks validate later
+pipeline stages separately. Kernel timings and completed GPU timestamps measure
+stage cost, not delivered recording cadence; GPU results apply to the measured
+adapter and driver. Use the preserved-binary alternating-pair recording workflow
+above before claiming throughput changes, preserving source and binary hashes
+and feature settings.

@@ -11,6 +11,10 @@ use windows::core::PCSTR;
 
 use super::*;
 
+#[path = "direct_gpu_resize.rs"]
+mod resize;
+use resize::{AreaScaler, CropCopy};
+
 pub(super) fn eligible(config: &DirectRecordingConfig) -> bool {
     config.format == ExportFormat::Mp4
         && config.codec == VideoCodec::H264
@@ -304,6 +308,9 @@ pub(super) struct GpuVisualCompositor {
     cursor_shader: ID3D11ComputeShader,
     cursor_constants: ID3D11Buffer,
     cursor_texture: Option<(u64, Texture)>,
+    scaler: Option<AreaScaler>,
+    crop_copy: Option<CropCopy>,
+    native_desktop: Option<NativeDesktop>,
     size: (u32, u32),
     pub overlay_upload_bytes: u64,
 }
@@ -409,6 +416,9 @@ impl GpuVisualCompositor {
             cursor_constants: cursor_constants
                 .ok_or_else(|| gpu_error("missing cursor constants"))?,
             cursor_texture: None,
+            scaler: None,
+            crop_copy: None,
+            native_desktop: None,
             size,
             overlay_upload_bytes: 0,
         })
@@ -433,50 +443,7 @@ impl GpuVisualCompositor {
             return Err(gpu_error("encoder output belongs to another GPU device"));
         }
         let source_size = frame.dimensions();
-        let mut layers = frame.layers.clone();
-        for layer in &mut layers {
-            let left = scale_coordinate(layer.destination.x, source_size.0, self.size.0);
-            let top = scale_coordinate(layer.destination.y, source_size.1, self.size.1);
-            let right = scale_coordinate(
-                layer.destination.x + layer.destination.width as i32,
-                source_size.0,
-                self.size.0,
-            );
-            let bottom = scale_coordinate(
-                layer.destination.y + layer.destination.height as i32,
-                source_size.1,
-                self.size.1,
-            );
-            layer.destination = Rect {
-                x: left,
-                y: top,
-                width: (right - left).max(0) as u32,
-                height: (bottom - top).max(0) as u32,
-            };
-        }
-        layers.retain(|layer| layer.destination.width != 0 && layer.destination.height != 0);
-        let mut index = 0;
-        let mut consumed = 0;
-        while consumed < layers.len() {
-            let mut batch = Vec::new();
-            if consumed != 0 {
-                batch.push(self.layer(self.scratch[1 - index].clone(), false));
-            }
-            let count = (self.processor.max_streams() - batch.len()).min(layers.len() - consumed);
-            batch.extend_from_slice(&layers[consumed..consumed + count]);
-            self.processor
-                .blit(&batch, self.scratch[index].raw(), 0)
-                .map_err(|error| gpu_error(format!("desktop pass: {error:#}")))?;
-            consumed += count;
-            if consumed < layers.len() {
-                index = 1 - index;
-            }
-        }
-        if layers.is_empty() {
-            self.processor
-                .blit(&[], self.scratch[index].raw(), 0)
-                .map_err(|error| gpu_error(format!("desktop pass: {error:#}")))?;
-        }
+        let mut index = self.desktop(&frame.layers, source_size)?;
         if config.show_cursor
             && config.mouse_highlight_rgba[3] != 0
             && let Some(sample) = cursor.filter(|c| {
@@ -600,6 +567,123 @@ impl GpuVisualCompositor {
             rotation: 0,
             alpha,
         }
+    }
+
+    /// Resize the complete desktop once in RGB. Native recording allocates no
+    /// filtering intermediates; explicit crops use exact loads into existing storage.
+    fn desktop(&mut self, layers: &[VideoLayer], source_size: (u32, u32)) -> Result<usize> {
+        if source_size.0 <= self.size.0 && source_size.1 <= self.size.1 {
+            self.native_desktop = None;
+            self.scaler = None;
+            if source_size == self.size {
+                if layers.len() == 1
+                    && layers[0].source == Rect::full(layers[0].texture.dimensions())
+                    && layers[0].destination == Rect::full(self.size)
+                    && layers[0].rotation == 0
+                {
+                    if let Some(copy) = self.crop_copy.as_mut() {
+                        copy.clear_views();
+                    }
+                    return composite_desktop(&self.processor, &self.scratch, layers, self.size);
+                }
+                if self.crop_copy.is_none() {
+                    self.crop_copy = Some(CropCopy::new(self.device.clone())?);
+                }
+                self.crop_copy
+                    .as_mut()
+                    .unwrap()
+                    .copy_into(layers, &self.cursor_output)?;
+                self.processor
+                    .blit(
+                        &[self.layer(self.cursor_output.clone(), false)],
+                        self.scratch[0].raw(),
+                        0,
+                    )
+                    .map_err(gpu_error)?;
+                return Ok(0);
+            }
+            if let Some(copy) = self.crop_copy.as_mut() {
+                copy.clear_views();
+            }
+            let mut enlarged = layers.to_vec();
+            for layer in &mut enlarged {
+                let left = scale_coordinate(layer.destination.x, source_size.0, self.size.0);
+                let top = scale_coordinate(layer.destination.y, source_size.1, self.size.1);
+                let right = scale_coordinate(
+                    layer.destination.x + layer.destination.width as i32,
+                    source_size.0,
+                    self.size.0,
+                );
+                let bottom = scale_coordinate(
+                    layer.destination.y + layer.destination.height as i32,
+                    source_size.1,
+                    self.size.1,
+                );
+                layer.destination = Rect {
+                    x: left,
+                    y: top,
+                    width: (right - left).max(0) as u32,
+                    height: (bottom - top).max(0) as u32,
+                };
+            }
+            enlarged.retain(|layer| layer.destination.width != 0 && layer.destination.height != 0);
+            return composite_desktop(&self.processor, &self.scratch, &enlarged, self.size);
+        }
+        let direct = layers.first().filter(|layer| {
+            let oriented = if layer.rotation.is_multiple_of(2) {
+                (layer.source.width, layer.source.height)
+            } else {
+                (layer.source.height, layer.source.width)
+            };
+            layers.len() == 1
+                && !layer.alpha
+                && layer.destination == Rect::full(source_size)
+                && oriented == source_size
+        });
+        let source = if let Some(layer) = direct {
+            if self.native_desktop.take().is_some()
+                && let Some(scaler) = self.scaler.as_mut()
+            {
+                scaler.clear_source_views();
+            }
+            if let Some(copy) = self.crop_copy.as_mut() {
+                copy.clear_views();
+            }
+            // The compute shader clamps every tap to the explicit crop; driver
+            // filtering can otherwise leak neighboring monitor pixels into it.
+            layer.clone()
+        } else {
+            if self
+                .native_desktop
+                .as_ref()
+                .is_none_or(|desktop| desktop.size != source_size)
+            {
+                self.native_desktop = Some(NativeDesktop::new(&self.device, source_size)?);
+            }
+            if self.crop_copy.is_none() {
+                self.crop_copy = Some(CropCopy::new(self.device.clone())?);
+            }
+            let desktop = self.native_desktop.as_ref().unwrap();
+            self.crop_copy
+                .as_mut()
+                .unwrap()
+                .copy_into(layers, &desktop.texture)?;
+            VideoLayer {
+                texture: desktop.texture.clone(),
+                source: Rect::full(source_size),
+                destination: Rect::full(self.size),
+                rotation: 0,
+                alpha: false,
+            }
+        };
+        if self.scaler.is_none() {
+            self.scaler = Some(AreaScaler::new(self.device.clone())?);
+        }
+        let filtered = self.scaler.as_mut().unwrap().resize(&source, self.size)?;
+        self.processor
+            .blit(&[self.layer(filtered, false)], self.scratch[0].raw(), 0)
+            .map_err(|error| gpu_error(format!("filtered desktop pass: {error:#}")))?;
+        Ok(0)
     }
 
     fn cursor(
@@ -749,6 +833,67 @@ impl GpuVisualCompositor {
         }
         self.device.check().map_err(gpu_error)
     }
+}
+
+struct NativeDesktop {
+    size: (u32, u32),
+    texture: Texture,
+}
+
+impl NativeDesktop {
+    fn new(device: &SharedDevice, size: (u32, u32)) -> Result<Self> {
+        Ok(Self {
+            size,
+            texture: device
+                .texture(
+                    size.0,
+                    size.1,
+                    DXGI_FORMAT_R8G8B8A8_UNORM,
+                    (D3D11_BIND_SHADER_RESOURCE
+                        | D3D11_BIND_UNORDERED_ACCESS
+                        | D3D11_BIND_RENDER_TARGET)
+                        .0 as u32,
+                )
+                .map_err(gpu_error)?,
+        })
+    }
+}
+
+fn composite_desktop(
+    processor: &VideoProcessor,
+    scratch: &[Texture; 2],
+    layers: &[VideoLayer],
+    size: (u32, u32),
+) -> Result<usize> {
+    let mut index = 0;
+    let mut consumed = 0;
+    while consumed < layers.len() {
+        let mut batch = Vec::with_capacity(processor.max_streams().min(layers.len() + 1));
+        if consumed != 0 {
+            batch.push(VideoLayer {
+                texture: scratch[1 - index].clone(),
+                source: Rect::full(size),
+                destination: Rect::full(size),
+                rotation: 0,
+                alpha: false,
+            });
+        }
+        let count = (processor.max_streams() - batch.len()).min(layers.len() - consumed);
+        batch.extend_from_slice(&layers[consumed..consumed + count]);
+        processor
+            .blit(&batch, scratch[index].raw(), 0)
+            .map_err(|error| gpu_error(format!("desktop pass: {error:#}")))?;
+        consumed += count;
+        if consumed < layers.len() {
+            index = 1 - index;
+        }
+    }
+    if layers.is_empty() {
+        processor
+            .blit(&[], scratch[index].raw(), 0)
+            .map_err(|error| gpu_error(format!("desktop pass: {error:#}")))?;
+    }
+    Ok(index)
 }
 
 #[cfg(test)]
@@ -1014,6 +1159,841 @@ mod tests {
         config.prefer_hardware_encoder = true;
         config.format = ExportFormat::Gif;
         assert!(!eligible(&config));
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum DownscalePattern {
+        VerticalStripes,
+        HorizontalStripes,
+        Checkerboard,
+        VerticalLine,
+        HorizontalLine,
+        VerticalStems,
+    }
+
+    impl DownscalePattern {
+        fn value(self, x: u32, y: u32, size: (u32, u32), phase: u32) -> u8 {
+            let white = match self {
+                Self::VerticalStripes => (x + phase).is_multiple_of(2),
+                Self::HorizontalStripes => (y + phase).is_multiple_of(2),
+                Self::Checkerboard => (x + y + phase).is_multiple_of(2),
+                Self::VerticalLine => x == size.0 / 2 + phase,
+                Self::HorizontalLine => y == size.1 / 2 + phase,
+                Self::VerticalStems => x % 8 == phase,
+            };
+            if white { 255 } else { 0 }
+        }
+    }
+
+    fn downscale_area_reference(
+        pattern: DownscalePattern,
+        source: (u32, u32),
+        output: (u32, u32),
+        phase: u32,
+    ) -> Vec<f64> {
+        let scale = (
+            f64::from(source.0) / f64::from(output.0),
+            f64::from(source.1) / f64::from(output.1),
+        );
+        let mut reference = Vec::with_capacity((output.0 * output.1) as usize);
+        for y in 0..output.1 {
+            let (top, bottom) = if source.1 >= output.1 {
+                (f64::from(y) * scale.1, f64::from(y + 1) * scale.1)
+            } else {
+                let point = (f64::from(y) * scale.1).floor();
+                (point, point + 1.0)
+            };
+            for x in 0..output.0 {
+                let (left, right) = if source.0 >= output.0 {
+                    (f64::from(x) * scale.0, f64::from(x + 1) * scale.0)
+                } else {
+                    let point = (f64::from(x) * scale.0).floor();
+                    (point, point + 1.0)
+                };
+                let mut total = 0.0;
+                for sy in top.floor() as u32..bottom.ceil() as u32 {
+                    let height = bottom.min(f64::from(sy + 1)) - top.max(f64::from(sy));
+                    for sx in left.floor() as u32..right.ceil() as u32 {
+                        let width = right.min(f64::from(sx + 1)) - left.max(f64::from(sx));
+                        total += f64::from(pattern.value(sx, sy, source, phase)) * width * height;
+                    }
+                }
+                reference.push(total / ((right - left) * (bottom - top)));
+            }
+        }
+        reference
+    }
+
+    fn read_downscale_rgb(device: &SharedDevice, texture: &Texture) -> Result<Vec<u8>> {
+        let mut desc = texture.desc();
+        desc.Usage = D3D11_USAGE_STAGING;
+        desc.BindFlags = 0;
+        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
+        let mut staging = None;
+        unsafe {
+            device
+                .device()
+                .CreateTexture2D(&desc, None, Some(&mut staging))
+        }
+        .map_err(gpu_error)?;
+        let staging = staging.ok_or_else(|| gpu_error("downscale staging texture"))?;
+        unsafe { device.context().CopyResource(&staging, texture.raw()) };
+        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+        unsafe {
+            device
+                .context()
+                .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+        }
+        .map_err(gpu_error)?;
+        let mut pixels = Vec::with_capacity((desc.Width * desc.Height * 4) as usize);
+        for row in 0..desc.Height as usize {
+            pixels.extend_from_slice(unsafe {
+                std::slice::from_raw_parts(
+                    mapped
+                        .pData
+                        .cast::<u8>()
+                        .add(row * mapped.RowPitch as usize),
+                    desc.Width as usize * 4,
+                )
+            });
+        }
+        unsafe { device.context().Unmap(&staging, 0) };
+        Ok(pixels)
+    }
+
+    fn downscale_pattern_layer(
+        device: &SharedDevice,
+        source: (u32, u32),
+        output: (u32, u32),
+        pattern: DownscalePattern,
+        phase: u32,
+        rotation: u32,
+        cropped: bool,
+    ) -> Result<VideoLayer> {
+        let native = if rotation.is_multiple_of(2) {
+            source
+        } else {
+            (source.1, source.0)
+        };
+        let origin = if cropped { (7u32, 5u32) } else { (0, 0) };
+        let padding = if cropped { (19, 13) } else { (0, 0) };
+        let size = (native.0 + padding.0, native.1 + padding.1);
+        let texture = device
+            .texture(
+                size.0,
+                size.1,
+                DXGI_FORMAT_B8G8R8X8_UNORM,
+                (D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE).0 as u32,
+            )
+            .map_err(gpu_error)?;
+        // Magenta pixels outside the crop reveal source-rectangle leakage.
+        let mut pixels = [255u8, 0, 255, 255].repeat((size.0 * size.1) as usize);
+        for y in 0..native.1 {
+            for x in 0..native.0 {
+                let (dx, dy) = match rotation {
+                    0 => (x, y),
+                    1 => (native.1 - 1 - y, x),
+                    2 => (native.0 - 1 - x, native.1 - 1 - y),
+                    _ => (y, native.0 - 1 - x),
+                };
+                let value = pattern.value(dx, dy, source, phase);
+                let offset = (((y + origin.1) * size.0 + x + origin.0) * 4) as usize;
+                pixels[offset..offset + 4].copy_from_slice(&[value, value, value, 255]);
+            }
+        }
+        unsafe {
+            device.context().UpdateSubresource(
+                texture.raw(),
+                0,
+                None,
+                pixels.as_ptr().cast(),
+                size.0 * 4,
+                0,
+            );
+        }
+        Ok(VideoLayer {
+            texture,
+            source: Rect {
+                x: origin.0 as i32,
+                y: origin.1 as i32,
+                width: native.0,
+                height: native.1,
+            },
+            destination: Rect::full(output),
+            rotation,
+            alpha: false,
+        })
+    }
+
+    #[test]
+    fn downscale_quality_reference_integrates_both_line_phases() {
+        let output = (128, 96);
+        for source in [(256, 192), (192, 144)] {
+            for pattern in [
+                DownscalePattern::VerticalStripes,
+                DownscalePattern::HorizontalStripes,
+                DownscalePattern::Checkerboard,
+                DownscalePattern::VerticalLine,
+                DownscalePattern::HorizontalLine,
+            ] {
+                let expected_energy = match pattern {
+                    DownscalePattern::VerticalLine => {
+                        255.0 * f64::from(output.0 * output.1) / f64::from(source.0)
+                    }
+                    DownscalePattern::HorizontalLine => {
+                        255.0 * f64::from(output.0 * output.1) / f64::from(source.1)
+                    }
+                    _ => 127.5 * f64::from(output.0 * output.1),
+                };
+                for phase in 0..2 {
+                    let reference = downscale_area_reference(pattern, source, output, phase);
+                    assert!(
+                        (reference.iter().sum::<f64>() - expected_energy).abs() < 1e-6,
+                        "area reference {pattern:?}, {source:?}, phase {phase}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires an offscreen D3D11 hardware video processor"]
+    fn hardware_desktop_downscale_preserves_phase_energy_crop_and_rotation() -> Result<()> {
+        use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
+        use windows::core::Interface;
+        let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }.map_err(gpu_error)?;
+        let adapter = unsafe { factory.EnumAdapters1(0) }
+            .map_err(gpu_error)?
+            .cast()
+            .map_err(gpu_error)?;
+        let device = SharedDevice::create(&adapter).map_err(gpu_error)?;
+        let _lock = device.lock();
+        let output = (128, 96);
+        let mut failures = Vec::new();
+        let mut validator = AreaScaler::new(device.clone())?;
+        let valid = downscale_pattern_layer(
+            &device,
+            (256, 192),
+            output,
+            DownscalePattern::Checkerboard,
+            0,
+            0,
+            true,
+        )?;
+        for (x, y, width, height, rotation) in [
+            (-1, 5, 256, 192, 0),
+            (7, -1, 256, 192, 0),
+            (7, 5, 0, 192, 0),
+            (7, 5, 256, 0, 0),
+            (7, 5, 300, 192, 0),
+            (7, 5, 256, 300, 0),
+            (7, 5, 256, 192, 4),
+        ] {
+            let mut invalid = valid.clone();
+            invalid.source = Rect {
+                x,
+                y,
+                width,
+                height,
+            };
+            invalid.rotation = rotation;
+            assert!(validator.resize(&invalid, output).is_err());
+        }
+        assert!(validator.resize(&valid, (0, output.1)).is_err());
+        assert!(validator.resize(&valid, (output.0, 0)).is_err());
+        let foreign_device = SharedDevice::create(&adapter).map_err(gpu_error)?;
+        let foreign = downscale_pattern_layer(
+            &foreign_device,
+            (256, 192),
+            output,
+            DownscalePattern::Checkerboard,
+            0,
+            0,
+            true,
+        )?;
+        assert!(validator.resize(&foreign, output).is_err());
+        drop(validator);
+        for source in [(256, 192), (192, 144)] {
+            let mut compositor = GpuVisualCompositor::new(device.clone(), source, output, 30)?;
+            for pattern in [
+                DownscalePattern::VerticalStripes,
+                DownscalePattern::HorizontalStripes,
+                DownscalePattern::Checkerboard,
+                DownscalePattern::VerticalLine,
+                DownscalePattern::HorizontalLine,
+            ] {
+                let mut phases = [0.0; 2];
+                for phase in 0..2 {
+                    let reference = downscale_area_reference(pattern, source, output, phase);
+                    let reference_energy = reference.iter().sum::<f64>();
+                    let mut baseline = None::<Vec<u8>>;
+                    for cropped in [false, true] {
+                        for rotation in 0..4 {
+                            let mut layer = downscale_pattern_layer(
+                                &device, source, output, pattern, phase, rotation, cropped,
+                            )?;
+                            layer.destination = Rect::full(source);
+                            let index = compositor.desktop(&[layer], source)?;
+                            assert_eq!(compositor.scaler.as_ref().unwrap().cached_view_count(), 1);
+                            let pixels = read_downscale_rgb(&device, &compositor.scratch[index])?;
+                            let energy = pixels
+                                .chunks_exact(4)
+                                .map(|pixel| f64::from(pixel[1]))
+                                .sum::<f64>();
+                            let ratio = energy / reference_energy;
+                            let area_mae = pixels
+                                .chunks_exact(4)
+                                .zip(&reference)
+                                .map(|(pixel, expected)| (f64::from(pixel[1]) - expected).abs())
+                                .sum::<f64>()
+                                / f64::from(output.0 * output.1);
+                            let area_max = pixels
+                                .chunks_exact(4)
+                                .zip(&reference)
+                                .map(|(pixel, expected)| (f64::from(pixel[1]) - expected).abs())
+                                .fold(0.0f64, f64::max);
+                            let color_leak = pixels
+                                .chunks_exact(4)
+                                .map(|pixel| {
+                                    pixel[0].abs_diff(pixel[1]).max(pixel[2].abs_diff(pixel[1]))
+                                })
+                                .max()
+                                .unwrap();
+                            let geometry_error = baseline.as_ref().map_or(0, |baseline| {
+                                pixels
+                                    .chunks_exact(4)
+                                    .zip(baseline.chunks_exact(4))
+                                    .flat_map(|(actual, expected)| {
+                                        (0..3).map(move |channel| {
+                                            actual[channel].abs_diff(expected[channel])
+                                        })
+                                    })
+                                    .max()
+                                    .unwrap()
+                            });
+                            eprintln!(
+                                "GPU downscale {source:?}->{output:?} {pattern:?} phase={phase} \
+                                 cropped={cropped} rotation={rotation}: energy_ratio={ratio:.4} \
+                                 area_mae={area_mae:.3} area_max={area_max:.3} color_leak={color_leak} \
+                                 geometry_error={geometry_error}"
+                            );
+                            // Integrated brightness must remain stable when a one-pixel
+                            // detail crosses the sampling lattice. Nearest selection
+                            // loses one 2:1 phase completely and doubles the other.
+                            if !(0.98..=1.02).contains(&ratio)
+                                || area_mae > 2.0
+                                || area_max > 2.0
+                                || color_leak > 2
+                                || geometry_error > 4
+                            {
+                                failures.push(format!(
+                                    "{source:?} {pattern:?} phase {phase}, crop {cropped}, \
+                                     rotation {rotation}: ratio {ratio:.4}, color leakage \
+                                     {color_leak}, geometry error {geometry_error}, area error {area_mae:.3}, \
+                                     maximum {area_max:.3}"
+                                ));
+                            }
+                            if baseline.is_none() {
+                                phases[phase as usize] = ratio;
+                                baseline = Some(pixels);
+                            }
+                        }
+                    }
+                }
+                if (phases[0] - phases[1]).abs() > 0.02 {
+                    failures.push(format!(
+                        "{source:?} {pattern:?}: phase energy changed from {:.4} to {:.4}",
+                        phases[0], phases[1]
+                    ));
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "GPU downscale quality:\n{}",
+            failures.join("\n")
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires an offscreen D3D11 hardware video processor"]
+    fn hardware_desktop_downscale_filters_monitor_seams_and_releases_unused_scratch() -> Result<()>
+    {
+        use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
+        use windows::core::Interface;
+        let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }.map_err(gpu_error)?;
+        let adapter = unsafe { factory.EnumAdapters1(0) }
+            .map_err(gpu_error)?
+            .cast()
+            .map_err(gpu_error)?;
+        let device = SharedDevice::create(&adapter).map_err(gpu_error)?;
+        let _lock = device.lock();
+        let output = (128, 96);
+        let mut compositor = GpuVisualCompositor::new(device.clone(), (256, 192), output, 30)?;
+        for source in [(256, 192), (192, 144)] {
+            for phase in 0..2 {
+                let pattern = DownscalePattern::VerticalLine;
+                let original =
+                    downscale_pattern_layer(&device, source, source, pattern, phase, 0, true)?;
+                // The odd seam bisects a destination pixel's source footprint.
+                // Resizing displays independently cannot preserve this coverage.
+                let seam = source.0 / 2 + 1;
+                let two_displays = [(0, seam), (seam, source.0 - seam)].map(|(x, width)| {
+                    let mut layer = original.clone();
+                    layer.source.x += x as i32;
+                    layer.source.width = width;
+                    layer.destination = Rect {
+                        x: x as i32,
+                        y: 0,
+                        width,
+                        height: source.1,
+                    };
+                    layer
+                });
+                let batch_count = (compositor.processor.max_streams() + 1).min(source.0 as usize);
+                let many_displays = (0..batch_count)
+                    .map(|index| {
+                        let left = index as u32 * source.0 / batch_count as u32;
+                        let right = (index + 1) as u32 * source.0 / batch_count as u32;
+                        let mut layer = original.clone();
+                        layer.source.x += left as i32;
+                        layer.source.width = right - left;
+                        layer.destination = Rect {
+                            x: left as i32,
+                            y: 0,
+                            width: right - left,
+                            height: source.1,
+                        };
+                        layer
+                    })
+                    .collect::<Vec<_>>();
+                let reference = downscale_area_reference(pattern, source, output, phase);
+                for layers in [two_displays.as_slice(), many_displays.as_slice()] {
+                    let index = compositor.desktop(layers, source)?;
+                    let actual = read_downscale_rgb(&device, &compositor.scratch[index])?;
+                    for (position, (pixel, expected)) in
+                        actual.chunks_exact(4).zip(&reference).enumerate()
+                    {
+                        for component in &pixel[..3] {
+                            assert!(
+                                (f64::from(*component) - expected).abs() <= 2.0,
+                                "monitor seam {source:?}, phase {phase}, {} layers, pixel {position}: \
+                                 {pixel:?}, expected {expected}",
+                                layers.len()
+                            );
+                        }
+                    }
+                }
+                assert!(compositor.native_desktop.is_some());
+                assert_eq!(
+                    compositor.crop_copy.as_ref().unwrap().cached_views(),
+                    (1, true)
+                );
+                compositor.desktop(&[original], source)?;
+                assert!(compositor.native_desktop.is_none());
+                assert_eq!(
+                    compositor.crop_copy.as_ref().unwrap().cached_views(),
+                    (0, false)
+                );
+            }
+        }
+        for rotation in 0..4 {
+            let native = downscale_pattern_layer(
+                &device,
+                output,
+                output,
+                DownscalePattern::Checkerboard,
+                0,
+                rotation,
+                true,
+            )?;
+            let index = compositor.desktop(&[native], output)?;
+            assert!(compositor.scaler.is_none() && compositor.native_desktop.is_none());
+            assert_eq!(
+                compositor.crop_copy.as_ref().unwrap().cached_views(),
+                (1, true)
+            );
+            let actual = read_downscale_rgb(&device, &compositor.scratch[index])?;
+            for (index, pixel) in actual.chunks_exact(4).enumerate() {
+                let expected = DownscalePattern::Checkerboard.value(
+                    index as u32 % output.0,
+                    index as u32 / output.0,
+                    output,
+                    0,
+                );
+                assert_eq!(
+                    &pixel[..3],
+                    &[expected; 3],
+                    "native crop rotation {rotation}"
+                );
+            }
+        }
+        let full_native = downscale_pattern_layer(
+            &device,
+            output,
+            output,
+            DownscalePattern::Checkerboard,
+            0,
+            0,
+            false,
+        )?;
+        compositor.desktop(&[full_native], output)?;
+        assert_eq!(
+            compositor.crop_copy.as_ref().unwrap().cached_views(),
+            (0, false)
+        );
+        let enlarged = downscale_pattern_layer(
+            &device,
+            (64, 48),
+            (64, 48),
+            DownscalePattern::Checkerboard,
+            0,
+            0,
+            true,
+        )?;
+        compositor.desktop(&[enlarged], (64, 48))?;
+        assert_eq!(
+            compositor.crop_copy.as_ref().unwrap().cached_views(),
+            (0, false)
+        );
+        for source in [(96, 192), (256, 72)] {
+            for pattern in [
+                DownscalePattern::VerticalStripes,
+                DownscalePattern::HorizontalStripes,
+            ] {
+                let layer = downscale_pattern_layer(&device, source, source, pattern, 0, 0, true)?;
+                let index = compositor.desktop(&[layer], source)?;
+                let actual = read_downscale_rgb(&device, &compositor.scratch[index])?;
+                let reference = downscale_area_reference(pattern, source, output, 0);
+                for (pixel, expected) in actual.chunks_exact(4).zip(&reference) {
+                    assert!(
+                        (f64::from(pixel[1]) - expected).abs() <= 2.0,
+                        "mixed-axis {source:?}: {pixel:?} != {expected}"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn decoded_stem_luma(frame: &ffmpeg_next::frame::Video, size: (u32, u32)) -> (f64, f64) {
+        assert_eq!((frame.width(), frame.height()), size);
+        assert!(matches!(
+            frame.format(),
+            ffmpeg_next::format::Pixel::YUV420P | ffmpeg_next::format::Pixel::NV12
+        ));
+        let mut stems = 0u64;
+        let mut stem_count = 0u64;
+        let mut gaps = 0u64;
+        let mut gap_count = 0u64;
+        for y in 8..size.1 - 8 {
+            for x in 4..size.0 - 4 {
+                let value = u64::from(frame.data(0)[y as usize * frame.stride(0) + x as usize]);
+                if x.is_multiple_of(4) {
+                    stems += value;
+                    stem_count += 1;
+                } else if x % 4 == 2 {
+                    gaps += value;
+                    gap_count += 1;
+                }
+            }
+        }
+        (
+            stems as f64 / stem_count as f64,
+            gaps as f64 / gap_count as f64,
+        )
+    }
+
+    #[test]
+    #[ignore = "requires offscreen D3D11 video processing and a native hardware H.264 encoder"]
+    fn hardware_downscale_encoded_h264_preserves_both_thin_stem_phases() -> Result<()> {
+        use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
+        use windows::core::Interface;
+        let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }.map_err(gpu_error)?;
+        let adapter = unsafe { factory.EnumAdapters1(0) }
+            .map_err(gpu_error)?
+            .cast()
+            .map_err(gpu_error)?;
+        let device = SharedDevice::create(&adapter).map_err(gpu_error)?;
+        let _lock = device.lock();
+        // AMF rejects very small encoder surfaces (128x96 on the test adapter).
+        // Keep the same 2:1 pixel coverage in a portable native-encoder fixture.
+        let source = (512, 384);
+        let output = (256, 192);
+        let directory = tempfile::tempdir()?;
+        let mut phase_contrast = [0.0; 2];
+        for phase in 0..2 {
+            let path = directory.path().join(format!("gpu-stems-{phase}.mp4"));
+            let mut config = config(path.clone(), CaptureBackendKind::Auto);
+            config.region.width = source.0;
+            config.region.height = source.1;
+            config.maximum_width = Some(output.0);
+            config.maximum_height = Some(output.1);
+            config.quality = 90;
+            config.show_cursor = false;
+            config.show_keyboard = false;
+            config.mouse_trail_rgba = [0; 4];
+            config.mouse_click_rgba = [0; 4];
+            assert_eq!(config.output_dimensions(), output);
+            let mut encoder = StreamingEncoder::builder(config.streaming_config())
+                .gpu_input(snow_recording_export::gpu::GpuInputConfig {
+                    device: device.clone(),
+                })
+                .create()?;
+            let layer = downscale_pattern_layer(
+                &device,
+                source,
+                source,
+                DownscalePattern::VerticalStems,
+                phase,
+                0,
+                true,
+            )?;
+            let observation = GpuCapturedFrame::from_layers(
+                vec![layer],
+                source,
+                snow_capture::FrameMetadata::default(),
+            )?;
+            let mut compositor = GpuVisualCompositor::new(device.clone(), source, output, 30)?;
+            let mut state = VisualCompositor::new(output);
+            for pts in 0..4 {
+                let surface = encoder.allocate_gpu_frame()?.ok_or_else(|| {
+                    gpu_error("encoded clarity fixture exhausted its surface pool")
+                })?;
+                compositor.compose(
+                    &mut state,
+                    &config,
+                    &observation,
+                    pts * 1000 / 30,
+                    None,
+                    &surface,
+                )?;
+                encoder.push_gpu_frame_at_pts(pts, surface)?;
+            }
+            let report = encoder.finish_at_pts(4)?;
+            assert!(
+                report.used_hardware_video_encoder && !report.hardware_fallback,
+                "{report:?}"
+            );
+            assert_eq!(report.encoded_frames, 4);
+            let mut media = ffmpeg_next::format::input(&path).map_err(gpu_error)?;
+            let stream = media
+                .streams()
+                .best(ffmpeg_next::media::Type::Video)
+                .ok_or_else(|| gpu_error("missing hardware clarity video"))?;
+            let video_index = stream.index();
+            let mut decoder =
+                ffmpeg_next::codec::context::Context::from_parameters(stream.parameters())
+                    .map_err(gpu_error)?
+                    .decoder()
+                    .video()
+                    .map_err(gpu_error)?;
+            let mut frame = ffmpeg_next::frame::Video::empty();
+            let mut decoded = 0;
+            let mut contrast = 0.0;
+            let mut observe = |frame: &ffmpeg_next::frame::Video| {
+                let (stem, gap) = decoded_stem_luma(frame, output);
+                eprintln!(
+                    "encoded GPU stem phase={phase} frame={decoded}: stem_luma={stem:.3} gap_luma={gap:.3}"
+                );
+                // A one-pixel stem occupies exactly half a 2:1 output pixel:
+                // BT.709 limited-range luma is 16 + 219 / 2 = 125.5. Allow
+                // H.264 quantization while rejecting missing/doubled stems.
+                assert!(
+                    (stem - 125.5).abs() <= 12.0,
+                    "phase {phase} lost stem coverage: {stem}"
+                );
+                assert!(
+                    (gap - 16.0).abs() <= 8.0,
+                    "phase {phase} blurred black gaps: {gap}"
+                );
+                contrast += stem - gap;
+                decoded += 1;
+            };
+            for (stream, packet) in media.packets() {
+                if stream.index() != video_index {
+                    continue;
+                }
+                decoder.send_packet(&packet).map_err(gpu_error)?;
+                while decoder.receive_frame(&mut frame).is_ok() {
+                    observe(&frame);
+                }
+            }
+            decoder.send_eof().map_err(gpu_error)?;
+            while decoder.receive_frame(&mut frame).is_ok() {
+                observe(&frame);
+            }
+            assert_eq!(decoded, 4);
+            phase_contrast[phase as usize] = contrast / f64::from(decoded);
+        }
+        assert!(
+            (phase_contrast[0] - phase_contrast[1]).abs() <= 12.0,
+            "hardware encoding changed stem contrast between phases: {phase_contrast:?}"
+        );
+        Ok(())
+    }
+
+    fn time_completed_gpu_batch(
+        device: &SharedDevice,
+        iterations: u32,
+        mut operation: impl FnMut() -> Result<()>,
+    ) -> Result<(f64, f64)> {
+        let query = |kind| -> Result<ID3D11Query> {
+            let mut result = None;
+            unsafe {
+                device.device().CreateQuery(
+                    &D3D11_QUERY_DESC {
+                        Query: kind,
+                        MiscFlags: 0,
+                    },
+                    Some(&mut result),
+                )
+            }
+            .map_err(gpu_error)?;
+            result.ok_or_else(|| gpu_error("missing GPU timing query"))
+        };
+        let disjoint = query(D3D11_QUERY_TIMESTAMP_DISJOINT)?;
+        let first = query(D3D11_QUERY_TIMESTAMP)?;
+        let last = query(D3D11_QUERY_TIMESTAMP)?;
+        let completed = query(D3D11_QUERY_EVENT)?;
+        let context = device.context();
+        let started = Instant::now();
+        unsafe {
+            context.Begin(&disjoint);
+            context.End(&first);
+        }
+        for _ in 0..iterations {
+            operation()?;
+        }
+        unsafe {
+            context.End(&last);
+            context.End(&disjoint);
+            context.End(&completed);
+            context.Flush();
+        }
+        let mut done = 0u32;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while done == 0 {
+            unsafe {
+                context.GetData(
+                    &completed,
+                    Some((&mut done as *mut u32).cast()),
+                    std::mem::size_of_val(&done) as u32,
+                    0,
+                )
+            }
+            .map_err(gpu_error)?;
+            if Instant::now() >= deadline {
+                return Err(gpu_error("GPU resize timing completion timeout"));
+            }
+            if done == 0 {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+        let cpu_ms = started.elapsed().as_secs_f64() * 1000.0 / f64::from(iterations);
+        let mut frequency = D3D11_QUERY_DATA_TIMESTAMP_DISJOINT::default();
+        let mut start = 0u64;
+        let mut end = 0u64;
+        unsafe {
+            context
+                .GetData(
+                    &disjoint,
+                    Some((&mut frequency as *mut D3D11_QUERY_DATA_TIMESTAMP_DISJOINT).cast()),
+                    std::mem::size_of_val(&frequency) as u32,
+                    0,
+                )
+                .map_err(gpu_error)?;
+            context
+                .GetData(&first, Some((&mut start as *mut u64).cast()), 8, 0)
+                .map_err(gpu_error)?;
+            context
+                .GetData(&last, Some((&mut end as *mut u64).cast()), 8, 0)
+                .map_err(gpu_error)?;
+        }
+        if frequency.Disjoint.as_bool() || frequency.Frequency == 0 || end <= start {
+            return Err(gpu_error(
+                "GPU resize timestamps are disjoint or unavailable",
+            ));
+        }
+        Ok((
+            (end - start) as f64 * 1000.0 / frequency.Frequency as f64 / f64::from(iterations),
+            cpu_ms,
+        ))
+    }
+
+    #[test]
+    #[ignore = "requires an offscreen D3D11 hardware device and the Release performance preset"]
+    fn hardware_area_resize_stage_benchmark() -> Result<()> {
+        use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
+        use windows::core::Interface;
+        if cfg!(debug_assertions) {
+            panic!("run with windows-msvc-performance Release");
+        }
+        let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }.map_err(gpu_error)?;
+        let adapter = unsafe { factory.EnumAdapters1(0) }
+            .map_err(gpu_error)?
+            .cast()
+            .map_err(gpu_error)?;
+        let device = SharedDevice::create(&adapter).map_err(gpu_error)?;
+        let _lock = device.lock();
+        for (source, output) in [
+            ((2560, 1440), (1920, 1080)),
+            ((3840, 2160), (1920, 1080)),
+            ((3840, 2160), (1280, 720)),
+        ] {
+            let mut compositor = GpuVisualCompositor::new(device.clone(), source, output, 60)?;
+            let legacy = downscale_pattern_layer(
+                &device,
+                source,
+                output,
+                DownscalePattern::Checkerboard,
+                0,
+                0,
+                true,
+            )?;
+            let mut filtered = legacy.clone();
+            filtered.destination = Rect::full(source);
+            for _ in 0..10 {
+                compositor
+                    .processor
+                    .blit(
+                        std::slice::from_ref(&legacy),
+                        compositor.scratch[0].raw(),
+                        0,
+                    )
+                    .map_err(gpu_error)?;
+                compositor.desktop(std::slice::from_ref(&filtered), source)?;
+            }
+            for pair in 0u32..5 {
+                for candidate in if pair.is_multiple_of(2) {
+                    [false, true]
+                } else {
+                    [true, false]
+                } {
+                    let (gpu_ms, completed_ms) = time_completed_gpu_batch(&device, 120, || {
+                        if candidate {
+                            compositor.desktop(std::slice::from_ref(&filtered), source)?;
+                            Ok(())
+                        } else {
+                            compositor
+                                .processor
+                                .blit(
+                                    std::slice::from_ref(&legacy),
+                                    compositor.scratch[0].raw(),
+                                    0,
+                                )
+                                .map_err(gpu_error)
+                        }
+                    })?;
+                    eprintln!(
+                        "GPU resize stage {source:?}->{output:?} pair={pair} area={candidate}: \
+                         gpu_ms/frame={gpu_ms:.4} completed_wall_ms/frame={completed_ms:.4}"
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 
     #[test]

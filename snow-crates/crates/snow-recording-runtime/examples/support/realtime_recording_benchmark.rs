@@ -170,7 +170,7 @@ bench-stage-timing,bench-compositor-timing,bench-pipeline-timing \
   --conversion-threads <n>   experimental frame converter: 1, 2, or 4 workers; 0 uses legacy\n\
   --async-encoder            experimental encoder worker with one waiting video frame\n\
   --automatic-policies       opt in to provisional validated-domain policy selection\n\
-  --half-resize              experimental exact 2:1 resize specialization\n\
+  --half-resize              legacy flag; filtered 2:1 specialization is always enabled\n\
   --direct-output            experimental direct resize when overlays are absent\n\
   --partial-composition      experimental conservative damage updates and restoration\n\
   --restoration-only         restore overlays only while the background is unchanged\n\

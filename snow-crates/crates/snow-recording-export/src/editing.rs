@@ -2,7 +2,7 @@ use crate::codec::*;
 #[cfg(test)]
 use crate::config::ExportExecutionMode;
 use crate::decoder::*;
-use crate::resize::{NearestResizePlan, resize_rgba_fast_into};
+use crate::resize::RecordingResizePlan;
 use snow_core::cancellation::CancellationToken;
 use snow_memory::RasterBuffer;
 use std::cell::Cell;
@@ -559,7 +559,7 @@ impl EditingSession {
         check_canceled(cancel_flag)?;
 
         let resize_plan =
-            needs_resize.then(|| NearestResizePlan::new(source_w, source_h, output_w, output_h));
+            needs_resize.then(|| RecordingResizePlan::new(source_w, source_h, output_w, output_h));
         let process_pool = build_process_pool(request.performance.process_threads);
         let mut overlay_state = OverlaySearchState::default();
         // Overlay exports often repeat the same source frame when slowing playback.
@@ -1668,7 +1668,7 @@ fn prepare_overlay_base_rgba(
     source_index: usize,
     output_w: u32,
     output_h: u32,
-    resize_plan: Option<&NearestResizePlan>,
+    resize_plan: Option<&RecordingResizePlan>,
     process_pool: Option<&rayon::ThreadPool>,
     resized_cache_key: &mut Option<(usize, u32, u32)>,
     resized_cache: &mut RasterBuffer,
@@ -1687,16 +1687,20 @@ fn prepare_overlay_base_rgba(
 
     let source_cache_key = (source_index, source.width, source.height);
     if *resized_cache_key != Some(source_cache_key) {
-        resize_rgba_fast_into(
-            &source.rgba,
-            source.width,
-            source.height,
-            output_w,
-            output_h,
-            resize_plan,
-            resized_cache,
-            process_pool,
-        );
+        let fallback;
+        let plan = match resize_plan {
+            Some(plan) if plan.matches((source.width, source.height), (output_w, output_h)) => plan,
+            _ => {
+                fallback =
+                    RecordingResizePlan::new(source.width, source.height, output_w, output_h);
+                &fallback
+            }
+        };
+        if let Some(pool) = process_pool {
+            plan.resize_into_with_pool(&source.rgba, resized_cache, pool);
+        } else {
+            plan.resize_into(&source.rgba, resized_cache);
+        }
         *resized_cache_key = Some(source_cache_key);
     }
 
@@ -5383,7 +5387,7 @@ fn export_video_generated_from_source(
                 .as_ref()
                 .is_none_or(|s| (s.input().format, s.input().width, s.input().height) != key)
             {
-                let mut conversion = ffmpeg::software::scaling::Context::get(
+                let mut conversion = crate::output_scaler::recording_scaler(
                     key.0,
                     key.1,
                     key.2,
@@ -6115,7 +6119,7 @@ fn decode_frame_to_output_rgba(
     let key = (source_w, source_h, decoded_format);
     if scaler_key.as_ref() != Some(&key) {
         *scaler = Some(
-            ffmpeg::software::scaling::Context::get(
+            crate::output_scaler::recording_scaler(
                 decoded_format,
                 source_w,
                 source_h,
@@ -7367,6 +7371,131 @@ mod tests {
     }
 
     #[test]
+    fn bundled_downscale_preserves_thin_screen_strokes_at_both_source_phases() {
+        use snow_recording_model::{
+            CursorFrameRecord, RecordingBundleAsset, write_mouse_records, write_recording_bundle,
+        };
+        for with_overlay in [false, true] {
+            let directory = tempdir().unwrap();
+            let bundle = directory.path().join("source.snowrec");
+            let index = directory.path().join("index.bin");
+            let mouse = directory.path().join("mouse.bin");
+            let source = directory.path().join("source.mp4");
+            let mut encoder = StreamingEncoder::create(StreamingEncoderConfig {
+                loop_animated_images: false,
+                output_path: source.clone(),
+                format: ExportFormat::Mp4,
+                width: 64,
+                height: 48,
+                fps: 10,
+                codec: VideoCodec::H264,
+                prefer_hardware_h264: false,
+                execution_mode: ExportExecutionMode::SoftwareOnly,
+                software_h264_priority: crate::SoftwareH264Priority::X264First,
+                video: VideoEncodeConfig {
+                    quality: 100,
+                    speed: VideoEncodingSpeed::VeryFast,
+                },
+                encode_threads: 1,
+                audio: Vec::new(),
+            })
+            .unwrap();
+            // Adjacent source phases are the same thin vertical screen detail.
+            // Selecting a single source pixel either doubles its darkness or
+            // removes it; filtered downsampling must preserve half coverage.
+            for phase in 0..2u64 {
+                let pixels: Vec<_> = (0..64 * 48)
+                    .flat_map(|pixel| {
+                        let value = if (pixel % 64) % 8 == phase as u32 {
+                            0
+                        } else {
+                            255
+                        };
+                        [value, value, value, 255]
+                    })
+                    .collect();
+                encoder.push_rgba_frame_at_pts(phase, &pixels).unwrap();
+            }
+            encoder.finish_at_pts(2).unwrap();
+            fs::rename(&source, &bundle).unwrap();
+            let mut bytes = VIDEO_INDEX_MAGIC.to_vec();
+            for frame in 0..2u64 {
+                bytes.extend_from_slice(&frame.to_le_bytes());
+                bytes.extend_from_slice(&(frame * 100).to_le_bytes());
+                bytes.extend_from_slice(&100u32.to_le_bytes());
+            }
+            fs::write(&index, bytes).unwrap();
+            let mut store = MouseStore::new();
+            // Enter the composition path without drawing over the fixture.
+            store.cursor_frames.push(CursorFrameRecord {
+                timestamp_ms: 0,
+                x: 32,
+                y: 24,
+                visible: false,
+                shape_id: None,
+            });
+            write_mouse_records(&mouse, &store).unwrap();
+            let mut fixture = test_editing_session(false, false);
+            fixture.manifest.width = 64;
+            fixture.manifest.height = 48;
+            fixture.manifest.fps = 10;
+            fixture.manifest.audio_tracks.clear();
+            write_recording_bundle(
+                &bundle,
+                &fixture.manifest,
+                &[
+                    RecordingBundleAsset {
+                        kind: BundleAssetKind::VideoIndex,
+                        asset_id: None,
+                        path: &index,
+                    },
+                    RecordingBundleAsset {
+                        kind: BundleAssetKind::MouseStore,
+                        asset_id: None,
+                        path: &mouse,
+                    },
+                ],
+            )
+            .unwrap();
+            fixture.artifact.bundle_path = bundle.clone();
+            fixture.artifact.local_paths.video_intermediate_path = bundle;
+            let editing = EditingSession::open(fixture.artifact).unwrap();
+            let mut request = editing.export_request();
+            request.output_path = directory.path().join("downscaled.mp4");
+            request.maximum_width = Some(32);
+            request.maximum_height = Some(24);
+            request.video.quality = 95;
+            request.performance.mode = ExportExecutionMode::SoftwareOnly;
+            request.performance.encode_threads = 1;
+            request.mouse.visible = with_overlay;
+            let result = editing.export(request).unwrap();
+            assert_eq!(result.runtime_report.path, ExportPathKind::FullTranscode);
+            let mut decoded = StreamingVideoFrameSource::spawn(
+                &result.output_path,
+                vec![0, 1],
+                10,
+                2,
+                1,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .unwrap();
+            for phase in 0..2 {
+                let frame = decoded.frame_at(phase).unwrap();
+                assert_eq!((frame.width, frame.height), (32, 24));
+                for x in [4, 12, 20, 28] {
+                    let value = frame.rgba[(8 * 32 + x) * 4];
+                    assert!(
+                        (105..=155).contains(&value),
+                        "half-covered stroke must survive encoding: overlay={with_overlay}, phase={phase}, x={x}, value={value}"
+                    );
+                    let background = frame.rgba[(8 * 32 + x + 2) * 4];
+                    assert!(background > 235, "filter must retain the white background");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn prepare_overlay_base_rgba_reuses_resized_cache_for_same_source_index() {
         let source = StoredFrame {
             timestamp_ms: 0,
@@ -7382,7 +7511,7 @@ mod tests {
             height: 1,
             rgba: vec![220, 210, 200, 255].into(),
         };
-        let plan = NearestResizePlan::new(1, 1, 2, 2);
+        let plan = RecordingResizePlan::new(1, 1, 2, 2);
         let mut cache_key = None::<(usize, u32, u32)>;
         let mut cache = RasterBuffer::new();
         let mut output = vec![0u8; 2 * 2 * 4];
@@ -7415,6 +7544,58 @@ mod tests {
     }
 
     #[test]
+    fn overlay_background_filter_covers_thin_detail_with_missing_or_stale_geometry_plan() {
+        let mut pixels = Vec::new();
+        for _ in 0..4 {
+            for x in 0..4 {
+                let value = if x == 1 { 0 } else { 255 };
+                pixels.extend_from_slice(&[value, value, value, 255]);
+            }
+        }
+        let source = StoredFrame {
+            timestamp_ms: 0,
+            duration_ms: 16,
+            width: 4,
+            height: 4,
+            rgba: pixels.into(),
+        };
+        let valid = RecordingResizePlan::new(4, 4, 2, 2);
+        let stale = RecordingResizePlan::new(6, 4, 2, 2);
+        for plan in [None, Some(&valid), Some(&stale)] {
+            let mut key = None;
+            let mut cache = RasterBuffer::new();
+            let mut output = vec![0; 16];
+            prepare_overlay_base_rgba(
+                &source,
+                0,
+                2,
+                2,
+                plan,
+                None,
+                &mut key,
+                &mut cache,
+                &mut output,
+            );
+            assert_eq!(output, [128, 128, 128, 255, 255, 255, 255, 255].repeat(2));
+            // Composition may modify the caller's frame; the reusable filtered
+            // base must remain clean for another observation of the same source.
+            output.fill(0);
+            prepare_overlay_base_rgba(
+                &source,
+                0,
+                2,
+                2,
+                plan,
+                None,
+                &mut key,
+                &mut cache,
+                &mut output,
+            );
+            assert_eq!(output, [128, 128, 128, 255, 255, 255, 255, 255].repeat(2));
+        }
+    }
+
+    #[test]
     fn prepare_overlay_base_rgba_refreshes_cache_when_source_index_changes() {
         let first_source = StoredFrame {
             timestamp_ms: 0,
@@ -7430,7 +7611,7 @@ mod tests {
             height: 1,
             rgba: vec![50, 60, 70, 255].into(),
         };
-        let plan = NearestResizePlan::new(1, 1, 2, 2);
+        let plan = RecordingResizePlan::new(1, 1, 2, 2);
         let mut cache_key = None::<(usize, u32, u32)>;
         let mut cache = RasterBuffer::new();
         let mut output = vec![0u8; 2 * 2 * 4];
