@@ -43,6 +43,7 @@
 #include <QScopeGuard>
 #include <QStyleOptionGraphicsItem>
 #include <QTextBlock>
+#include <QTextLayout>
 #include <QTextBrowser>
 #include <QTextDocument>
 #include <QTextEdit>
@@ -1274,6 +1275,57 @@ QGraphicsTextItem* formattedTextItem(QGraphicsView* layer) {
     return nullptr;
 }
 
+void formattedTextHoverUpdatesCursorWithoutClicking() {
+#ifdef Q_OS_WIN
+    if (QGuiApplication::platformName() == QStringLiteral("offscreen")) {
+        require(QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/segoeui.ttf")) >=
+                    0,
+                "load the formatted hover test font");
+    }
+#endif
+    using Mode = ScreenshotRecognitionWindow::PresentationMode;
+    using Rendering = ScreenshotOcrTextLayer::RenderingMode;
+    for (const auto mode : {Mode::TopLevelWindow, Mode::EmbeddedChild}) {
+        for (const auto rendering : {Rendering::Normal, Rendering::SelectionOnly}) {
+            QWidget host;
+            host.resize(300, 180);
+            host.show();
+            ScreenshotRecognitionWindow recognition({}, &host, mode);
+            require(recognition.present({QGuiApplication::primaryScreen(), &host, host.rect(),
+                                         QRectF(QPointF(), QSizeF(host.size()) * 2.0), mode, 2.0}),
+                    "present formatted text hover at a scaled canvas");
+            auto document = std::make_shared<QTextDocument>();
+            document->setHtml(QStringLiteral("<p><b>Hover</b> text</p>"));
+            document->setTextWidth(140);
+            recognition.showFormattedText(document, rendering, false);
+            QApplication::processEvents();
+            auto* layer =
+                recognition.findChild<QGraphicsView*>(QStringLiteral("screenshotClipboardText"));
+            auto* item = formattedTextItem(layer);
+            require(item != nullptr, "formatted hover requires a selectable document");
+            const auto block = document->firstBlock();
+            const auto line = block.layout()->lineAt(0);
+            const QPoint text = layer->mapFromScene(
+                item->mapToScene(block.layout()->position() +
+                                 QPointF(line.cursorToX(2), line.y() + line.height() / 2)));
+            const QPoint blank = layer->viewport()->rect().bottomRight() - QPoint(20, 20);
+            const auto hover = [&](QPoint point, Qt::CursorShape cursor) {
+                QMouseEvent move(QEvent::MouseMove, QPointF(point),
+                                 layer->viewport()->mapToGlobal(point), Qt::NoButton, Qt::NoButton,
+                                 Qt::NoModifier);
+                QApplication::sendEvent(layer->viewport(), &move);
+                require(layer->viewport()->cursor().shape() == cursor,
+                        "formatted hover must distinguish text from background without clicking");
+                require(!item->textCursor().hasSelection() && !recognition.textSelectionActive(),
+                        "formatted hover must not begin a selection");
+            };
+            hover(text, Qt::IBeamCursor);
+            hover(blank, Qt::ArrowCursor);
+            hover(text, Qt::IBeamCursor);
+        }
+    }
+}
+
 QImage renderFormattedTextItem(QGraphicsTextItem* item, bool focused) {
     const QRectF bounds = item->boundingRect();
     QImage image(bounds.size().toSize(), QImage::Format_ARGB32_Premultiplied);
@@ -1568,6 +1620,77 @@ void formattedClipboardTextUsesASelectableQtDocument() {
     window.clearFormattedText();
     require(window.findChild<QGraphicsView*>(QStringLiteral("screenshotClipboardText")) == nullptr,
             "leaving formatted-text mode should remove its selectable surface");
+}
+
+void selectionOnlyFormattedTextPaintsOnlyHighlights() {
+    QScreen* screen = QGuiApplication::primaryScreen();
+    require(screen != nullptr, "formatted selection rendering requires a screen");
+    for (const qreal dpr : {1.0, 2.0}) {
+        QWidget host;
+        host.resize(360, 150);
+        QPalette palette = host.palette();
+        palette.setColor(QPalette::Window, QColor(24, 72, 120));
+        host.setPalette(palette);
+        host.setAutoFillBackground(true);
+        host.show();
+        ScreenshotRecognitionWindow window(
+            {}, &host, ScreenshotRecognitionWindow::PresentationMode::EmbeddedChild);
+        require(window.present({screen, &host, host.rect(),
+                                QRectF(QPointF(), QSizeF(host.size()) * dpr),
+                                ScreenshotRecognitionWindow::PresentationMode::EmbeddedChild, dpr}),
+                "present the formatted selection-only overlay");
+        QApplication::processEvents();
+        const auto original = host.grab().toImage();
+        auto document = std::make_shared<QTextDocument>();
+        QImage inlineImage(20, 20, QImage::Format_ARGB32_Premultiplied);
+        inlineImage.fill(Qt::red);
+        document->addResource(QTextDocument::ImageResource, QUrl(QStringLiteral("inline-image")),
+                              inlineImage);
+        document->setHtml(
+            QStringLiteral("<p style=\"color: red; background-color: yellow\"><b>Rich</b> "
+                           "<u>wrapped</u> selection text <img src=\"inline-image\"></p>"
+                           "<table border=\"1\"><tr><td>Cell</td></tr></table>"));
+        document->setTextWidth(160);
+        const QString originalHtml = document->toHtml();
+        window.showFormattedText(document, ScreenshotOcrTextLayer::RenderingMode::SelectionOnly,
+                                 false);
+        QApplication::processEvents();
+        require(host.grab().toImage() == original,
+                "hidden formatted text must not repaint text, HTML backgrounds, or table borders");
+        auto* layer = window.findChild<QGraphicsView*>(QStringLiteral("screenshotClipboardText"));
+        auto* item = formattedTextItem(layer);
+        require(item && item->document() == document.get(),
+                "selection-only rendering must use the original document layout");
+        QTextCursor cursor(document.get());
+        cursor.select(QTextCursor::Document);
+        item->setTextCursor(cursor);
+        QApplication::processEvents();
+        const auto selected = host.grab().toImage();
+        require(selected != original, "formatted selection must paint visible highlights");
+        QImage overlay(host.size(), QImage::Format_ARGB32_Premultiplied);
+        overlay.fill(Qt::transparent);
+        QPainter painter(&overlay);
+        layer->render(&painter);
+        painter.end();
+        int maximumAlpha = 0;
+        for (int y = 0; y < overlay.height(); ++y)
+            for (int x = 0; x < overlay.width(); ++x)
+                maximumAlpha = std::max(maximumAlpha, qAlpha(overlay.pixel(x, y)));
+        require(maximumAlpha == 102,
+                "formatted selection paints only translucent highlights, without rich text glyphs");
+        require(document->toHtml() == originalHtml, "paint policy must not modify the source HTML");
+        window.showFormattedText(document, ScreenshotOcrTextLayer::RenderingMode::SelectionOnly,
+                                 false);
+        require(item->textCursor().hasSelection(), "synchronization preserves native selection");
+        window.clearTextSelection();
+        QApplication::processEvents();
+        require(host.grab().toImage() == original,
+                "clearing formatted selection must restore the original pixels");
+        window.showFormattedText(document);
+        QApplication::processEvents();
+        require(host.grab().toImage() != original,
+                "displayed formatted text retains normal painting");
+    }
 }
 
 void qrContentsUseStrictRichTextLinksAndPreserveOrder() {
@@ -2951,6 +3074,8 @@ int main(int argc, char** argv) {
     }
     if (application.arguments().contains(QStringLiteral("--selection-only-rendering"))) {
         selectionOnlyTextLayerPaintsOnlyHighlights();
+        selectionOnlyFormattedTextPaintsOnlyHighlights();
+        formattedClipboardTextUsesASelectableQtDocument();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--image-snapshot-only"))) {
@@ -2963,6 +3088,7 @@ int main(int argc, char** argv) {
     }
 
     ocrHoverUpdatesCursorWithoutClicking();
+    formattedTextHoverUpdatesCursorWithoutClicking();
     if (application.arguments().contains(QStringLiteral("--ocr-hover-only"))) {
         return 0;
     }
@@ -2982,6 +3108,7 @@ int main(int argc, char** argv) {
     shortRecognitionWindowPreservesExactSelectionGeometryAcrossModes();
     textRecognitionEditorsCollapseMarginsInSmallAreas();
     formattedClipboardTextUsesASelectableQtDocument();
+    selectionOnlyFormattedTextPaintsOnlyHighlights();
     qrContentsUseStrictRichTextLinksAndPreserveOrder();
     emptyOcrResultCopiesEmptyText();
     tableClipboardPreservesLargeValuesForWholeTableAndSelection();

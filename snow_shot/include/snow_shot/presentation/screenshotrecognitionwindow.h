@@ -24,6 +24,7 @@ class QFocusEvent;
 class QEvent;
 class QContextMenuEvent;
 class QMouseEvent;
+class QMimeData;
 class QPaintEvent;
 class QResizeEvent;
 class QScreen;
@@ -128,6 +129,9 @@ class ScreenshotRecognitionWindow final : public QWidget {
         bool takeFocus = true);
     void updateOcrSelection();
     void clearOcrSelection();
+    void clearTextSelection();
+    [[nodiscard]] bool textSelectionActive() const;
+    [[nodiscard]] std::unique_ptr<QMimeData> textSelectionClipboardMimeData() const;
     void updateOcrText(int lineIndex, const QString& text);
     void clearOcrPresentation();
     [[nodiscard]] std::optional<ScreenshotRecognitionImageSnapshot>
@@ -137,7 +141,10 @@ class ScreenshotRecognitionWindow final : public QWidget {
                                                const QRectF& canvasRect = {}, QImage filtered = {},
                                                const QRectF& filteredRect = {},
                                                qreal contentOpacity = 1.0);
-    void showFormattedText(std::shared_ptr<QTextDocument> document);
+    void showFormattedText(
+        std::shared_ptr<QTextDocument> document,
+        ScreenshotOcrTextLayer::RenderingMode mode = ScreenshotOcrTextLayer::RenderingMode::Normal,
+        bool takeFocus = true, std::optional<QTransform> documentToCanvas = std::nullopt);
     void clearFormattedText();
 
     void setTableSession(std::shared_ptr<ScreenshotTableEditingSession> session);
@@ -210,6 +217,7 @@ class ScreenshotRecognitionWindow final : public QWidget {
     [[nodiscard]] ScreenshotSelectionDragMode
     selectionResizeDragModeAtLocalPoint(const QPointF& localPosition) const;
     [[nodiscard]] bool handleSelectionResizeEvent(QObject* watched, QEvent* event);
+    [[nodiscard]] bool forwardFormattedTextPointerEvent(QObject* watched, QEvent* event);
     void updateSelectionResizeCursor(const QPointF& localPosition);
     [[nodiscard]] static Qt::CursorShape
     cursorForSelectionResize(ScreenshotSelectionDragMode dragMode);

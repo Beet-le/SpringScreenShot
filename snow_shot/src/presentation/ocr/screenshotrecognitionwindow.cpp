@@ -41,6 +41,7 @@
 #include <QKeyEvent>
 #include <QLayout>
 #include <QMouseEvent>
+#include <QMimeData>
 #include <QPainter>
 #include <QPalette>
 #include <QResizeEvent>
@@ -54,6 +55,9 @@
 #include <QTextBrowser>
 #endif
 #include <QTextCharFormat>
+#include <QTextBlock>
+#include <QTextLayout>
+#include <QTextBoundaryFinder>
 #include <QTextCursor>
 #include <QTextDocument>
 #include <QTextDocumentFragment>
@@ -129,9 +133,54 @@ bool focusInside(const QWidget* container, const QWidget* focus) {
 class ScreenshotFormattedTextItem final : public QGraphicsTextItem {
   public:
     using QGraphicsTextItem::QGraphicsTextItem;
+    bool selectionOnly = false;
 
     void paint(QPainter* painter, const QStyleOptionGraphicsItem* option,
                QWidget* widget = nullptr) override {
+        if (selectionOnly) {
+            const QTextCursor cursor = textCursor();
+            if (!cursor.hasSelection())
+                return;
+            painter->save();
+            painter->setClipRect(boundingRect(), Qt::IntersectClip);
+            // Use the native layout's grapheme edges for highlight geometry. Drawing the
+            // layout itself would also paint inline HTML objects, even with transparent text.
+            QPainterPath highlights;
+            highlights.setFillRule(Qt::WindingFill);
+            for (QTextBlock block = document()->findBlock(cursor.selectionStart());
+                 block.isValid() && block.position() < cursor.selectionEnd();
+                 block = block.next()) {
+                auto* layout = block.layout();
+                if (!layout)
+                    continue;
+                const QPointF origin =
+                    document()->documentLayout()->blockBoundingRect(block).topLeft();
+                const int end =
+                    std::min(block.length() - 1, cursor.selectionEnd() - block.position());
+                QTextBoundaryFinder boundaries(QTextBoundaryFinder::Grapheme, block.text());
+                int start = std::max(0, cursor.selectionStart() - block.position());
+                boundaries.setPosition(start);
+                while (start < end) {
+                    const QTextLine line = layout->lineForTextPosition(start);
+                    if (line.isValid()) {
+                        const qreal leading = line.cursorToX(start, QTextLine::Leading);
+                        const qreal trailing = line.cursorToX(start, QTextLine::Trailing);
+                        highlights.addRect(
+                            QRectF(origin + QPointF(std::min(leading, trailing), line.y()),
+                                   QSizeF(std::abs(trailing - leading), line.height())));
+                    }
+                    const int next = boundaries.toNextBoundary();
+                    if (next <= start)
+                        break;
+                    start = next;
+                }
+            }
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(QColor(64, 150, 255, 102));
+            painter->drawPath(highlights);
+            painter->restore();
+            return;
+        }
         QStyleOptionGraphicsItem textOption(*option);
         // Qt's graphics-text focus indicator is a dashed item outline. The pinned surface
         // still needs focus for keyboard selection, but that outline is not part of the HTML.
@@ -163,6 +212,7 @@ class ScreenshotFormattedTextLayer final : public QGraphicsView {
         setBackgroundBrush(background);
         setFocusPolicy(Qt::StrongFocus);
         setInteractive(true);
+        setMouseTracking(true);
         setOptimizationFlag(QGraphicsView::DontSavePainterState, true);
         setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing |
                        QPainter::SmoothPixmapTransform);
@@ -183,18 +233,63 @@ class ScreenshotFormattedTextLayer final : public QGraphicsView {
     }
 
     void setDocument(std::shared_ptr<QTextDocument> document, const QRectF& canvasRect,
-                     qreal devicePixelRatio) {
-        clearDocument();
+                     qreal devicePixelRatio, ScreenshotOcrTextLayer::RenderingMode mode,
+                     const std::optional<QTransform>& documentToCanvas) {
         if (document == nullptr || !canvasRect.isValid() || canvasRect.isEmpty() ||
             !std::isfinite(devicePixelRatio) || devicePixelRatio <= 0.0) {
+            clearDocument();
             return;
         }
-        m_document = std::move(document);
+        if (m_document != document) {
+            clearDocument();
+            m_document = std::move(document);
+            m_textItem->setDocument(m_document.get());
+        }
         m_canvasRect = canvasRect.normalized();
-        m_textItem->setDocument(m_document.get());
-        m_textItem->setPos(m_canvasRect.topLeft());
-        m_textItem->setScale(devicePixelRatio);
+        m_textItem->setPos(QPointF());
+        m_textItem->setScale(1.0);
+        // Preserve the public item's scale in the ordinary formatted-text presentation.
+        if (documentToCanvas) {
+            m_textItem->setTransform(*documentToCanvas);
+        } else {
+            m_textItem->setTransform(QTransform());
+            m_textItem->setPos(m_canvasRect.topLeft());
+            m_textItem->setScale(devicePixelRatio);
+        }
+        const bool selectionOnly = mode == ScreenshotOcrTextLayer::RenderingMode::SelectionOnly;
+        m_textItem->selectionOnly = selectionOnly;
+        setAutoFillBackground(!selectionOnly);
+        viewport()->setAutoFillBackground(!selectionOnly);
+        setAttribute(Qt::WA_NoSystemBackground, selectionOnly);
+        viewport()->setAttribute(Qt::WA_NoSystemBackground, selectionOnly);
+        setBackgroundBrush(selectionOnly ? QBrush(Qt::NoBrush)
+                                         : QBrush(palette().color(QPalette::Base)));
+        setStyleSheet(
+            selectionOnly
+                ? QStringLiteral("QGraphicsView#screenshotClipboardText {"
+                                 " background: transparent; border: none; }")
+                : QStringLiteral("QGraphicsView#screenshotClipboardText { border: none; }"));
         m_textItem->show();
+        m_textItem->update();
+    }
+
+    [[nodiscard]] QTextCursor textCursor() const {
+        return m_textItem->textCursor();
+    }
+
+    void clearSelection() {
+        auto cursor = textCursor();
+        cursor.clearSelection();
+        m_textItem->setTextCursor(cursor);
+    }
+
+    [[nodiscard]] bool selectionActive() const {
+        return m_scene->mouseGrabberItem() == m_textItem;
+    }
+
+    [[nodiscard]] bool textAt(const QPointF& canvasPosition) const {
+        return m_document && m_document->documentLayout()->hitTest(
+                                 m_textItem->mapFromScene(canvasPosition), Qt::ExactHit) >= 0;
     }
 
     void paintPrintViewport(QPainter& painter) const {
@@ -228,7 +323,10 @@ class ScreenshotFormattedTextLayer final : public QGraphicsView {
         if (geometry() != viewportRect) {
             setGeometry(viewportRect);
         }
-        setSceneRect(m_canvasRect);
+        // Match the scene extent to the host camera, including zoomed or rotated pins.
+        // QGraphicsView otherwise recenters a stale document rectangle via its scrollbars.
+        setSceneRect(canvasToViewTransform.inverted().mapRect(
+            QRectF(QPointF(), QSizeF(viewportRect.size()))));
         setTransform(canvasToViewTransform, false);
         show();
         raise();
@@ -242,7 +340,7 @@ class ScreenshotFormattedTextLayer final : public QGraphicsView {
 
   private:
     QGraphicsScene* m_scene = nullptr;
-    QGraphicsTextItem* m_textItem = nullptr;
+    ScreenshotFormattedTextItem* m_textItem = nullptr;
     std::shared_ptr<QTextDocument> m_document;
     QRectF m_canvasRect;
 };
@@ -773,6 +871,39 @@ void ScreenshotRecognitionWindow::clearOcrSelection() {
     unsetCursor();
 }
 
+void ScreenshotRecognitionWindow::clearTextSelection() {
+    clearOcrSelection();
+    if (m_formattedTextLayer)
+        m_formattedTextLayer->clearSelection();
+}
+
+bool ScreenshotRecognitionWindow::textSelectionActive() const {
+    return (m_ocrPresentation && m_ocrPresentation->textSelectionActive()) ||
+           (m_formattedTextLayer && m_formattedTextLayer->selectionActive());
+}
+
+std::unique_ptr<QMimeData> ScreenshotRecognitionWindow::textSelectionClipboardMimeData() const {
+    if (m_formattedTextLayer && m_stack->currentWidget() == m_formattedTextLayer) {
+        const auto cursor = m_formattedTextLayer->textCursor();
+        if (!cursor.hasSelection())
+            return {};
+        const QTextDocumentFragment fragment(cursor);
+        auto mime = std::make_unique<QMimeData>();
+        mime->setText(fragment.toPlainText());
+        mime->setHtml(fragment.toHtml());
+        return mime;
+    }
+    if (!m_ocrPresentation || !m_ocrPresentation->hasTextSelection())
+        return {};
+    auto mime = std::make_unique<QMimeData>();
+    const snow_shot::storage::TextRecognitionSettings settings;
+    mime->setText(m_ocrCopyDefaultsEnabled ? snow_shot::presentation::applyOcrTextTransforms(
+                                                 *m_ocrPresentation, settings.defaultFormatting(),
+                                                 settings.defaultPunctuation())
+                                           : m_ocrPresentation->selectedText());
+    return mime;
+}
+
 void ScreenshotRecognitionWindow::updateOcrText(int lineIndex, const QString& text) {
     if (m_ocrPresentation != nullptr) {
         m_ocrPresentation->setLineText(lineIndex, text);
@@ -787,7 +918,10 @@ void ScreenshotRecognitionWindow::clearOcrPresentation() {
     unsetCursor();
 }
 
-void ScreenshotRecognitionWindow::showFormattedText(std::shared_ptr<QTextDocument> document) {
+void ScreenshotRecognitionWindow::showFormattedText(std::shared_ptr<QTextDocument> document,
+                                                    ScreenshotOcrTextLayer::RenderingMode mode,
+                                                    bool takeFocus,
+                                                    std::optional<QTransform> documentToCanvas) {
     if (document == nullptr) {
         return;
     }
@@ -796,16 +930,17 @@ void ScreenshotRecognitionWindow::showFormattedText(std::shared_ptr<QTextDocumen
     clearOcrPresentation();
     clearTableSession();
     clearQrContents();
+    m_selectionOnly = mode == ScreenshotOcrTextLayer::RenderingMode::SelectionOnly;
     if (m_formattedTextLayer == nullptr) {
         m_formattedTextLayer = new ScreenshotFormattedTextLayer(this);
         m_stack->addWidget(m_formattedTextLayer);
         installSelectionResizeEventFilters(m_formattedTextLayer);
     }
     m_formattedTextLayer->setDocument(std::move(document), m_canvasSelection,
-                                      m_formattedTextDevicePixelRatio);
+                                      m_formattedTextDevicePixelRatio, mode, documentToCanvas);
     m_stack->setCurrentWidget(m_formattedTextLayer);
     synchronizeTextLayer();
-    if (!m_showOriginalImage) {
+    if (takeFocus && !m_showOriginalImage) {
         m_formattedTextLayer->focusText();
     }
 }
@@ -1837,6 +1972,14 @@ void ScreenshotRecognitionWindow::updateSelectionResizeCursor(const QPointF& loc
         setCursor(position.valid() ? Qt::IBeamCursor : Qt::ArrowCursor);
         return;
     }
+    if (m_formattedTextLayer != nullptr) {
+        // QGraphicsTextItem enables selection but does not provide a hover cursor.
+        // Use the same document hit test that reserves text presses for selection.
+        setCursor(m_formattedTextLayer->textAt(canvasPositionForLocalPoint(localPosition))
+                      ? Qt::IBeamCursor
+                      : Qt::ArrowCursor);
+        return;
+    }
     unsetCursor();
 }
 
@@ -1906,6 +2049,44 @@ bool ScreenshotRecognitionWindow::handleSelectionResizeEvent(QObject* watched, Q
     return false;
 }
 
+bool ScreenshotRecognitionWindow::forwardFormattedTextPointerEvent(QObject* watched,
+                                                                   QEvent* event) {
+    if (!event || !m_selectionOnly || !m_formattedTextLayer ||
+        watched != m_formattedTextLayer->viewport() || textSelectionActive()) {
+        return false;
+    }
+    switch (event->type()) {
+    case QEvent::MouseButtonPress:
+    case QEvent::MouseButtonDblClick:
+    case QEvent::MouseMove:
+    case QEvent::MouseButtonRelease:
+        break;
+    default:
+        return false;
+    }
+    auto* mouse = static_cast<QMouseEvent*>(event);
+    const QPointF local = m_formattedTextLayer->viewport()->mapTo(this, mouse->position());
+    if (!isOcrBackgroundAt(local) && !mouse->modifiers().testFlag(Qt::ControlModifier)) {
+        return false;
+    }
+    // Blank document space belongs to the host's pin gestures, including double-clicks.
+    // An active native text selection retains every phase of its mouse gesture.
+    QMouseEvent forwarded(mouse->type(), local, mapTo(window(), local), mouse->globalPosition(),
+                          mouse->button(), mouse->buttons(), mouse->modifiers(), mouse->source(),
+                          mouse->pointingDevice());
+    forwarded.setTimestamp(mouse->timestamp());
+    forwarded.ignore();
+    const bool handled = QCoreApplication::sendEvent(this, &forwarded);
+    // The host action can delete the formatted viewport (for example, entering thumbnail mode).
+    // Consume accepted events without accessing the viewport again.
+    // Host event filters can handle a controlled move without setting the accepted flag.
+    if (!handled && !forwarded.isAccepted()) {
+        return false;
+    }
+    event->accept();
+    return true;
+}
+
 bool ScreenshotRecognitionWindow::eventFilter(QObject* watched, QEvent* event) {
     if (watched == m_originalImagePreview) {
         return QWidget::eventFilter(watched, event);
@@ -1948,6 +2129,9 @@ bool ScreenshotRecognitionWindow::eventFilter(QObject* watched, QEvent* event) {
         return true;
     }
     if (handleSelectionResizeEvent(watched, event)) {
+        return true;
+    }
+    if (forwardFormattedTextPointerEvent(watched, event)) {
         return true;
     }
     return QWidget::eventFilter(watched, event);
@@ -2025,6 +2209,11 @@ void ScreenshotRecognitionWindow::mouseDoubleClickEvent(QMouseEvent* event) {
 }
 
 bool ScreenshotRecognitionWindow::isOcrBackgroundAt(const QPointF& localPosition) const {
+    if (m_formattedTextLayer && m_stack->currentWidget() == m_formattedTextLayer) {
+        return !m_showOriginalImage && !textSelectionActive() &&
+               rect().contains(localPosition.toPoint()) &&
+               !m_formattedTextLayer->textAt(canvasPositionForLocalPoint(localPosition));
+    }
     return !m_showOriginalImage && m_ocrPresentation != nullptr &&
            m_stack->currentWidget() == m_textLayer && !m_ocrPresentation->textSelectionActive() &&
            rect().contains(localPosition.toPoint()) &&

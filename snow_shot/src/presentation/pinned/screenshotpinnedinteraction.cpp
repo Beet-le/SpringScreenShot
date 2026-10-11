@@ -232,7 +232,7 @@ bool ScreenshotPinnedWindow::beginControlledInteraction(const QPointF& desktopPo
     if (!begun)
         return false;
     if (!handle && m_recognitionContent && (m_ocrMode || m_hiddenTextSelection)) {
-        m_recognitionContent->clearOcrSelection();
+        m_recognitionContent->clearTextSelection();
     }
     resetPinnedGestures();
     m_interactionPlacement = placement;

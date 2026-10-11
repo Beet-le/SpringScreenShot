@@ -158,6 +158,16 @@ decorationPlacement(snow_shot::storage::PinnedWindowPlacement placement, QScreen
     return placement;
 }
 
+QTransform imagePixelsToCanvasTransform(const QTransform& imageTransform,
+                                        const QSize& transformedPixels, const QRectF& contentRect) {
+    QTransform pixelsToCanvas;
+    pixelsToCanvas.translate(contentRect.left(), contentRect.top());
+    pixelsToCanvas.scale(
+        transformedPixels.width() > 0 ? contentRect.width() / transformedPixels.width() : 1,
+        transformedPixels.height() > 0 ? contentRect.height() / transformedPixels.height() : 1);
+    return imageTransform * pixelsToCanvas;
+}
+
 std::shared_ptr<ScreenshotOcrPresentation>
 transformedOcrPresentation(const ScreenshotOcrPresentation& source, const QRectF& sourceRect,
                            const QSize& sourcePixels, const QTransform& imageTransform,
@@ -170,16 +180,12 @@ transformedOcrPresentation(const ScreenshotOcrPresentation& source, const QRectF
         sourceRect.width() > 0 ? sourcePixels.width() / sourceRect.width() : 1;
     const qreal sourceScaleY =
         sourceRect.height() > 0 ? sourcePixels.height() / sourceRect.height() : 1;
-    const qreal targetScaleX =
-        transformedPixels.width() > 0 ? contentRect.width() / transformedPixels.width() : 1;
-    const qreal targetScaleY =
-        transformedPixels.height() > 0 ? contentRect.height() / transformedPixels.height() : 1;
+    const QTransform pixelsToCanvas =
+        imagePixelsToCanvasTransform(imageTransform, transformedPixels, contentRect);
     const auto mapPoint = [&](const QPointF& point) {
         const QPointF pixel((point.x() - sourceRect.left()) * sourceScaleX,
                             (point.y() - sourceRect.top()) * sourceScaleY);
-        const auto transformed = imageTransform.map(pixel);
-        return QPointF(contentRect.left() + transformed.x() * targetScaleX,
-                       contentRect.top() + transformed.y() * targetScaleY);
+        return pixelsToCanvas.map(pixel);
     };
     for (auto& line : result->lines) {
         for (auto& point : line.quad)
@@ -5420,13 +5426,15 @@ void ScreenshotPinnedWindow::synchronizeHiddenTextSelection() {
         return;
     }
     const bool enabled =
-        !m_closing && m_recognitionTargetReady && !m_thumbnailMode && !m_formattedTextAvailable &&
+        !m_closing && m_recognitionTargetReady && !m_thumbnailMode &&
         m_recognitionSession != nullptr && !m_recognitionSession->active() &&
         (m_editController == nullptr || !m_editController->editMode()) &&
         snow_shot::storage::PinToScreenSettings().textSelectionOnRecognitionResults() ==
             QStringLiteral("always");
-    const auto results =
-        enabled ? m_recognitionSession->cachedRecognitionResults() : ScreenshotRecognitionResults{};
+    const bool formatted = enabled && m_formattedTextAvailable && m_formattedTextDocument &&
+                           !m_formattedTextDocument->isEmpty();
+    const auto results = enabled && !formatted ? m_recognitionSession->cachedRecognitionResults()
+                                               : ScreenshotRecognitionResults{};
     const auto presentation = results.text.has_value() ? results.text->presentation : nullptr;
     const bool usable = presentation != nullptr && !presentation->empty() &&
                         std::any_of(presentation->lines.cbegin(), presentation->lines.cend(),
@@ -5434,10 +5442,11 @@ void ScreenshotPinnedWindow::synchronizeHiddenTextSelection() {
                                         return !line.text.isEmpty() && line.quad.size() == 4 &&
                                                !line.quad.boundingRect().isEmpty();
                                     });
-    if (!usable || ensureRecognitionContent() == nullptr) {
+    if ((!formatted && !usable) || ensureRecognitionContent() == nullptr) {
         if (m_recognitionContent != nullptr) {
-            m_recognitionContent->clearOcrSelection();
+            m_recognitionContent->clearTextSelection();
             m_recognitionContent->clearOcrPresentation();
+            m_recognitionContent->clearFormattedText();
             m_recognitionContent->hide();
         }
         if (m_displayOcrPresentation != nullptr) {
@@ -5448,9 +5457,25 @@ void ScreenshotPinnedWindow::synchronizeHiddenTextSelection() {
         return;
     }
     m_hiddenTextSelection = true;
-    m_originalOcrPresentation = presentation;
-    m_ocrReady = true;
-    updateOcrPresentation();
+    if (formatted) {
+        // The source document already supplies precise text geometry. Selection availability
+        // must not depend on an OCR cache entry or activating the recognition session.
+        // Document coordinates are logical text units; the raster's DPR converts them to
+        // source pixels. Canvas scaling belongs only in the shared image mapping below.
+        const QTransform documentToPixels =
+            QTransform::fromScale(m_formattedTextDevicePixelRatio, m_formattedTextDevicePixelRatio);
+        const QTransform documentToCanvas =
+            documentToPixels * imagePixelsToCanvasTransform(m_imageTransform,
+                                                            m_transformedImage.size(),
+                                                            m_backgroundCanvasRect);
+        m_recognitionContent->showFormattedText(
+            m_formattedTextDocument, ScreenshotOcrTextLayer::RenderingMode::SelectionOnly, false,
+            documentToCanvas);
+    } else {
+        m_originalOcrPresentation = presentation;
+        m_ocrReady = true;
+        updateOcrPresentation();
+    }
     m_recognitionContent->show();
     updateRecognitionContentGeometry();
     updateBorderOutline();
@@ -5541,16 +5566,16 @@ void ScreenshotPinnedWindow::copyEditToolbarContent() {
 }
 
 bool ScreenshotPinnedWindow::copyHiddenTextSelection() {
-    if (!m_hiddenTextSelection || m_displayOcrPresentation == nullptr ||
-        !m_displayOcrPresentation->hasTextSelection()) {
+    if (!m_hiddenTextSelection || !m_recognitionContent) {
+        return false;
+    }
+    auto mime = m_recognitionContent->textSelectionClipboardMimeData();
+    if (!mime) {
         return false;
     }
     invalidatePendingCopy();
     if (QClipboard* clipboard = QApplication::clipboard()) {
-        const snow_shot::storage::TextRecognitionSettings settings;
-        clipboard->setText(snow_shot::presentation::applyOcrTextTransforms(
-            *m_displayOcrPresentation, settings.defaultFormatting(),
-            settings.defaultPunctuation()));
+        clipboard->setMimeData(mime.release());
     }
     return true;
 }
@@ -6888,7 +6913,9 @@ void ScreenshotPinnedWindow::rebuildTransformedImage() {
     m_screenshotRenderer->setImage(m_transformedImage, m_backgroundCanvasRect);
     m_screenshotRenderer->setPinnedResultSurface(m_backgroundCanvasRect, m_resultSurfaceCanvasRect,
                                                  m_resultStyle);
-    if (m_ocrReady) {
+    if (m_hiddenTextSelection && m_formattedTextAvailable) {
+        synchronizeHiddenTextSelection();
+    } else if (m_ocrReady) {
         updateOcrPresentation();
         if (m_ocrMode && m_recognitionSession != nullptr && m_recognitionSession->active() &&
             m_recognitionSession->mode() == ScreenshotRecognitionSessionController::Mode::Text) {
@@ -8383,7 +8410,7 @@ bool ScreenshotPinnedWindow::startWindowMove() {
     }
     // Both Qt client presses and Windows non-client caption presses enter here.
     if (m_recognitionContent != nullptr && (m_ocrMode || m_hiddenTextSelection)) {
-        m_recognitionContent->clearOcrSelection();
+        m_recognitionContent->clearTextSelection();
     }
     const auto nativeCursor = physicalCursorPosition();
     if (!nativeCursor || !m_nativeGeometryController->beginMove(*nativeCursor))
@@ -8445,8 +8472,9 @@ bool ScreenshotPinnedWindow::windowDragEligible() const {
     }
     if (m_ocrMode || m_hiddenTextSelection) {
         return m_recognitionSession != nullptr && !m_recognitionSession->editing() &&
-               m_displayOcrPresentation != nullptr &&
-               !m_displayOcrPresentation->textSelectionActive();
+               (m_displayOcrPresentation != nullptr ||
+                (m_hiddenTextSelection && m_formattedTextAvailable)) &&
+               m_recognitionContent != nullptr && !m_recognitionContent->textSelectionActive();
     }
     return m_editController == nullptr || !m_editController->editMode() ||
            m_editController->resizeWindowToolActive();
@@ -8955,12 +8983,8 @@ ScreenshotPinnedWindow::automationClipboardMimeData(bool original) const {
             mime->setText(m_originalClipboardContent.text);
         if (!m_originalClipboardContent.localFilePath.isEmpty())
             mime->setUrls({QUrl::fromLocalFile(m_originalClipboardContent.localFilePath)});
-    } else if (m_hiddenTextSelection && m_displayOcrPresentation &&
-               m_displayOcrPresentation->hasTextSelection()) {
-        const snow_shot::storage::TextRecognitionSettings settings;
-        mime->setText(snow_shot::presentation::applyOcrTextTransforms(
-            *m_displayOcrPresentation, settings.defaultFormatting(),
-            settings.defaultPunctuation()));
+    } else if (m_hiddenTextSelection && m_recognitionContent) {
+        return m_recognitionContent->textSelectionClipboardMimeData();
     } else if (m_ocrMode && m_recognitionSession && m_recognitionSession->active()) {
         return m_recognitionSession->recognitionClipboardMimeData(m_displayOcrPresentation.get());
     } else

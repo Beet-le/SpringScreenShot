@@ -28,6 +28,7 @@
 #include "snow_shot/presentation/screenshotprintservice.h"
 #include <QTextEdit>
 #include <QTextBlock>
+#include <QTextLayout>
 #include <QScrollBar>
 #include <QDialog>
 #include <QGraphicsTextItem>
@@ -143,6 +144,7 @@
 #include <QTimer>
 #include <QTextBrowser>
 #include <QTextDocument>
+#include <QTextDocumentFragment>
 #include <QTranslator>
 #include <QUuid>
 #include <QVariantAnimation>
@@ -802,6 +804,10 @@ class ScreenshotPinnedWindowTestAccess {
         window.m_automaticTextRecognition = false;
         window.m_ocrMode = false;
         window.m_hiddenTextSelection = false;
+        window.m_formattedTextDocument = config.formattedTextDocument;
+        window.m_formattedPlainText = config.formattedPlainText;
+        window.m_formattedTextAvailable = config.formattedTextDocument != nullptr;
+        window.m_formattedTextDevicePixelRatio = config.formattedTextDevicePixelRatio;
         window.configureRecognitionSession();
         window.configureRecognitionTarget();
         window.show();
@@ -845,6 +851,9 @@ class ScreenshotPinnedWindowTestAccess {
         window.m_transformedImage = window.m_originalImage.transformed(window.m_imageTransform);
         window.m_backgroundCanvasRect.setSize(QSizeF(window.m_transformedImage.size()));
         window.updateOcrPresentation();
+    }
+    static void rotateFormattedSelectionOffscreen(ScreenshotPinnedWindow& window) {
+        window.applyImageOperation(QTransform().rotate(90), 1);
     }
     static const ScreenshotOcrPresentation&
     displayedRecognition(const ScreenshotPinnedWindow& window) {
@@ -13171,6 +13180,349 @@ void pinnedHiddenTextSelectionOffscreen() {
             "restore default selection setting");
 }
 
+void pinnedHiddenFormattedTextSelectionOffscreen() {
+    using Access = ScreenshotPinnedWindowTestAccess;
+    const snow_shot::storage::PinToScreenSettings settings;
+    const QString priorSelection = settings.textSelectionOnRecognitionResults();
+    const auto restore = qScopeGuard(
+        [&] { static_cast<void>(settings.setTextSelectionOnRecognitionResults(priorSelection)); });
+    for (const bool html : {false, true}) {
+        for (const qreal dpr : {1.0, 2.0}) {
+            require(settings.setTextSelectionOnRecognitionResults(
+                        QStringLiteral("only_when_displayed")),
+                    "start formatted pins with selection only when displayed");
+            QMimeData mime;
+            if (html)
+                mime.setHtml(QStringLiteral("<p><b>Selectable</b> pinned HTML</p>"));
+            else
+                mime.setText(QStringLiteral("Selectable pinned text"));
+            auto snapshot =
+                ScreenshotClipboardContentReader::snapshotMimeData(&mime, dpr, Qt::white);
+            require(snapshot.has_value(), "snapshot formatted clipboard content");
+            auto decoded = decodeScreenshotDropContent(std::move(*snapshot));
+            require(decoded && decoded->isFormattedText(), "decode a document-backed pin");
+            auto config = cachedOcrPinConfig(nullptr);
+            config.recognitionResults = {};
+            config.canvasSourceRect = QRectF(QPointF(), QSizeF(decoded->image.size()));
+            config.imageSource =
+                ScreenshotImageSource::fromImage(decoded->image, config.canvasSourceRect);
+            config.formattedTextDocument = decoded->formattedDocument;
+            config.formattedPlainText = decoded->plainText;
+            config.formattedTextDevicePixelRatio = decoded->formattedTextDevicePixelRatio;
+            ScreenshotPinnedWindow window;
+            auto* session = Access::hiddenSelectionOffscreen(window, config);
+            require(session && session->hasTextResult() && !Access::hiddenSelection(window),
+                    "formatted text is available without displaying recognition");
+            require(settings.setTextSelectionOnRecognitionResults(QStringLiteral("always")),
+                    "enable Always on the existing formatted pin");
+            require(Access::hiddenSelection(window) && !session->active() &&
+                        !window.persistenceSnapshot().recognitionVisible,
+                    "Always installs formatted text selection without activating recognition");
+            ScreenshotPinnedWindow initial;
+            auto* initialSession = Access::hiddenSelectionOffscreen(initial, config);
+            require(Access::hiddenSelection(initial) && !initialSession->active(),
+                    "a formatted pin created under Always is immediately selectable");
+            auto* layer =
+                window.findChild<QGraphicsView*>(QStringLiteral("screenshotClipboardText"));
+            require(layer && layer->isVisible(), "formatted hidden selection uses its document");
+            QGraphicsTextItem* item = nullptr;
+            for (auto* candidate : layer->scene()->items())
+                if (auto* text = dynamic_cast<QGraphicsTextItem*>(candidate))
+                    item = text;
+            require(item && item->document() == config.formattedTextDocument.get(),
+                    "hidden selection must retain the original formatted document");
+            const auto block = item->document()->firstBlock();
+            const auto line = block.layout()->lineAt(0);
+            const auto point = [&](int character) {
+                return layer->mapFromScene(item->mapToScene(
+                    block.layout()->position() +
+                    QPointF(line.cursorToX(character), line.y() + line.height() / 2)));
+            };
+            const auto pointer = [&](QEvent::Type type, QPoint position, Qt::MouseButton changed,
+                                     Qt::MouseButtons held) {
+                QMouseEvent event(type, QPointF(position),
+                                  QPointF(layer->viewport()->mapToGlobal(position)), changed, held,
+                                  Qt::NoModifier);
+                QApplication::sendEvent(layer->viewport(), &event);
+            };
+            window.activateWindow();
+            QApplication::processEvents();
+            const QPoint textPoint = layer->viewport()->mapTo(&window, point(1));
+            QEnterEvent enter(QPointF(textPoint), QPointF(textPoint),
+                              window.mapToGlobal(textPoint));
+            QApplication::sendEvent(window.windowHandle(), &enter);
+            const auto hover = [&](QPoint position, Qt::CursorShape cursor) {
+                const QPoint local = layer->viewport()->mapTo(&window, position);
+                QMouseEvent move(QEvent::MouseMove, QPointF(local), QPointF(local),
+                                 window.mapToGlobal(local), Qt::NoButton, Qt::NoButton,
+                                 Qt::NoModifier);
+                QApplication::sendEvent(window.windowHandle(), &move);
+                require(window.childAt(local) == layer->viewport() &&
+                            layer->viewport()->underMouse(),
+                        "formatted text must remain the routed hover target");
+                require(layer->viewport()->cursor().shape() == cursor,
+                        "formatted hover must update the viewport cursor without clicking");
+                require(window.windowHandle()->cursor().shape() == cursor,
+                        "formatted hover must update the native cursor without clicking");
+            };
+            hover(point(1), Qt::IBeamCursor);
+            const QPoint blank = layer->mapFromScene(item->mapToScene(QPointF(
+                item->document()->size().width() / 2, item->document()->documentMargin() / 2)));
+            require(Access::draggableAt(window, layer->viewport()->mapTo(&window, blank)),
+                    "the formatted document margin must remain window-drag background");
+            hover(blank, Qt::OpenHandCursor);
+            hover(point(1), Qt::IBeamCursor);
+            require(!item->textCursor().hasSelection(), "hover must not select formatted text");
+            layer->setFocus();
+            require(!Access::draggableAt(window, layer->viewport()->mapTo(&window, point(1))),
+                    "formatted text hit testing must reserve the press for selection");
+            pointer(QEvent::MouseButtonPress, point(1), Qt::LeftButton, Qt::LeftButton);
+            require(!Access::draggableAt(window, window.rect().center()),
+                    "a native formatted-text drag owns the pointer until release");
+            pointer(QEvent::MouseMove, point(7), Qt::NoButton, Qt::LeftButton);
+            pointer(QEvent::MouseButtonRelease, point(7), Qt::LeftButton, Qt::NoButton);
+            const QString selected = item->textCursor().selectedText();
+            require(selected == QStringLiteral("electa"),
+                    "drag must select the character range in text and HTML pins at either DPI");
+            sendShortcut(*layer, Qt::Key_C, Qt::ControlModifier);
+            require(QApplication::clipboard()->text() == selected,
+                    "Ctrl+C copies the hidden formatted selection");
+            Access::copyCurrentViewport(window);
+            require(QApplication::clipboard()->text() == selected,
+                    "pinned Copy uses the hidden formatted selection");
+            const auto copied = Access::automationClipboard(window);
+            require(copied && copied->text() == selected && copied->hasHtml(),
+                    "automation preserves the selected formatted fragment");
+            const auto controlPointer = [&](QEvent::Type type, Qt::MouseButtons held) {
+                const QPoint position = point(1);
+                QMouseEvent event(type, QPointF(position),
+                                  QPointF(layer->viewport()->mapToGlobal(position)), Qt::LeftButton,
+                                  held, Qt::ControlModifier);
+                QApplication::sendEvent(layer->viewport(), &event);
+            };
+            controlPointer(QEvent::MouseButtonPress, Qt::LeftButton);
+            require(Access::exportGesture(window), "Ctrl press still reserves image drag export");
+            controlPointer(QEvent::MouseButtonRelease, Qt::NoButton);
+            require(!Access::exportGesture(window) && item->textCursor().selectedText() == selected,
+                    "Ctrl click releases export ownership without changing text selection");
+            sendShortcut(*layer, Qt::Key_A, Qt::ControlModifier);
+            require(QTextDocumentFragment(item->textCursor()).toPlainText() == decoded->plainText,
+                    "Ctrl+A selects the native formatted document");
+            // A press inside a native selection can begin dragging that selected text.
+            // Collapse it with a click before testing a fresh selection after rotation.
+            pointer(QEvent::MouseButtonPress, point(10), Qt::LeftButton, Qt::LeftButton);
+            pointer(QEvent::MouseButtonRelease, point(10), Qt::LeftButton, Qt::NoButton);
+            require(!item->textCursor().hasSelection(), "a native text click clears Select All");
+            Access::rotateFormattedSelectionOffscreen(window);
+            require(!window.persistenceSnapshot().imageTransform.isIdentity(),
+                    "formatted fixture must apply the real pinned rotation");
+            QApplication::processEvents();
+            auto* content = window.findChild<ScreenshotRecognitionWindow*>(
+                QStringLiteral("screenshotPinnedRecognitionContent"));
+            require(content &&
+                        !content->isOcrBackgroundAt(layer->viewport()->mapTo(content, point(1))),
+                    "rotated text hit testing must agree with the native document layout");
+            hover(point(1), Qt::IBeamCursor);
+            pointer(QEvent::MouseButtonPress, point(1), Qt::LeftButton, Qt::LeftButton);
+            pointer(QEvent::MouseMove, point(7), Qt::NoButton, Qt::LeftButton);
+            pointer(QEvent::MouseButtonRelease, point(7), Qt::LeftButton, Qt::NoButton);
+            require(item->textCursor().selectedText() == selected,
+                    "formatted selection geometry must follow the pinned image rotation");
+            Access::thumbnailForHideTest(window, true);
+            require(!Access::hiddenSelection(window), "thumbnail suspends formatted selection");
+            Access::thumbnailForHideTest(window, false);
+            require(Access::hiddenSelection(window), "expansion restores formatted selection");
+            Access::editSelectionOffscreen(window, true);
+            require(!Access::hiddenSelection(window), "annotation suspends formatted selection");
+            Access::editSelectionOffscreen(window, false);
+            require(Access::hiddenSelection(window), "leaving annotation restores the document");
+            session->activate(ScreenshotRecognitionSessionController::Mode::Text);
+            require(session->active() && !Access::hiddenSelection(window),
+                    "explicitly displayed formatted text remains available");
+            session->deactivate();
+            require(Access::hiddenSelection(window) && !session->active(),
+                    "hiding recognition restores formatted selection under Always");
+            require(settings.setTextSelectionOnRecognitionResults(
+                        QStringLiteral("only_when_displayed")),
+                    "disable hidden formatted selection");
+            require(!Access::hiddenSelection(window), "Only when displayed removes the overlay");
+        }
+    }
+}
+
+void pinnedHiddenFormattedSelectionFollowsImageCoordinates() {
+    using Access = ScreenshotPinnedWindowTestAccess;
+    const snow_shot::storage::PinToScreenSettings settings;
+    const QString prior = settings.textSelectionOnRecognitionResults();
+    const auto restore = qScopeGuard(
+        [&] { static_cast<void>(settings.setTextSelectionOnRecognitionResults(prior)); });
+    require(settings.setTextSelectionOnRecognitionResults(QStringLiteral("always")),
+            "enable hidden formatted selection for image alignment");
+    for (const bool html : {false, true}) {
+        for (const qreal dpr : {1.0, 2.0}) {
+            for (const QSizeF canvasScale : {QSizeF(1, 1), QSizeF(0.5, 0.5), QSizeF(2, 0.75)}) {
+                QMimeData mime;
+                if (html)
+                    mime.setHtml(QStringLiteral("<p><b>Selectable</b> pinned HTML</p>"));
+                else
+                    mime.setText(QStringLiteral("Selectable pinned text"));
+                auto snapshot =
+                    ScreenshotClipboardContentReader::snapshotMimeData(&mime, dpr, Qt::white);
+                require(snapshot.has_value(), "snapshot the image-alignment fixture");
+                auto decoded = decodeScreenshotDropContent(std::move(*snapshot));
+                require(decoded && decoded->isFormattedText(),
+                        "decode the image-alignment fixture");
+                auto config = cachedOcrPinConfig(nullptr);
+                config.recognitionResults = {};
+                config.canvasSourceRect = QRectF(
+                    QPointF(640.25, 360.5), QSizeF(decoded->image.width() * canvasScale.width(),
+                                                   decoded->image.height() * canvasScale.height()));
+                config.imageSource =
+                    ScreenshotImageSource::fromImage(decoded->image, config.canvasSourceRect);
+                config.formattedTextDocument = decoded->formattedDocument;
+                config.formattedPlainText = decoded->plainText;
+                config.formattedTextDevicePixelRatio = decoded->formattedTextDevicePixelRatio;
+                ScreenshotPinnedWindow window;
+                static_cast<void>(Access::hiddenSelectionOffscreen(window, config));
+                auto* layer =
+                    window.findChild<QGraphicsView*>(QStringLiteral("screenshotClipboardText"));
+                require(layer != nullptr, "image alignment requires the hidden document layer");
+                QGraphicsTextItem* item = nullptr;
+                for (auto* candidate : layer->scene()->items())
+                    if (auto* text = dynamic_cast<QGraphicsTextItem*>(candidate))
+                        item = text;
+                require(item != nullptr, "image alignment requires the native text item");
+                const auto block = item->document()->firstBlock();
+                const auto line = block.layout()->lineAt(0);
+                const auto documentPoint = [&](int character) {
+                    return block.layout()->position() +
+                           QPointF(line.cursorToX(character), line.y() + line.height() / 2);
+                };
+                for (int quarterTurns = 0; quarterTurns < 4; ++quarterTurns) {
+                    if (quarterTurns != 0)
+                        Access::rotateFormattedSelectionOffscreen(window);
+                    QApplication::processEvents();
+                    const auto state = window.persistenceSnapshot();
+                    const auto imagePoint = [&](int character) {
+                        const QPointF pixel =
+                            state.imageTransform.map(documentPoint(character) * dpr);
+                        return state.contentCanvasRect.topLeft() +
+                               QPointF(pixel.x() * canvasScale.width(),
+                                       pixel.y() * canvasScale.height());
+                    };
+                    for (const int character : {1, 7})
+                        require(QLineF(item->mapToScene(documentPoint(character)),
+                                       imagePoint(character))
+                                        .length() < 0.000001,
+                                "selection geometry must match backing pixels at every canvas "
+                                "scale and rotation");
+                    const auto pointer = [&](QEvent::Type type, int character,
+                                             Qt::MouseButton button, Qt::MouseButtons buttons) {
+                        const QPoint position = layer->mapFromScene(imagePoint(character));
+                        QMouseEvent event(type, QPointF(position),
+                                          QPointF(layer->viewport()->mapToGlobal(position)), button,
+                                          buttons, Qt::NoModifier);
+                        QApplication::sendEvent(layer->viewport(), &event);
+                    };
+                    window.activateWindow();
+                    layer->setFocus();
+                    item->setTextCursor(QTextCursor(item->document()));
+                    pointer(QEvent::MouseButtonPress, 1, Qt::LeftButton, Qt::LeftButton);
+                    pointer(QEvent::MouseMove, 7, Qt::NoButton, Qt::LeftButton);
+                    pointer(QEvent::MouseButtonRelease, 7, Qt::LeftButton, Qt::NoButton);
+                    require(
+                        item->textCursor().selectedText() == QStringLiteral("electa"),
+                        "dragging the displayed image text must select its exact character range");
+                    const auto copied = Access::automationClipboard(window);
+                    require(copied && copied->text() == QStringLiteral("electa") &&
+                                copied->hasHtml(),
+                            "image-aligned selection must copy the original formatted fragment");
+                }
+            }
+        }
+    }
+}
+
+void pinnedHiddenFormattedBackgroundDoubleClickUsesPinAction() {
+    using Access = ScreenshotPinnedWindowTestAccess;
+    const snow_shot::storage::PinToScreenSettings settings;
+    const QString priorSelection = settings.textSelectionOnRecognitionResults();
+    const QString priorDoubleClick = settings.doubleClickAction();
+    const auto restore = qScopeGuard([&] {
+        static_cast<void>(settings.setTextSelectionOnRecognitionResults(priorSelection));
+        static_cast<void>(settings.setDoubleClickAction(priorDoubleClick));
+    });
+    require(settings.setTextSelectionOnRecognitionResults(QStringLiteral("always")) &&
+                settings.setDoubleClickAction(QStringLiteral("thumbnail_mode")),
+            "enable hidden selection with the thumbnail double-click action");
+    for (const qreal dpr : {1.0, 2.0}) {
+        QMimeData mime;
+        mime.setHtml(QStringLiteral("<p style=\"margin-bottom:50px\">Selectable first paragraph</p>"
+                                    "<p>Second paragraph</p>"));
+        auto snapshot = ScreenshotClipboardContentReader::snapshotMimeData(&mime, dpr, Qt::white);
+        require(snapshot.has_value(), "snapshot paragraphs with a blank gap");
+        auto decoded = decodeScreenshotDropContent(std::move(*snapshot));
+        require(decoded && decoded->isFormattedText(), "decode paragraphs with a blank gap");
+        auto config = cachedOcrPinConfig(nullptr);
+        config.recognitionResults = {};
+        config.canvasSourceRect = QRectF(QPointF(), QSizeF(decoded->image.size()));
+        config.imageSource =
+            ScreenshotImageSource::fromImage(decoded->image, config.canvasSourceRect);
+        config.formattedTextDocument = decoded->formattedDocument;
+        config.formattedPlainText = decoded->plainText;
+        config.formattedTextDevicePixelRatio = decoded->formattedTextDevicePixelRatio;
+        ScreenshotPinnedWindow window;
+        static_cast<void>(Access::hiddenSelectionOffscreen(window, config));
+        QApplication::processEvents();
+        auto* layer = window.findChild<QGraphicsView*>(QStringLiteral("screenshotClipboardText"));
+        auto* content = window.findChild<ScreenshotRecognitionWindow*>(
+            QStringLiteral("screenshotPinnedRecognitionContent"));
+        require(layer && content, "double-click routing requires the hidden formatted layer");
+        QGraphicsTextItem* item = nullptr;
+        for (auto* candidate : layer->scene()->items())
+            if (auto* text = dynamic_cast<QGraphicsTextItem*>(candidate))
+                item = text;
+        require(item != nullptr, "double-click routing requires the native text item");
+        const auto block = item->document()->firstBlock();
+        const auto line = block.layout()->lineAt(0);
+        const QPoint text = layer->mapFromScene(item->mapToScene(
+            block.layout()->position() + QPointF(line.cursorToX(2), line.y() + line.height() / 2)));
+        const auto bounds = item->document()->documentLayout()->blockBoundingRect(block);
+        const auto nextBounds = item->document()->documentLayout()->blockBoundingRect(block.next());
+        const QPoint blank = layer->mapFromScene(item->mapToScene(
+            QPointF(bounds.left() + 20, (bounds.bottom() + nextBounds.top()) / 2)));
+        require(content->isOcrBackgroundAt(layer->viewport()->mapTo(content, blank)),
+                "paragraph gap must be a draggable background inside the text item");
+        QPointer<QWidget> viewport = layer->viewport();
+        const auto doubleClick = [&](QPoint position) {
+            const QPoint global = viewport->mapToGlobal(position);
+            for (const auto type : {QEvent::MouseButtonPress, QEvent::MouseButtonRelease,
+                                    QEvent::MouseButtonDblClick, QEvent::MouseButtonRelease}) {
+                QWidget* target = viewport ? viewport.data() : &window;
+                QMouseEvent event(
+                    type, QPointF(target->mapFromGlobal(global)), QPointF(global), Qt::LeftButton,
+                    type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton,
+                    Qt::NoModifier);
+                QApplication::sendEvent(target, &event);
+                if (position == blank && type == QEvent::MouseButtonPress)
+                    require(!content->textSelectionActive(),
+                            "a host-handled background press must not also start text selection");
+            }
+        };
+        window.activateWindow();
+        layer->setFocus();
+        doubleClick(text);
+        require(item->textCursor().selectedText() == QStringLiteral("Selectable") &&
+                    !window.persistenceSnapshot().thumbnailMode,
+                "text double-click must retain native word selection");
+        content->clearTextSelection();
+        doubleClick(blank);
+        require(
+            window.persistenceSnapshot().thumbnailMode && !Access::hiddenSelection(window),
+            "background double-click must invoke the pin action instead of selecting nearby text");
+    }
+}
+
 void pinnedCopyDefaultsCoverHiddenSelectionAndAutomation() {
     using Access = ScreenshotPinnedWindowTestAccess;
     const snow_shot::storage::TextRecognitionSettings textSettings;
@@ -21764,7 +22116,10 @@ int main(int argc, char* argv[]) {
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--hidden-text-selection-only"))) {
+            pinnedHiddenFormattedBackgroundDoubleClickUsesPinAction();
+            pinnedHiddenFormattedSelectionFollowsImageCoordinates();
             pinnedHiddenTextSelectionOffscreen();
+            pinnedHiddenFormattedTextSelectionOffscreen();
             pinnedCopyDefaultsCoverHiddenSelectionAndAutomation();
             return 0;
         }
