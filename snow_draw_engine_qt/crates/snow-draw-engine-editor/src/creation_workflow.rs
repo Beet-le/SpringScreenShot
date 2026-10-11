@@ -777,19 +777,18 @@ impl Editor {
                 })
             }
             Some(PointerButton::Secondary) => {
-                if self.finalize_arrow_creation_from_points(
+                if !self.finalize_arrow_creation_from_points(
                     document,
                     &state.committed_points,
                     event.modifiers,
                 )? {
-                    Ok(InteractionOutput {
-                        consumed: true,
-                        capture: PointerCaptureCommand::NoChange,
-                        cursor: CursorCommand::Set(CursorStyle::Crosshair),
-                    })
-                } else {
-                    Ok(InteractionOutput::default())
+                    self.cancel_interaction();
                 }
+                Ok(InteractionOutput {
+                    consumed: true,
+                    capture: self.release_capture_command(),
+                    cursor: CursorCommand::Set(CursorStyle::Crosshair),
+                })
             }
             _ => Ok(InteractionOutput::default()),
         }
@@ -1586,6 +1585,86 @@ mod line_creation_tests {
             (segment[0].x - segment[1].x).abs() <= 1e-6
                 || (segment[0].y - segment[1].y).abs() <= 1e-6
         }));
+    }
+
+    #[test]
+    fn secondary_click_finishes_single_node_linear_creation_without_a_transaction() {
+        for (tool, arrow_type) in [
+            (ActiveTool::Arrow, ArrowType::Straight),
+            (ActiveTool::Arrow, ArrowType::Curve),
+            (ActiveTool::Arrow, ArrowType::Elbow),
+            (ActiveTool::Line, ArrowType::Straight),
+            (ActiveTool::Line, ArrowType::Curve),
+        ] {
+            let document = DocumentModel::new();
+            let mut editor = Editor::new(EngineConfig::default()).unwrap();
+            editor.set_surface_size(400, 300).unwrap();
+            editor.set_active_tool(tool).unwrap();
+            editor.state.default_arrow_style.arrow_type = arrow_type;
+            editor.state.default_line_style.arrow_type = arrow_type;
+            let pointer = |event_type, position, button, buttons| {
+                InputEvent::Pointer(PointerEvent {
+                    pointer_id: 4,
+                    event_type,
+                    device: PointerDevice::Mouse,
+                    position,
+                    button,
+                    buttons: PointerButtons(buttons),
+                    modifiers: Modifiers::default(),
+                })
+            };
+            for (event_type, buttons) in [
+                (PointerEventType::Down, PointerButtons::PRIMARY),
+                (PointerEventType::Up, 0),
+            ] {
+                let update = editor
+                    .process_input(
+                        &document,
+                        pointer(
+                            event_type,
+                            Point::new(60.0, 80.0),
+                            Some(PointerButton::Primary),
+                            buttons,
+                        ),
+                    )
+                    .unwrap();
+                assert!(update.interaction.consumed);
+                assert!(update.command.is_none());
+            }
+            assert!(matches!(
+                &editor.state.interaction,
+                InteractionState::CreatingArrow(state)
+                    if state.committed_points.len() == 1
+                        && state.phase == ArrowCreationPhase::AwaitingEndpoint
+            ));
+            editor
+                .process_input(
+                    &document,
+                    pointer(PointerEventType::Move, Point::new(180.0, 120.0), None, 0),
+                )
+                .unwrap();
+            assert!(editor.state.creation_preview.is_some());
+
+            let update = editor
+                .process_input(
+                    &document,
+                    pointer(
+                        PointerEventType::Down,
+                        Point::new(25.0, 180.0),
+                        Some(PointerButton::Secondary),
+                        PointerButtons::SECONDARY,
+                    ),
+                )
+                .unwrap();
+
+            assert!(update.interaction.consumed);
+            assert!(update.command.is_none());
+            assert!(matches!(editor.state.interaction, InteractionState::Idle));
+            assert!(editor.state.creation_preview.is_none());
+            assert!(editor.state.ui.snap_guides.is_empty());
+            assert!(editor.captured_pointer.is_none());
+            assert_eq!(editor.active_tool(), tool);
+        }
     }
 
     #[test]

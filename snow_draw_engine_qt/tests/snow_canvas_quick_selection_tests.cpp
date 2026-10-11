@@ -147,6 +147,66 @@ void linearCreationConsumesContextMenu() {
     }
 }
 
+void singleNodeLinearCreationConsumesContextMenu() {
+    for (const auto tool : {SnowCanvasTool::Arrow, SnowCanvasTool::Line}) {
+        for (const auto type : {SnowCanvasArrowType::Straight, SnowCanvasArrowType::Curve,
+                                SnowCanvasArrowType::Elbow}) {
+            if (tool == SnowCanvasTool::Line && type == SnowCanvasArrowType::Elbow)
+                continue;
+            for (const bool hoverPreview : {false, true}) {
+                SnowCanvasRuntime runtime;
+                SnowCanvasWidget canvas(runtime);
+                canvas.resize(400, 300);
+                canvas.show();
+                QApplication::processEvents();
+                require(canvas.setCanvasTool(tool), "activate single node creation fixture");
+                SnowCanvasShapeStyle style;
+                style.arrowType = type;
+                require(canvas.setCanvasShapeStylePatch(
+                            style, SnowCanvasShapeStylePropertyArrowType,
+                            tool == SnowCanvasTool::Arrow ? SnowCanvasShapeKind::Arrow
+                                                          : SnowCanvasShapeKind::Line),
+                        "set single node creation type");
+                mouse(canvas, QEvent::MouseButtonPress, {60, 80}, Qt::LeftButton, Qt::LeftButton);
+                mouse(canvas, QEvent::MouseButtonRelease, {60, 80}, Qt::LeftButton, Qt::NoButton);
+                if (hoverPreview)
+                    mouse(canvas, QEvent::MouseMove, {180, 120}, Qt::NoButton, Qt::NoButton);
+                require(mouse(canvas, QEvent::MouseButtonPress, {25, 180}, Qt::RightButton,
+                              Qt::RightButton),
+                        "right click finishes creation with only one node");
+                const auto contextMenu = [&]() {
+                    QContextMenuEvent menu(QContextMenuEvent::Mouse, {25, 180},
+                                           canvas.mapToGlobal(QPoint(25, 180)));
+                    menu.setAccepted(false);
+                    QApplication::sendEvent(&canvas, &menu);
+                    require(menu.isAccepted(), "single node cancellation consumes its menu");
+                };
+                if (hoverPreview)
+                    contextMenu();
+                mouse(canvas, QEvent::MouseButtonRelease, {25, 180}, Qt::RightButton, Qt::NoButton);
+                if (!hoverPreview)
+                    contextMenu();
+                require(!runtime.hasDocumentContent() && !canvas.canvasHistoryState().canUndo &&
+                            !canvas.canvasHistoryState().canRedo && canvas.canvasTool() == tool,
+                        "single node cancellation creates no element or history entry");
+                mouse(canvas, QEvent::MouseButtonPress, {25, 180}, Qt::RightButton,
+                      Qt::RightButton);
+                mouse(canvas, QEvent::MouseButtonRelease, {25, 180}, Qt::RightButton, Qt::NoButton);
+                QContextMenuEvent idleMenu(QContextMenuEvent::Mouse, {25, 180},
+                                           canvas.mapToGlobal(QPoint(25, 180)));
+                QApplication::sendEvent(&canvas, &idleMenu);
+                require(!idleMenu.isAccepted(), "the next idle right click is available to host");
+                mouse(canvas, QEvent::MouseButtonPress, {220, 200}, Qt::LeftButton, Qt::LeftButton);
+                mouse(canvas, QEvent::MouseMove, {300, 240}, Qt::NoButton, Qt::LeftButton);
+                mouse(canvas, QEvent::MouseButtonRelease, {300, 240}, Qt::LeftButton, Qt::NoButton);
+                require(runtime.hasDocumentContent() && canvas.undo() &&
+                            !runtime.hasDocumentContent() && !canvas.canvasHistoryState().canUndo,
+                        "a fresh drag after cancellation creates one undoable element");
+            }
+        }
+    }
+}
+
 void textCommitConsumesContextMenu() {
     SnowCanvasRuntime runtime;
     SnowCanvasWidget canvas(runtime);
@@ -179,6 +239,7 @@ int main(int argc, char** argv) {
     strokeSelection();
     textCommitAndMove();
     linearCreationConsumesContextMenu();
+    singleNodeLinearCreationConsumesContextMenu();
     textCommitConsumesContextMenu();
     return 0;
 }
