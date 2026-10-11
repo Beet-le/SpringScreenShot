@@ -20417,6 +20417,153 @@ void pinnedToolbarAnchorsToContentOffscreen() {
         Access::editSelectionOffscreen(window, false);
         window.hide();
     }
+
+    auto config = clickThroughTestConfig(*screen);
+    const QRect logicalContent(bounds.right() - 800, bounds.top() + 200, 500, 220);
+    config.nativeGeometry = ScreenshotGeometryMapper::nativeRectForLogicalRect(
+        logicalContent, bounds, pinnedScreenGeometry(*screen));
+    config.initialWindowSize = config.nativeGeometry.size();
+    QImage image(config.initialWindowSize, QImage::Format_RGB32);
+    image.fill(QColor(42, 84, 126));
+    config.canvasSourceRect = QRectF(image.rect());
+    config.imageSource = ScreenshotImageSource::fromImage(image, config.canvasSourceRect);
+    config.initialBorderVisible = true;
+    config.initialShadowVisible = false;
+    ScreenshotPinnedWindow window;
+    Access::prepareReplacement(window, config);
+    window.show();
+    Access::editSelectionOffscreen(window, true);
+    waitForUi(10);
+    auto* controller = window.findChild<ScreenshotPinnedEditController*>();
+    auto* toolbar = controller ? controller->toolbarWindow() : nullptr;
+    auto* palette = toolbar ? toolbar->palette() : nullptr;
+    require(controller && toolbar && palette && toolbar->isVisible(),
+            "secondary-row placement fixture must show the pinned toolbar");
+    const auto mainRect = [&] {
+        auto* panel = palette->mainPanel();
+        return QRect(panel->mapToGlobal(QPoint()), panel->size());
+    };
+    const auto occupiedRect = [&] {
+        return toolbar->occupiedContentRect().translated(toolbar->contentPosition());
+    };
+    const auto contentRect = [&] {
+        return pinnedLogicalRect(Access::contentGeometry(window), screen);
+    };
+    const auto moveContentTo = [&](const QPoint& position) {
+        const QRect target = ScreenshotGeometryMapper::nativeRectForLogicalRect(
+            QRect(position, contentRect().size()), bounds, pinnedScreenGeometry(*screen));
+        const QPoint delta = target.topLeft() - Access::contentGeometry(window).topLeft();
+        require(Access::moveWindow(window, window.currentNativeGeometry().translated(delta)),
+                "secondary-row fixture must move the pinned content");
+        waitForUi(10);
+    };
+    require(palette->activateDrawingShortcut(QStringLiteral("shape")),
+            "secondary-row fixture must show Shape settings");
+    waitForUi(5);
+    const int mainHeight = mainRect().height();
+    const int fullHeight = occupiedRect().height();
+    require(palette->styleToolbarVisible() && fullHeight > mainHeight,
+            "Shape settings must extend the visible toolbar height");
+    controller->activateResizeWindowTool();
+    const int roomBelow = (mainHeight + fullHeight) / 2;
+    moveContentTo(
+        QPoint(contentRect().left(), bounds.bottom() + 1 - roomBelow - 5 - contentRect().height()));
+    require(!palette->styleToolbarVisible() && bounds.contains(occupiedRect()) &&
+                mainRect().top() == contentRect().top() + contentRect().height() + 5,
+            "the main row must fit below the pin before its settings open");
+    const QRect belowMain = mainRect();
+    const QSize fixedFrame = toolbar->size();
+    require(palette->activateDrawingShortcut(QStringLiteral("shape")),
+            "opening Shape settings must activate the drawing tool");
+    require(bounds.contains(occupiedRect()) && mainRect().bottom() == contentRect().top() - 5 &&
+                palette->stylePanel()->mapToGlobal(QPoint()).y() < mainRect().top(),
+            "opening settings must flip the undragged toolbar above the pin when below overflows");
+    require(toolbar->size() == fixedFrame,
+            "secondary-row placement must react even when the floating frame size is unchanged");
+    controller->activateResizeWindowTool();
+    require(
+        !palette->styleToolbarVisible() && mainRect() == belowMain,
+        "hiding settings must restore the undragged toolbar's preferred position below the pin");
+
+    // A compact user layout makes a longer settings row extend beyond its main row.
+    auto layout = snow_shot::storage::ScreenshotToolbarSettings().layout(
+        snow_shot::storage::ScreenshotToolbarLayoutKind::DrawingTools);
+    for (const auto& position : layout.positions) {
+        for (const auto& item : position) {
+            if (item != QStringLiteral("shape") && item != QStringLiteral("text")) {
+                layout.hidden.append(item);
+            }
+        }
+    }
+    layout.positions = {{QStringLiteral("shape")}, {QStringLiteral("text")}};
+    palette->setToolbarLayout(layout);
+    auto actionLayout = snow_shot::storage::ScreenshotToolbarSettings().layout(
+        snow_shot::storage::ScreenshotToolbarLayoutKind::PinnedActionTools);
+    for (const auto& position : actionLayout.positions) {
+        actionLayout.hidden.append(position);
+    }
+    actionLayout.positions.clear();
+    palette->setActionToolsLayout(actionLayout);
+    moveContentTo(QPoint(bounds.left() + 600, bounds.top() + 200));
+    require(palette->activateDrawingShortcut(QStringLiteral("shape")),
+            "horizontal placement fixture must show Shape settings");
+    waitForUi(5);
+    const int shapeWidth = occupiedRect().width();
+    SnowCanvasStyleToolbarState selectedText;
+    selectedText.source = SnowCanvasStyleToolbarSource::SelectedText;
+    selectedText.selectedElementCount = 1;
+    palette->setStyleToolbarState(selectedText);
+    waitForUi(5);
+    const int textWidth = occupiedRect().width();
+    require(textWidth > shapeWidth && textWidth < bounds.width(),
+            "selected Text settings must provide a longer row that still fits the monitor");
+    SnowCanvasStyleToolbarState selectedShape;
+    selectedShape.source = SnowCanvasStyleToolbarSource::SelectedRectangle;
+    selectedShape.selectedElementCount = 1;
+    palette->setStyleToolbarState(selectedShape);
+    const int anchorX = bounds.left() + (shapeWidth + textWidth) / 2;
+    moveContentTo(QPoint(anchorX - contentRect().width(), contentRect().top()));
+    const QRect shorterMain = mainRect();
+    require(bounds.contains(occupiedRect()) &&
+                shorterMain.right() == contentRect().left() + contentRect().width(),
+            "shorter settings must fit at the pin's unclamped right-edge anchor");
+    palette->setStyleToolbarState(selectedText);
+    require(palette->activeTool() == ScreenshotToolPalette::Tool::Shape &&
+                bounds.contains(occupiedRect()) && occupiedRect().left() == bounds.left() &&
+                mainRect().left() > shorterMain.left() && mainRect().top() == shorterMain.top(),
+            "selected-element settings growth must move the undragged toolbar inside the monitor");
+    palette->setStyleToolbarState(selectedShape);
+    require(mainRect() == shorterMain,
+            "shortening selected-element settings must restore the automatic content anchor");
+    require(palette->activateDrawingShortcut(QStringLiteral("text")),
+            "horizontal placement fixture must activate Text settings");
+    require(bounds.contains(occupiedRect()) && occupiedRect().left() == bounds.left() &&
+                mainRect().left() > shorterMain.left(),
+            "switching drawing tools must also reposition a longer row inside the monitor");
+
+    controller->activateResizeWindowTool();
+    toolbar->moveContentTo(toolbar->contentPosition() + QPoint(47, -33));
+    toolbar->dragFinished();
+    const QPoint manuallyPlacedMain = mainRect().topLeft();
+    for (const auto& tool : {QStringLiteral("shape"), QStringLiteral("text")}) {
+        require(palette->activateDrawingShortcut(tool),
+                "manually placed toolbar must permit changing drawing tools");
+        require(mainRect().topLeft() == manuallyPlacedMain,
+                "showing or replacing settings must preserve the dragged main-row position");
+        controller->activateResizeWindowTool();
+        require(mainRect().topLeft() == manuallyPlacedMain,
+                "hiding settings must preserve the dragged main-row position");
+    }
+    Access::editSelectionOffscreen(window, false);
+    Access::editSelectionOffscreen(window, true);
+    waitForUi(10);
+    toolbar = controller->toolbarWindow();
+    palette = toolbar ? toolbar->palette() : nullptr;
+    require(toolbar && palette && toolbar->isVisible() &&
+                mainRect().topLeft() != manuallyPlacedMain && bounds.contains(occupiedRect()),
+            "reopening pinned drawing must clear manual placement and restore automatic bounds");
+    Access::editSelectionOffscreen(window, false);
+    window.hide();
 }
 
 void pinnedShadowStateAndMarginsOffscreen() {

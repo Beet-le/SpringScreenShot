@@ -32,6 +32,7 @@
 #include <QMouseEvent>
 #include <QPointer>
 #include <QScreen>
+#include <QScopedValueRollback>
 #include <QTimer>
 #include <QWheelEvent>
 #include <QWindow>
@@ -538,6 +539,13 @@ void ScreenshotPinnedEditController::ensureToolbar() {
     if (ScreenshotToolPaletteHost* host = m_toolbarWindow->paletteHost()) {
         connect(host, &ScreenshotToolPaletteHost::dragStarted, this,
                 [this](const QPoint&) { markToolbarManuallyPlaced(); });
+        // Secondary rows can grow without changing the fixed window frame or main-row anchor.
+        // Recompute automatic placement from the host's committed visible content.
+        connect(host, &ScreenshotToolPaletteHost::visibleContentChanged, this, [this]() {
+            if (m_editMode && !m_manuallyPlaced) {
+                updatePlacement();
+            }
+        });
     }
 
     emit toolbarCreated(m_toolbarWindow);
@@ -707,6 +715,7 @@ void ScreenshotPinnedEditController::updatePlacement() {
     if (m_toolbarWindow == nullptr || m_updatingPlacement || m_nativeWindowInteractionActive) {
         return;
     }
+    const QScopedValueRollback<bool> updatingPlacement(m_updatingPlacement, true);
 
     const QRect logicalBounds = placementLogicalBounds();
     const QRect physicalBounds = placementPhysicalBounds();
@@ -742,9 +751,7 @@ void ScreenshotPinnedEditController::updatePlacement() {
         m_toolbarWindow->resetPhysicalSizeInvariant();
     }
 
-    m_updatingPlacement = true;
     m_toolbarWindow->moveContentTo(m_globalContentPosition);
-    m_updatingPlacement = false;
     if (m_toolbarWindow->isVisible()) {
         raiseToolbar();
     }
