@@ -40,12 +40,12 @@ struct SnowCanvasTextEdit {
 struct SnowCanvasSerialNumberEdit {
     SnowCanvasSerialNumberStyle style;
     quint32 properties = 0;
-    bool creationDefaults = true;
 };
 struct SnowCanvasFilterEdit {
     SnowCanvasFilterStyle style;
     quint32 properties = 0;
     bool pen = false;
+    bool bothFamilies = false;
 };
 struct SnowCanvasWatermarkEdit {
     SnowCanvasWatermarkConfig style;
@@ -63,15 +63,18 @@ struct SnowCanvasDistanceEdit {
     SnowCanvasDistanceStyle style;
     quint32 properties = 0;
 };
+// Routing is independent of remembering preferences: every successful user edit
+// merges its explicit properties into the corresponding creation style.
+enum class SnowCanvasStyleEditTarget { Creation, Selection };
 struct SnowCanvasAngleStyleEdit {
     SnowCanvasAngleStyle style;
     quint32 properties = 0;
-    bool creationDefaults = true;
+    SnowCanvasStyleEditTarget target = SnowCanvasStyleEditTarget::Creation;
 };
 struct SnowCanvasMagnifierEdit {
     SnowCanvasMagnifierStyle style;
     quint32 properties = 0;
-    bool creationDefaults = true;
+    SnowCanvasStyleEditTarget target = SnowCanvasStyleEditTarget::Creation;
 };
 using SnowCanvasStyleEdit =
     std::variant<SnowCanvasShapeEdit, SnowCanvasTextEdit, SnowCanvasSerialNumberEdit,
@@ -79,16 +82,14 @@ using SnowCanvasStyleEdit =
                  SnowCanvasBrushEraserEdit, SnowCanvasDistanceEdit, SnowCanvasAngleStyleEdit,
                  SnowCanvasMagnifierEdit>;
 
-inline bool snowCanvasStyleEditUpdatesCreationDefaults(const SnowCanvasStyleEdit& edit) {
+inline quint32 snowCanvasCreationStyleProperties(const SnowCanvasStyleEdit& edit) {
     return std::visit(
-        [](const auto& patch) {
+        [](const auto& patch) -> quint32 {
             using T = std::decay_t<decltype(patch)>;
-            if constexpr (std::is_same_v<T, SnowCanvasSerialNumberEdit> ||
-                          std::is_same_v<T, SnowCanvasAngleStyleEdit> ||
-                          std::is_same_v<T, SnowCanvasMagnifierEdit>)
-                return patch.creationDefaults;
+            if constexpr (std::is_same_v<T, SnowCanvasSerialNumberEdit>)
+                return patch.properties & ~SnowCanvasSerialNumberStyleMixedNumber;
             else
-                return true;
+                return patch.properties;
         },
         edit);
 }
@@ -317,19 +318,24 @@ inline void snowCanvasMergeStyleEdit(SnowCanvasStyleDefaults& defaults,
             } else if constexpr (std::is_same_v<T, SnowCanvasDistanceEdit>) {
                 snowCanvasMergeStyle(defaults.distance, patch.style, patch.properties);
             } else if constexpr (std::is_same_v<T, SnowCanvasAngleStyleEdit>) {
-                if (patch.creationDefaults)
-                    snowCanvasMergeStyle(defaults.angle, patch.style, patch.properties);
+                snowCanvasMergeStyle(defaults.angle, patch.style, patch.properties);
             } else if constexpr (std::is_same_v<T, SnowCanvasMagnifierEdit>) {
-                if (patch.creationDefaults)
-                    snowCanvasMergeStyle(defaults.magnifier, patch.style, patch.properties);
+                snowCanvasMergeStyle(defaults.magnifier, patch.style, patch.properties);
             } else if constexpr (std::is_same_v<T, SnowCanvasTextEdit>) {
                 snowCanvasMergeStyle(defaults.text, patch.style, patch.properties);
             } else if constexpr (std::is_same_v<T, SnowCanvasSerialNumberEdit>) {
-                if (patch.creationDefaults)
-                    snowCanvasMergeStyle(defaults.serialNumber, patch.style, patch.properties);
+                // The next number is owned by the document session, not a style preference.
+                snowCanvasMergeStyle(defaults.serialNumber, patch.style,
+                                     snowCanvasCreationStyleProperties(edit));
             } else if constexpr (std::is_same_v<T, SnowCanvasFilterEdit>) {
-                snowCanvasMergeStyle(patch.pen ? defaults.penFilter : defaults.rectangleFilter,
-                                     patch.style, patch.properties);
+                if (patch.pen || patch.bothFamilies)
+                    snowCanvasMergeStyle(defaults.penFilter, patch.style, patch.properties);
+                if (!patch.pen || patch.bothFamilies)
+                    snowCanvasMergeStyle(defaults.rectangleFilter, patch.style,
+                                         patch.bothFamilies
+                                             ? patch.properties &
+                                                   ~SnowCanvasFilterStylePropertyStrokeWidth
+                                             : patch.properties);
                 if ((patch.properties & SnowCanvasFilterStylePropertyStrength) != 0) {
                     defaults.penFilter.strength = patch.style.strength;
                     defaults.rectangleFilter.strength = patch.style.strength;

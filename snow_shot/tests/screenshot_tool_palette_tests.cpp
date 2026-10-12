@@ -11618,7 +11618,7 @@ void magnifierControlsPatchIndependentProperties() {
         require(magnifier != nullptr, "magnifier controls must emit magnifier style patches");
         emitted = magnifier->style;
         properties = magnifier->properties;
-        creationDefaults = magnifier->creationDefaults;
+        creationDefaults = magnifier->target == SnowCanvasStyleEditTarget::Creation;
         palette.rememberStyleEdit(edit);
         return true;
     });
@@ -11728,7 +11728,7 @@ void magnifierControlsPatchIndependentProperties() {
                 "leader endpoint choices must commit only the endpoint");
     }
     wheel(ratio(), 120);
-    const auto remembered = palette.creationStyleDefaults().magnifier;
+    auto remembered = palette.creationStyleDefaults().magnifier;
     require(palette.creationStyleDefaults().rectangle == options.styleDefaults.rectangle,
             "magnifier edits must leave the saved Shape style independent");
     require(palette.creationStyleDefaults().arrow == options.styleDefaults.arrow,
@@ -11758,30 +11758,31 @@ void magnifierControlsPatchIndependentProperties() {
             "mixed selected magnifiers must clear their controls and preserve creation defaults");
     verifyLayout();
     ratio()->click();
+    remembered.arrowRatio = 1.0;
     require(!creationDefaults && emitted.arrowRatio == 1.0 &&
                 properties == SnowCanvasMagnifierStylePropertyArrowRatio &&
                 ratio()->valueText() == QStringLiteral("1.0") &&
                 factor()->valueText() == QStringLiteral("-×") && shapes()->checkedId() == -1 &&
                 palette.creationStyleDefaults().magnifier == remembered,
-            "selected proportion edits clear only their mixed flag and preserve saved defaults");
+            "selected proportion edits clear their mixed flag and remember only that property");
     factor()->click();
-    require(
-        !creationDefaults && emitted.factor == 2 &&
-            properties == SnowCanvasMagnifierStylePropertyFactor && shapes()->checkedId() == -1 &&
-            palette.creationStyleDefaults().magnifier == remembered,
-        "a selected factor edit must preserve the other mixed properties and creation defaults");
+    require(!creationDefaults && emitted.factor == 2 &&
+                properties == SnowCanvasMagnifierStylePropertyFactor &&
+                shapes()->checkedId() == -1 &&
+                palette.creationStyleDefaults().magnifier == remembered,
+            "a selected factor edit remembers its factor and preserves the other mixed properties");
     require(radius()->valueText() == QStringLiteral("-"),
             "mixed magnifier corner values must be shown in the control");
     radius()->click();
-    require(
-        !creationDefaults && radius()->valueText() == QStringLiteral("6") &&
-            emitted.cornerRadii == SnowCanvasCornerRadii{6, 6, 6, 6} &&
-            properties == SnowCanvasMagnifierStylePropertyCornerRadius &&
-            shapes()->checkedId() == -1 && palette.creationStyleDefaults().magnifier == remembered,
-        "selected corner edits must clear only their mixed flag and preserve creation defaults");
+    require(!creationDefaults && radius()->valueText() == QStringLiteral("6") &&
+                emitted.cornerRadii == SnowCanvasCornerRadii{6, 6, 6, 6} &&
+                properties == SnowCanvasMagnifierStylePropertyCornerRadius &&
+                shapes()->checkedId() == -1 &&
+                palette.creationStyleDefaults().magnifier == remembered,
+            "selected corner edits remember their corners and preserve the other mixed properties");
 }
 
-void magnifierStylesPersistAndIgnoreSelectedEdits() {
+void magnifierStylesPersistSelectedEdits() {
     using namespace snow_shot::presentation;
     const auto original = screenshotCanvasToolStyleDefaults();
     const auto restore =
@@ -11817,9 +11818,10 @@ void magnifierStylesPersistAndIgnoreSelectedEdits() {
     selected.factor = 7;
     selected.arrowRatio = 0.5;
     require(persistScreenshotCanvasStyleEdit(
-                SnowCanvasMagnifierEdit{selected, SnowCanvasMagnifierStyleAllProperties, false}) &&
-                screenshotCanvasToolStyleDefaults().magnifier == saved.magnifier,
-            "selected magnifier style edits must never replace creation preferences");
+                SnowCanvasMagnifierEdit{selected, SnowCanvasMagnifierStyleAllProperties,
+                                        SnowCanvasStyleEditTarget::Selection}) &&
+                screenshotCanvasToolStyleDefaults().magnifier == selected,
+            "selected magnifier style edits must remember their explicit properties");
     auto& storage = snow_shot::storage::ApplicationStorage::instance();
     require(storage.configuration().flushNow().success, "flush magnifier preferences to disk");
     snow_shot::storage::ConfigurationStore reopened(
@@ -11930,10 +11932,12 @@ void magnifierStyleWheelsPersistCompletedSteps() {
                 SnowCanvasStyleToolbarSource::SelectedMagnifier,
             "select the magnifier before editing its factor through pinned style wheels");
     wheel(100, 0);
+    auto expectedSelected = saved;
+    expectedSelected.magnifier.factor = 2.5;
     require(commits == 3 && canvas.canvasMagnifierStyle().factor == 2.5 &&
-                screenshotCanvasToolStyleDefaults() == saved &&
-                palette.creationStyleDefaults().magnifier == saved.magnifier,
-            "selected magnifier wheel edits must preserve saved creation preferences");
+                screenshotCanvasToolStyleDefaults() == expectedSelected &&
+                palette.creationStyleDefaults().magnifier == expectedSelected.magnifier,
+            "selected magnifier wheel edits remember only the completed factor change");
     require(canvas.setCanvasTool(SnowCanvasTool::Select),
             "select pinned magnifiers through the Select tool");
     palette.setActiveTool(ScreenshotToolPalette::Tool::Select);
@@ -11967,7 +11971,7 @@ void magnifierStyleWheelsPersistCompletedSteps() {
                     beforeSelectedWheel.value(QStringLiteral("opacity")) &&
                 screenshotCanvasToolStyleDefaults() == saved &&
                 palette.creationStyleDefaults().magnifier == saved.magnifier,
-            "pinned Select-tool wheels must adjust factors without changing opacity or defaults");
+            "pinned Select-tool wheels remember factors while preserving other preferences");
     wheel(30, 0);
     const auto beforeModifiedWheel = magnifier();
     for (const auto modifiers : {Qt::ControlModifier, Qt::AltModifier, Qt::MetaModifier}) {
@@ -12254,10 +12258,13 @@ void angleSettingsAndWheelPreserveIndependentProperties() {
             "mixed selected values should clear controls without replacing creation defaults");
     const int beforeResolving = edits;
     units->button(static_cast<int>(SnowCanvasAngleUnit::Radians))->click();
-    require(edits == beforeResolving + 1 && properties == bit(SnowCanvasAngleStyleProperty::Unit) &&
-                !decimals->currentValue().isValid() &&
-                palette.creationStyleDefaults().angle == remembered,
-            "resolving one mixed property should preserve the other mixed controls");
+    auto expectedSelectedAngle = remembered;
+    expectedSelectedAngle.unit = SnowCanvasAngleUnit::Radians;
+    require(
+        edits == beforeResolving + 1 && properties == bit(SnowCanvasAngleStyleProperty::Unit) &&
+            !decimals->currentValue().isValid() &&
+            palette.creationStyleDefaults().angle == expectedSelectedAngle,
+        "resolving one mixed property remembers only that property and preserves mixed controls");
     const auto creationBeforeWheel = palette.creationStyleDefaults().angle;
     QVector<QPair<int, bool>> adjustments;
     QObject::connect(&palette, &ScreenshotToolPalette::angleValueAdjustmentRequested,
@@ -13867,13 +13874,13 @@ void serialNumberNumericTypeEditorPreservesValuesAndRetranslates() {
         const auto* serial = std::get_if<SnowCanvasSerialNumberEdit>(&edit);
         require(serial && serial->properties == SnowCanvasSerialNumberStyleMixedNumericType,
                 "numeric choice commits only the format property");
-        require(!serial->creationDefaults,
-                "selected numeric format edits target only the document");
         require(serial->style.number == 27, "format edits keep the exact decimal value");
         state.serialNumberStyle = serial->style;
         palette.rememberStyleEdit(edit);
-        require(palette.creationStyleDefaults() == creationDefaults,
-                "selected numeric format edits preserve standalone palette creation defaults");
+        auto expected = creationDefaults;
+        expected.serialNumber.numericType = serial->style.numericType;
+        require(palette.creationStyleDefaults() == expected,
+                "selected numeric format edits remember only the format property");
         ++changes;
         return true;
     });
@@ -18286,7 +18293,7 @@ int main(int argc, char** argv) {
     if (application.arguments().contains(QStringLiteral("--magnifier-only"))) {
         magnifierLayoutMigrationPreservesCustomization();
         magnifierControlsPatchIndependentProperties();
-        magnifierStylesPersistAndIgnoreSelectedEdits();
+        magnifierStylesPersistSelectedEdits();
         magnifierStyleWheelsPersistCompletedSteps();
         disabledSelectionOpacityRejectsWheelSteps();
         magnifierControlsRetranslateAndRenderPreviews();
@@ -18629,7 +18636,7 @@ int main(int argc, char** argv) {
     distanceSettingsExposeIndependentPropertiesAndHoverWheel();
     magnifierLayoutMigrationPreservesCustomization();
     magnifierControlsPatchIndependentProperties();
-    magnifierStylesPersistAndIgnoreSelectedEdits();
+    magnifierStylesPersistSelectedEdits();
     magnifierStyleWheelsPersistCompletedSteps();
     disabledSelectionOpacityRejectsWheelSteps();
     magnifierControlsRetranslateAndRenderPreviews();

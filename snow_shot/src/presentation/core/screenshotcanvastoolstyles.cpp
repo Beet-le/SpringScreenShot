@@ -627,7 +627,7 @@ bool persistScreenshotCanvasToolStyles(const SnowCanvasStyleDefaults& defaults) 
 }
 
 bool persistScreenshotCanvasStyleEdit(const SnowCanvasStyleEdit& edit) {
-    if (!snowCanvasStyleEditUpdatesCreationDefaults(edit))
+    if (snowCanvasCreationStyleProperties(edit) == 0)
         return true;
     if (!storage::ApplicationStorage::instance().isInitialized())
         return false;
@@ -668,7 +668,8 @@ void applyScreenshotCanvasToolStyles(SnowCanvasWidget& canvas,
     static_cast<void>(canvas.setCanvasDistanceStyle(defaults.distance));
     static_cast<void>(canvas.setCanvasAngleStyle(defaults.angle));
     static_cast<void>(canvas.applyStyleEdit(
-        SnowCanvasMagnifierEdit{defaults.magnifier, SnowCanvasMagnifierStyleAllProperties, true}));
+        SnowCanvasMagnifierEdit{defaults.magnifier, SnowCanvasMagnifierStyleAllProperties,
+                                SnowCanvasStyleEditTarget::Creation}));
     applyShape(defaults.line, kLineShapeProperties, SnowCanvasShapeKind::Line);
     applyShape(defaults.freeDraw, kFreeDrawShapeProperties, SnowCanvasShapeKind::FreeDraw);
     applyShape(defaults.rectangleHighlight, kRectangleHighlightProperties,

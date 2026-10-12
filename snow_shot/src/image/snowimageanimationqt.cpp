@@ -24,7 +24,7 @@ void reportError(QString* error, const char* detail) {
                                : QString{};
 }
 
-int SNOW_SHOT_IMAGE_CODEC_CALL cancelledCallback(void* context) noexcept {
+int SNOW_SHOT_IMAGE_CODEC_CALL animationCancelledCallback(void* context) noexcept {
     const auto* check = static_cast<const AnimationCancellationCheck*>(context);
     try {
         return check && *check && (*check)() ? 1 : 0;
@@ -165,9 +165,10 @@ AnimationDecoder& AnimationDecoder::operator=(AnimationDecoder&&) noexcept = def
 
 bool AnimationDecoder::advance(QString* error, AnimationCancellationCheck cancelled) {
     std::array<char, kErrorCapacity> detail{};
-    const int result = impl_ ? snow_shot_animation_advance(impl_->decoder, cancelledCallback,
-                                                           &cancelled, detail.data(), detail.size())
-                             : -1;
+    const int result = impl_
+                           ? snow_shot_animation_advance(impl_->decoder, animationCancelledCallback,
+                                                         &cancelled, detail.data(), detail.size())
+                           : -1;
     reportError(error, detail.data());
     return result == 1;
 }
@@ -242,7 +243,7 @@ decodeAnimationSource(const QByteArray& encoded, QString* error,
     std::array<char, kErrorCapacity> detail{};
     impl->decoder = snow_shot_animation_open(
         reinterpret_cast<const uint8_t*>(impl->encoded.constData()),
-        static_cast<uint64_t>(impl->encoded.size()), cancelledCallback, &cancelled,
+        static_cast<uint64_t>(impl->encoded.size()), animationCancelledCallback, &cancelled,
         admissionCallback, &allocationCheck, &impl->info, detail.data(), detail.size());
     if (!impl->decoder) {
         reportError(error, detail.data());
@@ -275,9 +276,9 @@ decodeAnimationSource(const QByteArray& encoded, QString* error,
     // pixels can be shared directly with the display.
     const qint64 displayBytes =
         source->encoded.size() + 2 * source->firstFrame.sizeInBytes() + 8LL * 1024LL * 1024LL;
-    if (cancelledCallback(&cancelled) != 0 ||
+    if (animationCancelledCallback(&cancelled) != 0 ||
         admissionCallback(&allocationCheck, static_cast<uint64_t>(displayBytes)) == 0 ||
-        cancelledCallback(&cancelled) != 0) {
+        animationCancelledCallback(&cancelled) != 0) {
         reportError(error, "Animation display preparation was not admitted.");
         return {};
     }
@@ -287,7 +288,7 @@ decodeAnimationSource(const QByteArray& encoded, QString* error,
             ? snowCanvasColorConvertedImage(source->firstFrame, srgb,
                                             QImage::Format_ARGB32_Premultiplied)
             : snowCanvasConvertImage(source->firstFrame, QImage::Format_ARGB32_Premultiplied);
-    if (source->firstDisplayFrame.isNull() || cancelledCallback(&cancelled) != 0) {
+    if (source->firstDisplayFrame.isNull() || animationCancelledCallback(&cancelled) != 0) {
         reportError(error, "Animation display preparation failed.");
         return {};
     }
@@ -317,7 +318,7 @@ openAnimationDecoder(std::shared_ptr<const ScreenshotAnimationSource> source, QS
     std::array<char, kErrorCapacity> detail{};
     impl->decoder = snow_shot_animation_open(
         reinterpret_cast<const uint8_t*>(impl->source->encoded.constData()),
-        static_cast<uint64_t>(impl->source->encoded.size()), cancelledCallback, &cancelled,
+        static_cast<uint64_t>(impl->source->encoded.size()), animationCancelledCallback, &cancelled,
         admissionCallback, &impl->allocationCheck, &impl->info, detail.data(), detail.size());
     if (!impl->decoder) {
         reportError(error, detail.data());

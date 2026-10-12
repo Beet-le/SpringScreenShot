@@ -232,6 +232,7 @@ enum class SnowCanvasFilterType {
 };
 
 // Capability flag returned alongside filterStyleMixed property bits.
+constexpr quint32 SnowCanvasFilterStyleMixedContainsBothFamilies = 1u << 30;
 constexpr quint32 SnowCanvasFilterStyleMixedContainsSmartErase = 1u << 31;
 
 enum SnowCanvasFilterStyleProperty : quint32 {

@@ -1003,10 +1003,11 @@ ScreenshotToolPalette::ScreenshotToolPalette(const Options& options, QWidget* pa
                     static_cast<void>(submitStyleEdit(SnowCanvasDistanceEdit{style, properties}));
                 },
                 [this](const SnowCanvasAngleStyle& style, quint32 properties) {
-                    const bool creationDefaults =
-                        !m_styleControls->styleState().showingSelectedAngle;
-                    static_cast<void>(submitStyleEdit(
-                        SnowCanvasAngleStyleEdit{style, properties, creationDefaults}));
+                    const auto target = m_styleControls->styleState().showingSelectedAngle
+                                            ? SnowCanvasStyleEditTarget::Selection
+                                            : SnowCanvasStyleEditTarget::Creation;
+                    static_cast<void>(
+                        submitStyleEdit(SnowCanvasAngleStyleEdit{style, properties, target}));
                 },
                 [this](const SnowCanvasTextStyle& style, quint32 properties) {
                     if (!submitStyleEdit(SnowCanvasTextEdit{style, properties}))
@@ -1016,11 +1017,7 @@ ScreenshotToolPalette::ScreenshotToolPalette(const Options& options, QWidget* pa
                 [this]() { emit textStylePopupInteractionBegan(); },
                 [this]() { emit textStylePopupInteractionEnded(); },
                 [this](const SnowCanvasSerialNumberStyle& style, quint32 properties) {
-                    const bool creationDefaults =
-                        m_styleControls->styleState().m_styleSource !=
-                        SnowCanvasStyleToolbarSource::SelectedSerialNumber;
-                    if (!submitStyleEdit(
-                            SnowCanvasSerialNumberEdit{style, properties, creationDefaults}))
+                    if (!submitStyleEdit(SnowCanvasSerialNumberEdit{style, properties}))
                         return;
                     emit serialNumberStyleChanged(style);
                 },
@@ -1050,7 +1047,9 @@ ScreenshotToolPalette::ScreenshotToolPalette(const Options& options, QWidget* pa
                 [this](const SnowCanvasMagnifierStyle& style, quint32 properties) {
                     static_cast<void>(submitStyleEdit(SnowCanvasMagnifierEdit{
                         style, properties,
-                        !m_styleControls->styleState().showingSelectedMagnifier}));
+                        m_styleControls->styleState().showingSelectedMagnifier
+                            ? SnowCanvasStyleEditTarget::Selection
+                            : SnowCanvasStyleEditTarget::Creation}));
                 },
             },
             m_styleDefaults, options.watermarkTemplateClock);
@@ -1372,8 +1371,13 @@ void ScreenshotToolPalette::rememberStyleEdit(const SnowCanvasStyleEdit& edit) {
 
 void ScreenshotToolPalette::notifyFilterStyleChanged(const SnowCanvasFilterStyle& style,
                                                      quint32 properties) {
-    const bool pen = m_activeTool == Tool::PenFilter;
-    if (!submitStyleEdit(SnowCanvasFilterEdit{style, properties, pen}))
+    const auto source = m_styleControls->styleState().filterStyleSource;
+    const bool pen = source == SnowCanvasStyleToolbarSource::SelectedPenFilter ||
+                     source == SnowCanvasStyleToolbarSource::DefaultPenFilter ||
+                     (!source.has_value() && m_activeTool == Tool::PenFilter);
+    const bool bothFamilies = (m_styleControls->styleState().filterStyleMixed &
+                               SnowCanvasFilterStyleMixedContainsBothFamilies) != 0;
+    if (!submitStyleEdit(SnowCanvasFilterEdit{style, properties, pen, bothFamilies}))
         return;
     emit filterStyleChanged(style, properties);
 }

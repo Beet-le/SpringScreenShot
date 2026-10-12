@@ -264,9 +264,16 @@ impl Editor {
     pub fn magnifier_style(&self, document: &DocumentModel) -> MagnifierStyle {
         self.state
             .selection
-            .ids
-            .iter()
-            .find_map(|id| document.magnifier(*id).ok().map(MagnifierStyle::from_data))
+            .primary
+            .and_then(|id| document.magnifier(id).ok())
+            .or_else(|| {
+                self.state
+                    .selection
+                    .ids
+                    .iter()
+                    .find_map(|id| document.magnifier(*id).ok())
+            })
+            .map(MagnifierStyle::from_data)
             .unwrap_or(self.state.default_magnifier_style)
     }
     pub fn magnifier_style_mixed(&self, document: &DocumentModel) -> u32 {
@@ -281,6 +288,8 @@ impl Editor {
         };
         values.fold(0, |mask, value| mask | first.differences(value))
     }
+    /// Creation-only patches keep the selection untouched. Both targets remember
+    /// the requested properties for subsequent magnifiers.
     pub fn set_magnifier_style_patch(
         &mut self,
         document: &DocumentModel,
@@ -295,6 +304,8 @@ impl Editor {
         if !creation_defaults && !self.has_homogeneous_magnifier_selection(document) {
             return Err(ErrorCode::InvalidState);
         }
+        let next_default = self.state.default_magnifier_style.merged(style, properties);
+        validate_magnifier_style(next_default)?;
         if properties & MAGNIFIER_STYLE_PROPERTY_FACTOR != 0 {
             self.magnifier_wheel = None;
         }
@@ -311,17 +322,13 @@ impl Editor {
                     transaction.update_magnifier(*id, next);
                 }
             }
-        } else {
-            let next = self.state.default_magnifier_style.merged(style, properties);
-            validate_magnifier_style(next)?;
-            self.state.default_magnifier_style = next;
-            if let Some(ElementCreationPreview::Magnifier(value)) = &mut self.state.creation_preview
-            {
-                let previous = *value;
-                next.apply(value);
-                if *value != previous {
-                    self.bump_scene_state_revision();
-                }
+        }
+        self.state.default_magnifier_style = next_default;
+        if let Some(ElementCreationPreview::Magnifier(value)) = &mut self.state.creation_preview {
+            let previous = *value;
+            next_default.apply(value);
+            if *value != previous {
+                self.bump_scene_state_revision();
             }
         }
         if transaction.is_empty() {

@@ -5461,6 +5461,13 @@ SnowCanvasStyleDefaults ScreenshotToolPaletteStyleControls::creationStyleDefault
 void ScreenshotToolPaletteStyleControls::rememberStyleEdit(const SnowCanvasStyleEdit& edit) {
     auto defaults = creationStyleDefaults();
     snowCanvasMergeStyleEdit(defaults, edit);
+    if (const auto* serial = std::get_if<SnowCanvasSerialNumberEdit>(&edit);
+        serial != nullptr && (serial->properties & SnowCanvasSerialNumberStyleMixedNumber) != 0 &&
+        m_state.m_styleSource != SnowCanvasStyleToolbarSource::SelectedSerialNumber) {
+        // Standalone palettes retain their current sequence value. Bound palettes
+        // receive the selected number's successor from the runtime on deselection.
+        defaults.serialNumber.number = serial->style.number;
+    }
     const ScreenshotToolPaletteStyleState remembered(defaults);
     m_state.m_creationRectangleStyle = remembered.m_creationRectangleStyle;
     m_state.m_creationLineStyle = remembered.m_creationLineStyle;

@@ -293,12 +293,8 @@ fn interior_angle_annotations_expose_type_and_reject_full_turn() {
 }
 
 #[test]
-fn angle_selected_style_patches_preserve_creation_defaults() {
+fn angle_selected_style_patches_update_creation_defaults() {
     let (mut engine, viewport) = setup();
-    let defaults = engine
-        .viewport_style_toolbar_state(viewport)
-        .unwrap()
-        .angle_style;
     let id = create(&mut engine, viewport);
     engine
         .set_viewport_active_tool(viewport, ActiveTool::Select)
@@ -329,7 +325,7 @@ fn angle_selected_style_patches_preserve_creation_defaults() {
             .viewport_style_toolbar_state(viewport)
             .unwrap()
             .angle_style,
-        defaults
+        style
     );
 }
 
@@ -889,7 +885,7 @@ fn angle_owned_pair_survives_duplicate_template_session_and_delete_history() {
 }
 
 #[test]
-fn angle_style_patch_updates_first_ray_preview_and_preserves_defaults_in_selected_mixed_styles() {
+fn angle_style_patch_updates_first_ray_preview_and_remembers_only_selected_properties() {
     let (mut engine, viewport) = setup();
     click(&mut engine, viewport, Point::new(100.0, 0.0));
     pointer(
@@ -948,6 +944,9 @@ fn angle_style_patch_updates_first_ray_preview_and_preserves_defaults_in_selecte
     assert_eq!(label(&engine, ids[1]).text, "1.571 rad");
     assert_eq!(engine.model.arrow(ids[0]).unwrap().stroke_width, 2.0);
     assert_eq!(engine.model.arrow(ids[1]).unwrap().stroke_width, 4.0);
+    assert!(engine.undo().unwrap());
+    assert_eq!(label(&engine, ids[0]).text, "90\u{00b0}");
+    assert!(engine.redo().unwrap());
     engine
         .reset_editing_state_with_viewport_changes(viewport)
         .unwrap();
@@ -959,7 +958,28 @@ fn angle_style_patch_updates_first_ray_preview_and_preserves_defaults_in_selecte
             .viewport_style_toolbar_state(viewport)
             .unwrap()
             .angle_style,
-        creation
+        AngleStyle {
+            unit: AngleUnit::Radians,
+            ..creation
+        }
+    );
+    click(&mut engine, viewport, Point::new(-100.0, 150.0));
+    click(&mut engine, viewport, Point::new(-200.0, 150.0));
+    click(&mut engine, viewport, Point::new(-200.0, 50.0));
+    let next = engine
+        .model
+        .paint_order()
+        .iter()
+        .copied()
+        .rev()
+        .find(|id| engine.model.arrow(*id).is_ok_and(|arrow| arrow.is_angle()))
+        .unwrap();
+    assert_eq!(
+        AngleStyle::from_arrow(engine.model.arrow(next).unwrap()).unwrap(),
+        AngleStyle {
+            unit: AngleUnit::Radians,
+            ..creation
+        }
     );
 }
 

@@ -355,7 +355,7 @@ void abiAndStyleNotifications() {
             "angle mixed state notifies controls");
 }
 
-void selectedStyleKeepsCreationDefaults() {
+void selectedStyleUpdatesCreationDefaults() {
     SnowCanvasRuntime runtime;
     SnowCanvasWidget canvas(runtime);
     prepare(canvas);
@@ -366,17 +366,45 @@ void selectedStyleKeepsCreationDefaults() {
     auto selected = canvas.canvasAngleStyle();
     selected.unit = SnowCanvasAngleUnit::Radians;
     selected.decimalPlaces = 2;
+    selected.strokeWidth = 11;
     const auto properties = static_cast<quint32>(SnowCanvasAngleStyleProperty::Unit) |
                             static_cast<quint32>(SnowCanvasAngleStyleProperty::DecimalPlaces);
-    require(!canvas.commitStyleEdit(SnowCanvasAngleStyleEdit{selected, properties, true}) &&
+    require(!canvas.commitStyleEdit(SnowCanvasAngleStyleEdit{
+                selected, properties, SnowCanvasStyleEditTarget::Creation}) &&
                 label(runtime) == QStringLiteral("90°"),
             "stale creation-default editor cannot mutate a newly selected angle");
-    require(canvas.commitStyleEdit(SnowCanvasAngleStyleEdit{selected, properties, false}) &&
+    require(canvas.commitStyleEdit(SnowCanvasAngleStyleEdit{
+                selected, properties, SnowCanvasStyleEditTarget::Selection}) &&
                 label(runtime) == QStringLiteral("1.57 rad"),
             "edit selected angle format");
     click(canvas, {30, 30});
-    require(canvas.setCanvasTool(SnowCanvasTool::Angle) && canvas.canvasAngleStyle() == defaults,
-            "selected style edits preserve future angle defaults");
+    auto expected = defaults;
+    expected.unit = selected.unit;
+    expected.decimalPlaces = selected.decimalPlaces;
+    require(
+        canvas.setCanvasTool(SnowCanvasTool::Angle) && canvas.canvasAngleStyle() == expected,
+        "selected style edits update touched future defaults and preserve untouched properties");
+    const auto ownersBeforeCreation = records(runtime, QStringLiteral("Arrow")).size();
+    click(canvas, {240, 270});
+    click(canvas, {80, 270});
+    click(canvas, {80, 200});
+    const auto owners = records(runtime, QStringLiteral("Arrow"));
+    require(
+        owners.size() == ownersBeforeCreation + 1 &&
+            owners.last().toObject().value(QStringLiteral("stroke_width")).toDouble() ==
+                defaults.strokeWidth &&
+            owners.last()
+                    .toObject()
+                    .value(QStringLiteral("angle"))
+                    .toObject()
+                    .value(QStringLiteral("unit"))
+                    .toString() == QStringLiteral("radians") &&
+            records(runtime, QStringLiteral("Text"))
+                    .last()
+                    .toObject()
+                    .value(QStringLiteral("text"))
+                    .toString() == QStringLiteral("1.57 rad"),
+        "the next angle uses the selected format edit without copying an untouched stroke width");
 }
 
 void arcAndLabelSelectAndEraseTheOwnedPair() {
@@ -652,7 +680,7 @@ int main(int argc, char** argv) {
     directedArcExportAndFullTurn();
     interiorAngleCreationSelectionAndExport();
     abiAndStyleNotifications();
-    selectedStyleKeepsCreationDefaults();
+    selectedStyleUpdatesCreationDefaults();
     heterogeneousStyleEditChangesOnlyCreationDefaults();
     arcAndLabelSelectAndEraseTheOwnedPair();
     equalSideCreationAndEditing();

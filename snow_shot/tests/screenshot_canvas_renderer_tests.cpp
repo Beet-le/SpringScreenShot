@@ -6782,7 +6782,7 @@ void overlayMagnifierWheelPreservesCreationStyle() {
                          require(patch != nullptr &&
                                      patch->properties == SnowCanvasMagnifierStylePropertyFactor,
                                  "overlay wheels must commit only the magnifier factor");
-                         creationDefaults = patch->creationDefaults;
+                         creationDefaults = patch->target == SnowCanvasStyleEditTarget::Creation;
                          ++committedEdits;
                      });
     sink.wheelReceived = [&](const QWheelEvent& event) {
@@ -6908,8 +6908,8 @@ void overlayMagnifierWheelPreservesCreationStyle() {
     require(factorIs(3.1) && committedEdits == 9 && !creationDefaults && opacitySteps == 0,
             "selected overlay factor adjustment must resume after modified input");
     require(canvas->resetEditingState() && canvas->setCanvasTool(SnowCanvasTool::Magnifier) &&
-                factorIs(2.8),
-            "selected overlay wheel edits must preserve the future magnifier factor");
+                factorIs(3.1),
+            "selected overlay wheel edits must update the future magnifier factor");
 }
 
 void overlayAngleWheel() {

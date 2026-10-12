@@ -624,7 +624,7 @@ fn magnifier_corner_handle_edits_geometry_with_undo_and_redo() {
 }
 
 #[test]
-fn magnifier_mixed_corner_patch_preserves_factors_and_defaults() {
+fn magnifier_mixed_corner_patch_remembers_corners_and_preserves_unedited_factors() {
     let (mut engine, viewport, first_id) = fixture(HighlightShape::Rectangle, 2.0);
     let first = *engine.model.magnifier(first_id).unwrap();
     let second_id = engine.model.peek_next_element_id();
@@ -647,7 +647,7 @@ fn magnifier_mixed_corner_patch_preserves_factors_and_defaults() {
         )
         .unwrap();
     let snapshot = serde_json::from_value(serde_json::json!({
-        "selectedIds": [first_id, second_id], "primaryId": first_id
+        "selectedIds": [first_id, second_id], "primaryId": second_id
     }))
     .unwrap();
     engine
@@ -655,6 +655,7 @@ fn magnifier_mixed_corner_patch_preserves_factors_and_defaults() {
         .restore_history_selection(&engine.model, &snapshot);
     engine.refresh_all_viewports().unwrap();
     let state = engine.viewport_style_toolbar_state(viewport).unwrap();
+    assert_eq!(state.magnifier_style.factor, 3.0);
     assert_eq!(
         state.magnifier_style_mixed,
         MAGNIFIER_STYLE_PROPERTY_CORNER_RADII | MAGNIFIER_STYLE_PROPERTY_FACTOR
@@ -701,8 +702,28 @@ fn magnifier_mixed_corner_patch_preserves_factors_and_defaults() {
             .unwrap()
             .magnifier_style
             .corner_radii,
-        CornerRadii::splat(6.0)
+        CornerRadii::splat(8.0)
     );
+    engine
+        .set_viewport_active_tool(viewport, ActiveTool::Magnifier)
+        .unwrap();
+    drag(
+        &mut engine,
+        viewport,
+        Point::new(-250.0, 100.0),
+        Point::new(-150.0, 180.0),
+    );
+    let next = engine
+        .model
+        .paint_order()
+        .iter()
+        .copied()
+        .rev()
+        .find(|id| engine.model.magnifier(*id).is_ok())
+        .unwrap();
+    let next = engine.model.magnifier(next).unwrap();
+    assert_eq!(next.corner_radii, CornerRadii::splat(8.0));
+    assert_eq!(next.factor, 2.0);
 }
 
 #[test]
@@ -793,7 +814,7 @@ fn magnifier_mixed_arrow_ratio_patch_preserves_other_properties_and_history() {
             .unwrap()
             .magnifier_style
             .arrow_ratio,
-        1.0
+        0.5
     );
 }
 
@@ -917,7 +938,7 @@ fn magnifier_lens_cancel_does_not_commit_and_z_order_remains_intact() {
 }
 
 #[test]
-fn magnifier_selected_styles_defaults_and_sessions_remain_independent() {
+fn magnifier_creation_only_patches_preserve_selection_and_sessions_remember_styles() {
     let (mut engine, viewport, id) = fixture(HighlightShape::Diamond, 2.0);
     select(&mut engine, viewport, id);
     let style = MagnifierStyle {
@@ -970,6 +991,18 @@ fn magnifier_selected_styles_defaults_and_sessions_remain_independent() {
     restored
         .set_viewport_active_tool(rv, ActiveTool::Magnifier)
         .unwrap();
+    assert_eq!(
+        restored
+            .viewport_style_toolbar_state(rv)
+            .unwrap()
+            .magnifier_style,
+        MagnifierStyle {
+            factor: 8.0,
+            corner_radii: CornerRadii::splat(3.0),
+            arrow_ratio: 0.5,
+            ..style
+        }
+    );
     assert_eq!(
         restored
             .viewport_style_toolbar_state(rv)
@@ -1643,7 +1676,7 @@ fn magnifier_single_resize_reflects_shape_corners_with_fixed_lens_center() {
 }
 
 #[test]
-fn magnifier_wheel_clamps_factor_without_changing_border_camera_or_defaults() {
+fn magnifier_wheel_clamps_and_remembers_factor_without_changing_border_or_camera() {
     let (mut engine, viewport, id) = fixture(HighlightShape::Ellipse, 2.0);
     select(&mut engine, viewport, id);
     let before = *engine.model.magnifier(id).unwrap();
@@ -1687,7 +1720,7 @@ fn magnifier_wheel_clamps_factor_without_changing_border_camera_or_defaults() {
             .unwrap()
             .magnifier_style
             .factor,
-        2.0
+        1.0
     );
     assert_eq!(
         engine.set_viewport_magnifier_style_patch(
@@ -1707,7 +1740,7 @@ fn magnifier_wheel_clamps_factor_without_changing_border_camera_or_defaults() {
             .unwrap()
             .magnifier_style
             .factor,
-        2.0
+        1.0
     );
 }
 

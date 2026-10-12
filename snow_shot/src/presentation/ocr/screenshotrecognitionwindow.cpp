@@ -170,10 +170,10 @@ class ScreenshotFormattedTextItem final : public QGraphicsTextItem {
                             QRectF(origin + QPointF(std::min(leading, trailing), line.y()),
                                    QSizeF(std::abs(trailing - leading), line.height())));
                     }
-                    const int next = boundaries.toNextBoundary();
-                    if (next <= start)
+                    const qsizetype next = boundaries.toNextBoundary();
+                    if (next <= start || next >= end)
                         break;
-                    start = next;
+                    start = static_cast<int>(next);
                 }
             }
             painter->setPen(Qt::NoPen);

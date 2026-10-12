@@ -271,12 +271,8 @@ impl Editor {
             }
             updates.push(SelectionArrowState { id, arrow: next });
         }
-        let edits_selection = !updates.is_empty();
-        if !edits_selection {
-            self.state.default_angle_style = next_default;
-        }
-        if !edits_selection
-            && let Some(ElementCreationPreview::Arrow(arrow)) = &mut self.state.creation_preview
+        self.state.default_angle_style = next_default;
+        if let Some(ElementCreationPreview::Arrow(arrow)) = &mut self.state.creation_preview
             && self.state.active_tool == crate::ActiveTool::Angle
         {
             let previous = arrow.clone();

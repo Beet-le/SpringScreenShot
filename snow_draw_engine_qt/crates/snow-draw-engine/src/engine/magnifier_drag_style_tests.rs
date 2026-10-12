@@ -157,7 +157,7 @@ fn magnifier_wheel_during_drag_updates_preview_commit_and_history() {
                 .unwrap()
                 .magnifier_style
                 .factor,
-            2.0
+            2.1
         );
     }
 }

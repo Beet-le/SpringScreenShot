@@ -47,7 +47,7 @@ ScreenshotStyleBinding::ScreenshotStyleBinding(ScreenshotToolPalette& palette,
              save](const SnowCanvasStyleEdit& edit) {
                 if (source == nullptr)
                     return;
-                if (!snowCanvasStyleEditUpdatesCreationDefaults(edit))
+                if (snowCanvasCreationStyleProperties(edit) == 0)
                     return;
                 source->rememberStyleEdit(edit);
                 if (replicate)

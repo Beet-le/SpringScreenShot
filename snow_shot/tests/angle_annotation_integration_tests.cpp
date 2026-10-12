@@ -49,9 +49,10 @@ void persistedAngleDefaultsAreIndependent() {
                 restored.distance == initial.distance,
             "angle property patches preserve independent arrow and distance defaults");
     require(persistScreenshotCanvasStyleEdit(SnowCanvasAngleStyleEdit{
-                initial.angle, static_cast<quint32>(SnowCanvasAngleStyleProperty::All), false}) &&
-                screenshotCanvasToolStyleDefaults().angle == changed,
-            "selected angle edits never overwrite creation defaults");
+                initial.angle, static_cast<quint32>(SnowCanvasAngleStyleProperty::All),
+                SnowCanvasStyleEditTarget::Selection}) &&
+                screenshotCanvasToolStyleDefaults().angle == initial.angle,
+            "selected angle edits remember the same properties as creation edits");
     SnowCanvasWidget canvas;
     applyScreenshotCanvasToolStyles(canvas, restored);
     require(canvas.setCanvasTool(SnowCanvasTool::Angle) && canvas.canvasAngleStyle() == changed,

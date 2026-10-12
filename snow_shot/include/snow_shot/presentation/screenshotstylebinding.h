@@ -12,7 +12,7 @@ class ScreenshotToolPalette;
 
 namespace snow_shot::presentation {
 
-// One binding per editor; only successful user commits are remembered and saved.
+// One binding per editor; only successful appearance commits are remembered and saved.
 class ScreenshotStyleBinding final : public QObject {
   public:
     using Save = std::function<bool(const SnowCanvasStyleEdit&)>;

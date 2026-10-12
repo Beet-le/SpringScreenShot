@@ -338,11 +338,12 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
             flags |= properties.value(it.key());
         const bool creationDefaults =
             state.source != SnowCanvasStyleToolbarSource::SelectedMagnifier;
+        const auto editTarget = creationDefaults ? SnowCanvasStyleEditTarget::Creation
+                                                 : SnowCanvasStyleEditTarget::Selection;
         if constexpr (requires {
-                          canvas.commitStyleEdit(
-                              SnowCanvasMagnifierEdit{style, flags, creationDefaults});
+                          canvas.commitStyleEdit(SnowCanvasMagnifierEdit{style, flags, editTarget});
                       })
-            return canvas.commitStyleEdit(SnowCanvasMagnifierEdit{style, flags, creationDefaults});
+            return canvas.commitStyleEdit(SnowCanvasMagnifierEdit{style, flags, editTarget});
         else
             return canvas.setMagnifierStyleFromToolbar(style, flags, creationDefaults);
     } else if (target == QStringLiteral("angle")) {
@@ -366,12 +367,14 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
         quint32 flags = 0;
         for (auto it = patch.begin(); it != patch.end(); ++it)
             flags |= properties.value(it.key());
-        const bool creationDefaults = state.source != SnowCanvasStyleToolbarSource::SelectedAngle;
+        const auto editTarget = state.source == SnowCanvasStyleToolbarSource::SelectedAngle
+                                    ? SnowCanvasStyleEditTarget::Selection
+                                    : SnowCanvasStyleEditTarget::Creation;
         if constexpr (requires {
                           canvas.commitStyleEdit(
-                              SnowCanvasAngleStyleEdit{style, flags, creationDefaults});
+                              SnowCanvasAngleStyleEdit{style, flags, editTarget});
                       })
-            return canvas.commitStyleEdit(SnowCanvasAngleStyleEdit{style, flags, creationDefaults});
+            return canvas.commitStyleEdit(SnowCanvasAngleStyleEdit{style, flags, editTarget});
         else
             return canvas.setAngleStyleFromToolbar(style, flags);
     } else if (target == QStringLiteral("distance")) {

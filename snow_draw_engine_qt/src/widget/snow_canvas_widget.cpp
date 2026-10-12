@@ -1188,11 +1188,12 @@ bool SnowCanvasWidget::Impl::adjustMagnifierFromWheel(const QWheelEvent& event) 
     if (before.magnifierStyle.factor != after.magnifierStyle.factor ||
         ((before.magnifierStyleMixed ^ after.magnifierStyleMixed) &
          SnowCanvasMagnifierStylePropertyFactor) != 0) {
-        if (!notifyStateChange(
-                &SnowCanvasWidget::styleEditCommitted,
-                SnowCanvasMagnifierEdit{
-                    after.magnifierStyle, SnowCanvasMagnifierStylePropertyFactor,
-                    before.source != SnowCanvasStyleToolbarSource::SelectedMagnifier})) {
+        if (!notifyStateChange(&SnowCanvasWidget::styleEditCommitted,
+                               SnowCanvasMagnifierEdit{
+                                   after.magnifierStyle, SnowCanvasMagnifierStylePropertyFactor,
+                                   before.source == SnowCanvasStyleToolbarSource::SelectedMagnifier
+                                       ? SnowCanvasStyleEditTarget::Selection
+                                       : SnowCanvasStyleEditTarget::Creation})) {
             return false;
         }
     }
@@ -2685,7 +2686,7 @@ bool SnowCanvasWidget::Impl::withPresentationUpdate(const std::function<bool()>&
     ScopedChangedViewportList changedViewports;
     bool succeeded = false;
     {
-        const int previousDepth = presentationUpdateDepth++;
+        const auto previousDepth = presentationUpdateDepth++;
         const auto depth = qScopeGuard([lifetime, previousDepth] {
             if (lifetime) {
                 lifetime->m_impl->presentationUpdateDepth = previousDepth;
@@ -3726,15 +3727,16 @@ bool SnowCanvasWidget::Impl::applyStyleEdit(const SnowCanvasStyleEdit& edit) {
                 const bool editsSelection =
                     canvasStyleToolbarState().source == SnowCanvasStyleToolbarSource::SelectedAngle;
                 // A delayed editor patch must still target the same kind of style.
-                if (patch.creationDefaults == editsSelection)
+                if ((patch.target == SnowCanvasStyleEditTarget::Selection) != editsSelection)
                     return false;
                 return widget.setCanvasAngleStyle(patch.style, patch.properties);
             } else if constexpr (std::is_same_v<T, SnowCanvasMagnifierEdit>) {
-                if (!patch.creationDefaults && canvasStyleToolbarState().source !=
-                                                   SnowCanvasStyleToolbarSource::SelectedMagnifier)
+                if (patch.target == SnowCanvasStyleEditTarget::Selection &&
+                    canvasStyleToolbarState().source !=
+                        SnowCanvasStyleToolbarSource::SelectedMagnifier)
                     return false;
                 return setCanvasMagnifierStyle(patch.style, patch.properties,
-                                               patch.creationDefaults);
+                                               patch.target == SnowCanvasStyleEditTarget::Creation);
             } else if constexpr (std::is_same_v<T, SnowCanvasTextEdit>) {
                 return setCanvasTextStyle(patch.style, patch.properties);
             } else if constexpr (std::is_same_v<T, SnowCanvasSerialNumberEdit>) {
@@ -3775,9 +3777,19 @@ bool SnowCanvasWidget::Impl::rememberDraftStyle(const SnowCanvasStyleEdit& edit)
 
 bool SnowCanvasWidget::commitStyleEdit(const SnowCanvasStyleEdit& edit) {
     auto committedEdit = edit;
-    if (auto* serial = std::get_if<SnowCanvasSerialNumberEdit>(&committedEdit)) {
-        serial->creationDefaults =
-            canvasStyleToolbarState().source != SnowCanvasStyleToolbarSource::SelectedSerialNumber;
+    if (auto* filter = std::get_if<SnowCanvasFilterEdit>(&committedEdit)) {
+        const auto state = canvasStyleToolbarState();
+        if (state.source == SnowCanvasStyleToolbarSource::SelectedPenFilter ||
+            state.source == SnowCanvasStyleToolbarSource::SelectedRectangleFilter) {
+            filter->pen = state.source == SnowCanvasStyleToolbarSource::SelectedPenFilter;
+            filter->bothFamilies =
+                (state.filterStyleMixed & SnowCanvasFilterStyleMixedContainsBothFamilies) != 0;
+            if (!filter->pen && !filter->bothFamilies)
+                filter->properties &= ~SnowCanvasFilterStylePropertyStrokeWidth;
+        } else {
+            filter->pen = canvasTool() == SnowCanvasTool::PenFilter;
+            filter->bothFamilies = false;
+        }
     }
     if (!interactionEnabled() || !applyStyleEdit(committedEdit) ||
         !m_impl->rememberDraftStyle(committedEdit))

@@ -932,22 +932,37 @@ impl Editor {
     }
 
     pub fn filter_style(&self, document: &DocumentModel) -> FilterStyle {
-        let selected = self.state.selection.ids.iter().find_map(|id| {
-            if let Ok(filter) = document.pen_filter(*id) {
-                return Some(FilterStyle {
-                    filter_type: filter.filter_type,
-                    strength: filter.strength,
-                    opacity: filter.opacity,
-                    stroke_width: filter.stroke_width,
-                });
-            }
-            document.filter(*id).ok().map(|filter| FilterStyle {
+        let pen_style = |id| {
+            document.pen_filter(id).ok().map(|filter| FilterStyle {
+                filter_type: filter.filter_type,
+                strength: filter.strength,
+                opacity: filter.opacity,
+                stroke_width: filter.stroke_width,
+            })
+        };
+        let rectangle_style = |id| {
+            document.filter(id).ok().map(|filter| FilterStyle {
                 filter_type: filter.filter_type,
                 strength: filter.strength,
                 opacity: filter.opacity,
                 stroke_width: 2.0,
             })
-        });
+        };
+        // Match the family and primary element chosen by the toolbar source.
+        let selected = self
+            .state
+            .selection
+            .primary
+            .and_then(|id| pen_style(id).or_else(|| rectangle_style(id)))
+            .or_else(|| self.state.selection.ids.iter().copied().find_map(pen_style))
+            .or_else(|| {
+                self.state
+                    .selection
+                    .ids
+                    .iter()
+                    .copied()
+                    .find_map(rectangle_style)
+            });
         selected.unwrap_or_else(|| {
             if self.state.active_tool == ActiveTool::PenFilter {
                 let filter = &self.state.default_pen_filter;
@@ -1005,7 +1020,25 @@ impl Editor {
         let Some(first) = selected.first() else {
             return 0;
         };
-        // Capability bit accompanies the mixed-property bits for heterogeneous selections.
+        // Capability bits identify affected families as well as Smart Erase,
+        // independently of which filter is the primary selection.
+        let contains_both_filters = if self
+            .state
+            .selection
+            .ids
+            .iter()
+            .any(|id| document.filter(*id).is_ok())
+            && self
+                .state
+                .selection
+                .ids
+                .iter()
+                .any(|id| document.pen_filter(*id).is_ok())
+        {
+            crate::FILTER_STYLE_MIXED_CONTAINS_BOTH_FILTERS
+        } else {
+            0
+        };
         let contains_smart_erase = if selected
             .iter()
             .any(|f| f.filter_type == snow_draw_engine_document::CanvasFilterType::SmartErase)
@@ -1014,10 +1047,9 @@ impl Editor {
         } else {
             0
         };
-        selected
-            .iter()
-            .skip(1)
-            .fold(contains_smart_erase, |mixed, filter| {
+        selected.iter().skip(1).fold(
+            contains_both_filters | contains_smart_erase,
+            |mixed, filter| {
                 mixed
                     | if filter.filter_type != first.filter_type {
                         FILTER_STYLE_PROPERTY_TYPE
@@ -1039,7 +1071,8 @@ impl Editor {
                     } else {
                         0
                     }
-            })
+            },
+        )
     }
 
     fn validate_filter_style_patch(style: FilterStyle, properties: u32) -> Result<(), ErrorCode> {
@@ -1157,10 +1190,22 @@ impl Editor {
             self.set_filter_creation_style(style, properties, tool)?;
             return Ok(None);
         }
-        let strength = FilterData::normalized_strength(style.strength);
-        if properties & FILTER_STYLE_PROPERTY_STRENGTH != 0 {
-            self.update_shared_filter_strength(strength);
+        // The property mask updates each affected family's creation style as
+        // well as its selected elements, without adopting untouched properties.
+        if selected_ids
+            .iter()
+            .any(|id| document.pen_filter(*id).is_ok())
+        {
+            self.set_filter_creation_style(style, properties, ActiveTool::PenFilter)?;
         }
+        if selected_ids.iter().any(|id| document.filter(*id).is_ok()) {
+            self.set_filter_creation_style(
+                style,
+                properties & !FILTER_STYLE_PROPERTY_STROKE_WIDTH,
+                ActiveTool::RectangleFilter,
+            )?;
+        }
+        let strength = FilterData::normalized_strength(style.strength);
         let mut transaction = Transaction::new("update filter style");
         for id in selected_ids {
             if let Ok(current) = document.pen_filter(id) {
@@ -2197,6 +2242,7 @@ impl Editor {
             style,
             properties,
             changed_properties & SERIAL_NUMBER_STYLE_MIXED_NUMBER != 0,
+            changed_properties | (properties & mixed),
         )
     }
 
@@ -2211,6 +2257,7 @@ impl Editor {
             style,
             properties,
             properties & SERIAL_NUMBER_STYLE_MIXED_NUMBER != 0,
+            properties,
         )
     }
 
@@ -2220,6 +2267,7 @@ impl Editor {
         style: SerialNumberStyle,
         properties: u32,
         explicit_number: bool,
+        creation_properties: u32,
     ) -> Result<Option<EditorCommand>, ErrorCode> {
         validate_serial_number_style(&style)?;
         if properties == 0 || properties & !SERIAL_NUMBER_STYLE_ALL_PROPERTIES != 0 {
@@ -2228,9 +2276,9 @@ impl Editor {
         // Full element styles carry a number during appearance edits. Only an
         // explicit number edit may replace a creation counter or restart it.
         let creation_properties = if explicit_number {
-            properties
+            creation_properties
         } else {
-            properties & !SERIAL_NUMBER_STYLE_MIXED_NUMBER
+            creation_properties & !SERIAL_NUMBER_STYLE_MIXED_NUMBER
         };
         let has_selected_serial_number = self
             .state
@@ -2272,11 +2320,15 @@ impl Editor {
                 }
             }
 
+            self.update_default_serial_number_style(
+                &style,
+                creation_properties & !SERIAL_NUMBER_STYLE_MIXED_NUMBER,
+            );
             if transaction.is_empty() {
                 return Ok(None);
             }
-            // Selection appearance stays in the document. Explicit value edits also
-            // continue the affected creation sequences after the edited numbers.
+            // Value edits continue their numeric sequence instead of treating
+            // the selected number as a fresh creation start.
             if explicit_number {
                 self.continue_serial_number_sequences_after_value_edits(document, &transaction);
             }
@@ -3432,6 +3484,214 @@ mod tests {
             assert_eq!(changed.number, original.number);
             assert_eq!(changed.color, original.color);
             assert_eq!(changed.font_family, original.font_family);
+        }
+    }
+
+    #[test]
+    fn selected_serial_size_edits_remember_only_size_and_preserve_creation_counter() {
+        for use_patch in [false, true] {
+            let mut document = DocumentModel::new();
+            let id = document.allocate_element_id();
+            let selected = SerialNumberData {
+                number: 99,
+                font_size: 52.0,
+                color: ColorRgba8 {
+                    r: 7,
+                    g: 8,
+                    b: 9,
+                    a: 255,
+                },
+                font_family: Some("Selected font".to_owned()),
+                ..Default::default()
+            };
+            let mut insert = Transaction::new("import differently styled serial");
+            insert.insert_serial_number(id, ElementMeta::default(), selected);
+            document.apply_transaction(insert).unwrap();
+            let mut editor = Editor::new(Default::default()).unwrap();
+            editor.state.default_serial_number.number = 7;
+            let mut expected = editor.state.default_serial_number.clone();
+            expected.font_size = 32.0;
+            expected.diameter = resolve_serial_number_style_diameter(expected.number, 32.0);
+            editor.set_selection_state(vec![id], Some(id));
+            let mut style = editor.serial_number_style(&document);
+            style.font_size = 32.0;
+            let command = if use_patch {
+                editor.set_serial_number_style_patch(
+                    &document,
+                    style,
+                    SERIAL_NUMBER_STYLE_MIXED_FONT_SIZE,
+                )
+            } else {
+                editor.set_serial_number_style(&document, style)
+            }
+            .unwrap();
+            let Some(EditorCommand::ApplyTransaction(command)) = command else {
+                panic!("a selected size change must edit the document")
+            };
+            document.apply_transaction(command.transaction).unwrap();
+            assert_eq!(editor.state.default_serial_number, expected);
+            assert_eq!(document.serial_number(id).unwrap().number, 99);
+            // A named property still becomes the preference if the selected
+            // element already has that value and needs no history operation.
+            editor.state.default_serial_number.font_size = 24.0;
+            let style = editor.serial_number_style(&document);
+            assert!(
+                editor
+                    .set_serial_number_style_patch(
+                        &document,
+                        style,
+                        SERIAL_NUMBER_STYLE_MIXED_FONT_SIZE,
+                    )
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(editor.state.default_serial_number, expected);
+        }
+    }
+
+    #[test]
+    fn selected_filter_patches_remember_only_properties_of_affected_families() {
+        use snow_draw_engine_document::{CanvasFilterType, PenFilterData};
+        for (rectangle, pen) in [(true, false), (false, true), (true, true)] {
+            let mut document = DocumentModel::new();
+            let mut insert = Transaction::new("import filters");
+            let mut ids = Vec::new();
+            if rectangle {
+                let id = document.allocate_element_id();
+                insert.insert_filter(
+                    id,
+                    ElementMeta::default(),
+                    FilterData {
+                        filter_type: CanvasFilterType::GaussianBlur,
+                        opacity: 0.2,
+                        ..Default::default()
+                    },
+                );
+                ids.push(id);
+            }
+            if pen {
+                let id = document.allocate_element_id();
+                insert.insert_pen_filter(
+                    id,
+                    ElementMeta::default(),
+                    PenFilterData {
+                        filter_type: CanvasFilterType::Brightness,
+                        opacity: 0.3,
+                        stroke_width: 12.0,
+                        width: 10.0,
+                        height: 10.0,
+                        ..Default::default()
+                    },
+                );
+                ids.push(id);
+            }
+            document.apply_transaction(insert).unwrap();
+            let mut editor = Editor::new(Default::default()).unwrap();
+            let original_rectangle = editor.state.default_filter;
+            let original_pen = editor.state.default_pen_filter.clone();
+            let original_rectangle_stroke = editor.state.default_filter_stroke_width;
+            editor.set_active_tool(ActiveTool::Select).unwrap();
+            editor.set_selection_state(ids.clone(), ids.first().copied());
+            assert_eq!(
+                editor.filter_style_mixed(&document)
+                    & crate::FILTER_STYLE_MIXED_CONTAINS_BOTH_FILTERS,
+                if rectangle && pen {
+                    crate::FILTER_STYLE_MIXED_CONTAINS_BOTH_FILTERS
+                } else {
+                    0
+                }
+            );
+            if rectangle && pen {
+                editor.set_selection_state(ids.clone(), ids.last().copied());
+                assert_eq!(
+                    editor.style_toolbar_source(&document),
+                    StyleToolbarSource::SelectedPenFilter
+                );
+                assert_eq!(editor.filter_style(&document).stroke_width, 12.0);
+                assert_eq!(
+                    editor.filter_style(&document).filter_type,
+                    CanvasFilterType::Brightness
+                );
+                editor.set_selection_state(ids.clone(), ids.first().copied());
+                assert_eq!(
+                    editor.style_toolbar_source(&document),
+                    StyleToolbarSource::SelectedRectangleFilter
+                );
+                assert_eq!(
+                    editor.filter_style(&document).filter_type,
+                    CanvasFilterType::GaussianBlur
+                );
+            }
+            let mut style = editor.filter_style(&document);
+            style.opacity = 0.7;
+            style.stroke_width = 19.0;
+            let Some(EditorCommand::ApplyTransaction(command)) = editor
+                .set_filter_style(
+                    &document,
+                    style,
+                    FILTER_STYLE_PROPERTY_OPACITY | FILTER_STYLE_PROPERTY_STROKE_WIDTH,
+                )
+                .unwrap()
+            else {
+                panic!("selected filters must change")
+            };
+            document.apply_transaction(command.transaction).unwrap();
+            assert_eq!(
+                editor.state.default_filter.opacity,
+                if rectangle {
+                    0.7
+                } else {
+                    original_rectangle.opacity
+                }
+            );
+            assert_eq!(
+                editor.state.default_pen_filter.opacity,
+                if pen { 0.7 } else { original_pen.opacity }
+            );
+            assert_eq!(
+                editor.state.default_pen_filter.stroke_width,
+                if pen { 19.0 } else { original_pen.stroke_width }
+            );
+            assert_eq!(
+                editor.state.default_filter_stroke_width,
+                original_rectangle_stroke
+            );
+            assert_eq!(
+                editor.state.default_filter.filter_type,
+                original_rectangle.filter_type
+            );
+            assert_eq!(
+                editor.state.default_pen_filter.filter_type,
+                original_pen.filter_type
+            );
+            style.filter_type = CanvasFilterType::Inversion;
+            let Some(EditorCommand::ApplyTransaction(command)) = editor
+                .set_filter_style(&document, style, FILTER_STYLE_PROPERTY_TYPE)
+                .unwrap()
+            else {
+                panic!("selected filter types must change")
+            };
+            document.apply_transaction(command.transaction).unwrap();
+            assert_eq!(
+                editor.state.default_filter.filter_type,
+                if rectangle {
+                    CanvasFilterType::Inversion
+                } else {
+                    original_rectangle.filter_type
+                }
+            );
+            assert_eq!(
+                editor.state.default_pen_filter.filter_type,
+                if pen {
+                    CanvasFilterType::Inversion
+                } else {
+                    original_pen.filter_type
+                }
+            );
+            assert_eq!(editor.active_tool(), ActiveTool::Select);
+            assert_eq!(editor.selected_ids(), ids);
+            editor.set_selection_state(Vec::new(), None);
+            assert_eq!(editor.filter_style_mixed(&document), 0);
         }
     }
 

@@ -125,12 +125,14 @@ void magnifierStylePatchesAndSynchronization() {
 
     SnowCanvasStyleDefaults defaults;
     style.factor = 4.0;
-    snowCanvasMergeStyleEdit(
-        defaults, SnowCanvasMagnifierEdit{style, SnowCanvasMagnifierStylePropertyFactor, false});
-    require(defaults.magnifier.factor == 2.0,
-            "selected-element magnifier patches cannot overwrite remembered defaults");
-    snowCanvasMergeStyleEdit(
-        defaults, SnowCanvasMagnifierEdit{style, SnowCanvasMagnifierStylePropertyFactor, true});
+    snowCanvasMergeStyleEdit(defaults,
+                             SnowCanvasMagnifierEdit{style, SnowCanvasMagnifierStylePropertyFactor,
+                                                     SnowCanvasStyleEditTarget::Selection});
+    require(defaults.magnifier.factor == 4.0 && defaults.magnifier.showLeader,
+            "selected magnifier patches remember only explicitly edited properties");
+    snowCanvasMergeStyleEdit(defaults,
+                             SnowCanvasMagnifierEdit{style, SnowCanvasMagnifierStylePropertyFactor,
+                                                     SnowCanvasStyleEditTarget::Creation});
     require(defaults.magnifier.factor == 4.0 && defaults.magnifier.showLeader,
             "remembered defaults merge only explicitly edited properties");
 }

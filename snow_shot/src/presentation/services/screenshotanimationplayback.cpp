@@ -282,7 +282,9 @@ qint64 availableMemory() {
             KERN_SUCCESS;
     mach_port_deallocate(mach_task_self(), host);
     if (available)
-        return static_cast<qint64>(status.free_count + status.inactive_count) * pageSize;
+        return (static_cast<qint64>(status.free_count) +
+                static_cast<qint64>(status.inactive_count)) *
+               static_cast<qint64>(pageSize);
 #endif
     return std::numeric_limits<qint64>::max();
 }
