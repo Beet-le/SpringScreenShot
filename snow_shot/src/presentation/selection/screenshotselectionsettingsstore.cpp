@@ -3,6 +3,7 @@
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/configurationstore.h"
 #include "snow_shot/storage/persistedselectioncodec.h"
+#include "snow_shot/storage/settingsadapters.h"
 
 #include <QJsonArray>
 
@@ -88,10 +89,18 @@ int ScreenshotSelectionSettingsStore::shadowWidth() const {
     return configuration().value(QStringLiteral("screenshot_selection/shadow_width")).toInt();
 }
 
-void ScreenshotSelectionSettingsStore::setSelectionEffects(int cornerRadius, int shadowWidth) {
+QColor ScreenshotSelectionSettingsStore::shadowColor() const {
+    return storage::colorFromRgbaString(
+        configuration().value(QStringLiteral("screenshot_selection/shadow_color")).toString());
+}
+
+void ScreenshotSelectionSettingsStore::setSelectionEffects(int cornerRadius, int shadowWidth,
+                                                           const QColor& shadowColor) {
     static_cast<void>(configuration().setValues({
         {QStringLiteral("screenshot_selection/corner_radius"), cornerRadius},
         {QStringLiteral("screenshot_selection/shadow_width"), shadowWidth},
+        {QStringLiteral("screenshot_selection/shadow_color"),
+         storage::colorToRgbaString(shadowColor)},
     }));
 }
 
@@ -156,6 +165,7 @@ void ScreenshotSelectionSettingsStore::clear() {
         {QStringLiteral("screenshot_selection/selection_rect_presets"), QJsonArray()},
         {QStringLiteral("screenshot_selection/corner_radius"), 0},
         {QStringLiteral("screenshot_selection/shadow_width"), 0},
+        {QStringLiteral("screenshot_selection/shadow_color"), QStringLiteral("#333333FF")},
         {QStringLiteral("screenshot_selection/aspect_ratio"), QStringLiteral("free")},
         {QStringLiteral("screenshot_selection/lock_aspect_ratio"), false},
     }));

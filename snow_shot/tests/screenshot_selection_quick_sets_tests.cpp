@@ -46,13 +46,13 @@ struct QuickSetFixture {
             return true;
         };
         workflow = std::make_unique<ScreenshotSelectionEditWorkflow>(
-            ScreenshotSelectionEditWorkflowContext{presentation.overlay, presentation.captureState,
-                                                   presentation.displays, presentation.geometry,
-                                                   presentation.interaction, presentation.selection,
-                                                   ui, [this](int radius, int shadow) {
-                                                       ++effectWrites;
-                                                       settings.setSelectionEffects(radius, shadow);
-                                                   }});
+            ScreenshotSelectionEditWorkflowContext{
+                presentation.overlay, presentation.captureState, presentation.displays,
+                presentation.geometry, presentation.interaction, presentation.selection, ui,
+                [this](int radius, int shadow, const QColor& color) {
+                    ++effectWrites;
+                    settings.setSelectionEffects(radius, shadow, color);
+                }});
         presentation.commands.readSelectionQuickSets = [this] {
             ScreenshotSelectionToolbarQuickSets quickSets;
             quickSets.previous = settings.previousSelectionParams(bounds());
@@ -167,6 +167,8 @@ void compoundSelectionsCanSwitchBetweenPreviousAndSavedPresets() {
             require(fixture.presentation.selection.params(fixture.bounds()) == previous &&
                         !fixture.presentation.selection.rectangular(),
                     "Previous must restore full compound/custom geometry and effects");
+            require(fixture.settings.shadowColor() == previous.shadowColor,
+                    "applying a previous selection must remember its shadow color");
             auto* dropdown = fixture.select();
             require(!dropdown->disabled(),
                     "compound geometry must retain access to selection presets");

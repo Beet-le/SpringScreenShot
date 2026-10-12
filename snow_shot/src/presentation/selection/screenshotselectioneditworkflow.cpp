@@ -91,7 +91,8 @@ void ScreenshotSelectionEditWorkflow::previewSelectionEffect(ScreenshotSelection
 
 void ScreenshotSelectionEditWorkflow::commitSelectionEffects() {
     m_context.persistSelectionEffects(m_context.selection.cornerRadius(),
-                                      m_context.selection.shadowWidth());
+                                      m_context.selection.shadowWidth(),
+                                      m_context.selection.shadowColor());
 }
 
 void ScreenshotSelectionEditWorkflow::setSelectionAspectRatioPresetFromToolbar(
@@ -199,8 +200,7 @@ void ScreenshotSelectionEditWorkflow::applySelectionParams(
         return;
     }
 
-    m_context.persistSelectionEffects(m_context.selection.cornerRadius(),
-                                      m_context.selection.shadowWidth());
+    commitSelectionEffects();
 
     m_context.interaction.applySelectionParams();
     m_context.captureState.sessionState = ScreenshotSessionState::Editing;

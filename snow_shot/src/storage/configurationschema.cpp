@@ -1518,6 +1518,8 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      ConfigurationIntegerRange{0, 256, 1}},
     {QStringLiteral("screenshot_selection/shadow_width"), 0, ConfigurationValueKind::Integer,
      ConfigurationIntegerRange{0, 64, 1}},
+    {QStringLiteral("screenshot_selection/shadow_color"), QStringLiteral("#333333FF"),
+     ConfigurationValueKind::String},
     {QStringLiteral("screenshot_selection/aspect_ratio"),
      QStringLiteral("free"),
      ConfigurationValueKind::String,
@@ -2009,6 +2011,7 @@ ConfigurationNormalization normalizeDrawTemplates(const QJsonValue& value) {
 
 bool isRgbaColorKey(const QString& key) {
     return key == QStringLiteral("interface/theme_primary_color") ||
+           key == QStringLiteral("screenshot_selection/shadow_color") ||
            key == QStringLiteral("screenshot_ui/selection_border_color") ||
            key == QStringLiteral("screenshot_ui/selection_mask_color") ||
            key == QStringLiteral("screenshot_ui/cursor_guide_line_color") ||

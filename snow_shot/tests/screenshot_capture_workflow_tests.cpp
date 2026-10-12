@@ -453,6 +453,7 @@ void captureRestoresSelectionPreferencesAfterReset() {
             state, runtime, geometry, displays, interaction, selection, intelligentSelection, {}};
         int radius = 24;
         int shadowWidth = 12;
+        QColor shadowColor(12, 34, 56);
         bool aspectRatioLocked = true;
         auto aspectRatioPreset = ScreenshotSelectionAspectRatioPreset::Landscape16x9;
         auto regionType = ScreenshotRegionType::Polyline;
@@ -460,6 +461,7 @@ void captureRestoresSelectionPreferencesAfterReset() {
             selection.setRegionType(regionType);
             static_cast<void>(selection.setCornerRadius(radius));
             static_cast<void>(selection.setShadowWidth(shadowWidth));
+            selection.setShadowColor(shadowColor);
             static_cast<void>(selection.setAspectRatioPreset(aspectRatioPreset, {}, 5.0));
             static_cast<void>(selection.setAspectRatioLockEnabled(aspectRatioLocked, 5.0));
         };
@@ -472,6 +474,8 @@ void captureRestoresSelectionPreferencesAfterReset() {
                 "cold and prewarmed captures restore the saved region type");
         require(selection.cornerRadius() == 24 && selection.shadowWidth() == 12,
                 "cold and prewarmed captures must restore effects after resetting the model");
+        require(selection.shadowColor() == shadowColor,
+                "cold and prewarmed captures must retain the restored shadow color");
         require(!selection.hasPixelSelection() && selection.aspectRatioLocked(),
                 "capture startup must restore the lock preference without restoring geometry");
         require(selection.aspectRatioPreset() == aspectRatioPreset,
@@ -485,6 +489,7 @@ void captureRestoresSelectionPreferencesAfterReset() {
         workflow.cancelCapture();
         radius = 32;
         shadowWidth = 16;
+        shadowColor = QColor(90, 120, 150);
         aspectRatioPreset = ScreenshotSelectionAspectRatioPreset::Portrait3x4;
         regionType = ScreenshotRegionType::Curve;
         workflow.startCapture();
@@ -492,6 +497,8 @@ void captureRestoresSelectionPreferencesAfterReset() {
                 "captures after cancellation reload the latest region type");
         require(selection.cornerRadius() == 32 && selection.shadowWidth() == 16,
                 "captures after cancellation must reload the latest saved effects");
+        require(selection.shadowColor() == shadowColor,
+                "captures after cancellation must reload the latest shadow color");
         require(selection.aspectRatioPreset() == aspectRatioPreset,
                 "captures after cancellation reload the latest ratio preference");
         radius = 0;
@@ -505,6 +512,8 @@ void captureRestoresSelectionPreferencesAfterReset() {
         require(selection.cornerRadius() == 0 && selection.shadowWidth() == 0 &&
                     !selection.aspectRatioLocked(),
                 "restarting an active capture must restore disabled selection preferences");
+        require(selection.shadowColor() == shadowColor,
+                "restarting an active capture with shadows disabled must retain their color");
     }
 }
 

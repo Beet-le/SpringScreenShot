@@ -80,11 +80,12 @@ struct Fixture {
         ScreenshotSelectionEditUiActions ui;
         ui.updateOverlayState = [this] { refresh(); };
         workflow = std::make_unique<ScreenshotSelectionEditWorkflow>(
-            ScreenshotSelectionEditWorkflowContext{parent, capture, displays, geometry, interaction,
-                                                   selection, ui, [this](int radius, int shadow) {
-                                                       ++writes;
-                                                       settings.setSelectionEffects(radius, shadow);
-                                                   }});
+            ScreenshotSelectionEditWorkflowContext{
+                parent, capture, displays, geometry, interaction, selection, ui,
+                [this](int radius, int shadow, const QColor& color) {
+                    ++writes;
+                    settings.setSelectionEffects(radius, shadow, color);
+                }});
         ScreenshotOverlayInputActions actions;
         actions.updateOverlayState = [this] { refresh(); };
         actions.setEffectCursor = ScreenshotOverlayCanvasPresenter::setOverlayEffectCursor;

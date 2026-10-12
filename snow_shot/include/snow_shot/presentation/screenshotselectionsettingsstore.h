@@ -22,7 +22,8 @@ class ScreenshotSelectionSettingsStore final : public ScreenshotSelectionParamsS
     void setRegionType(ScreenshotRegionType type);
     [[nodiscard]] int cornerRadius() const;
     [[nodiscard]] int shadowWidth() const;
-    void setSelectionEffects(int cornerRadius, int shadowWidth);
+    [[nodiscard]] QColor shadowColor() const;
+    void setSelectionEffects(int cornerRadius, int shadowWidth, const QColor& shadowColor);
     [[nodiscard]] ScreenshotSelectionAspectRatioPreset aspectRatioPreset() const;
     [[nodiscard]] bool aspectRatioLocked() const;
     void setAspectRatioPreference(ScreenshotSelectionAspectRatioPreset preset, bool locked);
