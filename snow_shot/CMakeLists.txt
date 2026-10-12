@@ -8399,6 +8399,11 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_test(NAME snow-shot-scrolling-image-replay-tests COMMAND snow-shot-scrolling-image-replay-tests)
     add_test(NAME snow-shot-scrolling-snapshot-lifetime-tests
         COMMAND snow-shot-scrolling-image-replay-tests --snapshot-teardown-only)
+    add_test(NAME snow-shot-scrolling-async-teardown-tests
+        COMMAND snow-shot-scrolling-image-replay-tests --async-teardown-only)
+    set_tests_properties(snow-shot-scrolling-async-teardown-tests PROPERTIES
+        LABELS "unit" ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(snow-shot-scrolling-snapshot-lifetime-tests PROPERTIES
         LABELS "unit" ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")

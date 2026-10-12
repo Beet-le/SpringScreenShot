@@ -79,6 +79,13 @@ class ScreenshotScrollingPipeline final : public QObject {
     ScreenshotScrollingPipeline(FrameCallback frameCallback, ErrorCallback errorCallback,
                                 QObject* parent = nullptr);
     ~ScreenshotScrollingPipeline() override;
+    // Terminal, nonblocking teardown. Native source shutdown and accepted snapshot jobs finish
+    // off the caller's thread; completion is then queued to receiver. Destroying the pipeline
+    // also tears it down asynchronously, but does not cancel an accepted completion.
+    void shutdown(QObject* receiver, std::function<void()> completed);
+    // Terminal application teardown joins all submitted cleanup threads without dispatching
+    // GUI events. Owners must be destroyed first, while services used by capture remain alive.
+    static void waitForShutdowns();
     void begin(quint64 generation, QSize viewport, ScreenshotScrollingRecognitionMode mode,
                ScrollingSourceFactory source, AdaptiveScrollingCaptureCadence::Config cadence = {});
     void reset(quint64 generation);

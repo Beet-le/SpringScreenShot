@@ -221,7 +221,13 @@ impl MacCapturer {
 }
 impl MonitorCapturer for MacCapturer {
     fn set_cancellation(&mut self, token: snow_core::cancellation::CancellationToken) {
-        self.session.set_snapshot_cancellation(token);
+        self.session.set_cancellation(token);
+    }
+    fn set_target_fps(&mut self, fps: u32) -> CaptureResult<()> {
+        // ScreenCaptureKit accepts 1..=240; an uncapped stream uses that ceiling.
+        self.session
+            .set_fps(if fps == 0 { 240 } else { fps.min(240) })
+            .map_err(map_error)
     }
     fn set_cursor_visible(&mut self, visible: bool) -> CaptureResult<()> {
         self.session

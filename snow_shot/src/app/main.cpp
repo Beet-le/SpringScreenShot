@@ -27,6 +27,7 @@
 #include "snow_shot/storage/settingsadapters.h"
 #include "snow_shot/presentation/capture/screenshotcapturepolicy.h"
 #include "../presentation/capture/screenshotcaptureperfinstrumentation.h"
+#include "../presentation/capture/screenshotscrollingpipeline.h"
 #include "../presentation/pinned/screenshotpintoperfinstrumentation.h"
 
 #include "icon_renderer.h"
@@ -543,6 +544,9 @@ int main(int argc, char* argv[]) {
     // rejects straggler submissions; no history task runs after main returns.
     struct HistoryTaskDrain {
         ~HistoryTaskDrain() {
+            // Controllers have retired capture before this terminal join. Keep storage,
+            // diagnostics and Qt alive, without dispatching timers owned by those controllers.
+            snow_shot::capture_detail::ScreenshotScrollingPipeline::waitForShutdowns();
             shutdownScreenshotHistoryTasks();
         }
     } historyTaskDrain;

@@ -337,11 +337,9 @@ struct ScreenshotScrollingCaptureController::Impl {
         }
         thumbnailHost = nullptr;
 
-        // Scrolling workers are session-scoped.  Tear them down after invalidating all
-        // in-flight work so the stitch session and its native resources are released between
-        // captures; the next start() recreates them on demand.
+        // Retire the session after invalidating UI delivery. Native shutdown and accepted
+        // exports drain asynchronously; their window exclusion leases survive until then.
         shutdownWorker();
-        restoreScrollingWindowsCaptureVisibility();
     }
 
     void detachPendingResultRequest() {
@@ -358,19 +356,35 @@ struct ScreenshotScrollingCaptureController::Impl {
         if (overlay == nullptr || toolbar == nullptr) {
             return false;
         }
-        captureExclusion.exclude(overlay);
-        captureExclusion.exclude(overlay->scrollingThumbnailWindow());
-        captureExclusion.exclude(toolbar);
-        exclusionWindowIds = captureExclusion.windowIds(snow_shot::platform::captureWindowId);
+        captureExclusion = std::make_shared<snow_shot::presentation::WindowCaptureExclusion>(
+            [operation = exclusionGeneration](QWidget* window, bool excluded) {
+#if defined(Q_OS_WIN) || defined(_WIN32)
+                SetLastError(ERROR_SUCCESS);
+                const bool succeeded =
+                    snow_shot::platform::setWindowExcludedFromCapture(window, excluded);
+                const DWORD error = succeeded ? ERROR_SUCCESS : GetLastError();
+#else
+                const bool succeeded =
+                    snow_shot::platform::setWindowExcludedFromCapture(window, excluded);
+                const qint64 error = 0;
+#endif
+                logScrollingEvent(
+                    "scrolling.window_exclusion", operation,
+                    {{QStringLiteral("status"), excluded},
+                     {QStringLiteral("outcome"),
+                      succeeded ? QStringLiteral("succeeded") : QStringLiteral("failed")},
+                     {QStringLiteral("code"), static_cast<qint64>(error)}},
+                    succeeded ? QtInfoMsg : QtWarningMsg);
+                return succeeded;
+            });
+        captureExclusion->exclude(overlay);
+        captureExclusion->exclude(overlay->scrollingThumbnailWindow());
+        captureExclusion->exclude(toolbar);
+        exclusionWindowIds = captureExclusion->windowIds(snow_shot::platform::captureWindowId);
 #else
         Q_UNUSED(overlay);
 #endif
         return true;
-    }
-
-    void restoreScrollingWindowsCaptureVisibility() {
-        captureExclusion.restore();
-        exclusionWindowIds.clear();
     }
 
     void ensureWorker() {
@@ -382,6 +396,16 @@ struct ScreenshotScrollingCaptureController::Impl {
     }
 
     void shutdownWorker() {
+        auto exclusion = std::exchange(captureExclusion, {});
+        exclusionWindowIds.clear();
+        if (pipeline) {
+            pipeline->shutdown(QCoreApplication::instance(), [exclusion = std::move(exclusion)] {
+                if (exclusion)
+                    exclusion->restore();
+            });
+        } else if (exclusion) {
+            exclusion->restore();
+        }
         pipeline.reset();
     }
 
@@ -398,8 +422,8 @@ struct ScreenshotScrollingCaptureController::Impl {
         ++generation;
         snapshotRequest.cancel();
         pipeline->reset(generation);
-        // Leave the pipeline's error callback before destroying it. stop() joins
-        // capture before restoring native sharing policies, including failed starts.
+        // Leave the pipeline's error callback before retiring it. Native cleanup retains
+        // sharing policies until the source has stopped, including failed starts.
         QMetaObject::invokeMethod(
             &owner,
             [this, failedGeneration = generation]() {
@@ -720,29 +744,7 @@ struct ScreenshotScrollingCaptureController::Impl {
     std::unique_ptr<ScreenshotScrollingPipeline> pipeline;
     QPointer<ScreenshotOverlayWindow> thumbnailHost;
     QVector<std::uint32_t> exclusionWindowIds;
-    snow_shot::presentation::WindowCaptureExclusion captureExclusion{
-#if defined(Q_OS_WIN) || defined(_WIN32) || defined(Q_OS_MACOS)
-        [this](QWidget* window, bool excluded) {
-#if defined(Q_OS_WIN) || defined(_WIN32)
-            SetLastError(ERROR_SUCCESS);
-            const bool succeeded =
-                snow_shot::platform::setWindowExcludedFromCapture(window, excluded);
-            const DWORD error = succeeded ? ERROR_SUCCESS : GetLastError();
-#else
-            const bool succeeded =
-                snow_shot::platform::setWindowExcludedFromCapture(window, excluded);
-            const qint64 error = 0;
-#endif
-            logScrollingEvent("scrolling.window_exclusion", exclusionGeneration,
-                              {{QStringLiteral("status"), excluded},
-                               {QStringLiteral("outcome"),
-                                succeeded ? QStringLiteral("succeeded") : QStringLiteral("failed")},
-                               {QStringLiteral("code"), static_cast<qint64>(error)}},
-                              succeeded ? QtInfoMsg : QtWarningMsg);
-            return succeeded;
-        }
-#endif
-    };
+    std::shared_ptr<snow_shot::presentation::WindowCaptureExclusion> captureExclusion;
     quint64 exclusionGeneration = 0;
     QSize latestOutputSize;
     ScreenshotScrollingSnapshot cachedSnapshot;

@@ -376,7 +376,7 @@ class BuiltInSettingsBackend final : public SettingsBackend {
     GlobalMouseManager* m_mouseManager = nullptr;
     platform::macos::LoginItemService* m_loginItems = nullptr;
     std::unique_ptr<platform::windows::ShellContextMenuRegistration> m_defaultShellContextMenu;
-    platform::windows::ShellContextMenuRegistration* m_shellContextMenu = nullptr;
+    [[maybe_unused]] platform::windows::ShellContextMenuRegistration* m_shellContextMenu = nullptr;
     std::function<platform::windows::AdministratorResult(bool, bool)> m_startupSettingsApply;
     QPointer<MainWindowSkinController> m_skinController;
     QMetaObject::Connection m_skinStatusConnection;

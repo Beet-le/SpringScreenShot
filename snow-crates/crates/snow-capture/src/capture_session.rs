@@ -1150,6 +1150,25 @@ impl CaptureSession {
         self.config.mode
     }
 
+    pub(crate) fn set_stream_cancellation(
+        &mut self,
+        token: snow_core::cancellation::CancellationToken,
+    ) {
+        if let Some(native) = &mut self.native {
+            // A previously used continuous session may still own producers
+            // bound to its old token. Stream ownership begins with new access.
+            native.release_capture_access();
+            native.set_cancellation(token);
+        }
+    }
+
+    pub(crate) fn set_stream_target_fps(&mut self, fps: u32) -> CaptureResult<()> {
+        if let Some(native) = &mut self.native {
+            native.set_target_fps(fps)?;
+        }
+        Ok(())
+    }
+
     /// Effective Windows tuning is unavailable for other platform backends.
     pub fn windows_tuning(&self) -> Option<crate::tuning::windows::WindowsCaptureOptions> {
         cfg!(windows).then_some(self.config.windows)

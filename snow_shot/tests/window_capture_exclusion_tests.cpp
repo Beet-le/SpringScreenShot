@@ -133,6 +133,95 @@ void successfulIdsAndScopeCleanup() {
             "scope exit restores in reverse order");
 }
 
+void overlappingCapturesKeepExclusionUntilTheFinalOwner() {
+    QWidget overlay, toolbar;
+    std::vector<std::pair<QWidget*, bool>> firstCalls, secondCalls;
+    WindowCaptureExclusion first([&](QWidget* window, bool excluded) {
+        firstCalls.emplace_back(window, excluded);
+        return true;
+    });
+    WindowCaptureExclusion second([&](QWidget* window, bool excluded) {
+        secondCalls.emplace_back(window, excluded);
+        return true;
+    });
+    require(first.exclude(&overlay) && first.exclude(&toolbar) && second.exclude(&overlay),
+            "overlapping captures must acquire the shared overlay independently");
+    firstCalls.clear();
+    secondCalls.clear();
+    first.restore();
+    require(firstCalls == std::vector<std::pair<QWidget*, bool>>{{&toolbar, false}} &&
+                secondCalls.empty(),
+            "retiring a capture restores only windows with no remaining capture owner");
+    require(second.windowIds([](QWidget*) { return std::optional<std::uint32_t>(17); }) ==
+                QVector<std::uint32_t>{17},
+            "a replacement capture retains its successful native exclusion");
+    second.restore();
+    require(secondCalls == std::vector<std::pair<QWidget*, bool>>{{&overlay, false}},
+            "the final owner restores through its own setter");
+}
+
+void childrenShareTheirTopLevelWindowLease() {
+    QWidget overlay;
+    QWidget child(&overlay);
+    int exclusions = 0, restores = 0;
+    const auto setter = [&](QWidget* window, bool excluded) {
+        require(window == &overlay, "native exclusion leases belong to top-level windows");
+        excluded ? ++exclusions : ++restores;
+        return true;
+    };
+    WindowCaptureExclusion first(setter), second(setter);
+    require(first.exclude(&child) && first.exclude(&overlay) && second.exclude(&overlay),
+            "child and top-level requests must share one native window");
+    require(exclusions == 2, "each owner validates exclusion once for the native window");
+    first.restore();
+    require(restores == 0, "a child owner cannot restore another owner's top-level window");
+    second.restore();
+    require(restores == 1, "shared top-level exclusion restores exactly once");
+}
+
+void newOwnerRevalidatesTheReplacementNativeSurface() {
+    class NativeWindow final : public QWidget {
+      public:
+        void replaceSurface() {
+            destroy();
+            static_cast<void>(winId());
+        }
+    };
+    NativeWindow overlay;
+    static_cast<void>(overlay.winId());
+    int exclusions = 0, restores = 0;
+    const auto setter = [&](QWidget*, bool excluded) {
+        excluded ? ++exclusions : ++restores;
+        return true;
+    };
+    WindowCaptureExclusion retired(setter), restarted(setter);
+    require(retired.exclude(&overlay), "first native surface exclusion must succeed");
+    overlay.replaceSurface();
+    require(restarted.exclude(&overlay) && exclusions == 2,
+            "a restart must reapply exclusion after native surface replacement");
+    retired.restore();
+    require(restores == 0, "old surface cleanup must not restore the restarted surface");
+    restarted.restore();
+    require(restores == 1, "the replacement surface restores only after the final owner");
+}
+
+void failedOverlappingOwnerDoesNotAcquireALease() {
+    QWidget overlay;
+    int restores = 0;
+    WindowCaptureExclusion first([&](QWidget*, bool excluded) {
+        if (!excluded)
+            ++restores;
+        return true;
+    });
+    WindowCaptureExclusion failed([](QWidget*, bool) { return false; });
+    require(first.exclude(&overlay) && !failed.exclude(&overlay),
+            "each capture reports its own native exclusion failure");
+    failed.restore();
+    require(restores == 0, "failed owners must never restore another capture's exclusion");
+    first.restore();
+    require(restores == 1, "failed owners must not delay successful exclusion restoration");
+}
+
 void recaptureCanRollbackPartialExclusionsBeforeFallback() {
     QWidget overlay;
     QWidget toolbar;
@@ -246,6 +335,10 @@ int main(int argc, char* argv[]) {
     cleanupToleratesDestroyedWindowsAndRestoreFailures();
     unavailableExclusionPreservesVisibility();
     successfulIdsAndScopeCleanup();
+    overlappingCapturesKeepExclusionUntilTheFinalOwner();
+    childrenShareTheirTopLevelWindowLease();
+    newOwnerRevalidatesTheReplacementNativeSurface();
+    failedOverlappingOwnerDoesNotAcquireALease();
     recaptureCanRollbackPartialExclusionsBeforeFallback();
     inputTransparencyRestoresOriginalStateAndRollsBackPartialFailure();
     inputTransparencySkipsDestroyedWindowsAndContinuesAfterRestoreFailure();

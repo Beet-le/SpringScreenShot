@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel as mpsc;
+use snow_core::cancellation::CancellationToken;
 use snow_core::error::{RecvError, RecvTimeoutError, TryRecvError};
 use snow_core::stream_queue::StreamQueue;
 
@@ -199,6 +200,8 @@ pub struct CaptureStreamStatsSnapshot {
 pub struct CaptureStream {
     queue: Arc<StreamQueue<CaptureEvent>>,
     stop_flag: Arc<AtomicBool>,
+    cancellation: CancellationToken,
+    wake: mpsc::Sender<()>,
     pause_flag: Arc<AtomicBool>,
     stats: Arc<CaptureStreamStats>,
     join_handle: Option<std::thread::JoinHandle<()>>,
@@ -211,7 +214,7 @@ pub struct CaptureStream {
 
 impl CaptureStream {
     fn request_stop_and_join(&mut self) {
-        self.stop_flag.store(true, Ordering::Release);
+        self.stop();
         if let Some(handle) = self.join_handle.take() {
             let _ = handle.join();
         }
@@ -238,6 +241,8 @@ impl CaptureStream {
                 "streaming requires CaptureWorkload::Continuous".into(),
             ));
         }
+        let cancellation = CancellationToken::default();
+        capture.set_stream_cancellation(cancellation.clone());
         capture.prepare_target()?;
 
         let buffer_depth = config.buffer_depth.max(1);
@@ -278,6 +283,8 @@ impl CaptureStream {
         let requested_target = Arc::clone(&target_fps);
         let pacing_origin = Arc::new(Mutex::new(None));
         let worker_origin = Arc::clone(&pacing_origin);
+        let (wake, wake_rx) = mpsc::bounded(1);
+        let worker_cancellation = cancellation.clone();
 
         let join_handle = std::thread::Builder::new()
             .name("snow-capture-stream".to_string())
@@ -294,6 +301,8 @@ impl CaptureStream {
                     &stats_clone,
                     &requested_target,
                     &worker_origin,
+                    &worker_cancellation,
+                    &wake_rx,
                 );
                 worker_queue.close();
             })
@@ -306,6 +315,8 @@ impl CaptureStream {
         Ok(Self {
             queue,
             stop_flag,
+            cancellation,
+            wake,
             pause_flag,
             stats,
             join_handle: Some(join_handle),
@@ -325,6 +336,7 @@ impl CaptureStream {
             .pacing_origin
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = origin;
+        let _ = self.wake.try_send(());
     }
 
     /// Receive the next capture event, blocking until one is available
@@ -346,9 +358,10 @@ impl CaptureStream {
         self.map_recv_outcome(self.queue.recv_timeout(timeout))
     }
 
-    /// exit on its next loop iteration.
+    /// Cancel native acquisition and wake pacing so the worker can release capture access.
     pub fn stop(&self) {
         self.stop_flag.store(true, Ordering::Release);
+        self.cancellation.cancel();
     }
 
     /// Update the pacing target without restarting the capture session.
@@ -357,10 +370,13 @@ impl CaptureStream {
     /// requests uncapped capture when the stream was created uncapped.
     pub fn set_target_fps(&self, target_fps: u32) {
         let clamped = clamp_target_fps(target_fps, self.maximum_fps, self.minimum_fps);
-        self.target_fps.store(clamped, Ordering::Release);
+        let previous = self.target_fps.swap(clamped, Ordering::AcqRel);
         self.stats
             .target_fps
             .store(u64::from(clamped), Ordering::Release);
+        if previous != clamped {
+            let _ = self.wake.try_send(());
+        }
     }
 
     /// Return the current externally requested pacing target. Zero means
@@ -374,11 +390,13 @@ impl CaptureStream {
     /// near-instant.
     pub fn pause(&self) {
         self.pause_flag.store(true, Ordering::Release);
+        let _ = self.wake.try_send(());
     }
 
     /// Resume a paused capture stream.
     pub fn resume(&self) {
         self.pause_flag.store(false, Ordering::Release);
+        let _ = self.wake.try_send(());
     }
 
     /// Whether the stream is currently paused.
@@ -483,6 +501,8 @@ fn stream_loop(
     stats: &CaptureStreamStats,
     requested_target: &AtomicU32,
     pacing_origin: &Mutex<Option<Instant>>,
+    cancellation: &CancellationToken,
+    wake: &mpsc::Receiver<()>,
 ) {
     let min_interval = if config.adaptive_fps && config.min_fps > 0 {
         Some(Duration::from_secs_f64(1.0 / config.min_fps as f64))
@@ -513,6 +533,7 @@ fn stream_loop(
     let mut fps_epoch = Instant::now();
 
     let mut was_paused = false;
+    let mut source_fps = None;
     let mut pause_started: Option<Instant> = None;
 
     loop {
@@ -527,7 +548,7 @@ fn stream_loop(
                 store_queue_fill(stats, queue.push(CaptureEvent::Paused { at: now }).data_len);
                 was_paused = true;
             }
-            std::thread::sleep(Duration::from_millis(50));
+            wait_for_control(Duration::from_millis(50), cancellation, wake);
             fps_counter = 0;
             fps_epoch = Instant::now();
             continue;
@@ -548,6 +569,16 @@ fn stream_loop(
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         let fps = requested_target.load(Ordering::Acquire);
+        let effective_fps = effective_target_fps(fps, pressure_interval);
+        if source_fps != Some(effective_fps) {
+            if let Err(error) = capture.set_stream_target_fps(effective_fps) {
+                if !stop.load(Ordering::Acquire) {
+                    store_queue_fill(stats, queue.push(CaptureEvent::Error(error)).data_len);
+                }
+                break;
+            }
+            source_fps = Some(effective_fps);
+        }
         let aligned = origin.is_some() && fps > 0 && !config.adaptive_fps;
         if let Some(origin) = origin.filter(|_| aligned) {
             if cadence
@@ -560,12 +591,15 @@ fn stream_loop(
                     next: 0,
                 });
             }
-            spin_sleep(
-                cadence
-                    .as_mut()
-                    .expect("capture cadence")
-                    .wait(Instant::now()),
-            );
+            if cadence
+                .as_mut()
+                .expect("capture cadence")
+                .wait_interruptibly(Instant::now(), |delay| {
+                    wait_for_control(delay, cancellation, wake)
+                })
+            {
+                continue;
+            }
             if stop.load(Ordering::Acquire) || pause.load(Ordering::Acquire) {
                 continue;
             }
@@ -584,6 +618,9 @@ fn stream_loop(
         };
 
         let capture_elapsed = frame_start.elapsed();
+        if stop.load(Ordering::Acquire) && capture_result.is_err() {
+            break;
+        }
 
         match capture_result {
             Ok((mut frame, cursor_outcome)) => {
@@ -705,7 +742,7 @@ fn stream_loop(
                     store_queue_fill(stats, queue.push(CaptureEvent::Error(e.clone())).data_len);
                     break;
                 }
-                std::thread::sleep(Duration::from_millis(16));
+                wait_for_control(Duration::from_millis(16), cancellation, wake);
                 continue;
             }
             Err(e) => {
@@ -733,7 +770,7 @@ fn stream_loop(
         if let Some(interval) = interval.filter(|_| !aligned) {
             let elapsed = frame_start.elapsed();
             if elapsed < interval {
-                spin_sleep(interval - elapsed);
+                wait_for_control(interval - elapsed, cancellation, wake);
             }
         }
     }
@@ -749,6 +786,18 @@ pub(crate) struct AlignedCaptureCadence {
     pub(crate) next: u64,
 }
 impl AlignedCaptureCadence {
+    fn wait_interruptibly(&mut self, now: Instant, wait: impl FnOnce(Duration) -> bool) -> bool {
+        let previous = self.next;
+        if wait(self.wait(now)) {
+            // A control wake is not an acquisition. Preserve the pending slot
+            // when its clock and rate remain unchanged on the next iteration.
+            self.next = previous;
+            true
+        } else {
+            false
+        }
+    }
+
     fn offset(index: u64, fps: u32) -> Duration {
         Duration::from_nanos(
             ((u128::from(index) * 4 + 1) * 1_000_000_000)
@@ -768,6 +817,15 @@ impl AlignedCaptureCadence {
 
 fn target_interval(target_fps: u32) -> Option<Duration> {
     (target_fps > 0).then(|| Duration::from_secs_f64(1.0 / target_fps as f64))
+}
+
+fn effective_target_fps(target_fps: u32, pressure: Option<Duration>) -> u32 {
+    match (target_interval(target_fps), pressure) {
+        (Some(requested), Some(pressure)) if pressure > requested => {
+            (1_000_000_000u128 / pressure.as_nanos()).max(1) as u32
+        }
+        _ => target_fps,
+    }
 }
 
 fn clamp_target_fps(target_fps: u32, maximum_fps: u32, minimum_fps: u32) -> u32 {
@@ -802,19 +860,33 @@ fn store_queue_fill(stats: &CaptureStreamStats, len: usize) {
     stats.buffer_fill.store(len as u64, Ordering::Release);
 }
 
-/// High-precision sleep that uses spin-waiting for the final sub-millisecond
-/// portion to avoid Windows timer resolution issues.
-fn spin_sleep(duration: Duration) {
-    const SPIN_THRESHOLD: Duration = Duration::from_micros(1500);
+/// Pacing never holds stop or a rate change behind the previous frame interval.
+fn wait_for_control(
+    duration: Duration,
+    cancellation: &CancellationToken,
+    wake: &mpsc::Receiver<()>,
+) -> bool {
+    #[cfg(windows)]
+    let sleep_duration = duration.saturating_sub(Duration::from_micros(1500));
+    #[cfg(not(windows))]
+    let sleep_duration = duration;
+    #[cfg(windows)]
     let target = Instant::now() + duration;
-
-    if duration > SPIN_THRESHOLD {
-        std::thread::sleep(duration - SPIN_THRESHOLD);
+    mpsc::select_biased! {
+        recv(cancellation.receiver()) -> _ => return true,
+        recv(wake) -> _ => return true,
+        default(sleep_duration) => {},
     }
-
+    // Windows needs precise timer boundaries for recording. macOS scheduling
+    // already supports the required granularity without a busy spin.
+    #[cfg(windows)]
     while Instant::now() < target {
+        if cancellation.is_canceled() || wake.try_recv().is_ok() {
+            return true;
+        }
         std::hint::spin_loop();
     }
+    false
 }
 
 fn stamp_content_generation(frame: &mut Frame, generation: &mut u64) {
@@ -829,6 +901,8 @@ mod tests {
     use super::{
         CaptureStream, CaptureStreamConfig, CaptureStreamStats, clamp_target_fps, target_interval,
     };
+    use crossbeam_channel as mpsc;
+    use snow_core::cancellation::CancellationToken;
     use snow_core::stream_queue::StreamQueue;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -873,10 +947,192 @@ mod tests {
         assert_eq!(stats.snapshot().target_fps, 24);
     }
 
+    #[test]
+    fn native_rate_follows_requested_and_adaptive_pacing() {
+        assert_eq!(super::effective_target_fps(30, target_interval(30)), 30);
+        assert_eq!(super::effective_target_fps(12, target_interval(30)), 12);
+        assert_eq!(super::effective_target_fps(30, target_interval(10)), 10);
+        assert_eq!(super::effective_target_fps(30, target_interval(1)), 1);
+        assert_eq!(super::effective_target_fps(0, None), 0);
+    }
+
+    #[test]
+    fn stop_and_control_changes_interrupt_pacing() {
+        let token = CancellationToken::default();
+        let (wake, receiver) = mpsc::bounded(1);
+        wake.send(()).unwrap();
+        assert!(super::wait_for_control(
+            Duration::from_secs(60),
+            &token,
+            &receiver
+        ));
+        token.cancel();
+        assert!(super::wait_for_control(
+            Duration::from_secs(60),
+            &token,
+            &receiver
+        ));
+    }
+
+    struct NativeStreamProbe {
+        observations: mpsc::Sender<u32>,
+        changes: mpsc::Sender<u32>,
+        permits: mpsc::Receiver<()>,
+        cancellation: Option<CancellationToken>,
+        fps: u32,
+    }
+
+    impl crate::backend::MonitorCapturer for NativeStreamProbe {
+        fn set_cancellation(&mut self, token: CancellationToken) {
+            self.cancellation = Some(token);
+        }
+
+        fn set_target_fps(&mut self, fps: u32) -> crate::error::CaptureResult<()> {
+            self.fps = fps;
+            self.changes.send(fps).unwrap();
+            Ok(())
+        }
+
+        fn capture(
+            &mut self,
+            _reuse: Option<crate::frame::Frame>,
+        ) -> crate::error::CaptureResult<crate::frame::Frame> {
+            self.observations.send(self.fps).unwrap();
+            let token = self
+                .cancellation
+                .as_ref()
+                .expect("stream cancellation is assigned");
+            mpsc::select_biased! {
+                recv(token.receiver()) -> _ => Err(crate::error::CaptureError::Canceled),
+                recv(self.permits) -> permit => {
+                    permit.unwrap();
+                    crate::frame::Frame::from_rgba8(2, 2, vec![0; 16])
+                },
+            }
+        }
+    }
+
+    struct NativeStreamBackend {
+        observations: mpsc::Sender<u32>,
+        changes: mpsc::Sender<u32>,
+        permits: mpsc::Receiver<()>,
+    }
+
+    impl crate::backend::CaptureBackend for NativeStreamBackend {
+        fn create_target_capturer(
+            &self,
+            _target: &crate::CaptureTarget,
+            _options: crate::CaptureOptions,
+        ) -> crate::error::CaptureResult<Option<Box<dyn crate::backend::MonitorCapturer>>> {
+            Ok(Some(Box::new(NativeStreamProbe {
+                observations: self.observations.clone(),
+                changes: self.changes.clone(),
+                permits: self.permits.clone(),
+                cancellation: None,
+                fps: 0,
+            })))
+        }
+
+        fn enumerate_monitors(&self) -> crate::error::CaptureResult<Vec<crate::MonitorId>> {
+            Ok(Vec::new())
+        }
+
+        fn primary_monitor(&self) -> crate::error::CaptureResult<crate::MonitorId> {
+            Err(crate::error::CaptureError::NoPrimaryMonitor)
+        }
+
+        fn monitor_layout(&self) -> crate::error::CaptureResult<crate::MonitorLayout> {
+            Err(crate::error::CaptureError::NoPrimaryMonitor)
+        }
+
+        fn create_monitor_capturer(
+            &self,
+            _monitor: &crate::MonitorId,
+        ) -> crate::error::CaptureResult<Box<dyn crate::backend::MonitorCapturer>> {
+            Err(crate::error::CaptureError::NoPrimaryMonitor)
+        }
+
+        fn inspect_window(
+            &self,
+            _window: &crate::WindowId,
+        ) -> crate::error::CaptureResult<crate::CaptureTargetInfo> {
+            Ok(crate::CaptureTargetInfo {
+                origin_x: 0,
+                origin_y: 0,
+                width: 2,
+                height: 2,
+            })
+        }
+    }
+
+    #[test]
+    fn stream_updates_native_rate_and_cancels_blocked_acquisition() {
+        let (observed, observations) = mpsc::unbounded();
+        let (changed, changes) = mpsc::unbounded();
+        let (permit, permits) = mpsc::bounded(1);
+        let session = crate::CaptureSession::builder()
+            .target(crate::CaptureTarget::Window(
+                crate::WindowId::from_macos_id(1),
+            ))
+            .with_backend(Arc::new(NativeStreamBackend {
+                observations: observed,
+                changes: changed,
+                permits,
+            }))
+            .with_options(crate::CaptureOptions {
+                workload: crate::CaptureWorkload::Continuous,
+                ..Default::default()
+            })
+            .build()
+            .unwrap();
+        let stream = CaptureStream::spawn(
+            session,
+            CaptureStreamConfig {
+                target_fps: 30,
+                include_cursor: false,
+                adaptive_fps: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let deadline = Duration::from_secs(5);
+        assert_eq!(observations.recv_timeout(deadline).unwrap(), 30);
+        assert_eq!(changes.recv_timeout(deadline).unwrap(), 30);
+        permit.send(()).unwrap();
+        assert_eq!(observations.recv_timeout(deadline).unwrap(), 30);
+        assert!(
+            changes.try_recv().is_err(),
+            "unchanged native rate is not reapplied"
+        );
+        stream.set_target_fps(12);
+        permit.send(()).unwrap();
+        assert_eq!(observations.recv_timeout(deadline).unwrap(), 12);
+        assert_eq!(changes.recv_timeout(deadline).unwrap(), 12);
+        // The third native acquisition has no permit and can finish only when
+        // stop broadcasts cancellation, independently of the consumer queue.
+        let (done, finished) = mpsc::bounded(1);
+        std::thread::spawn(move || {
+            done.send(stream.stop_and_drain()).unwrap();
+        });
+        let events = finished.recv_timeout(deadline).unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, crate::frame::CaptureEvent::StreamEnded))
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, crate::frame::CaptureEvent::Error(_)))
+        );
+    }
+
     fn test_stream(maximum_fps: u32, minimum_fps: u32) -> CaptureStream {
         CaptureStream {
             queue: Arc::new(StreamQueue::new(1)),
             stop_flag: Arc::new(AtomicBool::new(false)),
+            cancellation: CancellationToken::default(),
+            wake: mpsc::bounded(1).0,
             pause_flag: Arc::new(AtomicBool::new(false)),
             stats: Arc::new(CaptureStreamStats::default()),
             join_handle: None,
@@ -947,5 +1203,33 @@ mod tests {
             Duration::ZERO
         );
         assert!(cadence.wait(start + Duration::from_millis(110)) > Duration::from_millis(20));
+    }
+
+    #[test]
+    fn control_wakes_do_not_consume_aligned_capture_slots() {
+        let start = std::time::Instant::now();
+        let mut cadence = super::AlignedCaptureCadence {
+            origin: start,
+            fps: 30,
+            next: 0,
+        };
+        for elapsed in [Duration::ZERO, Duration::from_millis(4)] {
+            assert!(cadence.wait_interruptibly(start + elapsed, |delay| {
+                assert_eq!(delay + elapsed, Duration::from_nanos(8_333_334));
+                true
+            }));
+            assert_eq!(cadence.next, 0);
+        }
+        assert!(
+            !cadence.wait_interruptibly(start + Duration::from_millis(4), |delay| {
+                assert_eq!(delay, Duration::from_nanos(4_333_334));
+                false
+            })
+        );
+        assert_eq!(cadence.next, 1);
+        assert_eq!(
+            cadence.wait(start + Duration::from_millis(9)),
+            Duration::from_nanos(32_666_667)
+        );
     }
 }

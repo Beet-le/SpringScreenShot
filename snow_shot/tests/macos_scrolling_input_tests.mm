@@ -5,6 +5,7 @@
 #include <QCursor>
 #include <QRegion>
 #include <QWidget>
+#include <QWindow>
 #include <QWheelEvent>
 #include <QEventLoop>
 #include <QTimer>
@@ -37,6 +38,54 @@ class Overlay final : public ScrollTarget {
         destroy();
     }
 };
+
+void qtTransparencyTracksWindowAndSurfaceLifecycle() {
+    using snow_shot::platform::setScreenshotInputTransparent;
+    Overlay overlay;
+    setScreenshotInputTransparent(&overlay, true);
+    require(!overlay.internalWinId(), "enabling transparency must not create a native surface");
+    overlay.show();
+    QApplication::processEvents();
+    const WId surface = overlay.internalWinId();
+    QWindow* handle = overlay.windowHandle();
+    require(handle && handle->flags().testFlag(Qt::WindowTransparentForInput),
+            "showing scrolling capture gives Qt the same input ownership as the native window");
+    setScreenshotInputTransparent(&overlay, true);
+    overlay.move(overlay.pos() + QPoint(20, 20));
+    require(overlay.internalWinId() == surface && overlay.windowHandle() == handle,
+            "input ownership must preserve the current native surface during activation and move");
+    overlay.hide();
+    require(!handle->flags().testFlag(Qt::WindowTransparentForInput),
+            "hiding scrolling capture restores the original Qt input flag");
+    overlay.show();
+    QApplication::processEvents();
+    require(overlay.windowHandle()->flags().testFlag(Qt::WindowTransparentForInput),
+            "showing an active capture reapplies Qt input transparency");
+    setScreenshotInputTransparent(&overlay, false);
+    require(!overlay.windowHandle()->flags().testFlag(Qt::WindowTransparentForInput),
+            "stopping scrolling capture restores Qt input handling");
+    overlay.windowHandle()->setFlag(Qt::WindowTransparentForInput, true);
+    setScreenshotInputTransparent(&overlay, true);
+    setScreenshotInputTransparent(&overlay, false);
+    require(overlay.windowHandle()->flags().testFlag(Qt::WindowTransparentForInput),
+            "a preexisting Qt transparency flag must survive capture cleanup");
+    overlay.windowHandle()->setFlag(Qt::WindowTransparentForInput, false);
+    setScreenshotInputTransparent(&overlay, true);
+    overlay.hide();
+    overlay.releaseSurface();
+    require(!overlay.internalWinId(), "native surface release must remain complete");
+    overlay.show();
+    QApplication::processEvents();
+    require(overlay.windowHandle()->flags().testFlag(Qt::WindowTransparentForInput),
+            "a replacement surface acquires active Qt transparency");
+    setScreenshotInputTransparent(&overlay, false);
+    require(!overlay.windowHandle()->flags().testFlag(Qt::WindowTransparentForInput),
+            "replacement surface cleanup restores its original input flag");
+    overlay.hide();
+    overlay.releaseSurface();
+    setScreenshotInputTransparent(&overlay, false);
+    require(!overlay.internalWinId(), "cleanup must never recreate a released native surface");
+}
 
 void nativeTransparencyRoutesToUnderlyingWindow() {
     using snow_shot::platform::setScreenshotInputTransparent;
@@ -96,6 +145,8 @@ void nativeTransparencyRoutesToUnderlyingWindow() {
         setScreenshotInputTransparent(&overlay, true);
         require(native.ignoresMouseEvents,
                 "scrolling enables whole-window transparency without pointer movement");
+        require(overlay.windowHandle()->flags().testFlag(Qt::WindowTransparentForInput),
+                "Qt must preserve native transparency during pointer tracking");
         require(wheelRecipient() == 1, "WindowServer must deliver the original wheel underneath");
         overlay.clearMask();
         require(native.ignoresMouseEvents && wheelRecipient() == 1,
@@ -122,6 +173,7 @@ void nativeTransparencyRoutesToUnderlyingWindow() {
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
+    qtTransparencyTracksWindowAndSurfaceLifecycle();
     if (QApplication::platformName() == QStringLiteral("cocoa")) {
         if (!CGPreflightPostEventAccess()) {
             std::cout << "SKIP: native wheel fixture requires existing event-posting permission\n";
