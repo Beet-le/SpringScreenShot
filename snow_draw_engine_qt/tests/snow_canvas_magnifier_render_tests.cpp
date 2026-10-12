@@ -58,7 +58,7 @@ SnowCanvasSceneItem magnifier(double factor = 2.0,
     item.rect_shape = shape;
     item.stroke = {30, 40, 50, 255};
     item.stroke_width = 2;
-    item.magnifier = {35, 70, 30, 30, factor};
+    item.magnifier = {35, 70, 30, 30, factor, SNOW_MAGNIFIER_CONNECTION_NONE, 0, {}};
     return SnowCanvasSceneItem(item);
 }
 
@@ -316,7 +316,23 @@ QImage renderOpacityFixture(const SnowCanvasSceneItem& lens,
         painter.setWorldTransform(painter.deviceTransform().inverted());
         painter.drawImage(QPoint(), composed);
     } else {
+        const QTransform worldTransform = painter.worldTransform();
+        const QTransform deviceTransform = painter.deviceTransform();
+        const bool hasClipping = painter.hasClipping();
+        const QPainterPath clipPath = painter.clipPath();
+        const QRegion clipRegion = painter.clipRegion();
+        const double opacity = painter.opacity();
+        const QPainter::CompositionMode compositionMode = painter.compositionMode();
+        const QPainter::RenderHints renderHints = painter.renderHints();
         snow_canvas_magnifier_renderer::render(painter, info, lens, &sources);
+        require(painter.worldTransform() == worldTransform &&
+                    painter.deviceTransform() == deviceTransform &&
+                    painter.hasClipping() == hasClipping && painter.clipPath() == clipPath &&
+                    painter.clipRegion() == clipRegion && painter.opacity() == opacity &&
+                    painter.compositionMode() == compositionMode &&
+                    painter.renderHints() == renderHints,
+                "magnifier rendering must preserve caller transforms, clips, opacity, blend "
+                "mode and render hints");
     }
     return output;
 }
@@ -468,6 +484,64 @@ void multilayerOpacityTilesKeepSparseClipsAndBoundedScratch() {
     require(invisibleDiagnostics.sourceLayerDrawCount == 0 &&
                 invisibleDiagnostics.peakCompositingPixelCount == 0,
             "invisible magnifiers must not sample originals or allocate scratch");
+}
+
+void multilayerCompositingPreservesCallerStateAndEmptyClips() {
+    const QImage original = sourceImage();
+    QImage patch(original.size(), original.format());
+    patch.fill(QColor(240, 35, 80, 120));
+    const QList<SnowCanvasBaseImageSource> sources{{original, QRectF(0, 0, 200, 140), {}},
+                                                   {patch, QRectF(0, 0, 200, 140), {}}};
+    const QRegion full(QRect(0, 0, 200, 140));
+    const QRegion emptyLensClip = QRegion(QRect(100, 40, 3, 3)) + QRect(157, 97, 3, 3);
+    QPainterPath emptyLensClipPath;
+    emptyLensClipPath.addRegion(emptyLensClip);
+    for (const auto shape : {SNOW_DISPLAY_RECT_SHAPE_RECTANGLE, SNOW_DISPLAY_RECT_SHAPE_ELLIPSE,
+                             SNOW_DISPLAY_RECT_SHAPE_DIAMOND}) {
+        auto lens = magnifier(10, static_cast<std::uint8_t>(shape));
+        lens.stroke.a = 0;
+        lens.corner_radii = {};
+        lens.rotation = 0.37;
+        lens.opacity = 0.5;
+        auto clippedLens = magnifier(2, static_cast<std::uint8_t>(shape));
+        clippedLens.stroke.a = 0;
+        clippedLens.corner_radii = {};
+        clippedLens.opacity = 0.5;
+        if (shape != SNOW_DISPLAY_RECT_SHAPE_RECTANGLE) {
+            const QPainterPath path = opacityFixtureLensPath(clippedLens, projection());
+            require(path.boundingRect().intersects(QRectF(emptyLensClip.boundingRect())) &&
+                        path.intersected(emptyLensClipPath).isEmpty(),
+                    "sparse corner clips must overlap lens bounds without intersecting its mask");
+        }
+        for (double dpr : {1.0, 1.25, 2.0}) {
+            for (const QTransform& outer :
+                 {QTransform(), QTransform(1.3, 0.15, 0.2, 1.1, -13.7, 7.1),
+                  QTransform(1.9, 0, 0, 1.9, 5.3, 7.1)}) {
+                requirePremultipliedPixelsNear(
+                    renderOpacityFixture(lens, sources, dpr, outer, full, 0.4,
+                                         QPainter::CompositionMode_Multiply, false),
+                    renderOpacityFixture(lens, sources, dpr, outer, full, 0.4,
+                                         QPainter::CompositionMode_Multiply, true),
+                    "large layered lenses must retain canonical pixels and caller state across "
+                    "shapes, DPR and outer transforms");
+                if (shape == SNOW_DISPLAY_RECT_SHAPE_RECTANGLE)
+                    continue;
+                const QImage actual =
+                    renderOpacityFixture(clippedLens, sources, dpr, outer, emptyLensClip, 0.4,
+                                         QPainter::CompositionMode_Multiply, false);
+                QImage unchanged(actual.size(), actual.format());
+                unchanged.setDevicePixelRatio(dpr);
+                unchanged.fill(QColor(30, 40, 70, 255));
+                require(actual == unchanged,
+                        "sparse clips outside the actual lens mask must leave the target and "
+                        "caller painter state unchanged");
+                require(actual == renderOpacityFixture(clippedLens, sources, dpr, outer,
+                                                       emptyLensClip, 0.4,
+                                                       QPainter::CompositionMode_Multiply, true),
+                        "empty lens-mask intersections must match canonical group compositing");
+            }
+        }
+    }
 }
 
 void partialPaintPreservesMasksWhenOnlyOneOriginalLayerIsExposed() {
@@ -2180,6 +2254,7 @@ int main(int argc, char** argv) {
     missingPixelsStayTransparentAndCoverageIsRespected();
     multilayerOpacityComposesOriginalsBeforeElementAppearance();
     multilayerOpacityTilesKeepSparseClipsAndBoundedScratch();
+    multilayerCompositingPreservesCallerStateAndEmptyClips();
     partialPaintPreservesMasksWhenOnlyOneOriginalLayerIsExposed();
     patternedMultilayerSamplingPreservesSpanEndpointsAcrossCompositingStripes();
     partialPaintAndProjectionRetainOriginalSampling();

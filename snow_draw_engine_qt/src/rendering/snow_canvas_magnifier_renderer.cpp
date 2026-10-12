@@ -676,6 +676,7 @@ void drawCompositedLayers(QPainter& painter, const QList<SourceLayer>& layers,
         static_cast<std::size_t>(scratch.width()) * static_cast<std::size_t>(scratch.height());
     g_magnifierDiagnostics.peakCompositingPixelCount =
         qMax(g_magnifierDiagnostics.peakCompositingPixelCount, scratchPixels);
+    bool compositingStateSaved = false;
     for (qint64 top = pixels.top(); top <= pixels.bottom(); top += stripeHeight) {
         const QRect tile(pixels.left(), static_cast<int>(top), pixels.width(),
                          qMin(stripeHeight, static_cast<int>(pixels.bottom() - top + 1)));
@@ -694,19 +695,24 @@ void drawCompositedLayers(QPainter& painter, const QList<SourceLayer>& layers,
             for (const auto& layer : layers)
                 drawLayer(layersPainter, layer, sourceToView);
         }
-        painter.save();
-        // The lens is a group mask. Apply it and the existing exposure clip
-        // once after composing originals at full opacity with SourceOver.
-        painter.setClipPath(viewPath, Qt::IntersectClip);
-        painter.setWorldTransform(QTransform());
-        painter.setWorldTransform(painter.deviceTransform().inverted());
-        painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+        if (!compositingStateSaved) {
+            painter.save();
+            // Retain the complete group mask across stripes. Reinstalling it would
+            // rasterize the same lens contour for each strip. Wait until an exposed
+            // strip is ready so empty sparse clips do not create a mask.
+            painter.setClipPath(viewPath, Qt::IntersectClip);
+            painter.setWorldTransform(QTransform());
+            painter.setWorldTransform(painter.deviceTransform().inverted());
+            painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+            compositingStateSaved = true;
+        }
         painter.drawImage(QRectF(tile), scratch, QRectF(0, 0, tile.width(), tile.height()));
-        painter.restore();
         ++g_magnifierDiagnostics.compositedTileCount;
         g_magnifierDiagnostics.compositedPixelCount +=
             static_cast<std::size_t>(tile.width()) * static_cast<std::size_t>(tile.height());
     }
+    if (compositingStateSaved)
+        painter.restore();
 }
 
 } // namespace
@@ -822,8 +828,8 @@ void render(QPainter& painter, const SceneDisplayInfo& displayInfo, const SnowCa
                                    canvasToView.map(QPointF(item.center_x, item.center_y)));
         QColor sourceColor = snow_canvas_renderer::toQColor(item.stroke);
         QColor lensColor = sourceColor;
-        sourceColor.setAlphaF(sourceColor.alphaF() * 0.04);
-        lensColor.setAlphaF(lensColor.alphaF() * 0.16);
+        sourceColor.setAlphaF(static_cast<float>(static_cast<double>(sourceColor.alphaF()) * 0.04));
+        lensColor.setAlphaF(static_cast<float>(static_cast<double>(lensColor.alphaF()) * 0.16));
         connection.setColorAt(0.0, sourceColor);
         connection.setColorAt(1.0, lensColor);
         if (g_benchmarkDisableAntialiasing)
@@ -831,7 +837,7 @@ void render(QPainter& painter, const SceneDisplayInfo& displayInfo, const SnowCa
         QBrush brush(connection);
         if (g_benchmarkSolidFill) {
             QColor solid = snow_canvas_renderer::toQColor(item.stroke);
-            solid.setAlphaF(solid.alphaF() * 0.10);
+            solid.setAlphaF(static_cast<float>(static_cast<double>(solid.alphaF()) * 0.10));
             brush = QBrush(solid);
         }
         painter.fillPath(

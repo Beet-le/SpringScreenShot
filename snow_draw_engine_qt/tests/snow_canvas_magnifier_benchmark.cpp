@@ -5,9 +5,11 @@
 #include <QElapsedTimer>
 #include <QImage>
 #include <QPainter>
+#include <QtMath>
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
@@ -111,8 +113,9 @@ void appendGuides(std::vector<SnowCanvasOverlayItem>& guides, const SnowCanvasSc
 }
 
 bool benchmark(const std::string& scenario, int iterations, SnowMagnifierConnectionType connection,
-               bool sourceOutline, bool solidFill, bool disableBridgeAntialiasing) {
-    const int count = scenario == "single" || scenario == "creation" ? 1 : 24;
+               bool sourceOutline, bool solidFill, bool disableBridgeAntialiasing, double dpr) {
+    const bool largeLayeredLens = scenario == "layered_large";
+    const int count = scenario == "single" || scenario == "creation" || largeLayeredLens ? 1 : 24;
     std::vector<SnowCanvasSceneItem> items;
     if (scenario == "annotations") {
         for (int index = 0; index < 1000; ++index) {
@@ -129,11 +132,22 @@ bool benchmark(const std::string& scenario, int iterations, SnowMagnifierConnect
         }
     }
     const auto firstLens = items.size();
-    const bool layeredOpacity = scenario == "layered_opacity";
+    const bool layeredOpacity = scenario == "layered_opacity" || largeLayeredLens;
     for (int index = 0; index < count; ++index) {
         auto item = lens(index, connection, sourceOutline);
         if (layeredOpacity)
             item.opacity = 0.5;
+        if (largeLayeredLens) {
+            item.center_x = 960;
+            item.center_y = 540;
+            item.width = 1600;
+            item.height = 900;
+            item.rect_shape = SNOW_DISPLAY_RECT_SHAPE_ELLIPSE;
+            item.magnifier.source_center_x = 630;
+            item.magnifier.source_width = 160;
+            item.magnifier.source_height = 90;
+            item.setArrowPoints(nullptr, 0);
+        }
         items.push_back(item);
     }
     std::vector<SnowCanvasOverlayItem> guides;
@@ -150,12 +164,15 @@ bool benchmark(const std::string& scenario, int iterations, SnowMagnifierConnect
     const auto originalKey = original.cacheKey();
     QList<SnowCanvasBaseImageSource> sources{{original, QRectF(0, 0, 1920, 1080), {}}};
     if (layeredOpacity) {
-        QImage patch(300, 40, QImage::Format_ARGB32_Premultiplied);
+        const int patchTop = largeLayeredLens ? 400 : 480;
+        const int patchHeight = largeLayeredLens ? 200 : 40;
+        QImage patch(300, patchHeight, QImage::Format_ARGB32_Premultiplied);
         patch.fill(QColor(255, 230, 40, 220));
-        sources.append({patch, QRectF(480, 480, 300, 40), {}});
+        sources.append({patch, QRectF(480, patchTop, 300, patchHeight), {}});
     }
     const auto patchKey = layeredOpacity ? sources.back().image.cacheKey() : 0;
-    QImage output(original.size(), QImage::Format_ARGB32_Premultiplied);
+    QImage output(QSize(qCeil(1920 * dpr), qCeil(1080 * dpr)), QImage::Format_ARGB32_Premultiplied);
+    output.setDevicePixelRatio(dpr);
     SceneDisplayInfo info{};
     info.surface_width = 1920;
     info.surface_height = 1080;
@@ -240,17 +257,26 @@ bool benchmark(const std::string& scenario, int iterations, SnowMagnifierConnect
     const char* mode = connection == SNOW_MAGNIFIER_CONNECTION_NONE          ? "none"
                        : connection == SNOW_MAGNIFIER_CONNECTION_LEADER_LINE ? "leader-line"
                                                                              : "gradient";
+    std::uint64_t checksum = 14695981039346656037ULL;
+    for (int y = 0; y < output.height(); ++y) {
+        const auto* row = reinterpret_cast<const QRgb*>(output.constScanLine(y));
+        for (int x = 0; x < output.width(); ++x) {
+            checksum ^= static_cast<std::uint64_t>(row[x]);
+            checksum *= 1099511628211ULL;
+        }
+    }
     std::cout << scenario << "," << mode << "," << (sourceOutline ? "on" : "off") << "," << count
-              << "," << iterations << "," << (solidFill ? "solid" : "gradient") << ","
+              << "," << iterations << "," << dpr << "," << (solidFill ? "solid" : "gradient") << ","
               << (disableBridgeAntialiasing ? "off" : "on") << "," << std::fixed
               << std::setprecision(3) << mean << "," << percentile(0.5) << "," << percentile(0.95)
               << "," << sourceDraws << "," << geometryBuilds << "," << hullBuilds << ","
               << lastDiagnostics.disjointBridgeDrawCount << ","
-              << lastDiagnostics.maskedBridgeDrawCount << ","
+              << lastDiagnostics.maskedBridgeDrawCount << "," << lastDiagnostics.compositedTileCount
+              << "," << lastDiagnostics.peakCompositingPixelCount << ","
               << static_cast<double>(lastDiagnostics.connectionClipNanoseconds) / 1000.0 << ","
               << static_cast<double>(lastDiagnostics.connectionFillNanoseconds) / 1000.0 << ","
               << static_cast<double>(lastDiagnostics.sourceOutlineNanoseconds) / 1000.0 << ","
-              << static_cast<unsigned long long>(output.pixel(180, 170)) << '\n';
+              << checksum << '\n';
     return true;
 }
 
@@ -265,6 +291,7 @@ int main(int argc, char** argv) {
     bool solidFill = false;
     bool disableBridgeAntialiasing = false;
     int iterations = 100;
+    double dpr = 1;
     for (int index = 1; index < argc; ++index) {
         const std::string argument(argv[index]);
         if (argument == "--iterations" && index + 1 < argc) {
@@ -275,6 +302,16 @@ int main(int argc, char** argv) {
             }
             if (iterations < 1)
                 return 2;
+        } else if (argument == "--dpr" && index + 1 < argc) {
+            try {
+                const std::string value(argv[++index]);
+                std::size_t parsed = 0;
+                dpr = std::stod(value, &parsed);
+                if (parsed != value.size() || !std::isfinite(dpr) || dpr < 0.25 || dpr > 4)
+                    return 2;
+            } catch (...) {
+                return 2;
+            }
         } else if (argument == "--scenario" && index + 1 < argc) {
             scenario = argv[++index];
         } else if (argument == "--connection" && index + 1 < argc) {
@@ -306,31 +343,32 @@ int main(int argc, char** argv) {
             disableBridgeAntialiasing = antialiasing == "off";
         } else {
             std::cerr
-                << "usage: snow-canvas-magnifier-benchmark [--iterations N] "
+                << "usage: snow-canvas-magnifier-benchmark [--iterations N] [--dpr 0.25..4] "
                    "[--scenario single|many|lens_drag|source_drag|annotations|creation|selected|"
-                   "layered_opacity] [--connection none|leader-line|gradient] "
+                   "layered_opacity|layered_large] [--connection none|leader-line|gradient] "
                    "[--source-outline on|off] [--timings] [--bridge-fill gradient|solid] "
                    "[--bridge-antialiasing on|off]\n";
             return 2;
         }
     }
-    const std::vector<std::string> scenarios{"single",      "many",           "lens_drag",
-                                             "source_drag", "annotations",    "creation",
-                                             "selected",    "layered_opacity"};
+    const std::vector<std::string> scenarios{
+        "single",   "many",     "lens_drag",       "source_drag",  "annotations",
+        "creation", "selected", "layered_opacity", "layered_large"};
     if (!scenario.empty() &&
         std::find(scenarios.begin(), scenarios.end(), scenario) == scenarios.end())
         return 2;
     snow_canvas_magnifier_renderer::setBridgeBenchmarkOptionsForCurrentThread(
         solidFill, disableBridgeAntialiasing);
-    std::cout
-        << "scenario,connection,source_outline,lenses,iterations,bridge_fill,bridge_antialiasing,"
-           "mean_ms,p50_ms,p95_ms,"
-           "source_draws,geometry_builds,hull_builds,disjoint_bridges,masked_bridges,"
-           "bridge_clip_us,bridge_fill_us,outline_us,checksum\n";
+    std::cout << "scenario,connection,source_outline,lenses,iterations,dpr,bridge_fill,bridge_"
+                 "antialiasing,"
+                 "mean_ms,p50_ms,p95_ms,"
+                 "source_draws,geometry_builds,hull_builds,disjoint_bridges,masked_bridges,"
+                 "composited_tiles,peak_scratch_pixels,"
+                 "bridge_clip_us,bridge_fill_us,outline_us,checksum\n";
     for (const auto& name : scenarios) {
         if ((scenario.empty() || scenario == name) &&
             !benchmark(name, iterations, connection, sourceOutline, solidFill,
-                       disableBridgeAntialiasing))
+                       disableBridgeAntialiasing, dpr))
             return 1;
     }
     return 0;
