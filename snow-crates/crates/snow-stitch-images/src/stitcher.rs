@@ -219,6 +219,7 @@ struct StitchAccumulator {
     previous_raw_index: usize,
     synthetic_reference: Frame,
     reference_mode: ReferenceMode,
+    loaded_canvas_window: Option<i64>,
     state: ViewportState,
     processed_count: usize,
     accepted_count: usize,
@@ -247,11 +248,12 @@ impl StitchAccumulator {
         Ok(Self {
             viewport_extent: options.axis.primary_extent(first.width(), first.height()),
             expected_geometry: first.geometry(),
-            canvas: TiledCanvas::new_for_axis(first.clone(), options.axis)?,
+            canvas: TiledCanvas::new_from_frame(&first, options.axis)?,
             previous_raw: first.clone(),
             previous_raw_index: 0,
             synthetic_reference: first,
             reference_mode: ReferenceMode::Synthetic,
+            loaded_canvas_window: None,
             state: ViewportState::default(),
             processed_count: 0,
             accepted_count: 0,
@@ -286,6 +288,9 @@ impl StitchAccumulator {
         match self.reference_mode {
             ReferenceMode::Synthetic => Ok(()),
             ReferenceMode::CanvasWindow => {
+                if self.loaded_canvas_window == Some(self.state.position) {
+                    return Ok(());
+                }
                 let start =
                     u32::try_from(self.state.position).map_err(|_| StitchError::Arithmetic {
                         operation: "converting canvas-window position",
@@ -297,7 +302,9 @@ impl StitchAccumulator {
                             operation: "calculating canvas-window end",
                         })?;
                 self.canvas
-                    .copy_axis(start, end, self.synthetic_reference.pixels_mut())
+                    .copy_axis(start, end, self.synthetic_reference.pixels_mut())?;
+                self.loaded_canvas_window = Some(self.state.position);
+                Ok(())
             }
         }
     }
@@ -390,6 +397,9 @@ impl StitchAccumulator {
         self.previous_raw = incoming;
         self.previous_raw_index = index;
         let transition = self.state.transition(offset)?;
+        // Every accepted movement changes the loaded position or composes a
+        // boundary band. Stationary animation leaves this window reusable.
+        self.loaded_canvas_window = None;
         let shift = offset.unsigned_abs();
         let mut canvas_band = None;
         let mut synthetic_band = None;
@@ -649,6 +659,68 @@ mod tests {
                 assert_eq!(accumulator.synthetic_reference.pixels().as_ptr(), pointer);
                 assert_eq!(accumulator.synthetic_reference, expected);
             }
+        }
+    }
+
+    #[test]
+    fn stationary_frames_reuse_loaded_window_and_motion_invalidates_it() {
+        for axis in [StitchAxis::Vertical, StitchAxis::Horizontal] {
+            let mut accumulator = StitchAccumulator::new(
+                solid(0, 12, 12),
+                StitchOptions {
+                    axis,
+                    ..StitchOptions::default()
+                },
+            )
+            .unwrap();
+            accumulator
+                .process(1, solid(1, 12, 12), &mut |_, _, _| {
+                    Ok(estimate(MotionOutcome::Motion { offset: -4 }))
+                })
+                .unwrap();
+            accumulator
+                .process(2, solid(2, 12, 12), &mut |_, _, _| {
+                    Ok(estimate(MotionOutcome::Motion { offset: 2 }))
+                })
+                .unwrap();
+            assert_eq!(accumulator.reference_mode, ReferenceMode::CanvasWindow);
+            assert_eq!(accumulator.loaded_canvas_window, None);
+            let expected = accumulator.canvas.materialize_axis(2, 14).unwrap();
+            for (index, outcome) in [
+                (3, MotionOutcome::NoMotion),
+                (4, MotionOutcome::Indeterminate),
+            ] {
+                accumulator
+                    .process(index, solid(index as u8, 12, 12), &mut |reference, _, _| {
+                        assert_eq!(*reference, expected);
+                        Ok(estimate(outcome))
+                    })
+                    .unwrap();
+                assert_eq!(accumulator.loaded_canvas_window, Some(2));
+                assert_eq!(accumulator.state.position, 2);
+            }
+            accumulator
+                .process(5, solid(5, 12, 12), &mut |reference, _, _| {
+                    assert_eq!(*reference, expected);
+                    Ok(estimate(MotionOutcome::Motion { offset: 1 }))
+                })
+                .unwrap();
+            assert_eq!(accumulator.loaded_canvas_window, None);
+            let moved = accumulator.canvas.materialize_axis(1, 13).unwrap();
+            accumulator
+                .process(6, solid(6, 12, 12), &mut |reference, _, _| {
+                    assert_eq!(*reference, moved);
+                    Ok(estimate(MotionOutcome::NoMotion))
+                })
+                .unwrap();
+            assert_eq!(accumulator.loaded_canvas_window, Some(1));
+            accumulator
+                .process(7, solid(7, 12, 12), &mut |_, _, _| {
+                    Ok(estimate(MotionOutcome::Motion { offset: -6 }))
+                })
+                .unwrap();
+            assert_eq!(accumulator.reference_mode, ReferenceMode::Synthetic);
+            assert_eq!(accumulator.loaded_canvas_window, None);
         }
     }
 

@@ -365,11 +365,10 @@ fn detect_balanced_rust(
     sampling: Option<&SamplingPlan>,
 ) -> Vec<BinaryFeature> {
     let candidate_limit = max_features.saturating_mul(2).max(max_features);
-    let image = crate::orb::grayscale(frame);
     let image = if let Some(plan) = sampling {
-        plan.apply(image)
+        plan.apply_frame(frame)
     } else {
-        image
+        crate::orb::grayscale(frame)
     };
     let detection = crate::orb::detect(image, candidate_limit, pyramid_plan);
     let mut ranked = detection
@@ -1026,17 +1025,28 @@ impl VerticalMotionEstimator {
             return Ok(MotionEstimate::no_motion(1.0, diagnostics));
         }
 
-        let grayscale_perf = crate::perf::Scope::new(crate::perf::Stage::Grayscale);
-        let reference_gray = GrayImage::from_frame(motion_reference)?;
-        let previous_gray = GrayImage::from_frame(previous_raw)?;
-        let incoming_gray = GrayImage::from_frame(incoming)?;
-        grayscale_perf.finish();
-        let similarity_perf = crate::perf::Scope::new(crate::perf::Stage::SimilarityMaps);
-        let direct =
-            SimilarityMap::between(&previous_gray, &incoming_gray, self.layout, self.axis, 0);
-        let zero_alignment =
-            SimilarityMap::between(&reference_gray, &incoming_gray, self.layout, self.axis, 0);
-        similarity_perf.finish();
+        let (previous_gray, incoming_gray) = {
+            let _perf = crate::perf::Scope::new(crate::perf::Stage::Grayscale);
+            (
+                GrayImage::from_frame(previous_raw)?,
+                GrayImage::from_frame(incoming)?,
+            )
+        };
+        let direct = {
+            let _perf = crate::perf::Scope::new(crate::perf::Stage::SimilarityMaps);
+            SimilarityMap::between(&previous_gray, &incoming_gray, self.layout, self.axis, 0)
+        };
+        // The raw comparison is complete. Release its two float planes before
+        // preparing the motion reference or retaining the ORB pyramids.
+        drop(previous_gray);
+        let reference_gray = {
+            let _perf = crate::perf::Scope::new(crate::perf::Stage::Grayscale);
+            GrayImage::from_frame(motion_reference)?
+        };
+        let zero_alignment = {
+            let _perf = crate::perf::Scope::new(crate::perf::Stage::SimilarityMaps);
+            SimilarityMap::between(&reference_gray, &incoming_gray, self.layout, self.axis, 0)
+        };
 
         let max_features = self.options.max_features as usize;
         let evidence = pure_rust_feature_evidence(

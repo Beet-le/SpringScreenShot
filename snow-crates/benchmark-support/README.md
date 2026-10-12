@@ -143,3 +143,36 @@ checkpoint within each process, followed by the median across process maxima.
 This is a sampled encoding checkpoint, not a guaranteed transient encoding peak.
 Ordinary duplicate memory checkpoints remain errors. The opt-in and aggregation
 semantics are saved in summary provenance; raw records are retained unchanged.
+
+## Stitching corpus equivalence and latency
+
+`corpus_benchmark` runs the incremental stitcher on PNG sequences in the input
+directory and its direct child directories. Root PNGs form their own sequence,
+even when child directories exist. Only PNG files are included; deeper directories
+are not scanned. Filenames are sorted lexically. Output and baseline directories
+are excluded from discovery after resolving directory aliases, so both may live
+inside the input directory. Input, output, and baseline must be distinct directories;
+group names must produce distinct output filenames (case-insensitive on Windows
+and macOS). Invalid directory roles or ambiguous names fail before artifacts are written.
+Decode happens once per sequence, then immutable shared frame leases model the
+production capture handoff. One warmup precedes the requested measured runs.
+Push and final materialization timings are separate; decoding, output encoding,
+and validation are excluded. Production stage scopes are inclusive.
+
+Build the same example and feature set against both revisions, preserving the
+baseline executable before changing production sources. On Windows, use the
+`windows-msvc-performance` build environment and its Cargo target directory.
+
+```sh
+cargo build --release --locked --no-default-features -p snow-stitch-images \
+  --features perf-instrumentation --example corpus_benchmark
+corpus_benchmark INPUT BASELINE_OUTPUT 3
+corpus_benchmark INPUT OPTIMIZED_OUTPUT 3 BASELINE_OUTPUT
+```
+
+Each output directory contains stitched PNGs and `results.json` with complete
+decisions, geometry, full-pixel checksums, and timing samples. When baseline
+output is supplied, every run must reproduce the complete motion decisions;
+the first measured run also compares every decoded final pixel. Any difference
+fails the process. This verifies exact equivalence to the baseline, not absolute
+stitching accuracy or the correctness of movements already rejected by it.
