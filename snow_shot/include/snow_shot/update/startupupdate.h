@@ -13,7 +13,8 @@ namespace snow_shot::update {
 [[nodiscard]] bool isStartupUpdateRelaunch(const QStringList& arguments);
 [[nodiscard]] QStringList normalStartupArguments(QStringList arguments);
 // Automatic updates return to the tray unless a new launch requests the main window.
-[[nodiscard]] QStringList startupUpdateRelaunchArguments(bool foregroundRequested = false);
+[[nodiscard]] QStringList startupUpdateRelaunchArguments(bool foregroundRequested = false,
+                                                         const QStringList& imagePaths = {});
 
 enum class StartupUpdateResult { ContinueStartup, ExitForUpdate };
 
@@ -22,6 +23,7 @@ enum class StartupUpdateResult { ContinueStartup, ExitForUpdate };
 [[nodiscard]] StartupUpdateResult
 runStartupUpdate(UpdateService& service, const std::function<bool()>& flush,
                  const std::function<bool()>& foregroundRequested = {},
-                 std::chrono::milliseconds timeout = std::chrono::seconds(210));
+                 std::chrono::milliseconds timeout = std::chrono::seconds(210),
+                 const std::function<QStringList()>& relaunchArguments = {});
 
 } // namespace snow_shot::update

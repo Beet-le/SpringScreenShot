@@ -8,12 +8,14 @@
 #include <QLocalSocket>
 #include <QUuid>
 #include "snow_shot/app/singleinstancecoordinator.h"
+#include "snow_shot/app/shellimagelaunch.h"
 #include "snow_shot/presentation/languagemanager.h"
 #include "snow_shot/presentation/components/icons/snowshoticons.h"
 #include "snow_shot/presentation/styles/thememanager.h"
 #include "snow_shot/presentation/settings/applicationpriority.h"
 #include "snow_shot/platform/windows/autostartregistration.h"
 #include "snow_shot/platform/windows/administratorlaunch.h"
+#include "snow_shot/platform/windows/shellcontextmenuregistration.h"
 #include "widgets/message.h"
 #include "widgets/platform_compatibility.h"
 #include "snow_shot/presentation/components/screenshothistorypagewidget.h"
@@ -516,8 +518,9 @@ int main(int argc, char* argv[]) {
         launchArguments, snow_shot::platform::macos::initialNativeLoginItemLaunch());
 #endif
     snow_shot::app::SingleInstanceCoordinator singleInstance;
-    const snow_shot::app::SingleInstanceResult instanceResult =
-        singleInstance.acquireOrForward(launchArguments);
+    const snow_shot::app::SingleInstanceResult instanceResult = singleInstance.acquireOrForward(
+        launchArguments,
+        snow_shot::app::parseShellImageLaunchRequest(launchArguments).requested ? 10000 : 1500);
     if (instanceResult.outcome == snow_shot::app::SingleInstanceOutcome::Forwarded) {
         return 0;
     }
@@ -525,6 +528,8 @@ int main(int argc, char* argv[]) {
         qWarning().noquote() << instanceResult.error;
         return 2;
     }
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, &singleInstance,
+                     [&singleInstance] { singleInstance.stopAcceptingLaunchRequests(); });
 
     static_cast<void>(
         snow_shot::storage::ApplicationStorage::instance().initialize(storageOptions));
@@ -572,26 +577,52 @@ int main(int argc, char* argv[]) {
         startupUpdate.setSystemProxy(
             applicationStorage.configuration().value(QStringLiteral("network/proxy")).toString() ==
             u"system");
-        bool foregroundRequested = administratorRestart;
+        bool foregroundRequested =
+            administratorRestart || launchArguments.contains(QStringLiteral("--show-main-window"));
+        const auto initialImageRequest =
+            snow_shot::app::parseShellImageLaunchRequest(launchArguments);
+        QStringList pendingImagePaths =
+            initialImageRequest.valid ? initialImageRequest.paths : QStringList{};
+        const auto relaunchArguments = [&] {
+            return snow_shot::update::startupUpdateRelaunchArguments(foregroundRequested,
+                                                                     pendingImagePaths);
+        };
         const auto forwardedLaunch = QObject::connect(
             &singleInstance, &snow_shot::app::SingleInstanceCoordinator::launchRequestReceived,
             &app, [&](const QStringList& arguments) {
+                const auto imageRequest = snow_shot::app::parseShellImageLaunchRequest(arguments);
+                if (imageRequest.valid)
+                    pendingImagePaths.append(imageRequest.paths);
                 foregroundRequested =
-                    foregroundRequested || !arguments.contains(QStringLiteral("--autostart"));
-                startupUpdate.setRelaunchArguments(
-                    snow_shot::update::startupUpdateRelaunchArguments(foregroundRequested));
+                    foregroundRequested ||
+                    arguments.contains(QStringLiteral("--show-main-window")) ||
+                    (!imageRequest.requested && !arguments.contains(QStringLiteral("--autostart")));
+                startupUpdate.setRelaunchArguments(relaunchArguments());
             });
         const auto startupUpdateResult = snow_shot::update::runStartupUpdate(
             startupUpdate, [&applicationStorage] { return applicationStorage.flushNow().success; },
-            [&] { return foregroundRequested; });
+            [&] { return foregroundRequested; }, std::chrono::seconds(210), relaunchArguments);
         QObject::disconnect(forwardedLaunch);
-        if (startupUpdateResult == snow_shot::update::StartupUpdateResult::ExitForUpdate)
+        if (startupUpdateResult == snow_shot::update::StartupUpdateResult::ExitForUpdate) {
+            singleInstance.stopAcceptingLaunchRequests();
             return 0;
+        }
     }
 #else
     static_cast<void>(updaterRelaunch);
 #endif
     const auto startupSettings = snow_shot::storage::SystemSettings();
+#ifdef Q_OS_WIN
+    QString shellRegistrationError;
+    const snow_shot::platform::windows::ShellContextMenuRegistration shellRegistration;
+    if (!shellRegistration.setEnabled(snow_shot::storage::ApplicationStorage::instance()
+                                              .configuration()
+                                              .value(QStringLiteral("system/context_menu_mode"))
+                                              .toString() == QStringLiteral("image_files"),
+                                      &shellRegistrationError)) {
+        snow_shot::app::reportStartupRegistrationFailure(shellRegistrationError);
+    }
+#endif
 #ifdef Q_OS_MACOS
     const auto startupResult =
         snow_shot::platform::macos::loginItemAutomaticRegistrationAllowed(launchArguments)
@@ -609,11 +640,16 @@ int main(int argc, char* argv[]) {
     adqt::widgets::AdTooltip::installApplicationTooltips();
 
     snow_shot::app::ApplicationController applicationController(app);
-    singleInstance.setLaunchRequestHandler([&applicationController](const QStringList& arguments) {
-        applicationController.handleLaunchRequest(
-            snow_shot::update::normalStartupArguments(arguments));
-    });
     applicationController.start();
+    QTimer::singleShot(0, &app, [&] {
+        if (snow_shot::app::parseShellImageLaunchRequest(launchArguments).requested)
+            applicationController.handleLaunchRequest(launchArguments);
+        singleInstance.setLaunchRequestHandler(
+            [&applicationController](const QStringList& arguments) {
+                applicationController.handleLaunchRequest(
+                    snow_shot::update::normalStartupArguments(arguments));
+            });
+    });
     if (!startupResult.success) {
         snow_shot::app::reportStartupRegistrationFailure(startupResult.error);
 #ifdef Q_OS_MACOS

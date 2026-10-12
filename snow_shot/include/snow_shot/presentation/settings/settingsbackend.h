@@ -13,12 +13,16 @@
 #endif
 
 #include "snow_shot/platform/macos/loginitemservice.h"
+#include "snow_shot/platform/windows/administratorlaunch.h"
+#include "snow_shot/platform/windows/shellcontextmenuregistration.h"
 
 #include <QObject>
 #include <QPointer>
 #include <QVariant>
 #include <QVector>
 #include <future>
+#include <functional>
+#include <memory>
 
 namespace snow_shot::translation {
 class TranslationService;
@@ -264,7 +268,10 @@ class BuiltInSettingsBackend final : public SettingsBackend {
         ::snow_shot::presentation::GlobalShortcutManager& shortcutManager,
         QObject* parent = nullptr, GlobalMouseManager* mouseManager = nullptr,
         AppPermissionService* permissions = nullptr,
-        platform::macos::LoginItemService* loginItems = nullptr);
+        platform::macos::LoginItemService* loginItems = nullptr,
+        platform::windows::ShellContextMenuRegistration* shellContextMenu = nullptr,
+        std::function<platform::windows::AdministratorResult(bool, bool)> startupSettingsApply =
+            {});
     AppPermissionService* appPermissions() const override {
         return m_permissions;
     }
@@ -361,11 +368,16 @@ class BuiltInSettingsBackend final : public SettingsBackend {
 
   private:
     void connectSkinControllerIfNeeded();
+    [[nodiscard]] platform::windows::AdministratorResult applyStartupSettings(bool enabled,
+                                                                              bool elevated);
 
     ::snow_shot::presentation::GlobalShortcutManager& m_shortcutManager;
     AppPermissionService* m_permissions = nullptr;
     GlobalMouseManager* m_mouseManager = nullptr;
     platform::macos::LoginItemService* m_loginItems = nullptr;
+    std::unique_ptr<platform::windows::ShellContextMenuRegistration> m_defaultShellContextMenu;
+    platform::windows::ShellContextMenuRegistration* m_shellContextMenu = nullptr;
+    std::function<platform::windows::AdministratorResult(bool, bool)> m_startupSettingsApply;
     QPointer<MainWindowSkinController> m_skinController;
     QMetaObject::Connection m_skinStatusConnection;
     bool m_copyLogBusy = false;

@@ -34,6 +34,7 @@
 #include <QClipboard>
 #include <QDateTime>
 #include <QDir>
+#include <QDebug>
 #include <QFileInfo>
 #include <QMimeData>
 #include <QTimer>
@@ -201,7 +202,8 @@ storage::CaptureHistoryPolicy defaultHistoryPolicy() {
 }
 
 platform::windows::AdministratorResult
-applyStartupSettings(bool enabled, bool elevated, platform::macos::LoginItemService* loginItems) {
+applyNativeStartupSettings(bool enabled, bool elevated,
+                           platform::macos::LoginItemService* loginItems) {
 #ifdef Q_OS_MACOS
     Q_UNUSED(elevated);
     const auto result = loginItems->setEnabled(enabled);
@@ -243,9 +245,19 @@ applyStartupSettings(bool enabled, bool elevated, platform::macos::LoginItemServ
 BuiltInSettingsBackend::BuiltInSettingsBackend(
     ::snow_shot::presentation::GlobalShortcutManager& shortcutManager, QObject* parent,
     GlobalMouseManager* mouseManager, AppPermissionService* permissions,
-    platform::macos::LoginItemService* loginItems)
+    platform::macos::LoginItemService* loginItems,
+    platform::windows::ShellContextMenuRegistration* shellContextMenu,
+    std::function<platform::windows::AdministratorResult(bool, bool)> startupSettingsApply)
     : SettingsBackend(parent), m_shortcutManager(shortcutManager), m_permissions(permissions),
-      m_mouseManager(mouseManager), m_loginItems(loginItems) {
+      m_mouseManager(mouseManager), m_loginItems(loginItems), m_shellContextMenu(shellContextMenu),
+      m_startupSettingsApply(std::move(startupSettingsApply)) {
+#ifdef Q_OS_WIN
+    if (!m_shellContextMenu) {
+        m_defaultShellContextMenu =
+            std::make_unique<platform::windows::ShellContextMenuRegistration>();
+        m_shellContextMenu = m_defaultShellContextMenu.get();
+    }
+#endif
 #ifdef Q_OS_MACOS
     if (!m_loginItems)
         m_loginItems = &platform::macos::loginItemService();
@@ -310,6 +322,12 @@ BuiltInSettingsBackend::BuiltInSettingsBackend(
                 emit synchronized();
             });
     connectSkinControllerIfNeeded();
+}
+
+platform::windows::AdministratorResult BuiltInSettingsBackend::applyStartupSettings(bool enabled,
+                                                                                    bool elevated) {
+    return m_startupSettingsApply ? m_startupSettingsApply(enabled, elevated)
+                                  : applyNativeStartupSettings(enabled, elevated, m_loginItems);
 }
 
 void BuiltInSettingsBackend::connectSkinControllerIfNeeded() {
@@ -452,6 +470,11 @@ QVariant BuiltInSettingsBackend::selectValue(SettingsSelectBinding binding) cons
         return storage::ApplicationStorage::instance()
             .configuration()
             .value(QStringLiteral("system/memory_optimization_policy"))
+            .toString();
+    case SettingsSelectBinding::ContextMenuMode:
+        return storage::ApplicationStorage::instance()
+            .configuration()
+            .value(QStringLiteral("system/context_menu_mode"))
             .toString();
     case SettingsSelectBinding::ApplicationPriority: {
         auto& storage = storage::ApplicationStorage::instance();
@@ -698,6 +721,39 @@ bool BuiltInSettingsBackend::applySelectValue(SettingsSelectBinding binding,
 #else
         return false;
 #endif
+    case SettingsSelectBinding::ContextMenuMode: {
+#ifdef Q_OS_WIN
+        const QString key = QStringLiteral("system/context_menu_mode");
+        const auto requested =
+            storage::ConfigurationSchema::normalize(key, QJsonValue::fromVariant(value));
+        if (!requested.valid || !m_shellContextMenu)
+            return false;
+        auto& configuration = storage::ApplicationStorage::instance().configuration();
+        if (!configuration.isWritable())
+            return false;
+        const auto previous = configuration.value(key);
+        auto result = m_shellContextMenu->changeEnabled(
+            requested.value.toString() == QStringLiteral("image_files"), [&] {
+                return configuration.setValue(key, requested.value) &&
+                       configuration.flushNow().success;
+            });
+        if (!result.success) {
+            if (configuration.value(key) != previous &&
+                (!configuration.setValue(key, previous) || !configuration.flushNow().success)) {
+                result.error += QLatin1Char(' ') +
+                                QCoreApplication::translate(
+                                    "SettingsBackend",
+                                    "Could not restore the Windows context menu preference.");
+            }
+            emit operationMessage(result.error, false);
+        }
+        emit synchronized();
+        return result.success;
+#else
+        Q_UNUSED(value);
+        return false;
+#endif
+    }
     case SettingsSelectBinding::Proxy:
         return storage::NetworkSettings().setProxy(value.toString());
     case SettingsSelectBinding::UpdateMode:
@@ -924,6 +980,13 @@ bool BuiltInSettingsBackend::switchValue(SettingsSwitchBinding binding) const {
 void BuiltInSettingsBackend::refreshPlatformSettings() {
 #ifdef Q_OS_MACOS
     m_loginItems->refresh();
+#endif
+#ifdef Q_OS_WIN
+    if (m_shellContextMenu) {
+        QString error;
+        if (!m_shellContextMenu->refreshLabels(&error))
+            qWarning().noquote() << error;
+    }
 #endif
 }
 bool BuiltInSettingsBackend::fieldPending(const QString& fieldId) const {
@@ -1169,8 +1232,7 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
                                      : storage::SystemSettings().autoStartAtBoot(),
                                  binding == SettingsSwitchBinding::LaunchAsAdministrator
                                      ? value
-                                     : storage::SystemSettings().launchAsAdministrator(),
-                                 m_loginItems);
+                                     : storage::SystemSettings().launchAsAdministrator());
         if (!result.success)
             emit operationMessage(result.error, false);
         emit synchronized();
@@ -2056,6 +2118,9 @@ bool BuiltInSettingsBackend::importConfigurationSnapshot(
     const auto previous = configuration.snapshot();
     const QString enabledKey = QStringLiteral("system/auto_start_at_boot");
     const QString elevatedKey = QStringLiteral("system/launch_as_administrator");
+#ifdef Q_OS_WIN
+    const QString contextMenuKey = QStringLiteral("system/context_menu_mode");
+#endif
     const auto importedValue = [&](const QString& key) {
         const auto fallback = storage::ConfigurationSchema::defaultValue(key);
         const auto normalized =
@@ -2064,11 +2129,17 @@ bool BuiltInSettingsBackend::importConfigurationSnapshot(
     };
     const auto requestedEnabled = importedValue(enabledKey);
     const auto requestedElevated = importedValue(elevatedKey);
+#ifdef Q_OS_WIN
+    const auto requestedContextMenu = importedValue(contextMenuKey);
+#endif
     // Startup preferences are committed by the native transaction. Keep its previous
     // configuration baseline intact even if querying the OS during rollback fails.
     auto staged = values;
     staged.insert(enabledKey, previous.value(enabledKey));
     staged.insert(elevatedKey, previous.value(elevatedKey));
+#ifdef Q_OS_WIN
+    staged.insert(contextMenuKey, previous.value(contextMenuKey));
+#endif
     if (!configuration.applySnapshot(staged, schemaVersion))
         return false;
     bool accepted = true;
@@ -2107,10 +2178,16 @@ bool BuiltInSettingsBackend::importConfigurationSnapshot(
 #endif
     if (previous.value(enabledKey) != requestedEnabled ||
         previous.value(elevatedKey) != requestedElevated) {
-        const auto result = applyStartupSettings(requestedEnabled.toBool(),
-                                                 requestedElevated.toBool(), m_loginItems);
+        const auto result =
+            applyStartupSettings(requestedEnabled.toBool(), requestedElevated.toBool());
         accepted = accepted && result.success;
     }
+#ifdef Q_OS_WIN
+    if (previous.value(contextMenuKey) != requestedContextMenu)
+        accepted = applySelectValue(SettingsSelectBinding::ContextMenuMode,
+                                    requestedContextMenu.toVariant()) &&
+                   accepted;
+#endif
     bool historyChanged = false;
     for (auto it = previous.cbegin(); it != previous.cend(); ++it)
         if (it.key().startsWith(QStringLiteral("capture_history/")) &&
@@ -2720,14 +2797,22 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
         const auto result = applyStartupSettings(
             storage::ConfigurationSchema::defaultValue(QStringLiteral("system/auto_start_at_boot"))
                 .toBool(),
-            false, m_loginItems);
+            false);
         if (!result.success)
             emit operationMessage(result.error, false);
         emit synchronized();
-        return result.success && applySelectValue(SettingsSelectBinding::UpdateMode,
-                                                  storage::ConfigurationSchema::defaultValue(
-                                                      QStringLiteral("updates/mode"))
-                                                      .toVariant());
+        bool accepted = result.success;
+#ifdef Q_OS_WIN
+        accepted = applySelectValue(SettingsSelectBinding::ContextMenuMode,
+                                    storage::ConfigurationSchema::defaultValue(
+                                        QStringLiteral("system/context_menu_mode"))
+                                        .toVariant()) &&
+                   accepted;
+#endif
+        return accepted && applySelectValue(SettingsSelectBinding::UpdateMode,
+                                            storage::ConfigurationSchema::defaultValue(
+                                                QStringLiteral("updates/mode"))
+                                                .toVariant());
     }
     case SettingsSectionReset::ScreenshotCapture:
         return storage::ApplicationStorage::instance().configuration().setValues({

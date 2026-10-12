@@ -298,6 +298,11 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      std::nullopt,
      {QStringLiteral("smart_control"), QStringLiteral("disabled")}},
     {QStringLiteral("system/auto_start_at_boot"), true, ConfigurationValueKind::Boolean},
+    {QStringLiteral("system/context_menu_mode"),
+     QStringLiteral("image_files"),
+     ConfigurationValueKind::String,
+     std::nullopt,
+     {QStringLiteral("image_files"), QStringLiteral("disabled")}},
     {QStringLiteral("system/launch_as_administrator"), false, ConfigurationValueKind::Boolean},
     {QStringLiteral("mcp/enabled"), false, ConfigurationValueKind::Boolean},
 #ifdef Q_OS_MACOS

@@ -70,6 +70,7 @@ enum class SettingsSelectBinding {
     ApplicationPriority,
     ApplicationQoS,
     MemoryOptimizationPolicy,
+    ContextMenuMode,
     Proxy,
     UpdateMode,
     OcrModelType,

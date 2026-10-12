@@ -46,6 +46,10 @@
             <translation>無法插入標註範本</translation>
         </message>
         <message>
+            <source>Could not open the selected image file: %1</source>
+            <translation>無法開啟所選影像檔案：%1</translation>
+        </message>
+        <message>
             <source>Could not read the selected files from Finder. Please try again.</source>
             <translation>無法讀取 Finder 中所選的檔案，請再試一次。</translation>
         </message>
@@ -131,7 +135,7 @@
         </message>
         <message>
             <source>The pinned windows could not be hidden</source>
-            <translation>無法隱藏貼圖視窗</translation>
+            <translation>無法隱藏固定到螢幕視窗</translation>
         </message>
         <message>
             <source>The recognition text could not be saved: %1</source>

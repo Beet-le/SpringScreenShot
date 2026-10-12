@@ -119,6 +119,7 @@ class ScreenshotClipboardContentReader final {
     // and transient bytes before image copies, decoding, and rasterization.
     using AllocationCheck = std::function<bool(qint64)>;
 
+    [[nodiscard]] static QStringList supportedImageFileExtensions();
     [[nodiscard]] static QStringList supportedFileExtensions();
     [[nodiscard]] static QStringList localFilePaths(const QMimeData* mimeData);
     // File metadata is independent of GUI state and may be captured on a worker.

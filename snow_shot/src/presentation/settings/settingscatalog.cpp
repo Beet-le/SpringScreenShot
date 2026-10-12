@@ -2137,6 +2137,22 @@ SettingsItemDefinition autoStartItem() {
         QStringLiteral("system/auto_start_at_boot"), SettingsSwitchBinding::AutoStartAtBoot);
 }
 
+#ifdef Q_OS_WIN
+SettingsItemDefinition contextMenuModeItem() {
+    return fixedSelectItem(
+        QStringLiteral("system.context-menu-mode"),
+        QT_TRANSLATE_NOOP("SettingsCatalog", "Windows context menu"),
+        QT_TRANSLATE_NOOP("SettingsCatalog",
+                          "Add Edit with Snow Shot to the classic Windows context menu to pin an "
+                          "image file to the screen."),
+        QStringLiteral("system/context_menu_mode"), SettingsSelectBinding::ContextMenuMode,
+        {{QStringLiteral("image_files"),
+          settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Image files"))},
+         {QStringLiteral("disabled"),
+          settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Disabled"))}});
+}
+#endif
+
 SettingsItemDefinition mcpEnabledItem() {
     return switchItem(QStringLiteral("system.mcp-enabled"),
                       QT_TRANSLATE_NOOP("SettingsCatalog", "Enable MCP integration"),
@@ -3025,6 +3041,9 @@ QVector<SettingsPageDefinition> builtInPages() {
                   loginItemSettingsItem(),
 #else
                   launchAsAdministratorItem(), restartAsAdministratorItem(),
+#endif
+#ifdef Q_OS_WIN
+                  contextMenuModeItem(),
 #endif
                   updateModeItem()},
              },
@@ -4582,6 +4601,9 @@ QStringList SettingsCatalog::validationErrors() const {
                         break;
                     case SettingsSelectBinding::MemoryOptimizationPolicy:
                         expectedKey = QStringLiteral("system/memory_optimization_policy");
+                        break;
+                    case SettingsSelectBinding::ContextMenuMode:
+                        expectedKey = QStringLiteral("system/context_menu_mode");
                         break;
                     case SettingsSelectBinding::Proxy:
                         expectedKey = QStringLiteral("network/proxy");

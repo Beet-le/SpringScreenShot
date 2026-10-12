@@ -7,6 +7,8 @@ use crate::error::{Result, UpdateError, io_error};
 #[cfg(windows)]
 mod windows_impl;
 #[cfg(windows)]
+mod windows_shell;
+#[cfg(windows)]
 mod windows_startup;
 
 #[cfg(windows)]
@@ -56,6 +58,16 @@ pub fn registered_target_matches(_root: &Path) -> Result<bool> {
 
 #[cfg(not(windows))]
 pub fn remove_installation_startup(_root: &Path) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub fn remove_installation_shell_verbs(_root: &Path) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub fn migrate_installation_shell_verbs(_previous: &Path, _root: &Path) -> Result<()> {
     Ok(())
 }
 

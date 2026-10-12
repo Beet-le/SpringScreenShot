@@ -1034,6 +1034,10 @@
     <context>
         <name>SettingsBackend</name>
         <message>
+            <source>Could not restore the Windows context menu preference.</source>
+            <translation>无法恢复 Windows 右键菜单偏好设置。</translation>
+        </message>
+        <message>
             <source>Enter a valid HTTP or HTTPS server address without credentials, a query, or a fragment.</source>
             <translation>请输入有效的 HTTP 或 HTTPS 服务器地址，不包含凭据、查询参数或片段。</translation>
         </message>
@@ -1159,6 +1163,10 @@
         <message>
             <source>Active window</source>
             <translation>活动窗口</translation>
+        </message>
+        <message>
+            <source>Add Edit with Snow Shot to the classic Windows context menu to pin an image file to the screen.</source>
+            <translation>在经典 Windows 右键菜单中添加“使用 Snow Shot 编辑”，将图像文件固定到屏幕。</translation>
         </message>
         <message>
             <source>Adjust MP4 quality and file size</source>
@@ -2473,6 +2481,10 @@
             <translation>图像导出</translation>
         </message>
         <message>
+            <source>Image files</source>
+            <translation>图像文件</translation>
+        </message>
+        <message>
             <source>Image files (*.png *.ico);;PNG images (*.png);;Icon files (*.ico)</source>
             <translation>图像文件 (*.png *.ico);;PNG 图像 (*.png);;图标文件 (*.ico)</translation>
         </message>
@@ -3022,7 +3034,7 @@
         </message>
         <message>
             <source>Pin screenshot to screen</source>
-            <translation>固定截图到屏幕</translation>
+            <translation>将截图固定到屏幕</translation>
         </message>
         <message>
             <source>Pin selected image files from File Explorer or the desktop to the screen</source>
@@ -4426,7 +4438,7 @@
         </message>
         <message>
             <source>When pinning duplicate content</source>
-            <translation>固定重复内容时</translation>
+            <translation>将重复内容固定到屏幕时</translation>
         </message>
         <message>
             <source>Window Element API</source>
@@ -4443,6 +4455,10 @@
         <message>
             <source>Window interface</source>
             <translation>窗口界面</translation>
+        </message>
+        <message>
+            <source>Windows context menu</source>
+            <translation>Windows 右键菜单</translation>
         </message>
         <message>
             <source>Write the image to a file and copy that file to the clipboard</source>
@@ -4506,6 +4522,41 @@
         <message>
             <source>selected-text translation</source>
             <translation>选中文本翻译</translation>
+        </message>
+    </context>
+    <context>
+        <name>ShellContextMenuRegistration</name>
+        <message>
+            <source>Could not access the Windows context menu registry. Windows error %1.</source>
+            <translation>无法访问 Windows 右键菜单注册表。Windows 错误 %1。</translation>
+        </message>
+        <message>
+            <source>Could not read the Windows context menu registration.</source>
+            <translation>无法读取 Windows 右键菜单注册信息。</translation>
+        </message>
+        <message>
+            <source>Could not restore the Windows context menu registration. %1</source>
+            <translation>无法恢复 Windows 右键菜单注册信息。%1</translation>
+        </message>
+        <message>
+            <source>Could not save the Windows context menu preference.</source>
+            <translation>无法保存 Windows 右键菜单偏好设置。</translation>
+        </message>
+        <message>
+            <source>Edit with Snow Shot</source>
+            <translation>使用 Snow Shot 编辑</translation>
+        </message>
+        <message>
+            <source>Edit with Snow Shot Mini</source>
+            <translation>使用 Snow Shot Mini 编辑</translation>
+        </message>
+        <message>
+            <source>The Windows context menu entry is owned by another application.</source>
+            <translation>此 Windows 右键菜单项属于其他应用程序。</translation>
+        </message>
+        <message>
+            <source>The Windows context menu is only supported on Windows.</source>
+            <translation>Windows 右键菜单仅在 Windows 上受支持。</translation>
         </message>
     </context>
     <context>

@@ -900,6 +900,10 @@ void UpdateService::setRelaunchArguments(const QStringList& arguments) {
     }
 }
 
+void UpdateService::clearRelaunchArguments() {
+    m_impl->relaunchArguments.reset();
+}
+
 void UpdateService::reportBlocked(const QString& reason) {
     m_impl->errorSource.clear();
     if (m_impl->status.state == UpdateState::Applying) {

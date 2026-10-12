@@ -1072,6 +1072,7 @@ if(APPLE)
 endif()
 add_library(snow_shot_administrator STATIC
     src/platform/windows/autostartregistration.cpp
+    src/platform/windows/shellcontextmenuregistration.cpp
     src/platform/windows/administratorlaunch.cpp)
 target_include_directories(snow_shot_administrator PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(snow_shot_administrator PUBLIC Qt6::Core Qt6::Network)
@@ -1079,6 +1080,13 @@ if(WIN32)
     target_link_libraries(snow_shot_administrator PRIVATE taskschd ole32 oleaut32 advapi32 shell32 uuid comsuppw)
 endif()
 if(SNOW_SHOT_BUILD_TESTS)
+    add_executable(snow-shot-shell-image-launch-tests tests/shell_image_launch_tests.cpp)
+    target_include_directories(snow-shot-shell-image-launch-tests PRIVATE include)
+    target_link_libraries(snow-shot-shell-image-launch-tests PRIVATE Qt6::Core)
+    add_test(NAME snow-shot-shell-image-launch-tests COMMAND snow-shot-shell-image-launch-tests)
+    set_tests_properties(snow-shot-shell-image-launch-tests PROPERTIES LABELS "unit" TIMEOUT 30
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
     add_executable(snow-shot-administrator-launch-tests tests/administrator_launch_tests.cpp)
     target_link_libraries(snow-shot-administrator-launch-tests PRIVATE snow_shot_administrator)
     add_test(NAME snow-shot-administrator-launch-tests COMMAND snow-shot-administrator-launch-tests)
@@ -10838,6 +10846,40 @@ foreach(_snow_cloud_target IN LISTS _snow_cloud_targets)
 endforeach()
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/SnowShotMini.cmake")
+
+if(SNOW_SHOT_BUILD_TESTS AND WIN32)
+    foreach(_shell_edition IN ITEMS full mini)
+        set(_shell_suffix "")
+        if(_shell_edition STREQUAL "mini")
+            if(NOT TARGET snow_shot_settings_mini)
+                continue()
+            endif()
+            set(_shell_suffix "_mini")
+        endif()
+        set(_shell_registration_test "snow-shot-shell-context-menu-registration-${_shell_edition}-tests")
+        add_executable(${_shell_registration_test} tests/shell_context_menu_registration_tests.cpp)
+        target_link_libraries(${_shell_registration_test} PRIVATE snow_shot_administrator${_shell_suffix})
+        add_test(NAME ${_shell_registration_test} COMMAND ${_shell_registration_test})
+        set_tests_properties(${_shell_registration_test} PROPERTIES LABELS "unit;windows" TIMEOUT 30
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
+        set(_shell_settings_test "snow-shot-shell-context-menu-settings-${_shell_edition}-tests")
+        add_executable(${_shell_settings_test} tests/shell_context_menu_settings_tests.cpp
+            src/presentation/services/screenshotclipboardservice.cpp)
+        target_link_libraries(${_shell_settings_test} PRIVATE snow_shot_settings${_shell_suffix}
+            snow_shot_image_codec)
+        snow_shot_import_offscreen_platform(${_shell_settings_test})
+        if(_shell_edition STREQUAL "mini")
+            snow_shot_add_translations(${_shell_settings_test} MINI)
+        else()
+            snow_shot_add_translations(${_shell_settings_test})
+        endif()
+        add_test(NAME ${_shell_settings_test} COMMAND ${_shell_settings_test} -platform offscreen)
+        set_tests_properties(${_shell_settings_test} PROPERTIES LABELS "unit;windows" TIMEOUT 60
+            ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endforeach()
+endif()
 
 if(SNOW_SHOT_BUILD_TESTS)
     add_executable(snow-shot-memory-optimization-controller-tests

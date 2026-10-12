@@ -85,15 +85,28 @@ where
 
 pub fn validate_relaunch_arguments(arguments: &[String]) -> crate::Result<()> {
     let mut seen = std::collections::HashSet::new();
-    crate::error::require(
-        arguments.len() <= 3
-            && arguments.iter().all(|argument| {
-                matches!(
-                    argument.as_str(),
-                    "--autostart" | "--show-main-window" | "--skip-startup-update"
-                ) && seen.insert(argument.as_str())
+    let mut arguments = arguments.iter();
+    while let Some(argument) = arguments.next() {
+        let valid = if argument == "--edit-with-snow-shot" {
+            arguments.next().is_some_and(|path| {
+                std::path::Path::new(path).is_absolute()
+                    && !path.contains(['\0', '"'])
+                    && !path.chars().any(char::is_control)
             })
-            && !(seen.contains("--autostart") && seen.contains("--show-main-window")),
+        } else {
+            matches!(
+                argument.as_str(),
+                "--autostart" | "--show-main-window" | "--skip-startup-update"
+            ) && seen.insert(argument.as_str())
+        };
+        crate::error::require(
+            valid,
+            "invalid_updater_argument",
+            "Invalid updater command argument",
+        )?;
+    }
+    crate::error::require(
+        !(seen.contains("--autostart") && seen.contains("--show-main-window")),
         "invalid_updater_argument",
         "Invalid updater command argument",
     )
@@ -256,6 +269,50 @@ mod tests {
                 )
                 .is_err()
             );
+        }
+    }
+
+    #[test]
+    fn relaunch_arguments_preserve_repeated_absolute_image_requests() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory
+            .path()
+            .join("first image 安.png")
+            .display()
+            .to_string();
+        let second = directory
+            .path()
+            .join("second image.png")
+            .display()
+            .to_string();
+        let arguments = vec![
+            "--skip-startup-update".to_owned(),
+            "--edit-with-snow-shot".to_owned(),
+            first,
+            "--edit-with-snow-shot".to_owned(),
+            second,
+        ];
+        validate_relaunch_arguments(&arguments).unwrap();
+        for invalid in [
+            vec!["--edit-with-snow-shot".to_owned()],
+            vec![
+                "--edit-with-snow-shot".to_owned(),
+                "relative.png".to_owned(),
+            ],
+            vec![
+                "--edit-with-snow-shot".to_owned(),
+                "--update-probe".to_owned(),
+            ],
+            vec![
+                "--edit-with-snow-shot".to_owned(),
+                directory.path().join("bad\0.png").display().to_string(),
+            ],
+            vec![
+                "--edit-with-snow-shot".to_owned(),
+                directory.path().join("bad\".png").display().to_string(),
+            ],
+        ] {
+            assert!(validate_relaunch_arguments(&invalid).is_err());
         }
     }
 }

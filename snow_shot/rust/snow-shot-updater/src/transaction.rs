@@ -1063,15 +1063,16 @@ fn uninstall_owned_files(root: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn uninstall(root: &Path, remove_startup: bool) -> Result<()> {
-    installation_root_identity(root)?;
-    if remove_startup {
-        // Startup cleanup is extra work. Once the helper is running, a
+pub fn uninstall(root: &Path, remove_registrations: bool) -> Result<()> {
+    let root = installation_root_identity(root)?;
+    if remove_registrations {
+        // Registration cleanup is extra work. Once the helper is running, a
         // damaged or inaccessible registration must not keep the payload
         // installed; CPack still deletes the files it knew at build time.
-        platform::remove_installation_startup(root).ok();
+        platform::remove_installation_startup(&root).ok();
+        platform::remove_installation_shell_verbs(&root).ok();
     }
-    uninstall_owned_files(root)
+    uninstall_owned_files(&root)
 }
 
 fn installer_helper_source(root: &Path, backup: &Path) -> Result<PathBuf> {

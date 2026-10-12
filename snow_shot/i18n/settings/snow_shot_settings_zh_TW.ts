@@ -1034,6 +1034,10 @@
     <context>
         <name>SettingsBackend</name>
         <message>
+            <source>Could not restore the Windows context menu preference.</source>
+            <translation>無法還原 Windows 右鍵選單偏好設定。</translation>
+        </message>
+        <message>
             <source>Enter a valid HTTP or HTTPS server address without credentials, a query, or a fragment.</source>
             <translation>請輸入有效的 HTTP 或 HTTPS 伺服器位址，不包含認證資訊、查詢參數或片段。</translation>
         </message>
@@ -1159,6 +1163,10 @@
         <message>
             <source>Active window</source>
             <translation>作用中視窗</translation>
+        </message>
+        <message>
+            <source>Add Edit with Snow Shot to the classic Windows context menu to pin an image file to the screen.</source>
+            <translation>在傳統 Windows 右鍵選單中新增「使用 Snow Shot 編輯」，將影像檔案固定到螢幕。</translation>
         </message>
         <message>
             <source>Adjust MP4 quality and file size</source>
@@ -1966,7 +1974,7 @@
         </message>
         <message>
             <source>Customize the pinned window toolbar</source>
-            <translation>自訂貼圖視窗工具列</translation>
+            <translation>自訂固定到螢幕視窗的工具列</translation>
         </message>
         <message>
             <source>Customize the quick-set buttons for annotation fill colors</source>
@@ -2471,6 +2479,10 @@
         <message>
             <source>Image export</source>
             <translation>影像匯出</translation>
+        </message>
+        <message>
+            <source>Image files</source>
+            <translation>影像檔案</translation>
         </message>
         <message>
             <source>Image files (*.png *.ico);;PNG images (*.png);;Icon files (*.ico)</source>
@@ -3022,7 +3034,7 @@
         </message>
         <message>
             <source>Pin screenshot to screen</source>
-            <translation>固定截圖到螢幕</translation>
+            <translation>將截圖固定到螢幕</translation>
         </message>
         <message>
             <source>Pin selected image files from File Explorer or the desktop to the screen</source>
@@ -3094,7 +3106,7 @@
         </message>
         <message>
             <source>Pinned window locked border</source>
-            <translation>貼圖視窗鎖定邊框</translation>
+            <translation>固定到螢幕視窗鎖定邊框</translation>
         </message>
         <message>
             <source>Pinned window locked shadow</source>
@@ -3678,7 +3690,7 @@
         </message>
         <message>
             <source>Set the border color of locked pinned screenshots</source>
-            <translation>設定已鎖定貼圖的邊框顏色</translation>
+            <translation>設定已鎖定並固定到螢幕的截圖邊框色彩</translation>
         </message>
         <message>
             <source>Set the border color of pinned screenshots</source>
@@ -3730,7 +3742,7 @@
         </message>
         <message>
             <source>Set the shadow color of locked pinned screenshots</source>
-            <translation>設定已鎖定貼圖的陰影顏色</translation>
+            <translation>設定已鎖定並固定到螢幕的截圖陰影色彩</translation>
         </message>
         <message>
             <source>Set the shadow color of pinned screenshots</source>
@@ -3778,7 +3790,7 @@
         </message>
         <message>
             <source>Shared image export settings for screenshot and pin-to-screen windows</source>
-            <translation>截圖視窗和釘選視窗共用的影像匯出設定</translation>
+            <translation>截圖視窗和固定到螢幕視窗共用的影像匯出設定</translation>
         </message>
         <message>
             <source>Shortcut hint opacity</source>
@@ -3874,7 +3886,7 @@
         </message>
         <message>
             <source>Show the border on new pinned windows</source>
-            <translation>在新建立的貼圖視窗中顯示邊框</translation>
+            <translation>在新建立的固定到螢幕視窗中顯示邊框</translation>
         </message>
         <message>
             <source>Show the captured mouse cursor by default in new normal screenshots.</source>
@@ -3886,7 +3898,7 @@
         </message>
         <message>
             <source>Show the shadow on new pinned windows</source>
-            <translation>在新建立的貼圖視窗中顯示陰影</translation>
+            <translation>在新建立的固定到螢幕視窗中顯示陰影</translation>
         </message>
         <message>
             <source>Show the sub-toolbar for the Edit Selection tool</source>
@@ -3942,7 +3954,7 @@
         </message>
         <message>
             <source>Smart Control releases unused heap memory while the app is idle. Active captures and pinned images are kept.</source>
-            <translation>智慧控制會在應用程式閒置時釋放未使用的堆積記憶體。進行中的擷取和貼圖會保留。</translation>
+            <translation>智慧控制會在應用程式閒置時釋放未使用的堆積記憶體。進行中的擷取和已固定到螢幕的影像會保留。</translation>
         </message>
         <message>
             <source>Smart Control trims resident memory while the app is idle. The next use may briefly take longer.</source>
@@ -4426,7 +4438,7 @@
         </message>
         <message>
             <source>When pinning duplicate content</source>
-            <translation>固定重複內容時</translation>
+            <translation>將重複內容固定到螢幕時</translation>
         </message>
         <message>
             <source>Window Element API</source>
@@ -4443,6 +4455,10 @@
         <message>
             <source>Window interface</source>
             <translation>視窗介面</translation>
+        </message>
+        <message>
+            <source>Windows context menu</source>
+            <translation>Windows 右鍵選單</translation>
         </message>
         <message>
             <source>Write the image to a file and copy that file to the clipboard</source>
@@ -4506,6 +4522,41 @@
         <message>
             <source>selected-text translation</source>
             <translation>選取文字翻譯</translation>
+        </message>
+    </context>
+    <context>
+        <name>ShellContextMenuRegistration</name>
+        <message>
+            <source>Could not access the Windows context menu registry. Windows error %1.</source>
+            <translation>無法存取 Windows 右鍵選單登錄。Windows 錯誤 %1。</translation>
+        </message>
+        <message>
+            <source>Could not read the Windows context menu registration.</source>
+            <translation>無法讀取 Windows 右鍵選單註冊資訊。</translation>
+        </message>
+        <message>
+            <source>Could not restore the Windows context menu registration. %1</source>
+            <translation>無法還原 Windows 右鍵選單註冊資訊。%1</translation>
+        </message>
+        <message>
+            <source>Could not save the Windows context menu preference.</source>
+            <translation>無法儲存 Windows 右鍵選單偏好設定。</translation>
+        </message>
+        <message>
+            <source>Edit with Snow Shot</source>
+            <translation>使用 Snow Shot 編輯</translation>
+        </message>
+        <message>
+            <source>Edit with Snow Shot Mini</source>
+            <translation>使用 Snow Shot Mini 編輯</translation>
+        </message>
+        <message>
+            <source>The Windows context menu entry is owned by another application.</source>
+            <translation>此 Windows 右鍵選單項目屬於其他應用程式。</translation>
+        </message>
+        <message>
+            <source>The Windows context menu is only supported on Windows.</source>
+            <translation>Windows 右鍵選單僅在 Windows 上受支援。</translation>
         </message>
     </context>
     <context>

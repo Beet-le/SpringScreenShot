@@ -37,6 +37,7 @@
     "SettingsBackend",
     "SettingsCatalog",
     "SettingsPageWidget",
+    "ShellContextMenuRegistration",
     "ShortcutKeyRow",
     "StorageDirectoryChange",
     "StorageStatusSettingsWidget",

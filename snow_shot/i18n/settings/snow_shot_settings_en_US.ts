@@ -1034,6 +1034,10 @@
     <context>
         <name>SettingsBackend</name>
         <message>
+            <source>Could not restore the Windows context menu preference.</source>
+            <translation>Could not restore the Windows context menu preference.</translation>
+        </message>
+        <message>
             <source>Enter a valid HTTP or HTTPS server address without credentials, a query, or a fragment.</source>
             <translation>Enter a valid HTTP or HTTPS server address without credentials, a query, or a fragment.</translation>
         </message>
@@ -1159,6 +1163,10 @@
         <message>
             <source>Active window</source>
             <translation>Active window</translation>
+        </message>
+        <message>
+            <source>Add Edit with Snow Shot to the classic Windows context menu to pin an image file to the screen.</source>
+            <translation>Add Edit with Snow Shot to the classic Windows context menu to pin an image file to the screen.</translation>
         </message>
         <message>
             <source>Adjust MP4 quality and file size</source>
@@ -2471,6 +2479,10 @@
         <message>
             <source>Image export</source>
             <translation>Image export</translation>
+        </message>
+        <message>
+            <source>Image files</source>
+            <translation>Image files</translation>
         </message>
         <message>
             <source>Image files (*.png *.ico);;PNG images (*.png);;Icon files (*.ico)</source>
@@ -4445,6 +4457,10 @@
             <translation>Window interface</translation>
         </message>
         <message>
+            <source>Windows context menu</source>
+            <translation>Windows context menu</translation>
+        </message>
+        <message>
             <source>Write the image to a file and copy that file to the clipboard</source>
             <translation>Write the image to a file and copy that file to the clipboard</translation>
         </message>
@@ -4506,6 +4522,41 @@
         <message>
             <source>selected-text translation</source>
             <translation>selected-text translation</translation>
+        </message>
+    </context>
+    <context>
+        <name>ShellContextMenuRegistration</name>
+        <message>
+            <source>Could not access the Windows context menu registry. Windows error %1.</source>
+            <translation>Could not access the Windows context menu registry. Windows error %1.</translation>
+        </message>
+        <message>
+            <source>Could not read the Windows context menu registration.</source>
+            <translation>Could not read the Windows context menu registration.</translation>
+        </message>
+        <message>
+            <source>Could not restore the Windows context menu registration. %1</source>
+            <translation>Could not restore the Windows context menu registration. %1</translation>
+        </message>
+        <message>
+            <source>Could not save the Windows context menu preference.</source>
+            <translation>Could not save the Windows context menu preference.</translation>
+        </message>
+        <message>
+            <source>Edit with Snow Shot</source>
+            <translation>Edit with Snow Shot</translation>
+        </message>
+        <message>
+            <source>Edit with Snow Shot Mini</source>
+            <translation>Edit with Snow Shot Mini</translation>
+        </message>
+        <message>
+            <source>The Windows context menu entry is owned by another application.</source>
+            <translation>The Windows context menu entry is owned by another application.</translation>
+        </message>
+        <message>
+            <source>The Windows context menu is only supported on Windows.</source>
+            <translation>The Windows context menu is only supported on Windows.</translation>
         </message>
     </context>
     <context>

@@ -55,6 +55,7 @@ class ScreenshotController : public QObject {
     [[nodiscard]] bool
     handleActiveScreenshotShortcut(snow_shot::presentation::GlobalShortcutAction action);
     void pinDroppedContent(ScreenshotClipboardContentSnapshot snapshot, QStringList paths);
+    void pinImageFilesToScreen(QStringList paths);
     explicit ScreenshotController(
         QObject* parent = nullptr,
         snow_shot::presentation::PinnedWindowGroupManager* groupManager = nullptr,

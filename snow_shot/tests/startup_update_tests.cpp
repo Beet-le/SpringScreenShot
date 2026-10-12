@@ -1,5 +1,6 @@
 #include "snow_shot/app/singleinstancecoordinator.h"
 #include "snow_shot/app/applicationinputguard.h"
+#include "snow_shot/app/shellimagelaunch.h"
 #include "snow_shot/update/startupupdate.h"
 
 #include <QCoreApplication>
@@ -168,9 +169,12 @@ int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     if (!argument(argc, argv, "--forward-startup-test").isEmpty()) {
         snow_shot::app::SingleInstanceCoordinator secondary;
-        return secondary.acquireOrForward(
-                            {QStringLiteral("snow-shot"), QStringLiteral("--show-main-window")})
-                           .outcome == snow_shot::app::SingleInstanceOutcome::Forwarded
+        auto forwarded = app.arguments().mid(3);
+        if (forwarded.isEmpty())
+            forwarded.append(QStringLiteral("--show-main-window"));
+        forwarded.prepend(QStringLiteral("snow-shot"));
+        return secondary.acquireOrForward(forwarded).outcome ==
+                       snow_shot::app::SingleInstanceOutcome::Forwarded
                    ? EXIT_SUCCESS
                    : EXIT_FAILURE;
     }
@@ -213,6 +217,9 @@ int main(int argc, char** argv) {
             "startup and running services share the installation-specific cache factory");
 
 #ifdef Q_OS_WIN
+    // The copied sidecar needs the same deployed DLLs as this test executable.
+    qputenv("PATH", QDir::toNativeSeparators(QCoreApplication::applicationDirPath()).toLocal8Bit() +
+                        ';' + qgetenv("PATH"));
     QTemporaryDir directory;
     require(directory.isValid(), "create startup test directory");
     const QString root = directory.filePath(QStringLiteral("Snow Shot"));
@@ -230,6 +237,97 @@ int main(int argc, char** argv) {
         result.githubApiUrl = QUrl(QStringLiteral("https://updates.example.test/") + scenario);
         return result;
     };
+
+    const QStringList initialImages{directory.filePath(QStringLiteral("\u56fe\u7247 one.png")),
+                                    directory.filePath(QStringLiteral("second image.avif"))};
+    const auto initialIntent =
+        snow_shot::update::startupUpdateRelaunchArguments(false, initialImages);
+    require(!initialIntent.contains(QStringLiteral("--autostart")) &&
+                !initialIntent.contains(QStringLiteral("--show-main-window")) &&
+                snow_shot::app::parseShellImageLaunchRequest(initialIntent).paths == initialImages,
+            "shell relaunch preserves all image paths without opening the main window");
+    require(snow_shot::app::parseShellImageLaunchRequest(
+                snow_shot::update::startupUpdateRelaunchArguments(true, initialImages))
+                    .paths == initialImages,
+            "an explicit foreground request does not erase shell images");
+
+    for (const QString& scenario :
+         {QStringLiteral("ready"), QStringLiteral("commit-failed"), QStringLiteral("late-forward"),
+          QStringLiteral("late-forward-failed"), QStringLiteral("late-forward-disconnected")}) {
+        const bool late = scenario.startsWith(u"late-forward");
+        const bool accepted = scenario == u"ready" || scenario == u"late-forward";
+        snow_shot::app::SingleInstanceCoordinator primary;
+        require(primary.acquireOrForward({QStringLiteral("snow-shot")}).outcome ==
+                    snow_shot::app::SingleInstanceOutcome::Primary,
+                "acquire shell startup singleton");
+        auto value = options(scenario);
+        const QString cache = value.cacheDirectory;
+        UpdateService service(std::move(value));
+        service.setMode(QStringLiteral("next_launch"));
+        QStringList images = initialImages;
+        const QStringList forwardedImages{directory.filePath(QStringLiteral("late \u96ea.jpeg")),
+                                          directory.filePath(QStringLiteral("last image.webp"))};
+        QProcess secondary;
+        QObject::connect(&service, &UpdateService::handoffPendingChanged, &app, [&](bool pending) {
+            if (pending && late)
+                QTimer::singleShot(0, &app, [&] {
+                    QStringList arguments{QStringLiteral("--forward-startup-test"),
+                                          QCoreApplication::applicationName()};
+                    arguments.append(snow_shot::app::shellImageLaunchArguments(forwardedImages));
+                    secondary.start(QCoreApplication::applicationFilePath(), arguments);
+                });
+        });
+        const auto connection = QObject::connect(
+            &primary, &snow_shot::app::SingleInstanceCoordinator::launchRequestReceived, &app,
+            [&](const QStringList& arguments) {
+                const auto request = snow_shot::app::parseShellImageLaunchRequest(arguments);
+                require(request.valid && request.paths == forwardedImages,
+                        "shell paths preserve Unicode and spaces through single-instance IPC");
+                images.append(request.paths);
+                service.setRelaunchArguments(
+                    snow_shot::update::startupUpdateRelaunchArguments(false, images));
+                QFile marker(QDir(cache).filePath(QStringLiteral("forwarded")));
+                require(marker.open(QIODevice::WriteOnly), "acknowledge shell forwarding");
+            });
+        const auto result = snow_shot::update::runStartupUpdate(
+            service, [] { return true; }, {}, std::chrono::seconds(5),
+            [&] { return snow_shot::update::startupUpdateRelaunchArguments(false, images); });
+        QObject::disconnect(connection);
+        if (result != (accepted ? StartupUpdateResult::ExitForUpdate
+                                : StartupUpdateResult::ContinueStartup)) {
+            std::cerr << "Shell startup scenario " << scenario.toStdString() << ": "
+                      << service.status().error.toStdString() << '\n';
+        }
+        require(result == (accepted ? StartupUpdateResult::ExitForUpdate
+                                    : StartupUpdateResult::ContinueStartup),
+                "shell relaunch acknowledgment gates startup exit");
+        require(handoff(cache).value(QStringLiteral("relaunchArguments")).toArray() ==
+                    QJsonArray::fromStringList(initialIntent),
+                "initial shell images are included in the committed handoff request");
+        if (late) {
+            require(
+                (secondary.state() == QProcess::NotRunning || secondary.waitForFinished(3000)) &&
+                    secondary.exitCode() == 0,
+                "late shell launch forwards successfully");
+            require(images == initialImages + forwardedImages &&
+                        handoff(cache, QStringLiteral("relaunch.json"))
+                                .value(QStringLiteral("relaunchArguments"))
+                                .toArray() ==
+                            QJsonArray::fromStringList(
+                                snow_shot::update::startupUpdateRelaunchArguments(false, images)),
+                    "late shell images reach the replacement without erasing initial images");
+            if (!accepted) {
+                int handled = 0;
+                primary.setLaunchRequestHandler([&](const QStringList& arguments) {
+                    require(snow_shot::app::parseShellImageLaunchRequest(arguments).paths ==
+                                forwardedImages,
+                            "failed handoff retains the original forwarded shell request");
+                    ++handled;
+                });
+                require(handled == 1, "failed handoff dispatches a shell request exactly once");
+            }
+        }
+    }
 
     for (const QString& scenario :
          {QStringLiteral("absent"), QStringLiteral("invalid"), QStringLiteral("partial"),
