@@ -1169,6 +1169,10 @@
             <translation>在傳統 Windows 右鍵選單中新增「使用 Snow Shot 編輯」，將影像檔案固定到螢幕。</translation>
         </message>
         <message>
+            <source>Add a mask to highlight text recognition results</source>
+            <translation>加入遮罩以醒目顯示文字辨識結果</translation>
+        </message>
+        <message>
             <source>Adjust MP4 quality and file size</source>
             <translation>調整 MP4 畫質與檔案大小</translation>
         </message>
@@ -3827,6 +3831,10 @@
         <message>
             <source>Show Guides by Default</source>
             <translation>預設顯示輔助線</translation>
+        </message>
+        <message>
+            <source>Show Text Highlighting</source>
+            <translation>顯示文字醒目提示</translation>
         </message>
         <message>
             <source>Show a button in the text recognition toolbar that sends recognized text to the Translation page.</source>

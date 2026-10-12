@@ -842,6 +842,10 @@ void ScreenshotRecognitionWindow::setOcrCopyDefaultsEnabled(bool enabled) {
     m_ocrCopyDefaultsEnabled = enabled;
 }
 
+void ScreenshotRecognitionWindow::setTextHighlighting(bool enabled, const QColor& maskColor) {
+    m_textLayer->setTextHighlighting(enabled, maskColor);
+}
+
 void ScreenshotRecognitionWindow::setOcrPresentation(
     std::shared_ptr<ScreenshotOcrPresentation> presentation,
     ScreenshotOcrTextLayer::RenderingMode mode, bool takeFocus) {

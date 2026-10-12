@@ -372,6 +372,14 @@ bool TextRecognitionSettings::setShowOriginalImagePreview(bool enabled) const {
                             enabled);
 }
 
+bool TextRecognitionSettings::showTextHighlighting() const {
+    return cache().value(QStringLiteral("text_recognition/show_text_highlighting")).toBool();
+}
+
+bool TextRecognitionSettings::setShowTextHighlighting(bool enabled) const {
+    return cache().setValue(QStringLiteral("text_recognition/show_text_highlighting"), enabled);
+}
+
 QString TextRecognitionSettings::defaultFormatting() const {
     return cache().value(QStringLiteral("text_recognition/default_formatting")).toString();
 }

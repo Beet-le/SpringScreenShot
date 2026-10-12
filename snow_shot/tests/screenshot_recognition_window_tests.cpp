@@ -18,6 +18,7 @@
 
 #include <QApplication>
 #include <QClipboard>
+#include <QColorSpace>
 #include <QContextMenuEvent>
 #include <QDir>
 #include <QFileInfo>
@@ -39,6 +40,7 @@
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QPainter>
+#include <QPainterPath>
 #include <QScrollBar>
 #include <QScreen>
 #include <QScopeGuard>
@@ -252,6 +254,426 @@ double averageLightness(const QImage& image) {
         }
     }
     return static_cast<double>(total) / static_cast<double>(image.width() * image.height());
+}
+
+QImage renderOcrHighlightingScene(ScreenshotOcrTextLayer& layer, qreal devicePixelRatio,
+                                  const QColor& referenceMask = {},
+                                  const QTransform& outputTransform = {}) {
+    const QRectF sceneRect = layer.sceneRect();
+    QImage image(QSize(qCeil(sceneRect.width() * devicePixelRatio),
+                       qCeil(sceneRect.height() * devicePixelRatio)),
+                 QImage::Format_ARGB32_Premultiplied);
+    image.setDevicePixelRatio(devicePixelRatio);
+    image.fill(QColor(214, 227, 239));
+    QPainter painter(&image);
+    painter.setTransform(outputTransform);
+    painter.setClipRect(sceneRect, Qt::IntersectClip);
+    if (referenceMask.isValid()) {
+        QPainterPath complement;
+        complement.addRect(sceneRect);
+        for (const auto* item : layer.scene()->items()) {
+            if (!item->isVisible())
+                continue;
+            QPainterPath hole;
+            hole.addPolygon(item->mapToScene(item->boundingRect()));
+            hole.closeSubpath();
+            // Sequential subtraction independently checks the union of overlapping holes,
+            // including labels whose projected polygons have opposite winding.
+            complement = complement.subtracted(hole);
+        }
+        painter.save();
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.fillPath(complement, referenceMask);
+        painter.restore();
+    }
+    layer.scene()->render(&painter, sceneRect, sceneRect);
+    return image;
+}
+
+QPainterPath ocrLabelScenePath(const QGraphicsItem& item) {
+    QPainterPath path;
+    path.addPolygon(item.mapToScene(item.boundingRect()));
+    path.closeSubpath();
+    return path;
+}
+
+std::optional<QPoint> blankOcrPixelInPath(const QImage& image, const QPainterPath& path) {
+    const qreal dpr = image.devicePixelRatio();
+    const QRectF bounds = path.boundingRect();
+    const QRect pixels = QRectF(bounds.topLeft() * dpr, bounds.size() * dpr)
+                             .toAlignedRect()
+                             .intersected(image.rect());
+    for (int y = pixels.top(); y <= pixels.bottom(); ++y) {
+        for (int x = pixels.left(); x <= pixels.right(); ++x) {
+            const QPointF center((x + 0.5) / dpr, (y + 0.5) / dpr);
+            if (image.pixelColor(x, y) == QColor(214, 227, 239) &&
+                path.contains(QRectF(center - QPointF(1, 1), QSizeF(2, 2)))) {
+                return QPoint(x, y);
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+QColor singleOcrMaskBlend(const QColor& mask) {
+    QImage pixel(1, 1, QImage::Format_ARGB32_Premultiplied);
+    pixel.fill(QColor(214, 227, 239));
+    {
+        QPainter painter(&pixel);
+        painter.fillRect(pixel.rect(), mask);
+    }
+    return pixel.pixelColor(0, 0);
+}
+
+std::shared_ptr<ScreenshotOcrPresentation> ocrHighlightingPresentation() {
+    auto presentation = std::make_shared<ScreenshotOcrPresentation>();
+    presentation->selection = QRect(0, 0, 420, 440);
+    presentation->lines = {
+        ScreenshotOcrLine{QStringLiteral("A"), 1.0, ocrQuad(QRectF(20, 15, 220, 40))},
+        ScreenshotOcrLine{
+            QStringLiteral("Rotated"), 1.0, {{40, 85}, {260, 125}, {254, 160}, {34, 120}}},
+        ScreenshotOcrLine{
+            QStringLiteral("Perspective"), 1.0, {{40, 180}, {255, 165}, {245, 220}, {50, 235}}},
+        ScreenshotOcrLine{QStringLiteral("ABCDE"), 1.0, ocrQuad(QRectF(320, 30, 35, 220)),
+                          ScreenshotOcrTextDirection::Vertical},
+        ScreenshotOcrLine{QStringLiteral("Top row\nBottom row"), 1.0,
+                          ocrQuad(QRectF(40, 270, 280, 130))},
+        ScreenshotOcrLine{QString{}, 1.0, ocrQuad(QRectF(350, 300, 30, 30))},
+        ScreenshotOcrLine{QStringLiteral("Invalid"), 1.0, {{360, 360}, {390, 360}, {375, 390}}},
+        ScreenshotOcrLine{QStringLiteral("Offscreen"), 1.0, ocrQuad(QRectF(900, 900, 50, 20))},
+    };
+    auto& paragraph = presentation->lines[4];
+    paragraph.paragraph = true;
+    paragraph.sourceLineQuads = {ocrQuad(QRectF(40, 270, 280, 30)),
+                                 ocrQuad(QRectF(40, 365, 280, 35))};
+    return presentation;
+}
+
+void ocrTextHighlightingMasksNonTextAroundFittedLabels() {
+    ScreenshotOcrTextLayer layer;
+    const auto presentation = ocrHighlightingPresentation();
+    layer.setPresentation(presentation);
+    layer.synchronize(QTransform(), presentation->selection);
+    const auto items = layer.scene()->items();
+    require(items.size() == presentation->lines.size() &&
+                std::count_if(items.cbegin(), items.cend(),
+                              [](const auto* item) { return item->isVisible(); }) == 5,
+            "highlighting uses only the existing valid nonempty text labels");
+    require(std::any_of(items.cbegin(), items.cend(),
+                        [](const auto* item) {
+                            return item->isVisible() && item->sceneBoundingRect().top() < 60 &&
+                                   item->sceneBoundingRect().left() < 300 &&
+                                   item->sceneBoundingRect().width() < 110;
+                        }),
+            "highlighting fixture includes a label narrower than its recognized quad");
+#if defined(SNOW_SHOT_BENCH_INTERNALS)
+    const quint64 initialSynchronizations = layer.geometrySynchronizationCount();
+#endif
+    for (const qreal dpr : {1.0, 1.25, 2.0}) {
+        layer.setTextHighlighting(false, QColor(0, 0, 0, 128));
+        const QImage disabled = renderOcrHighlightingScene(layer, dpr);
+        const auto fittedItem = std::find_if(items.cbegin(), items.cend(), [](const auto* item) {
+            return item->isVisible() && item->sceneBoundingRect().top() < 60 &&
+                   item->sceneBoundingRect().left() < 300;
+        });
+        require(fittedItem != items.cend(), "the clear-text fixture contains a fitted label");
+        const auto labelWhitespace = blankOcrPixelInPath(disabled, ocrLabelScenePath(**fittedItem));
+        require(labelWhitespace.has_value(), "the label fixture has whitespace inside its bounds");
+        layer.setTextHighlighting(true, QColor(32, 96, 192, 0));
+        require(renderOcrHighlightingScene(layer, dpr) == disabled,
+                "a transparent mask preserves every text and background pixel");
+        for (const QColor& mask :
+             {QColor(30, 120, 210, 91), QColor(180, 45, 80, 255), QColor(0, 0, 0, 128), QColor()}) {
+            const QColor normalized = mask.isValid() ? mask : QColor(0, 0, 0, 128);
+            layer.setTextHighlighting(false, mask);
+            const QImage expected = renderOcrHighlightingScene(layer, dpr, normalized);
+            layer.setTextHighlighting(true, mask);
+            const QImage actual = renderOcrHighlightingScene(layer, dpr);
+            if (actual != expected)
+                std::cerr << "OCR mask mismatch at DPR " << dpr << " for "
+                          << normalized.name(QColor::HexArgb).toStdString() << '\n';
+            require(actual == expected && actual != disabled,
+                    "the configured RGBA mask covers non-text areas and leaves fitted labels "
+                    "and glyphs clear");
+            require(actual.pixelColor(*labelWhitespace) == QColor(214, 227, 239),
+                    "whitespace inside a text label remains clear instead of receiving a mask");
+            for (const QPoint& blank : {QPoint(5, 5), QPoint(365, 315), QPoint(375, 375)}) {
+                require(actual.pixelColor(qFloor(blank.x() * dpr), qFloor(blank.y() * dpr)) ==
+                            singleOcrMaskBlend(normalized),
+                        "non-text background, empty and invalid labels receive exactly one RGBA "
+                        "mask blend");
+            }
+            require(layer.scene()->items() == items,
+                    "mask toggles and color changes preserve graphics item identities");
+            layer.synchronize(QTransform(), presentation->selection);
+        }
+        layer.setTextHighlighting(false, QColor(0, 0, 0, 128));
+        require(renderOcrHighlightingScene(layer, dpr) == disabled,
+                "disabling highlighting restores the original label rendering exactly");
+    }
+#if defined(SNOW_SHOT_BENCH_INTERNALS)
+    require(layer.geometrySynchronizationCount() == initialSynchronizations,
+            "paint-only style changes must not synchronize or reshape text geometry");
+#endif
+    layer.setTextHighlighting(true, QColor(30, 120, 210, 91));
+    const QImage highlighted = renderOcrHighlightingScene(layer, 1.25);
+    layer.clearPresentation();
+    require(layer.scene()->items().isEmpty(), "clearing OCR removes label items");
+    layer.setPresentation(presentation);
+    layer.synchronize(QTransform(), presentation->selection);
+    require(renderOcrHighlightingScene(layer, 1.25) == highlighted,
+            "the configured mask style survives clearing and replacing the presentation");
+}
+
+void ocrTextHighlightingUnionsOverlappingLabels() {
+    ScreenshotOcrTextLayer layer;
+    auto presentation = std::make_shared<ScreenshotOcrPresentation>();
+    presentation->selection = QRect(0, 0, 320, 200);
+    const QRectF bounds(60, 50, 200, 80);
+    presentation->lines = {
+        ScreenshotOcrLine{QStringLiteral("Overlap"), 1.0, ocrQuad(bounds)},
+        ScreenshotOcrLine{
+            QStringLiteral("Overlap"),
+            1.0,
+            {bounds.topLeft(), bounds.bottomLeft(), bounds.bottomRight(), bounds.topRight()}},
+    };
+    layer.setPresentation(presentation);
+    layer.synchronize(QTransform(), presentation->selection);
+    const auto items = layer.scene()->items();
+    require(items.size() == 2 && items[0]->isVisible() && items[1]->isVisible(),
+            "overlapping text uses exactly two existing label items");
+    const auto signedArea = [](const QPolygonF& polygon) {
+        qreal area = 0;
+        for (qsizetype index = 0; index < polygon.size(); ++index) {
+            const QPointF& first = polygon[index];
+            const QPointF& second = polygon[(index + 1) % polygon.size()];
+            area += first.x() * second.y() - second.x() * first.y();
+        }
+        return area;
+    };
+    require(signedArea(items[0]->mapToScene(items[0]->boundingRect())) *
+                    signedArea(items[1]->mapToScene(items[1]->boundingRect())) <
+                0,
+            "the overlap fixture projects text rectangles with opposite winding");
+    const QPainterPath overlap =
+        ocrLabelScenePath(*items[0]).intersected(ocrLabelScenePath(*items[1]));
+    const QColor mask(30, 120, 210, 91);
+    for (const qreal dpr : {1.0, 1.25, 2.0}) {
+        layer.setTextHighlighting(false, mask);
+        const QImage disabled = renderOcrHighlightingScene(layer, dpr);
+        const auto overlapWhitespace = blankOcrPixelInPath(disabled, overlap);
+        require(overlapWhitespace.has_value(), "overlapping labels have a blank interior sample");
+        const QImage expected = renderOcrHighlightingScene(layer, dpr, mask);
+        layer.setTextHighlighting(true, mask);
+        const QImage actual = renderOcrHighlightingScene(layer, dpr);
+        require(actual == expected &&
+                    actual.pixelColor(*overlapWhitespace) == QColor(214, 227, 239),
+                "overlapping labels form a union of clear holes regardless of winding");
+        require(actual.pixelColor(qFloor(5 * dpr), qFloor(5 * dpr)) == singleOcrMaskBlend(mask) &&
+                    layer.scene()->items() == items,
+                "overlapping labels never multiply background opacity or create overlay items");
+    }
+}
+
+void ocrTextHighlightingTracksFractionalDevicePhase() {
+    const auto presentation = ocrHighlightingPresentation();
+    presentation->selection = QRect(0, 0, 640, 640);
+    // Dense contours exercise raster reuse; simple masks use the direct vector fill.
+    for (int index = 0; index < 48; ++index) {
+        presentation->lines.push_back(ScreenshotOcrLine{
+            QStringLiteral("Z"), 1.0,
+            ocrQuad(QRectF(30 + (index % 8) * 70, 460 + (index / 8) * 28, 50, 20))});
+    }
+    ScreenshotOcrTextLayer layer;
+    ScreenshotOcrTextLayer reference;
+    layer.setPresentation(presentation);
+    reference.setPresentation(presentation);
+    layer.synchronize(QTransform(), presentation->selection);
+    reference.synchronize(QTransform(), presentation->selection);
+    const auto items = layer.scene()->items();
+    const QColor mask(30, 120, 210, 91);
+    layer.setTextHighlighting(true, mask);
+    constexpr qreal dpr = 1.25;
+    const QImage identityExpected = renderOcrHighlightingScene(reference, dpr, mask);
+    const QImage identityActual = renderOcrHighlightingScene(layer, dpr);
+    const QTransform initialPhase = QTransform::fromTranslate(0.25, 0.4);
+    const QImage initial = renderOcrHighlightingScene(layer, dpr, {}, initialPhase);
+    for (const QTransform& transform :
+         {initialPhase, QTransform::fromTranslate(0.6, 0.1), initialPhase,
+          QTransform(1.1, 0, 0, 0.9, 0.3, 0.2), initialPhase}) {
+        const QImage expected = renderOcrHighlightingScene(reference, dpr, mask, transform);
+        const QImage actual = renderOcrHighlightingScene(layer, dpr, {}, transform);
+        const bool metadataEqual = actual.format() == expected.format() &&
+                                   actual.devicePixelRatio() == expected.devicePixelRatio() &&
+                                   actual.colorSpace() == expected.colorSpace();
+        require(metadataEqual, "cached and reference masks have identical image metadata");
+        require(actual == expected,
+                "mask cache follows fractional device phase and nonuniform transforms exactly");
+        if (transform == initialPhase) {
+            require(actual == initial,
+                    "returning to the initial device phase restores its exact mask pixels");
+        }
+        require(layer.scene()->items() == items,
+                "device-phase mask updates preserve the existing text-label items");
+    }
+    require(identityActual == identityExpected,
+            "cached and reference masks agree at the identity device phase");
+}
+
+void ocrTextHighlightingPreservesHiddenTextSelection() {
+    ScreenshotOcrTextLayer layer;
+    const auto presentation = ocrHighlightingPresentation();
+    layer.setTextHighlighting(true, QColor(180, 45, 80, 255));
+    layer.setPresentation(presentation, ScreenshotOcrTextLayer::RenderingMode::SelectionOnly);
+    layer.synchronize(QTransform(), presentation->selection);
+    const auto items = layer.scene()->items();
+    for (const qreal dpr : {1.0, 1.25, 2.0}) {
+        presentation->clearTextSelection();
+        layer.updateSelection();
+        layer.setTextHighlighting(false, QColor(180, 45, 80, 255));
+        const QImage hidden = renderOcrHighlightingScene(layer, dpr);
+        layer.setTextHighlighting(true, QColor(180, 45, 80, 255));
+        require(renderOcrHighlightingScene(layer, dpr) == hidden,
+                "hidden selectable OCR must never paint text highlighting");
+        presentation->selectAll();
+        layer.updateSelection();
+        const QImage selected = renderOcrHighlightingScene(layer, dpr);
+        layer.setTextHighlighting(false, QColor(180, 45, 80, 255));
+        require(renderOcrHighlightingScene(layer, dpr) == selected && selected != hidden,
+                "SelectionOnly preserves character selection while suppressing label masks");
+        require(layer.scene()->items() == items,
+                "hidden label style changes preserve the existing scene items");
+    }
+}
+
+void ocrTextHighlightingPreservesInteractionAndExports() {
+    QWidget host;
+    host.resize(320, 180);
+    QPalette hostPalette = host.palette();
+    hostPalette.setColor(QPalette::Window, QColor(214, 227, 239));
+    host.setPalette(hostPalette);
+    host.setAutoFillBackground(true);
+    host.show();
+    ScreenshotRecognitionWindow window(
+        {}, &host, ScreenshotRecognitionWindow::PresentationMode::EmbeddedChild);
+    require(window.present({QGuiApplication::primaryScreen(), &host, host.rect(), host.rect(),
+                            ScreenshotRecognitionWindow::PresentationMode::EmbeddedChild}),
+            "the highlighting recognition surface presents");
+    auto presentation = std::make_shared<ScreenshotOcrPresentation>();
+    presentation->selection = host.rect();
+    presentation->lines = {
+        ScreenshotOcrLine{QStringLiteral("Mask sample"), 1.0, ocrQuad(QRectF(35, 40, 220, 35))},
+        ScreenshotOcrLine{QStringLiteral("Second line"), 1.0, ocrQuad(QRectF(35, 105, 220, 35))},
+    };
+    window.setOcrPresentation(presentation);
+    window.setOcrCopyDefaultsEnabled(false);
+    QApplication::processEvents();
+    auto* layer = static_cast<ScreenshotOcrTextLayer*>(
+        window.findChild<QGraphicsView*>(QStringLiteral("snowShotOcrTextLayer")));
+    require(layer != nullptr, "the window owns the OCR label layer");
+    const auto items = layer->scene()->items();
+    const QPointF hitPoint(80, 55);
+    const auto position = layer->textPositionAt(hitPoint, false);
+    require(position.valid() && !window.isOcrBackgroundAt(hitPoint) &&
+                window.isOcrBackgroundAt(QPointF(10, 10)),
+            "the highlighting fixture has distinct text and background hit regions");
+    QImage source(host.size(), QImage::Format_ARGB32_Premultiplied);
+    source.fill(QColor(22, 90, 130));
+    const auto originalSnapshot = window.imageSnapshot(source, host.rect(), {}, {}, {});
+    require(originalSnapshot.has_value(), "OCR exports produce an image snapshot");
+    const QImage originalExport = renderScreenshotRecognitionImage(*originalSnapshot);
+    const QImage originalPrint = window.printViewportSnapshot(source, host.rect());
+    require(!originalExport.isNull() && !originalPrint.isNull(),
+            "highlighting export references contain rendered text");
+    const QImage defaultPixels = renderOcrHighlightingScene(*layer, 1.0);
+    window.setTextHighlighting(false, QColor(0, 0, 0, 128));
+    require(renderOcrHighlightingScene(*layer, 1.0) == defaultPixels,
+            "text highlighting is disabled on a newly created recognition window");
+    const QColor mask(30, 120, 210, 91);
+    QApplication::processEvents();
+    const QImage originalHost = host.grab().toImage();
+    window.setTextHighlighting(true, mask);
+    QApplication::processEvents();
+    require(host.grab().toImage() != originalHost,
+            "enabling highlighting repaints the composed parent surface");
+    window.setTextHighlighting(false, mask);
+    QApplication::processEvents();
+    require(host.grab().toImage() == originalHost,
+            "disabling highlighting clears its backing pixels and restores the parent surface");
+    presentation->beginTextSelection(ScreenshotOcrTextPosition{0, 0});
+    presentation->updateTextSelection(ScreenshotOcrTextPosition{0, 2});
+    presentation->finishTextSelection();
+    window.updateOcrSelection();
+    const auto originalCopy = window.textSelectionClipboardMimeData();
+    require(originalCopy && originalCopy->text() == QStringLiteral("Ma"),
+            "highlighting selection fixture copies its exact selected text");
+    const QImage expectedSelection = renderOcrHighlightingScene(*layer, 1.25, mask);
+    window.setTextHighlighting(true, mask);
+    require(renderOcrHighlightingScene(*layer, 1.25) == expectedSelection,
+            "character selection and glyphs remain unchanged inside clear label regions");
+    const auto highlightedPosition = layer->textPositionAt(hitPoint, false);
+    const auto highlightedCopy = window.textSelectionClipboardMimeData();
+    require(highlightedPosition.lineIndex == position.lineIndex &&
+                highlightedPosition.characterIndex == position.characterIndex &&
+                !window.isOcrBackgroundAt(hitPoint) && window.isOcrBackgroundAt(QPointF(10, 10)) &&
+                highlightedCopy && highlightedCopy->text() == originalCopy->text() &&
+                layer->scene()->items() == items,
+            "highlighting preserves text hit tests, clipboard data and graphics item identities");
+    const auto highlightedSnapshot = window.imageSnapshot(source, host.rect(), {}, {}, {});
+    require(highlightedSnapshot &&
+                renderScreenshotRecognitionImage(*highlightedSnapshot) == originalExport &&
+                window.printViewportSnapshot(source, host.rect()) == originalPrint,
+            "screen highlighting never changes recognized image exports or printed pixels");
+    const auto changedItem = std::find_if(items.cbegin(), items.cend(), [](const auto* item) {
+        return item->sceneBoundingRect().center().y() > 100;
+    });
+    require(changedItem != items.cend(), "the incremental fixture has a second text label");
+    const QRectF originalLabelBounds = (*changedItem)->sceneBoundingRect();
+    const QPainterPath originalHole = ocrLabelScenePath(**changedItem);
+    const QImage beforeUpdate = renderOcrHighlightingScene(*layer, 1.25);
+    window.updateOcrText(1, QStringLiteral("B"));
+    const QImage updated = renderOcrHighlightingScene(*layer, 1.25);
+    const QPainterPath vacatedHole = originalHole.subtracted(ocrLabelScenePath(**changedItem));
+    const auto vacatedWhitespace = blankOcrPixelInPath(beforeUpdate, vacatedHole);
+    require(vacatedWhitespace.has_value() &&
+                updated.pixelColor(*vacatedWhitespace) == singleOcrMaskBlend(mask),
+            "shrinking a text label remasks its former clear area exactly once");
+    require(layer->scene()->items() == items &&
+                (*changedItem)->sceneBoundingRect().width() < originalLabelBounds.width() / 2 &&
+                presentation->selectedText() == QStringLiteral("Ma"),
+            "incremental OCR text changes resize the highlighted label without replacing items "
+            "or disturbing another line's selection");
+    const QRect unchangedPixels(0, 0, updated.width(), qRound(90 * 1.25));
+    require(updated.copy(unchangedPixels) == beforeUpdate.copy(unchangedPixels),
+            "incremental highlighted text updates preserve every pixel of the other label");
+    window.setTextHighlighting(false, mask);
+    const QImage expectedUpdate = renderOcrHighlightingScene(*layer, 1.25, mask);
+    window.setTextHighlighting(true, mask);
+    require(updated == expectedUpdate && renderOcrHighlightingScene(*layer, 1.25) == expectedUpdate,
+            "the clear hole follows updated fitted bounds without retaining the old rectangle");
+    const QImage highlighted = renderOcrHighlightingScene(*layer, 1.25);
+    window.clearOcrPresentation();
+    window.setOcrPresentation(presentation);
+    require(renderOcrHighlightingScene(*layer, 1.25) == highlighted,
+            "window presentation replacement preserves its configured highlighting style");
+}
+
+void ocrTextHighlightingTests() {
+    const QFont originalFont = QApplication::font();
+    const auto restoreFont = qScopeGuard([&]() { QApplication::setFont(originalFont); });
+#ifdef Q_OS_WIN
+    if (QGuiApplication::platformName() == QStringLiteral("offscreen")) {
+        require(QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/segoeui.ttf")) >=
+                    0,
+                "load offscreen text highlighting font");
+        QApplication::setFont(QFont(QStringLiteral("Segoe UI")));
+    }
+#endif
+    ocrTextHighlightingMasksNonTextAroundFittedLabels();
+    ocrTextHighlightingUnionsOverlappingLabels();
+    ocrTextHighlightingTracksFractionalDevicePhase();
+    ocrTextHighlightingPreservesHiddenTextSelection();
+    ocrTextHighlightingPreservesInteractionAndExports();
 }
 
 void selectionOnlyTextLayerPaintsOnlyHighlights() {
@@ -3037,6 +3459,10 @@ void latexPreviewUsesPassiveCompanionAndSurvivesEditing() {
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     QApplication::setQuitOnLastWindowClosed(false);
+    if (application.arguments().contains(QStringLiteral("--ocr-highlighting-only"))) {
+        ocrTextHighlightingTests();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--text-editor-layout-only"))) {
         textRecognitionEditorsCollapseMarginsInSmallAreas();
         return 0;
@@ -3101,6 +3527,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     selectionOnlyTextLayerPaintsOnlyHighlights();
+    ocrTextHighlightingTests();
     embeddedRecognitionWindowPreservesParentSurfaceWithVisibleTextLayer();
     ocrDoubleClickCopiesOnlyTheClickedBlock();
     ocrDoubleClickPreservesEditorsAndResizeHandles();

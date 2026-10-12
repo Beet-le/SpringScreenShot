@@ -5,6 +5,7 @@
 
 #include <QColor>
 #include <QGraphicsView>
+#include <QPainterPath>
 #include <QRect>
 #include <QTransform>
 
@@ -12,7 +13,7 @@
 #include <memory>
 #include <vector>
 
-class QGraphicsScene;
+class ScreenshotOcrGraphicsScene;
 class ScreenshotOcrGraphicsTextItem;
 
 class ScreenshotOcrTextLayer final : public QGraphicsView {
@@ -24,6 +25,7 @@ class ScreenshotOcrTextLayer final : public QGraphicsView {
     void setPresentation(std::shared_ptr<ScreenshotOcrPresentation> presentation,
                          RenderingMode mode = RenderingMode::Normal);
     void clearPresentation();
+    void setTextHighlighting(bool enabled, const QColor& maskColor);
     [[nodiscard]] QColor textColor() const {
         return m_textColor;
     }
@@ -47,10 +49,14 @@ class ScreenshotOcrTextLayer final : public QGraphicsView {
 
     void rebuildTextItems();
     void synchronizeTextItem(TextItem& item, const QTransform& canvasToViewTransform);
+    void updateTextHighlighting();
 
-    QGraphicsScene* m_scene = nullptr;
+    ScreenshotOcrGraphicsScene* m_scene = nullptr;
     std::shared_ptr<ScreenshotOcrPresentation> m_presentation;
     QColor m_textColor;
+    QColor m_textHighlightColor = QColor(Qt::transparent);
+    QPainterPath m_textHighlightMask;
+    bool m_textHighlightGeometryDirty = true;
     RenderingMode m_renderingMode = RenderingMode::Normal;
     std::vector<TextItem> m_textItems;
     QTransform m_canvasToViewTransform;

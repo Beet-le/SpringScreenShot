@@ -13905,6 +13905,264 @@ void pinnedHiddenTextSelectionRestores() {
     require(processUntilDeleted(window, 2000), "close restored native pin");
 }
 
+void pinnedOcrHighlightingFollowsVisibleResultsWithoutRebuildingLabels() {
+#ifdef Q_OS_WIN
+    require(QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/segoeui.ttf")) >= 0,
+            "load offscreen highlighting font");
+    QApplication::setFont(QFont(QStringLiteral("Segoe UI")));
+#endif
+    using Access = ScreenshotPinnedWindowTestAccess;
+    const snow_shot::storage::TextRecognitionSettings textSettings;
+    const snow_shot::storage::ScreenshotUiSettings uiSettings;
+    const snow_shot::storage::PinToScreenSettings pinSettings;
+    const bool priorHighlighting = textSettings.showTextHighlighting();
+    const bool priorPreview = textSettings.showOriginalImagePreview();
+    const QColor priorMask = uiSettings.selectionMaskColor();
+    const QString priorSelection = pinSettings.textSelectionOnRecognitionResults();
+    auto& configuration = snow_shot::storage::ApplicationStorage::instance().configuration();
+    const QString fillKey = QStringLiteral("text_recognition/fill_style");
+    const auto priorFill = configuration.value(fillKey);
+    const auto restore = qScopeGuard([&] {
+        textSettings.setShowTextHighlighting(priorHighlighting);
+        textSettings.setShowOriginalImagePreview(priorPreview);
+        uiSettings.setSelectionMaskColor(priorMask);
+        static_cast<void>(pinSettings.setTextSelectionOnRecognitionResults(priorSelection));
+        static_cast<void>(configuration.setValue(fillKey, priorFill));
+    });
+    require(textSettings.setShowTextHighlighting(false) &&
+                textSettings.setShowOriginalImagePreview(false) &&
+                uiSettings.setSelectionMaskColor(QColor(30, 180, 80, 110)) &&
+                pinSettings.setTextSelectionOnRecognitionResults(QStringLiteral("always")) &&
+                configuration.setValue(fillKey, QStringLiteral("background_fill")),
+            "configure highlighting without a comparison window");
+    class CountingRecognition final : public ScreenshotOcrRecognitionPort {
+      public:
+        RequestToken recognize(ScreenshotOcrRequest, QObject*, Completion) override {
+            ++requests;
+            return 1;
+        }
+        RequestToken render(ScreenshotOcrRequest, QObject*, Completion) override {
+            ++renderRequests;
+            return 0;
+        }
+        void cancel(RequestToken) override {}
+        bool reprioritize(RequestToken, ScreenshotOcrRequestPriority) override {
+            return false;
+        }
+        int requests = 0;
+        int renderRequests = 0;
+    } recognition;
+    auto config = cachedOcrPinConfig(&recognition);
+    config.recognitionResults.translatedText =
+        std::make_shared<ScreenshotOcrPresentation>(*config.recognitionResults.text->presentation);
+    config.recognitionResults.translatedText->setLineText(0, QStringLiteral("Translated OCR"));
+    ScreenshotPinnedWindow window;
+    auto* session = Access::hiddenSelectionOffscreen(window, config);
+    auto* content = window.findChild<ScreenshotRecognitionWindow*>(
+        QStringLiteral("screenshotPinnedRecognitionContent"));
+    auto* layer = content
+                      ? content->findChild<QGraphicsView*>(QStringLiteral("snowShotOcrTextLayer"))
+                      : nullptr;
+    auto* action = pinnedMenuActionNamed(window, QStringLiteral("screenshotPinnedOcrAction"));
+    require(session && content && layer && action && Access::hiddenSelection(window),
+            "cached OCR supplies a hidden selectable label");
+    const auto renderLayer = [&] {
+        QApplication::processEvents();
+        QImage image(layer->sceneRect().size().toSize(), QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::transparent);
+        QPainter painter(&image);
+        layer->scene()->render(&painter, QRectF(image.rect()), layer->sceneRect());
+        painter.end();
+        return image;
+    };
+    const auto singleMaskPixel = [](const QColor& mask,
+                                    const QColor& background = Qt::transparent) {
+        QImage image(1, 1, QImage::Format_ARGB32_Premultiplied);
+        image.fill(background);
+        QPainter painter(&image);
+        painter.fillRect(image.rect(), mask);
+        painter.end();
+        return image.pixel(0, 0);
+    };
+    const QPoint blankPoint(5, 5);
+    const auto requireClearLabel = [&](const QImage& original, const QImage& masked,
+                                       const QGraphicsItem& item) {
+        const QPoint center = item.mapToScene(item.boundingRect().center()).toPoint();
+        require(original.rect().contains(center) && masked.rect().contains(center) &&
+                    masked.pixel(center) == original.pixel(center),
+                "the fitted OCR label interior stays clear above the surrounding mask");
+    };
+    QImage transparent = renderLayer();
+    transparent.fill(Qt::transparent);
+    require(renderLayer() == transparent, "unselected hidden OCR paints no label pixels");
+    const auto hiddenItems = layer->scene()->items();
+    require(textSettings.setShowTextHighlighting(true) && renderLayer() == transparent &&
+                layer->scene()->items() == hiddenItems && recognition.requests == 0,
+            "highlighting must not expose or rebuild hidden selection labels");
+
+    action->trigger();
+    require(session->active() && action->isChecked() && !Access::hiddenSelection(window),
+            "Show Text Recognition Results activates normal label painting");
+    require(textSettings.setShowTextHighlighting(false), "render displayed OCR without its mask");
+    const QImage normal = renderLayer();
+    const auto items = layer->scene()->items();
+    require(items.size() == 1 && normal != transparent, "displayed cached OCR paints its label");
+    const int initialRenderRequests = recognition.renderRequests;
+    require(initialRenderRequests > 0,
+            "activating cached OCR exercises its background render path");
+    const auto* presentation = &Access::displayedRecognition(window);
+    const auto quad = presentation->lines[0].quad;
+    const auto transform = items.front()->sceneTransform();
+    const auto bounds = items.front()->boundingRect();
+    const QImage normalWindow = renderWholeWidget(window);
+    require(textSettings.setShowTextHighlighting(true), "enable highlighting on an open pin");
+    const QImage highlighted = renderLayer();
+    require(highlighted != normal && layer->scene()->items() == items &&
+                &Access::displayedRecognition(window) == presentation &&
+                presentation->lines[0].quad == quad &&
+                items.front()->sceneTransform() == transform &&
+                items.front()->boundingRect() == bounds,
+            "live highlighting changes surrounding paint without reshaping or replacing labels");
+    require(highlighted.pixel(blankPoint) == singleMaskPixel(QColor(30, 180, 80, 110)),
+            "blank OCR viewport pixels receive exactly one screenshot mask blend");
+    requireClearLabel(normal, highlighted, *items.front());
+    const QImage highlightedWindow = renderWholeWidget(window);
+    const QPoint windowBlankPoint = content->mapTo(&window, blankPoint);
+    require(
+        highlightedWindow.pixel(windowBlankPoint) ==
+            singleMaskPixel(QColor(30, 180, 80, 110), normalWindow.pixelColor(windowBlankPoint)),
+        "the composed screenshot background receives one mask blend outside its text");
+    const QRect contentBounds(content->mapTo(&window, QPoint()), content->size());
+    const QRect allowedPaint = contentBounds.adjusted(-1, -1, 1, 1);
+    int outsidePixels = 0;
+    for (int y = 0; y < normalWindow.height(); ++y) {
+        for (int x = 0; x < normalWindow.width(); ++x) {
+            if (!allowedPaint.contains(x, y)) {
+                ++outsidePixels;
+                require(highlightedWindow.pixel(x, y) == normalWindow.pixel(x, y),
+                        "highlighting leaves parent pixels and pinned shadow margins unchanged");
+            }
+        }
+    }
+    require(outsidePixels > 0, "the mask clipping fixture includes a pinned shadow margin");
+    require(uiSettings.setSelectionMaskColor(QColor(90, 50, 230, 140)),
+            "change the screenshot mask on an open pin");
+    const QImage recolored = renderLayer();
+    require(recolored != highlighted && layer->scene()->items() == items &&
+                recolored.pixel(blankPoint) == singleMaskPixel(QColor(90, 50, 230, 140)),
+            "open OCR labels follow live screenshot mask color changes");
+    requireClearLabel(normal, recolored, *items.front());
+    require(uiSettings.setSelectionMaskColor(QColor(90, 50, 230, 0)) && renderLayer() == normal,
+            "a transparent screenshot mask preserves the original label pixels");
+    require(uiSettings.setSelectionMaskColor(QColor(30, 180, 80, 110)) &&
+                renderLayer() == highlighted,
+            "restoring the mask restores the same highlighted label pixels");
+    require(recognition.renderRequests == initialRenderRequests,
+            "highlighting and mask color changes must not request background rendering");
+    Access::selectHiddenText(window);
+    content->updateOcrSelection();
+    const QString selected = presentation->selectedText();
+    auto selectedClipboard = content->textSelectionClipboardMimeData();
+    require(selectedClipboard && !selected.isEmpty(), "highlighted labels remain selectable");
+    require(textSettings.setShowTextHighlighting(false) &&
+                uiSettings.setSelectionMaskColor(QColor(200, 70, 20, 150)) &&
+                textSettings.setShowTextHighlighting(true) && layer->scene()->items() == items &&
+                presentation->selectedText() == selected,
+            "appearance changes preserve selected text and its label components");
+    const auto recoloredClipboard = content->textSelectionClipboardMimeData();
+    require(recoloredClipboard && recoloredClipboard->text() == selectedClipboard->text(),
+            "appearance changes preserve text selection and copied text");
+    require(recognition.renderRequests == initialRenderRequests,
+            "highlighting changes preserve the existing selected-text background render");
+    content->clearOcrSelection();
+    session->setShowOriginalImage(true);
+    require(!layer->isVisibleTo(&window), "Show Original Image hides highlighted OCR labels");
+    require(textSettings.setShowTextHighlighting(false) &&
+                textSettings.setShowTextHighlighting(true) && !layer->isVisibleTo(&window),
+            "live highlighting must not reveal OCR over Show Original Image");
+    session->setShowOriginalImage(false);
+    require(layer->isVisibleTo(&window) && renderLayer() != normal,
+            "returning from Show Original Image restores highlighted OCR");
+    require(recognition.renderRequests == initialRenderRequests,
+            "hidden appearance changes and original image toggles do not rerender OCR backgrounds");
+    for (int repeat = 0; repeat < 2; ++repeat) {
+        action->trigger();
+        require(!session->active() && Access::hiddenSelection(window) &&
+                    renderLayer() == transparent,
+                "hiding recognition results removes the mask from SelectionOnly labels");
+        action->trigger();
+        require(session->active() && !Access::hiddenSelection(window) && renderLayer() != normal,
+                "showing recognition results again restores the label mask");
+    }
+    require(session->activateCachedTextTranslation(), "activate cached translated labels");
+    require(Access::displayedRecognition(window).lines[0].text == QStringLiteral("Translated OCR"),
+            "the highlighted translation retains its cached text");
+    const auto translatedItems = layer->scene()->items();
+    const QImage translatedHighlight = renderLayer();
+    const int translatedRenderRequests = recognition.renderRequests;
+    require(textSettings.setShowTextHighlighting(false), "disable the translated viewport mask");
+    const QImage translatedNormal = renderLayer();
+    requireClearLabel(translatedNormal, translatedHighlight, *translatedItems.front());
+    require(translatedNormal != translatedHighlight && layer->scene()->items() == translatedItems &&
+                recognition.requests == 0 &&
+                recognition.renderRequests == translatedRenderRequests &&
+                config.recognitionResults.text->presentation->lines[0].quad == quad &&
+                config.recognitionResults.text->presentation->lines[0].text ==
+                    QStringLiteral("Saved OCR"),
+            "translated label highlighting is paint-only and never requests recognition");
+    for (const QString& fill : {QStringLiteral("blur"), QStringLiteral("background_fill")}) {
+        require(configuration.setValue(fillKey, fill), "change the displayed OCR fill style");
+        const QImage unhighlighted = renderLayer();
+        const auto fillItems = layer->scene()->items();
+        const int fillRenderRequests = recognition.renderRequests;
+        require(textSettings.setShowTextHighlighting(true) &&
+                    uiSettings.setSelectionMaskColor(QColor(80, 150, 220, 100)),
+                "enable the surrounding mask for each OCR fill style");
+        const QImage fillMasked = renderLayer();
+        require(fillMasked != unhighlighted && layer->scene()->items() == fillItems &&
+                    fillMasked.pixel(blankPoint) == singleMaskPixel(QColor(80, 150, 220, 100)) &&
+                    recognition.renderRequests == fillRenderRequests,
+                "both fill styles highlight existing labels without rerendering backgrounds");
+        requireClearLabel(unhighlighted, fillMasked, *fillItems.front());
+        require(uiSettings.setSelectionMaskColor(QColor(80, 150, 220, 0)) &&
+                    renderLayer() == unhighlighted && textSettings.setShowTextHighlighting(false) &&
+                    recognition.renderRequests == fillRenderRequests && recognition.requests == 0,
+                "both fill styles preserve exact pixels for a transparent or disabled mask");
+    }
+    require(uiSettings.setSelectionMaskColor(QColor(30, 180, 80, 110)),
+            "restore a visible mask for viewport transform coverage");
+    const auto verifyTransformedMask = [&] {
+        const int renderRequests = recognition.renderRequests;
+        require(textSettings.setShowTextHighlighting(false),
+                "render transformed OCR without a mask");
+        const QImage unhighlighted = renderLayer();
+        const auto transformedItems = layer->scene()->items();
+        require(transformedItems.size() == 1 && transformedItems.front()->isVisible(),
+                "the transformed fixture keeps its single OCR label visible");
+        require(textSettings.setShowTextHighlighting(true), "mask the transformed OCR viewport");
+        const QImage masked = renderLayer();
+        require(masked.pixel(blankPoint) == singleMaskPixel(QColor(30, 180, 80, 110)) &&
+                    layer->scene()->items() == transformedItems &&
+                    recognition.renderRequests == renderRequests && recognition.requests == 0,
+                "transformed surrounding masks reuse label items without recognition work");
+        requireClearLabel(unhighlighted, masked, *transformedItems.front());
+        return masked;
+    };
+    const QImage beforeZoom = verifyTransformedMask();
+    const auto zoomItems = layer->scene()->items();
+    const QRectF preZoomBounds = zoomItems.front()->sceneBoundingRect();
+    Access::leaveViewportAtPreviousDpi(window, 1.25);
+    Access::refreshRecognitionGeometry(window);
+    const QImage zoomed = verifyTransformedMask();
+    require(layer->scene()->items() == zoomItems &&
+                zoomItems.front()->sceneBoundingRect() != preZoomBounds && zoomed != beforeZoom,
+            "zoom updates cached clear text regions while retaining label components");
+    Access::rotateRecognitionOffscreen(window);
+    Access::refreshRecognitionGeometry(window);
+    require(verifyTransformedMask() != zoomed,
+            "rotation refreshes the cached clear text regions at their new viewport positions");
+}
+
 void pinnedRecognitionSaveSnapshotsAndRoutesOffscreen() {
 #if defined(Q_OS_WIN)
     require(QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/segoeui.ttf")) >= 0,
@@ -13915,12 +14173,21 @@ void pinnedRecognitionSaveSnapshotsAndRoutesOffscreen() {
     QTemporaryDir directory;
     const snow_shot::storage::ScreenshotSettings output;
     const snow_shot::storage::TextRecognitionSettings settings;
+    const snow_shot::storage::ScreenshotUiSettings uiSettings;
+    const bool priorHighlighting = settings.showTextHighlighting();
+    const QColor priorMask = uiSettings.selectionMaskColor();
+    const auto restoreHighlighting = qScopeGuard([&] {
+        settings.setShowTextHighlighting(priorHighlighting);
+        uiSettings.setSelectionMaskColor(priorMask);
+    });
     require(directory.isValid() && output.setImageSaveDirectory(directory.path()) &&
                 output.setLastManualSaveDirectory(directory.path()) &&
                 output.setLastManualSaveFormat(QStringLiteral("png")) &&
                 output.setImageFormat(QStringLiteral("png")) &&
                 output.setAutoSaveFilenameFormat(QStringLiteral("Recognized")) &&
-                settings.setSaveRecognitionResultAsImage(true),
+                settings.setSaveRecognitionResultAsImage(true) &&
+                settings.setShowTextHighlighting(false) &&
+                uiSettings.setSelectionMaskColor(QColor(200, 70, 20, 150)),
             "recognition save settings");
     ScreenshotPinnedWindow window;
     auto config = cachedOcrPinConfig(nullptr);
@@ -13952,6 +14219,41 @@ void pinnedRecognitionSaveSnapshotsAndRoutesOffscreen() {
     };
     const QImage recognized = pixels(ScreenshotPinnedWindowTestAccess::fileSave(window));
     require(recognized != config.imageSource.materializedImage, "OCR text appears in saved image");
+    const auto clipboardPng = [&](std::shared_ptr<ScreenshotExportArtifact> artifact) {
+        QByteArray png;
+        bool complete = false;
+        require(artifact && artifact->requestClipboard(
+                                &window,
+                                [&](ScreenshotExportClipboardResult result) {
+                                    require(result.succeeded(), "recognition clipboard prepares");
+                                    png = result.payload.pngBytes();
+                                    complete = true;
+                                }),
+                "recognition clipboard schedules");
+        QElapsedTimer timer;
+        timer.start();
+        while (!complete && timer.elapsed() < 10000)
+            waitForUi(5);
+        require(complete && !png.isEmpty(), "recognition clipboard completes");
+        return png;
+    };
+    const QByteArray recognizedClipboard =
+        clipboardPng(ScreenshotPinnedWindowTestAccess::fileSave(window));
+    const QImage recognizedClipboardImage = QImage::fromData(recognizedClipboard, "PNG");
+    require(!recognizedClipboardImage.isNull() &&
+                recognizedClipboardImage.size() == recognized.size(),
+            "recognized image clipboard decodes at the saved image dimensions");
+    // The PNG encoder tags canonical sRGB while the source snapshot can be untagged.
+    // Compare each output route with its own baseline, retaining exact pixels and metadata.
+    require(settings.setShowTextHighlighting(true) &&
+                pixels(ScreenshotPinnedWindowTestAccess::fileSave(window)) == recognized,
+            "screen-only highlighting preserves exact saved recognition pixels");
+    const QByteArray highlightedClipboard =
+        clipboardPng(ScreenshotPinnedWindowTestAccess::fileSave(window));
+    const QImage highlightedClipboardImage = QImage::fromData(highlightedClipboard, "PNG");
+    require(!highlightedClipboardImage.isNull() && highlightedClipboard == recognizedClipboard &&
+                highlightedClipboardImage == recognizedClipboardImage,
+            "screen-only highlighting preserves exact clipboard PNG bytes and decoded pixels");
     session->setShowOriginalImage(true);
     require(pixels(ScreenshotPinnedWindowTestAccess::fileSave(window)) ==
                 config.imageSource.materializedImage,
@@ -13977,7 +14279,7 @@ void pinnedRecognitionSaveSnapshotsAndRoutesOffscreen() {
                 config.imageSource.materializedImage,
             "text-only editor preserves ordinary image export");
     session->endTextEditing();
-    const auto waitFile = [&](const QString& path) {
+    const auto waitFile = [&](const QString& path, const QImage& expected) {
         QElapsedTimer timer;
         timer.start();
         while ((!QFileInfo::exists(path) || window.property("saveDialogOpen").toBool()) &&
@@ -13985,10 +14287,35 @@ void pinnedRecognitionSaveSnapshotsAndRoutesOffscreen() {
             waitForUi(10);
         require(QFileInfo::exists(path), "recognition image file produced");
         waitForUi(20);
-        return QImage(path).convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        QImage decoded(path);
+        require(!decoded.isNull() && decoded.size() == expected.size(),
+                "recognition image file decodes at the expected dimensions");
+        decoded = decoded.convertToFormat(expected.format());
+        require(decoded.format() == expected.format(),
+                "recognition image file converts to the expected comparison format");
+        // These fixtures start with untagged sRGB pixels. PNG adds the canonical sRGB tag;
+        // retagging for comparison preserves every pixel without applying a color conversion.
+        decoded.setColorSpace(expected.colorSpace());
+        if (decoded != expected) {
+            for (int y = 0; y < decoded.height(); ++y) {
+                for (int x = 0; x < decoded.width(); ++x) {
+                    if (decoded.pixel(x, y) != expected.pixel(x, y)) {
+                        std::cerr << "Recognition file pixel mismatch in " << path.toStdString()
+                                  << " at " << x << ',' << y << ": actual "
+                                  << QString::number(decoded.pixel(x, y), 16).toStdString()
+                                  << ", expected "
+                                  << QString::number(expected.pixel(x, y), 16).toStdString()
+                                  << '\n';
+                        return decoded;
+                    }
+                }
+            }
+        }
+        return decoded;
     };
     ScreenshotPinnedWindowTestAccess::quickSave(window);
-    require(waitFile(directory.filePath(QStringLiteral("Recognized.png"))) == recognized,
+    require(waitFile(directory.filePath(QStringLiteral("Recognized.png")), recognized) ==
+                recognized,
             "Quick Save exports recognition pixels");
     require(output.setSaveAsFileDialog(QStringLiteral("snow_shot")), "select custom save dialog");
     ScreenshotPinnedWindowTestAccess::saveAsFile(window);
@@ -14005,7 +14332,7 @@ void pinnedRecognitionSaveSnapshotsAndRoutesOffscreen() {
         ->findChild<adqt::widgets::AdLineEdit*>(QStringLiteral("saveFilenameInput"))
         ->setText(QStringLiteral("frozen.png"));
     modal->acceptButton()->click();
-    require(waitFile(directory.filePath(QStringLiteral("frozen.png"))) == recognized,
+    require(waitFile(directory.filePath(QStringLiteral("frozen.png")), recognized) == recognized,
             "custom dialog saves activation snapshot despite later translation updates");
     require(output.setSaveAsFileDialog(QStringLiteral("system")), "select native dialog flow");
     const bool native = QApplication::testAttribute(Qt::AA_DontUseNativeDialogs);
@@ -14026,7 +14353,7 @@ void pinnedRecognitionSaveSnapshotsAndRoutesOffscreen() {
     accept.start();
     ScreenshotPinnedWindowTestAccess::saveAsFile(window);
     accept.stop();
-    require(waitFile(directory.filePath(QStringLiteral("native.png"))) == translated,
+    require(waitFile(directory.filePath(QStringLiteral("native.png")), translated) == translated,
             "native dialog also freezes recognition before modal event processing");
     ScreenshotPinnedWindowTestAccess::leaveViewportAtPreviousDpi(window, 1.5);
     require(pixels(ScreenshotPinnedWindowTestAccess::fileSave(window)) == recognized,
@@ -22995,6 +23322,10 @@ int main(int argc, char* argv[]) {
         // without this, lazily initialized storage lands in the developer's
         // real AppData (see IsolatedPinnedStorage).
         IsolatedPinnedStorage processStorage;
+        if (app.arguments().contains(QStringLiteral("--ocr-highlighting-only"))) {
+            pinnedOcrHighlightingFollowsVisibleResultsWithoutRebuildingLabels();
+            return 0;
+        }
         if (QCoreApplication::arguments().contains(QStringLiteral("--animation-transforms-only"))) {
             pinnedAnimatedImages(true);
             return 0;

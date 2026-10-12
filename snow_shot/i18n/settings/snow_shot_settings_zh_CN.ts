@@ -1169,6 +1169,10 @@
             <translation>在经典 Windows 右键菜单中添加“使用 Snow Shot 编辑”，将图像文件固定到屏幕。</translation>
         </message>
         <message>
+            <source>Add a mask to highlight text recognition results</source>
+            <translation>添加遮罩以高亮显示文本识别结果</translation>
+        </message>
+        <message>
             <source>Adjust MP4 quality and file size</source>
             <translation>调整 MP4 画质和文件大小</translation>
         </message>
@@ -3827,6 +3831,10 @@
         <message>
             <source>Show Guides by Default</source>
             <translation>默认显示辅助线</translation>
+        </message>
+        <message>
+            <source>Show Text Highlighting</source>
+            <translation>显示文本高亮</translation>
         </message>
         <message>
             <source>Show a button in the text recognition toolbar that sends recognized text to the Translation page.</source>

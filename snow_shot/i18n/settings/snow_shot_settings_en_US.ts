@@ -1169,6 +1169,10 @@
             <translation>Add Edit with Snow Shot to the classic Windows context menu to pin an image file to the screen.</translation>
         </message>
         <message>
+            <source>Add a mask to highlight text recognition results</source>
+            <translation>Add a mask to highlight text recognition results</translation>
+        </message>
+        <message>
             <source>Adjust MP4 quality and file size</source>
             <translation>Adjust MP4 quality and file size</translation>
         </message>
@@ -3827,6 +3831,10 @@
         <message>
             <source>Show Guides by Default</source>
             <translation>Show Guides by Default</translation>
+        </message>
+        <message>
+            <source>Show Text Highlighting</source>
+            <translation>Show Text Highlighting</translation>
         </message>
         <message>
             <source>Show a button in the text recognition toolbar that sends recognized text to the Translation page.</source>

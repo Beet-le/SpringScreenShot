@@ -904,6 +904,8 @@ bool BuiltInSettingsBackend::switchValue(SettingsSwitchBinding binding) const {
         return storage::TextRecognitionSettings().saveRecognitionResultAsImage();
     case SettingsSwitchBinding::ShowOriginalImagePreview:
         return storage::TextRecognitionSettings().showOriginalImagePreview();
+    case SettingsSwitchBinding::ShowTextHighlighting:
+        return storage::TextRecognitionSettings().showTextHighlighting();
     case SettingsSwitchBinding::PinAutomaticTextRecognition:
         return storage::PinToScreenSettings().automaticTextRecognition();
     case SettingsSwitchBinding::PinAutoResizeWindow:
@@ -1142,6 +1144,9 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     if (binding == SettingsSwitchBinding::ShowOriginalImagePreview) {
         return storage::TextRecognitionSettings().setShowOriginalImagePreview(value);
     }
+    if (binding == SettingsSwitchBinding::ShowTextHighlighting) {
+        return storage::TextRecognitionSettings().setShowTextHighlighting(value);
+    }
     if (binding == SettingsSwitchBinding::PinAutomaticTextRecognition) {
         return storage::PinToScreenSettings().setAutomaticTextRecognition(value);
     }
@@ -1280,6 +1285,7 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     case SettingsSwitchBinding::ScreenshotCopyImageFileToClipboard:
     case SettingsSwitchBinding::SaveRecognitionResultAsImage:
     case SettingsSwitchBinding::ShowOriginalImagePreview:
+    case SettingsSwitchBinding::ShowTextHighlighting:
     case SettingsSwitchBinding::PinAutomaticTextRecognition:
     case SettingsSwitchBinding::PinAutoResizeWindow:
     case SettingsSwitchBinding::PinShowWindowButtons:
@@ -2520,10 +2526,14 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
                  QStringLiteral("text_recognition/default_punctuation"))},
         });
     case SettingsSectionReset::TextRecognitionInterfaceSettings:
-        return storage::ApplicationStorage::instance().configuration().setValue(
-            QStringLiteral("text_recognition/fill_style"),
-            storage::ConfigurationSchema::defaultValue(
-                QStringLiteral("text_recognition/fill_style")));
+        return storage::ApplicationStorage::instance().configuration().setValues({
+            {QStringLiteral("text_recognition/fill_style"),
+             storage::ConfigurationSchema::defaultValue(
+                 QStringLiteral("text_recognition/fill_style"))},
+            {QStringLiteral("text_recognition/show_text_highlighting"),
+             storage::ConfigurationSchema::defaultValue(
+                 QStringLiteral("text_recognition/show_text_highlighting"))},
+        });
     case SettingsSectionReset::Toolbar:
         return storage::ApplicationStorage::instance().configuration().setValue(
             QStringLiteral("screenshot_ui/toolbar_size"),

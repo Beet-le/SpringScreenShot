@@ -67,9 +67,57 @@ class CatalogTranslator final : public QTranslator {
         if (source == QStringLiteral("Appearance")) {
             return QStringLiteral("Visual Style");
         }
+        if (source == QStringLiteral("Show Text Highlighting")) {
+            return QStringLiteral("Localized Text Highlighting");
+        }
         return {};
     }
 };
+
+void ocrHighlightingCatalog() {
+    const auto& registry = settings::builtInSettingsRegistry();
+    const auto& catalog = registry.catalog();
+    require(catalog.validationErrors().isEmpty(), "OCR highlighting catalog must validate");
+    const auto* section = catalog.section(QStringLiteral("text-recognition-translation"),
+                                          QStringLiteral("interface-text-recognition"));
+    require(
+        section != nullptr && section->title.translated() == QStringLiteral("Text background") &&
+            section->reset == settings::SettingsSectionReset::TextRecognitionInterfaceSettings &&
+            section->items.size() == 2 &&
+            section->items.at(0).id == QStringLiteral("interface.text-recognition.fill-style"),
+        "Text background must place OCR highlighting directly below Fill Style");
+    const auto& highlighting = section->items.at(1);
+    const QString itemId = QStringLiteral("interface.text-recognition.show-text-highlighting");
+    const QString key = QStringLiteral("text_recognition/show_text_highlighting");
+    const auto* toggle = std::get_if<settings::SettingsSwitchDefinition>(&highlighting.payload);
+    const auto* schema = storage::ConfigurationSchema::entry(key);
+    require(highlighting.id == itemId &&
+                highlighting.title.translated() == QStringLiteral("Show Text Highlighting") &&
+                highlighting.description.isValid() && highlighting.configurationKey == key &&
+                toggle != nullptr &&
+                toggle->binding == settings::SettingsSwitchBinding::ShowTextHighlighting &&
+                schema != nullptr &&
+                schema->valueKind == storage::ConfigurationValueKind::Boolean &&
+                schema->defaultValue == QJsonValue(false),
+            "Show Text Highlighting must be a translated switch with a disabled Boolean default");
+    const auto* descriptor = registry.field(itemId);
+    require(descriptor != nullptr && descriptor->kind == settings::SettingsFieldKind::Switch &&
+                descriptor->configurationKey == key &&
+                descriptor->defaultValue == QJsonValue(false) &&
+                descriptor == registry.fieldForConfigurationKey(key) &&
+                descriptor ==
+                    registry.fieldForSwitch(settings::SettingsSwitchBinding::ShowTextHighlighting),
+            "OCR highlighting must resolve through the shared settings registry");
+    const settings::SettingsSearchIndex search(registry);
+    require(!search.search(QStringLiteral("Show Text Highlighting")).isEmpty(),
+            "OCR highlighting must be discoverable in settings search");
+    CatalogTranslator translator;
+    require(QCoreApplication::installTranslator(&translator),
+            "install OCR highlighting translator");
+    require(highlighting.title.translated() == QStringLiteral("Localized Text Highlighting"),
+            "OCR highlighting title must resolve translations dynamically");
+    QCoreApplication::removeTranslator(&translator);
+}
 
 void ocrDefaultOptionsShareToolbarSource(const settings::SettingsCatalog& catalog) {
     const auto* section = catalog.section(QStringLiteral("text-recognition-translation"),
@@ -3428,6 +3476,10 @@ void memoryOptimizationPolicyCatalog() {
 
 int main(int argc, char** argv) {
     QCoreApplication application(argc, argv);
+    if (application.arguments().contains(QStringLiteral("--ocr-highlighting-only"))) {
+        ocrHighlightingCatalog();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--memory-optimization-only"))) {
         memoryOptimizationPolicyCatalog();
         return 0;
@@ -3454,6 +3506,7 @@ int main(int argc, char** argv) {
 #endif
         return 0;
     }
+    ocrHighlightingCatalog();
     memoryOptimizationPolicyCatalog();
     const auto adminCatalog = settings::buildBuiltInSettingsCatalog();
     const auto* qos = adminCatalog.item({QStringLiteral("general"), QStringLiteral("core"),

@@ -2508,6 +2508,11 @@ if(SNOW_SHOT_BUILD_TESTS)
              COMMAND snow-shot-settings-catalog-tests)
     add_test(NAME snow-shot-ocr-text-options-catalog-tests
              COMMAND snow-shot-settings-catalog-tests --ocr-text-options-only)
+    add_test(NAME snow-shot-ocr-highlighting-settings-catalog-tests
+        COMMAND snow-shot-settings-catalog-tests --ocr-highlighting-only)
+    set_tests_properties(snow-shot-ocr-highlighting-settings-catalog-tests PROPERTIES
+        LABELS "unit" TIMEOUT 30
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(snow-shot-ocr-text-options-catalog-tests PROPERTIES LABELS "unit" TIMEOUT 30
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(snow-shot-settings-catalog-tests PROPERTIES
@@ -2722,6 +2727,13 @@ if(SNOW_SHOT_BUILD_TESTS)
         snow_shot_image_codec
     )
     add_test(NAME snow-shot-translation-settings-tests COMMAND snow-shot-translation-settings-tests)
+    add_test(NAME snow-shot-ocr-highlighting-settings-tests
+        COMMAND snow-shot-translation-settings-tests --ocr-highlighting-only -platform offscreen)
+    add_test(NAME snow-shot-ocr-highlighting-storage-tests
+        COMMAND snow-shot-application-storage-tests --ocr-highlighting-only)
+    set_tests_properties(snow-shot-ocr-highlighting-settings-tests
+        snow-shot-ocr-highlighting-storage-tests PROPERTIES LABELS "unit" TIMEOUT 30
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-text-detection-processing-settings-tests
         COMMAND snow-shot-translation-settings-tests --text-detection-processing-only -platform offscreen)
     set_tests_properties(snow-shot-text-detection-processing-settings-tests PROPERTIES
@@ -4050,6 +4062,15 @@ if(SNOW_SHOT_BUILD_TESTS)
             tests/screenshot_cursor_performance_benchmark.cpp)
         target_compile_definitions(snow-shot-screenshot-canvas-renderer-tests PRIVATE
             SNOW_SHOT_CURSOR_BENCHMARK=1)
+        target_sources(snow-shot-screenshot-canvas-renderer-tests PRIVATE
+            tests/screenshot_ocr_highlighting_performance_benchmark.cpp)
+        target_compile_definitions(snow-shot-screenshot-canvas-renderer-tests PRIVATE
+            SNOW_SHOT_OCR_HIGHLIGHTING_BENCHMARK=1)
+        add_test(NAME snow-shot-ocr-highlighting-performance-benchmark
+            COMMAND snow-shot-screenshot-canvas-renderer-tests --ocr-highlighting-benchmark -platform offscreen)
+        set_tests_properties(snow-shot-ocr-highlighting-performance-benchmark PROPERTIES
+            LABELS "benchmark" TIMEOUT 120
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
         if(WIN32)
             target_link_libraries(snow-shot-screenshot-canvas-renderer-tests PRIVATE Psapi)
         endif()
@@ -5321,6 +5342,10 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-pinned-window-tests --hidden-text-selection-only -platform offscreen)
     add_test(NAME snow-shot-pinned-recognition-save-tests
         COMMAND snow-shot-pinned-window-tests --recognition-save-only -platform offscreen)
+    add_test(NAME snow-shot-pinned-ocr-highlighting-tests
+        COMMAND snow-shot-pinned-window-tests --ocr-highlighting-only -platform offscreen)
+    set_tests_properties(snow-shot-pinned-ocr-highlighting-tests PROPERTIES LABELS "unit" TIMEOUT 90
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(snow-shot-pinned-recognition-save-tests PROPERTIES LABELS "unit" TIMEOUT 90)
     add_test(NAME snow-shot-pinned-shared-image-export-tests
         COMMAND snow-shot-pinned-window-tests --shared-image-export-only -platform offscreen)
@@ -7546,6 +7571,7 @@ if(SNOW_SHOT_BUILD_TESTS)
 
     add_executable(snow-shot-recognition-window-tests
         tests/screenshot_recognition_window_tests.cpp
+        src/presentation/ocr/screenshotrecognitionimage.cpp
         include/snow_shot/presentation/screenshotcanvasrenderer.h
         include/snow_shot/presentation/screenshotgeometry.h
         include/snow_shot/presentation/screenshotocrpresentation.h
@@ -7604,6 +7630,10 @@ if(SNOW_SHOT_BUILD_TESTS)
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-recognition-selection-only-rendering-tests
         COMMAND snow-shot-recognition-window-tests --selection-only-rendering -platform offscreen)
+    add_test(NAME snow-shot-recognition-ocr-highlighting-tests
+        COMMAND snow-shot-recognition-window-tests --ocr-highlighting-only -platform offscreen)
+    set_tests_properties(snow-shot-recognition-ocr-highlighting-tests PROPERTIES LABELS "unit" TIMEOUT 60
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-recognition-ocr-hover-tests
         COMMAND snow-shot-recognition-window-tests --ocr-hover-only -platform offscreen)
     add_test(NAME snow-shot-recognition-text-editor-layout-tests

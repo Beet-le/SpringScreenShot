@@ -75,6 +75,58 @@ void writeBytes(const QString& path, const QByteArray& bytes) {
     require(file.write(bytes) == bytes.size(), "failed to write test file");
 }
 
+void ocrHighlightingSettingsPersistAndValidate() {
+    QTemporaryDir temporary;
+    require(temporary.isValid(), "OCR highlighting requires isolated storage");
+    const QString key = QStringLiteral("text_recognition/show_text_highlighting");
+    const storage::StorageInitializationOptions options{temporary.filePath(QStringLiteral("bin")),
+                                                        temporary.filePath(QStringLiteral("data")),
+                                                        60000};
+    auto& appStorage = storage::ApplicationStorage::instance();
+    require(appStorage.initialize(options).success, "initialize OCR highlighting storage");
+    const storage::TextRecognitionSettings recognition;
+    require(storage::ConfigurationSchema::defaultValue(key) == QJsonValue(false) &&
+                appStorage.configuration().value(key) == QJsonValue(false) &&
+                !recognition.showTextHighlighting(),
+            "new and older configurations must default OCR highlighting off");
+    require(recognition.setShowTextHighlighting(true) && recognition.showTextHighlighting(),
+            "the typed OCR highlighting setter enables the stored preference");
+    for (const QJsonValue& value : {QJsonValue(QStringLiteral("true")), QJsonValue(1),
+                                    QJsonValue(QJsonValue::Null), QJsonValue(QJsonArray{true})}) {
+        require(!storage::ConfigurationSchema::normalize(key, value).valid &&
+                    !appStorage.configuration().setValue(key, value) &&
+                    recognition.showTextHighlighting(),
+                "nonboolean highlighting writes must preserve the enabled preference");
+    }
+    require(appStorage.flushNow().success, "flush OCR highlighting to disk");
+    appStorage.shutdown();
+    require(appStorage.initialize(options).success && recognition.showTextHighlighting(),
+            "OCR highlighting survives an application storage restart");
+    require(recognition.setShowTextHighlighting(false) && appStorage.flushNow().success,
+            "the typed OCR highlighting setter persists disabled");
+    appStorage.shutdown();
+    require(appStorage.initialize(options).success && !recognition.showTextHighlighting(),
+            "disabled OCR highlighting survives an application storage restart");
+    appStorage.shutdown();
+
+    const QString invalidPath = temporary.filePath(QStringLiteral("invalid.json"));
+    writeBytes(invalidPath,
+               QJsonDocument(QJsonObject{{QStringLiteral("text_recognition"),
+                                          QJsonObject{{QStringLiteral("show_text_highlighting"),
+                                                       QStringLiteral("true")}}}})
+                   .toJson());
+    storage::ConfigurationStore imported(invalidPath, true, true, 60000);
+    require(imported.value(key) == QJsonValue(false),
+            "invalid stored OCR highlighting must recover to the disabled default");
+    require(imported.setValue(key, true) && imported.applySnapshot({}) &&
+                imported.value(key) == QJsonValue(false),
+            "older snapshots missing OCR highlighting restore the disabled default");
+    require(imported.setValue(key, true) &&
+                imported.applySnapshot({{key, QStringLiteral("true")}}) &&
+                imported.value(key) == QJsonValue(false),
+            "invalid imported OCR highlighting restores the disabled default");
+}
+
 void updateSettingsPersistAndValidate() {
     QTemporaryDir temporary;
     require(temporary.isValid(), "update settings require isolated storage");
@@ -3287,6 +3339,10 @@ int main(int argc, char** argv) {
     }
 #endif
     LifetimeObservedApplication application(argc, argv);
+    if (application.arguments().contains(QStringLiteral("--ocr-highlighting-only"))) {
+        ocrHighlightingSettingsPersistAndValidate();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--memory-activity-only"))) {
         idlePinnedRetentionSweepPreservesQuietPeriod();
         return 0;
@@ -3365,6 +3421,7 @@ int main(int argc, char** argv) {
         storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
+    ocrHighlightingSettingsPersistAndValidate();
     pinnedManagementConfigurationAndTrayMigration();
     updateSettingsPersistAndValidate();
     markerResolutionAndStatus();

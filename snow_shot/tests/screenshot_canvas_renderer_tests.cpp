@@ -7518,9 +7518,18 @@ void runScreenshotSelectionEffectEditorTests();
 #if defined(SNOW_SHOT_CURSOR_BENCHMARK)
 void runScreenshotCursorBenchmark();
 #endif
+#if defined(SNOW_SHOT_OCR_HIGHLIGHTING_BENCHMARK)
+void runScreenshotOcrHighlightingBenchmark();
+#endif
 
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
+#if defined(SNOW_SHOT_OCR_HIGHLIGHTING_BENCHMARK)
+    if (application.arguments().contains(QStringLiteral("--ocr-highlighting-benchmark"))) {
+        runScreenshotOcrHighlightingBenchmark();
+        return 0;
+    }
+#endif
     if (application.arguments().contains(QStringLiteral("--magnifier-only"))) {
         magnifierSourcesTrackOriginalImageLayersAndCaptureModes();
         magnifiersSampleEveryCapturedDisplayWithoutChangingLocalBackgrounds();

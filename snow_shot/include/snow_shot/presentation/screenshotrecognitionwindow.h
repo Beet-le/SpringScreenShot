@@ -123,6 +123,7 @@ class ScreenshotRecognitionWindow final : public QWidget {
     void refreshOriginalImagePreview();
     void syncOriginalImagePreviewStacking(bool staysOnTop);
     void setOcrCopyDefaultsEnabled(bool enabled);
+    void setTextHighlighting(bool enabled, const QColor& maskColor);
     void setOcrPresentation(
         std::shared_ptr<ScreenshotOcrPresentation> presentation,
         ScreenshotOcrTextLayer::RenderingMode mode = ScreenshotOcrTextLayer::RenderingMode::Normal,

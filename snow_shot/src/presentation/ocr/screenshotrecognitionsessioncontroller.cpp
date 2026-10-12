@@ -177,6 +177,11 @@ ScreenshotRecognitionSessionController::ScreenshotRecognitionSessionController(
                     return;
                 return;
             }
+            if (key == QStringLiteral("text_recognition/show_text_highlighting") ||
+                key == QStringLiteral("screenshot_ui/selection_mask_color")) {
+                notify(&ScreenshotRecognitionSessionController::updateTextHighlighting);
+                return;
+            }
             if (key == QStringLiteral("text_recognition/fill_style")) {
                 if (m_active && m_mode == Mode::Text) {
                     if (!notify(&ScreenshotRecognitionSessionController::
@@ -3141,6 +3146,8 @@ void ScreenshotRecognitionSessionController::ensureContent() {
         m_content = created;
         if (m_content != nullptr) {
             m_content->setShowOriginalImage(m_showOriginalImage);
+            if (!notify(&ScreenshotRecognitionSessionController::updateTextHighlighting))
+                return;
             connect(m_content, &ScreenshotRecognitionWindow::recognitionRetryRequested, this,
                     &ScreenshotRecognitionSessionController::retryRecognition);
 #if SNOW_SHOT_ENABLE_IMAGE_CONVERSION
@@ -3150,6 +3157,14 @@ void ScreenshotRecognitionSessionController::ensureContent() {
         }
     }
     notify(&ScreenshotRecognitionSessionController::updateOriginalImagePreview);
+}
+
+void ScreenshotRecognitionSessionController::updateTextHighlighting() const {
+    if (m_content != nullptr) {
+        m_content->setTextHighlighting(
+            snow_shot::storage::TextRecognitionSettings().showTextHighlighting(),
+            snow_shot::storage::ScreenshotUiSettings().selectionMaskColor());
+    }
 }
 
 void ScreenshotRecognitionSessionController::clearContent(bool retainTableEditor) {

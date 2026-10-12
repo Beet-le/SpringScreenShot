@@ -46,6 +46,8 @@ class TextRecognitionSettings final {
     bool setSaveRecognitionResultAsImage(bool enabled) const;
     [[nodiscard]] bool showOriginalImagePreview() const;
     bool setShowOriginalImagePreview(bool enabled) const;
+    [[nodiscard]] bool showTextHighlighting() const;
+    bool setShowTextHighlighting(bool enabled) const;
     [[nodiscard]] QString defaultFormatting() const;
     bool setDefaultFormatting(const QString& value) const;
     [[nodiscard]] QString defaultPunctuation() const;

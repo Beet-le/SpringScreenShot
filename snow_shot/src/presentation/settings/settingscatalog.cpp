@@ -1278,6 +1278,15 @@ SettingsItemDefinition ocrFillStyleItem() {
           settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Background Fill"))}});
 }
 
+SettingsItemDefinition showTextHighlightingItem() {
+    return switchItem(
+        QStringLiteral("interface.text-recognition.show-text-highlighting"),
+        QT_TRANSLATE_NOOP("SettingsCatalog", "Show Text Highlighting"),
+        QT_TRANSLATE_NOOP("SettingsCatalog", "Add a mask to highlight text recognition results"),
+        QStringLiteral("text_recognition/show_text_highlighting"),
+        SettingsSwitchBinding::ShowTextHighlighting);
+}
+
 SettingsItemDefinition screenshotSaveAsFileDialogItem() {
     return fixedSelectItem(
         QStringLiteral("screenshot.save-as-file-dialog"),
@@ -3375,7 +3384,7 @@ QVector<SettingsPageDefinition> builtInPages() {
                  settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Text background")),
                  settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Text recognition appearance")),
                  SettingsSectionReset::TextRecognitionInterfaceSettings,
-                 {ocrFillStyleItem()},
+                 {ocrFillStyleItem(), showTextHighlightingItem()},
              },
 
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
@@ -4855,6 +4864,9 @@ QStringList SettingsCatalog::validationErrors() const {
                     case SettingsSwitchBinding::ShowOriginalImagePreview:
                         expectedKey =
                             QStringLiteral("text_recognition/show_original_image_preview");
+                        break;
+                    case SettingsSwitchBinding::ShowTextHighlighting:
+                        expectedKey = QStringLiteral("text_recognition/show_text_highlighting");
                         break;
                     case SettingsSwitchBinding::PinAutomaticTextRecognition:
                         expectedKey = QStringLiteral("pin_to_screen/automatic_text_recognition");

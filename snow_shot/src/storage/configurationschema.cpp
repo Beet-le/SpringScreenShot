@@ -431,6 +431,8 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      ConfigurationValueKind::String,
      std::nullopt,
      {QStringLiteral("blur"), QStringLiteral("background_fill")}},
+    {QStringLiteral("text_recognition/show_text_highlighting"), false,
+     ConfigurationValueKind::Boolean},
     {QStringLiteral("global_shortcuts/screenshot"),
      QJsonArray{QStringLiteral("F1")},
      ConfigurationValueKind::StringList,

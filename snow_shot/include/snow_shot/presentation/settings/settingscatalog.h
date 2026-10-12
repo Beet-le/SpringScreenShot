@@ -150,6 +150,7 @@ enum class SettingsSwitchBinding {
     ScreenshotCopyImageFileToClipboard,
     SaveRecognitionResultAsImage,
     ShowOriginalImagePreview,
+    ShowTextHighlighting,
     PinAutomaticTextRecognition,
     PinAutoResizeWindow,
     PinShowWindowButtons,

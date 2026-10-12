@@ -49,6 +49,98 @@
 #include <utility>
 #include <vector>
 
+class ScreenshotOcrGraphicsScene final : public QGraphicsScene {
+  public:
+    using QGraphicsScene::QGraphicsScene;
+
+    void setTextHighlighting(const QColor& color, const QPainterPath& mask) {
+        if (m_maskColor == color && m_mask == mask) {
+            return;
+        }
+        m_maskColor = color;
+        m_mask = mask;
+        invalidate(sceneRect(), QGraphicsScene::BackgroundLayer);
+    }
+
+    void clearTextHighlighting() {
+        setTextHighlighting(QColor(Qt::transparent), {});
+        m_raster = {};
+        m_rasterMask = {};
+    }
+
+  protected:
+    void drawBackground(QPainter* painter, const QRectF& rect) override {
+        QGraphicsScene::drawBackground(painter, rect);
+        if (m_maskColor.alpha() == 0 || m_mask.isEmpty()) {
+            return;
+        }
+        // Paint one shared complement so overlapping text regions stay clear and mask
+        // opacity is applied once. Export and print render layouts without this scene.
+        const QPainterStateGuard guard(painter);
+        painter->setCompositionMode(QPainter::CompositionMode_SourceOver);
+        painter->setRenderHint(QPainter::Antialiasing, true);
+        if (!drawCachedMask(*painter)) {
+            painter->fillPath(m_mask, m_maskColor);
+        }
+    }
+
+  private:
+    bool drawCachedMask(QPainter& painter) {
+        // Small contours are cheaper to fill directly than to blit a viewport-sized image.
+        // Complex contours amortize rasterization across repaints. The actual device
+        // transform owns pixel alignment, including fractional DPR and redirected renders.
+        const QTransform device = painter.deviceTransform();
+        if (m_mask.elementCount() < 128 || device.type() > QTransform::TxScale ||
+            !std::isfinite(device.m11()) || device.m11() <= 0 ||
+            !qFuzzyCompare(device.m11(), device.m22())) {
+            return false;
+        }
+        const qreal scale = device.m11();
+        const QRect pixels =
+            device.mapRect(m_mask.boundingRect().adjusted(-2, -2, 2, 2)).toAlignedRect();
+        constexpr qint64 byteLimit = 64 * 1024 * 1024;
+        if (pixels.isEmpty() || pixels.width() > byteLimit / 4 || pixels.height() > byteLimit / 4 ||
+            qint64(pixels.width()) * pixels.height() * 4 > byteLimit) {
+            return false;
+        }
+        const QPointF origin = device.inverted().map(QPointF(pixels.topLeft()));
+        if (m_raster.isNull() || m_rasterMask != m_mask || m_rasterColor != m_maskColor ||
+            m_rasterOrigin != origin || m_rasterScale != scale ||
+            m_raster.size() != pixels.size()) {
+            if (m_raster.size() != pixels.size()) {
+                m_raster = {};
+                m_raster =
+                    snowCanvasAllocateImage(pixels.size(), QImage::Format_ARGB32_Premultiplied);
+            }
+            if (m_raster.isNull()) {
+                return false;
+            }
+            m_raster.setDevicePixelRatio(scale);
+            m_raster.fill(Qt::transparent);
+            {
+                QPainter raster(&m_raster);
+                raster.setRenderHint(QPainter::Antialiasing, true);
+                raster.translate(-origin);
+                raster.fillPath(m_mask, m_maskColor);
+            }
+            m_rasterMask = m_mask;
+            m_rasterColor = m_maskColor;
+            m_rasterOrigin = origin;
+            m_rasterScale = scale;
+        }
+        painter.drawImage(origin, m_raster);
+        return true;
+    }
+
+    QColor m_maskColor = QColor(Qt::transparent);
+    QPainterPath m_mask;
+    QImage m_raster;
+    QPainterPath m_rasterMask;
+    QColor m_rasterColor;
+    QPointF m_rasterOrigin;
+    qreal m_rasterScale = 0;
+};
+
 class ScreenshotOcrGraphicsTextItem final : public QGraphicsItem {
   public:
     ScreenshotOcrTextLayout layout;
@@ -724,7 +816,7 @@ bool pinnedResultUsesLinearFiltering(const SnowCanvasRenderContext& context,
 } // namespace
 
 ScreenshotOcrTextLayer::ScreenshotOcrTextLayer(QWidget* parent)
-    : QGraphicsView(parent), m_scene(new QGraphicsScene(this)) {
+    : QGraphicsView(parent), m_scene(new ScreenshotOcrGraphicsScene(this)) {
     setObjectName(QStringLiteral("snowShotOcrTextLayer"));
     setScene(m_scene);
     setFrameShape(QFrame::NoFrame);
@@ -752,6 +844,9 @@ void ScreenshotOcrTextLayer::setPresentation(
     m_renderingMode = mode;
     m_textItems.clear();
     m_scene->clear();
+    m_scene->clearTextHighlighting();
+    m_textHighlightMask = {};
+    m_textHighlightGeometryDirty = true;
     m_presentation = std::move(presentation);
     const adqt::theme::ThemeMapToken theme =
         adqt::theme::ThemeManager::instance().resolveTheme(this);
@@ -771,6 +866,9 @@ void ScreenshotOcrTextLayer::setPresentation(
 void ScreenshotOcrTextLayer::clearPresentation() {
     m_textItems.clear();
     m_scene->clear();
+    m_scene->clearTextHighlighting();
+    m_textHighlightMask = {};
+    m_textHighlightGeometryDirty = true;
     m_presentation.reset();
     m_textColor = {};
     m_viewportRect = {};
@@ -779,6 +877,51 @@ void ScreenshotOcrTextLayer::clearPresentation() {
     m_selectionRevision = std::numeric_limits<quint64>::max();
     m_synchronized = false;
     hide();
+}
+
+void ScreenshotOcrTextLayer::setTextHighlighting(bool enabled, const QColor& maskColor) {
+    const QColor normalized = maskColor.isValid() ? maskColor : QColor(0, 0, 0, 128);
+    // Keep only the effective paint color, so disabled/transparent style changes are no-ops.
+    const QColor next = enabled && normalized.alpha() > 0 ? normalized : QColor(Qt::transparent);
+    if (m_textHighlightColor == next) {
+        return;
+    }
+    m_textHighlightColor = next;
+    updateTextHighlighting();
+}
+
+void ScreenshotOcrTextLayer::updateTextHighlighting() {
+    if (!m_synchronized || m_renderingMode == RenderingMode::SelectionOnly ||
+        m_textHighlightColor.alpha() == 0) {
+        m_scene->setTextHighlighting(QColor(Qt::transparent), {});
+        return;
+    }
+    if (m_textHighlightGeometryDirty) {
+        QPainterPath textRegions;
+        textRegions.setFillRule(Qt::WindingFill);
+        for (const TextItem& item : m_textItems) {
+            if (!item.graphicsText->isVisible()) {
+                continue;
+            }
+            QPolygonF polygon = item.graphicsText->mapToScene(item.graphicsText->boundingRect());
+            // Consistent winding gives union semantics even when mirrored labels overlap.
+            qreal area = 0;
+            for (qsizetype index = 0; index < polygon.size(); ++index) {
+                const QPointF& next = polygon[(index + 1) % polygon.size()];
+                area += polygon[index].x() * next.y() - next.x() * polygon[index].y();
+            }
+            if (area < 0) {
+                std::reverse(polygon.begin(), polygon.end());
+            }
+            textRegions.addPolygon(polygon);
+            textRegions.closeSubpath();
+        }
+        QPainterPath viewport;
+        viewport.addRect(sceneRect());
+        m_textHighlightMask = viewport.subtracted(textRegions);
+        m_textHighlightGeometryDirty = false;
+    }
+    m_scene->setTextHighlighting(m_textHighlightColor, m_textHighlightMask);
 }
 
 void ScreenshotOcrTextLayer::synchronize(const QTransform& canvasToViewTransform,
@@ -796,6 +939,8 @@ void ScreenshotOcrTextLayer::synchronize(const QTransform& canvasToViewTransform
     }
     if (geometryChanged) {
         setSceneRect(QRectF(QPointF(0.0, 0.0), viewportRect.size()));
+        // The background mask can damage the entire viewport, beyond the text item bounds.
+        m_scene->setSceneRect(sceneRect());
         m_canvasToViewTransform = canvasToViewTransform;
         m_viewportRect = viewportRect;
         m_synchronized = true;
@@ -805,6 +950,8 @@ void ScreenshotOcrTextLayer::synchronize(const QTransform& canvasToViewTransform
             ++m_geometrySynchronizationCount;
 #endif
         }
+        m_textHighlightGeometryDirty = true;
+        updateTextHighlighting();
     }
     updateSelection();
     show();
@@ -820,6 +967,8 @@ void ScreenshotOcrTextLayer::updateLineText(int lineIndex) {
     }
     synchronizeTextItem(m_textItems.at(static_cast<std::size_t>(lineIndex)),
                         m_canvasToViewTransform);
+    m_textHighlightGeometryDirty = true;
+    updateTextHighlighting();
     // A text replacement can change selection ranges even when both endpoints stay put.
     m_selectionRevision = std::numeric_limits<quint64>::max();
     updateSelection();
