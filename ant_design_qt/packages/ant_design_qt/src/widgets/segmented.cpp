@@ -15,6 +15,7 @@
 #include <QPaintEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPointer>
 #include <QRadioButton>
 #include <QResizeEvent>
 #include <QSizePolicy>
@@ -350,12 +351,14 @@ class SegmentButton final : public QRadioButton {
     }
 
     if (delta != 0 && navigate) {
-      navigate(index_, delta);
+      const auto callback = navigate;
+      callback(index_, delta);
       event->accept();
       return;
     }
     if ((event->key() == Qt::Key_Home || event->key() == Qt::Key_End) && navigate) {
-      navigate(index_, event->key() == Qt::Key_Home ? -1000000 : 1000000);
+      const auto callback = navigate;
+      callback(index_, event->key() == Qt::Key_Home ? -1000000 : 1000000);
       event->accept();
       return;
     }
@@ -459,8 +462,7 @@ struct AdSegmented::Private {
         refreshButtons(false);
         return;
       }
-      q->setCurrentIndex(index);
-      emit q->activated(index, options.at(index).value);
+      activateOption(index, false);
     });
   }
 
@@ -692,9 +694,26 @@ struct AdSegmented::Private {
     if (next < 0 || next >= buttons.size() || next == from) {
       return;
     }
-    q->setCurrentIndex(next);
-    buttons.at(next)->setFocus(Qt::TabFocusReason);
-    emit q->activated(next, options.at(next).value);
+    activateOption(next, true);
+  }
+
+  void activateOption(int index, bool focusButton) {
+    const QPointer<AdSegmented> owner(q);
+    const QVariant value = options.at(index).value;
+    const QPointer<SegmentButton> button(focusButton ? buttons.at(index) : nullptr);
+    owner->setCurrentIndex(index);
+    if (!owner) {
+      return;
+    }
+    // Selection callbacks may replace the option widgets or destroy the owner.
+    // Retain the original activation value and focus only a surviving selection.
+    if (button && owner->currentIndex() == index && sameVariant(owner->currentValue(), value)) {
+      button->setFocus(Qt::TabFocusReason);
+      if (!owner) {
+        return;
+      }
+    }
+    emit owner->activated(index, value);
   }
 
   int firstEnabledIndex() const {
@@ -727,20 +746,28 @@ struct AdSegmented::Private {
     return -1;
   }
 
-  void emitSelectionChanges(int previousIndex, const QVariant& previousValue) {
+  bool emitSelectionChanges(int previousIndex, const QVariant& previousValue) {
+    const QPointer<AdSegmented> owner(q);
     const int nextIndex = currentIndex;
     const QVariant nextValue = currentValue();
     const bool indexChanged = previousIndex != nextIndex;
     const bool valueChanged = !sameVariant(previousValue, nextValue);
     if (indexChanged) {
-      emit q->currentIndexChanged(nextIndex);
+      emit owner->currentIndexChanged(nextIndex);
+      if (!owner) {
+        return false;
+      }
     }
     if (valueChanged) {
-      emit q->currentValueChanged(nextValue);
+      emit owner->currentValueChanged(nextValue);
+      if (!owner) {
+        return false;
+      }
     }
     if (indexChanged || valueChanged) {
-      emit q->currentChanged(nextIndex, nextValue);
+      emit owner->currentChanged(nextIndex, nextValue);
     }
+    return !owner.isNull();
   }
 
   AdSegmented* q = nullptr;
@@ -806,7 +833,9 @@ int AdSegmented::insertOption(int index, const Option& rawOption) {
     ++d_->currentIndex;
   }
   d_->rebuildButtons();
-  d_->emitSelectionChanges(previousIndex, previousValue);
+  if (!d_->emitSelectionChanges(previousIndex, previousValue)) {
+    return index;
+  }
   emit optionsChanged();
   return index;
 }
@@ -830,7 +859,9 @@ void AdSegmented::removeOption(int index) {
     }
   }
   d_->rebuildButtons();
-  d_->emitSelectionChanges(previousIndex, previousValue);
+  if (!d_->emitSelectionChanges(previousIndex, previousValue)) {
+    return;
+  }
   emit optionsChanged();
 }
 
@@ -843,7 +874,9 @@ void AdSegmented::clear() {
   d_->options.clear();
   d_->currentIndex = -1;
   d_->rebuildButtons();
-  d_->emitSelectionChanges(previousIndex, previousValue);
+  if (!d_->emitSelectionChanges(previousIndex, previousValue)) {
+    return;
+  }
   emit optionsChanged();
 }
 
@@ -883,7 +916,9 @@ void AdSegmented::setOptions(const QList<Option>& options) {
     d_->currentIndex = d_->firstEnabledIndex();
   }
   d_->rebuildButtons();
-  d_->emitSelectionChanges(previousIndex, previousValue);
+  if (!d_->emitSelectionChanges(previousIndex, previousValue)) {
+    return;
+  }
   emit optionsChanged();
 }
 
@@ -972,7 +1007,9 @@ void AdSegmented::setOptionEnabled(int index, bool enabled) {
   }
   d_->refreshButtons(false);
   d_->syncThumb(true);
-  d_->emitSelectionChanges(previousIndex, previousValue);
+  if (!d_->emitSelectionChanges(previousIndex, previousValue)) {
+    return;
+  }
   emit optionsChanged();
 }
 

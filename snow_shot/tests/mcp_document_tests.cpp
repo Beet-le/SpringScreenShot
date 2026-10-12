@@ -12,6 +12,7 @@
 #include "snow_shot/presentation/screenshotocrrecognitionservice.h"
 #include "snow_shot/presentation/screenshotocrpresentation.h"
 #include "snow_shot/presentation/screenshotqrrecognitionservice.h"
+#include "snow_shot/presentation/screenshotrecognitionsessioncontroller.h"
 #include "snow_shot/presentation/screenshotimagefileservice.h"
 #include "snow_shot/runtime/runtimeactivitytracker.h"
 #include "snowimageqtcodec.h"
@@ -30,6 +31,7 @@
 #include <QSemaphore>
 #include <QBuffer>
 #include <QMimeData>
+#include <QPointer>
 #include <QScopeGuard>
 #include <QtEndian>
 #include <atomic>
@@ -1216,6 +1218,75 @@ void recognitionModelDocuments(const QString& directory) {
 #endif
 }
 
+void recognitionServiceTeardown() {
+#if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
+    for (const bool disconnect : {false, true}) {
+        const auto await = [](auto predicate) {
+            QElapsedTimer timer;
+            timer.start();
+            while (!predicate() && timer.elapsed() < 5000) {
+                QCoreApplication::processEvents();
+                QThread::msleep(1);
+            }
+            require(predicate(), "recognition teardown operation completes");
+        };
+        McpJobRegistry registry;
+        McpDocumentService::Ports ports;
+        ports.jobs = &registry;
+        ports.resolveSource = [](const ScreenshotMcpRequest&, auto completion, auto budget) {
+            McpDocumentService::Source source;
+            source.image = QImage(4, 4, QImage::Format_ARGB32_Premultiplied);
+            source.image.fill(Qt::white);
+            require(budget(source.image.sizeInBytes()), "teardown source reserves its pixels");
+            ScreenshotTableRecognitionEntry table;
+            table.model = QStringLiteral("saved-model");
+            table.result.html = QStringLiteral("<table><tr><td>saved</td></tr></table>");
+            source.recognitionResults.tableEntries = {table};
+            source.recognitionResults.tableModelSelection = table.model;
+            completion(std::move(source), {});
+        };
+        auto service = std::make_unique<McpDocumentService>(std::move(ports));
+        ScreenshotMcpRequest request;
+        request.connectionId = 29;
+        request.requestId = QStringLiteral("open");
+        request.method = QStringLiteral("snow_shot_document_open");
+        request.idempotencyKey = QStringLiteral("teardown-open");
+        request.params = {{QStringLiteral("source"), QStringLiteral("clipboard")}};
+        std::optional<ScreenshotMcpResponse> opened;
+        service->request(request, [&](auto response) { opened = std::move(response); });
+        await([&] { return opened.has_value(); });
+        require(opened->ok, "create recognition teardown document");
+        request.requestId = QStringLiteral("recognize");
+        request.method = QStringLiteral("snow_shot_document_recognize");
+        request.idempotencyKey = QStringLiteral("teardown-recognize");
+        request.expectedRevision = opened->revision;
+        request.params = {
+            {QStringLiteral("document_id"), opened->result.value(QStringLiteral("document_id"))},
+            {QStringLiteral("kind"), QStringLiteral("table")}};
+        std::optional<ScreenshotMcpResponse> recognized;
+        service->request(request, [&](auto response) { recognized = std::move(response); });
+        await([&] { return recognized.has_value(); });
+        require(recognized->ok, "cached recognition creates an owned session");
+        const auto child = service->findChild<ScreenshotRecognitionSessionController*>();
+        require(child != nullptr, "recognition session belongs to document service");
+        const QPointer<McpDocumentService> guard(service.get());
+        bool retiredWhileStopping = false;
+        QObject::connect(child, &QObject::destroyed, &registry, [&] {
+            require(guard, "document state outlives recognition destruction callbacks");
+            guard->request(request, [&](auto response) {
+                retiredWhileStopping = response.errorCode == QStringLiteral("disabled");
+            });
+        });
+        if (disconnect)
+            service->disconnected(request.connectionId);
+        service.reset();
+        require(retiredWhileStopping,
+                "retained and deferred recognition sessions retire before private state");
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    }
+#endif
+}
+
 void recognitionModelSourceBudget() {
     // QString copies share storage: each fixture retains only one 8 MiB allocation, while the
     // admission charge accounts for every model's independent baseline and draft.
@@ -1810,6 +1881,293 @@ void jobs() {
                 expiredCancellation == 1 && expiredNotifications == 65,
             "expiry cancels pending work exactly once after retiring its record");
 }
+void jobCallbacksAllowRegistryDestruction() {
+    QObject receiver;
+    {
+        qint64 now = 0;
+        auto registry = std::make_unique<McpJobRegistry>(nullptr, [&] { return now; });
+        const auto old = registry->start(1, QStringLiteral("expired"));
+        now = 900000;
+        QObject::connect(registry.get(), &McpJobRegistry::changed, &receiver,
+                         [&](quint64, const QString& id) {
+                             if (id == old)
+                                 registry.reset();
+                         });
+        require(registry->start(2, QStringLiteral("new")).isEmpty() && !registry,
+                "expiry callbacks can retire the registry during admission");
+    }
+    for (const bool shutdown : {false, true}) {
+        auto registry = std::make_unique<McpJobRegistry>();
+        int cancellations = 0;
+        registry->start(1, QStringLiteral("first"), [&] {
+            ++cancellations;
+            registry.reset();
+        });
+        registry->start(1, QStringLiteral("second"), [&] { ++cancellations; });
+        if (shutdown)
+            registry->shutdown();
+        else
+            registry->disconnected(1);
+        require(!registry && cancellations == 2,
+                "all retired jobs cancel even when cancellation destroys the registry");
+    }
+    {
+        auto registry = std::make_unique<McpJobRegistry>();
+        const auto id = registry->start(1, QStringLiteral("artifact"));
+        registry->setArtifactPublisher([&](quint64, QByteArray, QString) {
+            registry.reset();
+            return QJsonObject{{QStringLiteral("artifact_id"), QStringLiteral("result")}};
+        });
+        require(!registry->complete(id, {{QStringLiteral("text"), QString(1048576, u'x')}}) &&
+                    !registry,
+                "artifact publication can destroy the registry before completion");
+    }
+}
+
+void jobCallbacksAllowServiceDestruction() {
+    for (int variant = 0; variant < 3; ++variant) {
+        McpJobRegistry registry;
+        McpDocumentService::Ports ports;
+        ports.jobs = &registry;
+        auto service = std::make_unique<McpDocumentService>(std::move(ports));
+        require(!service->storeArtifact(1, QByteArray("lifetime"), QStringLiteral("text/plain"))
+                     .isEmpty(),
+                "lifetime fixture registers an owner");
+        int cancellations = 0;
+        const auto id = registry.start(1, QStringLiteral("lifetime"), [&] { ++cancellations; });
+        QObject receiver;
+        QObject::connect(&registry, &McpJobRegistry::changed, &receiver,
+                         [&](quint64, const QString& changedId) {
+                             if (changedId == id)
+                                 service.reset();
+                         });
+        int responses = 0;
+        if (variant == 0) {
+            ScreenshotMcpRequest request;
+            request.connectionId = 1;
+            request.requestId = QStringLiteral("cancel-lifetime");
+            request.method = QStringLiteral("snow_shot_job_cancel");
+            request.params = {{QStringLiteral("job_id"), id}};
+            service->request(request, [&](auto) { ++responses; });
+        } else if (variant == 1)
+            service->disconnected(1);
+        else
+            service->shutdown();
+        require(!service && cancellations == 1 && responses == 0,
+                "job callbacks can retire a document service during cancellation and shutdown");
+    }
+    {
+        McpJobRegistry registry;
+        McpDocumentService::Ports ports;
+        ports.jobs = &registry;
+        bool sourceEntered = false;
+        ports.resolveSource = [&](const ScreenshotMcpRequest&, auto, auto) {
+            sourceEntered = true;
+        };
+        std::unique_ptr<McpDocumentService> service;
+        bool cancellationReturned = false;
+        auto cancellationState = std::make_shared<bool>(false);
+        const std::weak_ptr<bool> weakCancellationState = cancellationState;
+        ports.cancelSource = [&, cancellationState](quint64, const QString&) {
+            service.reset();
+            require(!weakCancellationState.expired(),
+                    "source cancellation retains its callable while the service is retired");
+            *cancellationState = true;
+            cancellationReturned = *cancellationState;
+        };
+        service = std::make_unique<McpDocumentService>(std::move(ports));
+        cancellationState.reset();
+        ScreenshotMcpRequest request;
+        request.connectionId = 1;
+        request.requestId = QStringLiteral("source-lifetime");
+        request.idempotencyKey = request.requestId;
+        request.method = QStringLiteral("snow_shot_document_open");
+        request.params = {{QStringLiteral("source"), QStringLiteral("clipboard")}};
+        int responses = 0;
+        service->request(request, [&](auto) { ++responses; });
+        require(sourceEntered && responses == 0,
+                "source cancellation fixture must admit an unresolved request");
+        require(service->cancelRequest(1, request.requestId) && !service && cancellationReturned &&
+                    responses == 0 && weakCancellationState.expired(),
+                "source cancellation can retire its service and callable before returning");
+    }
+}
+
+void shutdownRetiresRemainingOwnersWhenReentered() {
+    for (bool destroy : {false, true}) {
+        McpJobRegistry registry;
+        McpDocumentService::Ports ports;
+        ports.jobs = &registry;
+        auto service = std::make_unique<McpDocumentService>(std::move(ports));
+        for (quint64 owner : {quint64(1), quint64(2)})
+            require(
+                !service->storeArtifact(owner, QByteArray("shutdown"), QStringLiteral("text/plain"))
+                     .isEmpty(),
+                "register each shutdown owner");
+        int cancellations = 0;
+        for (quint64 owner : {quint64(1), quint64(2)})
+            require(!registry.start(owner, QStringLiteral("shutdown"), [&] { ++cancellations; })
+                         .isEmpty(),
+                    "start each owner's cancellation fixture");
+        bool reentered = false;
+        QObject receiver;
+        QObject::connect(&registry, &McpJobRegistry::changed, &receiver,
+                         [&](quint64, const QString&) {
+                             if (reentered)
+                                 return;
+                             reentered = true;
+                             if (destroy)
+                                 service.reset();
+                             else
+                                 service->shutdown();
+                         });
+        service->shutdown();
+        require(reentered && cancellations == 2 && !registry.hasRunningJobs(),
+                "nested shutdown cancels every remaining owner before retiring workers");
+        if (destroy)
+            require(!service, "nested destruction completes worker retirement");
+        else {
+            service->shutdown();
+            require(cancellations == 2, "repeated shutdown does not repeat cancellations");
+            service.reset();
+        }
+    }
+}
+
+void disconnectedRetiresWorkBeforeNestedShutdown() {
+    class ReentrantClipboard final : public McpDocumentService::Clipboard {
+      public:
+        MemoryClipboard memory;
+        std::function<void()> onCancel;
+
+        Cancel publishImage(QObject* receiver, ScreenshotClipboardPayload payload,
+                            Completion completion) override {
+            return observe(
+                memory.publishImage(receiver, std::move(payload), std::move(completion)));
+        }
+        Cancel publishMimeData(QObject* receiver, std::unique_ptr<QMimeData> data,
+                               Completion completion) override {
+            return observe(
+                memory.publishMimeData(receiver, std::move(data), std::move(completion)));
+        }
+
+      private:
+        Cancel observe(Cancel cancel) {
+            return [this, cancel = std::move(cancel)] {
+                cancel();
+                const auto callback = onCancel;
+                if (callback)
+                    callback();
+            };
+        }
+    };
+    for (int variant = 0; variant < 5; ++variant) {
+        const bool destroy = variant >= 2;
+        const bool fromRegistry = variant % 2 == 1;
+        const bool soleClipboardOwner = variant == 4;
+        McpJobRegistry registry;
+        auto clipboard = std::make_shared<ReentrantClipboard>();
+        const std::weak_ptr<ReentrantClipboard> weakClipboard = clipboard;
+        clipboard->memory.automatic = false;
+        McpDocumentService::Ports ports;
+        ports.jobs = &registry;
+        ports.clipboard = clipboard;
+        ports.resolveSource = [](const ScreenshotMcpRequest&, auto completion, auto budget) {
+            QImage image(4, 4, QImage::Format_ARGB32_Premultiplied);
+            image.fill(Qt::red);
+            require(budget(image.sizeInBytes()), "nested shutdown source fits its budget");
+            McpDocumentService::Source source;
+            source.image = image;
+            completion(std::move(source), {});
+        };
+        auto service = std::make_unique<McpDocumentService>(std::move(ports));
+        const auto waitUntil = [](auto ready) {
+            QElapsedTimer timer;
+            timer.start();
+            while (!ready() && timer.elapsed() < 5000) {
+                QCoreApplication::processEvents();
+                QThread::msleep(1);
+            }
+            require(ready(), "nested shutdown fixture reaches its expected state");
+        };
+        int completions = 0;
+        for (quint64 owner : {quint64(1), quint64(2)}) {
+            ScreenshotMcpRequest request;
+            request.connectionId = owner;
+            request.requestId = QStringLiteral("open");
+            request.idempotencyKey = request.requestId;
+            request.method = QStringLiteral("snow_shot_document_open");
+            request.params = {{QStringLiteral("source"), QStringLiteral("clipboard")}};
+            std::optional<ScreenshotMcpResponse> opened;
+            service->request(request, [&](auto response) { opened = std::move(response); });
+            waitUntil([&] { return opened.has_value(); });
+            require(opened->ok, "open each owner's nested shutdown document");
+            request.expectedRevision = opened->revision;
+            request.method = QStringLiteral("snow_shot_document_copy");
+            request.params = {{QStringLiteral("document_id"),
+                               opened->result.value(QStringLiteral("document_id"))}};
+            for (int copy = 0; copy < 2; ++copy) {
+                request.requestId = QStringLiteral("copy-%1").arg(copy);
+                request.idempotencyKey = request.requestId;
+                service->request(request, [&](auto) { ++completions; });
+            }
+        }
+        waitUntil([&] { return clipboard->memory.pending.size() == 4; });
+        const auto publications = clipboard->memory.pending;
+        for (quint64 owner : {quint64(1), quint64(2)})
+            require(!registry.start(owner, QStringLiteral("nested_shutdown"), [] {}).isEmpty(),
+                    "register each owner's nested shutdown job");
+        bool reentered = false;
+        const auto reenter = [&] {
+            if (std::exchange(reentered, true))
+                return;
+            if (destroy)
+                service.reset();
+            else
+                service->shutdown();
+        };
+        int cancellations = 0;
+        clipboard->onCancel = [&] {
+            ++cancellations;
+            require(!weakClipboard.expired(), "cancellation retains its borrowed clipboard port");
+            if (!fromRegistry)
+                reenter();
+            require(!weakClipboard.expired(),
+                    "clipboard cancellation survives synchronous service destruction");
+        };
+        QObject receiver;
+        if (fromRegistry)
+            QObject::connect(&registry, &McpJobRegistry::changed, &receiver,
+                             [&](quint64, const QString&) { reenter(); });
+        if (soleClipboardOwner)
+            clipboard.reset();
+        service->disconnected(1);
+        require(reentered && cancellations == 4 && completions == 0 && registry.list(1).isEmpty() &&
+                    registry.list(2).isEmpty(),
+                "nested shutdown retires every owner's work exactly once before callbacks");
+        for (const auto& publication : publications) {
+            require(publication->canceled, "all extracted publications remain canceled");
+            if (clipboard)
+                clipboard->memory.complete(publication);
+            else
+                require(!publication->receiver,
+                        "service destruction retires the sole clipboard receiver");
+        }
+        require(completions == 0 && (!clipboard || clipboard->memory.imagePublications == 0),
+                "nested shutdown suppresses all late clipboard writes and replies");
+        if (soleClipboardOwner)
+            require(weakClipboard.expired(),
+                    "the sole clipboard port retires only after every cancellation returns");
+        if (destroy)
+            require(!service, "a cancellation may retire its owning document service");
+        else {
+            service->shutdown();
+            require(cancellations == 4,
+                    "repeated nested shutdown preserves cancellation idempotence");
+        }
+    }
+}
+
 void eraserDocuments(const QString& directory) {
     QImage image(100, 80, QImage::Format_ARGB32_Premultiplied);
     image.fill(QColor(20, 40, 70));
@@ -2314,11 +2672,16 @@ int main(int argc, char** argv) {
     }
     if (application.arguments().contains(QStringLiteral("--recognition-models-only"))) {
         recognitionModelDocuments(temporary.path());
+        recognitionServiceTeardown();
         recognitionModelSourceBudget();
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
     jobs();
+    jobCallbacksAllowRegistryDestruction();
+    jobCallbacksAllowServiceDestruction();
+    shutdownRetiresRemainingOwnersWhenReentered();
+    disconnectedRetiresWorkBeforeNestedShutdown();
     if (application.arguments().contains(QStringLiteral("--jobs-only"))) {
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
@@ -2331,6 +2694,7 @@ int main(int argc, char** argv) {
     documents(temporary.path());
     documentWorkflows();
     recognitionModelDocuments(temporary.path());
+    recognitionServiceTeardown();
     recognitionModelSourceBudget();
     documentClipboardTeardown();
     runMcpApplicationTests();

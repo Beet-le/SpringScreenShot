@@ -30,6 +30,8 @@ OverlayPopupSurface::OverlayPopupSurface(QWidget* parent) : QWidget(parent) {
   bodyWidget_ = new QWidget(this);
 }
 
+OverlayPopupSurface::~OverlayPopupSurface() { emit aboutToDestroy(); }
+
 QMargins OverlayPopupSurface::shadowMargins() const {
 #if defined(Q_OS_MACOS)
   if (isWindow()) {

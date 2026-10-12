@@ -17,6 +17,7 @@
 #include <QMouseEvent>
 #include <QMoveEvent>
 #include <QPainter>
+#include <QPointer>
 #include <QPainterPath>
 #include <QPalette>
 #include <QResizeEvent>
@@ -724,6 +725,8 @@ AdRadio::EffectiveStateSnapshot AdRadio::captureEffectiveState(bool includeToken
 
 void AdRadio::applyEffectiveStateChange(const EffectiveStateSnapshot& before, bool tokensMayChange,
                                         bool updateGeometry) {
+  const QPointer<AdRadio> guard(this);
+  AdRadioButtonGroup* const sourceGroup = group_;
   syncManagedSizePolicy();
   if (group_) {
     group_->refreshManagedLayoutState();
@@ -738,12 +741,15 @@ void AdRadio::applyEffectiveStateChange(const EffectiveStateSnapshot& before, bo
   const ButtonStyle nextButtonStyle = buttonStyle();
   if (before.controlSize != nextControlSize) {
     emit controlSizeChanged(nextControlSize);
+    if (!guard || group_ != sourceGroup) return;
   }
   if (before.variant != nextVariant) {
     emit variantChanged(nextVariant);
+    if (!guard || group_ != sourceGroup) return;
   }
   if (before.buttonStyle != nextButtonStyle) {
     emit buttonStyleChanged(nextButtonStyle);
+    if (!guard || group_ != sourceGroup) return;
   }
   if (tokensMayChange) {
     const ComponentTokens resolved = resolvedComponentTokens();
@@ -903,9 +909,10 @@ void AdRadio::commitControlScale(const AdControlScaleContext& context) {
 }
 
 bool AdRadio::event(QEvent* event) {
+  const QPointer<AdRadio> lifetime(this);
   detail::resetWidgetHoverOnLifecycle(this, event);
   const bool handled = QRadioButton::event(event);
-  if (!event) {
+  if (!lifetime || !event) {
     return handled;
   }
 
@@ -1096,8 +1103,10 @@ void AdRadio::mousePressEvent(QMouseEvent* event) {
 }
 
 void AdRadio::mouseReleaseEvent(QMouseEvent* event) {
+  const QPointer<AdRadio> lifetime(this);
   if (forwardedPressTarget_) {
-    AdRadio* const target = forwardedPressTarget_;
+    event->accept();
+    const QPointer<AdRadio> target(forwardedPressTarget_);
     forwardedPressTarget_ = nullptr;
 
     if (target) {
@@ -1110,12 +1119,13 @@ void AdRadio::mouseReleaseEvent(QMouseEvent* event) {
       target->update();
       if (triggerTarget) {
         target->setFocus(Qt::MouseFocusReason);
+        if (!lifetime || !target) return;
         target->click();
+        if (!lifetime || !target) return;
         target->triggerInteractionWaveOverlay();
       }
     }
 
-    event->accept();
     update();
     return;
   }
@@ -1127,20 +1137,15 @@ void AdRadio::mouseReleaseEvent(QMouseEvent* event) {
     triggerInteractionWaveOverlay();
   }
   QRadioButton::mouseReleaseEvent(event);
+  if (!lifetime) return;
   update();
 }
 
 void AdRadio::keyPressEvent(QKeyEvent* event) {
-  if (event) {
-    if (AdRadioButtonGroup* const group = group_;
-        group && group->tryHandleNavigation(this, event->key())) {
-      event->accept();
-      return;
-    }
-    if (group_ && isArrowKey(event->key())) {
-      event->accept();
-      return;
-    }
+  if (event && group_ && isArrowKey(event->key())) {
+    event->accept();
+    group_->tryHandleNavigation(this, event->key());
+    return;
   }
 
   const bool interactiveKey =
@@ -1155,6 +1160,7 @@ void AdRadio::keyPressEvent(QKeyEvent* event) {
 }
 
 void AdRadio::keyReleaseEvent(QKeyEvent* event) {
+  const QPointer<AdRadio> lifetime(this);
   const bool interactiveKey =
       event && (event->key() == Qt::Key_Space || event->key() == Qt::Key_Return ||
                 event->key() == Qt::Key_Enter);
@@ -1164,6 +1170,7 @@ void AdRadio::keyReleaseEvent(QKeyEvent* event) {
     triggerInteractionWaveOverlay();
   }
   QRadioButton::keyReleaseEvent(event);
+  if (!lifetime) return;
   update();
 }
 

@@ -40,6 +40,9 @@ class RuntimeSession final {
     void destroyForOwnerDestruction(SnowCanvasRuntime& owner, OwnerDestructionPolicy policy);
 
     SnowRuntime handle() const;
+    RuntimeLease retainHandle() const {
+        return m_runtime;
+    }
     snow_canvas_smart_erase::Coordinator& smartErase() {
         return m_smartErase;
     }
@@ -53,9 +56,11 @@ class RuntimeSession final {
     void destroyRuntimeAsync();
 
     SnowCanvasRuntimeConfig m_config;
-    ScopedRuntimeHandle m_runtime;
+    RuntimeLease m_runtime;
+    std::uint64_t m_replacementGeneration = 0;
     ClientRegistry m_clients;
     snow_canvas_smart_erase::Coordinator m_smartErase;
+    std::shared_ptr<const int> m_lifetime = std::make_shared<const int>(0);
 };
 
 } // namespace snow_canvas_runtime

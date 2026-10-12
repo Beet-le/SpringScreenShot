@@ -4,6 +4,7 @@
 #include "snow_shot/presentation/settings/settingsruntimesession.h"
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/capturehistoryrepository.h"
+#include "snow_shot/storage/storageusagetracker.h"
 #include "snowimageqtcodec.h"
 #include "snow_shot/storage/configurationarchive.h"
 #include "../src/app/mcp/mcpsettingsadapter_p.h"
@@ -14,8 +15,11 @@
 #include <QElapsedTimer>
 #include <QFileInfo>
 #include <QFile>
+#include <QDir>
 #include <QJsonDocument>
+#include <QPointer>
 #include <QTemporaryDir>
+#include <QScopeGuard>
 #include <QThread>
 #include <QUuid>
 #include <QtEndian>
@@ -121,6 +125,68 @@ void runMcpApplicationTests() {
         if (!settingsValue(field, settingsJson(state.acceptedValue), &decoded)) {
             std::cerr << "setting round trip failed: " << field.id.toStdString() << '\n';
             std::exit(1);
+        }
+    }
+    const QVector<QColor> paletteColors{QColor(0, 17, 34, 0), QColor(51, 68, 85, 128),
+                                        QColor(102, 119, 136, 255), QColor(153, 170, 187, 64),
+                                        QColor(204, 221, 238, 192)};
+    const QJsonArray paletteJson{QStringLiteral("#00112200"), QStringLiteral("#33445580"),
+                                 QStringLiteral("#667788FF"), QStringLiteral("#99AABB40"),
+                                 QStringLiteral("#CCDDEEC0")};
+    require(settingsJson(QVariant::fromValue(paletteColors)) == paletteJson,
+            "MCP palettes encode the schema's RGBA order and preserve every alpha value");
+    for (const auto binding : {settings::SettingsColorPaletteBinding::StrokeColors,
+                               settings::SettingsColorPaletteBinding::FillColors}) {
+        const auto* palette = registry.fieldForColorPalette(binding);
+        require(palette != nullptr, "both color palette fields are registered");
+        const auto publicPalette = [&](const ScreenshotMcpResponse& response) {
+            for (const auto& value : response.result.value(QStringLiteral("fields")).toArray()) {
+                const auto object = value.toObject();
+                if (object.value(QStringLiteral("id")) == palette->id)
+                    return object.value(QStringLiteral("value"));
+            }
+            return QJsonValue();
+        };
+        require(publicPalette(snapshot) == configuration.value(palette->configurationKey),
+                "MCP discovery exposes the canonical persisted palette without losing alpha");
+        QVariant decodedPalette;
+        require(settingsValue(*palette, paletteJson, &decodedPalette) &&
+                    decodedPalette.metaType() == QMetaType::fromType<QVector<QColor>>() &&
+                    decodedPalette.value<QVector<QColor>>() == paletteColors,
+                "MCP palette decoding produces the typed value accepted by the runtime");
+        auto normalizedInput = paletteJson;
+        normalizedInput[3] = QStringLiteral("  #99aabb40  ");
+        require(settingsValue(*palette, normalizedInput, &decodedPalette) &&
+                    decodedPalette.value<QVector<QColor>>() == paletteColors,
+                "MCP palettes accept the schema's whitespace and case normalization");
+        const auto paletteWrite =
+            call(QStringLiteral("settings_update"),
+                 {{QStringLiteral("values"), QJsonObject{{palette->id, normalizedInput}}}},
+                 configuration.revision());
+        require(paletteWrite.ok && session.colorPaletteValue(binding) == paletteColors &&
+                    configuration.value(palette->configurationKey) == paletteJson &&
+                    publicPalette(call(QStringLiteral("settings_get"))) == paletteJson,
+                "MCP palette updates persist and publish the same typed RGBA values as the UI");
+        auto invalidColor = paletteJson;
+        invalidColor[2] = QStringLiteral("#667788");
+        auto invalidElement = paletteJson;
+        invalidElement[2] = 7;
+        auto missingColor = paletteJson;
+        missingColor.removeLast();
+        auto extraColor = paletteJson;
+        extraColor.append(QStringLiteral("#FFFFFFFF"));
+        for (const QJsonValue& invalid :
+             {QJsonValue(QStringLiteral("#00112200")), QJsonValue(invalidColor),
+              QJsonValue(invalidElement), QJsonValue(missingColor), QJsonValue(extraColor)}) {
+            const auto revision = configuration.revision();
+            require(!settingsValue(*palette, invalid, &decodedPalette) &&
+                        call(QStringLiteral("settings_update"),
+                             {{QStringLiteral("values"), QJsonObject{{palette->id, invalid}}}},
+                             revision)
+                                .errorCode == QStringLiteral("invalid_parameters") &&
+                        configuration.revision() == revision &&
+                        session.colorPaletteValue(binding) == paletteColors,
+                    "invalid palette shapes and colors are rejected before runtime mutation");
         }
     }
     const auto* field = registry.field(QStringLiteral("quick.screenshot-delay"));
@@ -604,6 +670,203 @@ void runMcpApplicationTests() {
         },
         "missing updater helper reports terminal job failure");
     require(!jobs.get(72, updateJob), "update job status remains private to its requester");
+    // Responses are synchronous callback boundaries: their consumer may retire the service.
+    for (int variant = 0; variant < 5; ++variant) {
+        McpJobRegistry lifetimeJobs;
+        auto lifetimePorts = ports;
+        lifetimePorts.jobs = &lifetimeJobs;
+        int captures = 0;
+        lifetimePorts.selectedText = [&](auto) {
+            ++captures;
+            return std::function<void()>{};
+        };
+        auto ownedService = std::make_unique<McpApplicationService>(lifetimePorts);
+        ScreenshotMcpRequest request;
+        request.connectionId = 74;
+        request.requestId = QString::number(++sequence);
+        if (variant == 0) {
+            request.method = QStringLiteral("snow_shot_updates_action");
+            request.params = {{QStringLiteral("action"), QStringLiteral("check")}};
+        } else if (variant == 1 || variant == 2) {
+            request.method = QStringLiteral("snow_shot_translation_start");
+            request.params =
+                variant == 1 ? QJsonObject{{QStringLiteral("texts"),
+                                            QJsonArray{QStringLiteral("response teardown")}}}
+                             : QJsonObject{{QStringLiteral("source"), QStringLiteral("selection")}};
+        } else if (variant == 3) {
+            request.method = QStringLiteral("snow_shot_history_clear");
+            request.expectedRevision = storage.captureHistory().recordsSnapshot().revision;
+        } else {
+            request.method = QStringLiteral("snow_shot_settings_action");
+            const auto action = std::find_if(
+                registry.fields().cbegin(), registry.fields().cend(), [](const auto& item) {
+                    const auto* definition =
+                        std::get_if<settings::SettingsActionDefinition>(&item.definition->payload);
+                    return definition && definition->binding ==
+                                             settings::SettingsActionBinding::ClearPinnedHistory;
+                });
+            require(action != registry.fields().cend(), "cleanup action is discoverable");
+            request.params = {{QStringLiteral("field_id"), action->id}};
+            request.expectedRevision = configuration.revision();
+        }
+        int responses = 0;
+        ownedService->request(request, [&](auto response) {
+            require(response.ok, "destructive response observer receives an accepted job");
+            ++responses;
+            ownedService.reset();
+        });
+        require(!ownedService && responses == 1 && captures == 0,
+                "a response observer can retire its service before post-response work");
+        translation_tests::waitUntil([&] { return !storage.status().pinnedClearing; },
+                                     "cleanup finishes independently of its retired observer");
+    }
+    for (int variant = 0; variant < 3; ++variant) {
+        McpJobRegistry lifetimeJobs;
+        auto lifetimePorts = ports;
+        lifetimePorts.jobs = &lifetimeJobs;
+        auto ownedService = std::make_unique<McpApplicationService>(lifetimePorts);
+        ScreenshotMcpRequest request;
+        request.connectionId = 75;
+        request.requestId = QString::number(++sequence);
+        QString thumbnailPath;
+        const auto removeThumbnail = qScopeGuard([&] {
+            if (!thumbnailPath.isEmpty())
+                QFile::remove(thumbnailPath);
+        });
+        if (variant == 0) {
+            request.method = QStringLiteral("snow_shot_updates_action");
+            request.params = {{QStringLiteral("action"), QStringLiteral("check")}};
+        } else if (variant == 1) {
+            request.method = QStringLiteral("snow_shot_settings_update");
+            request.params = {
+                {QStringLiteral("values"),
+                 QJsonObject{
+                     {historyField->id, !session.state(historyField->id).acceptedValue.toBool()}}}};
+            request.expectedRevision = configuration.revision();
+        } else {
+            const QString directory =
+                storage::StorageUsageTracker::defaultThumbnailCacheDirectory();
+            require(!directory.isEmpty() && QDir().mkpath(directory),
+                    "thumbnail cleanup fixture has a writable cache directory");
+            thumbnailPath = QDir(directory).filePath(
+                QStringLiteral("mcp-lifetime-%1.png")
+                    .arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
+            QFile thumbnail(thumbnailPath);
+            require(thumbnail.open(QIODevice::WriteOnly | QIODevice::NewOnly) &&
+                        thumbnail.write(QByteArray(64, 'x')) == 64,
+                    "thumbnail cleanup fixture creates a removable PNG cache entry");
+            thumbnail.close();
+            storage.requestStorageUsageRefresh();
+            require(storage.flushNow().success,
+                    "thumbnail fixture usage refresh drains before cleanup admission");
+            translation_tests::waitUntil(
+                [&] {
+                    const auto state =
+                        session.actionState(settings::SettingsActionBinding::ClearThumbnailCache);
+                    return state.enabled && !state.busy &&
+                           storage.status().appUsage.thumbnailCacheBytes >= 64;
+                },
+                "thumbnail cleanup is admitted after the seeded cache usage scan finishes");
+            request.method = QStringLiteral("snow_shot_settings_action");
+            request.params = {
+                {QStringLiteral("field_id"), QStringLiteral("storage.clear-thumbnails")}};
+            request.expectedRevision = configuration.revision();
+        }
+        QString terminalStatus;
+        QString terminalError;
+        QObject::connect(&lifetimeJobs, &McpJobRegistry::changed, &session,
+                         [&](quint64 owner, const QString& id) {
+                             const auto state = lifetimeJobs.get(owner, id);
+                             if (state && state->value(QStringLiteral("status")) !=
+                                              QStringLiteral("running")) {
+                                 terminalStatus = state->value(QStringLiteral("status")).toString();
+                                 terminalError = state->value(QStringLiteral("result"))
+                                                     .toObject()
+                                                     .value(QStringLiteral("error"))
+                                                     .toObject()
+                                                     .value(QStringLiteral("code"))
+                                                     .toString();
+                                 ownedService.reset();
+                             }
+                         });
+        int responses = 0;
+        ownedService->request(request, [variant, &responses](auto response) {
+            ++responses;
+            const auto message =
+                QStringLiteral("job observation variant %1 begins with an accepted response: %2")
+                    .arg(variant)
+                    .arg(response.errorCode)
+                    .toUtf8();
+            require(response.ok, message.constData());
+        });
+        translation_tests::waitUntil([&] { return !ownedService; },
+                                     "terminal job observers can retire owned observations");
+        require(responses == 1, "terminal observers retire their service after its accepted reply");
+        if (variant == 2) {
+            const auto message =
+                QStringLiteral("thumbnail cleanup completes after observer retirement: "
+                               "status=%1 error=%2 file_exists=%3 cache_clearing=%4")
+                    .arg(terminalStatus, terminalError)
+                    .arg(QFile::exists(thumbnailPath))
+                    .arg(storage.status().cacheClearing)
+                    .toUtf8();
+            require(terminalStatus == QStringLiteral("completed") &&
+                        !QFile::exists(thumbnailPath) && !storage.status().cacheClearing,
+                    message.constData());
+        }
+    }
+    for (int variant = 0; variant < 4; ++variant) {
+        auto ownedService = std::make_unique<McpApplicationService>(ports);
+        ScreenshotMcpRequest request;
+        request.connectionId = 73;
+        request.requestId = QString::number(++sequence);
+        request.method = QStringLiteral("snow_shot_translation_start");
+        request.params = {{QStringLiteral("texts"), QJsonArray{QStringLiteral("teardown")}},
+                          {QStringLiteral("model_id"), QStringLiteral("general")}};
+        std::optional<ScreenshotMcpResponse> startedJob;
+        ownedService->request(request, [&](auto response) { startedJob = std::move(response); });
+        require(startedJob && startedJob->ok, "service teardown owns a translation job");
+        const auto id = startedJob->result.value(QStringLiteral("job_id")).toString();
+        const auto child = ownedService->findChild<translation::TranslationJob*>();
+        require(child != nullptr, "translation lifetime belongs to its application service");
+        if (variant == 1) {
+            // Retire it without dispatching DeferredDelete before its owner goes away.
+            child->deleteLater();
+        } else if (variant == 2) {
+            require(jobs.cancel(73, id), "cancel teardown translation");
+        }
+        const QPointer<McpApplicationService> guard(ownedService.get());
+        bool retiredWhileStopping = false;
+        QObject::connect(child, &QObject::destroyed, &session, [&] {
+            require(guard, "service retires child callbacks before its QObject teardown");
+            guard->request(request, [&](auto response) {
+                retiredWhileStopping = response.errorCode == QStringLiteral("unavailable");
+            });
+        });
+        if (variant == 3) {
+            const auto completed = QObject::connect(
+                &jobs, &McpJobRegistry::changed, &session,
+                [&](quint64 owner, const QString& changedId) {
+                    const auto state = jobs.get(owner, changedId);
+                    if (owner == 73 && changedId == id && state &&
+                        state->value(QStringLiteral("status")) == QStringLiteral("completed"))
+                        ownedService.reset();
+                });
+            const int streamCount = static_cast<int>(provider.streams.size());
+            translation_tests::waitUntil([&] { return provider.streams.size() > streamCount; },
+                                         "teardown translation reaches provider");
+            provider.delta(streamCount, QStringLiteral("done"));
+            provider.finish(streamCount);
+            translation_tests::waitUntil([&] { return !ownedService; },
+                                         "completion observers retire their service");
+            QObject::disconnect(completed);
+        }
+        ownedService.reset();
+        require(retiredWhileStopping,
+                "active and deferred translation children retire while service state is valid");
+        jobs.disconnected(73);
+        translation_tests::flushEvents();
+    }
     service.disconnected(71);
     service.shutdown();
 }

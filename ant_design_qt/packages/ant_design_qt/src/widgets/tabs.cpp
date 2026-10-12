@@ -23,6 +23,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QResizeEvent>
+#include <QScopeGuard>
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QScroller>
@@ -246,7 +247,8 @@ class TabOverflowList final : public QListWidget {
     AdScrollArea::applyThemedScrollBar(verticalScrollBar());
     connect(this, &QListWidget::itemClicked, this, [this](QListWidgetItem* item) {
       if (item && item->flags().testFlag(Qt::ItemIsEnabled) && choose) {
-        choose(item->data(KeyRole).toString());
+        const auto callback = choose;
+        callback(item->data(KeyRole).toString());
       }
     });
   }
@@ -317,19 +319,21 @@ class TabOverflowList final : public QListWidget {
         navigate(-1);
         break;
       case Qt::Key_Escape:
-        if (dismiss) dismiss();
+        if (const auto callback = dismiss) callback();
         break;
       case Qt::Key_Return:
       case Qt::Key_Enter:
       case Qt::Key_Space:
         if (currentItem() && currentItem()->flags().testFlag(Qt::ItemIsEnabled) && choose) {
-          choose(currentItem()->data(KeyRole).toString());
+          const auto callback = choose;
+          callback(currentItem()->data(KeyRole).toString());
         }
         break;
       case Qt::Key_Delete:
       case Qt::Key_Backspace:
         if (currentItem() && currentItem()->data(ClosableRole).toBool() && close) {
-          close(currentItem()->data(KeyRole).toString());
+          const auto callback = close;
+          callback(currentItem()->data(KeyRole).toString());
         }
         break;
       default:
@@ -372,7 +376,8 @@ class TabOverflowList final : public QListWidget {
       const QModelIndex index = indexAt(event->position().toPoint());
       if (event->button() == Qt::LeftButton && key == index.data(KeyRole).toString() &&
           closeRect(visualRect(index), index).contains(event->position().toPoint()) && close) {
-        close(key);
+        const auto callback = close;
+        callback(key);
       }
       event->accept();
       return;
@@ -666,7 +671,8 @@ class TabButton final : public QAbstractButton {
       event->accept();
       update();
       if (requestClose && close) {
-        close(index_);
+        const auto callback = close;
+        callback(index_);
       }
       return;
     }
@@ -688,18 +694,21 @@ class TabButton final : public QAbstractButton {
     }
 
     if (delta != 0 && navigate) {
-      navigate(index_, delta);
+      const auto callback = navigate;
+      callback(index_, delta);
       event->accept();
       return;
     }
     if ((event->key() == Qt::Key_Home || event->key() == Qt::Key_End) && navigate) {
-      navigate(index_, event->key() == Qt::Key_Home ? -1000000 : 1000000);
+      const auto callback = navigate;
+      callback(index_, event->key() == Qt::Key_Home ? -1000000 : 1000000);
       event->accept();
       return;
     }
     if ((event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) && closable_) {
       if (close) {
-        close(index_);
+        const auto callback = close;
+        callback(index_);
       }
       event->accept();
       return;
@@ -726,7 +735,8 @@ class TabButton final : public QAbstractButton {
 
   void nextCheckState() override {
     if (activate) {
-      activate(index_);
+      const auto callback = activate;
+      callback(index_);
     }
   }
 
@@ -801,7 +811,9 @@ class OperationButton final : public QAbstractButton {
 
  protected:
   void keyPressEvent(QKeyEvent* event) override {
-    if (!handleKey || !handleKey(event)) QAbstractButton::keyPressEvent(event);
+    const QPointer<OperationButton> guard(this);
+    const auto callback = handleKey;
+    if ((!callback || !callback(event)) && guard) QAbstractButton::keyPressEvent(event);
   }
 
   void focusInEvent(QFocusEvent* event) override {
@@ -898,13 +910,16 @@ class TabsStrip final : public QWidget {
     overflowList_->setAccessibleName(moreButton_->accessibleName());
     overflowPopup_->setContentWidget(overflowList_);
     overflowList_->choose = [this](const QString& key) {
+      const QPointer<TabsStrip> guard(this);
       overflowPopup_->hide();
+      if (!guard) return;
       for (int index = 0; index < items_.size(); ++index) {
         if (items_.at(index).key == key) {
-          if (activate) activate(index);
+          if (const auto callback = activate) callback(index);
           break;
         }
       }
+      if (!guard) return;
       if (currentIndex_ >= 0 && currentIndex_ < buttons_.size()) {
         scrollArea_->revealTab(buttons_.at(currentIndex_));
         buttons_.at(currentIndex_)->setFocus(Qt::OtherFocusReason);
@@ -913,7 +928,7 @@ class TabsStrip final : public QWidget {
     overflowList_->close = [this](const QString& key) {
       for (int index = 0; index < items_.size(); ++index) {
         if (items_.at(index).key == key) {
-          if (closeRequested) closeRequested(index);
+          if (const auto callback = closeRequested) callback(index);
           break;
         }
       }
@@ -944,8 +959,8 @@ class TabsStrip final : public QWidget {
       });
     }
     connect(addButton_, &QAbstractButton::clicked, this, [this] {
-      if (addRequested) {
-        addRequested();
+      if (const auto callback = addRequested) {
+        callback();
       }
     });
     indicatorAnimation_->setEasingCurve(QEasingCurve::OutCubic);
@@ -979,13 +994,13 @@ class TabsStrip final : public QWidget {
     while (buttons_.size() < items.size()) {
       auto* button = new TabButton(tabContent_);
       button->activate = [this](int index) {
-        if (activate) {
-          activate(index);
+        if (const auto callback = activate) {
+          callback(index);
         }
       };
       button->close = [this](int index) {
-        if (closeRequested) {
-          closeRequested(index);
+        if (const auto callback = closeRequested) {
+          callback(index);
         }
       };
       button->navigate = [this](int index, int delta) { navigateFrom(index, delta); };
@@ -1364,10 +1379,16 @@ class TabsStrip final : public QWidget {
     for (int attempts = 0; attempts < buttonCount; ++attempts) {
       target = (target + delta + buttonCount) % buttonCount;
       if (buttons_.at(target)->isEnabled()) {
-        if (activate) {
-          activate(target);
+        const QPointer<TabsStrip> guard(this);
+        const QPointer<TabButton> button(buttons_.at(target));
+        const QString key = items_.at(target).key;
+        if (const auto callback = activate) {
+          callback(target);
         }
-        buttons_.at(target)->setFocus(Qt::TabFocusReason);
+        if (guard && button && currentIndex_ == target && target < items_.size() &&
+            items_.at(target).key == key) {
+          button->setFocus(Qt::TabFocusReason);
+        }
         return;
       }
     }
@@ -1488,8 +1509,6 @@ struct AdTabs::Private {
     if (index < 0 || index >= items.size()) {
       return nullptr;
     }
-    const int previousIndex = currentIndex;
-    const QString previousKey = q->currentKey();
     QPointer<QWidget> page = items.at(index).page;
     const QString key = items.at(index).key;
     items.removeAt(index);
@@ -1516,13 +1535,36 @@ struct AdTabs::Private {
     }
     stack->setCurrentIndex(currentIndex);
     refreshStrip();
-    if (previousIndex != currentIndex) {
-      emit q->currentIndexChanged(currentIndex);
-    }
-    if (previousKey != q->currentKey()) {
-      emit q->currentKeyChanged(q->currentKey());
-    }
+    publishSelectionChanges();
     return page.data();
+  }
+
+  void publishSelectionChanges() {
+    if (publishingSelection) return;
+    const QPointer<AdTabs> owner(q);
+    publishingSelection = true;
+    const auto restorePublishing = qScopeGuard([owner] {
+      if (owner) owner->d_->publishingSelection = false;
+    });
+    // Nested selection edits join this drain. Keep delivered properties separate
+    // so replacing the index cannot discard an unreported key change.
+    while (true) {
+      const int nextIndex = currentIndex;
+      if (lastNotifiedIndex != nextIndex) {
+        lastNotifiedIndex = nextIndex;
+        emit owner->currentIndexChanged(nextIndex);
+        if (!owner) return;
+        continue;
+      }
+      const QString nextKey = owner->currentKey();
+      if (lastNotifiedKey != nextKey) {
+        lastNotifiedKey = nextKey;
+        emit owner->currentKeyChanged(nextKey);
+        if (!owner) return;
+        continue;
+      }
+      return;
+    }
   }
 
   AdTabs* q = nullptr;
@@ -1531,6 +1573,9 @@ struct AdTabs::Private {
   QStackedWidget* stack = nullptr;
   QList<TabItem> items;
   int currentIndex = -1;
+  int lastNotifiedIndex = -1;
+  QString lastNotifiedKey;
+  bool publishingSelection = false;
   Type type = Type::Line;
   ControlSize controlSize = ControlSize::Medium;
   Placement placement = Placement::Top;
@@ -1556,12 +1601,17 @@ AdTabs::AdTabs(QWidget* parent) : QWidget(parent), d_(std::make_unique<Private>(
     if (index < 0 || index >= d_->items.size()) {
       return;
     }
-    emit tabClicked(d_->items.at(index).key);
-    setCurrentIndex(index);
+    const QPointer<AdTabs> guard(this);
+    const QString key = d_->items.at(index).key;
+    emit tabClicked(key);
+    if (guard) {
+      setCurrentKey(key);
+    }
   };
   d_->strip->closeRequested = [this](int index) {
     if (index >= 0 && index < d_->items.size() && d_->items.at(index).closable) {
-      emit tabCloseRequested(d_->items.at(index).key);
+      const QString key = d_->items.at(index).key;
+      emit tabCloseRequested(key);
     }
   };
   d_->strip->addRequested = [this] { emit addRequested(); };
@@ -1627,11 +1677,6 @@ int AdTabs::insertTab(int index, const TabItem& source) {
                        },
                        Qt::QueuedConnection));
 
-  const int previousIndex = d_->currentIndex;
-  const QString previousKey =
-      previousIndex >= 0 && previousIndex < d_->items.size()
-          ? d_->items.at(previousIndex + (index <= previousIndex ? 1 : 0)).key
-          : QString();
   if (d_->currentIndex < 0 && item.enabled) {
     d_->currentIndex = index;
   } else if (index <= d_->currentIndex) {
@@ -1641,12 +1686,7 @@ int AdTabs::insertTab(int index, const TabItem& source) {
     d_->stack->setCurrentIndex(d_->currentIndex);
   }
   d_->refreshStrip();
-  if (previousIndex != d_->currentIndex) {
-    emit currentIndexChanged(d_->currentIndex);
-  }
-  if (previousKey != currentKey()) {
-    emit currentKeyChanged(currentKey());
-  }
+  d_->publishSelectionChanges();
   return index;
 }
 
@@ -1662,8 +1702,10 @@ void AdTabs::removeTab(const QString& key) { removeTab(indexOf(key)); }
 QWidget* AdTabs::takeTab(int index) { return d_->detachTab(index, false); }
 
 void AdTabs::clear() {
+  const QPointer<AdTabs> guard(this);
   while (!d_->items.isEmpty()) {
     removeTab(static_cast<int>(d_->items.size()) - 1);
+    if (!guard) return;
   }
 }
 
@@ -1853,14 +1895,10 @@ void AdTabs::setCurrentIndex(int index) {
   if (d_->currentIndex == index) {
     return;
   }
-  const QString previousKey = currentKey();
   d_->currentIndex = index;
   d_->stack->setCurrentIndex(index);
   d_->refreshStrip();
-  emit currentIndexChanged(index);
-  if (previousKey != currentKey()) {
-    emit currentKeyChanged(currentKey());
-  }
+  d_->publishSelectionChanges();
 }
 
 void AdTabs::setCurrentKey(const QString& key) {

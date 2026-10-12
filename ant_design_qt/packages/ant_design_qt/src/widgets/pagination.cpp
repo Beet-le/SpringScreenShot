@@ -18,7 +18,9 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPalette>
+#include <QPointer>
 #include <QResizeEvent>
+#include <QScopeGuard>
 #include <QSignalBlocker>
 #include <QStyle>
 #include <QStyleOptionFocusRect>
@@ -319,6 +321,12 @@ struct AdPagination::Private {
   int currentPage = 1;
   int total = 0;
   int pageSize = 10;
+  int lastNotifiedTotal = 0;
+  int lastNotifiedPageSize = 10;
+  int lastNotifiedCurrentPage = 1;
+  int lastNotifiedPageCount = 0;
+  bool publishingState = false;
+  bool userChangePending = false;
   ControlSize controlSize = ControlSize::Medium;
   ControlSize lastEffectiveSize = ControlSize::Medium;
   Alignment alignment = Alignment::Start;
@@ -365,7 +373,9 @@ AdPagination::AdPagination(QWidget* parent) : QWidget(parent), d_(std::make_uniq
   d_->quickSuffixLabel->setObjectName(QStringLiteral("paginationQuickSuffix"));
   connect(d_->quickInput, &QLineEdit::editingFinished, this, [this]() {
     if (!d_->rebuilding && !d_->quickInput->text().isEmpty()) {
+      const QPointer<AdPagination> guard(this);
       navigateFromUser(d_->quickInput->text().toInt());
+      if (!guard) return;
       d_->quickInput->clear();
     }
   });
@@ -409,8 +419,8 @@ void AdPagination::setCurrentPage(int value) {
     return;
   }
   d_->currentPage = bounded;
-  emit currentPageChanged(bounded);
   rebuild();
+  publishStateChanges();
 }
 
 int AdPagination::total() const { return d_->total; }
@@ -420,18 +430,10 @@ void AdPagination::setTotal(int value) {
   if (d_->total == value) {
     return;
   }
-  const int oldPageCount = pageCount();
   d_->total = value;
-  emit totalChanged(value);
-  const int bounded = boundedPage(d_->currentPage);
-  if (bounded != d_->currentPage) {
-    d_->currentPage = bounded;
-    emit currentPageChanged(bounded);
-  }
-  if (pageCount() != oldPageCount) {
-    emit pageCountChanged(pageCount());
-  }
+  d_->currentPage = boundedPage(d_->currentPage);
   rebuild();
+  publishStateChanges();
 }
 
 int AdPagination::pageSize() const { return d_->pageSize; }
@@ -441,18 +443,10 @@ void AdPagination::setPageSize(int value) {
   if (d_->pageSize == value) {
     return;
   }
-  const int oldPageCount = pageCount();
   d_->pageSize = value;
-  emit pageSizeChanged(value);
-  const int bounded = boundedPage(d_->currentPage);
-  if (bounded != d_->currentPage) {
-    d_->currentPage = bounded;
-    emit currentPageChanged(bounded);
-  }
-  if (pageCount() != oldPageCount) {
-    emit pageCountChanged(pageCount());
-  }
+  d_->currentPage = boundedPage(d_->currentPage);
   rebuild();
+  publishStateChanges();
 }
 
 int AdPagination::pageCount() const {
@@ -703,19 +697,14 @@ void AdPagination::applyPageSizeFromUser(int value) {
     return;
   }
   const int oldCurrent = d_->currentPage;
-  const int oldPageCount = pageCount();
   d_->pageSize = value;
   d_->currentPage = boundedPage(oldCurrent);
-  emit pageSizeSelected(oldCurrent, value);
-  emit pageSizeChanged(value);
-  if (d_->currentPage != oldCurrent) {
-    emit currentPageChanged(d_->currentPage);
-  }
-  if (pageCount() != oldPageCount) {
-    emit pageCountChanged(pageCount());
-  }
-  emit changed(d_->currentPage, d_->pageSize);
   rebuild();
+  const QPointer<AdPagination> guard(this);
+  emit pageSizeSelected(oldCurrent, value);
+  if (!guard) return;
+  d_->userChangePending = true;
+  publishStateChanges();
 }
 
 void AdPagination::navigateFromUser(int page) {
@@ -728,9 +717,47 @@ void AdPagination::navigateFromUser(int page) {
     return;
   }
   d_->currentPage = bounded;
-  emit currentPageChanged(bounded);
-  emit changed(bounded, d_->pageSize);
   rebuild();
+  d_->userChangePending = true;
+  publishStateChanges();
+}
+
+bool AdPagination::publishStateChanges() {
+  if (d_->publishingState) return true;
+  const QPointer<AdPagination> guard(this);
+  d_->publishingState = true;
+  const auto restorePublishing = qScopeGuard([guard] {
+    if (guard) guard->d_->publishingState = false;
+  });
+  // Re-read after every observer. A nested page edit replaces the pending page
+  // notification but leaves the independent page-count notification intact.
+  while (true) {
+    if (d_->lastNotifiedTotal != d_->total) {
+      const int value = d_->total;
+      d_->lastNotifiedTotal = value;
+      emit totalChanged(value);
+    } else if (d_->lastNotifiedPageSize != d_->pageSize) {
+      const int value = d_->pageSize;
+      d_->lastNotifiedPageSize = value;
+      emit pageSizeChanged(value);
+    } else if (d_->lastNotifiedCurrentPage != d_->currentPage) {
+      const int value = d_->currentPage;
+      d_->lastNotifiedCurrentPage = value;
+      emit currentPageChanged(value);
+    } else if (d_->lastNotifiedPageCount != pageCount()) {
+      const int value = pageCount();
+      d_->lastNotifiedPageCount = value;
+      emit pageCountChanged(value);
+    } else if (d_->userChangePending) {
+      const int page = d_->currentPage;
+      const int size = d_->pageSize;
+      d_->userChangePending = false;
+      emit changed(page, size);
+    } else {
+      return true;
+    }
+    if (!guard) return false;
+  }
 }
 
 int AdPagination::boundedPage(int page) const {

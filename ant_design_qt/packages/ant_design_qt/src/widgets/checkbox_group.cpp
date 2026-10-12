@@ -1,7 +1,7 @@
 #include "checkbox_group.h"
 
 #include <QBoxLayout>
-#include <QScopedValueRollback>
+#include <QScopeGuard>
 
 #include <algorithm>
 #include <utility>
@@ -18,24 +18,29 @@ AdCheckboxGroup::AdCheckboxGroup(QObject* parent) : QButtonGroup(parent) {
 }
 
 AdCheckboxGroup::~AdCheckboxGroup() {
-  const QList<AdCheckbox*> current = checkboxes();
-  for (AdCheckbox* checkbox : current) {
+  const auto current = order_;
+  for (const QPointer<AdCheckbox>& checkbox : current) {
+    if (checkbox) detachCheckbox(checkbox);
+  }
+  for (const QPointer<AdCheckbox>& checkbox : current) {
     if (checkbox) {
-      detachCheckbox(checkbox);
       if (!enabled_ && enabledBeforeGroupDisable_.contains(checkbox)) {
         checkbox->setEnabled(enabledBeforeGroupDisable_.value(checkbox));
       }
-      checkbox->setGroup(nullptr);
+      if (checkbox) checkbox->setGroup(nullptr);
     }
   }
 }
 
 void AdCheckboxGroup::addButton(QAbstractButton* button, int id) {
+  const QPointer<AdCheckboxGroup> guard(this);
+  const QPointer<QAbstractButton> lifetime(button);
   AdCheckbox* checkbox = qobject_cast<AdCheckbox*>(button);
   if (!checkbox) {
     return;
   }
   addCheckbox(checkbox, checkbox->value());
+  if (!guard || !lifetime) return;
   if (id != -1) {
     QButtonGroup::setId(checkbox, id);
   }
@@ -56,11 +61,14 @@ QVariant AdCheckboxGroup::effectiveValue(AdCheckbox* checkbox, const QVariant& r
 }
 
 void AdCheckboxGroup::addCheckbox(AdCheckbox* checkbox, const QVariant& value) {
+  const QPointer<AdCheckboxGroup> guard(this);
+  const QPointer<AdCheckbox> lifetime(checkbox);
   if (!checkbox) {
     return;
   }
   if (checkbox->group_ && checkbox->group_ != this) {
     checkbox->group_->removeCheckbox(checkbox);
+    if (!guard || !lifetime) return;
   }
   if (!buttons().contains(checkbox)) {
     QButtonGroup::addButton(checkbox);
@@ -74,17 +82,23 @@ void AdCheckboxGroup::addCheckbox(AdCheckbox* checkbox, const QVariant& value) {
   optionValues_.insert(checkbox, resolvedValue);
   if (checkbox->value() != resolvedValue) {
     checkbox->setValue(resolvedValue);
+    if (!guard || !lifetime) return;
   }
   checkbox->setGroup(this);
+  if (!guard || !lifetime) return;
   if (!enabled_) {
     enabledBeforeGroupDisable_.insert(checkbox, checkbox->isEnabled());
     checkbox->setEnabled(false);
+    if (!guard) return;
   }
   refreshLayoutSpacing();
+  if (!guard) return;
   emitValuesIfChanged();
 }
 
 void AdCheckboxGroup::removeCheckbox(AdCheckbox* checkbox) {
+  const QPointer<AdCheckboxGroup> guard(this);
+  const QPointer<AdCheckbox> lifetime(checkbox);
   if (!checkbox || !buttons().contains(checkbox)) {
     return;
   }
@@ -93,6 +107,7 @@ void AdCheckboxGroup::removeCheckbox(AdCheckbox* checkbox) {
   optionValues_.remove(checkbox);
   if (!enabled_ && enabledBeforeGroupDisable_.contains(checkbox)) {
     checkbox->setEnabled(enabledBeforeGroupDisable_.take(checkbox));
+    if (!guard) return;
   } else {
     enabledBeforeGroupDisable_.remove(checkbox);
   }
@@ -101,8 +116,10 @@ void AdCheckboxGroup::removeCheckbox(AdCheckbox* checkbox) {
                                 return item.isNull() || item.data() == checkbox;
                               }),
                order_.end());
-  checkbox->setGroup(nullptr);
+  if (lifetime) lifetime->setGroup(nullptr);
+  if (!guard) return;
   refreshLayoutSpacing();
+  if (!guard) return;
   emitValuesIfChanged();
 }
 
@@ -122,6 +139,7 @@ QVariant AdCheckboxGroup::value(const AdCheckbox* checkbox) const {
 }
 
 void AdCheckboxGroup::setValue(AdCheckbox* checkbox, const QVariant& value) {
+  const QPointer<AdCheckboxGroup> guard(this);
   if (!checkbox || !buttons().contains(checkbox)) {
     return;
   }
@@ -131,6 +149,7 @@ void AdCheckboxGroup::setValue(AdCheckbox* checkbox, const QVariant& value) {
   optionValues_.insert(checkbox, value);
   if (checkbox->value() != value) {
     checkbox->setValue(value);
+    if (!guard) return;
   }
   emitValuesIfChanged();
 }
@@ -146,13 +165,23 @@ QVariantList AdCheckboxGroup::values() const {
 }
 
 void AdCheckboxGroup::setValues(const QVariantList& values) {
+  const QPointer<AdCheckboxGroup> guard(this);
+  const quint64 generation = ++selectionGeneration_;
   {
-    QScopedValueRollback<bool> guard(syncing_, true);
-    for (AdCheckbox* checkbox : checkboxes()) {
+    const bool previousSyncing = syncing_;
+    syncing_ = true;
+    const auto restoreSyncing = qScopeGuard([guard, previousSyncing] {
+      if (guard) guard->syncing_ = previousSyncing;
+    });
+    const auto current = order_;
+    for (const QPointer<AdCheckbox>& checkbox : current) {
+      if (!checkbox || !buttons().contains(checkbox)) continue;
       const bool shouldCheck = values.contains(optionValues_.value(checkbox));
       const Qt::CheckState nextState = shouldCheck ? Qt::Checked : Qt::Unchecked;
       if (checkbox->checkState() != nextState) {
         checkbox->setCheckState(nextState);
+        if (!guard) return;
+        if (selectionGeneration_ != generation) return;
       }
     }
   }
@@ -164,19 +193,23 @@ void AdCheckboxGroup::clear() { setValues({}); }
 bool AdCheckboxGroup::isEnabled() const { return enabled_; }
 
 void AdCheckboxGroup::setEnabled(bool value) {
+  const QPointer<AdCheckboxGroup> guard(this);
   if (enabled_ == value) {
     return;
   }
   enabled_ = value;
-  for (AdCheckbox* checkbox : checkboxes()) {
+  const auto current = order_;
+  for (const QPointer<AdCheckbox>& checkbox : current) {
+    if (!checkbox || !buttons().contains(checkbox)) continue;
     if (!enabled_) {
       enabledBeforeGroupDisable_.insert(checkbox, checkbox->isEnabled());
       checkbox->setEnabled(false);
     } else if (enabledBeforeGroupDisable_.contains(checkbox)) {
       checkbox->setEnabled(enabledBeforeGroupDisable_.take(checkbox));
     }
+    if (!guard) return;
   }
-  refreshCheckboxes(false);
+  if (!refreshCheckboxes(false)) return;
   emit enabledChanged(enabled_);
 }
 
@@ -189,7 +222,7 @@ void AdCheckboxGroup::setComponentTokens(const ComponentTokens& value) {
     return;
   }
   componentTokens_ = value;
-  refreshCheckboxes();
+  if (!refreshCheckboxes()) return;
   emit componentTokensChanged();
 }
 
@@ -200,7 +233,7 @@ void AdCheckboxGroup::setComponentTokenResolver(ComponentTokenResolver resolver)
     return;
   }
   componentTokenResolver_ = std::move(resolver);
-  refreshCheckboxes();
+  if (!refreshCheckboxes()) return;
   emit componentTokensChanged();
 }
 
@@ -216,14 +249,20 @@ void AdCheckboxGroup::setManagedLayout(QBoxLayout* layout) {
   refreshLayoutSpacing();
 }
 
-void AdCheckboxGroup::refreshCheckboxes(bool geometryChanged) {
-  for (AdCheckbox* checkbox : checkboxes()) {
+bool AdCheckboxGroup::refreshCheckboxes(bool geometryChanged) {
+  const QPointer<AdCheckboxGroup> guard(this);
+  const auto current = order_;
+  for (const QPointer<AdCheckbox>& checkbox : current) {
+    if (!checkbox || !buttons().contains(checkbox)) continue;
     if (!enabled_ && checkbox->hasFocus()) {
       checkbox->clearFocus();
+      if (!guard) return false;
     }
-    checkbox->refreshAfterPropertyChange(geometryChanged);
+    if (checkbox) checkbox->refreshAfterPropertyChange(geometryChanged);
+    if (!guard) return false;
   }
   refreshLayoutSpacing();
+  return guard != nullptr;
 }
 
 void AdCheckboxGroup::refreshLayoutSpacing() {
@@ -252,7 +291,7 @@ void AdCheckboxGroup::emitValuesIfChanged() {
     return;
   }
   lastValues_ = current;
-  emit valuesChanged(lastValues_);
+  emit valuesChanged(current);
 }
 
 void AdCheckboxGroup::attachCheckbox(AdCheckbox* checkbox) {

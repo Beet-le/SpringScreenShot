@@ -773,6 +773,41 @@ ScreenshotToolPaletteStyleControls::ScreenshotToolPaletteStyleControls(
     : m_state(defaults), m_callbacks(std::move(callbacks)), m_defaults(defaults),
       m_watermarkTemplateClock(std::move(watermarkTemplateClock)) {}
 
+ScreenshotToolPaletteStyleControls::~ScreenshotToolPaletteStyleControls() {
+    releaseControlCallbacksExcept(nullptr);
+    releaseWatermarkTemplateBindings();
+}
+
+QObject* ScreenshotToolPaletteStyleControls::controlCallbackContext(QWidget* owner) {
+    for (const auto& context : m_controlCallbackContexts) {
+        if (context != nullptr && context->parent() == owner) {
+            return context;
+        }
+    }
+    auto* context = new QObject(owner);
+    m_controlCallbackContexts.push_back(context);
+    return context;
+}
+
+void ScreenshotToolPaletteStyleControls::releaseControlCallbacksExcept(QWidget* retainedControls) {
+    m_controlCallbackContexts.erase(
+        std::remove_if(m_controlCallbackContexts.begin(), m_controlCallbackContexts.end(),
+                       [retainedControls](const QPointer<QObject>& context) {
+                           if (context == nullptr) {
+                               return true;
+                           }
+                           auto* owner = qobject_cast<QWidget*>(context->parent());
+                           if (retainedControls != nullptr && owner != nullptr &&
+                               (owner == retainedControls ||
+                                retainedControls->isAncestorOf(owner))) {
+                               return false;
+                           }
+                           delete context.data();
+                           return true;
+                       }),
+        m_controlCallbackContexts.end());
+}
+
 ScreenshotToolPaletteStyleState& ScreenshotToolPaletteStyleControls::styleState() {
     return m_state;
 }
@@ -1517,8 +1552,8 @@ ScreenshotToolPaletteShapeFamilyResult ScreenshotToolPaletteStyleControls::build
     container->setProperty("screenshotStyleEditorSignature", kSignatureShapeKind);
     QObject::disconnect(group, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged, nullptr,
                         nullptr);
-    QObject::connect(group, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged, controls,
-                     [this, spotlight](int id) {
+    QObject::connect(group, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
+                     controlCallbackContext(controls), [this, spotlight](int id) {
                          const auto shape = id == 1   ? SnowCanvasRectangleShape::Ellipse
                                             : id == 2 ? SnowCanvasRectangleShape::Diamond
                                                       : SnowCanvasRectangleShape::Rectangle;
@@ -1659,8 +1694,8 @@ ScreenshotToolPaletteShapeFamilyResult ScreenshotToolPaletteStyleControls::build
         lineTypeControlsContainer->setProperty("screenshotStyleEditorSignature",
                                                kSignatureLineType);
         QObject::connect(
-            m_lineTypeButtonGroup, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged, controls,
-            [this](int id) {
+            m_lineTypeButtonGroup, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
+            controlCallbackContext(controls), [this](int id) {
                 setLineType(id == 0 ? SnowCanvasArrowType::Straight : SnowCanvasArrowType::Curve);
             });
     }
@@ -1737,7 +1772,8 @@ void ScreenshotToolPaletteStyleControls::buildCornerRadiusEditor(
     m_cornerRadiusEditor->setProperty("screenshotStyleEditorRole", kRoleCornerRadius);
     m_cornerRadiusEditor->setProperty("screenshotStyleEditorSignature", kSignatureCornerRadius);
     m_cornerRadiusEditor->setObjectName(QStringLiteral("screenshotSelectionCornerRadiusButton"));
-    QObject::connect(m_cornerRadiusEditor, &adqt::widgets::AdButton::clicked, controls,
+    QObject::connect(m_cornerRadiusEditor, &adqt::widgets::AdButton::clicked,
+                     controlCallbackContext(controls),
                      [this]() { setCornerRadius(defaultCornerRadius()); });
 }
 
@@ -1842,7 +1878,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildArrowFamily(
     arrowTypeControlsContainer->setProperty("screenshotStyleEditorRole", kRoleArrowType);
     arrowTypeControlsContainer->setProperty("screenshotStyleEditorSignature", kSignatureArrowType);
     QObject::connect(m_arrowTypeButtonGroup, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
-                     controls, [this](int id) {
+                     controlCallbackContext(controls), [this](int id) {
                          setArrowType(id == 1   ? SnowCanvasArrowType::Curve
                                       : id == 2 ? SnowCanvasArrowType::Elbow
                                                 : SnowCanvasArrowType::Straight);
@@ -1870,8 +1906,8 @@ QWidget* ScreenshotToolPaletteStyleControls::buildArrowFamily(
     m_arrowRatioEditor->setProperty("screenshotStyleEditorRoot", true);
     m_arrowRatioEditor->setProperty("screenshotStyleEditorRole", kRoleArrowRatio);
     m_arrowRatioEditor->setProperty("screenshotStyleEditorSignature", kSignatureArrowRatio);
-    QObject::connect(m_arrowRatioEditor, &adqt::widgets::AdButton::clicked, controls,
-                     [this]() { setArrowRatio(1.0); });
+    QObject::connect(m_arrowRatioEditor, &adqt::widgets::AdButton::clicked,
+                     controlCallbackContext(controls), [this]() { setArrowRatio(1.0); });
 
     const QVector<SnowCanvasArrowhead> arrowheads{
         SnowCanvasArrowhead::None,
@@ -2096,7 +2132,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildMagnifierFamily(
     QObject::disconnect(m_magnifierShapeGroup, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
                         nullptr, nullptr);
     QObject::connect(m_magnifierShapeGroup, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
-                     controls, [this](int id) {
+                     controlCallbackContext(controls), [this](int id) {
                          if (id < 0 || id > static_cast<int>(SnowCanvasRectangleShape::Diamond))
                              return;
                          commitMagnifierProperty(SnowCanvasMagnifierStylePropertyShape,
@@ -2191,8 +2227,8 @@ QWidget* ScreenshotToolPaletteStyleControls::buildMagnifierFamily(
     tagWidget(m_magnifierFactorEditor, kRoleMagnifierFactor, kSignatureMagnifierFactor);
     QObject::disconnect(m_magnifierFactorEditor, &adqt::widgets::AdButton::clicked, nullptr,
                         nullptr);
-    QObject::connect(m_magnifierFactorEditor, &adqt::widgets::AdButton::clicked, controls,
-                     [this]() { setMagnifierFactor(2.0); });
+    QObject::connect(m_magnifierFactorEditor, &adqt::widgets::AdButton::clicked,
+                     controlCallbackContext(controls), [this]() { setMagnifierFactor(2.0); });
 
     m_magnifierLeaderToggle = qobject_cast<adqt::widgets::AdButton*>(
         takeReusableWidget(kRoleMagnifierLeader, kSignatureMagnifierLeader, layout, controls));
@@ -2205,15 +2241,15 @@ QWidget* ScreenshotToolPaletteStyleControls::buildMagnifierFamily(
     tagWidget(m_magnifierLeaderToggle, kRoleMagnifierLeader, kSignatureMagnifierLeader);
     QObject::disconnect(m_magnifierLeaderToggle, &adqt::widgets::AdButton::clicked, nullptr,
                         nullptr);
-    QObject::connect(
-        m_magnifierLeaderToggle, &adqt::widgets::AdButton::clicked, controls, [this]() {
-            const bool show =
-                !m_state.magnifierStyle.showLeader ||
-                (m_state.magnifierStyleMixed & SnowCanvasMagnifierStylePropertyShowLeader) != 0;
-            commitMagnifierProperty(
-                SnowCanvasMagnifierStylePropertyShowLeader,
-                [show](SnowCanvasMagnifierStyle& style) { style.showLeader = show; });
-        });
+    QObject::connect(m_magnifierLeaderToggle, &adqt::widgets::AdButton::clicked,
+                     controlCallbackContext(controls), [this]() {
+                         const bool show = !m_state.magnifierStyle.showLeader ||
+                                           (m_state.magnifierStyleMixed &
+                                            SnowCanvasMagnifierStylePropertyShowLeader) != 0;
+                         commitMagnifierProperty(
+                             SnowCanvasMagnifierStylePropertyShowLeader,
+                             [show](SnowCanvasMagnifierStyle& style) { style.showLeader = show; });
+                     });
 
     m_magnifierArrowRatioEditor = dynamic_cast<IconNumericValuePreviewButton*>(
         takeReusableWidget(kRoleMagnifierArrowRatio, kSignatureArrowRatio, layout, controls));
@@ -2231,8 +2267,8 @@ QWidget* ScreenshotToolPaletteStyleControls::buildMagnifierFamily(
     tagWidget(m_magnifierArrowRatioEditor, kRoleMagnifierArrowRatio, kSignatureArrowRatio);
     QObject::disconnect(m_magnifierArrowRatioEditor, &adqt::widgets::AdButton::clicked, nullptr,
                         nullptr);
-    QObject::connect(m_magnifierArrowRatioEditor, &adqt::widgets::AdButton::clicked, controls,
-                     [this]() { setMagnifierArrowRatio(1.0); });
+    QObject::connect(m_magnifierArrowRatioEditor, &adqt::widgets::AdButton::clicked,
+                     controlCallbackContext(controls), [this]() { setMagnifierArrowRatio(1.0); });
 
     ScreenshotToolPaletteIconOptionEditorConfig leaderConfig;
     leaderConfig.accessibleName = QStringLiteral("Leader line type");
@@ -2297,7 +2333,8 @@ QWidget* ScreenshotToolPaletteStyleControls::buildMagnifierFamily(
     tagWidget(m_magnifierCornerRadiusEditor, kRoleMagnifierRadius, kSignatureCornerRadius);
     QObject::disconnect(m_magnifierCornerRadiusEditor, &adqt::widgets::AdButton::clicked, nullptr,
                         nullptr);
-    QObject::connect(m_magnifierCornerRadiusEditor, &adqt::widgets::AdButton::clicked, controls,
+    QObject::connect(m_magnifierCornerRadiusEditor, &adqt::widgets::AdButton::clicked,
+                     controlCallbackContext(controls),
                      [this]() { setMagnifierCornerRadius(defaultCornerRadius()); });
 
     updateMagnifierStyleControls();
@@ -2447,7 +2484,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildAngleFamily(
     QObject::disconnect(m_angleTypeGroup, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
                         nullptr, nullptr);
     QObject::connect(m_angleTypeGroup, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
-                     controls, [this](int id) {
+                     controlCallbackContext(controls), [this](int id) {
                          if (id < static_cast<int>(SnowCanvasAngleType::Directed) ||
                              id > static_cast<int>(SnowCanvasAngleType::Interior))
                              return;
@@ -2483,7 +2520,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildAngleFamily(
     QObject::disconnect(m_angleUnitGroup, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
                         nullptr, nullptr);
     QObject::connect(m_angleUnitGroup, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
-                     controls, [this](int id) {
+                     controlCallbackContext(controls), [this](int id) {
                          if (id < static_cast<int>(SnowCanvasAngleUnit::Degrees) ||
                              id > static_cast<int>(SnowCanvasAngleUnit::Radians))
                              return;
@@ -2518,7 +2555,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildAngleFamily(
     QObject::disconnect(m_angleDecimalsEditor.select, &adqt::widgets::AdSelect::currentValueChanged,
                         nullptr, nullptr);
     QObject::connect(m_angleDecimalsEditor.select, &adqt::widgets::AdSelect::currentValueChanged,
-                     controls, [this](const QVariant& value) {
+                     controlCallbackContext(controls), [this](const QVariant& value) {
                          if (!value.isValid())
                              return;
                          const int places = value.toInt();
@@ -2643,7 +2680,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildDistanceFamily(
     QObject::disconnect(m_distanceValueInput, &adqt::widgets::AdInputNumber::exactValueChanged,
                         nullptr, nullptr);
     QObject::connect(m_distanceValueInput, &adqt::widgets::AdInputNumber::exactValueChanged,
-                     controls, [this](const QString& text) {
+                     controlCallbackContext(controls), [this](const QString& text) {
                          bool ok = false;
                          const double value = text.toDouble(&ok);
                          if (ok)
@@ -2680,7 +2717,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildDistanceFamily(
     QObject::disconnect(m_distanceUnitGroup, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
                         nullptr, nullptr);
     QObject::connect(m_distanceUnitGroup, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
-                     controls, [this](int id) {
+                     controlCallbackContext(controls), [this](int id) {
                          if (id < static_cast<int>(SnowCanvasDistanceUnit::Px) ||
                              id > static_cast<int>(SnowCanvasDistanceUnit::Mm))
                              return;
@@ -2717,7 +2754,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildDistanceFamily(
     QObject::disconnect(m_distanceDecimalsEditor.select,
                         &adqt::widgets::AdSelect::currentValueChanged, nullptr, nullptr);
     QObject::connect(m_distanceDecimalsEditor.select, &adqt::widgets::AdSelect::currentValueChanged,
-                     controls, [this](const QVariant& value) {
+                     controlCallbackContext(controls), [this](const QVariant& value) {
                          if (!value.isValid())
                              return;
                          const int places = value.toInt();
@@ -2743,8 +2780,8 @@ QWidget* ScreenshotToolPaletteStyleControls::buildDistanceFamily(
     m_distanceScaleEditor->setDecimalPlaces(1);
     tagWidget(m_distanceScaleEditor, kRoleDistanceScale, kSignatureArrowRatio);
     QObject::disconnect(m_distanceScaleEditor, &adqt::widgets::AdButton::clicked, nullptr, nullptr);
-    QObject::connect(m_distanceScaleEditor, &adqt::widgets::AdButton::clicked, controls,
-                     [this]() { setDistanceEndpointScale(1.0); });
+    QObject::connect(m_distanceScaleEditor, &adqt::widgets::AdButton::clicked,
+                     controlCallbackContext(controls), [this]() { setDistanceEndpointScale(1.0); });
 
     ScreenshotToolPaletteIconOptionEditorConfig endpointConfig;
     endpointConfig.accessibleName = QStringLiteral("Endpoint style");
@@ -3059,9 +3096,10 @@ QWidget* ScreenshotToolPaletteStyleControls::buildSpotlightFamily(
         m_spotlightOpacityEditor.slider->setToolTip(opacityConfig.sliderTooltip);
         configureScreenshotToolPaletteSliderEditor(m_spotlightOpacityEditor, metrics);
     }
-    QObject::disconnect(m_spotlightOpacityEditor.slider, nullptr, opacityRoot, nullptr);
+    QObject::disconnect(m_spotlightOpacityEditor.slider, nullptr,
+                        controlCallbackContext(opacityRoot), nullptr);
     QObject::connect(m_spotlightOpacityEditor.slider, &adqt::widgets::AdSlider::valueChanged,
-                     opacityRoot, [this, spotlightCallbacks](double value) {
+                     controlCallbackContext(opacityRoot), [this, spotlightCallbacks](double value) {
                          m_spotlightOpacityEditor.slider->setAccessibleDescription(
                              QStringLiteral("%1%").arg(qRound(value)));
                          if (spotlightCallbacks.setOpacity) {
@@ -3285,7 +3323,8 @@ QWidget* ScreenshotToolPaletteStyleControls::buildTextFamily(
     m_textCornerRadiusEditor->setProperty("screenshotStyleEditorRoot", true);
     m_textCornerRadiusEditor->setProperty("screenshotStyleEditorRole", kRoleCornerRadius);
     m_textCornerRadiusEditor->setProperty("screenshotStyleEditorSignature", kSignatureCornerRadius);
-    QObject::connect(m_textCornerRadiusEditor, &adqt::widgets::AdButton::clicked, controls,
+    QObject::connect(m_textCornerRadiusEditor, &adqt::widgets::AdButton::clicked,
+                     controlCallbackContext(controls),
                      [this]() { setTextCornerRadius(defaultCornerRadius()); });
 
     registerTextEntries();
@@ -3379,8 +3418,8 @@ QWidget* ScreenshotToolPaletteStyleControls::buildSerialNumberFamily(
                                           ScreenshotToolPaletteTranslationText(QT_TRANSLATE_NOOP(
                                               "ScreenshotToolPalette", "Sequence number type")));
     QObject::connect(m_serialNumberTypeButtonGroup,
-                     &adqt::widgets::AdRadioButtonGroup::checkedIdChanged, controls,
-                     [this](int id) {
+                     &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
+                     controlCallbackContext(controls), [this](int id) {
                          if (id >= static_cast<int>(SnowCanvasSerialNumberType::OutlinedCircle) &&
                              id <= static_cast<int>(SnowCanvasSerialNumberType::Circle)) {
                              setSerialNumberType(static_cast<SnowCanvasSerialNumberType>(id));
@@ -3444,7 +3483,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildSerialNumberFamily(
             QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Sequence number numeric type")));
     QObject::connect(
         m_serialNumberNumericTypeButtonGroup, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
-        controls, [this](int id) {
+        controlCallbackContext(controls), [this](int id) {
             if (id >= static_cast<int>(SnowCanvasSerialNumberNumericType::Arabic) &&
                 id <= static_cast<int>(SnowCanvasSerialNumberNumericType::Chinese)) {
                 setSerialNumberNumericType(static_cast<SnowCanvasSerialNumberNumericType>(id));
@@ -3481,17 +3520,18 @@ QWidget* ScreenshotToolPaletteStyleControls::buildSerialNumberFamily(
         qMax(1, qRound(kSerialNumberInputWidth * metrics.physicalScale)),
         qMax(1, qRound(metrics.buttonSize * metrics.physicalScale)));
     stampScreenshotToolbarReferenceWidth(m_serialNumberEditor, kSerialNumberInputWidth);
-    QObject::connect(m_serialNumberEditor, &QLineEdit::editingFinished, controls, [this]() {
-        if (m_serialNumberEditor == nullptr) {
-            return;
-        }
-        bool valid = false;
-        const qint64 number = m_serialNumberEditor->text().toLongLong(&valid);
-        if (valid && number >= 0) {
-            setSerialNumber(number);
-        }
-        updateSerialNumberStyleControls(SerialNumberValueRefresh);
-    });
+    QObject::connect(m_serialNumberEditor, &QLineEdit::editingFinished,
+                     controlCallbackContext(controls), [this]() {
+                         if (m_serialNumberEditor == nullptr) {
+                             return;
+                         }
+                         bool valid = false;
+                         const qint64 number = m_serialNumberEditor->text().toLongLong(&valid);
+                         if (valid && number >= 0) {
+                             setSerialNumber(number);
+                         }
+                         updateSerialNumberStyleControls(SerialNumberValueRefresh);
+                     });
     m_serialNumberEditor->setProperty("screenshotStyleEditorRoot", true);
     m_serialNumberEditor->setProperty("screenshotStyleEditorRole", kRoleSerialValue);
     m_serialNumberEditor->setProperty("screenshotStyleEditorSignature", kSignatureSerialValue);
@@ -3656,7 +3696,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildWatermarkFamily(
         const QSignalBlocker blocker(m_watermarkTextEdit);
         m_watermarkTextEdit->setText(config.text);
     }
-    QObject::connect(m_watermarkTextEdit, &QLineEdit::textChanged, controls,
+    QObject::connect(m_watermarkTextEdit, &QLineEdit::textChanged, controlCallbackContext(controls),
                      [this](const QString& text) {
                          const QString normalized = text.trimmed();
                          if (m_state.m_watermarkConfig.text == normalized) {
@@ -3665,12 +3705,13 @@ QWidget* ScreenshotToolPaletteStyleControls::buildWatermarkFamily(
                          m_state.m_watermarkConfig.text = normalized;
                          notifyWatermarkConfigChanged(SnowCanvasWatermarkText);
                      });
-    QObject::connect(m_watermarkTextEdit, &QLineEdit::editingFinished, controls, [this]() {
-        const QString normalized = m_watermarkTextEdit->text().trimmed();
-        m_state.m_watermarkConfig.text = normalized;
-        const QSignalBlocker blocker(m_watermarkTextEdit);
-        m_watermarkTextEdit->setText(normalized);
-    });
+    QObject::connect(m_watermarkTextEdit, &QLineEdit::editingFinished,
+                     controlCallbackContext(controls), [this]() {
+                         const QString normalized = m_watermarkTextEdit->text().trimmed();
+                         m_state.m_watermarkConfig.text = normalized;
+                         const QSignalBlocker blocker(m_watermarkTextEdit);
+                         m_watermarkTextEdit->setText(normalized);
+                     });
 
     ScreenshotToolPaletteFontEditorConfig watermarkFontConfig;
     watermarkFontConfig.accessibleName = QStringLiteral("Watermark font family");
@@ -3706,6 +3747,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildWatermarkFamily(
         takeReusableWidget(kRoleWatermarkTemplate, kSignatureWatermarkTemplate, layout, controls));
     if (m_watermarkTemplateSelect == nullptr) {
         m_watermarkTemplateSelect = new adqt::widgets::AdSelect(controls);
+        m_watermarkTemplateCallbackContext = controlCallbackContext(m_watermarkTemplateSelect);
         layout->addWidget(m_watermarkTemplateSelect);
         m_watermarkTemplateSelect->setMode(adqt::widgets::AdSelect::Mode::Single);
         m_watermarkTemplateSelect->setEditable(true);
@@ -3722,36 +3764,35 @@ QWidget* ScreenshotToolPaletteStyleControls::buildWatermarkFamily(
         m_watermarkTemplateEmptyLabel->setContentsMargins(12, 8, 12, 8);
         m_watermarkTemplateSelect->setNotFoundContentWidget(m_watermarkTemplateEmptyLabel);
 
-        m_watermarkTemplateSelect->setPopupExtraContentFactory([this](QWidget* parent) {
-            auto* addButton = new adqt::widgets::AdButton(parent);
-            addButton->setObjectName(QStringLiteral("screenshotWatermarkTemplateAddButton"));
-            addButton->setButtonStyle(adqt::widgets::AdButton::ButtonStyle::Text);
-            addButton->setAccentRole(adqt::widgets::AdButton::AccentRole::Primary);
-            addButton->setIconRef(outlined_icons::Plus());
-            addButton->setIconPosition(adqt::widgets::AdButton::IconPosition::Leading);
-            addButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-            addButton->setText(watermarkTemplateText("Add"));
-            addButton->setToolTip(watermarkTemplateText("Add template"));
-            addButton->setAccessibleName(watermarkTemplateText("Add template"));
-            m_watermarkTemplateAddButton = addButton;
-            QObject::connect(addButton, &QAbstractButton::clicked, addButton, [this]() {
-                if (m_watermarkTemplateSelect != nullptr) {
-                    m_watermarkTemplateSelect->hidePopup();
+        m_watermarkTemplateSelect->setPopupExtraContentFactory(
+            [this, context = m_watermarkTemplateCallbackContext](QWidget* parent) -> QWidget* {
+                if (context == nullptr) {
+                    return nullptr;
                 }
-                openCreateWatermarkTemplateModal();
+                auto* addButton = new adqt::widgets::AdButton(parent);
+                addButton->setObjectName(QStringLiteral("screenshotWatermarkTemplateAddButton"));
+                addButton->setButtonStyle(adqt::widgets::AdButton::ButtonStyle::Text);
+                addButton->setAccentRole(adqt::widgets::AdButton::AccentRole::Primary);
+                addButton->setIconRef(outlined_icons::Plus());
+                addButton->setIconPosition(adqt::widgets::AdButton::IconPosition::Leading);
+                addButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+                addButton->setText(watermarkTemplateText("Add"));
+                addButton->setToolTip(watermarkTemplateText("Add template"));
+                addButton->setAccessibleName(watermarkTemplateText("Add template"));
+                m_watermarkTemplateAddButton = addButton;
+                QObject::connect(addButton, &QAbstractButton::clicked, context, [this]() {
+                    if (m_watermarkTemplateSelect != nullptr) {
+                        m_watermarkTemplateSelect->hidePopup();
+                    }
+                    openCreateWatermarkTemplateModal();
+                });
+                QObject::connect(addButton, &QObject::destroyed, context, [this, addButton]() {
+                    if (m_watermarkTemplateAddButton == addButton) {
+                        m_watermarkTemplateAddButton = nullptr;
+                    }
+                });
+                return addButton;
             });
-            // Scope the connection to the select rather than the button: the
-            // popup frame outlives the palette when its deferred delete lands
-            // later, and a receiver that dies with the palette keeps the
-            // handler from dereferencing freed style controls.
-            QObject::connect(addButton, &QObject::destroyed, m_watermarkTemplateSelect,
-                             [this, addButton]() {
-                                 if (m_watermarkTemplateAddButton == addButton) {
-                                     m_watermarkTemplateAddButton = nullptr;
-                                 }
-                             });
-            return addButton;
-        });
 
     } else {
         m_watermarkTemplateEmptyLabel = m_watermarkTemplateSelect->findChild<QLabel*>(
@@ -3776,7 +3817,8 @@ QWidget* ScreenshotToolPaletteStyleControls::buildWatermarkFamily(
     setScreenshotToolPaletteTooltipSource(m_watermarkTemplateSelect, "Template");
     setScreenshotToolPaletteAccessibleNameSource(m_watermarkTemplateSelect, "Template");
     QObject::connect(
-        m_watermarkTemplateSelect, &adqt::widgets::AdSelect::popupOpening, controls, [this]() {
+        m_watermarkTemplateSelect, &adqt::widgets::AdSelect::popupOpening,
+        m_watermarkTemplateCallbackContext, [this, context = m_watermarkTemplateCallbackContext]() {
             if (m_watermarkTemplateSelect == nullptr) {
                 return;
             }
@@ -3786,7 +3828,10 @@ QWidget* ScreenshotToolPaletteStyleControls::buildWatermarkFamily(
                                        view->itemDelegate()) == nullptr) {
                 auto* delegate = new WatermarkTemplateOptionActionDelegate(
                     m_watermarkTemplateSelect, view, view->itemDelegate(),
-                    [this](const QString& key) {
+                    [this, context](const QString& key) {
+                        if (context == nullptr) {
+                            return;
+                        }
                         if (m_watermarkTemplateSelect != nullptr) {
                             m_watermarkTemplateSelect->hidePopup();
                         }
@@ -3796,7 +3841,8 @@ QWidget* ScreenshotToolPaletteStyleControls::buildWatermarkFamily(
             }
             refreshWatermarkTemplateOptions();
         });
-    QObject::connect(m_watermarkTemplateSelect, &adqt::widgets::AdSelect::selected, controls,
+    QObject::connect(m_watermarkTemplateSelect, &adqt::widgets::AdSelect::selected,
+                     m_watermarkTemplateCallbackContext,
                      [this](const QVariant& selected, const QString&) {
                          const int index = watermarkTemplateIndex(selected.toString());
                          if (index < 0 || index >= m_watermarkTemplates.size() ||
@@ -3808,14 +3854,14 @@ QWidget* ScreenshotToolPaletteStyleControls::buildWatermarkFamily(
                          setWatermarkTemplateValue(templateValue);
                      });
     if (m_watermarkTemplateSelect->lineEdit() != nullptr) {
-        QObject::connect(m_watermarkTemplateSelect->lineEdit(), &QLineEdit::textEdited, controls,
-                         [this](const QString& templateValue) {
+        QObject::connect(m_watermarkTemplateSelect->lineEdit(), &QLineEdit::textEdited,
+                         m_watermarkTemplateCallbackContext, [this](const QString& templateValue) {
                              syncWatermarkTemplateEditorValue(templateValue);
                              setWatermarkTemplateValue(templateValue);
                          });
     }
     QObject::connect(m_watermarkTemplateSelect, &adqt::widgets::AdSelect::popupVisibleChanged,
-                     controls, [this](bool visible) {
+                     m_watermarkTemplateCallbackContext, [this](bool visible) {
                          if (!visible) {
                              syncWatermarkTemplateEditorValue(
                                  m_state.m_watermarkConfig.templateValue);
@@ -3840,8 +3886,8 @@ QWidget* ScreenshotToolPaletteStyleControls::buildWatermarkFamily(
     m_watermarkAngleEditor->setProperty("screenshotStyleEditorRoot", true);
     m_watermarkAngleEditor->setProperty("screenshotStyleEditorRole", kRoleAngle);
     m_watermarkAngleEditor->setProperty("screenshotStyleEditorSignature", kSignatureAngle);
-    QObject::connect(m_watermarkAngleEditor, &adqt::widgets::AdButton::clicked, controls,
-                     [this]() { setWatermarkAngle(30.0); });
+    QObject::connect(m_watermarkAngleEditor, &adqt::widgets::AdButton::clicked,
+                     controlCallbackContext(controls), [this]() { setWatermarkAngle(30.0); });
 
     m_watermarkGapEditor = dynamic_cast<IconNumericValuePreviewButton*>(
         takeReusableWidget(kRoleGap, kSignatureGap, layout, controls));
@@ -3855,8 +3901,8 @@ QWidget* ScreenshotToolPaletteStyleControls::buildWatermarkFamily(
     m_watermarkGapEditor->setProperty("screenshotStyleEditorRoot", true);
     m_watermarkGapEditor->setProperty("screenshotStyleEditorRole", kRoleGap);
     m_watermarkGapEditor->setProperty("screenshotStyleEditorSignature", kSignatureGap);
-    QObject::connect(m_watermarkGapEditor, &adqt::widgets::AdButton::clicked, controls,
-                     [this]() { setWatermarkGap(56.0); });
+    QObject::connect(m_watermarkGapEditor, &adqt::widgets::AdButton::clicked,
+                     controlCallbackContext(controls), [this]() { setWatermarkGap(56.0); });
 
     if (host.addGroupSeparator) {
         host.addGroupSeparator(layout);
@@ -3892,9 +3938,11 @@ QWidget* ScreenshotToolPaletteStyleControls::buildWatermarkFamily(
         m_watermarkOpacityEditor.slider->setToolTip(opacityConfig.sliderTooltip);
         configureScreenshotToolPaletteSliderEditor(m_watermarkOpacityEditor, metrics);
     }
-    QObject::disconnect(m_watermarkOpacityEditor.slider, nullptr, opacityRoot, nullptr);
+    QObject::disconnect(m_watermarkOpacityEditor.slider, nullptr,
+                        controlCallbackContext(opacityRoot), nullptr);
     QObject::connect(m_watermarkOpacityEditor.slider, &adqt::widgets::AdSlider::valueChanged,
-                     opacityRoot, [this](double value) { setWatermarkOpacity(value / 100.0); });
+                     controlCallbackContext(opacityRoot),
+                     [this](double value) { setWatermarkOpacity(value / 100.0); });
     refreshWatermarkOpacityMetrics(metrics);
 
     registerWatermarkEntries();
@@ -4123,10 +4171,11 @@ ScreenshotToolPaletteFilterFamilyResult ScreenshotToolPaletteStyleControls::buil
     result.intensitySlider->setObjectName(config.intensitySliderObjectName);
     result.intensitySlider->setAccessibleName(QStringLiteral("Filter intensity"));
     result.intensitySlider->setToolTip(QStringLiteral("Adjust filter intensity"));
-    QObject::disconnect(result.intensitySlider, nullptr, intensityRoot, nullptr);
+    QObject::disconnect(result.intensitySlider, nullptr, controlCallbackContext(intensityRoot),
+                        nullptr);
 
     QObject::connect(result.typeSelect, &adqt::widgets::AdSelect::currentValueChanged,
-                     result.controls, [callbacks](const QVariant& value) {
+                     controlCallbackContext(result.controls), [callbacks](const QVariant& value) {
                          if (!value.canConvert<int>()) {
                              return;
                          }
@@ -4134,8 +4183,8 @@ ScreenshotToolPaletteFilterFamilyResult ScreenshotToolPaletteStyleControls::buil
                              callbacks.setType(value.toInt());
                          }
                      });
-    QObject::connect(result.intensitySlider, &adqt::widgets::AdSlider::valueChanged, intensityRoot,
-                     [callbacks](double value) {
+    QObject::connect(result.intensitySlider, &adqt::widgets::AdSlider::valueChanged,
+                     controlCallbackContext(intensityRoot), [callbacks](double value) {
                          if (callbacks.setStrength) {
                              callbacks.setStrength(qBound(0.0, value / 100.0, 1.0));
                          }
@@ -4757,6 +4806,7 @@ void ScreenshotToolPaletteStyleControls::reset() {
 
 void ScreenshotToolPaletteStyleControls::releaseControlBindings() {
     clearTextStylePopupInteractions();
+    releaseControlCallbacksExcept(nullptr);
     finishStyleReconcile(-1);
     m_parkedEditors.clear();
 
@@ -4835,12 +4885,7 @@ void ScreenshotToolPaletteStyleControls::releaseControlBindings() {
     m_watermarkTemplateView = nullptr;
     m_watermarkTemplateEmptyLabel = nullptr;
     m_watermarkTemplateAddButton = nullptr;
-    m_createWatermarkTemplateModal = nullptr;
-    m_createWatermarkTemplateNameItem = nullptr;
-    m_createWatermarkTemplateValueItem = nullptr;
-    m_createWatermarkTemplateAlert = nullptr;
-    m_deleteWatermarkTemplateModal = nullptr;
-    m_deleteWatermarkTemplateName.clear();
+    releaseWatermarkTemplateBindings();
     m_watermarkTemplates.clear();
     m_watermarkAngleEditor = nullptr;
     m_watermarkGapEditor = nullptr;
@@ -4862,6 +4907,7 @@ void ScreenshotToolPaletteStyleControls::releaseControlBindings() {
 
 void ScreenshotToolPaletteStyleControls::discardBindingsExcept(int destinationTool,
                                                                QWidget* destinationControls) {
+    releaseControlCallbacksExcept(destinationControls);
     using Tool = ScreenshotToolPalette::Tool;
     const Tool destination = static_cast<Tool>(destinationTool);
     const bool keepShape =
@@ -4967,6 +5013,7 @@ void ScreenshotToolPaletteStyleControls::discardBindingsExcept(int destinationTo
         m_serialNumberEditor = nullptr;
     }
     if (!keepWatermark) {
+        releaseWatermarkTemplateBindings();
         m_watermarkColorPreviewPending = false;
         m_watermarkTextEdit = nullptr;
         m_watermarkTemplateSelect = nullptr;
@@ -4991,6 +5038,17 @@ void ScreenshotToolPaletteStyleControls::discardBindingsExcept(int destinationTo
                                    !destinationControls->isAncestorOf(item.owner));
                        }),
         m_toolbarSpacingItems.end());
+}
+
+void ScreenshotToolPaletteStyleControls::releaseWatermarkTemplateBindings() {
+    delete m_watermarkTemplateCallbackContext.data();
+    m_watermarkTemplateCallbackContext.clear();
+    m_createWatermarkTemplateModal = nullptr;
+    m_createWatermarkTemplateNameItem = nullptr;
+    m_createWatermarkTemplateValueItem = nullptr;
+    m_createWatermarkTemplateAlert = nullptr;
+    m_deleteWatermarkTemplateModal = nullptr;
+    m_deleteWatermarkTemplateName.clear();
 }
 
 int ScreenshotToolPaletteStyleControls::spacerReferenceWidth(const QSpacerItem* spacer) const {
@@ -6278,32 +6336,43 @@ void ScreenshotToolPaletteStyleControls::openCreateWatermarkTemplateModal() {
     const QPointer<adqt::widgets::AdForm> formGuard(form);
     const QPointer<adqt::widgets::AdLineEdit> nameGuard(nameInput);
     const QPointer<adqt::widgets::AdLineEdit> valueGuard(valueInput);
-    QObject::connect(modal, &adqt::widgets::AdModal::closeRequested, modal,
-                     [this, modal, formGuard, nameGuard,
-                      valueGuard](adqt::widgets::AdModal::CloseReason reason) {
-                         if (reason != adqt::widgets::AdModal::CloseReason::OkAction) {
-                             modal->reject();
-                             return;
-                         }
-                         if (formGuard == nullptr || nameGuard == nullptr ||
-                             valueGuard == nullptr || !formGuard->submit()) {
-                             return;
-                         }
-                         const snow_shot::storage::WatermarkTemplateSettings settings;
-                         QVector<snow_shot::storage::WatermarkTemplate> templates =
-                             settings.templates();
-                         const QString templateValue = valueGuard->text();
-                         templates.push_back({nameGuard->text().trimmed(), templateValue});
-                         if (!settings.setTemplates(templates)) {
-                             return;
-                         }
-                         m_watermarkTemplates = templates;
-                         syncWatermarkTemplateEditorValue(templateValue);
-                         setWatermarkTemplateValue(templateValue);
-                         refreshWatermarkTemplateOptions();
-                         modal->accept();
-                     });
-    QObject::connect(modal, &adqt::widgets::AdModal::finished, modal,
+    QObject::connect(
+        modal, &adqt::widgets::AdModal::closeRequested, m_watermarkTemplateCallbackContext,
+        [this, modal = QPointer<adqt::widgets::AdModal>(modal),
+         context = m_watermarkTemplateCallbackContext, formGuard, nameGuard,
+         valueGuard](adqt::widgets::AdModal::CloseReason reason) {
+            if (reason != adqt::widgets::AdModal::CloseReason::OkAction) {
+                modal->reject();
+                return;
+            }
+            if (formGuard == nullptr || nameGuard == nullptr || valueGuard == nullptr ||
+                !formGuard->submit()) {
+                return;
+            }
+            if (context == nullptr || modal == nullptr || nameGuard == nullptr ||
+                valueGuard == nullptr) {
+                return;
+            }
+            const snow_shot::storage::WatermarkTemplateSettings settings;
+            QVector<snow_shot::storage::WatermarkTemplate> templates = settings.templates();
+            const QString templateValue = valueGuard->text();
+            templates.push_back({nameGuard->text().trimmed(), templateValue});
+            if (!settings.setTemplates(templates)) {
+                return;
+            }
+            if (context == nullptr || modal == nullptr) {
+                return;
+            }
+            m_watermarkTemplates = templates;
+            syncWatermarkTemplateEditorValue(templateValue);
+            setWatermarkTemplateValue(templateValue);
+            if (context == nullptr || modal == nullptr) {
+                return;
+            }
+            refreshWatermarkTemplateOptions();
+            modal->accept();
+        });
+    QObject::connect(modal, &adqt::widgets::AdModal::finished, m_watermarkTemplateCallbackContext,
                      [this, modal](adqt::widgets::AdModal::DialogCode) {
                          if (m_createWatermarkTemplateModal == modal) {
                              m_createWatermarkTemplateModal = nullptr;
@@ -6344,16 +6413,20 @@ void ScreenshotToolPaletteStyleControls::openDeleteWatermarkTemplateModal(
     m_deleteWatermarkTemplateName = m_watermarkTemplates.at(index).name;
     retranslateWatermarkTemplateUi();
 
-    QObject::connect(modal, &adqt::widgets::AdModal::closeRequested, modal,
-                     [this, modal, templateKey](adqt::widgets::AdModal::CloseReason reason) {
+    QObject::connect(modal, &adqt::widgets::AdModal::closeRequested,
+                     m_watermarkTemplateCallbackContext,
+                     [this, modal = QPointer<adqt::widgets::AdModal>(modal),
+                      templateKey](adqt::widgets::AdModal::CloseReason reason) {
                          if (reason == adqt::widgets::AdModal::CloseReason::OkAction) {
                              deleteWatermarkTemplate(templateKey);
-                             modal->accept();
+                             if (modal != nullptr) {
+                                 modal->accept();
+                             }
                              return;
                          }
                          modal->reject();
                      });
-    QObject::connect(modal, &adqt::widgets::AdModal::finished, modal,
+    QObject::connect(modal, &adqt::widgets::AdModal::finished, m_watermarkTemplateCallbackContext,
                      [this, modal](adqt::widgets::AdModal::DialogCode) {
                          if (m_deleteWatermarkTemplateModal == modal) {
                              m_deleteWatermarkTemplateModal = nullptr;
@@ -6375,7 +6448,11 @@ void ScreenshotToolPaletteStyleControls::deleteWatermarkTemplate(const QString& 
     QVector<snow_shot::storage::WatermarkTemplate> templates = m_watermarkTemplates;
     templates.removeAt(index);
     const snow_shot::storage::WatermarkTemplateSettings settings;
+    const QPointer<QObject> context = m_watermarkTemplateCallbackContext;
     if (!settings.setTemplates(templates)) {
+        return;
+    }
+    if (context == nullptr) {
         return;
     }
     m_watermarkTemplates = templates;

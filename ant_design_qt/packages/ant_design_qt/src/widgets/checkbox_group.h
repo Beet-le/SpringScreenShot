@@ -65,7 +65,7 @@ class AdCheckboxGroup final : public QButtonGroup {
   void emitValuesIfChanged();
   void attachCheckbox(AdCheckbox* checkbox);
   void detachCheckbox(AdCheckbox* checkbox);
-  void refreshCheckboxes(bool geometryChanged = true);
+  bool refreshCheckboxes(bool geometryChanged = true);
   void refreshLayoutSpacing();
   void handleValuePropertyChanged(AdCheckbox* checkbox);
 
@@ -79,6 +79,7 @@ class AdCheckboxGroup final : public QButtonGroup {
   ComponentTokenResolver componentTokenResolver_;
   QPointer<QBoxLayout> managedLayout_;
   bool syncing_ = false;
+  quint64 selectionGeneration_ = 0;
 };
 
 }  // namespace adqt::widgets

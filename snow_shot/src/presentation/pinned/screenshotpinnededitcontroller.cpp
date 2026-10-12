@@ -32,7 +32,7 @@
 #include <QMouseEvent>
 #include <QPointer>
 #include <QScreen>
-#include <QScopedValueRollback>
+#include <QScopeGuard>
 #include <QTimer>
 #include <QWheelEvent>
 #include <QWindow>
@@ -537,15 +537,15 @@ void ScreenshotPinnedEditController::ensureToolbar() {
     connect(m_toolbarWindow, &ScreenshotFloatingToolPaletteWindow::dragFinished, this,
             &ScreenshotPinnedEditController::markToolbarManuallyPlaced);
     if (ScreenshotToolPaletteHost* host = m_toolbarWindow->paletteHost()) {
-        connect(host, &ScreenshotToolPaletteHost::dragStarted, this,
-                [this](const QPoint&) { markToolbarManuallyPlaced(); });
-        // Secondary rows can grow without changing the fixed window frame or main-row anchor.
-        // Recompute automatic placement from the host's committed visible content.
+        // Secondary rows can change their occupied extent inside the fixed window frame.
+        // Observe the committed host layout even when the main row does not move.
         connect(host, &ScreenshotToolPaletteHost::visibleContentChanged, this, [this]() {
             if (m_editMode && !m_manuallyPlaced) {
                 updatePlacement();
             }
         });
+        connect(host, &ScreenshotToolPaletteHost::dragStarted, this,
+                [this](const QPoint&) { markToolbarManuallyPlaced(); });
     }
 
     emit toolbarCreated(m_toolbarWindow);
@@ -559,7 +559,11 @@ void ScreenshotPinnedEditController::setEditMode(bool enabled) {
     m_editMode = enabled;
     m_angleWheelSteps.reset();
     if (enabled) {
+        const QPointer<ScreenshotPinnedEditController> guard(this);
         ensureToolbar();
+        if (guard == nullptr || !m_editMode || m_toolbarWindow == nullptr) {
+            return;
+        }
         const SnowCanvasStyleDefaults defaults =
             snow_shot::presentation::screenshotCanvasToolStyleDefaults();
         snow_shot::presentation::applyScreenshotCanvasToolStyles(m_canvas, defaults);
@@ -583,7 +587,13 @@ void ScreenshotPinnedEditController::setEditMode(bool enabled) {
                 applyResizeWindowTool();
             }
             updatePlacement();
+            if (guard == nullptr || !m_editMode || m_toolbarWindow == nullptr) {
+                return;
+            }
             m_toolbarWindow->prepareForDisplay();
+            if (guard == nullptr || !m_editMode || m_toolbarWindow == nullptr) {
+                return;
+            }
             m_toolbarWindow->show();
             raiseToolbar();
         }
@@ -698,8 +708,15 @@ void ScreenshotPinnedEditController::endNativeWindowInteraction() {
         return;
     }
     m_manuallyPlaced = false;
+    const QPointer<ScreenshotPinnedEditController> guard(this);
     updatePlacement();
+    if (guard == nullptr || !m_editMode || m_toolbarWindow == nullptr) {
+        return;
+    }
     m_toolbarWindow->prepareForDisplay();
+    if (guard == nullptr || !m_editMode || m_toolbarWindow == nullptr) {
+        return;
+    }
     m_toolbarWindow->show();
     raiseToolbar();
 }
@@ -715,12 +732,27 @@ void ScreenshotPinnedEditController::updatePlacement() {
     if (m_toolbarWindow == nullptr || m_updatingPlacement || m_nativeWindowInteractionActive) {
         return;
     }
-    const QScopedValueRollback<bool> updatingPlacement(m_updatingPlacement, true);
 
+    // Layout preparation and row arrangement can emit content changes synchronously.
+    const QPointer<ScreenshotPinnedEditController> guard(this);
+    const QPointer<ScreenshotFloatingToolPaletteWindow> toolbar(m_toolbarWindow);
+    m_updatingPlacement = true;
+    // The callback may delete this controller, so cleanup must not retain a member reference.
+    const auto updatingPlacement = qScopeGuard([guard] {
+        if (guard != nullptr) {
+            guard->m_updatingPlacement = false;
+        }
+    });
     const QRect logicalBounds = placementLogicalBounds();
     const QRect physicalBounds = placementPhysicalBounds();
-    m_toolbarWindow->setPlacementContext(placementScreen(), logicalBounds, physicalBounds);
-    m_toolbarWindow->prepareForDisplay();
+    toolbar->setPlacementContext(placementScreen(), logicalBounds, physicalBounds);
+    if (guard == nullptr || toolbar == nullptr || toolbar != m_toolbarWindow) {
+        return;
+    }
+    toolbar->prepareForDisplay();
+    if (guard == nullptr || toolbar == nullptr || toolbar != m_toolbarWindow) {
+        return;
+    }
 
     if (!m_manuallyPlaced) {
         const ScreenshotToolbarPlacementSnapshot toolbarGeometry =
@@ -746,12 +778,18 @@ void ScreenshotPinnedEditController::updatePlacement() {
                 QPoint(pinnedContentGeometry.left() + pinnedContentGeometry.width(),
                        pinnedContentGeometry.top()),
                 toolbarGeometry.bottom, toolbarGeometry.top, placementBounds, kToolbarGap);
-        m_toolbarWindow->setStyleToolbarAboveMain(placement.usesTopRightPlacement);
+        toolbar->setStyleToolbarAboveMain(placement.usesTopRightPlacement);
+        if (guard == nullptr || toolbar == nullptr || toolbar != m_toolbarWindow) {
+            return;
+        }
         m_globalContentPosition = placement.contentPosition;
         m_toolbarWindow->resetPhysicalSizeInvariant();
     }
 
     m_toolbarWindow->moveContentTo(m_globalContentPosition);
+    if (guard == nullptr || toolbar == nullptr || toolbar != m_toolbarWindow) {
+        return;
+    }
     if (m_toolbarWindow->isVisible()) {
         raiseToolbar();
     }

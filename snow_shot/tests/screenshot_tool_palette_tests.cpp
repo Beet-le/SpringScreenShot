@@ -4010,6 +4010,80 @@ void tableBusyStatePreservesSiblingGroupPopovers(bool recoverFromMove = false) {
     verifyPopup(drawingPopup);
 }
 
+void toolbarGroupCommandsCanReplaceTheirOwningPopover() {
+    ScreenshotToolPalette::Options options;
+    options.showScreenRecordButton = true;
+    options.showOcrTool = true;
+    options.enableStyleToolbar = false;
+    options.actionToolsLayout = snow_shot::storage::ScreenshotToolbarLayout{
+        {{QStringLiteral("record-screen"), QStringLiteral("text-recognition")}}, {}};
+    ScreenshotToolPalette palette(options);
+    auto* trigger = palette.findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotActionToolGroupButton0"));
+    require(trigger != nullptr, "the replaceable action stack must expose its trigger");
+    materializeLazyPopover(trigger);
+    QPointer<adqt::widgets::AdPopover> popover(popoverForTrigger(trigger));
+    auto* record = popoverButtonWithTooltip(popover, "Record screen");
+    require(popover != nullptr && record != nullptr,
+            "the action stack must materialize its record command");
+    int requests = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::screenRecordRequested, &palette, [&]() {
+        ++requests;
+        palette.setActionToolsLayout(snow_shot::storage::ScreenshotToolbarLayout{
+            {{QStringLiteral("record-screen")}, {QStringLiteral("text-recognition")}}, {}});
+    });
+    require(QMetaObject::invokeMethod(record, "clicked", Qt::DirectConnection, Q_ARG(bool, false)),
+            "dispatch the action command across synchronous layout replacement");
+    require(requests == 1 && popover == nullptr,
+            "an action command may replace its owning group exactly once without a stale popup");
+
+    options.toolbarLayout = snow_shot::storage::ScreenshotToolbarLayout{
+        {{QStringLiteral("arrow"), QStringLiteral("line")}}, {}};
+    options.showShapeTool = false;
+    options.showLineTool = true;
+    ScreenshotToolPalette drawingPalette(options);
+    trigger = drawingPalette.findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotArrowLineButton"));
+    require(trigger != nullptr, "the replaceable drawing stack must expose its trigger");
+    materializeLazyPopover(trigger);
+    popover = popoverForTrigger(trigger);
+    auto* line = popoverButtonWithTooltip(popover, "Line");
+    require(popover != nullptr && line != nullptr,
+            "the drawing stack must materialize its line command");
+    requests = 0;
+    QObject::connect(
+        &drawingPalette, &ScreenshotToolPalette::lineRequested, &drawingPalette, [&]() {
+            ++requests;
+            drawingPalette.setToolbarLayout(snow_shot::storage::ScreenshotToolbarLayout{
+                {{QStringLiteral("arrow")}, {QStringLiteral("line")}}, {}});
+        });
+    require(QMetaObject::invokeMethod(line, "clicked", Qt::DirectConnection, Q_ARG(bool, false)),
+            "dispatch the drawing command across synchronous layout replacement");
+    require(requests == 1 && popover == nullptr,
+            "a drawing command may replace its owning group without accessing its retired popup");
+
+    ScreenshotToolPalette materializingPalette(options);
+    trigger = materializingPalette.findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotActionToolGroupButton0"));
+    popover = popoverForTrigger(trigger);
+    require(popover != nullptr, "the materializing action stack must expose its lazy popup");
+    int materializations = 0;
+    QObject::connect(
+        &materializingPalette, &ScreenshotToolPalette::materializedScope, &materializingPalette,
+        [&](QWidget* scope) {
+            if (scope->objectName() == QStringLiteral("screenshotActionToolGroupPopoverContent")) {
+                ++materializations;
+                materializingPalette.setActionToolsLayout(
+                    snow_shot::storage::ScreenshotToolbarLayout{
+                        {{QStringLiteral("record-screen")}, {QStringLiteral("text-recognition")}},
+                        {}});
+            }
+        });
+    popover->preparePopup();
+    require(materializations == 1 && popover == nullptr,
+            "a popup materialization observer may retire the originating group safely");
+}
+
 void mainToolbarGroupPopoversRecreateTheirOptions() {
     const auto flushDeferredDeletes = []() {
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
@@ -13172,6 +13246,195 @@ void textEmphasisButtonsToggleMixedStylesAndSurviveReuse() {
             "destroying the palette releases both emphasis controls");
 }
 
+void colorSamplerStopsWhenPopupClosureRetiresItsEditor() {
+    using namespace snow_shot::presentation;
+    for (bool retire : {false, true}) {
+        QWidget owner;
+        auto* layout = new QHBoxLayout(&owner);
+        auto editor = std::make_unique<ScreenshotToolPaletteColorEditor>();
+        ScreenshotToolPaletteColorEditorConfig config;
+        config.accessibleName = QStringLiteral("Test color");
+        config.observePopup = true;
+        ScreenshotToolPaletteEditorServices services;
+        int closed = 0;
+        int samplingRequests = 0;
+        services.popupInteractionEnded = [&](QObject*) {
+            ++closed;
+            if (retire) {
+                editor.reset();
+            }
+        };
+        services.canvasColorSamplingRequested = [&](adqt::widgets::AdColorPicker*) {
+            ++samplingRequests;
+        };
+        editor->build(layout, &owner, &owner, config, QColor(Qt::red), {}, {}, services,
+                      ScreenshotToolPaletteButtonMetrics{24, 16, 1.0});
+        owner.show();
+        auto* picker = owner.findChild<adqt::widgets::AdColorPicker*>();
+        require(picker != nullptr, "the sampler fixture must expose its color picker");
+        picker->setPopupVisible(true);
+        auto* sampler = qobject_cast<QAbstractButton*>(picker->previewContent());
+        require(picker->popupVisible() && sampler != nullptr,
+                "opening the color picker must expose its sampling command");
+        require(
+            QMetaObject::invokeMethod(sampler, "clicked", Qt::DirectConnection, Q_ARG(bool, false)),
+            "dispatch sampling while popup closure may retire the editor");
+        require(closed == 1 && !picker->popupVisible(),
+                "sampling closes the color popup exactly once");
+        require(samplingRequests == (retire ? 0 : 1),
+                "sampling must proceed only while its editor callback context remains alive");
+    }
+}
+
+void retiredStyleEditorsIgnorePendingCommands() {
+    ScreenshotToolPalette::Options options;
+    options.showTextTool = true;
+    options.styleDefaults.arrow.arrowRatio = 2.3;
+    ScreenshotToolPalette palette(options);
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Text);
+    QPointer<adqt::widgets::AdButton> fontSummary(qobject_cast<adqt::widgets::AdButton*>(
+        controlWithTooltip(palette, "Current text font size")));
+    require(fontSummary != nullptr, "Text must expose a font size command before retirement");
+    int textEdits = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::textStyleChanged, &palette,
+                     [&](const SnowCanvasTextStyle&, quint32) { ++textEdits; });
+    require(QMetaObject::invokeMethod(fontSummary, "click", Qt::QueuedConnection),
+            "queue a font command before capture cancellation");
+    palette.clearActiveTool();
+    require(fontSummary != nullptr,
+            "retired controls stay alive until their pending input can unwind");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    require(textEdits == 0, "pending retired font commands must not edit a canceled capture");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    require(fontSummary == nullptr, "retired font controls must still be deferred-deleted");
+
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Shape);
+    QPointer<adqt::widgets::AdColorPicker> strokePicker(
+        colorPickerWithAccessibleName(palette, "Stroke color"));
+    require(strokePicker != nullptr && strokePicker->popupContent() == nullptr,
+            "Shape must expose its unmaterialized stroke editor before retirement");
+    int shapeEdits = 0;
+    QObject::connect(
+        &palette, &ScreenshotToolPalette::shapeStyleChanged, &palette,
+        [&](const SnowCanvasShapeStyle&, quint32, SnowCanvasShapeKind) { ++shapeEdits; });
+    const auto defaults = palette.creationStyleDefaults();
+    QMetaObject::invokeMethod(
+        strokePicker,
+        [strokePicker]() {
+            strokePicker->commitValue(
+                adqt::widgets::AdColorValue::solid(QColor(QStringLiteral("#123456"))));
+            strokePicker->popupOpening();
+        },
+        Qt::QueuedConnection);
+    palette.clearActiveTool();
+    require(strokePicker != nullptr, "retired picker must survive until deferred deletion");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    require(shapeEdits == 0 && palette.creationStyleDefaults() == defaults,
+            "pending retired color commands must preserve the retained style model");
+    require(strokePicker->popupContent() == nullptr,
+            "pending popup input must not recreate a retired editor's content");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    require(strokePicker == nullptr, "retired color controls must be deferred-deleted");
+
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Arrow);
+    QPointer<adqt::widgets::AdButton> arrowRatio(
+        palette.findChild<adqt::widgets::AdButton*>(QStringLiteral("screenshotArrowRatioButton")));
+    require(arrowRatio != nullptr, "Arrow must expose its ratio reset command before retirement");
+    QPointer<adqt::widgets::AdPopover> shaftPopover(
+        popoverForTrigger(controlWithAccessibleName(palette, "Arrow shaft type")));
+    require(shaftPopover != nullptr && shaftPopover->contentWidget() == nullptr,
+            "Arrow must expose its lazy shaft popup before retirement");
+    const auto arrowDefaults = palette.creationStyleDefaults();
+    QMetaObject::invokeMethod(arrowRatio, "click", Qt::QueuedConnection);
+    QMetaObject::invokeMethod(
+        shaftPopover, [shaftPopover]() { shaftPopover->preparePopup(); }, Qt::QueuedConnection);
+    palette.clearActiveTool();
+    require(arrowRatio != nullptr, "retired direct row controls await deferred deletion");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    require(palette.creationStyleDefaults() == arrowDefaults,
+            "pending retired row commands must preserve the retained style model");
+    require(shaftPopover->contentWidget() == nullptr,
+            "pending factory preparation must not materialize a retired editor");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    require(arrowRatio == nullptr && shaftPopover == nullptr,
+            "retired direct row controls and their popups must be deferred-deleted");
+
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Spotlight);
+    QPointer<adqt::widgets::AdSlider> opacitySlider(palette.findChild<adqt::widgets::AdSlider*>(
+        QStringLiteral("screenshotSpotlightOpacitySlider")));
+    require(opacitySlider != nullptr, "Spotlight must expose its opacity slider before retirement");
+    QMetaObject::invokeMethod(
+        opacitySlider, [opacitySlider]() { opacitySlider->setValue(30.0); }, Qt::QueuedConnection);
+    palette.clearActiveTool();
+    require(opacitySlider != nullptr, "retired sliders await deferred deletion");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    require(opacitySlider == nullptr, "retired sliders must be deferred-deleted");
+}
+
+void watermarkTemplateDialogBindingsRetireWithTheirEditor() {
+    ScreenshotToolPalette palette(ScreenshotToolPalette::Options{});
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Watermark);
+    palette.show();
+    const auto openCreateDialog = [&]() {
+        auto* select = palette.findChild<adqt::widgets::AdSelect*>(
+            QStringLiteral("screenshotWatermarkTemplateSelect"));
+        require(select != nullptr, "Watermark must expose its template selector");
+        select->showPopup();
+        auto* popup = select->view() != nullptr ? select->view()->window() : nullptr;
+        auto* addButton = popup != nullptr
+                              ? popup->findChild<adqt::widgets::AdButton*>(
+                                    QStringLiteral("screenshotWatermarkTemplateAddButton"))
+                              : nullptr;
+        require(addButton != nullptr, "template popup must expose its Add command");
+        addButton->click();
+        QPointer<adqt::widgets::AdModal> modal(palette.findChild<adqt::widgets::AdModal*>(
+            QStringLiteral("screenshotWatermarkTemplateCreateModal")));
+        require(modal != nullptr && modal->isOpen(), "Add must open its template dialog");
+        return modal;
+    };
+    auto retiredModal = openCreateDialog();
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Shape);
+    require(retiredModal == nullptr, "switching tool must destroy the template dialog owner");
+    QEvent languageChange(QEvent::LanguageChange);
+    QCoreApplication::sendEvent(&palette, &languageChange);
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Watermark);
+    auto replacementModal = openCreateDialog();
+    replacementModal->reject();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    require(replacementModal == nullptr, "the rematerialized dialog must close normally");
+
+    const snow_shot::storage::WatermarkTemplateSettings settings;
+    const auto previousTemplates = settings.templates();
+    const auto restoreTemplates = qScopeGuard([&]() { settings.setTemplates(previousTemplates); });
+    auto committingModal = openCreateDialog();
+    auto* form = qobject_cast<adqt::widgets::AdForm*>(committingModal->contentWidget());
+    require(form != nullptr, "the committing template dialog must expose its form");
+    auto* name = form->findChild<adqt::widgets::AdLineEdit*>(
+        QStringLiteral("screenshotWatermarkTemplateNameInput"));
+    auto* value = form->findChild<adqt::widgets::AdLineEdit*>(
+        QStringLiteral("screenshotWatermarkTemplateValueInput"));
+    require(name != nullptr && value != nullptr, "the template dialog must expose its fields");
+    name->setText(QStringLiteral("Retirement test"));
+    value->setText(QStringLiteral("{text} retirement"));
+    int commits = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::watermarkConfigChanged, &palette,
+                     [&](const SnowCanvasWatermarkConfig& config) {
+                         if (config.templateValue == QStringLiteral("{text} retirement")) {
+                             ++commits;
+                             palette.setActiveTool(ScreenshotToolPalette::Tool::Shape);
+                         }
+                     });
+    committingModal->closeRequested(adqt::widgets::AdModal::CloseReason::OkAction);
+    require(commits == 1 && committingModal == nullptr &&
+                palette.activeToolForTests() == ScreenshotToolPalette::Tool::Shape,
+            "template acceptance may retire the editor during its commit notification");
+    const auto committedTemplates = settings.templates();
+    require(committedTemplates.size() == previousTemplates.size() + 1 &&
+                committedTemplates.constLast().value == QStringLiteral("{text} retirement"),
+            "retiring the template dialog during notification must preserve its committed value");
+}
+
 void textStyleControlsExposeAndEmitAllRequestedProperties() {
     ScreenshotToolPalette::Options options;
     options.showTextTool = true;
@@ -17884,6 +18147,18 @@ int main(int argc, char** argv) {
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
+    if (application.arguments().contains(QStringLiteral("--retired-style-editors-only"))) {
+        colorSamplerStopsWhenPopupClosureRetiresItsEditor();
+        retiredStyleEditorsIgnorePendingCommands();
+        watermarkTemplateDialogBindingsRetireWithTheirEditor();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--watermark-dialog-retirement-only"))) {
+        watermarkTemplateDialogBindingsRetireWithTheirEditor();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--original-image-only"))) {
         originalImageToggleLeadsRecognitionActions();
         imageConversionToolsExposeRecognitionActions();
@@ -17947,6 +18222,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--popover-lifecycle-only"))) {
+        toolbarGroupCommandsCanReplaceTheirOwningPopover();
         mainToolbarGroupPopoversRecreateTheirOptions();
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
         QCoreApplication::processEvents();
@@ -18301,6 +18577,7 @@ int main(int argc, char** argv) {
     repeatingActionShortcutsReturnsToSelect();
     groupedToolShortcutsToggleOnlyTheRequestedTool();
     tableToolExposesStructureActionsAndOwnHistoryState();
+    toolbarGroupCommandsCanReplaceTheirOwningPopover();
     tableBusyStatePreservesSiblingGroupPopovers();
     tableQrPopoverSharesOneEntryAndRemembersTheSelectedMode();
     tableRecognitionClickActivatesOnceAfterPointerReentry();
@@ -18370,6 +18647,7 @@ int main(int argc, char** argv) {
     serialNumberInputCommitsEditsAndSupportsWheel();
     stylePopoverTriggersProvideMouseFeedback();
     cornerRadiusButtonsRestoreTheDefaultValue();
+    colorSamplerStopsWhenPopupClosureRetiresItsEditor();
     selectedStrokeColorDragKeepsPickerIndicatorInSync();
     fillStyleButtonsFollowFillColorPickerTrigger();
     configurationDrivenStyleEditorsShareStructuralContracts();

@@ -25,6 +25,8 @@
 #include <functional>
 #include <memory>
 #include <atomic>
+#include <tuple>
+#include <utility>
 
 class QUrl;
 class QMimeData;
@@ -182,6 +184,31 @@ class ScreenshotRecognitionSessionController final : public QObject {
     void workflowStateChanged() const;
 
   private:
+    template <typename Callback, typename... Arguments>
+    bool notifyCallback(Callback callback, Arguments&&... arguments) const {
+        if (m_destroying)
+            return true;
+        const QPointer<const ScreenshotRecognitionSessionController> lifetime(this);
+        auto values = std::make_tuple(std::forward<Arguments>(arguments)...);
+        std::apply(std::move(callback), values);
+        return !lifetime.isNull();
+    }
+
+    template <typename Signal, typename... Arguments>
+    bool notify(Signal signal, Arguments&&... arguments) const {
+        return notifyCallback(
+            [this, signal](auto&... values) {
+                (const_cast<ScreenshotRecognitionSessionController*>(this)->*signal)(values...);
+            },
+            std::forward<Arguments>(arguments)...);
+    }
+
+    template <typename Owner, typename Method, typename... Arguments>
+    bool invokeOwned(std::shared_ptr<Owner> owner, Method method, Arguments&&... arguments) const {
+        return notifyCallback(
+            [owner = std::move(owner), method](auto&... values) { ((*owner).*method)(values...); },
+            std::forward<Arguments>(arguments)...);
+    }
     struct TextCacheEntry {
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
         enum class TranslationStatus { Absent, Streaming, Completed, Failed };
@@ -230,7 +257,7 @@ class ScreenshotRecognitionSessionController final : public QObject {
     void startQrRecognition();
     void startLatexRecognition();
     void loadRecognitionModels(bool refresh = false);
-    void updateRecognitionModels() const;
+    bool updateRecognitionModels() const;
     void cancelModelRecognition(Mode mode);
     void failModelRecognition(const QString& message);
     [[nodiscard]] QString resolvedRecognitionModel(Mode mode) const;
@@ -266,10 +293,10 @@ class ScreenshotRecognitionSessionController final : public QObject {
     void handleTranslationFinished(quint64 generation, const QString& key,
                                    SnowShotTranslationResult result);
     void invalidateCurrentTranslation(bool restartIfVisible);
-    void updateBusyState() const;
-    void updateConversionState() const;
+    bool updateBusyState() const;
+    bool updateConversionState() const;
     void updateConversionMessage();
-    void updateTextState() const;
+    bool updateTextState() const;
     void updateOriginalImagePreview() const;
     void updateTableState(const ScreenshotTableCommandState& state) const;
     void clearTextEditingState();
@@ -279,9 +306,9 @@ class ScreenshotRecognitionSessionController final : public QObject {
     [[nodiscard]] bool textModelDownloading() const;
     void showModelDownloadMessage();
     void hideModelDownloadMessage();
-    void showRecognitionMessage() const;
-    void hideRecognitionMessage() const;
-    void showStatus(const QString& message, bool error) const;
+    bool showRecognitionMessage() const;
+    bool hideRecognitionMessage() const;
+    bool showStatus(QString message, bool error) const;
     void cancelOutstandingRequests();
     void resetTargetState();
     void handleRecognitionProviderDestroyed(Mode mode);
@@ -303,6 +330,7 @@ class ScreenshotRecognitionSessionController final : public QObject {
     bool m_conversionMessageShown = false;
 #endif
     ScreenshotRecognitionSessionActions m_actions;
+    bool m_destroying = false;
     ScreenshotRecognitionTarget m_target;
     QPointer<ScreenshotRecognitionWindow> m_content;
     QHash<QString, TextCacheEntry> m_textCache;

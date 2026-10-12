@@ -349,13 +349,23 @@ class AdMultiSlider : public QWidget, public AdControlScaleParticipant {
     Track,
   };
 
+  enum class BoundNotificationOrder {
+    MinimumFirst,
+    MaximumFirst,
+  };
+
   struct LayoutInfo;
+  struct PendingHandleMove {
+    qint64 id;
+    double value;
+  };
 
   MarkMap effectiveMarks() const;
   SemanticStyles resolvedSemanticStyles() const;
   QList<double> normalizedValues(const QList<double>& values, bool forceRangeMode) const;
   QList<double> snapPoints() const;
   double normalizeValue(double value) const;
+  void setRangeInternal(double minimum, double maximum, BoundNotificationOrder notificationOrder);
   void setHandlesInternal(const QList<double>& handles, bool emitValueChangedSignal,
                           bool fromUserAction, bool commitResult = true,
                           bool valueOnlyLayoutChange = false);
@@ -365,11 +375,9 @@ class AdMultiSlider : public QWidget, public AdControlScaleParticipant {
   void setSliderDownInternal(bool value);
   void setPendingChangeStateFromVisuals();
   void commitPendingChanges();
-  void emitChangedSignalsForCurrentMode();
+  void publishStateChanges();
   void emitCompletedSignalsForCurrentMode();
   void refreshAfterPropertyChange(bool updateGeometryHint = true);
-  void emitActiveHandleIndexChangedIfNeeded(int previousIndex);
-  void emitSliderPositionChangedIfNeeded(double previousPosition);
   void syncAccessibleState();
   void syncInteractionCursor();
   double effectiveSingleStep() const;
@@ -432,6 +440,19 @@ class AdMultiSlider : public QWidget, public AdControlScaleParticipant {
 
   QList<double> handles_;
   QList<double> committedHandles_;
+  int lastNotifiedActiveHandleIndex_ = -1;
+  int lastNotifiedCurrentHandle_ = -1;
+  double lastNotifiedSliderPosition_ = 0.0;
+  double lastNotifiedValue_ = 0.0;
+  QList<double> lastNotifiedHandleValues_;
+  bool committedValueNotificationsPending_ = false;
+  double lastNotifiedMinimum_ = minimum_;
+  double lastNotifiedMaximum_ = maximum_;
+  double lastNotifiedRangeMinimum_ = minimum_;
+  double lastNotifiedRangeMaximum_ = maximum_;
+  BoundNotificationOrder boundNotificationOrder_ = BoundNotificationOrder::MinimumFirst;
+  bool publishingState_ = false;
+  std::optional<PendingHandleMove> pendingHandleMove_;
   MarkMap marks_;
   TooltipFormatter tooltipFormatter_;
   ComponentTokens componentTokens_;
@@ -560,8 +581,13 @@ class AdRangeSlider final : public AdMultiSlider {
   void actionTriggered(QAbstractSlider::SliderAction action, int handleIndex);
 
  private:
-  double lastLowerValue_ = 0.0;
-  double lastUpperValue_ = 0.0;
+  void publishRangeValueChanges();
+
+  double lastNotifiedLowerValue_ = 0.0;
+  double lastNotifiedUpperValue_ = 0.0;
+  double lastNotifiedCombinedLowerValue_ = 0.0;
+  double lastNotifiedCombinedUpperValue_ = 0.0;
+  bool publishingRangeValues_ = false;
   using AdMultiSlider::activeHandleIndex;
   using AdMultiSlider::currentHandle;
   using AdMultiSlider::handleEditingEnabled;

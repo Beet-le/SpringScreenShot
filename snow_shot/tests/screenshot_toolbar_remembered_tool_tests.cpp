@@ -20,10 +20,13 @@
 #include "widgets/modal.h"
 #include "widgets/button.h"
 #include <QAbstractButton>
+#include <QEvent>
+#include <QPointer>
 #include <QScopeGuard>
 #include <QTemporaryDir>
 
 #include <cstdlib>
+#include <functional>
 #include <iostream>
 
 namespace {
@@ -236,6 +239,92 @@ void moveOptionsCapabilityIsIndependentOfVisibility() {
     require(supported.actionToolbarVisible() && !controls->isHidden() &&
                 supported.canActivateScreenshotShortcut(recapture),
             "enabling a materialized row must immediately reveal its controls");
+}
+
+void selectionToolbarStateSurvivesEvictedMoveControls() {
+    using Tool = ScreenshotToolPalette::Tool;
+    using Button = adqt::widgets::AdButton;
+    const storage::ScreenshotUiSettings settings;
+    const bool originalShown = settings.showEditSelectionToolbar();
+    const bool originalHidden = settings.selectionToolbarHidden();
+    const auto cleanup = qScopeGuard([&] {
+        static_cast<void>(settings.setShowEditSelectionToolbar(originalShown));
+        static_cast<void>(settings.setSelectionToolbarHidden(originalHidden));
+    });
+    require(settings.setShowEditSelectionToolbar(true) && settings.setSelectionToolbarHidden(false),
+            "the lifecycle fixture must materialize a shown Move action row");
+    struct Commands final : RecordingToolbarCommands {
+        std::function<void()> closeCapture;
+        int cancelCount = 0;
+        int visibilityCount = 0;
+        bool hidden = false;
+        void cancelCapture() override {
+            ++cancelCount;
+            closeCapture();
+        }
+        void setSelectionToolbarHidden(bool value) override {
+            ++visibilityCount;
+            hidden = value;
+        }
+    } commands;
+    ScreenshotToolbarWindow window(commands);
+    auto* palette = window.palette();
+    const auto moveControls = [&] {
+        return palette->findChild<QWidget*>(QStringLiteral("screenshotMoveActionControls"));
+    };
+    const auto hideButton = [&] {
+        return palette->findChild<Button*>(QStringLiteral("screenshotHideSelectionToolbarButton"));
+    };
+    QPointer<QWidget> retiredRow = moveControls();
+    QPointer<Button> retiredButton = hideButton();
+    require(retiredRow && retiredButton, "the initial capture must expose Move controls");
+    retiredButton->click();
+    require(settings.selectionToolbarHidden() && palette->selectionToolbarHidden() &&
+                commands.visibilityCount == 1 && commands.hidden,
+            "the Move visibility action must save and dispatch its selected state once");
+    require(window.activateDrawingShortcut(QStringLiteral("shape")) &&
+                window.activateDrawingShortcut(QStringLiteral("line")) &&
+                palette->activeTool() == Tool::Line && moveControls() == nullptr &&
+                hideButton() == nullptr,
+            "switching drawing tools must retire the previous Move controls");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    require(retiredRow.isNull() && retiredButton.isNull(),
+            "the retired Move row and visibility button must actually be destroyed");
+
+    require(settings.setShowEditSelectionToolbar(false),
+            "disable Move row materialization for the capture reset");
+    commands.closeCapture = [&] {
+        // Capture cancellation conceals the toolbar before deferred maintenance resets it.
+        window.hide();
+        window.resetForNewCapture();
+    };
+    require(palette->activateScreenshotShortcut(QStringLiteral("cancel_screenshot")) &&
+                commands.cancelCount == 1 && palette->activeTool() == Tool::Move &&
+                palette->selectionToolbarHidden() && moveControls() == nullptr &&
+                hideButton() == nullptr,
+            "closing after tool switches must reset state without using destroyed Move controls");
+    require(settings.setSelectionToolbarHidden(false) && !palette->selectionToolbarHidden() &&
+                moveControls() == nullptr && hideButton() == nullptr,
+            "live visibility settings must update state without rebuilding an absent Move row");
+    palette->setSelectionToolbarHidden(true);
+    require(palette->selectionToolbarHidden() && moveControls() == nullptr,
+            "direct visibility synchronization must also work while the row is absent");
+    window.resetForNewCapture();
+    require(!palette->selectionToolbarHidden() && moveControls() == nullptr &&
+                hideButton() == nullptr && commands.visibilityCount == 1,
+            "repeated hidden-row capture resets must restore saved state without a command");
+    require(settings.setSelectionToolbarHidden(true) && settings.setShowEditSelectionToolbar(true),
+            "reopen the Move action row with a saved hidden-selection preference");
+    auto* restoredButton = hideButton();
+    require(moveControls() != nullptr && restoredButton != nullptr &&
+                palette->actionToolbarVisible() && palette->selectionToolbarHidden() &&
+                restoredButton->buttonStyle() == Button::ButtonStyle::Solid,
+            "rebuilt Move controls must restore the saved visibility button state");
+    restoredButton->click();
+    require(!settings.selectionToolbarHidden() && !palette->selectionToolbarHidden() &&
+                restoredButton->buttonStyle() == Button::ButtonStyle::Text &&
+                commands.visibilityCount == 2 && !commands.hidden,
+            "the rebuilt visibility button must save and dispatch exactly one new action");
 }
 
 void eraserSubtoolsReachToolbarCommands() {
@@ -598,6 +687,11 @@ int main(int argc, char** argv) {
         applicationStorage.shutdown();
         return 0;
     }
+    if (application.arguments().contains(QStringLiteral("--selection-toolbar-lifecycle-only"))) {
+        selectionToolbarStateSurvivesEvictedMoveControls();
+        applicationStorage.shutdown();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--hidden-tools-only"))) {
         selectionShortcutsReachToolbarCommands(true);
         applicationStorage.shutdown();
@@ -611,6 +705,7 @@ int main(int argc, char** argv) {
     eraserSubtoolsReachToolbarCommands();
     editSelectionToolbarFollowsSetting();
     moveOptionsCapabilityIsIndependentOfVisibility();
+    selectionToolbarStateSurvivesEvictedMoveControls();
     rememberedDrawingToolRestoresOncePerCapture();
     selectionShortcutsReachToolbarCommands();
     applicationStorage.shutdown();

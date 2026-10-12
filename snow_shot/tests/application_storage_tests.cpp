@@ -1134,6 +1134,8 @@ void screenshotUiSchemaRepairsStructuredValues() {
                         QJsonArray{QStringLiteral("select-separator")},
                         QJsonArray{QStringLiteral("watermark"), QStringLiteral("shape")},
                         QJsonArray{QStringLiteral("line")},
+                        QJsonArray{QStringLiteral("magnifier")},
+                        QJsonArray{QStringLiteral("angle"), QStringLiteral("distance")},
                         QJsonArray{QStringLiteral("spotlight"), QStringLiteral("highlighter")},
                         QJsonArray{QStringLiteral("text")},
                         QJsonArray{QStringLiteral("serial-number")},
@@ -1158,10 +1160,11 @@ void screenshotUiSchemaRepairsStructuredValues() {
         QStringLiteral("screenshot_toolbar/layout"), invalidSeparatorLayout);
     const QJsonArray separatedPositions =
         separated.value.toObject().value(QStringLiteral("positions")).toArray();
-    require(separated.valid && separated.changed && separatedPositions.size() >= 3 &&
+    require(separated.valid && separated.changed && separatedPositions.size() >= 4 &&
                 separatedPositions.at(0).toArray() == QJsonArray{QStringLiteral("shape")} &&
-                separatedPositions.at(1).toArray() == QJsonArray{QStringLiteral("separator")} &&
-                separatedPositions.at(2).toArray() ==
+                separatedPositions.at(1).toArray() == QJsonArray{QStringLiteral("magnifier")} &&
+                separatedPositions.at(2).toArray() == QJsonArray{QStringLiteral("separator")} &&
+                separatedPositions.at(3).toArray() ==
                     QJsonArray{QStringLiteral("undo"), QStringLiteral("redo")},
             "separator must normalize into its own drawing toolbar position");
     QJsonObject selectSeparatorLayout = invalidSeparatorLayout;
@@ -1179,8 +1182,9 @@ void screenshotUiSchemaRepairsStructuredValues() {
     require(selectSeparated.valid && selectPositions.at(0) == QJsonArray{QStringLiteral("shape")} &&
                 selectPositions.at(1) == QJsonArray{QStringLiteral("select-separator")} &&
                 selectPositions.at(2) == QJsonArray{QStringLiteral("select")} &&
-                selectPositions.at(3) == QJsonArray{QStringLiteral("separator")} &&
-                selectPositions.at(4) == QJsonArray{QStringLiteral("undo")} &&
+                selectPositions.at(3) == QJsonArray{QStringLiteral("magnifier")} &&
+                selectPositions.at(4) == QJsonArray{QStringLiteral("separator")} &&
+                selectPositions.at(5) == QJsonArray{QStringLiteral("undo")} &&
                 !storage::ConfigurationSchema::normalize(
                      QStringLiteral("screenshot_toolbar/layout"), selectSeparated.value)
                      .changed,
@@ -1220,16 +1224,15 @@ void screenshotUiSchemaRepairsStructuredValues() {
         normalizedActions.valid && normalizedActions.changed && actionLayout.size() == 2 &&
             actionLayout.value(QStringLiteral("positions")).toArray() ==
                 QJsonArray{
-                    QJsonArray{QStringLiteral("upload-to-cloud"), QStringLiteral("quick-save"),
-                               QStringLiteral("save-as-file"), QStringLiteral("table-recognition"),
-                               QStringLiteral("convert-to-markdown"),
-                               QStringLiteral("latex-recognition"),
-                               QStringLiteral("convert-to-html")},
+                    QJsonArray{
+                        QStringLiteral("upload-to-cloud"), QStringLiteral("print"),
+                        QStringLiteral("quick-save"), QStringLiteral("save-as-file"),
+                        QStringLiteral("table-recognition"), QStringLiteral("convert-to-markdown"),
+                        QStringLiteral("latex-recognition"), QStringLiteral("convert-to-html")},
                     QJsonArray{QStringLiteral("record-screen")},
                     QJsonArray{QStringLiteral("pin-to-screen")},
                     QJsonArray{QStringLiteral("text-translation")},
                     QJsonArray{QStringLiteral("scrolling-screenshot")},
-                    QJsonArray{QStringLiteral("print")},
                     QJsonArray{QStringLiteral("separator")},
                     QJsonArray{QStringLiteral("cancel")},
                     QJsonArray{QStringLiteral("copy")},
@@ -1349,6 +1352,8 @@ void screenshotUiAdaptersRoundTripTypedValues() {
         {QStringLiteral("select-separator")},
         {QStringLiteral("watermark"), QStringLiteral("shape")},
         {QStringLiteral("line")},
+        {QStringLiteral("magnifier")},
+        {QStringLiteral("angle"), QStringLiteral("distance")},
         {QStringLiteral("spotlight"), QStringLiteral("highlighter")},
         {QStringLiteral("text")},
         {QStringLiteral("serial-number")},

@@ -2452,8 +2452,64 @@ void visionLatexResponsesMustContainCompleteSource() {
     }
 }
 
+void modelNotificationsAllowClientDestruction() {
+    QObject receiver;
+    {
+        auto client = std::make_unique<SnowShotApiClient>(QStringLiteral("http://localhost:1"));
+        int catalogChanges = 0;
+        QObject::connect(client.get(), &SnowShotApiClient::chatModelsChanged, &receiver,
+                         [&] { ++catalogChanges; });
+        QObject::connect(client.get(), &SnowShotApiClient::baseUrlChanged, &receiver,
+                         [&] { client.reset(); });
+        require(client->setBaseUrl(QStringLiteral("http://localhost:2")) && !client &&
+                    catalogChanges == 0,
+                "server-change callbacks can destroy the client before catalog notification");
+    }
+    {
+        auto client = std::make_unique<SnowShotApiClient>(QString());
+        snow_shot::CustomAiModelConfiguration model{
+            QUuid::createUuid().toString(QUuid::WithoutBraces),
+            QStringLiteral("Lifetime"),
+            QStringLiteral("http://localhost:1"),
+            {},
+            QStringLiteral("model"),
+            false,
+            false};
+        client->setCustomModels({model});
+        int invalidations = 0;
+        QObject::connect(client.get(), &SnowShotApiClient::customModelInvalidated, &receiver,
+                         [&](const QString&, bool, bool) {
+                             ++invalidations;
+                             client.reset();
+                         });
+        client->setCustomModels({});
+        require(!client && invalidations == 1,
+                "custom model invalidation can retire its client during notification");
+    }
+    translation_tests::flushEvents();
+    {
+        translation_tests::Server provider;
+        auto client = std::make_unique<SnowShotApiClient>(provider.url());
+        int completions = 0;
+        QObject::connect(client.get(), &SnowShotApiClient::chatModelsChanged, &receiver,
+                         [&] { client.reset(); });
+        require(client->fetchChatModels(QStringLiteral("en_US"), &receiver,
+                                        [&](auto) { ++completions; }) != 0,
+                "catalog lifetime fixture admits a request");
+        translation_tests::waitUntil([&] { return !client; },
+                                     "catalog notification retires the client");
+        translation_tests::flushEvents();
+        require(completions == 0,
+                "destroyed catalog clients cancel subscribers before delivering completion");
+    }
+}
+
 int main(int argc, char** argv) {
     QCoreApplication application(argc, argv);
+
+    modelNotificationsAllowClientDestruction();
+    if (application.arguments().contains(QStringLiteral("--lifetime-only")))
+        return 0;
 
     QImage wide(4000, 2000, QImage::Format_RGBA8888);
     wide.fill(Qt::white);

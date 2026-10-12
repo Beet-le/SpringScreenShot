@@ -44,6 +44,7 @@ void runImageConversionTests();
 void runImageConversionNetworkTests();
 void runImageConversionClipboardTests();
 void runRecognitionModelTests();
+void runRecognitionNotificationLifetimeTests();
 
 class SnowShotApiClientTestAccess {
   public:
@@ -1094,6 +1095,11 @@ int main(int argc, char** argv) {
             "initialize recognition test storage");
     if (application.arguments().contains(QStringLiteral("--latex-only"))) {
         runLatexRecognitionTests();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--notification-lifetime-only"))) {
+        runRecognitionNotificationLifetimeTests();
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }

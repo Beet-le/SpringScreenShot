@@ -872,6 +872,82 @@ void fileClearCommit() {
     require(commits == 1, "editing completion after clear cannot duplicate its commit");
 }
 
+void callbackRetirementPreservesFieldLifetime() {
+    QWidget owner;
+    for (const auto policy : {fields::CommitPolicy::Immediate, fields::CommitPolicy::OnFinish}) {
+        fields::Options options;
+        options.parent = &owner;
+        options.commitPolicy = policy;
+        const auto choice = fields::select(
+            metadata("retiring-choice"),
+            {{QStringLiteral("alpha"), {"FormFieldsTests", "Alpha"}, {}, true}}, options);
+        const QPointer<fields::FormField> field = choice.field;
+        const QPointer<QWidget> view = choice.viewWidget();
+        int edits = 0;
+        int commits = 0;
+        QObject::connect(field, &fields::FormField::valueEdited, &owner, [&](const QVariant&) {
+            ++edits;
+            delete view.data();
+        });
+        QObject::connect(field, &fields::FormField::valueCommitted, &owner,
+                         [&](const QVariant&) { ++commits; });
+        require(QMetaObject::invokeMethod(choice.editor, "currentValueChanged",
+                                          Qt::DirectConnection,
+                                          Q_ARG(QVariant, QVariant(QStringLiteral("alpha")))),
+                "dispatch a choice edit whose observer retires the view");
+        require(edits == 1 && commits == 0 && field == nullptr && view == nullptr,
+                "retiring a field from its edit notification must stop subsequent commits");
+    }
+
+    fields::Options options;
+    options.parent = &owner;
+    const auto text = fields::text(metadata("retiring-synchronization"), options);
+    const QPointer<fields::FormField> field = text.field;
+    const QPointer<QWidget> view = text.viewWidget();
+    text.field->synchronize([&] { delete view.data(); });
+    require(field == nullptr && view == nullptr,
+            "synchronization must unwind safely when its update retires the field view");
+
+    QWidget* retiringView = nullptr;
+    int writes = 0;
+    fields::CustomBinding binding;
+    binding.control = new QWidget;
+    binding.readValue = [] { return QVariant(QStringLiteral("draft")); };
+    binding.writeValue = [&](const QVariant&) {
+        if (retiringView != nullptr) {
+            ++writes;
+            delete std::exchange(retiringView, nullptr);
+        }
+    };
+    const auto custom = fields::custom(metadata("retiring-writer"), std::move(binding), options);
+    const QPointer<fields::FormField> customField = custom.field;
+    retiringView = custom.viewWidget();
+    custom.field->syncValue(QStringLiteral("next"));
+    require(writes == 1 && customField == nullptr && retiringView == nullptr,
+            "custom value writers may retire their field without leaving live callback storage");
+
+    const auto slider = fields::slider(metadata("retiring-slider-writer"), {}, options);
+    const QPointer<fields::FormField> sliderField = slider.field;
+    const QPointer<QWidget> sliderView = slider.viewWidget();
+    QObject::connect(slider.editor, &adqt::widgets::AdSlider::valueChanged, &owner,
+                     [&] { delete sliderView.data(); });
+    slider.field->syncValue(5);
+    require(sliderField == nullptr && sliderView == nullptr,
+            "built-in slider writers stop refreshing when a value observer retires the view");
+
+    const auto radio =
+        fields::radio(metadata("retiring-radio-choices"),
+                      {{QStringLiteral("alpha"), {"FormFieldsTests", "Alpha"}, {}, true}}, options);
+    const QPointer<fields::FormField> radioField = radio.field;
+    const QPointer<QWidget> radioView = radio.viewWidget();
+    radio.field->syncValue(QStringLiteral("alpha"));
+    QObject::connect(radio.editor, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged, &owner,
+                     [&] { delete radioView.data(); });
+    radio.field->setChoices({{QStringLiteral("beta"), {"FormFieldsTests", "Beta"}, {}, true}});
+    require(radioField == nullptr && radioView == nullptr,
+            "built-in radio choice rebuilds stop when deselection retires their view");
+}
+
 void customEditorBridgeAndOwnership() {
     QWidget owner;
     adqt::widgets::AdForm form(&owner);
@@ -954,6 +1030,7 @@ int main(int argc, char** argv) {
     radioIdentityAndFocus();
     radioDisabledChoicesAndFocus();
     fileClearCommit();
+    callbackRetirementPreservesFieldLifetime();
     customEditorBridgeAndOwnership();
     std::cout << "Form fields tests passed\n";
     return 0;

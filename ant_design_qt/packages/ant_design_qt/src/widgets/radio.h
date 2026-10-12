@@ -2,6 +2,7 @@
 
 #include <QColor>
 #include <QRadioButton>
+#include <QPointer>
 #include <QString>
 
 #include <functional>
@@ -227,7 +228,7 @@ class AdRadio final : public QRadioButton, public AdControlScaleParticipant {
   GroupPosition groupPosition_ = GroupPosition::None;
   bool groupVertical_ = false;
   AdRadioButtonGroup* group_ = nullptr;
-  AdRadio* forwardedPressTarget_ = nullptr;
+  QPointer<AdRadio> forwardedPressTarget_;
   ComponentTokens componentTokens_;
   ComponentTokenResolver componentTokenResolver_;
   bool componentTokensOverride_ = false;

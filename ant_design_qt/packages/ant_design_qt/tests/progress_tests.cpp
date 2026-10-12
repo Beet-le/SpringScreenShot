@@ -9,6 +9,7 @@
 #include <QEventLoop>
 #include <QImage>
 #include <QPainter>
+#include <QPointer>
 #include <QTimer>
 #include <QTranslator>
 
@@ -201,6 +202,42 @@ void valueAndSignalInvariants() {
   require(near(progress.strokeWidth(), 12) && near(progress.stepGap(), 3) &&
               near(progress.gapDegree(), 295),
           "nonfinite geometry must preserve the last valid geometry");
+}
+
+void notificationDeletionInvariants() {
+  for (const int signal : {0, 1, 2, 3, 4}) {
+    QPointer<AdProgress> progress = new AdProgress;
+    const auto deleteOwner = [&] { delete progress.data(); };
+    if (signal == 0) {
+      QObject::connect(progress, &AdProgress::displayedPercentChanged, deleteOwner);
+      progress->setPercent(50);
+    } else if (signal == 1) {
+      QObject::connect(progress, &AdProgress::percentChanged, deleteOwner);
+      progress->setPercent(50);
+    } else if (signal == 2) {
+      QObject::connect(progress, &AdProgress::effectiveStatusChanged, deleteOwner);
+      progress->setPercent(100);
+    } else if (signal == 3) {
+      QObject::connect(progress, &AdProgress::effectiveStatusChanged, deleteOwner);
+      progress->setStatus(AdProgress::Status::Exception);
+    } else {
+      progress->show();
+      progress->setPercent(50);
+      QObject::connect(progress, &AdProgress::displayedPercentChanged, deleteOwner);
+      progress->setAnimationEnabled(false);
+    }
+    require(progress.isNull(), "progress notifications must allow synchronous owner deletion");
+  }
+  AdProgress progress;
+  bool observed = false;
+  QObject::connect(&progress, &AdProgress::displayedPercentChanged, [&](qreal value) {
+    if (value != 100) return;
+    observed = true;
+    require(progress.effectiveStatus() == AdProgress::Status::Success,
+            "displayed percentage notifications must observe committed completion status");
+  });
+  progress.setPercent(100);
+  require(observed, "completion must notify the displayed percentage");
 }
 
 void accessibilityAndFormatting() {
@@ -889,6 +926,7 @@ int main(int argc, char** argv) {
   QApplication app(argc, argv);
   ThemeManager::instance().applyTo(app);
   valueAndSignalInvariants();
+  notificationDeletionInvariants();
   accessibilityAndFormatting();
   languageChangeRefreshesCachedText(app);
   sizingAndSmallGeometry();

@@ -574,7 +574,10 @@ bool SnowShotApiClient::setBaseUrl(const QString& baseUrl) {
     m_cachedChatModels.clear();
     m_cachedChatModelsLocale.clear();
     rebuildAvailableModels();
+    const QPointer<SnowShotApiClient> guard(this);
     emit baseUrlChanged();
+    if (!guard)
+        return true;
     emit chatModelsChanged();
     return true;
 }
@@ -1020,6 +1023,7 @@ void SnowShotApiClient::setCustomModels(const snow_shot::CustomAiModels& models)
     const auto previous = m_customModels;
     m_customModels = normalized;
     rebuildAvailableModels();
+    const QPointer<SnowShotApiClient> guard(this);
     for (const auto& old : previous) {
         const QString id = old.selectionId();
         const auto* current = customModel(id);
@@ -1039,6 +1043,8 @@ void SnowShotApiClient::setCustomModels(const snow_shot::CustomAiModels& models)
             }
         }
         emit customModelInvalidated(id, changed, vision);
+        if (!guard)
+            return;
     }
     QTimer::singleShot(0, this, &SnowShotApiClient::pumpCustomChatStreams);
     emit chatModelsChanged();
@@ -1222,11 +1228,17 @@ SnowShotApiClient::fetchChatModels(const QString& locale, QObject* receiver,
                 result.models = m_availableModels;
                 result.error.clear();
             }
-            if (generation == m_serverGeneration &&
-                localeGeneration == m_chatModelsLocaleGeneration)
-                emit chatModelsChanged();
-            finishChatModels(token, std::move(result));
+            // Retire the reply before publishing: catalog observers and completions
+            // can synchronously destroy the client and cancel all remaining requests.
             reply->deleteLater();
+            const QPointer<SnowShotApiClient> guard(this);
+            if (generation == m_serverGeneration &&
+                localeGeneration == m_chatModelsLocaleGeneration) {
+                emit chatModelsChanged();
+                if (!guard)
+                    return;
+            }
+            finishChatModels(token, std::move(result));
         });
     return token;
 }

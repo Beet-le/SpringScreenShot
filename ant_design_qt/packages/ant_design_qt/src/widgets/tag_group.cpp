@@ -7,6 +7,7 @@
 #include <QLayoutItem>
 #include <QPaintEvent>
 #include <QPainter>
+#include <QScopeGuard>
 
 #include <tuple>
 #include <utility>
@@ -91,13 +92,17 @@ void AdTagGroup::setSelectionMode(SelectionMode value) {
   const QVariantList previousValues = selectedValues_;
   selectionMode_ = value;
   selectedValues_ = normalizedValues(selectedValues_);
-  applySelectionToTags();
-  applyContainerStyle();
+  if (!applySelectionToTags() || !applyContainerStyle()) {
+    return;
+  }
 
+  const QPointer<AdTagGroup> guard(this);
   emit selectionModeChanged(selectionMode_);
+  if (!guard) {
+    return;
+  }
   if (previousValues != selectedValues_) {
-    emit selectedValueChanged(selectedValue());
-    emit selectedValuesChanged(selectedValues_);
+    emitSelectionChanged();
   }
 }
 
@@ -122,9 +127,9 @@ void AdTagGroup::setSelectedValues(const QVariantList& values) {
   }
 
   selectedValues_ = normalized;
-  applySelectionToTags();
-  emit selectedValueChanged(selectedValue());
-  emit selectedValuesChanged(selectedValues_);
+  if (applySelectionToTags()) {
+    emitSelectionChanged();
+  }
 }
 
 QVector<AdTagGroup::Option> AdTagGroup::options() const { return options_; }
@@ -144,7 +149,9 @@ void AdTagGroup::setSpacing(int value) {
     return;
   }
   spacing_ = normalized;
-  applyContainerStyle();
+  if (!applyContainerStyle()) {
+    return;
+  }
   emit spacingChanged(spacing_);
 }
 
@@ -155,7 +162,9 @@ void AdTagGroup::setComponentTokens(const ComponentTokens& value) {
     return;
   }
   componentTokens_ = value;
-  applyContainerStyle();
+  if (!applyContainerStyle()) {
+    return;
+  }
   emit componentTokensChanged();
 }
 
@@ -168,7 +177,9 @@ void AdTagGroup::setComponentTokenResolver(ComponentTokenResolver resolver) {
     return;
   }
   componentTokenResolver_ = std::move(resolver);
-  applyContainerStyle();
+  if (!applyContainerStyle()) {
+    return;
+  }
   emit componentTokensChanged();
 }
 
@@ -181,7 +192,9 @@ void AdTagGroup::setSemanticStyles(const SemanticStyles& styles) {
     return;
   }
   semanticStyles_ = styles;
-  applyContainerStyle();
+  if (!applyContainerStyle()) {
+    return;
+  }
   emit semanticStylesChanged();
 }
 
@@ -194,7 +207,9 @@ void AdTagGroup::setSemanticStyleResolver(SemanticStyleResolver resolver) {
     return;
   }
   semanticStyleResolver_ = std::move(resolver);
-  applyContainerStyle();
+  if (!applyContainerStyle()) {
+    return;
+  }
   emit semanticStylesChanged();
 }
 
@@ -203,8 +218,15 @@ void AdTagGroup::resetSemanticStyleResolver() { setSemanticStyleResolver({}); }
 void AdTagGroup::paintEvent(QPaintEvent* event) {
   QFrame::paintEvent(event);
 
+  const QPointer<AdTagGroup> guard(this);
   const SemanticStyles styles = resolvedSemanticStyles();
+  if (!guard) {
+    return;
+  }
   const ComponentTokens tokens = resolvedComponentTokens();
+  if (!guard) {
+    return;
+  }
   if (!styles.root.backgroundColor.has_value() && !styles.root.borderColor.has_value()) {
     return;
   }
@@ -255,8 +277,9 @@ void AdTagGroup::changeEvent(QEvent* event) {
 AdTagGroup::ComponentTokens AdTagGroup::resolvedComponentTokens() const {
   ComponentTokens resolved;
   mergeComponentTokens(&resolved, componentTokens_);
-  if (componentTokenResolver_) {
-    mergeComponentTokens(&resolved, componentTokenResolver_(currentComponentTokenContext()));
+  const auto resolver = componentTokenResolver_;
+  if (resolver) {
+    mergeComponentTokens(&resolved, resolver(currentComponentTokenContext()));
   }
   return resolved;
 }
@@ -264,8 +287,9 @@ AdTagGroup::ComponentTokens AdTagGroup::resolvedComponentTokens() const {
 AdTagGroup::SemanticStyles AdTagGroup::resolvedSemanticStyles() const {
   SemanticStyles resolved;
   mergeSemanticStyles(&resolved, semanticStyles_);
-  if (semanticStyleResolver_) {
-    mergeSemanticStyles(&resolved, semanticStyleResolver_(currentStyleContext()));
+  const auto resolver = semanticStyleResolver_;
+  if (resolver) {
+    mergeSemanticStyles(&resolved, resolver(currentStyleContext()));
   }
   return resolved;
 }
@@ -314,36 +338,53 @@ void AdTagGroup::rebuildTags() {
   const QVariantList normalized = normalizedValues(selectedValues_);
   const bool selectionChanged = normalized != selectedValues_;
   selectedValues_ = normalized;
-  applyContainerStyle();
-  applySelectionToTags();
+  if (!applyContainerStyle() || !applySelectionToTags()) {
+    return;
+  }
   if (selectionChanged) {
-    emit selectedValueChanged(selectedValue());
-    emit selectedValuesChanged(selectedValues_);
+    emitSelectionChanged();
   }
 }
 
-void AdTagGroup::applySelectionToTags() {
+bool AdTagGroup::applySelectionToTags() {
+  const QPointer<AdTagGroup> guard(this);
+  const bool previous = syncing_;
   syncing_ = true;
-  for (int i = 0; i < itemTags_.size(); ++i) {
-    AdTag* tag = itemTags_.at(i);
-    if (!tag) {
+  const auto restore = qScopeGuard([guard, previous] {
+    if (guard) {
+      guard->syncing_ = previous;
+    }
+  });
+  const auto tags = itemTags_;
+  for (const auto& tag : tags) {
+    if (!tag || !itemTags_.contains(tag)) {
       continue;
     }
     const QVariant value = tag->property("adqt.tag-group.value");
     tag->setChecked(selectedValues_.contains(value));
+    if (!guard) {
+      return false;
+    }
   }
-  syncing_ = false;
+  return true;
 }
 
-void AdTagGroup::applyContainerStyle() {
+bool AdTagGroup::applyContainerStyle() {
   if (!flowLayout_) {
-    return;
+    return true;
   }
 
+  const QPointer<AdTagGroup> guard(this);
   const adqt::theme::ResolvedTheme resolvedTheme =
       adqt::theme::ThemeManager::instance().resolve(this);
   const ComponentTokens tokens = resolvedComponentTokens();
+  if (!guard) {
+    return false;
+  }
   const SemanticStyles semantic = resolvedSemanticStyles();
+  if (!guard) {
+    return false;
+  }
 
   const int resolvedSpacing =
       spacing_ >= 0 ? spacing_
@@ -354,17 +395,25 @@ void AdTagGroup::applyContainerStyle() {
   flowLayout_->setVerticalSpacing(resolvedSpacing);
   flowLayout_->setContentsMargins(resolvedPadding);
 
-  for (int i = 0; i < itemTags_.size(); ++i) {
-    if (i >= options_.size()) {
+  const auto tags = itemTags_;
+  const auto options = options_;
+  for (int i = 0; i < tags.size(); ++i) {
+    if (i >= options.size()) {
       break;
     }
-    AdTag* tag = itemTags_.at(i);
-    if (!tag) {
+    const QPointer<AdTag> tag = tags.at(i);
+    if (!tag || !itemTags_.contains(tag)) {
       continue;
     }
 
-    const Option& option = options_.at(i);
+    const Option& option = options.at(i);
     tag->setEnabled(isEnabled() && !option.disabled);
+    if (!guard) {
+      return false;
+    }
+    if (!tag || !itemTags_.contains(tag)) {
+      continue;
+    }
 
     AdTag::SemanticStyles itemStyles;
     itemStyles.root.textColor = semantic.item.textColor;
@@ -373,14 +422,18 @@ void AdTagGroup::applyContainerStyle() {
     itemStyles.content.textColor = semantic.item.textColor;
     itemStyles.icon.textColor = semantic.item.textColor;
     tag->setSemanticStyles(itemStyles);
+    if (!guard) {
+      return false;
+    }
   }
 
   updateGeometry();
   update();
+  return true;
 }
 
 void AdTagGroup::updateSelectionFromTag(AdTag* tag, bool checked) {
-  if (syncing_ || !tag) {
+  if (syncing_ || !tag || !itemTags_.contains(tag)) {
     return;
   }
 
@@ -407,9 +460,19 @@ void AdTagGroup::updateSelectionFromTag(AdTag* tag, bool checked) {
   }
 
   selectedValues_ = nextValues;
-  applySelectionToTags();
-  emit selectedValueChanged(selectedValue());
-  emit selectedValuesChanged(selectedValues_);
+  if (applySelectionToTags()) {
+    emitSelectionChanged();
+  }
+}
+
+void AdTagGroup::emitSelectionChanged() {
+  const QPointer<AdTagGroup> guard(this);
+  const QVariant value = selectedValue();
+  emit selectedValueChanged(value);
+  if (guard) {
+    const QVariantList values = selectedValues_;
+    emit selectedValuesChanged(values);
+  }
 }
 
 QVariantList AdTagGroup::normalizedValues(const QVariantList& values) const {

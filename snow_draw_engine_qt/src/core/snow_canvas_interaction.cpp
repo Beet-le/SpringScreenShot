@@ -4,6 +4,7 @@
 #include "snow_canvas_input_adapter.h"
 
 #include <QWidget>
+#include <QPointer>
 
 namespace snow_canvas_interaction {
 
@@ -25,14 +26,18 @@ void Controller::setEnabled(QWidget& widget, SnowCanvasCursorController& cursorC
 
 void Controller::clearTransientState(QWidget& widget,
                                      SnowCanvasCursorController& cursorController) {
+    const QPointer<QWidget> lifetime(&widget);
     releasePointerCapture(widget);
+    if (!lifetime) {
+        return;
+    }
     cursorController.clearCursor(SnowCanvasCursorLayer::CanvasTool);
 }
 
 void Controller::releasePointerCapture(QWidget& widget) {
     if (m_capturedPointerId != 0) {
-        widget.releaseMouse();
         m_capturedPointerId = 0;
+        widget.releaseMouse();
     }
 }
 
@@ -47,13 +52,16 @@ void Controller::applyOutput(QWidget& widget, SnowCanvasCursorController& cursor
     if (!m_enabled) {
         return;
     }
+    const QPointer<QWidget> lifetime(&widget);
 
     switch (output.capture_kind) {
     case SNOW_POINTER_CAPTURE_CAPTURE:
         if (m_capturedPointerId == 0) {
+            m_capturedPointerId = output.capture_pointer_id;
             widget.grabMouse();
+        } else {
+            m_capturedPointerId = output.capture_pointer_id;
         }
-        m_capturedPointerId = output.capture_pointer_id;
         break;
     case SNOW_POINTER_CAPTURE_RELEASE:
         releasePointerCapture(widget);
@@ -61,6 +69,9 @@ void Controller::applyOutput(QWidget& widget, SnowCanvasCursorController& cursor
     case SNOW_POINTER_CAPTURE_NO_CHANGE:
     default:
         break;
+    }
+    if (!lifetime) {
+        return;
     }
 
     if (output.cursor_kind == SNOW_CURSOR_SET) {

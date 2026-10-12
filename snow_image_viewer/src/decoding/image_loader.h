@@ -61,7 +61,7 @@ class ImageLoader final : public QObject {
                               const QString& cacheKey) const;
     std::optional<ThumbnailTask> takeQueuedPrefetchTask(const QString& cacheKey);
     void cacheThumbnail(const QString& cacheKey, const ImageThumbnail& thumbnail);
-    void emitCurrentThumbnail(const QString& cacheKey, const ImageThumbnail& thumbnail);
+    bool emitCurrentThumbnail(const QString& cacheKey, const ImageThumbnail& thumbnail);
     void startPendingDecode();
 
     quint64 generation_ = 0;

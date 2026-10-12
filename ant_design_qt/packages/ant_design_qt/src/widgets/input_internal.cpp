@@ -366,6 +366,9 @@ void restoreAncestorScrollPositions(const QVector<PreservedScrollPosition>& posi
     if (QScrollBar* bar = position.area->horizontalScrollBar()) {
       bar->setValue(position.horizontalValue);
     }
+    if (!position.area) {
+      continue;
+    }
     if (QScrollBar* bar = position.area->verticalScrollBar()) {
       bar->setValue(position.verticalValue);
     }

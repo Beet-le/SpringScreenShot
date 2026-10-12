@@ -149,6 +149,13 @@ class AdTextEdit final : public QTextEdit {
   void focusOutEvent(QFocusEvent* event) override;
 
  private:
+  void handleDocumentTextChanged();
+  bool replaceDocumentText(const QString& text, bool preserveCursor);
+  void publishTextChange(const QString& text, quint64 textGeneration, quint64 policyGeneration,
+                         bool userEdited);
+  bool textTransactionCurrent(const QString& text, quint64 textGeneration,
+                              quint64 policyGeneration) const;
+  bool refreshTextPolicyState();
   void applyDocumentLayoutMetrics(const adqt::widgets::detail::InputVisualStyle& style);
   void updateCountLabel();
   void updateClearButton();
@@ -160,15 +167,13 @@ class AdTextEdit final : public QTextEdit {
   void updateLayoutMetrics();
   void updateHeightConstraints();
   void applyEditorPalette();
-  void refreshVisualState(bool geometryChanged);
+  bool refreshVisualState(bool geometryChanged);
   void updateInteractionFocusOverlay();
   void syncAccessibleState();
   Status effectiveStatus() const;
   adqt::widgets::detail::InputVisualStyle resolvedStyle() const;
-  int effectiveCount(const QString& text) const;
   int effectiveCountMax() const;
   QString normalizedText(const QString& text) const;
-  QString countLabelText(const QString& text, int count, int maximum) const;
   int widthAccessoryHint(const detail::InputVisualStyle& style) const;
 
   ControlSize controlSize_ = ControlSize::Medium;
@@ -176,13 +181,22 @@ class AdTextEdit final : public QTextEdit {
   Status status_ = Status::None;
   bool allowClear_ = false;
   int maxLength_ = -1;
+  quint64 maxLengthGeneration_ = 0;
   bool countVisible_ = false;
   int maximumCharacterCount_ = -1;
   HeightMode heightMode_ = HeightMode::FixedRows;
   int minimumVisibleRows_ = 2;
   int maximumVisibleRows_ = 6;
+  quint64 visibleRowsGeneration_ = 0;
   adqt::icons::IconRef feedbackIconRef_;
   QPointer<AdInputTextPolicy> textPolicy_;
+  QMetaObject::Connection textPolicyDestroyedConnection_;
+  quint64 textPolicyGeneration_ = 0;
+  quint64 textGeneration_ = 0;
+  quint64 policyEvaluationGeneration_ = 0;
+  int cachedCharacterCount_ = 0;
+  QString cachedCountLabelText_;
+  QString lastPublishedText_;
   QString defaultAccessibleName_;
 
   QScrollBar* overlayVerticalScrollBar_ = nullptr;

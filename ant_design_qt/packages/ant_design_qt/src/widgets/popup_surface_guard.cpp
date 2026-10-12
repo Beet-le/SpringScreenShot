@@ -99,6 +99,7 @@ bool AdPopupSurfaceGuard::canShow(QWidget* surface) {
       popup->setNativeSurfaceRetained(true);
     }
   }
-  return !guard_ || guard_(surface);
+  const auto callback = guard_;
+  return !callback || callback(surface);
 }
 }  // namespace adqt::widgets

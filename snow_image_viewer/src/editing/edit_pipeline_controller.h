@@ -6,6 +6,7 @@
 #include "editing/gpu_resize_readback.h"
 
 #include <QObject>
+#include <QPointer>
 #include <QByteArray>
 #include <QElapsedTimer>
 #include <QThreadPool>
@@ -15,6 +16,8 @@
 #include <memory>
 #include <optional>
 #include <stop_token>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 #include <snow/image/processing.h>
@@ -234,7 +237,25 @@ class EditPipelineController final : public QObject {
         std::uint64_t accessSerial = 0;
     };
 
-    void setState(EditPipelineState state);
+    // Edit publications own their payload and propagate deletion or source/request
+    // supersession before the caller resumes work on that edit.
+    template <typename Signal, typename... Arguments>
+    bool notify(Signal signal, Arguments&&... arguments) {
+        if (shuttingDown_)
+            return true;
+        const QPointer<EditPipelineController> lifetime(this);
+        const auto requestId = latestRequestId_;
+        const auto generation = sourceGeneration_;
+        auto values = std::make_tuple(std::forward<Arguments>(arguments)...);
+        std::apply([this, signal](auto&... value) { (this->*signal)(value...); }, values);
+        return lifetime && requestId == latestRequestId_ && generation == sourceGeneration_;
+    }
+    bool setState(EditPipelineState state);
+    bool publishBusyState();
+    bool isCurrentRequest(const PendingExact& request) const;
+    bool storeCurrentResult(const PendingExact& request, ExactEditResult& result);
+    bool publishCurrentArtifact(const PendingExact& request, ExactEditResult& result);
+    bool publishCurrentExact(const PendingExact& request, ExactEditResult& result);
     void startSourceDecode(EditRequestId generation,
                            const std::shared_ptr<std::stop_source>& cancellation);
     void scheduleExact();
@@ -251,6 +272,8 @@ class EditPipelineController final : public QObject {
                                RasterProvenance provenance, snow::image::AlphaContent alphaContent);
     void startWorker();
     void sendActiveWorkerJob();
+    bool notifyWorkerTiming(QProcess& worker, EditRequestId requestId, QString stage,
+                            qint64 nanoseconds);
     void handleWorkerOutput();
     void handleWorkerExit(int exitCode);
     void cancelActiveWorker(bool restart);
@@ -290,6 +313,7 @@ class EditPipelineController final : public QObject {
     EditRequestId latestRequestId_ = 0;
     EditRequestId sourceGeneration_ = 0;
     EditPipelineState state_ = EditPipelineState::VisualReady;
+    bool publishedBusy_ = false;
     int activeWorkerCount_ = 0;
     bool gpuSource_ = false;
     bool sourceReady_ = false;

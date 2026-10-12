@@ -22,8 +22,10 @@
 #include <QMoveEvent>
 #include <QMimeData>
 #include <QPainter>
+#include <QPointer>
 #include <QResizeEvent>
 #include <QScrollBar>
+#include <QScopeGuard>
 #include <QSignalBlocker>
 #include <QTextBlockFormat>
 #include <QTextFrame>
@@ -250,48 +252,27 @@ AdTextEdit::AdTextEdit(QWidget* parent) : QTextEdit(parent) {
     });
   }
 
-  connect(this, &QTextEdit::textChanged, this, [this]() {
-    if (internalTextUpdate_ || internalDocumentLayoutUpdate_) {
-      return;
-    }
-
-    QString currentText = toPlainText();
-    if (maxLength_ > 0 && currentText.size() > maxLength_) {
-      currentText = currentText.left(maxLength_);
-    }
-    currentText = normalizedText(currentText);
-
-    if (currentText != toPlainText()) {
-      QTextCursor cursor = textCursor();
-      const int position = std::min(cursor.position(), static_cast<int>(currentText.size()));
-      internalTextUpdate_ = true;
-      QTextEdit::setPlainText(currentText);
-      cursor = textCursor();
-      cursor.setPosition(position);
-      setTextCursor(cursor);
-      internalTextUpdate_ = false;
-    }
-
-    emit plainTextChanged(toPlainText());
-    if (userEditInProgress_) {
-      emit textEdited(toPlainText());
-    }
-    updateCountLabel();
-    updateClearButton();
-    updateHeightConstraints();
-    refreshVisualState(false);
-  });
+  connect(this, &QTextEdit::textChanged, this, &AdTextEdit::handleDocumentTextChanged);
 
   connect(clearButton_, &QToolButton::clicked, this, [this]() {
     if (toPlainText().isEmpty()) {
       return;
     }
-    internalTextUpdate_ = true;
-    QTextEdit::clear();
-    internalTextUpdate_ = false;
+    const QPointer<AdTextEdit> lifetime(this);
+    const quint64 generation = ++textGeneration_;
+    const quint64 policyGeneration = textPolicyGeneration_;
+    if (!replaceDocumentText(QString(), false) || !refreshVisualState(true) ||
+        !toPlainText().isEmpty()) {
+      return;
+    }
     emit cleared();
-    emit plainTextChanged(QString());
-    focusEditor(FocusSelection::Start, false);
+    if (!lifetime) {
+      return;
+    }
+    publishTextChange(QString(), generation, policyGeneration, false);
+    if (lifetime && toPlainText().isEmpty()) {
+      focusEditor(FocusSelection::Start, false);
+    }
   });
 
   connect(&adqt::theme::ThemeManager::instance(), &adqt::theme::ThemeManager::themeChanged, this,
@@ -300,7 +281,10 @@ AdTextEdit::AdTextEdit(QWidget* parent) : QTextEdit(parent) {
   refreshVisualState(true);
 }
 
-AdTextEdit::~AdTextEdit() { stopInteractionFocusForOwner(this); }
+AdTextEdit::~AdTextEdit() {
+  QObject::disconnect(textPolicyDestroyedConnection_);
+  stopInteractionFocusForOwner(this);
+}
 
 AdTextEdit::ControlSize AdTextEdit::controlSize() const { return controlSize_; }
 
@@ -309,7 +293,9 @@ void AdTextEdit::setControlSize(ControlSize value) {
     return;
   }
   controlSize_ = value;
-  refreshVisualState(true);
+  if (!refreshVisualState(true)) {
+    return;
+  }
   emit controlSizeChanged(controlSize_);
 }
 
@@ -320,7 +306,9 @@ void AdTextEdit::setVariant(Variant value) {
     return;
   }
   variant_ = value;
-  refreshVisualState(true);
+  if (!refreshVisualState(true)) {
+    return;
+  }
   emit variantChanged(variant_);
 }
 
@@ -331,7 +319,9 @@ void AdTextEdit::setStatus(Status value) {
     return;
   }
   status_ = value;
-  refreshVisualState(false);
+  if (!refreshVisualState(false)) {
+    return;
+  }
   emit statusChanged(status_);
 }
 
@@ -342,7 +332,9 @@ void AdTextEdit::setAllowClear(bool value) {
     return;
   }
   allowClear_ = value;
-  refreshVisualState(true);
+  if (!refreshVisualState(true)) {
+    return;
+  }
   emit allowClearChanged(allowClear_);
 }
 
@@ -351,28 +343,102 @@ void AdTextEdit::setPlaceholderText(const QString& value) {
     return;
   }
   QTextEdit::setPlaceholderText(value);
-  refreshVisualState(true);
+  if (!refreshVisualState(true)) {
+    return;
+  }
   emit placeholderTextChanged(value);
 }
 
 QString AdTextEdit::plainText() const { return toPlainText(); }
 
 void AdTextEdit::setPlainText(const QString& value) {
+  const QPointer<AdTextEdit> guard(this);
+  const quint64 generation = ++textGeneration_;
+  const quint64 policyGeneration = textPolicyGeneration_;
   QString next = value;
   if (maxLength_ > 0 && next.size() > maxLength_) {
     next = next.left(maxLength_);
   }
   next = normalizedText(next);
+  if (!guard || textGeneration_ != generation || textPolicyGeneration_ != policyGeneration) {
+    return;
+  }
 
   if (toPlainText() == next) {
     return;
   }
 
+  if (!replaceDocumentText(next, false)) {
+    return;
+  }
+  publishTextChange(next, generation, policyGeneration, false);
+}
+
+void AdTextEdit::handleDocumentTextChanged() {
+  if (internalTextUpdate_ || internalDocumentLayoutUpdate_) {
+    return;
+  }
+  const QPointer<AdTextEdit> lifetime(this);
+  const quint64 generation = ++textGeneration_;
+  const quint64 policyGeneration = textPolicyGeneration_;
+  const bool userEdited = userEditInProgress_;
+  QString next = toPlainText();
+  if (maxLength_ > 0 && next.size() > maxLength_) {
+    next = next.left(maxLength_);
+  }
+  next = normalizedText(next);
+  if (!lifetime || textGeneration_ != generation || textPolicyGeneration_ != policyGeneration) {
+    return;
+  }
+  if (next != toPlainText() && !replaceDocumentText(next, true)) {
+    return;
+  }
+  publishTextChange(next, generation, policyGeneration, userEdited);
+}
+
+bool AdTextEdit::replaceDocumentText(const QString& text, bool preserveCursor) {
+  const QPointer<AdTextEdit> lifetime(this);
+  const int position = preserveCursor ? textCursor().position() : -1;
+  const bool wasUpdating = internalTextUpdate_;
   internalTextUpdate_ = true;
-  QTextEdit::setPlainText(next);
-  internalTextUpdate_ = false;
-  emit plainTextChanged(next);
-  refreshVisualState(true);
+  const auto restoreUpdating = qScopeGuard([lifetime, wasUpdating] {
+    if (lifetime) {
+      lifetime->internalTextUpdate_ = wasUpdating;
+    }
+  });
+  QTextEdit::setPlainText(text);
+  if (!lifetime) {
+    return false;
+  }
+  if (position >= 0 && toPlainText() == text) {
+    QTextCursor cursor = textCursor();
+    cursor.setPosition(std::min(position, static_cast<int>(text.size())));
+    setTextCursor(cursor);
+  }
+  return !lifetime.isNull();
+}
+
+bool AdTextEdit::textTransactionCurrent(const QString& text, quint64 textGeneration,
+                                        quint64 policyGeneration) const {
+  return textGeneration_ == textGeneration && textPolicyGeneration_ == policyGeneration &&
+         toPlainText() == text;
+}
+
+void AdTextEdit::publishTextChange(const QString& text, quint64 textGeneration,
+                                   quint64 policyGeneration, bool userEdited) {
+  const QPointer<AdTextEdit> lifetime(this);
+  if (toPlainText() != text || !refreshVisualState(true) || toPlainText() != text ||
+      lastPublishedText_ == text) {
+    return;
+  }
+  // A nested no-op setter or policy replacement can supersede the operation while
+  // leaving this committed text unchanged. Publish the settled value once; a
+  // nested operation that already published it owns the notification instead.
+  lastPublishedText_ = text;
+  emit plainTextChanged(text);
+  if (lifetime && userEdited && textTransactionCurrent(text, textGeneration, policyGeneration)) {
+    emit textEdited(text);
+  }
 }
 
 void AdTextEdit::setReadOnly(bool value) {
@@ -380,7 +446,9 @@ void AdTextEdit::setReadOnly(bool value) {
     return;
   }
   QTextEdit::setReadOnly(value);
-  refreshVisualState(false);
+  if (!refreshVisualState(false)) {
+    return;
+  }
   emit readOnlyChanged(value);
 }
 
@@ -392,11 +460,18 @@ void AdTextEdit::setMaxLength(int value) {
     return;
   }
   maxLength_ = normalized;
+  const quint64 generation = ++maxLengthGeneration_;
   if (maxLength_ > 0 && toPlainText().size() > maxLength_) {
+    const QPointer<AdTextEdit> guard(this);
     setPlainText(toPlainText().left(maxLength_));
+    if (!guard || maxLengthGeneration_ != generation) {
+      return;
+    }
   }
-  refreshVisualState(true);
-  emit maxLengthChanged(maxLength_);
+  if (!refreshVisualState(true) || maxLengthGeneration_ != generation) {
+    return;
+  }
+  emit maxLengthChanged(normalized);
 }
 
 bool AdTextEdit::countVisible() const { return countVisible_; }
@@ -406,7 +481,9 @@ void AdTextEdit::setCountVisible(bool value) {
     return;
   }
   countVisible_ = value;
-  refreshVisualState(true);
+  if (!refreshVisualState(true)) {
+    return;
+  }
   emit countVisibleChanged(countVisible_);
 }
 
@@ -418,7 +495,9 @@ void AdTextEdit::setMaximumCharacterCount(int value) {
     return;
   }
   maximumCharacterCount_ = normalized;
-  refreshVisualState(true);
+  if (!refreshVisualState(true)) {
+    return;
+  }
   emit maximumCharacterCountChanged(maximumCharacterCount_);
 }
 
@@ -441,12 +520,20 @@ void AdTextEdit::setMinimumVisibleRows(int value) {
     return;
   }
   minimumVisibleRows_ = normalized;
-  if (maximumVisibleRows_ < minimumVisibleRows_) {
+  const quint64 generation = ++visibleRowsGeneration_;
+  const bool maximumChanged = maximumVisibleRows_ < minimumVisibleRows_;
+  if (maximumChanged) {
     maximumVisibleRows_ = minimumVisibleRows_;
-    emit maximumVisibleRowsChanged(maximumVisibleRows_);
   }
   updateHeightConstraints();
-  emit minimumVisibleRowsChanged(minimumVisibleRows_);
+  if (maximumChanged) {
+    const QPointer<AdTextEdit> guard(this);
+    emit maximumVisibleRowsChanged(normalized);
+    if (!guard || visibleRowsGeneration_ != generation) {
+      return;
+    }
+  }
+  emit minimumVisibleRowsChanged(normalized);
 }
 
 int AdTextEdit::maximumVisibleRows() const { return maximumVisibleRows_; }
@@ -457,6 +544,7 @@ void AdTextEdit::setMaximumVisibleRows(int value) {
     return;
   }
   maximumVisibleRows_ = normalized;
+  ++visibleRowsGeneration_;
   updateHeightConstraints();
   emit maximumVisibleRowsChanged(maximumVisibleRows_);
 }
@@ -469,7 +557,9 @@ void AdTextEdit::setFeedbackIconRef(const adqt::icons::IconRef& value) {
   }
   feedbackIconRef_ = value;
   updateFeedbackSpinnerState();
-  refreshVisualState(true);
+  if (!refreshVisualState(true)) {
+    return;
+  }
   emit feedbackIconRefChanged(feedbackIconRef_);
 }
 
@@ -480,15 +570,39 @@ void AdTextEdit::setTextPolicy(AdInputTextPolicy* value) {
     return;
   }
 
+  QObject::disconnect(textPolicyDestroyedConnection_);
+  textPolicyDestroyedConnection_ = QMetaObject::Connection();
   textPolicy_ = value;
-  emit textPolicyChanged(textPolicy_);
-
+  if (textPolicy_) {
+    textPolicyDestroyedConnection_ = connect(textPolicy_, &QObject::destroyed, this, [this] {
+      textPolicyDestroyedConnection_ = QMetaObject::Connection();
+      textPolicy_.clear();
+      ++textPolicyGeneration_;
+      // QPointer policy retirement has always been silent. Refresh cached
+      // defaults without introducing a notification from QObject teardown.
+      refreshVisualState(true);
+    });
+  }
+  const quint64 generation = ++textPolicyGeneration_;
+  const QPointer<AdTextEdit> guard(this);
+  const quint64 textGeneration = textGeneration_;
   const QString current = toPlainText();
-  if (normalizedText(current) != current) {
-    setPlainText(current);
+  const QString normalized = normalizedText(current);
+  if (!guard || textPolicyGeneration_ != generation) {
     return;
   }
-  refreshVisualState(true);
+  if (textGeneration_ == textGeneration && normalized != current) {
+    setPlainText(current);
+    if (!guard || textPolicyGeneration_ != generation) {
+      return;
+    }
+  } else {
+    refreshVisualState(true);
+  }
+  if (!guard || textPolicyGeneration_ != generation) {
+    return;
+  }
+  emit textPolicyChanged(textPolicy_.data());
 }
 
 QSize AdTextEdit::sizeHint() const {
@@ -538,7 +652,11 @@ void AdTextEdit::focusEditor(FocusSelection selection, bool preventScroll) {
   }
 
   if (!preserved.isEmpty()) {
+    const QPointer<AdTextEdit> guard(this);
     detail::input_internal::restoreAncestorScrollPositions(preserved);
+    if (!guard) {
+      return;
+    }
     detail::input_internal::restoreAncestorScrollPositionsDeferred(this, preserved);
   }
 
@@ -559,7 +677,9 @@ bool AdTextEdit::eventFilter(QObject* watched, QEvent* event) {
   if (watched == clearButton_) {
     if (event->type() == QEvent::Enter || event->type() == QEvent::Leave ||
         event->type() == QEvent::FocusIn || event->type() == QEvent::FocusOut) {
-      refreshVisualState(false);
+      if (!refreshVisualState(false)) {
+        return true;
+      }
     }
   } else if (watched == viewport()) {
     if (event->type() == QEvent::Resize || event->type() == QEvent::Show ||
@@ -585,27 +705,39 @@ bool AdTextEdit::event(QEvent* event) {
 void AdTextEdit::paintEvent(QPaintEvent* event) { QTextEdit::paintEvent(event); }
 
 void AdTextEdit::keyPressEvent(QKeyEvent* event) {
+  const QPointer<AdTextEdit> lifetime(this);
   userEditInProgress_ = true;
   QTextEdit::keyPressEvent(event);
-  userEditInProgress_ = false;
+  if (lifetime) {
+    userEditInProgress_ = false;
+  }
 }
 
 void AdTextEdit::inputMethodEvent(QInputMethodEvent* event) {
+  const QPointer<AdTextEdit> lifetime(this);
   userEditInProgress_ = true;
   QTextEdit::inputMethodEvent(event);
-  userEditInProgress_ = false;
+  if (lifetime) {
+    userEditInProgress_ = false;
+  }
 }
 
 void AdTextEdit::insertFromMimeData(const QMimeData* source) {
+  const QPointer<AdTextEdit> lifetime(this);
   userEditInProgress_ = true;
   QTextEdit::insertFromMimeData(source);
-  userEditInProgress_ = false;
+  if (lifetime) {
+    userEditInProgress_ = false;
+  }
 }
 
 void AdTextEdit::dropEvent(QDropEvent* event) {
+  const QPointer<AdTextEdit> lifetime(this);
   userEditInProgress_ = true;
   QTextEdit::dropEvent(event);
-  userEditInProgress_ = false;
+  if (lifetime) {
+    userEditInProgress_ = false;
+  }
 }
 
 void AdTextEdit::resizeEvent(QResizeEvent* event) {
@@ -652,24 +784,32 @@ void AdTextEdit::hideEvent(QHideEvent* event) {
 }
 
 void AdTextEdit::enterEvent(QEnterEvent* event) {
-  refreshVisualState(false);
+  if (!refreshVisualState(false)) {
+    return;
+  }
   QTextEdit::enterEvent(event);
 }
 
 void AdTextEdit::leaveEvent(QEvent* event) {
-  refreshVisualState(false);
+  if (!refreshVisualState(false)) {
+    return;
+  }
   QTextEdit::leaveEvent(event);
 }
 
 void AdTextEdit::focusInEvent(QFocusEvent* event) {
   focused_ = true;
-  refreshVisualState(false);
+  if (!refreshVisualState(false)) {
+    return;
+  }
   QTextEdit::focusInEvent(event);
 }
 
 void AdTextEdit::focusOutEvent(QFocusEvent* event) {
   focused_ = false;
-  refreshVisualState(false);
+  if (!refreshVisualState(false)) {
+    return;
+  }
   QTextEdit::focusOutEvent(event);
 }
 
@@ -678,9 +818,7 @@ void AdTextEdit::updateCountLabel() {
     return;
   }
 
-  const int count = effectiveCount(toPlainText());
-  const int maximum = effectiveCountMax();
-  countLabel_->setText(countLabelText(toPlainText(), count, maximum));
+  countLabel_->setText(cachedCountLabelText_);
   countLabel_->setVisible(countVisible_);
 }
 
@@ -1008,7 +1146,44 @@ void AdTextEdit::applyEditorPalette() {
   viewport()->setPalette(palette);
 }
 
-void AdTextEdit::refreshVisualState(bool geometryChanged) {
+bool AdTextEdit::refreshTextPolicyState() {
+  // Evaluate extension callbacks before touching the view. A nested text or policy
+  // update owns the newer snapshot; the outer evaluation must never apply its result.
+  const QPointer<AdTextEdit> lifetime(this);
+  const QPointer<AdInputTextPolicy> policy = textPolicy_;
+  AdInputTextPolicy* const policyIdentity = policy.data();
+  const QString text = toPlainText();
+  const int maximum = effectiveCountMax();
+  const quint64 policyGeneration = textPolicyGeneration_;
+  const quint64 evaluationGeneration = ++policyEvaluationGeneration_;
+  const auto current = [lifetime, policyIdentity, text, policyGeneration, evaluationGeneration] {
+    return lifetime && lifetime->textPolicy_.data() == policyIdentity &&
+           lifetime->policyEvaluationGeneration_ == evaluationGeneration &&
+           lifetime->textPolicyGeneration_ == policyGeneration && lifetime->toPlainText() == text;
+  };
+
+  const int count =
+      policy ? std::max(0, policy->characterCount(text)) : static_cast<int>(text.size());
+  if (!current()) {
+    return false;
+  }
+  const QString label = policy        ? policy->formatCountLabel(text, count, maximum)
+                        : maximum > 0 ? QStringLiteral("%1 / %2").arg(count).arg(maximum)
+                                      : QString::number(count);
+  if (!current()) {
+    return false;
+  }
+  cachedCharacterCount_ = count;
+  cachedCountLabelText_ = label;
+  return true;
+}
+
+bool AdTextEdit::refreshVisualState(bool geometryChanged) {
+  const QPointer<AdTextEdit> lifetime(this);
+  if (!refreshTextPolicyState()) {
+    // A surviving nested update already refreshed its own state.
+    return !lifetime.isNull();
+  }
   const InputVisualStyle style = resolvedStyle();
   if (font() != style.metrics.font) {
     QTextEdit::setFont(style.metrics.font);
@@ -1047,6 +1222,7 @@ void AdTextEdit::refreshVisualState(bool geometryChanged) {
   if (geometryChanged) {
     updateGeometry();
   }
+  return !lifetime.isNull();
 }
 
 void AdTextEdit::updateInteractionFocusOverlay() {
@@ -1065,7 +1241,7 @@ AdTextEdit::Status AdTextEdit::effectiveStatus() const {
     return status_;
   }
   const int maximum = effectiveCountMax();
-  if (maximum > 0 && effectiveCount(toPlainText()) > maximum) {
+  if (maximum > 0 && cachedCharacterCount_ > maximum) {
     return Status::Warning;
   }
   return Status::None;
@@ -1085,13 +1261,6 @@ InputVisualStyle AdTextEdit::resolvedStyle() const {
       input, adqt::theme::ThemeManager::instance().resolve(this));
 }
 
-int AdTextEdit::effectiveCount(const QString& text) const {
-  if (textPolicy_) {
-    return std::max(0, textPolicy_->characterCount(text));
-  }
-  return static_cast<int>(text.size());
-}
-
 int AdTextEdit::effectiveCountMax() const {
   if (maximumCharacterCount_ > 0) {
     return maximumCharacterCount_;
@@ -1109,16 +1278,6 @@ QString AdTextEdit::normalizedText(const QString& text) const {
   return textPolicy_->normalizeText(text, effectiveCountMax());
 }
 
-QString AdTextEdit::countLabelText(const QString& text, int count, int maximum) const {
-  if (textPolicy_) {
-    return textPolicy_->formatCountLabel(text, count, maximum);
-  }
-  if (maximum > 0) {
-    return QStringLiteral("%1 / %2").arg(count).arg(maximum);
-  }
-  return QString::number(count);
-}
-
 int AdTextEdit::widthAccessoryHint(const InputVisualStyle& style) const {
   const QFontMetrics fm(style.metrics.font);
   int widthHint = 0;
@@ -1130,8 +1289,7 @@ int AdTextEdit::widthAccessoryHint(const InputVisualStyle& style) const {
         std::max(widthHint, std::max(10, style.metrics.affixIconSize) + clearButtonGap(style));
   }
   if (countVisible_) {
-    widthHint += horizontalTextWidth(
-        fm, countLabelText(toPlainText(), effectiveCount(toPlainText()), effectiveCountMax()));
+    widthHint += horizontalTextWidth(fm, cachedCountLabelText_);
   }
   return widthHint;
 }

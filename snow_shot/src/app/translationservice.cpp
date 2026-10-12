@@ -105,20 +105,38 @@ void TranslationService::syncPreferences(ChangeReason reason) {
     }
 }
 
-bool TranslationService::savePreferences(const TranslationPreferences& preferences) {
+std::optional<bool> TranslationService::writePreferences(const QMap<QString, QJsonValue>& values,
+                                                         ChangeReason reason) {
     if (m_settings == nullptr)
-        return false;
-    m_saving = true;
-    const bool saved =
-        m_settings->setValues({{sourceKey, preferences.sourceLanguage},
-                               {targetKey, preferences.targetLanguage},
-                               {secondaryTargetKey, preferences.secondaryTargetLanguage},
-                               {modelKey, preferences.modelId}});
-    m_saving = false;
+        return std::nullopt;
+    const QPointer<TranslationService> lifetime(this);
+    const quint64 generation = ++m_preferencesGeneration;
+    const bool previousSaving = std::exchange(m_saving, true);
+    const bool saved = m_settings->setValues(values);
+    if (!lifetime)
+        return std::nullopt;
+    m_saving = previousSaving;
+    if (generation != m_preferencesGeneration)
+        return std::nullopt;
     m_storageError = !saved;
-    syncPreferences(ChangeReason::UserPreferences);
-    emit catalogChanged();
+    syncPreferences(reason);
+    if (!lifetime || generation != m_preferencesGeneration)
+        return std::nullopt;
     return saved;
+}
+
+bool TranslationService::savePreferences(const TranslationPreferences& preferences) {
+    const auto saved = writePreferences({{sourceKey, preferences.sourceLanguage},
+                                         {targetKey, preferences.targetLanguage},
+                                         {secondaryTargetKey, preferences.secondaryTargetLanguage},
+                                         {modelKey, preferences.modelId}},
+                                        ChangeReason::UserPreferences);
+    if (!saved.has_value())
+        return false;
+    const QPointer<TranslationService> lifetime(this);
+    const quint64 generation = m_preferencesGeneration;
+    emit catalogChanged();
+    return lifetime && generation == m_preferencesGeneration && *saved;
 }
 
 void TranslationService::publishModels(bool resolveSelection) {
@@ -132,21 +150,22 @@ void TranslationService::publishModels(bool resolveSelection) {
     });
     const auto reason =
         m_modelInvalidationPending ? ChangeReason::ModelInvalidated : ChangeReason::Catalog;
-    const int index = translationModelIndex(m_models, m_preferences.modelId);
-    const bool missingCustom = (m_preferences.modelId.startsWith(QStringLiteral("custom:")) &&
-                                !m_client->isCustomModel(m_preferences.modelId)) ||
-                               (m_preferences.modelId.startsWith(QStringLiteral("translation:")) &&
-                                !m_client->isTextTranslation(m_preferences.modelId));
-    const bool localDefault = m_preferences.modelId.isEmpty() && index >= 0 &&
+    // A catalog can change inside a settings write, before the preference cache is synchronized.
+    const QString selectedModel =
+        m_settings != nullptr ? m_settings->value(modelKey).toString() : m_preferences.modelId;
+    const int index = translationModelIndex(m_models, selectedModel);
+    const bool missingCustom = (selectedModel.startsWith(QStringLiteral("custom:")) &&
+                                !m_client->isCustomModel(selectedModel)) ||
+                               (selectedModel.startsWith(QStringLiteral("translation:")) &&
+                                !m_client->isTextTranslation(selectedModel));
+    const bool localDefault = selectedModel.isEmpty() && index >= 0 &&
                               (m_client->isCustomModel(m_models.at(index).id) ||
                                m_client->isTextTranslation(m_models.at(index).id));
     if ((resolveSelection || missingCustom || localDefault) && (index >= 0 || missingCustom)) {
         const QString resolved = index >= 0 ? m_models.at(index).id : QString();
-        if (resolved != m_preferences.modelId && m_settings != nullptr) {
-            m_saving = true;
-            m_storageError = !m_settings->setValue(modelKey, resolved);
-            m_saving = false;
-            syncPreferences(reason);
+        if (resolved != selectedModel && m_settings != nullptr) {
+            if (!writePreferences({{modelKey, resolved}}, reason).has_value())
+                return;
         }
     }
     m_modelInvalidationPending = false;

@@ -2,6 +2,7 @@
 
 #include <QFrame>
 #include <QMargins>
+#include <QPointer>
 #include <QVariant>
 #include <QVariantList>
 
@@ -125,8 +126,9 @@ class AdTagGroup final : public QFrame {
   ComponentTokenContext currentComponentTokenContext() const;
   StyleContext currentStyleContext() const;
   void rebuildTags();
-  void applySelectionToTags();
-  void applyContainerStyle();
+  bool applySelectionToTags();
+  bool applyContainerStyle();
+  void emitSelectionChanged();
   void updateSelectionFromTag(AdTag* tag, bool checked);
   QVariantList normalizedValues(const QVariantList& values) const;
 
@@ -138,7 +140,7 @@ class AdTagGroup final : public QFrame {
   SemanticStyles semanticStyles_;
   SemanticStyleResolver semanticStyleResolver_;
   detail::FlowLayout* flowLayout_ = nullptr;
-  QVector<AdTag*> itemTags_;
+  QVector<QPointer<AdTag>> itemTags_;
   int spacing_ = -1;
   bool syncing_ = false;
 };

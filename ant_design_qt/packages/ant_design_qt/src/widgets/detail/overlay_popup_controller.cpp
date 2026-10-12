@@ -17,7 +17,7 @@
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QScreen>
-#include <QScopedValueRollback>
+#include <QScopeGuard>
 #include <QScrollBar>
 #include <QSet>
 #include <QWidget>
@@ -201,12 +201,13 @@ void applyPopupVisibility(QWidget* popup, bool shouldShow, bool raiseWhenShowing
     return;
   }
 
+  const QPointer<QWidget> lifetime(popup);
   const bool wasVisible = popup->isVisible();
   if (!wasVisible) {
     qCDebug(popupLog) << "surface.show" << popup->objectName() << popup->geometry();
     popup->show();
   }
-  if (raiseWhenShowing && !wasVisible) {
+  if (lifetime && popup->isVisible() && raiseWhenShowing && !wasVisible) {
     popup->raise();
   }
 }
@@ -346,6 +347,7 @@ void OverlayPopupController::tracePopup(const char* event, int detail) const {
 }
 
 void OverlayPopupController::setPopupVisible(bool value) {
+  const QPointer<OverlayPopupController> lifetime(this);
   tracePopup("visibility.request", value);
   if (visibilityMode_ == VisibilityMode::External) {
     clearAllOpenReasons();
@@ -353,7 +355,7 @@ void OverlayPopupController::setPopupVisible(bool value) {
       resetHoverInteraction();
     }
     setPopupVisibleInternal(value, true);
-    if (value) {
+    if (lifetime && value) {
       reconcileHoverFromCursor();
     }
     return;
@@ -366,7 +368,7 @@ void OverlayPopupController::setPopupVisible(bool value) {
     clearAllOpenReasons();
   }
   updatePopupVisibility(true, VisibilityUpdateSource::InternalState);
-  if (value) {
+  if (lifetime && value) {
     reconcileHoverFromCursor();
   }
 }
@@ -426,8 +428,9 @@ void OverlayPopupController::refreshVisiblePopup() {
     return;
   }
   noteGeometryActivity();
-  delegate_->popupEnsureSurface();
-  delegate_->popupPrepareToShow();
+  if (!preparePopupSurface()) {
+    return;
+  }
   syncPreparedPopupVisibility();
 }
 
@@ -438,7 +441,11 @@ void OverlayPopupController::nativeSurfaceChanged() {
   if (!popupVisible_ || !delegate_ || !hasSurfaceShowGuard()) {
     return;
   }
+  const QPointer<OverlayPopupController> lifetime(this);
   applySurfaceVisibility(delegate_->popupSurfaceWidget(), false, false);
+  if (!lifetime) {
+    return;
+  }
   schedulePopupRelayout(true);
 }
 bool OverlayPopupController::eventFilter(QObject* watched, QEvent* event) {
@@ -1180,15 +1187,20 @@ void OverlayPopupController::setPopupVisibleInternal(bool visible, bool emitSign
     return;
   }
   updatingPopupVisible_ = true;
+  const QPointer<OverlayPopupController> lifetime(this);
 
   if (popupVisible_ == visible) {
     if (popupVisible_) {
       setPopupInteractionHostOpen(this, true);
       refreshAnchorScrollBarWatchers();
       noteGeometryActivity();
-      delegate_->popupEnsureSurface();
-      delegate_->popupPrepareToShow();
+      if (!preparePopupSurface()) {
+        return;
+      }
       syncPreparedPopupVisibility();
+      if (!lifetime) {
+        return;
+      }
     }
     syncPopupTooltipRoute();
     finishPopupVisibilityUpdate();
@@ -1201,12 +1213,19 @@ void OverlayPopupController::setPopupVisibleInternal(bool visible, bool emitSign
   refreshAnchorScrollBarWatchers();
   noteGeometryActivity();
   if (popupVisible_) {
-    delegate_->popupEnsureSurface();
-    delegate_->popupPrepareToShow();
+    if (!preparePopupSurface()) {
+      return;
+    }
     if (auto* guard = AdPopupSurfaceGuard::forScope(popupScopeWindow())) {
       emit guard->surfaceRequested(delegate_->popupSurfaceWidget());
+      if (!lifetime) {
+        return;
+      }
     }
     syncPreparedPopupVisibility();
+    if (!lifetime) {
+      return;
+    }
   } else {
     cancelPopupRelayout();
     geometryFrameSyncDeadlineMs_ = -1;
@@ -1215,8 +1234,14 @@ void OverlayPopupController::setPopupVisibleInternal(bool visible, bool emitSign
     clearAnchorScrollBarWatchers();
     resetHoverInteraction();
     applySurfaceVisibility(delegate_->popupSurfaceWidget(), false, false);
+    if (!lifetime) {
+      return;
+    }
     if (delegate_->popupReleaseOnHide()) {
       delegate_->popupReleaseSurface();
+      if (!lifetime) {
+        return;
+      }
     } else if (popupUsesTopLevelToolLayer()) {
       releaseTopLevelToolResourcesOnHide(delegate_->popupSurfaceWidget());
     }
@@ -1224,6 +1249,9 @@ void OverlayPopupController::setPopupVisibleInternal(bool visible, bool emitSign
 
   if (emitSignal) {
     emit popupVisibleChanged(popupVisible_);
+    if (!lifetime) {
+      return;
+    }
   }
   tracePopup("visibility.applied");
   syncPopupTooltipRoute();
@@ -1243,8 +1271,19 @@ void OverlayPopupController::finishPopupVisibilityUpdate() {
   setPopupVisibleInternal(pendingVisible, pendingEmitSignal);
 }
 
+bool OverlayPopupController::preparePopupSurface() {
+  const QPointer<OverlayPopupController> lifetime(this);
+  delegate_->popupEnsureSurface();
+  if (!lifetime) {
+    return false;
+  }
+  delegate_->popupPrepareToShow();
+  return !lifetime.isNull();
+}
+
 void OverlayPopupController::syncPreparedPopupVisibility() {
-  QWidget* popup = delegate_ ? delegate_->popupSurfaceWidget() : nullptr;
+  const QPointer<OverlayPopupController> lifetime(this);
+  const QPointer<QWidget> popup = delegate_ ? delegate_->popupSurfaceWidget() : nullptr;
   if (!delegate_ || !popupVisible_ || !popup) {
     return;
   }
@@ -1253,14 +1292,23 @@ void OverlayPopupController::syncPreparedPopupVisibility() {
   // content chain. Repeating a recursive polish/layout pass here makes every
   // open pay for the same tree twice.
   const bool canShowPopup = syncPopupGeometry();
+  if (!lifetime || !popup) {
+    return;
+  }
   applySurfaceVisibility(popup, canShowPopup, true);
-  if (!canShowPopup || !popup->isVisible()) {
+  if (!lifetime || !popup || !canShowPopup || !popup->isVisible()) {
     return;
   }
 
   // Showing can change the size hint, but the tree was fully prepared by the first pass.
   const bool updatedCanShowPopup = syncPopupGeometry();
+  if (!lifetime || !popup) {
+    return;
+  }
   applySurfaceVisibility(popup, updatedCanShowPopup, true);
+  if (!lifetime || !popup) {
+    return;
+  }
   if (updatedCanShowPopup && popup->isVisible()) {
     if (popupUsesInWindowLayer()) {
       popup->update();
@@ -1272,18 +1320,25 @@ void OverlayPopupController::syncPreparedPopupVisibility() {
 
 void OverlayPopupController::applySurfaceVisibility(QWidget* popup, bool shouldShow,
                                                     bool raiseWhenShowing) {
+  const QPointer<OverlayPopupController> lifetime(this);
   const QPointer<QWidget> guardedPopup(popup);
   if (shouldShow && delegate_) {
     shouldShow = delegate_->popupSurfaceCanShow();
-    if (!guardedPopup || !popupVisible_) return;
+    if (!lifetime || !guardedPopup || !popupVisible_) return;
     if (shouldShow && popupUsesTopLevelToolLayer()) {
       if (auto* guard = AdPopupSurfaceGuard::forScope(popupScopeWindow())) {
         shouldShow = guard->canShow(popup);
-        if (!guardedPopup || !popupVisible_) return;
+        if (!lifetime || !guardedPopup || !popupVisible_) return;
       }
     }
   }
-  const QScopedValueRollback<bool> applying(applyingSurfaceVisibility_, true);
+  const bool wasApplying = applyingSurfaceVisibility_;
+  applyingSurfaceVisibility_ = true;
+  const auto restoreApplying = qScopeGuard([lifetime, wasApplying]() {
+    if (lifetime) {
+      lifetime->applyingSurfaceVisibility_ = wasApplying;
+    }
+  });
   applyPopupVisibility(guardedPopup, shouldShow, raiseWhenShowing);
 }
 
@@ -1295,7 +1350,8 @@ bool OverlayPopupController::hasSurfaceShowGuard() const {
 
 bool OverlayPopupController::syncPopupGeometry() {
   recordSyncPopupGeometryCallForTesting();
-  QWidget* popup = delegate_ ? delegate_->popupSurfaceWidget() : nullptr;
+  const QPointer<OverlayPopupController> lifetime(this);
+  const QPointer<QWidget> popup = delegate_ ? delegate_->popupSurfaceWidget() : nullptr;
   if (!popupVisible_ || !popup || !delegate_) {
     return false;
   }
@@ -1311,16 +1367,28 @@ bool OverlayPopupController::syncPopupGeometry() {
   if (useTopLevelToolLayer && popupParent) {
     const bool wasVisible = popup->isVisible();
     popup->setParent(nullptr, popup->windowFlags());
+    if (!lifetime || !popup) {
+      return false;
+    }
     popupParent = nullptr;
     setPopupInteractionHostOpen(this, true);
     applySurfaceVisibility(popup, wasVisible && !hasSurfaceShowGuard(), true);
+    if (!lifetime || !popup) {
+      return false;
+    }
   }
   if (!useTopLevelToolLayer && expectedPopupParent && popupParent != expectedPopupParent) {
     const bool wasVisible = popup->isVisible();
     popup->setParent(expectedPopupParent, popup->windowFlags());
+    if (!lifetime || !popup) {
+      return false;
+    }
     popupParent = expectedPopupParent;
     setPopupInteractionHostOpen(this, true);
     applySurfaceVisibility(popup, wasVisible && !hasSurfaceShowGuard(), true);
+    if (!lifetime || !popup) {
+      return false;
+    }
   }
   const auto rejectGeometry = [this](int reason) {
     if (geometryRejection_ != reason) {
@@ -1331,6 +1399,9 @@ bool OverlayPopupController::syncPopupGeometry() {
   if (!useTopLevelToolLayer && !popupParent) {
     rejectGeometry(1);  // Missing in-window parent.
     applySurfaceVisibility(popup, false, false);
+    if (!lifetime) {
+      return false;
+    }
     resetGeometrySyncSnapshot();
     return false;
   }
@@ -1343,6 +1414,9 @@ bool OverlayPopupController::syncPopupGeometry() {
   if (!anchorRect.isValid()) {
     rejectGeometry(2);  // Anchor is hidden or clipped out.
     applySurfaceVisibility(popup, false, false);
+    if (!lifetime) {
+      return false;
+    }
     resetGeometrySyncSnapshot();
     return false;
   }
@@ -1357,15 +1431,27 @@ bool OverlayPopupController::syncPopupGeometry() {
     if (toolScreen && popup->isWindow() && popup->screen() != toolScreen) {
       if (hasSurfaceShowGuard()) {
         applySurfaceVisibility(popup, false, false);
+        if (!lifetime || !popup) {
+          return false;
+        }
       }
       popup->setScreen(toolScreen);
+      if (!lifetime || !popup) {
+        return false;
+      }
     }
     if (hasSurfaceShowGuard() && anchorVisibilityScope &&
         popup->windowFlags().testFlag(Qt::WindowStaysOnTopHint) !=
             anchorVisibilityScope->windowFlags().testFlag(Qt::WindowStaysOnTopHint)) {
       applySurfaceVisibility(popup, false, false);
+      if (!lifetime || !popup) {
+        return false;
+      }
     }
     syncTopLevelToolTransientParent(popup, anchorVisibilityScope);
+    if (!lifetime || !popup) {
+      return false;
+    }
   }
   const QRect bounds = useTopLevelToolLayer ? (toolScreen ? toolScreen->availableGeometry()
                                                           : popupScreenBoundsInGlobal(anchorRect))
@@ -1374,9 +1460,16 @@ bool OverlayPopupController::syncPopupGeometry() {
   const int arrowOffsetHorizontal = delegate_->popupArrowOffsetHorizontal();
   const int arrowOffsetVertical = delegate_->popupArrowOffsetVertical();
 
-  if (!delegate_->popupAcceptsGeometry(anchorRect, popupSize, bounds)) {
+  const bool acceptsGeometry = delegate_->popupAcceptsGeometry(anchorRect, popupSize, bounds);
+  if (!lifetime || !popup) {
+    return false;
+  }
+  if (!acceptsGeometry) {
     rejectGeometry(3);  // Component-specific bounds policy.
     applySurfaceVisibility(popup, false, false);
+    if (!lifetime) {
+      return false;
+    }
     resetGeometrySyncSnapshot();
     return false;
   }
@@ -1404,6 +1497,9 @@ bool OverlayPopupController::syncPopupGeometry() {
 
   if (popup->size() != popupFrameSize) {
     popup->resize(popupFrameSize);
+    if (!lifetime || !popup) {
+      return false;
+    }
   }
 
   OverlayPopupPlacementInput placementInput;
@@ -1422,9 +1518,15 @@ bool OverlayPopupController::syncPopupGeometry() {
       popupFrameTopLeftForVisualTopLeft(placementResult.topLeft, popupShadowMargins);
   if (popup->pos() != popupTopLeft) {
     popup->move(popupTopLeft);
+    if (!lifetime || !popup) {
+      return false;
+    }
   }
   delegate_->popupApplyResolvedPlacement(placementResult.placement,
                                          placementResult.arrowCenterCoord);
+  if (!lifetime || !popup) {
+    return false;
+  }
 
   geometrySyncParent_ = geometrySnapshotParent;
   geometrySyncAnchorRect_ = anchorRect;
@@ -1760,16 +1862,23 @@ void OverlayPopupController::popupCloseFromHost(PopupCloseReason reason) {
     return;
   }
   closingFromHost_ = true;
+  const QPointer<OverlayPopupController> lifetime(this);
   clearAllOpenReasons();
   updatePopupVisibility(true, VisibilityUpdateSource::UserInteraction);
-  closingFromHost_ = false;
+  if (lifetime) {
+    closingFromHost_ = false;
+  }
 }
 
 void OverlayPopupController::popupRelayoutFromHost() {
   if (!popupVisible_ || !delegate_) {
     return;
   }
+  const QPointer<OverlayPopupController> lifetime(this);
   const bool canShowPopup = syncPopupGeometry();
+  if (!lifetime) {
+    return;
+  }
   applySurfaceVisibility(delegate_->popupSurfaceWidget(), canShowPopup, true);
 }
 

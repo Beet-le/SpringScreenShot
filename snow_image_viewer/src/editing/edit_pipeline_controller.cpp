@@ -428,6 +428,7 @@ EditPipelineController::EditPipelineController(EditPipelineOptions options, QObj
     connect(&exactTimer_, &QTimer::timeout, this, &EditPipelineController::scheduleExact);
     workerTimeout_.setSingleShot(true);
     connect(&workerTimeout_, &QTimer::timeout, this, [this]() {
+        const QPointer<EditPipelineController> lifetime(this);
         if (!activeWorkerJob_)
             return;
         const PendingExact request = activeWorkerJob_->request;
@@ -435,9 +436,14 @@ EditPipelineController::EditPipelineController(EditPipelineOptions options, QObj
         if (wasCancelling)
             activeWorkerJob_->cooperative = false;
         cancelActiveWorker(wasCancelling);
+        if (!lifetime)
+            return;
         if (!wasCancelling && request.requestId == latestRequestId_) {
-            setState(EditPipelineState::Failed);
-            emit failed(QStringLiteral("The image export worker timed out."));
+            if (!setState(EditPipelineState::Failed))
+                return;
+            if (!notify(&EditPipelineController::failed,
+                        QStringLiteral("The image export worker timed out.")))
+                return;
         }
         startPendingExact();
     });
@@ -480,7 +486,10 @@ EditPipelineController::~EditPipelineController() {
 void EditPipelineController::setSource(const QString& filePath,
                                        const std::shared_ptr<ImageRasterStore>& rasterStore,
                                        snow::image::RasterAnalysis analysis) {
+    const QPointer<EditPipelineController> lifetime(this);
     cancel();
+    if (!lifetime)
+        return;
     clearCache();
     sourcePath_ = QFileInfo(filePath).absoluteFilePath();
     sourceAnalysis_ = analysis;
@@ -496,7 +505,8 @@ void EditPipelineController::setSource(const QString& filePath,
         const EditRequestId generation = ++sourceGeneration_;
         QTimer::singleShot(0, this, [this, generation]() {
             if (generation == sourceGeneration_ && sourceReady_ && !gpuSource_)
-                emit sourceReady();
+                if (!notify(&EditPipelineController::sourceReady))
+                    return;
         });
         return;
     }
@@ -508,7 +518,10 @@ void EditPipelineController::setSource(const QString& filePath,
 void EditPipelineController::setGpuSource(const QString& filePath,
                                           const std::shared_ptr<ImageRasterStore>& rasterStore,
                                           snow::image::RasterAnalysis analysis) {
+    const QPointer<EditPipelineController> lifetime(this);
     cancel();
+    if (!lifetime)
+        return;
     clearCache();
     ++sourceGeneration_;
     sourcePath_ = QFileInfo(filePath).absoluteFilePath();
@@ -524,12 +537,14 @@ void EditPipelineController::setGpuSource(const QString& filePath,
     sourceReady_ = true;
     QTimer::singleShot(0, this, [this]() {
         if (gpuSource_ && sourceReady_)
-            emit sourceReady();
+            if (!notify(&EditPipelineController::sourceReady))
+                return;
     });
 }
 
 EditRequestId EditPipelineController::requestEdit(const EditExportSettings& settings,
                                                   EditChangeKind kind) {
+    const QPointer<EditPipelineController> lifetime(this);
     QElapsedTimer handlingTimer;
     handlingTimer.start();
     if (!settings.isValid() || !sourceReady_)
@@ -557,10 +572,13 @@ EditRequestId EditPipelineController::requestEdit(const EditExportSettings& sett
         if (exactResult_ && exactResult_->requestId == latestRequestId_ &&
             exportKey(exactResult_->settings, sourceGeneration_) == key)
             exactResult_->settings = normalizedSettings;
-        emit visualRequested(latestRequestId_, normalizedSettings);
-        emit performanceStageCompleted(latestRequestId_, QStringLiteral("exact.in_flight_reuse"),
-                                       handlingTimer.nsecsElapsed());
-        return latestRequestId_;
+        const auto requestId = latestRequestId_;
+        if (!notify(&EditPipelineController::visualRequested, requestId, normalizedSettings))
+            return requestId;
+        if (!notify(&EditPipelineController::performanceStageCompleted, latestRequestId_,
+                    QStringLiteral("exact.in_flight_reuse"), handlingTimer.nsecsElapsed()))
+            return requestId;
+        return requestId;
     }
     const EditRequestId requestId = ++latestRequestId_;
     latestSettings_ = normalizedSettings;
@@ -576,6 +594,8 @@ EditRequestId EditPipelineController::requestEdit(const EditExportSettings& sett
     pendingPreview_.reset();
     if (activeWorkerJob_)
         cancelActiveWorker(true);
+    if (!lifetime || requestId != latestRequestId_)
+        return requestId;
     for (const auto& cancellation : workerCancellations_) {
         if (cancellation && !cancellation->stop_requested()) {
             cancellation->request_stop();
@@ -596,11 +616,16 @@ EditRequestId EditPipelineController::requestEdit(const EditExportSettings& sett
     const int delay = kind == EditChangeKind::dimension_typing ? options_.dimensionDebounceMs
                       : kind == EditChangeKind::continuous     ? continuousDelay
                                                                : options_.discreteDebounceMs;
-    setState(EditPipelineState::VisualPending);
+    if (!setState(EditPipelineState::VisualPending))
+        return requestId;
     const bool cached = publishCacheHit(requestId, key);
-    emit visualRequested(requestId, normalizedSettings);
-    emit performanceStageCompleted(requestId, QStringLiteral("controller.request_handling"),
-                                   handlingTimer.nsecsElapsed());
+    if (!lifetime || requestId != latestRequestId_)
+        return requestId;
+    if (!notify(&EditPipelineController::visualRequested, requestId, normalizedSettings))
+        return requestId;
+    if (!notify(&EditPipelineController::performanceStageCompleted, requestId,
+                QStringLiteral("controller.request_handling"), handlingTimer.nsecsElapsed()))
+        return requestId;
     if (!cached)
         exactTimer_.start(std::max(0, delay));
     return requestId;
@@ -634,15 +659,18 @@ void EditPipelineController::submitVisualFrame(EditRequestId requestId) {
     if (requestId != latestRequestId_)
         return;
     if (state_ == EditPipelineState::VisualPending)
-        setState(EditPipelineState::VisualReady);
-    emit visualReady(requestId);
+        if (!setState(EditPipelineState::VisualReady))
+            return;
+    if (!notify(&EditPipelineController::visualReady, requestId))
+        return;
 }
 
 void EditPipelineController::scheduleExact() {
     if (!latestRequestId_ || !latestSettings_.isValid())
         return;
-    emit performanceStageCompleted(latestRequestId_, QStringLiteral("exact.debounce_delay"),
-                                   exactDelayTimer_.nsecsElapsed());
+    if (!notify(&EditPipelineController::performanceStageCompleted, latestRequestId_,
+                QStringLiteral("exact.debounce_delay"), exactDelayTimer_.nsecsElapsed()))
+        return;
     QElapsedTimer planningTimer;
     planningTimer.start();
     const std::size_t sourceBytes =
@@ -670,25 +698,30 @@ void EditPipelineController::scheduleExact() {
                              std::min(workingBytes, editingBudgetBytes_ - sourceBytes) &&
            (!cache_.empty() || !rasterCache_.empty()) && evictOldestCachePortion()) {
     }
-    emit performanceStageCompleted(latestRequestId_, QStringLiteral("exact.resource_planning"),
-                                   planningTimer.nsecsElapsed());
+    if (!notify(&EditPipelineController::performanceStageCompleted, latestRequestId_,
+                QStringLiteral("exact.resource_planning"), planningTimer.nsecsElapsed()))
+        return;
     if (workingBytes == std::numeric_limits<std::size_t>::max() ||
         sourceBytes > editingBudgetBytes_ ||
         workingBytes > editingBudgetBytes_ - std::min(sourceBytes, editingBudgetBytes_)) {
-        setState(EditPipelineState::Failed);
-        emit failed(
-            QStringLiteral("Exact export requires at least %1 bytes; %2 bytes are available. "
-                           "The live preview remains available.")
-                .arg(QString::number(workingBytes),
-                     QString::number(editingBudgetBytes_ > sourceBytes
-                                         ? editingBudgetBytes_ - sourceBytes
-                                         : 0)));
+        if (!setState(EditPipelineState::Failed))
+            return;
+        if (!notify(
+                &EditPipelineController::failed,
+                QStringLiteral("Exact export requires at least %1 bytes; %2 bytes are available. "
+                               "The live preview remains available.")
+                    .arg(QString::number(workingBytes),
+                         QString::number(editingBudgetBytes_ > sourceBytes
+                                             ? editingBudgetBytes_ - sourceBytes
+                                             : 0))))
+            return;
         return;
     }
     auto cancellation = std::make_shared<std::stop_source>();
     pendingExact_ = PendingExact{latestRequestId_, latestSettings_, cancellation,
                                  exportKey(latestSettings_, sourceGeneration_), workingBytes};
-    setState(EditPipelineState::EncodingPending);
+    if (!setState(EditPipelineState::EncodingPending))
+        return;
     if (activeWorkerCount_ >= 1)
         return;
     startPendingExact();
@@ -705,18 +738,22 @@ void EditPipelineController::startPendingExact() {
         RasterProvenance provenance = RasterProvenance::cpu_reference;
         const auto cachedRaster = findRaster(request.key.base, &provenance);
         if (cachedRaster) {
-            emit performanceStageCompleted(request.requestId,
-                                           QStringLiteral("exact.raster_cache_hit"), 0);
+            if (!notify(&EditPipelineController::performanceStageCompleted, request.requestId,
+                        QStringLiteral("exact.raster_cache_hit"), 0))
+                return;
             startCpuExact(std::move(request), cachedRaster, provenance);
         } else if (options_.allowSourceRasterReuse &&
                    canReuseSourceRaster(request.settings, sourceRaster_)) {
-            emit performanceStageCompleted(request.requestId,
-                                           QStringLiteral("exact.source_raster_reuse"), 0);
+            if (!notify(&EditPipelineController::performanceStageCompleted, request.requestId,
+                        QStringLiteral("exact.source_raster_reuse"), 0))
+                return;
             cacheRaster(request.key.base, sourceRaster_, RasterProvenance::source_exact);
             startCpuExact(std::move(request), sourceRaster_, RasterProvenance::source_exact);
         } else if (gpuSource_) {
             gpuReadbackRequestId_ = request.requestId;
-            emit exactRasterRequested(request.requestId, request.settings);
+            if (!notify(&EditPipelineController::exactRasterRequested, request.requestId,
+                        request.settings))
+                return;
         } else {
             startCpuExact(std::move(request));
         }
@@ -771,17 +808,22 @@ void EditPipelineController::failGpuRequest(EditRequestId requestId, const QStri
     gpuSource_ = false;
     sourceReady_ = false;
     sourceCancellation_ = std::make_shared<std::stop_source>();
-    emit performanceStageCompleted(requestId, QStringLiteral("exact.gpu_cpu_fallback"), 0);
+    if (!notify(&EditPipelineController::performanceStageCompleted, requestId,
+                QStringLiteral("exact.gpu_cpu_fallback"), 0))
+        return;
     startSourceDecode(sourceGeneration_, sourceCancellation_);
 }
 
 void EditPipelineController::cancel() {
+    const QPointer<EditPipelineController> lifetime(this);
     exactTimer_.stop();
     ++latestRequestId_;
     if (sourceCancellation_)
         sourceCancellation_->request_stop();
     if (activeWorkerJob_)
         cancelActiveWorker(!shuttingDown_);
+    if (!lifetime)
+        return;
     for (const auto& cancellation : workerCancellations_) {
         if (cancellation && !cancellation->stop_requested()) {
             cancellation->request_stop();
@@ -847,16 +889,79 @@ void EditPipelineController::clearAllCachesForBenchmark() {
     clearCache();
 }
 
-void EditPipelineController::setState(EditPipelineState state) {
-    if (state_ == state)
-        return;
-    const bool wasBusy = isBusy();
-    if (state != EditPipelineState::ArtifactReady)
-        previewPending_ = false;
-    state_ = state;
-    emit stateChanged(state_);
-    if (wasBusy != isBusy())
-        emit busyChanged(isBusy());
+bool EditPipelineController::setState(EditPipelineState state) {
+    const QPointer<EditPipelineController> lifetime(this);
+    bool current = true;
+    if (state_ != state) {
+        if (state != EditPipelineState::ArtifactReady)
+            previewPending_ = false;
+        state_ = state;
+        current = notify(&EditPipelineController::stateChanged, state);
+        if (!lifetime)
+            return false;
+    }
+    // A state observer may replace the request without another state transition.
+    // Reconcile this property even when request-specific work has been superseded.
+    const bool busyCurrent = publishBusyState();
+    return current && busyCurrent;
+}
+
+bool EditPipelineController::publishBusyState() {
+    if (shuttingDown_)
+        return true;
+    const bool busy = isBusy();
+    if (publishedBusy_ == busy)
+        return true;
+    // Record delivery before invoking observers so reentrant state changes compare against
+    // the value already received and cannot duplicate or suppress a later transition.
+    publishedBusy_ = busy;
+    return notify(&EditPipelineController::busyChanged, busy);
+}
+
+bool EditPipelineController::isCurrentRequest(const PendingExact& request) const {
+    return request.requestId == latestRequestId_ &&
+           request.key == exportKey(latestSettings_, sourceGeneration_) && request.cancellation &&
+           !request.cancellation->stop_requested();
+}
+
+bool EditPipelineController::storeCurrentResult(const PendingExact& request,
+                                                ExactEditResult& result) {
+    if (!isCurrentRequest(request))
+        return false;
+    // Equivalent edits retain their export identity while replacing presentation settings.
+    // Completed work owns its pixels and artifact; the controller owns current settings.
+    result.requestId = request.requestId;
+    result.settings = latestSettings_;
+    exactResult_ = result;
+    return true;
+}
+
+bool EditPipelineController::publishCurrentArtifact(const PendingExact& request,
+                                                    ExactEditResult& result) {
+    if (!storeCurrentResult(request, result))
+        return false;
+    previewPending_ = !result.exactPreviewAvailable;
+    if (!setState(result.exactPreviewAvailable ? EditPipelineState::ExactReady
+                                               : EditPipelineState::ArtifactReady) ||
+        !storeCurrentResult(request, result))
+        return false;
+    const EncodedEditResult encoded{result.requestId, result.settings,   result.warning,
+                                    result.artifact,  result.provenance, result.alphaContent};
+    if (!notify(&EditPipelineController::artifactReady, encoded))
+        return false;
+    return storeCurrentResult(request, result);
+}
+
+bool EditPipelineController::publishCurrentExact(const PendingExact& request,
+                                                 ExactEditResult& result) {
+    if (!storeCurrentResult(request, result))
+        return false;
+    previewPending_ = false;
+    if (!setState(EditPipelineState::ExactReady) || !storeCurrentResult(request, result))
+        return false;
+    if (pendingCacheHit_ && pendingCacheHit_->cancellation == request.cancellation)
+        pendingCacheHit_.reset();
+    return notify(&EditPipelineController::exactReady, result);
 }
 
 void EditPipelineController::startSourceDecode(
@@ -869,16 +974,21 @@ void EditPipelineController::startSourceDecode(
                 if (generation != sourceGeneration_ || cancellation->stop_requested())
                     return;
                 if (!result.error.isEmpty()) {
-                    emit failed(result.error);
+                    if (!notify(&EditPipelineController::failed, result.error))
+                        return;
                     return;
                 }
                 for (const PerformanceTiming& timing : result.timings) {
-                    emit performanceStageCompleted(0, timing.stage, timing.nanoseconds);
+                    if (!notify(&EditPipelineController::performanceStageCompleted, 0, timing.stage,
+                                timing.nanoseconds))
+                        return;
                 }
                 sourceAnalysis_ = result.analysis;
                 sourceRaster_ = std::move(result.raster);
                 if (!sourceRaster_) {
-                    emit failed(QStringLiteral("The decoded source raster is unavailable."));
+                    if (!notify(&EditPipelineController::failed,
+                                QStringLiteral("The decoded source raster is unavailable.")))
+                        return;
                     return;
                 }
                 if (const snow::image::Document* document = sourceRaster_->document())
@@ -892,7 +1002,8 @@ void EditPipelineController::startSourceDecode(
                 if (resumeExact) {
                     exactTimer_.start(0);
                 } else {
-                    emit sourceReady();
+                    if (!notify(&EditPipelineController::sourceReady))
+                        return;
                 }
             });
     const auto artifactDirectory = artifactDirectory_;
@@ -1345,22 +1456,29 @@ void EditPipelineController::finishBasePreparation(PendingExact request, Preview
                          !request.cancellation->stop_requested();
     if (!result.error.isEmpty()) {
         if (current) {
-            setState(EditPipelineState::Failed);
-            emit failed(result.error);
+            if (!setState(EditPipelineState::Failed))
+                return;
+            if (!notify(&EditPipelineController::failed, result.error))
+                return;
         }
         startPendingExact();
         return;
     }
     if (!result.raster) {
         if (current) {
-            setState(EditPipelineState::Failed);
-            emit failed(QStringLiteral("The base raster package was not produced."));
+            if (!setState(EditPipelineState::Failed))
+                return;
+            if (!notify(&EditPipelineController::failed,
+                        QStringLiteral("The base raster package was not produced.")))
+                return;
         }
         startPendingExact();
         return;
     }
     for (const PerformanceTiming& timing : result.timings) {
-        emit performanceStageCompleted(request.requestId, timing.stage, timing.nanoseconds);
+        if (!notify(&EditPipelineController::performanceStageCompleted, request.requestId,
+                    timing.stage, timing.nanoseconds))
+            return;
     }
     cacheRaster(request.key.base, result.raster, result.provenance);
     if (!current) {
@@ -1374,9 +1492,13 @@ void EditPipelineController::finishBasePreparation(PendingExact request, Preview
 void EditPipelineController::dispatchWorker(PendingExact request,
                                             std::shared_ptr<MappedRasterPackage> package,
                                             RasterProvenance provenance) {
+    const QPointer<EditPipelineController> lifetime(this);
     if (!package || !artifactDirectory_ || !artifactDirectory_->isValid()) {
-        setState(EditPipelineState::Failed);
-        emit failed(QStringLiteral("The image export package is unavailable."));
+        if (!setState(EditPipelineState::Failed))
+            return;
+        if (!notify(&EditPipelineController::failed,
+                    QStringLiteral("The image export package is unavailable.")))
+            return;
         return;
     }
     auto plan = editResourcePlan(request.settings, package->source().descriptor(),
@@ -1411,10 +1533,13 @@ void EditPipelineController::dispatchWorker(PendingExact request,
         required > editingBudgetBytes_ - resident) {
         const std::uint64_t available =
             resident < editingBudgetBytes_ ? editingBudgetBytes_ - resident : 0;
-        setState(EditPipelineState::Failed);
-        emit failed(QStringLiteral("Exact export requires %1 bytes; %2 bytes are available. "
+        if (!setState(EditPipelineState::Failed))
+            return;
+        if (!notify(&EditPipelineController::failed,
+                    QStringLiteral("Exact export requires %1 bytes; %2 bytes are available. "
                                    "The live preview remains available.")
-                        .arg(QString::number(required), QString::number(available)));
+                        .arg(QString::number(required), QString::number(available))))
+            return;
         startPendingExact();
         return;
     }
@@ -1457,6 +1582,8 @@ void EditPipelineController::dispatchWorker(PendingExact request,
     workerTimeout_.start(options_.workerTimeoutMs);
     if (!worker_ || worker_->state() == QProcess::NotRunning)
         startWorker();
+    if (!lifetime)
+        return;
     sendActiveWorkerJob();
 }
 
@@ -1464,6 +1591,7 @@ void EditPipelineController::dispatchPreviewWorker(PendingExact request,
                                                    std::shared_ptr<const EncodedArtifact> artifact,
                                                    RasterProvenance provenance,
                                                    snow::image::AlphaContent alphaContent) {
+    const QPointer<EditPipelineController> lifetime(this);
     if (!artifact || !artifactDirectory_ || !artifactDirectory_->isValid())
         return;
     request.cancellation = std::make_shared<std::stop_source>();
@@ -1502,6 +1630,8 @@ void EditPipelineController::dispatchPreviewWorker(PendingExact request,
     workerTimeout_.start(options_.workerTimeoutMs);
     if (!worker_ || worker_->state() == QProcess::NotRunning)
         startWorker();
+    if (!lifetime)
+        return;
     sendActiveWorkerJob();
 }
 
@@ -1554,6 +1684,7 @@ void EditPipelineController::startWorker() {
 }
 
 void EditPipelineController::sendActiveWorkerJob() {
+    const QPointer<EditPipelineController> lifetime(this);
     if (!activeWorkerJob_ || activeWorkerJob_->sent || !workerReady_ || !worker_ ||
         worker_->state() != QProcess::Running)
         return;
@@ -1568,9 +1699,13 @@ void EditPipelineController::sendActiveWorkerJob() {
     if (!normalizedOptions) {
         const PendingExact request = activeWorkerJob_->request;
         cancelActiveWorker(true);
+        if (!lifetime)
+            return;
         if (request.requestId == latestRequestId_) {
-            setState(EditPipelineState::Failed);
-            emit failed(statusText(normalizedOptions.error()));
+            if (!setState(EditPipelineState::Failed))
+                return;
+            if (!notify(&EditPipelineController::failed, statusText(normalizedOptions.error())))
+                return;
         }
         return;
     }
@@ -1590,8 +1725,13 @@ void EditPipelineController::sendActiveWorkerJob() {
     if (!activeWorkerJob_->previewOnly) {
         if (!activeWorkerJob_->baseAsset) {
             cancelActiveWorker(true);
-            setState(EditPipelineState::Failed);
-            emit failed(QStringLiteral("The image export raster asset is unavailable."));
+            if (!lifetime)
+                return;
+            if (!setState(EditPipelineState::Failed))
+                return;
+            if (!notify(&EditPipelineController::failed,
+                        QStringLiteral("The image export raster asset is unavailable.")))
+                return;
             return;
         }
         job.insert(QStringLiteral("baseRaster"), activeWorkerJob_->baseAsset->workerTransport());
@@ -1619,31 +1759,55 @@ void EditPipelineController::sendActiveWorkerJob() {
     if (worker_->write(frame) != frame.size()) {
         const PendingExact request = activeWorkerJob_->request;
         cancelActiveWorker(true);
+        if (!lifetime)
+            return;
         if (request.requestId == latestRequestId_) {
-            setState(EditPipelineState::Failed);
-            emit failed(QStringLiteral("The image export job could not be sent to the worker."));
+            if (!setState(EditPipelineState::Failed))
+                return;
+            if (!notify(&EditPipelineController::failed,
+                        QStringLiteral("The image export job could not be sent to the worker.")))
+                return;
         }
         return;
     }
     activeWorkerJob_->sent = true;
-    emit performanceStageCompleted(activeWorkerJob_->request.requestId,
-                                   QStringLiteral("worker.job_dispatched"), 0);
+    if (!notify(&EditPipelineController::performanceStageCompleted,
+                activeWorkerJob_->request.requestId, QStringLiteral("worker.job_dispatched"), 0))
+        return;
     if (replacementDispatchTimer_.isValid() &&
         activeWorkerJob_->request.requestId == replacementDispatchRequestId_) {
-        emit performanceStageCompleted(activeWorkerJob_->request.requestId,
-                                       QStringLiteral("worker.replacement_dispatch"),
-                                       replacementDispatchTimer_.nsecsElapsed());
+        if (!notify(&EditPipelineController::performanceStageCompleted,
+                    activeWorkerJob_->request.requestId,
+                    QStringLiteral("worker.replacement_dispatch"),
+                    replacementDispatchTimer_.nsecsElapsed()))
+            return;
         replacementDispatchTimer_.invalidate();
         replacementDispatchRequestId_ = 0;
     }
     workerTimeout_.start(options_.workerTimeoutMs);
 }
 
+bool EditPipelineController::notifyWorkerTiming(QProcess& worker, EditRequestId requestId,
+                                                QString stage, qint64 nanoseconds) {
+    const QPointer<EditPipelineController> lifetime(this);
+    const QPointer<QProcess> process(&worker);
+    if (shuttingDown_)
+        return false;
+    emit performanceStageCompleted(requestId, stage, nanoseconds);
+    // Protocol progress belongs to the process, independently of the current edit/source.
+    return lifetime && process && worker_ == process.data();
+}
+
 void EditPipelineController::handleWorkerOutput() {
+    const QPointer<EditPipelineController> lifetime(this);
     if (!worker_)
         return;
-    workerOutput_.append(worker_->readAllStandardOutput());
-    for (;;) {
+    const QPointer<QProcess> process(worker_);
+    const auto isCurrentWorker = [&] {
+        return lifetime && process && worker_ == process.data() && !shuttingDown_;
+    };
+    workerOutput_.append(process->readAllStandardOutput());
+    while (isCurrentWorker()) {
         worker_protocol::Frame frame;
         QString frameError;
         if (!worker_protocol::takeFrame(&workerOutput_, &frame, &frameError)) {
@@ -1651,9 +1815,13 @@ void EditPipelineController::handleWorkerOutput() {
                 const bool affected =
                     activeWorkerJob_ && activeWorkerJob_->request.requestId == latestRequestId_;
                 cancelActiveWorker(false);
+                if (!lifetime)
+                    return;
                 if (affected) {
-                    setState(EditPipelineState::Failed);
-                    emit failed(frameError);
+                    if (!setState(EditPipelineState::Failed))
+                        return;
+                    if (!notify(&EditPipelineController::failed, frameError))
+                        return;
                 }
             }
             return;
@@ -1665,18 +1833,27 @@ void EditPipelineController::handleWorkerOutput() {
                 const bool affected =
                     activeWorkerJob_ && activeWorkerJob_->request.requestId == latestRequestId_;
                 cancelActiveWorker(false);
+                if (!lifetime)
+                    return;
                 if (affected) {
-                    setState(EditPipelineState::Failed);
-                    emit failed(tr("The image export worker uses an incompatible protocol."));
+                    if (!setState(EditPipelineState::Failed))
+                        return;
+                    if (!notify(&EditPipelineController::failed,
+                                tr("The image export worker uses an incompatible protocol.")))
+                        return;
                 }
                 return;
             }
             workerStartupNanoseconds_ =
                 workerStartupTimer_.isValid() ? workerStartupTimer_.nsecsElapsed() : 0;
-            emit performanceStageCompleted(latestRequestId_, QStringLiteral("worker.startup"),
-                                           workerStartupNanoseconds_);
+            // Commit the consumed handshake before observers can dispatch or replace work.
             workerReady_ = true;
+            if (!notifyWorkerTiming(*process, latestRequestId_, QStringLiteral("worker.startup"),
+                                    workerStartupNanoseconds_))
+                return;
             sendActiveWorkerJob();
+            if (!isCurrentWorker())
+                return;
             continue;
         }
         if (frame.type == worker_protocol::MessageType::cancelled && activeWorkerJob_ &&
@@ -1689,10 +1866,13 @@ void EditPipelineController::handleWorkerOutput() {
             reservedWorkerBytes_ -=
                 std::min(reservedWorkerBytes_, job->request.estimatedWorkingBytes);
             cleanupWorkerJob(*job);
-            emit performanceStageCompleted(
-                latestRequestId_, QStringLiteral("worker.cooperative_cancellation"),
-                job->cancellationTimer.isValid() ? job->cancellationTimer.nsecsElapsed() : 0);
+            if (!notifyWorkerTiming(
+                    *process, latestRequestId_, QStringLiteral("worker.cooperative_cancellation"),
+                    job->cancellationTimer.isValid() ? job->cancellationTimer.nsecsElapsed() : 0))
+                return;
             startPendingExact();
+            if (!isCurrentWorker())
+                return;
             continue;
         }
         if (!activeWorkerJob_)
@@ -1706,9 +1886,14 @@ void EditPipelineController::handleWorkerOutput() {
             if (object.value(QStringLiteral("artifactPath")).toString() !=
                 activeWorkerJob_->artifactPath) {
                 cancelActiveWorker(true);
-                setState(EditPipelineState::Failed);
-                emit failed(
-                    QStringLiteral("The image export worker returned a mismatched artifact."));
+                if (!lifetime)
+                    return;
+                if (!setState(EditPipelineState::Failed))
+                    return;
+                if (!notify(
+                        &EditPipelineController::failed,
+                        QStringLiteral("The image export worker returned a mismatched artifact.")))
+                    return;
                 continue;
             }
             QString artifactError;
@@ -1717,12 +1902,17 @@ void EditPipelineController::handleWorkerOutput() {
                                                   &artifactError) ||
                 receipt.format != activeWorkerJob_->request.settings.format) {
                 cancelActiveWorker(true);
-                setState(EditPipelineState::Failed);
-                emit failed(
-                    artifactError.isEmpty()
-                        ? QStringLiteral(
-                              "The image export worker returned an invalid artifact receipt.")
-                        : artifactError);
+                if (!lifetime)
+                    return;
+                if (!setState(EditPipelineState::Failed))
+                    return;
+                if (!notify(
+                        &EditPipelineController::failed,
+                        artifactError.isEmpty()
+                            ? QStringLiteral(
+                                  "The image export worker returned an invalid artifact receipt.")
+                            : artifactError))
+                    return;
                 continue;
             }
             bool artifactBytesValid = false;
@@ -1733,9 +1923,15 @@ void EditPipelineController::handleWorkerOutput() {
             if (!artifactBytesValid || artifactBytes == 0 || !artifactInfo.isFile() ||
                 static_cast<std::uint64_t>(artifactInfo.size()) != artifactBytes) {
                 cancelActiveWorker(true);
-                setState(EditPipelineState::Failed);
-                emit failed(QStringLiteral(
-                    "The image export worker returned an artifact with an invalid size."));
+                if (!lifetime)
+                    return;
+                if (!setState(EditPipelineState::Failed))
+                    return;
+                if (!notify(
+                        &EditPipelineController::failed,
+                        QStringLiteral(
+                            "The image export worker returned an artifact with an invalid size.")))
+                    return;
                 continue;
             }
             const auto lease = TemporaryFileLease::adopt(activeWorkerJob_->artifactPath,
@@ -1745,8 +1941,12 @@ void EditPipelineController::handleWorkerOutput() {
                 std::move(receipt), lease, &artifactError);
             if (!activeWorkerJob_->artifact) {
                 cancelActiveWorker(true);
-                setState(EditPipelineState::Failed);
-                emit failed(artifactError);
+                if (!lifetime)
+                    return;
+                if (!setState(EditPipelineState::Failed))
+                    return;
+                if (!notify(&EditPipelineController::failed, artifactError))
+                    return;
                 continue;
             }
             activeWorkerJob_->warning = object.value(QStringLiteral("warning")).toString();
@@ -1757,9 +1957,14 @@ void EditPipelineController::handleWorkerOutput() {
             if (alphaContent < static_cast<int>(snow::image::AlphaContent::opaque) ||
                 alphaContent > static_cast<int>(snow::image::AlphaContent::non_opaque)) {
                 cancelActiveWorker(true);
-                setState(EditPipelineState::Failed);
-                emit failed(
-                    QStringLiteral("The image export worker returned invalid alpha metadata."));
+                if (!lifetime)
+                    return;
+                if (!setState(EditPipelineState::Failed))
+                    return;
+                if (!notify(
+                        &EditPipelineController::failed,
+                        QStringLiteral("The image export worker returned invalid alpha metadata.")))
+                    return;
                 continue;
             }
             activeWorkerJob_->alphaContent = static_cast<snow::image::AlphaContent>(alphaContent);
@@ -1809,35 +2014,33 @@ void EditPipelineController::handleWorkerOutput() {
             cached.provenance = activeWorkerJob_->provenance;
             cached.alphaContent = activeWorkerJob_->alphaContent;
             cacheResult(request.key, cached);
-            if (request.requestId == latestRequestId_ &&
-                request.key == exportKey(latestSettings_, sourceGeneration_)) {
-                exactResult_ = cached;
-                previewPending_ = true;
-                setState(EditPipelineState::ArtifactReady);
-                EncodedEditResult encoded{request.requestId, request.settings,
-                                          cached.warning,    cached.artifact,
-                                          cached.provenance, cached.alphaContent};
-                emit artifactReady(encoded);
-                emit performanceStageCompleted(request.requestId,
-                                               QStringLiteral("request_to_artifact_ready"),
-                                               requestToArtifact);
-            }
+            // These measurements describe completed work. Publish them before result observers
+            // can replace the edit and retire its unfinished comparison preview.
             const auto addTiming = [&](const char* key, const char* stage) {
                 bool okay = false;
                 const qint64 value =
                     object.value(QString::fromLatin1(key)).toString().toLongLong(&okay);
-                if (okay)
-                    emit performanceStageCompleted(request.requestId, QString::fromLatin1(stage),
-                                                   value);
+                return !okay || notify(&EditPipelineController::performanceStageCompleted,
+                                       request.requestId, QString::fromLatin1(stage), value);
             };
-            addTiming("prepareNs", "exact.prepare_export");
-            addTiming("alphaClassificationNs", "exact.classify_alpha");
-            addTiming("encodeNs", "exact.encode");
-            addTiming("directNativeEncodeNs", "exact.direct_native_encode");
-            addTiming("validateReceiptNs", "exact.validate_receipt");
+            if (!addTiming("prepareNs", "exact.prepare_export") ||
+                !addTiming("alphaClassificationNs", "exact.classify_alpha") ||
+                !addTiming("encodeNs", "exact.encode") ||
+                !addTiming("directNativeEncodeNs", "exact.direct_native_encode") ||
+                !addTiming("validateReceiptNs", "exact.validate_receipt"))
+                return;
             if (object.value(QStringLiteral("preparationCacheHit")).toBool())
-                emit performanceStageCompleted(request.requestId,
-                                               QStringLiteral("exact.preparation_cache_hit"), 0);
+                if (!notify(&EditPipelineController::performanceStageCompleted, request.requestId,
+                            QStringLiteral("exact.preparation_cache_hit"), 0))
+                    return;
+            if (request.requestId == latestRequestId_ &&
+                request.key == exportKey(latestSettings_, sourceGeneration_)) {
+                if (!notify(&EditPipelineController::performanceStageCompleted, request.requestId,
+                            QStringLiteral("request_to_artifact_ready"), requestToArtifact))
+                    return;
+                if (!publishCurrentArtifact(request, cached))
+                    return;
+            }
             if (activeWorkerJob_ && activeWorkerJob_->nonce == jobNonce)
                 workerTimeout_.start(options_.workerTimeoutMs);
             continue;
@@ -1869,6 +2072,8 @@ void EditPipelineController::handleWorkerOutput() {
                         QFile::remove(activeWorkerJob_->artifactPath + QStringLiteral(".partial"));
                         QFile::remove(activeWorkerJob_->previewPath + QStringLiteral(".partial"));
                         sendActiveWorkerJob();
+                        if (!lifetime)
+                            return;
                         continue;
                     }
                 }
@@ -1885,10 +2090,15 @@ void EditPipelineController::handleWorkerOutput() {
                 QFile::remove(job->previewPath);
                 if (job->request.settings.format == snow::image::Format::jxl)
                     retireIdleWorker();
+                if (!lifetime)
+                    return;
                 if (job->request.requestId == latestRequestId_) {
                     previewPending_ = false;
-                    setState(EditPipelineState::ArtifactReady);
-                    emit previewUnavailable(job->request.requestId, error);
+                    if (!setState(EditPipelineState::ArtifactReady))
+                        return;
+                    if (!notify(&EditPipelineController::previewUnavailable, job->request.requestId,
+                                error))
+                        return;
                 }
                 startPendingExact();
             } else {
@@ -1898,6 +2108,8 @@ void EditPipelineController::handleWorkerOutput() {
                 cleanupWorkerJob(*job);
                 finishWorker(job->request, std::move(result));
             }
+            if (!lifetime)
+                return;
             continue;
         }
         if (frame.type != worker_protocol::MessageType::preview_ready)
@@ -1992,6 +2204,8 @@ void EditPipelineController::handleWorkerOutput() {
         if (!job->preparedAsset)
             QFile::remove(job->preparedPath);
         finishWorker(job->request, std::move(result));
+        if (!lifetime)
+            return;
     }
 }
 
@@ -2018,14 +2232,19 @@ void EditPipelineController::handleWorkerExit(int exitCode) {
     if (affected) {
         if (artifactPublished) {
             previewPending_ = false;
-            setState(EditPipelineState::ArtifactReady);
-            emit previewUnavailable(
-                latestRequestId_,
-                QStringLiteral(
-                    "The exact comparison preview is unavailable because the worker exited."));
+            if (!setState(EditPipelineState::ArtifactReady))
+                return;
+            if (!notify(
+                    &EditPipelineController::previewUnavailable, latestRequestId_,
+                    QStringLiteral(
+                        "The exact comparison preview is unavailable because the worker exited.")))
+                return;
         } else {
-            setState(EditPipelineState::Failed);
-            emit failed(QStringLiteral("The image export worker exited unexpectedly."));
+            if (!setState(EditPipelineState::Failed))
+                return;
+            if (!notify(&EditPipelineController::failed,
+                        QStringLiteral("The image export worker exited unexpectedly.")))
+                return;
         }
     }
     // Start another process only when queued or newly requested work needs it.
@@ -2062,9 +2281,9 @@ void EditPipelineController::cancelActiveWorker(bool restart) {
         auto job = std::move(activeWorkerJob_);
         cleanupWorkerJob(*job);
         ++cancellationCount_;
-        emit performanceStageCompleted(latestRequestId_,
-                                       QStringLiteral("worker.cooperative_cancellation"),
-                                       cancellation.nsecsElapsed());
+        if (!notify(&EditPipelineController::performanceStageCompleted, latestRequestId_,
+                    QStringLiteral("worker.cooperative_cancellation"), cancellation.nsecsElapsed()))
+            return;
         if (restart && (!worker_ || worker_->state() == QProcess::NotRunning))
             startWorker();
         return;
@@ -2112,8 +2331,9 @@ void EditPipelineController::cancelActiveWorker(bool restart) {
     workerOutput_.clear();
     replacementDispatchTimer_.invalidate();
     replacementDispatchRequestId_ = 0;
-    emit performanceStageCompleted(latestRequestId_, QStringLiteral("worker.cancellation_latency"),
-                                   cancellation.nsecsElapsed());
+    if (!notify(&EditPipelineController::performanceStageCompleted, latestRequestId_,
+                QStringLiteral("worker.cancellation_latency"), cancellation.nsecsElapsed()))
+        return;
     if (restart && !shuttingDown_)
         startWorker();
 }
@@ -2135,6 +2355,7 @@ void EditPipelineController::retireIdleWorker() {
 }
 
 void EditPipelineController::finishWorker(const PendingExact& request, PreviewResult result) {
+    const QPointer<EditPipelineController> lifetime(this);
     activeWorkerCount_ = std::max(0, activeWorkerCount_ - 1);
     reservedWorkerBytes_ -= std::min(reservedWorkerBytes_, request.estimatedWorkingBytes);
     std::erase(workerCancellations_, request.cancellation);
@@ -2145,6 +2366,8 @@ void EditPipelineController::finishWorker(const PendingExact& request, PreviewRe
     // worker before another JPEG XL job receives a fresh per-job memory ceiling.
     if (request.settings.format == snow::image::Format::jxl)
         retireIdleWorker();
+    if (!lifetime)
+        return;
     const bool current = request.requestId == latestRequestId_ &&
                          request.key == exportKey(latestSettings_, sourceGeneration_) &&
                          !request.cancellation->stop_requested();
@@ -2152,15 +2375,22 @@ void EditPipelineController::finishWorker(const PendingExact& request, PreviewRe
         if (!result.error.isEmpty()) {
             if (result.artifact && result.artifact->byteSize() > 0) {
                 previewPending_ = false;
-                setState(EditPipelineState::ArtifactReady);
-                emit previewUnavailable(request.requestId, result.error);
+                if (!setState(EditPipelineState::ArtifactReady))
+                    return;
+                if (!notify(&EditPipelineController::previewUnavailable, request.requestId,
+                            result.error))
+                    return;
             } else {
-                setState(EditPipelineState::Failed);
-                emit failed(result.error);
+                if (!setState(EditPipelineState::Failed))
+                    return;
+                if (!notify(&EditPipelineController::failed, result.error))
+                    return;
             }
         } else if (result.artifact && result.artifact->byteSize() > 0) {
             for (const auto& timing : result.timings) {
-                emit performanceStageCompleted(request.requestId, timing.stage, timing.nanoseconds);
+                if (!notify(&EditPipelineController::performanceStageCompleted, request.requestId,
+                            timing.stage, timing.nanoseconds))
+                    return;
             }
             ExactEditResult exact;
             exact.requestId = request.requestId;
@@ -2173,11 +2403,8 @@ void EditPipelineController::finishWorker(const PendingExact& request, PreviewRe
             exact.exactPreviewAvailable = true;
             exact.alphaContent = result.alphaContent;
             cacheResult(request.key, exact);
-            exactResult_ = exact;
-            setState(EditPipelineState::ExactReady);
-            // The result is passed by value; a handler may synchronously clear
-            // exactResult_ without affecting other receivers.
-            emit exactReady(exact);
+            if (!publishCurrentExact(request, exact))
+                return;
         }
     }
     if (!current && result.artifact && result.artifact->byteSize() > 0) {
@@ -2206,17 +2433,20 @@ bool EditPipelineController::publishCacheHit(EditRequestId requestId, const Expo
     const PendingExact request{requestId, latestSettings_, std::make_shared<std::stop_source>(),
                                key, 0};
     pendingCacheHit_ = request;
-    setState(EditPipelineState::EncodingPending);
+    if (!setState(EditPipelineState::EncodingPending))
+        return true;
     QTimer::singleShot(0, this, [this, request]() {
-        const auto finishPublication = qScopeGuard([this, cancellation = request.cancellation] {
-            if (pendingCacheHit_ && pendingCacheHit_->cancellation == cancellation)
-                pendingCacheHit_.reset();
-        });
+        const auto finishPublication =
+            qScopeGuard([lifetime = QPointer<EditPipelineController>(this),
+                         cancellation = request.cancellation] {
+                if (!lifetime)
+                    return;
+                if (lifetime->pendingCacheHit_ &&
+                    lifetime->pendingCacheHit_->cancellation == cancellation)
+                    lifetime->pendingCacheHit_.reset();
+            });
         const EditRequestId requestId = request.requestId;
-        const auto current = [&] {
-            return requestId == latestRequestId_ && !request.cancellation->stop_requested() &&
-                   request.key == exportKey(latestSettings_, sourceGeneration_);
-        };
+        const auto current = [&] { return isCurrentRequest(request); };
         if (!current())
             return;
         const ExportKey key = request.key;
@@ -2230,29 +2460,20 @@ bool EditPipelineController::publishCacheHit(EditRequestId requestId, const Expo
         if (found->result.exactPreviewAvailable)
             found->previewAccessSerial = found->artifactAccessSerial;
         ExactEditResult exact = found->result;
-        exact.requestId = requestId;
-        exact.settings = latestSettings_;
-        exactResult_ = exact;
-        emit performanceStageCompleted(requestId, QStringLiteral("exact.cache_hit"), 0);
+        if (!storeCurrentResult(request, exact))
+            return;
+        if (!notify(&EditPipelineController::performanceStageCompleted, requestId,
+                    QStringLiteral("exact.cache_hit"), 0))
+            return;
         if (!current())
             return;
-        previewPending_ = !exact.exactPreviewAvailable;
-        setState(exact.exactPreviewAvailable ? EditPipelineState::ExactReady
-                                             : EditPipelineState::ArtifactReady);
+        if (!publishCurrentArtifact(request, exact))
+            return;
         if (!current())
             return;
-        exact.settings = latestSettings_;
-        exactResult_ = exact;
-        EncodedEditResult encoded{requestId,      exact.settings,   exact.warning,
-                                  exact.artifact, exact.provenance, exact.alphaContent};
-        emit artifactReady(encoded);
-        if (!current())
-            return;
-        exact.settings = latestSettings_;
-        exactResult_ = exact;
         if (exact.exactPreviewAvailable) {
-            pendingCacheHit_.reset();
-            emit exactReady(exact);
+            if (!publishCurrentExact(request, exact))
+                return;
         } else {
             const EditExportSettings settings = latestSettings_;
             PendingExact previewRequest{requestId, settings, std::make_shared<std::stop_source>(),
@@ -2309,19 +2530,20 @@ bool EditPipelineController::publishCacheHit(EditRequestId requestId, const Expo
             }
             if (recovered) {
                 exact.exactPreviewAvailable = true;
-                exactResult_ = exact;
+                if (!storeCurrentResult(request, exact))
+                    return;
                 previewPending_ = false;
                 cacheResult(key, exact);
-                setState(EditPipelineState::ExactReady);
-                emit performanceStageCompleted(requestId,
-                                               QStringLiteral("exact.raster_preview_recovery"),
-                                               recoveryTimer.nsecsElapsed());
+                if (!setState(EditPipelineState::ExactReady))
+                    return;
+                if (!notify(&EditPipelineController::performanceStageCompleted, requestId,
+                            QStringLiteral("exact.raster_preview_recovery"),
+                            recoveryTimer.nsecsElapsed()))
+                    return;
                 if (!current())
                     return;
-                exact.settings = latestSettings_;
-                exactResult_ = exact;
-                pendingCacheHit_.reset();
-                emit exactReady(exact);
+                if (!publishCurrentExact(request, exact))
+                    return;
             } else {
                 dispatchPreviewWorker(std::move(previewRequest), exact.artifact, exact.provenance,
                                       exact.alphaContent);

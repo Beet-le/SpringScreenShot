@@ -16,6 +16,11 @@ SnowRuntime SnowCanvasWidgetRuntimeBinding::engine() const {
     return m_engine;
 }
 
+snow_canvas_runtime::RuntimeLease SnowCanvasWidgetRuntimeBinding::retainEngine() const {
+    return m_runtimeOwner ? snow_canvas_runtime::Access::retainHandle(*m_runtimeOwner)
+                          : snow_canvas_runtime::RuntimeLease{};
+}
+
 SnowViewport SnowCanvasWidgetRuntimeBinding::viewportHandle() const {
     return m_viewport.get();
 }

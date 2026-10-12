@@ -5,6 +5,7 @@
 #include "snow_shot/presentation/mainwindowskincontroller.h"
 #include "snow_shot/presentation/mainwindowskinwidget.h"
 #include "snow_shot/storage/applicationstorage.h"
+#include "snow_shot/storage/configurationschema.h"
 #include "../src/image/snowimageqtcodec.h"
 #include "../src/presentation/tools/screenshottoolpalettebuttons.h"
 
@@ -28,6 +29,8 @@
 #include <QFile>
 #include <QGraphicsDropShadowEffect>
 #include <QImage>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QHideEvent>
 #include <QLabel>
 #include <QLayout>
@@ -1672,32 +1675,60 @@ void printToolbarRoutingAndLayoutMigration() {
     namespace layout = snow_shot::presentation::toolbar_layout;
     using Kind = snow_shot::storage::ScreenshotToolbarLayoutKind;
     const QString print = QStringLiteral("print");
+    const QString upload = QStringLiteral("upload-to-cloud");
     const QString quick = QStringLiteral("quick-save");
     const QString save = QStringLiteral("save-as-file");
     for (const auto kind : {Kind::ActionTools, Kind::PinnedActionTools}) {
+        const auto verifyStorage = [kind](
+                                       const snow_shot::storage::ScreenshotToolbarLayout& input) {
+            QJsonArray positions;
+            for (const auto& position : input.positions)
+                positions.append(QJsonArray::fromStringList(position));
+            const QString key = kind == Kind::ActionTools
+                                    ? QStringLiteral("screenshot_toolbar/action_tools_layout")
+                                    : QStringLiteral("pin_to_screen/action_tools_layout");
+            const auto stored = snow_shot::storage::ConfigurationSchema::normalize(
+                key,
+                QJsonObject{{QStringLiteral("positions"), positions},
+                            {QStringLiteral("hidden"), QJsonArray::fromStringList(input.hidden)}});
+            const auto expected = layout::normalizedLayout(input, kind);
+            QJsonArray expectedPositions;
+            for (const auto& position : expected.positions)
+                expectedPositions.append(QJsonArray::fromStringList(position));
+            require(stored.valid &&
+                        stored.value.toObject().value(QStringLiteral("positions")) ==
+                            expectedPositions &&
+                        stored.value.toObject().value(QStringLiteral("hidden")) ==
+                            QJsonArray::fromStringList(expected.hidden),
+                    "storage and toolbar models must agree on Print layout migration");
+        };
         auto defaults = layout::defaultPositions(kind);
-        require(defaults.contains(QStringList{print, quick, save}),
+        require(defaults.contains(QStringList{upload, print, quick, save}),
                 "Print must join the default Save as File stack");
         snow_shot::storage::ScreenshotToolbarLayout old;
         old.positions = {{save, QStringLiteral("text-recognition")}};
         const auto upgraded = layout::normalizedLayout(old, kind);
         require(upgraded.positions[0] ==
-                    QStringList{print, quick, save, QStringLiteral("text-recognition")},
+                    QStringList{upload, print, quick, save, QStringLiteral("text-recognition")},
                 "migration must preserve previous item order and placement");
+        verifyStorage(old);
         require(layout::normalizedLayout(upgraded, kind) == upgraded,
                 "migration must be idempotent");
         old.positions = {{print}, {save}};
         require(layout::normalizedLayout(old, kind).positions[0] == QStringList{print},
                 "explicitly positioned Print must remain in its position");
+        verifyStorage(old);
         old.positions = {{save}};
         old.hidden = {print};
         const auto hiddenPrint = layout::normalizedLayout(old, kind);
         require(hiddenPrint.hidden.contains(print) && !hiddenPrint.positions[0].contains(print),
                 "explicitly hidden Print must remain hidden");
+        verifyStorage(old);
         old.positions.clear();
         old.hidden = {save};
         require(layout::normalizedLayout(old, kind).hidden.contains(print),
                 "migrated Print must inherit Save as File's hidden state");
+        verifyStorage(old);
         const auto stack = layout::stackPresentation(QStringList{print, quick, save},
                                                      [](const QString&) { return true; });
         require(stack.entryItemId() == save, "Save as File must remain the initial trigger");

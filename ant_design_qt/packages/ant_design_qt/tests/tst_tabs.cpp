@@ -61,6 +61,11 @@ class TabsTest final : public QObject {
   void editableCardEmitsAddAndCloseRequests();
   void arrowKeysSelectTheNextEnabledTab();
   void selectionUsesStandardButtonState();
+  void activationSurvivesOwnerDeletion();
+  void activationTracksTabIdentityAcrossMutation();
+  void selectionMutationSurvivesOwnerDeletion();
+  void selectionNotificationsTrackNestedChanges();
+  void nestedSelectionNotificationsSurviveOwnerDeletion();
   void propertiesRoundTrip();
   void sizeHintsFollowContentAndTokens();
   void extraContentTracksQObjectLifetime();
@@ -99,6 +104,90 @@ void TabsTest::firstEnabledTabBecomesCurrent() {
   QCOMPARE(tabs.count(), 2);
 }
 
+void TabsTest::activationSurvivesOwnerDeletion() {
+  for (const bool keyboard : {false, true}) {
+    for (const int signal : {0, 1, 2}) {
+      QPointer<AdTabs> tabs = new AdTabs;
+      tabs->addTab(QStringLiteral("first"), QStringLiteral("First"));
+      tabs->addTab(QStringLiteral("second"), QStringLiteral("Second"));
+      const auto deleteOwner = [&] { delete tabs.data(); };
+      if (signal == 0) {
+        connect(tabs, &AdTabs::tabClicked, this, deleteOwner);
+      } else if (signal == 1) {
+        connect(tabs, &AdTabs::currentIndexChanged, this, deleteOwner);
+      } else {
+        connect(tabs, &AdTabs::currentKeyChanged, this, deleteOwner);
+      }
+      QAbstractButton* button =
+          tabButton(tabs, keyboard ? QStringLiteral("First") : QStringLiteral("Second"));
+      QVERIFY(button);
+      if (keyboard) {
+        QKeyEvent event(QEvent::KeyPress, Qt::Key_Right, Qt::NoModifier);
+        QCoreApplication::sendEvent(button, &event);
+      } else {
+        button->click();
+      }
+      QVERIFY(tabs.isNull());
+    }
+  }
+}
+
+void TabsTest::activationTracksTabIdentityAcrossMutation() {
+  for (const bool keyboard : {false, true}) {
+    for (const bool remove : {false, true}) {
+      AdTabs tabs;
+      tabs.addTab(QStringLiteral("first"), QStringLiteral("First"));
+      tabs.addTab(QStringLiteral("second"), QStringLiteral("Second"));
+      connect(&tabs, &AdTabs::tabClicked, this, [&](const QString& key) {
+        QCOMPARE(key, QStringLiteral("second"));
+        if (remove) {
+          tabs.clear();
+        } else {
+          AdTabs::TabItem item;
+          item.key = QStringLiteral("inserted");
+          item.label = QStringLiteral("Inserted");
+          tabs.insertTab(0, item);
+        }
+      });
+      QAbstractButton* button =
+          tabButton(&tabs, keyboard ? QStringLiteral("First") : QStringLiteral("Second"));
+      QVERIFY(button);
+      if (keyboard) {
+        QKeyEvent event(QEvent::KeyPress, Qt::Key_Right, Qt::NoModifier);
+        QCoreApplication::sendEvent(button, &event);
+      } else {
+        button->click();
+      }
+      QCOMPARE(tabs.currentKey(), remove ? QString() : QStringLiteral("second"));
+      QCOMPARE(tabs.currentIndex(), remove ? -1 : 2);
+    }
+  }
+}
+
+void TabsTest::selectionMutationSurvivesOwnerDeletion() {
+  for (const int mutation : {0, 1, 2, 3, 4}) {
+    QPointer<AdTabs> tabs = new AdTabs;
+    tabs->addTab(QStringLiteral("first"), QStringLiteral("First"));
+    tabs->addTab(QStringLiteral("second"), QStringLiteral("Second"));
+    tabs->setCurrentIndex(1);
+    connect(tabs, &AdTabs::currentIndexChanged, this, [&] { delete tabs.data(); });
+    if (mutation == 0) {
+      tabs->setCurrentIndex(0);
+    } else if (mutation == 1) {
+      AdTabs::TabItem item;
+      item.key = QStringLiteral("inserted");
+      tabs->insertTab(0, item);
+    } else if (mutation == 2) {
+      tabs->removeTab(1);
+    } else if (mutation == 3) {
+      tabs->clear();
+    } else {
+      tabs->setTabEnabled(1, false);
+    }
+    QVERIFY(tabs.isNull());
+  }
+}
+
 void TabsTest::keysStayStableAcrossInsertionAndRemoval() {
   AdTabs tabs;
   tabs.addTab(QStringLiteral("a"), QStringLiteral("A"));
@@ -116,6 +205,56 @@ void TabsTest::keysStayStableAcrossInsertionAndRemoval() {
   QCOMPARE(tabs.currentIndex(), 1);
   QCOMPARE(tabs.currentKey(), QStringLiteral("b"));
   QCOMPARE(tabs.tabKey(0), QStringLiteral("zero"));
+}
+
+void TabsTest::selectionNotificationsTrackNestedChanges() {
+  for (const bool removeSelected : {false, true}) {
+    AdTabs tabs;
+    tabs.addTab(QStringLiteral("first"), QStringLiteral("First"));
+    tabs.addTab(QStringLiteral("second"), QStringLiteral("Second"));
+    tabs.addTab(QStringLiteral("third"), QStringLiteral("Third"));
+    QList<int> indices;
+    QStringList keys;
+    connect(&tabs, &AdTabs::currentIndexChanged, this, [&](int index) {
+      QCOMPARE(index, tabs.currentIndex());
+      indices.append(index);
+      if (index == 1 && tabs.currentKey() == QStringLiteral("second")) {
+        if (removeSelected) {
+          tabs.removeTab(1);
+        } else {
+          tabs.setCurrentIndex(2);
+        }
+      }
+    });
+    connect(&tabs, &AdTabs::currentKeyChanged, this, [&](const QString& key) {
+      QCOMPARE(key, tabs.currentKey());
+      keys.append(key);
+      if (key == QStringLiteral("third")) tabs.setCurrentKey(QStringLiteral("first"));
+    });
+    tabs.setCurrentIndex(1);
+    QCOMPARE(indices, removeSelected ? QList<int>({1, 0}) : QList<int>({1, 2, 0}));
+    QCOMPARE(keys, QStringList({QStringLiteral("third"), QStringLiteral("first")}));
+    QCOMPARE(tabs.currentKey(), QStringLiteral("first"));
+  }
+}
+
+void TabsTest::nestedSelectionNotificationsSurviveOwnerDeletion() {
+  QPointer<AdTabs> tabs = new AdTabs;
+  tabs->addTab(QStringLiteral("first"), QStringLiteral("First"));
+  tabs->addTab(QStringLiteral("second"), QStringLiteral("Second"));
+  tabs->addTab(QStringLiteral("third"), QStringLiteral("Third"));
+  int keyNotifications = 0;
+  connect(tabs, &AdTabs::currentIndexChanged, this, [&](int index) {
+    if (index == 1) {
+      tabs->setCurrentIndex(2);
+    } else if (index == 2) {
+      delete tabs.data();
+    }
+  });
+  connect(tabs, &AdTabs::currentKeyChanged, this, [&] { ++keyNotifications; });
+  tabs->setCurrentIndex(1);
+  QVERIFY(tabs.isNull());
+  QCOMPARE(keyNotifications, 0);
 }
 
 void TabsTest::disabledTabsCannotBecomeCurrent() {

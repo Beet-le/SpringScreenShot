@@ -22,6 +22,7 @@
 #endif
 #include "snow_shot/presentation/screenshotautofiltercontroller.h"
 #include "snow_shot/presentation/screenshottoolbarmainpanel.h"
+#include "snow_shot/presentation/screenshottoolpalettehost.h"
 #include "snow_shot/presentation/screenshottoolbarlayoutmodel.h"
 #include "close_release_native_test_support.h"
 #include "snow_shot/presentation/screenshotpinnedwindow.h"
@@ -21522,6 +21523,233 @@ void pinnedToolbarAnchorsToContentOffscreen() {
     window.hide();
 }
 
+void pinnedToolbarRepositionsForSecondaryRowsOffscreen() {
+    using Access = ScreenshotPinnedWindowTestAccess;
+    using Tool = ScreenshotToolPalette::Tool;
+    using snow_shot::presentation::pinnedLogicalRect;
+    using snow_shot::presentation::pinnedScreenGeometry;
+    namespace layout = snow_shot::presentation::toolbar_layout;
+    require(QGuiApplication::platformName() == QStringLiteral("offscreen"),
+            "secondary toolbar fixture requires the offscreen platform");
+    QScreen* screen = QGuiApplication::primaryScreen();
+    require(screen && screen->handle(), "secondary toolbar fixture requires a screen");
+    const QRect originalBounds = screen->handle()->geometry();
+    const QRect originalAvailable = screen->handle()->availableGeometry();
+    const auto restoreScreen = qScopeGuard([&] {
+        QWindowSystemInterface::handleScreenGeometryChange(screen, originalBounds,
+                                                           originalAvailable);
+        QWindowSystemInterface::flushWindowSystemEvents();
+        QApplication::processEvents();
+    });
+    const qreal dpr = screen->devicePixelRatio();
+    const QRect nativeBounds(0, 0, qRound(1800 * dpr), qRound(1200 * dpr));
+    QWindowSystemInterface::handleScreenGeometryChange(screen, nativeBounds, nativeBounds);
+    QWindowSystemInterface::flushWindowSystemEvents();
+    QApplication::processEvents();
+    const QRect bounds = screen->geometry();
+
+    auto config = clickThroughTestConfig(*screen);
+    const QRect initialContent(bounds.right() - 800, bounds.top() + 200, 500, 220);
+    config.nativeGeometry = ScreenshotGeometryMapper::nativeRectForLogicalRect(
+        initialContent, bounds, pinnedScreenGeometry(*screen));
+    config.initialWindowSize = config.nativeGeometry.size();
+    QImage image(config.initialWindowSize, QImage::Format_RGB32);
+    image.fill(QColor(42, 84, 126));
+    config.canvasSourceRect = QRectF(image.rect());
+    config.imageSource = ScreenshotImageSource::fromImage(image, config.canvasSourceRect);
+    config.initialBorderVisible = true;
+    config.initialShadowVisible = false;
+    ScreenshotPinnedWindow window;
+    Access::prepareReplacement(window, config);
+    window.show();
+    Access::editSelectionOffscreen(window, true);
+    waitForUi(10);
+    auto* controller = window.findChild<ScreenshotPinnedEditController*>();
+    auto* toolbar = controller ? controller->toolbarWindow() : nullptr;
+    auto* palette = toolbar ? toolbar->palette() : nullptr;
+    require(toolbar && palette && palette->mainPanel() && toolbar->isVisible(),
+            "secondary toolbar fixture must show the real pinned edit palette");
+    const auto activate = [&](Tool tool) {
+        if (tool == Tool::Move) {
+            controller->activateResizeWindowTool();
+        } else {
+            require(palette->activateToolShortcut(tool), "secondary fixture tool must activate");
+        }
+        waitForUi(5);
+        require(palette->activeTool() == tool, "secondary fixture must use the requested tool");
+    };
+    const auto visibleMain = [&] {
+        auto* panel = palette->mainPanel();
+        return QRect(panel->mapToGlobal(QPoint()), panel->size());
+    };
+    const auto occupied = [&] {
+        return toolbar->occupiedContentRect().translated(toolbar->contentPosition());
+    };
+    const auto content = [&] { return pinnedLogicalRect(Access::contentGeometry(window), screen); };
+    const auto moveContent = [&](const QPoint& logicalTopLeft) {
+        const QRect target = ScreenshotGeometryMapper::nativeRectForLogicalRect(
+            QRect(logicalTopLeft, content().size()), bounds, pinnedScreenGeometry(*screen));
+        const QPoint delta = target.topLeft() - Access::contentGeometry(window).topLeft();
+        require(Access::moveWindow(window, window.currentNativeGeometry().translated(delta)),
+                "secondary toolbar fixture must move its pinned content");
+        waitForUi(5);
+    };
+
+    activate(Tool::Move);
+    const auto collapsed = toolbar->placementSnapshot().bottom;
+    const int occupiedBelowMainTop =
+        collapsed.occupiedContentRect.bottom() - collapsed.mainToolbarContentRect.top();
+    // Reserve enough room for the collapsed row, but less than an expanded row.
+    const int contentBottom = bounds.bottom() - occupiedBelowMainTop - 15;
+    moveContent(QPoint(initialContent.left(), contentBottom - content().height()));
+    const QRect bottomMain = visibleMain();
+    require(bounds.contains(occupied()) && bottomMain.top() == content().bottom() + 6,
+            "the collapsed pinned toolbar must fit below the bottom-edge content");
+
+    activate(Tool::Shape);
+    require(palette->styleToolbarVisible(), "Shape must reveal a secondary style row");
+    const auto expanded = toolbar->placementSnapshot().bottom;
+    const QPoint unchangedBottomPosition =
+        bottomMain.topLeft() - expanded.mainToolbarContentRect.topLeft();
+    require(!bounds.contains(expanded.occupiedContentRect.translated(unchangedBottomPosition)),
+            "the expanded row must overflow if the collapsed toolbar remains anchored below");
+    require(bounds.contains(occupied()) && visibleMain().bottom() == content().top() - 5,
+            "showing a secondary row must move the untouched pinned toolbar above the content");
+    activate(Tool::Text);
+    require(bounds.contains(occupied()) && visibleMain().bottom() == content().top() - 5,
+            "switching secondary rows must retain a fully visible top placement");
+    activate(Tool::Move);
+    require(!palette->styleToolbarVisible() && visibleMain() == bottomMain &&
+                bounds.contains(occupied()),
+            "collapsing the secondary row must restore the untouched toolbar below the content");
+
+    toolbar->moveContentTo(toolbar->contentPosition() + QPoint(24, -7));
+    toolbar->dragFinished();
+    const QRect manualMain = visibleMain();
+    require(manualMain != bottomMain, "manual fixture must move the toolbar away from its anchor");
+    for (const Tool tool : {Tool::Shape, Tool::Text, Tool::Move}) {
+        activate(tool);
+        require(visibleMain() == manualMain,
+                "secondary row growth and collapse must preserve the user's dragged main row");
+    }
+    Access::editSelectionOffscreen(window, false);
+    Access::editSelectionOffscreen(window, true);
+    waitForUi(5);
+    toolbar = controller->toolbarWindow();
+    palette = toolbar ? toolbar->palette() : nullptr;
+    require(palette, "reopening annotation mode must recreate the palette");
+    activate(Tool::Move);
+    require(visibleMain() == bottomMain && bounds.contains(occupied()),
+            "reopening annotation mode must reset manual placement and use the content anchor");
+
+    // A user-customized compact main row leaves the real Text style row wider.
+    const auto drawingKind = snow_shot::storage::ScreenshotToolbarLayoutKind::DrawingTools;
+    QStringList hiddenDrawing = layout::defaultOrder(drawingKind);
+    hiddenDrawing.removeAll(QStringLiteral("text"));
+    palette->setToolbarLayout({{{QStringLiteral("text")}}, hiddenDrawing});
+    const auto actionKind = snow_shot::storage::ScreenshotToolbarLayoutKind::PinnedActionTools;
+    palette->setActionToolsLayout({{}, layout::defaultOrder(actionKind)});
+    waitForUi(5);
+    const int mainWidth = visibleMain().width();
+    moveContent(QPoint(bounds.left() + mainWidth + 5 - content().width(), bounds.top() + 200));
+    require(bounds.contains(occupied()), "the compact main row must fit before Text expands");
+    activate(Tool::Text);
+    require(palette->styleToolbarVisible() && occupied().width() > mainWidth,
+            "the horizontal fixture must have a secondary row wider than the main row");
+    require(bounds.contains(occupied()) && occupied().left() == bounds.left(),
+            "a wider secondary row must clamp the untouched toolbar at the left monitor edge");
+    activate(Tool::Move);
+    moveContent(QPoint(bounds.right() + 1 - content().width(), bounds.top() + 200));
+    activate(Tool::Text);
+    require(bounds.contains(occupied()) && occupied().right() == bounds.right(),
+            "an expanded secondary row must remain visible at the right monitor edge");
+    Access::editSelectionOffscreen(window, false);
+    window.hide();
+}
+
+void pinnedToolbarPlacementCanRetireItsOwnerOffscreen() {
+    using Access = ScreenshotPinnedWindowTestAccess;
+    using snow_shot::presentation::pinnedScreenGeometry;
+    require(QGuiApplication::platformName() == QStringLiteral("offscreen"),
+            "toolbar retirement fixture requires the offscreen platform");
+    QScreen* screen = QGuiApplication::primaryScreen();
+    require(screen && screen->handle(), "toolbar retirement fixture requires a screen");
+    const QRect originalBounds = screen->handle()->geometry();
+    const QRect originalAvailable = screen->handle()->availableGeometry();
+    const auto restoreScreen = qScopeGuard([&] {
+        QWindowSystemInterface::handleScreenGeometryChange(screen, originalBounds,
+                                                           originalAvailable);
+        QWindowSystemInterface::flushWindowSystemEvents();
+        QApplication::processEvents();
+    });
+    const qreal dpr = screen->devicePixelRatio();
+    const QRect nativeBounds(0, 0, qRound(1800 * dpr), qRound(1200 * dpr));
+    QWindowSystemInterface::handleScreenGeometryChange(screen, nativeBounds, nativeBounds);
+    QWindowSystemInterface::flushWindowSystemEvents();
+    QApplication::processEvents();
+    const QRect bounds = screen->geometry();
+
+    for (const bool closePin : {false, true}) {
+        auto config = clickThroughTestConfig(*screen);
+        const QRect initialContent(bounds.right() - 800, bounds.top() + 200, 500, 220);
+        config.nativeGeometry = ScreenshotGeometryMapper::nativeRectForLogicalRect(
+            initialContent, bounds, pinnedScreenGeometry(*screen));
+        config.initialWindowSize = config.nativeGeometry.size();
+        QImage image(config.initialWindowSize, QImage::Format_RGB32);
+        image.fill(QColor(42, 84, 126));
+        config.canvasSourceRect = QRectF(image.rect());
+        config.imageSource = ScreenshotImageSource::fromImage(image, config.canvasSourceRect);
+        config.initialBorderVisible = true;
+        config.initialShadowVisible = false;
+        ScreenshotPinnedWindow window;
+        Access::prepareReplacement(window, config);
+        window.show();
+        Access::editSelectionOffscreen(window, true);
+        waitForUi(10);
+        QPointer<ScreenshotPinnedEditController> controller =
+            window.findChild<ScreenshotPinnedEditController*>();
+        QPointer<ScreenshotFloatingToolPaletteWindow> toolbar =
+            controller ? controller->toolbarWindow() : nullptr;
+        require(toolbar && controller->toolbarHost(),
+                "toolbar retirement fixture must create the real pinned palette");
+        controller->activateResizeWindowTool();
+        controller->beginNativeWindowInteraction();
+        const QRect bottomContent(initialContent.left(), bounds.bottom() - 230, 500, 220);
+        const QRect target = ScreenshotGeometryMapper::nativeRectForLogicalRect(
+            bottomContent, bounds, pinnedScreenGeometry(*screen));
+        const QPoint delta = target.topLeft() - Access::contentGeometry(window).topLeft();
+        require(Access::moveWindow(window, window.currentNativeGeometry().translated(delta)),
+                "toolbar retirement fixture must move the pin during native interaction");
+        int retirements = 0;
+        QObject::connect(controller->toolbarHost(),
+                         &ScreenshotToolPaletteHost::visibleContentChanged, &window, [&] {
+                             if (retirements++ != 0) {
+                                 return;
+                             }
+                             if (closePin) {
+                                 window.close();
+                             } else {
+                                 controller->setEditMode(false);
+                             }
+                         });
+        controller->endNativeWindowInteraction();
+        require(retirements >= 1 && toolbar == nullptr,
+                "row placement callbacks may synchronously retire their toolbar");
+        if (closePin) {
+            require(controller == nullptr,
+                    "closing a pin during placement must retire its edit controller");
+        } else {
+            require(controller != nullptr && !controller->editMode(),
+                    "a placement callback may disable editing while its controller survives");
+            Access::editSelectionOffscreen(window, true);
+            require(controller->toolbarWindow() && controller->toolbarWindow()->isVisible(),
+                    "surviving placement guards must allow the toolbar to reopen");
+            Access::editSelectionOffscreen(window, false);
+            window.hide();
+        }
+    }
+}
+
 void pinnedShadowStateAndMarginsOffscreen() {
     using Access = ScreenshotPinnedWindowTestAccess;
     using snow_shot::presentation::pinnedOuterRect;
@@ -22733,6 +22961,8 @@ int main(int argc, char* argv[]) {
         }
         if (app.arguments().contains(QStringLiteral("--toolbar-placement-only"))) {
             pinnedToolbarAnchorsToContentOffscreen();
+            pinnedToolbarRepositionsForSecondaryRowsOffscreen();
+            pinnedToolbarPlacementCanRetireItsOwnerOffscreen();
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--memory-idle-only"))) {

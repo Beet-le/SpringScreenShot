@@ -329,12 +329,219 @@ void serverChangesRefreshModelsAndPreserveStreams(const QString& directory) {
                 client.cachedChatModels().first().id == QStringLiteral("replacement"),
             "missing selection falls back and retired refresh cannot overwrite latest catalog");
 }
+
+void preferenceAndCatalogPublicationPermitServiceDeletion(const QString& directory) {
+    for (const bool removeFromPersistence : {false, true}) {
+        SnowShotApiClient client(QStringLiteral("http://127.0.0.1:1"));
+        ConfigurationStore settings(
+            directory + QStringLiteral("/save-lifetime-%1.json").arg(removeFromPersistence), true,
+            true, 60000);
+        QPointer<TranslationService> service =
+            &TranslationService::forClient(client, settings, QLocale::English);
+        int notifications = 0;
+        const auto remove = [&] {
+            ++notifications;
+            delete service.data();
+        };
+        if (removeFromPersistence) {
+            QObject::connect(&settings, &ConfigurationStore::valueChanged, &settings,
+                             [&](const QString&, const QJsonValue&) {
+                                 if (service)
+                                     remove();
+                             });
+        } else {
+            QObject::connect(service, &TranslationService::preferencesChanged, &settings,
+                             [&](TranslationService::ChangeReason) { remove(); });
+        }
+        auto preferences = service->preferences();
+        preferences.targetLanguage = QStringLiteral("ja");
+        require(!service->savePreferences(preferences),
+                "retired preference publication reports cancellation");
+        require(!service && notifications == 1,
+                "preference persistence and observers may retire their service");
+    }
+
+    for (const bool removeFromPersistence : {false, true}) {
+        SnowShotApiClient client(QStringLiteral("http://127.0.0.1:1"));
+        ConfigurationStore settings(
+            directory + QStringLiteral("/catalog-lifetime-%1.json").arg(removeFromPersistence),
+            true, true, 60000);
+        QPointer<TranslationService> service =
+            &TranslationService::forClient(client, settings, QLocale::English);
+        int notifications = 0;
+        const auto remove = [&] {
+            ++notifications;
+            delete service.data();
+        };
+        if (removeFromPersistence) {
+            QObject::connect(&settings, &ConfigurationStore::valueChanged, &settings,
+                             [&](const QString& key, const QJsonValue&) {
+                                 if (key == QStringLiteral("screenshot_translation/model") &&
+                                     service)
+                                     remove();
+                             });
+        } else {
+            QObject::connect(service, &TranslationService::preferencesChanged, &settings,
+                             [&](TranslationService::ChangeReason) { remove(); });
+        }
+        const snow_shot::CustomAiModelConfiguration model{
+            QStringLiteral("33333333-3333-4333-8333-333333333333"),
+            QStringLiteral("Lifetime model"),
+            QStringLiteral("http://127.0.0.1:1/v1"),
+            QStringLiteral("test-key"),
+            QStringLiteral("local-model"),
+            true};
+        client.setCustomModels({model});
+        require(!service && notifications == 1,
+                "catalog selection persistence and observers may retire their service");
+    }
+}
+
+void nestedPreferenceSaveSupersedesPublication(const QString& directory) {
+    SnowShotApiClient client(QStringLiteral("http://127.0.0.1:1"));
+    ConfigurationStore settings(directory + QStringLiteral("/nested-preferences.json"), true, true,
+                                60000);
+    auto& service = TranslationService::forClient(client, settings, QLocale::English);
+    bool nested = false;
+    int catalogNotifications = 0;
+    QObject::connect(&service, &TranslationService::catalogChanged, &settings,
+                     [&] { ++catalogNotifications; });
+    QObject::connect(&service, &TranslationService::preferencesChanged, &settings,
+                     [&](TranslationService::ChangeReason) {
+                         if (nested)
+                             return;
+                         nested = true;
+                         auto preferences = service.preferences();
+                         preferences.targetLanguage = QStringLiteral("zh-Hans");
+                         require(service.savePreferences(preferences),
+                                 "nested preference update completes");
+                     });
+    auto preferences = service.preferences();
+    preferences.targetLanguage = QStringLiteral("ja");
+    require(!service.savePreferences(preferences),
+            "superseded preference publication reports cancellation");
+    require(nested && service.preferences().targetLanguage == QStringLiteral("zh-Hans") &&
+                settings.value(QStringLiteral("screenshot_translation/target_language")) ==
+                    QStringLiteral("zh-Hans") &&
+                catalogNotifications == 1,
+            "latest preference update owns the remaining catalog notification");
+}
+
+void catalogMetadataChangesPreservePreferenceWrites(const QString& directory) {
+    for (const bool fromPersistence : {false, true}) {
+        SnowShotApiClient client{QString()};
+        ConfigurationStore settings(
+            directory + QStringLiteral("/catalog-during-save-%1.json").arg(fromPersistence), true,
+            true, 60000);
+        auto& service = TranslationService::forClient(client, settings, QLocale::English);
+        snow_shot::CustomAiModelConfiguration model{
+            QStringLiteral("33333333-3333-4333-8333-333333333333"),
+            QStringLiteral("Initial name"),
+            QStringLiteral("http://127.0.0.1:1/v1"),
+            QStringLiteral("test-key"),
+            QStringLiteral("local-model"),
+            true};
+        client.setCustomModels({model});
+        require(service.preferences().modelId == model.selectionId(),
+                "catalog metadata fixture starts with a selected custom model");
+        bool refreshed = false;
+        const auto refresh = [&] {
+            if (refreshed)
+                return;
+            refreshed = true;
+            model.name = QStringLiteral("Updated name");
+            client.setCustomModels({model});
+        };
+        if (fromPersistence) {
+            QObject::connect(&settings, &ConfigurationStore::valueChanged, &settings,
+                             [&](const QString& key, const QJsonValue&) {
+                                 if (key ==
+                                     QStringLiteral("screenshot_translation/target_language"))
+                                     refresh();
+                             });
+        } else {
+            QObject::connect(&service, &TranslationService::preferencesChanged, &settings,
+                             [&](TranslationService::ChangeReason) { refresh(); });
+        }
+        int preferenceNotifications = 0;
+        QObject::connect(&service, &TranslationService::preferencesChanged, &settings,
+                         [&](TranslationService::ChangeReason) { ++preferenceNotifications; });
+        auto preferences = service.preferences();
+        preferences.targetLanguage = QStringLiteral("ja");
+        require(service.savePreferences(preferences),
+                "catalog-only updates do not retire a successful preference save");
+        require(refreshed && service.preferences() == preferences &&
+                    settings.value(QStringLiteral("screenshot_translation/target_language")) ==
+                        QStringLiteral("ja") &&
+                    service.models().first().name == model.name && preferenceNotifications == 1,
+                "catalog refresh keeps persisted and published translation preferences aligned");
+    }
+}
+
+void catalogSelectionWritesRespectNestedUpdates(const QString& directory) {
+    for (const bool saveNestedPreferences : {false, true}) {
+        SnowShotApiClient client{QString()};
+        ConfigurationStore settings(
+            directory +
+                QStringLiteral("/catalog-selection-write-%1.json").arg(saveNestedPreferences),
+            true, true, 60000);
+        auto& service = TranslationService::forClient(client, settings, QLocale::English);
+        snow_shot::CustomAiModelConfiguration model{
+            QStringLiteral("33333333-3333-4333-8333-333333333333"),
+            QStringLiteral("Initial name"),
+            QStringLiteral("http://127.0.0.1:1/v1"),
+            QStringLiteral("test-key"),
+            QStringLiteral("local-model"),
+            true};
+        bool nested = false;
+        int preferenceNotifications = 0;
+        TranslationService::ChangeReason reason = TranslationService::ChangeReason::Catalog;
+        QObject::connect(&service, &TranslationService::preferencesChanged, &settings,
+                         [&](TranslationService::ChangeReason nextReason) {
+                             ++preferenceNotifications;
+                             reason = nextReason;
+                         });
+        QObject::connect(&settings, &ConfigurationStore::valueChanged, &settings,
+                         [&](const QString& key, const QJsonValue&) {
+                             if (nested || key != QStringLiteral("screenshot_translation/model"))
+                                 return;
+                             nested = true;
+                             if (saveNestedPreferences) {
+                                 auto preferences = service.preferences();
+                                 preferences.modelId = model.selectionId();
+                                 preferences.targetLanguage = QStringLiteral("ja");
+                                 require(service.savePreferences(preferences),
+                                         "nested user preferences supersede catalog selection");
+                             } else {
+                                 model.name = QStringLiteral("Updated name");
+                                 client.setCustomModels({model});
+                             }
+                         });
+        client.setCustomModels({model});
+        require(nested && service.preferences().modelId == model.selectionId() &&
+                    settings.value(QStringLiteral("screenshot_translation/model")) ==
+                        model.selectionId() &&
+                    preferenceNotifications == 1,
+                "catalog selection uses the persisted model while its cache awaits publication");
+        require(reason == (saveNestedPreferences ? TranslationService::ChangeReason::UserPreferences
+                                                 : TranslationService::ChangeReason::Catalog) &&
+                    service.preferences().targetLanguage ==
+                        (saveNestedPreferences ? QStringLiteral("ja") : QStringLiteral("en")),
+                "only a genuine nested preference write supersedes catalog selection publication");
+    }
+}
 } // namespace
 
 int main(int argc, char** argv) {
     QCoreApplication application(argc, argv);
     QTemporaryDir directory;
     require(directory.isValid(), "isolated translation service settings");
+    preferenceAndCatalogPublicationPermitServiceDeletion(directory.path());
+    nestedPreferenceSaveSupersedesPublication(directory.path());
+    catalogMetadataChangesPreservePreferenceWrites(directory.path());
+    catalogSelectionWritesRespectNestedUpdates(directory.path());
+    if (application.arguments().contains(QStringLiteral("--notification-lifetime-only")))
+        return 0;
     discoverySharesRequestsAndCancellation(directory.path());
     secondaryTargetsPersistAndReachEveryUnit(directory.path());
     customModelsStayAvailableAndInvalidateTogether(directory.path());

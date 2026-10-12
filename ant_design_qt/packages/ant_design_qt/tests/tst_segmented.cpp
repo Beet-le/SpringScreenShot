@@ -3,6 +3,7 @@
 #include <QHBoxLayout>
 #include <QImage>
 #include <QPainter>
+#include <QPointer>
 #include <QRadioButton>
 #include <QSet>
 #include <QSignalSpy>
@@ -48,6 +49,9 @@ class SegmentedTest final : public QObject {
   void disabledOptionsAreSkippedByKeyboard();
   void focusFollowsSelectionChanges();
   void mouseActivationAndGlobalDisable();
+  void activationSurvivesOptionMutation();
+  void activationSurvivesOwnerDeletion();
+  void optionMutationSurvivesOwnerDeletion();
   void propertiesAndOptionDataRoundTrip();
   void geometryFollowsOrientationDistributionAndRtl();
   void sizeHintsAndCustomizationHooks();
@@ -276,6 +280,95 @@ void SegmentedTest::mouseActivationAndGlobalDisable() {
   QTest::mouseClick(buttons.at(0), Qt::LeftButton);
   QCOMPARE(segmented.currentIndex(), 1);
   QCOMPARE(activated.count(), 1);
+}
+
+void SegmentedTest::activationSurvivesOptionMutation() {
+  for (const bool keyboard : {false, true}) {
+    for (const bool replace : {false, true}) {
+      AdSegmented segmented;
+      segmented.setOptions(
+          {makeOption(QStringLiteral("daily")), makeOption(QStringLiteral("weekly"))});
+      QSignalSpy activated(&segmented, &AdSegmented::activated);
+      connect(&segmented, &AdSegmented::currentIndexChanged, &segmented, [&](int index) {
+        if (index != 1) {
+          return;
+        }
+        if (replace) {
+          segmented.setOptions({makeOption(QStringLiteral("replacement"))});
+        } else {
+          segmented.clear();
+        }
+      });
+
+      const QList<QRadioButton*> buttons = optionButtons(&segmented);
+      if (keyboard) {
+        QKeyEvent press(QEvent::KeyPress, Qt::Key_Right, Qt::NoModifier);
+        QCoreApplication::sendEvent(buttons.at(0), &press);
+      } else {
+        buttons.at(1)->click();
+      }
+
+      QCOMPARE(segmented.count(), replace ? 1 : 0);
+      QCOMPARE(segmented.currentValue(),
+               replace ? QVariant(QStringLiteral("replacement")) : QVariant());
+      QCOMPARE(activated.count(), 1);
+      QCOMPARE(activated.at(0).at(0).toInt(), 1);
+      QCOMPARE(activated.at(0).at(1), QVariant(QStringLiteral("weekly")));
+    }
+  }
+}
+
+void SegmentedTest::activationSurvivesOwnerDeletion() {
+  for (const bool keyboard : {false, true}) {
+    for (const int signal : {0, 1, 2}) {
+      QPointer<AdSegmented> segmented = new AdSegmented;
+      segmented->setOptions(
+          {makeOption(QStringLiteral("daily")), makeOption(QStringLiteral("weekly"))});
+      int activatedCount = 0;
+      connect(segmented, &AdSegmented::activated, this,
+              [&](int, const QVariant&) { ++activatedCount; });
+      const auto deleteOwner = [&] { delete segmented.data(); };
+      if (signal == 0) {
+        connect(segmented, &AdSegmented::currentIndexChanged, this, deleteOwner);
+      } else if (signal == 1) {
+        connect(segmented, &AdSegmented::currentValueChanged, this, deleteOwner);
+      } else {
+        connect(segmented, &AdSegmented::currentChanged, this, deleteOwner);
+      }
+
+      const QList<QRadioButton*> buttons = optionButtons(segmented);
+      if (keyboard) {
+        QKeyEvent press(QEvent::KeyPress, Qt::Key_Right, Qt::NoModifier);
+        QCoreApplication::sendEvent(buttons.at(0), &press);
+      } else {
+        buttons.at(1)->click();
+      }
+      QVERIFY(segmented.isNull());
+      QCOMPARE(activatedCount, 0);
+    }
+  }
+}
+
+void SegmentedTest::optionMutationSurvivesOwnerDeletion() {
+  for (const int mutation : {0, 1, 2, 3, 4}) {
+    QPointer<AdSegmented> segmented = new AdSegmented;
+    segmented->setOptions(
+        {makeOption(QStringLiteral("daily")), makeOption(QStringLiteral("weekly"))});
+    segmented->setCurrentIndex(1);
+    connect(segmented, &AdSegmented::currentIndexChanged, this, [&] { delete segmented.data(); });
+    if (mutation == 0) {
+      segmented->insertOption(0, makeOption(QStringLiteral("hourly")));
+    } else if (mutation == 1) {
+      segmented->removeOption(1);
+    } else if (mutation == 2) {
+      segmented->clear();
+    } else if (mutation == 3) {
+      segmented->setOptions({makeOption(QStringLiteral("monthly"))});
+    } else {
+      segmented->setOptionEnabled(1, false);
+    }
+    QVERIFY(segmented.isNull());
+  }
 }
 
 void SegmentedTest::propertiesAndOptionDataRoundTrip() {

@@ -85,14 +85,14 @@ class AdRadioButtonGroup final : public QButtonGroup {
   friend class AdRadio;
 
   struct RadioSnapshot {
-    AdRadio* radio = nullptr;
+    QPointer<AdRadio> radio;
     AdRadio::EffectiveStateSnapshot state;
   };
 
   QList<AdRadio*> radios() const;
   QList<AdRadio*> orderedRadios(bool visibleOnly) const;
   QList<RadioSnapshot> snapshotRadios(bool includeTokens) const;
-  void applySnapshots(const QList<RadioSnapshot>& snapshots, bool tokensMayChange);
+  bool applySnapshots(const QList<RadioSnapshot>& snapshots, bool tokensMayChange);
   void refreshManagedLayoutState();
   void refreshManagedLayoutSpacing();
   void refreshManagedLayoutDistribution();

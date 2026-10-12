@@ -1524,12 +1524,13 @@ createScreenshotToolPaletteOptionPopoverShell(adqt::widgets::AdButton* trigger, 
     popover->setArrowVisible(true);
     const QPointer<QObject> guardedReceiver(receiver);
     popover->setContentFactory(
-        [popover, guardedReceiver, materialize]() -> QWidget* {
+        [popover = QPointer<adqt::widgets::AdPopover>(popover), guardedReceiver,
+         materialize]() -> QWidget* {
             if (!guardedReceiver || !materialize) {
                 return nullptr;
             }
             materialize();
-            return popover->contentWidget();
+            return popover != nullptr ? popover->contentWidget() : nullptr;
         },
         adqt::widgets::AdPopover::FactoryContentLifetime::RecreateOnOpen);
     QObject::connect(popover, &adqt::widgets::AdPopover::contentWidgetChanged, receiver,
@@ -1569,11 +1570,14 @@ ScreenshotToolPaletteOptionPopoverEditor materializeScreenshotToolPaletteOptionP
         editor.values.push_back(option.value);
         layout->addWidget(button);
         QObject::connect(button, &adqt::widgets::AdButton::clicked, receiver,
-                         [popover, activateValue, value = option.value]() {
+                         [popover = QPointer<adqt::widgets::AdPopover>(popover), activateValue,
+                          value = option.value]() {
                              if (activateValue) {
                                  activateValue(value);
                              }
-                             popover->hide();
+                             if (popover != nullptr) {
+                                 popover->hide();
+                             }
                          });
     }
     popover->setContentWidget(content);

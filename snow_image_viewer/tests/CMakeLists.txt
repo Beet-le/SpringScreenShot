@@ -41,6 +41,55 @@ endif()
 include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/SnowQtOffscreenTest.cmake")
 snow_shot_import_offscreen_platform(snow_image_viewer_editor_lifecycle_tests)
 snow_shot_offscreen_qpa_environment(SNOW_IMAGE_VIEWER_EDITOR_LIFECYCLE_ENVIRONMENT)
+add_executable(snow_image_viewer_image_notification_lifetime_tests
+    image_notification_lifetime_tests.cpp ../resources/resources.qrc)
+target_link_libraries(snow_image_viewer_image_notification_lifetime_tests
+    PRIVATE snow_image_viewer_lib Qt6::Test)
+target_compile_features(snow_image_viewer_image_notification_lifetime_tests PRIVATE cxx_std_20)
+if(MSVC)
+    target_compile_options(snow_image_viewer_image_notification_lifetime_tests PRIVATE
+        /FS /utf-8 /permissive- /Zc:__cplusplus /W4)
+    if(SNOW_IMAGE_VIEWER_STRICT_COMPILE)
+        target_compile_options(snow_image_viewer_image_notification_lifetime_tests PRIVATE /WX)
+    endif()
+endif()
+snow_shot_import_offscreen_platform(snow_image_viewer_image_notification_lifetime_tests)
+add_test(NAME snow_image_viewer_image_notification_lifetime_tests
+    COMMAND snow_image_viewer_image_notification_lifetime_tests)
+set_tests_properties(snow_image_viewer_image_notification_lifetime_tests PROPERTIES
+    ENVIRONMENT "${SNOW_IMAGE_VIEWER_EDITOR_LIFECYCLE_ENVIRONMENT}"
+    LABELS "unit" TIMEOUT 30)
+if(WIN32)
+    set_tests_properties(snow_image_viewer_image_notification_lifetime_tests PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+endif()
+add_executable(snow_image_viewer_pipeline_notification_lifetime_tests
+    pipeline_notification_lifetime_tests.cpp)
+target_link_libraries(snow_image_viewer_pipeline_notification_lifetime_tests
+    PRIVATE snow_image_viewer_lib Qt6::Test)
+target_compile_features(snow_image_viewer_pipeline_notification_lifetime_tests PRIVATE cxx_std_20)
+add_dependencies(snow_image_viewer_pipeline_notification_lifetime_tests snow_image_edit_worker)
+add_custom_command(TARGET snow_image_viewer_pipeline_notification_lifetime_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:snow_image_edit_worker>
+        $<TARGET_FILE_DIR:snow_image_viewer_pipeline_notification_lifetime_tests>)
+if(MSVC)
+    target_compile_options(snow_image_viewer_pipeline_notification_lifetime_tests PRIVATE
+        /FS /utf-8 /permissive- /Zc:__cplusplus /W4)
+    if(SNOW_IMAGE_VIEWER_STRICT_COMPILE)
+        target_compile_options(snow_image_viewer_pipeline_notification_lifetime_tests PRIVATE /WX)
+    endif()
+endif()
+snow_shot_import_offscreen_platform(snow_image_viewer_pipeline_notification_lifetime_tests)
+add_test(NAME snow_image_viewer_pipeline_notification_lifetime_tests
+    COMMAND snow_image_viewer_pipeline_notification_lifetime_tests)
+set_tests_properties(snow_image_viewer_pipeline_notification_lifetime_tests PROPERTIES
+    ENVIRONMENT "${SNOW_IMAGE_VIEWER_EDITOR_LIFECYCLE_ENVIRONMENT}"
+    LABELS "unit" TIMEOUT 60)
+if(WIN32)
+    set_tests_properties(snow_image_viewer_pipeline_notification_lifetime_tests PROPERTIES
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+endif()
 add_test(NAME snow_image_viewer_editor_lifecycle_tests
     COMMAND snow_image_viewer_editor_lifecycle_tests)
 add_test(NAME snow_image_viewer_editor_reopen_tests

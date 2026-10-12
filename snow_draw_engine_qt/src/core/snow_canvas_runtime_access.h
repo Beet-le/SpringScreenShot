@@ -3,6 +3,7 @@
 #include "snow_draw_engine.h"
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 class SnowCanvasRuntime;
@@ -11,6 +12,8 @@ class Coordinator;
 }
 
 namespace snow_canvas_runtime {
+
+using RuntimeLease = std::shared_ptr<SnowRuntimeImpl>;
 
 class Client {
   public:
@@ -34,6 +37,7 @@ class Client {
 struct Access {
     static snow_canvas_smart_erase::Coordinator& smartErase(SnowCanvasRuntime& runtime);
     static SnowRuntime handle(const SnowCanvasRuntime& runtime);
+    static RuntimeLease retainHandle(const SnowCanvasRuntime& runtime);
     static void registerClient(SnowCanvasRuntime& runtime, Client& client);
     static void unregisterClient(SnowCanvasRuntime& runtime, Client& client);
     static void syncChangedViewports(SnowCanvasRuntime& runtime,

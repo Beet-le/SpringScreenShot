@@ -2229,6 +2229,24 @@ normalizeToolbarLayout(const QJsonValue& value, const QStringList& itemIds,
             hiddenSet.insert(QStringLiteral("quick-save"));
         }
     }
+    if (known.contains(QStringLiteral("print")) && !positioned.contains(QStringLiteral("print")) &&
+        !hiddenSet.contains(QStringLiteral("print"))) {
+        for (QStringList& position : positions) {
+            const qsizetype saveIndex = position.indexOf(QStringLiteral("save-as-file"));
+            if (saveIndex >= 0) {
+                const qsizetype quickIndex = position.indexOf(QStringLiteral("quick-save"));
+                position.insert(quickIndex >= 0 ? std::min(quickIndex, saveIndex) : saveIndex,
+                                QStringLiteral("print"));
+                positioned.insert(QStringLiteral("print"));
+                break;
+            }
+        }
+        if (!positioned.contains(QStringLiteral("print")) &&
+            hiddenSet.contains(QStringLiteral("save-as-file"))) {
+            hidden.push_back(QStringLiteral("print"));
+            hiddenSet.insert(QStringLiteral("print"));
+        }
+    }
     if (migrateScreenshotLayout && !positions.isEmpty() &&
         known.contains(QStringLiteral("convert-to-markdown"))) {
         // Upgrade earlier defaults without changing custom placements.

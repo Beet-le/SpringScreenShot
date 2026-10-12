@@ -122,6 +122,14 @@ class QtToolPopupTest final : public QObject {
   void tooltipReleasesAndRecreatesNativeResources();
   void datePickerReleasesAndRecreatesNativeResources();
   void dateRangePickerReleasesAndRecreatesNativeResources();
+  void datePickerSurvivesPopupContainerDestructionOrder();
+  void dateRangePickerSurvivesPopupContainerDestructionOrder();
+  void popoverSurvivesExternalSurfaceDestruction();
+  void popoverFactoryAllowsOwnerDeletion();
+  void popoverShowGuardAllowsOwnerDeletion();
+  void popoverVisibilityObserverAllowsOwnerDeletion();
+  void popoverShowEventAllowsOwnerDeletion();
+  void popoverPropertyObserversAllowOwnerDeletion();
   void recreateLifetimeStillDestroysPopupSurface();
   void retainedPopupCachesFollowVisibilityAndStayComponentLocal();
   void retainedFactoryContentIsLazyAndOwnerBound();
@@ -129,6 +137,8 @@ class QtToolPopupTest final : public QObject {
   void directContentRemainsCompatibleWithFactoryApi();
   void popoverDestructionAllowsUiEvents();
   void tooltipDestructionAllowsUiEvents();
+  void datePickerDestructionAllowsUiEvents();
+  void datePickerPopupReplacementAllowsOwnerDeletion();
   void colorPickerPrewarmCanBeDisabled();
   void stationaryPopoverStopsRelayout();
   void visiblePopoverRelayoutDoesNotRaise();
@@ -1118,6 +1128,394 @@ void QtToolPopupTest::dateRangePickerReleasesAndRecreatesNativeResources() {
   QVERIFY(surface->backingStore());
 }
 
+void QtToolPopupTest::datePickerSurvivesPopupContainerDestructionOrder() {
+  auto* host = new QWidget;
+  host->resize(640, 360);
+  auto* picker = new AdDatePicker(host);
+  picker->setGeometry(24, 24, 220, 32);
+  host->show();
+  picker->showPopup();
+  QPointer<QWidget> surface = findSurface(QStringLiteral("addatepicker-popup"));
+  QVERIFY(surface);
+  QCOMPARE(surface->parentWidget(), host);
+  picker->hidePopup();
+  picker->raise();
+  QVERIFY(host->children().indexOf(surface) < host->children().indexOf(picker));
+  QPointer<AdDatePicker> guardedPicker = picker;
+  delete host;
+  QVERIFY(surface.isNull());
+  QVERIFY(guardedPicker.isNull());
+
+  QWidget survivingHost;
+  survivingHost.resize(640, 360);
+  host = new QWidget;
+  host->resize(640, 360);
+  picker = new AdDatePicker(host);
+  picker->setGeometry(24, 24, 220, 32);
+  host->show();
+  picker->showPopup();
+  surface = findSurface(QStringLiteral("addatepicker-popup"));
+  QVERIFY(surface);
+  picker->hidePopup();
+  picker->setParent(&survivingHost);
+  delete host;
+  QVERIFY(surface.isNull());
+  QVERIFY(!picker->popupVisible());
+  picker->setDate(QDate(2026, 10, 11));
+  survivingHost.show();
+  picker->show();
+  picker->showPopup();
+  surface = findSurface(QStringLiteral("addatepicker-popup"));
+  QVERIFY(surface);
+  QCOMPARE(surface->parentWidget(), &survivingHost);
+  QVERIFY(picker->popupVisible());
+  QCOMPARE(picker->date(), QDate(2026, 10, 11));
+
+  delete surface.data();
+  QVERIFY(surface.isNull());
+  QVERIFY(!picker->popupVisible());
+  picker->setDate(QDate(2026, 10, 12));
+  picker->showPopup();
+  surface = findSurface(QStringLiteral("addatepicker-popup"), true);
+  QVERIFY(surface);
+  picker->clearPopupContentWrapperFactory();
+  QPointer<QWidget> replacement = findSurface(QStringLiteral("addatepicker-popup"), true);
+  QVERIFY(replacement);
+  QVERIFY(replacement != surface);
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  QVERIFY(surface.isNull());
+  QVERIFY(replacement);
+  QVERIFY(picker->popupVisible());
+  picker->setDate(QDate(2026, 10, 13));
+  QCOMPARE(picker->date(), QDate(2026, 10, 13));
+}
+
+void QtToolPopupTest::dateRangePickerSurvivesPopupContainerDestructionOrder() {
+  auto* host = new QWidget;
+  host->resize(760, 360);
+  auto* picker = new AdDateRangePicker(host);
+  picker->setGeometry(24, 24, 320, 32);
+  host->show();
+  picker->showPopup();
+  QPointer<QWidget> surface = findSurface(QStringLiteral("addaterangepicker-popup"));
+  QVERIFY(surface);
+  QCOMPARE(surface->parentWidget(), host);
+  picker->hidePopup();
+  picker->raise();
+  QVERIFY(host->children().indexOf(surface) < host->children().indexOf(picker));
+  QPointer<AdDateRangePicker> guardedPicker = picker;
+  delete host;
+  QVERIFY(surface.isNull());
+  QVERIFY(guardedPicker.isNull());
+
+  QWidget survivingHost;
+  survivingHost.resize(760, 360);
+  host = new QWidget;
+  host->resize(760, 360);
+  picker = new AdDateRangePicker(host);
+  picker->setGeometry(24, 24, 320, 32);
+  host->show();
+  picker->showPopup();
+  surface = findSurface(QStringLiteral("addaterangepicker-popup"));
+  QVERIFY(surface);
+  picker->hidePopup();
+  picker->setParent(&survivingHost);
+  delete host;
+  QVERIFY(surface.isNull());
+  QVERIFY(!picker->popupVisible());
+  picker->setRange(QDate(2026, 10, 11), QDate(2026, 10, 12));
+  survivingHost.show();
+  picker->show();
+  picker->showPopup();
+  surface = findSurface(QStringLiteral("addaterangepicker-popup"));
+  QVERIFY(surface);
+  QCOMPARE(surface->parentWidget(), &survivingHost);
+  QVERIFY(picker->popupVisible());
+  QCOMPARE(picker->startDate(), QDate(2026, 10, 11));
+  QCOMPARE(picker->endDate(), QDate(2026, 10, 12));
+
+  delete surface.data();
+  QVERIFY(surface.isNull());
+  QVERIFY(!picker->popupVisible());
+  picker->setRange(QDate(2026, 10, 12), QDate(2026, 10, 13));
+  picker->showPopup();
+  surface = findSurface(QStringLiteral("addaterangepicker-popup"), true);
+  QVERIFY(surface);
+  picker->clearPopupContentWrapperFactory();
+  QPointer<QWidget> replacement = findSurface(QStringLiteral("addaterangepicker-popup"), true);
+  QVERIFY(replacement);
+  QVERIFY(replacement != surface);
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  QVERIFY(surface.isNull());
+  QVERIFY(replacement);
+  QVERIFY(picker->popupVisible());
+  picker->setRange(QDate(2026, 10, 13), QDate(2026, 10, 14));
+  QCOMPARE(picker->startDate(), QDate(2026, 10, 13));
+  QCOMPARE(picker->endDate(), QDate(2026, 10, 14));
+}
+
+void QtToolPopupTest::popoverSurvivesExternalSurfaceDestruction() {
+  QWidget host;
+  host.resize(640, 360);
+  QPushButton trigger(QStringLiteral("Open"), &host);
+  trigger.setGeometry(24, 24, 100, 32);
+  AdPopover popover;
+  popover.setSourceWidget(&trigger);
+  popover.setText(QStringLiteral("Fallback content"));
+  QPointer<QWidget> title = new QPushButton(QStringLiteral("Title"));
+  QPointer<QWidget> content = new QPushButton(QStringLiteral("Content"));
+  popover.setTitleWidget(title);
+  popover.setContentWidget(content);
+  host.show();
+  popover.show();
+  QPointer<QWidget> surface = findSurface(QStringLiteral("adpopover-surface"), true);
+  QVERIFY(surface);
+  QVERIFY(surface->isAncestorOf(title));
+  QVERIFY(surface->isAncestorOf(content));
+
+  delete surface.data();
+  QVERIFY(surface.isNull());
+  QVERIFY(!popover.isVisible());
+  QVERIFY(title);
+  QVERIFY(content);
+  QCOMPARE(popover.titleWidget(), title.data());
+  QCOMPARE(popover.contentWidget(), content.data());
+  popover.show();
+  QPointer<QWidget> replacement = findSurface(QStringLiteral("adpopover-surface"), true);
+  QVERIFY(replacement);
+  QVERIFY(replacement->isAncestorOf(title));
+  QVERIFY(replacement->isAncestorOf(content));
+  popover.setPopupLayerMode(AdPopover::PopupLayerMode::QtTool);
+  QPointer<QWidget> latest = findSurface(QStringLiteral("adpopover-surface"), true);
+  QVERIFY(latest);
+  QVERIFY(latest != replacement);
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  QVERIFY(replacement.isNull());
+  QVERIFY(latest);
+  QVERIFY(popover.isVisible());
+  QVERIFY(latest->isAncestorOf(title));
+  QVERIFY(latest->isAncestorOf(content));
+}
+
+void QtToolPopupTest::popoverFactoryAllowsOwnerDeletion() {
+  for (int entryPoint = 0; entryPoint < 5; ++entryPoint) {
+    QWidget host;
+    host.resize(640, 360);
+    QPushButton trigger(QStringLiteral("Open"), &host);
+    trigger.setGeometry(24, 24, 100, 32);
+    QPointer<AdPopover> popover = new AdPopover;
+    popover->setSourceWidget(&trigger);
+    popover->setTriggers(AdPopover::Trigger::Click);
+    if (entryPoint == 2) {
+      popover->setVisibilityPolicy(AdPopover::VisibilityPolicy::Manual);
+    }
+    if (entryPoint == 4) {
+      connect(popover, &AdPopover::contentWidgetChanged, &host, [&](QWidget* content) {
+        if (content) {
+          delete popover.data();
+        }
+      });
+    }
+    int creations = 0;
+    popover->setContentFactory([&]() -> QWidget* {
+      ++creations;
+      if (entryPoint == 4) {
+        return new QWidget;
+      }
+      delete popover.data();
+      return nullptr;
+    });
+    host.show();
+    if (entryPoint == 0) {
+      popover->preparePopup();
+    } else if (entryPoint == 3) {
+      QTest::mouseClick(&trigger, Qt::LeftButton);
+    } else {
+      popover->show();
+    }
+    QCOMPARE(creations, 1);
+    QVERIFY(popover.isNull());
+    QTest::mouseClick(&trigger, Qt::LeftButton);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  }
+}
+
+void QtToolPopupTest::popoverShowGuardAllowsOwnerDeletion() {
+  QWidget host;
+  host.resize(640, 360);
+  QPushButton trigger(QStringLiteral("Open"), &host);
+  trigger.setGeometry(24, 24, 100, 32);
+  QPointer<AdPopover> popover = new AdPopover;
+  popover->setSourceWidget(&trigger);
+  popover->setText(QStringLiteral("Guarded popup"));
+  int checks = 0;
+  popover->setSurfaceShowGuard([&](QWidget*) {
+    ++checks;
+    delete popover.data();
+    return true;
+  });
+  host.show();
+  popover->show();
+  QCOMPARE(checks, 1);
+  QVERIFY(popover.isNull());
+  QTest::mouseClick(&trigger, Qt::LeftButton);
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+}
+
+void QtToolPopupTest::popoverVisibilityObserverAllowsOwnerDeletion() {
+  for (bool deleteOnShow : {false, true}) {
+    QWidget host;
+    host.resize(640, 360);
+    QPushButton trigger(QStringLiteral("Open"), &host);
+    trigger.setGeometry(24, 24, 100, 32);
+    QPointer<AdPopover> popover = new AdPopover;
+    popover->setSourceWidget(&trigger);
+    popover->setText(QStringLiteral("Observed popup"));
+    connect(popover, &AdPopover::visibleChanged, &host, [&](bool visible) {
+      if (visible == deleteOnShow) {
+        delete popover.data();
+      }
+    });
+    host.show();
+    popover->show();
+    if (!deleteOnShow) {
+      QVERIFY(popover);
+      popover->hide();
+    }
+    QVERIFY(popover.isNull());
+    QTest::mouseClick(&trigger, Qt::LeftButton);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  }
+}
+
+void QtToolPopupTest::popoverShowEventAllowsOwnerDeletion() {
+  class DeletionFilter final : public QObject {
+   public:
+    std::function<void()> onShow;
+    bool eventFilter(QObject* watched, QEvent* event) override {
+      if (event->type() != QEvent::Show) {
+        return false;
+      }
+      const QPointer<QObject> receiver(watched);
+      onShow();
+      return receiver.isNull();
+    }
+  };
+
+  for (const auto layer :
+       {AdPopover::PopupLayerMode::InWindow, AdPopover::PopupLayerMode::QtTool}) {
+    QWidget host;
+    host.resize(640, 360);
+    QPushButton trigger(QStringLiteral("Open"), &host);
+    trigger.setGeometry(24, 24, 100, 32);
+    QPointer<AdPopover> popover = new AdPopover;
+    popover->setSourceWidget(&trigger);
+    popover->setPopupLayerMode(layer);
+    popover->setText(QStringLiteral("Observed popup"));
+    host.show();
+    popover->preparePopup();
+    QPointer<QWidget> surface = findSurface(QStringLiteral("adpopover-surface"));
+    QVERIFY(surface);
+    DeletionFilter observer;
+    observer.onShow = [&]() { delete popover.data(); };
+    surface->installEventFilter(&observer);
+    popover->show();
+    QVERIFY(popover.isNull());
+    QVERIFY(surface);
+    QVERIFY(!surface->isVisible());
+    QTest::mouseClick(&trigger, Qt::LeftButton);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  }
+}
+
+void QtToolPopupTest::popoverPropertyObserversAllowOwnerDeletion() {
+  const auto verify = [&](auto signal, const auto& change) {
+    QWidget host;
+    host.resize(640, 360);
+    QPushButton trigger(QStringLiteral("Open"), &host);
+    QPointer<AdPopover> popover = new AdPopover;
+    popover->setSourceWidget(&trigger);
+    popover->setText(QStringLiteral("Initial content"));
+    int notifications = 0;
+    connect(popover, signal, &host, [&]() {
+      ++notifications;
+      delete popover.data();
+    });
+    change(popover.data(), &host);
+    QCOMPARE(notifications, 1);
+    QVERIFY(popover.isNull());
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  };
+
+  verify(&AdPopover::placementChanged,
+         [](auto* p, QWidget*) { p->setPlacement(AdPopover::Placement::Left); });
+  verify(&AdPopover::triggersChanged,
+         [](auto* p, QWidget*) { p->setTriggers(AdPopover::Trigger::Click); });
+  verify(&AdPopover::retainNativeSurfaceOnHideChanged, [](auto* p, QWidget*) {
+    p->setRetainNativeSurfaceOnHide(!p->retainNativeSurfaceOnHide());
+  });
+  verify(&AdPopover::visibilityPolicyChanged,
+         [](auto* p, QWidget*) { p->setVisibilityPolicy(AdPopover::VisibilityPolicy::Manual); });
+  verify(&AdPopover::popupLifetimeChanged,
+         [](auto* p, QWidget*) { p->setPopupLifetime(AdPopover::PopupLifetime::RecreateOnOpen); });
+  verify(&AdPopover::destroyOnHiddenChanged,
+         [](auto* p, QWidget*) { p->setDestroyOnHidden(true); });
+  verify(&AdPopover::popupLayerModeChanged,
+         [](auto* p, QWidget*) { p->setPopupLayerMode(AdPopover::PopupLayerMode::QtTool); });
+  verify(&AdPopover::defaultVisibleChanged, [](auto* p, QWidget*) { p->setDefaultVisible(true); });
+  verify(&AdPopover::autoAdjustOverflowChanged,
+         [](auto* p, QWidget*) { p->setAutoAdjustOverflow(!p->autoAdjustOverflow()); });
+  verify(&AdPopover::arrowVisibleChanged,
+         [](auto* p, QWidget*) { p->setArrowVisible(!p->arrowVisible()); });
+  verify(&AdPopover::arrowPointAtCenterChanged,
+         [](auto* p, QWidget*) { p->setArrowPointAtCenter(!p->arrowPointAtCenter()); });
+  verify(&AdPopover::hoverOpenDelayMsChanged,
+         [](auto* p, QWidget*) { p->setHoverOpenDelayMs(p->hoverOpenDelayMs() + 1); });
+  verify(&AdPopover::hoverCloseDelayMsChanged,
+         [](auto* p, QWidget*) { p->setHoverCloseDelayMs(p->hoverCloseDelayMs() + 1); });
+  verify(&AdPopover::enabledChanged, [](auto* p, QWidget*) { p->setEnabled(false); });
+  verify(&AdPopover::titleChanged,
+         [](auto* p, QWidget*) { p->setTitle(QStringLiteral("Changed title")); });
+  verify(&AdPopover::textChanged,
+         [](auto* p, QWidget*) { p->setText(QStringLiteral("Changed content")); });
+  verify(&AdPopover::sourceWidgetChanged, [](auto* p, QWidget* host) { p->setSourceWidget(host); });
+  verify(&AdPopover::anchorWidgetChanged, [](auto* p, QWidget* host) { p->setAnchorWidget(host); });
+  verify(&AdPopover::titleWidgetChanged, [](auto* p, QWidget*) { p->setTitleWidget(new QWidget); });
+  verify(&AdPopover::contentWidgetChanged,
+         [](auto* p, QWidget*) { p->setContentWidget(new QWidget); });
+  verify(&AdPopover::titleFontChanged, [](auto* p, QWidget*) {
+    QFont font = p->titleFont();
+    font.setBold(!font.bold());
+    p->setTitleFont(font);
+  });
+  verify(&AdPopover::textFontChanged, [](auto* p, QWidget*) {
+    QFont font = p->textFont();
+    font.setBold(!font.bold());
+    p->setTextFont(font);
+  });
+  verify(&AdPopover::backgroundColorChanged,
+         [](auto* p, QWidget*) { p->setBackgroundColor(Qt::magenta); });
+  verify(&AdPopover::borderColorChanged, [](auto* p, QWidget*) { p->setBorderColor(Qt::magenta); });
+  verify(&AdPopover::titleColorChanged, [](auto* p, QWidget*) { p->setTitleColor(Qt::magenta); });
+  verify(&AdPopover::textColorChanged, [](auto* p, QWidget*) { p->setTextColor(Qt::magenta); });
+  verify(&AdPopover::contentMarginsChanged, [](auto* p, QWidget*) {
+    p->setContentMargins(p->contentMargins() + QMargins(1, 1, 1, 1));
+  });
+  verify(&AdPopover::titleMinimumWidthChanged,
+         [](auto* p, QWidget*) { p->setTitleMinimumWidth(p->titleMinimumWidth() + 1); });
+  verify(&AdPopover::maximumWidthChanged,
+         [](auto* p, QWidget*) { p->setMaximumWidth(p->maximumWidth() + 1); });
+  verify(&AdPopover::zIndexChanged, [](auto* p, QWidget*) { p->setZIndex(p->zIndex() + 1); });
+  verify(&AdPopover::cornerRadiusChanged,
+         [](auto* p, QWidget*) { p->setCornerRadius(p->cornerRadius() + 1); });
+  verify(&AdPopover::borderWidthChanged,
+         [](auto* p, QWidget*) { p->setBorderWidth(p->borderWidth() + 1); });
+  verify(&AdPopover::arrowSizeChanged,
+         [](auto* p, QWidget*) { p->setArrowSize(p->arrowSize() + 1); });
+  verify(&AdPopover::popupOffsetChanged,
+         [](auto* p, QWidget*) { p->setPopupOffset(p->popupOffset() + 1); });
+}
+
 void QtToolPopupTest::recreateLifetimeStillDestroysPopupSurface() {
   QWidget host;
   host.resize(640, 360);
@@ -1252,6 +1650,80 @@ void QtToolPopupTest::tooltipDestructionAllowsUiEvents() {
       QVERIFY(replacementShown);
       QVERIFY(!findSurface(QStringLiteral("adtooltip-surface"), true));
       QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    }
+  }
+}
+
+void QtToolPopupTest::datePickerDestructionAllowsUiEvents() {
+  for (const auto layer :
+       {AdDatePicker::PopupLayerMode::InWindow, AdDatePicker::PopupLayerMode::QtTool}) {
+    for (int state = 0; state < 3; ++state) {
+      QWidget host;
+      host.resize(760, 360);
+      QPushButton trigger(QStringLiteral("Target"), &host);
+      trigger.setGeometry(400, 24, 100, 32);
+      host.show();
+      const auto verifyDestruction = [&](auto* picker) {
+        picker->setGeometry(24, 24, 320, 32);
+        picker->setPopupLayerMode(layer);
+        picker->show();
+        if (state > 0) picker->showPopup();
+        if (state == 2) picker->hidePopup();
+        int notifications = 0;
+        for (QObject* child : picker->template findChildren<QObject*>()) {
+          connect(child, &QObject::destroyed, &host, [&]() {
+            ++notifications;
+            QTest::mouseClick(&trigger, Qt::LeftButton);
+            QWidget replacement;
+            replacement.show();
+          });
+        }
+        delete picker;
+        QVERIFY(notifications > 0);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+      };
+      verifyDestruction(new AdDatePicker(&host));
+      verifyDestruction(new AdDateRangePicker(&host));
+    }
+  }
+}
+
+void QtToolPopupTest::datePickerPopupReplacementAllowsOwnerDeletion() {
+  for (const auto layer :
+       {AdDatePicker::PopupLayerMode::InWindow, AdDatePicker::PopupLayerMode::QtTool}) {
+    for (int replacement = 0; replacement < 3; ++replacement) {
+      QWidget host;
+      host.resize(760, 360);
+      host.show();
+      const auto verify = [&](auto* picker, auto signal) {
+        picker->setGeometry(24, 24, 320, 32);
+        picker->setPopupLayerMode(layer);
+        picker->show();
+        picker->showPopup();
+        QVERIFY(picker->popupVisible());
+        QPointer<QObject> lifetime(picker);
+        int notifications = 0;
+        connect(picker, signal, &host, [&](bool visible) {
+          if (!visible) {
+            ++notifications;
+            delete picker;
+          }
+        });
+        if (replacement == 0) {
+          picker->setPopupLayerMode(layer == AdDatePicker::PopupLayerMode::InWindow
+                                        ? AdDatePicker::PopupLayerMode::QtTool
+                                        : AdDatePicker::PopupLayerMode::InWindow);
+        } else if (replacement == 1) {
+          picker->clearPopupContentWrapperFactory();
+        } else {
+          picker->clearPanelComponentFactory();
+        }
+        QCOMPARE(notifications, 1);
+        QVERIFY(lifetime.isNull());
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+      };
+      verify(new AdDatePicker(&host), &AdDatePicker::popupVisibleChanged);
+      verify(new AdDateRangePicker(&host), &AdDateRangePicker::popupVisibleChanged);
     }
   }
 }
@@ -1432,6 +1904,15 @@ void QtToolPopupTest::colorPickerPrewarmCanBeDisabled() {
   QCOMPARE(pickerPanelCount(), initialPickerPanelCount + 3);
 }
 
-QTEST_MAIN(QtToolPopupTest)
+int main(int argc, char** argv) {
+  QApplication application(argc, argv);
+  QStringList arguments = application.arguments();
+  if (arguments.removeAll(QStringLiteral("--date-picker-popup-lifetime-only")) > 0) {
+    arguments.append(QStringLiteral("datePickerSurvivesPopupContainerDestructionOrder"));
+    arguments.append(QStringLiteral("dateRangePickerSurvivesPopupContainerDestructionOrder"));
+  }
+  QtToolPopupTest test;
+  return QTest::qExec(&test, arguments);
+}
 
 #include "qt_tool_popup_tests.moc"

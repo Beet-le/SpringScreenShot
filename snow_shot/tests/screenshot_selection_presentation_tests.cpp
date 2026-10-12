@@ -1695,12 +1695,79 @@ void destroyedPickerOwnersAndPopupEntryCancelPendingInput() {
                 fixture.coordinator.colorPicker()->isHidden(),
             "screenshot UI entry must cancel queued samples even while the picker is hidden");
 }
+void deferredToolbarRaiseEndsWithItsPresenter() {
+    Fixture fixture;
+    fixture.coordinator.showToolbar();
+    auto* toolbar = fixture.coordinator.toolbar();
+    require(toolbar && toolbar->isVisible(), "the lifetime fixture needs a visible toolbar");
+    ScreenshotToolbarPresentationState state;
+    state.editing = true;
+    auto presenter = std::make_unique<ScreenshotToolbarPresenter>(
+        fixture.coordinator, fixture.geometry, fixture.displays);
+    presenter->raiseToolbarForCanvasInteraction(state);
+    presenter.reset();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    Fixture::processEvents();
+    require(toolbar->isVisible(), "retiring the presenter must preserve its reusable toolbar");
+
+    fixture.toolbar.raiseToolbarForCanvasInteraction(state);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    Fixture::processEvents();
+    require(toolbar->isVisible(), "a live presenter must still raise the toolbar safely");
+}
+
+void nativeToolbarRaiseAllowsPresenterDeletion() {
+    class RaiseObserver final : public QObject {
+      public:
+        std::function<void()> onRaise;
+        int raises = 0;
+
+      protected:
+        bool eventFilter(QObject*, QEvent* event) override {
+            if (event->type() == QEvent::ZOrderChange) {
+                ++raises;
+                onRaise();
+            }
+            return false;
+        }
+    };
+    for (const int retiringRaise : {1, 2}) {
+        Fixture fixture;
+        fixture.coordinator.showToolbar();
+        Fixture::processEvents();
+        auto* toolbar = fixture.coordinator.toolbar();
+        require(toolbar && toolbar->isVisible(), "native raise needs a reusable visible toolbar");
+        auto presenter = std::make_unique<ScreenshotToolbarPresenter>(
+            fixture.coordinator, fixture.geometry, fixture.displays);
+        QPointer<ScreenshotToolbarPresenter> lifetime(presenter.get());
+        RaiseObserver observer;
+        observer.onRaise = [&] {
+            if (observer.raises == retiringRaise)
+                presenter.reset();
+        };
+        toolbar->installEventFilter(&observer);
+        ScreenshotToolbarPresentationState state;
+        state.editing = true;
+        presenter->raiseToolbarForCanvasInteraction(state);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        Fixture::processEvents();
+        require(!lifetime && observer.raises == retiringRaise && toolbar->isVisible(),
+                "immediate and delayed native raises may retire their presenter safely");
+    }
+}
 } // namespace
 
 int main(int argc, char* argv[]) {
     QApplication application(argc, argv);
     application.setQuitOnLastWindowClosed(false);
     selection_presentation_test::IsolatedStorage storage;
+    if (application.arguments().contains(QStringLiteral("--toolbar-presenter-lifetime-only"))) {
+        deferredToolbarRaiseEndsWithItsPresenter();
+        nativeToolbarRaiseAllowsPresenterDeletion();
+        return 0;
+    }
+    deferredToolbarRaiseEndsWithItsPresenter();
+    nativeToolbarRaiseAllowsPresenterDeletion();
     repeatedSelectionLeavesThePresentedUiIdle();
     multipleRequestsCommitOnlyTheirLatestSelection();
     theFirstResultAfterAnEmptySelectionIsImmediate();

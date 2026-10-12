@@ -4968,7 +4968,7 @@ bool ScreenshotToolPalette::activateToolFromToolbar(Tool tool, bool toggleVisibl
         toolbar_settings::DrawingSettings().alwaysShowFirstToolbarGroupButton();
     const bool alreadyActive =
         !toggleVisibleButton || fixedGroupButton ? m_activeTool.has_value() && *m_activeTool == tool
-        : requestedButton != nullptr ? m_activeToolButton == requestedButton
+        : requestedButton != nullptr             ? m_activeToolButton == requestedButton
                                      : m_activeTool.has_value() && *m_activeTool == tool;
     const Tool requestedTool = alreadyActive && tool != Tool::Select ? Tool::Select : tool;
     activateDrawingTool(requestedTool);
@@ -7609,6 +7609,7 @@ void ScreenshotToolPalette::clearSecondaryResourceBindings() {
     m_moveActionControls = nullptr;
     m_selectionDisplayUnitGroup = nullptr;
     m_cursorButton = nullptr;
+    m_hideSelectionToolbarButton = nullptr;
     m_recaptureButton = nullptr;
     m_showQrCodeButton = nullptr;
     m_addRegionButton = nullptr;

@@ -21,6 +21,7 @@
 #include <QPlatformSurfaceEvent>
 #include <QPointer>
 #include <QResizeEvent>
+#include <QScopeGuard>
 #include <QTimer>
 #include <QUrl>
 #if SNOW_IMAGE_VIEWER_HAS_QT_VULKAN
@@ -341,9 +342,9 @@ RhiImageWindow::RhiImageWindow(QWindow* parent, RhiBackend backend)
     connect(this, &QWindow::screenChanged, this, [this]() {
         viewTransform_.setDevicePixelRatio(devicePixelRatio());
         updateTileSelection();
-        emit zoomChanged(viewTransform_.zoom());
         releaseSwapChain();
         requestRender();
+        emit zoomChanged(viewTransform_.zoom());
     });
 }
 
@@ -368,6 +369,7 @@ void RhiImageWindow::setImage(const DecodedImage& image) {
 }
 
 void RhiImageWindow::setImageInternal(const DecodedImage& image) {
+    ++renderNotificationGeneration_;
     const bool preserveGeometry = image_.isValid() && image_.filePath == image.filePath &&
                                   image_.sourceSize == image.sourceSize;
     image_ = image;
@@ -382,10 +384,10 @@ void RhiImageWindow::setImageInternal(const DecodedImage& image) {
     imageResourcesDirty_ = true;
     imageFrameSubmissionPending_ = true;
     updateOutputMode();
-    emit zoomChanged(viewTransform_.zoom());
     requestRender();
     QTimer::singleShot(0, this, [this]() { requestRender(); });
     QTimer::singleShot(50, this, [this]() { requestRender(); });
+    emit zoomChanged(viewTransform_.zoom());
 }
 
 void RhiImageWindow::setThumbnail(const ImageThumbnail& thumbnail) {
@@ -407,6 +409,7 @@ void RhiImageWindow::setThumbnail(const ImageThumbnail& thumbnail) {
 }
 
 void RhiImageWindow::clearImage() {
+    ++renderNotificationGeneration_;
     clearEditJobs();
     image_ = {};
     comparisonImage_ = {};
@@ -419,13 +422,14 @@ void RhiImageWindow::clearImage() {
     imageGpuOnlyResident_ = false;
     releaseImageResources();
     updateOutputMode();
-    emit zoomChanged(viewTransform_.zoom());
     requestRender();
+    emit zoomChanged(viewTransform_.zoom());
 }
 
 void RhiImageWindow::setComparisonToOriginal() {
     if (!image_.isValid())
         return;
+    ++comparisonNotificationGeneration_;
     editProxySettings_.reset();
     comparisonImage_ = {};
     comparisonActive_ = true;
@@ -437,6 +441,7 @@ void RhiImageWindow::setComparisonToOriginal() {
 void RhiImageWindow::setComparisonImage(const DecodedImage& preview) {
     if (!image_.isValid() || !preview.isValid())
         return;
+    ++comparisonNotificationGeneration_;
     editProxySettings_.reset();
     comparisonImage_ = preview;
     comparisonActive_ = true;
@@ -449,6 +454,7 @@ void RhiImageWindow::clearComparison() {
     editProxySettings_.reset();
     if (!comparisonActive_ && !comparisonImage_.isValid())
         return;
+    ++comparisonNotificationGeneration_;
     comparisonActive_ = false;
     comparisonImage_ = {};
     comparisonFrameSubmissionPending_ = false;
@@ -466,8 +472,8 @@ void RhiImageWindow::setComparisonRatio(qreal ratio) {
     if (qFuzzyCompare(comparisonRatio_ + 1.0, normalized + 1.0))
         return;
     comparisonRatio_ = normalized;
-    emit comparisonRatioChanged(comparisonRatio_);
     requestRender();
+    emit comparisonRatioChanged(comparisonRatio_);
 }
 
 void RhiImageWindow::prewarm() {
@@ -586,36 +592,36 @@ void RhiImageWindow::appendNavigationVertices(std::vector<OverlayVertex>* vertic
 void RhiImageWindow::setActualSize() {
     viewTransform_.setActualSize();
     updateTileSelection();
-    emit zoomChanged(viewTransform_.zoom());
     requestRender();
+    emit zoomChanged(viewTransform_.zoom());
 }
 
 void RhiImageWindow::fitToWindow() {
     viewTransform_.fitToWindow();
     updateTileSelection();
-    emit zoomChanged(viewTransform_.zoom());
     requestRender();
+    emit zoomChanged(viewTransform_.zoom());
 }
 
 void RhiImageWindow::zoomBy(qreal factor, const QPointF& anchor) {
     viewTransform_.zoomBy(factor, effectiveAnchor(anchor));
     updateTileSelection();
-    emit zoomChanged(viewTransform_.zoom());
     requestRender();
+    emit zoomChanged(viewTransform_.zoom());
 }
 
 void RhiImageWindow::rotateLeft() {
     viewTransform_.rotateLeft();
     updateTileSelection();
-    emit zoomChanged(viewTransform_.zoom());
     requestRender();
+    emit zoomChanged(viewTransform_.zoom());
 }
 
 void RhiImageWindow::rotateRight() {
     viewTransform_.rotateRight();
     updateTileSelection();
-    emit zoomChanged(viewTransform_.zoom());
     requestRender();
+    emit zoomChanged(viewTransform_.zoom());
 }
 
 qreal RhiImageWindow::zoom() const {
@@ -699,13 +705,15 @@ bool RhiImageWindow::canGpuResize(const QSize& size) const {
 
 void RhiImageWindow::requestMainImageReadback(quint64 requestId) {
     if (!imageGpuOnlyResident_ || (!imageVirtualTexture_ && imageTiles_.size() != 1) || !rhi_) {
-        emit gpuOperationFailed(requestId,
-                                QStringLiteral("The image texture is not available for readback."));
+        publishRenderingNotification(
+            &RhiImageWindow::gpuOperationFailed, requestId,
+            QStringLiteral("The image texture is not available for readback."));
         return;
     }
     QRhiCommandBuffer* commandBuffer = nullptr;
     if (rhi_->beginOffscreenFrame(&commandBuffer) != QRhi::FrameOpSuccess) {
-        emit gpuOperationFailed(requestId, QStringLiteral("Could not begin the image readback."));
+        publishRenderingNotification(&RhiImageWindow::gpuOperationFailed, requestId,
+                                     QStringLiteral("Could not begin the image readback."));
         return;
     }
     const std::size_t readbackCount =
@@ -721,8 +729,8 @@ void RhiImageWindow::requestMainImageReadback(quint64 requestId) {
     commandBuffer->resourceUpdate(updates);
     const QRhi::FrameOpResult frameResult = rhi_->endOffscreenFrame();
     if (frameResult != QRhi::FrameOpSuccess || results.front().data.isEmpty()) {
-        emit gpuOperationFailed(requestId,
-                                QStringLiteral("The image texture could not be read back."));
+        publishRenderingNotification(&RhiImageWindow::gpuOperationFailed, requestId,
+                                     QStringLiteral("The image texture could not be read back."));
         return;
     }
     const QRhiTexture::Format textureFormat = image_.pixelEncoding == PixelEncoding::LinearScRgb16F
@@ -778,8 +786,8 @@ void RhiImageWindow::requestMainImageReadback(quint64 requestId) {
         }
     }
     if (pixels.isNull()) {
-        emit gpuOperationFailed(requestId,
-                                QStringLiteral("The image texture readback was incomplete."));
+        publishRenderingNotification(&RhiImageWindow::gpuOperationFailed, requestId,
+                                     QStringLiteral("The image texture readback was incomplete."));
         return;
     }
     pixels.setColorSpace(image_.pixelEncoding == PixelEncoding::LinearScRgb16F
@@ -790,7 +798,8 @@ void RhiImageWindow::requestMainImageReadback(quint64 requestId) {
 
 void RhiImageWindow::requestEditVisual(quint64 requestId, const EditExportSettings& settings) {
     if (!imageGpuOnlyResident_ || (!imageVirtualTexture_ && imageTiles_.empty())) {
-        emit gpuOperationFailed(requestId, QStringLiteral("The source texture is unavailable."));
+        publishRenderingNotification(&RhiImageWindow::gpuOperationFailed, requestId,
+                                     QStringLiteral("The source texture is unavailable."));
         return;
     }
     // The resident source texture remains visible while exact export work is pending.
@@ -804,8 +813,9 @@ void RhiImageWindow::requestEditVisual(quint64 requestId, const EditExportSettin
 
 void RhiImageWindow::requestEditResize(quint64 requestId, const EditExportSettings& settings) {
     if (!canGpuResize(QSize(settings.width, settings.height))) {
-        emit gpuOperationFailed(
-            requestId, QStringLiteral("The requested size is not eligible for GPU resizing."));
+        publishRenderingNotification(
+            &RhiImageWindow::gpuOperationFailed, requestId,
+            QStringLiteral("The requested size is not eligible for GPU resizing."));
         return;
     }
     pendingExactRaster_ = std::pair{requestId, settings};
@@ -1141,17 +1151,21 @@ bool RhiImageWindow::submitPendingExactRaster(QRhiCommandBuffer* commandBuffer) 
         commandBuffer->resourceUpdate(readbackBatch);
         job->gpuTimer.start();
         activeExactRaster_ = std::move(job);
-        emit editResizeResourceCacheResult(requestId, false);
-        emit editPerformanceStageCompleted(requestId, QStringLiteral("exact.gpu_identity_readback"),
-                                           submissionTimer.nsecsElapsed());
-        emit editPerformanceStageCompleted(requestId, QStringLiteral("exact.gpu_pass_count"), 0);
+        publishRenderingNotification(&RhiImageWindow::editResizeResourceCacheResult, requestId,
+                                     false);
+        publishRenderingNotification(&RhiImageWindow::editPerformanceStageCompleted, requestId,
+                                     QStringLiteral("exact.gpu_identity_readback"),
+                                     submissionTimer.nsecsElapsed());
+        publishRenderingNotification(&RhiImageWindow::editPerformanceStageCompleted, requestId,
+                                     QStringLiteral("exact.gpu_pass_count"), 0);
         return true;
     }
 
     const int textureLimit = maximumTextureSize();
     const std::vector<QRect> tileRects = textureTilesForLimit(targetSize, textureLimit);
     if (tileRects.empty()) {
-        emit gpuOperationFailed(requestId, QStringLiteral("The GPU resize tile plan is invalid."));
+        publishRenderingNotification(&RhiImageWindow::gpuOperationFailed, requestId,
+                                     QStringLiteral("The GPU resize tile plan is invalid."));
         return false;
     }
     const bool tiled = tileRects.size() > 1;
@@ -1168,14 +1182,16 @@ bool RhiImageWindow::submitPendingExactRaster(QRhiCommandBuffer* commandBuffer) 
         auto resources = exactRasterResources(rect.size(), targetSize, image_.pixelEncoding,
                                               settings.resampling, tiled, &cacheHit);
         if (!resources) {
-            emit gpuOperationFailed(
-                requestId, QStringLiteral("The GPU resize tile resources could not be created."));
+            publishRenderingNotification(
+                &RhiImageWindow::gpuOperationFailed, requestId,
+                QStringLiteral("The GPU resize tile resources could not be created."));
             return false;
         }
         allCacheHits = allCacheHits && cacheHit;
         plans.push_back({rect, std::move(resources)});
     }
-    emit editResizeResourceCacheResult(requestId, allCacheHits);
+    publishRenderingNotification(&RhiImageWindow::editResizeResourceCacheResult, requestId,
+                                 allCacheHits);
 
     auto job = std::make_shared<ExactRasterJob>();
     job->requestId = requestId;
@@ -1321,10 +1337,12 @@ bool RhiImageWindow::submitPendingExactRaster(QRhiCommandBuffer* commandBuffer) 
 
     job->gpuTimer.start();
     activeExactRaster_ = std::move(job);
-    emit editPerformanceStageCompleted(requestId, QStringLiteral("exact.gpu_submission"),
-                                       submissionTimer.nsecsElapsed());
-    emit editPerformanceStageCompleted(requestId, QStringLiteral("exact.gpu_pass_count"),
-                                       static_cast<qint64>(passCount));
+    publishRenderingNotification(&RhiImageWindow::editPerformanceStageCompleted, requestId,
+                                 QStringLiteral("exact.gpu_submission"),
+                                 submissionTimer.nsecsElapsed());
+    publishRenderingNotification(&RhiImageWindow::editPerformanceStageCompleted, requestId,
+                                 QStringLiteral("exact.gpu_pass_count"),
+                                 static_cast<qint64>(passCount));
     return true;
 }
 
@@ -1351,8 +1369,6 @@ void RhiImageWindow::completeExactRaster(const std::shared_ptr<ExactRasterJob>& 
         }
         return;
     }
-    emit editPerformanceStageCompleted(job->requestId, QStringLiteral("exact.gpu_readback"),
-                                       job->gpuTimer.nsecsElapsed());
     GpuRasterResult readback;
     readback.pixelSize = QSize(job->settings.width, job->settings.height);
     readback.encoding = job->encoding;
@@ -1386,13 +1402,19 @@ void RhiImageWindow::completeExactRaster(const std::shared_ptr<ExactRasterJob>& 
         }
         retiredEditSourceTiles_.clear();
     }
-    if (!dimensionsValid || !readback.isValid()) {
-        emit gpuOperationFailed(requestId, QStringLiteral("The GPU resize readback failed."));
-    } else {
-        emit editResizeReadbackReady(requestId, readback);
-    }
     if (pendingExactRaster_)
         requestRender();
+    if (!publishRenderingNotification(&RhiImageWindow::editPerformanceStageCompleted,
+                                      job->requestId, QStringLiteral("exact.gpu_readback"),
+                                      job->gpuTimer.nsecsElapsed())) {
+        return;
+    }
+    if (!dimensionsValid || !readback.isValid()) {
+        publishRenderingNotification(&RhiImageWindow::gpuOperationFailed, requestId,
+                                     QStringLiteral("The GPU resize readback failed."));
+    } else {
+        publishRenderingNotification(&RhiImageWindow::editResizeReadbackReady, requestId, readback);
+    }
 }
 // NOLINTEND(clang-analyzer-cplusplus.NewDeleteLeaks)
 
@@ -1580,8 +1602,8 @@ void RhiImageWindow::resizeEvent(QResizeEvent* event) {
     viewTransform_.setDevicePixelRatio(devicePixelRatio());
     viewTransform_.setViewportSize(event->size());
     updateTileSelection();
-    emit zoomChanged(viewTransform_.zoom());
     requestRender();
+    emit zoomChanged(viewTransform_.zoom());
 }
 
 void RhiImageWindow::mousePressEvent(QMouseEvent* event) {
@@ -1739,8 +1761,10 @@ bool RhiImageWindow::initializeRhi() {
         break;
     }
     if (!rhi_) {
-        emit renderError(QStringLiteral("The %1 QRhi graphics device could not be created.")
-                             .arg(backendLabel(backend_)));
+        publishRenderingNotification(
+            &RhiImageWindow::renderError,
+            QStringLiteral("The %1 QRhi graphics device could not be created.")
+                .arg(backendLabel(backend_)));
         return false;
     }
     return true;
@@ -1768,7 +1792,8 @@ bool RhiImageWindow::initializeSwapChain() {
     renderPassDescriptor_ = swapChain_->newCompatibleRenderPassDescriptor();
     swapChain_->setRenderPassDescriptor(renderPassDescriptor_);
     if (!swapChain_->createOrResize()) {
-        emit renderError(QStringLiteral("The image swapchain could not be created."));
+        publishRenderingNotification(&RhiImageWindow::renderError,
+                                     QStringLiteral("The image swapchain could not be created."));
         return false;
     }
     swapChainReady_ = true;
@@ -1800,7 +1825,9 @@ bool RhiImageWindow::initializeStaticResources() {
                                 QRhiSampler::ClampToEdge, QRhiSampler::ClampToEdge);
     if (!vertexBuffer_->create() || !overlayVertexBuffer_->create() ||
         !overlayUniformBuffer_->create() || !sampler_->create()) {
-        emit renderError(QStringLiteral("The QRhi image resources could not be created."));
+        publishRenderingNotification(
+            &RhiImageWindow::renderError,
+            QStringLiteral("The QRhi image resources could not be created."));
         return false;
     }
     vertexUploadPending_ = true;
@@ -1816,7 +1843,8 @@ bool RhiImageWindow::rebuildImageResources() {
     }
     const int maximumTextureSize = rhi_->resourceLimit(QRhi::TextureSizeMax);
     if (maximumTextureSize <= 0) {
-        emit renderError(
+        publishRenderingNotification(
+            &RhiImageWindow::renderError,
             QStringLiteral("The graphics device does not report a usable texture limit."));
         return false;
     }
@@ -1847,7 +1875,8 @@ bool RhiImageWindow::rebuildImageResources() {
         for (const QRect& tileRect : virtualPlan.tiles) {
             QImage layer = paddedArrayLayer(image_.pixels, tileRect, virtualPlan.layerSize);
             if (layer.isNull()) {
-                emit renderError(
+                publishRenderingNotification(
+                    &RhiImageWindow::renderError,
                     QStringLiteral("The virtual image texture layer could not be prepared."));
                 return false;
             }
@@ -1858,7 +1887,9 @@ bool RhiImageWindow::rebuildImageResources() {
         source->uniformBuffer = rhi_->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer,
                                                 static_cast<quint32>(sizeof(UniformData)));
         if (!source->texture->create() || !source->uniformBuffer->create()) {
-            emit renderError(QStringLiteral("The virtual image texture could not be created."));
+            publishRenderingNotification(
+                &RhiImageWindow::renderError,
+                QStringLiteral("The virtual image texture could not be created."));
             return false;
         }
         source->shaderResources = rhi_->newShaderResourceBindings();
@@ -1871,7 +1902,8 @@ bool RhiImageWindow::rebuildImageResources() {
                                                       source->texture, sampler_),
         });
         if (!source->shaderResources->create()) {
-            emit renderError(
+            publishRenderingNotification(
+                &RhiImageWindow::renderError,
                 QStringLiteral("The virtual image texture bindings could not be created."));
             return false;
         }
@@ -1905,7 +1937,7 @@ bool RhiImageWindow::rebuildImageResources() {
             QString error;
             QImage pixels = image_.tileStore->load(stored, &error);
             if (pixels.isNull()) {
-                emit renderError(error);
+                publishRenderingNotification(&RhiImageWindow::renderError, error);
                 return false;
             }
             const QRectF sourceRect(stored.sourceRect);
@@ -1919,7 +1951,8 @@ bool RhiImageWindow::rebuildImageResources() {
         for (const QRect& textureRect : textureTiles) {
             QImage pixels = imageTilePixels(image_.pixels, textureRect);
             if (pixels.isNull()) {
-                emit renderError(
+                publishRenderingNotification(
+                    &RhiImageWindow::renderError,
                     QStringLiteral("The image tile could not be prepared for upload."));
                 return false;
             }
@@ -1930,7 +1963,9 @@ bool RhiImageWindow::rebuildImageResources() {
         loadedRegion = QRectF(QPointF(0.0, 0.0), image_.sourceSize);
     }
     if (preparedTiles.empty()) {
-        emit renderError(QStringLiteral("The image could not be divided into graphics textures."));
+        publishRenderingNotification(
+            &RhiImageWindow::renderError,
+            QStringLiteral("The image could not be divided into graphics textures."));
         return false;
     }
 
@@ -1952,7 +1987,9 @@ bool RhiImageWindow::rebuildImageResources() {
             delete tile->texture;
             delete tile->uniformBuffer;
             releaseImageResources();
-            emit renderError(QStringLiteral("The image tile resources could not be created."));
+            publishRenderingNotification(
+                &RhiImageWindow::renderError,
+                QStringLiteral("The image tile resources could not be created."));
             return false;
         }
 
@@ -1970,7 +2007,8 @@ bool RhiImageWindow::rebuildImageResources() {
             delete tile->texture;
             delete tile->uniformBuffer;
             releaseImageResources();
-            emit renderError(
+            publishRenderingNotification(
+                &RhiImageWindow::renderError,
                 QStringLiteral("The image tile shader bindings could not be created."));
             return false;
         }
@@ -2023,7 +2061,8 @@ bool RhiImageWindow::rebuildComparisonResources() {
 
 bool RhiImageWindow::appendComparisonTile(const QRectF& sourceRect, QImage pixels) {
     if (pixels.isNull()) {
-        emit renderError(QStringLiteral("The comparison image could not be prepared."));
+        publishRenderingNotification(&RhiImageWindow::renderError,
+                                     QStringLiteral("The comparison image could not be prepared."));
         return false;
     }
     QRhiTexture::Flags flags = QRhiTexture::MipMapped | QRhiTexture::UsedWithGenerateMips |
@@ -2044,7 +2083,9 @@ bool RhiImageWindow::appendComparisonTile(const QRectF& sourceRect, QImage pixel
     if (!tile->texture->create() || !tile->uniformBuffer->create()) {
         delete tile->texture;
         delete tile->uniformBuffer;
-        emit renderError(QStringLiteral("The comparison image resources could not be created."));
+        publishRenderingNotification(
+            &RhiImageWindow::renderError,
+            QStringLiteral("The comparison image resources could not be created."));
         return false;
     }
     tile->shaderResources = rhi_->newShaderResourceBindings();
@@ -2059,7 +2100,9 @@ bool RhiImageWindow::appendComparisonTile(const QRectF& sourceRect, QImage pixel
         delete tile->shaderResources;
         delete tile->texture;
         delete tile->uniformBuffer;
-        emit renderError(QStringLiteral("The comparison shader bindings could not be created."));
+        publishRenderingNotification(
+            &RhiImageWindow::renderError,
+            QStringLiteral("The comparison shader bindings could not be created."));
         return false;
     }
     comparisonTiles_.push_back(std::move(tile));
@@ -2100,6 +2143,7 @@ void RhiImageWindow::scheduleComparisonTileLoads() {
         auto* watcher = new QFutureWatcher<LoadResult>(this);
         connect(watcher, &QFutureWatcher<LoadResult>::finished, this,
                 [this, watcher, store, sourceRect, generation]() {
+                    const QPointer<RhiImageWindow> window(this);
                     --activeComparisonTileLoads_;
                     LoadResult loaded = watcher->result();
                     watcher->deleteLater();
@@ -2109,15 +2153,18 @@ void RhiImageWindow::scheduleComparisonTileLoads() {
                         return;
                     }
                     if (loaded.first.isNull()) {
-                        if (!comparisonTileLoadFailed_) {
-                            comparisonTileLoadFailed_ = true;
-                            emit renderError(
-                                loaded.second.isEmpty()
-                                    ? QStringLiteral("The comparison tile could not be loaded.")
-                                    : loaded.second);
-                        }
                         comparisonTileLoadQueue_.clear();
                         nextComparisonTileLoad_ = 0;
+                        if (!comparisonTileLoadFailed_) {
+                            comparisonTileLoadFailed_ = true;
+                            if (!publishRenderingNotification(
+                                    &RhiImageWindow::renderError,
+                                    loaded.second.isEmpty()
+                                        ? QStringLiteral("The comparison tile could not be loaded.")
+                                        : loaded.second)) {
+                                return;
+                            }
+                        }
                     } else if (appendComparisonTile(QRectF(sourceRect), std::move(loaded.first))) {
                         const QRectF rect(sourceRect);
                         comparisonLoadedTileRegion_ =
@@ -2125,6 +2172,10 @@ void RhiImageWindow::scheduleComparisonTileLoads() {
                                 ? rect
                                 : comparisonLoadedTileRegion_.united(rect);
                         requestRender();
+                    }
+                    if (!window || generation != comparisonTileGeneration_ ||
+                        store != comparisonImage_.tileStore) {
+                        return;
                     }
                     scheduleComparisonTileLoads();
                 });
@@ -2238,7 +2289,8 @@ bool RhiImageWindow::rebuildPipeline() {
         const QShader vertexShader = loadShader(QStringLiteral(":/shaders/image.vert.qsb"));
         const QShader fragmentShader = loadShader(QStringLiteral(":/shaders/image.frag.qsb"));
         if (!vertexShader.isValid() || !fragmentShader.isValid()) {
-            emit renderError(QStringLiteral("The embedded QRhi shaders are invalid."));
+            publishRenderingNotification(&RhiImageWindow::renderError,
+                                         QStringLiteral("The embedded QRhi shaders are invalid."));
             return false;
         }
 
@@ -2261,7 +2313,9 @@ bool RhiImageWindow::rebuildPipeline() {
         if (!pipeline_->create()) {
             delete pipeline_;
             pipeline_ = nullptr;
-            emit renderError(QStringLiteral("The QRhi image pipeline could not be created."));
+            publishRenderingNotification(
+                &RhiImageWindow::renderError,
+                QStringLiteral("The QRhi image pipeline could not be created."));
             return false;
         }
     }
@@ -2269,7 +2323,9 @@ bool RhiImageWindow::rebuildPipeline() {
         const QShader vertexShader = loadShader(QStringLiteral(":/shaders/image.vert.qsb"));
         const QShader fragmentShader = loadShader(QStringLiteral(":/shaders/image_array.frag.qsb"));
         if (!vertexShader.isValid() || !fragmentShader.isValid()) {
-            emit renderError(QStringLiteral("The embedded virtual-image shaders are invalid."));
+            publishRenderingNotification(
+                &RhiImageWindow::renderError,
+                QStringLiteral("The embedded virtual-image shaders are invalid."));
             return false;
         }
         virtualPipeline_ = rhi_->newGraphicsPipeline();
@@ -2289,7 +2345,9 @@ bool RhiImageWindow::rebuildPipeline() {
         if (!virtualPipeline_->create()) {
             delete virtualPipeline_;
             virtualPipeline_ = nullptr;
-            emit renderError(QStringLiteral("The virtual-image pipeline could not be created."));
+            publishRenderingNotification(
+                &RhiImageWindow::renderError,
+                QStringLiteral("The virtual-image pipeline could not be created."));
             return false;
         }
     }
@@ -2372,7 +2430,8 @@ bool RhiImageWindow::rebuildNavigationPipeline() {
         overlayShaderResources_->setBindings({QRhiShaderResourceBinding::uniformBuffer(
             0, QRhiShaderResourceBinding::VertexStage, overlayUniformBuffer_)});
         if (!overlayShaderResources_->create()) {
-            emit renderError(
+            publishRenderingNotification(
+                &RhiImageWindow::renderError,
                 QStringLiteral("The navigation shader bindings could not be created."));
             return false;
         }
@@ -2384,7 +2443,9 @@ bool RhiImageWindow::rebuildNavigationPipeline() {
     const QShader vertexShader = loadShader(QStringLiteral(":/shaders/navigation.vert.qsb"));
     const QShader fragmentShader = loadShader(QStringLiteral(":/shaders/navigation.frag.qsb"));
     if (!vertexShader.isValid() || !fragmentShader.isValid()) {
-        emit renderError(QStringLiteral("The embedded navigation shaders are invalid."));
+        publishRenderingNotification(
+            &RhiImageWindow::renderError,
+            QStringLiteral("The embedded navigation shaders are invalid."));
         return false;
     }
 
@@ -2413,7 +2474,9 @@ bool RhiImageWindow::rebuildNavigationPipeline() {
     if (!overlayPipeline_->create()) {
         delete overlayPipeline_;
         overlayPipeline_ = nullptr;
-        emit renderError(QStringLiteral("The navigation graphics pipeline could not be created."));
+        publishRenderingNotification(
+            &RhiImageWindow::renderError,
+            QStringLiteral("The navigation graphics pipeline could not be created."));
         return false;
     }
     return true;
@@ -2522,7 +2585,7 @@ void RhiImageWindow::releaseAllResources() {
     imageGpuOnlyEligible_ = false;
     imageResourcesDirty_ = image_.isValid() && image_.hasCpuPixels();
     if (!lostPath.isEmpty())
-        emit gpuBackingLost(lostPath);
+        publishRenderingNotification(&RhiImageWindow::gpuBackingLost, lostPath);
 }
 
 void RhiImageWindow::updateOutputMode() {
@@ -2602,6 +2665,24 @@ QPointF RhiImageWindow::effectiveAnchor(const QPointF& anchor) const {
 }
 
 void RhiImageWindow::render() {
+    if (renderNotifications_ != nullptr) {
+        return;
+    }
+    const QPointer<RhiImageWindow> window(this);
+    std::vector<std::function<void()>> notifications;
+    renderNotifications_ = &notifications;
+    const auto publishNotifications = qScopeGuard([window, &notifications] {
+        if (!window) {
+            return;
+        }
+        window->renderNotifications_ = nullptr;
+        for (auto& publish : notifications) {
+            if (!window) {
+                return;
+            }
+            publish();
+        }
+    });
     if (!isVisible() || size().isEmpty() || !initializeSwapChain() ||
         !initializeStaticResources()) {
         return;
@@ -2615,7 +2696,9 @@ void RhiImageWindow::render() {
     }
     if (comparisonResourcesDirty_ && !rebuildComparisonResources()) {
         comparisonResourcesDirty_ = false;
-        emit renderError(QStringLiteral("The comparison image resources could not be created."));
+        publishRenderingNotification(
+            &RhiImageWindow::renderError,
+            QStringLiteral("The comparison image resources could not be created."));
     }
     if (((!pipeline_ && (!imageTiles_.empty() || !comparisonTiles_.empty())) ||
          (!virtualPipeline_ && imageVirtualTexture_)) &&
@@ -2624,15 +2707,18 @@ void RhiImageWindow::render() {
     }
     if (imageGpuOnlyEligible_ && (imageVirtualTexture_ || imageTiles_.size() == 1) &&
         !editProxyPipeline_ && !rebuildEditProxyPipeline()) {
-        emit renderError(QStringLiteral("The GPU edit pipeline could not be prewarmed."));
+        publishRenderingNotification(
+            &RhiImageWindow::renderError,
+            QStringLiteral("The GPU edit pipeline could not be prewarmed."));
     }
     if (editProxySettings_ && !rebuildEditProxyPipeline()) {
         const quint64 requestId = pendingVisualFrameRequestId_;
         editProxySettings_.reset();
         if (requestId) {
             pendingVisualFrameRequestId_ = 0;
-            emit gpuOperationFailed(requestId,
-                                    QStringLiteral("The GPU edit preview could not be created."));
+            publishRenderingNotification(
+                &RhiImageWindow::gpuOperationFailed, requestId,
+                QStringLiteral("The GPU edit preview could not be created."));
         }
     }
     if ((navigationHovered_ != NavigationDirection::None || comparisonActive_) &&
@@ -2648,12 +2734,15 @@ void RhiImageWindow::render() {
     }
     if (frameResult == QRhi::FrameOpDeviceLost) {
         releaseAllResources();
-        emit renderError(QStringLiteral("The graphics device was reset; rebuilding the viewer."));
+        publishRenderingNotification(
+            &RhiImageWindow::renderError,
+            QStringLiteral("The graphics device was reset; rebuilding the viewer."));
         requestRender();
         return;
     }
     if (frameResult != QRhi::FrameOpSuccess) {
-        emit renderError(QStringLiteral("QRhi could not begin an image frame."));
+        publishRenderingNotification(&RhiImageWindow::renderError,
+                                     QStringLiteral("QRhi could not begin an image frame."));
         return;
     }
 
@@ -2844,7 +2933,7 @@ void RhiImageWindow::render() {
         if (pendingVisualFrameRequestId_ != 0) {
             const quint64 requestId = pendingVisualFrameRequestId_;
             pendingVisualFrameRequestId_ = 0;
-            emit editVisualFrameSubmitted(requestId);
+            publishRenderingNotification(&RhiImageWindow::editVisualFrameSubmitted, requestId);
         }
         if (imageGpuOnlyEligible_ && !imageGpuOnlyResident_) {
             imageGpuOnlyResident_ = true;
@@ -2855,11 +2944,12 @@ void RhiImageWindow::render() {
             }
             if (imageVirtualTexture_)
                 imageVirtualTexture_->layerPixels.clear();
-            emit staticTextureResident(image_.filePath);
+            publishRenderingNotification(&RhiImageWindow::staticTextureResident, image_.filePath);
         }
         if (imageFrameSubmissionPending_ && image_.isValid()) {
             imageFrameSubmissionPending_ = false;
-            emit imageFrameSubmitted(image_.filePath, imageIsThumbnail_);
+            publishRenderingNotification(&RhiImageWindow::imageFrameSubmitted, image_.filePath,
+                                         imageIsThumbnail_);
         }
         const bool comparisonStagingComplete =
             !comparisonImage_.tileStore ||
@@ -2869,7 +2959,8 @@ void RhiImageWindow::render() {
             comparisonStagingComplete &&
             (!comparisonImage_.tileStore || !comparisonTiles_.empty())) {
             comparisonFrameSubmissionPending_ = false;
-            emit comparisonFrameSubmitted(comparisonImage_.filePath);
+            publishComparisonNotification(&RhiImageWindow::comparisonFrameSubmitted,
+                                          comparisonImage_.filePath);
         }
         if (comparisonImage_.isValid() && !comparisonImage_.isAnimated()) {
             comparisonImage_.pixels = {};

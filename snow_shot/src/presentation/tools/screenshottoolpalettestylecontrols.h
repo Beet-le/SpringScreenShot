@@ -188,6 +188,7 @@ class ScreenshotToolPaletteStyleControls final {
     explicit ScreenshotToolPaletteStyleControls(
         ScreenshotToolPaletteStyleControlCallbacks callbacks,
         const SnowCanvasStyleDefaults& defaults, std::function<QDateTime()> watermarkTemplateClock);
+    ~ScreenshotToolPaletteStyleControls();
 
     [[nodiscard]] ScreenshotToolPaletteStyleState& styleState();
     [[nodiscard]] const ScreenshotToolPaletteStyleState& styleState() const;
@@ -493,12 +494,16 @@ class ScreenshotToolPaletteStyleControls final {
     [[nodiscard]] bool reusableRoleStaged(const char* role) const;
     [[nodiscard]] QWidget* editorRootForRole(QWidget* controls, const char* role) const;
     void rebuildRegisteredComponents();
+    void releaseWatermarkTemplateBindings();
+    [[nodiscard]] QObject* controlCallbackContext(QWidget* owner);
+    void releaseControlCallbacksExcept(QWidget* retainedControls);
 
     ScreenshotToolPaletteStyleState m_state;
     ScreenshotToolPaletteStyleControlCallbacks m_callbacks;
     const SnowCanvasStyleDefaults m_defaults;
     std::function<QDateTime()> m_watermarkTemplateClock;
     QSet<QObject*> m_openTextStylePopups;
+    QVector<QPointer<QObject>> m_controlCallbackContexts;
 
     struct ReusableEditor {
         QByteArray role;
@@ -584,14 +589,15 @@ class ScreenshotToolPaletteStyleControls final {
     adqt::widgets::AdLineEdit* m_watermarkTextEdit = nullptr;
     std::unique_ptr<ScreenshotToolPaletteFontEditor> m_watermarkFontEditor;
     adqt::widgets::AdSelect* m_watermarkTemplateSelect = nullptr;
+    QPointer<QObject> m_watermarkTemplateCallbackContext;
     QPointer<QListView> m_watermarkTemplateView;
     QLabel* m_watermarkTemplateEmptyLabel = nullptr;
     adqt::widgets::AdButton* m_watermarkTemplateAddButton = nullptr;
-    adqt::widgets::AdModal* m_createWatermarkTemplateModal = nullptr;
-    adqt::widgets::AdFormItem* m_createWatermarkTemplateNameItem = nullptr;
-    adqt::widgets::AdFormItem* m_createWatermarkTemplateValueItem = nullptr;
-    adqt::widgets::AdAlert* m_createWatermarkTemplateAlert = nullptr;
-    adqt::widgets::AdModal* m_deleteWatermarkTemplateModal = nullptr;
+    QPointer<adqt::widgets::AdModal> m_createWatermarkTemplateModal;
+    QPointer<adqt::widgets::AdFormItem> m_createWatermarkTemplateNameItem;
+    QPointer<adqt::widgets::AdFormItem> m_createWatermarkTemplateValueItem;
+    QPointer<adqt::widgets::AdAlert> m_createWatermarkTemplateAlert;
+    QPointer<adqt::widgets::AdModal> m_deleteWatermarkTemplateModal;
     QString m_deleteWatermarkTemplateName;
     QVector<snow_shot::storage::WatermarkTemplate> m_watermarkTemplates;
     IconNumericValuePreviewButton* m_watermarkAngleEditor = nullptr;

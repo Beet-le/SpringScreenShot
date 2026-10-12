@@ -6,6 +6,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFutureWatcher>
+#include <QPointer>
 #include <QSet>
 #include <QtConcurrent>
 
@@ -51,6 +52,7 @@ ImageLoader::ImageLoader(QObject* parent) : QObject(parent) {
 }
 
 void ImageLoader::load(const QString& filePath, int thumbnailExtent) {
+    const QPointer<ImageLoader> guard(this);
     const QString absolutePath = QFileInfo(filePath).absoluteFilePath();
     if (activeCancellation_) {
         activeCancellation_->cancel();
@@ -68,10 +70,16 @@ void ImageLoader::load(const QString& filePath, int thumbnailExtent) {
     if (!loading_) {
         loading_ = true;
         emit loadingChanged(true);
+        if (!guard || generation_ != request.generation) {
+            return;
+        }
     }
 
     cancelPrefetchThumbnailTasksExcept(request.thumbnailCacheKey);
     startThumbnailLoad(request);
+    if (!guard || generation_ != request.generation) {
+        return;
+    }
     // The newest request always gets the next available decode slot.
     startPendingDecode();
 }
@@ -180,7 +188,9 @@ void ImageLoader::startPrimaryThumbnailTask(ThumbnailTask task) {
                 if (!cancellation->isCancelled() && thumbnail.isValid()) {
                     cacheThumbnail(cacheKey, thumbnail);
                     if (displayWhenReady) {
-                        emitCurrentThumbnail(cacheKey, thumbnail);
+                        if (!emitCurrentThumbnail(cacheKey, thumbnail)) {
+                            return;
+                        }
                     }
                 }
                 startNextPrimaryThumbnailTask();
@@ -222,7 +232,9 @@ void ImageLoader::startPrefetchThumbnailTask(ThumbnailTask task) {
                 if (!cancellation->isCancelled() && thumbnail.isValid()) {
                     cacheThumbnail(cacheKey, thumbnail);
                     if (displayWhenReady) {
-                        emitCurrentThumbnail(cacheKey, thumbnail);
+                        if (!emitCurrentThumbnail(cacheKey, thumbnail)) {
+                            return;
+                        }
                     }
                 }
                 startNextPrefetchThumbnailTask();
@@ -269,10 +281,14 @@ void ImageLoader::cacheThumbnail(const QString& cacheKey, const ImageThumbnail& 
     thumbnailCache_.insert(cacheKey, new ImageThumbnail(thumbnail), thumbnailCacheCost(thumbnail));
 }
 
-void ImageLoader::emitCurrentThumbnail(const QString& cacheKey, const ImageThumbnail& thumbnail) {
+bool ImageLoader::emitCurrentThumbnail(const QString& cacheKey, const ImageThumbnail& thumbnail) {
+    const QPointer<ImageLoader> guard(this);
     if (loading_ && cacheKey == currentThumbnailCacheKey_ && thumbnail.isValid()) {
-        emit thumbnailLoaded(thumbnail);
+        // Cached entries may be replaced by another load from a thumbnail observer.
+        const ImageThumbnail snapshot = thumbnail;
+        emit thumbnailLoaded(snapshot);
     }
+    return !guard.isNull();
 }
 
 void ImageLoader::startPendingDecode() {
@@ -299,7 +315,11 @@ void ImageLoader::startPendingDecode() {
 
         pendingRequest_.reset();
         loading_ = false;
+        const QPointer<ImageLoader> guard(this);
         emit loadingChanged(false);
+        if (!guard || generation_ != request.generation) {
+            return;
+        }
         if (result.succeeded()) {
             emit imageLoaded(result.image);
         } else {

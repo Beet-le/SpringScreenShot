@@ -16,6 +16,7 @@
 #include <QMouseEvent>
 #include <QMoveEvent>
 #include <QPainter>
+#include <QPointer>
 #include <QPainterPath>
 #include <QResizeEvent>
 #include <QShowEvent>
@@ -197,7 +198,8 @@ void AdCheckbox::setValue(const QVariant& value) {
     return;
   }
   value_ = value;
-  emit valueChanged(value_);
+  const QVariant published = value_;
+  emit valueChanged(published);
 }
 
 AdCheckbox::ComponentTokens AdCheckbox::componentTokens() const { return componentTokens_; }
@@ -400,9 +402,10 @@ void AdCheckbox::paintEvent(QPaintEvent* event) {
 }
 
 bool AdCheckbox::event(QEvent* event) {
+  const QPointer<AdCheckbox> lifetime(this);
   detail::resetWidgetHoverOnLifecycle(this, event);
   const bool handled = QCheckBox::event(event);
-  if (!event) {
+  if (!lifetime || !event) {
     return handled;
   }
 
@@ -455,6 +458,7 @@ void AdCheckbox::leaveEvent(QEvent* event) {
 }
 
 void AdCheckbox::mousePressEvent(QMouseEvent* event) {
+  const QPointer<AdCheckbox> lifetime(this);
   if (!event) {
     return;
   }
@@ -470,10 +474,12 @@ void AdCheckbox::mousePressEvent(QMouseEvent* event) {
     updateInteractionFocusOverlay();
   }
   QCheckBox::mousePressEvent(event);
+  if (!lifetime) return;
   update();
 }
 
 void AdCheckbox::mouseReleaseEvent(QMouseEvent* event) {
+  const QPointer<AdCheckbox> lifetime(this);
   if (!event) {
     return;
   }
@@ -487,6 +493,7 @@ void AdCheckbox::mouseReleaseEvent(QMouseEvent* event) {
       event->button() == Qt::LeftButton && pressed_ && hitButton(event->position().toPoint());
   pressed_ = false;
   QCheckBox::mouseReleaseEvent(event);
+  if (!lifetime) return;
   if (wave) {
     triggerInteractionWaveOverlay();
   }
@@ -511,6 +518,7 @@ void AdCheckbox::keyPressEvent(QKeyEvent* event) {
 }
 
 void AdCheckbox::keyReleaseEvent(QKeyEvent* event) {
+  const QPointer<AdCheckbox> lifetime(this);
   if (!event) {
     return;
   }
@@ -523,6 +531,7 @@ void AdCheckbox::keyReleaseEvent(QKeyEvent* event) {
     return;
   }
   QCheckBox::keyReleaseEvent(event);
+  if (!lifetime) return;
   if (wave) {
     triggerInteractionWaveOverlay();
   }

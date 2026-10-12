@@ -11,7 +11,7 @@
 #include <QLayout>
 #include <QPalette>
 #include <QPixmap>
-#include <QScopedValueRollback>
+#include <QScopeGuard>
 #include <QSet>
 #include <QVBoxLayout>
 
@@ -409,7 +409,9 @@ void AdPopover::setPlacement(Placement value) {
     return;
   }
   placement_ = value;
-  emit placementChanged(placement_);
+  if (!notifyPropertyChange(&AdPopover::placementChanged, placement_)) {
+    return;
+  }
   updateStyle();
   refreshVisiblePopup();
 }
@@ -419,10 +421,16 @@ void AdPopover::setTriggers(Triggers value) {
     return;
   }
   triggers_ = value;
+  const QPointer<AdPopover> lifetime(this);
   if (controller_) {
     controller_->setTriggerModes(toOverlayTriggers(triggers_));
+    if (!lifetime) {
+      return;
+    }
   }
-  emit triggersChanged(triggers_);
+  if (!notifyPropertyChange(&AdPopover::triggersChanged, triggers_)) {
+    return;
+  }
 }
 
 bool AdPopover::isVisible() const { return controller_ && controller_->popupVisible(); }
@@ -445,7 +453,11 @@ void AdPopover::preparePopup() {
   if (!popupHasContent()) {
     return;
   }
+  const QPointer<AdPopover> lifetime(this);
   popupPrepareToShow();
+  if (!lifetime) {
+    return;
+  }
   if (popupSurface_ && !popupSurface_->isVisible() && popupLayerMode_ == PopupLayerMode::QtTool &&
       retainNativeSurfaceOnHide_) {
     if (QWidget* anchor = effectiveAnchorWidget();
@@ -480,7 +492,9 @@ void AdPopover::setRetainNativeSurfaceOnHide(bool retain) {
       detail::releaseTopLevelToolResourcesOnHide(popupSurface_);
     }
   }
-  emit retainNativeSurfaceOnHideChanged(retain);
+  if (!notifyPropertyChange(&AdPopover::retainNativeSurfaceOnHideChanged, retain)) {
+    return;
+  }
 }
 
 void AdPopover::setSurfaceShowGuard(SurfaceShowGuard guard) {
@@ -498,7 +512,9 @@ void AdPopover::setVisibilityPolicy(VisibilityPolicy value) {
                                        ? detail::OverlayPopupController::VisibilityMode::External
                                        : detail::OverlayPopupController::VisibilityMode::Automatic);
   }
-  emit visibilityPolicyChanged(visibilityPolicy_);
+  if (!notifyPropertyChange(&AdPopover::visibilityPolicyChanged, visibilityPolicy_)) {
+    return;
+  }
   applyDefaultVisibleIfNeeded();
 }
 
@@ -507,8 +523,12 @@ void AdPopover::setPopupLifetime(PopupLifetime value) {
     return;
   }
   popupLifetime_ = value;
-  emit popupLifetimeChanged(popupLifetime_);
-  emit destroyOnHiddenChanged(destroyOnHidden());
+  if (!notifyPropertyChange(&AdPopover::popupLifetimeChanged, popupLifetime_)) {
+    return;
+  }
+  if (!notifyPropertyChange(&AdPopover::destroyOnHiddenChanged, destroyOnHidden())) {
+    return;
+  }
   if (!isVisible() && popupLifetime_ == PopupLifetime::RecreateOnOpen) {
     releasePopupSurface();
   }
@@ -520,14 +540,20 @@ void AdPopover::setPopupLayerMode(PopupLayerMode value) {
   }
 
   const bool wasVisible = isVisible();
+  const QPointer<AdPopover> lifetime(this);
   popupLayerMode_ = value;
   if (popupSurface_) {
     releasePopupSurface();
+    if (!lifetime) {
+      return;
+    }
   } else if (controller_) {
     controller_->popupSurfaceChanged();
     controller_->invalidatePopupGeometry();
   }
-  emit popupLayerModeChanged(popupLayerMode_);
+  if (!notifyPropertyChange(&AdPopover::popupLayerModeChanged, popupLayerMode_)) {
+    return;
+  }
   if (wasVisible) {
     refreshVisiblePopup();
   }
@@ -545,7 +571,9 @@ void AdPopover::setDefaultVisible(bool value) {
   if (defaultVisible_) {
     defaultVisibleApplied_ = false;
   }
-  emit defaultVisibleChanged(defaultVisible_);
+  if (!notifyPropertyChange(&AdPopover::defaultVisibleChanged, defaultVisible_)) {
+    return;
+  }
   applyDefaultVisibleIfNeeded();
 }
 
@@ -554,7 +582,9 @@ void AdPopover::setAutoAdjustOverflow(bool value) {
     return;
   }
   autoAdjustOverflow_ = value;
-  emit autoAdjustOverflowChanged(autoAdjustOverflow_);
+  if (!notifyPropertyChange(&AdPopover::autoAdjustOverflowChanged, autoAdjustOverflow_)) {
+    return;
+  }
   refreshVisiblePopup();
 }
 
@@ -563,7 +593,9 @@ void AdPopover::setArrowVisible(bool value) {
     return;
   }
   arrowVisible_ = value;
-  emit arrowVisibleChanged(arrowVisible_);
+  if (!notifyPropertyChange(&AdPopover::arrowVisibleChanged, arrowVisible_)) {
+    return;
+  }
   updateStyle();
   refreshVisiblePopup();
 }
@@ -573,7 +605,9 @@ void AdPopover::setArrowPointAtCenter(bool value) {
     return;
   }
   arrowPointAtCenter_ = value;
-  emit arrowPointAtCenterChanged(arrowPointAtCenter_);
+  if (!notifyPropertyChange(&AdPopover::arrowPointAtCenterChanged, arrowPointAtCenter_)) {
+    return;
+  }
   refreshVisiblePopup();
 }
 
@@ -586,7 +620,9 @@ void AdPopover::setHoverOpenDelayMs(int value) {
   if (controller_) {
     controller_->setMouseEnterDelayMs(hoverOpenDelayMs_);
   }
-  emit hoverOpenDelayMsChanged(hoverOpenDelayMs_);
+  if (!notifyPropertyChange(&AdPopover::hoverOpenDelayMsChanged, hoverOpenDelayMs_)) {
+    return;
+  }
 }
 
 void AdPopover::setHoverCloseDelayMs(int value) {
@@ -598,7 +634,9 @@ void AdPopover::setHoverCloseDelayMs(int value) {
   if (controller_) {
     controller_->setMouseLeaveDelayMs(hoverCloseDelayMs_);
   }
-  emit hoverCloseDelayMsChanged(hoverCloseDelayMs_);
+  if (!notifyPropertyChange(&AdPopover::hoverCloseDelayMsChanged, hoverCloseDelayMs_)) {
+    return;
+  }
 }
 
 void AdPopover::setEnabled(bool value) {
@@ -606,8 +644,12 @@ void AdPopover::setEnabled(bool value) {
     return;
   }
   enabled_ = value;
-  emit enabledChanged(enabled_);
-  syncControllerConfiguration();
+  if (!notifyPropertyChange(&AdPopover::enabledChanged, enabled_)) {
+    return;
+  }
+  if (!syncControllerConfiguration()) {
+    return;
+  }
   syncAccessibleState();
   updateStyle();
   refreshVisiblePopup();
@@ -618,13 +660,22 @@ void AdPopover::setTitle(const QString& value) {
     return;
   }
   title_ = value;
-  emit titleChanged(title_);
+  const QPointer<AdPopover> lifetime(this);
+  if (!notifyPropertyChange(&AdPopover::titleChanged, title_)) {
+    return;
+  }
   syncPopupContent();
   syncAccessibleState();
   if (controller_) {
     controller_->popupContentChanged(true);
+    if (!lifetime) {
+      return;
+    }
   }
   applyDefaultVisibleIfNeeded();
+  if (!lifetime) {
+    return;
+  }
   refreshVisiblePopup();
 }
 
@@ -633,13 +684,22 @@ void AdPopover::setText(const QString& value) {
     return;
   }
   text_ = value;
-  emit textChanged(text_);
+  const QPointer<AdPopover> lifetime(this);
+  if (!notifyPropertyChange(&AdPopover::textChanged, text_)) {
+    return;
+  }
   syncPopupContent();
   syncAccessibleState();
   if (controller_) {
     controller_->popupContentChanged(true);
+    if (!lifetime) {
+      return;
+    }
   }
   applyDefaultVisibleIfNeeded();
+  if (!lifetime) {
+    return;
+  }
   refreshVisiblePopup();
 }
 
@@ -648,18 +708,28 @@ void AdPopover::setSourceWidget(QWidget* widget) {
     return;
   }
 
+  const QPointer<AdPopover> lifetime(this);
   const QWidget* previousEffectiveAnchor = effectiveAnchorWidget();
   detail::clearDerivedAccessibleDescription(sourceWidget_);
   sourceWidget_ = widget;
   refreshObservedWidgets();
-  syncControllerConfiguration();
-  emit sourceWidgetChanged(sourceWidget_);
+  if (!syncControllerConfiguration()) {
+    return;
+  }
+  if (!notifyPropertyChange(&AdPopover::sourceWidgetChanged, sourceWidget_)) {
+    return;
+  }
   if (!anchorWidget_ && previousEffectiveAnchor != effectiveAnchorWidget()) {
-    emit anchorWidgetChanged(anchorWidget());
+    if (!notifyPropertyChange(&AdPopover::anchorWidgetChanged, anchorWidget())) {
+      return;
+    }
   }
   syncAccessibleState();
   updateStyle();
   applyDefaultVisibleIfNeeded();
+  if (!lifetime) {
+    return;
+  }
   refreshVisiblePopup();
 }
 
@@ -669,12 +739,20 @@ void AdPopover::setAnchorWidget(QWidget* widget) {
   if (anchorWidget_ == widget) {
     return;
   }
+  const QPointer<AdPopover> lifetime(this);
   anchorWidget_ = widget;
   refreshObservedWidgets();
-  syncControllerConfiguration();
-  emit anchorWidgetChanged(anchorWidget());
+  if (!syncControllerConfiguration()) {
+    return;
+  }
+  if (!notifyPropertyChange(&AdPopover::anchorWidgetChanged, anchorWidget())) {
+    return;
+  }
   updateStyle();
   applyDefaultVisibleIfNeeded();
+  if (!lifetime) {
+    return;
+  }
   refreshVisiblePopup();
 }
 
@@ -683,6 +761,7 @@ void AdPopover::setTitleWidget(QWidget* widget) {
     return;
   }
 
+  const QPointer<AdPopover> lifetime(this);
   const bool movedFromContent = widget && widget == contentWidget_;
   if (movedFromContent) {
     QWidget* moved = takeOwnedWidget(contentWidget_, contentWidgetDestroyedConnection_);
@@ -690,31 +769,50 @@ void AdPopover::setTitleWidget(QWidget* widget) {
   }
 
   deleteOwnedWidget(titleWidget_, titleWidgetDestroyedConnection_);
+  if (!lifetime) {
+    return;
+  }
   titleWidget_ = widget;
   if (titleWidget_) {
     titleWidget_->hide();
     titleWidget_->setParent(ensureOwnedWidgetParkingRoot());
     bindOwnedWidgetDestroyed(titleWidget_, titleWidgetDestroyedConnection_, [this]() {
-      emit titleWidgetChanged(nullptr);
+      const QPointer<AdPopover> lifetime(this);
+      if (!notifyPropertyChange(&AdPopover::titleWidgetChanged, nullptr)) {
+        return;
+      }
       syncPopupContent();
       syncAccessibleState();
       if (controller_) {
         controller_->popupContentChanged(true);
+        if (!lifetime) {
+          return;
+        }
       }
       refreshVisiblePopup();
     });
   }
 
   if (movedFromContent) {
-    emit contentWidgetChanged(nullptr);
+    if (!notifyPropertyChange(&AdPopover::contentWidgetChanged, nullptr)) {
+      return;
+    }
   }
-  emit titleWidgetChanged(titleWidget_);
+  if (!notifyPropertyChange(&AdPopover::titleWidgetChanged, titleWidget_)) {
+    return;
+  }
   syncPopupContent();
   syncAccessibleState();
   if (controller_) {
     controller_->popupContentChanged(true);
+    if (!lifetime) {
+      return;
+    }
   }
   applyDefaultVisibleIfNeeded();
+  if (!lifetime) {
+    return;
+  }
   refreshVisiblePopup();
 }
 
@@ -722,12 +820,18 @@ QWidget* AdPopover::takeTitleWidget() {
   if (!titleWidget_) {
     return nullptr;
   }
-  QWidget* widget = takeOwnedWidget(titleWidget_, titleWidgetDestroyedConnection_);
-  emit titleWidgetChanged(nullptr);
+  const QPointer<AdPopover> lifetime(this);
+  QPointer<QWidget> widget = takeOwnedWidget(titleWidget_, titleWidgetDestroyedConnection_);
+  if (!lifetime || !notifyPropertyChange(&AdPopover::titleWidgetChanged, nullptr)) {
+    return widget;
+  }
   syncPopupContent();
   syncAccessibleState();
   if (controller_) {
     controller_->popupContentChanged(true);
+    if (!lifetime) {
+      return widget;
+    }
   }
   refreshVisiblePopup();
   return widget;
@@ -742,6 +846,8 @@ void AdPopover::setContentWidget(QWidget* widget) {
     return;
   }
 
+  const QPointer<AdPopover> lifetime(this);
+
   if (!updatingFactoryContent_) {
     contentFactory_ = {};
     contentCreatedByFactory_ = false;
@@ -754,17 +860,27 @@ void AdPopover::setContentWidget(QWidget* widget) {
   }
 
   deleteOwnedWidget(contentWidget_, contentWidgetDestroyedConnection_);
+  if (!lifetime) {
+    return;
+  }
   contentWidget_ = widget;
   if (contentWidget_) {
     contentWidget_->hide();
     contentWidget_->setParent(ensureOwnedWidgetParkingRoot());
     bindOwnedWidgetDestroyed(contentWidget_, contentWidgetDestroyedConnection_, [this]() {
       contentCreatedByFactory_ = false;
+      const QPointer<AdPopover> lifetime(this);
       emit contentWidgetChanged(nullptr);
+      if (!lifetime) {
+        return;
+      }
       syncPopupContent();
       syncAccessibleState();
       if (controller_) {
         controller_->popupContentChanged(true);
+        if (!lifetime) {
+          return;
+        }
       }
       refreshVisiblePopup();
     });
@@ -772,14 +888,26 @@ void AdPopover::setContentWidget(QWidget* widget) {
 
   if (movedFromTitle) {
     emit titleWidgetChanged(nullptr);
+    if (!lifetime) {
+      return;
+    }
   }
   emit contentWidgetChanged(contentWidget_);
+  if (!lifetime) {
+    return;
+  }
   syncPopupContent();
   syncAccessibleState();
   if (controller_) {
     controller_->popupContentChanged(true);
+    if (!lifetime) {
+      return;
+    }
   }
   applyDefaultVisibleIfNeeded();
+  if (!lifetime) {
+    return;
+  }
   refreshVisiblePopup();
 }
 
@@ -787,34 +915,59 @@ QWidget* AdPopover::takeContentWidget() {
   if (!contentWidget_) {
     return nullptr;
   }
-  QWidget* widget = takeOwnedWidget(contentWidget_, contentWidgetDestroyedConnection_);
+  const QPointer<AdPopover> lifetime(this);
+  QPointer<QWidget> widget = takeOwnedWidget(contentWidget_, contentWidgetDestroyedConnection_);
+  if (!lifetime) {
+    return widget;
+  }
   if (!updatingFactoryContent_) {
     contentFactory_ = {};
   }
   contentCreatedByFactory_ = false;
-  emit contentWidgetChanged(nullptr);
+  if (!notifyPropertyChange(&AdPopover::contentWidgetChanged, nullptr)) {
+    return widget;
+  }
   syncPopupContent();
   syncAccessibleState();
   if (controller_) {
     controller_->popupContentChanged(true);
+    if (!lifetime) {
+      return widget;
+    }
   }
   refreshVisiblePopup();
   return widget;
 }
 
 void AdPopover::setContentFactory(ContentFactory factory, FactoryContentLifetime lifetime) {
+  const QPointer<AdPopover> ownerLifetime(this);
   if (isVisible()) {
     hide();
+    if (!ownerLifetime) {
+      return;
+    }
   }
   {
-    const QScopedValueRollback<bool> guard(updatingFactoryContent_, true);
+    const bool wasUpdating = updatingFactoryContent_;
+    updatingFactoryContent_ = true;
+    const auto restoreUpdating = qScopeGuard([ownerLifetime, wasUpdating]() {
+      if (ownerLifetime) {
+        ownerLifetime->updatingFactoryContent_ = wasUpdating;
+      }
+    });
     setContentWidget(nullptr);
+  }
+  if (!ownerLifetime) {
+    return;
   }
   contentFactory_ = std::move(factory);
   factoryContentLifetime_ = lifetime;
   contentCreatedByFactory_ = false;
   if (controller_) {
     controller_->popupContentChanged(true);
+    if (!ownerLifetime) {
+      return;
+    }
   }
   applyDefaultVisibleIfNeeded();
 }
@@ -841,7 +994,9 @@ void AdPopover::setTitleFont(const QFont& value) {
   if (previous == current) {
     return;
   }
-  emit titleFontChanged(current);
+  if (!notifyPropertyChange(&AdPopover::titleFontChanged, current)) {
+    return;
+  }
   updateStyle();
   refreshVisiblePopup();
 }
@@ -868,7 +1023,9 @@ void AdPopover::setTextFont(const QFont& value) {
   if (previous == current) {
     return;
   }
-  emit textFontChanged(current);
+  if (!notifyPropertyChange(&AdPopover::textFontChanged, current)) {
+    return;
+  }
   updateStyle();
   refreshVisiblePopup();
 }
@@ -899,7 +1056,9 @@ void AdPopover::setBackgroundColor(const QColor& value) {
   if (previous == current) {
     return;
   }
-  emit backgroundColorChanged(current);
+  if (!notifyPropertyChange(&AdPopover::backgroundColorChanged, current)) {
+    return;
+  }
   updateStyle();
   refreshVisiblePopup();
 }
@@ -930,7 +1089,9 @@ void AdPopover::setBorderColor(const QColor& value) {
   if (previous == current) {
     return;
   }
-  emit borderColorChanged(current);
+  if (!notifyPropertyChange(&AdPopover::borderColorChanged, current)) {
+    return;
+  }
   updateStyle();
   refreshVisiblePopup();
 }
@@ -961,7 +1122,9 @@ void AdPopover::setTitleColor(const QColor& value) {
   if (previous == current) {
     return;
   }
-  emit titleColorChanged(current);
+  if (!notifyPropertyChange(&AdPopover::titleColorChanged, current)) {
+    return;
+  }
   updateStyle();
   refreshVisiblePopup();
 }
@@ -992,7 +1155,9 @@ void AdPopover::setTextColor(const QColor& value) {
   if (previous == current) {
     return;
   }
-  emit textColorChanged(current);
+  if (!notifyPropertyChange(&AdPopover::textColorChanged, current)) {
+    return;
+  }
   updateStyle();
   refreshVisiblePopup();
 }
@@ -1019,7 +1184,9 @@ void AdPopover::setContentMargins(const QMargins& value) {
   if (previous == current) {
     return;
   }
-  emit contentMarginsChanged(current);
+  if (!notifyPropertyChange(&AdPopover::contentMarginsChanged, current)) {
+    return;
+  }
   updateStyle();
   refreshVisiblePopup();
 }
@@ -1047,7 +1214,9 @@ void AdPopover::setTitleMinimumWidth(int value) {
   if (previous == current) {
     return;
   }
-  emit titleMinimumWidthChanged(current);
+  if (!notifyPropertyChange(&AdPopover::titleMinimumWidthChanged, current)) {
+    return;
+  }
   updateStyle();
   refreshVisiblePopup();
 }
@@ -1075,7 +1244,9 @@ void AdPopover::setMaximumWidth(int value) {
   if (previous == current) {
     return;
   }
-  emit maximumWidthChanged(current);
+  if (!notifyPropertyChange(&AdPopover::maximumWidthChanged, current)) {
+    return;
+  }
   updateStyle();
   refreshVisiblePopup();
 }
@@ -1103,7 +1274,9 @@ void AdPopover::setZIndex(int value) {
   if (previous == current) {
     return;
   }
-  emit zIndexChanged(current);
+  if (!notifyPropertyChange(&AdPopover::zIndexChanged, current)) {
+    return;
+  }
   updateStyle();
   refreshVisiblePopup();
 }
@@ -1131,7 +1304,9 @@ void AdPopover::setCornerRadius(int value) {
   if (previous == current) {
     return;
   }
-  emit cornerRadiusChanged(current);
+  if (!notifyPropertyChange(&AdPopover::cornerRadiusChanged, current)) {
+    return;
+  }
   updateStyle();
   refreshVisiblePopup();
 }
@@ -1159,7 +1334,9 @@ void AdPopover::setBorderWidth(int value) {
   if (previous == current) {
     return;
   }
-  emit borderWidthChanged(current);
+  if (!notifyPropertyChange(&AdPopover::borderWidthChanged, current)) {
+    return;
+  }
   updateStyle();
   refreshVisiblePopup();
 }
@@ -1187,7 +1364,9 @@ void AdPopover::setArrowSize(int value) {
   if (previous == current) {
     return;
   }
-  emit arrowSizeChanged(current);
+  if (!notifyPropertyChange(&AdPopover::arrowSizeChanged, current)) {
+    return;
+  }
   updateStyle();
   refreshVisiblePopup();
 }
@@ -1215,7 +1394,9 @@ void AdPopover::setPopupOffset(int value) {
   if (previous == current) {
     return;
   }
-  emit popupOffsetChanged(current);
+  if (!notifyPropertyChange(&AdPopover::popupOffsetChanged, current)) {
+    return;
+  }
   updateStyle();
   refreshVisiblePopup();
 }
@@ -1225,7 +1406,9 @@ void AdPopover::refreshPopupLayout() { refreshVisiblePopup(); }
 bool AdPopover::eventFilter(QObject* watched, QEvent* event) {
   if (event && (watched == sourceWidget_ || watched == anchorWidget_)) {
     if (event->type() == QEvent::EnabledChange) {
-      syncControllerConfiguration();
+      if (!syncControllerConfiguration()) {
+        return false;
+      }
       syncAccessibleState();
       updateStyle();
       refreshVisiblePopup();
@@ -1366,7 +1549,9 @@ void AdPopover::deleteOwnedWidget(QPointer<QWidget>& widget,
   QPointer<QWidget> owned = widget;
   widget.clear();
   owned->hide();
-  owned->deleteLater();
+  if (owned) {
+    owned->deleteLater();
+  }
 }
 
 QWidget* AdPopover::takeOwnedWidget(QPointer<QWidget>& widget,
@@ -1377,9 +1562,12 @@ QWidget* AdPopover::takeOwnedWidget(QPointer<QWidget>& widget,
     return nullptr;
   }
 
-  QWidget* owned = widget.data();
+  QPointer<QWidget> owned = widget;
   widget.clear();
   owned->hide();
+  if (!owned) {
+    return nullptr;
+  }
   owned->setParent(nullptr);
   return owned;
 }
@@ -1430,6 +1618,8 @@ void AdPopover::ensurePopupSurface() {
   surface->setMouseTracking(true);
   surface->hide();
   popupSurface_ = surface;
+  connect(surface, &detail::OverlayPopupSurface::aboutToDestroy, this,
+          [this]() { releasePopupSurface(true); });
   surface->setNativeSurfaceRetained(retainNativeSurfaceOnHide_);
   surface->installEventFilter(this);
 
@@ -1458,9 +1648,30 @@ void AdPopover::ensurePopupSurface() {
   updateStyle();
 }
 
-void AdPopover::releasePopupSurface() {
+void AdPopover::releasePopupSurface(bool surfaceBeingDestroyed) {
+  QPointer<AdPopover> lifetime(this);
   QPointer<QWidget> surfaceToRelease = popupSurface_;
-  const auto reparentIfOwned = [this, surfaceToRelease](QPointer<QWidget>& widget) {
+  if (surfaceToRelease) {
+    // A retired surface must not release a replacement when deferred deletion runs.
+    disconnect(surfaceToRelease.data(), nullptr, this, nullptr);
+    surfaceToRelease->removeEventFilter(this);
+  }
+  popupSurface_.clear();
+  popupBodyHost_.clear();
+  popupContentView_.clear();
+
+  if (controller_) {
+    controller_->popupSurfaceChanged();
+    controller_->invalidatePopupGeometry();
+    if (surfaceBeingDestroyed) {
+      controller_->setPopupVisible(false);
+    }
+  }
+  if (!lifetime) {
+    return;
+  }
+
+  const auto reparentIfOwned = [this, lifetime, surfaceToRelease](QPointer<QWidget>& widget) {
     if (!widget) {
       return;
     }
@@ -1469,25 +1680,26 @@ void AdPopover::releasePopupSurface() {
     if (!insideSurface) {
       return;
     }
-    widget->hide();
-    widget->setParent(ensureOwnedWidgetParkingRoot());
+    QPointer<QWidget> owned = widget;
+    owned->hide();
+    if (lifetime && owned) {
+      owned->setParent(ensureOwnedWidgetParkingRoot());
+    }
   };
 
   reparentIfOwned(titleWidget_);
-  reparentIfOwned(contentWidget_);
-
-  popupSurface_.clear();
-  popupBodyHost_.clear();
-  popupContentView_.clear();
-
-  if (surfaceToRelease) {
-    surfaceToRelease->hide();
-    surfaceToRelease->deleteLater();
+  if (!lifetime) {
+    return;
   }
-
-  if (controller_) {
-    controller_->popupSurfaceChanged();
-    controller_->invalidatePopupGeometry();
+  reparentIfOwned(contentWidget_);
+  if (!lifetime) {
+    return;
+  }
+  if (surfaceToRelease && !surfaceBeingDestroyed) {
+    surfaceToRelease->hide();
+    if (surfaceToRelease) {
+      surfaceToRelease->deleteLater();
+    }
   }
 }
 
@@ -1583,18 +1795,26 @@ void AdPopover::refreshVisiblePopup() {
   }
 }
 
-void AdPopover::syncControllerConfiguration() {
+bool AdPopover::syncControllerConfiguration() {
   if (!controller_) {
-    return;
+    return true;
   }
+  const QPointer<AdPopover> lifetime(this);
   controller_->setTriggerModes(toOverlayTriggers(triggers_));
+  if (!lifetime) {
+    return false;
+  }
   controller_->setVisibilityMode(visibilityPolicy_ == VisibilityPolicy::Manual
                                      ? detail::OverlayPopupController::VisibilityMode::External
                                      : detail::OverlayPopupController::VisibilityMode::Automatic);
   controller_->setDisabled(effectiveDisabled());
+  if (!lifetime) {
+    return false;
+  }
   controller_->setMouseEnterDelayMs(hoverOpenDelayMs_);
   controller_->setMouseLeaveDelayMs(hoverCloseDelayMs_);
   controller_->anchorWidgetChanged();
+  return !lifetime.isNull();
 }
 
 void AdPopover::refreshObservedWidgets() {
@@ -1648,7 +1868,9 @@ void AdPopover::handleObservedWidgetDestroyed(QObject* object) {
 
   if (object == sourceWidget_) {
     sourceWidget_.clear();
-    emit sourceWidgetChanged(nullptr);
+    if (!notifyPropertyChange(&AdPopover::sourceWidgetChanged, nullptr)) {
+      return;
+    }
     anchorSignalNeeded = !anchorWidget_;
   }
   if (object == anchorWidget_) {
@@ -1663,10 +1885,14 @@ void AdPopover::handleObservedWidgetDestroyed(QObject* object) {
   }
 
   if (anchorSignalNeeded || previousEffectiveAnchor != effectiveAnchorWidget()) {
-    emit anchorWidgetChanged(anchorWidget());
+    if (!notifyPropertyChange(&AdPopover::anchorWidgetChanged, anchorWidget())) {
+      return;
+    }
   }
 
-  syncControllerConfiguration();
+  if (!syncControllerConfiguration()) {
+    return;
+  }
   syncAccessibleState();
   updateStyle();
   refreshVisiblePopup();
@@ -1685,34 +1911,61 @@ void AdPopover::applyDefaultVisibleIfNeeded() {
 void AdPopover::emitVisibleSignals(bool value) { emit visibleChanged(value); }
 
 void AdPopover::handleControllerPopupVisibleChanged(bool value) {
+  const QPointer<AdPopover> lifetime(this);
   if (popupSurface_) {
     detail::notifyAccessibilityEvent(popupSurface_,
                                      value ? QAccessible::ObjectShow : QAccessible::ObjectHide);
   }
   if (!value && factoryContentLifetime_ == FactoryContentLifetime::RecreateOnOpen) {
     releaseFactoryContent();
+    if (!lifetime) {
+      return;
+    }
   }
   emitVisibleSignals(value);
 }
 
-void AdPopover::ensureFactoryContent() {
+bool AdPopover::ensureFactoryContent() {
   if (contentWidget_ || !contentFactory_ || updatingFactoryContent_) {
-    return;
+    return true;
   }
-  const QScopedValueRollback<bool> guard(updatingFactoryContent_, true);
-  QWidget* content = contentFactory_();
+  const QPointer<AdPopover> lifetime(this);
+  // Factories can replace the toolbar that owns this popover. Keep the callable
+  // alive independently and never restore member state after owner deletion.
+  const ContentFactory factory = contentFactory_;
+  updatingFactoryContent_ = true;
+  const auto restoreUpdating = qScopeGuard([lifetime]() {
+    if (lifetime) {
+      lifetime->updatingFactoryContent_ = false;
+    }
+  });
+  QWidget* content = factory();
+  if (!lifetime) {
+    return false;
+  }
   if (!content) {
-    return;
+    return true;
   }
   setContentWidget(content);
+  if (!lifetime) {
+    return false;
+  }
   contentCreatedByFactory_ = contentWidget_ == content;
+  return true;
 }
 
 void AdPopover::releaseFactoryContent() {
   if (!contentCreatedByFactory_ || !contentWidget_) {
     return;
   }
-  const QScopedValueRollback<bool> guard(updatingFactoryContent_, true);
+  const QPointer<AdPopover> lifetime(this);
+  const bool wasUpdating = updatingFactoryContent_;
+  updatingFactoryContent_ = true;
+  const auto restoreUpdating = qScopeGuard([lifetime, wasUpdating]() {
+    if (lifetime) {
+      lifetime->updatingFactoryContent_ = wasUpdating;
+    }
+  });
   contentCreatedByFactory_ = false;
   setContentWidget(nullptr);
 }
@@ -1735,13 +1988,17 @@ QWidget* AdPopover::popupScopeWindow() const {
 QWidget* AdPopover::popupSurfaceWidget() const { return popupSurface_; }
 
 QWidget* AdPopover::popupEnsureSurface() {
-  ensureFactoryContent();
+  if (!ensureFactoryContent()) {
+    return nullptr;
+  }
   ensurePopupSurface();
   return popupSurface_;
 }
 
 void AdPopover::popupPrepareToShow() {
-  ensureFactoryContent();
+  if (!ensureFactoryContent()) {
+    return;
+  }
   ensurePopupSurface();
   syncPopupContent();
   updateStyle();
@@ -1812,7 +2069,8 @@ void AdPopover::popupReleaseSurface() { releasePopupSurface(); }
 bool AdPopover::popupHasSurfaceShowGuard() const { return static_cast<bool>(surfaceShowGuard_); }
 
 bool AdPopover::popupSurfaceCanShow() const {
-  return !surfaceShowGuard_ || surfaceShowGuard_(popupSurface_);
+  const SurfaceShowGuard guard = surfaceShowGuard_;
+  return !guard || guard(popupSurface_);
 }
 
 }  // namespace adqt::widgets

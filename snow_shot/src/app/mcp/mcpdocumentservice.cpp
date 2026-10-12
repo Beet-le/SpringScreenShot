@@ -1173,6 +1173,7 @@ struct McpDocumentService::Impl {
     QQueue<QString> replayOrder;
     qsizetype replayBytes = 0;
     bool stopped = false;
+    bool workersDrained = false;
     Impl(McpDocumentService& owner, Ports options) : q(owner), ports(std::move(options)) {
         if (!ports.clipboard)
             ports.clipboard = std::make_shared<NativeDocumentClipboard>();
@@ -1193,6 +1194,16 @@ struct McpDocumentService::Impl {
         expiration->setInterval(30000);
         QObject::connect(expiration, &QTimer::timeout, &q, [this] { pruneBlobs(); });
         expiration->start();
+    }
+    void drainWorkers() {
+        if (workersDrained)
+            return;
+        for (auto& workerThread : workerThreads)
+            workerThread.quit();
+        for (auto& workerThread : workerThreads)
+            workerThread.wait();
+        workers.fill(nullptr);
+        workersDrained = true;
     }
     qint64 now() const {
         return ports.clock ? ports.clock() : QDateTime::currentMSecsSinceEpoch();
@@ -1334,20 +1345,34 @@ struct McpDocumentService::Impl {
                           ScreenshotMcpResponse response, ScreenshotMcpServer::Completion done) {
         const QString key = QString::number(request.connectionId) + u':' + request.requestId;
         const auto canceled = requestToken(request);
-        auto cancel = start([this, key, request, canceled, response = std::move(response),
-                             done](ScreenshotClipboardCommitResult result) mutable {
-            clipboard.remove(key);
-            if (canceled->load())
-                return;
-            if (!result.succeeded()) {
-                done(failure(request, QStringLiteral("clipboard_failed")));
-                return;
-            }
-            response.result.insert(QStringLiteral("copied"), true);
-            done(std::move(response));
-        });
+        const QPointer<McpDocumentService> guard(&q);
+        const auto port = ports.clipboard;
+        auto cancel =
+            start(*port, [this, guard, key, request, canceled, response = std::move(response),
+                          done](ScreenshotClipboardCommitResult result) mutable {
+                if (!guard)
+                    return;
+                clipboard.remove(key);
+                if (canceled->load())
+                    return;
+                if (!result.succeeded()) {
+                    done(failure(request, QStringLiteral("clipboard_failed")));
+                    return;
+                }
+                response.result.insert(QStringLiteral("copied"), true);
+                done(std::move(response));
+            });
+        if (!guard || canceled->load()) {
+            if (cancel)
+                cancel();
+            return;
+        }
         if (cancel)
-            clipboard.insert(key, std::move(cancel));
+            // Cancellation may borrow port state and retire the service while it is executing.
+            clipboard.insert(key, [port, cancel = std::move(cancel)] {
+                (void)port;
+                cancel();
+            });
         else
             done(failure(request, QStringLiteral("clipboard_failed")));
     }
@@ -1451,9 +1476,14 @@ struct McpDocumentService::Impl {
                      request.method == QStringLiteral("snow_shot_document_close"))) {
                     auto entry = retainedRecognition.take(documentId);
                     ports.jobs->cancel(entry.owner, entry.job);
+                    if (!guard)
+                        return;
                     if (entry.session) {
                         entry.session->cancelWorkflow();
-                        entry.session->deleteLater();
+                        if (!guard)
+                            return;
+                        if (entry.session)
+                            entry.session->deleteLater();
                     }
                 }
                 if (result.response.ok && result.source &&
@@ -1532,6 +1562,8 @@ struct McpDocumentService::Impl {
                             if (job.value(QStringLiteral("document_id")) == id)
                                 ports.jobs->cancel(request.connectionId,
                                                    job.value(QStringLiteral("job_id")).toString());
+                            if (!guard)
+                                return;
                         }
                     }
                     done(std::move(result.response));
@@ -1551,6 +1583,7 @@ struct McpDocumentService::Impl {
     }
     void autoFilter(const ScreenshotMcpRequest& request, WorkerResult result,
                     ScreenshotMcpServer::Completion done) {
+        QPointer<McpDocumentService> guard(&q);
         const QStringList allowed{QStringLiteral("text"),      QStringLiteral("text_in_box"),
                                   QStringLiteral("image"),     QStringLiteral("avatar"),
                                   QStringLiteral("icon"),      QStringLiteral("message_box"),
@@ -1577,65 +1610,73 @@ struct McpDocumentService::Impl {
             {{QStringLiteral("document_id"), request.params.value(QStringLiteral("document_id"))},
              {QStringLiteral("source_revision"),
               static_cast<qint64>(request.expectedRevision.value_or(0))}});
+        if (!guard)
+            return;
         if (id.isEmpty()) {
             done(failure(request, QStringLiteral("queue_full")));
             return;
         }
-        QPointer<McpDocumentService> guard(&q);
         const auto canvasRect =
             result.response.result.value(QStringLiteral("canvas_rect")).toArray();
         const QRectF bounds(canvasRect[0].toDouble(), canvasRect[1].toDouble(),
                             canvasRect[2].toDouble(), canvasRect[3].toDouble());
         const auto pixels = result.image.size();
-        ports.autoFilter(
-            std::move(result.image),
-            [this, guard, canceled, ownerCanceled, request, id, bounds,
-             pixels](QList<SnowCanvasAutoFilterRegion> regions, QString error) mutable {
-                if (!guard || canceled->load() || ownerCanceled->load())
+        const auto filter = ports.autoFilter;
+        filter(std::move(result.image), [this, guard, canceled, ownerCanceled, request, id, bounds,
+                                         pixels](QList<SnowCanvasAutoFilterRegion> regions,
+                                                 QString error) mutable {
+            if (!guard || canceled->load() || ownerCanceled->load())
+                return;
+            if (!error.isEmpty()) {
+                ports.jobs->fail(id, QStringLiteral("recognition_failed"));
+                return;
+            }
+            for (auto& region : regions)
+                region.bounds =
+                    QRectF(bounds.x() + region.bounds.x() * bounds.width() / pixels.width(),
+                           bounds.y() + region.bounds.y() * bounds.height() / pixels.height(),
+                           region.bounds.width() * bounds.width() / pixels.width(),
+                           region.bounds.height() * bounds.height() / pixels.height())
+                        .intersected(bounds);
+            regions.removeIf([](const auto& region) { return region.bounds.isEmpty(); });
+            // Once the engine transaction is queued it must complete atomically; a
+            // cancel acknowledgment may not race a successful document mutation.
+            if (!ports.jobs->setCancellation(id, {}))
+                return;
+            if (!guard)
+                return;
+            auto* worker = workers[laneFor(request)];
+            queueMcpWork(worker, [this, guard, worker, canceled, ownerCanceled, request, id,
+                                  record = SnowCanvasAutoFilterRecord{
+                                      bounds, std::move(regions)}]() mutable {
+                if (canceled->load() || ownerCanceled->load())
                     return;
-                if (!error.isEmpty()) {
-                    ports.jobs->fail(id, QStringLiteral("recognition_failed"));
+                auto value = worker->autoFilter(request, std::move(record));
+                if (!guard)
                     return;
-                }
-                for (auto& region : regions)
-                    region.bounds =
-                        QRectF(bounds.x() + region.bounds.x() * bounds.width() / pixels.width(),
-                               bounds.y() + region.bounds.y() * bounds.height() / pixels.height(),
-                               region.bounds.width() * bounds.width() / pixels.width(),
-                               region.bounds.height() * bounds.height() / pixels.height())
-                            .intersected(bounds);
-                regions.removeIf([](const auto& region) { return region.bounds.isEmpty(); });
-                // Once the engine transaction is queued it must complete atomically; a
-                // cancel acknowledgment may not race a successful document mutation.
-                if (!ports.jobs->setCancellation(id, {}))
-                    return;
-                auto* worker = workers[laneFor(request)];
-                queueMcpWork(worker, [this, guard, worker, canceled, ownerCanceled, request, id,
-                                      record = SnowCanvasAutoFilterRecord{
-                                          bounds, std::move(regions)}]() mutable {
-                    if (canceled->load() || ownerCanceled->load())
+                queueMcpWork(guard, [this, guard, canceled, ownerCanceled, request, id,
+                                     value = std::move(value)]() mutable {
+                    if (!guard || canceled->load() || ownerCanceled->load())
                         return;
-                    auto value = worker->autoFilter(request, std::move(record));
-                    if (!guard)
-                        return;
-                    queueMcpWork(guard, [this, guard, canceled, ownerCanceled, request, id,
-                                         value = std::move(value)]() mutable {
-                        if (!guard || canceled->load() || ownerCanceled->load())
+                    if (value.response.ok) {
+                        ports.jobs->complete(id, value.response.result);
+                        if (!guard)
                             return;
-                        if (value.response.ok) {
-                            ports.jobs->complete(id, value.response.result);
-                            emit q.changed(
-                                request.connectionId,
-                                request.params.value(QStringLiteral("document_id")).toString());
-                        } else
-                            ports.jobs->fail(id, value.response.errorCode);
-                    });
+                        emit q.changed(
+                            request.connectionId,
+                            request.params.value(QStringLiteral("document_id")).toString());
+                    } else
+                        ports.jobs->fail(id, value.response.errorCode);
                 });
             });
+        });
+        if (!guard)
+            return;
         done(success(request, *ports.jobs->get(request.connectionId, id)));
     }
     void recognize(const ScreenshotMcpRequest& request, WorkerResult result,
                    ScreenshotMcpServer::Completion done) {
+        QPointer<McpDocumentService> guard(&q);
         const QString kind =
             request.params.value(QStringLiteral("kind")).toString(QStringLiteral("text"));
         const QStringList modes{QStringLiteral("text"), QStringLiteral("table"),
@@ -1675,20 +1716,30 @@ struct McpDocumentService::Impl {
         auto prior = retainedRecognition.take(documentId);
         if (prior.session) {
             ports.jobs->cancel(prior.owner, prior.job);
-            prior.session->cancelWorkflow();
-            prior.session->deleteLater();
+            if (!guard)
+                return;
+            if (prior.session) {
+                prior.session->cancelWorkflow();
+                if (!guard)
+                    return;
+                if (prior.session)
+                    prior.session->deleteLater();
+            }
         }
         const QString id = ports.jobs->start(
             request.connectionId, QStringLiteral("document_recognition"),
             [guardedSession] {
                 if (guardedSession) {
                     guardedSession->cancelWorkflow();
-                    guardedSession->deleteLater();
+                    if (guardedSession)
+                        guardedSession->deleteLater();
                 }
             },
             {{QStringLiteral("document_id"), request.params.value(QStringLiteral("document_id"))},
              {QStringLiteral("source_revision"),
               result.response.result.value(QStringLiteral("revision"))}});
+        if (!guard)
+            return;
         if (id.isEmpty()) {
             delete session;
             done(failure(request, QStringLiteral("queue_full")));
@@ -1702,7 +1753,6 @@ struct McpDocumentService::Impl {
         });
         retainedRecognition.insert(
             documentId, RetainedRecognition{request.connectionId, sourceRevision, 1, id, session});
-        QPointer<McpDocumentService> guard(&q);
         const auto settle = [this, guard, session, id, documentId] {
             if (!guard || !recognition.contains(id) ||
                 session->workflowState().value(QStringLiteral("busy")).toBool())
@@ -1719,6 +1769,8 @@ struct McpDocumentService::Impl {
                 ports.jobs->fail(id, QStringLiteral("recognition_failed"));
             else
                 ports.jobs->complete(id, value);
+            if (!guard)
+                return;
             recognition.remove(id);
             emit q.changed(entry.owner, documentId);
         };
@@ -1728,16 +1780,26 @@ struct McpDocumentService::Impl {
                          &ScreenshotRecognitionSessionController::recognitionResultsChanged,
                          session, settle, Qt::QueuedConnection);
         session->setTarget({id, result.image, QRectF(QPointF(), result.image.size())});
+        if (!guard || !guardedSession)
+            return;
         cached.key = id;
         if (!cached.isEmpty())
             session->seedRecognitionResults(std::move(cached));
+        if (!guard || !guardedSession)
+            return;
         session->activate(static_cast<ScreenshotRecognitionSessionController::Mode>(index));
+        if (!guard || !guardedSession)
+            return;
         QTimer::singleShot(0, session, settle);
-        QTimer::singleShot(300000, session, [this, guardedSession, id] {
+        QTimer::singleShot(300000, session, [this, guard, guardedSession, id] {
             if (!guardedSession || !guardedSession->busy())
                 return;
             ports.jobs->fail(id, QStringLiteral("timeout"));
+            if (!guard || !guardedSession)
+                return;
             guardedSession->cancelWorkflow();
+            if (!guard || !guardedSession)
+                return;
             guardedSession->deleteLater();
             recognition.remove(id);
         });
@@ -1745,6 +1807,7 @@ struct McpDocumentService::Impl {
     }
     void recognitionCommand(const ScreenshotMcpRequest& request, ScreenshotMcpResponse response,
                             ScreenshotMcpServer::Completion done) {
+        const QPointer<McpDocumentService> guard(&q);
         const auto documentId = request.params.value(QStringLiteral("document_id")).toString();
         auto entry = retainedRecognition.find(documentId);
         if (entry == retainedRecognition.end() || !entry->session ||
@@ -1774,13 +1837,24 @@ struct McpDocumentService::Impl {
                 done(failure(request, QStringLiteral("resource_limit")));
                 return;
             }
-            if (!entry->session->editWorkflow(request.params)) {
+            const bool edited = entry->session->editWorkflow(request.params);
+            if (!guard)
+                return;
+            entry = retainedRecognition.find(documentId);
+            if (entry == retainedRecognition.end() || !entry->session)
+                return;
+            if (!edited) {
                 done(failure(request, QStringLiteral("action_unavailable")));
                 return;
             }
             ++entry->revision;
             entry->editBytes += charge;
             emit q.changed(entry->owner, documentId);
+            if (!guard)
+                return;
+            entry = retainedRecognition.find(documentId);
+            if (entry == retainedRecognition.end() || !entry->session)
+                return;
         }
         auto value = entry->session->workflowResult();
         value.insert(QStringLiteral("workflow"), entry->session->workflowState());
@@ -1844,9 +1918,8 @@ struct McpDocumentService::Impl {
                 mime->setHtml(QString::fromUtf8(bytes));
             publishClipboard(
                 request,
-                [&](Clipboard::Completion completion) {
-                    return ports.clipboard->publishMimeData(&q, std::move(mime),
-                                                            std::move(completion));
+                [&](Clipboard& port, Clipboard::Completion completion) {
+                    return port.publishMimeData(&q, std::move(mime), std::move(completion));
                 },
                 success(request, {}), std::move(done));
             return;
@@ -1994,9 +2067,9 @@ struct McpDocumentService::Impl {
                                            prepared.payload.pngBytes().size());
                         publishClipboard(
                             request,
-                            [&](Clipboard::Completion completion) {
-                                return ports.clipboard->publishImage(
-                                    &q, std::move(prepared.payload), std::move(completion));
+                            [&](Clipboard& port, Clipboard::Completion completion) {
+                                return port.publishImage(&q, std::move(prepared.payload),
+                                                         std::move(completion));
                             },
                             std::move(response), finish);
                     }))
@@ -2168,6 +2241,8 @@ struct McpDocumentService::Impl {
                                                   if (guard)
                                                       guard->cancelRequest(owner, childId);
                                               });
+            if (!guard)
+                return;
             if (id.isEmpty()) {
                 done(failure(request, QStringLiteral("queue_full")));
                 return;
@@ -2185,6 +2260,8 @@ struct McpDocumentService::Impl {
                 else
                     ports.jobs->fail(id, response.errorCode);
             });
+            if (!guard)
+                return;
             done(std::move(reply));
             return;
         }
@@ -2205,11 +2282,19 @@ struct McpDocumentService::Impl {
                 return;
             }
             if (request.method == QStringLiteral("snow_shot_job_cancel")) {
-                if (!ports.jobs->cancel(request.connectionId, id)) {
+                const QPointer<McpDocumentService> guard(&q);
+                const bool canceled = ports.jobs->cancel(request.connectionId, id);
+                if (!guard)
+                    return;
+                if (!canceled) {
                     done(failure(request, QStringLiteral("not_cancelable")));
                     return;
                 }
                 value = ports.jobs->get(request.connectionId, id);
+                if (!value) {
+                    done(failure(request, QStringLiteral("job_not_found")));
+                    return;
+                }
             }
             done(success(request, *value));
             return;
@@ -2266,6 +2351,10 @@ McpDocumentService::McpDocumentService(Ports ports, QObject* parent)
     : QObject(parent), m_impl(std::make_unique<Impl>(*this, std::move(ports))) {}
 McpDocumentService::~McpDocumentService() {
     shutdown();
+    // Recognition sessions can still be waiting for DeferredDelete. Their
+    // destruction callbacks must run before m_impl and its registries disappear.
+    while (!children().isEmpty())
+        delete children().constLast();
 }
 bool McpDocumentService::handles(const QString& method) const {
     return kTools.contains(method);
@@ -2510,28 +2599,30 @@ void McpDocumentService::disconnected(quint64 owner) {
     Q_ASSERT(QThread::currentThread() == thread());
     const auto activity = runtime::RuntimeActivityTracker::shared().acquire();
     auto& s = *m_impl;
+    const QPointer<McpDocumentService> guard(this);
     if (const auto canceled = s.owners.take(owner))
         canceled->store(true);
-    s.ports.jobs->disconnected(owner);
+    // Retire every owner entry before cancellation can reenter shutdown and mutate these maps.
+    // Local callbacks also remain valid if an earlier cancellation destroys the service.
+    QVector<QPointer<ScreenshotRecognitionSessionController>> sessions;
+    QVector<ScreenshotExportJobHandle> exports;
+    QVector<Clipboard::Cancel> clipboardCancellations;
+    QVector<std::shared_ptr<ScreenshotExportArtifact>> artifacts;
     const QString prefix = QString::number(owner) + u':';
     for (auto it = s.retainedRecognition.begin(); it != s.retainedRecognition.end();) {
         if (it->owner != owner) {
             ++it;
             continue;
         }
-        const auto session = it->session;
+        sessions.append(it->session);
         it = s.retainedRecognition.erase(it);
-        if (session) {
-            session->cancelWorkflow();
-            session->deleteLater();
-        }
     }
     for (auto it = s.textExports.begin(); it != s.textExports.end();) {
         if (!it.key().startsWith(prefix)) {
             ++it;
             continue;
         }
-        it->cancel();
+        exports.append(std::move(*it));
         it = s.textExports.erase(it);
     }
     for (auto it = s.blobs.begin(); it != s.blobs.end();) {
@@ -2564,18 +2655,16 @@ void McpDocumentService::disconnected(quint64 owner) {
             ++it;
             continue;
         }
-        const auto commit = *it;
+        clipboardCancellations.append(std::move(*it));
         it = s.clipboard.erase(it);
-        commit();
     }
     for (auto it = s.artifacts.begin(); it != s.artifacts.end();) {
         if (!it.key().startsWith(prefix)) {
             ++it;
             continue;
         }
-        const auto artifact = *it;
+        artifacts.append(std::move(*it));
         it = s.artifacts.erase(it);
-        artifact->cancel();
     }
     for (auto it = s.replay.begin(); it != s.replay.end();) {
         if (!it.key().startsWith(prefix)) {
@@ -2591,6 +2680,23 @@ void McpDocumentService::disconnected(quint64 owner) {
             it = s.documentLanes.erase(it);
         else
             ++it;
+    s.ports.jobs->disconnected(owner);
+    for (const auto& session : sessions) {
+        if (!session)
+            continue;
+        session->cancelWorkflow();
+        if (session)
+            session->deleteLater();
+    }
+    for (const auto& job : exports)
+        job.cancel();
+    for (const auto& cancel : clipboardCancellations)
+        if (cancel)
+            cancel();
+    for (const auto& artifact : artifacts)
+        artifact->cancel();
+    if (!guard)
+        return;
     if (!s.stopped)
         for (auto* worker : s.workers)
             queueMcpWork(worker, [worker, owner] { worker->disconnected(owner); });
@@ -2598,6 +2704,7 @@ void McpDocumentService::disconnected(quint64 owner) {
 bool McpDocumentService::cancelRequest(quint64 owner, const QString& requestId) {
     Q_ASSERT(QThread::currentThread() == thread());
     auto& s = *m_impl;
+    const QPointer<McpDocumentService> guard(this);
     const QString key = QString::number(owner) + u':' + requestId;
     auto found = s.activeRequests.find(key);
     if (found == s.activeRequests.end())
@@ -2605,8 +2712,10 @@ bool McpDocumentService::cancelRequest(quint64 owner, const QString& requestId) 
     auto active = std::move(*found);
     s.activeRequests.erase(found);
     active.canceled->store(true);
-    if (s.ports.cancelSource)
-        s.ports.cancelSource(owner, requestId);
+    if (const auto cancelSource = s.ports.cancelSource)
+        cancelSource(owner, requestId);
+    if (!guard)
+        return true;
     auto response = failure(active.request, QStringLiteral("canceled"));
     response.errorDetails.insert(QStringLiteral("outcome_may_have_completed"), true);
     const QString replayKey = QString::number(owner) + u':' + active.request.idempotencyKey;
@@ -2630,6 +2739,8 @@ bool McpDocumentService::cancelRequest(quint64 owner, const QString& requestId) 
     }
     if (const auto cancel = s.clipboard.take(key))
         cancel();
+    if (!guard)
+        return true;
     s.textExports.take(key).cancel();
     active.completion(response);
     for (auto& waiter : waiters)
@@ -2639,18 +2750,18 @@ bool McpDocumentService::cancelRequest(quint64 owner, const QString& requestId) 
 void McpDocumentService::shutdown() {
     Q_ASSERT(QThread::currentThread() == thread());
     auto& s = *m_impl;
-    if (s.stopped)
-        return;
+    const QPointer<McpDocumentService> guard(this);
     const auto activity = runtime::RuntimeActivityTracker::shared().acquire();
     // Cancellation callbacks may re-enter request(); close admission before invoking them.
     s.stopped = true;
-    const auto owners = s.owners.keys();
-    for (const auto owner : owners)
+    // disconnected() removes its owner before callbacks. A nested shutdown or
+    // destructor must still cancel remaining owners and drain the live workers.
+    while (!s.owners.isEmpty()) {
+        const auto owner = s.owners.constBegin().key();
         disconnected(owner);
-    for (auto& workerThread : s.workerThreads)
-        workerThread.quit();
-    for (auto& workerThread : s.workerThreads)
-        workerThread.wait();
-    s.workers.fill(nullptr);
+        if (!guard)
+            return;
+    }
+    s.drainWorkers();
 }
 } // namespace snow_shot::app::mcp

@@ -10,6 +10,7 @@
 #include "snow_shot/presentation/screenshottoolbarwindow.h"
 
 #include <QTimer>
+#include <QPointer>
 
 namespace {
 constexpr int kSelectionToolbarGap = 4;
@@ -132,12 +133,20 @@ void ScreenshotToolbarPresenter::raiseToolbarForCanvasInteraction(
         return;
     }
 
+    const QPointer<ScreenshotToolbarPresenter> lifetime(this);
     toolbar->raise();
+    if (!lifetime)
+        return;
     m_overlayCoordinator.raiseSelectionToolbar();
-    QTimer::singleShot(0, toolbar, [this]() {
+    if (!lifetime)
+        return;
+    QTimer::singleShot(0, this, [this]() {
+        const QPointer<ScreenshotToolbarPresenter> lifetime(this);
         ScreenshotToolbarWindow* delayedToolbar = m_overlayCoordinator.toolbar();
         if (delayedToolbar != nullptr && delayedToolbar->isVisible()) {
             delayedToolbar->raise();
+            if (!lifetime)
+                return;
             m_overlayCoordinator.raiseSelectionToolbar();
         }
     });

@@ -56,7 +56,8 @@ void SnowCanvasCursorController::applyResolvedCursorToWidget(const QCursor& curs
     if (m_widget.testAttribute(Qt::WA_SetCursor) && m_widget.cursor() == cursor) {
         return;
     }
-    m_widget.setCursor(cursor);
+    const QCursor resolvedCursor = cursor;
+    m_widget.setCursor(resolvedCursor);
 }
 
 void SnowCanvasCursorController::setEngineCursor(SnowCursorStyle style) {

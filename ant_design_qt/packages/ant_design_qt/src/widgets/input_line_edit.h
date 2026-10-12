@@ -220,6 +220,8 @@ class AdLineEdit : public QLineEdit {
   bool joinedLeft_ = false;
   bool joinedRight_ = false;
   QPointer<AdInputTextPolicy> textPolicy_;
+  quint64 textPolicyGeneration_ = 0;
+  quint64 textGeneration_ = 0;
   adqt::icons::IconRef prefixIconRef_;
   adqt::icons::IconRef suffixIconRef_;
   adqt::icons::IconRef feedbackIconRef_;
