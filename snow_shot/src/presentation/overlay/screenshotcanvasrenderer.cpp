@@ -378,7 +378,7 @@ class ScreenshotOcrSelectionPreviewItem final : public QGraphicsItem {
         if (quad.preview != ScreenshotOcrLineSelectionPreview::None) {
             auto& indices = m_active[actionIndex(quad.preview)];
             const int replacement = indices.back();
-            indices[quad.slot] = replacement;
+            indices[static_cast<std::size_t>(quad.slot)] = replacement;
             m_quads[static_cast<std::size_t>(replacement)].slot = quad.slot;
             indices.pop_back();
         }
