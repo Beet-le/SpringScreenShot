@@ -8417,6 +8417,16 @@ if(SNOW_SHOT_BUILD_TESTS)
     set_tests_properties(snow-shot-scrolling-image-replay-tests PROPERTIES
         LABELS "unit" ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    if(APPLE)
+        foreach(_snow_qos IN ITEMS user_interactive user_initiated default utility background)
+            add_test(NAME snow-shot-scrolling-qos-${_snow_qos}-tests
+                COMMAND snow-shot-scrolling-image-replay-tests --qos-only ${_snow_qos})
+            set_tests_properties(snow-shot-scrolling-qos-${_snow_qos}-tests PROPERTIES
+                LABELS "unit;macos" TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+                ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+        endforeach()
+        unset(_snow_qos)
+    endif()
 endif()
 
 if(SNOW_SHOT_BUILD_BENCHMARKS)

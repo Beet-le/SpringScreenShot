@@ -13,6 +13,10 @@
 #include <QThread>
 #include <QColorSpace>
 
+#ifdef Q_OS_MACOS
+#include <pthread/qos.h>
+#endif
+
 #include <algorithm>
 #include <atomic>
 #include <cstring>
@@ -773,7 +777,26 @@ struct ScreenshotScrollingPipeline::Impl {
         stitchThread.setObjectName(QStringLiteral("snow-shot-scrolling-stitch"));
         snow_shot::platform::configureApplicationQoSThread(&captureThread);
         captureThread.start();
+#ifdef Q_OS_MACOS
+        // CPU-intensive stitching must not inherit the application's interactive QoS.
+        QObject::connect(
+            &stitchThread, &QThread::started, &stitchThread,
+            [] {
+                const int code = pthread_set_qos_class_self_np(QOS_CLASS_DEFAULT, 0);
+                if (code != 0) {
+                    snow_shot::diagnostics::logEvent(
+                        QStringLiteral("snow_shot.platform"),
+                        QStringLiteral("scheduling.qos_failed"),
+                        {{QStringLiteral("code"), code},
+                         {QStringLiteral("thread"), QStringLiteral("snow-shot-scrolling-stitch")},
+                         {QStringLiteral("qos"), QStringLiteral("default")}},
+                        QtWarningMsg);
+                }
+            },
+            Qt::DirectConnection);
+#else
         snow_shot::platform::configureApplicationQoSThread(&stitchThread);
+#endif
         stitchThread.start();
     }
     ~Impl() {

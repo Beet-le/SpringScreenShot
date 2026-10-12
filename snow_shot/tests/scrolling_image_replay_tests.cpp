@@ -3,6 +3,7 @@
 #include "snowimageqtcodec.h"
 #include "snow_stitch_images.h"
 #include "../src/presentation/capture/scrollingsnapshotrequest.h"
+#include "snow_shot/platform/applicationqos.h"
 #include "snow_shot/runtime/runtimeactivitytracker.h"
 
 #include <QApplication>
@@ -20,6 +21,10 @@
 #include <QTimer>
 #include <QColorSpace>
 #include <QThread>
+
+#ifdef Q_OS_MACOS
+#include <pthread/qos.h>
+#endif
 
 #include <iostream>
 #include <array>
@@ -384,6 +389,120 @@ QImage fixture() {
     }
     return image;
 }
+
+#ifdef Q_OS_MACOS
+struct ScrollingQoSSourceState {
+    std::atomic_uint producerClass = 0;
+    std::atomic_uint consumerClass = 0;
+    std::atomic_bool captureThread = false;
+};
+
+class ScrollingQoSSource final : public ScrollingFrameSource {
+  public:
+    ScrollingQoSSource(std::shared_ptr<ManualState> frames,
+                       std::shared_ptr<ScrollingQoSSourceState> qos)
+        : m_source(std::move(frames)), m_qos(std::move(qos)) {
+        m_qos->producerClass = qos_class_self();
+        m_qos->captureThread =
+            QThread::currentThread()->objectName() == QStringLiteral("snow-shot-scrolling-capture");
+    }
+    ScrollingSourceEvent receive(int milliseconds) override {
+        m_qos->consumerClass = qos_class_self();
+        return m_source.receive(milliseconds);
+    }
+    void setTargetFps(int fps) override {
+        m_source.setTargetFps(fps);
+    }
+    ScrollingSourceStats stats() const override {
+        return m_source.stats();
+    }
+    void stop() override {
+        m_source.stop();
+    }
+
+  private:
+    ManualSource m_source;
+    std::shared_ptr<ScrollingQoSSourceState> m_qos;
+};
+
+struct ScrollingQoSImageLease {
+    QImage pixels;
+    std::atomic_uint workerClass = 0;
+    std::atomic_bool stitchThread = false;
+    std::atomic_bool released = false;
+};
+
+void scrollingQoSTest(const QString& profile) {
+    namespace platform = snow_shot::platform;
+    const auto selected = platform::applicationQoSForValue(profile);
+    require(selected.has_value(), "scrolling QoS requires a valid application profile");
+    platform::initializeApplicationQoS(*selected);
+    const unsigned int classes[] = {QOS_CLASS_USER_INTERACTIVE, QOS_CLASS_USER_INITIATED,
+                                    QOS_CLASS_DEFAULT, QOS_CLASS_UTILITY, QOS_CLASS_BACKGROUND};
+    const unsigned int expected = classes[static_cast<unsigned int>(*selected)];
+    require(qos_class_self() == expected, "main thread must retain application QoS");
+    int received = 0;
+    bool failed = false;
+    ScreenshotScrollingPipeline pipeline(
+        [&](ScrollingPipelineFrame frame) {
+            require(!frame.fatalError && frame.changed && frame.sourceSize == QSize(400, 400),
+                    "QoS fixture must produce an initial stitched frame");
+            ++received;
+        },
+        [&](quint64, QString) { failed = true; });
+    for (quint64 generation = 1; generation <= 2; ++generation) {
+        auto lease = std::make_shared<ScrollingQoSImageLease>();
+        lease->pixels = fixture().copy(0, 0, 400, 400);
+        auto frames = std::make_shared<ManualState>();
+        QImage frame(
+            lease->pixels.constBits(), lease->pixels.width(), lease->pixels.height(),
+            lease->pixels.bytesPerLine(), lease->pixels.format(),
+            [](void* value) {
+                const std::unique_ptr<std::shared_ptr<ScrollingQoSImageLease>> owner(
+                    static_cast<std::shared_ptr<ScrollingQoSImageLease>*>(value));
+                (*owner)->workerClass = qos_class_self();
+                (*owner)->stitchThread = QThread::currentThread()->objectName() ==
+                                         QStringLiteral("snow-shot-scrolling-stitch");
+                (*owner)->released = true;
+            },
+            new std::shared_ptr<ScrollingQoSImageLease>(lease));
+        frames->push(std::move(frame));
+        auto sourceQoS = std::make_shared<ScrollingQoSSourceState>();
+        pipeline.begin(generation, lease->pixels.size(),
+                       ScreenshotScrollingRecognitionMode::Vertical, [frames, sourceQoS] {
+                           return std::make_unique<ScrollingQoSSource>(frames, sourceQoS);
+                       });
+        waitUntil([&] { return failed || received == static_cast<int>(generation); },
+                  "QoS fixture must finish stitching");
+        require(!failed && !lease->released.load(),
+                "the stitch session must retain its accepted native input");
+        require(sourceQoS->producerClass == expected && sourceQoS->consumerClass == expected &&
+                    sourceQoS->captureThread,
+                "capture control and receive threads must retain application QoS");
+        bool paused = false;
+        pipeline.pause(generation, [&] { paused = true; });
+        waitUntil([&] { return paused; }, "QoS fixture must acknowledge pause");
+        require(!lease->released.load(), "pause must preserve the stitch session input");
+        auto resumedFrames = std::make_shared<ManualState>();
+        auto resumedQoS = std::make_shared<ScrollingQoSSourceState>();
+        pipeline.resume(generation, lease->pixels.size(), [resumedFrames, resumedQoS] {
+            return std::make_unique<ScrollingQoSSource>(resumedFrames, resumedQoS);
+        });
+        waitUntil([&] { return resumedQoS->consumerClass.load() != 0; },
+                  "QoS fixture must reopen capture after resume");
+        require(resumedQoS->producerClass == expected && resumedQoS->consumerClass == expected &&
+                    resumedQoS->captureThread,
+                "resumed capture threads must retain application QoS");
+        pipeline.reset(generation + 1);
+        waitUntil([&] { return lease->released.load(); },
+                  "reset must release the native input on the stitch worker");
+        require(lease->stitchThread && lease->workerClass == QOS_CLASS_DEFAULT,
+                "stitch worker must keep native Default QoS across pause, resume, and reset");
+        require(qos_class_self() == expected,
+                "stitching must preserve main thread application QoS");
+    }
+}
+#endif
 
 void pipelineTest(ScreenshotScrollingRecognitionMode mode) {
     const bool horizontal = mode == ScreenshotScrollingRecognitionMode::Horizontal;
@@ -1214,6 +1333,14 @@ int main(int argc, char** argv) {
         }
     } shutdownDrain;
     try {
+#ifdef Q_OS_MACOS
+        if (application.arguments().contains(QStringLiteral("--qos-only"))) {
+            require(application.arguments().size() == 3,
+                    "scrolling QoS expects one application profile");
+            scrollingQoSTest(application.arguments().at(2));
+            return 0;
+        }
+#endif
         if (application.arguments().contains(QStringLiteral("--thumbnail-drag-only"))) {
             interruptedThumbnailDragTest();
             return 0;
