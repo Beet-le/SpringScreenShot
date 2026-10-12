@@ -1662,6 +1662,9 @@ void ScreenshotPinnedWindow::registerWindowShortcuts() {
         if (m_displayOcrPresentation == nullptr) {
             return false;
         }
+        if (m_recognitionContent != nullptr) {
+            m_recognitionContent->cancelLineBoxSelection();
+        }
         m_displayOcrPresentation->selectAll();
         if (m_recognitionContent != nullptr) {
             m_recognitionContent->updateOcrSelection();
@@ -2923,7 +2926,7 @@ bool ScreenshotPinnedWindow::eventFilter(QObject* watched, QEvent* event) {
                 windowPositionForEvent(watched, mouseEvent->position()).toPoint();
             updateWindowDragCursor(position, mouseEvent->modifiers());
             if (watched == m_recognitionContent &&
-                windowDragEnabledAt(position, mouseEvent->modifiers())) {
+                windowMoveEnabledForPointer(position, mouseEvent->modifiers())) {
                 mouseEvent->accept();
                 return true;
             }
@@ -2936,7 +2939,7 @@ bool ScreenshotPinnedWindow::eventFilter(QObject* watched, QEvent* event) {
                     static_cast<QMouseEvent*>(event)->modifiers().testFlag(Qt::AltModifier))) {
             auto* mouseEvent = static_cast<QMouseEvent*>(event);
             if (mouseEvent->button() == Qt::LeftButton &&
-                windowDragEnabledAt(
+                windowMoveEnabledForPointer(
                     windowPositionForEvent(watched, mouseEvent->position()).toPoint(),
                     mouseEvent->modifiers())) {
                 if (startWindowMove()) {
@@ -3191,7 +3194,8 @@ void ScreenshotPinnedWindow::mousePressEvent(QMouseEvent* event) {
         return;
     }
     if (event != nullptr && event->button() == Qt::LeftButton &&
-        windowDragEnabledAt(event->position().toPoint(), event->modifiers()) && startWindowMove()) {
+        windowMoveEnabledForPointer(event->position().toPoint(), event->modifiers()) &&
+        startWindowMove()) {
         event->accept();
         return;
     }
@@ -5808,14 +5812,11 @@ void ScreenshotPinnedWindow::updateOcrPresentation() {
                        [](const ScreenshotOcrLine& left, const ScreenshotOcrLine& right) {
                            return left.text == right.text && left.quad == right.quad &&
                                   left.direction == right.direction &&
-                                  left.sourceLineQuads == right.sourceLineQuads;
+                                  left.sourceLineQuads == right.sourceLineQuads &&
+                                  left.paragraph == right.paragraph;
                        });
         if (sameTextGeometry && m_displayOcrPresentation->hasTextSelection()) {
-            presentation->beginTextSelection(m_displayOcrPresentation->selectionAnchor());
-            presentation->updateTextSelection(m_displayOcrPresentation->selectionFocus());
-            if (!m_displayOcrPresentation->textSelectionActive()) {
-                presentation->finishTextSelection();
-            }
+            presentation->copyCommittedSelectionFrom(*m_displayOcrPresentation);
         }
     }
     m_displayOcrPresentation = std::move(presentation);
@@ -9061,7 +9062,8 @@ bool ScreenshotPinnedWindow::windowDragEligible() const {
         return m_recognitionSession != nullptr && !m_recognitionSession->editing() &&
                (m_displayOcrPresentation != nullptr ||
                 (m_hiddenTextSelection && m_formattedTextAvailable)) &&
-               m_recognitionContent != nullptr && !m_recognitionContent->textSelectionActive();
+               m_recognitionContent != nullptr && !m_recognitionContent->textSelectionActive() &&
+               !m_recognitionContent->lineBoxSelectionActive();
     }
     return m_editController == nullptr || !m_editController->editMode() ||
            m_editController->resizeWindowToolActive();
@@ -9083,6 +9085,24 @@ bool ScreenshotPinnedWindow::windowDragEligibleAt(const QPoint& position,
     return modifiers.testFlag(Qt::AltModifier) || !(m_ocrMode || m_hiddenTextSelection) ||
            (m_recognitionContent != nullptr && m_recognitionContent->isVisible() &&
             m_recognitionContent->isOcrBackgroundAt(m_recognitionContent->mapFrom(this, position)));
+}
+
+bool ScreenshotPinnedWindow::windowMoveEligibleForPointer(const QPoint& position,
+                                                          Qt::KeyboardModifiers modifiers) const {
+    if (!windowDragEligibleAt(position, modifiers)) {
+        return false;
+    }
+    if (m_recognitionContent != nullptr && m_recognitionContent->isVisible() &&
+        m_recognitionContent->boxSelectionEnabled() && contentViewRect().contains(position) &&
+        !modifiers.testFlag(Qt::ControlModifier)) {
+        return modifiers.testFlag(Qt::AltModifier);
+    }
+    return true;
+}
+
+bool ScreenshotPinnedWindow::windowMoveEnabledForPointer(const QPoint& position,
+                                                         Qt::KeyboardModifiers modifiers) const {
+    return !m_lockedMode && windowMoveEligibleForPointer(position, modifiers);
 }
 
 bool ScreenshotPinnedWindow::handleDoubleClick(const QPoint& position) {
@@ -9132,7 +9152,7 @@ void ScreenshotPinnedWindow::updateWindowDragCursor(const QPoint& position,
         setWindowDragCursor(Qt::ClosedHandCursor);
         return;
     }
-    if (windowDragEnabledAt(position, modifiers)) {
+    if (windowMoveEnabledForPointer(position, modifiers)) {
         setWindowDragCursor(Qt::OpenHandCursor);
         return;
     }

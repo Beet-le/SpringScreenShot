@@ -7,6 +7,7 @@
 #include "../../presentation/pinned/screenshotpinnedgeometrymapping.h"
 #include "../../presentation/pinned/screenshotpinnedhidetotopcontroller.h"
 #include "snow_shot/presentation/screenshotpinnededitcontroller.h"
+#include "snow_shot/presentation/screenshotrecognitionwindow.h"
 #include <QWindow>
 #include <QCursor>
 #include <QTimer>
@@ -313,6 +314,10 @@ bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QBy
         const bool automaticButtonRelease = nativeMessage->message == WM_CAPTURECHANGED &&
                                             nativeMessage->lParam == 0 &&
                                             (GetKeyState(VK_LBUTTON) & 0x8000) == 0;
+        if (captureLost && !automaticButtonRelease && window.m_recognitionContent != nullptr &&
+            window.m_recognitionContent->lineBoxSelectionActive()) {
+            window.m_recognitionContent->cancelLineBoxSelection();
+        }
         if (captureLost && (!automaticButtonRelease || window.m_selectionGeometryActive) &&
             window.m_selectionController &&
             window.m_selectionController->cancelPointerInteraction(&window)) {
@@ -468,9 +473,21 @@ bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QBy
         }
 
         if (nativeMessage->message == WM_NCHITTEST) {
+            if (window.m_recognitionContent != nullptr &&
+                window.m_recognitionContent->lineBoxSelectionActive()) {
+                window.clearWindowDragCursor();
+                if (result)
+                    *result = HTCLIENT;
+                return true;
+            }
             int hitTest = HTCLIENT;
-            const Qt::KeyboardModifiers modifiers =
-                (GetKeyState(VK_MENU) & 0x8000) ? Qt::AltModifier : Qt::NoModifier;
+            Qt::KeyboardModifiers pointerModifiers = Qt::NoModifier;
+            if (GetKeyState(VK_CONTROL) & 0x8000) {
+                pointerModifiers |= Qt::ControlModifier;
+            }
+            if (GetKeyState(VK_MENU) & 0x8000) {
+                pointerModifiers |= Qt::AltModifier;
+            }
             const QRect nativeGeometry =
                 native::currentClientGeometry(reinterpret_cast<WId>(pinnedHwnd));
             const QPoint screenPosition(GET_X_LPARAM(nativeMessage->lParam),
@@ -483,7 +500,7 @@ bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QBy
                 // A click may clear/toggle selection. Keep the initial press in
                 // Qt until its drag threshold has chosen a geometry/export gesture.
                 if (!window.m_selectionGeometryActive)
-                    window.updateWindowDragCursor(selectionPosition, modifiers);
+                    window.updateWindowDragCursor(selectionPosition, pointerModifiers);
                 if (result)
                     *result = HTCLIENT;
                 return true;
@@ -499,7 +516,7 @@ bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QBy
 
                 if (hitTest == HTCLIENT) {
                     const QPoint clientPosition = mapping.localPosition(screenPosition).toPoint();
-                    if (window.windowDragEnabledAt(clientPosition, modifiers) &&
+                    if (window.windowMoveEnabledForPointer(clientPosition, pointerModifiers) &&
                         !window.m_geometryAnimating) {
                         hitTest = HTCAPTION;
                     }
@@ -507,7 +524,7 @@ bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QBy
             } else if (window.windowDragEnabled()) {
                 if (nativeGeometry.isValid() && !nativeGeometry.isEmpty()) {
                     const QPoint clientPosition = mapping.localPosition(screenPosition).toPoint();
-                    if (window.windowDragEnabledAt(clientPosition, modifiers)) {
+                    if (window.windowMoveEnabledForPointer(clientPosition, pointerModifiers)) {
                         hitTest = HTCAPTION;
                     }
                 }
@@ -523,7 +540,8 @@ bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QBy
                 window.clearWindowDragCursor();
             }
             if (hitTest == HTCAPTION && (GetKeyState(VK_CONTROL) & 0x8000) &&
-                window.exportDragEnabledAt(mapping.localPosition(screenPosition).toPoint())) {
+                window.exportDragEnabledAt(mapping.localPosition(screenPosition).toPoint(),
+                                           pointerModifiers)) {
                 hitTest = HTCLIENT;
             }
             if (result != nullptr) {

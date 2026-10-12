@@ -1,5 +1,6 @@
 #include "snow_shot/presentation/screenshotocrpresentation.h"
 #include "snow_shot/presentation/screenshotrecognitionsessioncontroller.h"
+#include "snow_shot/presentation/screenshotrecognitionwindow.h"
 #include "snow_shot/presentation/translationpagecontroller.h"
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/settingsadapters.h"
@@ -32,13 +33,14 @@
 #include "snow_shot/presentation/screenshotpinnededitcontroller.h"
 #include "snow_shot/presentation/screenshotfloatingtoolpalettewindow.h"
 #include "snow_shot/presentation/screenshottoolpalette.h"
-#include "snow_shot/presentation/screenshotrecognitionwindow.h"
 #include "snow_shot/presentation/screenshotgeometry.h"
 #include "snow_draw_engine_qt/snow_canvas_widget.h"
 #include "widgets/context_menu.h"
 #include "widgets/button.h"
 #include <QAction>
 #include <QApplication>
+#include <QContextMenuEvent>
+#include <QGraphicsItem>
 #include <QGraphicsScene>
 #include <QGraphicsView>
 #include <QScreen>
@@ -46,6 +48,19 @@
 #endif
 
 namespace {
+#if defined(SNOW_SHOT_TEST_PINNED_TRANSLATION)
+QList<QGraphicsItem*> ocrGlyphItems(QGraphicsView* layer) {
+    if (layer == nullptr || layer->scene() == nullptr) {
+        return {};
+    }
+    auto items = layer->scene()->items();
+    items.erase(std::remove_if(items.begin(), items.end(),
+                               [](const QGraphicsItem* item) { return item->zValue() != 0.0; }),
+                items.end());
+    return items;
+}
+#endif
+
 void require(bool condition, const char* message) {
     if (!condition) {
         std::cerr << message << '\n';
@@ -250,23 +265,34 @@ struct SessionProbe {
 
     SessionProbe(SnowShotApiClient* api, int boxes, QString key = QStringLiteral("image"),
                  bool formatted = false, ScreenshotOcrRecognitionPort* ocr = nullptr,
-                 QWidget* settingsOwner = nullptr) {
+                 QWidget* settingsOwner = nullptr,
+                 ScreenshotRecognitionWindow* recognitionWindow = nullptr) {
         ScreenshotRecognitionSessionActions actions;
+        if (recognitionWindow != nullptr) {
+            actions.ensureContent = [recognitionWindow]() { return recognitionWindow; };
+        }
         actions.setTextTargetLanguage = [this](const QString& language) {
             primaryTarget = language;
         };
         actions.translationSettingsOwner = [settingsOwner]() { return settingsOwner; };
-        actions.applyOcrPresentation = [this](auto presentation) {
+        actions.applyOcrPresentation = [this, recognitionWindow](auto presentation) {
             displayed = std::move(presentation);
+            if (recognitionWindow != nullptr) {
+                recognitionWindow->setOcrPresentation(displayed);
+            }
         };
         actions.applyOcrBackground = [this](auto) { ++backgrounds; };
         if (ocr != nullptr) {
             actions.applyOcrBackgroundImage = [](auto, QImage, QRectF) {};
         }
-        actions.updateOcrText = [this](int index, const QString& text) {
+        actions.updateOcrText = [this, recognitionWindow](int index, const QString& text) {
             ++textUpdates;
             require(displayed != source, "stream updates must not modify the source presentation");
-            displayed->setLineText(index, text);
+            if (recognitionWindow != nullptr) {
+                recognitionWindow->updateOcrText(index, text);
+            } else {
+                displayed->setLineText(index, text);
+            }
         };
         actions.showStatus = [this](const QString& text, bool error) {
             if (error) {
@@ -427,6 +453,160 @@ void smartLayoutStreamsParagraphsAndSwitchesModes() {
             "merged output and original remain independent");
 }
 
+void sourceSelectionSurvivesOriginalImageTranslation() {
+    configureTranslation();
+    TranslationServer server;
+    SnowShotApiClient api(server.url());
+    ScreenshotRecognitionWindow window({});
+    SessionProbe session(&api, 3, QStringLiteral("selection-refresh"), false, nullptr, nullptr,
+                         &window);
+    for (const int line : {0, 2}) {
+        session.source->beginLineBoxSelection(QPointF(-1, line * 25 - 1));
+        session.source->updateLineBoxSelection(QRectF(-1, line * 25 - 1, 152, 22));
+        session.source->finishLineBoxSelection();
+    }
+    session.source->beginLineBoxSelection(QPointF(-1, -1));
+    session.source->updateLineBoxSelection(QRectF(-1, -1, 152, 47));
+    require(
+        session.source->lineSelectionPreview(0) == ScreenshotOcrLineSelectionPreview::Deselect &&
+            session.source->lineSelectionPreview(1) == ScreenshotOcrLineSelectionPreview::Select,
+        "source refresh fixture has a committed sparse selection and an uncommitted preview");
+    session.controller->beginTextTranslation();
+    require(session.displayed != session.source &&
+                session.displayed->selectedText() == QStringLiteral("source 0\nsource 2") &&
+                !session.source->lineBoxSelectionActive() &&
+                !session.displayed->lineBoxSelectionActive() &&
+                !session.displayed->textSelectionActive(),
+            "compatible source-to-overlay replacement transfers committed sparse selection only");
+    server.waitForStreams(3);
+    server.delta(0, QStringLiteral("first translated block"));
+    server.delta(2, QStringLiteral("third translated block"));
+    waitUntil([&] { return session.textUpdates == 2; }, "selected overlay blocks receive deltas");
+    require(session.controller->recognitionClipboardMimeData()->text() ==
+                    QStringLiteral("first translated block\nthird translated block") &&
+                session.source->selectedText() == QStringLiteral("source 0\nsource 2"),
+            "transferred full-line selections grow with translated text independently of source");
+    server.delta(1, QStringLiteral("middle translated block"));
+    for (int line = 0; line < 3; ++line) {
+        server.finish(line);
+    }
+    waitUntil([&] { return !session.streaming; }, "selected original-image translation finishes");
+
+    const auto freshPresentation = [&] {
+        auto presentation = std::make_shared<ScreenshotOcrPresentation>();
+        presentation->selection = session.displayed->selection;
+        presentation->lines = session.displayed->lines;
+        presentation->prepareForRendering();
+        return presentation;
+    };
+    auto canonicalSource = freshPresentation();
+    canonicalSource->lines[0].sourceLineQuads = {canonicalSource->lines[0].quad};
+    canonicalSource->copyCommittedSelectionFrom(*session.displayed);
+    window.setOcrPresentation(canonicalSource);
+    auto closedReplacement = std::make_shared<ScreenshotOcrPresentation>();
+    closedReplacement->selection = canonicalSource->selection;
+    closedReplacement->lines = canonicalSource->lines;
+    for (auto& line : closedReplacement->lines) {
+        line.quad.push_back(line.quad.constFirst());
+        for (auto& sourceQuad : line.sourceLineQuads) {
+            sourceQuad.push_back(sourceQuad.constFirst());
+        }
+    }
+    window.setOcrPresentation(closedReplacement);
+    require(closedReplacement->selectedText() == session.displayed->selectedText() &&
+                closedReplacement->lines[0].quad.size() == 4 &&
+                closedReplacement->lines[0].sourceLineQuads[0].size() == 4,
+            "fresh closed quads are prepared before compatible refresh selection is compared");
+    auto callerSelected = freshPresentation();
+    callerSelected->beginTextSelection(ScreenshotOcrTextPosition{1, 0});
+    callerSelected->updateTextSelection(
+        ScreenshotOcrTextPosition{1, static_cast<int>(callerSelected->lines[1].text.size())});
+    callerSelected->finishTextSelection();
+    callerSelected->beginLineBoxSelection(QPointF(-1, -1));
+    callerSelected->updateLineBoxSelection(QRectF(-1, -1, 152, 47));
+    require(callerSelected->lineBoxSelectionActive() && callerSelected->hasTextSelection(),
+            "incoming refresh fixture has committed selection and an active box preview");
+    window.setOcrPresentation(callerSelected);
+    require(callerSelected->selectedText() == QStringLiteral("middle translated block") &&
+                !callerSelected->lineBoxSelectionActive() && !window.lineBoxSelectionActive() &&
+                QWidget::mouseGrabber() != &window,
+            "incoming committed selection takes precedence while its box preview loses ownership");
+
+    callerSelected->beginTextSelection(ScreenshotOcrTextPosition{1, 0});
+    callerSelected->updateTextSelection(ScreenshotOcrTextPosition{1, 6});
+    auto characterReplacement = freshPresentation();
+    window.setOcrPresentation(characterReplacement);
+    require(!callerSelected->textSelectionActive() &&
+                !characterReplacement->textSelectionActive() &&
+                characterReplacement->selectedText() == QStringLiteral("middle"),
+            "a compatible replacement commits the outgoing character range without its drag");
+    window.setOcrPresentation(callerSelected);
+    require(!callerSelected->textSelectionActive() &&
+                callerSelected->selectedText() == QStringLiteral("middle"),
+            "reinstalling a retired source presentation cannot resume its character gesture");
+    auto incomingCharacterSelection = freshPresentation();
+    incomingCharacterSelection->beginTextSelection(ScreenshotOcrTextPosition{0, 0});
+    incomingCharacterSelection->updateTextSelection(ScreenshotOcrTextPosition{0, 5});
+    window.setOcrPresentation(incomingCharacterSelection);
+    require(!incomingCharacterSelection->textSelectionActive() &&
+                incomingCharacterSelection->selectedText() == QStringLiteral("first") &&
+                QWidget::mouseGrabber() != &window,
+            "installing an incoming active character selection preserves only its committed range");
+    incomingCharacterSelection->beginTextSelection(ScreenshotOcrTextPosition{0, 0});
+    incomingCharacterSelection->updateTextSelection(ScreenshotOcrTextPosition{0, 5});
+    window.setOcrPresentation(incomingCharacterSelection);
+    require(!incomingCharacterSelection->textSelectionActive() &&
+                incomingCharacterSelection->selectedText() == QStringLiteral("first"),
+            "reinstalling the same model also ends character selection ownership");
+
+    const auto incompatibleReplacement = [&](const auto& change) {
+        window.setOcrPresentation(session.displayed);
+        auto replacement = freshPresentation();
+        change(*replacement);
+        replacement->prepareForRendering();
+        window.setOcrPresentation(replacement);
+        require(!replacement->hasTextSelection(),
+                "incompatible OCR replacements do not inherit committed selection");
+    };
+    incompatibleReplacement([](auto& value) { value.selection.translate(1, 0); });
+    incompatibleReplacement([](auto& value) { value.lines[0].text.append(QLatin1Char('!')); });
+    incompatibleReplacement([](auto& value) { value.lines[0].quad.translate(1, 0); });
+    incompatibleReplacement(
+        [](auto& value) { value.lines[0].sourceLineQuads.push_back(value.lines[0].quad); });
+    incompatibleReplacement(
+        [](auto& value) { value.lines[0].direction = ScreenshotOcrTextDirection::Vertical; });
+    incompatibleReplacement([](auto& value) { value.lines[0].paragraph = true; });
+
+    window.setOcrPresentation(session.displayed);
+    auto hiddenReplacement = freshPresentation();
+    window.setOcrPresentation(hiddenReplacement,
+                              ScreenshotOcrTextLayer::RenderingMode::SelectionOnly);
+    require(!hiddenReplacement->hasTextSelection(),
+            "rendering-mode changes do not inherit visible OCR selection");
+    window.setOcrPresentation(session.displayed,
+                              ScreenshotOcrTextLayer::RenderingMode::SelectionOnly);
+    auto visibleReplacement = freshPresentation();
+    window.setOcrPresentation(visibleReplacement);
+    require(!visibleReplacement->hasTextSelection(),
+            "returning from SelectionOnly does not inherit its selection");
+    auto clearedSource = freshPresentation();
+    window.setOcrPresentation(clearedSource);
+    clearedSource->beginTextSelection(ScreenshotOcrTextPosition{0, 0});
+    clearedSource->updateTextSelection(ScreenshotOcrTextPosition{0, 5});
+    window.clearOcrPresentation();
+    require(!clearedSource->textSelectionActive() &&
+                clearedSource->selectedText() == QStringLiteral("first"),
+            "explicit clearing retires a retained model's character gesture without erasing range");
+    auto clearedReplacement = freshPresentation();
+    window.setOcrPresentation(clearedReplacement);
+    require(!clearedReplacement->hasTextSelection(),
+            "explicit content clearing remains a selection-transfer boundary");
+    window.setOcrPresentation(clearedSource);
+    require(!clearedSource->textSelectionActive() &&
+                clearedSource->selectedText() == QStringLiteral("first"),
+            "reinstalling an explicitly cleared model cannot revive its retired character gesture");
+}
+
 void queueStreamsIndividualBoxesAndKeepsOriginals() {
     configureTranslation();
     TranslationServer server;
@@ -463,11 +643,43 @@ void queueStreamsIndividualBoxesAndKeepsOriginals() {
     session.displayed->finishTextSelection();
     require(session.controller->recognitionClipboardMimeData()->text() == QStringLiteral("irs"),
             "copy should honor the translated text selection");
+    session.displayed->beginLineBoxSelection(QPointF(-1, -1));
+    session.displayed->updateLineBoxSelection(QRectF(-1, -1, 152, 22));
+    session.displayed->finishLineBoxSelection();
+    session.displayed->beginLineBoxSelection(QPointF(-1, 49));
+    session.displayed->updateLineBoxSelection(QRectF(-1, 49, 152, 22));
+    session.displayed->finishLineBoxSelection();
+    require(session.controller->recognitionClipboardMimeData()->text() ==
+                QStringLiteral("first\nthird"),
+            "box selection copies independent translated blocks in OCR reading order");
+    session.displayed->beginLineBoxSelection(QPointF(-1, -1));
+    session.displayed->updateLineBoxSelection(QRectF(-1, -1, 152, 72));
+    require(session.displayed->lineSelectionPreview(0) ==
+                    ScreenshotOcrLineSelectionPreview::Deselect &&
+                session.displayed->lineSelectionPreview(1) ==
+                    ScreenshotOcrLineSelectionPreview::Select &&
+                session.displayed->lineSelectionPreview(2) ==
+                    ScreenshotOcrLineSelectionPreview::Deselect,
+            "streaming translations expose mixed add/remove previews from the press baseline");
     server.delta(2, QStringLiteral(" box"));
     server.finish(2);
     server.waitForStreams(5);
     require(snapshot.translatedText->lines[2].text == QStringLiteral("third"),
             "later translation deltas must not modify a previously captured pin snapshot");
+    require(session.displayed->selectedText() == QStringLiteral("first\nthird box") &&
+                session.displayed->lineSelectionPreview(2) ==
+                    ScreenshotOcrLineSelectionPreview::Deselect &&
+                session.backgrounds == backgrounds,
+            "full-block selections grow with streaming without reversing the preview or filtering");
+    const auto selectedSnapshot = session.controller->recognitionResultsSnapshot();
+    require(!selectedSnapshot.translatedText->hasTextSelection() &&
+                !selectedSnapshot.translatedText->lineBoxSelectionActive() &&
+                !session.source->hasTextSelection(),
+            "pin snapshots and source OCR exclude live selection and preview state");
+    session.displayed->cancelLineBoxSelection();
+    session.displayed->beginTextSelection(ScreenshotOcrTextPosition{0, 1});
+    session.displayed->updateTextSelection(ScreenshotOcrTextPosition{0, 4});
+    session.displayed->finishTextSelection();
     require(session.displayed->selectedText() == QStringLiteral("irs") &&
                 session.backgrounds == backgrounds,
             "stream updates should preserve unrelated selection and the OCR background");
@@ -1030,6 +1242,7 @@ void runOriginalImageTranslationTests() {
     translationSettingsSwitchKeepsReadableSize();
     confirmingTranslationDisplayModeRestartsTranslation();
     smartLayoutStreamsParagraphsAndSwitchesModes();
+    sourceSelectionSurvivesOriginalImageTranslation();
     queueStreamsIndividualBoxesAndKeepsOriginals();
     fourBoxesAndOwnerClosure();
     partialFailuresRetryOnlyFailedBoxes();
@@ -1110,7 +1323,7 @@ void runPinnedOriginalImageTranslationTests() {
             // shared resource, so the copied text needs a bounded settle
             // before the visibility and copy assertions can be judged.
             bool copied = false;
-            if (layer != nullptr && layer->isVisible() && layer->scene()->items().size() == 1) {
+            if (layer != nullptr && layer->isVisible() && ocrGlyphItems(layer).size() == 1) {
                 for (int attempt = 0; attempt < 40 && !copied; ++attempt) {
                     if (content->copyVisibleContentToClipboard() &&
                         QApplication::clipboard()->text() == expected.text) {
@@ -1164,15 +1377,14 @@ void runPinnedOriginalImageTranslationTests() {
     auto* layer = content == nullptr
                       ? nullptr
                       : content->findChild<QGraphicsView*>(QStringLiteral("snowShotOcrTextLayer"));
-    require(layer != nullptr && layer->isVisible() && layer->scene()->items().size() == 2,
+    require(layer != nullptr && layer->isVisible() && ocrGlyphItems(layer).size() == 2,
             "pinned translation should display both OCR boxes in the embedded text layer");
-    const auto items = layer->scene()->items();
+    const auto items = ocrGlyphItems(layer);
     server.delta(0, QStringLiteral("translated"));
     waitUntil([&]() { return controller->textDraft().startsWith(QStringLiteral("translated")); },
               "pinned translation should consume streamed text");
-    require(layer->scene()->items() == items &&
-                controller->recognitionClipboardMimeData()->text() ==
-                    QStringLiteral("translated\nsource 1"),
+    require(ocrGlyphItems(layer) == items && controller->recognitionClipboardMimeData()->text() ==
+                                                 QStringLiteral("translated\nsource 1"),
             "pinned overlay must update existing text items and copy translated display text");
     const auto partialRecord = pinned->persistenceSnapshot();
     const auto partialResults = controller->recognitionResultsSnapshot();
@@ -1201,19 +1413,31 @@ void runPinnedOriginalImageTranslationTests() {
     QCoreApplication::sendEvent(canvas, &zoom);
     waitUntil([&]() { return pinned->currentNativeGeometry().size() != beforeZoom; },
               "pinned translation should remain zoomable during streaming");
+    QContextMenuEvent rotationMenuEvent(QContextMenuEvent::Mouse, QPoint(8, 8),
+                                        pinned->mapToGlobal(QPoint(8, 8)));
+    QCoreApplication::sendEvent(pinned, &rotationMenuEvent);
+    auto* rotationMenu = pinned->findChild<adqt::widgets::AdContextMenu*>(
+        QStringLiteral("screenshotPinnedContextMenu"));
+    auto* processAction =
+        pinned->findChild<QAction*>(QStringLiteral("screenshotPinnedProcessImageMenu"));
+    require(rotationMenu != nullptr && processAction != nullptr && processAction->menu() != nullptr,
+            "open the pinned image-processing menu");
+    require(QMetaObject::invokeMethod(processAction->menu(), "aboutToShow", Qt::DirectConnection),
+            "populate the lazy pinned image-processing menu");
     auto* rotate =
         pinned->findChild<QAction*>(QStringLiteral("screenshotPinnedRotateClockwiseAction"));
     require(rotate != nullptr, "find pinned rotation action");
     rotate->trigger();
+    rotationMenu->dismissPopup();
     QCoreApplication::processEvents();
     pinned->resize(pinned->width() + 20, pinned->height() + 10);
     QCoreApplication::processEvents();
-    const auto rotatedItems = layer->scene()->items();
+    const auto rotatedItems = ocrGlyphItems(layer);
     server.delta(0, QStringLiteral(" after rotation"));
     server.delta(1, QStringLiteral("vertical result"));
     waitUntil([&]() { return controller->textDraft().contains(QStringLiteral("vertical result")); },
               "streaming should continue through pinned rotation and resize");
-    require(layer->scene()->items() == rotatedItems &&
+    require(ocrGlyphItems(layer) == rotatedItems &&
                 controller->recognitionClipboardMimeData()->text() ==
                     QStringLiteral("translated after rotation\nvertical result") &&
                 seed.source->lines[0].text == QStringLiteral("source 0"),
@@ -1283,12 +1507,19 @@ void runPinnedOriginalImageTranslationTests() {
                 restoredCopied,
                 "a restored translated overlay must be visible and copyable without new requests");
             if (scenario == 1) {
+                QContextMenuEvent drawingMenuEvent(QContextMenuEvent::Mouse, QPoint(8, 8),
+                                                   restored->mapToGlobal(QPoint(8, 8)));
+                QCoreApplication::sendEvent(restored, &drawingMenuEvent);
+                auto* drawingMenu = restored->findChild<adqt::widgets::AdContextMenu*>(
+                    QStringLiteral("screenshotPinnedContextMenu"));
                 auto* drawingAction =
                     restored->findChild<QAction*>(QStringLiteral("screenshotPinnedDrawingAction"));
-                require(drawingAction != nullptr, "find the toolbar menu action");
+                require(drawingMenu != nullptr && drawingAction != nullptr,
+                        "find the toolbar menu action");
                 drawingAction->trigger();
                 require(drawingAction->isChecked(),
                         "the toolbar menu action must reflect the open toolbar");
+                drawingMenu->dismissPopup();
             } else {
                 auto* editButton = restored->findChild<adqt::widgets::AdButton*>(
                     QStringLiteral("screenshotPinnedEditButton"));

@@ -16,6 +16,8 @@
 #include "snow_shot/presentation/screenshotguidelinerendering.h"
 #include "snow_shot/presentation/screenshotmessageservice.h"
 #include "snow_shot/presentation/screenshotocrpresentation.h"
+#include "snow_shot/presentation/screenshotocrtextlayer.h"
+#include "snow_shot/presentation/screenshotocrtextlayout.h"
 #include "snow_shot/presentation/screenshotocrvisuals.h"
 #include "snow_shot/presentation/screenshotselectionmodel.h"
 #include "snow_shot/presentation/screenshotselectionshadowrenderer.h"
@@ -49,6 +51,7 @@
 #include <QThread>
 #include <QFontDatabase>
 #include <QGraphicsItem>
+#include <QGraphicsRectItem>
 #include <QGraphicsScene>
 #include <QGraphicsView>
 #include <QImage>
@@ -61,10 +64,13 @@
 #include <QMouseEvent>
 #include <QObject>
 #include <QPainter>
+#include <QStyleOptionGraphicsItem>
+#include <QPainterPathStroker>
 #include <QPaintEvent>
 #include <QPointer>
 #include <QPushButton>
 #include <QRegion>
+#include <QRawFont>
 #include <QScopedValueRollback>
 #include <QScrollBar>
 #include <QTextBoundaryFinder>
@@ -1762,9 +1768,12 @@ void imageSourceOpacityMetadataIsSharedAndTracksPixelChanges() {
 int ocrTextItemCount(SnowCanvasWidget& canvas) {
     const auto* textLayer =
         canvas.findChild<QGraphicsView*>(QStringLiteral("snowShotOcrTextLayer"));
-    return textLayer != nullptr && textLayer->scene() != nullptr
-               ? static_cast<int>(textLayer->scene()->items().size())
-               : 0;
+    if (textLayer == nullptr || textLayer->scene() == nullptr) {
+        return 0;
+    }
+    const auto items = textLayer->scene()->items();
+    return static_cast<int>(std::count_if(items.begin(), items.end(),
+                                          [](const auto* item) { return item->zValue() == 0.0; }));
 }
 
 QRect paintedInkBounds(const QImage& image, const QRect& region, int maximumLightness = 224) {
@@ -4126,6 +4135,1422 @@ void selectionTransitionDirtyRegionCoversEveryChangedPixel() {
         previous = next;
     }
     canvas.setCustomRenderer(nullptr);
+}
+
+QImage renderOcrSelectionLayer(ScreenshotOcrTextLayer& layer, qreal devicePixelRatio) {
+    const QSize size(qCeil(layer.viewport()->width() * devicePixelRatio),
+                     qCeil(layer.viewport()->height() * devicePixelRatio));
+    QImage output(size, QImage::Format_ARGB32_Premultiplied);
+    output.setDevicePixelRatio(devicePixelRatio);
+    output.fill(Qt::white);
+    QPainter painter(&output);
+    layer.viewport()->render(&painter);
+    return output;
+}
+
+std::shared_ptr<ScreenshotOcrPresentation> ocrLineBoxRenderingPresentation() {
+    auto presentation = std::make_shared<ScreenshotOcrPresentation>();
+    presentation->selection = QRect(0, 0, 300, 220);
+    for (int lineIndex = 0; lineIndex < 4; ++lineIndex) {
+        ScreenshotOcrLine line;
+        line.text = QStringLiteral("  Preview text  ");
+        const qreal y = 25.0 + lineIndex * 50.0;
+        line.quad = {{30.0, y}, {250.0, y}, {250.0, y + 20.0}, {30.0, y + 20.0}};
+        presentation->lines.push_back(std::move(line));
+    }
+    presentation->beginTextSelection(ScreenshotOcrTextPosition{0, 0});
+    presentation->updateTextSelection(ScreenshotOcrTextPosition{1, 5});
+    presentation->finishTextSelection();
+    return presentation;
+}
+
+void ocrLineBoxPreviewMatchesEngineVisuals() {
+    using Rendering = ScreenshotOcrTextLayer::RenderingMode;
+    auto& themeManager = adqt::theme::ThemeManager::instance();
+    const auto originalScheme = themeManager.config().scheme;
+    themeManager.setColorScheme(adqt::theme::ThemeScheme::Light);
+    for (const auto rendering : {Rendering::Normal, Rendering::SelectionOnly}) {
+        for (const qreal dpr : {1.0, 1.5, 2.0}) {
+            QWidget host;
+            host.resize(400, 310);
+            ScreenshotOcrTextLayer layer(&host);
+            auto presentation = ocrLineBoxRenderingPresentation();
+            layer.setPresentation(presentation, rendering);
+            const QTransform transform(1.25, 0.0, 0.0, 1.25, 7.25, 9.5);
+            layer.synchronize(transform, host.rect());
+            host.show();
+            QApplication::processEvents();
+            const QImage committed = renderOcrSelectionLayer(layer, dpr);
+            const ScreenshotOcrPresentation committedState = *presentation;
+            presentation->clearTextSelection();
+            layer.updateSelection();
+            const QImage unselected = renderOcrSelectionLayer(layer, dpr);
+            presentation->copyCommittedSelectionFrom(committedState);
+            layer.updateSelection();
+            const auto originalItems = layer.scene()->items();
+            const quint64 geometryCount = layer.geometrySynchronizationCount();
+
+            presentation->beginLineBoxSelection(QPointF(10.0, 10.0));
+            layer.updateSelection();
+            const QRectF box(10.0, 10.0, 260.0, 100.0);
+            presentation->updateLineBoxSelection(box);
+            layer.updateSelection();
+            const QImage preview = renderOcrSelectionLayer(layer, dpr);
+            const auto previewBuilds = layer.previewRasterBuildCount();
+            const auto previewHits = layer.previewRasterHitCount();
+            require(renderOcrSelectionLayer(layer, dpr) == preview &&
+                        layer.previewRasterBuildCount() == previewBuilds &&
+                        layer.previewRasterHitCount() > previewHits,
+                    "a warm preview cache must reuse identical pixels without rebuilding quads");
+            require(layer.geometrySynchronizationCount() == geometryCount,
+                    "box selection must reuse shaped text and synchronized geometry");
+            for (auto* item : originalItems) {
+                require(layer.scene()->items().contains(item),
+                        "box selection must preserve every original text graphics item");
+            }
+
+            QGraphicsItem* marquee = nullptr;
+            for (auto* item : layer.scene()->items()) {
+                if (item->zValue() == 1.0) {
+                    marquee = item;
+                }
+            }
+            for (const int lineIndex : {0, 1}) {
+                const auto action = lineIndex == 0 ? ScreenshotOcrLineSelectionPreview::Deselect
+                                                   : ScreenshotOcrLineSelectionPreview::Select;
+                const QPolygonF polygon = transform.map(presentation->lines[lineIndex].quad);
+                QPainterPath expectedPath;
+                expectedPath.setFillRule(Qt::WindingFill);
+                expectedPath.addPolygon(polygon);
+                expectedPath.closeSubpath();
+                require(layer.selectionPreviewPathForTesting(action) == expectedPath,
+                        "batched preview paths must preserve fractional mapped line geometry");
+                const QColor color =
+                    lineIndex == 0 ? QColor(0xff, 0x4d, 0x4f) : QColor(0x52, 0xc4, 0x1a);
+                QColor fill = color;
+                fill.setAlpha(0x33);
+                // Fitting uses glyph ink bounds, so whitespace does not identify a blank area at
+                // a fixed offset. Use a glyph-free interior pixel from the unselected reference.
+                const QRectF interior = polygon.boundingRect().adjusted(3.0, 3.0, -3.0, -3.0);
+                const QRect interiorPixels = QRectF(interior.topLeft() * dpr, interior.size() * dpr)
+                                                 .toAlignedRect()
+                                                 .intersected(unselected.rect());
+                std::optional<QPoint> sample;
+                for (int y = interiorPixels.top(); y <= interiorPixels.bottom() && !sample; ++y) {
+                    for (int x = interiorPixels.left(); x <= interiorPixels.right(); ++x) {
+                        if (unselected.pixelColor(x, y) == QColor(Qt::white)) {
+                            sample = QPoint(x, y);
+                            break;
+                        }
+                    }
+                }
+                require(sample.has_value(),
+                        "the preview test must find a glyph-free interior pixel");
+                const QColor expected =
+                    sourceOverOpaqueBackground(QColor(0x40, 0x96, 0xff, 0x33),
+                                               sourceOverOpaqueBackground(fill, QColor(Qt::white)));
+                const QColor actual = preview.pixelColor(*sample);
+                if (qAbs(actual.red() - expected.red()) > 1 ||
+                    qAbs(actual.green() - expected.green()) > 1 ||
+                    qAbs(actual.blue() - expected.blue()) > 1) {
+                    std::cerr << "OCR preview pixel: rendering=" << static_cast<int>(rendering)
+                              << " dpr=" << dpr << " line=" << lineIndex << " point=" << sample->x()
+                              << "," << sample->y() << " actual=" << actual.name().toStdString()
+                              << " expected=" << expected.name().toStdString() << '\n';
+                }
+                require(actual == expected,
+                        "preview fills must replace committed highlights under the blue marquee");
+            }
+            require(marquee != nullptr,
+                    "mixed full and partial line selection must preview both actions and a box");
+            require(layer.marqueeRectangleForTesting() == transform.mapRect(box) &&
+                        marquee->boundingRect() == layer.sceneRect() && marquee->zValue() > 0.0,
+                    "the box must retain its geometry above text within fixed viewport bounds");
+            if (rendering == Rendering::SelectionOnly) {
+                QImage expected(preview.size(), QImage::Format_ARGB32_Premultiplied);
+                expected.setDevicePixelRatio(dpr);
+                expected.fill(Qt::white);
+                QPainter painter(&expected);
+                painter.setRenderHint(QPainter::Antialiasing, true);
+                for (const int lineIndex : {0, 1}) {
+                    const QColor color =
+                        lineIndex == 0 ? QColor(0xff, 0x4d, 0x4f) : QColor(0x52, 0xc4, 0x1a);
+                    QPen pen(color, 1.0, Qt::SolidLine);
+                    pen.setJoinStyle(Qt::MiterJoin);
+                    painter.setPen(pen);
+                    QColor fill = color;
+                    fill.setAlpha(0x33);
+                    painter.setBrush(fill);
+                    painter.drawPolygon(transform.map(presentation->lines[lineIndex].quad));
+                }
+                QPen marqueePen(QColor(0x40, 0x96, 0xff), 1.0, Qt::SolidLine);
+                marqueePen.setJoinStyle(Qt::MiterJoin);
+                painter.setPen(marqueePen);
+                painter.setBrush(QColor(0x40, 0x96, 0xff, 0x33));
+                painter.drawRect(layer.marqueeRectangleForTesting());
+                painter.end();
+                QPainterPath outlines;
+                for (const int lineIndex : {0, 1}) {
+                    outlines.addPolygon(transform.map(presentation->lines[lineIndex].quad));
+                    outlines.closeSubpath();
+                }
+                outlines.addRect(layer.marqueeRectangleForTesting());
+                QPainterPathStroker edgeBand;
+                edgeBand.setWidth(1.0 + 2.0 / dpr);
+                edgeBand.setJoinStyle(Qt::MiterJoin);
+                const QPainterPath antialiasBand = edgeBand.createStroke(outlines);
+                bool matchesReference = true;
+                if (preview != expected) {
+                    qsizetype different = 0;
+                    int maximumDifference = 0;
+                    QPoint first;
+                    for (int y = 0; y < preview.height(); ++y) {
+                        for (int x = 0; x < preview.width(); ++x) {
+                            const QColor a = preview.pixelColor(x, y);
+                            const QColor b = expected.pixelColor(x, y);
+                            if (a == b) {
+                                continue;
+                            }
+                            if (different == 0) {
+                                first = QPoint(x, y);
+                            }
+                            ++different;
+                            const int difference =
+                                std::max({qAbs(a.red() - b.red()), qAbs(a.green() - b.green()),
+                                          qAbs(a.blue() - b.blue()), qAbs(a.alpha() - b.alpha())});
+                            maximumDifference = std::max(maximumDifference, difference);
+                            matchesReference &=
+                                difference <= 1 &&
+                                antialiasBand.contains(QPointF((x + 0.5) / dpr, (y + 0.5) / dpr));
+                        }
+                    }
+                    if (!matchesReference) {
+                        std::cerr << "OCR batched/reference mismatch: dpr=" << dpr
+                                  << " pixels=" << different
+                                  << " max_difference=" << maximumDifference
+                                  << " first=" << first.x() << ',' << first.y()
+                                  << " actual=" << preview.pixelColor(first).name().toStdString()
+                                  << " expected=" << expected.pixelColor(first).name().toStdString()
+                                  << '\n';
+                    }
+                }
+                require(matchesReference, "batched fills must match exactly; antialiased outlines "
+                                          "may round by one level");
+            }
+
+            const QRectF firstQuad = transform.mapRect(presentation->lines[0].quad.boundingRect());
+            int darkPixels = 0;
+            const QRect pixels =
+                QRectF(firstQuad.topLeft() * dpr, firstQuad.size() * dpr).toAlignedRect();
+            for (int y = pixels.top() + 2; y < pixels.bottom() - 2; ++y) {
+                for (int x = pixels.left() + 2; x < pixels.right() - 2; ++x) {
+                    darkPixels += preview.pixelColor(x, y).lightness() < 100;
+                }
+            }
+            require(
+                rendering == Rendering::Normal ? darkPixels > 20 : darkPixels == 0,
+                "preview must retain readable normal glyphs and keep original-image glyphs hidden");
+
+            presentation->cancelLineBoxSelection();
+            layer.updateSelection();
+            require(renderOcrSelectionLayer(layer, dpr) == committed,
+                    "canceling must restore every committed selection pixel at fractional DPI");
+            presentation->beginLineBoxSelection(QPointF(10.0, 10.0));
+            presentation->updateLineBoxSelection(box);
+            layer.updateSelection();
+            presentation->finishLineBoxSelection();
+            layer.updateSelection();
+            require(layer.marqueeRectangleForTesting().isEmpty() &&
+                        !presentation->lineSelected(0) &&
+                        presentation->textSelectionForLine(1).length ==
+                            presentation->lines[1].text.size(),
+                    "release must remove previews and render the committed line toggle");
+            require(layer.geometrySynchronizationCount() == geometryCount,
+                    "commit and cancel must never reshape the existing text geometry");
+        }
+    }
+    themeManager.setColorScheme(originalScheme);
+}
+
+void ocrLineBoxSelectionUpdatesOnlyChangedItemsAndDamage() {
+    QWidget host;
+    host.resize(400, 310);
+    ScreenshotOcrTextLayer layer(&host);
+    auto presentation = ocrLineBoxRenderingPresentation();
+    layer.setPresentation(presentation, ScreenshotOcrTextLayer::RenderingMode::SelectionOnly);
+    const QTransform transform(1.25, 0.0, 0.0, 1.25, 7.25, 9.5);
+    layer.synchronize(transform, host.rect());
+    host.show();
+    QApplication::processEvents();
+    constexpr qreal dpr = 1.5;
+    QImage previous = renderOcrSelectionLayer(layer, dpr);
+    const QImage committed = previous;
+    const quint64 geometryCount = layer.geometrySynchronizationCount();
+    CanvasPaintRegionObserver observer;
+    layer.viewport()->installEventFilter(&observer);
+    const auto applyChange = [&](const QRectF& rectangle, quint64 expectedChangedLines) {
+        const quint64 itemCount = layer.selectionItemUpdateCount();
+        observer.begin();
+        presentation->updateLineBoxSelection(rectangle);
+        layer.updateSelection();
+        QApplication::processEvents();
+        QApplication::processEvents();
+        const QRegion dirty = observer.region();
+        const QImage next = renderOcrSelectionLayer(layer, dpr);
+        requireChangedPixelsCoveredByDirtyRegion(
+            previous, next, dirty,
+            "box preview damage must cover all changed fractional-DPI pixels");
+        require(layer.selectionItemUpdateCount() - itemCount == expectedChangedLines,
+                "box preview updates must visit only lines whose appearance changed");
+        require(!dirty.contains(transform.map(QPointF(140.0, 190.0)).toPoint()),
+                "box selection must not repaint unrelated distant lines");
+        previous = next;
+        return dirty;
+    };
+
+    presentation->beginLineBoxSelection(QPointF(10.0, 10.0));
+    layer.updateSelection();
+    applyChange(QRectF(10.0, 10.0, 260.0, 45.0), 1);
+    const quint64 overlayCount = layer.overlayUpdateCount();
+    const QRegion stationaryDamage = applyChange(QRectF(10.0, 10.0, 260.0, 45.0), 0);
+    require(layer.overlayUpdateCount() == overlayCount && stationaryDamage.isEmpty(),
+            "an unchanged drag position must not schedule any line or overlay repaint");
+    applyChange(QRectF(10.0, 10.0, 260.0, 46.0), 0);
+    applyChange(QRectF(10.0, 10.0, 260.0, 100.0), 1);
+    applyChange(QRectF(10.0, 10.0, 260.0, 45.0), 1);
+    applyChange(QRectF(10.0, 10.0, 260.0, 100.0), 1);
+    // A reader can skip pointer revisions; line revisions must still restore every affected line.
+    presentation->updateLineBoxSelection(QRectF(10.0, 10.0, 260.0, 45.0));
+    presentation->updateLineBoxSelection(QRectF(10.0, 10.0, 260.0, 100.0));
+    layer.updateSelection();
+    require(renderOcrSelectionLayer(layer, dpr) == previous,
+            "a skipped selection revision must resolve to the latest complete visual state");
+    require(layer.geometrySynchronizationCount() == geometryCount,
+            "sparse drag updates must preserve cached text geometry");
+    observer.begin();
+    presentation->cancelLineBoxSelection();
+    layer.updateSelection();
+    QApplication::processEvents();
+    QApplication::processEvents();
+    const QRegion canceledDamage = observer.region();
+    const QImage canceled = renderOcrSelectionLayer(layer, dpr);
+    require(canceled == committed,
+            "explicit preview damage must restore every committed highlight on cancellation");
+    requireChangedPixelsCoveredByDirtyRegion(
+        previous, canceled, canceledDamage,
+        "canceling a preview must repaint glyph highlights through explicit quad damage");
+    observer.begin();
+    presentation->beginTextSelection(ScreenshotOcrTextPosition{3, 0});
+    presentation->updateTextSelection(ScreenshotOcrTextPosition{3, 2});
+    presentation->finishTextSelection();
+    layer.updateSelection();
+    QApplication::processEvents();
+    QApplication::processEvents();
+    const QRegion characterDamage = observer.region();
+    const QImage characters = renderOcrSelectionLayer(layer, dpr);
+    require(characters != canceled && !characterDamage.isEmpty(),
+            "ordinary character selection must still schedule graphics-item damage");
+    requireChangedPixelsCoveredByDirtyRegion(
+        canceled, characters, characterDamage,
+        "ordinary character selection damage must cover every changed highlight pixel");
+    require(layer.geometrySynchronizationCount() == geometryCount,
+            "cancel and character selection must preserve the fitted glyph geometry");
+    layer.viewport()->removeEventFilter(&observer);
+}
+
+void ocrMarqueeDamageRetainsInteriorsAndMatchesFullPainting() {
+    using Rendering = ScreenshotOcrTextLayer::RenderingMode;
+    for (const auto rendering : {Rendering::Normal, Rendering::SelectionOnly}) {
+        for (const qreal dpr : {1.0, 1.5, 2.0}) {
+            QWidget host;
+            host.resize(400, 310);
+            ScreenshotOcrTextLayer layer(&host);
+            auto presentation = ocrLineBoxRenderingPresentation();
+            layer.setPresentation(presentation, rendering);
+            const QTransform transform(1.25, 0.0, 0.0, 1.25, 7.25, 9.5);
+            layer.synchronize(transform, host.rect());
+            host.show();
+            QApplication::processEvents();
+            QImage previous = renderOcrSelectionLayer(layer, dpr);
+            const QImage committed = previous;
+            const auto originalItems = layer.scene()->items();
+            const quint64 geometryCount = layer.geometrySynchronizationCount();
+            QApplication::processEvents();
+            QApplication::processEvents();
+            (void)layer.takeSelectionDamageForTesting();
+            CanvasPaintRegionObserver observer;
+            layer.viewport()->installEventFilter(&observer);
+
+            const auto verifyCurrent = [&](const char* operation, bool retainsInterior) {
+                QApplication::processEvents();
+                QApplication::processEvents();
+                const QRegion paintedDamage = observer.region();
+                const QImage full = renderOcrSelectionLayer(layer, dpr);
+                // Full rendering must not consume the explicit selection damage journal.
+                const QRegion damage = layer.takeSelectionDamageForTesting();
+                require(layer.takeSelectionDamageForTesting().isEmpty(),
+                        "taking selection damage must clear only the testing journal");
+                require((damage - layer.viewport()->rect()).isEmpty(),
+                        "selection damage must be clipped before integer conversion");
+                QImage incremental = previous;
+                if (!damage.isEmpty()) {
+                    QPainter painter(&incremental);
+                    painter.setClipRegion(damage);
+                    painter.setCompositionMode(QPainter::CompositionMode_Source);
+                    painter.fillRect(layer.viewport()->rect(), Qt::white);
+                    painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+                    layer.viewport()->render(&painter, damage.boundingRect().topLeft(), damage);
+                }
+                if (incremental != full) {
+                    qsizetype different = 0;
+                    int maximumDifference = 0;
+                    QPoint first;
+                    for (int y = 0; y < full.height(); ++y) {
+                        for (int x = 0; x < full.width(); ++x) {
+                            const QColor a = incremental.pixelColor(x, y);
+                            const QColor b = full.pixelColor(x, y);
+                            if (a == b) {
+                                continue;
+                            }
+                            if (different == 0) {
+                                first = QPoint(x, y);
+                            }
+                            ++different;
+                            maximumDifference = std::max(
+                                maximumDifference,
+                                std::max({qAbs(a.red() - b.red()), qAbs(a.green() - b.green()),
+                                          qAbs(a.blue() - b.blue()), qAbs(a.alpha() - b.alpha())}));
+                        }
+                    }
+                    std::cerr << "OCR incremental marquee: operation=" << operation
+                              << " mode=" << static_cast<int>(rendering) << " dpr=" << dpr
+                              << " pixels=" << different << " max_difference=" << maximumDifference
+                              << " first=" << first.x() << ',' << first.y() << " incremental="
+                              << incremental.pixelColor(first).name().toStdString()
+                              << " full=" << full.pixelColor(first).name().toStdString() << '\n';
+                }
+                require(incremental == full,
+                        "painting only selection damage must exactly match a fresh full frame");
+                requireChangedPixelsCoveredByDirtyRegion(
+                    previous, full, damage,
+                    "the selection journal must cover every changed fractional-DPI pixel");
+                if (retainsInterior) {
+                    const QPoint center = transform.map(QPointF(140.0, 60.0)).toPoint();
+                    require(!damage.contains(center) && !paintedDamage.contains(center),
+                            "unchanged marquee fill must not invalidate its shared interior");
+                }
+                require(layer.scene()->items() == originalItems &&
+                            layer.geometrySynchronizationCount() == geometryCount,
+                        "every box operation must retain graphics items and fixed text geometry");
+                previous = full;
+                QApplication::processEvents();
+                QApplication::processEvents();
+                return damage;
+            };
+            const auto applyRectangle = [&](const QRectF& rectangle, const char* operation,
+                                            bool retainsInterior = false) {
+                observer.begin();
+                presentation->updateLineBoxSelection(rectangle);
+                layer.updateSelection();
+                return verifyCurrent(operation, retainsInterior);
+            };
+
+            observer.begin();
+            presentation->beginLineBoxSelection(QPointF(10.0, 10.0));
+            layer.updateSelection();
+            require(verifyCurrent("press", false).isEmpty(),
+                    "an empty marquee must retain its permanent item without repainting");
+            applyRectangle(QRectF(10.0, 10.0, 260.0, 100.0), "initial box");
+            applyRectangle(QRectF(10.0, 10.0, 261.0, 101.0), "grow", true);
+            applyRectangle(QRectF(10.0, 10.0, 260.0, 100.0), "shrink", true);
+            const QRectF fractional(10.1, 10.1, 259.9, 99.9);
+            require(transform.mapRect(fractional).toAlignedRect() ==
+                        layer.marqueeRectangleForTesting().toAlignedRect(),
+                    "the fractional movement fixture must retain its aligned pixel bounds");
+            const QImage beforeFractional = previous;
+            applyRectangle(fractional, "fractional edges", true);
+            require(previous != beforeFractional,
+                    "fractional marquee edges must repaint even with equal aligned bounds");
+            applyRectangle(QRectF(QPointF(270.0, 110.0), QPointF(10.0, 10.0)), "reversed", true);
+            const quint64 overlayCount = layer.overlayUpdateCount();
+            const quint64 itemCount = layer.selectionItemUpdateCount();
+            require(
+                applyRectangle(QRectF(10.0, 10.0, 260.0, 100.0), "stationary", true).isEmpty() &&
+                    layer.overlayUpdateCount() == overlayCount &&
+                    layer.selectionItemUpdateCount() == itemCount,
+                "an unchanged rectangle must schedule no selection or marquee damage");
+            applyRectangle(QRectF(-10.0, -8.0, 280.0, 118.0), "clipped edges", true);
+            applyRectangle(QRectF(-1.0e12, -1.0e12, 2.0e12, 2.0e12), "huge clipped box");
+            observer.begin();
+            presentation->cancelLineBoxSelection();
+            layer.updateSelection();
+            verifyCurrent("cancel", false);
+            require(previous == committed && layer.marqueeRectangleForTesting().isEmpty(),
+                    "canceling must restore the committed frame and empty the permanent marquee");
+            observer.begin();
+            presentation->beginLineBoxSelection(QPointF(10.0, 10.0));
+            layer.updateSelection();
+            verifyCurrent("second press", false);
+            applyRectangle(QRectF(10.0, 10.0, 260.0, 100.0), "second box");
+            observer.begin();
+            presentation->finishLineBoxSelection();
+            layer.updateSelection();
+            verifyCurrent("commit", false);
+            require(layer.marqueeRectangleForTesting().isEmpty() &&
+                        !presentation->lineSelected(0) && presentation->lineSelected(1),
+                    "commit must remove the marquee while retaining the toggled line selection");
+            layer.viewport()->removeEventFilter(&observer);
+        }
+    }
+}
+
+void ocrRectangularPreviewCachesRetainOnlyEdgesAndExactInterior() {
+    for (const qreal dpr : {1.0, 1.5, 2.0}) {
+        QWidget host;
+        host.resize(800, 450);
+        ScreenshotOcrTextLayer layer(&host);
+        auto presentation = std::make_shared<ScreenshotOcrPresentation>();
+        presentation->selection = host.rect();
+        for (int index = 0; index < 12; ++index) {
+            ScreenshotOcrLine line;
+            line.text = QStringLiteral("Cache");
+            QPolygonF quad(QRectF(12 + (index % 4) * 200, 12 + (index / 4) * 150, 175, 120));
+            quad.removeLast();
+            line.quad = quad;
+            presentation->lines.push_back(std::move(line));
+        }
+        layer.setPresentation(presentation, ScreenshotOcrTextLayer::RenderingMode::SelectionOnly);
+        const QTransform transform(0.9, 0.0, 0.0, 0.9, 0.25, 0.5);
+        layer.synchronize(transform, host.rect());
+        host.ensurePolished();
+        layer.viewport()->resize(host.size());
+        const quint64 geometry = layer.geometrySynchronizationCount();
+        presentation->beginLineBoxSelection(QPointF(-5, -5));
+        presentation->updateLineBoxSelection(QRectF(-5, -5, 820, 470));
+        layer.updateSelection();
+        const QImage green = renderOcrSelectionLayer(layer, dpr);
+        const auto builds = layer.previewRasterBuildCount();
+        const auto hits = layer.previewRasterHitCount();
+        const qreal fullInteriorBytes = 12.0 * 175 * 120 * 0.9 * 0.9 * dpr * dpr * 4;
+        require(builds == 12 && layer.previewRasterBytes() < fullInteriorBytes / 2,
+                "axis-aligned preview caches must retain thin edges instead of solid interiors");
+        require(renderOcrSelectionLayer(layer, dpr) == green &&
+                    layer.previewRasterBuildCount() == builds &&
+                    layer.previewRasterHitCount() > hits,
+                "compressed preview rasters must reuse exact pixels on a stationary frame");
+        const QPoint sample = (transform.map(QPointF(80, 70)) * dpr).toPoint();
+        const QColor marquee(0x40, 0x96, 0xff, 0x33);
+        require(green.pixelColor(sample) ==
+                    sourceOverOpaqueBackground(
+                        marquee, sourceOverOpaqueBackground(QColor(0x52, 0xc4, 0x1a, 0x33),
+                                                            QColor(Qt::white))),
+                "compressed interiors must retain exact twenty-percent green compositing");
+        presentation->finishLineBoxSelection();
+        layer.updateSelection();
+        const QImage committed = renderOcrSelectionLayer(layer, dpr);
+        presentation->beginLineBoxSelection(QPointF(-5, -5));
+        presentation->updateLineBoxSelection(QRectF(-5, -5, 820, 470));
+        layer.updateSelection();
+        const QImage red = renderOcrSelectionLayer(layer, dpr);
+        require(layer.previewRasterBuildCount() == builds + 12 &&
+                    layer.previewRasterBytes() < fullInteriorBytes,
+                "both green and red edge caches must remain smaller than one full solid surface");
+        require(red.pixelColor(sample) ==
+                    sourceOverOpaqueBackground(
+                        marquee, sourceOverOpaqueBackground(QColor(0xff, 0x4d, 0x4f, 0x33),
+                                                            QColor(Qt::white))),
+                "compressed interiors must retain exact twenty-percent red compositing");
+        presentation->cancelLineBoxSelection();
+        layer.updateSelection();
+        require(renderOcrSelectionLayer(layer, dpr) == committed &&
+                    layer.geometrySynchronizationCount() == geometry,
+                "compressed preview cancellation must restore committed pixels without layout");
+        layer.clearPresentation();
+        require(layer.previewRasterBytes() == 0,
+                "presentation teardown must release every compressed edge strip");
+    }
+}
+
+void ocrLineBoxBatchRetainsOverlappingReversedQuads() {
+    QWidget host;
+    host.resize(300, 200);
+    ScreenshotOcrTextLayer layer(&host);
+    auto presentation = std::make_shared<ScreenshotOcrPresentation>();
+    presentation->selection = QRect(0, 0, 300, 200);
+    for (const QPolygonF& quad :
+         {QPolygonF{{40.0, 40.0}, {160.0, 40.0}, {160.0, 80.0}, {40.0, 80.0}},
+          QPolygonF{{100.0, 80.0}, {220.0, 80.0}, {220.0, 40.0}, {100.0, 40.0}}}) {
+        ScreenshotOcrLine line;
+        line.text = QStringLiteral("Overlapping text");
+        line.quad = quad;
+        presentation->lines.push_back(std::move(line));
+    }
+    layer.setPresentation(presentation, ScreenshotOcrTextLayer::RenderingMode::SelectionOnly);
+    layer.synchronize(QTransform(), host.rect());
+    host.show();
+    QApplication::processEvents();
+    presentation->beginLineBoxSelection(QPointF(5.0, 5.0));
+    presentation->updateLineBoxSelection(QRectF(5.0, 5.0, 240.0, 110.0));
+    layer.updateSelection();
+    const QPainterPath path =
+        layer.selectionPreviewPathForTesting(ScreenshotOcrLineSelectionPreview::Select);
+    require(path.fillRule() == Qt::WindingFill && path.contains(QPointF(130.0, 60.0)),
+            "reversed overlapping OCR quads must retain filled preview coverage");
+    const QImage preview = renderOcrSelectionLayer(layer, 1.5);
+    const QColor expected = sourceOverOpaqueBackground(
+        QColor(0x40, 0x96, 0xff, 0x33),
+        sourceOverOpaqueBackground(QColor(0x52, 0xc4, 0x1a, 0x33), QColor(Qt::white)));
+    require(preview.pixelColor(195, 90) == expected,
+            "overlapping previews must retain one consistent twenty-percent green fill");
+    presentation->updateLineBoxSelection(QRectF(5.0, 5.0, 80.0, 110.0));
+    layer.updateSelection();
+    const QImage shrunk = renderOcrSelectionLayer(layer, 1.5);
+    require(shrunk.pixelColor(285, 90) == QColor(Qt::white),
+            "shrinking a batch must remove the deselected block's previous pixels");
+}
+
+void ocrLineBoxDamageClampsHugeGeometryAndRejectsNonfiniteQuads() {
+    QWidget host;
+    host.resize(300, 200);
+    ScreenshotOcrTextLayer layer(&host);
+    auto presentation = std::make_shared<ScreenshotOcrPresentation>();
+    presentation->selection = host.rect();
+    ScreenshotOcrLine giant;
+    giant.text = QStringLiteral("X");
+    giant.quad = {{-1.0e12, 40.0}, {1.0e12, 40.0}, {1.0e12, 80.0}, {-1.0e12, 80.0}};
+    presentation->lines.push_back(giant);
+    ScreenshotOcrLine invalid = giant;
+    invalid.quad[0].setX(std::numeric_limits<qreal>::quiet_NaN());
+    presentation->lines.push_back(invalid);
+    layer.setPresentation(presentation, ScreenshotOcrTextLayer::RenderingMode::SelectionOnly);
+    layer.synchronize(QTransform(), host.rect());
+    host.show();
+    QApplication::processEvents();
+    CanvasPaintRegionObserver observer;
+    layer.viewport()->installEventFilter(&observer);
+    observer.begin();
+    presentation->beginLineBoxSelection(QPointF(10.0, 10.0));
+    presentation->updateLineBoxSelection(QRectF(10.0, 10.0, 100.0, 100.0));
+    layer.updateSelection();
+    QApplication::processEvents();
+    QApplication::processEvents();
+    require(observer.region().contains(QRect(0, 38, 300, 44)) &&
+                !observer.region().contains(QPoint(150, 180)),
+            "giant quad damage must clamp to the viewport before integer conversion");
+    const QPainterPath path =
+        layer.selectionPreviewPathForTesting(ScreenshotOcrLineSelectionPreview::Select);
+    require(!path.isEmpty(), "a visible giant quad must retain its selection preview");
+    for (int index = 0; index < path.elementCount(); ++index) {
+        const auto element = path.elementAt(index);
+        require(std::isfinite(element.x) && std::isfinite(element.y),
+                "nonfinite OCR geometry must never enter prepared preview paths");
+    }
+    layer.viewport()->removeEventFilter(&observer);
+}
+
+void ocrLineBoxSelectionPreservesRendererBackgroundCaches() {
+    SnowCanvasWidget canvas;
+    canvas.resize(400, 310);
+    canvas.setClearBackgroundEnabled(false);
+    require(canvas.setViewportCamera(150.0, 110.0, 1.0),
+            "the OCR cache fixture initializes its camera");
+    ScreenshotCanvasRenderer renderer(canvas);
+    canvas.setCustomRenderer(&renderer);
+    QImage screenshot(300, 220, QImage::Format_ARGB32_Premultiplied);
+    screenshot.fill(Qt::white);
+    const QRectF imageRect(screenshot.rect());
+    renderer.setImage(screenshot, imageRect);
+    auto presentation = ocrLineBoxRenderingPresentation();
+    renderer.setOcrPresentation(presentation);
+    QRectF filteredRect;
+    renderer.setOcrFilteredImage(
+        testRenderOcrFilteredImage(screenshot, imageRect, *presentation, Qt::white, &filteredRect),
+        filteredRect);
+    canvas.show();
+    QApplication::processEvents();
+    const QImage committed = renderCanvas(canvas);
+    const auto contentRevision = renderer.contentRevision();
+    const auto originalRevision = renderer.originalBackgroundRevision();
+    const auto filteredKey = renderer.ocrFilteredImage().cacheKey();
+    const auto geometryCount = renderer.ocrGeometrySynchronizationCountForTesting();
+    require(!renderer.ocrFilteredImage().isNull() && geometryCount == 4,
+            "the OCR cache fixture prepares a filtered background and each text layout");
+    const auto requireStableCaches = [&]() {
+        require(renderer.contentRevision() == contentRevision &&
+                    renderer.originalBackgroundRevision() == originalRevision &&
+                    renderer.ocrFilteredImage().cacheKey() == filteredKey &&
+                    renderer.ocrGeometrySynchronizationCountForTesting() == geometryCount,
+                "box preview, commit and cancel must preserve background caches and text geometry");
+    };
+    presentation->beginLineBoxSelection(QPointF(10.0, 10.0));
+    renderer.updateOcrSelection();
+    for (const qreal height : {45.0, 46.0, 100.0, 45.0}) {
+        presentation->updateLineBoxSelection(QRectF(10.0, 10.0, 260.0, height));
+        renderer.updateOcrSelection();
+        require(renderCanvas(canvas) != committed,
+                "the cache fixture must display each box selection preview");
+        requireStableCaches();
+    }
+    presentation->cancelLineBoxSelection();
+    renderer.updateOcrSelection();
+    require(renderCanvas(canvas) == committed,
+            "renderer-hosted cancellation must restore the original committed pixels");
+    requireStableCaches();
+    presentation->beginLineBoxSelection(QPointF(10.0, 10.0));
+    presentation->updateLineBoxSelection(QRectF(10.0, 10.0, 260.0, 100.0));
+    renderer.updateOcrSelection();
+    presentation->finishLineBoxSelection();
+    renderer.updateOcrSelection();
+    static_cast<void>(renderCanvas(canvas));
+    requireStableCaches();
+    canvas.setCustomRenderer(nullptr);
+}
+
+void ocrGlyphDeviceCachesMatchDirectPaintingAndInvalidate() {
+    using Rendering = ScreenshotOcrTextLayer::RenderingMode;
+    auto& themeManager = adqt::theme::ThemeManager::instance();
+    const auto originalScheme = themeManager.config().scheme;
+    const QFont originalFont = QApplication::font();
+    themeManager.setColorScheme(adqt::theme::ThemeScheme::Light);
+    for (const auto rendering : {Rendering::Normal, Rendering::SelectionOnly}) {
+        QWidget host;
+        host.resize(400, 310);
+        ScreenshotOcrTextLayer layer(&host);
+        auto presentation = ocrLineBoxRenderingPresentation();
+        layer.setPresentation(presentation, rendering);
+        host.show();
+        const auto compareWithDirect = [&](qreal dpr, bool cacheEligible = true) {
+            const auto buildsBeforePaint = layer.glyphRasterBuildCount();
+            const auto hitsBeforePaint = layer.glyphRasterHitCount();
+            const QImage cached = renderOcrSelectionLayer(layer, dpr);
+            const auto builds = layer.glyphRasterBuildCount();
+            const auto hits = layer.glyphRasterHitCount();
+            const auto backgroundBuilds = layer.backgroundRasterBuildCount();
+            const bool usedCache = builds > buildsBeforePaint || hits > hitsBeforePaint;
+            require(renderOcrSelectionLayer(layer, dpr) == cached &&
+                        layer.glyphRasterBuildCount() == builds &&
+                        layer.backgroundRasterBuildCount() == backgroundBuilds &&
+                        (usedCache ? layer.glyphRasterHitCount() > hits
+                                   : layer.glyphRasterHitCount() == hits),
+                    "warm affine caches and direct perspective painting must retain exact pixels");
+            layer.setGlyphCachingEnabledForTesting(false);
+            const QImage direct = renderOcrSelectionLayer(layer, dpr);
+            layer.setGlyphCachingEnabledForTesting(true);
+            const auto solidPixel = [](QColor foreground, QColor background) {
+                QImage sample(1, 1, QImage::Format_ARGB32_Premultiplied);
+                sample.fill(background);
+                QPainter painter(&sample);
+                painter.fillRect(sample.rect(), foreground);
+                painter.end();
+                return sample.pixelColor(0, 0);
+            };
+            std::vector<QColor> backgrounds{QColor(Qt::white)};
+            for (const QColor fill :
+                 {QColor(0x52, 0xc4, 0x1a, 0x33), QColor(0xff, 0x4d, 0x4f, 0x33)}) {
+                backgrounds.push_back(solidPixel(fill, Qt::white));
+            }
+            for (std::size_t index = 0, count = backgrounds.size(); index < count; ++index) {
+                backgrounds.push_back(
+                    solidPixel(QColor(0x40, 0x96, 0xff, 0x33), backgrounds[index]));
+            }
+            std::vector<QColor> solidColors;
+            const QPalette palette = layer.palette();
+            QColor highlight = palette.highlight().color();
+            if (rendering == Rendering::SelectionOnly) {
+                highlight.setAlphaF(0.4F);
+            }
+            for (const QColor background : backgrounds) {
+                solidColors.push_back(background);
+                solidColors.push_back(solidPixel(layer.textColor(), background));
+                const QColor selectedBackground = solidPixel(highlight, background);
+                solidColors.push_back(selectedBackground);
+                solidColors.push_back(
+                    solidPixel(palette.highlightedText().color(), selectedBackground));
+            }
+            bool matchesDirect = true;
+            if (cached != direct) {
+                qsizetype differingPixels = 0;
+                int maximumDifference = 0;
+                QPoint first;
+                for (int y = 0; y < cached.height(); ++y) {
+                    for (int x = 0; x < cached.width(); ++x) {
+                        const QColor a = cached.pixelColor(x, y);
+                        const QColor b = direct.pixelColor(x, y);
+                        if (a == b) {
+                            continue;
+                        }
+                        if (differingPixels == 0) {
+                            first = QPoint(x, y);
+                        }
+                        ++differingPixels;
+                        const int difference =
+                            std::max({qAbs(a.red() - b.red()), qAbs(a.green() - b.green()),
+                                      qAbs(a.blue() - b.blue()), qAbs(a.alpha() - b.alpha())});
+                        maximumDifference = std::max(maximumDifference, difference);
+                        const bool solid = std::find(solidColors.begin(), solidColors.end(), b) !=
+                                           solidColors.end();
+                        bool edge = false;
+                        for (int dy = -1; dy <= 1 && !edge; ++dy) {
+                            for (int dx = -1; dx <= 1; ++dx) {
+                                if (direct.rect().contains(x + dx, y + dy)) {
+                                    const QColor adjacent = direct.pixelColor(x + dx, y + dy);
+                                    edge |= qAbs(adjacent.red() - b.red()) > 1 ||
+                                            qAbs(adjacent.green() - b.green()) > 1 ||
+                                            qAbs(adjacent.blue() - b.blue()) > 1 ||
+                                            qAbs(adjacent.alpha() - b.alpha()) > 1;
+                                }
+                            }
+                        }
+                        matchesDirect &= difference <= 1 && !solid && edge;
+                    }
+                }
+                if (!matchesDirect) {
+                    std::cerr << "OCR cached/direct mismatch: mode=" << static_cast<int>(rendering)
+                              << " dpr=" << dpr << " pixels=" << differingPixels
+                              << " max_channel_difference=" << maximumDifference
+                              << " first=" << first.x() << ',' << first.y() << " cached="
+                              << cached.pixelColor(first).name(QColor::HexArgb).toStdString()
+                              << " direct="
+                              << direct.pixelColor(first).name(QColor::HexArgb).toStdString()
+                              << '\n';
+                    const auto items = layer.scene()->items();
+                    const auto glyph =
+                        std::find_if(items.begin(), items.end(),
+                                     [](const auto* item) { return item->zValue() == 0.0; });
+                    if (glyph != items.end()) {
+                        const auto transform = (*glyph)->sceneTransform();
+                        std::cerr << "OCR glyph transform: " << transform.m11() << ','
+                                  << transform.m12() << ',' << transform.m13() << ','
+                                  << transform.m21() << ',' << transform.m22() << ','
+                                  << transform.m23() << ',' << transform.m31() << ','
+                                  << transform.m32() << ',' << transform.m33() << '\n';
+                    }
+                }
+            }
+            require(
+                usedCache ? matchesDirect : cached == direct,
+                "glyph caches must retain exact solids and permit only one-level AA edge rounding");
+            require((cacheEligible || !usedCache) && (!usedCache || layer.glyphRasterBytes() > 0) &&
+                        layer.glyphRasterBytes() + layer.previewRasterBytes() +
+                                layer.backgroundRasterBytes() <=
+                            64 * 1024 * 1024,
+                    "glyph and preview rasters must share the surface's bounded local budget");
+        };
+        for (const auto& transform :
+             {QTransform(1.25, 0.0, 0.0, 1.25, 7.25, 9.5),
+              QTransform(1.12, 0.13, -0.09, 1.15, 22.25, 6.75),
+              QTransform(1.12, 0.13, 0.00008, -0.09, 1.15, 0.00012, 22.25, 6.75, 1.0)}) {
+            layer.synchronize(transform, host.rect());
+            QApplication::processEvents();
+            for (const qreal dpr : {1.0, 1.5, 2.0}) {
+                compareWithDirect(dpr, transform.isAffine());
+            }
+        }
+        layer.synchronize(QTransform(1.25, 0.0, 0.0, 1.25, 7.25, 9.5), host.rect());
+        presentation->selectAll();
+        layer.updateSelection();
+        compareWithDirect(1.5);
+        const auto selectedBuilds = layer.glyphRasterBuildCount();
+        QPalette palette = layer.palette();
+        palette.setColor(QPalette::Highlight, QColor(71, 29, 137));
+        palette.setColor(QPalette::HighlightedText, QColor(255, 230, 110));
+        layer.setPalette(palette);
+        compareWithDirect(1.5);
+        require(layer.glyphRasterBuildCount() > selectedBuilds,
+                "a selection palette change must invalidate cached selected pixels");
+        presentation->beginLineBoxSelection(QPointF(10.0, 10.0));
+        presentation->updateLineBoxSelection(QRectF(10.0, 10.0, 260.0, 100.0));
+        layer.updateSelection();
+        compareWithDirect(1.5);
+        const auto previewBuilds = layer.glyphRasterBuildCount();
+        presentation->cancelLineBoxSelection();
+        layer.updateSelection();
+        compareWithDirect(1.5);
+        require(layer.glyphRasterBuildCount() == previewBuilds,
+                "entering and leaving a box preview must reuse cached committed glyph pixels");
+
+        const QImage beforeTextReplacement = renderOcrSelectionLayer(layer, 1.5);
+        const auto textBuilds = layer.glyphRasterBuildCount();
+        const auto textGeometry = layer.geometrySynchronizationCount();
+        const auto textBytes = layer.glyphRasterBytes();
+        presentation->setLineText(1, QStringLiteral("Changed translated text"));
+        layer.updateLineText(1);
+        require(layer.geometrySynchronizationCount() == textGeometry + 1 &&
+                    layer.glyphRasterBuildCount() == textBuilds &&
+                    layer.glyphRasterBytes() < textBytes,
+                "a streaming replacement must reconfigure only its glyph and discard its cached "
+                "pixels before painting");
+        compareWithDirect(1.5);
+        require(renderOcrSelectionLayer(layer, 1.5) != beforeTextReplacement,
+                "a streaming replacement must display changed glyph pixels even when its new "
+                "geometry requires direct painting");
+        const auto fontBuilds = layer.glyphRasterBuildCount();
+        QFont boldFont = originalFont;
+        boldFont.setBold(!originalFont.bold());
+        QApplication::setFont(boldFont);
+        QApplication::processEvents();
+        compareWithDirect(1.5);
+        require(layer.glyphRasterBuildCount() > fontBuilds,
+                "an application font change must rebuild text appearance and device rasters");
+        const auto themeBuilds = layer.glyphRasterBuildCount();
+        themeManager.setColorScheme(adqt::theme::ThemeScheme::Dark);
+        compareWithDirect(1.5);
+        require(layer.glyphRasterBuildCount() > themeBuilds &&
+                    layer.textColor() == themeManager.resolveTheme(&layer).colorText,
+                "a theme change must refresh cached text colors");
+        presentation->beginLineBoxSelection(QPointF(10.0, 10.0));
+        presentation->updateLineBoxSelection(QRectF(10.0, 10.0, 260.0, 100.0));
+        layer.updateSelection();
+        const QImage beforeEviction = renderOcrSelectionLayer(layer, 1.5);
+        layer.setRasterCacheBudgetForTesting(128 * 1024);
+        require(layer.glyphRasterBytes() + layer.previewRasterBytes() +
+                        layer.backgroundRasterBytes() <=
+                    128 * 1024,
+                "reducing the shared budget must immediately evict older raster entries");
+        const auto buildsBeforeEviction = layer.glyphRasterBuildCount() +
+                                          layer.previewRasterBuildCount() +
+                                          layer.backgroundRasterBuildCount();
+        require(
+            renderOcrSelectionLayer(layer, 1.5) == beforeEviction &&
+                layer.glyphRasterBuildCount() + layer.previewRasterBuildCount() +
+                        layer.backgroundRasterBuildCount() >
+                    buildsBeforeEviction &&
+                layer.glyphRasterBytes() + layer.previewRasterBytes() +
+                        layer.backgroundRasterBytes() <=
+                    128 * 1024,
+            "evicted glyph and preview rasters must rebuild identical pixels within the budget");
+        layer.clearPresentation();
+        require(layer.glyphRasterBytes() == 0 && layer.previewRasterBytes() == 0 &&
+                    layer.backgroundRasterBytes() == 0,
+                "clearing recognition must release all locally retained glyph and preview rasters");
+
+        layer.setRasterCacheBudgetForTesting(64 * 1024 * 1024);
+        auto paragraph = std::make_shared<ScreenshotOcrPresentation>();
+        paragraph->selection = host.rect();
+        ScreenshotOcrLine line;
+        line.text = QStringLiteral("Translated source rows retain their exact selected backgrounds "
+                                   "and preserve the shorter final row");
+        line.paragraph = true;
+        line.quad = {QPointF(30.0, 25.0), QPointF(250.0, 25.0), QPointF(250.0, 120.0),
+                     QPointF(30.0, 120.0)};
+        for (const QRectF row : {QRectF(30.0, 25.0, 220.0, 20.0), QRectF(30.0, 60.0, 220.0, 20.0),
+                                 QRectF(30.0, 100.0, 145.0, 20.0)}) {
+            QPolygonF quad(row);
+            quad.removeLast();
+            line.sourceLineQuads.push_back(quad);
+        }
+        paragraph->lines.push_back(line);
+        paragraph->prepareForRendering();
+        paragraph->selectAll();
+        ScreenshotOcrTextLayout paragraphLayout;
+        QTransform paragraphTransform;
+        require(configureScreenshotOcrTextLayout(
+                    paragraphLayout, line, QTransform(), QApplication::font(), layer.textColor(),
+                    paragraph->textSelectionForLine(0), &paragraphTransform) &&
+                    !paragraphLayout.usesSourceRows(),
+                "the longer translated paragraph must exercise ordinary paragraph reflow");
+        layer.setPresentation(paragraph, rendering);
+        const auto paragraphBuilds = layer.glyphRasterBuildCount();
+        for (const auto& transform :
+             {QTransform(1.25, 0.0, 0.0, 1.25, 7.25, 9.5),
+              QTransform(1.12, 0.13, -0.09, 1.15, 22.25, 6.75),
+              QTransform(1.12, 0.13, 0.00008, -0.09, 1.15, 0.00012, 22.25, 6.75, 1.0)}) {
+            layer.synchronize(transform, host.rect());
+            QApplication::processEvents();
+            for (const qreal dpr : {1.0, 1.5, 2.0}) {
+                compareWithDirect(dpr, transform.isAffine());
+            }
+        }
+        require(layer.glyphRasterBuildCount() > paragraphBuilds,
+                "the selected reflowed paragraph fixture must exercise device raster painting");
+
+        paragraph->setLineText(
+            0, QStringLiteral("These words should fill the original rows with readable spacing"));
+        layer.updateLineText(0);
+        require(configureScreenshotOcrTextLayout(
+                    paragraphLayout, paragraph->lines.constFirst(), QTransform(),
+                    QApplication::font(), layer.textColor(), paragraph->textSelectionForLine(0),
+                    &paragraphTransform) &&
+                    paragraphLayout.usesSourceRows(),
+                "the shorter translation must exercise fitted source-row clipping");
+        const auto sourceRowBuilds = layer.glyphRasterBuildCount();
+        for (const auto& transform :
+             {QTransform(1.25, 0.0, 0.0, 1.25, 7.25, 9.5),
+              QTransform(1.12, 0.13, -0.09, 1.15, 22.25, 6.75),
+              QTransform(1.12, 0.13, 0.00008, -0.09, 1.15, 0.00012, 22.25, 6.75, 1.0)}) {
+            layer.synchronize(transform, host.rect());
+            QApplication::processEvents();
+            for (const qreal dpr : {1.0, 1.5, 2.0}) {
+                compareWithDirect(dpr, transform.isAffine());
+            }
+        }
+        require(layer.glyphRasterBuildCount() > sourceRowBuilds,
+                "the selected source-row paragraph fixture must exercise device raster painting");
+        layer.clearPresentation();
+        require(layer.glyphRasterBytes() == 0 && layer.previewRasterBytes() == 0 &&
+                    layer.backgroundRasterBytes() == 0,
+                "clearing fitted source rows must also release their device rasters");
+        QApplication::setFont(originalFont);
+        themeManager.setColorScheme(adqt::theme::ThemeScheme::Light);
+    }
+    themeManager.setColorScheme(originalScheme);
+}
+
+void ocrGlyphCachesCropTransparentMarginsWithoutChangingPhase() {
+    const QFont originalFont = QApplication::font();
+    QFont trueTypeFont = originalFont;
+#ifdef Q_OS_WIN
+    trueTypeFont.setFamily(QStringLiteral("Segoe UI"));
+#endif
+    require(!QRawFont::fromFont(trueTypeFont).fontTable("glyf").isEmpty(),
+            "the glyph margin fixture must use verified TrueType outlines");
+    QApplication::setFont(trueTypeFont);
+    for (const qreal dpr : {1.0, 1.5, 2.0}) {
+        QWidget host;
+        host.resize(360, 230);
+        ScreenshotOcrTextLayer layer(&host);
+        auto presentation = std::make_shared<ScreenshotOcrPresentation>();
+        presentation->selection = host.rect();
+        ScreenshotOcrLine line;
+        line.text = QStringLiteral("Margin glyphs with room");
+        line.backgroundFillColor = Qt::white;
+        line.quad = {{20.0, 20.0}, {320.0, 20.0}, {320.0, 110.0}, {20.0, 110.0}};
+        presentation->lines.push_back(line);
+        layer.setPresentation(presentation);
+        layer.synchronize(QTransform(1.0, 0.03, 0.05, 1.0, 0.25, 0.5), host.rect());
+        host.ensurePolished();
+        layer.viewport()->resize(host.size());
+        QGraphicsItem* glyph = nullptr;
+        for (QGraphicsItem* item : layer.scene()->items()) {
+            if (item->zValue() == 0.0) {
+                glyph = item;
+            }
+        }
+        require(glyph != nullptr, "the margin fixture must contain one fitted glyph item");
+        const QTransform device =
+            glyph->sceneTransform() * layer.viewportTransform() * QTransform::fromScale(dpr, dpr);
+        const QRect fullBounds =
+            device.mapRect(glyph->boundingRect()).adjusted(-1, -1, 1, 1).toAlignedRect();
+        const qsizetype fullBytes = qsizetype(fullBounds.width()) * fullBounds.height() * 4;
+        QImage first(QSize(qCeil(host.width() * dpr), qCeil(host.height() * dpr)),
+                     QImage::Format_ARGB32_Premultiplied);
+        first.setDevicePixelRatio(dpr);
+        first.fill(Qt::white);
+        {
+            QPainter painter(&first);
+            const QPointF center =
+                layer.viewportTransform().map(glyph->sceneBoundingRect().center());
+            painter.setClipRect(QRectF(center - QPointF(2, 2), QSizeF(4, 4)));
+            layer.viewport()->render(&painter);
+        }
+        require(layer.glyphRasterBuildCount() == 1 && layer.glyphRasterBytes() < fullBytes,
+                "a clipped cold paint must retain only the glyph's nontransparent image extent");
+        const auto builds = layer.glyphRasterBuildCount();
+        const auto hits = layer.glyphRasterHitCount();
+        const auto geometry = layer.geometrySynchronizationCount();
+        const QImage whole = renderOcrSelectionLayer(layer, dpr);
+        require(layer.glyphRasterBuildCount() == builds && layer.glyphRasterHitCount() > hits,
+                "cropped rasters must reuse their complete glyph pixels on whole exposure");
+        for (int y = 0; y < whole.height(); ++y) {
+            for (int x = 0; x < whole.width(); ++x) {
+                const QColor pixel = whole.pixelColor(x, y);
+                require(pixel.red() == pixel.green() && pixel.green() == pixel.blue(),
+                        "transformed black glyphs must retain portable grayscale coverage");
+            }
+        }
+        const auto trimmedBytes = layer.glyphRasterBytes();
+        layer.setRasterMarginTrimmingEnabledForTesting(false);
+        require(renderOcrSelectionLayer(layer, dpr) == whole &&
+                    layer.glyphRasterBytes() > trimmedBytes,
+                "cropped and freshly untrimmed cached glyphs must match bit-for-bit");
+        layer.setGlyphCachingEnabledForTesting(false);
+        const QImage direct = renderOcrSelectionLayer(layer, dpr);
+        if (direct != whole) {
+            qsizetype differences = 0;
+            int maximum = 0;
+            QPoint firstDifference;
+            for (int y = 0; y < direct.height(); ++y) {
+                for (int x = 0; x < direct.width(); ++x) {
+                    const QColor cached = whole.pixelColor(x, y);
+                    const QColor actual = direct.pixelColor(x, y);
+                    if (cached == actual) {
+                        continue;
+                    }
+                    if (differences++ == 0) {
+                        firstDifference = QPoint(x, y);
+                    }
+                    maximum =
+                        std::max(maximum, std::max({std::abs(cached.red() - actual.red()),
+                                                    std::abs(cached.green() - actual.green()),
+                                                    std::abs(cached.blue() - actual.blue()),
+                                                    std::abs(cached.alpha() - actual.alpha())}));
+                }
+            }
+            std::cerr << "OCR margin dpr=" << dpr << " direct_difference_pixels=" << differences
+                      << " max_difference=" << maximum << " first=" << firstDifference.x() << ','
+                      << firstDifference.y() << " cached="
+                      << whole.pixelColor(firstDifference).name(QColor::HexArgb).toStdString()
+                      << " direct="
+                      << direct.pixelColor(firstDifference).name(QColor::HexArgb).toStdString()
+                      << " image_dpi=" << whole.logicalDpiX() << ',' << whole.logicalDpiY()
+                      << " viewport_dpi=" << layer.viewport()->logicalDpiX() << ','
+                      << layer.viewport()->logicalDpiY()
+                      << " viewport_dpr=" << layer.viewport()->devicePixelRatioF()
+                      << " font=" << QApplication::font().toString().toStdString()
+                      << " geometry_delta=" << layer.geometrySynchronizationCount() - geometry
+                      << '\n';
+        }
+        require(direct == whole,
+                "integer image offsets must preserve the direct black-glyph pixels exactly");
+        require(layer.geometrySynchronizationCount() == geometry,
+                "cropping cached image margins must never reshape the glyph layout");
+        layer.clearPresentation();
+        require(layer.glyphRasterBytes() == 0,
+                "teardown must release all cropped glyph image bytes");
+    }
+    QApplication::setFont(originalFont);
+}
+
+void ocrGlyphCachingPreservesOriginalAndCffFontCoverage() {
+    const QFont originalFont = QApplication::font();
+    const QString text = QStringLiteral("Margin glyphs with room");
+    const auto verify = [&](const QString& sample, ScreenshotOcrTextDirection direction,
+                            bool sourceRows, bool expectCff) {
+        QWidget host;
+        host.resize(360, 230);
+        ScreenshotOcrTextLayer layer(&host);
+        auto presentation = std::make_shared<ScreenshotOcrPresentation>();
+        presentation->selection = host.rect();
+        ScreenshotOcrLine line;
+        line.text = sample;
+        line.direction = direction;
+        line.backgroundFillColor = Qt::white;
+        line.quad = {{20.0, 20.0}, {320.0, 20.0}, {320.0, 110.0}, {20.0, 110.0}};
+        line.paragraph = sourceRows;
+        if (sourceRows) {
+            for (const QRectF row :
+                 {QRectF(20, 20, 300, 24), QRectF(20, 53, 300, 24), QRectF(20, 86, 300, 24)}) {
+                QPolygonF quad(row);
+                quad.removeLast();
+                line.sourceLineQuads.push_back(quad);
+            }
+        }
+        ScreenshotOcrTextLayout prepared;
+        QTransform fit;
+        require(configureScreenshotOcrTextLayout(prepared, line, QTransform(), QApplication::font(),
+                                                 Qt::black, {}, &fit),
+                "the font coverage fixture must shape its fitted text");
+        require(prepared.glyphRasterBounds().contains(prepared.boundingRect()),
+                "prepared raster geometry must retain the original ink clipping bounds");
+        if (expectCff) {
+            require(!prepared.glyphRasterCacheable(),
+                    "actual CFF glyph runs must prepare destination-dependent direct painting");
+        }
+        presentation->lines.push_back(line);
+        layer.setPresentation(presentation);
+        layer.synchronize(QTransform(1.0, 0.03, 0.05, 1.0, 0.25, 0.5), host.rect());
+        host.ensurePolished();
+        layer.viewport()->resize(host.size());
+        const auto geometry = layer.geometrySynchronizationCount();
+        for (const qreal dpr : {1.0, 1.5, 2.0}) {
+            layer.setGlyphCachingEnabledForTesting(true);
+            const QImage cached = renderOcrSelectionLayer(layer, dpr);
+            layer.setGlyphCachingEnabledForTesting(false);
+            const QImage direct = renderOcrSelectionLayer(layer, dpr);
+            if (cached != direct) {
+                int maximum = 0;
+                qsizetype differingPixels = 0;
+                for (int y = 0; y < cached.height(); ++y) {
+                    for (int x = 0; x < cached.width(); ++x) {
+                        const QColor a = cached.pixelColor(x, y);
+                        const QColor b = direct.pixelColor(x, y);
+                        if (a != b) {
+                            ++differingPixels;
+                            maximum = std::max(maximum, std::max({std::abs(a.red() - b.red()),
+                                                                  std::abs(a.green() - b.green()),
+                                                                  std::abs(a.blue() - b.blue())}));
+                        }
+                    }
+                }
+                std::cerr << "OCR original coverage dpr=" << dpr
+                          << " cacheable=" << prepared.glyphRasterCacheable()
+                          << " differing_pixels=" << differingPixels
+                          << " max_difference=" << maximum << '\n';
+            }
+            require(cached == direct,
+                    "the original font and destination-dependent runs must retain exact pixels");
+        }
+        require(layer.geometrySynchronizationCount() == geometry,
+                "font coverage decisions must remain prepared during painting");
+        layer.synchronize(QTransform(1.0, 0.03, 0.05, 1.0, -60.25, -12.5), host.rect());
+        const auto negativeGeometry = layer.geometrySynchronizationCount();
+        const auto negativeBuilds = layer.glyphRasterBuildCount();
+        layer.setGlyphCachingEnabledForTesting(true);
+        const QImage negativeCached = renderOcrSelectionLayer(layer, 2.0);
+        layer.setGlyphCachingEnabledForTesting(false);
+        require(negativeCached == renderOcrSelectionLayer(layer, 2.0) &&
+                    layer.glyphRasterBuildCount() == negativeBuilds &&
+                    layer.geometrySynchronizationCount() == negativeGeometry,
+                "negative device baselines must retain direct pixels without cache re-centering");
+        if (!prepared.glyphRasterCacheable()) {
+            require(layer.glyphRasterBuildCount() == 0 && layer.glyphRasterBytes() == 0 &&
+                        layer.glyphDirectPaintCount() > 0,
+                    "CFF foregrounds must retain direct painting without hidden raster work");
+        }
+    };
+    verify(text, ScreenshotOcrTextDirection::Horizontal, false, false);
+    for (const QString& family : QFontDatabase::families()) {
+        QFont font(family);
+        const QRawFont raw = QRawFont::fromFont(font);
+        if (raw.fontTable("CFF ").isEmpty() && raw.fontTable("CFF2").isEmpty()) {
+            continue;
+        }
+        char32_t character = 0;
+        for (const char32_t candidate :
+             {U'A', U'a', char32_t(0xf000), char32_t(0xe600), char32_t(0xe000)}) {
+            if (raw.supportsCharacter(candidate)) {
+                character = candidate;
+                break;
+            }
+        }
+        if (character == 0) {
+            continue;
+        }
+        QApplication::setFont(font);
+        const QString glyph = QString::fromUcs4(&character, 1);
+        verify(glyph.repeated(4), ScreenshotOcrTextDirection::Horizontal, false, true);
+        verify((glyph + QLatin1Char(' ')).repeated(12), ScreenshotOcrTextDirection::Horizontal,
+               true, true);
+        verify(glyph.repeated(4), ScreenshotOcrTextDirection::Vertical, false, true);
+        break;
+    }
+    QApplication::setFont(originalFont);
+}
+
+void ocrDeviceCachesRetainWholeQuadsAfterClippedFirstPaint() {
+    QWidget host;
+    host.resize(400, 310);
+    ScreenshotOcrTextLayer layer(&host);
+    auto presentation = ocrLineBoxRenderingPresentation();
+    layer.setPresentation(presentation);
+    const QTransform transform(1.25, 0.0, 0.0, 1.25, 7.25, 9.5);
+    layer.synchronize(transform, host.rect());
+    presentation->beginLineBoxSelection(QPointF(10.0, 10.0));
+    presentation->updateLineBoxSelection(QRectF(10.0, 10.0, 260.0, 100.0));
+    layer.updateSelection();
+    host.ensurePolished();
+    layer.viewport()->resize(host.size());
+    require(layer.glyphRasterBuildCount() == 0 && layer.previewRasterBuildCount() == 0,
+            "the clipped-first fixture must begin with cold device caches");
+
+    constexpr qreal dpr = 1.5;
+    QImage clipped(QSize(600, 465), QImage::Format_ARGB32_Premultiplied);
+    clipped.setDevicePixelRatio(dpr);
+    clipped.fill(Qt::white);
+    {
+        QPainter painter(&clipped);
+        painter.setClipRect(QRectF(60.0, 46.0, 4.0, 4.0));
+        layer.viewport()->render(&painter);
+    }
+    const QRect physicalClip(90, 69, 6, 6);
+    for (int y = 0; y < clipped.height(); ++y) {
+        for (int x = 0; x < clipped.width(); ++x) {
+            require(physicalClip.contains(x, y) || clipped.pixelColor(x, y) == QColor(Qt::white),
+                    "cached blits must retain the caller's tiny external paint clip");
+        }
+    }
+    require(layer.glyphRasterBuildCount() > 0 && layer.previewRasterBuildCount() > 0,
+            "a clipped first paint must populate both glyph and preview device caches");
+    const auto glyphBuilds = layer.glyphRasterBuildCount();
+    const auto previewBuilds = layer.previewRasterBuildCount();
+    const QImage full = renderOcrSelectionLayer(layer, dpr);
+    require(layer.glyphRasterBuildCount() == glyphBuilds &&
+                layer.previewRasterBuildCount() == previewBuilds,
+            "expanding exposure must reuse complete cached rasters without rebuilding them");
+
+    QWidget referenceHost;
+    referenceHost.resize(host.size());
+    ScreenshotOcrTextLayer reference(&referenceHost);
+    reference.setPresentation(presentation);
+    reference.synchronize(transform, referenceHost.rect());
+    // Hidden child layouts have not received their first resize yet. Match both viewport sizes
+    // before allocating the reference image, while retaining entirely cold device rasters.
+    referenceHost.ensurePolished();
+    reference.viewport()->resize(layer.viewport()->size());
+    const QImage fresh = renderOcrSelectionLayer(reference, dpr);
+    if (full != fresh) {
+        qsizetype differingPixels = 0;
+        int maximumDifference = 0;
+        QPoint first;
+        const QSize common = full.size().boundedTo(fresh.size());
+        for (int y = 0; y < common.height(); ++y) {
+            for (int x = 0; x < common.width(); ++x) {
+                const QColor a = full.pixelColor(x, y);
+                const QColor b = fresh.pixelColor(x, y);
+                if (a == b) {
+                    continue;
+                }
+                if (differingPixels == 0) {
+                    first = QPoint(x, y);
+                }
+                ++differingPixels;
+                maximumDifference =
+                    std::max(maximumDifference,
+                             std::max({qAbs(a.red() - b.red()), qAbs(a.green() - b.green()),
+                                       qAbs(a.blue() - b.blue()), qAbs(a.alpha() - b.alpha())}));
+            }
+        }
+        std::cerr << "OCR clipped-first/full mismatch: full=" << full.width() << 'x'
+                  << full.height() << " fresh=" << fresh.width() << 'x' << fresh.height()
+                  << " pixels=" << differingPixels
+                  << " max_channel_difference=" << maximumDifference << " first=" << first.x()
+                  << ',' << first.y()
+                  << " populated=" << full.pixelColor(first).name(QColor::HexArgb).toStdString()
+                  << " fresh=" << fresh.pixelColor(first).name(QColor::HexArgb).toStdString()
+                  << '\n';
+    }
+    require(full == fresh,
+            "caches populated through tiny exposure must match a fresh full-frame paint exactly");
+}
+
+void ocrBackgroundRastersPreserveSourceRowExposureAndDpi() {
+    QWidget host;
+    host.resize(400, 310);
+    ScreenshotOcrTextLayer layer(&host);
+    auto presentation = std::make_shared<ScreenshotOcrPresentation>();
+    presentation->selection = host.rect();
+    ScreenshotOcrLine line;
+    line.text = QStringLiteral("These words should fill the original rows with readable spacing");
+    line.paragraph = true;
+    line.quad = {QPointF(30.0, 25.0), QPointF(250.0, 25.0), QPointF(250.0, 120.0),
+                 QPointF(30.0, 120.0)};
+    for (const QRectF row : {QRectF(30.0, 25.0, 220.0, 20.0), QRectF(30.0, 60.0, 220.0, 20.0),
+                             QRectF(30.0, 100.0, 145.0, 20.0)}) {
+        QPolygonF quad(row);
+        quad.removeLast();
+        line.sourceLineQuads.push_back(quad);
+    }
+    presentation->lines.push_back(line);
+    presentation->prepareForRendering();
+    presentation->selectAll();
+    layer.setPresentation(presentation);
+    layer.synchronize(QTransform(1.25, 0.0, 0.0, 1.25, 7.25, 9.5), host.rect());
+    host.ensurePolished();
+    layer.viewport()->resize(host.size());
+    ScreenshotOcrTextLayout layout;
+    QTransform textTransform;
+    require(configureScreenshotOcrTextLayout(
+                layout, line, QTransform(), QApplication::font(), layer.textColor(),
+                presentation->textSelectionForLine(0), &textTransform) &&
+                layout.usesSourceRows() && layer.backgroundRasterBuildCount() == 0,
+            "the background exposure fixture must start with fitted rows and cold rasters");
+
+    const auto render = [&](bool clipped, bool customDpi = false) {
+        QImage output(QSize(600, 465), QImage::Format_ARGB32_Premultiplied);
+        output.setDevicePixelRatio(1.5);
+        if (customDpi) {
+            output.setDotsPerMeterX(output.dotsPerMeterX() * 5 / 4);
+            output.setDotsPerMeterY(output.dotsPerMeterY() * 5 / 4);
+        }
+        output.fill(Qt::white);
+        QPainter painter(&output);
+        painter.setRenderHints(layer.renderHints());
+        if (clipped) {
+            painter.setClipRect(QRectF(60.0, 46.0, 12.0, 8.0));
+        }
+        if (customDpi) {
+            // QWidget paint events report the widget's logical DPI even when redirected into
+            // an image. Paint the actual glyph item to exercise a non-default target device.
+            for (QGraphicsItem* item : layer.scene()->items()) {
+                if (item->zValue() == 0.0) {
+                    painter.save();
+                    painter.setWorldTransform(item->sceneTransform());
+                    QStyleOptionGraphicsItem option;
+                    item->paint(&painter, &option, layer.viewport());
+                    painter.restore();
+                }
+            }
+        } else {
+            layer.viewport()->render(&painter);
+        }
+        return output;
+    };
+    const QImage clipped = render(true);
+    const QRect exposure(90, 69, 18, 12);
+    for (int y = 0; y < clipped.height(); ++y) {
+        for (int x = 0; x < clipped.width(); ++x) {
+            require(exposure.contains(x, y) || clipped.pixelColor(x, y) == QColor(Qt::white),
+                    "source-row restores must never clear an external clip on later rows");
+        }
+    }
+    require(layer.backgroundRasterBuildCount() > 0 && layer.backgroundRasterBytes() > 0,
+            "a clipped first paint must prepare complete source-row background rasters");
+    const auto builds = layer.backgroundRasterBuildCount();
+    const auto hits = layer.backgroundRasterHitCount();
+    const QImage whole = render(false);
+    require(layer.backgroundRasterBuildCount() == builds && layer.backgroundRasterHitCount() > hits,
+            "whole exposure must reuse the independently prepared source-row rasters");
+    layer.setBackgroundRasterCachingEnabledForTesting(false);
+    const QImage directWhole = render(false);
+    const QImage directClipped = render(true);
+    if (directWhole != whole || directClipped != clipped) {
+        const QImage& expected = directWhole != whole ? directWhole : directClipped;
+        const QImage& actual = directWhole != whole ? whole : clipped;
+        qsizetype differences = 0;
+        int maximum = 0;
+        QPoint first;
+        for (int y = 0; y < actual.height(); ++y) {
+            for (int x = 0; x < actual.width(); ++x) {
+                const QColor left = actual.pixelColor(x, y);
+                const QColor right = expected.pixelColor(x, y);
+                if (left == right) {
+                    continue;
+                }
+                if (differences++ == 0) {
+                    first = QPoint(x, y);
+                }
+                maximum = std::max(maximum, std::max({std::abs(left.red() - right.red()),
+                                                      std::abs(left.green() - right.green()),
+                                                      std::abs(left.blue() - right.blue()),
+                                                      std::abs(left.alpha() - right.alpha())}));
+            }
+        }
+        std::cerr << "OCR background pixels=" << differences << " max_difference=" << maximum
+                  << " first=" << first.x() << ',' << first.y()
+                  << " cached=" << actual.pixelColor(first).name(QColor::HexArgb).toStdString()
+                  << " direct=" << expected.pixelColor(first).name(QColor::HexArgb).toStdString()
+                  << '\n';
+    }
+    require(directWhole == whole && directClipped == clipped,
+            "prepared and direct source-row backgrounds must match exactly for whole and clipped "
+            "exposure");
+    layer.setBackgroundRasterCachingEnabledForTesting(true);
+    const auto dpiHits = layer.backgroundRasterHitCount();
+    const auto dpiBuilds = layer.backgroundRasterBuildCount();
+    const QImage differentDpi = render(false, true);
+    require(layer.backgroundRasterHitCount() > dpiHits &&
+                layer.backgroundRasterBuildCount() == dpiBuilds,
+            "non-default logical DPI must reuse physical background pixels without logical DPI "
+            "scaling");
+    layer.setBackgroundRasterCachingEnabledForTesting(false);
+    require(render(false, true) == differentDpi,
+            "logical-DPI fallback must match direct source-row background pixels exactly");
+    const qsizetype glyphBytes = layer.glyphRasterBytes();
+    require(glyphBytes > 0, "the background eviction fixture must retain its current glyph raster");
+    layer.setRasterCacheBudgetForTesting(glyphBytes);
+    layer.setBackgroundRasterCachingEnabledForTesting(true);
+    const auto glyphBuilds = layer.glyphRasterBuildCount();
+    require(render(false) == whole && layer.glyphRasterBuildCount() == glyphBuilds &&
+                layer.glyphRasterBytes() == glyphBytes && layer.backgroundRasterBytes() == 0,
+            "background-raster admission must never evict the glyph being painted when only "
+            "that glyph fits the cache budget");
+    require(layer.glyphRasterBytes() + layer.previewRasterBytes() + layer.backgroundRasterBytes() <=
+                64 * 1024 * 1024,
+            "prepared backgrounds must share the bounded raster cache budget");
+    layer.clearPresentation();
+    require(layer.glyphRasterBytes() == 0 && layer.previewRasterBytes() == 0 &&
+                layer.backgroundRasterBytes() == 0,
+            "teardown must release source-row backgrounds and glyphs together");
 }
 
 void originalImageVisibilityPreservesLatestOcrRendering() {
@@ -7524,6 +8949,45 @@ void runScreenshotOcrHighlightingBenchmark();
 
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
+    if (application.arguments().contains(QStringLiteral("--ocr-glyph-margins-only"))) {
+#ifdef Q_OS_WIN
+        require(QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/segoeui.ttf")) >=
+                    0,
+                "the OCR glyph margin test requires a system TrueType font");
+#endif
+        ocrGlyphCachingPreservesOriginalAndCffFontCoverage();
+        ocrGlyphCachesCropTransparentMarginsWithoutChangingPhase();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--ocr-background-rasters-only"))) {
+#ifdef Q_OS_WIN
+        require(QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/segoeui.ttf")) >=
+                    0,
+                "the OCR background test requires a system TrueType font");
+#endif
+        ocrBackgroundRastersPreserveSourceRowExposureAndDpi();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--ocr-line-box-rendering-only"))) {
+#ifdef Q_OS_WIN
+        require(QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/segoeui.ttf")) >=
+                    0,
+                "the OCR preview test requires a system TrueType font");
+#endif
+        ocrLineBoxPreviewMatchesEngineVisuals();
+        ocrLineBoxSelectionUpdatesOnlyChangedItemsAndDamage();
+        ocrMarqueeDamageRetainsInteriorsAndMatchesFullPainting();
+        ocrRectangularPreviewCachesRetainOnlyEdgesAndExactInterior();
+        ocrLineBoxBatchRetainsOverlappingReversedQuads();
+        ocrLineBoxDamageClampsHugeGeometryAndRejectsNonfiniteQuads();
+        ocrLineBoxSelectionPreservesRendererBackgroundCaches();
+        ocrDeviceCachesRetainWholeQuadsAfterClippedFirstPaint();
+        ocrBackgroundRastersPreserveSourceRowExposureAndDpi();
+        ocrGlyphDeviceCachesMatchDirectPaintingAndInvalidate();
+        ocrGlyphCachingPreservesOriginalAndCffFontCoverage();
+        ocrGlyphCachesCropTransparentMarginsWithoutChangingPhase();
+        return 0;
+    }
 #if defined(SNOW_SHOT_OCR_HIGHLIGHTING_BENCHMARK)
     if (application.arguments().contains(QStringLiteral("--ocr-highlighting-benchmark"))) {
         runScreenshotOcrHighlightingBenchmark();
@@ -7765,6 +9229,18 @@ int main(int argc, char** argv) {
             "the vertical OCR renderer test requires a system CJK font");
 #endif
     if (application.arguments().contains(QStringLiteral("--ocr-presentation"))) {
+        ocrLineBoxPreviewMatchesEngineVisuals();
+        ocrLineBoxSelectionUpdatesOnlyChangedItemsAndDamage();
+        ocrMarqueeDamageRetainsInteriorsAndMatchesFullPainting();
+        ocrRectangularPreviewCachesRetainOnlyEdgesAndExactInterior();
+        ocrLineBoxBatchRetainsOverlappingReversedQuads();
+        ocrLineBoxDamageClampsHugeGeometryAndRejectsNonfiniteQuads();
+        ocrLineBoxSelectionPreservesRendererBackgroundCaches();
+        ocrDeviceCachesRetainWholeQuadsAfterClippedFirstPaint();
+        ocrBackgroundRastersPreserveSourceRowExposureAndDpi();
+        ocrGlyphDeviceCachesMatchDirectPaintingAndInvalidate();
+        ocrGlyphCachingPreservesOriginalAndCffFontCoverage();
+        ocrGlyphCachesCropTransparentMarginsWithoutChangingPhase();
         originalImageVisibilityPreservesLatestOcrRendering();
         mergedParagraphUsesSourceRows();
         ocrBackgroundFillSamplesRobustlyAndChoosesContrastingText();
@@ -7778,6 +9254,18 @@ int main(int argc, char** argv) {
         return 0;
     }
     originalEraserSourceExcludesPresentationOverlays();
+    ocrLineBoxPreviewMatchesEngineVisuals();
+    ocrLineBoxSelectionUpdatesOnlyChangedItemsAndDamage();
+    ocrMarqueeDamageRetainsInteriorsAndMatchesFullPainting();
+    ocrRectangularPreviewCachesRetainOnlyEdgesAndExactInterior();
+    ocrLineBoxBatchRetainsOverlappingReversedQuads();
+    ocrLineBoxDamageClampsHugeGeometryAndRejectsNonfiniteQuads();
+    ocrLineBoxSelectionPreservesRendererBackgroundCaches();
+    ocrDeviceCachesRetainWholeQuadsAfterClippedFirstPaint();
+    ocrBackgroundRastersPreserveSourceRowExposureAndDpi();
+    ocrGlyphDeviceCachesMatchDirectPaintingAndInvalidate();
+    ocrGlyphCachingPreservesOriginalAndCffFontCoverage();
+    ocrGlyphCachesCropTransparentMarginsWithoutChangingPhase();
     pointerPresentationRespectsOverlayInputGate();
     pinnedFiltersUseTheSourceResolution();
     ocrBackgroundFillSamplesRobustlyAndChoosesContrastingText();

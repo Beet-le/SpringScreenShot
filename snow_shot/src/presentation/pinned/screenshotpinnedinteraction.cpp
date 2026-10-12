@@ -47,9 +47,11 @@ Qt::CursorShape resizeCursor(int handle) {
 }
 } // namespace
 
-bool ScreenshotPinnedWindow::exportDragEnabledAt(const QPoint& position) const {
+bool ScreenshotPinnedWindow::exportDragEnabledAt(const QPoint& position,
+                                                 Qt::KeyboardModifiers modifiers) const {
     return m_presented && !m_closing && !m_clickThroughActive && !m_geometryAnimating &&
-           !m_interactionPlacement && !m_windowDragActive && !m_ocrMode && m_canvas &&
+           !m_interactionPlacement && !m_windowDragActive && !m_ocrMode &&
+           !(m_hiddenTextSelection && modifiers.testFlag(Qt::AltModifier)) && m_canvas &&
            contentViewRect().contains(position) && !isControlsPanelPosition(position) &&
            (!interactiveResizingEnabled() || !resizeHandleAt(position));
 }
@@ -121,7 +123,8 @@ bool ScreenshotPinnedWindow::handleExportDrag(QObject* watched, QEvent* event) {
         return false;
     auto* mouse = static_cast<QMouseEvent*>(event);
     if (mouse->button() != Qt::LeftButton || !mouse->modifiers().testFlag(Qt::ControlModifier) ||
-        !exportDragEnabledAt(windowPositionForEvent(watched, mouse->position()).toPoint()))
+        !exportDragEnabledAt(windowPositionForEvent(watched, mouse->position()).toPoint(),
+                             mouse->modifiers()))
         return false;
     m_exportDragOrigin = mouse->globalPosition().toPoint();
     m_exportDragAborted = false;
@@ -406,7 +409,7 @@ bool ScreenshotPinnedWindow::handleLockedPointer(QObject* watched, QEvent* event
         const QPointF local = windowPositionForEvent(watched, mouse->position());
         const bool resize =
             !m_geometryAnimating && !m_thumbnailMode && resizeHandleAt(local).has_value();
-        if (!resize && !windowDragEligibleAt(local.toPoint(), mouse->modifiers()))
+        if (!resize && !windowMoveEligibleForPointer(local.toPoint(), mouse->modifiers()))
             return false;
     }
     showLockedReadout();
@@ -462,6 +465,10 @@ bool ScreenshotPinnedWindow::handleControlledPointer(QObject* watched, QEvent* e
         }
         return false;
     }
+    if (m_recognitionContent != nullptr && m_recognitionContent->lineBoxSelectionActive()) {
+        clearWindowDragCursor();
+        return false;
+    }
     const bool moveControl = watched == m_clickThroughMoveButton.get();
     if (watched != this && watched != m_canvas && watched != m_recognitionContent && !moveControl)
         return false;
@@ -497,7 +504,7 @@ bool ScreenshotPinnedWindow::handleControlledPointer(QObject* watched, QEvent* e
         return false;
     }
     if (mouse->button() == Qt::LeftButton &&
-        (handle || moveControl || windowDragEnabledAt(local.toPoint(), mouse->modifiers())))
+        (handle || moveControl || windowMoveEnabledForPointer(local.toPoint(), mouse->modifiers())))
         return beginControlledInteraction(mouse->globalPosition(), handle);
     return false;
 }

@@ -2,6 +2,7 @@
 #include <QFontMetricsF>
 #include <QGlyphRun>
 #include <QPainter>
+#include <QPen>
 #include <QRawFont>
 #include <QTextBoundaryFinder>
 #include <QTextOption>
@@ -66,6 +67,13 @@ QRectF textLayoutInkBounds(const QTextLayout& layout) {
         bounds = unitedValidBounds(bounds, glyphRunInkBounds(run), &hasBounds);
     }
     return hasBounds ? bounds : QRectF();
+}
+
+bool glyphsUseCffOutlines(const QTextLayout& layout) {
+    return std::ranges::any_of(layout.glyphRuns(), [](const QGlyphRun& run) {
+        const QRawFont font = run.rawFont();
+        return !font.fontTable("CFF ").isEmpty() || !font.fontTable("CFF2").isEmpty();
+    });
 }
 
 QVector<int> graphemeBoundaries(const QString& text) {
@@ -619,6 +627,7 @@ void ScreenshotOcrTextLayout::configure(const QString& text, const QFont& font,
     } else if (paragraph && targetAspectRatio > 0) {
         // Source rows use the full quad and inset each row to preserve OCR line gaps.
         if (fitSourceRows(targetAspectRatio * kOcrTextCrossAxisScale)) {
+            updateGlyphRasterCacheability();
             return;
         }
         // Font ascent/descent and unused wrap width are not painted bounds. Use glyph ink for
@@ -683,6 +692,49 @@ void ScreenshotOcrTextLayout::configure(const QString& text, const QFont& font,
         m_line = measured.line;
         m_layout = std::move(measured.layout);
     }
+    updateGlyphRasterCacheability();
+}
+
+void ScreenshotOcrTextLayout::updateGlyphRasterCacheability() {
+    // FreeType's CFF stem darkening requests gamma-corrected destination blending even for
+    // grayscale glyphs. A transparent foreground raster cannot reproduce an opaque backdrop.
+    // Inspect the final shaped runs once, including fallback fonts, rather than on selection.
+    m_glyphRasterCacheable = m_layout == nullptr || !glyphsUseCffOutlines(*m_layout);
+    m_glyphRasterBounds = m_bounds;
+    const auto includeOrigins = [&](const QTextLayout& layout, const QTransform& transform,
+                                    const QPointF& origin = {}) {
+        // QTextLine first truncates its logical drawing origin to 1/64 coordinates. Include
+        // the resulting baselines as well as ink so re-centering cannot change their sign.
+        const QPointF fixedOrigin(std::trunc(origin.x() * 64.0) / 64.0,
+                                  std::trunc(origin.y() * 64.0) / 64.0);
+        for (const auto& run : layout.glyphRuns()) {
+            for (const QPointF& position : run.positions()) {
+                const QPointF point = transform.map(position + fixedOrigin);
+                m_glyphRasterBounds.setLeft(std::min(m_glyphRasterBounds.left(), point.x()));
+                m_glyphRasterBounds.setTop(std::min(m_glyphRasterBounds.top(), point.y()));
+                m_glyphRasterBounds.setRight(std::max(m_glyphRasterBounds.right(), point.x()));
+                m_glyphRasterBounds.setBottom(std::max(m_glyphRasterBounds.bottom(), point.y()));
+            }
+        }
+    };
+    if (m_layout != nullptr) {
+        includeOrigins(*m_layout, QTransform(), m_layoutOrigin);
+    }
+    for (const auto& row : m_fittedRows) {
+        m_glyphRasterCacheable = m_glyphRasterCacheable && !glyphsUseCffOutlines(*row.layout);
+        includeOrigins(*row.layout, row.transform);
+    }
+    for (std::size_t index = 0; index < m_verticalGlyphs.size(); ++index) {
+        const auto& glyph = m_verticalGlyphs[index];
+        m_glyphRasterCacheable = m_glyphRasterCacheable && !glyphsUseCffOutlines(*glyph.layout);
+        QTransform transform;
+        transform.translate(m_bounds.width() / 2.0,
+                            (static_cast<qreal>(index) + 0.5) * m_verticalCellAdvance);
+        if (glyph.rotated) {
+            transform.rotate(90.0);
+        }
+        includeOrigins(*glyph.layout, transform, -glyph.inkBounds.center());
+    }
 }
 
 void ScreenshotOcrTextLayout::setSelection(const ScreenshotOcrTextRange& selection) {
@@ -739,18 +791,21 @@ QRectF ScreenshotOcrTextLayout::boundingRect() const {
 void ScreenshotOcrTextLayout::paint(QPainter* painter, const QColor& selectionBackground,
                                     const QColor& selectionForeground, PaintMode mode) const {
     const bool selectionOnly = mode == PaintMode::SelectionOnly;
+    const bool selectionBackgroundVisible = mode != PaintMode::TextOnly;
     if (painter == nullptr || m_text.isEmpty() || (selectionOnly && m_selection.empty())) {
         return;
     }
 
     painter->save();
-    painter->setClipRect(m_bounds);
+    painter->setClipRect(m_bounds, Qt::IntersectClip);
     painter->setRenderHint(QPainter::TextAntialiasing, true);
     // Visibility is a paint policy, independent of cached background colors
     // that may have chosen an opaque contrasting color during text layout.
     const QColor textColor = selectionOnly ? QColor(Qt::transparent) : m_textColor;
     const QColor selectedTextColor = selectionOnly ? QColor(Qt::transparent) : selectionForeground;
-    painter->setPen(textColor);
+    // A transparent text brush still makes Qt position and rasterize glyphs. Selection-only
+    // paints suppress text at QTextLayout and QPainter entry points, retaining just backgrounds.
+    painter->setPen(selectionOnly ? QPen(Qt::NoPen) : QPen(textColor));
 
     if (m_direction == ScreenshotOcrTextDirection::Vertical) {
         const int selectionStart = qBound(0, m_selection.start, static_cast<int>(m_text.size()));
@@ -760,7 +815,7 @@ void ScreenshotOcrTextLayout::paint(QPainter* painter, const QColor& selectionBa
             const VerticalGlyph& glyph = m_verticalGlyphs.at(index);
             const int glyphEnd = glyph.textStart + glyph.textLength;
             const bool selected = selectionStart < glyphEnd && selectionEnd > glyph.textStart;
-            if (selected) {
+            if (selected && selectionBackgroundVisible) {
                 painter->fillRect(QRectF(0.0, static_cast<qreal>(index) * m_verticalCellAdvance,
                                          m_bounds.width(), m_verticalCellAdvance),
                                   selectionBackground);
@@ -802,11 +857,6 @@ void ScreenshotOcrTextLayout::paint(QPainter* painter, const QColor& selectionBa
     if (usesSourceRows()) {
         for (const auto& row : m_fittedRows) {
             QVector<QTextLayout::FormatRange> formats;
-            QTextLayout::FormatRange textFormat;
-            textFormat.start = 0;
-            textFormat.length = row.textLength;
-            textFormat.format.setForeground(QBrush(textColor));
-            formats.push_back(textFormat);
             const int start = std::max(row.textStart, m_selection.start);
             const int end =
                 std::min(row.textStart + row.textLength, m_selection.start + m_selection.length);
@@ -814,8 +864,10 @@ void ScreenshotOcrTextLayout::paint(QPainter* painter, const QColor& selectionBa
                 QTextLayout::FormatRange selected;
                 selected.start = start - row.textStart;
                 selected.length = end - start;
-                selected.format.setBackground(QBrush(selectionBackground));
-                selected.format.setForeground(QBrush(selectedTextColor));
+                selected.format.setBackground(QBrush(
+                    selectionBackgroundVisible ? selectionBackground : QColor(Qt::transparent)));
+                selected.format.setForeground(selectionOnly ? QBrush(Qt::NoBrush)
+                                                            : QBrush(selectedTextColor));
                 formats.push_back(selected);
             }
             painter->save();
@@ -834,17 +886,15 @@ void ScreenshotOcrTextLayout::paint(QPainter* painter, const QColor& selectionBa
     }
 
     QVector<QTextLayout::FormatRange> formats;
-    QTextLayout::FormatRange textFormat;
-    textFormat.start = 0;
-    textFormat.length = static_cast<int>(m_text.size());
-    textFormat.format.setForeground(QBrush(textColor));
-    formats.push_back(textFormat);
+    // The painter pen supplies ordinary text. Overlapping whole-line foreground selections
+    // make QTextLayout skip the later selected foreground or draw glyphs twice at AA edges.
     if (!m_selection.empty()) {
         QTextLayout::FormatRange range;
         range.start = qBound(0, m_selection.start, static_cast<int>(m_text.size()));
         range.length = qBound(0, m_selection.length, static_cast<int>(m_text.size()) - range.start);
-        range.format.setBackground(QBrush(selectionBackground));
-        range.format.setForeground(QBrush(selectedTextColor));
+        range.format.setBackground(
+            QBrush(selectionBackgroundVisible ? selectionBackground : QColor(Qt::transparent)));
+        range.format.setForeground(selectionOnly ? QBrush(Qt::NoBrush) : QBrush(selectedTextColor));
         formats.push_back(range);
     }
 
@@ -877,6 +927,10 @@ bool configureScreenshotOcrTextLayout(ScreenshotOcrTextLayout& layout,
         line.direction == ScreenshotOcrTextDirection::Vertical ? lineWidth : lineHeight;
     font.setPixelSize(std::max(kOcrTextLayoutMinPixelSize, qCeil(crossAxisSize * 2.0)));
     font.setHintingPreference(QFont::PreferNoHinting);
+    // Transformed OCR glyphs are also painted into transparent device rasters. LCD coverage
+    // depends on the opaque destination and cannot be reused across selection backgrounds.
+    // Keep direct widget painting and cached glyphs on the same grayscale coverage path.
+    font.setStyleStrategy(QFont::StyleStrategy(font.styleStrategy() | QFont::NoSubpixelAntialias));
     const QPolygonF textFitQuad = ocrTextFitQuad(viewQuad, line.direction);
     const qreal targetWidth = (edgeLength(textFitQuad.at(0), textFitQuad.at(1)) +
                                edgeLength(textFitQuad.at(3), textFitQuad.at(2))) /

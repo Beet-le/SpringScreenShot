@@ -13,8 +13,10 @@
 #include <QTextCursor>
 #include <QTextBlockFormat>
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 
 namespace {
 void require(bool condition, const char* message) {
@@ -199,6 +201,401 @@ void incrementalTextUpdatesPreserveGeometryAndGraphemeSelection() {
     presentation.setLineText(0, QString());
     require(!presentation.hasTextSelection() && presentation.lineAt(QPointF(5, 5)) == 0,
             "empty replacement should clamp selection without changing spatial indexing");
+}
+
+void lineBoxSelectionPreviewsCurrentHitsAndCommitsFixedToggles() {
+    ScreenshotOcrPresentation presentation;
+    presentation.lines = {line(QStringLiteral("Alpha"), 0, 0), line(QStringLiteral("Beta"), 0, 20),
+                          line(QStringLiteral("Gamma"), 0, 40)};
+    presentation.beginTextSelection(ScreenshotOcrTextPosition{0, 1});
+    presentation.updateTextSelection(ScreenshotOcrTextPosition{1, 4});
+    presentation.finishTextSelection();
+    const QString original = presentation.selectedText();
+    presentation.beginLineBoxSelection(QPointF(-1, -1));
+    require(presentation.lineBoxSelectionActive() && presentation.textSelectionActive(),
+            "box selection exposes active ownership before any lines are hit");
+    presentation.updateLineBoxSelection(QRectF(-1, -1, 52, 32));
+    require(
+        presentation.lineSelectionPreview(0) == ScreenshotOcrLineSelectionPreview::Select &&
+            presentation.lineSelectionPreview(1) == ScreenshotOcrLineSelectionPreview::Deselect &&
+            presentation.lineSelectionPreview(2) == ScreenshotOcrLineSelectionPreview::None &&
+            presentation.selectedText() == original,
+        "partial lines preview selecting and full lines preview deselecting without committing");
+    const quint64 revision = presentation.selectionRevision();
+    presentation.updateLineBoxSelection(QRectF(-1, -1, 52, 32));
+    require(presentation.selectionRevision() == revision,
+            "repeating a box rectangle does not invalidate selection rendering");
+    presentation.updateLineBoxSelection(QRectF(-1, -1, 52, 12));
+    require(presentation.lineSelectionPreview(1) == ScreenshotOcrLineSelectionPreview::None &&
+                presentation.selectedText() == original,
+            "a shrinking rectangle removes preview hits while preserving committed selection");
+    presentation.cancelLineBoxSelection();
+    require(!presentation.textSelectionActive() && presentation.lineBoxSelectionRect().isNull() &&
+                presentation.selectedText() == original,
+            "cancel removes the rectangle and preserves the previous character selection");
+    presentation.beginLineBoxSelection(QPointF(-1, -1));
+    presentation.updateLineBoxSelection(QRectF(-1, -1, 52, 32));
+    presentation.finishLineBoxSelection();
+    require(presentation.selectedText() == QStringLiteral("Alpha") &&
+                !presentation.textSelectionActive() && !presentation.lineSelected(1),
+            "release expands partial selection and removes full selection in the same operation");
+    presentation.beginLineBoxSelection(QPointF(-1, 39));
+    presentation.updateLineBoxSelection(QRectF(-1, 39, 52, 12));
+    presentation.finishLineBoxSelection();
+    require(presentation.selectedText() == QStringLiteral("Alpha\nGamma") &&
+                snow_shot::presentation::applyOcrTextTransforms(
+                    presentation, QStringLiteral("keep"), QString{}) ==
+                    QStringLiteral("Alpha\nGamma"),
+            "sparse selection copies in reading order without inserting gaps for omitted lines");
+    presentation.selectAll();
+    require(presentation.selectedText() == QStringLiteral("Alpha\nBeta\nGamma"),
+            "select all replaces sparse selection with all presentation lines");
+    presentation.clearTextSelection();
+    require(!presentation.hasTextSelection() && !presentation.textSelectionActive(),
+            "clear removes committed sparse selection and gesture state");
+}
+
+void lineBoxSelectionRequiresPositivePolygonOverlap() {
+    ScreenshotOcrPresentation presentation;
+    auto diamond = line(QStringLiteral("Diamond"), 0, 0);
+    diamond.quad = QPolygonF{QPointF(0, 10), QPointF(10, 0), QPointF(20, 10), QPointF(10, 20)};
+    auto vertical = line(QStringLiteral("Vertical"), 40, 0);
+    vertical.direction = ScreenshotOcrTextDirection::Vertical;
+    vertical.quad = QPolygonF{QPointF(40, 0), QPointF(50, 0), QPointF(50, 80), QPointF(40, 80)};
+    presentation.lines = {diamond, vertical};
+    presentation.beginLineBoxSelection(QPointF(-5, -5));
+    presentation.updateLineBoxSelection(QRectF(0, 0, 2, 2));
+    require(presentation.lineSelectionPreview(0) == ScreenshotOcrLineSelectionPreview::None,
+            "overlapping polygon bounds alone must not select a rotated OCR quad");
+    presentation.updateLineBoxSelection(QRectF(-5, 5, 5, 10));
+    require(presentation.lineSelectionPreview(0) == ScreenshotOcrLineSelectionPreview::None,
+            "a rectangle touching only the quad boundary has no selection overlap");
+    presentation.updateLineBoxSelection(QRectF(0, 9, 0.01, 2));
+    require(presentation.lineSelectionPreview(0) == ScreenshotOcrLineSelectionPreview::Select,
+            "any positive polygon overlap selects a whole line, including subpixel overlap");
+    presentation.updateLineBoxSelection(QRectF(51, 81, -12, -82));
+    require(presentation.lineBoxSelectionRect() == QRectF(39, -1, 12, 82) &&
+                presentation.lineSelectionPreview(0) == ScreenshotOcrLineSelectionPreview::None &&
+                presentation.lineSelectionPreview(1) == ScreenshotOcrLineSelectionPreview::Select,
+            "reverse rectangles normalize and select complete vertical lines");
+    presentation.finishLineBoxSelection();
+    require(presentation.selectedText() == QStringLiteral("Vertical"),
+            "only lines intersecting the final rectangle are committed");
+}
+
+void lineBoxSelectionContainmentCachesPreserveExactGeometry() {
+    ScreenshotOcrPresentation presentation;
+    auto reversed = line(QStringLiteral("Reversed"), 40, 0);
+    std::reverse(reversed.quad.begin(), reversed.quad.end());
+    auto diamond = line(QStringLiteral("Diamond"), 0, 0);
+    diamond.quad = QPolygonF{QPointF(0, 10), QPointF(10, 0), QPointF(20, 10), QPointF(10, 20)};
+    auto triangle = line(QStringLiteral("Triangle"), 80, 0);
+    triangle.quad = QPolygonF{QPointF(80, 0), QPointF(100, 0), QPointF(90, 10), QPointF(90, 10)};
+    auto collinear = line(QStringLiteral("Collinear"), 120, 0);
+    collinear.quad =
+        QPolygonF{QPointF(120, 0), QPointF(130, 10), QPointF(140, 20), QPointF(150, 30)};
+    presentation.lines = {diamond, reversed, triangle, collinear};
+    presentation.beginLineBoxSelection(QPointF(-1, -1));
+    presentation.updateLineBoxSelection(QRectF(-1, -1, 181, 32));
+    require(presentation.lineSelectionPreview(0) == ScreenshotOcrLineSelectionPreview::Select &&
+                presentation.lineSelectionPreview(1) == ScreenshotOcrLineSelectionPreview::Select &&
+                presentation.lineSelectionPreview(2) == ScreenshotOcrLineSelectionPreview::Select &&
+                presentation.lineSelectionPreview(3) == ScreenshotOcrLineSelectionPreview::None,
+            "whole-geometry containment keeps rotated and reversed shapes but excludes zero area");
+    const quint64 previous = presentation.selectionRevision();
+    presentation.updateLineBoxSelection(QRectF(-2, -2, 183, 34));
+    const auto* changed = presentation.selectionChangesSince(previous);
+    require(changed != nullptr && changed->isEmpty(),
+            "equivalent full-containment queries retain every preview without dirty line work");
+    presentation.updateLineBoxSelection(QRectF(80, 8, 1, 1));
+    require(presentation.lineSelectionPreview(2) == ScreenshotOcrLineSelectionPreview::None,
+            "repeated quad corners must not turn a triangular shape into a bounds-only hit");
+    presentation.updateLineBoxSelection(QRectF(125, 4, 1, 1));
+    require(presentation.lineSelectionPreview(3) == ScreenshotOcrLineSelectionPreview::None,
+            "partial queries cannot select a zero-area quad");
+    presentation.cancelLineBoxSelection();
+}
+
+void lineBoxSelectionRejectsCrossingQuadsAtEveryScale() {
+    ScreenshotOcrPresentation presentation;
+    auto bowtie = line(QStringLiteral("Bowtie"), 0, 0);
+    bowtie.quad = QPolygonF{QPointF(0, 0), QPointF(10, 10), QPointF(0, 10), QPointF(10, 0)};
+    auto unequalBowtie = line(QStringLiteral("Unequal bowtie"), 20, 0);
+    unequalBowtie.quad =
+        QPolygonF{QPointF(20, 0), QPointF(32, 10), QPointF(20, 10), QPointF(30, 0)};
+    auto concave = line(QStringLiteral("Concave"), 40, 0);
+    concave.quad = QPolygonF{QPointF(40, 0), QPointF(50, 0), QPointF(43, 3), QPointF(40, 10)};
+    auto reversed = line(QStringLiteral("Reversed"), 80, 0);
+    std::reverse(reversed.quad.begin(), reversed.quad.end());
+    auto triangle = line(QStringLiteral("Triangle"), 140, 0);
+    triangle.quad = QPolygonF{QPointF(140, 0), QPointF(160, 0), QPointF(150, 10), QPointF(150, 10)};
+    presentation.lines = {bowtie, unequalBowtie, concave, reversed, triangle};
+    presentation.beginLineBoxSelection(QPointF(-1, -1));
+    require(presentation.lineAt(QPointF(1, 0.25)) == -1 &&
+                presentation.lineAt(QPointF(21, 0.25)) == -1 &&
+                presentation.lineAt(QPointF(41, 1)) == 2,
+            "prepared point queries exclude crossing geometry while retaining concave interiors");
+    presentation.updateLineBoxSelection(QRectF(0, 0, 1, 1));
+    require(presentation.lineSelectionPreview(0) == ScreenshotOcrLineSelectionPreview::None,
+            "a small rectangle cannot select one lobe of an invalid crossing quad");
+    presentation.updateLineBoxSelection(QRectF(20, 0, 1, 1));
+    require(presentation.lineSelectionPreview(1) == ScreenshotOcrLineSelectionPreview::None,
+            "crossing quads remain invalid when their signed polygon area is nonzero");
+    presentation.updateLineBoxSelection(QRectF(-1, -1, 162, 12));
+    require(presentation.lineSelectionPreview(0) == ScreenshotOcrLineSelectionPreview::None &&
+                presentation.lineSelectionPreview(1) == ScreenshotOcrLineSelectionPreview::None &&
+                presentation.lineSelectionPreview(2) == ScreenshotOcrLineSelectionPreview::Select &&
+                presentation.lineSelectionPreview(3) == ScreenshotOcrLineSelectionPreview::Select &&
+                presentation.lineSelectionPreview(4) == ScreenshotOcrLineSelectionPreview::Select,
+            "full containment rejects crossing edges while retaining concave shapes, reversed "
+            "winding, and repeated-corner triangles");
+    presentation.updateLineBoxSelection(QRectF(0, 0, 1, 1));
+    presentation.finishLineBoxSelection();
+    require(!presentation.hasTextSelection(),
+            "expanding and shrinking around an invalid bowtie never commits a selection");
+    presentation.beginLineBoxSelection(QPointF(-1, -1));
+    presentation.updateLineBoxSelection(QRectF(-1, -1, 162, 12));
+    presentation.finishLineBoxSelection();
+    require(presentation.selectedText() == QStringLiteral("Concave\nReversed\nTriangle"),
+            "crossing-geometry validation preserves positive-area simple polygons");
+}
+
+void closedQuadsPrepareAsFourCornerGeometry() {
+    const QPolygonF closedQuad(QRectF(0, 0, 50, 10));
+    const QVector<QPolygonF> closedRows{QPolygonF(QRectF(0, 0, 50, 4)),
+                                        QPolygonF(QRectF(0, 6, 50, 4))};
+    ScreenshotOcrPresentation presentation;
+    auto closed = line(QStringLiteral("Closed paragraph"), 0, 0);
+    closed.quad = closedQuad;
+    closed.sourceLineQuads = closedRows;
+    closed.paragraph = true;
+    presentation.lines = {closed};
+    require(presentation.lineAt(QPointF(25, 5)) == 0,
+            "unprepared point queries accept Qt's closed rectangle polygon");
+    presentation.prepareForRendering();
+    require(presentation.lines[0].quad.size() == 4 &&
+                presentation.lines[0].quad.boundingRect() == closedQuad.boundingRect() &&
+                presentation.lines[0].sourceLineQuads[0].size() == 4 &&
+                presentation.lines[0].sourceLineQuads[1].size() == 4 && closedQuad.size() == 5 &&
+                closedRows[0].size() == 5 && closedRows[1].size() == 5 && closed.quad.size() == 5 &&
+                closed.sourceLineQuads[0].size() == 5 && presentation.lineAt(QPointF(25, 5)) == 0,
+            "preparation canonicalizes exact closures without mutating shared source geometry or "
+            "changing point hits");
+    ScreenshotOcrPresentation snapshot;
+    snapshot.lines = presentation.lines;
+    snapshot.prepareForRendering();
+    require(snapshot.lines[0].quad.size() == 4 &&
+                snapshot.lines[0].sourceLineQuads[0].size() == 4 &&
+                snapshot.lines[0].sourceLineQuads[1].size() == 4 &&
+                snapshot.lineAt(QPointF(25, 5)) == 0,
+            "snapshots retain canonical main and source-row quads");
+    presentation.beginLineBoxSelection(QPointF(25, 5));
+    presentation.updateLineBoxSelection(QRectF(25, 5, 1, 1));
+    require(presentation.lineSelectionPreview(0) == ScreenshotOcrLineSelectionPreview::Select,
+            "a closed paragraph accepts positive overlap between its source rows");
+    presentation.updateLineBoxSelection(QRectF(50, 0, 1, 10));
+    require(presentation.lineSelectionPreview(0) == ScreenshotOcrLineSelectionPreview::None,
+            "canonical closed quads still reject edge-only overlap");
+    presentation.updateLineBoxSelection(QRectF(-1, -1, 52, 12));
+    presentation.finishLineBoxSelection();
+    require(presentation.selectedText() == QStringLiteral("Closed paragraph"),
+            "whole containment commits all text from a canonical closed quad");
+}
+
+void lineBoxSelectionRevisionsDescribeOnlyChangedLines() {
+    ScreenshotOcrPresentation presentation;
+    presentation.lines = {line(QStringLiteral("Alpha"), 0, 0), line(QStringLiteral("Beta"), 0, 20)};
+    presentation.beginLineBoxSelection(QPointF(-1, -1));
+    const quint64 previous = presentation.selectionRevision();
+    presentation.updateLineBoxSelection(QRectF(-1, -1, 52, 12));
+    const auto* changed = presentation.selectionChangesSince(previous);
+    require(changed != nullptr && *changed == QVector<int>{0} &&
+                presentation.lineSelectionRevision(0) == presentation.selectionRevision() &&
+                presentation.lineSelectionRevision(1) == 0,
+            "a new preview hit invalidates only the affected OCR line");
+    const quint64 firstHit = presentation.selectionRevision();
+    presentation.updateLineBoxSelection(QRectF(-2, -2, 54, 14));
+    changed = presentation.selectionChangesSince(firstHit);
+    require(changed != nullptr && changed->isEmpty() &&
+                presentation.lineSelectionRevision(0) == firstHit,
+            "moving the rectangle without changing hits does not invalidate text items");
+    require(presentation.selectionChangesSince(previous) == nullptr,
+            "a reader skipping visual revisions must fall back to per-line revision checks");
+    const quint64 beforeRelease = presentation.selectionRevision();
+    presentation.finishLineBoxSelection();
+    changed = presentation.selectionChangesSince(beforeRelease);
+    require(changed != nullptr && *changed == QVector<int>{0} &&
+                presentation.lineSelectionRevision(0) == presentation.selectionRevision(),
+            "release invalidates the line whose preview becomes committed selection");
+    presentation.setLineText(1, QStringLiteral("Updated"));
+    require(presentation.lineSelectionRevision(1) == presentation.selectionRevision(),
+            "streamed text replacement invalidates its line without rebuilding geometry");
+}
+
+void lineBoxSelectionPreservesStreamingSentinelsAndPressDirections() {
+    ScreenshotOcrPresentation presentation;
+    presentation.lines = {line(QStringLiteral("Alpha"), 0, 0), line(QStringLiteral("Beta"), 0, 20)};
+    presentation.beginLineBoxSelection(QPointF(-1, -1));
+    presentation.updateLineBoxSelection(QRectF(-1, -1, 52, 12));
+    presentation.finishLineBoxSelection();
+    presentation.setLineText(0, QStringLiteral("Longer translated content"));
+    require(presentation.selectedText() == presentation.lines[0].text &&
+                presentation.textSelectionForLine(0).length == presentation.lines[0].text.size(),
+            "a fully selected box expands to the complete streamed replacement");
+    presentation.setLineText(0, QString{});
+    require(
+        presentation.hasTextSelection() && presentation.selectedText().isEmpty(),
+        "an empty intermediate stream retains full-line selection rather than copying all text");
+    presentation.setLineText(0, QStringLiteral("Restored"));
+    require(presentation.selectedText() == QStringLiteral("Restored"),
+            "full-line selection survives an empty stream and selects later content");
+    presentation.beginLineBoxSelection(QPointF(-1, -1));
+    presentation.updateLineBoxSelection(QRectF(-1, -1, 52, 12));
+    presentation.setLineText(0, QStringLiteral("Replacement during drag"));
+    require(presentation.lineSelectionPreview(0) == ScreenshotOcrLineSelectionPreview::Deselect,
+            "a fully selected line keeps its press-time deselection direction while streaming");
+    presentation.finishLineBoxSelection();
+    require(!presentation.hasTextSelection(), "release removes the streamed full-line selection");
+    presentation.beginTextSelection(ScreenshotOcrTextPosition{1, 0});
+    presentation.updateTextSelection(ScreenshotOcrTextPosition{1, 2});
+    presentation.finishTextSelection();
+    presentation.beginLineBoxSelection(QPointF(-1, 19));
+    presentation.updateLineBoxSelection(QRectF(-1, 19, 42, 12));
+    presentation.setLineText(1, QStringLiteral("Be"));
+    require(presentation.lineSelectionPreview(1) == ScreenshotOcrLineSelectionPreview::Select,
+            "a partial range becoming complete while streaming still keeps its select direction");
+    presentation.finishLineBoxSelection();
+    presentation.setLineText(1, QStringLiteral("Beta grows"));
+    require(presentation.selectedText() == QStringLiteral("Beta grows"),
+            "release promotes a partial line to a streaming full-line sentinel");
+}
+
+void sparsePartialSelectionClampsCombiningGraphemesIndependently() {
+    ScreenshotOcrPresentation presentation;
+    presentation.lines = {line(QStringLiteral("ABCD"), 0, 0), line(QStringLiteral("Gamma"), 0, 20)};
+    presentation.beginTextSelection(ScreenshotOcrTextPosition{0, 2});
+    presentation.updateTextSelection(ScreenshotOcrTextPosition{0, 3});
+    presentation.finishTextSelection();
+    presentation.beginLineBoxSelection(QPointF(-1, 19));
+    presentation.updateLineBoxSelection(QRectF(-1, 19, 52, 12));
+    presentation.finishLineBoxSelection();
+    require(presentation.selectedText() == QStringLiteral("C\nGamma"),
+            "box selection preserves an unrelated partial character range");
+    presentation.setLineText(0, QStringLiteral("Ae\u0301B"));
+    const ScreenshotOcrTextRange range = presentation.textSelectionForLine(0);
+    require(range.start == 1 && range.length == 2 &&
+                presentation.selectedText() == QStringLiteral("e\u0301\nGamma"),
+            "sparse partial endpoints clamp to a complete combining grapheme during streaming");
+    presentation.setLineText(0, QString{});
+    require(presentation.hasTextSelection() && presentation.textSelectionForLine(0).empty() &&
+                presentation.selectedText() == QStringLiteral("Gamma"),
+            "empty replacement removes only the partial range and keeps other full-line selection");
+    presentation.setLineText(1, QStringLiteral("Gamma grows"));
+    require(
+        presentation.selectedText() == QStringLiteral("Gamma grows"),
+        "a full-line sentinel continues tracking text after a neighboring partial range vanishes");
+}
+
+void lineBoxSelectionPreservesLinearNewlineAndParagraphContracts() {
+    ScreenshotOcrPresentation presentation;
+    presentation.lines = {line(QStringLiteral("AB"), 0, 0), line(QString{}, 0, 20),
+                          line(QStringLiteral("CD"), 0, 40)};
+    presentation.beginTextSelection(ScreenshotOcrTextPosition{0, 2});
+    presentation.updateTextSelection(ScreenshotOcrTextPosition{2, 0});
+    presentation.finishTextSelection();
+    require(presentation.hasTextSelection() &&
+                presentation.selectedText() == QStringLiteral("\n\n"),
+            "ordinary character selection preserves empty endpoints and selected line separators");
+    presentation.beginLineBoxSelection(QPointF(100, 100));
+    presentation.finishLineBoxSelection();
+    require(presentation.selectedText() == QStringLiteral("\n\n"),
+            "a blank click without box overlap preserves the linear newline selection");
+    presentation.beginLineBoxSelection(QPointF(100, 100));
+    presentation.updateLineBoxSelection(QRectF(100, 100, 10, 10));
+    presentation.cancelLineBoxSelection();
+    require(presentation.selectedText() == QStringLiteral("\n\n"),
+            "canceling an empty box leaves the original linear clipboard contract intact");
+    auto paragraph = line(QStringLiteral("Wrapped translated paragraph"), 0, 80);
+    paragraph.quad =
+        QPolygonF{QPointF(0, 80), QPointF(100, 80), QPointF(100, 130), QPointF(0, 130)};
+    paragraph.paragraph = true;
+    paragraph.sourceLineQuads = {line(QStringLiteral("Row"), 0, 80).quad,
+                                 line(QStringLiteral("Row"), 0, 120).quad};
+    presentation.lines.push_back(paragraph);
+    presentation.beginLineBoxSelection(QPointF(50, 101));
+    presentation.updateLineBoxSelection(QRectF(50, 101, 1, 1));
+    presentation.finishLineBoxSelection();
+    require(presentation.selectedText() == paragraph.text && presentation.lineSelected(3),
+            "overlap between source rows selects the complete wrapped paragraph block");
+}
+
+void lineBoxSelectionHandlesBoundedIndexesAndInvalidGeometry() {
+    ScreenshotOcrPresentation presentation;
+    auto huge = line(QStringLiteral("Large"), -1000000, -1000000);
+    huge.quad = QPolygonF{QPointF(-1000000, -1000000), QPointF(1000000, -1000000),
+                          QPointF(1000000, 1000000), QPointF(-1000000, 1000000)};
+    auto invalid = line(QStringLiteral("Invalid"), 0, 0);
+    invalid.quad[0].setX(std::numeric_limits<qreal>::infinity());
+    presentation.lines = {huge, line(QStringLiteral("Negative"), -100, -100), invalid};
+    presentation.beginLineBoxSelection(QPointF(-101, -101));
+    presentation.updateLineBoxSelection(QRectF(-101, -101, 2, 2));
+    require(presentation.lineSelectionPreview(0) == ScreenshotOcrLineSelectionPreview::Select &&
+                presentation.lineSelectionPreview(1) == ScreenshotOcrLineSelectionPreview::Select &&
+                presentation.lineSelectionPreview(2) == ScreenshotOcrLineSelectionPreview::None,
+            "oversized line fallback and negative spatial cells retain exact overlap results");
+    presentation.updateLineBoxSelection(QRectF(-1e12, -1e12, 2e12, 2e12));
+    require(
+        presentation.lineSelectionPreview(0) == ScreenshotOcrLineSelectionPreview::Select &&
+            presentation.lineSelectionPreview(1) == ScreenshotOcrLineSelectionPreview::Select &&
+            presentation.lineSelectionPreview(2) == ScreenshotOcrLineSelectionPreview::None,
+        "very large rectangles use bounded full-line fallback without visiting billions of cells");
+    presentation.updateLineBoxSelection(QRectF(0, -1e12, 2e12, 2e12));
+    require(presentation.lineSelectionPreview(0) == ScreenshotOcrLineSelectionPreview::Select &&
+                presentation.lineSelectionPreview(1) == ScreenshotOcrLineSelectionPreview::None &&
+                presentation.lineSelectionPreview(2) == ScreenshotOcrLineSelectionPreview::None,
+            "a huge partial query uses bounded line fallback and excludes out-of-rectangle lines");
+    presentation.updateLineBoxSelection(QRectF(0, 0, std::numeric_limits<qreal>::infinity(), 10));
+    require(presentation.lineSelectionPreview(0) == ScreenshotOcrLineSelectionPreview::None &&
+                presentation.lineSelectionPreview(1) == ScreenshotOcrLineSelectionPreview::None,
+            "non-finite rectangles remove preview hits safely");
+    presentation.finishLineBoxSelection();
+    require(!presentation.hasTextSelection() &&
+                presentation.lineAt(QPointF(std::numeric_limits<qreal>::infinity(), 0)) == -1,
+            "invalid input must not create committed selection or unsafe spatial coordinates");
+}
+
+void committedSelectionTransferExcludesActivePreview() {
+    ScreenshotOcrPresentation source;
+    source.lines = {line(QStringLiteral("Alpha"), 0, 0),
+                    line(QString::fromUcs4(U"A\U0001f642B"), 0, 20),
+                    line(QStringLiteral("Gamma"), 0, 40)};
+    source.beginTextSelection(ScreenshotOcrTextPosition{0, 1});
+    source.updateTextSelection(ScreenshotOcrTextPosition{1, 3});
+    source.finishTextSelection();
+    source.beginLineBoxSelection(QPointF(-1, 39));
+    source.updateLineBoxSelection(QRectF(-1, 39, 52, 12));
+    source.finishLineBoxSelection();
+    const QString selected = source.selectedText();
+    source.beginLineBoxSelection(QPointF(-1, -1));
+    source.updateLineBoxSelection(QRectF(-1, -1, 52, 12));
+    ScreenshotOcrPresentation destination;
+    destination.lines = source.lines;
+    destination.copyCommittedSelectionFrom(source);
+    require(
+        destination.selectedText() == selected && !destination.textSelectionActive() &&
+            destination.lineSelectionPreview(0) == ScreenshotOcrLineSelectionPreview::None,
+        "presentation replacement preserves committed sparse ranges without transferring preview");
+    destination.setLineText(1, QString::fromUcs4(U"A\U0001f642"));
+    require(destination.textSelectionForLine(1).start == 0 &&
+                destination.textSelectionForLine(1).length == 3,
+            "transferred partial selections preserve complete supplementary graphemes");
+    source.cancelLineBoxSelection();
+    source.beginTextSelection(ScreenshotOcrTextPosition{0, 5});
+    source.updateTextSelection(ScreenshotOcrTextPosition{1, 0});
+    source.finishTextSelection();
+    destination.copyCommittedSelectionFrom(source);
+    require(destination.selectedText() == QStringLiteral("\n"),
+            "selection transfer preserves the ordinary linear newline-only selection contract");
 }
 
 void sourceComposerUsesOnlyCapturedDisplayPixels() {
@@ -521,6 +918,17 @@ int main(int argc, char** argv) {
     verticalLineHitTestingFollowsTopToBottomGraphemes();
     preparedGeometryAndSelectionRevisionsAvoidRepeatedWork();
     incrementalTextUpdatesPreserveGeometryAndGraphemeSelection();
+    lineBoxSelectionPreviewsCurrentHitsAndCommitsFixedToggles();
+    lineBoxSelectionRequiresPositivePolygonOverlap();
+    lineBoxSelectionContainmentCachesPreserveExactGeometry();
+    lineBoxSelectionRejectsCrossingQuadsAtEveryScale();
+    closedQuadsPrepareAsFourCornerGeometry();
+    lineBoxSelectionRevisionsDescribeOnlyChangedLines();
+    lineBoxSelectionPreservesStreamingSentinelsAndPressDirections();
+    sparsePartialSelectionClampsCombiningGraphemesIndependently();
+    lineBoxSelectionPreservesLinearNewlineAndParagraphContracts();
+    lineBoxSelectionHandlesBoundedIndexesAndInvalidGeometry();
+    committedSelectionTransferExcludesActivePreview();
     sourceComposerUsesOnlyCapturedDisplayPixels();
     textTransformsUseOriginalPunctuationAndLineRules();
     textEditingHistoryPreservesNativeEditsAndAtomicTransforms();

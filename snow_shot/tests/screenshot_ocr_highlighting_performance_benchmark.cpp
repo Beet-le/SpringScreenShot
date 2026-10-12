@@ -43,7 +43,11 @@ void benchmarkLabels(const QSize& size, int count) {
     ScreenshotOcrTextLayer layer;
     layer.setPresentation(presentation);
     layer.synchronize(QTransform(), QRect(QPoint(), size));
-    const auto items = layer.scene()->items();
+    const auto sceneItems = layer.scene()->items();
+    auto items = sceneItems;
+    items.erase(std::remove_if(items.begin(), items.end(),
+                               [](const auto* item) { return item->zValue() != 0; }),
+                items.end());
     require(items.size() == count &&
                 std::count_if(items.cbegin(), items.cend(),
                               [](const auto* item) { return item->isVisible(); }) == count,
@@ -93,7 +97,7 @@ void benchmarkLabels(const QSize& size, int count) {
     layer.synchronize(QTransform(), QRect(QPoint(), size));
     require(layer.geometrySynchronizationCount() == geometryCount,
             "highlighting toggles and paints do not synchronize label geometry");
-    require(layer.scene()->items() == items,
+    require(layer.scene()->items() == sceneItems,
             "highlighting toggles retain scene items and allocate no overlay items");
     for (int enabled = 0; enabled < 2; ++enabled) {
         auto& values = timings[enabled];
