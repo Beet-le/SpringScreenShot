@@ -406,7 +406,8 @@ struct ImagePreparationReservation final {
             bottom > maximum || right - left <= 0 || bottom - top <= 0 || right - left > maximum ||
             bottom - top > maximum)
             return {};
-        const long double bytes = static_cast<long double>(right - left) * (bottom - top) * 4;
+        const long double bytes =
+            static_cast<long double>(right - left) * static_cast<long double>(bottom - top) * 4;
         constexpr qint64 rasterLimit = 256 * 1024 * 1024;
         if (bytes > rasterLimit)
             return {};
