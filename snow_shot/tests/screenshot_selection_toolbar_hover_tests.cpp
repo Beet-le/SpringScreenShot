@@ -52,6 +52,9 @@ class NoOpSelectionToolbarCommands final : public ScreenshotSelectionToolbarComm
     }
     void applySelectionParamsFromToolbar(const ScreenshotSelectionParams& params) override {
         appliedParams.push_back(params);
+        if (selectionParamsObserver) {
+            selectionParamsObserver(params);
+        }
     }
     void openSelectionResizeModalFromToolbar() override {
         ++resizeModalCount;
@@ -88,6 +91,7 @@ class NoOpSelectionToolbarCommands final : public ScreenshotSelectionToolbarComm
     std::vector<ScreenshotSelectionAspectRatioPreset> selectedPresets;
     ScreenshotSelectionToolbarQuickSets quickSets;
     std::vector<ScreenshotSelectionParams> appliedParams;
+    std::function<void(const ScreenshotSelectionParams&)> selectionParamsObserver;
     std::function<void(ScreenshotSelectionAspectRatioPreset)> presetSelectionObserver;
     std::vector<bool> popupVisibility;
     std::function<void(bool)> popupVisibilityObserver;
@@ -1025,6 +1029,82 @@ void selectionQuickSetsApplyFullParamsAndRefreshOnOpen() {
     select->hidePopup();
 }
 
+void selectionQuickSetsKeepToolbarFittedToCurrentContent() {
+    for (const bool keyboard : {false, true}) {
+        for (const bool previous : {false, true}) {
+            for (const bool locked : {false, true}) {
+                NoOpSelectionToolbarCommands commands;
+                QWidget host;
+                host.resize(1000, 400);
+                ScreenshotSelectionToolbarWidget toolbar(commands, &host);
+                toolbar.setSelectionState(
+                    QRect(50, 50, 320, 180), locked, 0, 0,
+                    ScreenshotSelectionToolbarWidget::DisplayMode::Full, false, std::nullopt,
+                    locked ? ScreenshotSelectionAspectRatioPreset::Landscape16x9
+                           : ScreenshotSelectionAspectRatioPreset::Free);
+                host.show();
+                toolbar.show();
+                QCoreApplication::processEvents();
+
+                ScreenshotSelectionParams params;
+                params.selection = QRect(8, 12, 140, 90);
+                params.radius = 12;
+                params.shadowWidth = 8;
+                commands.quickSets.previous = params;
+                commands.quickSets.presets = {
+                    {QStringLiteral("Saved selection with a long descriptive name"), params}};
+                commands.selectionParamsObserver = [&toolbar](const auto& applied) {
+                    // Showing the toolbar presents the new selection synchronously.
+                    toolbar.setSelectionState(applied.selection, applied.lockAspectRatio,
+                                              applied.radius, applied.shadowWidth);
+                };
+
+                auto* select = ratioSelect(toolbar);
+                select->showPopup();
+                QCoreApplication::processEvents();
+                auto* view = select->view();
+                const QModelIndex index =
+                    optionIndex(select, previous ? QStringLiteral("selection:previous")
+                                                 : QStringLiteral("selection:preset:0"));
+                require(index.isValid(), "selection size preset must be available");
+                view->setCurrentIndex(index);
+                if (keyboard) {
+                    QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+                    QApplication::sendEvent(view, &enter);
+                } else {
+                    view->scrollTo(index);
+                    const QPointF position(view->visualRect(index).center());
+                    const QPointF globalPosition(view->viewport()->mapToGlobal(position.toPoint()));
+                    QMouseEvent press(QEvent::MouseButtonPress, position, position, globalPosition,
+                                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+                    QApplication::sendEvent(view->viewport(), &press);
+                    QMouseEvent release(QEvent::MouseButtonRelease, position, position,
+                                        globalPosition, Qt::LeftButton, Qt::NoButton,
+                                        Qt::NoModifier);
+                    QApplication::sendEvent(view->viewport(), &release);
+                }
+                QCoreApplication::processEvents();
+                require(commands.appliedParams.size() == 1 &&
+                            commands.appliedParams.front() == params &&
+                            select->currentValue() == QStringLiteral("free") &&
+                            !select->popupVisible(),
+                        "size preset must apply once and show the resulting active ratio");
+
+                NoOpSelectionToolbarCommands referenceCommands;
+                ScreenshotSelectionToolbarWidget reference(referenceCommands, &host);
+                reference.setSelectionState(params.selection, params.lockAspectRatio, params.radius,
+                                            params.shadowWidth);
+                reference.show();
+                QCoreApplication::processEvents();
+                require(toolbar.contentSizeHint() == reference.contentSizeHint() &&
+                            toolbar.size() == reference.size() &&
+                            select->geometry() == ratioSelect(reference)->geometry(),
+                        "applying a size preset must fit the final controls without blank space");
+            }
+        }
+    }
+}
+
 void aspectRatioSelectSynchronizesWithoutDispatchingCommands() {
     NoOpSelectionToolbarCommands commands;
     QWidget host;
@@ -1614,6 +1694,8 @@ int main(int argc, char* argv[]) {
         aspectRatioTriggerInputStaysWithSelect();
         selectionQuickSetRefreshReleasesPreviousOptionsModel();
         selectionQuickSetsApplyFullParamsAndRefreshOnOpen();
+        selectionQuickSetsKeepToolbarFittedToCurrentContent();
+        choosingFreeDispatchesExactlyOneExplicitCommand();
         return 0;
     }
     selectionDragCannotActivateToolbarPreview();
@@ -1631,6 +1713,7 @@ int main(int argc, char* argv[]) {
     aspectRatioTriggerInputStaysWithSelect();
     selectionQuickSetRefreshReleasesPreviousOptionsModel();
     selectionQuickSetsApplyFullParamsAndRefreshOnOpen();
+    selectionQuickSetsKeepToolbarFittedToCurrentContent();
     disabledAspectRatioSelectPreservesItsTextColor();
     aspectRatioPopupOwnsInputAndEndsWithToolbarLifecycle();
     aspectRatioPopupSuspendsScreenshotShortcutsThroughDismissal();

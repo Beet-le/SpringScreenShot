@@ -289,8 +289,15 @@ ScreenshotSelectionToolbarWidget::ScreenshotSelectionToolbarWidget(
     m_editingWidgets << aspectRatioGap << m_aspectRatioSelect;
     connect(m_aspectRatioSelect, &adqt::widgets::AdSelect::selected, this,
             [this](const QVariant& value, const QString&) {
+                const QString id = value.toString();
+                {
+                    // Preset rows invoke commands; the trigger displays the active ratio.
+                    // Restore it before callbacks synchronously size and position the toolbar.
+                    const QSignalBlocker blocker(m_aspectRatioSelect);
+                    m_aspectRatioSelect->setCurrentValue(
+                        screenshotSelectionAspectRatioPresetId(m_aspectRatioPreset));
+                }
                 if (selectionInputEnabled()) {
-                    const QString id = value.toString();
                     if (id == QString::fromLatin1(kPreviousSelectionId)) {
                         if (m_previousQuickSet) {
                             m_commands.applySelectionParamsFromToolbar(*m_previousQuickSet);
@@ -308,9 +315,6 @@ ScreenshotSelectionToolbarWidget::ScreenshotSelectionToolbarWidget(
                             screenshotSelectionAspectRatioPresetFromId(id));
                     }
                 }
-                const QSignalBlocker blocker(m_aspectRatioSelect);
-                m_aspectRatioSelect->setCurrentValue(
-                    screenshotSelectionAspectRatioPresetId(m_aspectRatioPreset));
             });
     connect(m_aspectRatioSelect, &adqt::widgets::AdSelect::popupOpening, this, [this]() {
         refreshSelectionQuickSets();

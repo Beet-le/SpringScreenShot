@@ -130,6 +130,9 @@ struct QuickSetFixture {
         }
         flush();
         require(!dropdown->popupVisible(), "confirming a preset must dismiss the dropdown");
+        auto* toolbar = presentation.coordinator.selectionToolbar();
+        require(toolbar->contentSizeHint().width() == dropdown->parentWidget()->sizeHint().width(),
+                "selection toolbar must fit its final content after applying a preset");
     }
 };
 
