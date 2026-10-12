@@ -669,6 +669,101 @@ void statusPresentationUsesSemanticTokens() {
             "unset global shortcuts must show Not set with neutral styling");
 }
 
+void disabledStatusPreservesKeysAndRetranslates() {
+    const auto scheme = styles::ThemeManager::instance().themeColorScheme();
+    const shortcuts::GlobalShortcutBindingResult released{
+        QStringLiteral("Ctrl+Shift+1"),
+        false,
+        shortcuts::GlobalShortcutFailureReason::None,
+        0,
+        binding(QStringLiteral("Ctrl+Shift+1")),
+    };
+    ShortcutKeyRowConfig config;
+    config.title = QStringLiteral("Screenshot");
+    config.registrationState = stateFor(shortcuts::GlobalShortcutStatus::Disabled, {released});
+    ShortcutKeyRow row(config, scheme.metricAlias,
+                       styles::buildMainWindowComponentMetricToken(scheme));
+    row.resize(720, row.height());
+    row.show();
+    QApplication::processEvents();
+
+    auto* const shortcutButton =
+        row.findChild<adqt::widgets::AdButton*>(QStringLiteral("shortcutKeyButton"));
+    auto* const statusTrigger =
+        row.findChild<InfoTooltipIcon*>(QStringLiteral("shortcutRegistrationStatusTooltipTrigger"));
+    require(shortcutButton != nullptr && statusTrigger != nullptr,
+            "disabled shortcuts must retain their settings control and status trigger");
+    require(
+        shortcutButton->text() == displayText(released.shortcut) && shortcutButton->isEnabled() &&
+            shortcutButton->accentRole() == adqt::widgets::AdButton::AccentRole::Neutral &&
+            shortcutButton->property("registrationStatus").toInt() ==
+                static_cast<int>(shortcuts::GlobalShortcutStatus::Disabled) &&
+            statusTrigger->property("statusColor").value<QColor>() == scheme.map.colorTextTertiary,
+        "disabled shortcuts must preserve editable configured keys with neutral styling");
+    require(
+        statusTrigger->isVisible() &&
+            statusTrigger->accessibleName() ==
+                QStringLiteral("Global shortcut status: Temporarily disabled") &&
+            statusTrigger->tooltipText().contains(QStringLiteral("released for use")) &&
+            statusTrigger->tooltipText().contains(QStringLiteral("will be restored")) &&
+            !statusTrigger->tooltipText().contains(QStringLiteral("registration did not")) &&
+            statusTrigger->accessibleDescription() == statusTrigger->tooltipText() &&
+            shortcutButton->accessibleDescription() == statusTrigger->tooltipText(),
+        "disabled status must explain released registrations through tooltip and accessibility");
+    const QString sourceTooltip = statusTrigger->tooltipText();
+
+    class DisabledTranslator final : public QTranslator {
+      public:
+        bool isEmpty() const override {
+            return false;
+        }
+
+        QString translate(const char* context, const char* source, const char*,
+                          int) const override {
+            if (QByteArray(context) != QByteArrayLiteral("ShortcutKeyRow")) {
+                return {};
+            }
+            if (QByteArray(source) == QByteArrayLiteral("Temporarily disabled")) {
+                return QStringLiteral("Localized disabled status");
+            }
+            if (QByteArray(source) ==
+                QByteArrayLiteral("This shortcut is temporarily disabled and released for use by "
+                                  "other applications. It will be restored when global hotkeys are "
+                                  "enabled and the focused window allows them.")) {
+                return QStringLiteral("Localized disabled explanation");
+            }
+            return {};
+        }
+    } translator;
+    QCoreApplication::installTranslator(&translator);
+    QApplication::processEvents();
+    require(statusTrigger->accessibleName() ==
+                    QStringLiteral("Global shortcut status: Localized disabled status") &&
+                statusTrigger->tooltipText() == QStringLiteral("Localized disabled explanation") &&
+                statusTrigger->accessibleDescription() == statusTrigger->tooltipText() &&
+                shortcutButton->accessibleDescription() == statusTrigger->tooltipText() &&
+                shortcutButton->text() == displayText(released.shortcut),
+            "disabled status and explanation must retranslate without changing configured keys");
+    QCoreApplication::removeTranslator(&translator);
+    QApplication::processEvents();
+    require(statusTrigger->accessibleName() ==
+                    QStringLiteral("Global shortcut status: Temporarily disabled") &&
+                statusTrigger->tooltipText() == sourceTooltip &&
+                shortcutButton->accessibleDescription() == sourceTooltip,
+            "disabled shortcut status must restore the source language after translator removal");
+
+    auto registered = released;
+    registered.registered = true;
+    row.setRegistrationState(stateFor(shortcuts::GlobalShortcutStatus::Registered, {registered}));
+    QApplication::processEvents();
+    require(
+        shortcutButton->accentRole() == adqt::widgets::AdButton::AccentRole::Green &&
+            !statusTrigger->isVisible() && statusTrigger->tooltipText().isEmpty() &&
+            statusTrigger->accessibleDescription().isEmpty() &&
+            shortcutButton->accessibleDescription().isEmpty(),
+        "restored shortcuts must clear their disabled explanation and restore registered styling");
+}
+
 void recorderAcceptsOnlyBackendSupportedShortcuts() {
     const styles::ThemeColorScheme scheme = styles::ThemeManager::instance().themeColorScheme();
     const auto mainWindowMetric = styles::buildMainWindowComponentMetricToken(scheme);
@@ -2001,6 +2096,7 @@ int main(int argc, char** argv) {
     displayRefreshUpdatesTheSettingsRowAndOpenEditor();
     actionRowBordersRetainEqualThicknessAtFractionalScale();
     statusPresentationUsesSemanticTokens();
+    disabledStatusPreservesKeysAndRetranslates();
     recorderAcceptsOnlyBackendSupportedShortcuts();
     guideShortcutRecorderAcceptsStandaloneAlt();
     recorderCapturesMacPhysicalKeysAndRejectsPhysicalDuplicates();

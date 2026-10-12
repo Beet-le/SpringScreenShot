@@ -252,7 +252,7 @@ class FloatingToolbarController::Impl {
         reveal.setInterval(100);
         retreat.setSingleShot(true);
         retreat.setInterval(200);
-        fullscreen.setInterval(2000);
+        fullscreen.setInterval(1000);
         fullscreen.setTimerType(Qt::PreciseTimer);
         QObject::connect(&reveal, &QTimer::timeout, &q, [this] { showToolbar(); });
         QObject::connect(&retreat, &QTimer::timeout, &q, [this] {

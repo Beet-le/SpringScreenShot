@@ -4,6 +4,7 @@
 #include "snow_shot/storage/applicationstorage.h"
 
 #include <QApplication>
+#include <QHash>
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QTemporaryDir>
@@ -324,14 +325,16 @@ class FakeHotkeyBackend final : public GlobalShortcutBackend {
         return {shortcut.portableText, true, GlobalShortcutFailureReason::None, shortcut};
     }
     GlobalShortcutBackendResult
-    registerShortcut(int id, const snow_shot::shortcuts::ShortcutBinding&) override {
-        registrationId = id;
+    registerShortcut(int id, const snow_shot::shortcuts::ShortcutBinding& shortcut) override {
+        registrations.insert(id, shortcut);
         return {true};
     }
-    void unregisterShortcut(int) override {}
+    void unregisterShortcut(int id) override {
+        registrations.remove(id);
+    }
 
     ActivationHandler handler;
-    int registrationId = 0;
+    QHash<int, snow_shot::shortcuts::ShortcutBinding> registrations;
 };
 
 void hotkeySuppressionNeverDisablesMouseGestures() {
@@ -357,10 +360,16 @@ void hotkeySuppressionNeverDisablesMouseGestures() {
         auto* hotkeyInput = hotkeyBackend.get();
         GlobalShortcutManager hotkeys(std::move(hotkeyBackend), nullptr,
                                       [&fullscreen]() { return fullscreen; });
-        hotkeys.setShortcuts(GlobalShortcutAction::Screenshot, {QStringLiteral("Ctrl+F9")});
+        const snow_shot::shortcuts::ShortcutBinding screenshotKey{QStringLiteral("Ctrl+F9")};
+        require(hotkeys.setShortcuts(GlobalShortcutAction::Screenshot, {screenshotKey}),
+                "configure a screenshot hotkey while fullscreen is focused");
+        require(!hotkeyInput->registrations.values().contains(screenshotKey),
+                "initial fullscreen suppression must leave the screenshot hotkey unregistered");
         int hotkeyActivations = 0;
         QObject::connect(&hotkeys, &GlobalShortcutManager::activated, &hotkeys,
-                         [&hotkeyActivations](GlobalShortcutAction) { ++hotkeyActivations; });
+                         [&hotkeyActivations](GlobalShortcutAction action) {
+                             hotkeyActivations += action == GlobalShortcutAction::Screenshot;
+                         });
         auto mouseBackend = std::make_unique<FakeBackend>();
         auto* mouseInput = mouseBackend.get();
         GlobalMouseManager mouse(std::move(mouseBackend));
@@ -382,6 +391,7 @@ void hotkeySuppressionNeverDisablesMouseGestures() {
                     "hotkey suppression must leave configured mouse gestures active");
         };
         requireMouseActivation();
+        int lastScreenshotRegistrationId = 0;
         for (const bool enabled : {false, true}) {
             hotkeys.setGlobalHotkeysEnabled(enabled);
             for (const bool suppressFullscreen : {false, true}) {
@@ -389,10 +399,26 @@ void hotkeySuppressionNeverDisablesMouseGestures() {
                         "fullscreen suppression changes must persist");
                 for (const bool focusedFullscreen : {false, true}) {
                     fullscreen = focusedFullscreen;
+                    hotkeys.refreshFocusedFullscreenState();
+                    const bool expectedRegistered = enabled && !(suppressFullscreen && fullscreen);
+                    const int registrationId = hotkeyInput->registrations.key(screenshotKey);
+                    require((registrationId != 0) == expectedRegistered,
+                            "hotkey suppression must release and restore the native binding");
                     const int previousActivations = hotkeyActivations;
-                    hotkeyInput->handler(hotkeyInput->registrationId);
+                    if (registrationId != 0) {
+                        if (lastScreenshotRegistrationId != 0 &&
+                            lastScreenshotRegistrationId != registrationId) {
+                            hotkeyInput->handler(lastScreenshotRegistrationId);
+                            require(hotkeyActivations == previousActivations,
+                                    "restoring a hotkey must not reactivate its released ID");
+                        }
+                        hotkeyInput->handler(registrationId);
+                        lastScreenshotRegistrationId = registrationId;
+                    } else {
+                        hotkeyInput->handler(lastScreenshotRegistrationId);
+                    }
                     require(hotkeyActivations - previousActivations ==
-                                static_cast<int>(enabled && !(suppressFullscreen && fullscreen)),
+                                static_cast<int>(expectedRegistered),
                             "global hotkeys must obey manual and fullscreen suppression");
                     requireMouseActivation();
                 }

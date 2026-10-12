@@ -271,6 +271,10 @@ class ApplicationController::Impl {
                              systemTray.setQuickActionChecked(
                                  presentation::GlobalShortcutAction::ToggleGlobalHotkeys, !enabled);
                          });
+        QObject::connect(
+            &globalShortcutManager,
+            &presentation::GlobalShortcutManager::focusedFullscreenSuppressionChanged, &systemTray,
+            &presentation::SystemTrayController::setFocusedFullscreenSuppressionActive);
         QObject::connect(&app, &QCoreApplication::aboutToQuit, &systemTray,
                          &presentation::SystemTrayController::hide);
         QObject::connect(&app, &QCoreApplication::aboutToQuit, &globalMouseManager,

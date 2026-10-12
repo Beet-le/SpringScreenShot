@@ -4626,6 +4626,14 @@ Unavailable: %2</source>
 不可用：%2</translation>
         </message>
         <message>
+            <source>Temporarily disabled</source>
+            <translation>暫時停用</translation>
+        </message>
+        <message>
+            <source>This shortcut is temporarily disabled and released for use by other applications. It will be restored when global hotkeys are enabled and the focused window allows them.</source>
+            <translation>此快捷鍵已暫時停用並取消註冊，其他應用程式可以使用此按鍵組合。啟用全域快捷鍵且目前焦點視窗允許使用時，將恢復此快捷鍵。</translation>
+        </message>
+        <message>
             <source>already used by another application or action</source>
             <translation>已被其他應用程式或動作使用</translation>
         </message>

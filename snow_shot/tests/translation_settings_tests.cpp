@@ -302,18 +302,46 @@ void selectedTextShortcutSettings() {
                 "re-enable restores native registration");
         id = input->registrations.key(keys.first());
         manager.setGlobalHotkeysEnabled(false);
+        require(
+            !input->registrations.values().contains(keys.first()) &&
+                !input->registrations.values().contains(keys.last()) &&
+                persisted.translateSelectedText() == keys,
+            "manual hotkey disablement releases both selected text bindings and preserves keys");
         input->handler(id);
         require(activations == 1, "disabled global hotkeys suppress selected text translation");
         manager.setGlobalHotkeysEnabled(true);
+        const int restoredId = input->registrations.key(keys.first());
+        require(restoredId != 0 && restoredId != id &&
+                    input->registrations.values().contains(keys.last()),
+                "manual re-enablement restores both selected text bindings with fresh IDs");
+        input->handler(id);
+        require(activations == 1, "manual re-enablement must keep the released ID inactive");
+        id = restoredId;
+        input->handler(id);
+        require(activations == 2, "manual re-enablement restores selected text translation");
         auto& store = storage::ApplicationStorage::instance().configuration();
         const QString fullscreenKey =
             QStringLiteral("global_shortcuts/disable_on_focused_fullscreen_window");
         const auto previousFullscreen = store.value(fullscreenKey);
         require(store.setValue(fullscreenKey, true), "enable fullscreen suppression");
         fullscreen = true;
+        manager.refreshFocusedFullscreenState();
+        require(!input->registrations.values().contains(keys.first()) &&
+                    !input->registrations.values().contains(keys.last()) &&
+                    persisted.translateSelectedText() == keys,
+                "focused fullscreen releases both selected text bindings and preserves keys");
         input->handler(id);
-        require(activations == 1, "fullscreen suppression applies to selected text translation");
+        require(activations == 2, "fullscreen suppression ignores released translation IDs");
         fullscreen = false;
+        manager.refreshFocusedFullscreenState();
+        const int fullscreenRestoredId = input->registrations.key(keys.first());
+        require(fullscreenRestoredId != 0 && fullscreenRestoredId != id &&
+                    input->registrations.values().contains(keys.last()),
+                "leaving fullscreen restores both selected text bindings with fresh IDs");
+        input->handler(id);
+        require(activations == 2, "leaving fullscreen must keep the released ID inactive");
+        input->handler(fullscreenRestoredId);
+        require(activations == 3, "leaving fullscreen restores selected text translation");
         require(store.setValue(fullscreenKey, previousFullscreen), "restore fullscreen preference");
         const auto conflict = persisted.pinClipboardContent();
         require(!conflict.isEmpty(), "pin clipboard default provides a conflict fixture");

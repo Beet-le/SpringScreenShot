@@ -57,7 +57,9 @@ class GlobalShortcutManager final : public QObject {
     void resumeRegistrations(RegistrationSuspensionHandle handle);
     void setGlobalHotkeysEnabled(bool enabled);
     void setGlobalCanvasActive(bool active);
+    void refreshFocusedFullscreenState();
     [[nodiscard]] bool globalHotkeysEnabled() const;
+    [[nodiscard]] bool focusedFullscreenSuppressionActive() const;
     [[nodiscard]] std::optional<GlobalShortcutInputState> inputState(int registrationId) const;
 
   signals:
@@ -67,6 +69,7 @@ class GlobalShortcutManager final : public QObject {
     void stateChanged(snow_shot::presentation::GlobalShortcutAction action,
                       const snow_shot::presentation::GlobalShortcutRegistrationState& state);
     void globalHotkeysEnabledChanged(bool enabled);
+    void focusedFullscreenSuppressionChanged(bool active);
 
   private:
     class Impl;

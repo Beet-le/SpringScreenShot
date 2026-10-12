@@ -219,6 +219,76 @@ void verifyConfiguredTrayMenuOptions(snow_shot::presentation::SystemTrayControll
             "an intentionally empty tray selection must remain empty");
 }
 
+void verifyFullscreenSuppressionBadge(snow_shot::presentation::SystemTrayController& controller,
+                                      const QTemporaryDir& storageDirectory) {
+    using Action = snow_shot::presentation::GlobalShortcutAction;
+    auto* trayIcon =
+        controller.findChild<QSystemTrayIcon*>(QStringLiteral("snowShotSystemTrayIcon"));
+    require(trayIcon != nullptr, "fullscreen suppression requires a tray icon");
+    controller.setMenuOptions(
+        {QStringLiteral("quick.toggle-global-hotkeys"),
+         QStringLiteral("quick.toggle-disable-on-focused-fullscreen-window")});
+    QPointer<adqt::widgets::AdContextMenu> menu = controller.createContextMenu();
+    require(menu != nullptr, "fullscreen suppression requires a tray menu");
+    QAction* manualToggle = nullptr;
+    for (auto* action : menu->actions()) {
+        if (action && action->data().toString() == QStringLiteral("quick.toggle-global-hotkeys")) {
+            manualToggle = action;
+        }
+    }
+    require(manualToggle != nullptr, "the manual toggle must be available for state checks");
+    int quickActions = 0;
+    const auto connection = QObject::connect(
+        &controller, &snow_shot::presentation::SystemTrayController::quickActionRequested,
+        &controller, [&](Action) { ++quickActions; });
+    const auto artwork = [&]() { return trayIcon->icon().pixmap(QSize(32, 32), 1.0).toImage(); };
+    const auto verify = [&]() {
+        const QImage original = artwork();
+        controller.setQuickActionChecked(Action::ToggleDisableOnFocusedFullscreenWindow, true);
+        require(artwork() == original,
+                "enabling the fullscreen setting alone must not add a badge");
+        controller.setQuickActionChecked(Action::ToggleGlobalHotkeys, true);
+        const QImage disabled = artwork();
+        require(disabled != original, "manual disablement must provide the reference badge");
+        controller.setQuickActionChecked(Action::ToggleGlobalHotkeys, false);
+        controller.setFocusedFullscreenSuppressionActive(true);
+        require(
+            artwork() == disabled && !manualToggle->isChecked(),
+            "fullscreen suppression uses the disabled badge without checking the manual toggle");
+        controller.show();
+        require(artwork() == disabled, "tray refresh must retain the fullscreen suppression badge");
+        controller.setQuickActionChecked(Action::ToggleGlobalHotkeys, true);
+        controller.setFocusedFullscreenSuppressionActive(false);
+        require(artwork() == disabled && manualToggle->isChecked(),
+                "leaving fullscreen must preserve the badge when hotkeys are manually disabled");
+        controller.setFocusedFullscreenSuppressionActive(true);
+        controller.setQuickActionChecked(Action::ToggleGlobalHotkeys, false);
+        require(artwork() == disabled && !manualToggle->isChecked(),
+                "re-enabling manual hotkeys must retain the badge while fullscreen is focused");
+        controller.setFocusedFullscreenSuppressionActive(false);
+        require(artwork() == original, "clearing both disablement reasons restores tray artwork");
+    };
+    for (const auto& selection : {QStringLiteral("default"), QStringLiteral("light"),
+                                  QStringLiteral("dark"), QStringLiteral("snow-default"),
+                                  QStringLiteral("snow-light"), QStringLiteral("snow-dark")}) {
+        controller.setIconSelection(selection);
+        verify();
+    }
+    const QString customPath = storageDirectory.filePath(QStringLiteral("fullscreen-tray.png"));
+    QImage custom(32, 32, QImage::Format_ARGB32_Premultiplied);
+    custom.fill(Qt::blue);
+    require(custom.save(customPath), "save the fullscreen suppression custom icon fixture");
+    controller.setCustomIconPath(customPath);
+    verify();
+    controller.setCustomIconPath(storageDirectory.filePath(QStringLiteral("missing.png")));
+    verify();
+    require(quickActions == 0,
+            "suppression and manual state synchronization never dispatch commands");
+    QObject::disconnect(connection);
+    menu->dismissPopup();
+    drainMenus();
+}
+
 void verifyTraySkins(snow_shot::presentation::SystemTrayController& controller,
                      const QTemporaryDir& directory) {
     using snow_shot::presentation::MainWindowSkinController;
@@ -536,6 +606,11 @@ int main(int argc, char* argv[]) {
         return 0;
     }
     snow_shot::presentation::SystemTrayController controller;
+    if (application.arguments().contains(QStringLiteral("--fullscreen-suppression-only"))) {
+        verifyFullscreenSuppressionBadge(controller, storageDirectory);
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--hide-show-tray-only"))) {
         verifyHideShowTrayAction(controller);
         snow_shot::storage::ApplicationStorage::instance().shutdown();

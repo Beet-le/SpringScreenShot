@@ -2994,6 +2994,12 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-system-tray-controller-tests --menu-position-only -platform offscreen)
     add_test(NAME snow-shot-tray-menu-selection-tests
         COMMAND snow-shot-system-tray-controller-tests --configured-menu-only -platform offscreen)
+    add_test(NAME snow-shot-tray-fullscreen-suppression-tests
+        COMMAND snow-shot-system-tray-controller-tests --fullscreen-suppression-only -platform offscreen)
+    set_tests_properties(snow-shot-tray-fullscreen-suppression-tests PROPERTIES
+        LABELS "unit" TIMEOUT 30 SNOW_TEST_CROSS_PLATFORM TRUE
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(snow-shot-tray-menu-selection-tests PROPERTIES
         LABELS "unit" TIMEOUT 30 SNOW_TEST_CROSS_PLATFORM TRUE
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"

@@ -10,6 +10,7 @@
 #include <QHash>
 #include <QJsonDocument>
 #include <QSet>
+#include <QTimer>
 
 #include <algorithm>
 #include <array>
@@ -287,32 +288,22 @@ class GlobalShortcutManager::Impl {
         for (GlobalShortcutAction action : ALL_ACTIONS) {
             m_states[actionIndex(action)].action = action;
         }
+        m_fullscreenTimer.setInterval(1000);
+        m_fullscreenTimer.setTimerType(Qt::PreciseTimer);
+        QObject::connect(&m_fullscreenTimer, &QTimer::timeout, &q,
+                         &GlobalShortcutManager::refreshFocusedFullscreenState);
         m_backend->setActivationHandler([this](int registrationId) {
+            // Focus can change between timer ticks. Refresh before looking up
+            // the ID because reconciliation can release this registration.
+            refreshFocusedFullscreenState();
             const QString activeKey = m_registrationKeysById.value(registrationId);
             const auto active = m_activeRegistrations.constFind(activeKey);
-            if (active == m_activeRegistrations.cend()) {
+            if (active == m_activeRegistrations.cend() || !registrationEligible(active->action)) {
                 return;
             }
-            // Gate-control shortcuts must stay usable under both the session
-            // disablement and fullscreen suppression so either can be undone
-            // from the keyboard.
-            const bool gateControl = controlsGlobalHotkeyGates(active->action);
-            if ((!m_globalHotkeysEnabled && !gateControl)
-#if SNOW_SHOT_ENABLE_EXTENDED_FEATURES
-                || (active->action == GlobalShortcutAction::TranslateSelectedText &&
-                    !storage::ExtendedFeaturesSettings().translationPageEnabled())
-#endif
-            ) {
-                return;
-            }
-            if (gateControl ||
-                (active->action == GlobalShortcutAction::GlobalCanvas && m_globalCanvasActive) ||
-                !storage::GlobalShortcutSettings().disableOnFocusedFullscreenWindow() ||
-                !m_focusedFullscreenDetector || !m_focusedFullscreenDetector()) {
-                const auto action = active->action;
-                emit q.bindingActivated(action, registrationId);
-                emit q.activated(action);
-            }
+            const auto action = active->action;
+            emit q.bindingActivated(action, registrationId);
+            emit q.activated(action);
         });
         m_backend->setAvailabilityChangedHandler([this](const QList<int>& invalidatedIds) {
             for (int id : invalidatedIds) {
@@ -329,6 +320,7 @@ class GlobalShortcutManager::Impl {
     }
 
     ~Impl() {
+        m_fullscreenTimer.stop();
         m_backend->setAvailabilityChangedHandler({});
         unregisterAll();
         m_backend->setActivationHandler({});
@@ -343,15 +335,17 @@ class GlobalShortcutManager::Impl {
             m_shortcuts[actionIndex(action)] =
                 canonicalBindings(persistedShortcuts(settings, action));
         }
-        QObject::connect(&storage::ApplicationStorage::instance().configuration(),
-                         &storage::ConfigurationStore::valueChanged, &q,
-                         [this](const QString& key, const QJsonValue&) {
-                             if (m_initialized &&
-                                 key ==
-                                     QStringLiteral("extended_features/translation_page_enabled")) {
-                                 reconcile();
-                             }
-                         });
+        QObject::connect(
+            &storage::ApplicationStorage::instance().configuration(),
+            &storage::ConfigurationStore::valueChanged, &q,
+            [this](const QString& key, const QJsonValue&) {
+                if (m_initialized &&
+                    (key == QStringLiteral("extended_features/translation_page_enabled") ||
+                     key ==
+                         QStringLiteral("global_shortcuts/disable_on_focused_fullscreen_window"))) {
+                    reconcile();
+                }
+            });
         m_initialized = true;
         reconcile();
     }
@@ -412,11 +406,12 @@ class GlobalShortcutManager::Impl {
 
     RegistrationSuspensionHandle suspendRegistrations() {
         const RegistrationSuspensionHandle handle = m_nextSuspensionHandle++;
-        if (m_suspensions.isEmpty()) {
+        const bool firstSuspension = m_suspensions.isEmpty();
+        m_suspensions.insert(handle);
+        if (firstSuspension) {
             unregisterAll();
             emit q.registrationsSuspended();
         }
-        m_suspensions.insert(handle);
         return handle;
     }
 
@@ -449,21 +444,72 @@ class GlobalShortcutManager::Impl {
         m_registrationKeysById.clear();
     }
 
-    void reconcile() {
-        if (!m_initialized || !m_suspensions.isEmpty()) {
-            return;
+    bool sampleFocusedFullscreenState() {
+        if (!m_initialized) {
+            return false;
+        }
+        const bool suppressionEnabled =
+            storage::GlobalShortcutSettings().disableOnFocusedFullscreenWindow();
+        const bool fullscreen =
+            suppressionEnabled && m_focusedFullscreenDetector && m_focusedFullscreenDetector();
+        const bool fullscreenChanged = fullscreen != m_focusedFullscreen;
+        const bool changed =
+            suppressionEnabled != m_fullscreenSuppressionEnabled || fullscreenChanged;
+        m_fullscreenSuppressionEnabled = suppressionEnabled;
+        m_focusedFullscreen = fullscreen;
+        if (suppressionEnabled && !m_fullscreenTimer.isActive()) {
+            m_fullscreenTimer.start();
+        } else if (!suppressionEnabled) {
+            m_fullscreenTimer.stop();
+        }
+        if (fullscreenChanged) {
+            emit q.focusedFullscreenSuppressionChanged(fullscreen);
+        }
+        return changed;
+    }
+
+    void refreshFocusedFullscreenState() {
+        if (sampleFocusedFullscreenState()) {
+            reconcile(false);
+        }
+    }
+
+    bool actionAvailable(GlobalShortcutAction action) const {
+        if (action != GlobalShortcutAction::TranslateSelectedText) {
+            return true;
         }
 #if SNOW_SHOT_ENABLE_EXTENDED_FEATURES
-        const bool translationEnabled =
-            storage::ExtendedFeaturesSettings().translationPageEnabled();
+        return storage::ExtendedFeaturesSettings().translationPageEnabled();
 #else
-        constexpr bool translationEnabled = false;
+        return false;
 #endif
+    }
+
+    bool registrationEligible(GlobalShortcutAction action) const {
+        // Keep both gate controls usable so disablement can be undone from
+        // the keyboard. An active canvas must also remain dismissible.
+        return actionAvailable(action) &&
+               (controlsGlobalHotkeyGates(action) ||
+                (m_globalHotkeysEnabled &&
+                 (!m_focusedFullscreen ||
+                  (action == GlobalShortcutAction::GlobalCanvas && m_globalCanvasActive))));
+    }
+
+    void reconcile(bool refreshFullscreen = true) {
+        if (!m_initialized) {
+            return;
+        }
+        if (refreshFullscreen) {
+            sampleFocusedFullscreenState();
+        }
+        if (!m_suspensions.isEmpty()) {
+            return;
+        }
         QHash<QString, QString> winnerByIdentity;
         QSet<QString> desiredOwnerKeys;
         QSet<QString> duplicateOwnerKeys;
         for (GlobalShortcutAction action : ALL_ACTIONS) {
-            if (action == GlobalShortcutAction::TranslateSelectedText && !translationEnabled) {
+            if (!registrationEligible(action)) {
                 continue;
             }
             for (const auto& binding : m_shortcuts[actionIndex(action)]) {
@@ -492,14 +538,19 @@ class GlobalShortcutManager::Impl {
             auto& state = nextStates[actionIndex(action)];
             state.action = action;
             state.shortcuts = m_shortcuts[actionIndex(action)];
-            if (action == GlobalShortcutAction::TranslateSelectedText && !translationEnabled) {
+            if (!actionAvailable(action)) {
                 state.status = GlobalShortcutStatus::Unset;
                 continue;
             }
+            const bool eligible = registrationEligible(action);
             for (const auto& bindingValue : state.shortcuts) {
                 GlobalShortcutBindingResult binding;
                 binding.binding = bindingValue;
                 binding.shortcut = bindingValue.portableText;
+                if (!eligible) {
+                    state.bindings.push_back(binding);
+                    continue;
+                }
                 const QString activeOwner = ownerKey(action, bindingValue);
                 if (duplicateOwnerKeys.contains(activeOwner)) {
                     binding.failureReason = GlobalShortcutFailureReason::AlreadyInUse;
@@ -535,7 +586,8 @@ class GlobalShortcutManager::Impl {
                     m_registrationKeysById.insert(registrationId, activeOwner);
                 }
             }
-            state.status = aggregateStatus(state.bindings);
+            state.status = !eligible && !state.bindings.isEmpty() ? GlobalShortcutStatus::Disabled
+                                                                  : aggregateStatus(state.bindings);
         }
 
         for (GlobalShortcutAction action : ALL_ACTIONS) {
@@ -551,6 +603,7 @@ class GlobalShortcutManager::Impl {
     GlobalShortcutManager& q;
     std::unique_ptr<GlobalShortcutBackend> m_backend;
     std::function<bool()> m_focusedFullscreenDetector;
+    QTimer m_fullscreenTimer;
     std::array<shortcuts::ShortcutBindingList, ACTION_COUNT> m_shortcuts;
     std::array<GlobalShortcutRegistrationState, ACTION_COUNT> m_states;
     QHash<QString, ActiveRegistration> m_activeRegistrations;
@@ -561,6 +614,8 @@ class GlobalShortcutManager::Impl {
     bool m_initialized = false;
     bool m_globalHotkeysEnabled = true;
     bool m_globalCanvasActive = false;
+    bool m_fullscreenSuppressionEnabled = false;
+    bool m_focusedFullscreen = false;
 };
 
 GlobalShortcutManager::GlobalShortcutManager(QObject* parent)
@@ -607,7 +662,11 @@ void GlobalShortcutManager::resumeRegistrations(RegistrationSuspensionHandle han
 }
 
 void GlobalShortcutManager::setGlobalCanvasActive(bool active) {
+    if (m_impl->m_globalCanvasActive == active) {
+        return;
+    }
     m_impl->m_globalCanvasActive = active;
+    m_impl->reconcile();
 }
 
 void GlobalShortcutManager::setGlobalHotkeysEnabled(bool enabled) {
@@ -615,7 +674,12 @@ void GlobalShortcutManager::setGlobalHotkeysEnabled(bool enabled) {
         return;
     }
     m_impl->m_globalHotkeysEnabled = enabled;
+    m_impl->reconcile();
     emit globalHotkeysEnabledChanged(enabled);
+}
+
+void GlobalShortcutManager::refreshFocusedFullscreenState() {
+    m_impl->refreshFocusedFullscreenState();
 }
 
 std::optional<GlobalShortcutInputState>
@@ -629,6 +693,10 @@ GlobalShortcutManager::inputState(int registrationId) const {
 
 bool GlobalShortcutManager::globalHotkeysEnabled() const {
     return m_impl->m_globalHotkeysEnabled;
+}
+
+bool GlobalShortcutManager::focusedFullscreenSuppressionActive() const {
+    return m_impl->m_focusedFullscreen;
 }
 
 } // namespace snow_shot::presentation

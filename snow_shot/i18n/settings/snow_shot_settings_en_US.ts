@@ -4626,6 +4626,14 @@ Available: %1
 Unavailable: %2</translation>
         </message>
         <message>
+            <source>Temporarily disabled</source>
+            <translation>Temporarily disabled</translation>
+        </message>
+        <message>
+            <source>This shortcut is temporarily disabled and released for use by other applications. It will be restored when global hotkeys are enabled and the focused window allows them.</source>
+            <translation>This shortcut is temporarily disabled and released for use by other applications. It will be restored when global hotkeys are enabled and the focused window allows them.</translation>
+        </message>
+        <message>
             <source>already used by another application or action</source>
             <translation>already used by another application or action</translation>
         </message>

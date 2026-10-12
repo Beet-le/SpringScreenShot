@@ -818,7 +818,7 @@ class SystemTrayController::Impl {
             resolvedSource = QCoreApplication::applicationFilePath();
             icon = QIcon(QCoreApplication::applicationFilePath());
         }
-        if (globalShortcutsDisabled) {
+        if (globalShortcutsDisabled || focusedFullscreenSuppressionActive) {
             icon = withShortcutsDisabledBadge(icon);
         }
 #ifdef Q_OS_MACOS
@@ -867,6 +867,7 @@ class SystemTrayController::Impl {
     QString lastBalloonFilePath;
     bool enabled = true;
     bool globalShortcutsDisabled = false;
+    bool focusedFullscreenSuppressionActive = false;
 };
 
 SystemTrayController::SystemTrayController(QObject* parent)
@@ -1048,5 +1049,13 @@ void SystemTrayController::setQuickActionChecked(GlobalShortcutAction action, bo
     if (QAction* trayAction = m_impl->checkableQuickActions.value(action)) {
         trayAction->setChecked(checked);
     }
+}
+
+void SystemTrayController::setFocusedFullscreenSuppressionActive(bool active) {
+    if (m_impl->focusedFullscreenSuppressionActive == active) {
+        return;
+    }
+    m_impl->focusedFullscreenSuppressionActive = active;
+    m_impl->updateIcon();
 }
 } // namespace snow_shot::presentation

@@ -47,6 +47,7 @@ enum class GlobalShortcutStatus {
     Registered,
     PartiallyRegistered,
     Failed,
+    Disabled,
 };
 
 enum class GlobalShortcutFailureReason {

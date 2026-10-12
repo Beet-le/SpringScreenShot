@@ -33,6 +33,7 @@ shortcutAccentRole(snow_shot::presentation::GlobalShortcutStatus status) {
     case snow_shot::presentation::GlobalShortcutStatus::Failed:
         return adqt::widgets::AdButton::AccentRole::Danger;
     case snow_shot::presentation::GlobalShortcutStatus::Unset:
+    case snow_shot::presentation::GlobalShortcutStatus::Disabled:
         return adqt::widgets::AdButton::AccentRole::Neutral;
     }
     return adqt::widgets::AdButton::AccentRole::Danger;
