@@ -2,21 +2,28 @@
 #include "snow_shot/presentation/components/icons/snowshoticons.h"
 #include "snow_shot/presentation/styles/thememanager.h"
 #include "widgets/button.h"
+#include "widgets/select.h"
 #include <QCoreApplication>
 #include <QEvent>
+#include <QHideEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QSignalBlocker>
 #include <QSlider>
 #include <algorithm>
+#include <array>
 
 namespace {
 using namespace screenshot_action_toolbar;
 constexpr int HandleWidth = ControlSize / 2;
+constexpr int SpeedWidth = 72;
 constexpr int TrackGap = 8;
 constexpr qreal RailHeight = 4;
 constexpr qreal GripWidth = 10;
 constexpr qreal GripHeight = 20;
+constexpr std::array<quint32, 9> SpeedPercents{25, 50, 75, 100, 125, 150, 175, 200, 300};
+constexpr std::array<const char*, 9> SpeedLabels{"0.25", "0.5",  "0.75", "1.0", "1.25",
+                                                 "1.5",  "1.75", "2.0",  "3.0"};
 QString trimText(const char* text) {
     return QCoreApplication::translate("RecordingTrimToolbar", text);
 }
@@ -53,6 +60,25 @@ RecordingTrimToolbar::RecordingTrimToolbar(QWidget* parent) : ScreenshotToolbarP
     m_replay->setIconRef(snow_shot::presentation::icons::custom::outlined::RecordingReplay());
     m_replay->setReferenceIconSize({IconSize, IconSize});
     m_replay->setCursor(Qt::PointingHandCursor);
+    m_speed = new adqt::widgets::AdSelect(this);
+    m_speed->setObjectName(QStringLiteral("screenRecordingTrimSpeed"));
+    m_speed->setMode(adqt::widgets::AdSelect::Mode::Single);
+    m_speed->setControlSize(adqt::widgets::AdSelect::ControlSize::Middle);
+    m_speed->setVariant(adqt::widgets::AdSelect::Variant::Borderless);
+    m_speed->setPopupLayerMode(adqt::widgets::AdSelect::PopupLayerMode::QtTool);
+    m_speed->setSearchEnabled(false);
+    m_speed->setAllowClear(false);
+    m_speed->setFocusPolicy(Qt::StrongFocus);
+    m_speed->setPopupMatchSelectWidth(false);
+    m_speed->setPopupWidth(96);
+    adqt::widgets::AdSelect::ComponentTokens speedTokens;
+    speedTokens.metrics.horizontalPadding = 5;
+    speedTokens.metrics.popupMaxHeight = 9 * ControlSize;
+    m_speed->setComponentTokens(speedTokens);
+    connect(m_speed, &adqt::widgets::AdSelect::currentValueChanged, this, [this](const QVariant&) {
+        if (isEnabled() && speedChanged)
+            speedChanged(speedPercent());
+    });
     m_first = new TrimHandle(this);
     m_end = new TrimHandle(this);
     m_first->setObjectName(QStringLiteral("screenRecordingTrimStart"));
@@ -85,12 +111,14 @@ RecordingTrimToolbar::RecordingTrimToolbar(QWidget* parent) : ScreenshotToolbarP
 }
 
 QSize RecordingTrimToolbar::sizeHint() const {
-    return {qRound(360 * m_scale), qRound(PanelHeight * m_scale)};
+    return {qRound(440 * m_scale), qRound(PanelHeight * m_scale)};
 }
 void RecordingTrimToolbar::commitControlScale(const adqt::widgets::AdControlScaleContext& context) {
     m_scale = context.logicalScale;
     setPanelScale(m_scale);
     m_replay->commitControlScale(context);
+    m_speed->commitControlScale(context);
+    m_speed->setPopupWidth(qRound(96 * m_scale));
     setFixedSize(sizeHint());
     layoutHandles();
     retranslate();
@@ -100,6 +128,15 @@ int RecordingTrimToolbar::firstFrame() const {
 }
 int RecordingTrimToolbar::endFrame() const {
     return m_end->value();
+}
+quint32 RecordingTrimToolbar::speedPercent() const {
+    return m_speed->currentValue().toUInt();
+}
+void RecordingTrimToolbar::setSpeedPercent(quint32 percent) {
+    if (std::find(SpeedPercents.begin(), SpeedPercents.end(), percent) == SpeedPercents.end())
+        return;
+    const QSignalBlocker blocker(m_speed);
+    m_speed->setCurrentValue(percent);
 }
 void RecordingTrimToolbar::setTimeline(int frames, quint64 duration,
                                        std::function<quint64(int)> boundary) {
@@ -120,7 +157,7 @@ void RecordingTrimToolbar::setPosition(quint64 position) {
     update();
 }
 QRectF RecordingTrimToolbar::trackRect() const {
-    const qreal left = HorizontalMargin + ControlSize + TrackGap + HandleWidth;
+    const qreal left = HorizontalMargin + ControlSize + SpeedWidth + 2 * TrackGap + HandleWidth;
     const qreal right = HorizontalMargin + HandleWidth;
     return {left, (height() / m_scale - RailHeight) / 2.0, width() / m_scale - left - right,
             RailHeight};
@@ -152,6 +189,8 @@ void RecordingTrimToolbar::layoutHandles() {
     const int controlSize = qRound(ControlSize * m_scale);
     const int top = (height() - controlSize + 1) / 2;
     m_replay->setGeometry(qRound(HorizontalMargin * m_scale), top, controlSize, controlSize);
+    m_speed->setGeometry(qRound((HorizontalMargin + ControlSize + TrackGap) * m_scale), top,
+                         qRound(SpeedWidth * m_scale), controlSize);
     if (!m_boundary)
         return;
     for (auto* handle : {m_first, m_end}) {
@@ -169,6 +208,20 @@ void RecordingTrimToolbar::resizeEvent(QResizeEvent*) {
 void RecordingTrimToolbar::retranslate() {
     m_replay->setToolTip(trimText(QT_TRANSLATE_NOOP("RecordingTrimToolbar", "Replay")));
     m_replay->setAccessibleName(m_replay->toolTip());
+    const quint32 percent = speedPercent() ? speedPercent() : 100;
+    const QSignalBlocker speedBlock(m_speed);
+    QVector<adqt::widgets::AdSelect::Option> options;
+    options.reserve(static_cast<qsizetype>(SpeedPercents.size()));
+    for (size_t index = 0; index < SpeedPercents.size(); ++index)
+        options.append(
+            {SpeedPercents[index], trimText(QT_TRANSLATE_NOOP("RecordingTrimToolbar", "%1x"))
+                                       .arg(QString::fromLatin1(SpeedLabels[index]))});
+    m_speed->setOptions(options);
+    m_speed->setCurrentValue(percent);
+    m_speed->setAccessibleName(trimText(QT_TRANSLATE_NOOP("RecordingTrimToolbar", "Speed")));
+    m_speed->setToolTip(
+        trimText(QT_TRANSLATE_NOOP("RecordingTrimToolbar", "Playback and export speed")));
+    m_speed->setAccessibleDescription(m_speed->toolTip());
     m_first->setAccessibleName(trimText(QT_TRANSLATE_NOOP("RecordingTrimToolbar", "Trim start")));
     m_end->setAccessibleName(trimText(QT_TRANSLATE_NOOP("RecordingTrimToolbar", "Trim end")));
     layoutHandles();
@@ -179,8 +232,13 @@ void RecordingTrimToolbar::changeEvent(QEvent* event) {
     if (event->type() == QEvent::EnabledChange && !isEnabled()) {
         m_dragging = nullptr;
         m_hovered = nullptr;
+        m_speed->hidePopup();
     }
     QWidget::changeEvent(event);
+}
+void RecordingTrimToolbar::hideEvent(QHideEvent* event) {
+    m_speed->hidePopup();
+    ScreenshotToolbarPanel::hideEvent(event);
 }
 void RecordingTrimToolbar::paintEvent(QPaintEvent* event) {
     ScreenshotToolbarPanel::paintEvent(event);

@@ -33,6 +33,10 @@ uint8_t snow_recording_clip_info(const SnowRecordingClip* clip, SnowRecordingCli
 uint64_t snow_recording_clip_boundary(const SnowRecordingClip* clip, uint64_t frame);
 uint64_t snow_recording_clip_seek(SnowRecordingClip* clip, uint64_t frame, uint64_t end_frame,
                                   uint8_t play);
+/* Speed is one of 25, 50, 75, 100, 125, 150, 175, 200, or 300 percent.
+ * Preserves the current source position and play/pause state; returns the new revision.
+ * Subsequent seeks retain this speed. Invalid input returns zero and sets last error. */
+uint64_t snow_recording_clip_set_speed(SnowRecordingClip* clip, uint32_t speed_percent);
 SnowRecordingClipFrame* snow_recording_clip_acquire(const SnowRecordingClip* clip,
                                                     SnowRecordingClipPreview* preview);
 void snow_recording_clip_frame_destroy(SnowRecordingClipFrame* frame);
@@ -40,6 +44,11 @@ size_t snow_recording_clip_error(const SnowRecordingClip* clip, char* buffer, si
 SnowRecordingClipExport* snow_recording_clip_export_start(const SnowRecordingClip* clip,
                                                           uint64_t first, uint64_t end,
                                                           const char* destination);
+/* Retimes video and pitch-preserved audio. The legacy entry point exports at 100 percent. */
+SnowRecordingClipExport* snow_recording_clip_export_start_with_speed(const SnowRecordingClip* clip,
+                                                                     uint64_t first, uint64_t end,
+                                                                     const char* destination,
+                                                                     uint32_t speed_percent);
 /* States match SnowRecordingRenderState. Cancellation and destruction are worker operations. */
 uint32_t snow_recording_clip_export_poll(const SnowRecordingClipExport* task, float* percent);
 size_t snow_recording_clip_export_error(const SnowRecordingClipExport* task, char* buffer,

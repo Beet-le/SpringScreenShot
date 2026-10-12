@@ -73,6 +73,25 @@ class Observer final : public snow_canvas_runtime::Client {
     SnowRuntime attachment = nullptr;
 };
 
+void runtimeDestructionKeepsImplementationAvailableToDetachCallbacks() {
+    auto runtime = std::make_unique<SnowCanvasRuntime>();
+    const auto engine = snow_canvas_runtime::Access::retainHandle(*runtime);
+    Observer observer;
+    SnowCanvasWidget first(*runtime);
+    SnowCanvasWidget second(*runtime);
+    snow_canvas_runtime::Access::registerClient(*runtime, observer);
+    observer.ownerDetach = [&](SnowCanvasRuntime& owner) {
+        require(owner.isOwnerThread() && owner.isValid() &&
+                    snow_canvas_runtime::Access::retainHandle(owner) == engine,
+                "detach callbacks must retain the engine through its live runtime implementation");
+    };
+
+    runtime.reset();
+    require(observer.ownerDetaches == 1 && !first.setViewportCamera(0, 0, 1) &&
+                !second.setCanvasTool(SnowCanvasTool::Select),
+            "runtime destruction must detach every surviving canvas before releasing its engine");
+}
+
 void runtimeRetirementDrainsNewRegistrations() {
     for (const bool destroyOwner : {false, true}) {
         auto runtime = std::make_unique<SnowCanvasRuntime>();
@@ -756,6 +775,7 @@ void nestedRuntimeReplacementSupersedesEarlierReplacement() {
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
+    runtimeDestructionKeepsImplementationAvailableToDetachCallbacks();
     runtimeRetirementDrainsNewRegistrations();
     runtimeRetirementHonorsReentrantRemovalAndOwnerDeletion();
     runtimeRetirementDrainsClientsOfNestedReplacement();

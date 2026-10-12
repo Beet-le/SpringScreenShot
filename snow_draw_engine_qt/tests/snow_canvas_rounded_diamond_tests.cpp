@@ -69,7 +69,7 @@ SnowSceneDisplayItem diamond() {
     item.fill_style = SNOW_FILL_STYLE_SOLID;
     item.opacity = 1;
     item.corner_radii = {16, 0, 0, 0};
-    item.magnifier = {0, 0, 40, 40, 2};
+    item.magnifier = {0, 0, 40, 40, 2, SNOW_MAGNIFIER_CONNECTION_NONE, 0, {}};
     return item;
 }
 

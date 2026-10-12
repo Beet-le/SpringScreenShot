@@ -69,6 +69,10 @@
 
 extern "C" void snow_diagnostics_install_panic_hook(void (*callback)(const unsigned char*, size_t));
 
+#ifdef SNOW_SHOT_CONTROLLER_LIFETIME_TESTS
+int runScreenshotControllerLifetimeTests(int argc, char** argv);
+#endif
+
 namespace {
 #ifndef Q_OS_MACOS
 QString updateInstallationRoot(const QString& executableDirectory) {
@@ -115,6 +119,11 @@ int main(int argc, char* argv[]) {
     }
     QCoreApplication::setApplicationName(applicationName);
     QCoreApplication::setApplicationVersion(QStringLiteral(SNOW_DIAGNOSTICS_VERSION));
+#ifdef SNOW_SHOT_CONTROLLER_LIFETIME_TESTS
+    if (argc == 2 && QString::fromLocal8Bit(argv[1]) == u"--controller-lifetime-tests") {
+        return runScreenshotControllerLifetimeTests(argc, argv);
+    }
+#endif
 #ifdef SNOW_SHOT_MCP_TEST_FIXTURE
     // Only test builds expose this isolated production-router fixture. It bypasses
     // singleton acquisition, startup registration, and the user's configuration.

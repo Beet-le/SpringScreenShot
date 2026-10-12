@@ -639,7 +639,7 @@ struct ScreenshotAnimationPlayback::Impl {
         if (!options.monotonicNanoseconds)
             options.monotonicNanoseconds = monotonicNow;
     }
-    ~Impl() {
+    void shutdown() {
         cancel();
         lifetime->owner = nullptr;
     }
@@ -1157,7 +1157,10 @@ ScreenshotAnimationPlayback::ScreenshotAnimationPlayback(Hooks hooks, Options op
                                                          QObject* parent)
     : QObject(parent), m_impl(std::make_unique<Impl>(*this, std::move(hooks), std::move(options))) {
 }
-ScreenshotAnimationPlayback::~ScreenshotAnimationPlayback() = default;
+ScreenshotAnimationPlayback::~ScreenshotAnimationPlayback() {
+    // The supplied scheduler can inspect playback while canceling its final deadline.
+    m_impl->shutdown();
+}
 
 void ScreenshotAnimationPlayback::setSource(std::shared_ptr<const ScreenshotAnimationSource> source,
                                             bool playing, int speed, QImage initialTransformed) {

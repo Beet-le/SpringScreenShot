@@ -42,6 +42,22 @@ bool samePixels(const QImage& left, const QImage& right) {
     return true;
 }
 
+void destructionKeepsPlaybackAvailableToDeadlineCancellation() {
+    int cancellations = 0;
+    ScreenshotAnimationPlayback* retiring = nullptr;
+    ScreenshotAnimationPlayback::Options options;
+    options.cancelDeadline = [&] {
+        require(!retiring->requestedPlaying() && retiring->frameIndex() == 0,
+                "deadline cancellation must be able to inspect the retiring playback controller");
+        ++cancellations;
+    };
+    auto playback = std::make_unique<ScreenshotAnimationPlayback>(
+        ScreenshotAnimationPlayback::Hooks{}, std::move(options));
+    retiring = playback.get();
+    playback.reset();
+    require(cancellations == 1, "playback destruction must cancel its scheduler exactly once");
+}
+
 QByteArray profiledApng(const QColorSpace& colorSpace) {
     QImage profileImage(1, 1, QImage::Format_ARGB32_Premultiplied);
     profileImage.fill(Qt::red);
@@ -1346,6 +1362,7 @@ int main(int argc, char** argv) {
     if (argc > 1 && QByteArray(argv[1]) == "--preparation-teardown")
         return preparationTeardownChild(argc, argv);
     QCoreApplication application(argc, argv);
+    destructionKeepsPlaybackAvailableToDeadlineCancellation();
     preparedTransformsFreezeSourceTimeUntilPaint();
     latestPreparedTransformSurvivesHiddenAndPausedStates();
     preparationCancellationFailureAndQueuedStepsPreserveIntent();

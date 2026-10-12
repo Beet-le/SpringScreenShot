@@ -638,6 +638,7 @@
           "default-features": false,
           "features": [
             "avcodec",
+            "avfilter",
             "avformat",
             "swresample",
             "swscale",
@@ -812,6 +813,7 @@
           "default-features": false,
           "features": [
             "avcodec",
+            "avfilter",
             "avformat",
             "swresample",
             "swscale",

@@ -128,10 +128,6 @@ class DirectCaptureController::Impl {
         thread.start();
     }
 
-    ~Impl() {
-        shutdown();
-    }
-
     template <typename Result>
     bool submit(std::function<Result()> work, std::function<void(Result)> done) {
         if (stopped.load())
@@ -258,7 +254,10 @@ class DirectCaptureController::Impl {
 
 DirectCaptureController::DirectCaptureController(QObject* parent)
     : QObject(parent), m_impl(std::make_unique<Impl>(*this)) {}
-DirectCaptureController::~DirectCaptureController() = default;
+DirectCaptureController::~DirectCaptureController() {
+    // Final capture-activity observers need the implementation until shutdown returns.
+    m_impl->shutdown();
+}
 void DirectCaptureController::shutdown() {
     m_impl->shutdown();
 }

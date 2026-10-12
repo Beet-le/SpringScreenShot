@@ -181,27 +181,6 @@ DirectRecordingSettings directRecordingSettings(const QString& outputFormat,
     return result;
 }
 
-// Runs on the start worker thread: only touches the filesystem, never storage or UI.
-QString chooseRecordingOutputPath(const QStringList& directories, const QString& baseName,
-                                  const QString& extension) {
-    const QString normalizedExtension =
-        extension.startsWith(QLatin1Char('.')) ? extension : QStringLiteral(".%1").arg(extension);
-    for (const QString& candidate : directories) {
-        QDir directory(candidate);
-        if ((!directory.exists() && !directory.mkpath(QStringLiteral("."))) ||
-            !QFileInfo(directory.absolutePath()).isWritable()) {
-            continue;
-        }
-        QString path = directory.filePath(baseName + normalizedExtension);
-        for (int suffix = 1; QFileInfo::exists(path); ++suffix) {
-            path = directory.filePath(
-                QStringLiteral("%1_%2%3").arg(baseName).arg(suffix).arg(normalizedExtension));
-        }
-        return path;
-    }
-    return {};
-}
-
 // Owns the native recording session (capture pipeline, input hooks while
 // running, and worker threads) through its destroy entry point on every path.
 struct RecordingSessionDeleter {
@@ -391,7 +370,7 @@ struct ScreenRecordingController::Impl {
         QObject::connect(&countdownTimer, &QTimer::timeout, &owner, [this]() { tickCountdown(); });
     }
 
-    ~Impl() {
+    void shutdown() {
         stopAudioMeter();
         exclusionPollTimer.stop();
         durationTimer.stop();
@@ -1155,7 +1134,8 @@ struct ScreenRecordingController::Impl {
                         snow_shot::runtime::RuntimeActivityTracker::shared().acquire();
                     result.outputPath =
                         requestedPath.isEmpty()
-                            ? chooseRecordingOutputPath(directories, baseName, extension)
+                            ? snow_shot::presentation::recording::screenRecordingOutputPath(
+                                  directories, baseName, extension)
                             : requestedPath;
                     // The recording exporter owns its private staging file and
                     // publishes only after finalization. Reserving the destination
@@ -2173,7 +2153,11 @@ ScreenRecordingController::ScreenRecordingController(QObject* parent)
 ScreenRecordingController::ScreenRecordingController(EffectsSourceFactory factory, QObject* parent)
     : QObject(parent), m_impl(std::make_unique<Impl>(*this, std::move(factory))) {}
 
-ScreenRecordingController::~ScreenRecordingController() = default;
+ScreenRecordingController::~ScreenRecordingController() {
+    // Capture-activity observers can query the controller during final UI retirement.
+    // Keep m_impl available until those notifications and worker transfers have completed.
+    m_impl->shutdown();
+}
 
 void ScreenRecordingController::setPermissionCheck(PermissionCheck check) {
     m_impl->permissionCheck = std::move(check);

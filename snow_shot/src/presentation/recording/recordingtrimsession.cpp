@@ -2,19 +2,20 @@
 #include "recordingtrimsession.h"
 #include "recordingrenderdialog.h"
 #include "recordingtrimtoolbar.h"
+#include "snow_shot/presentation/screenrecordingfolder.h"
+#include "snow_shot/presentation/screenshotimagefileservice.h"
 #include "snow_shot/presentation/screenrecordingareawindow.h"
 #include "snow_shot/presentation/screenrecordingtoolbarwindow.h"
 #include "snow_shot/platform/applicationqos.h"
+#include "snow_shot/storage/settingsadapters.h"
 #include <QApplication>
 #include <QClipboard>
 #include <QCoreApplication>
-#include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QMimeData>
 #include <QSaveFile>
 #include <QUrl>
-#include <QUuid>
 #include <climits>
 #include <thread>
 
@@ -40,9 +41,10 @@ void copyRecording(const QString& path) {
 }
 QString nextOutput(const QString& original) {
     const QFileInfo file(original);
-    const QString stem = file.completeBaseName() + QStringLiteral("-trim-") +
-                         QUuid::createUuid().toString(QUuid::Id128).left(8);
-    return file.dir().filePath(stem + QStringLiteral(".") + file.suffix());
+    const QString baseName = ScreenshotImageFileService::suggestedBaseName(
+        snow_shot::storage::RecordingSettings().videoFilenameFormat());
+    return snow_shot::presentation::recording::screenRecordingOutputPath({file.absolutePath()},
+                                                                         baseName, file.suffix());
 }
 } // namespace
 
@@ -60,6 +62,7 @@ RecordingTrimSession::RecordingTrimSession(ScreenRecordingAreaWindow* area,
         m_end = static_cast<quint64>(end);
         seek(preview, false);
     };
+    m_panel->speedChanged = [this](quint32 percent) { setSpeed(percent); };
     m_timer.setInterval(16);
     connect(&m_timer, &QTimer::timeout, this, [this] { poll(); });
 }
@@ -135,6 +138,23 @@ void RecordingTrimSession::seek(int frame, bool play) {
     m_timer.setInterval(16);
     m_revision = snow_recording_clip_seek(m_clip, static_cast<quint64>(frame), m_end, play ? 1 : 0);
 }
+void RecordingTrimSession::setSpeed(quint32 percent) {
+    if (!ready() || m_detached || percent == m_speedPercent)
+        return;
+    const auto revision = snow_recording_clip_set_speed(m_clip, percent);
+    if (!revision) {
+        if (m_panel)
+            m_panel->setSpeedPercent(m_speedPercent);
+        if (reportError)
+            reportError(trimText(QT_TRANSLATE_NOOP("RecordingTrimSession",
+                                                   "Unable to preview recording: %1"))
+                            .arg(nativeError()));
+        return;
+    }
+    m_speedPercent = percent;
+    m_revision = revision;
+    m_timer.setInterval(16);
+}
 
 void RecordingTrimSession::poll() {
     if (m_publication)
@@ -185,8 +205,7 @@ void RecordingTrimSession::poll() {
             })).detach();
             if (state == SNOW_RECORDING_RENDER_STATE_SUCCEEDED) {
                 m_cachePath = m_pendingPath;
-                m_cachedFirst = m_first;
-                m_cachedEnd = m_end;
+                m_cachedSelection = m_pendingSelection;
                 publish();
             } else
                 finishExport(false, error);
@@ -264,19 +283,21 @@ void RecordingTrimSession::exportClip(bool save) {
     }
     m_percent = 0;
     m_phase = Phase::Exporting;
+    m_pendingSelection = {m_first, m_end, m_speedPercent};
     setBusy(true);
-    if (!m_deferred && m_first == 0 && m_end == m_info.frame_count) {
+    if (!m_deferred && m_pendingSelection.first == 0 &&
+        m_pendingSelection.end == m_info.frame_count && m_pendingSelection.speedPercent == 100) {
         m_cachePath = m_sourcePath;
-        m_cachedFirst = m_first;
-        m_cachedEnd = m_end;
+        m_cachedSelection = m_pendingSelection;
     }
-    if (m_cachedFirst == m_first && m_cachedEnd == m_end && QFileInfo::exists(m_cachePath)) {
+    if (m_cachedSelection == m_pendingSelection && QFileInfo::exists(m_cachePath)) {
         publish();
         return;
     }
     m_pendingPath = nextOutput(m_outputPath);
-    m_export = snow_recording_clip_export_start(m_clip, m_first, m_end,
-                                                m_pendingPath.toUtf8().constData());
+    m_export = snow_recording_clip_export_start_with_speed(
+        m_clip, m_pendingSelection.first, m_pendingSelection.end,
+        m_pendingPath.toUtf8().constData(), m_pendingSelection.speedPercent);
     if (!m_export) {
         finishExport(false, nativeError());
         return;

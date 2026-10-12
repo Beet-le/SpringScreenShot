@@ -42,6 +42,12 @@ class RecordingTrimSession final : public QObject {
         bool ok = false;
         QString error;
     };
+    struct Selection {
+        quint64 first = 0;
+        quint64 end = 0;
+        quint32 speedPercent = 100;
+        bool operator==(const Selection&) const = default;
+    };
     struct Publication {
         // Cancellation and final replacement have a single, nonblocking winner.
         enum State { Copying, Canceled, Committing };
@@ -51,6 +57,7 @@ class RecordingTrimSession final : public QObject {
     std::shared_ptr<Publication> m_publication;
     void poll();
     void seek(int frame, bool play);
+    void setSpeed(quint32 percent);
     void setBusy(bool busy);
     void finishExport(bool ok, const QString& error);
     void publish();
@@ -70,8 +77,9 @@ class RecordingTrimSession final : public QObject {
     quint64 m_revision = 0;
     quint64 m_first = 0;
     quint64 m_end = 0;
-    quint64 m_cachedFirst = 0;
-    quint64 m_cachedEnd = 0;
+    quint32 m_speedPercent = 100;
+    Selection m_cachedSelection;
+    Selection m_pendingSelection;
     QString m_sourcePath;
     QString m_outputPath;
     QString m_cachePath;

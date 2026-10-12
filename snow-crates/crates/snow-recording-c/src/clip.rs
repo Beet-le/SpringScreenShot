@@ -1,4 +1,5 @@
 use super::*;
+use snow_recording_export::PlaybackSpeed;
 use snow_recording_export::clip::ClipSource;
 use snow_recording_export::playback::{ClipExportTask, Playback};
 use snow_recording_export::{ExportExecutionMode, SoftwareH264Priority, StreamingEncoderConfig};
@@ -186,6 +187,26 @@ pub unsafe extern "C" fn snow_recording_clip_seek(
     )
 }
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn snow_recording_clip_set_speed(
+    clip: *mut SnowRecordingClipImpl,
+    speed_percent: u32,
+) -> u64 {
+    let Some(clip) = (unsafe { clip.as_ref() }) else {
+        set_last_error("clip is null");
+        return 0;
+    };
+    match PlaybackSpeed::from_percent(speed_percent) {
+        Ok(speed) => {
+            clear_last_error();
+            clip.playback.set_speed(speed)
+        }
+        Err(error) => {
+            set_last_error(error);
+            0
+        }
+    }
+}
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn snow_recording_clip_acquire(
     clip: *const SnowRecordingClipImpl,
     preview: *mut SnowRecordingClipPreview,
@@ -247,11 +268,28 @@ pub unsafe extern "C" fn snow_recording_clip_export_start(
     end: u64,
     destination: *const c_char,
 ) -> *mut SnowRecordingClipExportImpl {
+    unsafe { snow_recording_clip_export_start_with_speed(clip, first, end, destination, 100) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn snow_recording_clip_export_start_with_speed(
+    clip: *const SnowRecordingClipImpl,
+    first: u64,
+    end: u64,
+    destination: *const c_char,
+    speed_percent: u32,
+) -> *mut SnowRecordingClipExportImpl {
     let result = (|| -> Result<_, String> {
         let clip = unsafe { clip.as_ref() }.ok_or("clip is null")?;
+        let speed = PlaybackSpeed::from_percent(speed_percent)?;
         let range = clip.source.range(first, end).map_err(|e| e.to_string())?;
-        ClipExportTask::start(clip.source.clone(), range, unsafe { path(destination) }?)
-            .map_err(|e| e.to_string())
+        ClipExportTask::start_with_speed(
+            clip.source.clone(),
+            range,
+            unsafe { path(destination) }?,
+            speed,
+        )
+        .map_err(|e| e.to_string())
     })();
     match result {
         Ok(task) => {
@@ -348,6 +386,7 @@ mod tests {
         encoder.finish_at_duration_ms(500).unwrap();
         let file = CString::new(config.output_path.to_str().unwrap()).unwrap();
         let destination = CString::new(directory.join("trim.mp4").to_str().unwrap()).unwrap();
+        let fast_destination = CString::new(directory.join("fast.mp4").to_str().unwrap()).unwrap();
         let mut options = SnowRecordingClipOptions {
             version: 1,
             struct_size: std::mem::size_of::<SnowRecordingClipOptions>() as u32,
@@ -365,6 +404,9 @@ mod tests {
             options.version = 1;
             let clip = snow_recording_clip_open(file.as_ptr(), &options);
             assert!(!clip.is_null());
+            assert_eq!(snow_recording_clip_set_speed(ptr::null_mut(), 100), 0);
+            assert_eq!(snow_recording_clip_set_speed(clip, 99), 0);
+            assert_ne!(snow_recording_clip_set_speed(clip, 25), 0);
             assert_eq!(snow_recording_clip_seek(clip, 3, 2, 1), 0);
             let revision = snow_recording_clip_seek(clip, 1, 3, 0);
             let start = std::time::Instant::now();
@@ -386,6 +428,24 @@ mod tests {
             };
             let export = snow_recording_clip_export_start(clip, 1, 3, destination.as_ptr());
             assert!(!export.is_null());
+            assert!(
+                snow_recording_clip_export_start_with_speed(
+                    clip,
+                    1,
+                    3,
+                    fast_destination.as_ptr(),
+                    250
+                )
+                .is_null()
+            );
+            let fast = snow_recording_clip_export_start_with_speed(
+                clip,
+                1,
+                3,
+                fast_destination.as_ptr(),
+                300,
+            );
+            assert!(!fast.is_null());
             snow_recording_clip_destroy(clip);
             assert_eq!(view.byte_count, 32 * 24 * 4);
             assert_eq!(
@@ -402,10 +462,22 @@ mod tests {
             assert_eq!(snow_recording_clip_export_poll(export, &mut percent), 1);
             assert_eq!(percent, 100.0);
             snow_recording_clip_export_destroy(export);
+            while snow_recording_clip_export_poll(fast, &mut percent) == 0 {
+                assert!(start.elapsed().as_secs() < 10);
+                std::thread::yield_now();
+            }
+            assert_eq!(snow_recording_clip_export_poll(fast, &mut percent), 1);
+            snow_recording_clip_export_destroy(fast);
             snow_recording_clip_destroy(ptr::null_mut());
         }
         assert!(config.output_path.exists());
-        for file in [config.output_path, directory.join("trim.mp4")] {
+        let fast = ClipSource::open(&directory.join("fast.mp4"), Some(config.clone())).unwrap();
+        assert!(fast.duration_us.abs_diff(66_667) < 2_000);
+        for file in [
+            config.output_path,
+            directory.join("trim.mp4"),
+            directory.join("fast.mp4"),
+        ] {
             std::fs::remove_file(file).unwrap();
         }
         std::fs::remove_dir(directory).unwrap();

@@ -1457,6 +1457,42 @@ impl StreamingEncoder {
         self.encoder.format()
     }
 
+    /// Convert a borrowed RGBA image through the normal encoder color pipeline.
+    /// Retimed recordings can retain this immutable result across repeated FPS slots
+    /// without allocating or comparing additional full-resolution RGBA canvases.
+    pub(crate) fn prepare_rgba_video_frame(
+        &mut self,
+        frame: &ffmpeg::frame::Video,
+    ) -> Result<ffmpeg::frame::Video> {
+        if self.finished
+            || self.output.is_none()
+            || self.cpu_hdr_input
+            || frame.format() != ffmpeg::format::Pixel::RGBA
+            || frame.width() != self.width
+            || frame.height() != self.height
+        {
+            return Err(RecordingExportError::InvalidConfig(
+                "RGBA frame does not match encoder input".into(),
+            ));
+        }
+        ensure_video_frame_writable(&mut self.encode_frame)?;
+        self.scaler
+            .as_mut()
+            .ok_or_else(|| RecordingExportError::InvalidConfig("CPU scaler unavailable".into()))?
+            .run(frame, &mut self.encode_frame)
+            .map_err(|error| RecordingExportError::Encode(error.to_string()))?;
+        crate::hdr::frame(&mut self.encode_frame, false);
+        let mut retained = ffmpeg::frame::Video::empty();
+        let status =
+            unsafe { ffmpeg::ffi::av_frame_ref(retained.as_mut_ptr(), self.encode_frame.as_ptr()) };
+        if status < 0 {
+            return Err(RecordingExportError::Encode(
+                ffmpeg::Error::from(status).to_string(),
+            ));
+        }
+        Ok(retained)
+    }
+
     /// Admit a converted CPU frame without a second color conversion or pixel copy.
     /// The caller transfers immutable storage; FFmpeg retains it until packet drain.
     pub fn push_prepared_video_frame_at_pts(
@@ -1741,6 +1777,22 @@ impl StreamingEncoder {
         cancellation: &snow_core::cancellation::CancellationToken,
     ) -> Result<StreamingEncoderReport> {
         self.finish_at_duration_us_inner(duration_us, Some(cancellation))
+    }
+
+    /// Keep the audio/microsecond endpoint independent of an exact rational video grid.
+    pub fn finish_at_duration_us_with_end_pts_cancelable(
+        mut self,
+        duration_us: u64,
+        end_pts: u64,
+        cancellation: &snow_core::cancellation::CancellationToken,
+    ) -> Result<StreamingEncoderReport> {
+        if duration_us == 0 {
+            return Err(RecordingExportError::InvalidConfig(
+                "video duration must be non-zero".into(),
+            ));
+        }
+        self.final_duration_us = Some(duration_us);
+        self.finish_at_pts_inner(end_pts, Some(cancellation))
     }
     fn finish_at_duration_us_inner(
         mut self,

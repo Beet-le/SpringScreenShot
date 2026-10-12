@@ -52,6 +52,26 @@ QString screenRecordingDirectory() {
     return directories.isEmpty() ? QString() : directories.constFirst();
 }
 
+QString screenRecordingOutputPath(const QStringList& directories, const QString& baseName,
+                                  const QString& extension) {
+    const QString normalizedExtension =
+        extension.startsWith(QLatin1Char('.')) ? extension : QStringLiteral(".%1").arg(extension);
+    for (const QString& candidate : directories) {
+        QDir directory(candidate);
+        if ((!directory.exists() && !directory.mkpath(QStringLiteral("."))) ||
+            !QFileInfo(directory.absolutePath()).isWritable()) {
+            continue;
+        }
+        QString path = directory.filePath(baseName + normalizedExtension);
+        for (int suffix = 1; QFileInfo::exists(path); ++suffix) {
+            path = directory.filePath(
+                QStringLiteral("%1_%2%3").arg(baseName).arg(suffix).arg(normalizedExtension));
+        }
+        return path;
+    }
+    return {};
+}
+
 bool openScreenRecordingFolder() {
     const QString path = screenRecordingDirectory();
     return !path.isEmpty() && QDesktopServices::openUrl(QUrl::fromLocalFile(path));

@@ -290,7 +290,6 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
                   snow_shot::presentation::PinnedWindowGroupManager* groupManager,
                   ScreenshotOcrRecognitionService* sharedOcrRecognition,
                   SnowShotApiClient* sharedApiClient);
-    ~Impl();
 
     void createPresentationInfrastructure();
     void createSelectionWorkflows();
@@ -4425,7 +4424,7 @@ void ScreenshotController::Impl::printSelection() {
                 {{QStringLiteral("request_kind"), QStringLiteral("capture")},
                  {QStringLiteral("operation"), QString::number(epoch)},
                  {QStringLiteral("stage"), !snapshotSucceeded ? QStringLiteral("export_image")
-                                           : !printer         ? QStringLiteral("service_destroyed")
+                                           : !printer ? QStringLiteral("service_destroyed")
                                                       : QStringLiteral("service_rejected")}},
                 QtWarningMsg);
             finished({ScreenshotPrintService::Status::Failed,
@@ -5664,10 +5663,6 @@ void ScreenshotController::Impl::setSelectionShadowWidthFromToolbar(int shadowWi
     m_selectionEditWorkflow->setSelectionShadowWidthFromToolbar(shadowWidth);
 }
 
-ScreenshotController::Impl::~Impl() {
-    shutdown();
-}
-
 void ScreenshotController::Impl::endGlobalMouseDrag() {
     const quint64 id = m_globalMouseDrag.id();
     m_globalMouseDrag.reset();
@@ -6078,7 +6073,11 @@ ScreenshotController::ScreenshotController(
     : QObject(parent),
       m_impl(std::make_unique<Impl>(*this, groupManager, sharedOcrRecognition, sharedApiClient)) {}
 
-ScreenshotController::~ScreenshotController() = default;
+ScreenshotController::~ScreenshotController() {
+    // Shutdown publishes final capture activity and retires controllers with callbacks.
+    // Their observers must still be able to query this controller through m_impl.
+    m_impl->shutdown();
+}
 
 void ScreenshotController::prewarmResources() {
     QTimer::singleShot(0, this, [this]() {

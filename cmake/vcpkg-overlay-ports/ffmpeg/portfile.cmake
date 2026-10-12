@@ -667,6 +667,7 @@ if("snow-shot-minimal" IN_LIST FEATURES)
         " --enable-parser=h264,hevc,aac,mpegaudio,gif"
         " --enable-bsf=h264_mp4toannexb,aac_adtstoasc"
         " --enable-protocol=file"
+        " --enable-filter=abuffer,abuffersink,atempo"
         " --enable-hwaccel=h264_d3d11va,h264_d3d11va2,h264_dxva2,hevc_d3d11va,hevc_d3d11va2,hevc_dxva2"
     )
 endif()
@@ -684,6 +685,7 @@ if("snow-macos-media" IN_LIST FEATURES)
         " --enable-parser=h264,hevc,aac,mpegaudio,gif"
         " --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,aac_adtstoasc"
         " --enable-protocol=file"
+        " --enable-filter=abuffer,abuffersink,atempo"
         " --enable-hwaccel=h264_videotoolbox,hevc_videotoolbox"
     )
 endif()

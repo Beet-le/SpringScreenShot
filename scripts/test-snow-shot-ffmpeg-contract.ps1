@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$ComponentsHeader = "",
+    [string]$LinkMap = "",
     [switch]$ComponentsOnly
 )
 
@@ -63,10 +64,25 @@ if ($ComponentsOnly) {
     Write-Output "FFmpeg component contract verified: $($actual.Count) compiled components and Main10 support."
     return
 }
-$linkMap = Join-Path $repoRoot "build/snow-shot-msvc-release/snow_shot/Release/snow_shot.map"
-$linked = @(Select-String -LiteralPath $linkMap -Pattern (
-    '^\s+[0-9A-Fa-f]+:[0-9A-Fa-f]+\s+(ff_[A-Za-z0-9_]+_(?:bsf|decoder|encoder|hwaccel|parser|demuxer|muxer|protocol))\s+[0-9A-Fa-f]+\s{2,}\S'
-) | ForEach-Object { $_.Matches[0].Groups[1].Value } | Sort-Object)
+if ([string]::IsNullOrWhiteSpace($LinkMap)) {
+    $LinkMap = Join-Path $repoRoot "build/snow-shot-msvc-release/snow_shot/Release/snow_shot.map"
+}
+$linked = @(Select-String -LiteralPath $LinkMap -Pattern (
+    '^\s+[0-9A-Fa-f]+:[0-9A-Fa-f]+\s+(ff_[A-Za-z0-9_]+_(?:bsf|decoder|encoder|hwaccel|parser|demuxer|muxer|protocol)|ff_(?:af|asrc|asink|vf|vsrc|vsink|avf|vaf)_[A-Za-z0-9_]+)\s+[0-9A-Fa-f]+\s{2,}\S'
+) | ForEach-Object {
+    $registration = $_.Matches[0].Groups[1].Value
+    switch ($registration) {
+        'ff_asrc_abuffer' { 'ff_abuffer_filter' }
+        'ff_asink_abuffer' { 'ff_abuffersink_filter' }
+        'ff_af_atempo' { 'ff_atempo_filter' }
+        'ff_vsrc_buffer' { 'ff_buffer_filter' }
+        'ff_vsink_buffer' { 'ff_buffersink_filter' }
+        default { $registration }
+    }
+} | Sort-Object)
+$expected = @($expected + @(
+    'ff_abuffer_filter', 'ff_abuffersink_filter', 'ff_buffer_filter', 'ff_buffersink_filter') |
+    Sort-Object)
 if (@(Compare-Object $linked $expected).Count -gt 0) {
     throw "The link-map audit does not match the optimized executable registrations."
 }

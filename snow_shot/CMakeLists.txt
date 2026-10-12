@@ -1594,6 +1594,8 @@ qt_add_executable(snow_shot
 snow_shot_link_macos_window_platform(snow_shot)
 if(SNOW_SHOT_BUILD_TESTS)
     target_compile_definitions(snow_shot PRIVATE SNOW_SHOT_MCP_TEST_FIXTURE=1)
+    target_compile_definitions(snow_shot PRIVATE SNOW_SHOT_CONTROLLER_LIFETIME_TESTS=1)
+    target_sources(snow_shot PRIVATE tests/screenshot_controller_lifetime_tests.cpp)
     snow_shot_import_offscreen_platform(snow_shot)
 endif()
 
@@ -7215,7 +7217,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         target_compile_definitions(snow-shot-screen-recording-controller-tests PRIVATE
             "snow_recording_audio_monitor_${_operation}=test_recording_audio_monitor_${_operation}")
     endforeach()
-    foreach(_operation open destroy info boundary seek acquire frame_destroy error export_start export_poll export_error export_cancel export_destroy)
+    foreach(_operation open destroy info boundary seek set_speed acquire frame_destroy error export_start export_start_with_speed export_poll export_error export_cancel export_destroy)
         target_compile_definitions(snow-shot-screen-recording-controller-tests PRIVATE
             "snow_recording_clip_${_operation}=test_recording_clip_${_operation}")
     endforeach()
@@ -7268,6 +7270,15 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_test(NAME snow-shot-recording-trimming-tests
         COMMAND snow-shot-screen-recording-controller-tests --trim-only -platform offscreen)
     set_tests_properties(snow-shot-recording-trimming-tests PROPERTIES LABELS "unit" TIMEOUT 60)
+    add_test(NAME snow-shot-recording-export-naming-tests
+        COMMAND snow-shot-screen-recording-controller-tests --export-naming-only -platform offscreen)
+    set_tests_properties(snow-shot-recording-export-naming-tests PROPERTIES LABELS "unit" TIMEOUT 60)
+    if(WIN32)
+        add_test(NAME snow-shot-recording-trim-ui-tests
+            COMMAND snow-shot-screen-recording-controller-tests --trim-ui-only -platform windows)
+        set_tests_properties(snow-shot-recording-trim-ui-tests PROPERTIES
+            LABELS "interactive;e2e;windows" TIMEOUT 60)
+    endif()
     add_test(NAME snow-shot-recording-post-processing-tests
         COMMAND snow-shot-screen-recording-controller-tests --post-processing-only -platform offscreen)
     set_tests_properties(snow-shot-recording-post-processing-tests PROPERTIES LABELS "unit" TIMEOUT 60)
@@ -9276,7 +9287,7 @@ if(WIN32)
     set(_SNOW_SHOT_SAVED_PKG_CONFIG_PATH "$ENV{PKG_CONFIG_PATH}")
     set(ENV{PKG_CONFIG_PATH} "${SNOW_FFMPEG_ROOT}/lib/pkgconfig")
     find_package(PkgConfig REQUIRED)
-    set(_snow_ffmpeg_modules libavformat libavcodec libswresample libswscale libavutil)
+    set(_snow_ffmpeg_modules libavfilter libavformat libavcodec libswresample libswscale libavutil)
     if(SNOW_WINDOWS_ARCHITECTURE STREQUAL "x64")
         # FFmpeg's static .pc files omit this private QSV dependency.
         list(APPEND _snow_ffmpeg_modules vpl)
@@ -9818,6 +9829,11 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_test(NAME snow-shot-feature-action-router-tests COMMAND snow-shot-feature-action-router-tests)
     set_tests_properties(snow-shot-feature-action-router-tests PROPERTIES
         LABELS unit SNOW_TEST_CROSS_PLATFORM TRUE)
+    add_test(NAME snow-shot-screenshot-controller-lifetime-tests
+        COMMAND snow_shot --controller-lifetime-tests)
+    set_tests_properties(snow-shot-screenshot-controller-lifetime-tests PROPERTIES
+        LABELS unit SNOW_TEST_CROSS_PLATFORM TRUE TIMEOUT 30
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}")
     add_test(NAME snow-shot-pinned-controlled-interaction-tests
         COMMAND snow-shot-pinned-window-tests --controlled-interaction-only -platform offscreen)
     add_test(NAME snow-shot-pinned-pointer-routing-tests

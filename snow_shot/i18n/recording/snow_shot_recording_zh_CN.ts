@@ -144,8 +144,20 @@
     <context>
         <name>RecordingTrimToolbar</name>
         <message>
+            <source>%1x</source>
+            <translation>%1x</translation>
+        </message>
+        <message>
+            <source>Playback and export speed</source>
+            <translation>播放和导出速度</translation>
+        </message>
+        <message>
             <source>Replay</source>
             <translation>重播</translation>
+        </message>
+        <message>
+            <source>Speed</source>
+            <translation>速度</translation>
         </message>
         <message>
             <source>Trim end</source>

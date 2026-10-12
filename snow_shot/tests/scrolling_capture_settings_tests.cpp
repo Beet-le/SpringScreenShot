@@ -19,6 +19,7 @@
 
 #include <QApplication>
 #include <QElapsedTimer>
+#include <QHash>
 #include <QPointer>
 #include <QTemporaryDir>
 #include <QThread>
@@ -53,14 +54,15 @@ void require(bool condition, const char* message) {
         std::exit(1);
     }
 }
-template <class Predicate> void until(Predicate ready) {
+template <class Predicate>
+void until(Predicate ready, const char* message = "scrolling capture did not complete in time") {
     QElapsedTimer deadline;
     deadline.start();
     while (!ready() && deadline.elapsed() < 5000) {
         QCoreApplication::processEvents();
         QThread::msleep(1);
     }
-    require(ready(), "scrolling capture did not complete in time");
+    require(ready(), message);
 }
 
 struct SourceState {
@@ -75,12 +77,22 @@ struct SourceState {
     }
 };
 std::atomic<int> liveSources = 0;
+std::mutex exclusionMutex;
+QHash<std::uint32_t, int> excludedSourceCounts;
+QHash<QWidget*, std::uint32_t> nativeWindowIds;
 class ManualSource final : public ScrollingFrameSource {
   public:
-    explicit ManualSource(std::shared_ptr<SourceState> state) : m_state(std::move(state)) {
+    ManualSource(std::shared_ptr<SourceState> state, QVector<std::uint32_t> excludedIds)
+        : m_state(std::move(state)), m_excludedIds(std::move(excludedIds)) {
+        const std::lock_guard lock(exclusionMutex);
+        for (const auto id : m_excludedIds)
+            ++excludedSourceCounts[id];
         ++liveSources;
     }
     ~ManualSource() override {
+        const std::lock_guard lock(exclusionMutex);
+        for (const auto id : m_excludedIds)
+            --excludedSourceCounts[id];
         --liveSources;
     }
     ScrollingSourceEvent receive(int timeout) override {
@@ -107,6 +119,7 @@ class ManualSource final : public ScrollingFrameSource {
 
   private:
     std::shared_ptr<SourceState> m_state;
+    QVector<std::uint32_t> m_excludedIds;
 };
 struct CaptureRequest {
     QRect selection;
@@ -202,6 +215,27 @@ ScreenshotScrollingSnapshot snapshot(ScreenshotScrollingCaptureController& captu
     until([&] { return completed; });
     require(result.isValid(), "scrolling snapshot must be valid");
     return result;
+}
+
+void destructionKeepsControllerAvailableToStateObservers() {
+    OverlayEvents events;
+    SnowCanvasRuntime runtime;
+    snow_shot::presentation::WindowShortcutManager shortcuts;
+    ScreenshotDisplaySession displays;
+    ScreenshotGeometryMapper geometry;
+    ScreenshotOverlayCoordinator coordinator(events, runtime, shortcuts);
+    auto capture = std::make_unique<ScreenshotScrollingCaptureController>(
+        ScreenshotScrollingCaptureControllerContext{displays, geometry, coordinator});
+    QObject observer;
+    int notifications = 0;
+    auto* retiring = capture.get();
+    QObject::connect(retiring, &ScreenshotScrollingCaptureController::stateChanged, &observer, [&] {
+        require(!retiring->active() && retiring->canvasSelection().isEmpty(),
+                "final scrolling state observers must be able to inspect the retired session");
+        ++notifications;
+    });
+    capture.reset();
+    require(notifications == 1, "scrolling destruction must publish its final state once");
 }
 
 void changedSettingsRecapture(ScreenshotScrollingRecognitionMode mode, bool autoScroll) {
@@ -310,8 +344,12 @@ void changedSettingsRecapture(ScreenshotScrollingRecognitionMode mode, bool auto
                     requests.back().excludedIds ==
                         (captureInterface ? QVector<std::uint32_t>{} : initialIds),
                 "recapture must create a fresh source with the new interface exclusion policy");
-        require(captureInterface ? excludedWindows.isEmpty() : !excludedWindows.isEmpty(),
-                "recapture must also reapply the native window sharing policy");
+        // Retired workers retain sharing exclusions until native teardown completes.
+        until(
+            [&] {
+                return captureInterface ? excludedWindows.isEmpty() : !excludedWindows.isEmpty();
+            },
+            "recapture must also reapply the native window sharing policy");
         frame.fill(captureInterface ? Qt::blue : Qt::green);
         requests.back().source->push(frame);
         until([&] { return capture.state().value(QStringLiteral("ready")).toBool(); });
@@ -326,8 +364,8 @@ void changedSettingsRecapture(ScreenshotScrollingRecognitionMode mode, bool auto
             "each changed setting must recapture once while detached snapshots remain valid");
     capture.stop(false);
     require(overlay.mask().isEmpty(), "stopping scrolling must leave the overlay unmasked");
-    require(liveSources == 0 && excludedWindows.isEmpty(),
-            "teardown must release capture sources and window exclusions");
+    until([] { return liveSources == 0 && excludedWindows.isEmpty(); },
+          "teardown must release capture sources and window exclusions");
 }
 } // namespace
 
@@ -337,13 +375,18 @@ ScrollingSourceFactory nativeScrollingSource(QRect selection, bool,
                                              quint64 generation) {
     auto state = std::make_shared<SourceState>();
     requests.push_back({selection, excludedIds, generation, state});
-    return [state] { return std::make_unique<ManualSource>(state); };
+    return [state, excludedIds] { return std::make_unique<ManualSource>(state, excludedIds); };
 }
 } // namespace snow_shot::capture_detail
 
 namespace snow_shot::platform {
 bool snowTestSetWindowExcludedFromCapture(QWidget* window, bool excluded) {
-    require(liveSources == 0, "native sources must stop before window sharing changes");
+    if (!excluded) {
+        const std::lock_guard lock(exclusionMutex);
+        require(
+            excludedSourceCounts.value(nativeWindowIds.value(window)) == 0,
+            "native sources excluding a window must stop before its sharing policy is restored");
+    }
     if (excluded) {
         excludedWindows.push_back(window);
     } else {
@@ -352,7 +395,11 @@ bool snowTestSetWindowExcludedFromCapture(QWidget* window, bool excluded) {
     return true;
 }
 std::optional<std::uint32_t> snowTestCaptureWindowId(QWidget* window) {
-    return static_cast<std::uint32_t>(excludedWindows.indexOf(window) + 11);
+    auto id = nativeWindowIds.find(window);
+    if (id == nativeWindowIds.end())
+        id =
+            nativeWindowIds.insert(window, static_cast<std::uint32_t>(nativeWindowIds.size() + 11));
+    return id.value();
 }
 #ifdef Q_OS_MACOS
 bool snowTestScrollPermission() {
@@ -380,6 +427,7 @@ int main(int argc, char** argv) {
     require(temporary.isValid() &&
                 storage.initialize({temporary.path(), temporary.path(), 60000}).success,
             "scrolling settings tests require isolated storage");
+    destructionKeepsControllerAvailableToStateObservers();
     changedSettingsRecapture(ScreenshotScrollingRecognitionMode::Vertical, false);
     changedSettingsRecapture(ScreenshotScrollingRecognitionMode::Horizontal, true);
     storage.shutdown();

@@ -33,6 +33,10 @@ Screen color restoration uses nalgebra (Apache-2.0) for fixed-size matrix
 inversion and validation. Its license and resolved dependencies are included
 in the generated Rust dependency notice bundle.
 
+Recording crop speed control uses FFmpeg's libavfilter audio buffer and tempo
+filters for streaming pitch-preserving audio. These components are covered by
+the existing FFmpeg license notices in the generated vcpkg dependency bundle.
+
 Parallel screenshot stitching uses Rayon (Apache-2.0 OR MIT). Its license
 texts and resolved dependencies are included in the generated Rust dependency
 notice bundle.

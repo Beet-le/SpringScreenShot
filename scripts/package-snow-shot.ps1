@@ -241,7 +241,8 @@ function Get-SnowShotExpectedFfmpegComponents {
         DEMUXER = @("APNG", "GIF", "MATROSKA", "MOV", "WEBP_ANIM")
         MUXER = @("APNG", "AVI", "GIF", "MATROSKA", "MOV", "MP4", "WEBP")
         PROTOCOL = @("FILE")
-        FILTER = @()
+        # Buffer sources/sinks are intrinsic libavfilter API, absent from config_components.h.
+        FILTER = @("ATEMPO")
         INDEV = @()
         OUTDEV = @()
     }
@@ -722,10 +723,19 @@ if (-not (Test-Path -LiteralPath $linkMapPath -PathType Leaf)) {
     throw "The Snow Shot Release link map was not found: $linkMapPath"
 }
 $ffmpegRegistrationPattern =
-    '^\s+[0-9A-Fa-f]+:[0-9A-Fa-f]+\s+(?<Name>ff_[A-Za-z0-9_]+_(?:bsf|decoder|encoder|hwaccel|parser|demuxer|muxer|protocol))\s+[0-9A-Fa-f]+\s{2,}\S'
+    '^\s+[0-9A-Fa-f]+:[0-9A-Fa-f]+\s+(?<Name>ff_[A-Za-z0-9_]+_(?:bsf|decoder|encoder|hwaccel|parser|demuxer|muxer|protocol)|ff_(?:af|asrc|asink|vf|vsrc|vsink|avf|vaf)_[A-Za-z0-9_]+)\s+[0-9A-Fa-f]+\s{2,}\S'
 $linkedFfmpegRegistrations = @(Select-String -LiteralPath $linkMapPath `
     -Pattern $ffmpegRegistrationPattern | ForEach-Object {
-        $_.Matches[0].Groups["Name"].Value
+        # Filter registrations use source/sink/audio prefixes rather than a _filter suffix.
+        $registration = $_.Matches[0].Groups["Name"].Value
+        switch ($registration) {
+            'ff_asrc_abuffer' { 'ff_abuffer_filter' }
+            'ff_asink_abuffer' { 'ff_abuffersink_filter' }
+            'ff_af_atempo' { 'ff_atempo_filter' }
+            'ff_vsrc_buffer' { 'ff_buffer_filter' }
+            'ff_vsink_buffer' { 'ff_buffersink_filter' }
+            default { $registration }
+        }
     })
 # Native hardware encoding retains the configured parser registrations, so the
 # optimized application must match the same restricted component set as FFmpeg.
@@ -736,6 +746,9 @@ $expectedFfmpegRegistrations = @(
         }
     }
 )
+# FFmpeg always registers these four API endpoints, even with --disable-everything.
+$expectedFfmpegRegistrations += @(
+    'ff_abuffer_filter', 'ff_abuffersink_filter', 'ff_buffer_filter', 'ff_buffersink_filter')
 Assert-ExactStringSet -Description "Linked FFmpeg component registrations" `
     -Expected $expectedFfmpegRegistrations -Actual $linkedFfmpegRegistrations
 

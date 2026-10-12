@@ -5,6 +5,9 @@
 #include <functional>
 
 class QSlider;
+namespace adqt::widgets {
+class AdSelect;
+}
 
 class RecordingTrimToolbar final : public ScreenshotToolbarPanel,
                                    public adqt::widgets::AdControlScaleParticipant {
@@ -12,6 +15,8 @@ class RecordingTrimToolbar final : public ScreenshotToolbarPanel,
     explicit RecordingTrimToolbar(QWidget* parent = nullptr);
     void setTimeline(int frames, quint64 duration, std::function<quint64(int)> boundary);
     void setPosition(quint64 position);
+    void setSpeedPercent(quint32 percent);
+    [[nodiscard]] quint32 speedPercent() const;
     [[nodiscard]] int firstFrame() const;
     [[nodiscard]] int endFrame() const;
     QSize sizeHint() const override;
@@ -20,11 +25,13 @@ class RecordingTrimToolbar final : public ScreenshotToolbarPanel,
     std::function<void()> replayRequested;
     std::function<void(int)> seekRequested;
     std::function<void(int, int, int)> rangeChanged;
+    std::function<void(quint32)> speedChanged;
 
   protected:
     void paintEvent(QPaintEvent*) override;
     void resizeEvent(QResizeEvent*) override;
     void changeEvent(QEvent*) override;
+    void hideEvent(QHideEvent*) override;
     void mousePressEvent(QMouseEvent*) override;
     bool eventFilter(QObject*, QEvent*) override;
 
@@ -36,6 +43,7 @@ class RecordingTrimToolbar final : public ScreenshotToolbarPanel,
     [[nodiscard]] int frameAt(qreal x) const;
     [[nodiscard]] QRectF trackRect() const;
     adqt::widgets::AdButton* m_replay = nullptr;
+    adqt::widgets::AdSelect* m_speed = nullptr;
     QSlider* m_first = nullptr;
     QSlider* m_end = nullptr;
     QSlider* m_dragging = nullptr;

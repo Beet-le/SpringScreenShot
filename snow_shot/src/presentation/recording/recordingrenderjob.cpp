@@ -52,7 +52,7 @@ struct RecordingRenderJob::Impl {
         timer.setInterval(100);
         QObject::connect(&timer, &QTimer::timeout, &owner, [this] { poll(); });
     }
-    ~Impl() {
+    void shutdown() {
         timer.stop();
         if (modal) {
             modal->close();
@@ -317,7 +317,10 @@ RecordingRenderJob::RecordingRenderJob(SnowRecordingSource* source, bool showDia
                                        const QRect& anchorGeometry, QWidget* windowOwner)
     : QObject(parent), m_impl(std::make_unique<Impl>(*this, source, showDialog, screen,
                                                      anchorGeometry, windowOwner)) {}
-RecordingRenderJob::~RecordingRenderJob() = default;
+RecordingRenderJob::~RecordingRenderJob() {
+    // Closing the modal can notify observers that inspect this job's final state.
+    m_impl->shutdown();
+}
 void RecordingRenderJob::start() {
     m_impl->start();
 }

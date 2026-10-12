@@ -140,10 +140,6 @@ struct ScreenshotScrollingCaptureController::Impl {
         previewWatchdog.start(5000);
     }
 
-    ~Impl() {
-        stop(false);
-    }
-
     bool start(QRect selection, ScreenshotScrollingRecognitionMode requestedMode) {
         if (selection.width() < 1 || selection.height() < 1) {
             logScrollingEvent("scrolling.start_rejected", generation,
@@ -765,7 +761,10 @@ ScreenshotScrollingCaptureController::ScreenshotScrollingCaptureController(
     ScreenshotScrollingCaptureControllerContext context, QObject* parent)
     : QObject(parent), m_impl(std::make_unique<Impl>(*this, context)) {}
 
-ScreenshotScrollingCaptureController::~ScreenshotScrollingCaptureController() = default;
+ScreenshotScrollingCaptureController::~ScreenshotScrollingCaptureController() {
+    // stop() publishes stateChanged; observers can query this controller while it retires.
+    m_impl->stop(false);
+}
 
 bool ScreenshotScrollingCaptureController::start(const QRect& canvasSelection,
                                                  ScreenshotScrollingRecognitionMode mode) {

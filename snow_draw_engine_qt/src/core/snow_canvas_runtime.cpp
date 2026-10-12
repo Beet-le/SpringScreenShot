@@ -15,7 +15,7 @@
 
 struct SnowCanvasRuntime::Impl {
     Impl(SnowCanvasRuntime& owner, const SnowCanvasRuntimeConfig& config);
-    ~Impl();
+    void shutdown();
 
     bool isOwnerThread() const;
     bool isValid() const;
@@ -71,7 +71,7 @@ struct SnowCanvasRuntime::Impl {
 SnowCanvasRuntime::Impl::Impl(SnowCanvasRuntime& owner, const SnowCanvasRuntimeConfig& config)
     : owner(owner), session(config) {}
 
-SnowCanvasRuntime::Impl::~Impl() {
+void SnowCanvasRuntime::Impl::shutdown() {
     lifetime.reset();
     session.destroyForOwnerDestruction(
         owner, threadAffinity.hasDestructionAccess("~SnowCanvasRuntime")
@@ -231,7 +231,11 @@ SnowCanvasRuntime::SnowCanvasRuntime() : SnowCanvasRuntime(SnowCanvasRuntimeConf
 SnowCanvasRuntime::SnowCanvasRuntime(const SnowCanvasRuntimeConfig& config)
     : m_impl(std::make_unique<Impl>(*this, config)) {}
 
-SnowCanvasRuntime::~SnowCanvasRuntime() = default;
+SnowCanvasRuntime::~SnowCanvasRuntime() {
+    // Detachment callbacks can use the owner to retain its engine or retire other clients.
+    // Run them before unique_ptr clears m_impl and destroys the implementation.
+    m_impl->shutdown();
+}
 
 bool SnowCanvasRuntime::isOwnerThread() const {
     return m_impl->isOwnerThread();

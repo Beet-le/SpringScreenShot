@@ -206,16 +206,31 @@ impl RecordedEffects {
 
     /// The destination is pristine source content; old overlays must never be fed back.
     pub fn apply_rgba(&mut self, pixels: &mut [u8], frame: RenderFrame) -> Result<(), String> {
+        self.apply_rgba_at_playback_time(
+            pixels,
+            frame,
+            frame.timestamp_ms.saturating_sub(self.playback_origin_ms),
+        )
+    }
+
+    /// Input effects retain source time while playback overlays use the exported clock.
+    pub fn apply_rgba_at_playback_time(
+        &mut self,
+        pixels: &mut [u8],
+        frame: RenderFrame,
+        playback_ms: u64,
+    ) -> Result<(), String> {
         let size = (self.config.output_width, self.config.output_height);
         if pixels.len() != size.0 as usize * size.1 as usize * 4 {
             return Err("effect destination size disagrees with rendering policy".into());
         }
-        self.draw_to(
+        self.draw_to_at_playback_time(
             &mut RgbaSurface {
                 pixels,
                 dimensions: size,
             },
             frame,
+            playback_ms,
         )
     }
 
@@ -223,6 +238,19 @@ impl RecordedEffects {
         &mut self,
         surface: &mut S,
         frame: RenderFrame,
+    ) -> Result<(), String> {
+        self.draw_to_at_playback_time(
+            surface,
+            frame,
+            frame.timestamp_ms.saturating_sub(self.playback_origin_ms),
+        )
+    }
+
+    fn draw_to_at_playback_time<S: Surface>(
+        &mut self,
+        surface: &mut S,
+        frame: RenderFrame,
+        playback_ms: u64,
     ) -> Result<(), String> {
         if surface.size() != (self.config.output_width, self.config.output_height) {
             return Err("effect destination dimensions disagree with rendering policy".into());
@@ -275,7 +303,7 @@ impl RecordedEffects {
         }
         self.input_effects.draw_keyboard_to(surface, now)?;
         let playback_frame = RenderFrame {
-            timestamp_ms: frame.timestamp_ms.saturating_sub(self.playback_origin_ms),
+            timestamp_ms: playback_ms,
             ..frame
         };
         self.playback
@@ -286,12 +314,24 @@ impl RecordedEffects {
     /// Premultiplied SDR layers for native HDR composition. Masked cursor pixels need a
     /// background-aware backend and are rejected instead of silently changing their meaning.
     pub fn render_tiles(&mut self, frame: RenderFrame) -> Result<Vec<Tile>, String> {
+        self.render_tiles_at_playback_time(
+            frame,
+            frame.timestamp_ms.saturating_sub(self.playback_origin_ms),
+        )
+    }
+
+    /// HDR layers share the same independent source and playback clocks as SDR composition.
+    pub fn render_tiles_at_playback_time(
+        &mut self,
+        frame: RenderFrame,
+        playback_ms: u64,
+    ) -> Result<Vec<Tile>, String> {
         let mut tiles = std::mem::replace(
             &mut self.tiles,
             TileSurface::new((self.config.output_width, self.config.output_height)),
         );
         tiles.clear();
-        let result = self.draw_to(&mut tiles, frame);
+        let result = self.draw_to_at_playback_time(&mut tiles, frame, playback_ms);
         let snapshot = result.map(|()| tiles.snapshot());
         self.tiles = tiles;
         snapshot
@@ -819,6 +859,55 @@ mod tests {
             .apply_rgba(&mut pixels(), frame(30, 6000, 0.5))
             .unwrap();
         assert_eq!(effects.playback_caption(), "00:01 / 00:03");
+    }
+
+    #[test]
+    fn retimed_playback_badge_and_source_effects_use_independent_clocks() {
+        let mut policy = config(PlaybackOverlay::PlaybackTime { rgba: [255; 4] });
+        policy.effects.show_cursor = false;
+        policy.effects.mouse_click_rgba = [30, 180, 255, 180];
+        let mut source_policy = policy.clone();
+        source_policy.playback_overlay = PlaybackOverlay::None;
+        let mut retimed =
+            RecordedEffects::new_with_rasterizers(policy, (120, 100), None, Some(Box::new(Glyph)))
+                .unwrap()
+                .with_timeline(FinalizedTimeline::new(4000, 30).unwrap());
+        let mut source = RecordedEffects::new(source_policy, (120, 100), None).unwrap();
+        let click = input(
+            0,
+            5000,
+            RecordedInput::Click(RecordedMouseClick {
+                x: 60,
+                y: 80,
+                button: InputMouseButton::Left,
+                down: true,
+                key: KeyEvent {
+                    at_ms: 5000,
+                    key: 0x200,
+                    down: true,
+                    label: "Left click".into(),
+                    modifiers: vec![],
+                },
+            }),
+        );
+        retimed.observe(&click).unwrap();
+        source.observe(&click).unwrap();
+        let mut actual = pixels();
+        let mut expected = pixels();
+        retimed
+            .apply_rgba_at_playback_time(&mut actual, frame(30, 5200, 0.25), 1000)
+            .unwrap();
+        source
+            .apply_rgba(&mut expected, frame(30, 5200, 0.25))
+            .unwrap();
+        assert_eq!(retimed.playback_caption(), "00:01 / 00:04");
+        let below_badge = 65 * 120 * 4;
+        assert_eq!(actual[below_badge..], expected[below_badge..]);
+        assert_ne!(expected[below_badge..], pixels()[below_badge..]);
+        retimed
+            .render_tiles_at_playback_time(frame(60, 6000, 0.5), 2000)
+            .unwrap();
+        assert_eq!(retimed.playback_caption(), "00:02 / 00:04");
     }
     #[test]
     fn top_badge_preserves_keycap_layout_and_fixed_insets_clip_tiny_frames() {
