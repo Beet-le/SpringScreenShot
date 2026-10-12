@@ -1704,7 +1704,9 @@ BuiltInSettingsBackend::validateLocalShortcut(SettingsLocalShortcutScope scope,
                          ? storage::ScreenRecordingShortcutSettings().allShortcuts()
                          : storage::PinToScreenShortcutSettings().allShortcuts();
     for (auto it = all.cbegin(); it != all.cend(); ++it) {
-        if (it.key() == shortcutId) {
+        if (it.key() == shortcutId ||
+            (scope == SettingsLocalShortcutScope::PinToScreen &&
+             !storage::PinToScreenShortcutSettings::actionsMayConflict(shortcutId, it.key()))) {
             continue;
         }
         for (const shortcuts::ShortcutBinding& existing : it.value()) {

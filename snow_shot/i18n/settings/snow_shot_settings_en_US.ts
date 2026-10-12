@@ -2005,6 +2005,10 @@
             <translation>Decrease scale by 10%</translation>
         </message>
         <message>
+            <source>Decrease speed</source>
+            <translation>Decrease speed</translation>
+        </message>
+        <message>
             <source>Default</source>
             <translation>Default</translation>
         </message>
@@ -2537,6 +2541,10 @@
             <translation>Increase scale by 10%</translation>
         </message>
         <message>
+            <source>Increase speed</source>
+            <translation>Increase speed</translation>
+        </message>
+        <message>
             <source>Input Monitoring</source>
             <translation>Input Monitoring</translation>
         </message>
@@ -2841,6 +2849,10 @@
             <translation>Network proxy</translation>
         </message>
         <message>
+            <source>Next frame</source>
+            <translation>Next frame</translation>
+        </message>
+        <message>
             <source>Next screenshot history</source>
             <translation>Next screenshot history</translation>
         </message>
@@ -3097,6 +3109,10 @@
             <translation>Pinned-window shortcuts</translation>
         </message>
         <message>
+            <source>Play / Pause</source>
+            <translation>Play / Pause</translation>
+        </message>
+        <message>
             <source>Play a shutter sound when capturing the focused window or current display.</source>
             <translation>Play a shutter sound when capturing the focused window or current display.</translation>
         </message>
@@ -3127,6 +3143,10 @@
         <message>
             <source>Preview window groups, then release the shortcut keys to switch</source>
             <translation>Preview window groups, then release the shortcut keys to switch</translation>
+        </message>
+        <message>
+            <source>Previous frame</source>
+            <translation>Previous frame</translation>
         </message>
         <message>
             <source>Previous screenshot history</source>
@@ -3311,6 +3331,10 @@
         <message>
             <source>Reset canvas</source>
             <translation>Reset canvas</translation>
+        </message>
+        <message>
+            <source>Reset speed</source>
+            <translation>Reset speed</translation>
         </message>
         <message>
             <source>Reset transform</source>

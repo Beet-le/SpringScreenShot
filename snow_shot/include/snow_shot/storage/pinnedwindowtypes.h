@@ -4,6 +4,7 @@
 #include "pinnedwindowplacement.h"
 #include "pinnedsourceidentity.h"
 #include "capturehistorytypes.h"
+#include "snow_shot/image/screenshotanimationsource.h"
 #include <QByteArray>
 #include <QDateTime>
 #include <QImage>
@@ -67,6 +68,9 @@ struct PinnedWindowRecord final {
     QString groupId = QStringLiteral("default");
     PinnedWindowSourceKind sourceKind = PinnedWindowSourceKind::ImageData;
     QImage image;
+    std::shared_ptr<const ScreenshotAnimationSource> animationSource;
+    int animationSpeedPercent = 100;
+    bool animationPlaying = true;
     QString originalFilePath;
     QString originalFileName;
     QString originalHtml;

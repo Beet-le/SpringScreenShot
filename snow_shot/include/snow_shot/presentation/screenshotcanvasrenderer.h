@@ -117,6 +117,8 @@ class ScreenshotCanvasRenderer final : public SnowCanvasCustomRenderer {
     // Sampling can use captures outside this overlay's background viewport.
     void setImageSource(ScreenshotImageSource source, const QRectF& damage = {},
                         const ScreenshotImageSource& samplingSource = {});
+    // Pinned animation bypasses canvas reconstruction and annotation caches.
+    void setPinnedAnimationFrame(const QImage& image, const QRectF& canvasRect);
     [[nodiscard]] ScreenshotImageSource imageSourceSnapshot() const {
         return m_imageSource;
     }

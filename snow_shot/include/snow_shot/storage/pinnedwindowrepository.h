@@ -41,6 +41,7 @@ struct PinnedWindowPreviewSource final {
 };
 
 enum class PinnedWindowOperation {
+    AnimationSourceHash,
     PayloadReadAdmission,
     PayloadRead,
     PayloadWrite,

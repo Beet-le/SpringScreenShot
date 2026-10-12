@@ -1167,6 +1167,16 @@ void ScreenshotCanvasRenderer::setImageViewportPhysicalSize(const QSize& size) {
     m_canvas.update();
 }
 
+void ScreenshotCanvasRenderer::setPinnedAnimationFrame(const QImage& image,
+                                                       const QRectF& canvasRect) {
+    m_imageSource = ScreenshotImageSource::fromImage(image, canvasRect);
+    m_samplingImageSource = m_imageSource;
+    m_opaqueImageCanvasRects.clear();
+    m_opaqueCoverageValid = false;
+    invalidateCachedContent();
+    m_canvas.update(canvasImageDamageRegion(canvasRect));
+}
+
 void ScreenshotCanvasRenderer::setPinnedViewportRect(const QRectF& rect) {
     const std::optional<QRectF> normalized =
         rect.isValid() && !rect.isEmpty() ? std::optional<QRectF>(rect.normalized()) : std::nullopt;

@@ -158,6 +158,7 @@ bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QBy
             const bool keepTarget =
                 !window.m_presented || window.m_interactionResizeHandle ||
                 window.m_selectionGeometryActive || window.m_attentionOrigin.isValid() ||
+                window.m_platform->isMinimized() ||
                 window.m_nativeGeometryController->phase() == Phase::Programmatic;
             const QSize desired =
                 keepTarget
@@ -331,7 +332,7 @@ bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QBy
             window.endAuxiliaryWindowInteraction();
         }
         if (nativeMessage->message == WM_WINDOWPOSCHANGING &&
-            window.m_nativeGeometryController != nullptr) {
+            window.m_nativeGeometryController != nullptr && !window.m_platform->isMinimized()) {
             auto* position = pointerFromLParam<WINDOWPOS>(nativeMessage->lParam);
             if (position != nullptr) {
                 const bool moveRequested = (position->flags & SWP_NOMOVE) == 0;
@@ -384,6 +385,14 @@ bool PinnedWindowWindowsEvents::handle(ScreenshotPinnedWindow& window, const QBy
             if (dpi > 0)
                 window.m_windowsNativeDpi = dpi;
             auto* suggestedRect = pointerFromLParam<RECT>(nativeMessage->lParam);
+            if (window.m_platform->isMinimized()) {
+                // An iconic suggestion must not become content geometry. Qt still
+                // receives the notification to update its display/DPI bookkeeping.
+                if (suggestedRect)
+                    writeNativeRect(window.m_nativeGeometryController->targetGeometry(),
+                                    suggestedRect);
+                return false;
+            }
             const bool shakingDuringApply =
                 window.m_attentionOrigin.isValid() && window.m_platformApplying;
             if (!shakingDuringApply)

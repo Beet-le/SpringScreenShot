@@ -56,6 +56,7 @@ if(NOT SNOW_IMAGE_PROFILE STREQUAL "full" AND
 endif()
 
 set(SNOW_IMAGE_PUBLIC_HEADERS
+    include/snow/image/animation.h
     include/snow/image/codec.h
     include/snow/image/document.h
     include/snow/image/export.h
@@ -73,6 +74,7 @@ set(SNOW_IMAGE_PUBLIC_HEADERS
 )
 
 set(SNOW_IMAGE_SOURCES
+    src/animation.cpp
     src/codec_registry.cpp
     src/codec_registry.h
     src/compression_backend.cpp
@@ -124,6 +126,7 @@ if(SNOW_IMAGE_ENABLE_SANITIZERS)
 endif()
 
 if(SNOW_IMAGE_CODEC_PNG)
+    enable_language(C)
     find_package(PNG REQUIRED)
     find_package(ZLIB REQUIRED)
     include(CheckCXXSourceCompiles)
@@ -138,7 +141,20 @@ if(SNOW_IMAGE_CODEC_PNG)
         message(FATAL_ERROR
             "PNG support requires zlib-ng compatibility mode. Configure through the repository vcpkg overlay.")
     endif()
-    list(APPEND SNOW_IMAGE_SOURCES src/codecs/png_codec.cpp src/codecs/png_codec.h)
+    add_library(SnowImage_png_jump OBJECT src/codecs/png_jump.c src/codecs/png_jump.h)
+    target_link_libraries(SnowImage_png_jump PRIVATE PNG::PNG)
+    set_target_properties(SnowImage_png_jump PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    # Directory warning options include C++-only flags. The error boundary is C
+    # so libpng can jump without crossing nontrivial automatic objects.
+    if(MSVC)
+        set_property(TARGET SnowImage_png_jump PROPERTY COMPILE_OPTIONS
+            /FS /W4 /WX /sdl /utf-8)
+    else()
+        set_property(TARGET SnowImage_png_jump PROPERTY COMPILE_OPTIONS
+            -Wall -Wextra -Wpedantic -Werror -Wconversion -Wshadow -Wstrict-prototypes)
+    endif()
+    list(APPEND SNOW_IMAGE_SOURCES src/codecs/png_codec.cpp src/codecs/png_codec.h
+        $<TARGET_OBJECTS:SnowImage_png_jump>)
     list(APPEND SNOW_IMAGE_PRIVATE_LIBRARIES PNG::PNG ZLIB::ZLIB)
     list(APPEND SNOW_IMAGE_PRIVATE_DEFINITIONS SNOW_IMAGE_HAS_PNG=1)
 endif()
@@ -347,6 +363,7 @@ if(SNOW_IMAGE_BUILD_STATIC)
     # those private definitions do not collide when included into one TU.
     set_source_files_properties(
         src/raster.cpp
+        src/animation.cpp
         src/raster_buffer.cpp
         src/codecs/heif_codec.cpp
         src/codecs/jxl_codec.cpp

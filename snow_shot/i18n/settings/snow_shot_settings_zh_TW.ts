@@ -2005,6 +2005,10 @@
             <translation>縮放比例減少 10%</translation>
         </message>
         <message>
+            <source>Decrease speed</source>
+            <translation>降低速度</translation>
+        </message>
+        <message>
             <source>Default</source>
             <translation>預設</translation>
         </message>
@@ -2537,6 +2541,10 @@
             <translation>縮放比例增加 10%</translation>
         </message>
         <message>
+            <source>Increase speed</source>
+            <translation>提高速度</translation>
+        </message>
+        <message>
             <source>Input Monitoring</source>
             <translation>輸入監控</translation>
         </message>
@@ -2841,6 +2849,10 @@
             <translation>網路代理</translation>
         </message>
         <message>
+            <source>Next frame</source>
+            <translation>下一影格</translation>
+        </message>
+        <message>
             <source>Next screenshot history</source>
             <translation>下一筆截圖歷史</translation>
         </message>
@@ -3097,6 +3109,10 @@
             <translation>固定到螢幕視窗快捷鍵</translation>
         </message>
         <message>
+            <source>Play / Pause</source>
+            <translation>播放 / 暫停</translation>
+        </message>
+        <message>
             <source>Play a shutter sound when capturing the focused window or current display.</source>
             <translation>擷取焦點視窗或目前顯示器時播放快門聲音。</translation>
         </message>
@@ -3127,6 +3143,10 @@
         <message>
             <source>Preview window groups, then release the shortcut keys to switch</source>
             <translation>預覽視窗群組，放開所有快捷鍵後切換</translation>
+        </message>
+        <message>
+            <source>Previous frame</source>
+            <translation>上一影格</translation>
         </message>
         <message>
             <source>Previous screenshot history</source>
@@ -3311,6 +3331,10 @@
         <message>
             <source>Reset canvas</source>
             <translation>重設畫布</translation>
+        </message>
+        <message>
+            <source>Reset speed</source>
+            <translation>重設速度</translation>
         </message>
         <message>
             <source>Reset transform</source>

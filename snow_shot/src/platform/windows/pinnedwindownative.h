@@ -36,6 +36,10 @@ enum class PaintSynchronization {
 [[nodiscard]] bool
 applyClientGeometry(WId windowId, const QRect& geometry,
                     GeometryUpdate update = GeometryUpdate::PreserveClientPixels);
+// Native minimize notifications can precede Qt's window-state notification.
+[[nodiscard]] bool isMinimized(WId windowId);
+// A minimized pinned surface reports its normal restore rectangle; its icon
+// rectangle never participates in content geometry or persistence.
 [[nodiscard]] QRect currentClientGeometry(WId windowId);
 // The complete native window frame, which is wider than the client area on
 // Windows because the pinned surface re-applies WS_THICKFRAME. Falls back to

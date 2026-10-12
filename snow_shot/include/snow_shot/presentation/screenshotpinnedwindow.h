@@ -9,6 +9,7 @@
 #include "snow_shot/presentation/screenshotclipboardservice.h"
 #include "snow_shot/presentation/screenshotexportcoordinator.h"
 #include "snow_shot/presentation/screenshotimagesource.h"
+#include "snow_shot/image/screenshotanimationsource.h"
 #include "snow_shot/presentation/screenshotwheelinput.h"
 #include "snow_shot/presentation/screenshotrecognitionresults.h"
 #include "snow_shot/presentation/screenshotrecognitionfileexport.h"
@@ -91,6 +92,7 @@ class ScreenshotExportSource;
 struct ScreenshotPinnedViewportExportSource;
 class ScreenshotPrintService;
 class ScreenshotPinnedDragExport;
+class ScreenshotAnimationPlayback;
 class ScreenshotPinnedHideToTopController;
 class ScreenshotPinnedControlsPresence;
 class ScreenshotPinnedNativeGeometryController;
@@ -149,6 +151,9 @@ class ScreenshotPinnedWindow final : public QWidget {
         QSize initialWindowSize;
         QString mouseWheelZoomMode = QStringLiteral("mouse_position");
         ScreenshotImageSource imageSource;
+        std::shared_ptr<const ScreenshotAnimationSource> animationSource;
+        QImage initialPreparedAnimationFrame;
+        QTransform initialPreparedAnimationTransform;
         ScreenshotImageLoader imageLoader;
         ScreenshotPrintService* printService = nullptr;
         QScreen* screen = nullptr;
@@ -167,6 +172,8 @@ class ScreenshotPinnedWindow final : public QWidget {
         bool translationVisible = false;
         QString persistenceId;
         bool restorePersistentState = false;
+        int persistedAnimationSpeedPercent = 100;
+        bool persistedAnimationPlaying = true;
         double persistedFirstCreationTextDpi = 1.0;
         int persistedOpacityPercent = 100;
         int persistedClickThroughOpacityPercent = 50;
@@ -210,6 +217,8 @@ class ScreenshotPinnedWindow final : public QWidget {
     ~ScreenshotPinnedWindow() override;
 
     bool present(const Config& config, std::function<void(bool, QImage)> completion = {});
+    [[nodiscard]] QTransform contentReplacementTransform() const;
+    [[nodiscard]] bool animationTransformPending() const;
     bool prewarm(QScreen* screen = nullptr);
     QRect currentNativeGeometry() const;
     [[nodiscard]] snow_shot::storage::PinnedWindowRecord persistenceSnapshot() const;
@@ -275,6 +284,7 @@ class ScreenshotPinnedWindow final : public QWidget {
         Move,
         Scale,
         ImageTransform,
+        ImageTransformRollback,
         Thumbnail,
         Animation,
         Attention,
@@ -320,6 +330,12 @@ class ScreenshotPinnedWindow final : public QWidget {
     void updateShowMainInterfaceAction();
     void retranslateUi();
     void refreshContextMenu();
+    void configureAnimationPlayback(int speedPercent = 100, bool playing = true);
+    void updateAnimationSuspension();
+    void executeAnimationCommand(const QString& id);
+    void acknowledgeAnimationPaint();
+    void restorePaintedAnimationTransform();
+    [[nodiscard]] bool animatedImage() const;
     void showContextMenu(const QPoint& globalPosition);
     void updateCanvasViewport();
     void updateBorderOutline();
@@ -382,6 +398,8 @@ class ScreenshotPinnedWindow final : public QWidget {
     void requestContentReplacement(QStringList paths,
                                    std::optional<ScreenshotClipboardContentSnapshot> snapshot = {});
     bool replaceContent(ScreenshotClipboardContent content, bool* rejectedByLock = nullptr);
+    void finishContentReplacement(ScreenshotClipboardContent content, quint64 generation);
+    void finishQueuedContentReplacement();
     void cancelContentReplacement();
     void printContent();
     void saveAsFile();
@@ -400,6 +418,9 @@ class ScreenshotPinnedWindow final : public QWidget {
     void applyImageOperation(const QTransform& operation, int quarterTurnDelta = 0);
     void resetImageTransform();
     void applyImageTransform(const QTransform& transform, int quarterTurns);
+    void commitPreparedAnimationTransform(const QTransform& transform, int quarterTurns,
+                                          QImage original, QImage transformed, int frameIndex,
+                                          quint64 token);
     [[nodiscard]] QRect imageTransformGeometry(int quarterTurns) const;
     void rebuildTransformedImage();
     void applyScale(int percent);
@@ -586,6 +607,10 @@ class ScreenshotPinnedWindow final : public QWidget {
     QPointer<QAction> m_groupMenuAction;
     QPointer<QAction> m_ocrAction;
     QPointer<QAction> m_drawingAction;
+    QPointer<QAction> m_animationToggleAction;
+    QPointer<QAction> m_animationSpeedAction;
+    QPointer<QAction> m_animationDecreaseAction;
+    QPointer<QAction> m_animationIncreaseAction;
     QPointer<QAction> m_thumbnailAction;
     QPointer<QAction> m_hideToTopAction;
     QPointer<QAction> m_clickThroughAction;
@@ -617,6 +642,28 @@ class ScreenshotPinnedWindow final : public QWidget {
     ScreenshotImageSource m_imageSource;
     QImage m_originalImage;
     QImage m_transformedImage;
+    std::shared_ptr<const ScreenshotAnimationSource> m_animationSource;
+    std::unique_ptr<ScreenshotAnimationPlayback> m_animationPlayback;
+    QPointer<QScreen> m_animationScreen;
+    QMetaObject::Connection m_animationRefreshRateConnection;
+    QImage m_pendingAnimationOriginal;
+    QImage m_pendingAnimationTransformed;
+    quint64 m_pendingAnimationToken = 0;
+    struct AnimationTransformSnapshot {
+        QRectF backgroundRect;
+        QRectF surfaceRect;
+        QTransform transform;
+        QRect contentGeometry;
+        int quarterTurns = 0;
+    };
+    std::optional<AnimationTransformSnapshot> m_animationTransformSnapshot;
+    std::optional<QTransform> m_requestedAnimationTransform;
+    int m_requestedAnimationQuarterTurns = 0;
+    std::optional<ScreenshotClipboardContent> m_queuedAnimationReplacement;
+    int m_animationSpeedPercent = 100;
+    bool m_animationPlaying = true;
+    bool m_staticEditingEnabled = true;
+    bool m_staticAutomaticTextRecognition = true;
     std::optional<bool> m_checkerboardEnabled;
     QTransform m_imageTransform;
     std::shared_ptr<ScreenshotOcrPresentation> m_originalOcrPresentation;

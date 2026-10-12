@@ -1,6 +1,7 @@
 #include "snow_shot/presentation/screenshotfilepinbatch.h"
 
 #include "snow_shot/platform/selectedfiles.h"
+#include "pinned_animation_fixtures.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -370,6 +371,38 @@ void clipboardFiles() {
     require(ScreenshotClipboardContentReader::localFilePaths(&text).isEmpty(),
             "non-file clipboard content must retain the single-content flow");
 }
+
+void animatedFileBatchesRetainSources() {
+    QTemporaryDir directory;
+    const auto fixtures = pinned_animation_fixtures::images();
+    QStringList paths;
+    for (const auto& fixture : fixtures) {
+        const auto path = directory.filePath(QStringLiteral("source.") + fixture.suffix);
+        QFile file(path);
+        require(file.open(QIODevice::WriteOnly) &&
+                    file.write(fixture.bytes) == fixture.bytes.size(),
+                "animated batch fixtures must be written");
+        paths.append(path);
+    }
+    ScreenshotFilePinBatch batch;
+    QList<ScreenshotClipboardContent> retained;
+    batch.start(paths, [&](ScreenshotClipboardContent content) {
+        const auto index = retained.size();
+        require(content.animationSource && content.animationSource->isAnimated() &&
+                    content.animationSource->encoded == fixtures.at(index).bytes &&
+                    content.originalContent.localFilePath == paths.at(index),
+                "batched animated files must retain source bytes and selection order");
+        retained.append(std::move(content));
+        return true;
+    });
+    finish(batch);
+    require(retained.size() == fixtures.size(), "every animated file must be presented");
+    for (qsizetype index = 0; index < paths.size(); ++index) {
+        require(QFile::remove(paths.at(index)) &&
+                    retained.at(index).animationSource->encoded == fixtures.at(index).bytes,
+                "completed batches must transfer immutable source ownership to their pins");
+    }
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -382,6 +415,7 @@ int main(int argc, char** argv) {
     stoppingDiscardsPrefetchedDecodes();
     selectionAndCancellation();
     clipboardFiles();
+    animatedFileBatchesRetainSources();
     selectionFailures();
     ScreenshotExportCoordinator::shared().shutdown();
     return 0;

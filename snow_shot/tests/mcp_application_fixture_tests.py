@@ -134,6 +134,55 @@ def dimensions(path):
     return struct.unpack(">II", data[16:24])
 
 
+def animated_image(path, kind, width, height):
+    if kind == "gif":
+        data = bytearray(base64.b64decode(
+            "R0lGODlhAgACAIEAAP8AAAAAAAAAAAAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQACgAAACwAAAAAAgAC"
+            "AAAIBgABCAQQEAAh+QQBFAABACwAAAAAAgACAIEAgAAAAAAAAAAAAAAIBgABCAQQEAA7"))
+        data[6:10] = struct.pack("<HH", width, height)
+    elif kind == "webp":
+        data = bytearray(base64.b64decode(
+            "UklGRsYAAABXRUJQVlA4WAoAAAACAAAAAQAAAQAAQU5JTQYAAAAAAAAAAABBTk1GSgAAAAAAAAAAAAEA"
+            "AAEAAGQAAAJWUDggMgAAADABAJ0BKgIAAgABQCYloAADcAD+8ut///mwP/bz/wR6Af//0uD//pcH//S4"
+            "P/SkAAAAQU5NRkgAAAAAAAAAAAABAAABAADIAAAAVlA4IDAAAAA0AQCdASoCAAIAAAAmJaAAA3AA/vNpl"
+            "//5sD/yD/5B9/v//00j/+mkf/00j5TQAAA="))
+        data[24:30] = (width - 1).to_bytes(3, "little") + (height - 1).to_bytes(3, "little")
+    else:
+        assert kind == "apng", kind
+
+        def chunk(chunk_type, payload):
+            return (struct.pack(">I", len(payload)) + chunk_type + payload +
+                    struct.pack(">I", zlib.crc32(chunk_type + payload)))
+
+        data = b"\x89PNG\r\n\x1a\n" + chunk(
+            b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+        data += chunk(b"acTL", struct.pack(">II", 2, 0))
+        for index, color in enumerate(((255, 0, 0, 255), (0, 0, 255, 255))):
+            data += chunk(b"fcTL", struct.pack(
+                ">IIIIIHHBB", index, width, height, 0, 0, index + 1, 10, 0, 0))
+            pixels = b"".join(b"\0" + bytes(color) * width for _ in range(height))
+            compressed = zlib.compress(pixels)
+            data += chunk(b"IDAT", compressed) if index == 0 else chunk(
+                b"fdAT", struct.pack(">I", 2) + compressed)
+        data += chunk(b"IEND", b"")
+    path.write_bytes(data)
+
+
+def assert_static_png(path, expected_size):
+    assert dimensions(path) == expected_size, (path, dimensions(path), expected_size)
+    data = path.read_bytes()
+    position = 8
+    while position < len(data):
+        length = struct.unpack(">I", data[position:position + 4])[0]
+        kind = data[position + 4:position + 8]
+        assert kind != b"acTL", (path, "Export unexpectedly contains animation control")
+        assert position + length + 12 <= len(data), path
+        position += length + 12
+        if kind == b"IEND":
+            break
+    assert position == len(data), path
+
+
 def await_job(client, response):
     identifier = response["result"]["job_id"]
     deadline = time.monotonic() + 15
@@ -553,6 +602,92 @@ def exercise(client, directory):
             "scope": "Isolated app storage and local HTTP provider; no external providers or recording devices"}
 
 
+def exercise_animation(client, directory):
+    for kind in ("gif", "webp", "apng"):
+        source = directory / f"animation-source.{kind}"
+        animated_image(source, kind, 320, 180)
+        pin = client.tool("snow_shot_pinned_create", {
+            "source": {"kind": "file", "path": str(source)}})
+        identifier = pin["result"]["id"]
+        assert pin["result"]["ready"], pin
+        source.unlink()
+
+        def state():
+            return client.tool("snow_shot_pinned_get", {"id": identifier})
+
+        def mutate(tool, expected_error=None, **kwargs):
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                current = state()
+                response = client.request("tools/call", {"name": tool, "arguments": dict(
+                    id=identifier, expected_revision=current["revision"], **kwargs)})
+                result = response["structuredContent"]
+                if not response.get("isError", False):
+                    assert expected_error is None, (expected_error, response)
+                    return result
+                error = result["error"]["code"]
+                if error == expected_error:
+                    return result
+                assert error in ("stale_revision", "busy"), response
+                time.sleep(.025)
+            raise AssertionError("animated pin never reached a stable revision")
+
+        # Disabling editing verifies that imports retained animation identity,
+        # rather than silently pinning only the first decoded frame.
+        mutate("snow_shot_pinned_edit", expected_error="action_unavailable",
+               action="editing", payload={"enabled": True})
+        mutate("snow_shot_pinned_update", properties={"rotation": "clockwise",
+               "show_border": False, "show_shadow": False})
+        deadline = time.monotonic() + 10
+        while state()["result"]["quarter_turns"] != 1:
+            assert time.monotonic() < deadline, state()
+            time.sleep(.025)
+        original = directory / f"animation-original-{kind}.png"
+        rendered = directory / f"animation-rendered-{kind}.png"
+        mutate("snow_shot_pinned_export", output="save", original=True, path=str(original))
+        mutate("snow_shot_pinned_export", output="save", path=str(rendered))
+        assert_static_png(original, (320, 180))
+        assert_static_png(rendered, (180, 320))
+
+        # Management hide unloads the live window. Restoring must use the
+        # retained encoded source after its input file has been removed.
+        mutate("snow_shot_pinned_action", action="hide")
+        hidden = state()["result"]
+        assert hidden["hidden"] and not hidden["open"], hidden
+        replacement = directory / f"animation-replacement.{kind}"
+        animated_image(replacement, kind, 400, 220)
+        mutate("snow_shot_pinned_replace", expected_error="window_closed",
+               source={"kind": "file", "path": str(replacement)})
+        mutate("snow_shot_pinned_action", action="show")
+        deadline = time.monotonic() + 10
+        while not state()["result"].get("ready", False):
+            assert time.monotonic() < deadline, state()
+            time.sleep(.025)
+        restored = state()["result"]
+        assert restored["quarter_turns"] == 1 and restored["visible"], restored
+
+        # Rotated replacement prepares its first display raster on the import
+        # worker and retains the new animation independently of its input file.
+        mutate("snow_shot_pinned_replace", source={"kind": "file", "path": str(replacement)})
+        replacement.unlink()
+        replaced = state()["result"]
+        assert replaced["quarter_turns"] == 1 and replaced["visible"], replaced
+        mutate("snow_shot_pinned_edit", expected_error="action_unavailable",
+               action="editing", payload={"enabled": True})
+        original = directory / f"animation-replaced-original-{kind}.png"
+        rendered = directory / f"animation-replaced-rendered-{kind}.png"
+        mutate("snow_shot_pinned_export", output="save", original=True, path=str(original))
+        mutate("snow_shot_pinned_export", output="save", path=str(rendered))
+        assert_static_png(original, (400, 220))
+        assert_static_png(rendered, (220, 400))
+        mutate("snow_shot_pinned_action", action="destroy")
+    return {"domains": ["animated_file_import", "animated_transform_worker",
+                        "rotated_animation_replacement", "retained_encoded_source",
+                         "hidden_record_restore", "unloaded_replacement_rejection",
+                        "current_original_static_export", "quit_acknowledgement"],
+            "scope": "Isolated production router with GIF, WebP and APNG sources"}
+
+
 def exercise_clipboard(client, directory):
     source = directory / "clipboard-source.png"
     png(source)
@@ -618,6 +753,8 @@ def main():
                         help="Verify disabling acknowledges before private IPC teardown")
     parser.add_argument("--clipboard-only", action="store_true",
                         help="Exercise only repeated media clipboard publication and cancellation")
+    parser.add_argument("--animation-only", action="store_true",
+                        help="Exercise only animated media imports, transforms, replacement and exports")
     args = parser.parse_args()
     if (args.recording or args.native_capture) and args.platform == "offscreen":
         parser.error("native capture and recording require --platform windows or --platform cocoa")
@@ -639,7 +776,9 @@ def main():
                                               (directory / "application.log").read_text(encoding="utf-8"))
                 client = Client(args.bridge, descriptor)
                 try:
-                    if args.clipboard_only:
+                    if args.animation_only:
+                        report = exercise_animation(client, directory)
+                    elif args.clipboard_only:
                         report = exercise_clipboard(client, directory)
                     else:
                         report = exercise(client, directory)

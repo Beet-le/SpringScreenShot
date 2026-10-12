@@ -32,6 +32,16 @@ int main(int argc, char** argv) {
             "initialize pinned shortcut settings storage");
     const storage::PinToScreenShortcutSettings pinned;
     const auto defaults = pinned.allShortcuts();
+    require(pinned.shortcuts(QStringLiteral("toggle_playback")) ==
+                    snow_shot::shortcuts::ShortcutBindingList{QStringLiteral("Space")} &&
+                pinned.shortcuts(QStringLiteral("drawing_mode")) ==
+                    snow_shot::shortcuts::ShortcutBindingList{QStringLiteral("Space")},
+            "mutually exclusive annotation and playback must both default to Space");
+    for (const QString& id :
+         {QStringLiteral("next_frame"), QStringLiteral("previous_frame"),
+          QStringLiteral("decrease_playback_speed"), QStringLiteral("increase_playback_speed"),
+          QStringLiteral("reset_playback_speed")})
+        require(pinned.shortcuts(id).isEmpty(), "other playback shortcuts start unassigned");
     require(pinned.shortcuts(QStringLiteral("toggle_lock")) ==
                 snow_shot::shortcuts::ShortcutBindingList{QStringLiteral("L")},
             "lock must default to L");
@@ -50,6 +60,20 @@ int main(int argc, char** argv) {
         settings::BuiltInSettingsBackend backend(globalShortcuts);
         settings::SettingsRuntimeSession session(settings::builtInSettingsRegistry(), backend);
         constexpr auto scope = settings::SettingsLocalShortcutScope::PinToScreen;
+        require(session.applyLocalShortcuts(scope, QStringLiteral("next_frame"),
+                                            {QStringLiteral("Space")}) == false,
+                "simultaneously available playback commands reject conflicting shortcuts");
+        require(session.applyLocalShortcuts(scope, QStringLiteral("toggle_playback"),
+                                            {QStringLiteral("Ctrl+Alt+F11")}) &&
+                    session.applyLocalShortcuts(scope, QStringLiteral("drawing_mode"),
+                                                {QStringLiteral("Ctrl+Alt+F11")}),
+                "static-only and animated-only commands may share a configured shortcut");
+        require(!session.applyLocalShortcuts(scope, QStringLiteral("thumbnail_mode"),
+                                             {QStringLiteral("Ctrl+Alt+F11")}),
+                "commands available for both content types must still reject conflicts");
+        require(session.reset(settings::SettingsSectionReset::PinToScreenShortcuts) &&
+                    pinned.allShortcuts() == defaults,
+                "reset accepts the mutually exclusive default Space assignments");
         for (const QString& id : {QStringLiteral("always_on_top"), QStringLiteral("show_border"),
                                   QStringLiteral("show_shadow"), QStringLiteral("toggle_lock"),
                                   QStringLiteral("print")}) {

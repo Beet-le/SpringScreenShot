@@ -485,6 +485,10 @@
             <translation>减少 10%</translation>
         </message>
         <message>
+            <source>Decrease speed</source>
+            <translation>降低速度</translation>
+        </message>
+        <message>
             <source>Default</source>
             <translation>默认</translation>
         </message>
@@ -561,6 +565,10 @@
             <translation>增加 10%</translation>
         </message>
         <message>
+            <source>Increase speed</source>
+            <translation>提高速度</translation>
+        </message>
+        <message>
             <source>Load new content</source>
             <translation>加载新内容</translation>
         </message>
@@ -581,6 +589,10 @@
             <translation>新建分组</translation>
         </message>
         <message>
+            <source>Next frame</source>
+            <translation>下一帧</translation>
+        </message>
+        <message>
             <source>Opacity</source>
             <translation>不透明度</translation>
         </message>
@@ -589,8 +601,24 @@
             <translation>不透明度：%1%</translation>
         </message>
         <message>
+            <source>Pause</source>
+            <translation>暂停</translation>
+        </message>
+        <message>
+            <source>Play</source>
+            <translation>播放</translation>
+        </message>
+        <message>
+            <source>Playback speed: %1%</source>
+            <translation>播放速度：%1%</translation>
+        </message>
+        <message>
             <source>Preparing cloud upload...</source>
             <translation>正在准备云上传…</translation>
+        </message>
+        <message>
+            <source>Previous frame</source>
+            <translation>上一帧</translation>
         </message>
         <message>
             <source>Process image</source>
@@ -599,6 +627,10 @@
         <message>
             <source>Recognizing text</source>
             <translation>正在识别文本</translation>
+        </message>
+        <message>
+            <source>Reset speed</source>
+            <translation>重置速度</translation>
         </message>
         <message>
             <source>Reset transform</source>
@@ -643,6 +675,10 @@
         <message>
             <source>Supported files (%1)</source>
             <translation>支持的文件 (%1)</translation>
+        </message>
+        <message>
+            <source>The animation could not be played</source>
+            <translation>无法播放动画</translation>
         </message>
         <message>
             <source>The image could not be saved automatically: %1</source>

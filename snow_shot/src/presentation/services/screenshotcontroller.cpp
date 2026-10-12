@@ -3860,7 +3860,8 @@ void ScreenshotController::Impl::pinClipboardContentToScreen() {
                            snow_shot::storage::PinnedWindowCreationSource::Clipboard,
                            std::move(decoded.sourceIdentity),
                            appearance ? appearance->showBorder : std::nullopt,
-                           appearance ? appearance->showShadow : std::nullopt);
+                           appearance ? appearance->showShadow : std::nullopt,
+                           std::move(decoded.animationSource));
             },
             filter);
         if (m_selectionExportUiServices != nullptr) {
@@ -4110,7 +4111,8 @@ void ScreenshotController::Impl::pinClipboardContentToScreen() {
                                        : std::nullopt,
                     snow_shot::storage::PinnedWindowCreationSource::Clipboard, sourceIdentity,
                     decoded.appearance ? decoded.appearance->showBorder : std::nullopt,
-                    decoded.appearance ? decoded.appearance->showShadow : std::nullopt)) {
+                    decoded.appearance ? decoded.appearance->showShadow : std::nullopt,
+                    std::move(decoded.animationSource))) {
                 SNOW_SHOT_PIN_PERF_FINISH(false);
                 receiver->m_impl->m_messages->error(
                     QString::fromLatin1(kPinClipboardMessageKey),
@@ -6973,7 +6975,8 @@ bool ScreenshotController::mcpPinContent(ScreenshotClipboardContent content,
                snow_shot::storage::PinnedWindowCreationSource::Other,
                std::move(content.sourceIdentity),
                content.appearance ? content.appearance->showBorder : std::nullopt,
-               content.appearance ? content.appearance->showShadow : std::nullopt);
+               content.appearance ? content.appearance->showShadow : std::nullopt,
+               std::move(content.animationSource));
 }
 
 bool ScreenshotController::mcpPinDocument(ScreenshotHistoryEntry entry, QImage background,

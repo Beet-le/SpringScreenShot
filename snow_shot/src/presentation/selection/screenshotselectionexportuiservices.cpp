@@ -376,8 +376,9 @@ class ScreenshotPendingPinCoordinator final : public QObject {
         if (!transaction->window.isNull() &&
             transaction->intent == snow_shot::storage::PinnedWindowCloseIntent::Preserve)
             transaction->snapshot = transaction->window->persistenceSnapshot();
-        if (transaction->snapshot.sourceKind !=
-            snow_shot::storage::PinnedWindowSourceKind::ImageData) {
+        if (transaction->snapshot.animationSource ||
+            transaction->snapshot.sourceKind !=
+                snow_shot::storage::PinnedWindowSourceKind::ImageData) {
             persistNonImageSource(*transaction);
             if (transaction->intent == snow_shot::storage::PinnedWindowCloseIntent::Close)
                 snow_shot::storage::ApplicationStorage::instance()
@@ -454,10 +455,17 @@ class ScreenshotPendingPinCoordinator final : public QObject {
         if (transaction == m_transactions.end()) {
             return;
         }
-        if (!transaction->removed && result.succeeded()) {
-            if (!transaction->window.isNull() &&
-                transaction->intent == snow_shot::storage::PinnedWindowCloseIntent::Preserve)
-                transaction->snapshot = transaction->window->persistenceSnapshot();
+        if (!transaction->window.isNull() &&
+            transaction->intent == snow_shot::storage::PinnedWindowCloseIntent::Preserve)
+            transaction->snapshot = transaction->window->persistenceSnapshot();
+        if (!transaction->removed && (transaction->snapshot.animationSource ||
+                                      transaction->snapshot.sourceKind !=
+                                          snow_shot::storage::PinnedWindowSourceKind::ImageData)) {
+            // Content may have been replaced while the initial static source's
+            // PNG was being prepared. Persist the live immutable source rather
+            // than applying that obsolete encoding to the new content.
+            persistNonImageSource(*transaction);
+        } else if (!transaction->removed && result.succeeded()) {
             if (transaction->snapshot.image.isNull() && !transaction->image.isNull()) {
                 transaction->snapshot.image = transaction->image;
             }
@@ -901,7 +909,8 @@ bool ScreenshotSelectionExportUiServices::presentDecodedContentOnScreen(
                                   : std::nullopt,
                source, std::move(content.sourceIdentity),
                content.appearance ? content.appearance->showBorder : std::nullopt,
-               content.appearance ? content.appearance->showShadow : std::nullopt);
+               content.appearance ? content.appearance->showShadow : std::nullopt,
+               std::move(content.animationSource));
 }
 
 bool ScreenshotSelectionExportUiServices::presentPinnedImage(
@@ -913,7 +922,8 @@ bool ScreenshotSelectionExportUiServices::presentPinnedImage(
     std::optional<snow_shot::storage::PinnedBorderAppearance> borderAppearance,
     std::optional<bool> checkerboardEnabled, snow_shot::storage::PinnedWindowCreationSource source,
     snow_shot::storage::PinnedSourceIdentity sourceIdentity,
-    std::optional<bool> initialBorderVisible, std::optional<bool> initialShadowVisible) {
+    std::optional<bool> initialBorderVisible, std::optional<bool> initialShadowVisible,
+    std::shared_ptr<const ScreenshotAnimationSource> animationSource) {
     const QSize imageSize =
         !image.isNull() && !image.size().isEmpty() ? image.size() : initialWindowSize;
     if (imageSize.isEmpty() || (!imageLoader && image.isNull()) || screen == nullptr ||
@@ -926,7 +936,7 @@ bool ScreenshotSelectionExportUiServices::presentPinnedImage(
         formattedPlainText, formattedTextDevicePixelRatio, std::move(originalContent),
         std::move(imageLoader), std::move(completion), std::move(borderAppearance),
         checkerboardEnabled, source, nullptr, std::move(sourceIdentity), initialBorderVisible,
-        initialShadowVisible);
+        initialShadowVisible, std::move(animationSource));
 }
 
 bool ScreenshotSelectionExportUiServices::presentCompositedSelectionImage(
@@ -955,7 +965,8 @@ bool ScreenshotSelectionExportUiServices::presentPinnedImageOnCanvas(
     std::optional<snow_shot::storage::PinnedBorderAppearance> borderAppearance,
     std::optional<bool> checkerboardEnabled, snow_shot::storage::PinnedWindowCreationSource source,
     const ScreenshotHistoryEntry* document, snow_shot::storage::PinnedSourceIdentity sourceIdentity,
-    std::optional<bool> initialBorderVisible, std::optional<bool> initialShadowVisible) {
+    std::optional<bool> initialBorderVisible, std::optional<bool> initialShadowVisible,
+    std::shared_ptr<const ScreenshotAnimationSource> animationSource) {
     SNOW_SHOT_PIN_PERF_SCOPE("ui.present_pinned_image");
     const QSize imageSize =
         !image.isNull() && !image.size().isEmpty() ? image.size() : initialWindowSize;
@@ -988,6 +999,7 @@ bool ScreenshotSelectionExportUiServices::presentPinnedImageOnCanvas(
     ScreenshotPinnedWindow::Config config;
     config.creationSource = source;
     config.sourceIdentity = std::move(sourceIdentity);
+    config.animationSource = std::move(animationSource);
     config.nativeGeometry = nativeGeometry;
     config.canvasSourceRect = canvasRect;
     config.borderAppearance = std::move(borderAppearance);
@@ -1300,51 +1312,75 @@ bool ScreenshotSelectionExportUiServices::restoreRecord(const QString& id, bool 
         snow_shot::runtime::trackRuntimeWork([this, alive, repositoryGuard, id, generation]() {
             snow_shot::platform::applyApplicationQoSToCurrentThread();
             auto loaded = repositoryGuard->loadRecord(id);
+            QImage preparedAnimationFrame;
+            QTransform preparedAnimationTransform;
+            if (loaded && loaded->animationSource) {
+                ScreenshotClipboardContent content;
+                content.image = loaded->image;
+                content.animationSource = loaded->animationSource;
+                if (!ScreenshotClipboardContentReader::prepareAnimationDisplay(
+                        content, loaded->imageTransform, [alive] { return !alive->load(); })) {
+                    loaded.reset();
+                } else {
+                    preparedAnimationFrame = std::move(content.preparedDisplayImage);
+                    // Restore assigns the persisted matrix directly. The
+                    // raster has normalized pixel bounds, while this fingerprint
+                    // matches that exact matrix for atomic geometry setup.
+                    preparedAnimationTransform = loaded->imageTransform;
+                }
+            }
             QMetaObject::invokeMethod(
                 &snow_shot::storage::ApplicationStorage::instance(),
-                snow_shot::runtime::trackRuntimeWork([this, alive, repositoryGuard, id, generation,
-                                                      loaded = std::move(loaded)]() mutable {
-                    if (!alive->load() || !m_restoringIds.contains(id) ||
-                        m_restoringIds.value(id).generation != generation)
-                        return;
-                    auto& storage = snow_shot::storage::ApplicationStorage::instance();
-                    if (!storage.isInitialized() || &storage.pinnedWindows() != repositoryGuard) {
-                        m_restoringIds.remove(id);
-                        return;
-                    }
-                    const auto found = storage.pinnedWindows().summary(id);
-                    if (!found || found->pending || found->hidden ||
-                        (m_groupManager && found->groupId != m_groupManager->activeGroupId()) ||
-                        (loaded && loaded->groupId != found->groupId)) {
-                        cancelRestore(id);
-                        return;
-                    }
-                    if (!loaded) {
-                        cancelRestore(id);
-                        if (m_restoreFailure)
-                            m_restoreFailure();
-                        return;
-                    }
-                    if (auto* window = liveWindow(id)) {
-                        cancelRestore(id);
-                        window->showFromManagement();
-                        return;
-                    }
-                    loaded->hidden = false;
-                    if (!presentRestoredRecord(std::move(*loaded)) && m_restoringIds.contains(id) &&
-                        m_restoringIds.value(id).generation == generation) {
-                        cancelRestore(id);
-                        if (m_restoreFailure)
-                            m_restoreFailure();
-                    }
-                }),
+                snow_shot::runtime::trackRuntimeWork(
+                    [this, alive, repositoryGuard, id, generation,
+                     preparedAnimationFrame = std::move(preparedAnimationFrame),
+                     preparedAnimationTransform, loaded = std::move(loaded)]() mutable {
+                        if (!alive->load() || !m_restoringIds.contains(id) ||
+                            m_restoringIds.value(id).generation != generation)
+                            return;
+                        auto& storage = snow_shot::storage::ApplicationStorage::instance();
+                        if (!storage.isInitialized() ||
+                            &storage.pinnedWindows() != repositoryGuard) {
+                            m_restoringIds.remove(id);
+                            return;
+                        }
+                        const auto found = storage.pinnedWindows().summary(id);
+                        if (!found || found->pending || found->hidden ||
+                            (m_groupManager && found->groupId != m_groupManager->activeGroupId()) ||
+                            (loaded && loaded->groupId != found->groupId)) {
+                            cancelRestore(id);
+                            return;
+                        }
+                        if (!loaded) {
+                            cancelRestore(id);
+                            if (m_restoreFailure)
+                                m_restoreFailure();
+                            return;
+                        }
+                        if (auto* window = liveWindow(id)) {
+                            cancelRestore(id);
+                            window->showFromManagement();
+                            return;
+                        }
+                        loaded->hidden = false;
+                        if (!presentRestoredRecord(std::move(*loaded),
+                                                   std::move(preparedAnimationFrame),
+                                                   preparedAnimationTransform) &&
+                            m_restoringIds.contains(id) &&
+                            m_restoringIds.value(id).generation == generation) {
+                            cancelRestore(id);
+                            if (m_restoreFailure)
+                                m_restoreFailure();
+                        }
+                    }),
                 Qt::QueuedConnection);
         }));
     return true;
 }
 
 bool ScreenshotSelectionExportUiServices::presentRestoredRecord(
-    snow_shot::storage::PinnedWindowRecord record) {
+    snow_shot::storage::PinnedWindowRecord record, QImage initialPreparedAnimationFrame,
+    QTransform initialPreparedAnimationTransform) {
     QScreen* targetScreen = restoreScreen(record);
     if (targetScreen == nullptr || record.nativeGeometry.isEmpty()) {
         return false;
@@ -1382,6 +1418,11 @@ bool ScreenshotSelectionExportUiServices::presentRestoredRecord(
     config.restorePersistentState = true;
     config.persistedOpacityPercent = record.opacityPercent;
     config.persistedClickThroughOpacityPercent = record.clickThroughOpacityPercent;
+    config.animationSource = record.animationSource;
+    config.initialPreparedAnimationFrame = std::move(initialPreparedAnimationFrame);
+    config.initialPreparedAnimationTransform = initialPreparedAnimationTransform;
+    config.persistedAnimationSpeedPercent = record.animationSpeedPercent;
+    config.persistedAnimationPlaying = record.animationPlaying;
     config.persistedImageTransform = record.imageTransform;
     config.persistedQuarterTurns = record.quarterTurns;
     config.persistedHideToTopMode = record.hideToTopMode;

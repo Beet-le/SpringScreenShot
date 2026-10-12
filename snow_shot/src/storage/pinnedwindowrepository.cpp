@@ -8,6 +8,7 @@
 
 #include <QBuffer>
 #include <QCache>
+#include <QColorSpace>
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
@@ -208,6 +209,26 @@ bool safeFileName(const QString& name) {
            !name.contains(u'/') && !name.contains(u'\\') && !name.contains(u':');
 }
 
+bool validAnimationSource(const std::shared_ptr<const ScreenshotAnimationSource>& source) {
+    return source && source->isAnimated() && !source->encoded.isEmpty() &&
+           source->encoded.size() <= kMaximumImageBytes && !source->firstFrame.isNull() &&
+           source->firstFrame.size() == source->canvasSize &&
+           source->firstFrame.sizeInBytes() <= kMaximumImageBytes &&
+           !source->firstDisplayFrame.isNull() &&
+           source->firstDisplayFrame.size() == source->canvasSize &&
+           source->firstDisplayFrame.sizeInBytes() <= kMaximumImageBytes &&
+           source->firstDisplayFrame.format() == QImage::Format_ARGB32_Premultiplied &&
+           (!source->firstDisplayFrame.colorSpace().isValid() ||
+            source->firstDisplayFrame.colorSpace() == QColorSpace(QColorSpace::SRgb)) &&
+           source->firstDisplayFrame.devicePixelRatio() == 1.0 &&
+           (source->format == QStringLiteral("gif") || source->format == QStringLiteral("webp") ||
+            source->format == QStringLiteral("png"));
+}
+
+QString animationFileName(const ScreenshotAnimationSource& source) {
+    return QStringLiteral("source_animation.") + source.format;
+}
+
 void preserveInvalidIndex(const QString& path) {
     if (!QFileInfo::exists(path)) {
         return;
@@ -229,6 +250,8 @@ void preserveInvalidIndex(const QString& path) {
 struct PayloadSignature final {
     qint64 imageCacheKey = 0;
     QSize imageSize;
+    size_t animationHash = 0;
+    qsizetype animationBytes = 0;
     size_t originalHtmlHash = 0;
     size_t originalTextHash = 0;
     size_t resultStyleHash = 0;
@@ -238,6 +261,8 @@ struct PayloadSignature final {
 
 bool operator==(const PayloadSignature& first, const PayloadSignature& second) {
     return first.imageCacheKey == second.imageCacheKey && first.imageSize == second.imageSize &&
+           first.animationHash == second.animationHash &&
+           first.animationBytes == second.animationBytes &&
            first.originalHtmlHash == second.originalHtmlHash &&
            first.originalTextHash == second.originalTextHash &&
            first.resultStyleHash == second.resultStyleHash &&
@@ -250,10 +275,16 @@ size_t payloadHash(const QByteArray& bytes) {
                            : qHashBits(bytes.constData(), static_cast<std::size_t>(bytes.size()));
 }
 
-PayloadSignature payloadSignature(const PinnedWindowRecord& record) {
+PayloadSignature payloadSignature(const PinnedWindowRecord& record,
+                                  std::optional<size_t> animationHash = {}) {
     PayloadSignature signature;
     signature.imageCacheKey = record.image.cacheKey();
     signature.imageSize = record.image.size();
+    if (record.animationSource) {
+        signature.animationHash =
+            animationHash ? *animationHash : payloadHash(record.animationSource->encoded);
+        signature.animationBytes = record.animationSource->encoded.size();
+    }
     signature.originalHtmlHash = qHash(record.originalHtml);
     signature.originalTextHash = qHash(record.originalText);
     signature.resultStyleHash = payloadHash(record.resultStyle);
@@ -293,7 +324,9 @@ QImage decodeImage(const QString& path, const QString& suffix = QStringLiteral("
                    const std::function<bool(qint64)>& allocationCheck = {}) {
     snow::image::Format format = snow::image::Format::png;
     const QString normalized = suffix.toLower();
-    if (normalized == QStringLiteral("jpg") || normalized == QStringLiteral("jpeg")) {
+    if (normalized == QStringLiteral("gif")) {
+        format = snow::image::Format::gif;
+    } else if (normalized == QStringLiteral("jpg") || normalized == QStringLiteral("jpeg")) {
         format = snow::image::Format::jpeg;
     } else if (normalized == QStringLiteral("webp")) {
         format = snow::image::Format::webp;
@@ -318,6 +351,10 @@ QImage decodeImage(const QString& path, const QString& suffix = QStringLiteral("
         return image_codec::decode(bytes, format, "mcp-pinned-source");
     }
 #if defined(Q_OS_WIN) || defined(_WIN32)
+    // The GIF codec publishes RGBA8; unlike the existing still-image formats,
+    // it cannot satisfy the Windows BGRA output request directly.
+    if (format == snow::image::Format::gif)
+        return snow_shot::image_codec::decodeFile(path, format);
     return snow_shot::image_codec::decodeFileBgra(path, format);
 #else
     return snow_shot::image_codec::decodeFile(path, format);
@@ -333,6 +370,9 @@ struct StoredRecord final {
     PayloadSignature signature;
     std::optional<PreparedPngImage> preparedSource = std::nullopt;
     quint64 previewSourceRevision = 1;
+    // A live pin retains the immutable source after the repository demotes its
+    // payload. Remember its identity without retaining any encoded/pixel bytes.
+    std::weak_ptr<const ScreenshotAnimationSource> animationOwner = {};
 };
 
 bool samePayload(const StoredRecord& stored, const PinnedWindowRecord& incoming,
@@ -351,6 +391,8 @@ bool samePreviewSource(const StoredRecord& stored, const PinnedWindowRecord& inc
            stored.record.firstCreationTextDpi == incoming.firstCreationTextDpi &&
            stored.signature.imageCacheKey == incomingSignature.imageCacheKey &&
            stored.signature.imageSize == incomingSignature.imageSize &&
+           stored.signature.animationHash == incomingSignature.animationHash &&
+           stored.signature.animationBytes == incomingSignature.animationBytes &&
            stored.signature.originalHtmlHash == incomingSignature.originalHtmlHash &&
            stored.signature.originalTextHash == incomingSignature.originalTextHash;
 }
@@ -387,7 +429,10 @@ QString payloadDirectory(const QString& root, const QString& id) {
 
 QJsonObject payloadsToJson(const PinnedWindowRecord& record) {
     QJsonObject payloads{{QStringLiteral("directory"), record.id}};
-    if (record.sourceKind == PinnedWindowSourceKind::ImageData) {
+    if (record.animationSource) {
+        payloads.insert(QStringLiteral("image"), QStringLiteral("source.png"));
+        payloads.insert(QStringLiteral("animation"), animationFileName(*record.animationSource));
+    } else if (record.sourceKind == PinnedWindowSourceKind::ImageData) {
         payloads.insert(QStringLiteral("image"), QStringLiteral("source.png"));
     } else if (record.sourceKind == PinnedWindowSourceKind::ClipboardImageFile) {
         payloads.insert(QStringLiteral("image"), record.originalFileName);
@@ -554,6 +599,8 @@ QJsonObject recordToJson(const PinnedWindowRecord& record, const QJsonObject& pa
          rectToJson(record.hideToTopHandleNativeGeometry)},
         {QStringLiteral("hide_to_top_accent_index"), record.hideToTopAccentIndex},
         {QStringLiteral("thumbnail_mode"), record.thumbnailMode},
+        {QStringLiteral("animation_speed_percent"), record.animationSpeedPercent},
+        {QStringLiteral("animation_playing"), record.animationPlaying},
         {QStringLiteral("click_through_mode"), record.clickThroughMode},
         {QStringLiteral("locked_mode"), record.lockedMode},
         {QStringLiteral("always_on_top"), record.alwaysOnTop},
@@ -589,6 +636,7 @@ QJsonObject payloadsDescriptor(const StoredRecord& stored) {
 
 void clearResidentPayload(PinnedWindowRecord* record) {
     record->image = {};
+    record->animationSource.reset();
     record->originalHtml.clear();
     record->originalText.clear();
     record->resultStyle.clear();
@@ -604,16 +652,31 @@ void demoteWrittenRecord(StoredRecord& stored) {
     stored.preparedSource.reset();
 }
 
+qint64 retainedAnimationBytes(const PinnedWindowRecord& record) {
+    if (!record.animationSource)
+        return 0;
+    const auto& source = *record.animationSource;
+    qint64 bytes = source.encoded.size();
+    if (source.firstFrame.constBits() != record.image.constBits())
+        bytes += source.firstFrame.sizeInBytes();
+    if (source.firstDisplayFrame.constBits() != record.image.constBits() &&
+        source.firstDisplayFrame.constBits() != source.firstFrame.constBits())
+        bytes += source.firstDisplayFrame.sizeInBytes();
+    return bytes;
+}
+
 qint64 residentPayloadBytes(const StoredRecord& stored) {
     const auto& record = stored.record;
     return record.image.sizeInBytes() + 2 * record.originalHtml.size() +
            2 * record.originalText.size() + record.resultStyle.size() +
            record.canvasSession.size() + record.recognitionResults.size() +
+           retainedAnimationBytes(record) +
            (stored.preparedSource ? stored.preparedSource->bytes().size() : 0);
 }
 
 void clearResidentImmutableSource(PinnedWindowRecord* record) {
     record->image = {};
+    record->animationSource.reset();
     record->originalHtml.clear();
     record->originalText.clear();
     record->resultStyle.clear();
@@ -642,7 +705,24 @@ bool writePayload(const QString& root, const StoredRecord& stored, const QString
     if (!QDir().mkpath(directory)) {
         return false;
     }
-    if (record.sourceKind == PinnedWindowSourceKind::ImageData) {
+    if (record.animationSource) {
+        if (!validAnimationSource(record.animationSource))
+            return false;
+        const auto preview = encodeImage(record.animationSource->firstFrame, compression);
+        if (preview.isEmpty() || preview.size() > kMaximumImageBytes ||
+            !writeBytes(QDir(directory).filePath(QStringLiteral("source.png")), preview) ||
+            !writeBytes(QDir(directory).filePath(animationFileName(*record.animationSource)),
+                        record.animationSource->encoded))
+            return false;
+    } else if (stored.payloads.contains(QStringLiteral("animation"))) {
+        // Metadata and mutable-document updates retain the committed immutable
+        // animation. They must never recopy the external file or encode a frame.
+        for (const auto& key : {QStringLiteral("image"), QStringLiteral("animation")}) {
+            const auto fileName = stored.payloads.value(key).toString();
+            if (!safeFileName(fileName) || !QFileInfo(QDir(directory).filePath(fileName)).isFile())
+                return false;
+        }
+    } else if (record.sourceKind == PinnedWindowSourceKind::ImageData) {
         const QString sourcePath = QDir(directory).filePath(QStringLiteral("source.png"));
         QByteArray encoded;
         if (stored.preparedSource.has_value()) {
@@ -761,8 +841,9 @@ bool validatePayloads(const QJsonObject& payloads, const QString& root, const QS
             return false;
         }
         const QString fileName = it.value().toString();
-        if (!safeFileName(fileName) || (it.key() == QStringLiteral("image") &&
-                                        !QFileInfo(QDir(directory).filePath(fileName)).isFile())) {
+        if (!safeFileName(fileName) ||
+            ((it.key() == QStringLiteral("image") || it.key() == QStringLiteral("animation")) &&
+             !QFileInfo(QDir(directory).filePath(fileName)).isFile())) {
             return false;
         }
     }
@@ -804,7 +885,37 @@ bool loadPayloads(const QString& root, const QJsonObject& payloads, PinnedWindow
         return false;
     }
     const QString directory = payloadDirectory(root, record->id);
-    if (record->sourceKind == PinnedWindowSourceKind::ImageData) {
+    if (payloads.contains(QStringLiteral("animation"))) {
+        if (sourceOnly) {
+            const auto previewName = payloads.value(QStringLiteral("image")).toString();
+            if (record->image.isNull())
+                record->image = decodeImage(QDir(directory).filePath(previewName),
+                                            QStringLiteral("png"), allocationCheck);
+            if (record->image.isNull() || record->image.sizeInBytes() > kMaximumImageBytes)
+                return false;
+        }
+        const auto sourceName = payloads.value(QStringLiteral("animation")).toString();
+        const auto sourcePath = QDir(directory).filePath(sourceName);
+        if (record->sourceKind == PinnedWindowSourceKind::ClipboardImageFile) {
+            record->originalFileName = sourceName;
+            record->originalFilePath = sourcePath;
+        }
+        if (!sourceOnly && !record->animationSource) {
+            QFile file(sourcePath);
+            const auto bytes = file.size();
+            if (bytes <= 0 || bytes > kMaximumImageBytes ||
+                (allocationCheck && !allocationCheck(bytes)) || !file.open(QIODevice::ReadOnly))
+                return false;
+            const auto encoded = file.read(bytes + 1);
+            if (encoded.size() != bytes)
+                return false;
+            record->animationSource =
+                image_codec::decodeAnimationSource(encoded, nullptr, {}, allocationCheck);
+            if (!validAnimationSource(record->animationSource))
+                return false;
+            record->image = record->animationSource->firstFrame;
+        }
+    } else if (record->sourceKind == PinnedWindowSourceKind::ImageData) {
         const QString fileName = payloads.value(QStringLiteral("image")).toString();
         if (record->image.isNull())
             record->image = decodeImage(QDir(directory).filePath(fileName), QStringLiteral("png"),
@@ -817,11 +928,45 @@ bool loadPayloads(const QString& root, const QJsonObject& payloads, PinnedWindow
         const QString imagePath = QDir(directory).filePath(fileName);
         record->originalFileName = fileName;
         record->originalFilePath = imagePath;
-        if (record->image.isNull())
-            record->image = decodeImage(imagePath, QFileInfo(imagePath).suffix(), allocationCheck);
-        if (record->image.isNull() || record->image.sizeInBytes() > kMaximumImageBytes) {
-            return false;
+        // Older file pins already retained the original GIF/WebP/APNG bytes.
+        // Their initial preview also needs composition: GIF may start with a
+        // partial patch and APNG may have a separate poster outside playback.
+        // Decode only that initial frame and retain playback metadata on full
+        // restore; management previews release the temporary source owner.
+        const auto suffix = QFileInfo(imagePath).suffix().toLower();
+        if (!record->animationSource &&
+            (suffix == QStringLiteral("gif") || suffix == QStringLiteral("webp") ||
+             suffix == QStringLiteral("png") || suffix == QStringLiteral("apng"))) {
+            QFile file(imagePath);
+            const auto bytes = file.size();
+            if (bytes <= 0 || bytes > kMaximumImageBytes ||
+                (allocationCheck && !allocationCheck(bytes + record->image.sizeInBytes())) ||
+                !file.open(QIODevice::ReadOnly))
+                return false;
+            const auto encoded = file.read(bytes + 1);
+            if (encoded.size() != bytes)
+                return false;
+            QString error;
+            const auto alreadyRetained = record->image.sizeInBytes();
+            const std::function<bool(qint64)> animationAdmission =
+                allocationCheck ? std::function<bool(qint64)>([&](qint64 requested) {
+                    return allocationCheck(alreadyRetained + requested);
+                })
+                                : std::function<bool(qint64)>();
+            auto animationSource =
+                image_codec::decodeAnimationSource(encoded, &error, {}, animationAdmission);
+            if (!error.isEmpty())
+                return false;
+            if (animationSource) {
+                record->image = animationSource->firstFrame;
+                if (!sourceOnly && animationSource->isAnimated())
+                    record->animationSource = std::move(animationSource);
+            }
         }
+        if (record->image.isNull())
+            record->image = decodeImage(imagePath, suffix, allocationCheck);
+        if (record->image.isNull() || record->image.sizeInBytes() > kMaximumImageBytes)
+            return false;
     }
     if (sourceOnly && record->sourceKind != PinnedWindowSourceKind::ClipboardText) {
         return true;
@@ -918,6 +1063,14 @@ bool parseRecord(const QJsonObject& object, const QString& root, PinnedWindowRec
         return false;
     }
     record.thumbnailMode = object.value(QStringLiteral("thumbnail_mode")).toBool();
+    const auto animationSpeed = object.value(QStringLiteral("animation_speed_percent"));
+    const int speedPercent = animationSpeed.toInt(100);
+    record.animationSpeedPercent = speedPercent >= 10 && speedPercent <= 400 &&
+                                           speedPercent % 10 == 0 &&
+                                           animationSpeed.toDouble(100) == speedPercent
+                                       ? speedPercent
+                                       : 100;
+    record.animationPlaying = object.value(QStringLiteral("animation_playing")).toBool(true);
     record.clickThroughMode = object.value(QStringLiteral("click_through_mode")).toBool(false);
     record.lockedMode = object.value(QStringLiteral("locked_mode")).toBool(false);
     // Pins saved before the preference existed must keep floating above
@@ -1012,7 +1165,11 @@ bool parseRecord(const QJsonObject& object, const QString& root, PinnedWindowRec
         }
     }
     if (record.sourceKind == PinnedWindowSourceKind::ClipboardImageFile) {
-        record.originalFileName = payloads.value(QStringLiteral("image")).toString();
+        record.originalFileName =
+            payloads
+                .value(payloads.contains(QStringLiteral("animation")) ? QStringLiteral("animation")
+                                                                      : QStringLiteral("image"))
+                .toString();
     }
     if (payloadsResult != nullptr) {
         *payloadsResult = payloads;
@@ -1166,6 +1323,22 @@ struct PinnedWindowRepository::Impl final {
         if (operationObserved)
             operationObserved(operation);
     }
+    PayloadSignature sourceSignature(const PinnedWindowRecord& record,
+                                     bool reuseExistingAnimation = false) const {
+        std::optional<size_t> animationHash;
+        if (reuseExistingAnimation && record.animationSource) {
+            std::lock_guard locker(mutex);
+            const auto existing = records.constFind(record.id);
+            if (existing != records.cend() &&
+                existing->animationOwner.lock() == record.animationSource)
+                animationHash = existing->signature.animationHash;
+        }
+        // Full source inspection only occurs for a newly admitted immutable
+        // owner. Keep diagnostics outside the metadata lock, as with reads.
+        if (record.animationSource && !animationHash)
+            observe(PinnedWindowOperation::AnimationSourceHash);
+        return payloadSignature(record, animationHash);
+    }
     QString error;
     QHash<QString, StoredRecord> records;
     QVector<PinnedWindowGroup> groups{defaultGroup()};
@@ -1192,6 +1365,8 @@ struct PinnedWindowRepository::Impl final {
     quint64 nextPreviewSourceRevision = 1;
 
     void insertRecordLocked(const QString& id, StoredRecord stored) {
+        if (stored.record.animationSource)
+            stored.animationOwner = stored.record.animationSource;
         const auto existing = records.constFind(id);
         if (existing != records.cend())
             pendingPayloadBytes -= residentPayloadBytes(*existing);
@@ -1511,7 +1686,8 @@ PinnedWindowRepository::loadRecord(const QString& id,
     if (allocationCheck) {
         const QString directory = payloadDirectory(impl->root, id);
         for (auto it = stored.payloads.begin(); it != stored.payloads.end(); ++it) {
-            if (it.key() == QStringLiteral("directory") || it.key() == QStringLiteral("image"))
+            if (it.key() == QStringLiteral("directory") || it.key() == QStringLiteral("image") ||
+                it.key() == QStringLiteral("animation"))
                 continue;
             const auto name = it.value().toString();
             if (!safeFileName(name))
@@ -1522,7 +1698,8 @@ PinnedWindowRepository::loadRecord(const QString& id,
             // Retain room for UTF-16 text and decoded recognition structures.
             payloadBytes += 8 * bytes;
         }
-        if (!allocationCheck(payloadBytes + 2 * stored.record.image.sizeInBytes()))
+        if (!allocationCheck(payloadBytes + 2 * stored.record.image.sizeInBytes() +
+                             2 * retainedAnimationBytes(stored.record)))
             return std::nullopt;
     }
     const std::function<bool(qint64)> imageBudget =
@@ -2008,8 +2185,8 @@ StorageResult PinnedWindowRepository::createImpl(PinnedWindowRecord record,
         record.contentCanvasRect.isEmpty() || !record.surfaceCanvasRect.isValid() ||
         record.surfaceCanvasRect.isEmpty() || !record.initialWindowSize.isValid() ||
         record.initialWindowSize.isEmpty() ||
-        record.sourceKind != PinnedWindowSourceKind::ImageData || record.image.isNull() ||
-        record.image.size() != sourceImage.pixelSize()) {
+        record.sourceKind != PinnedWindowSourceKind::ImageData || record.animationSource ||
+        record.image.isNull() || record.image.size() != sourceImage.pixelSize()) {
         return StorageResult::failure(QStringLiteral("Pinned-window source is invalid"));
     }
     if (record.originalHtml.toUtf8().size() > kMaximumPayloadBytes ||
@@ -2023,6 +2200,7 @@ StorageResult PinnedWindowRepository::createImpl(PinnedWindowRecord record,
         record.updatedUtc = QDateTime::currentDateTimeUtc();
     }
 
+    const PayloadSignature signature = m_impl->sourceSignature(record);
     std::lock_guard locker(m_impl->mutex);
     if (requireReservation && !m_impl->pendingCreations.contains(record.id)) {
         return StorageResult::failure(QStringLiteral("Pinned-window creation was canceled"));
@@ -2036,7 +2214,6 @@ StorageResult PinnedWindowRepository::createImpl(PinnedWindowRecord record,
                      [&record](const auto& group) { return group.id == record.groupId; })) {
         record.groupId = QString::fromLatin1(kDefaultGroupId);
     }
-    const PayloadSignature signature = payloadSignature(record);
     const quint64 payloadRevision = ++m_impl->nextPayloadRevision;
     const QString id = record.id;
     StoredRecord stored{std::move(record), payloadRevision, {}, signature, std::move(sourceImage)};
@@ -2072,13 +2249,20 @@ StorageResult PinnedWindowRepository::createImpl(PinnedWindowRecord record,
         return StorageResult::failure(QCoreApplication::translate(
             "StorageDirectoryChange", "Storage migration is in progress"));
     normalizePlacement(record);
+    if (record.animationSource) {
+        if (!validAnimationSource(record.animationSource) ||
+            record.sourceKind == PinnedWindowSourceKind::ClipboardText)
+            return StorageResult::failure(QStringLiteral("Pinned-window animation is invalid"));
+        record.image = record.animationSource->firstFrame;
+    }
     if (m_impl == nullptr || !m_impl->writeAvailable) {
         return StorageResult::failure(QStringLiteral("Pinned-window storage is not writable"));
     }
     if (record.id.isEmpty()) {
         record.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
     }
-    if (!safeId(record.id) || record.sourceKind == PinnedWindowSourceKind::ImageData ||
+    if (!safeId(record.id) ||
+        (record.sourceKind == PinnedWindowSourceKind::ImageData && !record.animationSource) ||
         !record.nativeGeometry.isValid() || record.nativeGeometry.isEmpty() ||
         !record.canvasSourceRect.isValid() || record.canvasSourceRect.isEmpty() ||
         !record.contentCanvasRect.isValid() || record.contentCanvasRect.isEmpty() ||
@@ -2092,7 +2276,7 @@ StorageResult PinnedWindowRepository::createImpl(PinnedWindowRecord record,
     }
     if ((record.sourceKind == PinnedWindowSourceKind::ClipboardImageFile &&
          (!safeFileName(record.originalFileName) ||
-          !QFileInfo(record.originalFilePath).isFile())) ||
+          (!record.animationSource && !QFileInfo(record.originalFilePath).isFile()))) ||
         record.originalHtml.toUtf8().size() > kMaximumPayloadBytes ||
         record.originalText.toUtf8().size() > kMaximumPayloadBytes ||
         record.resultStyle.size() > kMaximumPayloadBytes ||
@@ -2104,6 +2288,7 @@ StorageResult PinnedWindowRepository::createImpl(PinnedWindowRecord record,
         record.updatedUtc = QDateTime::currentDateTimeUtc();
     }
 
+    const PayloadSignature signature = m_impl->sourceSignature(record);
     std::lock_guard locker(m_impl->mutex);
     if (requireReservation && !m_impl->pendingCreations.contains(record.id)) {
         return StorageResult::failure(QStringLiteral("Pinned-window creation was canceled"));
@@ -2117,7 +2302,6 @@ StorageResult PinnedWindowRepository::createImpl(PinnedWindowRecord record,
                      [&record](const auto& group) { return group.id == record.groupId; })) {
         record.groupId = QString::fromLatin1(kDefaultGroupId);
     }
-    const PayloadSignature signature = payloadSignature(record);
     const quint64 payloadRevision = ++m_impl->nextPayloadRevision;
     const QString id = record.id;
     StoredRecord stored{std::move(record), payloadRevision, {}, signature, {}};
@@ -2182,6 +2366,7 @@ StorageResult PinnedWindowRepository::updateState(PinnedWindowRecord record) {
          existing->signature.recognitionResultsHash != recognitionResultsHash);
     record.sourceKind = existing->record.sourceKind;
     record.image = existing->record.image;
+    record.animationSource = existing->record.animationSource;
     record.originalFilePath = existing->record.originalFilePath;
     record.originalFileName = existing->record.originalFileName;
     record.originalHtml = existing->record.originalHtml;
@@ -2215,6 +2400,7 @@ StorageResult PinnedWindowRepository::updateState(PinnedWindowRecord record) {
                          {},
                          existing->preparedSource};
     updated.previewSourceRevision = existing->previewSourceRevision;
+    updated.animationOwner = existing->animationOwner;
     updated.signature = existing->signature;
     updated.signature.canvasSessionHash = canvasSessionHash;
     updated.signature.recognitionResultsHash = recognitionResultsHash;
@@ -2253,6 +2439,12 @@ StorageResult PinnedWindowRepository::upsertImpl(PinnedWindowRecord record, bool
         return StorageResult::failure(QCoreApplication::translate(
             "StorageDirectoryChange", "Storage migration is in progress"));
     normalizePlacement(record);
+    if (record.animationSource) {
+        if (!validAnimationSource(record.animationSource) ||
+            record.sourceKind == PinnedWindowSourceKind::ClipboardText)
+            return StorageResult::failure(QStringLiteral("Pinned-window animation is invalid"));
+        record.image = record.animationSource->firstFrame;
+    }
     if (m_impl == nullptr || !m_impl->writeAvailable) {
         return StorageResult::failure(QStringLiteral("Pinned-window storage is not writable"));
     }
@@ -2281,7 +2473,7 @@ StorageResult PinnedWindowRepository::upsertImpl(PinnedWindowRecord record, bool
         return StorageResult::failure(QStringLiteral("Pinned-window image is missing"));
     }
     if (record.sourceKind == PinnedWindowSourceKind::ClipboardImageFile &&
-        !QFileInfo(record.originalFilePath).isFile()) {
+        !record.animationSource && !QFileInfo(record.originalFilePath).isFile()) {
         return StorageResult::failure(QStringLiteral("Pinned-window source file is invalid"));
     }
     if (record.originalHtml.toUtf8().size() > kMaximumPayloadBytes ||
@@ -2291,6 +2483,7 @@ StorageResult PinnedWindowRepository::upsertImpl(PinnedWindowRecord record, bool
         record.recognitionResults.size() > kMaximumPayloadBytes) {
         return StorageResult::failure(QStringLiteral("Pinned-window payload is too large"));
     }
+    const PayloadSignature signature = m_impl->sourceSignature(record, true);
     std::lock_guard locker(m_impl->mutex);
     if (!std::any_of(m_impl->groups.cbegin(), m_impl->groups.cend(),
                      [&record](const auto& group) { return group.id == record.groupId; })) {
@@ -2311,7 +2504,6 @@ StorageResult PinnedWindowRepository::upsertImpl(PinnedWindowRecord record, bool
     } else {
         preserveLifecycle(record, existing->record);
     }
-    const PayloadSignature signature = payloadSignature(record);
     const bool payloadChanged = isNew || !samePayload(*existing, record, signature);
     const quint64 previewSourceRevision = isNew || !samePreviewSource(*existing, record, signature)
                                               ? ++m_impl->nextPreviewSourceRevision
@@ -2325,6 +2517,7 @@ StorageResult PinnedWindowRepository::upsertImpl(PinnedWindowRecord record, bool
         // fresh resident copy until the writer runs.
         StoredRecord stored{std::move(record), payloadRevision, existing->payloads, signature};
         stored.previewSourceRevision = previewSourceRevision;
+        stored.animationOwner = stored.record.animationSource;
         clearResidentPayload(&stored.record);
         m_impl->insertRecordLocked(id, std::move(stored));
     } else {

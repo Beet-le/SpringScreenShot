@@ -25,6 +25,11 @@
 #include "snow_shot/presentation/screenshottoolbarlayoutmodel.h"
 #include "close_release_native_test_support.h"
 #include "snow_shot/presentation/screenshotpinnedwindow.h"
+#include "snow_shot/presentation/screenshotanimationplayback.h"
+#include "../src/image/snowimageqtcodec.h"
+#include "pinned_animation_fixtures.h"
+#include "pinned_animation_native_fixtures.h"
+#include "pinned_animation_persistence_tests.h"
 #include "snow_shot/presentation/screenshotprintservice.h"
 #include <QTextEdit>
 #include <QTextBlock>
@@ -265,6 +270,7 @@ class ObservedPinnedPlatform final : public snow_shot::presentation::PinnedWindo
     bool readFails = false;
     bool rejectNext = false;
     bool biasNext = false;
+    bool minimized = false;
     int applications = 0;
     GeometryUpdate lastUpdate = GeometryUpdate::PreserveContents;
     std::function<void()> notification;
@@ -285,6 +291,9 @@ class ObservedPinnedPlatform final : public snow_shot::presentation::PinnedWindo
     QRect windowGeometry() const override {
         return readFails ? QRect() : observed;
     }
+    bool isMinimized() const override {
+        return minimized;
+    }
     bool applyPlacement(const snow_shot::presentation::PinnedPlacement&, QScreen*,
                         GeometryUpdate) override {
         throw std::runtime_error("physical geometry must not round-trip through placement");
@@ -304,6 +313,37 @@ class ObservedPinnedPlatform final : public snow_shot::presentation::PinnedWindo
 // installing the Windows HWND hooks required by present().
 class ScreenshotPinnedWindowTestAccess {
   public:
+    static ScreenshotAnimationPlayback& playback(ScreenshotPinnedWindow& window) {
+        return *window.m_animationPlayback;
+    }
+    static void animationCommand(ScreenshotPinnedWindow& window, const QString& id) {
+        window.executeAnimationCommand(id);
+    }
+    static quint64 pendingAnimationToken(const ScreenshotPinnedWindow& window) {
+        return window.m_pendingAnimationToken;
+    }
+    static bool closing(const ScreenshotPinnedWindow& window) {
+        return window.m_closing;
+    }
+    static QRect animationPaintedGeometry(const ScreenshotPinnedWindow& window) {
+        return window.m_animationTransformSnapshot
+                   ? window.m_animationTransformSnapshot->contentGeometry
+                   : QRect();
+    }
+    static int animationPaintedQuarterTurns(const ScreenshotPinnedWindow& window) {
+        return window.m_animationTransformSnapshot
+                   ? window.m_animationTransformSnapshot->quarterTurns
+                   : -1;
+    }
+    static QSize initialWindowSize(const ScreenshotPinnedWindow& window) {
+        return window.m_initialWindowSize;
+    }
+    static bool preservesSettledScale(const ScreenshotPinnedWindow& window) {
+        return window.m_preserveScaleForSettledGeometry;
+    }
+    static void rejectAnimationTransform(ScreenshotPinnedWindow& window) {
+        window.applyImageTransform(QTransform().scale(1e9, 1e9), 0);
+    }
     static adqt::widgets::AdContextMenu* contextMenu(ScreenshotPinnedWindow& window) {
         if (!window.m_contextMenu || window.m_contextMenu->isRetiring())
             window.createContextMenu();
@@ -312,6 +352,9 @@ class ScreenshotPinnedWindowTestAccess {
     }
     static void persistNow(ScreenshotPinnedWindow& window) {
         window.persistNow();
+    }
+    static bool persistencePending(const ScreenshotPinnedWindow& window) {
+        return window.m_persistenceTimer && window.m_persistenceTimer->isActive();
     }
     static QByteArray applyAnnotationTransaction(ScreenshotPinnedWindow& window,
                                                  const QByteArray& payload) {
@@ -589,6 +632,10 @@ class ScreenshotPinnedWindowTestAccess {
     }
     static void thumbnailForHideTest(ScreenshotPinnedWindow& window, bool enabled) {
         window.setThumbnailMode(enabled, false);
+    }
+    static void thumbnailForAnimationTest(ScreenshotPinnedWindow& window, bool enabled,
+                                          bool animate) {
+        window.setThumbnailMode(enabled, animate);
     }
     static bool setClickThrough(ScreenshotPinnedWindow& window, bool enabled) {
         return window.setClickThroughMode(enabled);
@@ -1020,7 +1067,12 @@ void setSystemCursorPosition(const QPoint& position) {
 #if defined(Q_OS_WIN) || defined(_WIN32)
     const bool positioned = SetPhysicalCursorPos(position.x(), position.y()) != FALSE;
     if (!positioned) {
-        std::cerr << "SetPhysicalCursorPos failed: error=" << GetLastError() << '\n';
+        const auto error = GetLastError();
+        POINT actual{};
+        const bool readable = GetPhysicalCursorPos(&actual) != FALSE;
+        std::cerr << "SetPhysicalCursorPos failed: error=" << error << " requested=" << position.x()
+                  << ',' << position.y() << " readable=" << readable << " actual=" << actual.x
+                  << ',' << actual.y << '\n';
     }
     require(positioned, "failed to set the physical system cursor position");
 #else
@@ -1054,8 +1106,14 @@ class CursorPositionRestorer final {
   public:
     CursorPositionRestorer() : m_position(systemCursorPosition()) {}
 
-    ~CursorPositionRestorer() {
-        setSystemCursorPosition(m_position);
+    ~CursorPositionRestorer() noexcept {
+        try {
+            setSystemCursorPosition(m_position);
+        } catch (const std::exception& error) {
+            // Cleanup must not terminate exception unwinding and hide the
+            // behavioral assertion that caused a native test to fail.
+            std::cerr << "Cursor restoration failed: " << error.what() << '\n';
+        }
     }
 
   private:
@@ -7555,7 +7613,7 @@ void pinnedPhysicalAuthoritySurvivesObservations() {
     image.fill(Qt::white);
     config.imageSource = ScreenshotImageSource::fromImage(image, config.canvasSourceRect);
     ScreenshotPinnedWindowTestAccess::restoreOffscreen(window, config);
-    const QRect original = config.nativeGeometry;
+    const QRect original = snow_shot::presentation::pinnedOuterRect(config.nativeGeometry);
     require(ScreenshotPinnedWindowTestAccess::authority(window) == original,
             "initial physical rectangle must be authoritative");
     window.resize(333, 222);
@@ -7570,12 +7628,30 @@ void pinnedPhysicalAuthoritySurvivesObservations() {
             "painting observations must remain separate from geometry authority");
     ScreenshotPinnedWindowTestAccess::settle(window);
     require(qFuzzyCompare(ScreenshotPinnedWindowTestAccess::scale(window), 100.0) &&
-                window.persistenceSnapshot().nativeGeometry == original,
+                window.persistenceSnapshot().nativeGeometry == config.nativeGeometry,
             "DPI settlement and persistence must not adopt passive drift");
     ScreenshotPinnedWindowTestAccess::observe(window);
     require(platform->observed == original &&
                 ScreenshotPinnedWindowTestAccess::geometrySettled(window),
             "stable native drift must reconcile without changing authority");
+
+    platform->minimized = true;
+    platform->observed = QRect(44, 44, 237, 39);
+    const int beforeMinimization = platform->applications;
+    ScreenshotPinnedWindowTestAccess::observe(window);
+    QEvent minimizedObservation(QEvent::LayoutRequest);
+    QCoreApplication::sendEvent(&window, &minimizedObservation);
+    require(platform->applications == beforeMinimization &&
+                ScreenshotPinnedWindowTestAccess::authority(window) == original &&
+                ScreenshotPinnedWindowTestAccess::nativeController(window).phase() ==
+                    ScreenshotPinnedNativeGeometryController::Phase::Stable,
+            "iconic observations must neither restore nor adopt minimized geometry");
+    platform->minimized = false;
+    platform->observed = original;
+    ScreenshotPinnedWindowTestAccess::observe(window);
+    require(platform->applications == beforeMinimization &&
+                ScreenshotPinnedWindowTestAccess::authority(window) == original,
+            "native restoration must retain the committed content rectangle");
 
     // Exercise the window's commit boundary, not just the controller's target.
     // Neither a click nor a completed drag may turn native rounding into intent.
@@ -7604,7 +7680,8 @@ void pinnedPhysicalAuthoritySurvivesObservations() {
             require(ScreenshotPinnedWindowTestAccess::finishNativeInteraction(window) &&
                         controller.committedGeometry() == target && platform->observed == target &&
                         platform->applications == beforeCorrection + 1 &&
-                        window.persistenceSnapshot().nativeGeometry == target,
+                        window.persistenceSnapshot().nativeGeometry ==
+                            snow_shot::presentation::pinnedContentRect(target),
                     "finishing an interaction must restore the exact validated physical target");
         }
     }
@@ -7627,7 +7704,7 @@ void pinnedPhysicalAuthoritySurvivesObservations() {
                 ScreenshotPinnedWindowTestAccess::geometrySettled(window),
             "failed native application must preserve the last committed rectangle");
 
-    const QRect dpiRect(-1884, -288, 1250, 834);
+    const QRect dpiRect = snow_shot::presentation::pinnedOuterRect(QRect(-1884, -288, 1250, 834));
     require(ScreenshotPinnedWindowTestAccess::dpiTarget(window, dpiRect),
             "DPI proposal must be accepted");
     platform->observed = dpiRect;
@@ -16157,8 +16234,20 @@ void pinnedContentReplacement() {
     require(session->hasTextResult(), "seed cached OCR before same-size reload");
     require(!Access::replace(window, {}) && session->hasTextResult(),
             "failed replacement must preserve existing recognition results");
+    const auto emptyRecognitionPayload = [](ScreenshotRecognitionResults results) {
+        // Model preferences survive invalidation independently of recognized content.
+        results.tableModelSelection.clear();
+        results.latexModelSelection.clear();
+        return results.isEmpty() && !results.latexDraft && !results.translatedText &&
+               !results.visibleConversion;
+    };
+    const auto modelPreferences = session->cachedRecognitionResults();
     require(Access::replace(window, contentFor(original)) && !session->hasTextResult() &&
-                session->cachedRecognitionResults().isEmpty(),
+                emptyRecognitionPayload(session->cachedRecognitionResults()) &&
+                session->cachedRecognitionResults().tableModelSelection ==
+                    modelPreferences.tableModelSelection &&
+                session->cachedRecognitionResults().latexModelSelection ==
+                    modelPreferences.latexModelSelection,
             "same-size reload must clear recognition caches and retarget the session");
 
     class DeferredRecognition final : public ScreenshotOcrRecognitionPort {
@@ -16188,7 +16277,7 @@ void pinnedContentReplacement() {
             "replacement must cancel outstanding OCR");
     recognition.pending(*cached.text);
     require(!pendingSession->hasTextResult() &&
-                pendingSession->cachedRecognitionResults().isEmpty(),
+                emptyRecognitionPayload(pendingSession->cachedRecognitionResults()),
             "late completion must not restore old-image OCR");
 
     // Fractional scale, rotation, and flips must not cause rounding or recentering.
@@ -21714,6 +21803,910 @@ void pinnedMemoryIdleSafety() {
     window.hide();
 }
 
+void pinnedAnimationTransformRollback() {
+    using Access = ScreenshotPinnedWindowTestAccess;
+    const auto fixture = pinned_animation_native_fixtures::images().front();
+    QString error;
+    const auto animation = snow_shot::image_codec::decodeAnimationSource(fixture.bytes, &error);
+    require(animation && error.isEmpty(), "decode the nonsquare animation rollback fixture");
+    const auto wait = [](auto ready, const char* message) {
+        QElapsedTimer timer;
+        timer.start();
+        while (!ready() && timer.elapsed() < 3000)
+            waitForUi(5);
+        require(ready(), message);
+    };
+    for (bool rejectRollback : {false, true}) {
+        snow_shot::storage::PinnedWindowRecord persisted;
+        ScreenshotPinnedWindow window;
+        window.setAttribute(Qt::WA_DeleteOnClose, false);
+        auto config = cachedOcrPinConfig(nullptr);
+        config.recognitionResults = {};
+        config.canvasSourceRect = QRectF(QPointF(), QSizeF(animation->canvasSize));
+        config.imageSource =
+            ScreenshotImageSource::fromImage(animation->firstFrame, config.canvasSourceRect);
+        config.contentCanvasRect = config.canvasSourceRect;
+        config.surfaceCanvasRect = config.canvasSourceRect;
+        config.initialWindowSize = animation->canvasSize;
+        config.nativeGeometry = QRect(QPoint(40, 40), animation->canvasSize);
+        config.persistenceWriter = [&](const auto& record) { persisted = record; };
+        Access::prepareReplacement(window, config);
+        auto* platform = Access::installObservedPlatform(window);
+        platform->observed = Access::authority(window);
+        ScreenshotClipboardContent content;
+        content.image = animation->firstFrame;
+        content.animationSource = animation;
+        require(Access::replace(window, std::move(content)), "install the rollback animation");
+        window.show();
+        auto* canvas = window.findChild<SnowCanvasWidget*>();
+        require(canvas, "animation rollback requires a canvas");
+        Access::playback(window).pause();
+        static_cast<void>(renderWidget(*canvas));
+        require(Access::pendingAnimationToken(window) == 0,
+                "paint the initial rollback fixture before staging a rotation");
+        const QRect paintedGeometry = Access::authority(window);
+        const QImage paintedImage = Access::originalImage(window);
+        window.setUpdatesEnabled(false);
+        Access::transformForHideTest(window, false);
+        wait(
+            [&] {
+                return !window.animationTransformPending() &&
+                       Access::pendingAnimationToken(window) != 0;
+            },
+            "stage a nonsquare rotation without painting it");
+        require(Access::authority(window).size() != paintedGeometry.size(),
+                "the rollback fixture must change physical geometry");
+        const QRect adoptedGeometry = Access::authority(window);
+        const auto adoptedRaster = Access::originalPreviewSource(window).materializedImage;
+        Access::setLock(window, true);
+        if (!rejectRollback)
+            wait([&] { return persisted.quarterTurns == 1; },
+                 "persist the accepted unpainted rotation before its rollback");
+        platform->rejectNext = rejectRollback;
+        Access::transformForHideTest(window, true);
+        if (rejectRollback) {
+            require(Access::closing(window) && !window.isVisible() &&
+                        Access::authority(window) == adoptedGeometry &&
+                        Access::originalPreviewSource(window).materializedImage == adoptedRaster &&
+                        !Access::playback(window).busy(),
+                    "failed internal rollback closes without painting a mismatched raster");
+            waitForUi(5);
+            continue;
+        }
+        require(!Access::closing(window) && Access::authority(window) == paintedGeometry &&
+                    window.persistenceSnapshot().lockedMode &&
+                    window.automationState().value(QStringLiteral("quarter_turns")).toInt() == 0 &&
+                    Access::originalImage(window) == paintedImage &&
+                    Access::originalPreviewSource(window).materializedImage ==
+                        ScreenshotResultCompositor::normalizeImage(paintedImage),
+                "internal rollback restores the painted geometry and raster while retaining lock");
+        wait([&] { return !window.animationTransformPending(); },
+             "complete the locked reset after internal rollback");
+        window.setUpdatesEnabled(true);
+        static_cast<void>(renderWidget(*canvas));
+        require(Access::pendingAnimationToken(window) == 0 &&
+                    Access::authority(window) == paintedGeometry &&
+                    window.persistenceSnapshot().lockedMode,
+                "painting the reset keeps the restored geometry and lock");
+        wait([&] { return persisted.quarterTurns == 0 && persisted.lockedMode; },
+             "rollback saves the restored orientation while retaining lock");
+        window.hide();
+    }
+}
+
+void pinnedAnimationTransformThumbnail() {
+    using Access = ScreenshotPinnedWindowTestAccess;
+    const auto fixture = pinned_animation_native_fixtures::images().front();
+    QString error;
+    const auto animation = snow_shot::image_codec::decodeAnimationSource(fixture.bytes, &error);
+    require(animation && error.isEmpty(), "decode the nonsquare thumbnail transform fixture");
+    const auto wait = [](auto ready, const char* message) {
+        QElapsedTimer timer;
+        timer.start();
+        while (!ready() && timer.elapsed() < 3000)
+            waitForUi(5);
+        require(ready(), message);
+    };
+    // Hold geometry animation time while the real preparation worker completes.
+    // This makes shrink/expansion ordering independent of machine speed.
+    for (int scenario : {0, 1, 2}) {
+        ScreenshotPinnedWindow window;
+        window.setAttribute(Qt::WA_DeleteOnClose, false);
+        auto config = cachedOcrPinConfig(nullptr);
+        config.recognitionResults = {};
+        config.canvasSourceRect = QRectF(QPointF(), QSizeF(animation->canvasSize));
+        config.imageSource =
+            ScreenshotImageSource::fromImage(animation->firstFrame, config.canvasSourceRect);
+        config.contentCanvasRect = config.canvasSourceRect;
+        config.surfaceCanvasRect = config.canvasSourceRect;
+        config.initialWindowSize = animation->canvasSize;
+        config.nativeGeometry = QRect(QPoint(40, 40), animation->canvasSize);
+        Access::prepareReplacement(window, config);
+        auto* platform = Access::installObservedPlatform(window);
+        platform->observed = Access::authority(window);
+        ScreenshotClipboardContent content;
+        content.image = animation->firstFrame;
+        content.animationSource = animation;
+        require(Access::replace(window, std::move(content)), "install the thumbnail animation");
+        window.show();
+        auto* canvas = window.findChild<SnowCanvasWidget*>();
+        require(canvas, "thumbnail transform requires a canvas");
+        Access::playback(window).pause();
+        static_cast<void>(renderWidget(*canvas));
+        const QImage painted = Access::originalImage(window);
+        window.setUpdatesEnabled(false);
+        Access::transformForHideTest(window, false);
+        Access::thumbnailForAnimationTest(window, true, scenario == 1);
+        auto* geometryAnimation = window.findChild<QVariantAnimation*>(
+            QStringLiteral("screenshotPinnedGeometryAnimation"));
+        if (scenario == 1) {
+            require(geometryAnimation, "animated thumbnail entry starts its geometry animation");
+            geometryAnimation->pause();
+        } else if (scenario == 2) {
+            Access::thumbnailForAnimationTest(window, false, true);
+            geometryAnimation = window.findChild<QVariantAnimation*>(
+                QStringLiteral("screenshotPinnedGeometryAnimation"));
+            require(geometryAnimation, "thumbnail expansion starts its geometry animation");
+            geometryAnimation->pause();
+        }
+        const QRect thumbnailGeometry = Access::authority(window);
+        wait(
+            [&] {
+                return !window.animationTransformPending() &&
+                       Access::pendingAnimationToken(window) != 0;
+            },
+            "adopt the preparation after changing thumbnail mode");
+        if (scenario == 2) {
+            require(!window.persistenceSnapshot().thumbnailMode &&
+                        geometryAnimation->state() == QAbstractAnimation::Stopped &&
+                        Access::contentGeometry(window).size() ==
+                            animation->canvasSize.transposed(),
+                    "prepared transform finishes expansion and stops obsolete geometry ticks");
+            waitForUi(250);
+            require(Access::contentGeometry(window).size() == animation->canvasSize.transposed(),
+                    "an obsolete expansion target cannot overwrite the rotated geometry");
+        } else {
+            const auto record = window.persistenceSnapshot();
+            require(record.thumbnailMode && Access::authority(window) == thumbnailGeometry &&
+                        record.quarterTurns == 1 &&
+                        record.preThumbnailNativeGeometry.size() ==
+                            animation->canvasSize.transposed(),
+                    "late transform keeps thumbnail geometry and updates its expansion extent");
+            if (scenario == 1) {
+                require(geometryAnimation->state() == QAbstractAnimation::Paused,
+                        "prepared transform preserves the in-progress thumbnail shrink");
+                geometryAnimation->resume();
+                geometryAnimation->setCurrentTime(geometryAnimation->duration());
+                wait([&] { return geometryAnimation->state() == QAbstractAnimation::Stopped; },
+                     "finish the accepted thumbnail shrink");
+            }
+            const QRect shrunkGeometry = Access::authority(window);
+            Access::rejectAnimationTransform(window);
+            require(window.persistenceSnapshot().thumbnailMode &&
+                        Access::authority(window) == shrunkGeometry &&
+                        window.persistenceSnapshot().quarterTurns == 0 &&
+                        window.persistenceSnapshot().preThumbnailNativeGeometry.size() ==
+                            animation->canvasSize,
+                    "superseding an unpainted rotation rolls back only saved expansion geometry");
+            wait([&] { return !window.animationTransformPending(); },
+                 "reject the oversized preparation while thumbnail remains suspended");
+            require(Access::authority(window) == shrunkGeometry &&
+                        Access::originalImage(window) == painted &&
+                        Access::pendingAnimationToken(window) == 0,
+                    "failed thumbnail transform keeps a coherent paused raster and mapping");
+            Access::thumbnailForHideTest(window, false);
+            require(Access::contentGeometry(window).size() == animation->canvasSize,
+                    "thumbnail expansion restores the rolled-back orientation");
+        }
+        window.setUpdatesEnabled(true);
+        static_cast<void>(renderWidget(*canvas));
+        window.hide();
+    }
+}
+
+void pinnedAnimationTransformReplacement() {
+    using Access = ScreenshotPinnedWindowTestAccess;
+    const auto fixtures = pinned_animation_native_fixtures::images();
+    QString error;
+    const auto animation =
+        snow_shot::image_codec::decodeAnimationSource(fixtures.front().bytes, &error);
+    require(animation && error.isEmpty(), "decode the unpainted replacement animation");
+    const auto replacementAnimation =
+        snow_shot::image_codec::decodeAnimationSource(fixtures.back().bytes, &error);
+    require(replacementAnimation && error.isEmpty(), "decode the prepared replacement animation");
+    const auto wait = [](auto ready, const char* message) {
+        QElapsedTimer timer;
+        timer.start();
+        while (!ready() && timer.elapsed() < 3000)
+            waitForUi(5);
+        require(ready(), message);
+    };
+    for (bool animatedReplacement : {false, true}) {
+        ScreenshotPinnedWindow window;
+        window.setAttribute(Qt::WA_DeleteOnClose, false);
+        auto config = cachedOcrPinConfig(nullptr);
+        config.recognitionResults = {};
+        config.canvasSourceRect = QRectF(QPointF(), QSizeF(animation->canvasSize));
+        config.imageSource =
+            ScreenshotImageSource::fromImage(animation->firstFrame, config.canvasSourceRect);
+        config.contentCanvasRect = config.canvasSourceRect;
+        config.surfaceCanvasRect = config.canvasSourceRect;
+        config.initialWindowSize = animation->canvasSize;
+        config.nativeGeometry = QRect(QPoint(40, 40), animation->canvasSize);
+        Access::prepareReplacement(window, config);
+        auto* platform = Access::installObservedPlatform(window);
+        platform->observed = Access::authority(window);
+        ScreenshotClipboardContent initial;
+        initial.image = animation->firstFrame;
+        initial.animationSource = animation;
+        require(Access::replace(window, std::move(initial)), "install the replacement animation");
+        window.show();
+        auto* canvas = window.findChild<SnowCanvasWidget*>();
+        require(canvas, "unpainted replacement requires a canvas");
+        Access::playback(window).pause();
+        static_cast<void>(renderWidget(*canvas));
+        window.setUpdatesEnabled(false);
+        Access::transformForHideTest(window, false);
+        wait(
+            [&] {
+                return !window.animationTransformPending() &&
+                       Access::pendingAnimationToken(window) != 0;
+            },
+            "adopt a rotation before replacing its unpainted animation frame");
+        const QRect acceptedGeometry = Access::authority(window);
+        const QTransform acceptedTransform = window.contentReplacementTransform();
+        require(!window.present(config) && Access::authority(window) == acceptedGeometry &&
+                    window.contentReplacementTransform() == acceptedTransform &&
+                    Access::pendingAnimationToken(window) != 0,
+                "repeated presentation rejects before retiring the active playback source");
+
+        ScreenshotClipboardContent replacement;
+        if (animatedReplacement) {
+            replacement.image = replacementAnimation->firstFrame;
+            replacement.animationSource = replacementAnimation;
+            require(ScreenshotClipboardContentReader::prepareAnimationDisplay(replacement,
+                                                                              acceptedTransform),
+                    "prepare the replacement animation with the accepted rotation");
+        } else {
+            replacement.image = QImage(animation->canvasSize, QImage::Format_ARGB32_Premultiplied);
+            replacement.image.fill(qRgb(20, 80, 160));
+        }
+        const QImage replacementOriginal = replacement.image;
+        const QImage expected =
+            animatedReplacement
+                ? replacement.preparedDisplayImage
+                : ScreenshotResultCompositor::normalizeImage(
+                      replacementOriginal.transformed(acceptedTransform, Qt::SmoothTransformation));
+        require(Access::replace(window, std::move(replacement)),
+                "replace the source after accepting its unpainted rotation");
+        if (animatedReplacement)
+            Access::playback(window).pause();
+        const bool replacementStateMatches =
+            Access::authority(window) == acceptedGeometry &&
+            Access::contentGeometry(window).size() == animation->canvasSize.transposed() &&
+            window.persistenceSnapshot().quarterTurns == 1 &&
+            window.contentReplacementTransform() == acceptedTransform &&
+            Access::originalImage(window) == replacementOriginal &&
+            Access::originalPreviewSource(window).materializedImage == expected &&
+            (Access::pendingAnimationToken(window) != 0) == animatedReplacement;
+        if (!replacementStateMatches) {
+            const auto actual = Access::originalPreviewSource(window).materializedImage;
+            const auto geometry = Access::contentGeometry(window);
+            std::cerr << "unpainted replacement: animated=" << animatedReplacement
+                      << " authority=" << (Access::authority(window) == acceptedGeometry)
+                      << " extent=" << geometry.width() << ',' << geometry.height()
+                      << " quarter=" << window.persistenceSnapshot().quarterTurns << " transform="
+                      << (window.contentReplacementTransform() == acceptedTransform)
+                      << " original=" << (Access::originalImage(window) == replacementOriginal)
+                      << " raster=" << (actual == expected) << " actual=" << actual.width() << ','
+                      << actual.height() << " expected=" << expected.width() << ','
+                      << expected.height() << " token=" << Access::pendingAnimationToken(window)
+                      << '\n';
+        }
+        require(replacementStateMatches,
+                "source retirement keeps the replacement's rotated geometry, mapping and raster");
+        QImage exported;
+        const auto artifact = window.automationArtifact(false, false);
+        require(artifact &&
+                    artifact->requestImage(&window, [&](auto result) { exported = result.image; }),
+                "export the replacement after retiring the unpainted source");
+        wait([&] { return !exported.isNull(); }, "complete the rotated replacement export");
+        require(exported == expected,
+                "replacement export retains the accepted rotation and replacement pixels");
+        window.setUpdatesEnabled(true);
+        static_cast<void>(renderWidget(*canvas));
+        require(Access::authority(window) == acceptedGeometry &&
+                    window.persistenceSnapshot().quarterTurns == 1 &&
+                    Access::pendingAnimationToken(window) == 0 &&
+                    Access::originalPreviewSource(window).materializedImage == expected,
+                "painting the replacement acknowledges its frame and keeps its orientation");
+        window.hide();
+    }
+}
+
+void pinnedAnimatedImages(bool transformsOnly = false) {
+    if (!transformsOnly) {
+        pinnedAnimationTransformRollback();
+        pinnedAnimationTransformThumbnail();
+        pinnedAnimationTransformReplacement();
+    }
+    using Access = ScreenshotPinnedWindowTestAccess;
+    const bool nativePlatform = QGuiApplication::platformName() == QStringLiteral("windows") ||
+                                QGuiApplication::platformName() == QStringLiteral("cocoa");
+    std::optional<CursorPositionRestorer> cursorRestorer;
+    if (nativePlatform && !transformsOnly)
+        cursorRestorer.emplace();
+    const auto fixtures = nativePlatform ? pinned_animation_native_fixtures::images()
+                                         : pinned_animation_fixtures::images();
+    const auto wait = [](auto ready, const char* message) {
+        QElapsedTimer timer;
+        timer.start();
+        while (!ready() && timer.elapsed() < 3000)
+            waitForUi(5);
+        require(ready(), message);
+    };
+    for (const auto& fixture : fixtures) {
+        QString error;
+        const auto animation = snow_shot::image_codec::decodeAnimationSource(fixture.bytes, &error);
+        require(animation && error.isEmpty(), "decode an animated pin fixture");
+        auto config = cachedOcrPinConfig(nullptr);
+        config.recognitionResults = {};
+        config.canvasSourceRect = QRectF(QPointF(), QSizeF(animation->canvasSize));
+        config.imageSource =
+            ScreenshotImageSource::fromImage(animation->firstFrame, config.canvasSourceRect);
+        config.contentCanvasRect = config.canvasSourceRect;
+        config.surfaceCanvasRect = config.canvasSourceRect;
+        config.initialWindowSize = animation->canvasSize;
+        config.nativeGeometry =
+            physicalPinGeometry(*config.screen, QPoint(40, 40), animation->canvasSize);
+        int persistenceWrites = 0;
+        config.persistenceWriter = [&](const auto&) { ++persistenceWrites; };
+        ScreenshotPinnedWindow window;
+        window.setAttribute(Qt::WA_DeleteOnClose, false);
+        if (nativePlatform) {
+            require(window.present(config), "present the native animated integration fixture");
+            wait([&] { return window.sourcePinAvailable(); }, "publish the native initial frame");
+        } else {
+            Access::prepareReplacement(window, config);
+        }
+        require(
+            !Access::applyAnnotationTransaction(
+                 window,
+                 R"({"version":1,"operations":[{"type":"rectangle","bounds":[0,0,2,2],"style":{"stroke":[255,255,0,255],"fill":[255,255,0,255]}}]})")
+                 .isEmpty(),
+            "create stored annotations before animation replacement");
+        const auto history = Access::drawingHistory(window);
+        ScreenshotClipboardContent content;
+        content.image = animation->firstFrame;
+        content.animationSource = animation;
+        content.originalContent.localFilePath = QStringLiteral("C:/original.") + fixture.suffix;
+        require(Access::replace(window, std::move(content)),
+                "replace static content with animation");
+        require(Access::drawingHistory(window) == history,
+                "animation replacement preserves dormant annotation undo history");
+        require(!Access::recognition(window) &&
+                    !window.findChild<ScreenshotPinnedEditController*>(),
+                "animated pins create no annotation or recognition interfaces");
+        QString automationError;
+        static_cast<void>(window.automationEdit(
+            QStringLiteral("editing"), {{QStringLiteral("enabled"), true}}, &automationError));
+        require(automationError == QStringLiteral("action_unavailable"),
+                "automation cannot activate annotation on animations");
+
+        window.show();
+        auto* canvas = window.findChild<SnowCanvasWidget*>();
+        require(canvas, "animated pin retains its canvas");
+        Access::playback(window).pause();
+        const auto focusShortcutTarget = [&](QWidget& target) {
+            const auto ownsFocus = [&] {
+                if (!window.isActiveWindow() || QApplication::focusWidget() != &target)
+                    return false;
+#if defined(Q_OS_WIN) || defined(_WIN32)
+                if (nativePlatform && GetForegroundWindow() != toNativeHwnd(window.winId()))
+                    return false;
+#endif
+                return true;
+            };
+            QElapsedTimer timeout;
+            timeout.start();
+            QElapsedTimer stable;
+            stable.start();
+            while (timeout.elapsed() < 2000 && stable.elapsed() < 100) {
+                if (!ownsFocus()) {
+#if defined(Q_OS_WIN) || defined(_WIN32)
+                    if (nativePlatform)
+                        static_cast<void>(
+                            screenshot_pinned_window_native::activateWindow(window.winId()));
+#endif
+                    window.activateWindow();
+                    target.setFocus(Qt::OtherFocusReason);
+                    stable.restart();
+                }
+                waitForUi(10);
+            }
+            require(ownsFocus() && stable.elapsed() >= 100,
+                    "animation shortcut target requires stable active-window and widget focus");
+        };
+        if (!transformsOnly)
+            focusShortcutTarget(*canvas);
+        static_cast<void>(renderWidget(*canvas));
+        require(Access::playback(window).frameIndex() == 0,
+                "new animated content initially displays frame zero");
+        const QImage beforeTransform = Access::originalImage(window);
+        const QRect beforeTransformGeometry = Access::authority(window);
+        const auto rectText = [](const QRect& rect) {
+            return QStringLiteral("(%1,%2 %3x%4)")
+                .arg(rect.x())
+                .arg(rect.y())
+                .arg(rect.width())
+                .arg(rect.height())
+                .toStdString();
+        };
+        window.setUpdatesEnabled(false);
+        Access::transformForHideTest(window, false);
+        Access::transformForHideTest(window, false);
+        require(window.animationTransformPending() &&
+                    Access::authority(window) == beforeTransformGeometry,
+                "repeated rotations prepare asynchronously before changing geometry");
+        wait(
+            [&] {
+                return !window.animationTransformPending() &&
+                       Access::pendingAnimationToken(window) != 0;
+            },
+            "latest accumulated rotation stages a worker-prepared raster");
+        const auto adoptedQuarterTurns =
+            window.automationState().value(QStringLiteral("quarter_turns")).toInt();
+        if (adoptedQuarterTurns != 2 || Access::playback(window).requestedPlaying())
+            std::cerr << "animation rotation diagnostics: format=" << fixture.suffix.toStdString()
+                      << " quarters=" << adoptedQuarterTurns
+                      << " playing=" << Access::playback(window).requestedPlaying()
+                      << " suspended=" << Access::playback(window).suspended()
+                      << " pendingTransform=" << window.animationTransformPending()
+                      << " pendingFrame=" << Access::pendingAnimationToken(window) << '\n';
+        require(adoptedQuarterTurns == 2 && !Access::playback(window).requestedPlaying(),
+                "rotation preserves paused intent and accumulates rapid commands");
+        QImage unpaintedTransformExport;
+        const auto beforeTransformArtifact = window.automationArtifact(false, false);
+        require(beforeTransformArtifact &&
+                    beforeTransformArtifact->requestImage(
+                        &window, [&](auto result) { unpaintedTransformExport = result.image; }),
+                "export the last-painted raster during prepared rotation");
+        wait([&] { return !unpaintedTransformExport.isNull(); },
+             "unpainted rotation export completes without advancing playback");
+        require(unpaintedTransformExport ==
+                    ScreenshotResultCompositor::normalizeImage(beforeTransform),
+                "unpainted transform exports keep the prior raster and canvas mapping");
+        window.setUpdatesEnabled(true);
+        static_cast<void>(renderWidget(*canvas));
+        require(Access::pendingAnimationToken(window) == 0,
+                "prepared rotation commits its raster through actual paint acknowledgement");
+        QImage transformedExport;
+        const auto transformedArtifact = window.automationArtifact(false, false);
+        require(transformedArtifact &&
+                    transformedArtifact->requestImage(
+                        &window, [&](auto result) { transformedExport = result.image; }),
+                "export the worker-prepared rotated frame");
+        wait([&] { return !transformedExport.isNull(); }, "rotated frame export completes");
+        QTransform halfTurn;
+        halfTurn.rotate(180);
+        require(transformedExport == ScreenshotResultCompositor::normalizeImage(
+                                         beforeTransform.transformed(halfTurn)),
+                "latest rotation pixels match static export semantics");
+        Access::transformForHideTest(window, true);
+        wait(
+            [&] {
+                static_cast<void>(renderWidget(*canvas));
+                return !window.animationTransformPending() &&
+                       Access::pendingAnimationToken(window) == 0;
+            },
+            "reset the asynchronously prepared transform before playback checks");
+        const QRect beforeUnpaintedRotationGeometry = Access::authority(window);
+        if (beforeUnpaintedRotationGeometry != beforeTransformGeometry)
+            std::cerr << "animation reset geometry diagnostics: format="
+                      << fixture.suffix.toStdString()
+                      << " initial=" << rectText(beforeTransformGeometry)
+                      << " reset=" << rectText(beforeUnpaintedRotationGeometry)
+                      << " observed=" << rectText(Access::observation(window)) << " quarters="
+                      << window.automationState().value(QStringLiteral("quarter_turns")).toInt()
+                      << " scale=" << Access::scale(window)
+                      << " preserveScale=" << Access::preservesSettledScale(window)
+                      << " closing=" << Access::closing(window)
+                      << " pendingTransform=" << window.animationTransformPending()
+                      << " pendingFrame=" << Access::pendingAnimationToken(window) << '\n';
+        require(beforeUnpaintedRotationGeometry == beforeTransformGeometry,
+                "resetting the painted transform preserves the original geometry baseline");
+        window.setUpdatesEnabled(false);
+        Access::transformForHideTest(window, false);
+        wait(
+            [&] {
+                return !window.animationTransformPending() &&
+                       Access::pendingAnimationToken(window) != 0;
+            },
+            "adopt a rotation without painting its prepared raster");
+        const QRect adoptedGeometry = Access::authority(window);
+        const QRect paintedContentGeometry = Access::animationPaintedGeometry(window);
+        const int paintedQuarterTurns = Access::animationPaintedQuarterTurns(window);
+        const double adoptedScale = Access::scale(window);
+        Access::rejectAnimationTransform(window);
+        const QRect rollbackGeometry = Access::authority(window);
+        const int rollbackQuarterTurns =
+            window.automationState().value(QStringLiteral("quarter_turns")).toInt();
+        if (rollbackGeometry != beforeTransformGeometry || rollbackQuarterTurns != 0) {
+            const QSize initialSize = Access::initialWindowSize(window);
+            std::cerr << "animation rollback diagnostics: format=" << fixture.suffix.toStdString()
+                      << " initial=" << rectText(beforeTransformGeometry)
+                      << " before90=" << rectText(beforeUnpaintedRotationGeometry)
+                      << " adopted=" << rectText(adoptedGeometry)
+                      << " paintedContent=" << rectText(paintedContentGeometry)
+                      << " paintedQuarters=" << paintedQuarterTurns
+                      << " rollback=" << rectText(rollbackGeometry)
+                      << " observed=" << rectText(Access::observation(window))
+                      << " quarters=" << rollbackQuarterTurns << " scale=" << adoptedScale << "->"
+                      << Access::scale(window) << " initialSize=" << initialSize.width() << 'x'
+                      << initialSize.height()
+                      << " preserveScale=" << Access::preservesSettledScale(window)
+                      << " closing=" << Access::closing(window)
+                      << " pendingTransform=" << window.animationTransformPending()
+                      << " pendingFrame=" << Access::pendingAnimationToken(window)
+                      << " playing=" << Access::playback(window).requestedPlaying()
+                      << " suspended=" << Access::playback(window).suspended() << '\n';
+        }
+        require(rollbackGeometry == beforeTransformGeometry && rollbackQuarterTurns == 0,
+                "superseding an unpainted rotation restores the painted geometry immediately");
+        wait([&] { return !window.animationTransformPending(); },
+             "reject oversized transform preparation without retrying");
+        require(Access::authority(window) == beforeTransformGeometry &&
+                    Access::pendingAnimationToken(window) == 0 &&
+                    !Access::playback(window).requestedPlaying() &&
+                    Access::originalImage(window) == beforeTransform,
+                "failed superseding preparation preserves the painted raster and geometry pair");
+        window.setUpdatesEnabled(true);
+        static_cast<void>(renderWidget(*canvas));
+        if (transformsOnly) {
+            window.hide();
+            continue;
+        }
+        materializePinnedMenuTree(window);
+        auto* menu = Access::contextMenu(window);
+        const auto actions = menu->actions();
+        QStringList names;
+        for (auto* action : actions)
+            names.append(action->objectName());
+        const int process = names.indexOf(QStringLiteral("screenshotPinnedProcessImageMenu"));
+        require(process >= 4 &&
+                    names.mid(process - 4, 4) ==
+                        QStringList{QStringLiteral("screenshotPinnedTogglePlaybackAction"),
+                                    QStringLiteral("screenshotPinnedNextFrameAction"),
+                                    QStringLiteral("screenshotPinnedPreviousFrameAction"),
+                                    QStringLiteral("screenshotPinnedPlaybackSpeedAction")},
+                "playback commands appear in exact order immediately above Process image");
+        require(!menu->findChild<QAction*>(QStringLiteral("screenshotPinnedDrawingAction")) &&
+                    !menu->findChild<QAction*>(QStringLiteral("screenshotPinnedOcrAction")),
+                "animation menu omits annotation and recognition entries");
+        auto* toggle =
+            menu->findChild<QAction*>(QStringLiteral("screenshotPinnedTogglePlaybackAction"));
+        require(toggle && toggle->text().startsWith(QStringLiteral("Play")) &&
+                    toggle->text().contains(QStringLiteral("Space")),
+                "paused menu displays Play with the configurable Space shortcut");
+        auto* speed =
+            menu->findChild<QAction*>(QStringLiteral("screenshotPinnedPlaybackSpeedAction"));
+        require(speed && speed->menu() && speed->menu()->actions().size() == 3,
+                "speed submenu contains three commands");
+        const auto speedActions = speed->menu()->actions();
+        require(speedActions[0]->objectName() ==
+                        QStringLiteral("screenshotPinnedDecreasePlaybackSpeedAction") &&
+                    speedActions[1]->objectName() ==
+                        QStringLiteral("screenshotPinnedIncreasePlaybackSpeedAction") &&
+                    speedActions[2]->objectName() ==
+                        QStringLiteral("screenshotPinnedResetPlaybackSpeedAction"),
+                "speed submenu uses decrease, increase, reset order");
+        for (int i = 0; i < 9; ++i)
+            speedActions[0]->trigger();
+        require(Access::playback(window).speedPercent() == 10 && !speedActions[0]->isEnabled(),
+                "decrease is disabled at ten percent");
+        for (int i = 0; i < 39; ++i)
+            speedActions[1]->trigger();
+        require(Access::playback(window).speedPercent() == 400 && !speedActions[1]->isEnabled(),
+                "increase is disabled at four hundred percent");
+        speedActions[2]->trigger();
+        require(speed->text().contains(QStringLiteral("100%")),
+                "reset updates current speed label");
+
+        class AnimationTranslator final : public QTranslator {
+          public:
+            QString translate(const char* context, const char* source, const char*,
+                              int) const override {
+                if (QByteArray(context) == "ScreenshotPinnedWindow" &&
+                    (QByteArray(source) == "Play" || QByteArray(source) == "Pause" ||
+                     QByteArray(source) == "Next frame" || QByteArray(source) == "Previous frame" ||
+                     QByteArray(source) == "Playback speed: %1%" ||
+                     QByteArray(source) == "Decrease speed" ||
+                     QByteArray(source) == "Increase speed" || QByteArray(source) == "Reset speed"))
+                    return QStringLiteral("Translated ") + QString::fromUtf8(source);
+                return {};
+            }
+        } translator;
+        QCoreApplication::installTranslator(&translator);
+        const auto removeTranslator =
+            qScopeGuard([&] { QCoreApplication::removeTranslator(&translator); });
+        QEvent languageChange(QEvent::LanguageChange);
+        QCoreApplication::sendEvent(&window, &languageChange);
+        require(toggle->text().startsWith(QStringLiteral("Translated Play")) &&
+                    speed->text() == QStringLiteral("Translated Playback speed: 100%") &&
+                    speedActions[0]->text().startsWith(QStringLiteral("Translated Decrease speed")),
+                "existing playback menu and speed submenu retranslate on LanguageChange");
+        QCoreApplication::removeTranslator(&translator);
+        QCoreApplication::sendEvent(&window, &languageChange);
+        const QImage displayed = Access::originalImage(window);
+        const auto exportArtifact = window.automationArtifact(false, false);
+        require(exportArtifact != nullptr, "freeze a frame for image export");
+        Access::animationCommand(window, QStringLiteral("next_frame"));
+        wait(
+            [&] {
+                static_cast<void>(renderWidget(*canvas));
+                return Access::playback(window).frameIndex() == 1;
+            },
+            "next frame finishes asynchronously and paints");
+        require(!Access::playback(window).requestedPlaying(), "frame steps pause playback");
+        QImage exported;
+        require(exportArtifact->requestImage(&window,
+                                             [&](ScreenshotExportImageResult result) {
+                                                 require(result.succeeded(),
+                                                         "frozen frame export completes");
+                                                 exported = std::move(result.image);
+                                             }),
+                "start immutable frame export");
+        Access::playback(window).play();
+        wait([&] { return !exported.isNull(); }, "export finishes during continued playback");
+        require(exported == ScreenshotResultCompositor::normalizeImage(displayed),
+                "raster export freezes last-painted frame and excludes dormant annotations");
+        QByteArray copiedPng;
+        require(exportArtifact->requestClipboard(&window,
+                                                 [&](ScreenshotExportClipboardResult result) {
+                                                     require(result.succeeded(),
+                                                             "copy the frozen animation frame");
+                                                     copiedPng = result.payload.pngBytes();
+                                                 }),
+                "start ordinary frame copy during playback");
+        wait([&] { return !copiedPng.isEmpty(); }, "frame copy finishes during playback");
+        QMimeData copiedFrame;
+        copiedFrame.setData(QStringLiteral("image/png"), copiedPng);
+        const auto repinned = ScreenshotClipboardContentReader::readMimeData(&copiedFrame, 1.0);
+        require(repinned && !repinned->animationSource &&
+                    repinned->image.size() == displayed.size(),
+                "repinning an ordinary copied frame produces static content");
+        const auto repinnedPixels = ScreenshotResultCompositor::normalizeImage(repinned->image);
+        for (int y = 0; y < displayed.height(); ++y)
+            for (int x = 0; x < displayed.width(); ++x)
+                require(repinnedPixels.pixelColor(x, y) == displayed.pixelColor(x, y),
+                        "repinning an ordinary copied frame preserves its pixels");
+        Access::playback(window).pause();
+        Access::animationCommand(window, QStringLiteral("next_frame"));
+        wait(
+            [&] {
+                static_cast<void>(renderWidget(*canvas));
+                return Access::playback(window).frameIndex() == 0;
+            },
+            "next frame wraps at the endpoint");
+        Access::animationCommand(window, QStringLiteral("previous_frame"));
+        wait(
+            [&] {
+                static_cast<void>(renderWidget(*canvas));
+                return Access::playback(window).frameIndex() == 1;
+            },
+            "previous frame wraps at the beginning");
+
+        window.setUpdatesEnabled(false);
+        QImage printExpected;
+        const auto printArtifact = Access::printArtifact(window);
+        require(printArtifact && printArtifact->requestImage(
+                                     &window, [&](auto result) { printExpected = result.image; }),
+                "capture the currently painted frame for printing");
+        wait([&] { return !printExpected.isNull(); }, "printing reference snapshot completes");
+        Access::animationCommand(window, QStringLiteral("next_frame"));
+        wait([&] { return Access::pendingAnimationToken(window) != 0; },
+             "stage another frame without painting it");
+        QImage printed;
+        ScreenshotPrintService printer([&](QWidget*, QImage image, auto completion) {
+            printed = std::move(image);
+            completion({ScreenshotPrintService::Status::Cancelled, {}});
+        });
+        Access::print(window, &printer);
+        window.setUpdatesEnabled(true);
+        static_cast<void>(renderWidget(*canvas));
+        require(Access::playback(window).frameIndex() == 0,
+                "paint the staged frame before asynchronous print preparation");
+        wait([&] { return !printed.isNull(); }, "printing finishes after animation advances");
+        require(printed == ScreenshotPrintService::opaqueImage(printExpected) &&
+                    Access::drawingHistory(window) == history,
+                "printing freezes the invocation frame and preserves dormant annotation history");
+        Access::animationCommand(window, QStringLiteral("previous_frame"));
+        wait(
+            [&] {
+                static_cast<void>(renderWidget(*canvas));
+                return Access::playback(window).frameIndex() == 1;
+            },
+            "return to the paused frame after printing");
+
+        focusShortcutTarget(*canvas);
+        sendShortcut(*canvas, Qt::Key_Space, Qt::NoModifier, true);
+        require(!Access::playback(window).requestedPlaying(),
+                "Space autorepeat never toggles playback");
+        sendShortcut(*canvas, Qt::Key_Space);
+        require(Access::playback(window).requestedPlaying(), "Space starts playback");
+        waitForUi(280);
+        const int writesBeforeFrames = persistenceWrites;
+        const auto documentBeforeFrames =
+            window.automationState().value(QStringLiteral("canvas_revision"));
+        const auto framesBefore = Access::playback(window).diagnostics().displayedFrames;
+        const bool persistencePendingBefore = Access::persistencePending(window);
+        // Native occlusion can withhold backing-store paints even while the
+        // window is visible. This invariant concerns acknowledged frame ticks,
+        // so publish the prepared canvas frames during the observation interval.
+        QElapsedTimer frameObservation;
+        frameObservation.start();
+        while (frameObservation.elapsed() < 360) {
+            static_cast<void>(renderWidget(*canvas));
+            waitForUi(5);
+        }
+        const auto framesAfter = Access::playback(window).diagnostics().displayedFrames;
+        const auto documentAfterFrames =
+            window.automationState().value(QStringLiteral("canvas_revision"));
+        const bool historyUnchanged = Access::drawingHistory(window) == history;
+        const bool frameTicksStable =
+            framesAfter > framesBefore && persistenceWrites == writesBeforeFrames &&
+            documentAfterFrames == documentBeforeFrames && historyUnchanged;
+        if (!frameTicksStable) {
+            std::cerr << "animation frame tick diagnostics: format=" << fixture.suffix.toStdString()
+                      << " displayed=" << framesBefore << "->" << framesAfter
+                      << " writes=" << writesBeforeFrames << "->" << persistenceWrites
+                      << " persistencePending=" << persistencePendingBefore << "->"
+                      << Access::persistencePending(window) << " canvasRevision="
+                      << documentBeforeFrames.toVariant().toString().toStdString() << "->"
+                      << documentAfterFrames.toVariant().toString().toStdString()
+                      << " historyUnchanged=" << historyUnchanged
+                      << " playing=" << Access::playback(window).requestedPlaying()
+                      << " suspended=" << Access::playback(window).suspended()
+                      << " pending=" << Access::pendingAnimationToken(window)
+                      << " visible=" << window.isVisible() << " updates=" << window.updatesEnabled()
+                      << '\n';
+        }
+        require(frameTicksStable,
+                "frame ticks do not persist or mutate annotation documents and history");
+        QLineEdit input(&window);
+        input.show();
+        input.raise();
+        focusShortcutTarget(input);
+        require(input.hasFocus(), "animation editable-input fixture owns keyboard focus");
+        sendShortcut(input, Qt::Key_Space);
+        require(Access::playback(window).requestedPlaying(), "Space respects editable input");
+        input.hide();
+        QDialog modal(&window);
+        modal.setWindowModality(Qt::ApplicationModal);
+        modal.show();
+        wait([&] { return QApplication::activeModalWidget() == &modal; },
+             "animation modal fixture owns application input");
+        sendShortcut(*canvas, Qt::Key_Space);
+        require(Access::playback(window).requestedPlaying(),
+                "modal input suspends playback commands");
+        modal.hide();
+        Access::thumbnailForHideTest(window, true);
+        require(Access::playback(window).suspended() && Access::playback(window).requestedPlaying(),
+                "thumbnail suspension preserves the playback choice");
+        waitForUi(80);
+        const auto idle = Access::playback(window).diagnostics();
+        waitForUi(150);
+        const auto afterIdle = Access::playback(window).diagnostics();
+        require(idle.deadlineWakeups == afterIdle.deadlineWakeups &&
+                    idle.decodeRequests == afterIdle.decodeRequests &&
+                    idle.publishedFrames == afterIdle.publishedFrames,
+                "settled thumbnail schedules no animation deadlines or decoding");
+        Access::animationCommand(window, QStringLiteral("toggle_playback"));
+        require(!window.persistenceSnapshot().thumbnailMode &&
+                    Access::playback(window).requestedPlaying(),
+                "Play expands a thumbnail and starts playback");
+        const QRect geometryBeforeMinimization = Access::authority(window);
+        window.showMinimized();
+        waitForUi(20);
+        require(Access::playback(window).suspended(), "minimized pin suspends animation");
+        if (nativePlatform) {
+            Access::transformForHideTest(window, false);
+            wait([&] { return !window.animationTransformPending(); },
+                 "worker prepares a minimized rotation without revealing the pin");
+            require(window.isMinimized() && Access::playback(window).suspended() &&
+                        Access::contentGeometry(window).size() ==
+                            QSize(animation->canvasSize.height(), animation->canvasSize.width()),
+                    "rotation updates normal placement without restoring a minimized animation");
+            Access::transformForHideTest(window, true);
+            wait([&] { return !window.animationTransformPending(); },
+                 "worker prepares a minimized reset without revealing the pin");
+            require(Access::authority(window) == geometryBeforeMinimization,
+                    "minimized transform reset restores the normal content geometry");
+            window.hide();
+            ScreenshotClipboardContent enlargedStatic;
+            enlargedStatic.image =
+                QImage(animation->canvasSize * 2, QImage::Format_ARGB32_Premultiplied);
+            enlargedStatic.image.fill(QColor(25, 75, 125));
+            require(Access::replace(window, std::move(enlargedStatic)) && window.isMinimized() &&
+                        !window.isVisible() &&
+                        Access::contentGeometry(window).size() == animation->canvasSize * 2,
+                    "hidden minimized replacement updates normal placement without revealing");
+            ScreenshotClipboardContent restoredAnimation;
+            restoredAnimation.image = animation->firstFrame;
+            restoredAnimation.animationSource = animation;
+            require(Access::replace(window, std::move(restoredAnimation)) && window.isMinimized() &&
+                        !window.isVisible() && Access::playback(window).suspended() &&
+                        Access::authority(window) == geometryBeforeMinimization,
+                    "animated replacement remains hidden and minimized with its restored extent");
+        }
+        window.showNormal();
+        waitForUi(20);
+        require(window.isVisible() && Access::authority(window) == geometryBeforeMinimization &&
+                    window.currentNativeGeometry() == geometryBeforeMinimization,
+                "minimize and restore preserve the pin and its committed content geometry");
+        auto& hideToTop = Access::hideToTop(window);
+        require(hideToTop.enter(screenshot_pinned_hide_to_top::screenGeometry(window.screen())),
+                "animated pin enters Hide to Top");
+        hideToTop.animation().setCurrentTime(hideToTop.animation().duration());
+        require(Access::playback(window).suspended(),
+                "unrevealed Hide to Top pin suspends animation");
+#ifdef Q_OS_WIN
+        if (nativePlatform) {
+            const auto hover = hideToTop.handleGeometry().center();
+            require(SetCursorPos(hover.x(), hover.y()) != FALSE,
+                    "position cursor on the animated native handle");
+        }
+#endif
+        wait(
+            [&] {
+                const auto hover = hideToTop.handleGeometry().center();
+                if (nativePlatform)
+                    setSystemCursorPosition(hover);
+                hideToTop.updatePointer(hover);
+                return hideToTop.state() == ScreenshotPinnedHideToTopController::State::Revealed &&
+                       !Access::playback(window).suspended();
+            },
+            "revealing Hide to Top resumes the prior playback choice");
+        hideToTop.exit();
+        window.hide();
+        waitForUi(50);
+        require(Access::playback(window).suspended(), "hidden pin suspends animation");
+        const auto hidden = Access::playback(window).diagnostics();
+        waitForUi(150);
+        const auto hiddenAfter = Access::playback(window).diagnostics();
+        require(hidden.decodeRequests == hiddenAfter.decodeRequests &&
+                    hidden.deadlineWakeups == hiddenAfter.deadlineWakeups &&
+                    hidden.publishedFrames == hiddenAfter.publishedFrames,
+                "settled hidden pin performs no animation work");
+        const auto record = window.persistenceSnapshot();
+        require(record.animationSource == animation && record.image == animation->firstFrame &&
+                    record.animationSpeedPercent == 100,
+                "persistence retains encoded source and static initial management preview");
+        ScreenshotClipboardContent staticContent;
+        staticContent.image = animation->firstFrame;
+        require(Access::replace(window, std::move(staticContent)),
+                "replace animation by static frame");
+        materializePinnedMenuTree(window);
+        require(Access::contextMenu(window)->findChild<QAction*>(
+                    QStringLiteral("screenshotPinnedDrawingAction")) &&
+                    Access::drawingHistory(window) == history,
+                "static replacement restores annotation capabilities and stored undo history");
+    }
+    if (transformsOnly)
+        return;
+    for (const auto& fixture : fixtures) {
+        IsolatedPinnedStorage storage;
+        auto* screen = QGuiApplication::primaryScreen();
+        const auto source = snow_shot::image_codec::decodeAnimationSource(fixture.bytes);
+        require(source && source->isAnimated(), "decode the persistence integration canvas");
+        pinned_animation_persistence_tests::replaceWhileInitialPngIsSaving<Access>(
+            fixture, screen, physicalPinGeometry(*screen, QPoint(50, 50), source->canvasSize),
+            require, wait, [](ScreenshotPinnedWindow& window) {
+                static_cast<void>(renderWidget(*window.findChild<SnowCanvasWidget*>()));
+            });
+    }
+}
+
 int main(int argc, char* argv[]) {
 
     PinnedWindowTestApplication app(argc, argv);
@@ -21730,6 +22723,14 @@ int main(int argc, char* argv[]) {
         // without this, lazily initialized storage lands in the developer's
         // real AppData (see IsolatedPinnedStorage).
         IsolatedPinnedStorage processStorage;
+        if (QCoreApplication::arguments().contains(QStringLiteral("--animation-transforms-only"))) {
+            pinnedAnimatedImages(true);
+            return 0;
+        }
+        if (app.arguments().contains(QStringLiteral("--animation-only"))) {
+            pinnedAnimatedImages();
+            return 0;
+        }
         if (app.arguments().contains(QStringLiteral("--toolbar-placement-only"))) {
             pinnedToolbarAnchorsToContentOffscreen();
             return 0;

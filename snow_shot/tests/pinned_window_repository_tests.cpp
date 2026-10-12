@@ -1,5 +1,7 @@
 #include "snow_shot/storage/pinnedwindowrepository.h"
 #include "snow_shot/runtime/runtimeactivitytracker.h"
+#include "snowimageqtcodec.h"
+#include "pinned_animation_fixtures.h"
 
 #include <QCoreApplication>
 #include <QBuffer>
@@ -106,6 +108,274 @@ QByteArray readBytes(const QString& path) {
     QFile file(path);
     require(file.open(QIODevice::ReadOnly), "failed to read committed payload");
     return file.readAll();
+}
+
+void animatedSourcesRoundTripWithoutRewritingFrames() {
+    for (const auto& fixture : pinned_animation_fixtures::images()) {
+        for (bool fileSource : {false, true}) {
+            QTemporaryDir directory;
+            require(directory.isValid(), "animation storage fixture must exist");
+            const auto source = snow_shot::image_codec::decodeAnimationSource(fixture.bytes);
+            require(source && source->isAnimated(), "animation fixture must decode");
+            const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+            auto record = recordWithId(id, source->firstFrame);
+            record.animationSource = source;
+            record.animationSpeedPercent = 170;
+            record.animationPlaying = fileSource;
+            record.thumbnailMode = fileSource;
+            record.preThumbnailNativeGeometry = record.nativeGeometry;
+            if (fileSource) {
+                record.sourceKind = storage::PinnedWindowSourceKind::ClipboardImageFile;
+                record.originalFilePath =
+                    directory.filePath(QStringLiteral("original.") + fixture.suffix);
+                record.originalFileName = QFileInfo(record.originalFilePath).fileName();
+                record.sourceIdentity = {QStringLiteral("file:") + record.originalFilePath};
+                QFile file(record.originalFilePath);
+                require(file.open(QIODevice::WriteOnly) &&
+                            file.write(fixture.bytes) == fixture.bytes.size(),
+                        "original animation file must be written");
+                file.close();
+                require(file.remove(), "the original may disappear after immutable import");
+            }
+            const auto payloadDirectory =
+                QDir(directory.path())
+                    .filePath(QStringLiteral("pinned_windows_v2/pins/%1").arg(id));
+            const auto encodedPath =
+                QDir(payloadDirectory)
+                    .filePath(QStringLiteral("source_animation.") + source->format);
+            const auto previewPath = QDir(payloadDirectory).filePath(QStringLiteral("source.png"));
+            const auto stamp =
+                QDateTime::fromString(QStringLiteral("2001-01-01T00:00:00Z"), Qt::ISODate);
+            {
+                storage::PinnedWindowRepository repository(directory.path());
+                require(repository.create(record).success && repository.flush().success,
+                        "animation bytes must persist without the original file");
+                require(readBytes(encodedPath) == fixture.bytes,
+                        "animation storage must preserve exact encoded source bytes");
+                const auto revision = repository.previewSourceRevision(id);
+                const auto preview = repository.loadPreviewSource(id);
+                require(preview && samePixels(preview->image, source->firstFrame),
+                        "management must retain a static initial-frame preview");
+                QFile committed(encodedPath);
+                require(committed.open(QIODevice::ReadWrite) &&
+                            committed.setFileTime(stamp, QFileDevice::FileModificationTime),
+                        "committed animation payload must be timestamped");
+                committed.close();
+                QFile committedPreview(previewPath);
+                require(committedPreview.open(QIODevice::ReadWrite) &&
+                            committedPreview.setFileTime(stamp, QFileDevice::FileModificationTime),
+                        "committed first-frame preview must be timestamped");
+                committedPreview.close();
+                // A displayed frame or UI preference save cannot replace the
+                // immutable source or invalidate the management thumbnail.
+                record.image = patternedImage(QSize(2, 2), 31);
+                record.opacityPercent = 70;
+                record.animationSpeedPercent = 220;
+                record.canvasSession = QByteArrayLiteral("mutable state");
+                require(repository.updateState(record).success && repository.flush().success &&
+                            repository.previewSourceRevision(id) == revision,
+                        "animation state must save independently of immutable source identity");
+                require(QFileInfo(encodedPath).lastModified() == stamp &&
+                            QFileInfo(previewPath).lastModified() == stamp &&
+                            readBytes(encodedPath) == fixture.bytes,
+                        "state saves must not rewrite animation or preview payloads");
+                require(!repository.loadRecord(id, [](qint64) { return false; }),
+                        "animation restoration must honor read admission");
+            }
+            {
+                storage::PinnedWindowRepository repository(directory.path());
+                const auto loaded = repository.loadRecord(id);
+                require(
+                    loaded && loaded->animationSource &&
+                        loaded->animationSource->encoded == fixture.bytes &&
+                        loaded->animationSpeedPercent == 220 &&
+                        loaded->animationPlaying == record.animationPlaying &&
+                        loaded->thumbnailMode == record.thumbnailMode &&
+                        loaded->opacityPercent == 70 &&
+                        samePixels(loaded->image, source->firstFrame) &&
+                        loaded->sourceIdentity == record.sourceIdentity,
+                    "restart must retain complete animation, playback preferences and identity");
+                if (fileSource)
+                    require(loaded->originalFilePath == encodedPath,
+                            "restored original content must use the private animation source");
+                auto replacement = recordWithId(id, patternedImage(QSize(2, 2), 47));
+                require(repository.upsertExisting(replacement).success &&
+                            repository.flush().success && !QFile::exists(encodedPath),
+                        "static replacement must remove obsolete animation payloads");
+                const auto staticRecord = repository.loadRecord(id);
+                require(staticRecord && !staticRecord->animationSource &&
+                            samePixels(staticRecord->image, replacement.image),
+                        "replacing an animation must restore an ordinary static image record");
+            }
+        }
+    }
+}
+
+void animationAdmissionIncludesPreparedDisplayStorage() {
+    for (bool separateDisplay : {false, true}) {
+        QTemporaryDir directory;
+        const auto fixture = pinned_animation_fixtures::images().first();
+        auto source = snow_shot::image_codec::decodeAnimationSource(fixture.bytes);
+        require(source && !source->firstDisplayFrame.isNull(),
+                "animation fixture prepares its initial display raster");
+        if (separateDisplay) {
+            auto distinct = std::make_shared<ScreenshotAnimationSource>(*source);
+            distinct->firstDisplayFrame = source->firstDisplayFrame.copy();
+            source = std::move(distinct);
+            require(source->firstDisplayFrame.constBits() != source->firstFrame.constBits(),
+                    "admission fixture retains a separate display raster");
+        }
+        const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        auto record = recordWithId(id, source->firstFrame);
+        record.animationSource = source;
+        const bool sharedDisplay =
+            source->firstDisplayFrame.constBits() == source->firstFrame.constBits();
+        const qint64 residentBytes = source->encoded.size() + source->firstFrame.sizeInBytes() +
+                                     (sharedDisplay ? 0 : source->firstDisplayFrame.sizeInBytes());
+        const std::weak_ptr<const ScreenshotAnimationSource> owner = source;
+        storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+        require(repository.upsert(std::move(record)).success, "queue prepared animation source");
+        qint64 admittedBytes = 0;
+        auto loaded = repository.loadRecord(id, [&](qint64 bytes) {
+            admittedBytes = std::max(admittedBytes, bytes);
+            return true;
+        });
+        require(loaded && loaded->animationSource == source && admittedBytes == 2 * residentBytes,
+                "resident read admission deduplicates shared display pixels and counts separate "
+                "rasters");
+        loaded.reset();
+        source.reset();
+        require(repository.flush().success && owner.expired(),
+                "committed source demotion releases display and immutable source owners");
+    }
+}
+
+void legacyAnimatedFileSourcesAndPlaybackDefaultsRecover() {
+    auto fixtures = pinned_animation_fixtures::images();
+    fixtures.append(pinned_animation_fixtures::hiddenPosterAnimation());
+    for (const auto& fixture : fixtures) {
+        QTemporaryDir directory;
+        const auto source = snow_shot::image_codec::decodeAnimationSource(fixture.bytes);
+        const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        auto record = recordWithId(id, source->firstFrame);
+        record.animationSource = source;
+        record.sourceKind = storage::PinnedWindowSourceKind::ClipboardImageFile;
+        record.originalFilePath = directory.filePath(QStringLiteral("missing.") + fixture.suffix);
+        record.originalFileName = QFileInfo(record.originalFilePath).fileName();
+        {
+            storage::PinnedWindowRepository repository(directory.path());
+            require(repository.create(record).success && repository.flush().success,
+                    "legacy animation fixture must commit");
+        }
+        const auto manifest =
+            QDir(directory.path()).filePath(QStringLiteral("pinned_windows_v2/index.json"));
+        auto document = QJsonDocument::fromJson(readBytes(manifest)).object();
+        auto records = document.value(QStringLiteral("records")).toArray();
+        auto item = records.at(0).toObject();
+        auto payloads = item.value(QStringLiteral("payloads")).toObject();
+        payloads.insert(QStringLiteral("image"), payloads.take(QStringLiteral("animation")));
+        item.insert(QStringLiteral("payloads"), payloads);
+        item.remove(QStringLiteral("animation_speed_percent"));
+        item.remove(QStringLiteral("animation_playing"));
+        records.replace(0, item);
+        document.insert(QStringLiteral("records"), records);
+        QFile file(manifest);
+        const auto bytes = QJsonDocument(document).toJson();
+        require(file.open(QIODevice::WriteOnly | QIODevice::Truncate) &&
+                    file.write(bytes) == bytes.size(),
+                "legacy source descriptor must be written");
+        file.close();
+        storage::PinnedWindowRepository repository(directory.path());
+        const auto preview = repository.loadPreviewSource(id);
+        require(preview && samePixels(preview->image, source->firstFrame),
+                "old animated file records must still expose a static first-frame preview");
+        const auto restored = repository.loadRecord(id);
+        require(restored && restored->animationSource &&
+                    restored->animationSource->encoded == fixture.bytes &&
+                    restored->animationSpeedPercent == 100 && restored->animationPlaying &&
+                    samePixels(restored->image, source->firstFrame),
+                "old private animated files must acquire playback with compatible defaults");
+    }
+}
+
+void animationSourceIdentityIncludesEncodedBytes() {
+    QTemporaryDir directory;
+    const auto fixture = pinned_animation_fixtures::images().first();
+    const auto source = snow_shot::image_codec::decodeAnimationSource(fixture.bytes);
+    require(source && source->isAnimated(), "animation identity fixture must decode");
+    const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    auto record = recordWithId(id, source->firstFrame);
+    record.animationSource = source;
+    storage::PinnedWindowRepository repository(directory.path());
+    require(repository.create(record).success && repository.flush().success,
+            "initial animation source must commit");
+    const auto originalRevision = repository.previewSourceRevision(id);
+    auto changed = std::make_shared<ScreenshotAnimationSource>(*source);
+    const auto delay = changed->encoded.indexOf(QByteArray::fromHex("21f904000a00"));
+    require(delay >= 0, "GIF identity fixture must expose its first-frame delay");
+    changed->encoded[delay + 4] = char(11);
+    changed->frameDurationsNs[0] += 10000000;
+    record.animationSource = changed;
+    require(record.image.cacheKey() == source->firstFrame.cacheKey() &&
+                repository.upsertExisting(record).success && repository.flush().success &&
+                repository.previewSourceRevision(id) != originalRevision,
+            "changed encoded bytes must replace a source even when initial pixels share identity");
+    const auto restored = repository.loadRecord(id);
+    require(restored && restored->animationSource &&
+                restored->animationSource->encoded == changed->encoded &&
+                restored->animationSource->frameDurationsNs[0] == changed->frameDurationsNs[0],
+            "animation source replacement must retain changed timing instead of stale bytes");
+}
+
+void animationStateUpdatesDoNotInspectOrRetainImmutableSources() {
+    QTemporaryDir directory;
+    const auto fixture = pinned_animation_fixtures::images().first();
+    auto source = snow_shot::image_codec::decodeAnimationSource(fixture.bytes);
+    require(source && source->isAnimated(), "decode immutable-source activity fixture");
+    const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    auto record = recordWithId(id, source->firstFrame);
+    record.animationSource = source;
+    std::atomic_int inspections{0};
+    storage::PinnedWindowRepository repository(
+        directory.path(), true, 1000, [&](storage::PinnedWindowOperation operation) {
+            if (operation == storage::PinnedWindowOperation::AnimationSourceHash)
+                ++inspections;
+        });
+    require(repository.create(record).success && repository.flush().success && inspections == 1,
+            "new animation source requires one full identity inspection");
+    const auto previewRevision = repository.previewSourceRevision(id);
+    for (int speed = 110; speed <= 220; speed += 10) {
+        record.animationSpeedPercent = speed;
+        record.animationPlaying = !record.animationPlaying;
+        require(repository.upsertExisting(record).success && repository.flush().success,
+                "save animation playback preferences after resident payload demotion");
+    }
+    record.canvasSession = QByteArrayLiteral("mutable annotation state");
+    require(repository.updateState(record).success && repository.flush().success &&
+                repository.upsertExisting(record).success && repository.flush().success &&
+                inspections == 1 && repository.previewSourceRevision(id) == previewRevision,
+            "preference and document updates never inspect unchanged encoded animation bytes");
+
+    auto changed = std::make_shared<ScreenshotAnimationSource>(*source);
+    const auto delay = changed->encoded.indexOf(QByteArray::fromHex("21f904000a00"));
+    require(delay >= 0, "activity fixture exposes its first-frame delay");
+    changed->encoded[delay + 4] = char(11);
+    changed->frameDurationsNs[0] += 10000000;
+    record.animationSource = changed;
+    require(repository.upsertExisting(record).success && repository.flush().success &&
+                inspections == 2 && repository.previewSourceRevision(id) != previewRevision,
+            "changed immutable source requires a new identity inspection and preview revision");
+    record.animationSpeedPercent = 230;
+    require(repository.upsertExisting(record).success && repository.flush().success &&
+                inspections == 2,
+            "the replacement source also avoids repeated inspection for playback changes");
+    const std::weak_ptr<const ScreenshotAnimationSource> originalOwner = source;
+    const std::weak_ptr<const ScreenshotAnimationSource> replacementOwner = changed;
+    record.animationSource.reset();
+    source.reset();
+    changed.reset();
+    require(originalOwner.expired() && replacementOwner.expired(),
+            "identity reuse must not keep encoded sources resident after live owners release them");
 }
 
 void stateUpdatesBeforeFirstFlushPreserveRestorableSources() {
@@ -2301,6 +2571,14 @@ void closeRestoreAndRetentionRevealHiddenSiblings() {
 
 int main(int argc, char* argv[]) {
     QCoreApplication application(argc, argv);
+    if (application.arguments().contains(QStringLiteral("--animation-only"))) {
+        animatedSourcesRoundTripWithoutRewritingFrames();
+        animationAdmissionIncludesPreparedDisplayStorage();
+        legacyAnimatedFileSourcesAndPlaybackDefaultsRecover();
+        animationSourceIdentityIncludesEncodedBytes();
+        animationStateUpdatesDoNotInspectOrRetainImmutableSources();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--memory-activity-only"))) {
         committedPayloadsAreServedFromDisk();
         require(snow_shot::runtime::RuntimeActivityTracker::shared().snapshot().activeCount == 0,
@@ -2344,6 +2622,11 @@ int main(int argc, char* argv[]) {
     managementCreationOrderSurvivesOutOfOrderEncoding();
     precisePlacementAndPreviousVersionIsolation();
     stateUpdatesBeforeFirstFlushPreserveRestorableSources();
+    animatedSourcesRoundTripWithoutRewritingFrames();
+    animationAdmissionIncludesPreparedDisplayStorage();
+    legacyAnimatedFileSourcesAndPlaybackDefaultsRecover();
+    animationSourceIdentityIncludesEncodedBytes();
+    animationStateUpdatesDoNotInspectOrRetainImmutableSources();
     committedPayloadsAreServedFromDisk();
     manifestFailuresReleaseWrittenPayloadsAndRetryMetadata();
     partialPayloadFailuresDemoteOnlyCompleteRevisions();

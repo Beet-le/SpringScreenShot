@@ -303,6 +303,12 @@ class WindowsPinnedWindowPlatform final : public PinnedWindowPlatform {
     bool systemInteractionReleased() const override {
         return (GetAsyncKeyState(VK_LBUTTON) & 0x8000) == 0;
     }
+    bool isMinimized() const override {
+        // USER32's iconic geometry notifications can precede Qt's state event.
+        return PinnedWindowPlatform::isMinimized() ||
+               (m_window &&
+                screenshot_pinned_window_native::isMinimized(m_window->internalWinId()));
+    }
     QRect frameGeometry() const override {
         return m_window ? screenshot_pinned_window_native::currentWindowGeometry(
                               m_window->internalWinId())

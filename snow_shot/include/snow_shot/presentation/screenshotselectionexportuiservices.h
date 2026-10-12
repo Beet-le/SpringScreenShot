@@ -84,7 +84,8 @@ class ScreenshotSelectionExportUiServices final : public ScreenshotSelectionExpo
             snow_shot::storage::PinnedWindowCreationSource::Other,
         snow_shot::storage::PinnedSourceIdentity sourceIdentity = {},
         std::optional<bool> initialBorderVisible = {},
-        std::optional<bool> initialShadowVisible = {});
+        std::optional<bool> initialShadowVisible = {},
+        std::shared_ptr<const ScreenshotAnimationSource> animationSource = {});
     // An already composited selection bitmap placed by screenshotSelectionPinRequest.
     [[nodiscard]] bool
     presentCompositedSelectionImage(const QImage& image,
@@ -140,7 +141,9 @@ class ScreenshotSelectionExportUiServices final : public ScreenshotSelectionExpo
     hiddenDuplicateId(const snow_shot::storage::PinnedSourceIdentity& identity) const;
     void trackSourceWindow(ScreenshotPinnedWindow* window,
                            const snow_shot::storage::PinnedSourceIdentity& identity);
-    [[nodiscard]] bool presentRestoredRecord(snow_shot::storage::PinnedWindowRecord record);
+    [[nodiscard]] bool presentRestoredRecord(snow_shot::storage::PinnedWindowRecord record,
+                                             QImage initialPreparedAnimationFrame = {},
+                                             QTransform initialPreparedAnimationTransform = {});
     [[nodiscard]] bool presentPinnedImageOnCanvas(
         const QImage& image, QScreen* screen, const QRect& nativeGeometry,
         const QSize& initialWindowSize, const QRectF& canvasRect,
@@ -154,7 +157,8 @@ class ScreenshotSelectionExportUiServices final : public ScreenshotSelectionExpo
         const ScreenshotHistoryEntry* document = nullptr,
         snow_shot::storage::PinnedSourceIdentity sourceIdentity = {},
         std::optional<bool> initialBorderVisible = {},
-        std::optional<bool> initialShadowVisible = {});
+        std::optional<bool> initialShadowVisible = {},
+        std::shared_ptr<const ScreenshotAnimationSource> animationSource = {});
 
     QHash<QString, QList<QPointer<ScreenshotPinnedWindow>>> m_sourceWindows;
     std::function<void()> m_restoreFailure;

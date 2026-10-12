@@ -644,6 +644,152 @@ class PngCancellingSource final : public snow::image::ByteSource {
     const bool* decode_started_;
 };
 
+class PngFaultSource final : public snow::image::ByteSource {
+  public:
+    enum class Failure : std::uint8_t { empty, partial, io };
+    PngFaultSource(std::shared_ptr<const snow::image::ByteSource> source, std::uint64_t offset,
+                   Failure failure)
+        : source_(std::move(source)), offset_(offset), failure_(failure) {}
+    Result<std::uint64_t> size() const override {
+        return source_->size();
+    }
+    Result<std::size_t> read_at(std::uint64_t offset,
+                                std::span<std::byte> destination) const override {
+        if (offset < offset_)
+            return source_->read_at(offset, destination);
+        ++failures;
+        if (failure_ == Failure::io)
+            return Status::error(ErrorCode::io_error,
+                                 "forced PNG source failure with a heap-owned diagnostic string");
+        if (failure_ == Failure::partial && failures == 1)
+            return source_->read_at(offset, destination.first(1));
+        return std::size_t{0};
+    }
+    mutable int failures = 0;
+
+  private:
+    std::shared_ptr<const snow::image::ByteSource> source_;
+    std::uint64_t offset_;
+    Failure failure_;
+};
+
+class PngRowsSource final : public snow::image::RasterSource {
+  public:
+    PngRowsSource(const Document& document, bool reject)
+        : source_(document.frames.front().image), descriptor_(source_.descriptor()),
+          reject_(reject) {
+        descriptor_.format = Format::png;
+        descriptor_.metadata = document.metadata;
+        descriptor_.color = document.color;
+    }
+    const snow::image::DocumentDescriptor& descriptor() const noexcept override {
+        return descriptor_;
+    }
+    snow::image::RasterAccess access() const noexcept override {
+        return snow::image::RasterAccess::random_rows;
+    }
+    Result<void> read_rows(std::uint32_t frame, std::uint32_t plane, std::uint32_t first,
+                           std::uint32_t count, std::size_t stride,
+                           std::span<std::byte> destination, std::stop_token stop) const override {
+        if (reject_)
+            return Status::error(ErrorCode::io_error,
+                                 "forced PNG row-source failure with an owned diagnostic string");
+        return source_.read_rows(frame, plane, first, count, stride, destination, stop);
+    }
+
+  private:
+    ScratchLifetimeSource source_;
+    snow::image::DocumentDescriptor descriptor_;
+    bool reject_;
+};
+
+void test_png_error_recovery(Service& service) {
+    if (!supports(service, Format::png, snow::image::CodecCapability::encode))
+        return;
+    snow::image::EncodeOptions encode;
+    encode.format = Format::png;
+    auto document = sample_document();
+    auto encoded = std::make_shared<std::vector<std::byte>>();
+    require(service.encode(document, snow::image::memory_output(encoded), encode).has_value(),
+            "encode PNG error-boundary fixture");
+    const auto input = snow::image::memory_input(encoded);
+    std::size_t image_data = 0;
+    for (std::size_t position = 8; position + 12 <= encoded->size();) {
+        std::uint32_t length = 0;
+        for (std::size_t byte = 0; byte < 4; ++byte)
+            length = (length << 8U) | std::to_integer<std::uint32_t>((*encoded)[position + byte]);
+        if (std::memcmp(encoded->data() + position + 4, "IDAT", 4) == 0) {
+            image_data = position + 8;
+            break;
+        }
+        position += static_cast<std::size_t>(length) + 12;
+    }
+    require(image_data != 0, "PNG fixture has an image-data chunk");
+    for (const auto mode : {PngFaultSource::Failure::empty, PngFaultSource::Failure::partial,
+                            PngFaultSource::Failure::io}) {
+        const auto expected =
+            mode == PngFaultSource::Failure::io ? ErrorCode::io_error : ErrorCode::truncated_data;
+        for (const std::size_t offset : {std::size_t{8}, image_data, encoded->size() - 12}) {
+            const auto faultInput = [&] {
+                return snow::image::Input{
+                    std::make_shared<PngFaultSource>(input.source, offset, mode), "fault.png"};
+            };
+            for (int attempt = 0; attempt < 2; ++attempt) {
+                if (offset == 8) {
+                    const auto inspected = service.inspect(faultInput());
+                    require(!inspected && inspected.error().code == expected,
+                            "PNG header recovery preserves source errors and Result lifetimes");
+                }
+                const auto decoded = service.decode(faultInput());
+                require(!decoded && decoded.error().code == expected,
+                        "PNG header, pixel and final-chunk failures safely reject owned decode");
+                for (const auto storage :
+                     {PngCollectingSink::Storage::rows, PngCollectingSink::Storage::complete}) {
+                    PngCollectingSink sink(storage);
+                    const auto status = service.decode_to_sink(faultInput(), sink);
+                    require(!status && status.error().code == expected && !sink.ended &&
+                                sink.completed_frames == 0,
+                            "PNG error recovery never completes partially decoded sink frames");
+                }
+            }
+        }
+    }
+    auto bad_pixels = *encoded;
+    bad_pixels[image_data] ^= std::byte{0xFF};
+    require(!service.decode(snow::image::memory_input(bad_pixels)),
+            "libpng internal inflate and CRC errors return safely");
+
+    auto output_bytes = std::make_shared<std::vector<std::byte>>();
+    for (const bool interlaced : {false, true}) {
+        encode.interlaced = interlaced;
+        PngRowsSource rejected(document, true);
+        const auto source_failed =
+            service.encode(rejected, snow::image::memory_output(output_bytes), encode);
+        require(!source_failed && source_failed.error().code == ErrorCode::io_error,
+                "PNG streamed row-source errors preserve owned diagnostics");
+        PngRowsSource rows(document, false);
+        auto failing = std::make_shared<FailingByteSink>();
+        const auto sink_failed = service.encode(rows, {failing, "fault.png"}, encode);
+        require(!sink_failed && sink_failed.error().code == ErrorCode::io_error &&
+                    failing->writes == 1,
+                "PNG streamed write recovery destroys callback Results before jumping");
+        document.color.icc_profile = {std::byte{1}, std::byte{2}, std::byte{3}};
+        const auto bad_metadata =
+            service.encode(document, snow::image::memory_output(output_bytes), encode);
+        require(!bad_metadata && bad_metadata.error().code == ErrorCode::encode_failed,
+                "PNG metadata setters recover without crossing C++ document lifetimes");
+        PngRowsSource invalid_metadata(document, false);
+        const auto bad_stream_metadata =
+            service.encode(invalid_metadata, snow::image::memory_output(output_bytes), encode);
+        require(!bad_stream_metadata &&
+                    bad_stream_metadata.error().code == ErrorCode::encode_failed,
+                "PNG streamed metadata setters recover without crossing C++ document lifetimes");
+        document.color.icc_profile.clear();
+    }
+    require(service.decode(input).has_value(),
+            "valid PNG decoding survives repeated failed sessions");
+}
+
 void test_png_sink_storage(Service& service) {
     if (!supports(service, Format::png, snow::image::CodecCapability::encode))
         return;
@@ -770,6 +916,7 @@ void test_png_sink_storage(Service& service) {
 }
 
 void test_png_round_trip(Service& service) {
+    test_png_error_recovery(service);
     test_png_sink_storage(service);
     if (!supports(service, Format::png, snow::image::CodecCapability::encode))
         return;

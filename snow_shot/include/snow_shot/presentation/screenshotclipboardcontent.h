@@ -2,6 +2,7 @@
 #define SNOW_SHOT_PRESENTATION_SCREENSHOTCLIPBOARDCONTENT_H
 
 #include "snow_shot/storage/pinnedsourceidentity.h"
+#include "snow_shot/image/screenshotanimationsource.h"
 #include "snow_shot/presentation/screenshotclipboardplacement.h"
 #include "snow_shot/presentation/screenshotclipboardappearance.h"
 #include <QByteArray>
@@ -12,6 +13,7 @@
 #include <QSize>
 #include <QString>
 #include <QStringList>
+#include <QTransform>
 
 #include <functional>
 #include <memory>
@@ -42,6 +44,9 @@ struct ScreenshotClipboardContent {
     snow_shot::storage::PinnedSourceIdentity sourceIdentity;
     ScreenshotClipboardContentKind kind = ScreenshotClipboardContentKind::Image;
     QImage image;
+    std::shared_ptr<const ScreenshotAnimationSource> animationSource;
+    QImage preparedDisplayImage;
+    QTransform preparedImageTransform;
     std::shared_ptr<QTextDocument> formattedDocument;
     QString plainText;
     qreal formattedTextDevicePixelRatio = 1.0;
@@ -130,6 +135,14 @@ class ScreenshotClipboardContentReader final {
     [[nodiscard]] static std::optional<ScreenshotClipboardContent>
     decode(ScreenshotClipboardContentSnapshot snapshot, CancellationCheck cancelled = {},
            AllocationCheck allocate = {});
+
+    // Prepare animation pixels on the import worker before the GUI commits a
+    // replacement. The fingerprint normalizes translation to the source bounds.
+    // Static content keeps its existing preparation path.
+    [[nodiscard]] static bool prepareAnimationDisplay(ScreenshotClipboardContent& content,
+                                                      const QTransform& transform,
+                                                      CancellationCheck cancelled = {},
+                                                      AllocationCheck allocate = {});
 
     [[nodiscard]] static std::optional<ScreenshotClipboardContent>
     readMimeData(const QMimeData* mimeData, qreal devicePixelRatio);

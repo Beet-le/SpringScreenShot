@@ -1,6 +1,7 @@
 #pragma once
 
 #include "snow/image/codec.h"
+#include "snow/image/animation.h"
 #include "snow/image/export.h"
 #include "snow/image/raster.h"
 
@@ -31,6 +32,11 @@ class SNOW_IMAGE_API Service final {
     [[nodiscard]] Result<Format> detect(const Input& input, std::stop_token stop = {}) const;
     [[nodiscard]] Result<DecodeSession> open_decoder(const Input& input,
                                                      std::stop_token stop = {}) const;
+    [[nodiscard]] Result<AnimationDecodeSession>
+    open_animation_decoder(const Input& input, const DecodeOptions& options = {},
+                           std::stop_token stop = {},
+                           const AnimationCancellationCheck& cancelled = {},
+                           const AnimationAdmissionCheck& admit = {}) const;
     [[nodiscard]] Result<DocumentInfo>
     inspect(const Input& input, const DecodeOptions& options = {}, std::stop_token stop = {}) const;
     [[nodiscard]] Result<DocumentDescriptor> inspect_raster(const Input& input,

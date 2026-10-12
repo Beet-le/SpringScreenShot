@@ -535,6 +535,13 @@
         </message>
     </context>
     <context>
+        <name>SnowImageQtCodec</name>
+        <message>
+            <source>Could not decode animated image.</source>
+            <translation>Could not decode animated image.</translation>
+        </message>
+    </context>
+    <context>
         <name>snow_shot::app::mcp::ScreenshotMcpServer</name>
         <message>
             <source>Another Snow Shot instance owns the MCP endpoint.</source>

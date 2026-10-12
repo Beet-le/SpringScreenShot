@@ -270,6 +270,18 @@ class McpMediaService::Impl {
         const QString token = uuid();
         const auto id = r.params.value(QStringLiteral("id")).toString();
         const bool replace = r.method == QStringLiteral("snow_shot_pinned_replace");
+        const QPointer<ScreenshotPinnedWindow> replacementWindow =
+            replace ? groups.liveWindow(id) : nullptr;
+        if (replace && !replacementWindow) {
+            reply({}, QStringLiteral("window_closed"));
+            return;
+        }
+        if (replacementWindow && replacementWindow->animationTransformPending()) {
+            reply(pinState(id), QStringLiteral("busy"));
+            return;
+        }
+        const QTransform replacementTransform =
+            replacementWindow ? replacementWindow->contentReplacementTransform() : QTransform();
         const auto group = r.params.value(QStringLiteral("group_id")).toString();
         if (!group.isEmpty() && !groups.contains(group)) {
             reply({}, QStringLiteral("group_not_found"));
@@ -278,8 +290,8 @@ class McpMediaService::Impl {
         const QPointer<McpMediaService> guard(&q);
         auto job = ScreenshotExportCoordinator::shared().submit(
             &q, ScreenshotExportCoordinator::Priority::Foreground,
-            [snapshot = std::move(snapshot), path, kind, content,
-             dpr](const ScreenshotExportCancellation& cancel) mutable {
+            [snapshot = std::move(snapshot), path, kind, content, dpr, replace,
+             replacementTransform](const ScreenshotExportCancellation& cancel) mutable {
                 if (kind == QStringLiteral("file")) {
                     const auto files = ScreenshotClipboardContentReader::snapshotLocalFiles({path});
                     if (files.size() != 1)
@@ -293,13 +305,19 @@ class McpMediaService::Impl {
                 }
                 *content = ScreenshotClipboardContentReader::decode(
                     std::move(*snapshot), [&cancel] { return cancel.isCancellationRequested(); });
-                return *content ? ScreenshotExportTaskResult{}
-                                : ScreenshotExportTaskResult::failure(
-                                      ScreenshotExportFailureStage::Source,
-                                      QStringLiteral("decode_failed"));
+                if (!*content)
+                    return ScreenshotExportTaskResult::failure(ScreenshotExportFailureStage::Source,
+                                                               QStringLiteral("decode_failed"));
+                if (replace && !ScreenshotClipboardContentReader::prepareAnimationDisplay(
+                                   **content, replacementTransform,
+                                   [&cancel] { return cancel.isCancellationRequested(); }))
+                    return ScreenshotExportTaskResult::failure(ScreenshotExportFailureStage::Source,
+                                                               QStringLiteral("decode_failed"));
+                return ScreenshotExportTaskResult{};
             },
-            [this, guard, content, token, id, replace, group, expected = r.expectedRevision,
-             reply](ScreenshotExportTaskResult result) {
+            [this, guard, content, token, id, replace, replacementWindow, replacementTransform,
+             group, expected = r.expectedRevision,
+             reply](const ScreenshotExportTaskResult& result) {
                 if (!guard || !pending.contains(token))
                     return;
                 if (!result.succeeded() || !*content) {
@@ -317,7 +335,16 @@ class McpMediaService::Impl {
                         return;
                     }
                     auto* window = groups.liveWindow(id);
-                    if (!window || !window->automationReplaceContent(std::move(**content)))
+                    if (!window || window != replacementWindow) {
+                        reply(state, QStringLiteral("window_closed"));
+                        return;
+                    }
+                    if (window->animationTransformPending() ||
+                        window->contentReplacementTransform() != replacementTransform) {
+                        reply(state, QStringLiteral("stale_revision"));
+                        return;
+                    }
+                    if (!window->automationReplaceContent(std::move(**content)))
                         reply({}, QStringLiteral("replacement_failed"));
                     else
                         reply(pinState(id), {});

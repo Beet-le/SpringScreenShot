@@ -63,6 +63,9 @@ class PinnedWindowPlatform : public QObject {
     [[nodiscard]] virtual bool systemInteractionReleased() const {
         return false;
     }
+    [[nodiscard]] virtual bool isMinimized() const {
+        return m_window && m_window->isMinimized();
+    }
     [[nodiscard]] virtual QRect frameGeometry() const {
         return windowGeometry();
     }
