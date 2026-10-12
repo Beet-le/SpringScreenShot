@@ -17,6 +17,7 @@
 #include <QCoreApplication>
 #include <QFile>
 #include <QFileInfo>
+#include <QFont>
 #include <QDir>
 #include <QSet>
 #include <QGuiApplication>
@@ -63,6 +64,7 @@ constexpr qint64 kMaximumRichTextPixels = 64LL * 1024LL * 1024LL;
 constexpr qint64 kMaximumClipboardImagePixels = 64LL * 1000LL * 1000LL;
 constexpr qint64 kMaximumClipboardImageBytes = 256LL * 1024LL * 1024LL;
 constexpr qint64 kMaximumEncodedImageBytes = 256LL * 1024LL * 1024LL;
+constexpr int kFormattedTextFontPixelSize = 16;
 constexpr qreal kFormattedTextPadding = 16.0;
 
 using AllocationCheck = ScreenshotClipboardContentReader::AllocationCheck;
@@ -398,6 +400,11 @@ std::shared_ptr<QTextDocument> makeDocument(const QString& source, bool html, QS
     if (allocate && (source.size() > 1024 * 1024 || !allocate(retained + source.size() * 32)))
         return {};
     auto document = makeRestrictedDocument(allocate, retained + source.size() * 32);
+    // Pinned content needs a readable default independent of the small application UI font.
+    // Set it before HTML parsing so explicit source sizes still override inherited text.
+    QFont font = document->defaultFont();
+    font.setPixelSize(kFormattedTextFontPixelSize);
+    document->setDefaultFont(font);
     if (html) {
         if (source.trimmed().isEmpty()) {
             return {};
