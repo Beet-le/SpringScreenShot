@@ -220,7 +220,9 @@
         "DefaultAngle",
         "SelectedAngle",
         "DefaultMagnifier",
-        "SelectedMagnifier"
+        "SelectedMagnifier",
+        "DefaultSpeechBubble",
+        "SelectedSpeechBubble"
       ]
     },
     "canvas_tools": {
@@ -246,7 +248,8 @@
         "AutoFilter": "AutoFilter",
         "RectangleEraser": "RectangleEraser",
         "BrushEraser": "BrushEraser",
-        "Magnifier": "Magnifier"
+        "Magnifier": "Magnifier",
+        "SpeechBubble": "SpeechBubble"
       }
     },
     "recording_options": {

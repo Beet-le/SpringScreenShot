@@ -29,6 +29,7 @@ class ScreenshotToolCommandWorkflow final {
     void setMoveTool();
     void setSelectTool();
     void setShapeTool();
+    void setSpeechBubbleTool();
     void setArrowTool();
     void setLineTool();
     void setDistanceTool();

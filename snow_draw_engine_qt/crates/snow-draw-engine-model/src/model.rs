@@ -77,6 +77,15 @@ impl DocumentModel {
     pub fn arrow_id_for_text(&self, text: ElementId) -> Option<ElementId> {
         self.arrow_label_owner(text)
     }
+    pub fn speech_bubble_text_bindings(&self) -> &[(ElementId, ElementId)] {
+        self.queries.relations().speech_bubble_text_bindings()
+    }
+    pub fn speech_bubble_id_for_text(&self, text: ElementId) -> Option<ElementId> {
+        self.queries.relations().speech_bubble_id_for_text(text)
+    }
+    pub fn text_owner_id(&self, text: ElementId) -> Option<ElementId> {
+        self.queries.relations().text_owner_id(text)
+    }
     pub fn is_text_bound_to_serial_number(&self, text: ElementId) -> bool {
         !self.serials_for_text(text).is_empty()
     }
@@ -223,7 +232,7 @@ impl DocumentModel {
             .filter_map(|state| {
                 if !state.visible
                     || state.data.is_background_restore()
-                    || self.arrow_label_owner(state.id).is_some()
+                    || self.text_owner_id(state.id).is_some()
                 {
                     return None;
                 }
@@ -399,5 +408,66 @@ mod tests {
         assert_eq!(model.paint_rank(ids[0]), None);
         assert_states_match(&model);
         assert_states_match(&model.clone());
+    }
+
+    #[test]
+    fn speech_bubble_relations_and_tail_spatial_bounds_refresh_locally() {
+        use snow_draw_engine_document::{SpeechBubbleData, TextData, speech_bubble_default_tail};
+        let mut model = DocumentModel::new();
+        let owner = model.allocate_element_id();
+        let label = model.allocate_element_id();
+        let mut body = rect(500.0);
+        body.fill.a = 255;
+        let mut bubble = SpeechBubbleData::new(body);
+        bubble.text_element_id = Some(label);
+        bubble.tails.push(speech_bubble_default_tail(
+            &bubble,
+            Point::new(-450.0, 0.0),
+            1.0,
+        ));
+        let mut insert = Transaction::new("bubble fixture");
+        insert.insert_speech_bubble(owner, ElementMeta::default(), bubble.clone());
+        insert.insert_text(label, ElementMeta::default(), TextData::default());
+        model.apply_transaction(insert).unwrap();
+        assert_eq!(model.speech_bubble_text_bindings(), &[(owner, label)]);
+        assert_eq!(model.text_owner_id(label), Some(owner));
+        assert_eq!(model.speech_bubble_id_for_text(label), Some(owner));
+        assert!(model.visible_element_ids(viewport_query()).contains(&owner));
+        assert_eq!(
+            model.topmost_element_at_with_tolerance(Point::new(50.0, 0.0), 1.0),
+            Some((owner, ElementKind::SpeechBubble))
+        );
+        assert!(
+            !model
+                .bindable_element_states_with_overrides(&[])
+                .iter()
+                .any(|state| state.id() == label)
+        );
+        let snapped = model.snap_point(&SnapQuery {
+            point: Point::new(519.5, 19.5),
+            threshold: 1.0,
+            include_grid: false,
+            grid_size: 10.0,
+        });
+        assert_eq!(snapped.point, Point::new(520.0, 20.0));
+        let builds = model.relation_index_build_count();
+        bubble.body.fill.a = 130;
+        let mut style = Transaction::new("bubble appearance");
+        style.update_speech_bubble(owner, bubble.clone());
+        model.apply_transaction(style).unwrap();
+        assert_eq!(model.relation_index_build_count(), builds);
+        bubble.tails.clear();
+        let mut remove_tail = Transaction::new("remove tail");
+        remove_tail.update_speech_bubble(owner, bubble);
+        model.apply_transaction(remove_tail).unwrap();
+        assert!(!model.visible_element_ids(viewport_query()).contains(&owner));
+        assert_eq!(model.relation_index_build_count(), builds);
+        let mut remove = Transaction::new("remove bubble and label");
+        remove.remove_element(owner);
+        remove.remove_element(label);
+        let removed = model.apply_transaction(remove).unwrap();
+        assert_eq!(model.text_owner_id(label), None);
+        model.apply_history_transaction(&removed.inverse).unwrap();
+        assert_eq!(model.text_owner_id(label), Some(owner));
     }
 }

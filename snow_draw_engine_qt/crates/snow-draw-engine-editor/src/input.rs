@@ -17,6 +17,7 @@ impl Editor {
         self.pending_command = None;
         self.state.pending_text_edit = None;
         self.state.pending_new_text_draft = false;
+        self.state.pending_speech_bubble_text_edit = None;
         let mut interaction = match event {
             InputEvent::Pointer(pointer) => self.process_pointer_event(document, pointer),
             InputEvent::Wheel(wheel) => self.process_wheel_event(document, wheel),
@@ -50,6 +51,9 @@ impl Editor {
         document: &DocumentModel,
         event: PointerEvent,
     ) -> Result<InteractionOutput, ErrorCode> {
+        if let Some(output) = self.process_speech_bubble_pointer(document, event)? {
+            return Ok(output);
+        }
         if self.selection_pointer_button() == Some(PointerButton::Secondary) {
             return self.process_selection_pointer_event(document, event);
         }

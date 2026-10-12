@@ -10,6 +10,7 @@ use super::TextStyle;
 pub enum TextCommitTarget {
     New,
     NewArrow(ElementId),
+    NewSpeechBubble(ElementId),
     Existing(ElementId),
 }
 
@@ -22,6 +23,8 @@ pub struct TextDraftCommit {
     pub style: TextStyle,
     pub auto_resize: bool,
     pub update_default_style: bool,
+    pub minimum_grapheme_width: f64,
+    pub text_ink_reserve: f64,
 }
 
 impl TextDraftCommit {
@@ -42,12 +45,16 @@ impl TextDraftCommit {
             style,
             auto_resize,
             update_default_style,
+            minimum_grapheme_width: 0.0,
+            text_ink_reserve: 0.0,
         }
     }
 
     pub fn existing_id(&self) -> Option<ElementId> {
         match self.target {
-            TextCommitTarget::New | TextCommitTarget::NewArrow(_) => None,
+            TextCommitTarget::New
+            | TextCommitTarget::NewArrow(_)
+            | TextCommitTarget::NewSpeechBubble(_) => None,
             TextCommitTarget::Existing(id) => Some(id),
         }
     }
@@ -88,6 +95,7 @@ pub(crate) fn text_with_committed_draft(
     updated = text_with_measured_layout(&updated, layout)?;
     updated.text = draft.text.clone();
     updated.auto_resize = draft.auto_resize;
+    updated.text_ink_reserve = draft.text_ink_reserve;
     Ok(updated)
 }
 

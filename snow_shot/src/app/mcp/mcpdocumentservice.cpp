@@ -142,6 +142,7 @@ bool validSize(QSize size) {
 const QHash<QString, SnowCanvasTool> kCanvasTools{
     {QStringLiteral("select"), SnowCanvasTool::Select},
     {QStringLiteral("rectangle"), SnowCanvasTool::Shape},
+    {QStringLiteral("speech_bubble"), SnowCanvasTool::SpeechBubble},
     {QStringLiteral("arrow"), SnowCanvasTool::Arrow},
     {QStringLiteral("distance"), SnowCanvasTool::Distance},
     {QStringLiteral("angle"), SnowCanvasTool::Angle},

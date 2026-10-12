@@ -89,6 +89,7 @@ struct Selection {
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 enum CanvasTool {
+    SpeechBubble,
     Magnifier,
     Distance,
     Angle,
@@ -662,6 +663,7 @@ struct AutoFilter {
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 enum StyleTarget {
+    SpeechBubble,
     Distance,
     Rectangle,
     Arrow,
@@ -1351,6 +1353,40 @@ mod tests {
                 }))
             )
             .is_ok()
+        );
+    }
+
+    #[test]
+    fn speech_bubble_tools_and_styles_are_exposed_without_a_creation_operation() {
+        for (method, owner) in [
+            ("snow_shot_screenshot_set_tool", "session_id"),
+            ("snow_shot_document_set_tool", "document_id"),
+        ] {
+            let mut input = json!({"expected_revision": 1, "tool": "speech_bubble"});
+            input[owner] = json!("fixture");
+            assert!(schema(method, Some(input)).is_ok());
+        }
+        for (method, owner) in [
+            ("snow_shot_screenshot_set_tool_style", "session_id"),
+            ("snow_shot_document_set_tool_style", "document_id"),
+        ] {
+            let mut input = json!({"expected_revision": 1, "target": "speech_bubble",
+                "style": {"shape": "diamond", "stroke": [245, 34, 45, 255],
+                    "stroke_width": 3, "fill": [255, 255, 255, 255],
+                    "fill_style": "solid", "corner_radius": 6}});
+            input[owner] = json!("fixture");
+            assert!(schema(method, Some(input.clone())).is_ok());
+            input["style"]["shape"] = json!("triangle");
+            assert!(schema(method, Some(input)).is_err());
+        }
+        assert!(
+            schema(
+                "snow_shot_screenshot_edit",
+                Some(json!({"session_id":"s",
+            "expected_revision":1,"operations":[{"type":"speech_bubble",
+                "bounds":[0,0,100,100]}]}))
+            )
+            .is_err()
         );
     }
 

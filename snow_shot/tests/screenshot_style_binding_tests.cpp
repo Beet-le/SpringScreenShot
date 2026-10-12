@@ -9,10 +9,12 @@
 #include <QInputMethodEvent>
 #include "widgets/button.h"
 #include "widgets/input_line_edit.h"
+#include "widgets/popover.h"
 #include "widgets/select.h"
 
 #include <QApplication>
 #include <QContextMenuEvent>
+#include <QFocusEvent>
 #include <QCursor>
 #include <QDateTime>
 #include <QJsonArray>
@@ -754,6 +756,116 @@ void fontWheelRemembersDefaultsAndDraftChoice() {
     require(fresh.palette.creationStyleDefaults().text.fontSize == initial + 2,
             "new editor loads the remembered font size");
 }
+void textAlignmentPopupPreservesEditing(bool editExisting) {
+    const auto original = screenshotCanvasToolStyleDefaults();
+    const auto restore =
+        qScopeGuard([&] { static_cast<void>(persistScreenshotCanvasToolStyles(original)); });
+    auto defaults = original;
+    defaults.text.horizontalAlign = SnowCanvasTextHorizontalAlign::Left;
+    require(persistScreenshotCanvasToolStyles(defaults), "reset text alignment defaults");
+    SnowCanvasRuntime runtime;
+    SnowCanvasWidget canvas(runtime);
+    ScreenshotToolPalette palette(options());
+    ScreenshotStyleBinding binding(palette, canvas, &palette);
+    applyScreenshotCanvasToolStyles(canvas, palette.creationStyleDefaults());
+    canvas.resize(400, 300);
+    canvas.setInteractionEnabled(true);
+    QObject::connect(&canvas, &SnowCanvasWidget::styleToolbarStateChanged, &palette,
+                     [&] { palette.setStyleToolbarState(canvas.canvasStyleToolbarState()); });
+    QObject::connect(&palette, &ScreenshotToolPalette::textStylePopupInteractionBegan, &canvas,
+                     [&] { canvas.beginTextStylePopupInteraction(); });
+    QObject::connect(&palette, &ScreenshotToolPalette::textStylePopupInteractionEnded, &canvas,
+                     [&] { canvas.endTextStylePopupInteraction(&palette); });
+    require(canvas.setCanvasTool(SnowCanvasTool::Text), "activate text alignment fixture");
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Text);
+    canvas.show();
+    palette.show();
+    QApplication::processEvents();
+    mouse(canvas, QEvent::MouseButtonPress, {100, 100});
+    mouse(canvas, QEvent::MouseButtonRelease, {100, 100});
+    QInputMethodEvent input;
+    input.setCommitString(QStringLiteral("Alignment draft\nShort"));
+    QApplication::sendEvent(&canvas, &input);
+    require(canvas.hasActiveTextEditing() && documentSlots(runtime).isEmpty() &&
+                canvas.canvasStyleToolbarState().source ==
+                    SnowCanvasStyleToolbarSource::DefaultText,
+            "new text must be an unselected draft outside the document");
+    if (editExisting) {
+        QFocusEvent focusOut(QEvent::FocusOut, Qt::OtherFocusReason);
+        QApplication::sendEvent(&canvas, &focusOut);
+        const auto center = documentSlots(runtime)
+                                .first()
+                                .toObject()
+                                .value(QStringLiteral("data"))
+                                .toObject()
+                                .value(QStringLiteral("Text"))
+                                .toObject()
+                                .value(QStringLiteral("center"))
+                                .toObject();
+        const auto point = canvas.canvasToViewTransform().map(
+            QPointF(center.value(QStringLiteral("x")).toDouble(),
+                    center.value(QStringLiteral("y")).toDouble()));
+        mouse(canvas, QEvent::MouseButtonPress, point);
+        mouse(canvas, QEvent::MouseButtonRelease, point);
+        require(canvas.hasActiveTextEditing() && canvas.canvasStyleToolbarState().source ==
+                                                     SnowCanvasStyleToolbarSource::SelectedText,
+                "reopening committed text must edit the existing selected element");
+    }
+    const auto before = documentSlots(runtime);
+
+    adqt::widgets::AdPopover* popover = nullptr;
+    for (QWidget* control : palette.findChildren<QWidget*>()) {
+        if (control->accessibleName() == QStringLiteral("Text alignment")) {
+            popover = control->findChild<adqt::widgets::AdPopover*>();
+            if (popover != nullptr)
+                break;
+        }
+    }
+    require(popover != nullptr, "text alignment must own an option popover");
+    popover->setPopupLayerMode(adqt::widgets::AdPopover::PopupLayerMode::InWindow);
+    for (const auto alignment :
+         {SnowCanvasTextHorizontalAlign::Center, SnowCanvasTextHorizontalAlign::Right}) {
+        popover->show();
+        // Deliver the native popup's focus transfer explicitly so this also reproduces offscreen.
+        QFocusEvent focusOut(QEvent::FocusOut, Qt::OtherFocusReason);
+        QApplication::sendEvent(&canvas, &focusOut);
+        require(canvas.hasActiveTextEditing() && documentSlots(runtime) == before,
+                "opening alignment options must retain text editing before focus loss");
+        auto* content = popover->contentWidget();
+        require(content != nullptr, "alignment options must materialize on each open");
+        const auto tooltip = alignment == SnowCanvasTextHorizontalAlign::Center
+                                 ? QStringLiteral("Align text center")
+                                 : QStringLiteral("Align text right");
+        adqt::widgets::AdButton* option = nullptr;
+        for (auto* button : content->findChildren<adqt::widgets::AdButton*>()) {
+            if (button->toolTip() == tooltip)
+                option = button;
+        }
+        require(option != nullptr, "requested alignment option must be present");
+        option->click();
+        QApplication::processEvents();
+        require(!popover->isVisible() && canvas.hasActiveTextEditing() &&
+                    documentSlots(runtime) == before &&
+                    canvas.canvasStyleToolbarState().textStyle.horizontalAlign == alignment &&
+                    screenshotCanvasToolStyleDefaults().text.horizontalAlign == alignment,
+                "alignment clicks must update the active draft and defaults without committing it");
+    }
+    QFocusEvent unrelatedFocusOut(QEvent::FocusOut, Qt::OtherFocusReason);
+    QApplication::sendEvent(&canvas, &unrelatedFocusOut);
+    require(!canvas.hasActiveTextEditing() && documentSlots(runtime).size() == 1,
+            "ordinary focus loss must still commit after the alignment popup closes");
+    const auto text = documentSlots(runtime)
+                          .first()
+                          .toObject()
+                          .value(QStringLiteral("data"))
+                          .toObject()
+                          .value(QStringLiteral("Text"))
+                          .toObject();
+    require(
+        text.value(QStringLiteral("text")).toString() == QStringLiteral("Alignment draft\nShort") &&
+            text.value(QStringLiteral("horizontal_align")).toString() == QStringLiteral("Right"),
+        "committed text must preserve the content and alignment chosen during editing");
+}
 void propertyPatchesPreserveOtherEditorsAndProgrammaticState() {
     Editor first;
     Editor second;
@@ -1156,6 +1268,11 @@ void rejectedWatermarkRestorationCanRetryWithoutSaving() {
             "rejected text edits preserve the document, saved content, and synchronized editor");
 }
 } // namespace
+
+void runScreenshotTextAlignmentTests() {
+    textAlignmentPopupPreservesEditing(false);
+    textAlignmentPopupPreservesEditing(true);
+}
 
 void runWatermarkPersistenceTests() {
     const snow_shot::storage::WatermarkContentSettings settings;

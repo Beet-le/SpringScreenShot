@@ -35,6 +35,7 @@ pub enum ActiveTool {
     Distance,
     Angle,
     Magnifier,
+    SpeechBubble,
 }
 
 impl ActiveTool {
@@ -73,7 +74,8 @@ impl ActiveTool {
             | Self::Spotlight
             | Self::Distance
             | Self::Angle
-            | Self::Magnifier => false,
+            | Self::Magnifier
+            | Self::SpeechBubble => false,
         }
     }
 }
@@ -163,6 +165,8 @@ pub enum StyleToolbarSource {
     SelectedAngle,
     DefaultMagnifier,
     SelectedMagnifier,
+    DefaultSpeechBubble,
+    SelectedSpeechBubble,
 }
 
 impl StyleToolbarSource {
@@ -216,6 +220,7 @@ pub const FILTER_STYLE_MIXED_CONTAINS_BOTH_FILTERS: u32 = 1 << 30;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShapeKind {
+    SpeechBubble,
     Rectangle,
     Arrow,
     Line,
@@ -277,7 +282,7 @@ pub const SHAPE_STYLE_PROPERTY_ALL: u32 = SHAPE_STYLE_PROPERTY_RECTANGLE
 impl ShapeKind {
     pub const fn supported_properties(self) -> u32 {
         match self {
-            Self::Rectangle => SHAPE_STYLE_PROPERTY_RECTANGLE,
+            Self::Rectangle | Self::SpeechBubble => SHAPE_STYLE_PROPERTY_RECTANGLE,
             Self::Arrow => SHAPE_STYLE_PROPERTY_ARROW,
             Self::Line => SHAPE_STYLE_PROPERTY_LINE,
             Self::FreeDraw => SHAPE_STYLE_PROPERTY_FREE_DRAW,
@@ -410,6 +415,7 @@ pub struct FreeDrawPreview {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ElementCreationPreview {
+    SpeechBubble(snow_draw_engine_document::SpeechBubbleData),
     Rectangle(RectangleData),
     Magnifier(snow_draw_engine_document::MagnifierData),
     Filter(FilterData),
@@ -447,6 +453,10 @@ pub struct EditorPresentationState {
     pub active_text_draft: Option<ActiveTextDraftPresentation>,
     pub arrow_text_previews: Vec<(ElementId, TextData)>,
     pub preview_arrows: Vec<SelectionArrowState>,
+    pub speech_bubble_previews: Vec<(ElementId, snow_draw_engine_document::SpeechBubbleData)>,
+    pub speech_bubble_text_previews: Vec<(ElementId, TextData)>,
+    pub speech_bubble_handles: Vec<(u8, Point<f64>)>,
+    pub speech_bubble_handle_leaders: Vec<(Point<f64>, Point<f64>)>,
     pub preview_magnifiers: Vec<crate::SelectionMagnifierState>,
     pub selected_magnifiers: Vec<crate::SelectionMagnifierState>,
     pub preview_elements: Vec<SelectionRectState>,
@@ -568,6 +578,7 @@ pub struct SelectionBounds {
 pub enum ActiveTextDraftTarget {
     New,
     NewArrow(ElementId),
+    NewSpeechBubble(ElementId),
     Existing(ElementId),
 }
 
@@ -581,7 +592,9 @@ pub struct ActiveTextDraftPresentation {
 impl ActiveTextDraftPresentation {
     pub fn existing_id(&self) -> Option<ElementId> {
         match self.target {
-            ActiveTextDraftTarget::New | ActiveTextDraftTarget::NewArrow(_) => None,
+            ActiveTextDraftTarget::New
+            | ActiveTextDraftTarget::NewArrow(_)
+            | ActiveTextDraftTarget::NewSpeechBubble(_) => None,
             ActiveTextDraftTarget::Existing(id) => Some(id),
         }
     }

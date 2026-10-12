@@ -388,6 +388,13 @@ screenshotShortcutHintRows(const ScreenshotShortcutHintContext& context) {
         append(rows, "Auto-align: Ctrl");
         append(rows, "Delete selected elements: Delete", !disabled(SnowCanvasTool::Magnifier));
         break;
+    case ScreenshotActiveTool::SpeechBubble:
+        append(rows, "Maintain aspect ratio: Shift");
+        append(rows, "Fixed-angle rotation: Shift", !disabled(SnowCanvasTool::SpeechBubble));
+        append(rows, "Scale from center: Alt");
+        append(rows, "Auto-align: Ctrl");
+        append(rows, "Delete selected elements: Delete", !disabled(SnowCanvasTool::SpeechBubble));
+        break;
     case ScreenshotActiveTool::Shape:
         append(rows, "Maintain aspect ratio: Shift");
         append(rows, "Fixed-angle rotation: Shift", !disabled(SnowCanvasTool::Shape));

@@ -507,6 +507,13 @@ impl Editor {
                 filter.rotation = rect.rotation;
                 ElementCreationPreview::Filter(filter)
             })
+        } else if self.active_tool() == ActiveTool::SpeechBubble {
+            preview.map(|mut body| {
+                body.corner_radii = self.state.default_speech_bubble_style.corner_radii;
+                ElementCreationPreview::SpeechBubble(
+                    snow_draw_engine_document::SpeechBubbleData::new(body),
+                )
+            })
         } else if self.active_tool() == ActiveTool::Magnifier {
             preview
                 .map(|rect| ElementCreationPreview::Magnifier(self.magnifier_creation_data(rect)))
@@ -545,6 +552,25 @@ impl Editor {
         self.cancel_interaction();
 
         if let Some(rect) = preview {
+            if self.active_tool() == ActiveTool::SpeechBubble {
+                let id = document.peek_next_element_id();
+                let mut body = rect;
+                body.corner_radii = self.state.default_speech_bubble_style.corner_radii;
+                let bubble = snow_draw_engine_document::SpeechBubbleData::new(body);
+                let mut transaction = Transaction::new("create speech bubble");
+                transaction.insert_speech_bubble(id, ElementMeta::default(), bubble);
+                let undo = self.capture_document_sync_snapshot(document);
+                self.set_selection_state(vec![id], Some(id));
+                self.state.pending_speech_bubble_text_edit = Some(id);
+                self.queue_command(EditorCommand::ApplyTransaction(
+                    ApplyTransactionCommand::with_history_undo_snapshot(transaction, undo),
+                ));
+                return Ok(InteractionOutput {
+                    consumed: true,
+                    capture: self.release_capture_command(),
+                    cursor: CursorCommand::Set(self.tool_policy().default_cursor),
+                });
+            }
             if self.active_tool() == ActiveTool::Magnifier {
                 let value = self.magnifier_creation_data(rect);
                 snow_draw_engine_document::validate_magnifier(&value)?;

@@ -27,7 +27,7 @@ pub struct HistoryApplyResult {
     pub snapshot: DocumentSyncSnapshot,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HistoryStore {
     undo_stack: Vec<HistoryEntry>,
@@ -40,9 +40,58 @@ pub struct HistoryStore {
     last_filter_commit: Option<(FilterCoalesceKey, Instant)>,
     #[serde(skip)]
     last_angle_commit: Option<(Vec<ElementId>, Instant)>,
+    #[serde(skip)]
+    mutation_generation: u64,
+}
+
+impl PartialEq for HistoryStore {
+    fn eq(&self, other: &Self) -> bool {
+        self.undo_stack == other.undo_stack
+            && self.redo_stack == other.redo_stack
+            && self.last_watermark_text_commit == other.last_watermark_text_commit
+            && self.last_spotlight_commit == other.last_spotlight_commit
+            && self.last_filter_commit == other.last_filter_commit
+            && self.last_angle_commit == other.last_angle_commit
+        // The amendment token identifies a runtime history state, not persisted content.
+    }
 }
 
 impl HistoryStore {
+    pub(crate) fn mutation_generation(&self) -> u64 {
+        self.mutation_generation
+    }
+
+    pub(crate) fn can_amend_latest(&self, generation: u64) -> bool {
+        self.mutation_generation == generation
+            && self.redo_stack.is_empty()
+            && !self.undo_stack.is_empty()
+    }
+
+    /// Attach host-measured geometry to its originating edit, preserving its undo boundary.
+    pub(crate) fn amend_latest(
+        &mut self,
+        generation: u64,
+        redo: &Transaction,
+        undo: &Transaction,
+        redo_snapshot: DocumentSyncSnapshot,
+    ) -> bool {
+        if !self.can_amend_latest(generation) {
+            return false;
+        }
+        let entry = self.undo_stack.last_mut().expect("checked history entry");
+        for operation in redo.operations() {
+            entry.redo.push(operation.clone());
+        }
+        let mut amended_undo = Transaction::new(entry.undo.label());
+        for operation in undo.operations().iter().chain(entry.undo.operations()) {
+            amended_undo.push(operation.clone());
+        }
+        entry.undo = amended_undo;
+        entry.redo_snapshot = redo_snapshot;
+        self.mutation_generation = self.mutation_generation.wrapping_add(1);
+        true
+    }
+
     pub(crate) fn normalize_angle_invariants(&mut self) -> Result<(), ErrorCode> {
         for entry in self.undo_stack.iter_mut().chain(self.redo_stack.iter_mut()) {
             entry.undo.normalize_angle_invariants()?;
@@ -193,6 +242,7 @@ impl HistoryStore {
         undo_snapshot: DocumentSyncSnapshot,
         redo_snapshot: DocumentSyncSnapshot,
     ) {
+        self.mutation_generation = self.mutation_generation.wrapping_add(1);
         let label = label.into();
         let now = Instant::now();
         if label == "adjust angle"
@@ -374,6 +424,7 @@ impl HistoryStore {
         let restore_selection = entry.label == "duplicate selection";
         let snapshot = entry.undo_snapshot.clone();
         self.redo_stack.push(entry);
+        self.mutation_generation = self.mutation_generation.wrapping_add(1);
         Ok(Some(HistoryApplyResult {
             restore_selection,
             apply_result,
@@ -404,6 +455,7 @@ impl HistoryStore {
         let restore_selection = entry.label == "duplicate selection";
         let snapshot = entry.redo_snapshot.clone();
         self.undo_stack.push(entry);
+        self.mutation_generation = self.mutation_generation.wrapping_add(1);
         Ok(Some(HistoryApplyResult {
             restore_selection,
             apply_result,

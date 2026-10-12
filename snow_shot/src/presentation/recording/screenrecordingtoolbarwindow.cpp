@@ -29,6 +29,7 @@ ScreenshotToolPalette::Options recordingToolbarOptions() {
     options.showDragHandle = true;
     options.showSelectTool = true;
     options.showShapeTool = true;
+    options.showSpeechBubbleTool = true;
     options.showArrowTool = true;
     options.showLineTool = true;
     options.showDistanceTool = true;

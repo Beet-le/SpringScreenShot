@@ -30,6 +30,7 @@ pub enum SnowActiveTool {
     Distance = 17,
     Angle = 18,
     Magnifier = 19,
+    SpeechBubble = 20,
 }
 
 impl SnowActiveTool {
@@ -72,6 +73,8 @@ pub enum SnowStyleToolbarSource {
     SelectedAngle = 29,
     DefaultMagnifier = 30,
     SelectedMagnifier = 31,
+    DefaultSpeechBubble = 32,
+    SelectedSpeechBubble = 33,
 }
 
 impl SnowStyleToolbarSource {
@@ -346,6 +349,7 @@ pub enum SnowShapeKind {
     RectangleHighlight = 4,
     PenHighlight = 5,
     Spotlight = 6,
+    SpeechBubble = 7,
 }
 
 #[repr(C)]
@@ -527,6 +531,7 @@ pub struct SnowStyleDefaults {
     pub angle: SnowAngleStyle,
     pub spotlight_corner_radii: SnowCornerRadii,
     pub magnifier: SnowMagnifierStyle,
+    pub speech_bubble: SnowShapeStyle,
 }
 
 #[repr(C)]

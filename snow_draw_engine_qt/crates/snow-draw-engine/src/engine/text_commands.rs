@@ -14,6 +14,9 @@ pub struct TextElementInfo {
     pub id: ElementId,
     pub arrow_id: Option<ElementId>,
     pub arrow_width: f64,
+    pub bubble_id: Option<ElementId>,
+    pub bubble_body: Option<snow_draw_engine_document::RectangleData>,
+    pub text_ink_reserve: f64,
     pub center: Point<f64>,
     pub width: f64,
     pub height: f64,
@@ -36,6 +39,9 @@ fn text_element_info_from_resize_request(request: TextResizeMeasurementRequest) 
         id: request.id,
         arrow_id: None,
         arrow_width: 0.0,
+        bubble_id: None,
+        bubble_body: None,
+        text_ink_reserve: 0.0,
         center: request.center,
         width: request.width,
         height: request.height,
@@ -59,6 +65,9 @@ fn text_element_info_from_active_draft(draft: &ActiveTextDraftPresentation) -> T
         id: draft.existing_id().unwrap_or_default(),
         arrow_id: None,
         arrow_width: 0.0,
+        bubble_id: None,
+        bubble_body: None,
+        text_ink_reserve: 0.0,
         center: draft.text.center,
         width: draft.text.width(),
         height: draft.text.height(),
@@ -131,6 +140,7 @@ impl Engine {
         viewport: ViewportId,
     ) -> Result<(), ErrorCode> {
         self.ensure_viewport(viewport)?;
+        self.speech_bubble_layout_origin = None;
         self.editor.invalidate_arrow_text_measurements();
         Ok(())
     }
@@ -177,6 +187,9 @@ impl Engine {
                 id: ElementId::default(),
                 arrow_id: Some(id),
                 arrow_width: arrow.width,
+                bubble_id: None,
+                bubble_body: None,
+                text_ink_reserve: 0.0,
                 center: snow_draw_engine_document::arrow_text_anchor(arrow),
                 width: 1.0,
                 height: style.font_size,
@@ -304,10 +317,20 @@ impl Engine {
     }
 
     pub fn text_element_info(&self, id: ElementId) -> Result<TextElementInfo, ErrorCode> {
-        let text = self.model.text(id)?;
+        let displayed_text = self
+            .editor
+            .speech_bubble_text_display_snapshot(&self.model, id);
+        let text = displayed_text.as_ref().unwrap_or(self.model.text(id)?);
         let layout = resolve_text_layout_rect(text);
         Ok(TextElementInfo {
             id,
+            bubble_id: self.model.speech_bubble_id_for_text(id),
+            bubble_body: self.model.speech_bubble_id_for_text(id).and_then(|owner| {
+                self.editor
+                    .speech_bubble_display_snapshot(&self.model, owner)
+                    .map(|bubble| bubble.body)
+            }),
+            text_ink_reserve: text.text_ink_reserve,
             arrow_id: self.model.arrow_id_for_text(id),
             arrow_width: self
                 .model
@@ -395,6 +418,16 @@ impl Engine {
                     .arrow_id
                     .and_then(|id| self.model.arrow(id).ok())
                     .map_or(0.0, |arrow| arrow.width);
+                info.bubble_id = match draft.target {
+                    snow_draw_engine_editor::ActiveTextDraftTarget::NewSpeechBubble(id) => Some(id),
+                    _ => draft
+                        .existing_id()
+                        .and_then(|id| self.model.speech_bubble_id_for_text(id)),
+                };
+                info.bubble_body = info
+                    .bubble_id
+                    .and_then(|id| self.editor.speech_bubble_draft_body(&self.model, id));
+                info.text_ink_reserve = draft.text.text_ink_reserve;
                 (info, style)
             }))
     }
@@ -601,5 +634,236 @@ mod emphasis_tests {
         serialized.as_object_mut().unwrap().remove("italic");
         let restored: TextData = serde_json::from_value(serialized).unwrap();
         assert!(!restored.bold && !restored.italic);
+    }
+}
+
+impl Engine {
+    pub fn speech_bubble_text_request_build_count(&self) -> u64 {
+        self.editor.speech_bubble_text_request_build_count()
+    }
+    pub fn speech_bubble_text_count(&self) -> usize {
+        self.model.speech_bubble_text_bindings().len()
+    }
+    pub fn speech_bubble_text_layout_requests(
+        &self,
+        viewport: ViewportId,
+    ) -> Result<Vec<snow_draw_engine_editor::SpeechBubbleTextLayoutRequest>, ErrorCode> {
+        self.ensure_viewport(viewport)?;
+        Ok(self.editor.speech_bubble_text_layout_requests(&self.model))
+    }
+    pub fn apply_speech_bubble_text_layouts(
+        &mut self,
+        viewport: ViewportId,
+        layouts: &[(
+            ElementId,
+            snow_draw_engine_editor::SpeechBubbleTextMeasurement,
+        )],
+    ) -> Result<MutationResult, ErrorCode> {
+        self.ensure_viewport(viewport)?;
+        let accepted = self
+            .editor
+            .apply_speech_bubble_text_layouts(&self.model, layouts)?;
+        if !accepted {
+            return Ok(MutationResult::default());
+        }
+        let Some(mut origin) = self.speech_bubble_layout_origin.take() else {
+            return self.refresh_all_viewports();
+        };
+        if origin.revision != self.model.document_revision()
+            || !self.history.can_amend_latest(origin.history_generation)
+            || self.editor.has_pointer_capture()
+            || self.editor.active_text_draft_presentation().is_some()
+        {
+            return self.refresh_all_viewports();
+        }
+        let submitted_keys: std::collections::HashSet<_> = layouts
+            .iter()
+            .map(|(id, measurement)| (*id, measurement.key))
+            .collect();
+        let mut amendment =
+            snow_draw_engine_document::Transaction::new("speech bubble text layout");
+        let mut completed = Vec::new();
+        for (&owner, &(text_id, expected_key)) in &origin.owners {
+            if !submitted_keys.contains(&(text_id, expected_key))
+                || self
+                    .editor
+                    .speech_bubble_document_layout_key(&self.model, owner)
+                    != Some((text_id, expected_key))
+            {
+                continue;
+            }
+            let Some((bubble, text)) = self
+                .editor
+                .speech_bubble_measured_document_values(&self.model, owner)
+            else {
+                continue;
+            };
+            if self.model.speech_bubble(owner)? != &bubble {
+                amendment.update_speech_bubble(owner, bubble);
+            }
+            if self.model.text(text_id)? != &text {
+                amendment.update_text(text_id, text);
+            }
+            completed.push(owner);
+        }
+        for owner in completed {
+            origin.owners.remove(&owner);
+        }
+        let result = if amendment.is_empty() {
+            self.refresh_all_viewports()?
+        } else {
+            let snapshot = self.capture_session_snapshot();
+            let applied = self.model.apply_transaction(amendment.clone())?;
+            let result = self.finish_document_change(&snapshot, &applied.changes);
+            let redo_snapshot = self.capture_session_snapshot();
+            let amended = self.history.amend_latest(
+                origin.history_generation,
+                &amendment,
+                &applied.inverse,
+                redo_snapshot,
+            );
+            debug_assert!(
+                amended,
+                "exclusive runtime access preserves the checked history entry"
+            );
+            origin.revision = self.model.document_revision();
+            origin.history_generation = self.history.mutation_generation();
+            result
+        };
+        if !origin.owners.is_empty() {
+            self.speech_bubble_layout_origin = Some(origin);
+        }
+        Ok(result)
+    }
+    pub fn take_speech_bubble_text_edit_request(
+        &mut self,
+        viewport: ViewportId,
+    ) -> Result<Option<ElementId>, ErrorCode> {
+        self.ensure_viewport(viewport)?;
+        Ok(self.editor.take_speech_bubble_text_edit_request())
+    }
+    pub fn speech_bubble_text_target(
+        &self,
+        viewport: ViewportId,
+        point: Option<Point<f64>>,
+    ) -> Result<Option<(TextElementInfo, TextStyle)>, ErrorCode> {
+        self.ensure_viewport(viewport)?;
+        if !self.editor.can_begin_arrow_text()
+            || point.is_some_and(|point| self.editor.speech_bubble_control_at(&self.model, point))
+        {
+            return Ok(None);
+        }
+        let target = if let Some(point) = point {
+            let zoom = self.viewport_slot(viewport)?.view.camera.zoom;
+            let hit = self
+                .model
+                .topmost_element_at_with_tolerance(point, 8.0 / zoom.max(0.01))
+                .map(|(id, _)| id);
+            self.model
+                .paint_order()
+                .iter()
+                .rev()
+                .copied()
+                .find(|id| {
+                    let Ok(element) = self.model.element(*id) else {
+                        return false;
+                    };
+                    if !element.meta.visible {
+                        return false;
+                    }
+                    if let Some(bubble) =
+                        self.editor.speech_bubble_display_snapshot(&self.model, *id)
+                    {
+                        snow_draw_engine_document::speech_bubble_body_contains(
+                            &bubble,
+                            snow_draw_engine_document::speech_bubble_canvas_to_local(
+                                &bubble, point,
+                            ),
+                        ) || snow_draw_engine_document::speech_bubble_hit_test(
+                            &bubble,
+                            point,
+                            8.0 / zoom.max(0.01),
+                        )
+                    } else if let Some(text) = self
+                        .editor
+                        .speech_bubble_text_display_snapshot(&self.model, *id)
+                    {
+                        snow_draw_engine_document::text_hit_test(&text, point, 8.0 / zoom.max(0.01))
+                    } else {
+                        hit == Some(*id)
+                    }
+                })
+                .map(|id| self.model.speech_bubble_id_for_text(id).unwrap_or(id))
+        } else {
+            let ids = self.editor.selected_ids();
+            (ids.len() == 1).then(|| {
+                self.model
+                    .speech_bubble_id_for_text(ids[0])
+                    .unwrap_or(ids[0])
+            })
+        };
+        let Some(owner) = target else {
+            return Ok(None);
+        };
+        let Some(bubble) = self
+            .editor
+            .speech_bubble_display_snapshot(&self.model, owner)
+        else {
+            return Ok(None);
+        };
+        let meta = self.model.element(owner)?.meta;
+        if meta.locked || !meta.visible {
+            return Ok(None);
+        }
+        if let Some(text) = bubble.text_element_id {
+            return Ok(Some((
+                self.text_element_info(text)?,
+                text_style_from_text(self.model.text(text)?),
+            )));
+        }
+        let mut style = self.editor.text_style(&self.model);
+        style.horizontal_align = TextHorizontalAlign::Center;
+        style.vertical_align = TextVerticalAlign::Center;
+        let text = TextData {
+            center: bubble.body.center,
+            rotation: bubble.body.rotation,
+            font_size: style.font_size,
+            font_family: style.font_family.clone(),
+            bold: style.bold,
+            italic: style.italic,
+            horizontal_align: style.horizontal_align,
+            vertical_align: style.vertical_align,
+            ..Default::default()
+        };
+        let draft = ActiveTextDraftPresentation {
+            target: snow_draw_engine_editor::ActiveTextDraftTarget::NewSpeechBubble(owner),
+            revision: 0,
+            text,
+        };
+        let mut info = text_element_info_from_active_draft(&draft);
+        info.bubble_id = Some(owner);
+        info.bubble_body = Some(bubble.body);
+        info.center = bubble.body.center;
+        let c = snow_draw_engine_editor::speech_bubble_text_constraints(
+            bubble.body,
+            1.0,
+            0.0,
+            style.font_size,
+        )?;
+        info.width = c.content_width;
+        info.height = c.content_height;
+        info.auto_resize = true;
+        Ok(Some((info, style)))
+    }
+    pub fn set_speech_bubble_aware_text_draft(
+        &mut self,
+        viewport: ViewportId,
+        mut draft: ActiveTextDraftPresentation,
+        minimum: f64,
+    ) -> Result<MutationResult, ErrorCode> {
+        self.ensure_viewport(viewport)?;
+        self.editor
+            .set_speech_bubble_draft_minimum(&self.model, &mut draft, minimum)?;
+        self.set_active_text_draft_presentation_with_viewport_changes(viewport, draft)
     }
 }

@@ -211,6 +211,7 @@ input!(DocumentId {
 });
 input!(DocumentPoint { point: [f64; 2] });
 choices!(DocumentCanvasTool {
+    SpeechBubble,
     Magnifier,
     Distance,
     Angle,

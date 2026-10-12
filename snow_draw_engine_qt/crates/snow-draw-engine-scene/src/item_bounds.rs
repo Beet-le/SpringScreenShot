@@ -63,6 +63,7 @@ pub(crate) fn scene_display_item_bounds(
                 item.stroke_width,
             ),
         },
+        SceneDisplayItem::SpeechBubble(item) => draw_path_item_bounds(frame_view, &item.path),
         SceneDisplayItem::Magnifier(item) => {
             let body = item.paint_geometry().bounds().map(|bounds| {
                 let min =
@@ -716,6 +717,7 @@ mod tests {
 
     fn text_item() -> TextDisplayItem {
         TextDisplayItem {
+            text_ink_reserve: 0.0,
             id: DisplayItemId::default(),
             center_x: 0.0,
             center_y: 0.0,

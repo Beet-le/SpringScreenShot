@@ -58,6 +58,7 @@ enum class Item {
     Watermark,
     Distance,
     Angle,
+    SpeechBubble,
 };
 
 enum class Icon {
@@ -105,6 +106,7 @@ enum class Icon {
     RecordingTrim,
     Distance,
     Angle,
+    SpeechBubble,
 };
 
 struct Descriptor {
@@ -127,6 +129,9 @@ struct EditorDescriptor {
          QT_TRANSLATE_NOOP("DrawingToolbarEditorSettingsWidget", "Select elements"), Icon::Select},
         {Item::Shape, "shape", QT_TRANSLATE_NOOP("DrawingToolbarEditorSettingsWidget", "Shape"),
          Icon::Shape},
+        {Item::SpeechBubble, "speech-bubble",
+         QT_TRANSLATE_NOOP("DrawingToolbarEditorSettingsWidget", "Speech Bubble"),
+         Icon::SpeechBubble},
         {Item::Arrow, "arrow", QT_TRANSLATE_NOOP("DrawingToolbarEditorSettingsWidget", "Arrow"),
          Icon::Arrow},
         {Item::Distance, "distance",
@@ -417,7 +422,7 @@ editorDescriptors(storage::ScreenshotToolbarLayoutKind kind) {
         {QStringLiteral("free-draw")},
         {QStringLiteral("magnifier"), QStringLiteral("spotlight"), QStringLiteral("highlighter")},
         {QStringLiteral("text")},
-        {QStringLiteral("serial-number")},
+        {QStringLiteral("speech-bubble"), QStringLiteral("serial-number")},
         {QStringLiteral("filter")},
         {QStringLiteral("eraser")},
         {QStringLiteral("watermark")},
@@ -934,6 +939,8 @@ moveItemToHidden(const storage::ScreenshotToolbarLayout& input,
         return custom::ToolSelect();
     case Icon::Shape:
         return custom::ToolRectangle();
+    case Icon::SpeechBubble:
+        return custom::ToolSpeechBubble();
     case Icon::Arrow:
         return custom::ToolArrow();
     case Icon::Distance:

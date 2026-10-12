@@ -1,4 +1,5 @@
 use super::*;
+use crate::persistence::{DrawingPayloadKind, deserialize_drawing};
 use snow_draw_engine_editor::DrawTemplate;
 
 impl Engine {
@@ -9,11 +10,7 @@ impl Engine {
         center: Point<f64>,
     ) -> Result<MutationResult, ErrorCode> {
         self.ensure_viewport(source_viewport_id)?;
-        if bytes.is_empty() || bytes.len() > crate::session::MAX_DOCUMENT_SESSION_BYTES {
-            return Err(ErrorCode::InvalidArgument);
-        }
-        let template: DrawTemplate =
-            serde_json::from_slice(bytes).map_err(|_| ErrorCode::InvalidArgument)?;
+        let template: DrawTemplate = deserialize_drawing(bytes, DrawingPayloadKind::Template)?;
         let previous_editor = self.editor.clone();
         let command = self
             .editor

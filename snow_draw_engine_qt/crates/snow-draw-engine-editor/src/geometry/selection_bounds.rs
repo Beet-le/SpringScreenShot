@@ -99,6 +99,29 @@ pub(crate) fn selection_bounds_from_selection(
     })
 }
 
+pub(crate) fn selection_bounds_include_local_rect(
+    bounds: SelectionBounds,
+    rect: snow_draw_engine_core::DrawRect,
+) -> SelectionBounds {
+    let (sin, cos) = bounds.rotation.sin_cos();
+    let (mut min_x, mut min_y) = (-bounds.width / 2.0, -bounds.height / 2.0);
+    let (mut max_x, mut max_y) = (-min_x, -min_y);
+    min_x = min_x.min(rect.min_x);
+    max_x = max_x.max(rect.max_x);
+    min_y = min_y.min(rect.min_y);
+    max_y = max_y.max(rect.max_y);
+    let (x, y) = (f64::midpoint(min_x, max_x), f64::midpoint(min_y, max_y));
+    SelectionBounds {
+        center: Point::new(
+            bounds.center.x + x * cos - y * sin,
+            bounds.center.y + x * sin + y * cos,
+        ),
+        width: max_x - min_x,
+        height: max_y - min_y,
+        rotation: bounds.rotation,
+    }
+}
+
 fn selection_bounds_from_arrow(arrow: &ArrowData) -> SelectionBounds {
     // The reference engine stores arrow points in element-local coordinates and
     // builds a single-selection frame from that rect plus the element rotation.

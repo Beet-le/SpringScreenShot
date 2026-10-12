@@ -1581,6 +1581,8 @@ SettingsItemDefinition drawingQuickSelectionItem() {
     SettingsMultiSelectDefinition payload;
     payload.options = {
         {QStringLiteral("shape"), settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Shape tool"))},
+        {QStringLiteral("speech-bubble"),
+         settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Speech Bubble"))},
         {QStringLiteral("arrow"), settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Arrow"))},
         {QStringLiteral("line"), settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Line"))},
         {QStringLiteral("distance"),
@@ -2362,6 +2364,9 @@ QVector<SettingsItemDefinition> drawingShortcutItems() {
         localShortcutItem(SettingsLocalShortcutScope::Drawing, QStringLiteral("shape"),
                           QT_TRANSLATE_NOOP("SettingsCatalog", "Shape tool"),
                           []() { return custom_outlined_icons::ToolRectangle(); }),
+        localShortcutItem(SettingsLocalShortcutScope::Drawing, QStringLiteral("speech_bubble"),
+                          QT_TRANSLATE_NOOP("SettingsCatalog", "Speech Bubble"),
+                          []() { return custom_outlined_icons::ToolSpeechBubble(); }),
         localShortcutItem(SettingsLocalShortcutScope::Drawing, QStringLiteral("arrow"),
                           QT_TRANSLATE_NOOP("SettingsCatalog", "Arrow"),
                           []() { return custom_outlined_icons::ToolArrow(); }),

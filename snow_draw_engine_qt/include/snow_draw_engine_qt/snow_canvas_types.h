@@ -44,6 +44,7 @@ enum class SnowCanvasTool {
     Distance,
     Angle,
     Magnifier,
+    SpeechBubble,
 };
 
 enum class SnowCanvasCursorLayer {
@@ -86,6 +87,8 @@ enum class SnowCanvasStyleToolbarSource {
     SelectedAngle,
     DefaultMagnifier,
     SelectedMagnifier,
+    DefaultSpeechBubble,
+    SelectedSpeechBubble,
 };
 
 enum SnowCanvasTextStyleMixedFlag : quint32 {
@@ -195,6 +198,7 @@ enum class SnowCanvasShapeKind {
     Highlight = RectangleHighlight,
     PenHighlight,
     Spotlight,
+    SpeechBubble,
 };
 
 enum class SnowCanvasHighlightShape {
@@ -666,6 +670,14 @@ struct SnowCanvasStyleDefaults {
     SnowCanvasDistanceStyle distance;
     SnowCanvasAngleStyle angle;
     SnowCanvasMagnifierStyle magnifier;
+    SnowCanvasShapeStyle speechBubble = [] {
+        SnowCanvasShapeStyle style;
+        style.fill = QColor(0, 0, 0, 0);
+        style.stroke = QColor(0x21, 0x6b, 0xa5);
+        style.strokeWidth = 2.0;
+        style.cornerRadii = {6.0, 6.0, 6.0, 6.0};
+        return style;
+    }();
 };
 
 inline bool operator==(const SnowCanvasStyleDefaults& lhs, const SnowCanvasStyleDefaults& rhs) {
@@ -677,7 +689,8 @@ inline bool operator==(const SnowCanvasStyleDefaults& lhs, const SnowCanvasStyle
            lhs.spotlight == rhs.spotlight && lhs.brushEraser == rhs.brushEraser &&
            lhs.spotlightShape == rhs.spotlightShape &&
            lhs.spotlightCornerRadii == rhs.spotlightCornerRadii && lhs.distance == rhs.distance &&
-           lhs.angle == rhs.angle && lhs.magnifier == rhs.magnifier;
+           lhs.angle == rhs.angle && lhs.magnifier == rhs.magnifier &&
+           lhs.speechBubble == rhs.speechBubble;
 }
 
 inline bool operator!=(const SnowCanvasStyleDefaults& lhs, const SnowCanvasStyleDefaults& rhs) {

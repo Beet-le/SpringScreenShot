@@ -32,7 +32,8 @@ void annotationShortcutsPersistValidateAndReset(const QString& configurationPath
     const auto undoDefault = backend.localShortcuts(screenshot, QStringLiteral("undo"));
     const auto redoDefault = backend.localShortcuts(screenshot, QStringLiteral("redo"));
 
-    for (const auto* id : {"line", "spotlight", "distance", "angle", "magnifier"}) {
+    for (const auto* id :
+         {"line", "spotlight", "distance", "angle", "magnifier", "speech_bubble"}) {
         require(drawingDefaults.contains(QString::fromLatin1(id)) &&
                     backend.localShortcuts(drawing, QString::fromLatin1(id)).isEmpty(),
                 "annotation tools without default shortcuts must start unassigned");

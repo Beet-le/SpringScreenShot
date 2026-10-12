@@ -20,6 +20,7 @@ impl Engine {
         let Some(history_result) = self.history.undo(&mut self.model)? else {
             return Ok(MutationResult::default());
         };
+        self.speech_bubble_layout_origin = None;
         self.editor.reset_magnifier_wheel_input();
         if serial_number_population_changed(&self.model, &history_result.apply_result) {
             self.editor.sync_serial_number_types_after_document_change(
@@ -49,6 +50,7 @@ impl Engine {
         let Some(history_result) = self.history.redo(&mut self.model)? else {
             return Ok(MutationResult::default());
         };
+        self.speech_bubble_layout_origin = None;
         self.editor.reset_magnifier_wheel_input();
         if serial_number_population_changed(&self.model, &history_result.apply_result) {
             self.editor.sync_serial_number_types_after_document_change(
@@ -100,6 +102,8 @@ impl Engine {
             &mut transaction,
             &restored_labels,
         );
+        self.editor
+            .append_speech_bubble_text_layouts(&self.model, &mut transaction);
         let redo_snapshot = self.capture_session_snapshot();
         let undo_snapshot = history_undo_snapshot.unwrap_or_else(|| redo_snapshot.clone());
         let label = transaction.label().to_owned();
@@ -117,6 +121,7 @@ impl Engine {
             Vec::new()
         };
         let apply_result = self.model.apply_transaction(transaction)?;
+        self.speech_bubble_layout_origin = None;
         self.editor.advance_serial_number_counters_for_insertions(
             &self.model,
             &apply_result.changes.created,
@@ -130,6 +135,32 @@ impl Engine {
             );
         }
         let mutation_result = self.finish_document_change(&redo_snapshot, &apply_result.changes);
+        let mut owners = HashMap::new();
+        for operation in redo.operations() {
+            use snow_draw_engine_document::{ElementData, Operation};
+            let (id, data) = match operation {
+                Operation::InsertElement { id, data, .. }
+                | Operation::UpdateElementData { id, data } => (*id, data),
+                Operation::RestoreElement { element, .. } => (element.id, &element.data),
+                _ => continue,
+            };
+            if !matches!(data, ElementData::SpeechBubble(_) | ElementData::Text(_)) {
+                continue;
+            }
+            let owner = if self.model.speech_bubble(id).is_ok() {
+                Some(id)
+            } else {
+                self.model.speech_bubble_id_for_text(id)
+            };
+            if let Some(owner) = owner
+                && !owners.contains_key(&owner)
+                && let Some(layout_key) = self
+                    .editor
+                    .speech_bubble_document_layout_key(&self.model, owner)
+            {
+                owners.insert(owner, layout_key);
+            }
+        }
         self.history.push_committed(
             label,
             redo,
@@ -137,6 +168,17 @@ impl Engine {
             undo_snapshot,
             redo_snapshot,
         );
+        if !owners.is_empty()
+            && self
+                .history
+                .can_amend_latest(self.history.mutation_generation())
+        {
+            self.speech_bubble_layout_origin = Some(SpeechBubbleLayoutOrigin {
+                revision: self.model.document_revision(),
+                history_generation: self.history.mutation_generation(),
+                owners,
+            });
+        }
         Ok(mutation_result)
     }
 

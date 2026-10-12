@@ -293,6 +293,9 @@ inline void snowCanvasMergeStyleEdit(SnowCanvasStyleDefaults& defaults,
                 case SnowCanvasShapeKind::Rectangle:
                     target = &defaults.rectangle;
                     break;
+                case SnowCanvasShapeKind::SpeechBubble:
+                    target = &defaults.speechBubble;
+                    break;
                 case SnowCanvasShapeKind::Arrow:
                     target = &defaults.arrow;
                     break;

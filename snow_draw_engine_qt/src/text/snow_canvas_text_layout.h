@@ -28,6 +28,7 @@ struct DocumentLayout {
     double itemWidth = 1.0;
     double itemHeight = 1.0;
     double topOffset = 0.0;
+    double inkReserve = 0.0;
     FontResolution resolution;
     std::unique_ptr<QTextDocument> document;
 
@@ -86,6 +87,13 @@ TextMeasuredLayout measureWrappedTextLayout(const QString& text, const QFont& ba
                                             double zoom = 1.0);
 double measureMinimumWrappedWidth(const QFont& baseFont, const SnowSceneDisplayItem& item,
                                   double zoom = 1.0);
+
+struct GraphemeMetrics {
+    double minimumWidth = 1.0;
+    double inkReserve = 0.0;
+};
+GraphemeMetrics measureGraphemeMetrics(const QString& text, const QFont& baseFont,
+                                       const SnowSceneDisplayItem& item);
 
 DocumentLayout createDocumentLayout(const SnowSceneDisplayItem& item, const QFont& baseFont,
                                     double zoom, const QString& text, bool substituteEmptyText);

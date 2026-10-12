@@ -524,6 +524,10 @@
             <translation>圖形</translation>
         </message>
         <message>
+            <source>Speech Bubble</source>
+            <translation>對話氣泡</translation>
+        </message>
+        <message>
             <source>Spotlight</source>
             <translation>聚光燈</translation>
         </message>
@@ -4011,6 +4015,10 @@
         <message>
             <source>Source Language</source>
             <translation>來源語言</translation>
+        </message>
+        <message>
+            <source>Speech Bubble</source>
+            <translation>對話氣泡</translation>
         </message>
         <message>
             <source>Speed First</source>

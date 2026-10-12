@@ -28,6 +28,10 @@ const SERIAL_TOOLBAR_WIDTH: f64 = 72.0;
 const SERIAL_TOOLBAR_HEIGHT: f64 = 24.0;
 const SERIAL_TOOLBAR_VERTICAL_OFFSET: f64 = 16.0;
 
+#[cfg(test)]
+#[path = "presentation_speech_bubble_duplicate_tests.rs"]
+mod speech_bubble_duplicate_tests;
+
 fn selection_bounds_view_rect(
     bounds: &SelectionBounds,
     camera: &Camera,
@@ -233,13 +237,9 @@ impl Editor {
             preview_elements.clear();
             preview_arrows.clear();
             preview_magnifiers.clear();
-            crate::document_ops::duplicate_selection_transaction(
-                document,
-                &self.state.selection.ids,
-                offset,
-            )
-            .ok()
-            .map(|(transaction, _)| transaction)
+            self.duplicate_selection_transaction(document, offset)
+                .ok()
+                .map(|(transaction, _)| transaction)
         } else {
             None
         };
@@ -261,6 +261,10 @@ impl Editor {
                 .or_else(|| self.state.creation_preview.clone()),
             active_text_draft: self.active_text_draft_display_presentation(),
             preview_arrows,
+            speech_bubble_previews: self.speech_bubble_previews(document),
+            speech_bubble_text_previews: self.speech_bubble_text_previews(document),
+            speech_bubble_handles: self.speech_bubble_handles(document),
+            speech_bubble_handle_leaders: self.speech_bubble_handle_leaders(document),
             preview_magnifiers,
             selected_magnifiers,
             preview_elements,
@@ -444,7 +448,13 @@ impl Editor {
         document: &DocumentModel,
     ) -> Vec<SelectionRectState> {
         if let Some(preview) = self.selection_preview_elements() {
-            return preview.to_vec();
+            let mut values = preview.to_vec();
+            for value in &mut values {
+                if let Some(bubble) = self.speech_bubble_display_snapshot(document, value.id) {
+                    value.rect = snow_draw_engine_document::speech_bubble_body_proxy(&bubble);
+                }
+            }
+            return values;
         }
         self.selected_document_elements_snapshot(document)
     }
@@ -454,6 +464,11 @@ impl Editor {
         document: &DocumentModel,
     ) -> Vec<SelectionRectState> {
         let mut elements = Self::selection_elements_from_ids(document, &self.state.selection.ids);
+        for item in &mut elements {
+            if let Some(bubble) = self.speech_bubble_display_snapshot(document, item.id) {
+                item.rect = snow_draw_engine_document::speech_bubble_body_proxy(&bubble);
+            }
+        }
         self.apply_active_text_draft_rect_to_elements(&mut elements);
         elements
     }
@@ -463,6 +478,11 @@ impl Editor {
         document: &DocumentModel,
         id: ElementId,
     ) -> Option<RectangleData> {
+        // Bubble layout can grow or clamp the requested selection rectangle.
+        // Controls and hit testing must use the same effective body as rendering.
+        if let Some(bubble) = self.speech_bubble_display_snapshot(document, id) {
+            return Some(snow_draw_engine_document::speech_bubble_body_proxy(&bubble));
+        }
         if let Some(preview) = self.selection_preview_elements()
             && let Some(element) = preview.iter().find(|element| element.id == id)
         {
@@ -495,7 +515,7 @@ impl Editor {
         document: &DocumentModel,
     ) -> Option<(ElementId, RectangleData)> {
         let id = self.state.selection.primary?;
-        if document.rectangle(id).is_err() {
+        if document.rectangle(id).is_err() && document.speech_bubble(id).is_err() {
             return None;
         }
         self.rectangle_snapshot(document, id).map(|rect| (id, rect))
@@ -512,7 +532,7 @@ impl Editor {
         if let Some(value) = self.magnifier_snapshot(document, id) {
             return Some((id, value.source_rect()));
         }
-        if document.rectangle(id).is_err() {
+        if document.rectangle(id).is_err() && document.speech_bubble(id).is_err() {
             return None;
         }
         self.rectangle_snapshot(document, id).map(|rect| (id, rect))
@@ -594,14 +614,39 @@ impl Editor {
         document: &DocumentModel,
     ) -> Option<SelectionBounds> {
         match &self.state.interaction {
-            InteractionState::EditingSelection(state) => Some(state.preview_bounds),
+            InteractionState::EditingSelection(state) => {
+                let mut values = state.preview_elements.clone();
+                for value in &mut values {
+                    if let Some(bubble) = self.speech_bubble_display_snapshot(document, value.id) {
+                        value.rect = snow_draw_engine_document::speech_bubble_body_proxy(&bubble);
+                    }
+                }
+                let bounds = if values.len() == 1
+                    && state.preview_arrows.is_empty()
+                    && document.speech_bubble(values[0].id).is_ok()
+                {
+                    selection_bounds_from_selection(&values, &state.preview_arrows)
+                } else {
+                    Some(state.preview_bounds)
+                };
+                self.speech_bubble_group_selection_bounds(
+                    document,
+                    bounds.or(Some(state.preview_bounds)),
+                    &values,
+                    &state.preview_arrows,
+                    true,
+                )
+            }
             _ => {
                 let elements = self.selected_document_elements_snapshot(document);
                 let arrows = self.selected_arrows_snapshot(document);
-                self.arrow_text_selection_bounds(
+                let bounds = self.arrow_text_selection_bounds(
                     document,
                     selection_bounds_from_selection(&elements, &arrows),
                     &arrows,
+                );
+                self.speech_bubble_group_selection_bounds(
+                    document, bounds, &elements, &arrows, true,
                 )
                 .or(self.state.selection.bounds)
             }
@@ -613,7 +658,13 @@ impl Editor {
         document: &DocumentModel,
     ) -> Vec<SelectionRectState> {
         if let Some(preview) = self.selection_preview_elements() {
-            return preview.to_vec();
+            let mut values = preview.to_vec();
+            for value in &mut values {
+                if let Some(bubble) = self.speech_bubble_display_snapshot(document, value.id) {
+                    value.rect = snow_draw_engine_document::speech_bubble_body_proxy(&bubble);
+                }
+            }
+            return values;
         }
         self.selected_document_elements_snapshot(document)
     }
@@ -635,7 +686,23 @@ impl Editor {
         selection_arrows: &[SelectionArrowState],
     ) -> Option<SelectionBounds> {
         let bounds = match &self.state.interaction {
-            InteractionState::EditingSelection(state) => Some(state.preview_bounds),
+            InteractionState::EditingSelection(state) => {
+                let mut values = state.preview_elements.clone();
+                for value in &mut values {
+                    if let Some(bubble) = self.speech_bubble_display_snapshot(document, value.id) {
+                        value.rect = snow_draw_engine_document::speech_bubble_body_proxy(&bubble);
+                    }
+                }
+                if values.len() == 1
+                    && state.preview_arrows.is_empty()
+                    && document.speech_bubble(values[0].id).is_ok()
+                {
+                    selection_bounds_from_selection(&values, &state.preview_arrows)
+                        .or(Some(state.preview_bounds))
+                } else {
+                    Some(state.preview_bounds)
+                }
+            }
             InteractionState::EditingArrow(_) => {
                 selection_bounds_from_selection(selection_elements, selection_arrows)
                     .or(self.state.selection.bounds)
@@ -647,7 +714,14 @@ impl Editor {
             _ => selection_bounds_from_selection(selection_elements, selection_arrows)
                 .or(self.state.selection.bounds),
         };
-        self.arrow_text_selection_bounds(document, bounds, selection_arrows)
+        let bounds = self.arrow_text_selection_bounds(document, bounds, selection_arrows);
+        self.speech_bubble_group_selection_bounds(
+            document,
+            bounds,
+            selection_elements,
+            selection_arrows,
+            true,
+        )
     }
 
     pub(crate) fn preview_selection_arrows(

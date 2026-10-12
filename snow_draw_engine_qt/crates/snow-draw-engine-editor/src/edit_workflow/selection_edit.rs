@@ -166,6 +166,12 @@ impl Editor {
         }
         // A centred reflection can move both regions while their union proxy stays unchanged.
         let magnifiers = self.selection_magnifier_previews(&state);
+        let bubbles = self.selection_speech_bubble_previews(document, &state);
+        let bubbles_changed = bubbles.iter().any(|(id, value)| {
+            document
+                .speech_bubble(*id)
+                .is_ok_and(|original| original != value)
+        });
         let magnifiers_changed = magnifiers.iter().any(|preview| {
             state
                 .original_magnifiers
@@ -173,6 +179,7 @@ impl Editor {
                 .is_some_and(|original| preview.magnifier != *original)
         });
         if !magnifiers_changed
+            && !bubbles_changed
             && state.preview_elements == state.original_elements
             && state.preview_arrows == state.original_arrows
         {
@@ -236,12 +243,17 @@ impl Editor {
         } else {
             None
         };
+        for (id, bubble) in &bubbles {
+            transaction.update_speech_bubble(*id, bubble.clone());
+        }
         for value in &magnifiers {
             snow_draw_engine_document::validate_magnifier(&value.magnifier)?;
             transaction.update_magnifier(value.id, value.magnifier);
         }
         for preview in state.preview_elements {
-            if state.original_magnifiers.contains_key(&preview.id) {
+            if state.original_magnifiers.contains_key(&preview.id)
+                || document.speech_bubble(preview.id).is_ok()
+            {
                 continue;
             }
             if Some(preview.id) == active_text_id {

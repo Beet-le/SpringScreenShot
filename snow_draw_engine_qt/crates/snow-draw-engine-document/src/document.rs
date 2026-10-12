@@ -843,6 +843,8 @@ pub struct TextData {
     pub layout: TextLayoutSize,
     pub rotation: f64,
     pub text: String,
+    /// Extra local padding measured by the host for glyph overhangs.
+    pub text_ink_reserve: f64,
     pub color: ColorRgba8,
     pub font_size: f64,
     #[serde(default)]
@@ -895,6 +897,7 @@ pub struct SerialNumberData {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ElementData {
     Rectangle(RectangleData),
+    SpeechBubble(crate::SpeechBubbleData),
     Magnifier(crate::MagnifierData),
     Filter(FilterData),
     PenFilter(PenFilterData),
@@ -918,6 +921,7 @@ impl ElementData {
     pub fn kind(&self) -> ElementKind {
         match self {
             Self::Rectangle(rect) => rect.element_kind(),
+            Self::SpeechBubble(_) => ElementKind::SpeechBubble,
             Self::Magnifier(_) => ElementKind::Magnifier,
             Self::Filter(filter) => {
                 if filter.auto_region_id.is_some() {
@@ -942,6 +946,7 @@ impl ElementData {
     pub fn hit_test(&self, point: Point<f64>, hit_tolerance: f64) -> bool {
         match self {
             Self::Rectangle(rect) => rectangle_hit_test(rect, point, hit_tolerance),
+            Self::SpeechBubble(value) => crate::speech_bubble_hit_test(value, point, hit_tolerance),
             Self::Magnifier(value) => crate::magnifier_hit_test(value, point, hit_tolerance),
             Self::Filter(filter) => crate::filter_hit_test(filter, point, hit_tolerance),
             Self::PenFilter(filter) => crate::pen_filter_hit_test(filter, point, hit_tolerance),
@@ -955,6 +960,7 @@ impl ElementData {
     pub(crate) fn bounds(&self) -> DrawRect {
         match self {
             Self::Rectangle(rect) => rect_bounds(rect),
+            Self::SpeechBubble(value) => crate::speech_bubble_bounds(value),
             Self::Magnifier(value) => crate::magnifier_interaction_bounds(value),
             Self::Filter(filter) => filter_bounds(filter),
             Self::PenFilter(filter) => pen_filter_bounds(filter),
@@ -970,6 +976,9 @@ impl ElementData {
     pub fn state_rect(&self) -> DrawRect {
         match self {
             Self::Rectangle(rect) => centered_rect(rect.center, rect.width, rect.height),
+            Self::SpeechBubble(value) => {
+                centered_rect(value.body.center, value.body.width, value.body.height)
+            }
             Self::Magnifier(value) => centered_rect(value.source_center, value.width, value.height),
             Self::Filter(filter) => centered_rect(filter.center, filter.width, filter.height),
             Self::PenFilter(filter) => DrawRect::new(
@@ -1010,6 +1019,7 @@ impl ElementData {
     pub fn rotation(&self) -> f64 {
         match self {
             Self::Rectangle(rect) => rect.rotation,
+            Self::SpeechBubble(value) => value.body.rotation,
             Self::Magnifier(value) => value.rotation,
             Self::Filter(filter) => filter.rotation,
             Self::PenFilter(filter) => filter.rotation,
@@ -1023,6 +1033,7 @@ impl ElementData {
     pub fn opacity(&self) -> f64 {
         match self {
             Self::Rectangle(rect) => rect.opacity,
+            Self::SpeechBubble(value) => value.body.opacity,
             Self::Magnifier(value) => value.opacity,
             Self::Filter(filter) => filter.opacity,
             Self::PenFilter(filter) => filter.opacity,
@@ -1060,6 +1071,7 @@ pub enum ElementKind {
     AutoFilter,
     Distance,
     Angle,
+    SpeechBubble,
 }
 
 impl ElementKind {
@@ -1079,6 +1091,7 @@ impl ElementKind {
             | Self::Spotlight
             | Self::Distance
             | Self::Angle => false,
+            Self::SpeechBubble => false,
         }
     }
 }
@@ -1294,6 +1307,14 @@ impl Document {
                 return Err(ErrorCode::InvalidArgument);
             }
         }
+        for (_, text_id) in self.speech_bubble_text_bindings() {
+            if self.text(text_id).is_err()
+                || !owned.insert(text_id)
+                || serial_labels.contains(&text_id)
+            {
+                return Err(ErrorCode::InvalidArgument);
+            }
+        }
         Ok(())
     }
 
@@ -1305,6 +1326,30 @@ impl Document {
         self.validate_arrow_text_bindings()?;
         let bindings = self.arrow_text_bindings();
         self.synchronize_arrow_text_pairs(&bindings, inverse, changes)?;
+        let bubble_bindings = self.speech_bubble_text_bindings();
+        for (bubble_id, text_id) in &bubble_bindings {
+            let bubble = self.speech_bubble(*bubble_id)?;
+            let mut text = self.text(*text_id)?.clone();
+            text.center = bubble.body.center;
+            text.rotation = bubble.body.rotation;
+            let meta = self.element(*bubble_id)?.meta;
+            if self.text(*text_id)? != &text {
+                inverse.push(self.apply_operation(
+                    &Operation::UpdateElementData {
+                        id: *text_id,
+                        data: ElementData::Text(text),
+                    },
+                    changes,
+                )?);
+            }
+            if self.element(*text_id)?.meta != meta {
+                inverse.push(self.apply_operation(
+                    &Operation::UpdateElementMeta { id: *text_id, meta },
+                    changes,
+                )?);
+            }
+        }
+        let bindings: Vec<_> = bindings.into_iter().chain(bubble_bindings).collect();
         if !bindings.is_empty() {
             let labels: HashSet<_> = bindings.iter().map(|(_, text)| *text).collect();
             let owners: HashMap<_, _> = bindings.into_iter().collect();
@@ -1590,11 +1635,49 @@ impl Document {
         }
     }
 
+    pub fn speech_bubble(&self, id: ElementId) -> Result<&crate::SpeechBubbleData, ErrorCode> {
+        match &self.element(id)?.data {
+            ElementData::SpeechBubble(value) => Ok(value),
+            _ => Err(ErrorCode::InvalidArgument),
+        }
+    }
+
+    pub fn speech_bubble_text_bindings(&self) -> Vec<(ElementId, ElementId)> {
+        self.paint_order
+            .iter()
+            .filter_map(|id| {
+                self.speech_bubble(*id)
+                    .ok()?
+                    .text_element_id
+                    .map(|text| (*id, text))
+            })
+            .collect()
+    }
+
+    pub fn bound_text_id_for_speech_bubble(&self, id: ElementId) -> Option<ElementId> {
+        self.speech_bubble(id).ok()?.text_element_id
+    }
+
+    pub fn speech_bubble_id_for_text(&self, text_id: ElementId) -> Option<ElementId> {
+        self.paint_order
+            .iter()
+            .copied()
+            .find(|id| self.bound_text_id_for_speech_bubble(*id) == Some(text_id))
+    }
+
+    pub fn text_owner_id(&self, text_id: ElementId) -> Option<ElementId> {
+        self.arrow_id_for_text(text_id)
+            .or_else(|| self.speech_bubble_id_for_text(text_id))
+    }
+
     pub fn element_kind(&self, id: ElementId) -> Result<ElementKind, ErrorCode> {
         Ok(self.element(id)?.data.kind())
     }
 
     pub fn element_rect_proxy(&self, id: ElementId) -> Option<RectangleData> {
+        if let Ok(value) = self.speech_bubble(id) {
+            return Some(crate::speech_bubble_body_proxy(value));
+        }
         if let Ok(rect) = self.rectangle(id) {
             return Some(*rect);
         }
@@ -2173,11 +2256,16 @@ fn element_data_has_relations(data: &ElementData) -> bool {
             arrow.text_element_id.is_some() || !arrow.bound_element_ids().is_empty()
         }
         ElementData::SerialNumber(serial) => serial.text_element_id.is_some(),
+        ElementData::SpeechBubble(value) => value.text_element_id.is_some(),
         _ => false,
     }
 }
 
 fn element_data_relation_targets_changed(previous: &ElementData, next: &ElementData) -> bool {
+    if let (ElementData::SpeechBubble(previous), ElementData::SpeechBubble(next)) = (previous, next)
+    {
+        return previous.text_element_id != next.text_element_id;
+    }
     if let (ElementData::SerialNumber(previous), ElementData::SerialNumber(next)) = (previous, next)
     {
         return previous.text_element_id != next.text_element_id;

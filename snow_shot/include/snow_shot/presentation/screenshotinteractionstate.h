@@ -38,6 +38,7 @@ enum class ScreenshotActiveTool {
     Distance,
     Angle,
     Magnifier,
+    SpeechBubble,
 };
 
 [[nodiscard]] inline bool isScreenshotRecognitionTool(ScreenshotActiveTool tool) {

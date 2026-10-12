@@ -22,6 +22,8 @@ inline SnowCanvasStyleDefaults screenshotCanvasStyleDefaults() {
     defaults.rectangle.strokeStyle = SnowCanvasStrokeStyle::Solid;
     defaults.rectangle.cornerRadii = {6.0, 6.0, 6.0, 6.0};
 
+    defaults.speechBubble = defaults.rectangle;
+
     defaults.arrow = defaults.rectangle;
     defaults.arrow.startArrowhead = SnowCanvasArrowhead::None;
     defaults.arrow.endArrowhead = SnowCanvasArrowhead::Arrow;
@@ -113,6 +115,7 @@ inline QSet<SnowCanvasTool> screenshotQuickSelectionDisabledTools(const QStringL
     QSet<SnowCanvasTool> tools;
     const QHash<QString, SnowCanvasTool> toolsById{
         {QStringLiteral("shape"), SnowCanvasTool::Shape},
+        {QStringLiteral("speech-bubble"), SnowCanvasTool::SpeechBubble},
         {QStringLiteral("arrow"), SnowCanvasTool::Arrow},
         {QStringLiteral("distance"), SnowCanvasTool::Distance},
         {QStringLiteral("angle"), SnowCanvasTool::Angle},

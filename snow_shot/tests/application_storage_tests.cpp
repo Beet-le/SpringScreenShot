@@ -1179,27 +1179,28 @@ void screenshotUiSchemaRepairsStructuredValues() {
         QStringLiteral("screenshot_toolbar/layout"), malformedLayout);
     const QJsonObject layout = normalized.value.toObject();
     const QJsonArray positions = layout.value(QStringLiteral("positions")).toArray();
-    require(normalized.valid && normalized.changed && layout.size() == 2 &&
-                positions ==
-                    QJsonArray{
-                        QJsonArray{QStringLiteral("select")},
-                        QJsonArray{QStringLiteral("select-separator")},
-                        QJsonArray{QStringLiteral("watermark"), QStringLiteral("shape")},
-                        QJsonArray{QStringLiteral("line")},
-                        QJsonArray{QStringLiteral("magnifier")},
-                        QJsonArray{QStringLiteral("angle"), QStringLiteral("distance")},
-                        QJsonArray{QStringLiteral("spotlight"), QStringLiteral("highlighter")},
-                        QJsonArray{QStringLiteral("text")},
-                        QJsonArray{QStringLiteral("serial-number")},
-                        QJsonArray{QStringLiteral("filter")},
-                        QJsonArray{QStringLiteral("eraser")},
-                        QJsonArray{QStringLiteral("separator")},
-                        QJsonArray{QStringLiteral("undo")},
-                        QJsonArray{QStringLiteral("redo")},
-                    } &&
-                layout.value(QStringLiteral("hidden")).toArray() ==
-                    QJsonArray{QStringLiteral("arrow"), QStringLiteral("free-draw")},
-            "toolbar layout normalization did not preserve hidden nested membership");
+    require(
+        normalized.valid && normalized.changed && layout.size() == 2 &&
+            positions ==
+                QJsonArray{
+                    QJsonArray{QStringLiteral("select")},
+                    QJsonArray{QStringLiteral("select-separator")},
+                    QJsonArray{QStringLiteral("watermark"), QStringLiteral("shape")},
+                    QJsonArray{QStringLiteral("line")},
+                    QJsonArray{QStringLiteral("magnifier")},
+                    QJsonArray{QStringLiteral("angle"), QStringLiteral("distance")},
+                    QJsonArray{QStringLiteral("spotlight"), QStringLiteral("highlighter")},
+                    QJsonArray{QStringLiteral("text")},
+                    QJsonArray{QStringLiteral("speech-bubble"), QStringLiteral("serial-number")},
+                    QJsonArray{QStringLiteral("filter")},
+                    QJsonArray{QStringLiteral("eraser")},
+                    QJsonArray{QStringLiteral("separator")},
+                    QJsonArray{QStringLiteral("undo")},
+                    QJsonArray{QStringLiteral("redo")},
+                } &&
+            layout.value(QStringLiteral("hidden")).toArray() ==
+                QJsonArray{QStringLiteral("arrow"), QStringLiteral("free-draw")},
+        "toolbar layout normalization did not preserve hidden nested membership");
 
     const QJsonObject invalidSeparatorLayout{
         {QStringLiteral("positions"),
@@ -1408,7 +1409,7 @@ void screenshotUiAdaptersRoundTripTypedValues() {
         {QStringLiteral("angle"), QStringLiteral("distance")},
         {QStringLiteral("spotlight"), QStringLiteral("highlighter")},
         {QStringLiteral("text")},
-        {QStringLiteral("serial-number")},
+        {QStringLiteral("speech-bubble"), QStringLiteral("serial-number")},
         {QStringLiteral("filter")},
         {QStringLiteral("eraser")},
         {QStringLiteral("separator")},

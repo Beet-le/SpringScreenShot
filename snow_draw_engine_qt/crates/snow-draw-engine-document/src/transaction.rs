@@ -103,6 +103,30 @@ impl Transaction {
         })
     }
 
+    pub fn insert_speech_bubble(
+        &mut self,
+        id: ElementId,
+        meta: ElementMeta,
+        value: crate::SpeechBubbleData,
+    ) -> &mut Self {
+        self.push(Operation::InsertElement {
+            id,
+            meta,
+            data: ElementData::SpeechBubble(value),
+        })
+    }
+
+    pub fn update_speech_bubble(
+        &mut self,
+        id: ElementId,
+        value: crate::SpeechBubbleData,
+    ) -> &mut Self {
+        self.push(Operation::UpdateElementData {
+            id,
+            data: ElementData::SpeechBubble(value),
+        })
+    }
+
     pub fn insert_magnifier(
         &mut self,
         id: ElementId,

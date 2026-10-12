@@ -20,6 +20,7 @@ mod abi {
     pub(crate) mod patch_exports;
     pub(crate) mod path_exports;
     pub(crate) mod raw_enum;
+    pub(crate) mod speech_bubble_exports;
     pub(crate) mod stroke_exports;
     pub(crate) mod style_exports;
     pub(crate) mod text;

@@ -30,6 +30,7 @@ constexpr qreal kEqualWidthHeightAspectRatio = 1.0;
 
 bool wheelAdjustsStrokeWidth(ScreenshotActiveTool tool) {
     switch (tool) {
+    case ScreenshotActiveTool::SpeechBubble:
     case ScreenshotActiveTool::Shape:
     case ScreenshotActiveTool::Distance:
     case ScreenshotActiveTool::Arrow:

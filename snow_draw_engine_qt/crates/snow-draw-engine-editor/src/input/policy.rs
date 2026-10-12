@@ -46,6 +46,14 @@ impl Editor {
                 allow_shift_toggle: true,
                 default_cursor: CursorStyle::Crosshair,
             },
+            ActiveTool::SpeechBubble => ToolPolicy {
+                selection_scope: ToolSelectionScope::SpeechBubbleOnly,
+                quick_selection_enabled: true,
+                clear_selection_on_activate: true,
+                empty_canvas_action: ToolEmptyCanvasAction::CreateRectangle,
+                allow_shift_toggle: true,
+                default_cursor: CursorStyle::Crosshair,
+            },
             ActiveTool::Shape => ToolPolicy {
                 selection_scope: ToolSelectionScope::RectangleOnly,
                 quick_selection_enabled: true,
@@ -213,6 +221,7 @@ impl Editor {
             ToolSelectionScope::None => false,
             ToolSelectionScope::All => true,
             ToolSelectionScope::MagnifierOnly => kind == ElementKind::Magnifier,
+            ToolSelectionScope::SpeechBubbleOnly => kind == ElementKind::SpeechBubble,
             ToolSelectionScope::RectangleOnly => kind == ElementKind::Rectangle,
             ToolSelectionScope::ArrowOnly => kind == ElementKind::Arrow,
             ToolSelectionScope::DistanceOnly => kind == ElementKind::Distance,

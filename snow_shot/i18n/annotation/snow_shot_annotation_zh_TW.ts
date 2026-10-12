@@ -1152,6 +1152,10 @@
             <translation>來源區域輪廓</translation>
         </message>
         <message>
+            <source>Speech Bubble</source>
+            <translation>對話氣泡</translation>
+        </message>
+        <message>
             <source>Split cells</source>
             <translation>分割儲存格</translation>
         </message>

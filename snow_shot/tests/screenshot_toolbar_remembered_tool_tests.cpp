@@ -50,6 +50,9 @@ class RecordingToolbarCommands : public ScreenshotToolbarCommandSink {
     void setShapeTool() override {
         ++shapeToolCount;
     }
+    void setSpeechBubbleTool() override {
+        ++speechBubbleToolCount;
+    }
     void setArrowTool() override {}
     void setLineTool() override {}
     void setFreeDrawTool() override {}
@@ -99,6 +102,7 @@ class RecordingToolbarCommands : public ScreenshotToolbarCommandSink {
     int moveToolCount = 0;
     int selectToolCount = 0;
     int shapeToolCount = 0;
+    int speechBubbleToolCount = 0;
     int elementEraserCount = 0;
     int rectangleEraserCount = 0;
     int brushEraserCount = 0;
@@ -666,6 +670,19 @@ void selectionShortcutsReachToolbarCommands(bool hiddenTools = false) {
         }
     }
 }
+void speechBubbleReachesScreenshotCommands() {
+    RecordingToolbarCommands commands;
+    ScreenshotToolbarWindow window(commands);
+    auto* palette = window.palette();
+    require(palette != nullptr &&
+                palette->activateDrawingShortcut(QStringLiteral("speech_bubble")) &&
+                commands.speechBubbleToolCount == 1 &&
+                palette->activeTool() == ScreenshotToolPalette::Tool::SpeechBubble,
+            "Speech Bubble activates screenshot command routing exactly once");
+    window.setActiveTool(ScreenshotToolPalette::Tool::SpeechBubble);
+    require(palette->activeTool() == ScreenshotToolPalette::Tool::SpeechBubble,
+            "screenshot tool synchronization recognizes Speech Bubble");
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -676,6 +693,11 @@ int main(int argc, char** argv) {
     static_cast<void>(
         applicationStorage.initialize({storageDirectory.filePath(QStringLiteral("bin")),
                                        storageDirectory.filePath(QStringLiteral("data")), 60000}));
+    if (application.arguments().contains(QStringLiteral("--speech-bubble-only"))) {
+        speechBubbleReachesScreenshotCommands();
+        applicationStorage.shutdown();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--eraser-only"))) {
         eraserSubtoolsReachToolbarCommands();
         applicationStorage.shutdown();

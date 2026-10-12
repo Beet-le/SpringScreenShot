@@ -259,6 +259,7 @@ pub(crate) fn snow_shape_kind_to_rust(value: SnowShapeKind) -> ShapeKind {
         SnowShapeKind::RectangleHighlight => ShapeKind::RectangleHighlight,
         SnowShapeKind::PenHighlight => ShapeKind::PenHighlight,
         SnowShapeKind::Spotlight => ShapeKind::Spotlight,
+        SnowShapeKind::SpeechBubble => ShapeKind::SpeechBubble,
     }
 }
 
@@ -507,6 +508,24 @@ pub(crate) fn snow_text_element_info_from_rust(value: TextElementInfo) -> SnowTe
             .map(snow_element_id_from_rust)
             .unwrap_or_default(),
         arrow_width: value.arrow_width,
+        bubble_id: value
+            .bubble_id
+            .map(snow_element_id_from_rust)
+            .unwrap_or_default(),
+        text_ink_reserve: value.text_ink_reserve,
+        bubble_body_width: value.bubble_body.map_or(0.0, |b| b.width),
+        bubble_body_height: value.bubble_body.map_or(0.0, |b| b.height),
+        bubble_shape: value
+            .bubble_body
+            .map_or(SnowRectangleShape::Rectangle, |b| match b.highlight_shape {
+                snow_draw_engine::HighlightShape::Rectangle => SnowRectangleShape::Rectangle,
+                snow_draw_engine::HighlightShape::Ellipse => SnowRectangleShape::Ellipse,
+                snow_draw_engine::HighlightShape::Diamond => SnowRectangleShape::Diamond,
+            }),
+        bubble_stroke_width: value.bubble_body.map_or(0.0, |b| b.stroke_width),
+        bubble_corner_radii: value
+            .bubble_body
+            .map_or(SnowCornerRadii::default(), |b| b.corner_radii.into()),
         center_x: value.center.x,
         center_y: value.center.y,
         width: value.width,
@@ -1130,6 +1149,7 @@ pub(crate) fn runtime_config_from_c(
                 distance: defaults.distance.into(),
                 angle: defaults.angle.into(),
                 magnifier: defaults.magnifier.into(),
+                speech_bubble: ShapeStyle::from(defaults.speech_bubble).rectangle_shape_style(),
                 text: TextStyle {
                     color: defaults.text.color.into(),
                     font_size: defaults.text.font_size,
@@ -1305,6 +1325,10 @@ impl From<StyleDefaults> for SnowStyleDefaults {
             distance: value.editor.distance.into(),
             angle: value.editor.angle.into(),
             magnifier: value.editor.magnifier.into(),
+            speech_bubble: snow_draw_engine::ShapeStyle::from_rectangle_shape_style(
+                value.editor.speech_bubble,
+            )
+            .into(),
             spotlight_shape: match value.editor.spotlight_shape {
                 snow_draw_engine::HighlightShape::Rectangle => SnowRectangleShape::Rectangle,
                 snow_draw_engine::HighlightShape::Ellipse => SnowRectangleShape::Ellipse,
@@ -1386,6 +1410,7 @@ pub(crate) fn snow_active_tool_to_rust(value: SnowActiveTool) -> ActiveTool {
         SnowActiveTool::Distance => ActiveTool::Distance,
         SnowActiveTool::Angle => ActiveTool::Angle,
         SnowActiveTool::Magnifier => ActiveTool::Magnifier,
+        SnowActiveTool::SpeechBubble => ActiveTool::SpeechBubble,
         SnowActiveTool::Watermark => ActiveTool::Watermark,
         SnowActiveTool::Text => ActiveTool::Text,
         SnowActiveTool::SerialNumber => ActiveTool::SerialNumber,
@@ -1411,6 +1436,7 @@ pub(crate) fn snow_active_tool_from_rust(value: ActiveTool) -> SnowActiveTool {
         ActiveTool::Distance => SnowActiveTool::Distance,
         ActiveTool::Angle => SnowActiveTool::Angle,
         ActiveTool::Magnifier => SnowActiveTool::Magnifier,
+        ActiveTool::SpeechBubble => SnowActiveTool::SpeechBubble,
         ActiveTool::Watermark => SnowActiveTool::Watermark,
         ActiveTool::Text => SnowActiveTool::Text,
         ActiveTool::SerialNumber => SnowActiveTool::SerialNumber,
@@ -1418,7 +1444,7 @@ pub(crate) fn snow_active_tool_from_rust(value: ActiveTool) -> SnowActiveTool {
 }
 
 pub(crate) fn snow_active_tool_mask_to_rust(value: u64) -> u64 {
-    const TOOLS: [SnowActiveTool; 20] = [
+    const TOOLS: [SnowActiveTool; 21] = [
         SnowActiveTool::Select,
         SnowActiveTool::Shape,
         SnowActiveTool::Arrow,
@@ -1439,6 +1465,7 @@ pub(crate) fn snow_active_tool_mask_to_rust(value: u64) -> u64 {
         SnowActiveTool::Distance,
         SnowActiveTool::Angle,
         SnowActiveTool::Magnifier,
+        SnowActiveTool::SpeechBubble,
     ];
 
     TOOLS.into_iter().fold(0, |mask, tool| {
@@ -1481,6 +1508,8 @@ pub(crate) fn snow_style_toolbar_source_from_rust(
         StyleToolbarSource::SelectedAngle => SnowStyleToolbarSource::SelectedAngle,
         StyleToolbarSource::DefaultMagnifier => SnowStyleToolbarSource::DefaultMagnifier,
         StyleToolbarSource::SelectedMagnifier => SnowStyleToolbarSource::SelectedMagnifier,
+        StyleToolbarSource::DefaultSpeechBubble => SnowStyleToolbarSource::DefaultSpeechBubble,
+        StyleToolbarSource::SelectedSpeechBubble => SnowStyleToolbarSource::SelectedSpeechBubble,
         StyleToolbarSource::DefaultRectangleFilter => {
             SnowStyleToolbarSource::DefaultRectangleFilter
         }
@@ -1741,6 +1770,9 @@ mod tests {
         let (family_prefix, family) = boundary_test_string(SNOW_FONT_FAMILY_UTF8_CAPACITY - 1);
 
         let info = snow_text_element_info_from_rust(TextElementInfo {
+            bubble_id: None,
+            bubble_body: None,
+            text_ink_reserve: 0.0,
             arrow_id: None,
             arrow_width: 0.0,
             id: ElementId {

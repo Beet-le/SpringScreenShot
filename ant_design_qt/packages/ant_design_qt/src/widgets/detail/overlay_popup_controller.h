@@ -114,6 +114,7 @@ class OverlayPopupController final : public QObject, private PopupInteractionOwn
   void nativeSurfaceChanged();
 
  signals:
+  void popupOpening();
   void popupVisibleChanged(bool value);
   void popupVisibilityRequested(bool value);
 

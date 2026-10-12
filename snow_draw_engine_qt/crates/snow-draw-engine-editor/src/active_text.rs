@@ -75,10 +75,26 @@ impl Editor {
         if let ActiveTextDraftTarget::Existing(id) = draft.target {
             document.text(id)?;
         }
+        let bubble_id = match draft.target {
+            ActiveTextDraftTarget::NewSpeechBubble(id) => Some(id),
+            ActiveTextDraftTarget::Existing(id) => document.speech_bubble_id_for_text(id),
+            _ => None,
+        };
+        if let Some(owner) = bubble_id {
+            let meta = document.element(owner)?.meta;
+            let bubble = document.speech_bubble(owner)?;
+            if meta.locked
+                || !meta.visible
+                || (matches!(draft.target, ActiveTextDraftTarget::NewSpeechBubble(_))
+                    && bubble.text_element_id.is_some())
+            {
+                return Err(ErrorCode::InvalidState);
+            }
+        }
         let arrow_id = match draft.target {
             ActiveTextDraftTarget::NewArrow(id) => Some(id),
             ActiveTextDraftTarget::Existing(id) => document.arrow_id_for_text(id),
-            ActiveTextDraftTarget::New => None,
+            ActiveTextDraftTarget::New | ActiveTextDraftTarget::NewSpeechBubble(_) => None,
         };
         if let Some(id) = arrow_id {
             let arrow = document.arrow(id)?;
@@ -114,11 +130,12 @@ impl Editor {
     }
 
     pub fn clear_active_text_draft_presentation(&mut self) -> bool {
-        if self.state.active_text_draft.is_none() {
+        let had_draft = self.state.active_text_draft.take().is_some();
+        let had_bubble_geometry = self.speech_bubble_draft_geometry.take().is_some();
+        if !had_draft && !had_bubble_geometry {
             return false;
         }
 
-        self.state.active_text_draft = None;
         self.bump_scene_state_revision();
         self.bump_overlay_state_revision();
         true

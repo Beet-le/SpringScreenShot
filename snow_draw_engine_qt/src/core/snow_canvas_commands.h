@@ -40,6 +40,9 @@ struct CommitTextRequest {
     bool autoResize = false;
     bool updateDefaultStyle = false;
     SnowElementId arrowId{};
+    SnowElementId bubbleId{};
+    double minimumGraphemeWidth = 1.0;
+    double textInkReserve = 0.0;
 
     SnowTextCommitDraft toAbi() const;
 };
@@ -60,6 +63,9 @@ struct ActiveTextDraftPresentationRequest {
     bool autoResize = false;
 
     SnowElementId arrowId{};
+    SnowElementId bubbleId{};
+    double minimumGraphemeWidth = 1.0;
+    double textInkReserve = 0.0;
     SnowActiveTextDraftPresentation toAbi() const;
 };
 

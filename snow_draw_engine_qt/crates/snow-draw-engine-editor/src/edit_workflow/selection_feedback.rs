@@ -85,6 +85,7 @@ impl Editor {
         scope: ToolSelectionScope,
     ) -> Vec<ElementId> {
         let mut ids = Vec::new();
+        let mut matched_bubbles = std::collections::HashSet::new();
         for id in document.paint_order() {
             let Ok(element) = document.element(*id) else {
                 continue;
@@ -92,8 +93,18 @@ impl Editor {
             if !element.meta.visible {
                 continue;
             }
-            let kind = element.data.kind();
-            if !Self::selection_scope_matches_document(document, scope, *id, kind) {
+            let selection_id = document.speech_bubble_id_for_text(*id).unwrap_or(*id);
+            let Ok(selection_element) = document.element(selection_id) else {
+                continue;
+            };
+            if !selection_element.meta.visible
+                || !Self::selection_scope_matches_document(
+                    document,
+                    scope,
+                    selection_id,
+                    selection_element.data.kind(),
+                )
+            {
                 continue;
             }
             if let Ok(value) = document.magnifier(*id) {
@@ -104,10 +115,14 @@ impl Editor {
                 }
                 continue;
             }
-            if let Some(rect) = document.element_rect_proxy(*id)
+            if let Some(rect) = self
+                .speech_bubble_display_rect(document, *id)
+                .or_else(|| document.element_rect_proxy(*id))
                 && rectangle_intersects_axis_aligned_bounds(&rect, bounds)
+                && (selection_element.data.kind() != ElementKind::SpeechBubble
+                    || matched_bubbles.insert(selection_id))
             {
-                ids.push(*id);
+                ids.push(selection_id);
             }
         }
         document.for_each_visible_arrow(|id, arrow| {

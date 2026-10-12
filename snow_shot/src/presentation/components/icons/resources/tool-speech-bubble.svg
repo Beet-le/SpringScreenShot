@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none" stroke="__ADQT_SLOT_PRIMARY__" stroke-width="80" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M192 128h640a64 64 0 0 1 64 64v448a64 64 0 0 1-64 64H512L320 896V704H192a64 64 0 0 1-64-64V192a64 64 0 0 1 64-64Z"/>
+  <path d="M320 320h384M320 480h256"/>
+</svg>

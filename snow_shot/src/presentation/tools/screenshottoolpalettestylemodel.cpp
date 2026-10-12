@@ -18,6 +18,8 @@ ScreenshotToolPaletteStyleState::ScreenshotToolPaletteStyleState(
 void ScreenshotToolPaletteStyleState::reset(const SnowCanvasStyleDefaults& defaults) {
     m_creationRectangleStyle.setRectangleStyle(defaults.rectangle);
     m_rectangleStyle = m_creationRectangleStyle;
+    m_creationSpeechBubbleStyle.setRectangleStyle(defaults.speechBubble);
+    m_speechBubbleStyle = m_creationSpeechBubbleStyle;
     SnowCanvasShapeStyle lineStyle = defaults.line;
     if (lineStyle.arrowType != SnowCanvasArrowType::Straight &&
         lineStyle.arrowType != SnowCanvasArrowType::Curve) {

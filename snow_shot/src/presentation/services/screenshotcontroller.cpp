@@ -216,6 +216,8 @@ ScreenshotToolPalette::Tool paletteToolForActiveTool(ScreenshotActiveTool tool) 
     switch (tool) {
     case ScreenshotActiveTool::Select:
         return ScreenshotToolPalette::Tool::Select;
+    case ScreenshotActiveTool::SpeechBubble:
+        return ScreenshotToolPalette::Tool::SpeechBubble;
     case ScreenshotActiveTool::Shape:
         return ScreenshotToolPalette::Tool::Shape;
     case ScreenshotActiveTool::Arrow:
@@ -405,6 +407,7 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     void setMoveTool() override;
     void setSelectTool() override;
     void setShapeTool() override;
+    void setSpeechBubbleTool() override;
     void setArrowTool() override;
     void setLineTool() override;
     void setDistanceTool() override;
@@ -2573,6 +2576,9 @@ bool ScreenshotController::Impl::activateToolForSelectionResize(ScreenshotActive
     case ScreenshotActiveTool::Select:
         setSelectTool();
         break;
+    case ScreenshotActiveTool::SpeechBubble:
+        setSpeechBubbleTool();
+        break;
     case ScreenshotActiveTool::Shape:
         setShapeTool();
         break;
@@ -2689,6 +2695,13 @@ void ScreenshotController::Impl::setSelectTool() {
     const bool scrollingCaptureStopped = stopScrollingCapture(true);
     m_toolCommandWorkflow->setSelectTool();
     restoreToolUiAfterScrollingCapture(scrollingCaptureStopped);
+}
+
+void ScreenshotController::Impl::setSpeechBubbleTool() {
+    deactivateRecognition();
+    const bool stopped = stopScrollingCapture(true);
+    m_toolCommandWorkflow->setSpeechBubbleTool();
+    restoreToolUiAfterScrollingCapture(stopped);
 }
 
 void ScreenshotController::Impl::setShapeTool() {
@@ -6556,6 +6569,7 @@ const std::pair<const char*, ScreenshotActiveTool> mcpTools[] = {
     {"move", ScreenshotActiveTool::Move},
     {"select", ScreenshotActiveTool::Select},
     {"rectangle", ScreenshotActiveTool::Shape},
+    {"speech_bubble", ScreenshotActiveTool::SpeechBubble},
     {"arrow", ScreenshotActiveTool::Arrow},
     {"distance", ScreenshotActiveTool::Distance},
     {"angle", ScreenshotActiveTool::Angle},

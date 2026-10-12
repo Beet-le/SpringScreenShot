@@ -154,6 +154,13 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_BENCHMARKS)
     add_executable(snow-canvas-stroke-filter-benchmark tests/snow_canvas_stroke_filter_benchmark.cpp)
     target_link_libraries(snow-canvas-stroke-filter-benchmark PRIVATE snow_draw_engine_qt_canvas)
 
+    add_executable(snow-canvas-speech-bubble-benchmark tests/snow_canvas_speech_bubble_benchmark.cpp)
+    target_include_directories(snow-canvas-speech-bubble-benchmark PRIVATE
+        ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
+        "${CMAKE_CURRENT_SOURCE_DIR}/crates/snow-draw-engine-c/include")
+    target_link_libraries(snow-canvas-speech-bubble-benchmark PRIVATE snow_draw_engine_qt_canvas)
+    snow_shot_import_offscreen_platform(snow-canvas-speech-bubble-benchmark)
+
     add_executable(snow-canvas-arrow-text-benchmark tests/snow_canvas_arrow_text_benchmark.cpp)
     target_link_libraries(snow-canvas-arrow-text-benchmark PRIVATE snow_draw_engine_qt_canvas)
     snow_shot_import_offscreen_platform(snow-canvas-arrow-text-benchmark)
@@ -374,6 +381,16 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
         LABELS "unit"
     )
+
+    add_executable(snow-canvas-speech-bubble-tests tests/snow_canvas_speech_bubble_tests.cpp)
+    target_include_directories(snow-canvas-speech-bubble-tests PRIVATE
+        ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
+        "${CMAKE_CURRENT_SOURCE_DIR}/crates/snow-draw-engine-c/include"
+    )
+    target_link_libraries(snow-canvas-speech-bubble-tests PRIVATE snow_draw_engine_qt_canvas)
+    snow_shot_import_offscreen_platform(snow-canvas-speech-bubble-tests)
+    add_test(NAME snow-canvas-speech-bubble-tests COMMAND snow-canvas-speech-bubble-tests -platform offscreen)
+    set_tests_properties(snow-canvas-speech-bubble-tests PROPERTIES LABELS "unit" TIMEOUT 90)
 
     add_executable(snow-canvas-arrow-text-tests tests/snow_canvas_arrow_text_tests.cpp)
     target_include_directories(snow-canvas-arrow-text-tests PRIVATE

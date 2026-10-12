@@ -211,6 +211,7 @@ SnowCanvasSceneItem defaultPreviewItem(const SnowTextElementInfo& info) {
     item.height = qMax(1.0, info.height);
     item.content_width = info.content_width;
     item.content_height = info.content_height;
+    item.text_ink_reserve = info.text_ink_reserve;
     item.rotation = info.rotation;
     item.text_color = SnowColorRgba8{0xf4, 0x21, 0x2c, 0xff};
     item.fill = SnowColorRgba8{0, 0, 0, 0};

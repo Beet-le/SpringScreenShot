@@ -132,7 +132,7 @@ impl ShapeStyle {
         style
     }
 
-    pub(crate) fn from_rectangle_shape_style(style: RectangleShapeStyle) -> Self {
+    pub fn from_rectangle_shape_style(style: RectangleShapeStyle) -> Self {
         Self {
             fill: style.fill,
             fill_style: style.fill_style,
@@ -451,7 +451,9 @@ fn validate_shape_style_patch(patch: ShapeStylePatch) -> Result<(), ErrorCode> {
     }
 
     match patch.kind {
-        ShapeKind::Rectangle => validate_rectangle_shape_style(patch.style.rectangle_shape_style()),
+        ShapeKind::Rectangle | ShapeKind::SpeechBubble => {
+            validate_rectangle_shape_style(patch.style.rectangle_shape_style())
+        }
         ShapeKind::Arrow => validate_arrow_style(patch.style.arrow_style()),
         ShapeKind::Line
         | ShapeKind::FreeDraw
@@ -555,6 +557,15 @@ pub(crate) fn rectangle_with_style(
         ),
         opacity: rect.opacity,
     }
+}
+
+fn speech_bubble_body_with_style(
+    rect: &RectangleData,
+    style: RectangleShapeStyle,
+) -> RectangleData {
+    let mut body = rectangle_with_style(rect, style);
+    body.corner_radii = style.corner_radii;
+    body
 }
 
 fn text_with_style(
@@ -806,6 +817,18 @@ impl Editor {
             return StyleToolbarSource::Eraser;
         }
         let primary = self.state.selection.primary;
+        if self
+            .state
+            .selection
+            .ids
+            .iter()
+            .any(|id| document.speech_bubble(*id).is_ok())
+        {
+            return StyleToolbarSource::SelectedSpeechBubble;
+        }
+        if self.state.active_tool == ActiveTool::SpeechBubble {
+            return StyleToolbarSource::DefaultSpeechBubble;
+        }
         if primary.is_some_and(|id| document.pen_filter(id).is_ok()) {
             StyleToolbarSource::SelectedPenFilter
         } else if primary.is_some_and(|id| document.filter(id).is_ok()) {
@@ -1256,6 +1279,21 @@ impl Editor {
     }
 
     pub fn shape_style(&self, document: &DocumentModel) -> ShapeStyle {
+        if let Some(value) = self
+            .state
+            .selection
+            .ids
+            .iter()
+            .find_map(|id| document.speech_bubble(*id).ok())
+        {
+            return ShapeStyle::from_rectangle_shape_style(RectangleShapeStyle::from_rectangle(
+                &value.body,
+            ))
+            .with_opacity(value.body.opacity);
+        }
+        if self.active_tool() == ActiveTool::SpeechBubble {
+            return ShapeStyle::from_rectangle_shape_style(self.state.default_speech_bubble_style);
+        }
         if matches!(
             self.style_toolbar_source(document),
             StyleToolbarSource::SelectedDistance | StyleToolbarSource::SelectedAngle
@@ -1331,6 +1369,9 @@ impl Editor {
     }
 
     pub fn rectangle_shape_style(&self, document: &DocumentModel) -> RectangleShapeStyle {
+        if self.active_tool() == ActiveTool::SpeechBubble {
+            return self.state.default_speech_bubble_style;
+        }
         self.selected_rectangle_style(document)
             .map(|style| style.rectangle_shape_style())
             .unwrap_or(self.state.default_rectangle_shape_style)
@@ -1369,6 +1410,10 @@ impl Editor {
             .ids
             .iter()
             .filter_map(|id| match source {
+                StyleToolbarSource::SelectedSpeechBubble => document
+                    .speech_bubble(*id)
+                    .ok()
+                    .map(|bubble| ShapeStyleSample::from_rectangle(&bubble.body)),
                 StyleToolbarSource::SelectedRectangle => document
                     .rectangle(*id)
                     .ok()
@@ -1833,6 +1878,19 @@ impl Editor {
         }
 
         match patch.kind {
+            ShapeKind::SpeechBubble => {
+                self.state.default_speech_bubble_style =
+                    patch.apply_to_rectangle_shape(self.state.default_speech_bubble_style);
+                if let Some(ElementCreationPreview::SpeechBubble(bubble)) =
+                    self.state.creation_preview.as_mut()
+                {
+                    bubble.body = speech_bubble_body_with_style(
+                        &bubble.body,
+                        self.state.default_speech_bubble_style,
+                    );
+                    self.bump_scene_state_revision();
+                }
+            }
             ShapeKind::Rectangle => self.update_default_shape_styles(
                 document,
                 patch.apply_to_rectangle_shape(self.state.default_rectangle_shape_style),
@@ -1890,6 +1948,26 @@ impl Editor {
             let mut next_selection_elements = Vec::new();
             let mut next_selection_arrows = Vec::new();
             for id in self.state.selection.ids.iter().copied() {
+                if let Ok(current) = document.speech_bubble(id) {
+                    let mut bubble = current.clone();
+                    if patch.kind == ShapeKind::SpeechBubble {
+                        bubble.body = speech_bubble_body_with_style(
+                            &bubble.body,
+                            patch.apply_to_rectangle_shape(RectangleShapeStyle::from_rectangle(
+                                &bubble.body,
+                            )),
+                        );
+                    }
+                    snow_draw_engine_document::speech_bubble_remove_swallowed_tails(&mut bubble);
+                    next_selection_elements.push(SelectionRectState {
+                        id,
+                        rect: snow_draw_engine_document::speech_bubble_body_proxy(&bubble),
+                    });
+                    if bubble != *current {
+                        transaction.update_speech_bubble(id, bubble);
+                    }
+                    continue;
+                }
                 if let Ok(current_rect) = document.rectangle(id) {
                     let matches_kind = (patch.kind == ShapeKind::Rectangle
                         && !current_rect.is_highlight()
@@ -2046,6 +2124,19 @@ impl Editor {
             let mut next_selection_arrows = Vec::new();
 
             for id in self.state.selection.ids.iter().copied() {
+                if let Ok(current) = document.speech_bubble(id) {
+                    let mut bubble = current.clone();
+                    bubble.body = rectangle_with_style(&bubble.body, style);
+                    snow_draw_engine_document::speech_bubble_remove_swallowed_tails(&mut bubble);
+                    next_selection_elements.push(SelectionRectState {
+                        id,
+                        rect: snow_draw_engine_document::speech_bubble_body_proxy(&bubble),
+                    });
+                    if bubble != *current {
+                        transaction.update_speech_bubble(id, bubble);
+                    }
+                    continue;
+                }
                 if let Ok(current_rect) = document.rectangle(id) {
                     let updated_rect = if current_rect.is_spotlight() {
                         *current_rect

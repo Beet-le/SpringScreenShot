@@ -611,6 +611,10 @@ if(ADQT_BUILD_TESTS)
                 directContentRemainsCompatibleWithFactoryApi
                 colorPickerPrewarmCanBeDisabled -platform offscreen)
     set_tests_properties(adqt-popover-content-lifecycle-tests PROPERTIES LABELS "unit")
+    add_test(NAME adqt-popover-opening-lifecycle-tests
+        COMMAND adqt-qt-tool-popup-tests popoverOpeningPrecedesSurfaceVisibility
+                popoverOpeningObserverAllowsOwnerDeletion -platform offscreen)
+    set_tests_properties(adqt-popover-opening-lifecycle-tests PROPERTIES LABELS "unit")
     add_test(NAME adqt-popup-delegate-destruction-tests
         COMMAND adqt-qt-tool-popup-tests popoverDestructionAllowsUiEvents
                 datePickerDestructionAllowsUiEvents

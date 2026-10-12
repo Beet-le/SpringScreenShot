@@ -94,7 +94,8 @@ typedef enum SnowActiveTool {
     SNOW_ACTIVE_TOOL_BRUSH_ERASER = 16,
     SNOW_ACTIVE_TOOL_DISTANCE = 17,
     SNOW_ACTIVE_TOOL_ANGLE = 18,
-    SNOW_ACTIVE_TOOL_MAGNIFIER = 19
+    SNOW_ACTIVE_TOOL_MAGNIFIER = 19,
+    SNOW_ACTIVE_TOOL_SPEECH_BUBBLE = 20
 } SnowActiveTool;
 #define SNOW_ACTIVE_TOOL_FILTER SNOW_ACTIVE_TOOL_RECTANGLE_FILTER
 #define SNOW_ACTIVE_TOOL_HIGHLIGHT SNOW_ACTIVE_TOOL_RECTANGLE_HIGHLIGHT
@@ -131,7 +132,9 @@ typedef enum SnowStyleToolbarSource {
     SNOW_STYLE_TOOLBAR_SOURCE_DEFAULT_ANGLE = 28,
     SNOW_STYLE_TOOLBAR_SOURCE_SELECTED_ANGLE = 29,
     SNOW_STYLE_TOOLBAR_SOURCE_DEFAULT_MAGNIFIER = 30,
-    SNOW_STYLE_TOOLBAR_SOURCE_SELECTED_MAGNIFIER = 31
+    SNOW_STYLE_TOOLBAR_SOURCE_SELECTED_MAGNIFIER = 31,
+    SNOW_STYLE_TOOLBAR_SOURCE_DEFAULT_SPEECH_BUBBLE = 32,
+    SNOW_STYLE_TOOLBAR_SOURCE_SELECTED_SPEECH_BUBBLE = 33
 } SnowStyleToolbarSource;
 #define SNOW_STYLE_TOOLBAR_SOURCE_DEFAULT_FILTER SNOW_STYLE_TOOLBAR_SOURCE_DEFAULT_RECTANGLE_FILTER
 #define SNOW_STYLE_TOOLBAR_SOURCE_SELECTED_FILTER                                                  \
@@ -303,7 +306,8 @@ typedef enum SnowSceneDisplayItemKind {
     SNOW_SCENE_DISPLAY_ITEM_SERIAL_NUMBER = 6,
     SNOW_SCENE_DISPLAY_ITEM_SERIAL_NUMBER_CONNECTOR = 7,
     SNOW_SCENE_DISPLAY_ITEM_FILTER = 8,
-    SNOW_SCENE_DISPLAY_ITEM_MAGNIFIER = 9
+    SNOW_SCENE_DISPLAY_ITEM_MAGNIFIER = 9,
+    SNOW_SCENE_DISPLAY_ITEM_SPEECH_BUBBLE = 10
 } SnowSceneDisplayItemKind;
 
 typedef enum SnowBlendMode {
@@ -421,7 +425,10 @@ typedef enum SnowOverlayRectKind {
     SNOW_OVERLAY_RECT_ERASER_CURSOR = 13,
     SNOW_OVERLAY_RECT_BINDING_HIGHLIGHT = 14,
     SNOW_OVERLAY_RECT_MAGNIFIER_MOVE_HANDLE = 15,
-    SNOW_OVERLAY_RECT_MAGNIFIER_SELECTION_FRAME = 16
+    SNOW_OVERLAY_RECT_MAGNIFIER_SELECTION_FRAME = 16,
+    SNOW_OVERLAY_RECT_SPEECH_BUBBLE_ADD_TAIL_HANDLE = 17,
+    SNOW_OVERLAY_RECT_SPEECH_BUBBLE_TAIL_BASE_HANDLE = 18,
+    SNOW_OVERLAY_RECT_SPEECH_BUBBLE_TAIL_TIP_HANDLE = 19
 } SnowOverlayRectKind;
 
 typedef enum SnowSnapGuideKind {
@@ -515,7 +522,8 @@ typedef enum SnowShapeKind {
     SNOW_SHAPE_KIND_FREE_DRAW = 3,
     SNOW_SHAPE_KIND_RECTANGLE_HIGHLIGHT = 4,
     SNOW_SHAPE_KIND_PEN_HIGHLIGHT = 5,
-    SNOW_SHAPE_KIND_SPOTLIGHT = 6
+    SNOW_SHAPE_KIND_SPOTLIGHT = 6,
+    SNOW_SHAPE_KIND_SPEECH_BUBBLE = 7
 } SnowShapeKind;
 #define SNOW_SHAPE_KIND_HIGHLIGHT SNOW_SHAPE_KIND_RECTANGLE_HIGHLIGHT
 
@@ -736,6 +744,7 @@ typedef struct SnowStyleDefaults {
     SnowAngleStyle angle;
     SnowCornerRadii spotlight_corner_radii;
     SnowMagnifierStyle magnifier;
+    SnowShapeStyle speech_bubble;
 } SnowStyleDefaults;
 
 struct SnowRuntimeConfig {
@@ -849,6 +858,9 @@ typedef struct SnowTextCommitDraft {
     SnowTextLayoutSize measured_layout;
     /* Full draft style to persist for the committed text. */
     SnowTextStyle style;
+    SnowElementId bubble_id;
+    double minimum_grapheme_width;
+    double text_ink_reserve;
 } SnowTextCommitDraft;
 
 typedef struct SnowActiveTextDraftPresentation {
@@ -869,6 +881,9 @@ typedef struct SnowActiveTextDraftPresentation {
     uint32_t text_utf8_len;
     uint32_t reserved1;
     SnowTextStyle style;
+    SnowElementId bubble_id;
+    double minimum_grapheme_width;
+    double text_ink_reserve;
 } SnowActiveTextDraftPresentation;
 
 typedef struct SnowTextElementInfo {
@@ -900,7 +915,50 @@ typedef struct SnowTextElementInfo {
     uint8_t italic;
     uint8_t reserved1[1];
     char font_family_utf8[SNOW_FONT_FAMILY_UTF8_CAPACITY];
+    SnowElementId bubble_id;
+    double minimum_grapheme_width;
+    double text_ink_reserve;
+    double bubble_body_width;
+    double bubble_body_height;
+    SnowRectangleShape bubble_shape;
+    double bubble_stroke_width;
+    SnowCornerRadii bubble_corner_radii;
 } SnowTextElementInfo;
+
+typedef struct SnowSpeechBubbleTextLayoutRequest {
+    SnowTextElementInfo info;
+    SnowTextStyle style;
+    uint64_t key;
+} SnowSpeechBubbleTextLayoutRequest;
+typedef struct SnowSpeechBubbleTextLayoutMetrics {
+    SnowElementId text_id;
+    uint64_t key;
+    SnowTextLayoutSize size;
+    double minimum_grapheme_width;
+    double text_ink_reserve;
+} SnowSpeechBubbleTextLayoutMetrics;
+uint32_t snow_runtime_speech_bubble_text_count(SnowRuntime runtime);
+SnowError snow_viewport_get_speech_bubble_text_target(SnowRuntime runtime, SnowViewport viewport,
+                                                      uint8_t use_point, double x, double y,
+                                                      SnowTextElementInfo* out_info,
+                                                      SnowTextStyle* out_style, uint8_t* out_found);
+SnowError snow_viewport_take_speech_bubble_text_edit_request(SnowRuntime runtime,
+                                                             SnowViewport viewport,
+                                                             SnowElementId* out_owner,
+                                                             uint8_t* out_requested);
+SnowError snow_speech_bubble_resolve_text_layout(const SnowTextElementInfo* info,
+                                                 double minimum_grapheme_width,
+                                                 double text_ink_reserve,
+                                                 double wrapped_text_height, double* out_body_width,
+                                                 double* out_body_height, double* out_content_width,
+                                                 double* out_content_height);
+SnowError
+snow_viewport_get_speech_bubble_text_layout_requests(SnowRuntime runtime, SnowViewport viewport,
+                                                     SnowSpeechBubbleTextLayoutRequest* out_items,
+                                                     uint32_t capacity, uint32_t* out_count);
+SnowError snow_viewport_apply_speech_bubble_text_layout_metrics_ex(
+    SnowRuntime runtime, SnowViewport viewport, const SnowSpeechBubbleTextLayoutMetrics* items,
+    uint32_t count, SnowChangedViewportList* out_changed);
 
 typedef struct SnowArrowTextLayoutRequest {
     SnowTextElementInfo info;
@@ -1294,6 +1352,7 @@ typedef struct SnowSceneDisplayItem {
     uint32_t font_family_utf8_len;
     const char* font_family_utf8;
     SnowMagnifierGeometry magnifier;
+    double text_ink_reserve;
 } SnowSceneDisplayItem;
 
 /* Conservative ink (fill padding plus text stroke halo) for dirty regions. */

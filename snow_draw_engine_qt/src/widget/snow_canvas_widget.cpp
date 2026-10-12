@@ -78,6 +78,7 @@ namespace {
 std::optional<SnowCursorStyle> baselineCursorForCanvasTool(SnowCanvasTool tool) {
     switch (tool) {
     case SnowCanvasTool::Shape:
+    case SnowCanvasTool::SpeechBubble:
     case SnowCanvasTool::Arrow:
     case SnowCanvasTool::Distance:
     case SnowCanvasTool::Angle:
@@ -513,6 +514,7 @@ struct SnowCanvasWidget::Impl : public snow_canvas_runtime::Client {
     bool adjustSelectedSerialNumbers(qint64 delta);
     bool createSerialNumberText();
     bool beginArrowText(const QPointF& viewPosition, bool selected);
+    bool beginSpeechBubbleText(const QPointF& viewPosition, bool selected);
     bool resetEditingState(bool restoreSelectTool) override;
     bool cancelActiveTextEditing();
     bool hasActiveTextEditing() const;
@@ -727,10 +729,11 @@ bool SnowCanvasWidget::Impl::prepareActiveTextResizeMeasurementForPointerUp(
     const auto tool = canvasTool();
     const bool geometryTool = tool == SnowCanvasTool::Select || tool == SnowCanvasTool::Arrow ||
                               tool == SnowCanvasTool::Distance || tool == SnowCanvasTool::Angle ||
-                              tool == SnowCanvasTool::Shape;
+                              tool == SnowCanvasTool::Shape || tool == SnowCanvasTool::SpeechBubble;
     if (!state.active &&
         (!geometryTool || (tool != SnowCanvasTool::Distance && tool != SnowCanvasTool::Angle &&
-                           snow_runtime_arrow_text_count(runtimeBinding.engine()) == 0))) {
+                           snow_runtime_arrow_text_count(runtimeBinding.engine()) == 0 &&
+                           snow_runtime_speech_bubble_text_count(runtimeBinding.engine()) == 0))) {
         return true;
     }
 
@@ -1061,7 +1064,8 @@ SnowCanvasStyleToolbarState SnowCanvasWidget::Impl::canvasStyleToolbarState() co
                                  0.0, &arrowText, &arrowTextStyle, &foundArrow) == SNOW_OK &&
                              foundArrow != 0;
     if (textInteraction.isActive()) {
-        if (textInteraction.session().arrowId().generation != 0) {
+        if (textInteraction.session().arrowId().generation != 0 ||
+            textInteraction.session().bubbleId().generation != 0) {
             state.source = SnowCanvasStyleToolbarSource::SelectedText;
         }
         state.textStyle = snow_canvas_types::toCanvasTextStyle(textInteraction.currentTextStyle());
@@ -2287,6 +2291,23 @@ bool SnowCanvasWidget::editSelectedArrowText() {
     return m_impl->beginArrowText(QPointF(), true);
 }
 
+bool SnowCanvasWidget::Impl::beginSpeechBubbleText(const QPointF& viewPosition, bool selected) {
+    if (!interactionEnabled() || textInteraction.isActive()) {
+        return false;
+    }
+    auto result =
+        textInteraction.beginSpeechBubble(runtimeBinding.engine(), runtimeBinding.viewportHandle(),
+                                          displayState.displayCache(), viewPosition, selected);
+    if (!syncChangedViewports(result.firstChangedViewports.get()) ||
+        !syncChangedViewports(result.secondChangedViewports.get())) {
+        return false;
+    }
+    if (result.started && !publishStateChange(StateNotification::StyleToolbar)) {
+        return false;
+    }
+    return result.started;
+}
+
 bool SnowCanvasWidget::createSerialNumberText() {
     return m_impl->createSerialNumberText();
 }
@@ -2672,7 +2693,9 @@ bool SnowCanvasWidget::Impl::measurePresentationText() {
         textInteraction.measureArrowText(runtimeBinding.engine(), runtimeBinding.viewportHandle());
     const auto serial = textInteraction.measureSerialLabelLayout(runtimeBinding.engine(),
                                                                  runtimeBinding.viewportHandle());
-    return labels.success && serial.success;
+    const auto bubbles = textInteraction.measureSpeechBubbleText(runtimeBinding.engine(),
+                                                                 runtimeBinding.viewportHandle());
+    return labels.success && serial.success && bubbles.success;
 }
 
 bool SnowCanvasWidget::Impl::withPresentationUpdate(const std::function<bool()>& update) {
@@ -2752,7 +2775,12 @@ bool SnowCanvasWidget::Impl::syncChangedViewports(SnowChangedViewportList change
 void SnowCanvasWidget::Impl::refreshArrowTextMetrics() {
     textInteraction.invalidateArrowTextMetrics();
     if (hasViewport()) {
-        if (!syncChangedViewports(nullptr)) {
+        if (!withPresentationUpdate([&]() {
+                return textInteraction
+                    .refreshActiveDraftMetrics(runtimeBinding.engine(),
+                                               runtimeBinding.viewportHandle())
+                    .success;
+            })) {
             return;
         }
     }
@@ -3194,7 +3222,8 @@ bool SnowCanvasWidget::Impl::handleMousePress(QMouseEvent* event) {
     }
 
     if (plan.shouldBeginText) {
-        if (plan.allowCreateText && beginArrowText(event->position(), false)) {
+        if (plan.allowCreateText && (beginSpeechBubbleText(event->position(), false) ||
+                                     beginArrowText(event->position(), false))) {
             event->accept();
             return true;
         }
@@ -3358,7 +3387,8 @@ bool SnowCanvasWidget::Impl::handleMouseDoubleClick(QMouseEvent* event) {
         return false;
     }
     if (event->button() == Qt::LeftButton && event->modifiers() == Qt::NoModifier &&
-        beginArrowText(event->position(), false)) {
+        (beginSpeechBubbleText(event->position(), false) ||
+         beginArrowText(event->position(), false))) {
         event->accept();
         return true;
     }
@@ -3490,6 +3520,9 @@ bool SnowCanvasWidget::Impl::handleMouseRelease(QMouseEvent* event) {
         auto result = textInteraction.beginRequestedTextEdit(
             runtimeBinding.engine(), runtimeBinding.viewportHandle(), displayState.displayCache());
         if (!syncChangedViewports(result.firstChangedViewports.get())) {
+            return false;
+        }
+        if (!syncChangedViewports(result.secondChangedViewports.get())) {
             return false;
         }
         if (result.started) {
@@ -3815,7 +3848,7 @@ bool SnowCanvasWidget::Impl::handleKeyPress(QKeyEvent* event) {
 
     if (event != nullptr && !event->isAutoRepeat() && event->modifiers() == Qt::NoModifier &&
         (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) &&
-        beginArrowText(QPointF(), true)) {
+        (beginSpeechBubbleText(QPointF(), true) || beginArrowText(QPointF(), true))) {
         event->accept();
         return true;
     }

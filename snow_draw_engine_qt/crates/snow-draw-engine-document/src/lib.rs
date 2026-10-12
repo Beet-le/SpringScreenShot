@@ -41,6 +41,8 @@ mod free_draw;
 mod magnifier;
 pub use magnifier::*;
 mod serial_number_format;
+mod speech_bubble;
+pub use speech_bubble::*;
 mod transaction;
 pub use serial_number_format::{SerialNumberNumericType, format_serial_number};
 

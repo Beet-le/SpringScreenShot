@@ -191,12 +191,37 @@ def check_magnifier_contracts(matrix):
         assert re.search(rf"\bMagnifier\({re.escape(kind)}\)", block(source, rf"enum {name}\s*\{{(.*?)\}}"))
 
 
+def check_speech_bubble_contracts(matrix):
+    qt_types = read("../snow_draw_engine_qt/include/snow_draw_engine_qt/snow_canvas_types.h")
+    schemas = read("rust/snow-shot-mcp/src/schemas.rs")
+    domains = read("rust/snow-shot-mcp/src/domain_schemas.rs")
+    assert "SpeechBubble" in enum_members(qt_types, "SnowCanvasTool")
+    assert "SpeechBubble" in enum_members(schemas, "CanvasTool")
+    assert "SpeechBubble" in enum_members(schemas, "StyleTarget")
+    assert re.search(r"\bSpeechBubble\s*,", block(domains, r"choices!\(DocumentCanvasTool\s*\{(.*?)\}\);"))
+    reviewed = matrix["surface_contracts"]
+    assert reviewed["canvas_tools"]["members"].get("SpeechBubble") == "SpeechBubble"
+    for source in ("DefaultSpeechBubble", "SelectedSpeechBubble"):
+        assert source in enum_members(qt_types, "SnowCanvasStyleToolbarSource")
+        assert reviewed["canvas_style_sources"]["members"].count(source) == 1
+    for path in ("include/snow_shot/app/mcp/mcpstylepatch.h", "src/app/mcp/mcpdocumentservice.cpp"):
+        assert re.search(r'\{QStringLiteral\("speech_bubble"\),\s*SnowCanvasTool::SpeechBubble\}', read(path))
+    patch = read("include/snow_shot/app/mcp/mcpstylepatch.h")
+    assert re.search(r'\{QStringLiteral\("speech_bubble"\),\s*SnowCanvasShapeKind::SpeechBubble\}', patch)
+    assert 'target == QStringLiteral("speech_bubble")' in patch
+    # Body creation is a UI gesture; existing annotation batch operations remain unchanged.
+    annotation = block(schemas, r"enum Annotation\s*\{(.*?)\n\}")
+    assert not re.search(r"\bSpeechBubble\s*\{", annotation)
+
+
 def main():
     global MINI
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mini", action="store_true", help="Check the compiled Mini contract")
     parser.add_argument("--angle-only", action="store_true",
                         help="Check only Angle entries and schemas in both full and Mini contracts")
+    parser.add_argument("--speech-bubble-only", action="store_true",
+                        help="Check only Speech Bubble entries and routing in full and Mini contracts")
     parser.add_argument("--magnifier-only", action="store_true",
                         help="Check only Magnifier tool and style contracts in full and Mini variants")
     parser.add_argument("--execution-reports", nargs="+", type=Path,
@@ -209,6 +234,14 @@ def main():
             matrix = json.loads(read("mcp-capabilities-mini.json" if MINI else "mcp-capabilities.json"))
             check_magnifier_contracts(matrix)
         print("MCP Magnifier capability agreement passed for full and Mini tool and style contracts.")
+        return
+    if args.speech_bubble_only:
+        if args.mini or args.execution_reports or args.angle_only or args.magnifier_only:
+            parser.error("--speech-bubble-only checks both variants and cannot be combined with other modes")
+        for MINI in (False, True):
+            matrix = json.loads(read("mcp-capabilities-mini.json" if MINI else "mcp-capabilities.json"))
+            check_speech_bubble_contracts(matrix)
+        print("MCP Speech Bubble capability agreement passed for full and Mini tools and styles.")
         return
     if args.angle_only:
         if args.mini or args.execution_reports:

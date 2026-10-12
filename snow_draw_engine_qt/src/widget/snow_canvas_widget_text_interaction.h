@@ -76,6 +76,8 @@ class SnowCanvasWidgetTextInteraction final {
     SnowCanvasWidgetTextInteraction(QWidget& widget, SnowCanvasCursorController& cursorController);
     void invalidateArrowTextMetrics();
     void resetDocumentRetainedState();
+    snow_canvas_commands::MutationResult refreshActiveDraftMetrics(SnowRuntime runtime,
+                                                                   SnowViewport viewport);
 
     SnowCanvasTextEditorSession& session();
     const SnowCanvasTextEditorSession& session() const;
@@ -86,6 +88,8 @@ class SnowCanvasWidgetTextInteraction final {
 
     snow_canvas_commands::MutationResult measureArrowText(SnowRuntime runtime,
                                                           SnowViewport viewport);
+    snow_canvas_commands::MutationResult measureSpeechBubbleText(SnowRuntime runtime,
+                                                                 SnowViewport viewport);
     snow_canvas_commands::MutationResult measureSerialLabelLayout(SnowRuntime runtime,
                                                                   SnowViewport viewport);
     bool isActive() const;
@@ -102,6 +106,9 @@ class SnowCanvasWidgetTextInteraction final {
     BeginResult beginArrow(SnowRuntime runtime, SnowViewport viewport,
                            SnowCanvasDisplayCache& displayCache, const QPointF& viewPosition,
                            bool selected = false);
+    BeginResult beginSpeechBubble(SnowRuntime runtime, SnowViewport viewport,
+                                  SnowCanvasDisplayCache& displayCache, const QPointF& viewPosition,
+                                  bool selected = false);
     BeginResult beginAt(SnowRuntime runtime, SnowViewport viewport,
                         SnowCanvasDisplayCache& displayCache, const QPointF& viewPosition,
                         const SnowTextStyle& newTextStyle, bool allowCreate = true);
@@ -121,7 +128,7 @@ class SnowCanvasWidgetTextInteraction final {
     createSerialNumberText(SnowRuntime runtime, SnowViewport viewport,
                            const SnowTextStyle& textStyle);
     BeginResult beginRequestedTextEdit(SnowRuntime runtime, SnowViewport viewport,
-                                       const SnowCanvasDisplayCache& displayCache);
+                                       SnowCanvasDisplayCache& displayCache);
     // Starts a blank-canvas draft only after the engine authorized it by
     // `snow_viewport_take_new_text_draft_request` during this press.
     BeginResult beginRequestedNewTextDraft(SnowRuntime runtime, SnowViewport viewport,
@@ -195,6 +202,9 @@ class SnowCanvasWidgetTextInteraction final {
     snow_canvas_text_measurement::NaturalTextLayoutCache m_arrowNaturalLayouts;
     QFont m_arrowLayoutFont;
     bool m_arrowMetricsInvalid = true;
+    snow_canvas_text_measurement::BubbleTextLayoutCache m_bubbleLayouts;
+    QFont m_bubbleLayoutFont;
+    bool m_bubbleMetricsInvalid = true;
     QTimer m_caretBlinkTimer;
     QRegion m_caretUpdateRegion;
     int m_caretFlashTimeMs = 0;

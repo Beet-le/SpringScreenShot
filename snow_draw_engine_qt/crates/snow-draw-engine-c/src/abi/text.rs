@@ -84,12 +84,14 @@ pub(crate) fn text_draft_commit_from_c(
     let text = text_string_from_raw(draft.text_utf8, draft.text_utf8_len)?;
     let target = if draft.has_existing_element != 0 {
         TextCommitTarget::Existing(snow_element_id_to_rust(draft.element_id))
+    } else if draft.bubble_id.generation != 0 {
+        TextCommitTarget::NewSpeechBubble(snow_element_id_to_rust(draft.bubble_id))
     } else if draft.arrow_id.generation != 0 {
         TextCommitTarget::NewArrow(snow_element_id_to_rust(draft.arrow_id))
     } else {
         TextCommitTarget::New
     };
-    Ok(TextDraftCommit::new(
+    let mut result = TextDraftCommit::new(
         target,
         Point::new(draft.center_x, draft.center_y),
         text,
@@ -97,7 +99,10 @@ pub(crate) fn text_draft_commit_from_c(
         draft.style.into(),
         draft.auto_resize != 0,
         draft.update_default_style != 0,
-    ))
+    );
+    result.minimum_grapheme_width = draft.minimum_grapheme_width;
+    result.text_ink_reserve = draft.text_ink_reserve;
+    Ok(result)
 }
 
 pub(crate) fn active_text_draft_from_c(
@@ -107,6 +112,8 @@ pub(crate) fn active_text_draft_from_c(
     let style: TextStyle = draft.style.into();
     let target = if draft.has_existing_element != 0 {
         ActiveTextDraftTarget::Existing(snow_element_id_to_rust(draft.element_id))
+    } else if draft.bubble_id.generation != 0 {
+        ActiveTextDraftTarget::NewSpeechBubble(snow_element_id_to_rust(draft.bubble_id))
     } else if draft.arrow_id.generation != 0 {
         ActiveTextDraftTarget::NewArrow(snow_element_id_to_rust(draft.arrow_id))
     } else {
@@ -116,6 +123,7 @@ pub(crate) fn active_text_draft_from_c(
         target,
         revision: 0,
         text: TextData {
+            text_ink_reserve: draft.text_ink_reserve,
             center: Point::new(draft.center_x, draft.center_y),
             layout: TextLayoutSize::with_content(
                 draft.width,

@@ -15,6 +15,7 @@ pub struct EditorStyleDefaults {
     pub spotlight_shape: snow_draw_engine_document::HighlightShape,
     pub spotlight_corner_radii: CornerRadii,
     pub rectangle: RectangleShapeStyle,
+    pub speech_bubble: RectangleShapeStyle,
     pub arrow: ArrowStyle,
     pub distance: crate::DistanceStyle,
     pub angle: crate::AngleStyle,
@@ -45,6 +46,15 @@ pub fn editor_style_defaults() -> EditorStyleDefaults {
     };
 
     EditorStyleDefaults {
+        speech_bubble: RectangleShapeStyle {
+            shape: snow_draw_engine_document::HighlightShape::Rectangle,
+            fill: ColorRgba8::default(),
+            fill_style: FillStyle::Solid,
+            stroke,
+            stroke_width: 2.0,
+            stroke_style: StrokeStyle::Solid,
+            corner_radii: CornerRadii::splat(6.0),
+        },
         distance: crate::DistanceStyle::default(),
         angle: crate::AngleStyle::default(),
         magnifier: crate::MagnifierStyle::default(),

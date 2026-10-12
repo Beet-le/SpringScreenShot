@@ -250,6 +250,7 @@ class DistanceValueTextPolicy final : public adqt::widgets::AdInputNumberTextPol
 QVector<QByteArray> styleEditorRoles(ScreenshotToolPalette::Tool tool) {
     using Tool = ScreenshotToolPalette::Tool;
     switch (tool) {
+    case Tool::SpeechBubble:
     case Tool::Shape:
         return {"shape-kind", kRoleOutlineStroke, kRoleOutlineWidth, kRoleShapeFill,
                 kRoleCornerRadius};
@@ -962,6 +963,7 @@ void ScreenshotToolPaletteStyleControls::parkStyleEditors(int tool, QWidget* con
 
     using Tool = ScreenshotToolPalette::Tool;
     switch (static_cast<Tool>(tool)) {
+    case Tool::SpeechBubble:
     case Tool::Shape:
     case Tool::Line:
     case Tool::FreeDraw:
@@ -1050,6 +1052,7 @@ void ScreenshotToolPaletteStyleControls::restoreStyleEditors(int tool, QWidget* 
 
     using Tool = ScreenshotToolPalette::Tool;
     switch (static_cast<Tool>(tool)) {
+    case Tool::SpeechBubble:
     case Tool::Shape:
     case Tool::Line:
     case Tool::FreeDraw:
@@ -1356,13 +1359,14 @@ void ScreenshotToolPaletteStyleControls::stageDestinationStyleEditors(
 
     using Tool = ScreenshotToolPalette::Tool;
     switch (destination) {
+    case Tool::SpeechBubble:
     case Tool::Shape:
     case Tool::Line:
     case Tool::FreeDraw:
         stageComponent(kRoleOutlineStroke, kSignatureStroke, m_shapeStrokeEditor);
         stageComponent(kRoleOutlineWidth, kSignatureStrokeWidth, m_shapeStrokeWidthEditor);
         stageComponent(kRoleShapeFill, kSignatureShapeFill, m_shapeFillEditor);
-        if (destination == Tool::Shape) {
+        if (destination == Tool::Shape || destination == Tool::SpeechBubble) {
             stageWidget(kRoleShapeKind);
             stageWidget(kRoleCornerRadius);
         } else if (destination == Tool::Line) {
@@ -1595,12 +1599,18 @@ ScreenshotToolPaletteShapeFamilyResult ScreenshotToolPaletteStyleControls::build
         return result;
     }
     const auto styleTool = static_cast<ScreenshotToolPalette::Tool>(tool);
-    const bool includeShapeOnlyEditors = styleTool == ScreenshotToolPalette::Tool::Shape;
+    const bool includeShapeOnlyEditors = styleTool == ScreenshotToolPalette::Tool::Shape ||
+                                         styleTool == ScreenshotToolPalette::Tool::SpeechBubble;
+    const auto& buildingStyle = styleTool == ScreenshotToolPalette::Tool::SpeechBubble
+                                    ? m_state.m_speechBubbleStyle
+                                    : m_state.m_rectangleStyle;
     const bool includeLineTypeEditor = styleTool == ScreenshotToolPalette::Tool::Line;
     const QString controlsObjectName = styleTool == ScreenshotToolPalette::Tool::Line
                                            ? QStringLiteral("screenshotLineStyleControls")
                                        : styleTool == ScreenshotToolPalette::Tool::FreeDraw
                                            ? QStringLiteral("screenshotFreeDrawStyleControls")
+                                       : styleTool == ScreenshotToolPalette::Tool::SpeechBubble
+                                           ? QStringLiteral("screenshotSpeechBubbleStyleControls")
                                            : QStringLiteral("screenshotRectangleStyleControls");
     QWidget* controls = createRowWidget(panel, controlsObjectName, host);
     auto* layout = static_cast<QHBoxLayout*>(controls->layout());
@@ -1613,7 +1623,7 @@ ScreenshotToolPaletteShapeFamilyResult ScreenshotToolPaletteStyleControls::build
     strokeConfig.accessibleName = QStringLiteral("Stroke color");
     strokeConfig.popupObjectName = QStringLiteral("screenshotStrokeOptions");
     strokeConfig.styleRowObjectName = QStringLiteral("screenshotStrokeStyles");
-    strokeConfig.colorValues = m_state.m_rectangleStyle.strokeColorValues();
+    strokeConfig.colorValues = buildingStyle.strokeColorValues();
     strokeConfig.presetSource =
         snow_shot::presentation::ScreenshotToolPaletteColorPresetSource::Stroke;
     strokeConfig.colorTooltip = [](const QColor& color) {
@@ -1635,9 +1645,8 @@ ScreenshotToolPaletteShapeFamilyResult ScreenshotToolPaletteStyleControls::build
     } else {
         m_shapeStrokeEditor = std::make_unique<ScreenshotToolPaletteStrokeEditor>();
         m_shapeStrokeEditor->build(
-            layout, controls, controls, strokeConfig, m_state.m_rectangleStyle.strokeColor(),
-            m_state.m_rectangleStyle.strokeStyle(),
-            [this](const QColor& color) { setStrokeColor(color); },
+            layout, controls, controls, strokeConfig, buildingStyle.strokeColor(),
+            buildingStyle.strokeStyle(), [this](const QColor& color) { setStrokeColor(color); },
             [this](SnowCanvasStrokeStyle style) { setStrokeStyle(style); }, editorServices(),
             metrics);
     }
@@ -1665,7 +1674,7 @@ ScreenshotToolPaletteShapeFamilyResult ScreenshotToolPaletteStyleControls::build
     } else {
         m_shapeStrokeWidthEditor = std::make_unique<ScreenshotToolPaletteNumericPresetEditor>();
         m_shapeStrokeWidthEditor->build(
-            layout, controls, controls, strokeWidthConfig, m_state.m_rectangleStyle.strokeWidth(),
+            layout, controls, controls, strokeWidthConfig, buildingStyle.strokeWidth(),
             [this]() { cycleStrokeWidth(); }, [this](double value) { setStrokeWidth(value); },
             metrics);
     }
@@ -1716,7 +1725,7 @@ ScreenshotToolPaletteShapeFamilyResult ScreenshotToolPaletteStyleControls::build
     fillConfig.accessibleName = QStringLiteral("Fill color");
     fillConfig.popupObjectName = QStringLiteral("screenshotFillOptions");
     fillConfig.presetRowObjectName = QStringLiteral("screenshotFillColorPresets");
-    fillConfig.colorValues = m_state.m_rectangleStyle.fillColorValues();
+    fillConfig.colorValues = buildingStyle.fillColorValues();
     fillConfig.presetSource = snow_shot::presentation::ScreenshotToolPaletteColorPresetSource::Fill;
     fillConfig.colorTooltip = [](const QColor& color) {
         return color.alpha() == 0
@@ -1738,16 +1747,15 @@ ScreenshotToolPaletteShapeFamilyResult ScreenshotToolPaletteStyleControls::build
     } else {
         m_shapeFillEditor = std::make_unique<ScreenshotToolPaletteFillEditor>();
         m_shapeFillEditor->build(
-            layout, controls, controls, fillConfig, m_state.m_rectangleStyle.fillColor(),
-            m_state.m_rectangleStyle.fillStyle(),
-            [this](const QColor& color) { setFillColor(color); },
+            layout, controls, controls, fillConfig, buildingStyle.fillColor(),
+            buildingStyle.fillStyle(), [this](const QColor& color) { setFillColor(color); },
             [this](SnowCanvasFillStyle style) { setFillStyle(style); }, editorServices(), metrics);
     }
     tagEditor(m_shapeFillEditor.get(), kRoleShapeFill, kSignatureShapeFill);
     registerEditor(m_shapeFillEditor.get());
 
     if (includeShapeOnlyEditors) {
-        buildCornerRadiusEditor(controls, m_state.m_rectangleStyle.cornerRadius(), host, metrics);
+        buildCornerRadiusEditor(controls, buildingStyle.cornerRadius(), host, metrics);
     }
 
     registerShapeEntries();
@@ -1963,7 +1971,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildArrowFamily(
                 [this, start](int value) {
                     setArrowhead(start, static_cast<SnowCanvasArrowhead>(value));
                 },
-                metrics);
+                editorServices(), metrics);
         }
         registerEditor(editor.get());
         return editor;
@@ -1992,7 +2000,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildArrowFamily(
         m_arrowShaftEditor = std::make_unique<ScreenshotToolPaletteIconOptionEditor>();
         m_arrowShaftEditor->build(layout, controls, controls, shaftConfig,
                                   static_cast<int>(m_state.m_arrowStyle.arrowShaftType),
-                                  changeShaft, metrics);
+                                  changeShaft, editorServices(), metrics);
     }
     registerEditor(m_arrowShaftEditor.get());
     m_endArrowheadEditor =
@@ -2383,7 +2391,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildMagnifierFamily(
         m_magnifierLeaderEditor = std::make_unique<ScreenshotToolPaletteIconOptionEditor>();
         m_magnifierLeaderEditor->build(layout, controls, controls, leaderConfig,
                                        static_cast<int>(m_state.magnifierStyle.leaderArrowhead),
-                                       setArrowhead, metrics);
+                                       setArrowhead, editorServices(), metrics);
     }
     tagEditor(m_magnifierLeaderEditor.get(), kRoleMagnifierArrowhead, kSignatureArrowhead);
     m_magnifierLeaderEditor->rootWidget()->setObjectName(
@@ -2897,7 +2905,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildDistanceFamily(
         m_distanceEndpointEditor = std::make_unique<ScreenshotToolPaletteIconOptionEditor>();
         m_distanceEndpointEditor->build(layout, controls, controls, endpointConfig,
                                         static_cast<int>(m_state.distanceStyle.endpointStyle),
-                                        setEndpoint, metrics);
+                                        setEndpoint, editorServices(), metrics);
     }
     tagEditor(m_distanceEndpointEditor.get(), kRoleDistanceEndpoint, kSignatureArrowhead);
     registerEditor(m_distanceEndpointEditor.get());
@@ -3271,6 +3279,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildTextFamily(
     alignmentConfig.accessibleName = QStringLiteral("Text alignment");
     alignmentConfig.triggerTooltip = QStringLiteral("Text alignment");
     alignmentConfig.minimizeTitleWidth = true;
+    alignmentConfig.observePopup = true;
     const struct AlignmentOption {
         SnowCanvasTextHorizontalAlign value;
         ScreenshotToolPaletteTranslationText tooltip;
@@ -3300,7 +3309,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildTextFamily(
             [this](int value) {
                 setTextHorizontalAlign(static_cast<SnowCanvasTextHorizontalAlign>(value));
             },
-            metrics);
+            editorServices(), metrics);
     }
     registerEditor(m_textAlignmentEditor.get());
     tagEditor(m_textAlignmentEditor.get(), kRoleTextAlignment, kSignatureTextAlignment);
@@ -4888,6 +4897,7 @@ void ScreenshotToolPaletteStyleControls::releaseControlBindings() {
     m_state.distanceControlsActive = false;
     m_state.angleControlsActive = false;
     m_state.m_lineControlsActive = false;
+    m_state.m_speechBubbleControlsActive = false;
     m_state.m_freeDrawControlsActive = false;
     m_state.m_highlightControlsActive = false;
     m_state.m_penHighlightControlsActive = false;
@@ -4985,8 +4995,8 @@ void ScreenshotToolPaletteStyleControls::discardBindingsExcept(int destinationTo
     releaseControlCallbacksExcept(destinationControls);
     using Tool = ScreenshotToolPalette::Tool;
     const Tool destination = static_cast<Tool>(destinationTool);
-    const bool keepShape =
-        destination == Tool::Shape || destination == Tool::Line || destination == Tool::FreeDraw;
+    const bool keepShape = destination == Tool::Shape || destination == Tool::SpeechBubble ||
+                           destination == Tool::Line || destination == Tool::FreeDraw;
     const bool keepArrow = destination == Tool::Arrow;
     const bool keepDistance = destination == Tool::Distance;
     const bool keepAngle = destination == Tool::Angle;
@@ -5049,11 +5059,11 @@ void ScreenshotToolPaletteStyleControls::discardBindingsExcept(int destinationTo
     resetUnless(keepWatermark, m_watermarkFontEditor);
     m_parkedEditors.clear();
 
-    if (destination != Tool::Shape) {
+    if (destination != Tool::Shape && destination != Tool::SpeechBubble) {
         m_shapeControlsContainer = nullptr;
         m_shapeButtonGroup = nullptr;
     }
-    if (destination != Tool::Shape && !keepSpotlight) {
+    if (destination != Tool::Shape && destination != Tool::SpeechBubble && !keepSpotlight) {
         m_cornerRadiusEditor = nullptr;
     }
     if (!keepSpotlight) {
@@ -5199,6 +5209,13 @@ void ScreenshotToolPaletteStyleControls::setArrowControlsActive(bool active) {
     m_state.m_arrowControlsActive = active;
 }
 
+void ScreenshotToolPaletteStyleControls::setSpeechBubbleControlsActive(bool active) {
+    if (m_state.m_speechBubbleControlsActive == active)
+        return;
+    m_state.m_speechBubbleControlsActive = active;
+    updateRectangleStyleControls();
+}
+
 void ScreenshotToolPaletteStyleControls::setLineControlsActive(bool active) {
     if (m_state.m_lineControlsActive == active) {
         return;
@@ -5277,6 +5294,8 @@ void ScreenshotToolPaletteStyleControls::clearTextStylePopupInteractions() {
             picker->setPopupVisible(false);
         } else if (auto* select = qobject_cast<adqt::widgets::AdSelect*>(popup)) {
             select->setPopupVisible(false);
+        } else if (auto* popover = qobject_cast<adqt::widgets::AdPopover*>(popup)) {
+            popover->hide();
         }
     }
     if (m_openTextStylePopups.isEmpty()) {
@@ -5356,7 +5375,7 @@ bool ScreenshotToolPaletteStyleControls::handleCornerRadiusWheel(const QPoint& g
 
     const int current = m_spotlightShapeButtonGroup != nullptr
                             ? qRound(m_state.spotlightCornerRadii.topLeft)
-                            : m_state.m_rectangleStyle.cornerRadius();
+                            : activeShapeStyle().cornerRadius();
     setCornerRadius(current + (direction > 0 ? 1 : -1));
     return true;
 }
@@ -5475,38 +5494,43 @@ SnowCanvasShapeStyle ScreenshotToolPaletteStyleControls::rectangleStyle() const 
 }
 
 ScreenshotToolPaletteRectangleStyleModel& ScreenshotToolPaletteStyleControls::activeShapeStyle() {
-    return m_state.m_highlightControlsActive  ? m_state.m_highlightStyle
-           : m_state.m_freeDrawControlsActive ? m_state.m_freeDrawStyle
-           : m_state.m_lineControlsActive     ? m_state.m_lineStyle
-                                              : m_state.m_rectangleStyle;
+    return m_state.m_highlightControlsActive      ? m_state.m_highlightStyle
+           : m_state.m_freeDrawControlsActive     ? m_state.m_freeDrawStyle
+           : m_state.m_lineControlsActive         ? m_state.m_lineStyle
+           : m_state.m_speechBubbleControlsActive ? m_state.m_speechBubbleStyle
+                                                  : m_state.m_rectangleStyle;
 }
 
 const ScreenshotToolPaletteRectangleStyleModel&
 ScreenshotToolPaletteStyleControls::activeShapeStyle() const {
-    return m_state.m_highlightControlsActive  ? m_state.m_highlightStyle
-           : m_state.m_freeDrawControlsActive ? m_state.m_freeDrawStyle
-           : m_state.m_lineControlsActive     ? m_state.m_lineStyle
-                                              : m_state.m_rectangleStyle;
+    return m_state.m_highlightControlsActive      ? m_state.m_highlightStyle
+           : m_state.m_freeDrawControlsActive     ? m_state.m_freeDrawStyle
+           : m_state.m_lineControlsActive         ? m_state.m_lineStyle
+           : m_state.m_speechBubbleControlsActive ? m_state.m_speechBubbleStyle
+                                                  : m_state.m_rectangleStyle;
 }
 
 ScreenshotToolPaletteRectangleStyleModel&
 ScreenshotToolPaletteStyleControls::activeCreationShapeStyle() {
-    return m_state.m_highlightControlsActive  ? m_state.m_creationHighlightStyle
-           : m_state.m_freeDrawControlsActive ? m_state.m_creationFreeDrawStyle
-           : m_state.m_lineControlsActive     ? m_state.m_creationLineStyle
-                                              : m_state.m_creationRectangleStyle;
+    return m_state.m_highlightControlsActive      ? m_state.m_creationHighlightStyle
+           : m_state.m_freeDrawControlsActive     ? m_state.m_creationFreeDrawStyle
+           : m_state.m_lineControlsActive         ? m_state.m_creationLineStyle
+           : m_state.m_speechBubbleControlsActive ? m_state.m_creationSpeechBubbleStyle
+                                                  : m_state.m_creationRectangleStyle;
 }
 
 SnowCanvasShapeKind ScreenshotToolPaletteStyleControls::activeShapeKind() const {
-    return m_state.m_highlightControlsActive  ? SnowCanvasShapeKind::RectangleHighlight
-           : m_state.m_freeDrawControlsActive ? SnowCanvasShapeKind::FreeDraw
-           : m_state.m_lineControlsActive     ? SnowCanvasShapeKind::Line
-                                              : SnowCanvasShapeKind::Rectangle;
+    return m_state.m_highlightControlsActive      ? SnowCanvasShapeKind::RectangleHighlight
+           : m_state.m_freeDrawControlsActive     ? SnowCanvasShapeKind::FreeDraw
+           : m_state.m_lineControlsActive         ? SnowCanvasShapeKind::Line
+           : m_state.m_speechBubbleControlsActive ? SnowCanvasShapeKind::SpeechBubble
+                                                  : SnowCanvasShapeKind::Rectangle;
 }
 
 SnowCanvasStyleDefaults ScreenshotToolPaletteStyleControls::creationStyleDefaults() const {
     SnowCanvasStyleDefaults defaults = m_defaults;
     defaults.rectangle = m_state.m_creationRectangleStyle.rectangleStyle();
+    defaults.speechBubble = m_state.m_creationSpeechBubbleStyle.rectangleStyle();
     defaults.line = m_state.m_creationLineStyle.rectangleStyle();
     defaults.freeDraw = m_state.m_creationFreeDrawStyle.rectangleStyle();
     defaults.rectangleHighlight = m_state.m_creationHighlightStyle.rectangleStyle();
@@ -5546,6 +5570,7 @@ void ScreenshotToolPaletteStyleControls::rememberStyleEdit(const SnowCanvasStyle
     }
     const ScreenshotToolPaletteStyleState remembered(defaults);
     m_state.m_creationRectangleStyle = remembered.m_creationRectangleStyle;
+    m_state.m_creationSpeechBubbleStyle = remembered.m_creationSpeechBubbleStyle;
     m_state.m_creationLineStyle = remembered.m_creationLineStyle;
     m_state.m_creationFreeDrawStyle = remembered.m_creationFreeDrawStyle;
     m_state.m_creationHighlightStyle = remembered.m_creationHighlightStyle;
@@ -5953,26 +5978,25 @@ void ScreenshotToolPaletteStyleControls::setCornerRadius(int cornerRadius) {
         return;
     }
     const bool wasMixed = hasMixedProperty(SnowCanvasShapeStylePropertyCornerRadius);
-    if (!m_state.m_rectangleStyle.setCornerRadius(cornerRadius) && !wasMixed) {
+    if (!activeShapeStyle().setCornerRadius(cornerRadius) && !wasMixed) {
         return;
     }
 
     clearMixedProperties(SnowCanvasShapeStylePropertyCornerRadius);
     updateRectangleStyleControls();
-    notifyShapeStyleChanged(m_state.m_rectangleStyle.rectangleStyle(),
-                            SnowCanvasShapeStylePropertyCornerRadius,
-                            SnowCanvasShapeKind::Rectangle);
+    notifyShapeStyleChanged(activeShapeStyle().rectangleStyle(),
+                            SnowCanvasShapeStylePropertyCornerRadius, activeShapeKind());
 }
 
 void ScreenshotToolPaletteStyleControls::setShape(SnowCanvasRectangleShape shape) {
     const bool wasMixed = hasMixedProperty(SnowCanvasShapeStylePropertyShape);
-    if (!m_state.m_rectangleStyle.setShape(shape) && !wasMixed) {
+    if (!activeShapeStyle().setShape(shape) && !wasMixed) {
         return;
     }
     clearMixedProperties(SnowCanvasShapeStylePropertyShape);
     updateRectangleStyleControls();
-    notifyShapeStyleChanged(m_state.m_rectangleStyle.rectangleStyle(),
-                            SnowCanvasShapeStylePropertyShape, SnowCanvasShapeKind::Rectangle);
+    notifyShapeStyleChanged(activeShapeStyle().rectangleStyle(), SnowCanvasShapeStylePropertyShape,
+                            activeShapeKind());
 }
 
 void ScreenshotToolPaletteStyleControls::updateSpotlightShapeControls() {
@@ -7119,26 +7143,32 @@ void ScreenshotToolPaletteStyleControls::setStyleToolbarState(
     const bool highlightStyleSource =
         state.source == SnowCanvasStyleToolbarSource::DefaultRectangleHighlight ||
         state.source == SnowCanvasStyleToolbarSource::SelectedRectangleHighlight;
+    const bool speechBubbleStyleSource =
+        state.source == SnowCanvasStyleToolbarSource::DefaultSpeechBubble ||
+        state.source == SnowCanvasStyleToolbarSource::SelectedSpeechBubble;
     const bool rectangleStyleSource =
         state.source == SnowCanvasStyleToolbarSource::DefaultRectangle ||
         state.source == SnowCanvasStyleToolbarSource::SelectedRectangle;
-    if (!rectangleStyleSource && !lineStyleSource && !freeDrawStyleSource &&
-        !highlightStyleSource) {
+    if (!rectangleStyleSource && !speechBubbleStyleSource && !lineStyleSource &&
+        !freeDrawStyleSource && !highlightStyleSource) {
         return;
     }
     const bool selectedShape =
+        state.source == SnowCanvasStyleToolbarSource::SelectedSpeechBubble ||
         state.source == SnowCanvasStyleToolbarSource::SelectedRectangle ||
         state.source == SnowCanvasStyleToolbarSource::SelectedLine ||
         state.source == SnowCanvasStyleToolbarSource::SelectedFreeDraw ||
         state.source == SnowCanvasStyleToolbarSource::SelectedRectangleHighlight;
-    auto& displayedModel = highlightStyleSource  ? m_state.m_highlightStyle
-                           : freeDrawStyleSource ? m_state.m_freeDrawStyle
-                           : lineStyleSource     ? m_state.m_lineStyle
-                                                 : m_state.m_rectangleStyle;
-    auto& creationModel = highlightStyleSource  ? m_state.m_creationHighlightStyle
-                          : freeDrawStyleSource ? m_state.m_creationFreeDrawStyle
-                          : lineStyleSource     ? m_state.m_creationLineStyle
-                                                : m_state.m_creationRectangleStyle;
+    auto& displayedModel = highlightStyleSource      ? m_state.m_highlightStyle
+                           : freeDrawStyleSource     ? m_state.m_freeDrawStyle
+                           : lineStyleSource         ? m_state.m_lineStyle
+                           : speechBubbleStyleSource ? m_state.m_speechBubbleStyle
+                                                     : m_state.m_rectangleStyle;
+    auto& creationModel = highlightStyleSource      ? m_state.m_creationHighlightStyle
+                          : freeDrawStyleSource     ? m_state.m_creationFreeDrawStyle
+                          : lineStyleSource         ? m_state.m_creationLineStyle
+                          : speechBubbleStyleSource ? m_state.m_creationSpeechBubbleStyle
+                                                    : m_state.m_creationRectangleStyle;
     SnowCanvasShapeStyle displayedStyle = state.shapeStyle;
     if (lineStyleSource && displayedStyle.arrowType != SnowCanvasArrowType::Straight &&
         displayedStyle.arrowType != SnowCanvasArrowType::Curve) {
@@ -7164,6 +7194,7 @@ void ScreenshotToolPaletteStyleControls::setStyleToolbarState(
         return;
     }
     m_state.m_lineControlsActive = lineStyleSource;
+    m_state.m_speechBubbleControlsActive = speechBubbleStyleSource;
     m_state.m_freeDrawControlsActive = freeDrawStyleSource;
     m_state.m_highlightControlsActive = highlightStyleSource;
     m_state.m_showingSelectedStyle = selectedShape;

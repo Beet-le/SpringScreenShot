@@ -231,6 +231,7 @@ SequenceNumberSolidSquare(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ToolRectangle(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ToolSelect(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ToolSerialNumber(const adqt::icons::IconColors& colors = {});
+[[nodiscard]] adqt::icons::IconRef ToolSpeechBubble(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ToolSpotlight(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ToolText(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ToolWatermark(const adqt::icons::IconColors& colors = {});

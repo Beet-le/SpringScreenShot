@@ -813,6 +813,42 @@ QTransform canvasToViewTransform(const snow_canvas_render_geometry::ViewProjecti
     return transform;
 }
 
+void drawSpeechBubbleItem(QPainter& painter, const SceneDisplayInfo& displayInfo,
+                          const SnowCanvasSceneItem& item) {
+    const auto projection = snow_canvas_render_geometry::sceneProjection(displayInfo);
+    QPainterPath fallback;
+    const QPainterPath* path = &item.aggregateClosedPath();
+    if (path->isEmpty()) {
+        auto identity = projection;
+        identity.cameraZoom = 1.0;
+        identity.cameraCenterX = identity.cameraCenterY = 0.0;
+        identity.surfaceWidth = identity.surfaceHeight = 0.0;
+        fallback = arrowPathFromCommands(identity, item.arrow_path_commands,
+                                         item.arrow_path_command_count);
+        path = &fallback;
+    }
+    if (path->isEmpty()) {
+        return;
+    }
+    painter.save();
+    painter.setWorldTransform(canvasToViewTransform(projection), true);
+    painter.setOpacity(qBound(0.0, item.opacity, 1.0));
+    if (item.fill.a != 0) {
+        painter.setPen(Qt::NoPen);
+        snow_canvas_fill_render::drawStyledFill(painter, *path, item.fill, item.fill_style,
+                                                item.stroke_width);
+    }
+    if (item.stroke.a != 0 && item.stroke_width > 0.0) {
+        QPen pen(toQColor(item.stroke), item.stroke_width);
+        applyRectangleStrokeStyle(pen, item.stroke_style);
+        pen.setJoinStyle(Qt::RoundJoin);
+        painter.setPen(pen);
+        painter.setBrush(Qt::NoBrush);
+        painter.drawPath(*path);
+    }
+    painter.restore();
+}
+
 QRectF viewRectToCanvas(const snow_canvas_render_geometry::ViewProjection& view,
                         const QRectF& rect) {
     const QPointF topLeft = snow_canvas_render_geometry::viewToCanvas(view, rect.topLeft());
@@ -1092,6 +1128,9 @@ void drawSceneItem(QPainter& painter, const SceneDisplayInfo& displayInfo,
     case SNOW_SCENE_DISPLAY_ITEM_DRAW_RECT:
         drawRectItem(painter, displayInfo, item);
         break;
+    case SNOW_SCENE_DISPLAY_ITEM_SPEECH_BUBBLE:
+        drawSpeechBubbleItem(painter, displayInfo, item);
+        break;
     case SNOW_SCENE_DISPLAY_ITEM_ARROW:
         drawArrowItem(painter, displayInfo, item);
         break;
@@ -1166,6 +1205,20 @@ void drawOverlayRectItem(QPainter& painter, const OverlayDisplayInfo& displayInf
     const double height = item.height * zoom;
     const double strokeWidth = item.stroke_width * zoom;
 
+    if (item.rect_kind == SNOW_OVERLAY_RECT_SPEECH_BUBBLE_ADD_TAIL_HANDLE) {
+        painter.save();
+        painter.translate(center);
+        painter.rotate(item.rotation * kRadiansToDegrees);
+        painter.setPen(QPen(toQColor(item.stroke), strokeWidth));
+        painter.setBrush(toQColor(item.fill));
+        painter.drawEllipse(QRectF(-width / 2.0, -height / 2.0, width, height));
+        const double half = qMin(width, height) * 0.25;
+        painter.drawLine(QPointF(-half, 0.0), QPointF(half, 0.0));
+        painter.drawLine(QPointF(0.0, -half), QPointF(0.0, half));
+        painter.restore();
+        return;
+    }
+
     if (item.rect_kind == SNOW_OVERLAY_RECT_TEXT_HOVER_UNDERLINE) {
         if (item.stroke.a == 0 || width <= 0.0 || strokeWidth <= 0.0) {
             return;
@@ -1200,7 +1253,9 @@ void drawOverlayRectItem(QPainter& painter, const OverlayDisplayInfo& displayInf
     const QRectF localRect(-width / 2.0, -height / 2.0, width, height);
     const bool isArrowHandle = item.rect_kind == SNOW_OVERLAY_RECT_ARROW_ENDPOINT_HANDLE ||
                                item.rect_kind == SNOW_OVERLAY_RECT_ARROW_FOCUS_HANDLE ||
-                               item.rect_kind == SNOW_OVERLAY_RECT_ARROW_SEGMENT_HANDLE;
+                               item.rect_kind == SNOW_OVERLAY_RECT_ARROW_SEGMENT_HANDLE ||
+                               item.rect_kind == SNOW_OVERLAY_RECT_SPEECH_BUBBLE_TAIL_BASE_HANDLE ||
+                               item.rect_kind == SNOW_OVERLAY_RECT_SPEECH_BUBBLE_TAIL_TIP_HANDLE;
     const bool isEraserCursor = item.rect_kind == SNOW_OVERLAY_RECT_ERASER_CURSOR;
     if (isArrowHandle || isEraserCursor) {
         painter.setBrush(fillBrushForStyle(item.fill, item.fill_style));
@@ -1218,6 +1273,12 @@ void drawOverlayRectItem(QPainter& painter, const OverlayDisplayInfo& displayInf
 
 void drawOverlayRectItem(QPainter& painter, const OverlayDisplayInfo& displayInfo,
                          const SnowCanvasOverlayItem& item) {
+    if (item.rect_kind == SNOW_OVERLAY_RECT_SPEECH_BUBBLE_ADD_TAIL_HANDLE ||
+        item.rect_kind == SNOW_OVERLAY_RECT_SPEECH_BUBBLE_TAIL_BASE_HANDLE ||
+        item.rect_kind == SNOW_OVERLAY_RECT_SPEECH_BUBBLE_TAIL_TIP_HANDLE) {
+        drawOverlayRectItem(painter, displayInfo, static_cast<const SnowOverlayDisplayItem&>(item));
+        return;
+    }
     if (drawMagnifierMoveHandle(painter, displayInfo, item))
         return;
     const auto projection = snow_canvas_render_geometry::overlayProjection(displayInfo);

@@ -1570,6 +1570,7 @@ fn serial_connector_tracks_ink_committed_with_edited_label() {
         .expect("committed serial label must render a connector");
 
     let measured_paint = TextPaintGeometry {
+        text_ink_reserve: 0.0,
         center,
         width: 220.0,
         height: 60.0,

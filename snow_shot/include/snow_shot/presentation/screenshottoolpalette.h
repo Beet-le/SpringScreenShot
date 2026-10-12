@@ -101,6 +101,7 @@ class ScreenshotToolPalette final : public QWidget,
         Distance,
         Angle,
         Magnifier,
+        SpeechBubble,
     };
 
     enum class MoveToolPresentation {
@@ -232,6 +233,7 @@ class ScreenshotToolPalette final : public QWidget,
         MoveToolPresentation moveToolPresentation = MoveToolPresentation::EditSelection;
         bool showSelectTool = true;
         bool showShapeTool = true;
+        bool showSpeechBubbleTool = true;
         bool showArrowTool = true;
         bool showDistanceTool = true;
         bool showAngleTool = true;
@@ -482,6 +484,7 @@ class ScreenshotToolPalette final : public QWidget,
     void selectRequested();
     void recordingExportSettingsVisibleChanged(bool visible);
     void shapeRequested();
+    void speechBubbleRequested();
     void arrowRequested();
     void distanceToolRequested();
     void angleToolRequested();
@@ -869,6 +872,7 @@ class ScreenshotToolPalette final : public QWidget,
     QBoxLayout* m_recordExportSettingsLayout = nullptr;
     QVector<QBoxLayout*> m_styleControlLayouts;
     QWidget* m_rectangleStyleControlsWidget = nullptr;
+    QWidget* m_speechBubbleStyleControlsWidget = nullptr;
     QWidget* m_moveActionControls = nullptr;
     QPointer<adqt::widgets::AdRadioButtonGroup> m_selectionDisplayUnitGroup;
     QWidget* m_lineStyleControlsWidget = nullptr;
@@ -904,6 +908,7 @@ class ScreenshotToolPalette final : public QWidget,
     adqt::widgets::AdButton* m_redoButton = nullptr;
     adqt::widgets::AdButton* m_selectButton = nullptr;
     adqt::widgets::AdButton* m_shapeButton = nullptr;
+    adqt::widgets::AdButton* m_speechBubbleButton = nullptr;
     adqt::widgets::AdButton* m_arrowButton = nullptr;
     adqt::widgets::AdButton* m_distanceButton = nullptr;
     adqt::widgets::AdButton* m_angleButton = nullptr;

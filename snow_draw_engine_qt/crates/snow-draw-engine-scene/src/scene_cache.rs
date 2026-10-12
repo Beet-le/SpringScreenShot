@@ -278,6 +278,10 @@ impl DocumentSceneCache {
                     .element_bounds(id)
                     .unwrap_or_else(|_| free_draw_bounds(free_draw)),
             }),
+            ElementData::SpeechBubble(value) => Some(CachedSceneEntry {
+                item: crate::item_conversions::scene_item_from_speech_bubble(id, value),
+                bounds: snow_draw_engine_document::speech_bubble_bounds(value),
+            }),
             ElementData::Magnifier(value) => Some(CachedSceneEntry {
                 item: crate::item_conversions::scene_item_from_magnifier(id, *value),
                 bounds: snow_draw_engine_document::magnifier_bounds(value),

@@ -61,6 +61,84 @@ std::uint64_t NaturalTextLayoutCache::measurementCount() const {
     return m_measurementCount;
 }
 
+BubbleTextLayoutCache::BubbleTextLayoutCache(int maximumBytes)
+    : m_graphemes(maximumBytes / 2), m_wrapped(maximumBytes / 2) {}
+
+namespace {
+QByteArray bubbleLayoutKey(const QString& text, const QFont& baseFont,
+                           const SnowSceneDisplayItem& item, std::optional<double> width) {
+    const auto resolution = snow_canvas_text_layout::resolveFont(baseFont, item, 1.0);
+    QByteArray key;
+    QDataStream stream(&key, QIODevice::WriteOnly);
+    stream << text << resolution.font << resolution.scale;
+    if (width.has_value()) {
+        stream << *width << static_cast<quint32>(item.text_horizontal_align);
+    }
+    return key;
+}
+
+snow_canvas_text_layout::GraphemeMetrics
+withBubbleDecorationReserve(snow_canvas_text_layout::GraphemeMetrics metrics,
+                            const SnowSceneDisplayItem& item) {
+    if (item.stroke.a != 0) {
+        metrics.inkReserve += qMax(0.0, item.stroke_width) / 2.0;
+    }
+    if (item.fill.a != 0) {
+        const auto outset = snow_scene_text_fill_outset(&item);
+        metrics.inkReserve = qMax(metrics.inkReserve, qMax(outset.x, outset.y));
+    }
+    return metrics;
+}
+} // namespace
+
+snow_canvas_text_layout::GraphemeMetrics
+BubbleTextLayoutCache::graphemes(const QString& text, const QFont& baseFont,
+                                 const SnowSceneDisplayItem& item) {
+    const QByteArray key = bubbleLayoutKey(text, baseFont, item, std::nullopt);
+    if (const auto* cached = m_graphemes.object(key)) {
+        return withBubbleDecorationReserve(*cached, item);
+    }
+    const auto measured = snow_canvas_text_layout::measureGraphemeMetrics(text, baseFont, item);
+    ++m_measurementCount;
+    const qsizetype cost = key.size() + static_cast<qsizetype>(sizeof(measured));
+    if (cost <= m_graphemes.maxCost()) {
+        m_graphemes.insert(key, new snow_canvas_text_layout::GraphemeMetrics(measured),
+                           static_cast<int>(cost));
+    }
+    return withBubbleDecorationReserve(measured, item);
+}
+
+snow_canvas_text_layout::TextMeasuredLayout
+BubbleTextLayoutCache::wrapped(const QString& text, const QFont& baseFont,
+                               const SnowSceneDisplayItem& item, double width) {
+    const QByteArray key = bubbleLayoutKey(text, baseFont, item, width);
+    if (const auto* cached = m_wrapped.object(key)) {
+        return *cached;
+    }
+    const auto measured =
+        snow_canvas_text_layout::measureWrappedTextLayout(text, baseFont, item, width);
+    ++m_measurementCount;
+    const qsizetype cost = key.size() + static_cast<qsizetype>(sizeof(measured));
+    if (cost <= m_wrapped.maxCost()) {
+        m_wrapped.insert(key, new snow_canvas_text_layout::TextMeasuredLayout(measured),
+                         static_cast<int>(cost));
+    }
+    return measured;
+}
+
+void BubbleTextLayoutCache::clear() {
+    m_graphemes.clear();
+    m_wrapped.clear();
+}
+
+qsizetype BubbleTextLayoutCache::retainedBytes() const {
+    return m_graphemes.totalCost() + m_wrapped.totalCost();
+}
+
+std::uint64_t BubbleTextLayoutCache::measurementCount() const {
+    return m_measurementCount;
+}
+
 TextLayoutOverrideMeasurement
 measureSelectedAutoResizeLayoutOverrides(const SelectedTextLayoutMeasurementRequest& request) {
     TextLayoutOverrideMeasurement result;
@@ -148,6 +226,11 @@ TextLayoutOverrideMeasurement measureAutoResizeLayoutOverrides(
         if ((properties & SNOW_TEXT_STYLE_MIXED_ITALIC) != 0) {
             typographyChanged |= item.text_italic != style.italic;
             item.text_italic = style.italic;
+        }
+        if (snow_canvas_element_id::hasElementId(info.bubble_id)) {
+            // Bubble metrics run after the style mutation, using the owner's final
+            // width and grapheme minimum rather than standalone auto-size policy.
+            continue;
         }
         const auto maximumWidth =
             !snow_canvas_element_id::hasElementId(info.arrow_id)

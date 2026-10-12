@@ -273,7 +273,9 @@ impl Editor {
         };
         let highlight = self.state.active_tool == ActiveTool::RectangleHighlight;
         let spotlight = self.state.active_tool == ActiveTool::Spotlight;
-        let style = if highlight {
+        let style = if self.state.active_tool == ActiveTool::SpeechBubble {
+            self.state.default_speech_bubble_style
+        } else if highlight {
             self.state
                 .default_rectangle_highlight_style
                 .rectangle_shape_style()

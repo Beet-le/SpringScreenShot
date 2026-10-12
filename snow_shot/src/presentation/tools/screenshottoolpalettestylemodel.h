@@ -105,6 +105,8 @@ struct ScreenshotToolPaletteStyleState {
 
     ScreenshotToolPaletteRectangleStyleModel m_creationRectangleStyle;
     ScreenshotToolPaletteRectangleStyleModel m_rectangleStyle;
+    ScreenshotToolPaletteRectangleStyleModel m_creationSpeechBubbleStyle;
+    ScreenshotToolPaletteRectangleStyleModel m_speechBubbleStyle;
     ScreenshotToolPaletteRectangleStyleModel m_creationLineStyle;
     ScreenshotToolPaletteRectangleStyleModel m_lineStyle;
     ScreenshotToolPaletteRectangleStyleModel m_creationFreeDrawStyle;
@@ -152,6 +154,7 @@ struct ScreenshotToolPaletteStyleState {
     quint32 spotlightShapeMixed = 0;
     bool m_arrowControlsActive = false;
     bool m_lineControlsActive = false;
+    bool m_speechBubbleControlsActive = false;
     bool m_freeDrawControlsActive = false;
     bool m_highlightControlsActive = false;
     bool m_penHighlightControlsActive = false;

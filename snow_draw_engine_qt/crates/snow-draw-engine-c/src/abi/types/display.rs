@@ -13,6 +13,7 @@ pub enum SnowSceneDisplayItemKind {
     SerialNumberConnector = 7,
     Filter = 8,
     Magnifier = 9,
+    SpeechBubble = 10,
 }
 
 snow_c_enum! {
@@ -193,6 +194,7 @@ pub struct SnowSceneDisplayItem {
     pub font_family_utf8_len: u32,
     pub font_family_utf8: *const std::ffi::c_char,
     pub magnifier: SnowMagnifierGeometry,
+    pub text_ink_reserve: f64,
 }
 
 #[repr(C)]
@@ -224,6 +226,9 @@ pub enum SnowOverlayRectKind {
     BindingHighlight = 14,
     MagnifierMoveHandle = 15,
     MagnifierSelectionFrame = 16,
+    SpeechBubbleAddTailHandle = 17,
+    SpeechBubbleTailBaseHandle = 18,
+    SpeechBubbleTailTipHandle = 19,
 }
 
 #[repr(C)]
@@ -355,6 +360,7 @@ impl Default for SnowSceneDisplayItem {
             font_family_utf8_len: 0,
             font_family_utf8: std::ptr::null(),
             magnifier: SnowMagnifierGeometry::default(),
+            text_ink_reserve: 0.0,
         }
     }
 }

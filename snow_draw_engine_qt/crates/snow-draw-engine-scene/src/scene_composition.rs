@@ -41,6 +41,16 @@ pub(crate) fn compose_scene_items(
         .cloned()
         .map(|preview| (preview.id, preview.arrow))
         .collect();
+    let preview_bubbles: HashMap<_, _> = presentation
+        .speech_bubble_previews
+        .iter()
+        .map(|(id, bubble)| (*id, bubble))
+        .collect();
+    let preview_bubble_texts: HashMap<_, _> = presentation
+        .speech_bubble_text_previews
+        .iter()
+        .map(|(id, text)| (*id, text))
+        .collect();
     let mut emitted_preview_ids = HashMap::<ElementId, bool>::new();
     let mut items = Vec::new();
     let serial_connectors = SerialConnectorEmission {
@@ -53,11 +63,22 @@ pub(crate) fn compose_scene_items(
     let mut extra: Vec<_> = preview_rects
         .keys()
         .chain(preview_arrows.keys())
+        .chain(preview_bubbles.keys())
+        .chain(preview_bubble_texts.keys())
         .chain(preview_magnifiers.keys())
         .chain(active_existing_text.iter().map(|(id, _)| id))
         .chain(presentation.free_draw_replacement.iter().map(|(id, _)| id))
         .copied()
-        .filter(|id| model.paint_rank(*id).is_some() && present.insert(*id))
+        .filter(|id| {
+            model.element(*id).is_ok_and(|element| element.meta.visible)
+                && model.speech_bubble_id_for_text(*id).is_none_or(|owner| {
+                    model
+                        .element(owner)
+                        .is_ok_and(|element| element.meta.visible)
+                })
+                && model.paint_rank(*id).is_some()
+                && present.insert(*id)
+        })
         .collect();
     extra.sort_unstable_by_key(|id| model.paint_rank(*id));
     if !extra.is_empty() {
@@ -77,6 +98,26 @@ pub(crate) fn compose_scene_items(
     }
 
     for id in &ordered_ids {
+        if let Some(bubble) = preview_bubbles.get(id) {
+            if bounds_visible(
+                snow_draw_engine_document::speech_bubble_bounds(bubble),
+                viewport,
+            ) {
+                items.push(scene_item_from_speech_bubble(*id, bubble));
+            }
+            emitted_preview_ids.insert(*id, true);
+            continue;
+        }
+        if let Some(text) = preview_bubble_texts.get(id)
+            && active_existing_text
+                .as_ref()
+                .is_none_or(|(active, _)| active != id)
+        {
+            if bounds_visible(text_bounds(text), viewport) {
+                items.push(scene_item_from_text(*id, (*text).clone()));
+            }
+            continue;
+        }
         if let Some((target, preview)) = &presentation.free_draw_replacement
             && id == target
         {
@@ -180,6 +221,9 @@ pub(crate) fn compose_scene_items(
     if let Some(preview) = presentation.creation_preview.as_ref() {
         let id = model.peek_next_element_id();
         match preview {
+            ElementCreationPreview::SpeechBubble(value) => {
+                items.push(scene_item_from_speech_bubble(id, value));
+            }
             ElementCreationPreview::Magnifier(value)
                 if bounds_visible(snow_draw_engine_document::magnifier_bounds(value), viewport) =>
             {
@@ -233,10 +277,28 @@ pub(crate) fn compose_scene_items(
         && active_draft.existing_id().is_none()
         && bounds_visible(text_bounds(&active_draft.text), viewport)
     {
-        items.push(scene_item_from_text(
-            active_draft.display_id(),
-            active_draft.text.clone(),
-        ));
+        let item = scene_item_from_text(active_draft.display_id(), active_draft.text.clone());
+        if let snow_draw_engine_editor::ActiveTextDraftTarget::NewSpeechBubble(owner) =
+            active_draft.target
+        {
+            if model
+                .element(owner)
+                .is_ok_and(|element| element.meta.visible)
+                && let Some(rank) = model.paint_rank(owner)
+            {
+                let position = items
+                    .iter()
+                    .position(|item| {
+                        scene_element_id(item)
+                            .and_then(|id| model.paint_rank(id))
+                            .is_none_or(|item_rank| item_rank > rank)
+                    })
+                    .unwrap_or(items.len());
+                items.insert(position, item);
+            }
+        } else {
+            items.push(item);
+        }
     }
 
     for item in &mut items {
@@ -295,6 +357,16 @@ pub(crate) fn compose_scene_items(
         "serial connectors must paint immediately above their bound text"
     );
     items
+}
+
+fn new_bound_text_draft_owner(
+    draft: &snow_draw_engine_editor::ActiveTextDraftPresentation,
+) -> Option<ElementId> {
+    match draft.target {
+        snow_draw_engine_editor::ActiveTextDraftTarget::NewArrow(owner)
+        | snow_draw_engine_editor::ActiveTextDraftTarget::NewSpeechBubble(owner) => Some(owner),
+        _ => None,
+    }
 }
 
 pub(crate) fn compose_scene_render_plan(
@@ -357,7 +429,7 @@ pub(crate) fn compose_scene_render_plan(
             effect: None,
             smart_erase: false,
         };
-        if let snow_draw_engine_editor::ActiveTextDraftTarget::NewArrow(owner) = draft.target {
+        if let Some(owner) = new_bound_text_draft_owner(draft) {
             model
                 .element(owner)
                 .is_ok_and(|element| element.meta.visible)
@@ -375,12 +447,8 @@ pub(crate) fn compose_scene_render_plan(
             || presentation
                 .active_text_draft
                 .as_ref()
-                .is_some_and(|draft| {
-                    let snow_draw_engine_editor::ActiveTextDraftTarget::NewArrow(owner) =
-                        draft.target
-                    else {
-                        return false;
-                    };
+                .and_then(new_bound_text_draft_owner)
+                .is_some_and(|owner| {
                     cache
                         .order_plan
                         .node(owner)
@@ -536,6 +604,9 @@ pub(crate) fn duplicate_preview_scene(
                 ElementData::SerialNumber(serial) => {
                     serial.text_element_id = serial.text_element_id.and_then(local_id);
                 }
+                ElementData::SpeechBubble(bubble) => {
+                    bubble.text_element_id = bubble.text_element_id.and_then(local_id);
+                }
                 _ => {}
             }
             compact.push(Operation::InsertElement {
@@ -595,6 +666,13 @@ fn remap_copy_display_ids(item: &mut SceneDisplayItem, ids: &[ElementId]) {
             remap(&mut item.lens.id);
             if let Some(leader) = &mut item.leader {
                 remap(&mut leader.id);
+            }
+        }
+        SceneDisplayItem::SpeechBubble(item) => {
+            remap(&mut item.body.id);
+            remap(&mut item.path.id);
+            if let Some(id) = &mut item.path.bound_text_id {
+                remap(id);
             }
         }
         SceneDisplayItem::Rectangle(item) => remap(&mut item.id),
@@ -801,6 +879,7 @@ fn scene_element_id(item: &SceneDisplayItem) -> Option<ElementId> {
         SceneDisplayItem::Arrow(item) => item.id,
         SceneDisplayItem::Text(item) => item.id,
         SceneDisplayItem::Magnifier(item) => item.lens.id,
+        SceneDisplayItem::SpeechBubble(item) => item.body.id,
         SceneDisplayItem::Rectangle(item) => item.id,
         SceneDisplayItem::Filter(item) => item.id,
         SceneDisplayItem::Stroke | SceneDisplayItem::Image => return None,

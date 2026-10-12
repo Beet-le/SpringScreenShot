@@ -6,6 +6,8 @@ mod auto_filter_workflow;
 pub use arrow_text::ArrowTextLayoutRequest;
 mod creation_workflow;
 pub use creation_workflow::SerialNumberLabelLayoutRequest;
+mod speech_bubble;
+pub use speech_bubble::*;
 mod magnifier;
 pub use magnifier::*;
 mod angle;
@@ -155,6 +157,11 @@ pub struct Editor {
     overlay_state_revision: u64,
     pending_command: Option<EditorCommand>,
     magnifier_wheel: Option<magnifier::MagnifierWheelAccumulator>,
+    speech_bubble_tail_drag: Option<speech_bubble::SpeechBubbleTailDrag>,
+    speech_bubble_text_cache: std::cell::RefCell<speech_bubble::SpeechBubbleTextCache>,
+    speech_bubble_layouts:
+        std::collections::HashMap<ElementId, speech_bubble::SpeechBubbleTextMeasurement>,
+    speech_bubble_draft_geometry: Option<(ElementId, snow_draw_engine_document::SpeechBubbleData)>,
     captured_pointer: Option<u32>,
     pending_capture_release: bool,
 }
@@ -175,6 +182,10 @@ impl Editor {
             overlay_state_revision: 0,
             pending_command: None,
             magnifier_wheel: None,
+            speech_bubble_tail_drag: None,
+            speech_bubble_text_cache: Default::default(),
+            speech_bubble_layouts: Default::default(),
+            speech_bubble_draft_geometry: None,
             captured_pointer: None,
             pending_capture_release: false,
         })
@@ -336,6 +347,9 @@ impl Editor {
         // reconciliation immediately, and retain a release command for the next input output.
         self.pending_capture_release |= self.captured_pointer.take().is_some();
         self.magnifier_wheel = None;
+        if self.speech_bubble_tail_drag.take().is_some() {
+            self.bump_scene_state_revision();
+        }
         self.state.ui.free_draw_hover_position = None;
         self.state.pending_text_edit = None;
         self.state.pending_new_text_draft = false;

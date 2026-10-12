@@ -66,6 +66,7 @@ pub fn validate_rectangle(rect: &RectangleData) -> Result<(), ErrorCode> {
 pub fn validate_element_data(data: &ElementData) -> Result<(), ErrorCode> {
     match data {
         ElementData::Rectangle(rect) => validate_rectangle(rect),
+        ElementData::SpeechBubble(value) => crate::validate_speech_bubble(value),
         ElementData::Magnifier(value) => crate::validate_magnifier(value),
         ElementData::Filter(filter) => validate_filter(filter),
         ElementData::PenFilter(filter) => validate_pen_filter(filter),
@@ -125,6 +126,7 @@ impl Default for TextData {
             layout: TextLayoutSize::new(1.0, 36.0),
             rotation: 0.0,
             text: String::new(),
+            text_ink_reserve: 0.0,
             color: ColorRgba8 {
                 r: 0xf4,
                 g: 0x21,
@@ -372,6 +374,7 @@ pub struct TextPaintGeometry {
     pub fill: ColorRgba8,
     pub stroke: ColorRgba8,
     pub stroke_width: f64,
+    pub text_ink_reserve: f64,
 }
 
 impl TextPaintGeometry {
@@ -391,6 +394,7 @@ impl TextPaintGeometry {
             fill: text.fill,
             stroke: text.stroke,
             stroke_width: text.stroke_width,
+            text_ink_reserve: text.text_ink_reserve,
         }
     }
 }
@@ -629,8 +633,8 @@ pub fn text_paint_outset(text: &TextPaintGeometry) -> (f64, f64) {
     };
     let (fill_outset_x, fill_outset_y) = text_fill_outset(text);
     (
-        stroke_outset.max(fill_outset_x),
-        stroke_outset.max(fill_outset_y),
+        stroke_outset.max(fill_outset_x) + text.text_ink_reserve.max(0.0),
+        stroke_outset.max(fill_outset_y) + text.text_ink_reserve.max(0.0),
     )
 }
 
@@ -804,7 +808,7 @@ pub fn text_hit_test(text: &TextData, point: Point<f64>, hit_tolerance: f64) -> 
     if width <= 0.0 || height <= 0.0 {
         return false;
     }
-    let tolerance = hit_tolerance.max(0.0);
+    let tolerance = hit_tolerance.max(0.0) + text.text_ink_reserve.max(0.0);
     let local = canvas_to_rect_local(text.center, text.rotation, point);
     local.x >= -width / 2.0 - tolerance
         && local.x <= width / 2.0 + tolerance
@@ -862,6 +866,7 @@ pub fn validate_text(text: &TextData) -> Result<(), ErrorCode> {
         text.corner_radii.bottom_right,
         text.corner_radii.bottom_left,
         text.opacity,
+        text.text_ink_reserve,
     ];
     if scalar_fields.iter().any(|value| !value.is_finite()) {
         return Err(ErrorCode::InvalidArgument);
@@ -876,6 +881,7 @@ pub fn validate_text(text: &TextData) -> Result<(), ErrorCode> {
         || text.corner_radii.bottom_left < 0.0
         || text.opacity < 0.0
         || text.opacity > 1.0
+        || text.text_ink_reserve < 0.0
     {
         return Err(ErrorCode::InvalidArgument);
     }
@@ -1365,6 +1371,7 @@ mod tests {
             rotation: 0.0,
             content_width: width,
             content_height: height,
+            text_ink_reserve: 0.0,
             horizontal_align: TextHorizontalAlign::Center,
             vertical_align: TextVerticalAlign::Center,
             has_text: true,

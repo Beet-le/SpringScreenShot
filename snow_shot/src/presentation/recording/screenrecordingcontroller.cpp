@@ -777,6 +777,9 @@ struct ScreenRecordingController::Impl {
         };
         snow_shot::presentation::recording::connectScreenRecordingSelection(
             palette, *areaWindow, *uiSession->connections);
+        QObject::connect(&palette, &ScreenshotToolPalette::speechBubbleRequested,
+                         uiSession->connections.get(),
+                         [activate]() { activate(SnowCanvasTool::SpeechBubble); });
         QObject::connect(&palette, &ScreenshotToolPalette::shapeRequested,
                          uiSession->connections.get(),
                          [activate]() { activate(SnowCanvasTool::Shape); });

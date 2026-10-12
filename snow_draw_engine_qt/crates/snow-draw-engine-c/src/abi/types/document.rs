@@ -96,6 +96,9 @@ pub struct SnowTextCommitDraft {
     pub reserved1: u32,
     pub measured_layout: SnowTextLayoutSize,
     pub style: SnowTextStyle,
+    pub bubble_id: SnowElementId,
+    pub minimum_grapheme_width: f64,
+    pub text_ink_reserve: f64,
 }
 
 impl Default for SnowTextCommitDraft {
@@ -103,6 +106,9 @@ impl Default for SnowTextCommitDraft {
         Self {
             element_id: SnowElementId::default(),
             arrow_id: SnowElementId::default(),
+            bubble_id: SnowElementId::default(),
+            minimum_grapheme_width: 0.0,
+            text_ink_reserve: 0.0,
             has_existing_element: 0,
             auto_resize: 0,
             update_default_style: 0,
@@ -138,6 +144,9 @@ pub struct SnowActiveTextDraftPresentation {
     pub text_utf8_len: u32,
     pub reserved1: u32,
     pub style: SnowTextStyle,
+    pub bubble_id: SnowElementId,
+    pub minimum_grapheme_width: f64,
+    pub text_ink_reserve: f64,
 }
 
 impl Default for SnowActiveTextDraftPresentation {
@@ -145,6 +154,9 @@ impl Default for SnowActiveTextDraftPresentation {
         Self {
             element_id: SnowElementId::default(),
             arrow_id: SnowElementId::default(),
+            bubble_id: SnowElementId::default(),
+            minimum_grapheme_width: 0.0,
+            text_ink_reserve: 0.0,
             has_existing_element: 0,
             auto_resize: 0,
             reserved0: [0; 6],
@@ -193,6 +205,14 @@ pub struct SnowTextElementInfo {
     pub italic: u8,
     pub reserved1: [u8; 1],
     pub font_family_utf8: [std::ffi::c_char; SNOW_FONT_FAMILY_UTF8_CAPACITY],
+    pub bubble_id: SnowElementId,
+    pub minimum_grapheme_width: f64,
+    pub text_ink_reserve: f64,
+    pub bubble_body_width: f64,
+    pub bubble_body_height: f64,
+    pub bubble_shape: SnowRectangleShape,
+    pub bubble_stroke_width: f64,
+    pub bubble_corner_radii: SnowCornerRadii,
 }
 
 impl Default for SnowTextElementInfo {
@@ -200,7 +220,15 @@ impl Default for SnowTextElementInfo {
         Self {
             id: SnowElementId::default(),
             arrow_id: SnowElementId::default(),
+            bubble_id: SnowElementId::default(),
+            minimum_grapheme_width: 0.0,
+            text_ink_reserve: 0.0,
             arrow_width: 0.0,
+            bubble_body_width: 0.0,
+            bubble_body_height: 0.0,
+            bubble_shape: SnowRectangleShape::Rectangle,
+            bubble_stroke_width: 0.0,
+            bubble_corner_radii: SnowCornerRadii::default(),
             center_x: 0.0,
             center_y: 0.0,
             width: 0.0,

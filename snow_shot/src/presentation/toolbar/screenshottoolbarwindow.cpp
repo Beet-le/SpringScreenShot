@@ -23,6 +23,7 @@ ScreenshotToolPalette::Options screenshotToolbarOptions() {
     options.enableMoveOptionsToolbar = true;
     options.showSelectTool = true;
     options.showShapeTool = true;
+    options.showSpeechBubbleTool = true;
     options.showArrowTool = true;
     options.showLineTool = true;
     options.showDistanceTool = true;
@@ -188,6 +189,10 @@ void ScreenshotToolbarWindow::connectToolCommands(ScreenshotToolPalette& toolPal
     connect(&toolPalette, &ScreenshotToolPalette::selectRequested, this, [this]() {
         m_commands.setSelectTool();
         setActiveToolAndReposition(ScreenshotToolPalette::Tool::Select);
+    });
+    connect(&toolPalette, &ScreenshotToolPalette::speechBubbleRequested, this, [this]() {
+        m_commands.setSpeechBubbleTool();
+        setActiveToolAndReposition(ScreenshotToolPalette::Tool::SpeechBubble);
     });
     connect(&toolPalette, &ScreenshotToolPalette::shapeRequested, this, [this]() {
         m_commands.setShapeTool();

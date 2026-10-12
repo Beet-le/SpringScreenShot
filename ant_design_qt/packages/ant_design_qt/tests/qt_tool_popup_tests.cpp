@@ -128,6 +128,8 @@ class QtToolPopupTest final : public QObject {
   void popoverFactoryAllowsOwnerDeletion();
   void popoverShowGuardAllowsOwnerDeletion();
   void popoverVisibilityObserverAllowsOwnerDeletion();
+  void popoverOpeningPrecedesSurfaceVisibility();
+  void popoverOpeningObserverAllowsOwnerDeletion();
   void popoverShowEventAllowsOwnerDeletion();
   void popoverPropertyObserversAllowOwnerDeletion();
   void recreateLifetimeStillDestroysPopupSurface();
@@ -1386,6 +1388,58 @@ void QtToolPopupTest::popoverVisibilityObserverAllowsOwnerDeletion() {
     QTest::mouseClick(&trigger, Qt::LeftButton);
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
   }
+}
+
+void QtToolPopupTest::popoverOpeningPrecedesSurfaceVisibility() {
+  for (auto layer : {AdPopover::PopupLayerMode::InWindow, AdPopover::PopupLayerMode::QtTool}) {
+    QWidget host;
+    host.resize(640, 360);
+    QPushButton trigger(QStringLiteral("Open"), &host);
+    trigger.setGeometry(24, 24, 100, 32);
+    AdPopover popover;
+    popover.setSourceWidget(&trigger);
+    popover.setTriggers(AdPopover::Trigger::Click);
+    popover.setPopupLayerMode(layer);
+    popover.setText(QStringLiteral("Alignment options"));
+    QStringList transitions;
+    connect(&popover, &AdPopover::popupOpening, &host, [&] {
+      QVERIFY(!popover.surfaceWidget() || !popover.surfaceWidget()->isVisible());
+      transitions.append(QStringLiteral("opening"));
+    });
+    connect(&popover, &AdPopover::visibleChanged, &host, [&](bool visible) {
+      transitions.append(visible ? QStringLiteral("visible") : QStringLiteral("hidden"));
+    });
+    host.show();
+    popover.preparePopup();
+    QVERIFY(transitions.isEmpty());
+    popover.show();
+    QCOMPARE(transitions, QStringList({QStringLiteral("opening"), QStringLiteral("visible")}));
+    popover.show();
+    popover.refreshPopupLayout();
+    QCOMPARE(transitions.size(), 2);
+    popover.hide();
+    transitions.clear();
+    QTest::mouseClick(&trigger, Qt::LeftButton);
+    QCOMPARE(transitions, QStringList({QStringLiteral("opening"), QStringLiteral("visible")}));
+    popover.hide();
+    QCOMPARE(transitions.last(), QStringLiteral("hidden"));
+  }
+}
+
+void QtToolPopupTest::popoverOpeningObserverAllowsOwnerDeletion() {
+  QWidget host;
+  host.resize(640, 360);
+  QPushButton trigger(QStringLiteral("Open"), &host);
+  trigger.setGeometry(24, 24, 100, 32);
+  QPointer<AdPopover> popover = new AdPopover;
+  popover->setSourceWidget(&trigger);
+  popover->setText(QStringLiteral("Observed popup"));
+  connect(popover, &AdPopover::popupOpening, &host, [&] { delete popover.data(); });
+  host.show();
+  popover->show();
+  QVERIFY(popover.isNull());
+  QTest::mouseClick(&trigger, Qt::LeftButton);
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 }
 
 void QtToolPopupTest::popoverShowEventAllowsOwnerDeletion() {

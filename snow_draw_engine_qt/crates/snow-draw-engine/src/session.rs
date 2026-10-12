@@ -5,12 +5,13 @@ use snow_draw_engine_editor::PersistedEditorSession;
 use snow_draw_engine_model::DocumentModel;
 
 use crate::engine::EngineConfig as RuntimeEngineConfig;
+use crate::persistence::{DrawingPayloadKind, deserialize_drawing};
 use crate::{Engine, history::HistoryStore};
 
 // Persisted counters became authoritative for badge creation in version 9.
 const SERIAL_NUMBER_COUNTERS_SESSION_SCHEMA_VERSION: u32 = 9;
-pub const DOCUMENT_SESSION_SCHEMA_VERSION: u32 = 12;
-pub const DOCUMENT_HISTORY_SCHEMA_VERSION: u32 = 8;
+pub const DOCUMENT_SESSION_SCHEMA_VERSION: u32 = 13;
+pub const DOCUMENT_HISTORY_SCHEMA_VERSION: u32 = 9;
 pub const MAX_DOCUMENT_SESSION_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Serialize, Deserialize)]
@@ -119,11 +120,7 @@ impl Engine {
         bytes: &[u8],
         config: RuntimeEngineConfig,
     ) -> Result<Self, ErrorCode> {
-        if bytes.is_empty() || bytes.len() > MAX_DOCUMENT_SESSION_BYTES {
-            return Err(ErrorCode::InvalidArgument);
-        }
-        let mut session: DocumentSession =
-            serde_json::from_slice(bytes).map_err(|_| ErrorCode::InvalidArgument)?;
+        let mut session: DocumentSession = deserialize_drawing(bytes, DrawingPayloadKind::Session)?;
         if !(1..=DOCUMENT_SESSION_SCHEMA_VERSION).contains(&session.schema_version) {
             return Err(ErrorCode::Unsupported);
         }
@@ -166,11 +163,7 @@ impl Engine {
         bytes: &[u8],
         config: RuntimeEngineConfig,
     ) -> Result<Self, ErrorCode> {
-        if bytes.is_empty() || bytes.len() > MAX_DOCUMENT_SESSION_BYTES {
-            return Err(ErrorCode::InvalidArgument);
-        }
-        let mut history: DocumentHistory =
-            serde_json::from_slice(bytes).map_err(|_| ErrorCode::InvalidArgument)?;
+        let mut history: DocumentHistory = deserialize_drawing(bytes, DrawingPayloadKind::History)?;
         if !(1..=DOCUMENT_HISTORY_SCHEMA_VERSION).contains(&history.schema_version) {
             return Err(ErrorCode::Unsupported);
         }
@@ -198,6 +191,7 @@ impl Engine {
             Self::from_serialized_document_history_with_config(bytes, self.config.clone())?;
         self.model = replacement.model;
         self.history = replacement.history;
+        self.speech_bubble_layout_origin = None;
         self.editor.reset_editing_state();
         self.editor
             .advance_serial_number_counters_for_insertions(&self.model, self.model.paint_order());
@@ -697,6 +691,50 @@ mod tests {
             assert!(restored.watermark_config().template_value.is_empty());
             assert_eq!(restored.watermark_config().template_application_time, None);
         }
+    }
+
+    #[test]
+    fn speech_bubble_session_requires_persisted_style() {
+        let mut config = RuntimeEngineConfig::default();
+        config.style_defaults.editor.speech_bubble.stroke_width = 7.0;
+        let source = Engine::new(config);
+        let session: serde_json::Value =
+            serde_json::from_slice(&source.serialize_document_session().unwrap()).unwrap();
+        let history: serde_json::Value =
+            serde_json::from_slice(&source.serialize_document_history().unwrap()).unwrap();
+        assert_eq!(session["schemaVersion"], 13);
+        assert_eq!(history["schemaVersion"], 9);
+
+        let restored =
+            Engine::from_serialized_document_session(&serde_json::to_vec(&session).unwrap())
+                .unwrap();
+        let restored_session: serde_json::Value =
+            serde_json::from_slice(&restored.serialize_document_session().unwrap()).unwrap();
+        assert_eq!(restored_session["schemaVersion"], 13);
+        assert_eq!(
+            restored_session["editor"]["speechBubble"],
+            session["editor"]["speechBubble"]
+        );
+        assert!(!restored_session["editor"]["speechBubble"].is_null());
+
+        let mut missing_style = session;
+        missing_style["editor"]
+            .as_object_mut()
+            .unwrap()
+            .remove("speechBubble");
+        assert_eq!(
+            Engine::from_serialized_document_session(&serde_json::to_vec(&missing_style).unwrap())
+                .unwrap_err(),
+            ErrorCode::InvalidArgument
+        );
+
+        let restored =
+            Engine::from_serialized_document_history(&serde_json::to_vec(&history).unwrap())
+                .unwrap();
+        let restored_history: serde_json::Value =
+            serde_json::from_slice(&restored.serialize_document_history().unwrap()).unwrap();
+        assert_eq!(restored_history["schemaVersion"], 9);
+        assert!(restored.model.paint_order().is_empty());
     }
 
     #[test]

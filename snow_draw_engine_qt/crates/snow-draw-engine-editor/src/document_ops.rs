@@ -36,6 +36,14 @@ pub(crate) fn append_selection_element_update(
     single_text_resize: bool,
     measured_resize: Option<MeasuredTextResize>,
 ) -> Result<(), ErrorCode> {
+    if let Ok(value) = document.speech_bubble(preview.id) {
+        let next =
+            snow_draw_engine_document::speech_bubble_with_selection_rect(value, preview.rect);
+        if next != *value {
+            transaction.update_speech_bubble(preview.id, next);
+        }
+        return Ok(());
+    }
     if let Ok(value) = document.magnifier(preview.id) {
         let next = value.translated(Point::new(
             preview.rect.center.x - value.source_center.x,
@@ -163,6 +171,11 @@ pub(crate) fn append_delete_dependencies(
         {
             delete_ids.push(text_id);
         }
+        if let Some(text_id) = document.bound_text_id_for_speech_bubble(id)
+            && !delete_ids.contains(&text_id)
+        {
+            delete_ids.push(text_id);
+        }
         if let Some(text_id) = document.bound_text_id_for_arrow(id)
             && !delete_ids.contains(&text_id)
         {
@@ -171,6 +184,14 @@ pub(crate) fn append_delete_dependencies(
     }
 
     for id in ids {
+        if let Some(owner) = document.speech_bubble_id_for_text(*id)
+            && !delete_ids.contains(&owner)
+            && let Ok(value) = document.speech_bubble(owner)
+        {
+            let mut bubble = value.clone();
+            bubble.text_element_id = None;
+            transaction.update_speech_bubble(owner, bubble);
+        }
         if let Some(arrow_id) = document.arrow_id_for_text(*id)
             && !delete_ids.contains(&arrow_id)
             && let Ok(arrow) = document.arrow(arrow_id)
@@ -218,6 +239,11 @@ pub(crate) fn expanded_duplicate_ids(
         {
             ids.push(text_id);
         }
+        if let Some(text_id) = document.bound_text_id_for_speech_bubble(id)
+            && !ids.contains(&text_id)
+        {
+            ids.push(text_id);
+        }
         if let Some(text_id) = document.bound_text_id_for_arrow(id)
             && !ids.contains(&text_id)
         {
@@ -244,6 +270,7 @@ pub(crate) fn duplicate_selection_transaction(
     document: &DocumentModel,
     selected_ids: &[ElementId],
     offset: Point<f64>,
+    data_overrides: &HashMap<ElementId, ElementData>,
 ) -> Result<(Transaction, Vec<ElementId>), ErrorCode> {
     let ids = expanded_duplicate_ids(document, selected_ids);
     if ids.is_empty() {
@@ -257,13 +284,22 @@ pub(crate) fn duplicate_selection_transaction(
             continue;
         };
         let element = document.element(id)?;
-        match &element.data {
+        match data_overrides.get(&id).unwrap_or(&element.data) {
             ElementData::Rectangle(rect) => {
                 let mut duplicate = *rect;
                 duplicate.center.x += offset.x;
                 duplicate.center.y += offset.y;
                 validate_rectangle(&duplicate)?;
                 transaction.insert_rectangle(new_id, element.meta, duplicate);
+            }
+            ElementData::SpeechBubble(value) => {
+                let mut bubble = value.clone();
+                bubble.body.center.x += offset.x;
+                bubble.body.center.y += offset.y;
+                bubble.text_element_id = value
+                    .text_element_id
+                    .and_then(|id| id_map.get(&id).copied());
+                transaction.insert_speech_bubble(new_id, element.meta, bubble);
             }
             ElementData::Magnifier(value) => {
                 transaction.insert_magnifier(new_id, element.meta, value.translated(offset));
@@ -614,6 +650,8 @@ impl Editor {
             let Ok(text) = document.text(*id) else {
                 continue;
             };
+            let bubble_text = self.speech_bubble_text_display_snapshot(document, *id);
+            let text = bubble_text.as_ref().unwrap_or(text);
             if text_hit_test(text, point, hit_tolerance) {
                 return Some(*id);
             }
@@ -693,11 +731,26 @@ impl Editor {
             .map(|rect| rect.rotation);
         let text_is_empty = draft.text_is_empty();
         let existing_id = draft.existing_id();
+        let bubble_id = match draft.target {
+            crate::TextCommitTarget::NewSpeechBubble(id) => Some(id),
+            crate::TextCommitTarget::Existing(id) => document.speech_bubble_id_for_text(id),
+            _ => None,
+        };
         let arrow_id = match draft.target {
             crate::TextCommitTarget::NewArrow(id) => Some(id),
             crate::TextCommitTarget::Existing(id) => document.arrow_id_for_text(id),
-            crate::TextCommitTarget::New => None,
+            crate::TextCommitTarget::New | crate::TextCommitTarget::NewSpeechBubble(_) => None,
         };
+        if let Some(id) = bubble_id {
+            let bubble = document.speech_bubble(id)?;
+            let meta = document.element(id)?.meta;
+            if meta.locked
+                || !meta.visible
+                || (existing_id.is_none() && bubble.text_element_id.is_some())
+            {
+                return Err(ErrorCode::InvalidState);
+            }
+        }
         if let Some(id) = arrow_id {
             let arrow = document.arrow(id)?;
             if arrow.linear_kind != snow_draw_engine_document::LinearElementKind::Arrow
@@ -709,8 +762,32 @@ impl Editor {
             }
         }
         if existing_id.is_none() && text_is_empty {
+            let history_undo_snapshot = self.capture_document_sync_snapshot(document);
+            let mut transaction = Transaction::new("resize speech bubble");
+            if let Some(owner) = bubble_id {
+                if let Some((_, value)) = self
+                    .speech_bubble_draft_geometry
+                    .as_ref()
+                    .filter(|(id, _)| *id == owner)
+                {
+                    let mut value = value.clone();
+                    value.text_element_id = None;
+                    if *document.speech_bubble(owner)? != value {
+                        transaction.update_speech_bubble(owner, value);
+                    }
+                }
+                self.set_selection_state_with_document(Some(document), vec![owner], Some(owner));
+            }
             self.clear_active_text_draft_presentation();
-            return Ok(None);
+            if transaction.is_empty() {
+                return Ok(None);
+            }
+            return Ok(Some(EditorCommand::ApplyTransaction(
+                ApplyTransactionCommand::with_history_undo_snapshot(
+                    transaction,
+                    history_undo_snapshot,
+                ),
+            )));
         }
 
         let history_undo_snapshot = self.capture_document_sync_snapshot(document);
@@ -728,6 +805,15 @@ impl Editor {
             } else {
                 let current = document.text(id)?.clone();
                 let mut updated = text_with_committed_draft(&current, &draft)?;
+                if let Some(owner) = bubble_id {
+                    self.fit_speech_bubble_draft(
+                        document,
+                        owner,
+                        &mut updated,
+                        draft.minimum_grapheme_width,
+                        draft.text_ink_reserve,
+                    )?;
+                }
                 if let Some(rotation) = active_text_rotation {
                     updated.rotation = rotation;
                 }
@@ -737,7 +823,16 @@ impl Editor {
                 }
             }
         } else {
-            let updated = text_with_committed_draft(&self.state.default_text, &draft)?;
+            let mut updated = text_with_committed_draft(&self.state.default_text, &draft)?;
+            if let Some(owner) = bubble_id {
+                self.fit_speech_bubble_draft(
+                    document,
+                    owner,
+                    &mut updated,
+                    draft.minimum_grapheme_width,
+                    draft.text_ink_reserve,
+                )?;
+            }
             validate_text(&updated)?;
             transaction.insert_text(
                 document.peek_next_element_id(),
@@ -751,12 +846,26 @@ impl Editor {
             }
         }
 
+        if let Some(owner) = bubble_id {
+            let mut bubble = self
+                .speech_bubble_draft_geometry
+                .as_ref()
+                .filter(|(id, _)| *id == owner)
+                .map(|(_, v)| v.clone())
+                .unwrap_or(document.speech_bubble(owner)?.clone());
+            if text_is_empty {
+                bubble.text_element_id = None;
+            } else if existing_id.is_none() {
+                bubble.text_element_id = Some(document.peek_next_element_id());
+            }
+            transaction.update_speech_bubble(owner, bubble);
+        }
         self.clear_active_text_draft_presentation();
         if draft.update_default_style && !text_is_empty {
             self.state.default_text =
                 text_with_style_attributes(&self.state.default_text, &draft.style);
         }
-        if let Some(id) = arrow_id {
+        if let Some(id) = arrow_id.or(bubble_id) {
             self.set_selection_state_with_document(Some(document), vec![id], Some(id));
         } else {
             self.clear_selection();
@@ -789,6 +898,29 @@ impl Editor {
         )))
     }
 
+    pub(crate) fn duplicate_selection_transaction(
+        &self,
+        document: &DocumentModel,
+        offset: Point<f64>,
+    ) -> Result<(Transaction, Vec<ElementId>), ErrorCode> {
+        let mut overrides = HashMap::new();
+        for id in &self.state.selection.ids {
+            let owner = document.speech_bubble_id_for_text(*id).unwrap_or(*id);
+            if overrides.contains_key(&owner) {
+                continue;
+            }
+            if let Some((bubble, text)) =
+                self.speech_bubble_measured_document_values(document, owner)
+            {
+                if let Some(label) = bubble.text_element_id {
+                    overrides.insert(label, ElementData::Text(text));
+                }
+                overrides.insert(owner, ElementData::SpeechBubble(bubble));
+            }
+        }
+        duplicate_selection_transaction(document, &self.state.selection.ids, offset, &overrides)
+    }
+
     pub fn duplicate_selected(
         &mut self,
         document: &DocumentModel,
@@ -799,7 +931,7 @@ impl Editor {
         }
         let history_undo_snapshot = self.capture_document_sync_snapshot(document);
         let (transaction, next_selection) =
-            duplicate_selection_transaction(document, &self.state.selection.ids, offset)?;
+            self.duplicate_selection_transaction(document, offset)?;
         if transaction.is_empty() {
             return Ok(None);
         }
@@ -1021,6 +1153,11 @@ impl Editor {
                     if updated != *value {
                         transaction.update_rectangle(*id, updated);
                     }
+                }
+                ElementData::SpeechBubble(value) => {
+                    let mut bubble = value.clone();
+                    bubble.body.opacity = opacity;
+                    transaction.update_speech_bubble(*id, bubble);
                 }
                 ElementData::Magnifier(value) => {
                     let mut next = *value;

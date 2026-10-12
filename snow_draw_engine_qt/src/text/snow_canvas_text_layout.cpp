@@ -9,11 +9,13 @@
 #include <QPainter>
 #include <QRawFont>
 #include <QScreen>
+#include <QSet>
 #include <QStringList>
 #include <QTextBlock>
 #include <QTextLayout>
 #include <QTextLine>
 #include <QTextOption>
+#include <QTextBoundaryFinder>
 
 #include <cmath>
 #include <limits>
@@ -345,6 +347,49 @@ double measureMinimumWrappedWidth(const QFont& baseFont, const SnowSceneDisplayI
     return qMax(1.0, viewWidth / safeZoom);
 }
 
+GraphemeMetrics measureGraphemeMetrics(const QString& text, const QFont& baseFont,
+                                       const SnowSceneDisplayItem& item) {
+    const FontResolution resolution = resolveFont(baseFont, item, 1.0);
+    const QFontMetricsF fontMetrics(resolution.font);
+    GraphemeMetrics result;
+    result.minimumWidth = text.isEmpty() ? fontMetrics.horizontalAdvance(QStringLiteral("M"))
+                                         : fontMetrics.horizontalAdvance(QStringLiteral(" "));
+    QTextBoundaryFinder finder(QTextBoundaryFinder::Grapheme, text);
+    QSet<QString> measuredClusters;
+    qsizetype start = 0;
+    while (true) {
+        const qsizetype end = finder.toNextBoundary();
+        if (end < 0) {
+            break;
+        }
+        const QString cluster = text.mid(start, end - start);
+        start = end;
+        if (cluster == QStringLiteral("\n") || cluster == QStringLiteral("\r\n") ||
+            cluster == QStringLiteral("\r")) {
+            continue;
+        }
+        if (measuredClusters.contains(cluster)) {
+            continue;
+        }
+        measuredClusters.insert(cluster);
+        QTextLayout layout(cluster, resolution.font);
+        layout.setTextOption(singleLineTextOption());
+        const QRectF logical = layoutSingleLineText(layout);
+        const QRectF ink = layoutInkBounds(layout);
+        const double advance = logical.width();
+        result.minimumWidth = qMax(result.minimumWidth, qMax(advance, ink.width()));
+        result.inkReserve =
+            qMax(result.inkReserve, qMax(qMax(0.0, -ink.left()), qMax(0.0, ink.right() - advance)));
+        result.inkReserve =
+            qMax(result.inkReserve, qMax(qMax(0.0, logical.top() - ink.top()),
+                                         qMax(0.0, ink.bottom() - logical.bottom())));
+    }
+    result.minimumWidth = qMax(
+        1.0, (result.minimumWidth + autoResizeTextWidthSafety(resolution.font)) * resolution.scale);
+    result.inkReserve = result.inkReserve * resolution.scale + 1.2;
+    return result;
+}
+
 DocumentLayout createDocumentLayout(const SnowSceneDisplayItem& item, const QFont& baseFont,
                                     double zoom, const QString& text, bool substituteEmptyText) {
     DocumentLayout layout;
@@ -352,6 +397,8 @@ DocumentLayout createDocumentLayout(const SnowSceneDisplayItem& item, const QFon
     layout.itemWidth = qMax(1.0, item.width * layout.safeZoom);
     layout.itemHeight = qMax(1.0, item.height * layout.safeZoom);
     layout.resolution = resolveFont(baseFont, item, layout.safeZoom);
+    layout.inkReserve =
+        qMax(0.0, item.text_ink_reserve) * layout.safeZoom / layout.resolution.scale;
     layout.document = std::make_unique<QTextDocument>();
     configureTextDocument(*layout.document, item, layout.resolution.font,
                           layout.itemWidth / layout.resolution.scale, text, substituteEmptyText);
@@ -373,7 +420,8 @@ QTransform documentToViewTransform(const SnowSceneDisplayItem& item, const QPoin
 
 QRectF documentContentsRect(const DocumentLayout& layout) {
     return QRectF(0.0, 0.0, layout.itemWidth / layout.resolution.scale,
-                  layout.textDocument().size().height());
+                  layout.textDocument().size().height())
+        .adjusted(-layout.inkReserve, -layout.inkReserve, layout.inkReserve, layout.inkReserve);
 }
 
 void drawDocument(QPainter& painter, const DocumentLayout& layout, const QColor& textColor) {

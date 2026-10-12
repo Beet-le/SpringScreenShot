@@ -594,6 +594,18 @@ QRectF sceneItemBounds(const SceneDisplayInfo& displayInfo, const SnowSceneDispl
         const double padding = qMax(1.0, item.stroke_width * projection.cameraZoom);
         return bounds.adjusted(-padding, -padding, padding, padding);
     }
+    case SNOW_SCENE_DISPLAY_ITEM_SPEECH_BUBBLE: {
+        const QPainterPath path = arrowPathFromCommands(projection, item.arrow_path_commands,
+                                                        item.arrow_path_command_count);
+        if (path.isEmpty()) {
+            const QPointF center = canvasToView(projection, item.center_x, item.center_y);
+            return rotatedRectBounds(center, item.width * projection.cameraZoom,
+                                     item.height * projection.cameraZoom, item.rotation,
+                                     item.stroke_width * projection.cameraZoom);
+        }
+        const double halfStroke = qMax(0.0, item.stroke_width * projection.cameraZoom) / 2.0;
+        return path.boundingRect().adjusted(-halfStroke, -halfStroke, halfStroke, halfStroke);
+    }
     case SNOW_SCENE_DISPLAY_ITEM_ARROW: {
         const QVector<QPointF> points =
             arrowPointsToView(projection, item.arrow_points, item.arrow_point_count);
@@ -629,7 +641,9 @@ QRectF sceneItemBounds(const SceneDisplayInfo& displayInfo, const SnowSceneDispl
 
 QRectF sceneItemBounds(const SceneDisplayInfo& displayInfo, const SnowCanvasSceneItem& item) {
     QRectF bounds = sceneItemBounds(displayInfo, static_cast<const SnowSceneDisplayItem&>(item));
-    if (item.kind != SNOW_SCENE_DISPLAY_ITEM_ARROW || item.pathChunks().empty()) {
+    if ((item.kind != SNOW_SCENE_DISPLAY_ITEM_ARROW &&
+         item.kind != SNOW_SCENE_DISPLAY_ITEM_SPEECH_BUBBLE) ||
+        item.pathChunks().empty()) {
         return bounds;
     }
 

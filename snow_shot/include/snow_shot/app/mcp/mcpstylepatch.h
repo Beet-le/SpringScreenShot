@@ -54,6 +54,7 @@ inline const QHash<QString, SnowCanvasTool>& mcpCanvasTools() {
     static const QHash<QString, SnowCanvasTool> tools{
         {QStringLiteral("select"), SnowCanvasTool::Select},
         {QStringLiteral("rectangle"), SnowCanvasTool::Shape},
+        {QStringLiteral("speech_bubble"), SnowCanvasTool::SpeechBubble},
         {QStringLiteral("arrow"), SnowCanvasTool::Arrow},
         {QStringLiteral("distance"), SnowCanvasTool::Distance},
         {QStringLiteral("angle"), SnowCanvasTool::Angle},
@@ -169,7 +170,7 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
     else if (target == QStringLiteral("rectangle_filter") || target == QStringLiteral("pen_filter"))
         allowed = {QStringLiteral("filter"), QStringLiteral("strength"), QStringLiteral("opacity"),
                    QStringLiteral("stroke_width")};
-    else if (target == QStringLiteral("rectangle"))
+    else if (target == QStringLiteral("rectangle") || target == QStringLiteral("speech_bubble"))
         allowed = {QStringLiteral("fill"),          QStringLiteral("stroke"),
                    QStringLiteral("stroke_width"),  QStringLiteral("fill_style"),
                    QStringLiteral("stroke_style"),  QStringLiteral("shape"),
@@ -578,16 +579,19 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
         quint32 flags = 0;
         for (auto it = patch.begin(); it != patch.end(); ++it)
             flags |= properties.value(it.key());
-        const QStringList kinds{QStringLiteral("rectangle"),
-                                QStringLiteral("arrow"),
-                                QStringLiteral("line"),
-                                QStringLiteral("freehand"),
-                                QStringLiteral("rectangle_highlight"),
-                                QStringLiteral("pen_highlight")};
-        return dispatch([&] {
-            return commands.setShapeStyleFromToolbar(
-                style, flags, static_cast<SnowCanvasShapeKind>(kinds.indexOf(target)));
-        });
+        const QHash<QString, SnowCanvasShapeKind> kinds{
+            {QStringLiteral("rectangle"), SnowCanvasShapeKind::Rectangle},
+            {QStringLiteral("speech_bubble"), SnowCanvasShapeKind::SpeechBubble},
+            {QStringLiteral("arrow"), SnowCanvasShapeKind::Arrow},
+            {QStringLiteral("line"), SnowCanvasShapeKind::Line},
+            {QStringLiteral("freehand"), SnowCanvasShapeKind::FreeDraw},
+            {QStringLiteral("rectangle_highlight"), SnowCanvasShapeKind::RectangleHighlight},
+            {QStringLiteral("pen_highlight"), SnowCanvasShapeKind::PenHighlight},
+        };
+        if (!kinds.contains(target))
+            return false;
+        return dispatch(
+            [&] { return commands.setShapeStyleFromToolbar(style, flags, kinds.value(target)); });
     }
 }
 } // namespace snow_shot::app::mcp

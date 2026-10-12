@@ -141,6 +141,7 @@ constexpr int TOOLBAR_ITEM_SPACING = 8;
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Resize window"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Select elements"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Shape"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Speech Bubble"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Arrow"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Line"),
     QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Pen"),
@@ -279,7 +280,8 @@ ScreenshotToolPaletteButtonMetrics actionButtonMetrics(qreal physicalScale) {
 }
 
 bool hasSelectedCanvasElements(const SnowCanvasStyleToolbarState& state) {
-    return state.source == SnowCanvasStyleToolbarSource::SelectedRectangle ||
+    return state.source == SnowCanvasStyleToolbarSource::SelectedSpeechBubble ||
+           state.source == SnowCanvasStyleToolbarSource::SelectedRectangle ||
            state.source == SnowCanvasStyleToolbarSource::SelectedArrow ||
            state.source == SnowCanvasStyleToolbarSource::SelectedDistance ||
            state.source == SnowCanvasStyleToolbarSource::SelectedAngle ||
@@ -339,6 +341,7 @@ actionFamilyForTool(ScreenshotToolPalette::Tool tool) {
 bool toolUsesStandardStyleToolbar(ScreenshotToolPalette::Tool tool) {
     switch (tool) {
     case ScreenshotToolPalette::Tool::Shape:
+    case ScreenshotToolPalette::Tool::SpeechBubble:
     case ScreenshotToolPalette::Tool::Arrow:
     case ScreenshotToolPalette::Tool::Distance:
     case ScreenshotToolPalette::Tool::Angle:
@@ -549,6 +552,8 @@ ScreenshotToolPalette::Tool drawingToolFromItem(toolbar_layout::Item item) {
         return ScreenshotToolPalette::Tool::Select;
     case toolbar_layout::Item::Shape:
         return ScreenshotToolPalette::Tool::Shape;
+    case toolbar_layout::Item::SpeechBubble:
+        return ScreenshotToolPalette::Tool::SpeechBubble;
     case toolbar_layout::Item::Arrow:
         return ScreenshotToolPalette::Tool::Arrow;
     case toolbar_layout::Item::Distance:
@@ -591,6 +596,8 @@ QString drawingToolItemId(ScreenshotToolPalette::Tool tool) {
         return QStringLiteral("select");
     case ScreenshotToolPalette::Tool::Shape:
         return QStringLiteral("shape");
+    case ScreenshotToolPalette::Tool::SpeechBubble:
+        return QStringLiteral("speech-bubble");
     case ScreenshotToolPalette::Tool::Arrow:
         return QStringLiteral("arrow");
     case ScreenshotToolPalette::Tool::Distance:
@@ -638,6 +645,9 @@ QString drawingShortcutToolIdForItemId(const QString& itemId) {
     if (itemId == QStringLiteral("shape")) {
         return QStringLiteral("shape");
     }
+    if (itemId == QStringLiteral("speech-bubble")) {
+        return QStringLiteral("speech_bubble");
+    }
     if (itemId == QStringLiteral("arrow")) {
         return QStringLiteral("arrow");
     }
@@ -683,6 +693,9 @@ QString drawingShortcutToolIdForTooltipSource(const QString& source) {
     }
     if (source == QStringLiteral("Select elements")) {
         return QStringLiteral("select");
+    }
+    if (source == QStringLiteral("Speech Bubble")) {
+        return QStringLiteral("speech_bubble");
     }
     if (source == QStringLiteral("Shape")) {
         return QStringLiteral("shape");
@@ -822,12 +835,13 @@ initialToolbarLayout(const ScreenshotToolPalette::Options& options) {
         return toolbar_layout::normalizedLayout(*options.toolbarLayout);
     }
     const bool hasDrawingTools =
-        options.showShapeTool || options.showArrowTool || options.showDistanceTool ||
-        options.showAngleTool || options.showLineTool || options.showFreeDrawTool ||
-        options.showHighlightTool || options.showRectangleHighlightTool ||
-        options.showPenHighlightTool || options.showSpotlightTool || options.showMagnifierTool ||
-        options.showTextTool || options.showSerialNumberTool || options.showFilterTool ||
-        options.showEraserTool || options.showWatermarkTool;
+        options.showShapeTool || options.showSpeechBubbleTool || options.showArrowTool ||
+        options.showDistanceTool || options.showAngleTool || options.showLineTool ||
+        options.showFreeDrawTool || options.showHighlightTool ||
+        options.showRectangleHighlightTool || options.showPenHighlightTool ||
+        options.showSpotlightTool || options.showMagnifierTool || options.showTextTool ||
+        options.showSerialNumberTool || options.showFilterTool || options.showEraserTool ||
+        options.showWatermarkTool;
     return hasDrawingTools ? std::optional(toolbar_layout::normalizedLayout(
                                  snow_shot::storage::ScreenshotToolbarLayout{}))
                            : std::nullopt;
@@ -1982,6 +1996,7 @@ void ScreenshotToolPalette::setActiveTool(Tool tool) {
         activeButton = drawingToolEntryButton(tool);
         break;
     case Tool::Shape:
+    case Tool::SpeechBubble:
         activeButton = drawingToolEntryButton(tool);
         break;
     case Tool::Arrow:
@@ -3160,7 +3175,8 @@ void ScreenshotToolPalette::setStyleToolbarState(const SnowCanvasStyleToolbarSta
         } else if (state.source == SnowCanvasStyleToolbarSource::SelectedSerialNumber) {
             opacity = state.serialNumberStyle.opacity;
             mixed = (state.serialNumberStyleMixed & SnowCanvasSerialNumberStyleMixedOpacity) != 0;
-        } else if (state.source == SnowCanvasStyleToolbarSource::SelectedRectangle ||
+        } else if (state.source == SnowCanvasStyleToolbarSource::SelectedSpeechBubble ||
+                   state.source == SnowCanvasStyleToolbarSource::SelectedRectangle ||
                    state.source == SnowCanvasStyleToolbarSource::SelectedArrow ||
                    state.source == SnowCanvasStyleToolbarSource::SelectedDistance ||
                    state.source == SnowCanvasStyleToolbarSource::SelectedAngle ||
@@ -3206,6 +3222,9 @@ void ScreenshotToolPalette::setStyleToolbarState(const SnowCanvasStyleToolbarSta
     } else if (state.source == SnowCanvasStyleToolbarSource::DefaultSerialNumber ||
                state.source == SnowCanvasStyleToolbarSource::SelectedSerialNumber) {
         activeStyleTool = Tool::SerialNumber;
+    } else if (state.source == SnowCanvasStyleToolbarSource::DefaultSpeechBubble ||
+               state.source == SnowCanvasStyleToolbarSource::SelectedSpeechBubble) {
+        activeStyleTool = Tool::SpeechBubble;
     } else if (state.source == SnowCanvasStyleToolbarSource::DefaultRectangle ||
                state.source == SnowCanvasStyleToolbarSource::SelectedRectangle) {
         activeStyleTool = Tool::Shape;
@@ -3478,12 +3497,12 @@ QSize ScreenshotToolPalette::maximumSecondaryToolbarSizeHint() const {
 
     QSize controlsSize;
     const QWidget* controlGroups[] = {
-        m_rectangleStyleControlsWidget,    m_arrowStyleControlsWidget,
-        m_distanceStyleControlsWidget,     m_angleStyleControlsWidget,
-        m_magnifierStyleControlsWidget,    m_highlightStyleControlsWidget,
-        m_penHighlightStyleControlsWidget, m_spotlightStyleControlsWidget,
-        m_textStyleControlsWidget,         m_serialNumberStyleControlsWidget,
-        m_watermarkStyleControlsWidget,
+        m_rectangleStyleControlsWidget,    m_speechBubbleStyleControlsWidget,
+        m_arrowStyleControlsWidget,        m_distanceStyleControlsWidget,
+        m_angleStyleControlsWidget,        m_magnifierStyleControlsWidget,
+        m_highlightStyleControlsWidget,    m_penHighlightStyleControlsWidget,
+        m_spotlightStyleControlsWidget,    m_textStyleControlsWidget,
+        m_serialNumberStyleControlsWidget, m_watermarkStyleControlsWidget,
     };
     for (const QWidget* group : controlGroups) {
         if (group == nullptr) {
@@ -4625,6 +4644,8 @@ adqt::widgets::AdButton* ScreenshotToolPalette::drawingToolButton(const QString&
         return m_selectButton;
     case toolbar_layout::Item::Shape:
         return m_shapeButton;
+    case toolbar_layout::Item::SpeechBubble:
+        return m_speechBubbleButton;
     case toolbar_layout::Item::Arrow:
         return m_arrowButton;
     case toolbar_layout::Item::Distance:
@@ -4710,6 +4731,9 @@ void ScreenshotToolPalette::activateDrawingTool(Tool tool) {
         break;
     case Tool::Select:
         emit selectRequested();
+        break;
+    case Tool::SpeechBubble:
+        emit speechBubbleRequested();
         break;
     case Tool::Shape:
         emit shapeRequested();
@@ -4973,7 +4997,7 @@ bool ScreenshotToolPalette::activateToolFromToolbar(Tool tool, bool toggleVisibl
         toolbar_settings::DrawingSettings().alwaysShowFirstToolbarGroupButton();
     const bool alreadyActive =
         !toggleVisibleButton || fixedGroupButton ? m_activeTool.has_value() && *m_activeTool == tool
-        : requestedButton != nullptr             ? m_activeToolButton == requestedButton
+        : requestedButton != nullptr ? m_activeToolButton == requestedButton
                                      : m_activeTool.has_value() && *m_activeTool == tool;
     const Tool requestedTool = alreadyActive && tool != Tool::Select ? Tool::Select : tool;
     activateDrawingTool(requestedTool);
@@ -5986,6 +6010,15 @@ bool ScreenshotToolPalette::addMainToolButtons(const Options& options, QBoxLayou
                 [this]() { activateToolFromToolbar(Tool::Shape); });
     }
 
+    if (options.showSpeechBubbleTool) {
+        m_speechBubbleButton =
+            addToolButton("Speech Bubble", custom_outlined_icons::ToolSpeechBubble());
+        m_speechBubbleButton->setObjectName(QStringLiteral("screenshotSpeechBubbleButton"));
+        addButton(m_speechBubbleButton);
+        connect(m_speechBubbleButton, &adqt::widgets::AdButton::clicked, this,
+                [this]() { activateToolFromToolbar(Tool::SpeechBubble); });
+    }
+
     if (options.showArrowTool) {
         m_arrowButton = addToolButton("Arrow", custom_outlined_icons::ToolArrow());
         m_arrowButton->setObjectName(QStringLiteral("screenshotArrowButton"));
@@ -6334,6 +6367,8 @@ ScreenshotToolPalette::drawingShortcutTool(const QString& toolId) const {
         tool = Tool::Select;
     } else if (toolId == QStringLiteral("shape")) {
         tool = Tool::Shape;
+    } else if (toolId == QStringLiteral("speech_bubble")) {
+        tool = Tool::SpeechBubble;
     } else if (toolId == QStringLiteral("arrow")) {
         tool = Tool::Arrow;
     } else if (toolId == QStringLiteral("angle")) {
@@ -7611,6 +7646,7 @@ void ScreenshotToolPalette::clearSecondaryResourceBindings() {
     m_scrollingHorizontalButton = nullptr;
 
     m_rectangleStyleControlsWidget = nullptr;
+    m_speechBubbleStyleControlsWidget = nullptr;
     m_moveActionControls = nullptr;
     m_selectionDisplayUnitGroup = nullptr;
     m_cursorButton = nullptr;
@@ -7860,6 +7896,7 @@ bool ScreenshotToolPalette::evictStyleToolbarContentsExcept(QWidget* retainedCon
         }
     };
     clearRemoved(m_rectangleStyleControlsWidget);
+    clearRemoved(m_speechBubbleStyleControlsWidget);
 
     clearRemoved(m_lineStyleControlsWidget);
     clearRemoved(m_freeDrawStyleControlsWidget);
@@ -7895,7 +7932,8 @@ bool ScreenshotToolPalette::evictStyleToolbarContentsExcept(QWidget* retainedCon
         m_spotlightOpacitySlider = nullptr;
     }
     if (m_shapeStyleGroupSeparator != nullptr &&
-        retainedControls != m_rectangleStyleControlsWidget) {
+        retainedControls != m_rectangleStyleControlsWidget &&
+        retainedControls != m_speechBubbleStyleControlsWidget) {
         m_shapeStyleGroupSeparator = nullptr;
         m_shapeStyleGroupSeparatorLeadingSpacing = nullptr;
         m_shapeStyleGroupSeparatorTrailingSpacing = nullptr;
@@ -9311,17 +9349,19 @@ void ScreenshotToolPalette::createStyleFamily(Tool tool) {
         return;
     }
 
-    QWidget** shapeControlsSlot = tool == Tool::Line       ? &m_lineStyleControlsWidget
-                                  : tool == Tool::FreeDraw ? &m_freeDrawStyleControlsWidget
-                                                           : &m_rectangleStyleControlsWidget;
-    if ((tool == Tool::Shape || tool == Tool::Line || tool == Tool::FreeDraw) &&
+    QWidget** shapeControlsSlot = tool == Tool::SpeechBubble ? &m_speechBubbleStyleControlsWidget
+                                  : tool == Tool::Line       ? &m_lineStyleControlsWidget
+                                  : tool == Tool::FreeDraw   ? &m_freeDrawStyleControlsWidget
+                                                             : &m_rectangleStyleControlsWidget;
+    if ((tool == Tool::Shape || tool == Tool::SpeechBubble || tool == Tool::Line ||
+         tool == Tool::FreeDraw) &&
         *shapeControlsSlot == nullptr) {
         SNOW_SHOT_TOOLBAR_PERF_SCOPE("palette.create_style_family.shape");
         const ScreenshotToolPaletteShapeFamilyResult result = m_styleControls->buildShapeFamily(
             static_cast<int>(tool), m_rectangleStylePanel, makeHost(m_highlightModeGroups),
             styleButtonMetrics(m_physicalScale));
         *shapeControlsSlot = result.controls;
-        if (tool == Tool::Shape) {
+        if (tool == Tool::Shape || tool == Tool::SpeechBubble) {
             m_shapeStyleGroupSeparator = result.shapeGroupSeparator;
             m_shapeStyleGroupSeparatorLeadingSpacing = result.shapeGroupSeparatorLeadingSpacing;
             m_shapeStyleGroupSeparatorTrailingSpacing = result.shapeGroupSeparatorTrailingSpacing;
@@ -9804,16 +9844,27 @@ void ScreenshotToolPalette::updateToolbarRowGeometry(bool styleToolbarVisible) {
 void ScreenshotToolPalette::setActiveToolButton(adqt::widgets::AdButton* activeButton) {
     m_activeToolButton = activeButton;
     adqt::widgets::AdButton* buttons[] = {
-        m_moveButton,        m_selectButton,
-        m_shapeButton,       m_arrowButton,
-        m_distanceButton,    m_angleButton,
-        m_lineButton,        m_freeDrawButton,
-        m_highlighterButton, m_spotlightButton,
-        m_magnifierButton,   m_eraserButton,
-        m_filterButton,      m_watermarkButton,
-        m_textButton,        m_serialNumberButton,
-        m_ocrButton,         m_textTranslationButton,
-        m_tableButton,       m_scrollingScreenshotButton,
+        m_moveButton,
+        m_selectButton,
+        m_shapeButton,
+        m_speechBubbleButton,
+        m_arrowButton,
+        m_distanceButton,
+        m_angleButton,
+        m_lineButton,
+        m_freeDrawButton,
+        m_highlighterButton,
+        m_spotlightButton,
+        m_magnifierButton,
+        m_eraserButton,
+        m_filterButton,
+        m_watermarkButton,
+        m_textButton,
+        m_serialNumberButton,
+        m_ocrButton,
+        m_textTranslationButton,
+        m_tableButton,
+        m_scrollingScreenshotButton,
     };
 
     for (adqt::widgets::AdButton* button : buttons) {
@@ -9934,6 +9985,7 @@ bool ScreenshotToolPalette::setStyleControlsActive(Tool tool) {
         m_styleControls->setDistanceControlsActive(tool == Tool::Distance);
         m_styleControls->setAngleControlsActive(tool == Tool::Angle);
         m_styleControls->setTextControlsActive(tool == Tool::Text);
+        m_styleControls->setSpeechBubbleControlsActive(tool == Tool::SpeechBubble);
     }
     applyStyleMetricsForScope(m_activeStyleControlsWidget);
     for (const StyleEditorBinding& binding : std::as_const(m_styleEditorBindings)) {

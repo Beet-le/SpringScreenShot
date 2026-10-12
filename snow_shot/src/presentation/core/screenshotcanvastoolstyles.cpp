@@ -50,6 +50,7 @@ constexpr quint32 kSerialNumberAppearanceProperties =
     SnowCanvasSerialNumberStyleMixedType | SnowCanvasSerialNumberStyleMixedNumericType;
 
 const QString kShapeKey = QStringLiteral("drawing/shape_style");
+const QString kSpeechBubbleKey = QStringLiteral("drawing/speech_bubble_style");
 const QString kArrowKey = QStringLiteral("drawing/arrow_style");
 const QString kLineKey = QStringLiteral("drawing/line_style");
 const QString kDistanceKey = QStringLiteral("drawing/distance_style");
@@ -500,6 +501,7 @@ SnowCanvasStyleDefaults screenshotCanvasToolStyleDefaults() {
         return defaults;
     const auto& configuration = storage.configuration();
     readShapeValue(configuration.value(kShapeKey).toObject(), &defaults.rectangle);
+    readShapeValue(configuration.value(kSpeechBubbleKey).toObject(), &defaults.speechBubble);
     readShapeValue(configuration.value(kArrowKey).toObject(), &defaults.arrow);
     readDistanceValue(configuration.value(kDistanceKey).toObject(), &defaults.distance);
     readAngleValue(configuration.value(kAngleKey).toObject(), &defaults.angle);
@@ -548,6 +550,7 @@ SnowCanvasStyleDefaults screenshotCanvasToolStyleDefaults() {
         }
     };
     normalizeShape(defaults.rectangle, true);
+    normalizeShape(defaults.speechBubble, true);
     normalizeShape(defaults.arrow, false);
     normalizeShape(defaults.line, false);
     normalizeShape(defaults.freeDraw, false);
@@ -603,6 +606,7 @@ bool persistToolStyles(const SnowCanvasStyleDefaults& defaults,
     penFilter.strength = defaults.rectangleFilter.strength;
     QMap<QString, QJsonValue> values{
         {kShapeKey, shapeValue(defaults.rectangle)},
+        {kSpeechBubbleKey, shapeValue(defaults.speechBubble)},
         {kArrowKey, shapeValue(defaults.arrow)},
         {kDistanceKey, distanceValue(defaults.distance)},
         {kAngleKey, angleValue(defaults.angle)},
@@ -672,6 +676,7 @@ void applyScreenshotCanvasToolStyles(SnowCanvasWidget& canvas,
         static_cast<void>(canvas.setCanvasShapeStylePatch(style, properties, kind));
     };
     applyShape(defaults.rectangle, kRectangleShapeProperties, SnowCanvasShapeKind::Rectangle);
+    applyShape(defaults.speechBubble, kRectangleShapeProperties, SnowCanvasShapeKind::SpeechBubble);
     applyShape(defaults.arrow, kArrowShapeProperties, SnowCanvasShapeKind::Arrow);
     static_cast<void>(canvas.setCanvasDistanceStyle(defaults.distance));
     static_cast<void>(canvas.setCanvasAngleStyle(defaults.angle));

@@ -42,6 +42,7 @@ ScreenshotToolPalette::Options canvasOptions() {
     options.showHistoryActions = true;
     options.showSelectTool = true;
     options.showShapeTool = true;
+    options.showSpeechBubbleTool = true;
     options.showArrowTool = true;
     options.showLineTool = true;
     options.showDistanceTool = true;
@@ -548,6 +549,9 @@ class GlobalCanvasController::Session final : public QWidget, public SnowCanvasC
         case SnowCanvasTool::Select:
             palette->setActiveTool(ScreenshotToolPalette::Tool::Select);
             break;
+        case SnowCanvasTool::SpeechBubble:
+            palette->setActiveTool(ScreenshotToolPalette::Tool::SpeechBubble);
+            break;
         case SnowCanvasTool::Shape:
             palette->setActiveTool(ScreenshotToolPalette::Tool::Shape);
             break;
@@ -615,6 +619,11 @@ class GlobalCanvasController::Session final : public QWidget, public SnowCanvasC
         connect(palette, &ScreenshotToolPalette::selectRequested, this, [this]() {
             drawing->setCanvasTool(SnowCanvasTool::Select);
             palette->setActiveTool(ScreenshotToolPalette::Tool::Select);
+            activateDrawing();
+        });
+        connect(palette, &ScreenshotToolPalette::speechBubbleRequested, this, [this]() {
+            drawing->setCanvasTool(SnowCanvasTool::SpeechBubble);
+            palette->setActiveTool(ScreenshotToolPalette::Tool::SpeechBubble);
             activateDrawing();
         });
         connect(palette, &ScreenshotToolPalette::shapeRequested, this, [this]() {

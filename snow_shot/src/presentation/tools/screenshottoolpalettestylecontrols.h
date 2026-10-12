@@ -261,6 +261,7 @@ class ScreenshotToolPaletteStyleControls final {
     void releaseControlBindings();
     [[nodiscard]] bool stepStrokeWidth(int direction);
     void setLineControlsActive(bool active);
+    void setSpeechBubbleControlsActive(bool active);
     void setFreeDrawControlsActive(bool active);
     void setHighlightControlsActive(bool active);
     void setPenHighlightControlsActive(bool active);

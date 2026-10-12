@@ -186,6 +186,42 @@ pub(crate) fn compose_overlay_items(
         ));
     }
 
+    for (anchor, center) in &presentation.speech_bubble_handle_leaders {
+        items.push(OverlayDisplayItem::FocusConnection(focus_connection_item(
+            *anchor, *center, zoom,
+        )));
+    }
+    for tail in presentation
+        .speech_bubble_handles
+        .iter()
+        .skip(1)
+        .collect::<Vec<_>>()
+        .chunks_exact(3)
+    {
+        items.push(OverlayDisplayItem::FocusConnection(focus_connection_item(
+            tail[0].1, tail[2].1, zoom,
+        )));
+        items.push(OverlayDisplayItem::FocusConnection(focus_connection_item(
+            tail[1].1, tail[2].1, zoom,
+        )));
+    }
+    for (kind, center) in &presentation.speech_bubble_handles {
+        let kind = match kind {
+            0 => UiShapeKind::SpeechBubbleAddTailHandle,
+            1 => UiShapeKind::SpeechBubbleTailBaseHandle,
+            _ => UiShapeKind::SpeechBubbleTailTipHandle,
+        };
+        items.push(OverlayDisplayItem::Rectangle(ui_rect_item(
+            kind,
+            selection_handle_rect(
+                *center,
+                selection_handle_size(frame_view.camera.zoom),
+                0.0,
+                true,
+                frame_view.camera.zoom,
+            ),
+        )));
+    }
     items.retain(|item| overlay_item_visible(item, frame_view));
     items
 }

@@ -350,6 +350,7 @@ fn arrowhead_display_dash_mode(dash_mode: ArrowheadDashMode) -> ArrowheadDisplay
 pub(crate) fn scene_item_from_text(id: ElementId, text: TextData) -> SceneDisplayItem {
     let (content_width, content_height) = text.layout.ink_or_wrap();
     SceneDisplayItem::Text(TextDisplayItem {
+        text_ink_reserve: text.text_ink_reserve,
         id: display_item_id(id),
         center_x: text.center.x,
         center_y: text.center.y,
@@ -477,6 +478,7 @@ pub(crate) fn serial_connector_bounds(
 /// the frame paints.
 pub(crate) fn text_paint_geometry_from_display_item(text: &TextDisplayItem) -> TextPaintGeometry {
     TextPaintGeometry {
+        text_ink_reserve: text.text_ink_reserve,
         center: Point::new(text.center_x, text.center_y),
         width: text.width,
         height: text.height,
@@ -577,6 +579,11 @@ pub(crate) fn scene_item_from_selection_preview(
             Some((scene_item_from_rect(id, rect), rect_bounds(rect)))
         }
         ElementData::Rectangle(_) => None,
+        ElementData::SpeechBubble(value) => {
+            let bubble = snow_draw_engine_document::speech_bubble_with_selection_rect(value, rect);
+            let bounds = snow_draw_engine_document::speech_bubble_bounds(&bubble);
+            Some((scene_item_from_speech_bubble(id, &bubble), bounds))
+        }
         ElementData::Magnifier(value) => {
             let mut preview = *value;
             preview.opacity = rect.opacity;
@@ -1602,4 +1609,48 @@ mod shaft_tests {
         assert_eq!(scene.path_commands, arrow.path_commands());
         assert_eq!(arrow.arrow_shaft_type, ArrowShaftType::Tapered);
     }
+}
+
+pub(crate) fn scene_item_from_speech_bubble(
+    id: ElementId,
+    bubble: &snow_draw_engine_document::SpeechBubbleData,
+) -> SceneDisplayItem {
+    let SceneDisplayItem::Rectangle(body) = scene_item_from_rect(
+        id,
+        snow_draw_engine_document::speech_bubble_body_proxy(bubble),
+    ) else {
+        unreachable!()
+    };
+    let geometry = Arc::new(snow_draw_engine_document::speech_bubble_path_geometry(
+        bubble,
+    ));
+    let path_commands = geometry
+        .chunks
+        .iter()
+        .flat_map(|chunk| chunk.commands.iter().copied())
+        .collect();
+    let path = ArrowDisplayItem {
+        id: display_item_id(id),
+        bound_text_id: bubble.text_element_id.map(display_item_id),
+        label_bounds: None,
+        bound_text_overlay: false,
+        points: Vec::new(),
+        path_commands,
+        geometry,
+        arrow_type: ArrowType::Straight,
+        arrow_shaft_type: Default::default(),
+        arrow_ratio: 1.0,
+        start_arrowhead: None,
+        end_arrowhead: None,
+        stroke: body.stroke,
+        stroke_width: body.stroke_width,
+        stroke_style: body.stroke_style,
+        fill: body.fill,
+        fill_style: body.fill_style,
+        arrowhead_primitives: Vec::new(),
+        opacity: body.opacity,
+        is_free_draw: false,
+        blend_mode: Default::default(),
+    };
+    SceneDisplayItem::SpeechBubble(snow_draw_engine_display::SpeechBubbleDisplayItem { body, path })
 }

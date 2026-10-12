@@ -12,6 +12,8 @@ mod scene_order_tests;
 mod selection_visuals;
 #[cfg(test)]
 mod smart_erase_tests;
+#[cfg(test)]
+mod speech_bubble_tests;
 
 use dirty_regions::finalize_dirty_regions;
 use item_bounds::*;
@@ -311,8 +313,10 @@ impl ViewportComposer {
             .iter()
             .flat_map(|operation| operation.insert_items.iter())
             .filter_map(|item| {
-                let SceneDisplayItem::Arrow(path) = item else {
-                    return None;
+                let path = match item {
+                    SceneDisplayItem::Arrow(path) => path,
+                    SceneDisplayItem::SpeechBubble(bubble) => &bubble.path,
+                    _ => return None,
                 };
                 Some(PathGeometryPatch {
                     id: path.id,
@@ -400,10 +404,12 @@ fn append_path_geometry_change(
 ) {
     let old = old_item.and_then(|item| match item {
         SceneDisplayItem::Arrow(path) => Some(path),
+        SceneDisplayItem::SpeechBubble(bubble) => Some(&bubble.path),
         _ => None,
     });
     let next = next_item.and_then(|item| match item {
         SceneDisplayItem::Arrow(path) => Some(path),
+        SceneDisplayItem::SpeechBubble(bubble) => Some(&bubble.path),
         _ => None,
     });
     match (old, next) {

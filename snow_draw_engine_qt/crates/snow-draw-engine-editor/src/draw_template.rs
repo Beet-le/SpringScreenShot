@@ -9,7 +9,7 @@ use snow_draw_engine_model::DocumentModel;
 
 use crate::{ApplyTransactionCommand, Editor, EditorCommand, expanded_duplicate_ids};
 
-pub const DRAW_TEMPLATE_SCHEMA_VERSION: u32 = 3;
+pub const DRAW_TEMPLATE_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -132,6 +132,14 @@ impl Editor {
                     data.center.y += offset.y;
                     validate_element_data(&ElementData::Rectangle(data))?;
                     transaction.insert_rectangle(new_id, element.meta, data);
+                }
+                ElementData::SpeechBubble(data) => {
+                    let mut bubble = data.clone();
+                    bubble.body.center.x += offset.x;
+                    bubble.body.center.y += offset.y;
+                    bubble.text_element_id =
+                        data.text_element_id.and_then(|id| id_map.get(&id).copied());
+                    transaction.insert_speech_bubble(new_id, element.meta, bubble);
                 }
                 ElementData::Magnifier(data) => {
                     let next = data.translated(offset);

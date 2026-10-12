@@ -1152,6 +1152,10 @@
             <translation>Source region outline</translation>
         </message>
         <message>
+            <source>Speech Bubble</source>
+            <translation>Speech Bubble</translation>
+        </message>
+        <message>
             <source>Split cells</source>
             <translation>Split cells</translation>
         </message>

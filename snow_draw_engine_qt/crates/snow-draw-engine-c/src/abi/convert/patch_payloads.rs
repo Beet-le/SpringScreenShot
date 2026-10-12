@@ -178,6 +178,24 @@ pub(crate) fn snow_scene_display_item_from_rust(
     omit_arrow_points: bool,
     omit_path_commands: bool,
 ) -> SnowScenePatchItem {
+    if let SceneDisplayItem::SpeechBubble(item) = value {
+        let mut converted = snow_scene_display_item_from_rust(
+            &SceneDisplayItem::Rectangle(item.body),
+            false,
+            false,
+        );
+        converted.view.kind = SnowSceneDisplayItemKind::SpeechBubble;
+        converted.view.arrow_type = snow_arrow_type_from_rust(item.path.arrow_type);
+        converted.view.arrow_stroke_style = snow_stroke_style_from_rust(item.path.stroke_style);
+        encode_bound_text_id(&mut converted.view, item.path.bound_text_id);
+        if !omit_path_commands {
+            converted.arrow_path_commands =
+                snow_arrow_path_commands_from_rust(&item.path.path_commands).into_boxed_slice();
+            converted.view.arrow_path_command_count = converted.arrow_path_commands.len() as u32;
+        }
+        converted.refresh_pointers();
+        return converted;
+    }
     if let SceneDisplayItem::Magnifier(item) = value {
         let mut converted = snow_scene_display_item_from_rust(
             &SceneDisplayItem::Rectangle(item.lens),
@@ -220,7 +238,7 @@ pub(crate) fn snow_scene_display_item_from_rust(
     let mut converted = SnowScenePatchItem::default();
     let out = &mut converted.view;
     match value {
-        SceneDisplayItem::Magnifier(_) => unreachable!(),
+        SceneDisplayItem::Magnifier(_) | SceneDisplayItem::SpeechBubble(_) => unreachable!(),
         SceneDisplayItem::Rectangle(item) => {
             out.kind = SnowSceneDisplayItemKind::DrawRect;
             out.element_id = SnowElementId {
@@ -341,6 +359,7 @@ pub(crate) fn snow_scene_display_item_from_rust(
             out.arrowhead_primitive_count = converted.arrowhead_primitives.len() as u32;
         }
         SceneDisplayItem::Text(item) => {
+            out.text_ink_reserve = item.text_ink_reserve;
             out.kind = SnowSceneDisplayItemKind::Text;
             out.element_id = SnowElementId {
                 index: item.id.index,
@@ -542,6 +561,9 @@ fn snow_overlay_rect_kind_from_rust(value: UiRectKind) -> SnowOverlayRectKind {
         UiRectKind::BindingHighlight => SnowOverlayRectKind::BindingHighlight,
         UiRectKind::MagnifierMoveHandle => SnowOverlayRectKind::MagnifierMoveHandle,
         UiRectKind::MagnifierSelectionFrame => SnowOverlayRectKind::MagnifierSelectionFrame,
+        UiRectKind::SpeechBubbleAddTailHandle => SnowOverlayRectKind::SpeechBubbleAddTailHandle,
+        UiRectKind::SpeechBubbleTailBaseHandle => SnowOverlayRectKind::SpeechBubbleTailBaseHandle,
+        UiRectKind::SpeechBubbleTailTipHandle => SnowOverlayRectKind::SpeechBubbleTailTipHandle,
     }
 }
 

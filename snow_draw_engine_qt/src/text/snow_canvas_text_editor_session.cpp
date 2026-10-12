@@ -16,7 +16,8 @@
 #include <limits>
 
 bool SnowCanvasTextEditorSession::FinishedEdit::shouldCommit(bool hasViewport) const {
-    return hasViewport && (hasExistingElement || !text.trimmed().isEmpty());
+    return hasViewport && (hasExistingElement || snow_canvas_element_id::hasElementId(bubbleId) ||
+                           !text.trimmed().isEmpty());
 }
 
 bool SnowCanvasTextEditorSession::begin(const SnowTextElementInfo& info,
@@ -30,6 +31,8 @@ bool SnowCanvasTextEditorSession::begin(const SnowTextElementInfo& info,
         completeText != nullptr ? *completeText : snow_canvas_text::textFromElementInfo(info);
     m_arrowId = info.arrow_id;
     m_arrowWidth = info.arrow_width;
+    m_bubbleId = info.bubble_id;
+    m_bubbleInfo = info;
     SnowCanvasSceneItem preview = snow_canvas_text::defaultPreviewItem(info);
     if (hasExisting) {
         if (existingSceneItem != nullptr) {
@@ -55,7 +58,8 @@ bool SnowCanvasTextEditorSession::begin(const SnowTextElementInfo& info,
         preview.content_height = initialMeasured.content.height();
     }
 
-    if (newTextStyle != nullptr && snow_canvas_element_id::hasElementId(m_arrowId)) {
+    if (newTextStyle != nullptr && (snow_canvas_element_id::hasElementId(m_arrowId) ||
+                                    snow_canvas_element_id::hasElementId(m_bubbleId))) {
         snow_canvas_text::applyTextStyleToSceneItem(preview, *newTextStyle);
     }
     const QPointF creationPoint(info.center_x, info.center_y);
@@ -73,7 +77,8 @@ bool SnowCanvasTextEditorSession::begin(const SnowTextElementInfo& info,
     m_hasExistingElement = hasExisting;
     m_elementId = hasExisting ? info.id : SnowElementId{};
     m_draft.begin(initialText);
-    if (snow_canvas_element_id::hasElementId(m_arrowId)) {
+    if (snow_canvas_element_id::hasElementId(m_arrowId) ||
+        snow_canvas_element_id::hasElementId(m_bubbleId)) {
         m_canvasAnchor = creationPoint;
         updatePreviewLayout(baseFont, true);
     }
@@ -94,6 +99,9 @@ SnowCanvasTextEditorSession::finish(const QFont& baseFont) {
     result.canvasCenter = QPointF(m_previewItem.center_x, m_previewItem.center_y);
     result.elementId = m_elementId;
     result.arrowId = m_arrowId;
+    result.bubbleId = m_bubbleId;
+    result.minimumGraphemeWidth = m_minimumGraphemeWidth;
+    result.textInkReserve = m_textInkReserve;
     result.hasExistingElement = m_hasExistingElement;
     result.measuredLayout = SnowTextLayoutSize{
         m_previewItem.width,
@@ -180,17 +188,21 @@ bool SnowCanvasTextEditorSession::applyActiveDraftPresentation(const SnowTextEle
 
     m_arrowId = info.arrow_id;
     m_arrowWidth = info.arrow_width;
+    m_bubbleId = info.bubble_id;
+    m_bubbleInfo = info;
     m_previewItem.center_x = info.center_x;
     m_previewItem.center_y = info.center_y;
     m_previewItem.width = qMax(1.0, info.width);
     m_previewItem.height = qMax(1.0, info.height);
     m_previewItem.content_width = info.content_width;
     m_previewItem.content_height = info.content_height;
+    m_previewItem.text_ink_reserve = info.text_ink_reserve;
     m_previewItem.rotation = info.rotation;
     snow_canvas_text::applyTextStyleToSceneItem(m_previewItem, style);
     snow_canvas_text::copyTextToSceneItem(m_previewItem, m_draft.displayText());
     m_previewAutoResize = info.auto_resize != 0;
-    m_canvasAnchor = snow_canvas_element_id::hasElementId(m_arrowId)
+    m_canvasAnchor = (snow_canvas_element_id::hasElementId(m_arrowId) ||
+                      snow_canvas_element_id::hasElementId(m_bubbleId))
                          ? QPointF(m_previewItem.center_x, m_previewItem.center_y)
                          : snow_canvas_text_edit_geometry::topAnchorForItem(m_previewItem);
     return true;
@@ -278,15 +290,24 @@ QRegion SnowCanvasTextEditorSession::applyTextStyle(const SnowTextStyle& style,
     const double previousFontSize = m_previewItem.font_size;
     const QString previousFontFamily = snow_canvas_text::fontFamilyFromSceneItem(m_previewItem);
     const auto previousHorizontalAlign = m_previewItem.text_horizontal_align;
+    const auto previousFillAlpha = m_previewItem.fill.a;
+    const auto previousStrokeAlpha = m_previewItem.stroke.a;
+    const double previousStrokeWidth = m_previewItem.stroke_width;
     snow_canvas_text::applyTextStyleToSceneItem(m_previewItem, style);
     m_styleChanged = true;
-    m_canvasAnchor = snow_canvas_element_id::hasElementId(m_arrowId)
+    m_canvasAnchor = (snow_canvas_element_id::hasElementId(m_arrowId) ||
+                      snow_canvas_element_id::hasElementId(m_bubbleId))
                          ? QPointF(m_previewItem.center_x, m_previewItem.center_y)
                          : snow_canvas_text_edit_geometry::topAnchorForItem(m_previewItem);
     const bool textLayoutChanged =
         previousBold != m_previewItem.text_bold || previousItalic != m_previewItem.text_italic ||
         previousFontSize != m_previewItem.font_size ||
         previousFontFamily != snow_canvas_text::fontFamilyFromSceneItem(m_previewItem) ||
+        (snow_canvas_element_id::hasElementId(m_bubbleId) &&
+         (previousFillAlpha != m_previewItem.fill.a ||
+          previousStrokeAlpha != m_previewItem.stroke.a ||
+          previousStrokeWidth != m_previewItem.stroke_width ||
+          previousHorizontalAlign != m_previewItem.text_horizontal_align)) ||
         (m_textEditingBounds.has_value() && canConstrainAutomaticWidth() &&
          previousHorizontalAlign != m_previewItem.text_horizontal_align);
     updatePreviewLayout(baseFont, textLayoutChanged);
@@ -412,6 +433,10 @@ void SnowCanvasTextEditorSession::resetState() {
     m_canvasAnchor = {};
     m_elementId = {};
     m_arrowId = {};
+    m_bubbleId = {};
+    m_bubbleInfo = {};
+    m_minimumGraphemeWidth = 1.0;
+    m_textInkReserve = 0.0;
     m_arrowWidth = 0.0;
     m_hasExistingElement = false;
     m_previewItem = SnowCanvasSceneItem{};
@@ -424,6 +449,12 @@ void SnowCanvasTextEditorSession::resetState() {
 void SnowCanvasTextEditorSession::releaseRetainedState() {
     resetState();
     m_draft.releaseRetainedState();
+    m_bubbleLayouts.clear();
+}
+
+void SnowCanvasTextEditorSession::invalidateFontMetrics(const QFont& baseFont) {
+    m_bubbleLayouts.clear();
+    updatePreviewLayout(baseFont, true);
 }
 
 void SnowCanvasTextEditorSession::updatePreviewLayout(const QFont& baseFont, bool forceLayout) {
@@ -437,6 +468,45 @@ void SnowCanvasTextEditorSession::updatePreviewLayout(const QFont& baseFont, boo
         return;
     }
 
+    if (snow_canvas_element_id::hasElementId(m_bubbleId)) {
+        snow_canvas_text::copyTextToSceneItem(m_previewItem, text);
+        const auto metrics = m_bubbleLayouts.graphemes(text, baseFont, m_previewItem);
+        m_minimumGraphemeWidth = metrics.minimumWidth;
+        m_textInkReserve = metrics.inkReserve;
+        double bodyWidth = 0.0;
+        double bodyHeight = 0.0;
+        double contentWidth = 0.0;
+        double contentHeight = 0.0;
+        if (snow_speech_bubble_resolve_text_layout(&m_bubbleInfo, m_minimumGraphemeWidth,
+                                                   m_textInkReserve, 0.0, &bodyWidth, &bodyHeight,
+                                                   &contentWidth, &contentHeight) != SNOW_OK) {
+            return;
+        }
+        const auto wrapped = m_bubbleLayouts.wrapped(text, baseFont, m_previewItem, contentWidth);
+        if (snow_speech_bubble_resolve_text_layout(
+                &m_bubbleInfo, m_minimumGraphemeWidth, m_textInkReserve, wrapped.layout.height(),
+                &bodyWidth, &bodyHeight, &contentWidth, &contentHeight) != SNOW_OK) {
+            return;
+        }
+        const double dx = (bodyWidth - m_bubbleInfo.bubble_body_width) / 2.0;
+        const double dy = (bodyHeight - m_bubbleInfo.bubble_body_height) / 2.0;
+        const double cos = std::cos(m_bubbleInfo.rotation);
+        const double sin = std::sin(m_bubbleInfo.rotation);
+        m_previewItem.center_x = m_bubbleInfo.center_x + dx * cos - dy * sin;
+        m_previewItem.center_y = m_bubbleInfo.center_y + dx * sin + dy * cos;
+        m_previewItem.width = contentWidth;
+        m_previewItem.height = contentHeight;
+        m_previewItem.content_width = wrapped.content.width();
+        m_previewItem.content_height = wrapped.layout.height();
+        m_previewItem.rotation = m_bubbleInfo.rotation;
+        m_previewItem.text_ink_reserve = m_textInkReserve;
+        m_bubbleInfo.bubble_body_width = bodyWidth;
+        m_bubbleInfo.bubble_body_height = bodyHeight;
+        m_bubbleInfo.center_x = m_previewItem.center_x;
+        m_bubbleInfo.center_y = m_previewItem.center_y;
+        m_canvasAnchor = QPointF(m_previewItem.center_x, m_previewItem.center_y);
+        return;
+    }
     if (snow_canvas_element_id::hasElementId(m_arrowId)) {
         snow_canvas_text::copyTextToSceneItem(m_previewItem, text);
         const snow_canvas_text_layout::TextMeasuredLayout natural =
@@ -464,6 +534,7 @@ void SnowCanvasTextEditorSession::updatePreviewLayout(const QFont& baseFont, boo
 bool SnowCanvasTextEditorSession::canConstrainAutomaticWidth() const {
     return m_hasPreview && m_previewAutoResize &&
            !snow_canvas_element_id::hasElementId(m_arrowId) &&
+           !snow_canvas_element_id::hasElementId(m_bubbleId) &&
            std::abs(m_previewItem.rotation) <= std::numeric_limits<double>::epsilon();
 }
 

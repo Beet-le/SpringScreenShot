@@ -369,6 +369,8 @@ detail::PopoverVisualStyle resolvePopoverStyleSnapshot(
 
 AdPopover::AdPopover(QObject* parent) : QObject(parent) {
   controller_ = new detail::OverlayPopupController(this, this);
+  connect(controller_, &detail::OverlayPopupController::popupOpening, this,
+          &AdPopover::popupOpening);
   connect(controller_, &detail::OverlayPopupController::popupVisibleChanged, this,
           &AdPopover::handleControllerPopupVisibleChanged);
   connect(controller_, &detail::OverlayPopupController::popupVisibilityRequested, this,

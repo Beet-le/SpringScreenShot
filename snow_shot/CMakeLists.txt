@@ -5323,6 +5323,10 @@ if(SNOW_SHOT_BUILD_TESTS)
     endif()
     snow_shot_import_offscreen_platform(snow-shot-mcp-tests)
     add_test(NAME snow-shot-mcp-tests COMMAND snow-shot-mcp-tests -platform offscreen)
+    add_test(NAME snow-shot-speech-bubble-mcp-capabilities-tests
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_mcp_capabilities.py"
+            --speech-bubble-only)
+    set_tests_properties(snow-shot-speech-bubble-mcp-capabilities-tests PROPERTIES TIMEOUT 30 LABELS unit)
     add_test(NAME snow-shot-magnifier-mcp-style-tests
         COMMAND snow-shot-mcp-tests --magnifier-only -platform offscreen)
     set_tests_properties(snow-shot-magnifier-mcp-style-tests PROPERTIES TIMEOUT 30 LABELS unit)
@@ -5425,6 +5429,21 @@ if(SNOW_SHOT_BUILD_TESTS)
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
+    add_executable(snow-shot-speech-bubble-integration-tests
+        tests/speech_bubble_integration_tests.cpp
+        src/presentation/core/screenshotcanvastoolstyles.cpp)
+    target_include_directories(snow-shot-speech-bubble-integration-tests PRIVATE include)
+    target_link_libraries(snow-shot-speech-bubble-integration-tests PRIVATE
+        snow_shot_storage snow_shot_window_shortcuts snow_draw_engine_qt_canvas
+        ant_design_qt adqt_icon_core ant_design_icons_qt Qt6::Widgets)
+    snow_shot_import_offscreen_platform(snow-shot-speech-bubble-integration-tests)
+    add_test(NAME snow-shot-speech-bubble-integration-tests
+        COMMAND snow-shot-speech-bubble-integration-tests -platform offscreen)
+    set_tests_properties(snow-shot-speech-bubble-integration-tests PROPERTIES
+        LABELS "unit" TIMEOUT 60 SNOW_TEST_CROSS_PLATFORM TRUE
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
     add_executable(snow-shot-screenshot-tool-palette-tests
         tests/screenshot_tool_palette_tests.cpp
         tests/screenshot_style_binding_tests.cpp
@@ -5504,6 +5523,10 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_test(NAME snow-shot-text-style-toolbar-tests
         COMMAND snow-shot-screenshot-tool-palette-tests --text-style-only -platform offscreen)
     set_tests_properties(snow-shot-text-style-toolbar-tests PROPERTIES LABELS "unit" TIMEOUT 60)
+    add_test(NAME snow-shot-text-alignment-editing-tests
+        COMMAND snow-shot-screenshot-tool-palette-tests --text-alignment-only -platform offscreen)
+    set_tests_properties(snow-shot-text-alignment-editing-tests PROPERTIES
+        LABELS "unit" TIMEOUT 60 SNOW_TEST_CROSS_PLATFORM TRUE)
     set_tests_properties(snow-shot-scrolling-toolbar-tests PROPERTIES LABELS "unit"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-screenshot-tool-palette-remembered-drawing-tool-tests
@@ -5768,6 +5791,12 @@ if(SNOW_SHOT_BUILD_TESTS)
         target_link_libraries(snow-shot-screenshot-toolbar-remembered-tool-tests PRIVATE comctl32)
     endif()
     snow_shot_import_offscreen_platform(snow-shot-screenshot-toolbar-remembered-tool-tests)
+    add_test(NAME snow-shot-speech-bubble-command-tests
+        COMMAND snow-shot-screenshot-toolbar-remembered-tool-tests --speech-bubble-only -platform offscreen)
+    set_tests_properties(snow-shot-speech-bubble-command-tests PROPERTIES
+        LABELS "unit" SNOW_TEST_CROSS_PLATFORM TRUE TIMEOUT 60
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-scrolling-interval-command-tests
         COMMAND snow-shot-screenshot-toolbar-remembered-tool-tests --scrolling-interval-only -platform offscreen)
     add_test(NAME snow-shot-edit-selection-toolbar-visibility-tests
@@ -7120,6 +7149,12 @@ if(SNOW_SHOT_BUILD_TESTS)
         ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )
+    add_test(NAME snow-shot-speech-bubble-toolbar-tests
+        COMMAND snow-shot-toolbar-main-panel-tests --speech-bubble-only -platform offscreen)
+    set_tests_properties(snow-shot-speech-bubble-toolbar-tests PROPERTIES
+        LABELS "unit" SNOW_TEST_CROSS_PLATFORM TRUE TIMEOUT 60
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-toolbar-skin-tests
         COMMAND snow-shot-toolbar-main-panel-tests --skin-only -platform offscreen)
     set_tests_properties(snow-shot-toolbar-skin-tests PROPERTIES

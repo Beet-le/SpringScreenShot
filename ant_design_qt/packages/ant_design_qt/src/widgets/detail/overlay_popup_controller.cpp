@@ -1213,6 +1213,12 @@ void OverlayPopupController::setPopupVisibleInternal(bool visible, bool emitSign
   refreshAnchorScrollBarWatchers();
   noteGeometryActivity();
   if (popupVisible_) {
+    // Owners must retain their editing session before preparing or showing a
+    // native popup can transfer focus. Visibility observers run after the show.
+    emit popupOpening();
+    if (!lifetime) {
+      return;
+    }
     if (!preparePopupSurface()) {
       return;
     }

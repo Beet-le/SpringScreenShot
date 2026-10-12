@@ -35,6 +35,7 @@ pub struct PersistedEditorSession {
     #[serde(default)]
     spotlight_corner_radii: snow_draw_engine_core::CornerRadii,
     rectangle: RectangleShapeStyle,
+    speech_bubble: RectangleShapeStyle,
     arrow: ArrowStyle,
     #[serde(default)]
     distance: crate::DistanceStyle,
@@ -61,6 +62,116 @@ pub struct PersistedEditorSession {
 }
 
 impl EditorSession {
+    pub fn speech_bubble_document_layout_key(
+        &self,
+        document: &DocumentModel,
+        owner: ElementId,
+    ) -> Option<(ElementId, u64)> {
+        self.editor
+            .speech_bubble_document_layout_key(document, owner)
+    }
+
+    pub fn speech_bubble_measured_document_values(
+        &self,
+        document: &DocumentModel,
+        owner: ElementId,
+    ) -> Option<(
+        snow_draw_engine_document::SpeechBubbleData,
+        snow_draw_engine_document::TextData,
+    )> {
+        self.editor
+            .speech_bubble_measured_document_values(document, owner)
+    }
+
+    pub fn speech_bubble_control_at(&self, document: &DocumentModel, point: Point<f64>) -> bool {
+        self.editor.speech_bubble_control_at(document, point)
+    }
+    pub fn speech_bubble_text_request_build_count(&self) -> u64 {
+        self.editor.speech_bubble_text_request_build_count()
+    }
+    pub fn speech_bubble_draft_body(
+        &self,
+        document: &DocumentModel,
+        id: ElementId,
+    ) -> Option<snow_draw_engine_document::RectangleData> {
+        self.editor
+            .speech_bubble_snapshot(document, id)
+            .map(|v| v.body)
+    }
+    pub fn speech_bubble_display_snapshot(
+        &self,
+        document: &DocumentModel,
+        id: ElementId,
+    ) -> Option<snow_draw_engine_document::SpeechBubbleData> {
+        self.editor.speech_bubble_display_snapshot(document, id)
+    }
+    pub fn speech_bubble_text_display_snapshot(
+        &self,
+        document: &DocumentModel,
+        id: ElementId,
+    ) -> Option<snow_draw_engine_document::TextData> {
+        self.editor
+            .speech_bubble_text_display_snapshot(document, id)
+    }
+    pub fn take_speech_bubble_text_edit_request(&mut self) -> Option<ElementId> {
+        self.editor.take_speech_bubble_text_edit_request()
+    }
+    pub fn speech_bubble_text_layout_requests(
+        &self,
+        document: &DocumentModel,
+    ) -> Vec<crate::SpeechBubbleTextLayoutRequest> {
+        self.editor.speech_bubble_text_layout_requests(document)
+    }
+    pub fn apply_speech_bubble_text_layouts(
+        &mut self,
+        document: &DocumentModel,
+        layouts: &[(ElementId, crate::SpeechBubbleTextMeasurement)],
+    ) -> Result<bool, ErrorCode> {
+        self.editor
+            .apply_speech_bubble_text_layouts(document, layouts)
+    }
+    pub fn append_speech_bubble_text_layouts(
+        &self,
+        document: &DocumentModel,
+        tx: &mut snow_draw_engine_document::Transaction,
+    ) {
+        self.editor.append_speech_bubble_text_layouts(document, tx)
+    }
+    pub fn set_speech_bubble_draft_minimum(
+        &mut self,
+        document: &DocumentModel,
+        draft: &mut ActiveTextDraftPresentation,
+        minimum: f64,
+    ) -> Result<(), ErrorCode> {
+        snow_draw_engine_document::validate_text(&draft.text)?;
+        let owner = match draft.target {
+            crate::ActiveTextDraftTarget::NewSpeechBubble(id) => Some(id),
+            crate::ActiveTextDraftTarget::Existing(id) => document.speech_bubble_id_for_text(id),
+            _ => None,
+        };
+        if let Some(owner) = owner {
+            let meta = document.element(owner)?.meta;
+            let bubble = document.speech_bubble(owner)?;
+            if meta.locked
+                || !meta.visible
+                || (matches!(
+                    draft.target,
+                    crate::ActiveTextDraftTarget::NewSpeechBubble(_)
+                ) && bubble.text_element_id.is_some())
+            {
+                return Err(ErrorCode::InvalidState);
+            }
+            let reserve = draft.text.text_ink_reserve;
+            self.editor.fit_speech_bubble_draft(
+                document,
+                owner,
+                &mut draft.text,
+                minimum,
+                reserve,
+            )?;
+        }
+        Ok(())
+    }
     pub fn take_text_edit_request(&mut self) -> Option<ElementId> {
         self.editor.state.pending_text_edit.take()
     }
@@ -108,6 +219,7 @@ impl EditorSession {
     ) {
         self.editor
             .sync_arrow_text_cache_after_document_change(document, delta);
+        self.editor.sync_speech_bubble_text_cache(document, delta);
     }
     pub fn invalidate_arrow_text_measurements(&mut self) {
         self.editor.invalidate_arrow_text_measurements();
@@ -153,10 +265,11 @@ impl EditorSession {
     }
 
     pub fn can_begin_arrow_text(&self) -> bool {
-        matches!(
-            self.editor.state.interaction,
-            crate::state::InteractionState::Idle
-        )
+        self.editor.speech_bubble_tail_drag.is_none()
+            && matches!(
+                self.editor.state.interaction,
+                crate::state::InteractionState::Idle
+            )
     }
 
     pub fn new(config: EngineConfig) -> Result<Self, ErrorCode> {
@@ -188,6 +301,7 @@ impl EditorSession {
             spotlight_shape: state.default_spotlight_shape,
             spotlight_corner_radii: state.default_spotlight_corner_radii,
             rectangle: state.default_rectangle_shape_style,
+            speech_bubble: state.default_speech_bubble_style,
             arrow: state.default_arrow_style,
             distance: state.default_distance_style,
             angle: state.default_angle_style,
@@ -224,6 +338,7 @@ impl EditorSession {
         let mut session = Self::new(persisted.config)?;
         let state = &mut session.editor.state;
         state.default_rectangle_shape_style = persisted.rectangle;
+        state.default_speech_bubble_style = persisted.speech_bubble;
         state.default_spotlight_shape = persisted.spotlight_shape;
         state.default_spotlight_corner_radii = persisted.spotlight_corner_radii;
         state.default_arrow_style = persisted.arrow;
@@ -335,6 +450,7 @@ impl EditorSession {
     /// A cloned document session does not inherit native pointer ownership or queued releases.
     pub fn reset_pointer_capture_state(&mut self) {
         self.editor.captured_pointer = None;
+        self.editor.speech_bubble_tail_drag = None;
         self.editor.pending_capture_release = false;
     }
 
@@ -343,6 +459,9 @@ impl EditorSession {
         self.editor.reset_editing_state();
         self.editor.invalidate_arrow_text_measurements();
         self.editor.state.arrow_text_measurements = std::collections::HashMap::new();
+        self.editor.speech_bubble_layouts = Default::default();
+        self.editor.speech_bubble_text_cache = Default::default();
+        self.editor.speech_bubble_draft_geometry = None;
         self.editor.state.selection = Default::default();
         self.editor.state.ui = Default::default();
         // Counters and explicit starts belong to a document, unlike creation appearance.
@@ -1023,6 +1142,7 @@ mod borrowed_view_query_tests {
 pub fn validate_editor_style_defaults(defaults: &EditorStyleDefaults) -> Result<(), ErrorCode> {
     crate::validate_magnifier_style(defaults.magnifier)?;
     super::style::validate_rectangle_shape_style(defaults.rectangle)?;
+    super::style::validate_rectangle_shape_style(defaults.speech_bubble)?;
     super::style::validate_rectangle_shape_style(RectangleShapeStyle {
         corner_radii: defaults.spotlight_corner_radii,
         ..defaults.rectangle
@@ -1068,6 +1188,7 @@ pub fn validate_editor_style_defaults(defaults: &EditorStyleDefaults) -> Result<
 
 fn validate_persisted_editor_styles(persisted: &PersistedEditorSession) -> Result<(), ErrorCode> {
     crate::validate_magnifier_style(persisted.magnifier)?;
+    super::style::validate_rectangle_shape_style(persisted.speech_bubble)?;
     crate::validate_distance_style(persisted.distance)?;
     crate::validate_angle_style(persisted.angle)?;
     fn finite_non_negative(value: f64) -> bool {

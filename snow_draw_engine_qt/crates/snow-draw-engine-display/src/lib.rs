@@ -417,6 +417,7 @@ pub enum DisplayFillStyle {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextDisplayItem {
+    pub text_ink_reserve: f64,
     pub id: DisplayItemId,
     pub center_x: f64,
     pub center_y: f64,
@@ -546,6 +547,7 @@ impl Default for RectangleDisplayItem {
 impl Default for TextDisplayItem {
     fn default() -> Self {
         Self {
+            text_ink_reserve: 0.0,
             id: DisplayItemId::default(),
             center_x: 0.0,
             center_y: 0.0,
@@ -635,6 +637,9 @@ pub enum UiShapeKind {
     BindingHighlight,
     MagnifierMoveHandle,
     MagnifierSelectionFrame,
+    SpeechBubbleAddTailHandle,
+    SpeechBubbleTailBaseHandle,
+    SpeechBubbleTailTipHandle,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -769,7 +774,14 @@ impl MagnifierDisplayItem {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct SpeechBubbleDisplayItem {
+    pub body: RectangleDisplayItem,
+    pub path: ArrowDisplayItem,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum SceneDisplayItem {
+    SpeechBubble(SpeechBubbleDisplayItem),
     Magnifier(MagnifierDisplayItem),
     Rectangle(RectangleDisplayItem),
     Filter(FilterDisplayItem),

@@ -3703,6 +3703,7 @@ void commandGroupsKeepFirstButtonWhenEnabled() {
 
 void configurableToolbarLayoutSupportsArbitraryPopoverGroups() {
     ScreenshotToolPalette::Options options;
+    options.showSpeechBubbleTool = false;
     options.showSelectTool = true;
     options.showShapeTool = true;
     options.showArrowTool = true;
@@ -3858,6 +3859,7 @@ void configurableToolbarLayoutSupportsArbitraryPopoverGroups() {
 
 void arrowAndLineUseConfiguredPopoverGroup() {
     ScreenshotToolPalette::Options options;
+    options.showSpeechBubbleTool = false;
     options.showShapeTool = false;
     options.showArrowTool = true;
     options.showDistanceTool = false;
@@ -4560,6 +4562,7 @@ void drawingGroupClicksActivateOnceAfterPointerReentry() {
         options.showFreeDrawTool = groups.at(index).contains(QStringLiteral("free-draw"));
         options.showHighlightTool = groups.at(index).contains(QStringLiteral("highlighter"));
         options.showSpotlightTool = groups.at(index).contains(QStringLiteral("spotlight"));
+        options.showSpeechBubbleTool = groups.at(index).contains(QStringLiteral("speech-bubble"));
         options.enableStyleToolbar = false;
         options.toolbarLayout = snow_shot::storage::ScreenshotToolbarLayout{{groups.at(index)}, {}};
         ScreenshotToolPalette palette(options);
@@ -9491,6 +9494,7 @@ void filterStyleEditorsMatchShapeAndSpotlightMetrics() {
 
 void drawingToolbarGroupsUseToolbarPopoverMetrics() {
     ScreenshotToolPalette::Options options;
+    options.showSpeechBubbleTool = false;
     options.showSelectTool = false;
     options.showShapeTool = true;
     options.showArrowTool = true;
@@ -12315,8 +12319,9 @@ void magnifierControlsRetranslateAndRenderPreviews() {
                 snow_shot::presentation::icons::custom::outlined::SourceRegionOutline()};
             const QVector<QColor> colors{scheme.map.colorText, scheme.map.colorPrimary,
                                          scheme.map.colorTextQuaternary};
-            QImage sheet(QSize(qRound(40 * icons.size() * dpr), qRound(120 * dpr)),
-                         QImage::Format_RGBA8888);
+            QImage sheet(
+                QSize(qRound(40 * static_cast<qreal>(icons.size()) * dpr), qRound(120 * dpr)),
+                QImage::Format_RGBA8888);
             sheet.setDevicePixelRatio(dpr);
             sheet.fill(scheme.map.colorBgContainer);
             QPainter painter(&sheet);
@@ -13959,8 +13964,10 @@ void textStylePopupLifecyclesAreBalanced() {
     auto* fillPicker = pickerWithName(QStringLiteral("Text fill color"));
     auto* fontSelect = qobject_cast<adqt::widgets::AdSelect*>(
         controlWithAccessibleName(palette, "Text font family"));
+    auto* alignmentPopover =
+        popoverForTrigger(controlWithAccessibleName(palette, "Text alignment"));
     require(colorPicker != nullptr && strokePicker != nullptr && fillPicker != nullptr &&
-                fontSelect != nullptr,
+                fontSelect != nullptr && alignmentPopover != nullptr,
             "all text style popup controls should be present");
 
     for (adqt::widgets::AdColorPicker* picker : {
@@ -13971,6 +13978,7 @@ void textStylePopupLifecyclesAreBalanced() {
         picker->setPopupLayerMode(adqt::widgets::AdColorPicker::PopupLayerMode::InWindow);
     }
     fontSelect->setPopupLayerMode(adqt::widgets::AdSelect::PopupLayerMode::InWindow);
+    alignmentPopover->setPopupLayerMode(adqt::widgets::AdPopover::PopupLayerMode::InWindow);
 
     int begins = 0;
     int ends = 0;
@@ -13983,6 +13991,7 @@ void textStylePopupLifecyclesAreBalanced() {
     strokePicker->setPopupVisible(true);
     fillPicker->setPopupVisible(true);
     fontSelect->setPopupVisible(true);
+    alignmentPopover->show();
     QCoreApplication::processEvents();
     require(begins == 1 && ends == 0,
             "the first text style popup should begin one shared interaction");
@@ -13995,6 +14004,11 @@ void textStylePopupLifecyclesAreBalanced() {
             "closing all but one text style popup should retain the interaction");
 
     fontSelect->setPopupVisible(false);
+    QCoreApplication::processEvents();
+    require(begins == 1 && ends == 0,
+            "alignment options should retain the shared interaction after other popups close");
+
+    alignmentPopover->hide();
     QCoreApplication::processEvents();
     require(begins == 1 && ends == 1,
             "closing the final text style popup should end the interaction");
@@ -14009,6 +14023,30 @@ void textStylePopupLifecyclesAreBalanced() {
             "switching tools should close a retained shared popup subtree");
     require(begins == 2 && ends == 2,
             "switching tools with an open popup should balance the interaction lifecycle");
+
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Text);
+    auto* currentAlignment =
+        popoverForTrigger(controlWithAccessibleName(palette, "Text alignment"));
+    require(currentAlignment != nullptr, "returning to text must restore its alignment editor");
+    currentAlignment->setPopupLayerMode(adqt::widgets::AdPopover::PopupLayerMode::InWindow);
+    QPointer<adqt::widgets::AdPopover> openAlignment = currentAlignment;
+    currentAlignment->show();
+    QCoreApplication::processEvents();
+    require(begins == 3 && ends == 2, "reopening alignment starts one interaction");
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Watermark);
+    QCoreApplication::processEvents();
+    require((openAlignment == nullptr || !openAlignment->isVisible()) && begins == 3 && ends == 3,
+            "switching tools must close alignment options and balance their interaction");
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Text);
+    currentAlignment = popoverForTrigger(controlWithAccessibleName(palette, "Text alignment"));
+    require(currentAlignment != nullptr,
+            "returning to text must restore observed alignment options");
+    currentAlignment->setPopupLayerMode(adqt::widgets::AdPopover::PopupLayerMode::InWindow);
+    currentAlignment->show();
+    clickPopoverStyleControl(currentAlignment, "Align text center");
+    require(
+        begins == 4 && ends == 4,
+        "restored alignment option clicks must close one interaction without duplicate observers");
 }
 
 void retainedEditorsApplyDestinationMixedStateDuringReconciliation() {
@@ -18328,6 +18366,7 @@ void regionSwitcherRetranslatesAndRenders() {
 } // namespace
 
 void runScreenshotStyleBindingTests();
+void runScreenshotTextAlignmentTests();
 void runAngleStyleBindingTests();
 void runScreenshotSerialNumberRestartTests();
 void runScreenshotStylePersistenceFailureTest();
@@ -18418,12 +18457,19 @@ int main(int argc, char** argv) {
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
+    if (application.arguments().contains(QStringLiteral("--text-alignment-only"))) {
+        runScreenshotTextAlignmentTests();
+        textStylePopupLifecyclesAreBalanced();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--text-style-only"))) {
         fontEditorLoadsOnFirstOpen();
         fontFamilyListIsCachedForEditorBuilds();
         textEmphasisButtonsToggleMixedStylesAndSurviveReuse();
         textStyleControlsExposeAndEmitAllRequestedProperties();
         textStylePopupLifecyclesAreBalanced();
+        runScreenshotTextAlignmentTests();
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }

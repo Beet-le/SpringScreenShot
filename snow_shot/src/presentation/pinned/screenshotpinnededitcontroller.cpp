@@ -47,6 +47,7 @@ ScreenshotToolPalette::Options pinnedEditToolbarOptions() {
     options.moveToolPresentation = ScreenshotToolPalette::MoveToolPresentation::ResizeWindow;
     options.showSelectTool = true;
     options.showShapeTool = true;
+    options.showSpeechBubbleTool = true;
     options.showArrowTool = true;
     options.showLineTool = true;
     options.showDistanceTool = true;
@@ -402,6 +403,8 @@ void ScreenshotPinnedEditController::ensureToolbar() {
                 &ScreenshotPinnedEditController::activateResizeWindowTool);
         connect(toolbar, &ScreenshotToolPalette::selectRequested, this,
                 [this]() { activateCanvasTool(SnowCanvasTool::Select); });
+        connect(toolbar, &ScreenshotToolPalette::speechBubbleRequested, this,
+                [this]() { activateCanvasTool(SnowCanvasTool::SpeechBubble); });
         connect(toolbar, &ScreenshotToolPalette::shapeRequested, this,
                 [this]() { activateCanvasTool(SnowCanvasTool::Shape); });
         connect(toolbar, &ScreenshotToolPalette::distanceToolRequested, this,
@@ -918,6 +921,9 @@ void ScreenshotPinnedEditController::syncPaletteFromCanvasTool() {
     switch (m_canvas.canvasTool()) {
     case SnowCanvasTool::Select:
         host->setActiveTool(ScreenshotToolPalette::Tool::Select);
+        break;
+    case SnowCanvasTool::SpeechBubble:
+        host->setActiveTool(ScreenshotToolPalette::Tool::SpeechBubble);
         break;
     case SnowCanvasTool::Shape:
         host->setActiveTool(ScreenshotToolPalette::Tool::Shape);

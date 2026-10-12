@@ -42,6 +42,10 @@ void ScreenshotToolCommandWorkflow::setSelectTool() {
     setCanvasTool(ScreenshotActiveTool::Select, SnowCanvasTool::Select);
 }
 
+void ScreenshotToolCommandWorkflow::setSpeechBubbleTool() {
+    setCanvasTool(ScreenshotActiveTool::SpeechBubble, SnowCanvasTool::SpeechBubble);
+}
+
 void ScreenshotToolCommandWorkflow::setShapeTool() {
     setCanvasTool(ScreenshotActiveTool::Shape, SnowCanvasTool::Shape);
 }

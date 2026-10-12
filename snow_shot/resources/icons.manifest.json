@@ -1375,6 +1375,14 @@
     },
     {
       "variant": "outlined",
+      "symbol": "ToolSpeechBubble",
+      "name": "tool-speech-bubble",
+      "source": "../src/presentation/components/icons/resources/tool-speech-bubble.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "ToolSpotlight",
       "name": "tool-spotlight",
       "source": "../src/presentation/components/icons/resources/tool-spotlight.svg",

@@ -237,6 +237,21 @@ void observePopupLifecycle(QObject* popup, const ScreenshotToolPaletteEditorServ
                                  services.popupInteractionEnded(select);
                              }
                          });
+        return;
+    }
+    if (auto* popover = qobject_cast<adqt::widgets::AdPopover*>(popup)) {
+        QObject::connect(popover, &adqt::widgets::AdPopover::popupOpening, callbackContext,
+                         [services, popover]() {
+                             if (services.popupInteractionBegan) {
+                                 services.popupInteractionBegan(popover);
+                             }
+                         });
+        QObject::connect(popover, &adqt::widgets::AdPopover::visibleChanged, callbackContext,
+                         [services, popover](bool visible) {
+                             if (!visible && services.popupInteractionEnded) {
+                                 services.popupInteractionEnded(popover);
+                             }
+                         });
     }
 }
 
@@ -1646,7 +1661,8 @@ void ScreenshotToolPaletteFontEditor::release() {
 void ScreenshotToolPaletteIconOptionEditor::build(
     QBoxLayout* layout, QWidget* parent, QObject* receiver,
     const ScreenshotToolPaletteIconOptionEditorConfig& config, int initialValue,
-    const std::function<void(int)>& setValue, const ScreenshotToolPaletteButtonMetrics& metrics) {
+    const std::function<void(int)>& setValue, const ScreenshotToolPaletteEditorServices& services,
+    const ScreenshotToolPaletteButtonMetrics& metrics) {
     SNOW_SHOT_TOOLBAR_PERF_SCOPE("style.add_icon_option_editor");
     if (layout == nullptr || parent == nullptr || receiver == nullptr || config.options.isEmpty()) {
         return;
@@ -1680,6 +1696,9 @@ void ScreenshotToolPaletteIconOptionEditor::build(
     layout->addWidget(m_trigger);
 
     m_popover = new adqt::widgets::AdPopover(m_trigger);
+    if (config.observePopup) {
+        observePopupLifecycle(m_popover, services, receiver);
+    }
     m_popover->setSourceWidget(m_trigger);
     m_popover->setTriggers(adqt::widgets::AdPopover::Trigger::Hover);
     m_popover->setPlacement(adqt::widgets::AdPopover::Placement::Bottom);

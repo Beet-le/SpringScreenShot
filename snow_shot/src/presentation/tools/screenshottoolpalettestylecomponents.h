@@ -448,6 +448,7 @@ struct ScreenshotToolPaletteIconOptionEditorConfig {
     QVector<ScreenshotToolPaletteIconOption> options;
     int gridColumnCount = 0;
     bool minimizeTitleWidth = false;
+    bool observePopup = false;
 };
 
 // Icon-valued option editor: preview trigger plus popover grid. Shared by the
@@ -458,6 +459,7 @@ class ScreenshotToolPaletteIconOptionEditor final
     void build(QBoxLayout* layout, QWidget* parent, QObject* receiver,
                const ScreenshotToolPaletteIconOptionEditorConfig& config, int initialValue,
                const std::function<void(int)>& setValue,
+               const ScreenshotToolPaletteEditorServices& services,
                const ScreenshotToolPaletteButtonMetrics& metrics);
     void rebind(const ScreenshotToolPaletteIconOptionEditorConfig& config,
                 const std::function<void(int)>& setValue);

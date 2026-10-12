@@ -45,6 +45,7 @@ class ScreenshotToolbarCommandSink {
     virtual void setMoveTool() = 0;
     virtual void setSelectTool() = 0;
     virtual void setShapeTool() = 0;
+    virtual void setSpeechBubbleTool() {}
     virtual void setArrowTool() = 0;
     virtual void setLineTool() = 0;
     virtual void setDistanceTool() {}

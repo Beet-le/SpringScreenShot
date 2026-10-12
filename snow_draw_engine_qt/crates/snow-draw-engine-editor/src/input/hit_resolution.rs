@@ -161,6 +161,19 @@ impl Editor {
                     {
                         rect.element_kind()
                     }
+                    ElementData::SpeechBubble(_) => {
+                        let Some(value) = self.speech_bubble_display_snapshot(document, *id) else {
+                            continue;
+                        };
+                        if !snow_draw_engine_document::speech_bubble_hit_test(
+                            &value,
+                            canvas_point,
+                            hit_tolerance,
+                        ) {
+                            continue;
+                        }
+                        ElementKind::SpeechBubble
+                    }
                     ElementData::Magnifier(value) => {
                         if !Self::selection_scope_matches_document(
                             document,
@@ -208,13 +221,15 @@ impl Editor {
                     {
                         ElementKind::FreeDraw
                     }
-                    ElementData::Text(text)
-                        if text_hit_test(
-                            labels.get(id).unwrap_or(text),
-                            canvas_point,
-                            hit_tolerance,
-                        ) =>
-                    {
+                    ElementData::Text(text) => {
+                        let bubble_text = self.speech_bubble_text_display_snapshot(document, *id);
+                        let text = bubble_text
+                            .as_ref()
+                            .or_else(|| labels.get(id))
+                            .unwrap_or(text);
+                        if !text_hit_test(text, canvas_point, hit_tolerance) {
+                            continue;
+                        }
                         ElementKind::Text
                     }
                     ElementData::SerialNumber(serial)
@@ -225,13 +240,15 @@ impl Editor {
                     _ => continue,
                 }
             };
-            let owner = document.arrow_id_for_text(*id);
+            let owner = document
+                .arrow_id_for_text(*id)
+                .or_else(|| document.speech_bubble_id_for_text(*id));
             let (hit_id, kind) = owner.map_or((*id, kind), |id| {
                 (
                     id,
                     document
-                        .arrow(id)
-                        .map_or(ElementKind::Arrow, |arrow| arrow.element_kind()),
+                        .element(id)
+                        .map_or(ElementKind::Arrow, |element| element.data.kind()),
                 )
             });
             if Self::selection_scope_matches_document(

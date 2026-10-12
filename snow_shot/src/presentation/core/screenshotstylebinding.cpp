@@ -77,6 +77,7 @@ bool stepScreenshotStyle(ScreenshotToolPalette& palette, SnowCanvasWidget& canva
         return canvas.adjustAngleValue(direction * (fine ? 0.1 : 1.0) * std::numbers::pi / 180.0);
     }
     switch (canvas.canvasTool()) {
+    case SnowCanvasTool::SpeechBubble:
     case SnowCanvasTool::Shape:
     case SnowCanvasTool::Distance:
     case SnowCanvasTool::Arrow:

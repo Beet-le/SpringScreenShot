@@ -110,6 +110,8 @@ SnowCanvasTool toCanvasTool(SnowActiveTool tool) {
         return SnowCanvasTool::Angle;
     case SNOW_ACTIVE_TOOL_MAGNIFIER:
         return SnowCanvasTool::Magnifier;
+    case SNOW_ACTIVE_TOOL_SPEECH_BUBBLE:
+        return SnowCanvasTool::SpeechBubble;
     }
     return SnowCanvasTool::Select;
 }
@@ -156,6 +158,8 @@ SnowActiveTool toEngineTool(SnowCanvasTool tool) {
         return SNOW_ACTIVE_TOOL_ANGLE;
     case SnowCanvasTool::Magnifier:
         return SNOW_ACTIVE_TOOL_MAGNIFIER;
+    case SnowCanvasTool::SpeechBubble:
+        return SNOW_ACTIVE_TOOL_SPEECH_BUBBLE;
     }
     return SNOW_ACTIVE_TOOL_SELECT;
 }
@@ -226,6 +230,10 @@ SnowCanvasStyleToolbarSource toCanvasStyleToolbarSource(SnowStyleToolbarSource s
         return SnowCanvasStyleToolbarSource::DefaultMagnifier;
     case SNOW_STYLE_TOOLBAR_SOURCE_SELECTED_MAGNIFIER:
         return SnowCanvasStyleToolbarSource::SelectedMagnifier;
+    case SNOW_STYLE_TOOLBAR_SOURCE_DEFAULT_SPEECH_BUBBLE:
+        return SnowCanvasStyleToolbarSource::DefaultSpeechBubble;
+    case SNOW_STYLE_TOOLBAR_SOURCE_SELECTED_SPEECH_BUBBLE:
+        return SnowCanvasStyleToolbarSource::SelectedSpeechBubble;
     }
     return SnowCanvasStyleToolbarSource::DefaultRectangle;
 }
@@ -246,6 +254,8 @@ SnowShapeKind toEngineShapeKind(SnowCanvasShapeKind kind) {
         return SNOW_SHAPE_KIND_PEN_HIGHLIGHT;
     case SnowCanvasShapeKind::Spotlight:
         return SNOW_SHAPE_KIND_SPOTLIGHT;
+    case SnowCanvasShapeKind::SpeechBubble:
+        return SNOW_SHAPE_KIND_SPEECH_BUBBLE;
     }
     return SNOW_SHAPE_KIND_RECTANGLE;
 }
@@ -831,8 +841,13 @@ SnowWatermarkConfig toEngineWatermarkConfig(const SnowCanvasWatermarkConfig& con
 bool toEngineStyleDefaults(const SnowCanvasStyleDefaults& defaults,
                            SnowStyleDefaults& engineDefaults) {
     const SnowCanvasShapeStyle* shapes[] = {
-        &defaults.rectangle,          &defaults.arrow,        &defaults.line, &defaults.freeDraw,
-        &defaults.rectangleHighlight, &defaults.penHighlight,
+        &defaults.rectangle,
+        &defaults.arrow,
+        &defaults.line,
+        &defaults.freeDraw,
+        &defaults.rectangleHighlight,
+        &defaults.penHighlight,
+        &defaults.speechBubble,
     };
     if (std::any_of(
             std::begin(shapes), std::end(shapes),
@@ -880,6 +895,8 @@ bool toEngineStyleDefaults(const SnowCanvasStyleDefaults& defaults,
         defaults.serialNumber.fill,
         defaults.watermark.color,
         defaults.spotlight.color,
+        defaults.speechBubble.fill,
+        defaults.speechBubble.stroke,
     };
     for (const QColor& color : colors) {
         if (!color.isValid()) {
@@ -892,6 +909,7 @@ bool toEngineStyleDefaults(const SnowCanvasStyleDefaults& defaults,
         return false;
     engineDefaults = SnowStyleDefaults{};
     engineDefaults.rectangle = toEngineShapeStyle(defaults.rectangle);
+    engineDefaults.speech_bubble = toEngineShapeStyle(defaults.speechBubble);
     engineDefaults.arrow = toEngineShapeStyle(defaults.arrow);
     engineDefaults.line = toEngineShapeStyle(defaults.line);
     engineDefaults.free_draw = toEngineShapeStyle(defaults.freeDraw);

@@ -116,11 +116,26 @@ void SnowCanvasWidgetTextInteraction::invalidateArrowTextMetrics() {
     m_arrowNaturalLayouts.clear();
     snow_canvas_text_render::resetLayoutCacheForCurrentThread();
     m_arrowMetricsInvalid = true;
+    m_bubbleLayouts.clear();
+    m_bubbleMetricsInvalid = true;
 }
 
 void SnowCanvasWidgetTextInteraction::resetDocumentRetainedState() {
     m_session.releaseRetainedState();
     invalidateArrowTextMetrics();
+}
+
+snow_canvas_commands::MutationResult
+SnowCanvasWidgetTextInteraction::refreshActiveDraftMetrics(SnowRuntime runtime,
+                                                           SnowViewport viewport) {
+    if (!m_session.isActive()) {
+        snow_canvas_commands::MutationResult result;
+        result.success = true;
+        return result;
+    }
+    m_session.invalidateFontMetrics(m_widget.font());
+    updateInputMethod();
+    return publishActiveDraftPresentation(runtime, viewport);
 }
 
 snow_canvas_commands::MutationResult
@@ -195,6 +210,84 @@ SnowCanvasWidgetTextInteraction::measureArrowText(SnowRuntime runtime, SnowViewp
 }
 
 snow_canvas_commands::MutationResult
+SnowCanvasWidgetTextInteraction::measureSpeechBubbleText(SnowRuntime runtime,
+                                                         SnowViewport viewport) {
+    snow_canvas_commands::MutationResult result;
+    if (runtime == nullptr || viewport == nullptr) {
+        return result;
+    }
+    if (m_bubbleMetricsInvalid || m_bubbleLayoutFont != m_widget.font()) {
+        // Bound labels share the native font generation. measureArrowText runs first
+        // and invalidates that generation for all owners.
+        m_bubbleLayoutFont = m_widget.font();
+        m_bubbleMetricsInvalid = false;
+    }
+    std::uint32_t count = 0;
+    if (snow_viewport_get_speech_bubble_text_layout_requests(runtime, viewport, nullptr, 0,
+                                                             &count) != SNOW_OK) {
+        return result;
+    }
+    result.success = true;
+    if (count == 0) {
+        return result;
+    }
+    std::vector<SnowSpeechBubbleTextLayoutRequest> requests(count);
+    if (snow_viewport_get_speech_bubble_text_layout_requests(runtime, viewport, requests.data(),
+                                                             count, &count) != SNOW_OK) {
+        result.success = false;
+        return result;
+    }
+    std::vector<SnowSpeechBubbleTextLayoutMetrics> layouts;
+    layouts.reserve(count);
+    for (const auto& request : requests) {
+        SnowCanvasSceneItem item = snow_canvas_text::defaultPreviewItem(request.info);
+        snow_canvas_text::applyTextStyleToSceneItem(item, request.style);
+        QString text = snow_canvas_text::textFromElementInfo(request.info);
+        if (request.info.text_truncated != 0) {
+            std::uint32_t length = 0;
+            if (snow_runtime_get_text_utf8(runtime, request.info.id, nullptr, 0, &length) !=
+                SNOW_OK) {
+                result.success = false;
+                return result;
+            }
+            QByteArray utf8(static_cast<qsizetype>(length), Qt::Uninitialized);
+            if (snow_runtime_get_text_utf8(runtime, request.info.id,
+                                           reinterpret_cast<std::uint8_t*>(utf8.data()), length,
+                                           &length) != SNOW_OK) {
+                result.success = false;
+                return result;
+            }
+            text = QString::fromUtf8(utf8);
+        }
+        const auto glyphs = m_bubbleLayouts.graphemes(text, m_widget.font(), item);
+        double bodyWidth = 0.0;
+        double bodyHeight = 0.0;
+        double contentWidth = 0.0;
+        double contentHeight = 0.0;
+        if (snow_speech_bubble_resolve_text_layout(&request.info, glyphs.minimumWidth,
+                                                   glyphs.inkReserve, 0.0, &bodyWidth, &bodyHeight,
+                                                   &contentWidth, &contentHeight) != SNOW_OK) {
+            result.success = false;
+            return result;
+        }
+        const auto wrapped = m_bubbleLayouts.wrapped(text, m_widget.font(), item, contentWidth);
+        layouts.push_back(SnowSpeechBubbleTextLayoutMetrics{
+            request.info.id,
+            request.key,
+            {contentWidth, wrapped.layout.height(), wrapped.content.width(),
+             wrapped.layout.height()},
+            glyphs.minimumWidth,
+            glyphs.inkReserve,
+        });
+    }
+    result.success =
+        snow_viewport_apply_speech_bubble_text_layout_metrics_ex(
+            runtime, viewport, layouts.data(), static_cast<std::uint32_t>(layouts.size()),
+            result.changedViewports.outParam()) == SNOW_OK;
+    return result;
+}
+
+snow_canvas_commands::MutationResult
 SnowCanvasWidgetTextInteraction::measureSerialLabelLayout(SnowRuntime runtime,
                                                           SnowViewport viewport) {
     snow_canvas_commands::MutationResult result;
@@ -229,7 +322,8 @@ bool SnowCanvasWidgetTextInteraction::editorContains(const SnowCanvasDisplayCach
 }
 
 bool SnowCanvasWidgetTextInteraction::hasSelectionInteraction() const {
-    return m_session.isActive() && m_session.arrowId().generation == 0;
+    return m_session.isActive() && m_session.arrowId().generation == 0 &&
+           m_session.bubbleId().generation == 0;
 }
 
 const SnowSceneDisplayItem* SnowCanvasWidgetTextInteraction::previewItem() const {
@@ -268,6 +362,9 @@ SnowCanvasWidgetTextInteraction::publishActiveDraftPresentation(SnowRuntime runt
             snow_canvas_text::textStyleFromSceneItem(*preview),
             m_session.activeDraftAutoResize(),
             m_session.arrowId(),
+            m_session.bubbleId(),
+            m_session.minimumGraphemeWidth(),
+            m_session.textInkReserve(),
         });
 }
 
@@ -369,6 +466,33 @@ SnowCanvasWidgetTextInteraction::beginArrow(SnowRuntime runtime, SnowViewport vi
     return result;
 }
 
+SnowCanvasWidgetTextInteraction::BeginResult
+SnowCanvasWidgetTextInteraction::beginSpeechBubble(SnowRuntime runtime, SnowViewport viewport,
+                                                   SnowCanvasDisplayCache& displayCache,
+                                                   const QPointF& viewPosition, bool selected) {
+    BeginResult result;
+    SnowTextElementInfo info{};
+    SnowTextStyle style{};
+    std::uint8_t found = 0;
+    const QPointF point = viewToCanvasPoint(displayCache, viewPosition);
+    if (snow_viewport_get_speech_bubble_text_target(runtime, viewport, selected ? 0 : 1, point.x(),
+                                                    point.y(), &info, &style, &found) != SNOW_OK ||
+        found == 0) {
+        return result;
+    }
+    result.started = beginForElement(
+        info, displayCache, canvasToViewPoint(displayCache, QPointF(info.center_x, info.center_y)),
+        &style, false, runtime);
+    if (!result.started) {
+        return result;
+    }
+    auto selection = snow_canvas_commands::selectElement(runtime, viewport, info.bubble_id);
+    result.firstChangedViewports = std::move(selection.changedViewports);
+    auto draft = publishActiveDraftPresentation(runtime, viewport);
+    result.secondChangedViewports = std::move(draft.changedViewports);
+    return result;
+}
+
 SnowCanvasWidgetTextInteraction::BeginResult SnowCanvasWidgetTextInteraction::beginAt(
     SnowRuntime runtime, SnowViewport viewport, SnowCanvasDisplayCache& displayCache,
     const QPointF& viewPosition, const SnowTextStyle& newTextStyle, bool allowCreate) {
@@ -378,6 +502,10 @@ SnowCanvasWidgetTextInteraction::BeginResult SnowCanvasWidgetTextInteraction::be
     }
 
     if (allowCreate) {
+        BeginResult bubble = beginSpeechBubble(runtime, viewport, displayCache, viewPosition);
+        if (bubble.started) {
+            return bubble;
+        }
         BeginResult arrow = beginArrow(runtime, viewport, displayCache, viewPosition);
         if (arrow.started) {
             return arrow;
@@ -532,8 +660,15 @@ SnowCanvasWidgetTextInteraction::createSerialNumberText(SnowRuntime runtime, Sno
 }
 
 SnowCanvasWidgetTextInteraction::BeginResult
-SnowCanvasWidgetTextInteraction::beginRequestedTextEdit(
-    SnowRuntime runtime, SnowViewport viewport, const SnowCanvasDisplayCache& displayCache) {
+SnowCanvasWidgetTextInteraction::beginRequestedTextEdit(SnowRuntime runtime, SnowViewport viewport,
+                                                        SnowCanvasDisplayCache& displayCache) {
+    SnowElementId bubbleId{};
+    std::uint8_t bubbleRequested = 0;
+    if (snow_viewport_take_speech_bubble_text_edit_request(runtime, viewport, &bubbleId,
+                                                           &bubbleRequested) == SNOW_OK &&
+        bubbleRequested != 0) {
+        return beginSpeechBubble(runtime, viewport, displayCache, QPointF(), true);
+    }
     snow_canvas_commands::CreateSerialNumberTextResult request;
     std::uint8_t hasTextId = 0;
     if (snow_viewport_take_text_edit_request(runtime, viewport, &request.textId, &hasTextId) !=
@@ -653,9 +788,12 @@ SnowCanvasWidgetTextInteraction::commit(SnowRuntime runtime, SnowViewport viewpo
     m_selectionDragging = false;
     commitResult.sessionEnded = true;
     commitResult.finishedExistingEdit.elementId =
-        snow_canvas_element_id::hasElementId(edit.arrowId) ? edit.arrowId : edit.elementId;
+        snow_canvas_element_id::hasElementId(edit.bubbleId)  ? edit.bubbleId
+        : snow_canvas_element_id::hasElementId(edit.arrowId) ? edit.arrowId
+                                                             : edit.elementId;
     commitResult.finishedExistingEdit.hasElement =
-        edit.hasExistingElement || snow_canvas_element_id::hasElementId(edit.arrowId);
+        edit.hasExistingElement || snow_canvas_element_id::hasElementId(edit.arrowId) ||
+        snow_canvas_element_id::hasElementId(edit.bubbleId);
 
     if (edit.shouldCommit(hasViewport)) {
         const QByteArray utf8 = edit.text.toUtf8();
@@ -673,6 +811,9 @@ SnowCanvasWidgetTextInteraction::commit(SnowRuntime runtime, SnowViewport viewpo
                                                  edit.autoResize,
                                                  edit.styleChanged,
                                                  edit.arrowId,
+                                                 edit.bubbleId,
+                                                 edit.minimumGraphemeWidth,
+                                                 edit.textInkReserve,
                                              });
         if (result.success) {
             commitResult.changedViewports = std::move(result.changedViewports);

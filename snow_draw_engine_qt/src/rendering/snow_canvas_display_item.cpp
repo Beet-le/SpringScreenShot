@@ -230,10 +230,10 @@ void SnowCanvasSceneItem::assign(const SnowSceneDisplayItem& item) {
     const bool geometryStyleChanged =
         preservePenGeometry &&
         (!fuzzyEqual(stroke_width, item.stroke_width) || !fuzzyEqual(rotation, item.rotation));
-    const bool preservePathGeometry = kind == SNOW_SCENE_DISPLAY_ITEM_ARROW &&
-                                      item.kind == SNOW_SCENE_DISPLAY_ITEM_ARROW &&
-                                      element_id.index == item.element_id.index &&
-                                      element_id.generation == item.element_id.generation;
+    const bool preservePathGeometry =
+        (kind == SNOW_SCENE_DISPLAY_ITEM_ARROW || kind == SNOW_SCENE_DISPLAY_ITEM_SPEECH_BUBBLE) &&
+        item.kind == kind && element_id.index == item.element_id.index &&
+        element_id.generation == item.element_id.generation;
     static_cast<SnowSceneDisplayItem&>(*this) = item;
     if (!preservePenGeometry) {
         assignBorrowed(m_arrowPoints, item.arrow_points, item.arrow_point_count);
@@ -462,7 +462,7 @@ bool SnowCanvasSceneItem::applyPathGeometryPatch(
     std::uint64_t expectedRevision, std::uint64_t revision, const SnowPathChunkRange* ranges,
     std::uint32_t rangeCount, const SnowPathChunk* chunks, std::uint32_t chunkCount,
     const SnowArrowPathCommand* commands, std::uint32_t commandCount, bool closed, bool fullReset) {
-    if (kind != SNOW_SCENE_DISPLAY_ITEM_ARROW ||
+    if ((kind != SNOW_SCENE_DISPLAY_ITEM_ARROW && kind != SNOW_SCENE_DISPLAY_ITEM_SPEECH_BUBBLE) ||
         (!fullReset && m_pathGeometryRevision != expectedRevision) ||
         (rangeCount != 0 && ranges == nullptr)) {
         return false;

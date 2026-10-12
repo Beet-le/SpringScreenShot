@@ -33,6 +33,9 @@ SnowTextCommitDraft CommitTextRequest::toAbi() const {
     SnowTextCommitDraft draft{};
     draft.element_id = elementId;
     draft.arrow_id = arrowId;
+    draft.bubble_id = bubbleId;
+    draft.minimum_grapheme_width = minimumGraphemeWidth;
+    draft.text_ink_reserve = textInkReserve;
     draft.has_existing_element = hasExistingElement ? 1 : 0;
     draft.auto_resize = autoResize ? 1 : 0;
     draft.update_default_style = updateDefaultStyle ? 1 : 0;
@@ -49,6 +52,9 @@ SnowActiveTextDraftPresentation ActiveTextDraftPresentationRequest::toAbi() cons
     SnowActiveTextDraftPresentation draft{};
     draft.element_id = elementId;
     draft.arrow_id = arrowId;
+    draft.bubble_id = bubbleId;
+    draft.minimum_grapheme_width = minimumGraphemeWidth;
+    draft.text_ink_reserve = textInkReserve;
     draft.has_existing_element = hasExistingElement ? 1 : 0;
     draft.auto_resize = autoResize ? 1 : 0;
     draft.center_x = centerX;

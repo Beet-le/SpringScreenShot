@@ -1,5 +1,8 @@
 mod engine;
 mod history;
+mod persistence;
+#[cfg(test)]
+mod persistence_tests;
 mod session;
 
 pub use engine::{
@@ -42,3 +45,8 @@ pub use snow_draw_engine_editor::{
 pub use snow_draw_engine_interaction::*;
 
 pub type Runtime = Engine;
+
+pub use snow_draw_engine_editor::{
+    SpeechBubbleTextConstraints, SpeechBubbleTextLayoutRequest, SpeechBubbleTextMeasurement,
+    speech_bubble_text_constraints,
+};

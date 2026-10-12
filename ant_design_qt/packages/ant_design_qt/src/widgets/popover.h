@@ -227,6 +227,8 @@ class AdPopover final : public QObject, private detail::OverlayPopupControllerDe
  signals:
   void placementChanged(Placement value);
   void triggersChanged(Triggers value);
+  // Emitted once per open transition, before content preparation or focus transfer.
+  void popupOpening();
   void visibleChanged(bool value);
   void visibilityRequested(bool value);
   void visibilityPolicyChanged(VisibilityPolicy value);

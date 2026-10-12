@@ -48,6 +48,8 @@ mod pen_highlight_angle_tests;
 #[cfg(test)]
 mod rounded_diamond_tests;
 #[cfg(test)]
+mod speech_bubble_tests;
+#[cfg(test)]
 mod spotlight_shape_tests;
 mod text_commands;
 mod viewports;
@@ -92,6 +94,14 @@ struct ViewportSlot {
 }
 
 #[derive(Debug)]
+pub(crate) struct SpeechBubbleLayoutOrigin {
+    revision: snow_draw_engine_document::DocumentRevision,
+    history_generation: u64,
+    owners:
+        HashMap<snow_draw_engine_document::ElementId, (snow_draw_engine_document::ElementId, u64)>,
+}
+
+#[derive(Debug)]
 pub struct Engine {
     pub(crate) config: EngineConfig,
     pub(crate) model: DocumentModel,
@@ -103,6 +113,7 @@ pub struct Engine {
     next_viewport_id: u64,
     presentation_update_depth: u32,
     pending_viewports: BTreeSet<ViewportId>,
+    pub(crate) speech_bubble_layout_origin: Option<SpeechBubbleLayoutOrigin>,
 }
 
 impl Default for Engine {
@@ -146,6 +157,7 @@ impl Engine {
             next_viewport_id: 0,
             presentation_update_depth: 0,
             pending_viewports: BTreeSet::new(),
+            speech_bubble_layout_origin: None,
         };
         engine.scene_cache.sync(&engine.model, None);
         Ok(engine)
@@ -174,6 +186,7 @@ impl Engine {
         replacement.model.apply_transaction(retained_styles)?;
         self.model = replacement.model;
         self.history = HistoryStore::default();
+        self.speech_bubble_layout_origin = None;
         self.editor
             .reset_document_retained_state(&self.config.style_defaults.editor.serial_number);
         self.session_config_seeded = false;
@@ -209,6 +222,7 @@ impl Engine {
             next_viewport_id: self.next_viewport_id,
             presentation_update_depth: 0,
             pending_viewports: BTreeSet::new(),
+            speech_bubble_layout_origin: None,
         };
         engine.editor.reset_magnifier_wheel_input();
         engine.editor.reset_pointer_capture_state();
