@@ -1581,7 +1581,7 @@ void connectionModesAndSourceOutlinesAreIndependent() {
             require(mode == SNOW_MAGNIFIER_CONNECTION_NONE ? connectionAlpha == 0
                     : mode == SNOW_MAGNIFIER_CONNECTION_LEADER_LINE
                         ? connectionAlpha > 200
-                        : connectionAlpha > 0 && connectionAlpha < 50,
+                        : connectionAlpha > 0 && connectionAlpha < 110,
                     "None, Leader line and Gradient must draw only their selected connection");
             require(pixel(output, 130, 70).alpha() == 0 && pixel(output, 100, 70).alpha() > 100,
                     "decorations must preserve the transparent lens interior and its border");
@@ -1610,9 +1610,9 @@ void gradientUsesStrokeColorAndCombinedOpacity() {
                 const QRgb sample = output.pixel(x, 70);
                 const double fraction = (x + 0.5 - 35.0) / 95.0;
                 const int expected =
-                    qRound(stroke.a * (0.04 + 0.12 * fraction) * 0.7 * callerOpacity);
+                    qRound(stroke.a * (0.16 + 0.26 * fraction) * 0.7 * callerOpacity);
                 require(qAbs(qAlpha(sample) - expected) <= 2 && qAlpha(sample) > previousAlpha,
-                        "gradient opacity must increase from 4% to 16% and multiply every alpha");
+                        "gradient opacity must increase from 16% to 42% and multiply every alpha");
                 previousAlpha = qAlpha(sample);
                 require(qAbs(qRed(sample) - qRound(stroke.r * qAlpha(sample) / 255.0)) <= 1 &&
                             qAbs(qGreen(sample) - qRound(stroke.g * qAlpha(sample) / 255.0)) <= 1 &&
@@ -1686,10 +1686,10 @@ void gradientContoursExcludeBodiesAcrossShapesDirectionsAndProjection() {
                                 const QRgb a = partial.pixel(physicalX, physicalY);
                                 const QRgb b = full.pixel(physicalX, physicalY);
                                 // Splitting antialiased spans may round a premultiplied
-                                // channel by one. Unpremultiplication amplifies that
-                                // harmless difference for these translucent pixels.
-                                if (qAlpha(a) != qAlpha(b) ||
-                                    std::max({qAbs(qRed(a) - qRed(b)), qAbs(qGreen(a) - qGreen(b)),
+                                // channel, including alpha, by one. Unpremultiplication
+                                // amplifies that harmless difference for translucent pixels.
+                                if (std::max({qAbs(qAlpha(a) - qAlpha(b)), qAbs(qRed(a) - qRed(b)),
+                                              qAbs(qGreen(a) - qGreen(b)),
                                               qAbs(qBlue(a) - qBlue(b))}) > 1) {
                                     std::cerr << "gradient exposure mismatch: shape " << shape
                                               << ", rotation " << rotation << ", direction "

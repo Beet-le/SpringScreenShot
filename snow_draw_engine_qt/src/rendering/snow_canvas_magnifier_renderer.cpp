@@ -828,8 +828,8 @@ void render(QPainter& painter, const SceneDisplayInfo& displayInfo, const SnowCa
                                    canvasToView.map(QPointF(item.center_x, item.center_y)));
         QColor sourceColor = snow_canvas_renderer::toQColor(item.stroke);
         QColor lensColor = sourceColor;
-        sourceColor.setAlphaF(static_cast<float>(static_cast<double>(sourceColor.alphaF()) * 0.04));
-        lensColor.setAlphaF(static_cast<float>(static_cast<double>(lensColor.alphaF()) * 0.16));
+        sourceColor.setAlphaF(static_cast<float>(static_cast<double>(sourceColor.alphaF()) * 0.08));
+        lensColor.setAlphaF(static_cast<float>(static_cast<double>(lensColor.alphaF()) * 0.27));
         connection.setColorAt(0.0, sourceColor);
         connection.setColorAt(1.0, lensColor);
         if (g_benchmarkDisableAntialiasing)
