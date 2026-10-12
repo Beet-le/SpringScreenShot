@@ -224,8 +224,7 @@ struct ScreenshotScrollingCaptureController::Impl {
         capturePaused = false;
         pipelineInitialized = false;
 
-        context.overlayCoordinator.setScrollingCaptureMode(context.displaySession,
-                                                           QRectF(canvasSelection), true);
+        context.overlayCoordinator.setScrollingCaptureMode(context.displaySession, true);
 
         logPreparation();
         logScrollingEvent("scrolling.prepared", generation);
@@ -329,8 +328,7 @@ struct ScreenshotScrollingCaptureController::Impl {
         canvasSelection = {};
 
         if (wasActive) {
-            context.overlayCoordinator.setScrollingCaptureMode(context.displaySession, QRectF(),
-                                                               false);
+            context.overlayCoordinator.setScrollingCaptureMode(context.displaySession, false);
             if (restoreScreenshotPresentation) {
                 context.overlayCoordinator.applyDisplayModels(context.displaySession);
             }
@@ -539,8 +537,7 @@ struct ScreenshotScrollingCaptureController::Impl {
         if (!active || !movement.active())
             return;
         canvasSelection = movement.update(pointer, context.geometry.canvasBounds().toAlignedRect());
-        context.overlayCoordinator.setScrollingCaptureMode(context.displaySession, canvasSelection,
-                                                           true);
+        context.overlayCoordinator.setScrollingCaptureMode(context.displaySession, true);
         autoScroller.setSelection(canvasSelection.translated(context.geometry.canvasOrigin()));
         context.displaySession.forEachActiveOverlay([this](qsizetype,
                                                            const CapturedDisplayModel& display,

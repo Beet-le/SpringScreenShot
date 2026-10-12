@@ -65,8 +65,7 @@ class ScreenshotOverlayCoordinator final : public ScreenshotOverlayExclusionPort
                             const ScreenshotSelectionVisualState& selectionState,
                             bool intelligentSelecting, bool manualSelecting, bool dragging,
                             bool updateCursors = true);
-    void setScrollingCaptureMode(const ScreenshotDisplaySession& displaySession,
-                                 const QRectF& selection, bool enabled);
+    void setScrollingCaptureMode(const ScreenshotDisplaySession& displaySession, bool enabled);
     void setScrollingResultPreview(const ScreenshotDisplaySession& displaySession,
                                    const QImage& image, const QRectF& canvasRect,
                                    std::optional<Qt::Orientation> cropGuide = std::nullopt);

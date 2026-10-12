@@ -361,32 +361,13 @@ void ScreenshotOverlayWindow::setCanvasClearBackgroundEnabled(bool enabled) {
 
 QJsonObject ScreenshotOverlayWindow::scrollingDiagnostics() const {
     using snow_shot::capture_detail::scrollingRect;
-    const QRect hole =
-        m_scrollingVisualHole.translated(m_captureFrameMargins.left(), m_captureFrameMargins.top())
-            .intersected(rect());
     QJsonObject fields{{QStringLiteral("overlay_rect"), scrollingRect(geometry())},
-                       {QStringLiteral("hole_rect"), scrollingRect(hole)},
-                       {QStringLiteral("full_hole"),
-                        !hole.isEmpty() && hole == rect().marginsRemoved(m_captureFrameMargins)},
-                       {QStringLiteral("mask_empty"), mask().isEmpty()},
                        {QStringLiteral("dpr"), devicePixelRatioF()},
                        {QStringLiteral("thumbnail_visible"),
                         m_scrollingThumbnail != nullptr && m_scrollingThumbnail->isVisible()}};
 #if defined(Q_OS_WIN) || defined(_WIN32)
     if (QGuiApplication::platformName() == QStringLiteral("windows") && internalWinId() != 0) {
         const auto hwnd = reinterpret_cast<HWND>(internalWinId());
-        const HRGN region = CreateRectRgn(0, 0, 0, 0);
-        if (region != nullptr) {
-            const int type = GetWindowRgn(hwnd, region);
-            fields.insert(QStringLiteral("native_region_type"), type);
-            if (type != ERROR && !hole.isEmpty()) {
-                const QPoint center = hole.center();
-                fields.insert(QStringLiteral("native_hole_contains_center"),
-                              PtInRegion(region, qRound(center.x() * devicePixelRatioF()),
-                                         qRound(center.y() * devicePixelRatioF())) != FALSE);
-            }
-            DeleteObject(region);
-        }
         DWORD affinity = 0;
         if (GetWindowDisplayAffinity(hwnd, &affinity))
             fields.insert(QStringLiteral("code"), static_cast<qint64>(affinity));
@@ -402,21 +383,8 @@ QJsonObject ScreenshotOverlayWindow::scrollingDiagnostics() const {
     return fields;
 }
 
-void ScreenshotOverlayWindow::setScrollingVisualHole(const QRect& localRect) {
-    m_scrollingVisualHole = localRect;
-    updateWindowMask();
-}
-
-void ScreenshotOverlayWindow::clearScrollingVisualHole() {
-    m_scrollingVisualHole = {};
-    updateWindowMask();
-}
-
 void ScreenshotOverlayWindow::setScrollingCaptureMode(bool enabled) {
     if (!enabled) {
-        // Standard rendering draws into the scrolling visual hole, so
-        // restore the full window surface before its synchronous repaint.
-        clearScrollingVisualHole();
         clearScrollingResultPreview();
         clearScrollingThumbnail();
     }
@@ -538,7 +506,6 @@ void ScreenshotOverlayWindow::setScrollingResultPreview(const QImage& image,
     }
     m_scrollingResultPreviewCanvasRect = canvasRect.normalized();
     m_scrollingResultPreviewStatusVisible = showStatus;
-    updateWindowMask();
     updateScrollingResultPreviewReadout();
 }
 
@@ -557,7 +524,6 @@ void ScreenshotOverlayWindow::clearScrollingResultPreview() {
     if (m_scrollingResultPreviewReadout != nullptr) {
         m_scrollingResultPreviewReadout->hide();
     }
-    updateWindowMask();
     if (m_canvas != nullptr && isVisible() && updatesEnabled() && m_canvas->updatesEnabled()) {
         // A queued update can outlive hover exit and be captured as a new stitch frame.
         // Present the transparent restoration synchronously, before source restart.
@@ -619,10 +585,6 @@ ScreenshotScrollingTrimRange ScreenshotOverlayWindow::scrollingThumbnailTrim() c
 }
 
 #if defined(SNOW_SHOT_BENCH_INTERNALS)
-quint64 ScreenshotOverlayWindow::windowMaskApplicationCountForTesting() const {
-    return m_windowMaskApplicationCount;
-}
-
 quint64 ScreenshotOverlayWindow::transparentClearCountForTesting() const {
     return m_transparentClearCount;
 }
@@ -848,10 +810,6 @@ void ScreenshotOverlayWindow::releaseNativeSurface() {
     clearScrollingResultPreview();
     hide();
     setUpdatesEnabled(false);
-    clearMask();
-    m_scrollingVisualHole = {};
-    m_appliedWindowMask = QRegion();
-    m_windowMaskInitialized = false;
     if (m_canvas != nullptr) {
         m_canvas->setInteractionEnabled(false);
         m_canvas->setUpdatesEnabled(false);
@@ -1075,7 +1033,6 @@ void ScreenshotOverlayWindow::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
     layoutScrollingThumbnail();
     layoutRegionTypeControl();
-    updateWindowMask();
     updateScrollingResultPreviewReadout();
 }
 
@@ -1128,32 +1085,6 @@ void ScreenshotOverlayWindow::layoutScrollingThumbnail() {
                                   bounds.height() - thumbnailHeight - kScrollingThumbnailMargin);
     const int y = std::clamp(m_scrollingThumbnailAnchor.y(), bounds.top(), maximumY);
     m_scrollingThumbnail->move(QPoint(x, y) + displayOrigin);
-}
-
-void ScreenshotOverlayWindow::updateWindowMask() {
-    const QRect hole =
-        m_scrollingVisualHole.translated(m_captureFrameMargins.left(), m_captureFrameMargins.top())
-            .intersected(rect());
-    QRegion visibleRegion;
-    if (hole.isEmpty() ||
-        (m_screenshotRenderer != nullptr && m_screenshotRenderer->hasScrollingResultPreview())) {
-        visibleRegion = {};
-    } else {
-        visibleRegion = QRegion(rect()).subtracted(QRegion(hole));
-    }
-    if (m_windowMaskInitialized && visibleRegion == m_appliedWindowMask) {
-        return;
-    }
-    m_windowMaskInitialized = true;
-    m_appliedWindowMask = visibleRegion;
-#if defined(SNOW_SHOT_BENCH_INTERNALS)
-    ++m_windowMaskApplicationCount;
-#endif
-    if (visibleRegion.isEmpty()) {
-        clearMask();
-    } else {
-        setMask(visibleRegion);
-    }
 }
 
 bool ScreenshotOverlayWindow::handleCanvasEvent(QEvent* event) {

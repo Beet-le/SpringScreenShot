@@ -245,6 +245,7 @@ void changedSettingsRecapture(ScreenshotScrollingRecognitionMode mode, bool auto
     require(!capture.restart() && requests.isEmpty(), "inactive capture must not restart");
     const QRect selection(40, 30, 64, 64);
     require(capture.start(selection, mode), "start scrolling capture");
+    require(overlay.mask().isEmpty(), "starting scrolling must leave the overlay unmasked");
     capture.setAutoScrollIntervalMs(kScreenshotScrollingAutoScrollIntervalMaximum);
     capture.setAutoScroll(autoScroll);
     toolbar->setScrollingScreenshotMode(true);
@@ -295,6 +296,7 @@ void changedSettingsRecapture(ScreenshotScrollingRecognitionMode mode, bool auto
                     commands.restarts == previousRestarts,
                 "native teardown must finish before the queued recapture command");
         until([&] { return commands.restarts == previousRestarts + 1; });
+        require(overlay.mask().isEmpty(), "restarting scrolling must leave the overlay unmasked");
         require(capture.active() && capture.canvasSelection() == selection &&
                     capture.recognitionMode() == mode &&
                     capture.state().value(QStringLiteral("auto_scroll")).toBool() == autoScroll,
@@ -323,6 +325,7 @@ void changedSettingsRecapture(ScreenshotScrollingRecognitionMode mode, bool auto
                 previousSnapshot.materialize().pixelColor(0, 0) == QColor(Qt::red),
             "each changed setting must recapture once while detached snapshots remain valid");
     capture.stop(false);
+    require(overlay.mask().isEmpty(), "stopping scrolling must leave the overlay unmasked");
     require(liveSources == 0 && excludedWindows.isEmpty(),
             "teardown must release capture sources and window exclusions");
 }

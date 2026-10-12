@@ -9,7 +9,6 @@
 #include <QJsonObject>
 #include <QPointer>
 #include <QRectF>
-#include <QRegion>
 #include "snow_shot/image/screenshotregiongeometry.h"
 #include <QWidget>
 
@@ -105,8 +104,6 @@ class ScreenshotOverlayWindow final : public QWidget {
     void commitInitialSelectionCursor();
     void setCanvasClearBackgroundEnabled(bool enabled);
     [[nodiscard]] QJsonObject scrollingDiagnostics() const;
-    void setScrollingVisualHole(const QRect& localRect);
-    void clearScrollingVisualHole();
     void setScrollingCaptureMode(bool enabled);
     void beginScrollingThumbnail(
         const QRect& localSelection,
@@ -126,7 +123,6 @@ class ScreenshotOverlayWindow final : public QWidget {
     // Repaint the cleared surface before the controller resumes capture.
     void clearScrollingResultPreview();
 #if defined(SNOW_SHOT_BENCH_INTERNALS)
-    [[nodiscard]] quint64 windowMaskApplicationCountForTesting() const;
     [[nodiscard]] quint64 transparentClearCountForTesting() const;
     [[nodiscard]] ScreenshotCanvasRenderer* screenshotRendererForTesting() const;
     void setBackingStorePreparationModeForTesting(ScreenshotBackingStorePreparationMode mode);
@@ -174,7 +170,6 @@ class ScreenshotOverlayWindow final : public QWidget {
     void initializeScreenshotSurface();
     void layoutRegionTypeControl();
     void layoutScrollingThumbnail();
-    void updateWindowMask();
     void updateScrollingInputTransparency();
     void updateScrollingResultPreviewReadout();
     void retirePresentation();
@@ -190,8 +185,6 @@ class ScreenshotOverlayWindow final : public QWidget {
     CanvasStatusReadout* m_scrollingResultPreviewReadout = nullptr;
     std::unique_ptr<ScreenshotOverlayFramePresenter> m_framePresenter;
     std::unique_ptr<ScreenshotCanvasRenderer> m_screenshotRenderer;
-    QRect m_scrollingVisualHole;
-    QRegion m_appliedWindowMask;
     QRect m_scrollingThumbnailAnchor;
     QRectF m_scrollingResultPreviewCanvasRect;
     bool m_scrollingResultPreviewStatusVisible = false;
@@ -201,7 +194,6 @@ class ScreenshotOverlayWindow final : public QWidget {
     bool m_canvasContentWasVisible = true;
     bool m_canvasClearBackgroundWasEnabled = true;
     bool m_canvasInteractionWasEnabled = true;
-    bool m_windowMaskInitialized = false;
     quint64 m_presentationGeneration = 0;
     bool m_presentationActive = false;
     bool m_showingPreparedFrame = false;
@@ -215,7 +207,6 @@ class ScreenshotOverlayWindow final : public QWidget {
     bool m_backingStorePreparationAllocated = false;
     bool m_backingStorePreparationComplete = false;
 #if defined(SNOW_SHOT_BENCH_INTERNALS)
-    quint64 m_windowMaskApplicationCount = 0;
     quint64 m_transparentClearCount = 0;
     ScreenshotBackingStorePreparationMode m_backingStorePreparationMode =
         ScreenshotBackingStorePreparationMode::PageTouch;

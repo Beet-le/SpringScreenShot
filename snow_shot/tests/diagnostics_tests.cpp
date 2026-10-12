@@ -104,10 +104,8 @@ void scrollingMetadataAndReportCadence() {
     counters.timeouts = 9;
     counters.mailboxReplaced = 3;
     auto fields = counters.fields(start + 35s);
-    fields.insert(QStringLiteral("hole_rect"), QStringLiteral("0,0 1920x1080"));
-    fields.insert(QStringLiteral("full_hole"), true);
-    fields.insert(QStringLiteral("mask_empty"), true);
-    fields.insert(QStringLiteral("native_region_type"), 0);
+    fields.insert(QStringLiteral("overlay_rect"), QStringLiteral("0,0 1920x1080"));
+    fields.insert(QStringLiteral("dpr"), 1.25);
     fields.insert(QStringLiteral("thumbnail_visible"), false);
     fields.insert(QStringLiteral("backend"), 3);
     fields.insert(QStringLiteral("operation"), QStringLiteral("7"));
