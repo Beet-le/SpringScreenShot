@@ -13,15 +13,31 @@ fn magnifier_abi_layout_tool_and_all_arrowheads_round_trip() {
     assert_eq!(SnowSceneDisplayItemKind::Magnifier as u32, 9);
     assert_eq!(SnowOverlayRectKind::MagnifierMoveHandle as u32, 15);
     assert_eq!(SnowOverlayRectKind::MagnifierSelectionFrame as u32, 16);
-    assert_eq!(std::mem::size_of::<SnowMagnifierStyle>(), 72);
-    assert_eq!(std::mem::offset_of!(SnowMagnifierStyle, arrow_ratio), 64);
-    assert_eq!(std::mem::offset_of!(SnowMagnifierStyle, corner_radii), 32);
+    assert_eq!(std::mem::size_of::<SnowMagnifierStyle>(), 80);
+    assert_eq!(std::mem::offset_of!(SnowMagnifierStyle, arrow_ratio), 72);
+    assert_eq!(std::mem::offset_of!(SnowMagnifierStyle, corner_radii), 40);
     assert_eq!(std::mem::offset_of!(SnowMagnifierStyle, stroke_width), 8);
     assert_eq!(std::mem::offset_of!(SnowMagnifierStyle, factor), 16);
-    assert_eq!(std::mem::offset_of!(SnowMagnifierStyle, show_leader), 24);
+    assert_eq!(
+        std::mem::offset_of!(SnowMagnifierStyle, connection_type),
+        24
+    );
+    assert_eq!(std::mem::offset_of!(SnowMagnifierStyle, source_outline), 28);
+    assert_eq!(std::mem::size_of::<SnowMagnifierGeometry>(), 48);
+    assert_eq!(
+        std::mem::offset_of!(SnowMagnifierGeometry, connection_type),
+        40
+    );
+    assert_eq!(
+        std::mem::offset_of!(SnowMagnifierGeometry, source_outline),
+        44
+    );
+    assert_eq!(SnowMagnifierConnectionType::None as u32, 0);
+    assert_eq!(SnowMagnifierConnectionType::LeaderLine as u32, 1);
+    assert_eq!(SnowMagnifierConnectionType::Gradient as u32, 2);
     assert_eq!(
         std::mem::offset_of!(SnowMagnifierStyle, leader_arrowhead),
-        28
+        32
     );
     assert_eq!(
         snow_active_tool_to_rust(SnowActiveTool::Magnifier),
@@ -47,6 +63,20 @@ fn magnifier_abi_layout_tool_and_all_arrowheads_round_trip() {
         };
         assert_eq!(SnowMagnifierStyle::from(MagnifierStyle::from(style)), style);
     }
+    for connection_type in [
+        SnowMagnifierConnectionType::None,
+        SnowMagnifierConnectionType::LeaderLine,
+        SnowMagnifierConnectionType::Gradient,
+    ] {
+        for source_outline in [0, 1] {
+            let style = SnowMagnifierStyle {
+                connection_type,
+                source_outline,
+                ..Default::default()
+            };
+            assert_eq!(SnowMagnifierStyle::from(MagnifierStyle::from(style)), style);
+        }
+    }
 }
 
 #[test]
@@ -70,6 +100,32 @@ fn magnifier_ffi_invalid_values_and_selected_intent_leave_defaults_unchanged() {
         .unwrap()
         .magnifier_style;
     unsafe {
+        for raw in [-1_i32, 3, i32::MAX] {
+            let mut invalid = SnowMagnifierStyle::default();
+            std::ptr::addr_of_mut!(invalid.connection_type)
+                .cast::<i32>()
+                .write(raw);
+            assert_eq!(
+                snow_viewport_set_magnifier_style_patch_ex(
+                    &mut runtime,
+                    &mut viewport,
+                    &invalid,
+                    SNOW_MAGNIFIER_STYLE_PROPERTY_CONNECTION_TYPE,
+                    1,
+                    &mut changed
+                ),
+                SnowError::InvalidArgument
+            );
+            assert_eq!(
+                runtime
+                    .runtime
+                    .viewport_style_toolbar_state(id)
+                    .unwrap()
+                    .magnifier_style,
+                original
+            );
+            assert!(changed.is_null());
+        }
         for style in [
             SnowMagnifierStyle {
                 arrow_ratio: f64::NAN,
@@ -100,7 +156,7 @@ fn magnifier_ffi_invalid_values_and_selected_intent_leave_defaults_unchanged() {
                 ..Default::default()
             },
             SnowMagnifierStyle {
-                show_leader: 2,
+                source_outline: 2,
                 ..Default::default()
             },
             SnowMagnifierStyle {
@@ -269,6 +325,7 @@ fn magnifier_scene_bridge_preserves_source_and_complete_straight_leader_geometry
         let style = SnowMagnifierStyle {
             leader_arrowhead: head,
             arrow_ratio: 0.5 + f64::from(raw % 6) * 0.5,
+            connection_type: SnowMagnifierConnectionType::LeaderLine,
             ..Default::default()
         };
         runtime
@@ -276,7 +333,8 @@ fn magnifier_scene_bridge_preserves_source_and_complete_straight_leader_geometry
                 viewport,
                 style.into(),
                 SNOW_MAGNIFIER_STYLE_PROPERTY_LEADER_ARROWHEAD
-                    | SNOW_MAGNIFIER_STYLE_PROPERTY_ARROW_RATIO,
+                    | SNOW_MAGNIFIER_STYLE_PROPERTY_ARROW_RATIO
+                    | SNOW_MAGNIFIER_STYLE_PROPERTY_CONNECTION_TYPE,
                 false,
             )
             .unwrap();
@@ -295,6 +353,11 @@ fn magnifier_scene_bridge_preserves_source_and_complete_straight_leader_geometry
             SnowMagnifierStyle::default().corner_radii
         );
         assert_eq!(view.kind, SnowSceneDisplayItemKind::Magnifier);
+        assert_eq!(
+            view.magnifier.connection_type,
+            SnowMagnifierConnectionType::LeaderLine
+        );
+        assert_eq!(view.magnifier.source_outline, 1);
         assert_eq!((view.center_x, view.center_y), (200.0, 0.0));
         assert_eq!(
             (

@@ -794,6 +794,14 @@ struct AngleAnnotationStyle {
     decimal_places: Option<AngleDecimals>,
 }
 
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum MagnifierConnectionType {
+    None,
+    LeaderLine,
+    Gradient,
+}
+
 #[derive(Default, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 struct MagnifierStylePatch {
@@ -801,7 +809,8 @@ struct MagnifierStylePatch {
     stroke: Option<[u8; 4]>,
     stroke_width: Option<MagnifierStrokeWidth>,
     factor: Option<MagnifierFactor>,
-    show_leader: Option<bool>,
+    connection_type: Option<MagnifierConnectionType>,
+    source_outline: Option<bool>,
     leader_arrowhead: Option<Arrowhead>,
     arrow_ratio: Option<ArrowRatio>,
     corner_radius: Option<CornerRadius>,
@@ -1372,7 +1381,7 @@ mod tests {
                             name,
                             Some(json!({owner:"owned", "expected_revision":1,
                         "target":"magnifier", "style":{"shape":shape, "factor":factor,
-                        "stroke_width":0.0, "stroke":[245,34,45,255], "show_leader":false,
+                        "stroke_width":0.0, "stroke":[245,34,45,255], "connection_type":"gradient", "source_outline":true,
                         "leader_arrowhead":"indented_triangle", "arrow_ratio":0.5, "corner_radii":[3,6,9,12]}}))
                         )
                         .is_ok(),
@@ -1380,11 +1389,28 @@ mod tests {
                     );
                 }
             }
+            for connection in ["none", "leader_line", "gradient"] {
+                for outline in [false, true] {
+                    assert!(
+                        schema(
+                            name,
+                            Some(json!({owner:"owned", "expected_revision":1,
+                        "target":"magnifier", "style":{"connection_type":connection,
+                        "source_outline":outline}}))
+                        )
+                        .is_ok(),
+                        "{name}: {connection}/{outline}"
+                    );
+                }
+            }
             for style in [
                 json!({"factor":0.9}),
                 json!({"factor":10.1}),
                 json!({"stroke_width":73.0}),
-                json!({"show_leader":1}),
+                json!({"show_leader":true}),
+                json!({"connection_type":"unsupported"}),
+                json!({"connection_type":2}),
+                json!({"source_outline":1}),
                 json!({"fill":[0,0,0,255]}),
                 json!({"leader_arrowhead":"unsupported"}),
                 json!({"arrow_ratio":0.4}),
@@ -1408,7 +1434,7 @@ mod tests {
                 "snow_shot_pinned_edit",
                 Some(json!({"id":"pinned",
             "expected_revision":1, "action":"tool_style", "payload":{
-            "target":"magnifier", "style":{"factor":2.0, "show_leader":true}}}))
+            "target":"magnifier", "style":{"factor":2.0, "connection_type":"leader_line", "source_outline":true}}}))
             )
             .is_ok()
         );

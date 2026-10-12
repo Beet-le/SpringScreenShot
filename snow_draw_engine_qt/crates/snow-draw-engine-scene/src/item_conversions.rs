@@ -104,6 +104,8 @@ pub(crate) fn scene_item_from_magnifier(
         source_width: value.width,
         source_height: value.height,
         factor: value.factor,
+        connection_type: value.connection_type,
+        source_outline: value.source_outline,
         leader,
     })
 }

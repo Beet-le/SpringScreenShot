@@ -61,6 +61,30 @@ std::uint64_t filterTileHashDouble(std::uint64_t hash, double value) {
     return filterTileHashAppend(hash, bits);
 }
 
+std::uint64_t magnifierDependencyFingerprint(std::uint64_t hash, const SnowCanvasSceneItem& item) {
+    hash = filterTileHashDouble(hash, item.magnifier.source_center_x);
+    hash = filterTileHashDouble(hash, item.magnifier.source_center_y);
+    hash = filterTileHashDouble(hash, item.magnifier.source_width);
+    hash = filterTileHashDouble(hash, item.magnifier.source_height);
+    hash = filterTileHashDouble(hash, item.magnifier.magnification_factor);
+    hash = filterTileHashAppend(hash, item.magnifier.connection_type);
+    hash = filterTileHashAppend(hash, item.magnifier.source_outline);
+    const auto color = static_cast<std::uint32_t>(item.stroke.r) |
+                       (static_cast<std::uint32_t>(item.stroke.g) << 8) |
+                       (static_cast<std::uint32_t>(item.stroke.b) << 16) |
+                       (static_cast<std::uint32_t>(item.stroke.a) << 24);
+    hash = filterTileHashAppend(hash, color);
+    hash = filterTileHashDouble(hash, item.stroke_width);
+    hash = filterTileHashAppend(hash, item.rect_shape);
+    hash = filterTileHashDouble(hash, item.corner_radii.top_left);
+    hash = filterTileHashDouble(hash, item.corner_radii.top_right);
+    hash = filterTileHashDouble(hash, item.corner_radii.bottom_right);
+    hash = filterTileHashDouble(hash, item.corner_radii.bottom_left);
+    hash = filterTileHashAppend(hash, item.arrow_end_head);
+    hash = filterTileHashDouble(hash, item.arrow_ratio);
+    return hash;
+}
+
 std::uint64_t filterDependencyFingerprint(const SnowCanvasSceneItem* items, std::uint32_t end) {
     std::uint64_t hash = 1469598103934665603ULL;
     if (items == nullptr) {
@@ -86,9 +110,7 @@ std::uint64_t filterDependencyFingerprint(const SnowCanvasSceneItem* items, std:
         hash = filterTileHashDouble(hash, item.filter.blur_sigma);
         hash = filterTileHashDouble(hash, item.filter.sampling_radius);
         if (item.kind == SNOW_SCENE_DISPLAY_ITEM_MAGNIFIER) {
-            hash = filterTileHashDouble(hash, item.magnifier.source_center_x);
-            hash = filterTileHashDouble(hash, item.magnifier.source_center_y);
-            hash = filterTileHashDouble(hash, item.magnifier.magnification_factor);
+            hash = magnifierDependencyFingerprint(hash, item);
         }
     }
     return hash;
@@ -153,6 +175,8 @@ filterDependencyFingerprintsForRegion(const SnowCanvasSceneItem* items,
             hash = filterTileHashDouble(hash, item.filter.mosaic_block_size);
             hash = filterTileHashDouble(hash, item.filter.blur_sigma);
             hash = filterTileHashDouble(hash, item.filter.sampling_radius);
+            if (item.kind == SNOW_SCENE_DISPLAY_ITEM_MAGNIFIER)
+                hash = magnifierDependencyFingerprint(hash, item);
 
             const int dependencyPass = plan.passForItem[index];
             if (dependencyPass >= 0) {
@@ -1085,7 +1109,8 @@ void drawSceneItem(QPainter& painter, const SceneDisplayInfo& displayInfo,
             snow_canvas_smart_erase::paint(painter, displayInfo, item, smartErase);
         break;
     case SNOW_SCENE_DISPLAY_ITEM_MAGNIFIER:
-        if (item.arrow_point_count >= 2)
+        if (item.magnifier.connection_type == SNOW_MAGNIFIER_CONNECTION_LEADER_LINE &&
+            item.arrow_point_count >= 2)
             drawArrowItem(painter, displayInfo, item, painter.opacity());
         snow_canvas_magnifier_renderer::render(painter, displayInfo, item, baseImageSources);
         break;

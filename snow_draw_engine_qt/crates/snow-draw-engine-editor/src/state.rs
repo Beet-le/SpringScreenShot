@@ -225,6 +225,9 @@ pub(crate) enum SelectionEditMode {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct EditSelectionState {
     pub(crate) original_magnifiers: HashMap<ElementId, MagnifierData>,
+    pub(crate) last_magnifier_corner_input:
+        Option<(Point<f64>, snow_draw_engine_interaction::Modifiers)>,
+    pub(crate) magnifier_corner_input_offset: Point<f64>,
     pub(crate) duplicate: bool,
     pub(crate) pointer_id: u32,
     pub(crate) button: PointerButton,

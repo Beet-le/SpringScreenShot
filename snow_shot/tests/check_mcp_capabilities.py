@@ -172,7 +172,8 @@ def check_magnifier_contracts(matrix):
               re.findall(r"^\s*([a-z_]+)\s*:\s*([^\n,]+),", style, re.M)}
     expected = {"shape": "Option<ShapeVariant>", "stroke": "Option<[u8;4]>",
                 "stroke_width": "Option<MagnifierStrokeWidth>", "factor": "Option<MagnifierFactor>",
-                "show_leader": "Option<bool>", "leader_arrowhead": "Option<Arrowhead>",
+                "connection_type": "Option<MagnifierConnectionType>", "source_outline": "Option<bool>",
+                "leader_arrowhead": "Option<Arrowhead>",
                 "arrow_ratio": "Option<ArrowRatio>", "corner_radius": "Option<CornerRadius>",
                 "corner_radii": "Option<[CornerRadius;4]>"}
     assert fields == expected, f"Magnifier style fields changed: {fields}"
@@ -183,6 +184,7 @@ def check_magnifier_contracts(matrix):
     assert re.search(r'bounded_style_number!\(MagnifierStrokeWidth,\s*f64,\s*"number",\s*0\.0,\s*72\.0\)', schemas)
     assert re.search(r'bounded_style_number!\(ArrowRatio,\s*f64,\s*"number",\s*0\.5,\s*3\.0\)', schemas)
     assert enum_members(schemas, "MagnifierTarget") == {"Magnifier"}
+    assert enum_members(schemas, "MagnifierConnectionType") == {"None", "LeaderLine", "Gradient"}
     for source, name, kind in ((schemas, "ToolStyle", "MagnifierToolStyle"),
                                (schemas, "ScreenshotToolStyleMutation", "Mutation<MagnifierToolStyle>"),
                                (domains, "DocumentToolStyleMutation", "DocumentMutation<MagnifierToolStyle>")):

@@ -1,6 +1,8 @@
 use crate::*;
 use serde::{Deserialize, Serialize};
-use snow_draw_engine_core::{ColorRgba8, CornerRadii, ErrorCode, Point, arrow::Arrowhead};
+use snow_draw_engine_core::{
+    ColorRgba8, CornerRadii, ErrorCode, MagnifierConnectionType, Point, arrow::Arrowhead,
+};
 use snow_draw_engine_document::{ElementId, MagnifierData, Transaction};
 use snow_draw_engine_model::DocumentModel;
 use std::collections::HashMap;
@@ -9,19 +11,22 @@ pub const MAGNIFIER_STYLE_PROPERTY_SHAPE: u32 = 1;
 pub const MAGNIFIER_STYLE_PROPERTY_STROKE: u32 = 2;
 pub const MAGNIFIER_STYLE_PROPERTY_STROKE_WIDTH: u32 = 4;
 pub const MAGNIFIER_STYLE_PROPERTY_FACTOR: u32 = 8;
-pub const MAGNIFIER_STYLE_PROPERTY_SHOW_LEADER: u32 = 16;
+pub const MAGNIFIER_STYLE_PROPERTY_CONNECTION_TYPE: u32 = 16;
 pub const MAGNIFIER_STYLE_PROPERTY_LEADER_ARROWHEAD: u32 = 32;
 pub const MAGNIFIER_STYLE_PROPERTY_CORNER_RADII: u32 = 64;
 pub const MAGNIFIER_STYLE_PROPERTY_ARROW_RATIO: u32 = 128;
-pub const MAGNIFIER_STYLE_PROPERTY_ALL: u32 = 255;
+pub const MAGNIFIER_STYLE_PROPERTY_SOURCE_OUTLINE: u32 = 256;
+pub const MAGNIFIER_STYLE_PROPERTY_ALL: u32 = 511;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MagnifierStyle {
     pub shape: snow_draw_engine_document::HighlightShape,
     pub stroke: ColorRgba8,
     pub stroke_width: f64,
     pub factor: f64,
-    pub show_leader: bool,
+    pub connection_type: MagnifierConnectionType,
+    pub source_outline: bool,
     pub leader_arrowhead: Option<Arrowhead>,
     #[serde(
         default = "snow_draw_engine_core::arrow::default_arrow_ratio",
@@ -46,7 +51,8 @@ impl MagnifierStyle {
             stroke: value.stroke,
             stroke_width: value.stroke_width,
             factor: value.factor,
-            show_leader: value.show_leader,
+            connection_type: value.connection_type,
+            source_outline: value.source_outline,
             leader_arrowhead: value.leader_arrowhead,
             arrow_ratio: value.arrow_ratio,
             corner_radii: value.corner_radii,
@@ -57,7 +63,8 @@ impl MagnifierStyle {
         value.stroke = self.stroke;
         value.stroke_width = self.stroke_width;
         value.factor = self.factor;
-        value.show_leader = self.show_leader;
+        value.connection_type = self.connection_type;
+        value.source_outline = self.source_outline;
         value.leader_arrowhead = self.leader_arrowhead;
         value.arrow_ratio = self.arrow_ratio;
         value.corner_radii = self.corner_radii;
@@ -84,10 +91,15 @@ impl MagnifierStyle {
             } else {
                 self.factor
             },
-            show_leader: if properties & 16 != 0 {
-                next.show_leader
+            connection_type: if properties & MAGNIFIER_STYLE_PROPERTY_CONNECTION_TYPE != 0 {
+                next.connection_type
             } else {
-                self.show_leader
+                self.connection_type
+            },
+            source_outline: if properties & MAGNIFIER_STYLE_PROPERTY_SOURCE_OUTLINE != 0 {
+                next.source_outline
+            } else {
+                self.source_outline
             },
             leader_arrowhead: if properties & 32 != 0 {
                 next.leader_arrowhead
@@ -111,10 +123,11 @@ impl MagnifierStyle {
             | (u32::from(self.stroke != other.stroke) << 1)
             | (u32::from(self.stroke_width != other.stroke_width) << 2)
             | (u32::from(self.factor != other.factor) << 3)
-            | (u32::from(self.show_leader != other.show_leader) << 4)
+            | (u32::from(self.connection_type != other.connection_type) << 4)
             | (u32::from(self.leader_arrowhead != other.leader_arrowhead) << 5)
             | (u32::from(self.corner_radii != other.corner_radii) << 6)
             | (u32::from(self.arrow_ratio != other.arrow_ratio) << 7)
+            | (u32::from(self.source_outline != other.source_outline) << 8)
     }
 }
 pub fn validate_magnifier_style(style: MagnifierStyle) -> Result<(), ErrorCode> {
@@ -159,6 +172,7 @@ impl Editor {
     /// Rebase after successful commits and history replay so finishing or cancelling a drag
     /// cannot undo a separately committed style edit.
     pub(crate) fn sync_magnifier_interaction_styles(&mut self, document: &DocumentModel) {
+        let zoom = self.camera().zoom;
         match &mut self.state.interaction {
             InteractionState::EditingMagnifier(state) => {
                 if let Ok(committed) = document.magnifier(state.id) {
@@ -176,16 +190,21 @@ impl Editor {
                     &mut state.original_elements,
                     &mut [],
                     state.original_arrows.is_empty(),
+                    false,
                 );
             }
             InteractionState::EditingSelection(state) => {
-                sync_selection_magnifier_styles(
+                let contour_changed = sync_selection_magnifier_styles(
                     document,
                     &mut state.original_magnifiers,
                     &mut state.original_elements,
                     &mut state.preview_elements,
                     state.original_arrows.is_empty(),
+                    matches!(state.mode, SelectionEditMode::CornerRadius { .. }),
                 );
+                if contour_changed {
+                    rebase_magnifier_corner_input(state, zoom);
+                }
             }
             _ => {}
         }
@@ -466,7 +485,45 @@ impl EditSelectionState {
                 if let SelectionEditMode::CornerRadius { .. } = self.mode
                     && let Some(preview) = source_preview
                 {
-                    next.corner_radii = preview.corner_radii;
+                    let source = original.source_rect().corner_radii;
+                    let target = original.magnified_rect().corner_radii;
+                    let target_radius = |radius, previous, raw, normalized| {
+                        if radius == previous && raw == normalized {
+                            raw
+                        } else {
+                            radius * next.factor
+                        }
+                    };
+                    next.corner_radii = if preview.corner_radii == source {
+                        original.corner_radii
+                    } else {
+                        CornerRadii {
+                            top_left: target_radius(
+                                preview.corner_radii.top_left,
+                                source.top_left,
+                                original.corner_radii.top_left,
+                                target.top_left,
+                            ),
+                            top_right: target_radius(
+                                preview.corner_radii.top_right,
+                                source.top_right,
+                                original.corner_radii.top_right,
+                                target.top_right,
+                            ),
+                            bottom_right: target_radius(
+                                preview.corner_radii.bottom_right,
+                                source.bottom_right,
+                                original.corner_radii.bottom_right,
+                                target.bottom_right,
+                            ),
+                            bottom_left: target_radius(
+                                preview.corner_radii.bottom_left,
+                                source.bottom_left,
+                                original.corner_radii.bottom_left,
+                                target.bottom_left,
+                            ),
+                        }
+                    };
                 }
             }
             SelectionTransform::Move { delta } => next = original.translated(delta),
@@ -511,14 +568,17 @@ fn sync_selection_magnifier_styles(
     original_elements: &mut [SelectionRectState],
     preview_elements: &mut [SelectionRectState],
     no_arrows: bool,
-) {
+    corner_edit: bool,
+) -> bool {
     let single = original_elements.len() == 1 && no_arrows;
+    let mut contour_changed = false;
     for (id, value) in magnifiers {
         let Ok(committed) = document.magnifier(*id) else {
             continue;
         };
         let style = MagnifierStyle::from_data(committed);
         let properties = MagnifierStyle::from_data(value).differences(style);
+        let previous_factor = value.factor;
         style.apply(value);
         value.opacity = committed.opacity;
         // A group proxy is the union of source and lens, frozen at pointer down. Only a
@@ -526,34 +586,128 @@ fn sync_selection_magnifier_styles(
         if single {
             for element in original_elements
                 .iter_mut()
-                .chain(preview_elements.iter_mut())
+                .map(|element| (element, false))
+                .chain(preview_elements.iter_mut().map(|element| (element, true)))
             {
+                let (element, preview) = element;
                 if element.id != *id {
                     continue;
                 }
                 if properties & MAGNIFIER_STYLE_PROPERTY_SHAPE != 0 {
                     element.rect.highlight_shape = style.shape;
                 }
-                if properties & MAGNIFIER_STYLE_PROPERTY_CORNER_RADII != 0 {
-                    element.rect.corner_radii = style.corner_radii;
-                }
                 if properties
-                    & (MAGNIFIER_STYLE_PROPERTY_SHAPE | MAGNIFIER_STYLE_PROPERTY_CORNER_RADII)
+                    & (MAGNIFIER_STYLE_PROPERTY_SHAPE
+                        | MAGNIFIER_STYLE_PROPERTY_CORNER_RADII
+                        | MAGNIFIER_STYLE_PROPERTY_FACTOR)
                     != 0
                 {
+                    contour_changed = true;
+                    let target_radii = if preview
+                        && corner_edit
+                        && properties
+                            & (MAGNIFIER_STYLE_PROPERTY_SHAPE
+                                | MAGNIFIER_STYLE_PROPERTY_CORNER_RADII)
+                            == 0
+                    {
+                        element.rect.corner_radii.scaled(previous_factor)
+                    } else {
+                        style.corner_radii
+                    };
                     element.rect.corner_radii =
                         snow_draw_engine_document::normalize_shape_corner_radii(
                             element.rect.highlight_shape,
-                            element.rect.width,
-                            element.rect.height,
-                            element.rect.corner_radii,
-                        );
+                            element.rect.width * style.factor,
+                            element.rect.height * style.factor,
+                            target_radii,
+                        )
+                        .scaled(1.0 / style.factor);
                 }
                 element.rect.stroke = style.stroke;
                 element.rect.opacity = committed.opacity;
             }
         }
     }
+    contour_changed
+}
+
+fn rebase_magnifier_corner_input(state: &mut EditSelectionState, zoom: f64) {
+    let SelectionEditMode::CornerRadius { corner } = state.mode else {
+        return;
+    };
+    let Some((pointer, modifiers)) = state.last_magnifier_corner_input else {
+        return;
+    };
+    let Some(original) = state.original_elements.first() else {
+        return;
+    };
+    let Some(preview) = state.preview_elements.first() else {
+        return;
+    };
+    let rect = original.rect;
+    let target_radius = corner_radius(preview.rect.corner_radii, corner);
+    let current = canvas_to_rect_local(
+        rect.center,
+        rect.rotation,
+        Point::new(
+            pointer.x + state.magnifier_corner_input_offset.x,
+            pointer.y + state.magnifier_corner_input_offset.y,
+        ),
+    );
+    let (direction, inset) =
+        if rect.highlight_shape == snow_draw_engine_document::HighlightShape::Diamond {
+            match diamond_corner_index(corner) {
+                0 => (Point::new(0.0, 1.0), current.y + rect.height / 2.0),
+                1 => (Point::new(-1.0, 0.0), rect.width / 2.0 - current.x),
+                2 => (Point::new(0.0, -1.0), rect.height / 2.0 - current.y),
+                _ => (Point::new(1.0, 0.0), current.x + rect.width / 2.0),
+            }
+        } else {
+            let tip = rect_corner_point(rect.width, rect.height, corner);
+            let inward_x = (tip.x - current.x) * corner.x_sign();
+            let inward_y = (tip.y - current.y) * corner.y_sign();
+            (
+                Point::new(-corner.x_sign(), -corner.y_sign()),
+                inward_x.min(inward_y),
+            )
+        };
+    let tip = Point::new(
+        current.x - direction.x * inset,
+        current.y - direction.y * inset,
+    );
+    let extent = rect.width.max(rect.height);
+    // Calibrate the existing handle mapping only when style edits rebase it.
+    // Pointer moves then keep their normal constant-cost path and stay continuous.
+    let mapped_point = |t: f64| {
+        rect_local_to_canvas(
+            rect.center,
+            rect.rotation,
+            Point::new(
+                tip.x + direction.x * extent * t,
+                tip.y + direction.y * extent * t,
+            ),
+        )
+    };
+    let mut low = 0.0;
+    let mut high = 1.0;
+    for _ in 0..48 {
+        let middle = f64::midpoint(low, high);
+        let candidate = preview_rect_for_corner_radius(
+            &rect,
+            corner,
+            mapped_point(middle),
+            modifiers.shift,
+            zoom,
+        );
+        let radius = corner_radius(candidate.corner_radii, corner);
+        if radius < target_radius || (target_radius == 0.0 && radius == 0.0) {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    let mapped = mapped_point(f64::midpoint(low, high));
+    state.magnifier_corner_input_offset = Point::new(mapped.x - pointer.x, mapped.y - pointer.y);
 }
 
 /// Outside the lens so its body stays reachable when source and destination coincide.

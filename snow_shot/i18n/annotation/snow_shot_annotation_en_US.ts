@@ -232,6 +232,10 @@
             <translation>Confirm edit</translation>
         </message>
         <message>
+            <source>Connection type</source>
+            <translation>Connection type</translation>
+        </message>
+        <message>
             <source>Convert to HTML</source>
             <translation>Convert to HTML</translation>
         </message>
@@ -588,6 +592,10 @@
             <translation>Gaussian blur</translation>
         </message>
         <message>
+            <source>Gradient</source>
+            <translation>Gradient</translation>
+        </message>
+        <message>
             <source>Grayscale</source>
             <translation>Grayscale</translation>
         </message>
@@ -670,6 +678,10 @@
         <message>
             <source>LaTeX-Specific Model</source>
             <translation>LaTeX-Specific Model</translation>
+        </message>
+        <message>
+            <source>Leader line</source>
+            <translation>Leader line</translation>
         </message>
         <message>
             <source>Leader line type</source>
@@ -802,6 +814,10 @@
         <message>
             <source>No templates yet</source>
             <translation>No templates yet</translation>
+        </message>
+        <message>
+            <source>None</source>
+            <translation>None</translation>
         </message>
         <message>
             <source>Opacity</source>
@@ -1092,10 +1108,6 @@
             <translation>Show keystrokes in recording</translation>
         </message>
         <message>
-            <source>Show leader line</source>
-            <translation>Show leader line</translation>
-        </message>
-        <message>
             <source>Show original image</source>
             <translation>Show original image</translation>
         </message>
@@ -1134,6 +1146,10 @@
         <message>
             <source>Solid text fill</source>
             <translation>Solid text fill</translation>
+        </message>
+        <message>
+            <source>Source region outline</source>
+            <translation>Source region outline</translation>
         </message>
         <message>
             <source>Split cells</source>

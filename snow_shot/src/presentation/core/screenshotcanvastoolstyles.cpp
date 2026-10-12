@@ -185,7 +185,8 @@ QJsonObject magnifierValue(const SnowCanvasMagnifierStyle& style) {
     value.insert(QStringLiteral("stroke"), colorValue(style.stroke));
     putDouble(&value, QStringLiteral("stroke_width"), style.strokeWidth);
     putDouble(&value, QStringLiteral("factor"), style.factor);
-    value.insert(QStringLiteral("show_leader"), style.showLeader);
+    putEnum(&value, QStringLiteral("connection_type"), style.connectionType);
+    value.insert(QStringLiteral("source_outline"), style.sourceOutline);
     putEnum(&value, QStringLiteral("leader_arrowhead"), style.leaderArrowhead);
     putDouble(&value, QStringLiteral("arrow_ratio"),
               snowCanvasNormalizeArrowRatio(style.arrowRatio));
@@ -194,8 +195,17 @@ QJsonObject magnifierValue(const SnowCanvasMagnifierStyle& style) {
 }
 
 void readMagnifierValue(const QJsonObject& object, SnowCanvasMagnifierStyle* style) {
-    if (style == nullptr)
+    if (style == nullptr || object.contains(QStringLiteral("show_leader")) ||
+        !object.value(QStringLiteral("source_outline")).isBool())
         return;
+    auto connectionType = style->connectionType;
+    if (!readEnum(object, QStringLiteral("connection_type"),
+                  static_cast<int>(SnowCanvasMagnifierConnectionType::Gradient), &connectionType))
+        return;
+    // The unreleased Magnifier format requires both new fields. Reject its
+    // complete preference object before applying any appearance properties.
+    style->connectionType = connectionType;
+    style->sourceOutline = object.value(QStringLiteral("source_outline")).toBool();
     readEnum(object, QStringLiteral("shape"), static_cast<int>(SnowCanvasRectangleShape::Diamond),
              &style->shape);
     QColor color;
@@ -203,8 +213,6 @@ void readMagnifierValue(const QJsonObject& object, SnowCanvasMagnifierStyle* sty
         style->stroke = color;
     readDouble(object, QStringLiteral("stroke_width"), &style->strokeWidth);
     readDouble(object, QStringLiteral("factor"), &style->factor);
-    if (object.value(QStringLiteral("show_leader")).isBool())
-        style->showLeader = object.value(QStringLiteral("show_leader")).toBool();
     readEnum(object, QStringLiteral("leader_arrowhead"),
              static_cast<int>(SnowCanvasArrowhead::IndentedTriangle), &style->leaderArrowhead);
     style->strokeWidth = bounded(style->strokeWidth, 0.0, 72.0);

@@ -118,8 +118,10 @@ inline void snowCanvasMergeStyle(SnowCanvasMagnifierStyle& target,
         target.strokeWidth = value.strokeWidth;
     if (properties & SnowCanvasMagnifierStylePropertyFactor)
         target.factor = value.factor;
-    if (properties & SnowCanvasMagnifierStylePropertyShowLeader)
-        target.showLeader = value.showLeader;
+    if (properties & SnowCanvasMagnifierStylePropertyConnectionType)
+        target.connectionType = value.connectionType;
+    if (properties & SnowCanvasMagnifierStylePropertySourceOutline)
+        target.sourceOutline = value.sourceOutline;
     if (properties & SnowCanvasMagnifierStylePropertyLeaderArrowhead)
         target.leaderArrowhead = value.leaderArrowhead;
     if (properties & SnowCanvasMagnifierStylePropertyCornerRadius)

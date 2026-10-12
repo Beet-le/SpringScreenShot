@@ -49,25 +49,48 @@ void filterStyleParticipatesInToolbarStateDiffs() {
 
 void magnifierStylePatchesAndSynchronization() {
     SnowCanvasMagnifierStyle style;
-    require(style.factor == 2.0 && style.showLeader && style.strokeWidth == 2.0 &&
+    require(style.factor == 2.0 &&
+                style.connectionType == SnowCanvasMagnifierConnectionType::Gradient &&
+                style.sourceOutline && style.strokeWidth == 2.0 &&
                 style.cornerRadii == SnowCanvasCornerRadii{6, 6, 6, 6},
             "magnifier has independent usable defaults");
     style.shape = SnowCanvasRectangleShape::Diamond;
     style.stroke = QColor(12, 34, 56, 78);
     style.factor = 7.3;
-    style.showLeader = false;
+    style.connectionType = SnowCanvasMagnifierConnectionType::None;
+    style.sourceOutline = false;
     style.leaderArrowhead = SnowCanvasArrowhead::CrowfootOneOrMany;
     style.arrowRatio = 2.3;
     style.cornerRadii = {3, 6, 9, 12};
     require(snow_canvas_types::toCanvasMagnifierStyle(
                 snow_canvas_types::toEngineMagnifierStyle(style)) == style,
             "magnifier style preserves every field across the C ABI");
+    for (auto connection :
+         {SnowCanvasMagnifierConnectionType::None, SnowCanvasMagnifierConnectionType::LeaderLine,
+          SnowCanvasMagnifierConnectionType::Gradient}) {
+        for (bool outline : {false, true}) {
+            auto combination = style;
+            combination.connectionType = connection;
+            combination.sourceOutline = outline;
+            require(snow_canvas_types::toCanvasMagnifierStyle(
+                        snow_canvas_types::toEngineMagnifierStyle(combination)) == combination,
+                    "all connection and outline combinations survive the C ABI");
+        }
+    }
 
     snow_canvas_state::Snapshot before;
     auto after = before;
     after.styleToolbarState.magnifier_style = snow_canvas_types::toEngineMagnifierStyle(style);
     require(snow_canvas_state::diffSnapshots(before, after).styleToolbarChanged,
             "magnifier appearance changes synchronize the toolbar");
+    before = after;
+    after.styleToolbarState.magnifier_style.connection_type = SNOW_MAGNIFIER_CONNECTION_GRADIENT;
+    require(snow_canvas_state::diffSnapshots(before, after).styleToolbarChanged,
+            "connection changes synchronize the toolbar independently");
+    before = after;
+    after.styleToolbarState.magnifier_style.source_outline = 1;
+    require(snow_canvas_state::diffSnapshots(before, after).styleToolbarChanged,
+            "source outline changes synchronize the toolbar independently");
     before = after;
     after.styleToolbarState.magnifier_style.corner_radii.bottom_right = 15;
     require(snow_canvas_state::diffSnapshots(before, after).styleToolbarChanged,
@@ -97,6 +120,25 @@ void magnifierStylePatchesAndSynchronization() {
             "factor patches preserve unrelated magnifier properties");
     require(!runtime.canUndo(), "creation style changes do not create annotation history");
     require(
+        editor.setMagnifierStyleFromToolbar(style, SnowCanvasMagnifierStylePropertyConnectionType),
+        "magnifier connection patch succeeds");
+    expected.connectionType = style.connectionType;
+    require(editor.canvasStyleToolbarState().magnifierStyle == expected,
+            "connection patches preserve source outline and unrelated style properties");
+    require(
+        editor.setMagnifierStyleFromToolbar(style, SnowCanvasMagnifierStylePropertySourceOutline),
+        "magnifier source outline patch succeeds");
+    expected.sourceOutline = style.sourceOutline;
+    require(editor.canvasStyleToolbarState().magnifierStyle == expected,
+            "source outline patches preserve connection and unrelated style properties");
+    for (int connection : {-1, 3}) {
+        auto invalid = style;
+        invalid.connectionType = static_cast<SnowCanvasMagnifierConnectionType>(connection);
+        require(!editor.setMagnifierStyleFromToolbar(
+                    invalid, SnowCanvasMagnifierStylePropertyConnectionType),
+                "invalid connections leave magnifier defaults intact");
+    }
+    require(
         editor.setMagnifierStyleFromToolbar(style, SnowCanvasMagnifierStylePropertyCornerRadius),
         "magnifier corner patch succeeds");
     expected.cornerRadii = style.cornerRadii;
@@ -123,18 +165,30 @@ void magnifierStylePatchesAndSynchronization() {
     require(editor.canvasStyleToolbarState().magnifierStyle == expected,
             "invalid patches leave magnifier styles intact");
 
-    SnowCanvasStyleDefaults defaults;
     style.factor = 4.0;
-    snowCanvasMergeStyleEdit(defaults,
-                             SnowCanvasMagnifierEdit{style, SnowCanvasMagnifierStylePropertyFactor,
-                                                     SnowCanvasStyleEditTarget::Selection});
-    require(defaults.magnifier.factor == 4.0 && defaults.magnifier.showLeader,
-            "selected magnifier patches remember only explicitly edited properties");
-    snowCanvasMergeStyleEdit(defaults,
-                             SnowCanvasMagnifierEdit{style, SnowCanvasMagnifierStylePropertyFactor,
-                                                     SnowCanvasStyleEditTarget::Creation});
-    require(defaults.magnifier.factor == 4.0 && defaults.magnifier.showLeader,
-            "remembered defaults merge only explicitly edited properties");
+    for (auto target :
+         {SnowCanvasStyleEditTarget::Selection, SnowCanvasStyleEditTarget::Creation}) {
+        SnowCanvasStyleDefaults defaults;
+        auto remembered = defaults.magnifier;
+        snowCanvasMergeStyleEdit(
+            defaults,
+            SnowCanvasMagnifierEdit{style, SnowCanvasMagnifierStylePropertyFactor, target});
+        remembered.factor = style.factor;
+        require(defaults.magnifier == remembered,
+                "magnifier edits remember only the explicitly edited factor for either target");
+        snowCanvasMergeStyleEdit(
+            defaults,
+            SnowCanvasMagnifierEdit{style, SnowCanvasMagnifierStylePropertyConnectionType, target});
+        remembered.connectionType = style.connectionType;
+        require(defaults.magnifier == remembered,
+                "remembering a connection preserves the independent source outline");
+        snowCanvasMergeStyleEdit(
+            defaults,
+            SnowCanvasMagnifierEdit{style, SnowCanvasMagnifierStylePropertySourceOutline, target});
+        remembered.sourceOutline = style.sourceOutline;
+        require(defaults.magnifier == remembered,
+                "remembering a source outline preserves the independent connection and factor");
+    }
 }
 
 template <typename T> void requireEqualPair(const T& value, const char* message) {

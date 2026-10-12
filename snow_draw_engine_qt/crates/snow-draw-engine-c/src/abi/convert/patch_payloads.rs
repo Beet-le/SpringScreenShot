@@ -191,6 +191,9 @@ pub(crate) fn snow_scene_display_item_from_rust(
             source_width: item.source_width,
             source_height: item.source_height,
             magnification_factor: item.factor,
+            connection_type: item.connection_type.into(),
+            source_outline: u8::from(item.source_outline),
+            reserved: [0; 3],
         };
         if let Some(leader) = &item.leader {
             let arrow = snow_scene_display_item_from_rust(
@@ -692,7 +695,7 @@ mod tests {
 
     #[test]
     fn compact_display_views_stay_below_the_abi_size_budget() {
-        assert_eq!(std::mem::size_of::<SnowSceneDisplayItem>(), 344);
+        assert_eq!(std::mem::size_of::<SnowSceneDisplayItem>(), 408);
         assert!(std::mem::size_of::<SnowOverlayDisplayItem>() <= 384);
     }
 

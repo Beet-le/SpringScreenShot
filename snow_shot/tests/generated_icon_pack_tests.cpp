@@ -97,8 +97,8 @@ void everySnowShotEntryRenders() {
     const auto registered = icons::registerWith(renderer);
     require(registered.ok(), "Snow Shot pack registration should succeed");
     const adqt::icons::IconPack* staticPack = icons::pack().staticPack();
-    require(staticPack != nullptr && staticPack->entryCount == 177,
-            "Snow Shot pack should contain all 177 project-owned assets");
+    require(staticPack != nullptr && staticPack->entryCount == 180,
+            "Snow Shot pack should contain all 180 project-owned assets");
 
     adqt::icons::IconRenderRequest request;
     request.logicalSize = QSize(32, 32);
@@ -146,6 +146,61 @@ void recaptureIconUsesThemeColor() {
                                                  std::abs(pixel.green() - color.green()) <= 1 &&
                                                  std::abs(pixel.blue() - color.blue()) <= 1),
                         "Recapture must not retain any fixed SVG colors");
+            }
+        }
+    }
+}
+
+void magnifierDecorationIconsFollowThemeAndToolbarMetrics() {
+    namespace icons = snow_shot::presentation::icons::custom;
+    const QList<adqt::icons::IconRef> refs{icons::outlined::MagnifierConnectionNone(),
+                                           icons::outlined::MagnifierGradient(),
+                                           icons::outlined::SourceRegionOutline()};
+    for (const auto& ref : refs) {
+        const auto metadata = adqt::icons::describeIcon(ref);
+        const auto svg = ref.descriptor()->svg;
+        require(metadata.colorModel == adqt::icons::IconColorModel::Monochrome &&
+                    svg.find("viewBox=\"0 0 1024 1024\"") != std::string_view::npos &&
+                    svg.find("stroke-width=\"72\"") != std::string_view::npos &&
+                    svg.find("stroke-linecap=\"round\"") != std::string_view::npos &&
+                    svg.find("stroke-linejoin=\"round\"") != std::string_view::npos,
+                "magnifier decoration icons share the Ant Design canvas and theme-color model");
+        for (const QColor color :
+             {QColor("#262626"), QColor("#f0f0f0"), QColor("#1677ff"), QColor("#bfbfbf")}) {
+            for (qreal dpr : {1.0, 1.25, 1.5, 2.0}) {
+                const QImage image = snow_shot::presentation::icons::renderTintedIconPixmap(
+                                         ref, QSize(16, 16), dpr, color)
+                                         .toImage()
+                                         .convertToFormat(QImage::Format_ARGB32_Premultiplied);
+                require(!image.isNull() && image.width() == qRound(16 * dpr) &&
+                            !alphaBounds(image).isEmpty(),
+                        "magnifier icons remain readable at toolbar sizes and fractional DPI");
+                for (int y = 0; y < image.height(); ++y)
+                    for (int x = 0; x < image.width(); ++x) {
+                        // Gradient-stop premultiplication and interpolation each
+                        // round to eight bits. Compare stored channels within their
+                        // two-level bound; unpremultiplication amplifies that error.
+                        const QRgb pixel = image.pixel(x, y);
+                        const double alpha = qAlpha(pixel) / 255.0;
+                        const int tolerance =
+                            metadata.key.name == QStringLiteral("magnifier-gradient") &&
+                                    qAlpha(pixel) < 255
+                                ? 2
+                                : 1;
+                        require(std::abs(qRed(pixel) - qRound(color.red() * alpha)) <= tolerance &&
+                                    std::abs(qGreen(pixel) - qRound(color.green() * alpha)) <=
+                                        tolerance &&
+                                    std::abs(qBlue(pixel) - qRound(color.blue() * alpha)) <=
+                                        tolerance,
+                                "stroke and translucent bridge use the supplied theme tint");
+                    }
+                if (metadata.key.name == QStringLiteral("magnifier-gradient")) {
+                    const int bridgeAlpha =
+                        qAlpha(image.pixel(qFloor(image.width() * 352.0 / 1024.0),
+                                           qFloor(image.height() * 480.0 / 1024.0)));
+                    require(bridgeAlpha > 0 && bridgeAlpha < 128,
+                            "the theme-tinted bridge remains translucent between both icon frames");
+                }
             }
         }
     }
@@ -442,6 +497,7 @@ void numericFormatIconsRenderAtToolbarSizes() {
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     try {
+        magnifierDecorationIconsFollowThemeAndToolbarMetrics();
         numericFormatIconsRenderAtToolbarSizes();
         if (application.arguments().contains(QStringLiteral("--recapture-only"))) {
             recaptureIconUsesThemeColor();

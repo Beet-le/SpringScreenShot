@@ -424,7 +424,7 @@ fn magnifier_source_outline(
         HighlightShape::Diamond => snow_draw_engine_document::RoundedDiamond::new(
             value.width,
             value.height,
-            value.corner_radii,
+            value.source_rect().corner_radii,
         )
         .path_commands(value.source_center, value.rotation),
         HighlightShape::Ellipse => {
@@ -507,12 +507,12 @@ mod tests {
         assert_eq!(outline.path_commands.len(), 9);
         assert_eq!(
             outline.path_commands[0],
-            ArrowPathCommand::MoveTo { point: [5.0, 15.0] }
+            ArrowPathCommand::MoveTo { point: [3.0, 15.0] }
         );
         let ArrowPathCommand::CubicTo { end, .. } = outline.path_commands[2] else {
             panic!("rounded source corners must use curves");
         };
-        assert_eq!(end, [20.0, 20.0]);
+        assert_eq!(end, [20.0, 18.0]);
         assert_eq!(outline.stroke_width, 0.5);
         assert_eq!(outline.stroke_style, StrokeStyle::Dashed);
     }

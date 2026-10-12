@@ -1167,7 +1167,8 @@ void mixedVisibleAndOffscreenOriginalDamageRepaintsMagnifiers() {
     style.factor = 2;
     style.strokeWidth = 0;
     style.cornerRadii = {};
-    style.showLeader = false;
+    style.connectionType = SnowCanvasMagnifierConnectionType::None;
+    style.sourceOutline = false;
     require(canvas.setCanvasMagnifierStyle(style), "configure offscreen source lens");
     const auto drag = [&](const QPointF& start, const QPointF& end) {
         for (const auto& [type, point, button, buttons] :

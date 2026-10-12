@@ -302,6 +302,7 @@ class ScreenshotToolPaletteStyleControls final {
     void refreshThemeIcons(const ScreenshotToolPaletteButtonMetrics& metrics);
     void retranslateWatermarkTemplateUi();
     void retranslateTextEmphasisUi();
+    void retranslateMagnifierUi();
 
 #if defined(SNOW_SHOT_TEST_HOOKS)
     [[nodiscard]] quint64 styleStateNoopCount() const;
@@ -550,7 +551,8 @@ class ScreenshotToolPaletteStyleControls final {
     QPointer<IconNumericValuePreviewButton> m_magnifierFactorEditor;
     QPointer<IconNumericValuePreviewButton> m_magnifierArrowRatioEditor;
     QPointer<CornerRadiusEditorButton> m_magnifierCornerRadiusEditor;
-    QPointer<adqt::widgets::AdButton> m_magnifierLeaderToggle;
+    QPointer<adqt::widgets::AdRadioButtonGroup> m_magnifierConnectionGroup;
+    QPointer<adqt::widgets::AdButton> m_magnifierSourceOutlineToggle;
     std::unique_ptr<ScreenshotToolPaletteColorEditor> m_angleColorEditor;
     std::unique_ptr<ScreenshotToolPaletteNumericPresetEditor> m_angleWidthEditor;
     QPointer<adqt::widgets::AdRadioButtonGroup> m_angleTypeGroup;

@@ -248,7 +248,8 @@ pub unsafe extern "C" fn snow_viewport_set_magnifier_style_patch_ex(
         if !unsafe {
             raw_c_enum_is_valid(std::ptr::addr_of!((*style).shape))
                 && raw_c_enum_is_valid(std::ptr::addr_of!((*style).leader_arrowhead))
-                && (*style).show_leader <= 1
+                && raw_c_enum_is_valid(std::ptr::addr_of!((*style).connection_type))
+                && (*style).source_outline <= 1
         } {
             return SnowError::InvalidArgument;
         }

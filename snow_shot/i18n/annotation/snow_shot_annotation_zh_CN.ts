@@ -232,6 +232,10 @@
             <translation>确认编辑</translation>
         </message>
         <message>
+            <source>Connection type</source>
+            <translation>连接类型</translation>
+        </message>
+        <message>
             <source>Convert to HTML</source>
             <translation>转换为 HTML</translation>
         </message>
@@ -588,6 +592,10 @@
             <translation>高斯模糊</translation>
         </message>
         <message>
+            <source>Gradient</source>
+            <translation>渐变</translation>
+        </message>
+        <message>
             <source>Grayscale</source>
             <translation>灰度</translation>
         </message>
@@ -670,6 +678,10 @@
         <message>
             <source>LaTeX-Specific Model</source>
             <translation>LaTeX 专用模型</translation>
+        </message>
+        <message>
+            <source>Leader line</source>
+            <translation>引导线</translation>
         </message>
         <message>
             <source>Leader line type</source>
@@ -802,6 +814,10 @@
         <message>
             <source>No templates yet</source>
             <translation>暂无模板</translation>
+        </message>
+        <message>
+            <source>None</source>
+            <translation>无</translation>
         </message>
         <message>
             <source>Opacity</source>
@@ -1092,10 +1108,6 @@
             <translation>在录制中显示按键</translation>
         </message>
         <message>
-            <source>Show leader line</source>
-            <translation>显示引线</translation>
-        </message>
-        <message>
             <source>Show original image</source>
             <translation>显示原图</translation>
         </message>
@@ -1134,6 +1146,10 @@
         <message>
             <source>Solid text fill</source>
             <translation>纯色文本填充</translation>
+        </message>
+        <message>
+            <source>Source region outline</source>
+            <translation>源区域轮廓</translation>
         </message>
         <message>
             <source>Split cells</source>

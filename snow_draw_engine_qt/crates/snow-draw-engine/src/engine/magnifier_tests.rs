@@ -8,7 +8,8 @@ use snow_draw_engine_display::{OverlayDisplayItem, SceneDisplayItem, UiShapeKind
 use snow_draw_engine_document::{HighlightShape, Transaction};
 use snow_draw_engine_editor::{
     MAGNIFIER_STYLE_PROPERTY_ALL, MAGNIFIER_STYLE_PROPERTY_ARROW_RATIO,
-    MAGNIFIER_STYLE_PROPERTY_CORNER_RADII, MAGNIFIER_STYLE_PROPERTY_FACTOR, MagnifierStyle,
+    MAGNIFIER_STYLE_PROPERTY_CONNECTION_TYPE, MAGNIFIER_STYLE_PROPERTY_CORNER_RADII,
+    MAGNIFIER_STYLE_PROPERTY_FACTOR, MAGNIFIER_STYLE_PROPERTY_SOURCE_OUTLINE, MagnifierStyle,
 };
 use snow_draw_engine_interaction::{
     Modifiers, PointerButton, PointerButtons, PointerCaptureCommand, PointerDevice, PointerEvent,
@@ -161,7 +162,7 @@ fn magnifier_marquee_matches_either_region_without_matching_the_empty_gap() {
                 let mut value = *engine.model.magnifier(id).unwrap();
                 value.source_center = Point::new(-1000.0, 0.0);
                 value.rotation = rotation;
-                value.show_leader = false;
+                value.connection_type = snow_draw_engine_core::MagnifierConnectionType::None;
                 let mut transaction = Transaction::new("separate offscreen source");
                 transaction.update_magnifier(id, value);
                 engine.model.apply_transaction(transaction).unwrap();
@@ -539,7 +540,10 @@ fn magnifier_creates_all_shapes_as_one_pristine_image_item() {
         assert_eq!((value.width, value.height), (100.0, 80.0));
         assert_eq!(value.shape, shape);
         assert_eq!(value.corner_radii, CornerRadii::splat(6.0));
-        assert!(value.show_leader && value.leader().is_none());
+        assert!(
+            value.connection_type == snow_draw_engine_core::MagnifierConnectionType::Gradient
+                && value.leader().is_none()
+        );
         let patch = engine.acquire_patch(viewport, None).unwrap();
         let items = patch
             .scene
@@ -832,7 +836,11 @@ fn magnifier_factor_one_external_grip_can_separate_coincident_regions() {
     let value = engine.model.magnifier(id).unwrap();
     assert_eq!(value.source_center, Point::new(0.0, 0.0));
     assert_eq!(value.magnified_center, Point::new(140.0, 20.0));
-    assert!(value.leader().is_some());
+    assert!(value.leader().is_none());
+    assert_eq!(
+        value.connection_type,
+        snow_draw_engine_core::MagnifierConnectionType::Gradient
+    );
 }
 
 #[test]
@@ -938,12 +946,176 @@ fn magnifier_lens_cancel_does_not_commit_and_z_order_remains_intact() {
 }
 
 #[test]
+fn magnifier_style_payload_requires_current_fields_and_rejects_obsolete_toggle() {
+    let style = MagnifierStyle::default();
+    assert_eq!(
+        style.connection_type,
+        snow_draw_engine_core::MagnifierConnectionType::Gradient
+    );
+    assert!(style.source_outline);
+    let json = serde_json::to_value(style).unwrap();
+    assert_eq!(
+        serde_json::from_value::<MagnifierStyle>(json.clone()).unwrap(),
+        style
+    );
+    for key in ["connection_type", "source_outline"] {
+        let mut missing = json.clone();
+        missing.as_object_mut().unwrap().remove(key);
+        assert!(serde_json::from_value::<MagnifierStyle>(missing).is_err());
+    }
+    let mut obsolete = json;
+    obsolete["show_leader"] = false.into();
+    assert!(serde_json::from_value::<MagnifierStyle>(obsolete).is_err());
+}
+
+#[test]
+fn magnifier_connections_and_source_outlines_patch_independently_with_history() {
+    use snow_draw_engine_core::MagnifierConnectionType;
+    for connection_type in [
+        MagnifierConnectionType::None,
+        MagnifierConnectionType::LeaderLine,
+        MagnifierConnectionType::Gradient,
+    ] {
+        for source_outline in [false, true] {
+            let (mut engine, viewport, id) = fixture(HighlightShape::Rectangle, 2.0);
+            select(&mut engine, viewport, id);
+            let original = *engine.model.magnifier(id).unwrap();
+            let style = MagnifierStyle {
+                connection_type,
+                source_outline,
+                factor: 9.0,
+                ..Default::default()
+            };
+            engine
+                .set_viewport_magnifier_style_patch(
+                    viewport,
+                    style,
+                    MAGNIFIER_STYLE_PROPERTY_CONNECTION_TYPE
+                        | MAGNIFIER_STYLE_PROPERTY_SOURCE_OUTLINE,
+                    false,
+                )
+                .unwrap();
+            let changed = *engine.model.magnifier(id).unwrap();
+            assert_eq!(changed.connection_type, connection_type);
+            assert_eq!(changed.source_outline, source_outline);
+            assert_eq!(changed.factor, original.factor);
+            let display = scene_magnifiers(&engine, viewport).remove(0);
+            assert_eq!(display.connection_type, connection_type);
+            assert_eq!(display.source_outline, source_outline);
+            if changed != original {
+                assert!(engine.undo().unwrap());
+                assert_eq!(*engine.model.magnifier(id).unwrap(), original);
+                assert!(engine.redo().unwrap());
+                assert_eq!(*engine.model.magnifier(id).unwrap(), changed);
+            }
+            engine
+                .reset_editing_state_with_viewport_changes(viewport)
+                .unwrap();
+            let defaults = engine
+                .viewport_style_toolbar_state(viewport)
+                .unwrap()
+                .magnifier_style;
+            assert_eq!(defaults.connection_type, connection_type);
+            assert_eq!(defaults.source_outline, source_outline);
+            assert_eq!(defaults.factor, original.factor);
+        }
+    }
+}
+
+#[test]
+fn magnifier_mixed_connections_and_outlines_resolve_one_property_at_a_time() {
+    use snow_draw_engine_core::MagnifierConnectionType;
+    let (mut engine, viewport, first_id) = fixture(HighlightShape::Rectangle, 2.0);
+    let original = *engine.model.magnifier(first_id).unwrap();
+    let second_id = engine.model.peek_next_element_id();
+    let second = snow_draw_engine_document::MagnifierData {
+        source_center: Point::new(400.0, 0.0),
+        magnified_center: Point::new(400.0, 0.0),
+        connection_type: MagnifierConnectionType::None,
+        source_outline: false,
+        ..original
+    };
+    let mut transaction = Transaction::new("second magnifier");
+    transaction.insert_magnifier(second_id, Default::default(), second);
+    engine
+        .apply_editor_command(
+            viewport,
+            EditorCommand::ApplyTransaction(ApplyTransactionCommand {
+                transaction,
+                history_undo_snapshot: None,
+            }),
+        )
+        .unwrap();
+    let selection = serde_json::from_value(
+        serde_json::json!({"selectedIds":[first_id,second_id], "primaryId":first_id}),
+    )
+    .unwrap();
+    engine
+        .editor
+        .restore_history_selection(&engine.model, &selection);
+    engine.refresh_all_viewports().unwrap();
+    assert_eq!(
+        engine
+            .viewport_style_toolbar_state(viewport)
+            .unwrap()
+            .magnifier_style_mixed,
+        MAGNIFIER_STYLE_PROPERTY_CONNECTION_TYPE | MAGNIFIER_STYLE_PROPERTY_SOURCE_OUTLINE
+    );
+    engine
+        .set_viewport_magnifier_style_patch(
+            viewport,
+            MagnifierStyle {
+                connection_type: MagnifierConnectionType::LeaderLine,
+                ..Default::default()
+            },
+            MAGNIFIER_STYLE_PROPERTY_CONNECTION_TYPE,
+            false,
+        )
+        .unwrap();
+    assert_eq!(
+        engine
+            .viewport_style_toolbar_state(viewport)
+            .unwrap()
+            .magnifier_style_mixed,
+        MAGNIFIER_STYLE_PROPERTY_SOURCE_OUTLINE
+    );
+    assert!(engine.model.magnifier(first_id).unwrap().source_outline);
+    assert!(!engine.model.magnifier(second_id).unwrap().source_outline);
+    engine
+        .set_viewport_magnifier_style_patch(
+            viewport,
+            MagnifierStyle::default(),
+            MAGNIFIER_STYLE_PROPERTY_SOURCE_OUTLINE,
+            false,
+        )
+        .unwrap();
+    assert_eq!(
+        engine
+            .viewport_style_toolbar_state(viewport)
+            .unwrap()
+            .magnifier_style_mixed,
+        0
+    );
+    assert!(engine.model.magnifier(second_id).unwrap().source_outline);
+    assert_eq!(
+        engine.model.magnifier(second_id).unwrap().connection_type,
+        MagnifierConnectionType::LeaderLine
+    );
+    assert!(engine.undo().unwrap());
+    assert!(!engine.model.magnifier(second_id).unwrap().source_outline);
+    assert!(engine.undo().unwrap());
+    assert_eq!(*engine.model.magnifier(first_id).unwrap(), original);
+    assert_eq!(*engine.model.magnifier(second_id).unwrap(), second);
+}
+
+#[test]
 fn magnifier_creation_only_patches_preserve_selection_and_sessions_remember_styles() {
     let (mut engine, viewport, id) = fixture(HighlightShape::Diamond, 2.0);
     select(&mut engine, viewport, id);
     let style = MagnifierStyle {
         factor: 3.5,
-        show_leader: false,
+        connection_type: snow_draw_engine_core::MagnifierConnectionType::None,
+        source_outline: false,
         stroke_width: 0.0,
         corner_radii: CornerRadii::splat(12.0),
         arrow_ratio: 2.3,
@@ -978,7 +1150,7 @@ fn magnifier_creation_only_patches_preserve_selection_and_sessions_remember_styl
     assert_eq!(engine.model.magnifier(id).unwrap().arrow_ratio, 2.3);
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["schemaVersion"],
-        11
+        12
     );
     let mut restored =
         Engine::from_serialized_document_session_with_config(&bytes, EngineConfig::default())
@@ -1030,7 +1202,7 @@ fn magnifier_creation_only_patches_preserve_selection_and_sessions_remember_styl
     let history = engine.serialize_document_history().unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&history).unwrap()["schemaVersion"],
-        7
+        8
     );
     let restored =
         Engine::from_serialized_document_history_with_config(&history, EngineConfig::default())
@@ -1042,7 +1214,7 @@ fn magnifier_creation_only_patches_preserve_selection_and_sessions_remember_styl
     let template = engine.serialize_selected_draw_template().unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&template).unwrap()["schemaVersion"],
-        2
+        3
     );
     engine
         .insert_draw_template_with_viewport_changes(viewport, &template, Point::new(150.0, 120.0))
@@ -1054,6 +1226,8 @@ fn magnifier_creation_only_patches_preserve_selection_and_sessions_remember_styl
         .unwrap();
     assert_eq!((copy.width, copy.height, copy.factor), (100.0, 80.0, 3.5));
     assert_eq!(copy.arrow_ratio, 2.3);
+    assert_eq!(copy.connection_type, style.connection_type);
+    assert_eq!(copy.source_outline, style.source_outline);
 }
 
 #[test]
@@ -1907,6 +2081,17 @@ fn magnifier_pending_eraser_preview_fades_lens_and_leader_without_changing_geome
     ] {
         let (mut engine, viewport, id) = fixture(shape, 2.0);
         select(&mut engine, viewport, id);
+        engine
+            .set_viewport_magnifier_style_patch(
+                viewport,
+                MagnifierStyle {
+                    connection_type: snow_draw_engine_core::MagnifierConnectionType::LeaderLine,
+                    ..Default::default()
+                },
+                MAGNIFIER_STYLE_PROPERTY_CONNECTION_TYPE,
+                false,
+            )
+            .unwrap();
         let grip = handle(&mut engine, viewport, UiShapeKind::MagnifierMoveHandle);
         drag(
             &mut engine,

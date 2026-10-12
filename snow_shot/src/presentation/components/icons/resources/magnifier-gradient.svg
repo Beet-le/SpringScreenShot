@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none" stroke="currentColor" stroke-width="72" stroke-linecap="round" stroke-linejoin="round">
+  <defs>
+    <linearGradient id="bridge" x1="304" y1="720" x2="696" y2="344" gradientUnits="userSpaceOnUse">
+      <stop stop-color="currentColor" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="currentColor" stop-opacity="0.42"/>
+    </linearGradient>
+  </defs>
+  <path d="M160 600 472 144V600H864L400 864V600Z" fill="url(#bridge)" stroke="none"/>
+  <rect x="160" y="600" width="240" height="264" rx="72"/>
+  <rect x="472" y="144" width="392" height="456" rx="72"/>
+</svg>

@@ -735,6 +735,22 @@
     },
     {
       "variant": "outlined",
+      "symbol": "MagnifierConnectionNone",
+      "name": "magnifier-connection-none",
+      "source": "../src/presentation/components/icons/resources/magnifier-connection-none.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "MagnifierGradient",
+      "name": "magnifier-gradient",
+      "source": "../src/presentation/components/icons/resources/magnifier-gradient.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "Markdown",
       "name": "markdown",
       "source": "../src/presentation/components/icons/resources/markdown.svg",
@@ -1234,6 +1250,14 @@
       "symbol": "ShowLeaderLine",
       "name": "show-leader-line",
       "source": "../src/presentation/components/icons/resources/show-leader-line.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "SourceRegionOutline",
+      "name": "source-region-outline",
+      "source": "../src/presentation/components/icons/resources/source-region-outline.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },

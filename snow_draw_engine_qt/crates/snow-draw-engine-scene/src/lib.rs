@@ -1,6 +1,8 @@
 mod dirty_regions;
 mod item_bounds;
 mod item_conversions;
+#[cfg(test)]
+mod magnifier_damage_tests;
 mod overlay_composition;
 mod scene_cache;
 mod scene_composition;

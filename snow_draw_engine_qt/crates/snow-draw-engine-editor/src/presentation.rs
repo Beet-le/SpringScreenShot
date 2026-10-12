@@ -1437,6 +1437,8 @@ mod tests {
         let mut editor = editor_with_surface();
         editor.select_element(&document, text_id).unwrap();
         editor.state.interaction = InteractionState::EditingSelection(EditSelectionState {
+            last_magnifier_corner_input: None,
+            magnifier_corner_input_offset: Point::default(),
             original_magnifiers: Default::default(),
             preview_transform: crate::geometry::SelectionTransform::Identity,
             duplicate: false,
@@ -1510,6 +1512,8 @@ mod tests {
         let mut editor = editor_with_surface();
         editor.select_element(&document, text_id).unwrap();
         editor.state.interaction = InteractionState::EditingSelection(EditSelectionState {
+            last_magnifier_corner_input: None,
+            magnifier_corner_input_offset: Point::default(),
             original_magnifiers: Default::default(),
             preview_transform: crate::geometry::SelectionTransform::Identity,
             duplicate: false,

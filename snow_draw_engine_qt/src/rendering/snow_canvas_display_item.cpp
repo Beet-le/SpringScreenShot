@@ -116,12 +116,16 @@ SnowCanvasSceneItem::SnowCanvasSceneItem() : SnowSceneDisplayItem{} {
     rebuildLocalRectangleGeometry();
 }
 
+SnowCanvasSceneItem::~SnowCanvasSceneItem() = default;
+
 SnowCanvasSceneItem::SnowCanvasSceneItem(const SnowSceneDisplayItem& item) : SnowCanvasSceneItem() {
     assign(item);
 }
 
 SnowCanvasSceneItem::SnowCanvasSceneItem(const SnowCanvasSceneItem& other) : SnowCanvasSceneItem() {
     assign(other);
+    if (other.m_magnifierGeometry)
+        m_magnifierGeometry = std::make_unique<MagnifierGeometryCache>(*other.m_magnifierGeometry);
     viewBounds = other.viewBounds;
     m_penGeometryRevision = other.m_penGeometryRevision;
     m_pathChunks = other.m_pathChunks;
@@ -147,6 +151,7 @@ SnowCanvasSceneItem::SnowCanvasSceneItem(SnowCanvasSceneItem&& other) noexcept
       m_pathSpatialCells(std::move(other.m_pathSpatialCells)),
       m_aggregateClosedPath(std::move(other.m_aggregateClosedPath)),
       m_pathGeometryRevision(other.m_pathGeometryRevision), m_pathClosed(other.m_pathClosed),
+      m_magnifierGeometry(std::move(other.m_magnifierGeometry)),
       m_pendingPenGeometryChunkBuildCount(other.m_pendingPenGeometryChunkBuildCount),
       m_pendingPenGeometryChunkReuseCount(other.m_pendingPenGeometryChunkReuseCount) {
     refreshPointers();
@@ -158,6 +163,10 @@ SnowCanvasSceneItem::SnowCanvasSceneItem(SnowCanvasSceneItem&& other) noexcept
 SnowCanvasSceneItem& SnowCanvasSceneItem::operator=(const SnowCanvasSceneItem& other) {
     if (this != &other) {
         assign(other);
+        m_magnifierGeometry =
+            other.m_magnifierGeometry
+                ? std::make_unique<MagnifierGeometryCache>(*other.m_magnifierGeometry)
+                : nullptr;
         viewBounds = other.viewBounds;
         m_penGeometryRevision = other.m_penGeometryRevision;
         m_pathChunks = other.m_pathChunks;
@@ -193,6 +202,7 @@ SnowCanvasSceneItem& SnowCanvasSceneItem::operator=(SnowCanvasSceneItem&& other)
     m_pathGeometryRevision = other.m_pathGeometryRevision;
     m_pathClosed = other.m_pathClosed;
     m_arrowTextClipCacheValid = false;
+    m_magnifierGeometry = std::move(other.m_magnifierGeometry);
     m_pendingPenGeometryChunkBuildCount = other.m_pendingPenGeometryChunkBuildCount;
     m_pendingPenGeometryChunkReuseCount = other.m_pendingPenGeometryChunkReuseCount;
     refreshPointers();
@@ -209,6 +219,8 @@ SnowCanvasSceneItem& SnowCanvasSceneItem::operator=(const SnowSceneDisplayItem& 
 
 void SnowCanvasSceneItem::assign(const SnowSceneDisplayItem& item) {
     m_arrowTextClipCacheValid = false;
+    if (item.kind != SNOW_SCENE_DISPLAY_ITEM_MAGNIFIER)
+        m_magnifierGeometry.reset();
     const bool preservePenGeometry = kind == SNOW_SCENE_DISPLAY_ITEM_FILTER && is_free_draw != 0 &&
                                      item.kind == SNOW_SCENE_DISPLAY_ITEM_FILTER &&
                                      item.is_free_draw != 0 &&
@@ -244,6 +256,12 @@ void SnowCanvasSceneItem::assign(const SnowSceneDisplayItem& item) {
     if (!preservePenGeometry || geometryStyleChanged) {
         rebuildPenFilterGeometry(0);
     }
+}
+
+SnowCanvasSceneItem::MagnifierGeometryCache& SnowCanvasSceneItem::magnifierGeometryCache() const {
+    if (!m_magnifierGeometry)
+        m_magnifierGeometry = std::make_unique<MagnifierGeometryCache>();
+    return *m_magnifierGeometry;
 }
 
 void SnowCanvasSceneItem::rebuildPenFilterGeometry(std::size_t firstChangedPoint) {

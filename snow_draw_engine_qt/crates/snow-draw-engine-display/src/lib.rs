@@ -745,7 +745,27 @@ pub struct MagnifierDisplayItem {
     pub source_width: f64,
     pub source_height: f64,
     pub factor: f64,
+    pub connection_type: snow_draw_engine_core::MagnifierConnectionType,
+    pub source_outline: bool,
     pub leader: Option<ArrowDisplayItem>,
+}
+
+impl MagnifierDisplayItem {
+    pub fn paint_geometry(&self) -> snow_draw_engine_core::MagnifierPaintGeometry {
+        snow_draw_engine_core::MagnifierPaintGeometry {
+            lens_center: Point::new(self.lens.center_x, self.lens.center_y),
+            lens_width: self.lens.width,
+            lens_height: self.lens.height,
+            source_center: self.source_center,
+            source_width: self.source_width,
+            source_height: self.source_height,
+            rotation: self.lens.rotation,
+            stroke_width: self.lens.stroke_width,
+            stroke_visible: self.lens.stroke.a != 0,
+            source_outline: self.source_outline,
+            connection_type: self.connection_type,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -208,17 +208,24 @@ enum class SnowCanvasRectangleShape {
     Diamond,
 };
 
+enum class SnowCanvasMagnifierConnectionType {
+    None = 0,
+    LeaderLine = 1,
+    Gradient = 2,
+};
+
 enum SnowCanvasMagnifierStyleProperty : quint32 {
     SnowCanvasMagnifierStylePropertyShape = 1u << 0,
     SnowCanvasMagnifierStylePropertyStrokeColor = 1u << 1,
     SnowCanvasMagnifierStylePropertyStrokeWidth = 1u << 2,
     SnowCanvasMagnifierStylePropertyFactor = 1u << 3,
-    SnowCanvasMagnifierStylePropertyShowLeader = 1u << 4,
+    SnowCanvasMagnifierStylePropertyConnectionType = 1u << 4,
     SnowCanvasMagnifierStylePropertyLeaderArrowhead = 1u << 5,
     SnowCanvasMagnifierStylePropertyCornerRadius = 1u << 6,
     SnowCanvasMagnifierStylePropertyArrowRatio = 1u << 7,
+    SnowCanvasMagnifierStylePropertySourceOutline = 1u << 8,
 };
-inline constexpr quint32 SnowCanvasMagnifierStyleAllProperties = (1u << 8) - 1u;
+inline constexpr quint32 SnowCanvasMagnifierStyleAllProperties = (1u << 9) - 1u;
 
 enum class SnowCanvasFilterType {
     Mosaic,
@@ -439,7 +446,8 @@ struct SnowCanvasMagnifierStyle {
     QColor stroke{0xf5, 0x22, 0x2d};
     double strokeWidth = 2.0;
     double factor = 2.0;
-    bool showLeader = true;
+    SnowCanvasMagnifierConnectionType connectionType = SnowCanvasMagnifierConnectionType::Gradient;
+    bool sourceOutline = true;
     SnowCanvasArrowhead leaderArrowhead = SnowCanvasArrowhead::None;
     SnowCanvasCornerRadii cornerRadii{6.0, 6.0, 6.0, 6.0};
     double arrowRatio = 1.0;
@@ -448,7 +456,8 @@ struct SnowCanvasMagnifierStyle {
 inline bool operator==(const SnowCanvasMagnifierStyle& lhs, const SnowCanvasMagnifierStyle& rhs) {
     return lhs.shape == rhs.shape && lhs.stroke == rhs.stroke &&
            snowCanvasExactDoubleEqual(lhs.strokeWidth, rhs.strokeWidth) &&
-           snowCanvasExactDoubleEqual(lhs.factor, rhs.factor) && lhs.showLeader == rhs.showLeader &&
+           snowCanvasExactDoubleEqual(lhs.factor, rhs.factor) &&
+           lhs.connectionType == rhs.connectionType && lhs.sourceOutline == rhs.sourceOutline &&
            lhs.leaderArrowhead == rhs.leaderArrowhead && lhs.cornerRadii == rhs.cornerRadii &&
            snowCanvasExactDoubleEqual(lhs.arrowRatio, rhs.arrowRatio);
 }

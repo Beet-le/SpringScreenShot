@@ -276,8 +276,10 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
         snow_draw_engine_qt_canvas snow_test_cli_guard_qt)
     snow_shot_import_offscreen_platform(snow-canvas-magnifier-render-tests)
     add_test(NAME snow-canvas-magnifier-render-tests COMMAND snow-canvas-magnifier-render-tests)
+    add_test(NAME snow-canvas-magnifier-damage-tests
+        COMMAND snow-canvas-magnifier-render-tests --gradient-damage-only)
     snow_shot_offscreen_qpa_environment(_snow_canvas_magnifier_qpa_environment)
-    set_tests_properties(snow-canvas-magnifier-render-tests PROPERTIES
+    set_tests_properties(snow-canvas-magnifier-render-tests snow-canvas-magnifier-damage-tests PROPERTIES
         LABELS "unit" TIMEOUT 60
         ENVIRONMENT "${_snow_canvas_magnifier_qpa_environment}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")

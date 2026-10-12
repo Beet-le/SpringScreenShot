@@ -505,7 +505,8 @@ void addSeparatedLens(SnowCanvasWidget& canvas, const QRectF& source, const QPoi
     style.factor = 2;
     style.strokeWidth = 0;
     style.cornerRadii = {};
-    style.showLeader = false;
+    style.connectionType = SnowCanvasMagnifierConnectionType::None;
+    style.sourceOutline = false;
     require(canvas.setCanvasMagnifierStyle(style), "configure the damage-test lens");
     drag(canvas, source.topLeft(), source.bottomRight());
     mouse(canvas, QEvent::MouseButtonPress, source.center(), Qt::LeftButton, Qt::LeftButton);

@@ -74,7 +74,7 @@ fn magnifier_hit_queries_block_arrow_text_through_source_and_lens() {
                 height: 40.0,
                 rotation,
                 shape,
-                show_leader: false,
+                connection_type: snow_draw_engine_core::MagnifierConnectionType::None,
                 ..Default::default()
             };
             let mut transaction = Transaction::new("cover arrow with magnifier");

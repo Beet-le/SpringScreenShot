@@ -232,6 +232,10 @@
             <translation>確認編輯</translation>
         </message>
         <message>
+            <source>Connection type</source>
+            <translation>連接類型</translation>
+        </message>
+        <message>
             <source>Convert to HTML</source>
             <translation>轉換為 HTML</translation>
         </message>
@@ -588,6 +592,10 @@
             <translation>高斯模糊</translation>
         </message>
         <message>
+            <source>Gradient</source>
+            <translation>漸層</translation>
+        </message>
+        <message>
             <source>Grayscale</source>
             <translation>灰階</translation>
         </message>
@@ -670,6 +678,10 @@
         <message>
             <source>LaTeX-Specific Model</source>
             <translation>LaTeX 專用模型</translation>
+        </message>
+        <message>
+            <source>Leader line</source>
+            <translation>引導線</translation>
         </message>
         <message>
             <source>Leader line type</source>
@@ -802,6 +814,10 @@
         <message>
             <source>No templates yet</source>
             <translation>尚無範本</translation>
+        </message>
+        <message>
+            <source>None</source>
+            <translation>無</translation>
         </message>
         <message>
             <source>Opacity</source>
@@ -1092,10 +1108,6 @@
             <translation>在錄製中顯示按鍵</translation>
         </message>
         <message>
-            <source>Show leader line</source>
-            <translation>顯示引線</translation>
-        </message>
-        <message>
             <source>Show original image</source>
             <translation>顯示原圖</translation>
         </message>
@@ -1134,6 +1146,10 @@
         <message>
             <source>Solid text fill</source>
             <translation>純色文字填充</translation>
+        </message>
+        <message>
+            <source>Source region outline</source>
+            <translation>來源區域輪廓</translation>
         </message>
         <message>
             <source>Split cells</source>

@@ -88,6 +88,8 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
     const QHash<QString, QStringList> enums{
         {QStringLiteral("unit"), units},
         {QStringLiteral("angle_type"), {QStringLiteral("directed"), QStringLiteral("interior")}},
+        {QStringLiteral("connection_type"),
+         {QStringLiteral("none"), QStringLiteral("leader_line"), QStringLiteral("gradient")}},
         {QStringLiteral("shape"),
          {QStringLiteral("rectangle"), QStringLiteral("ellipse"), QStringLiteral("diamond")}},
         {QStringLiteral("fill_style"),
@@ -181,10 +183,15 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
         allowed = {QStringLiteral("stroke"), QStringLiteral("stroke_width"), QStringLiteral("unit"),
                    QStringLiteral("decimal_places"), QStringLiteral("angle_type")};
     else if (target == QStringLiteral("magnifier"))
-        allowed = {QStringLiteral("shape"),        QStringLiteral("stroke"),
-                   QStringLiteral("stroke_width"), QStringLiteral("factor"),
-                   QStringLiteral("show_leader"),  QStringLiteral("leader_arrowhead"),
-                   QStringLiteral("arrow_ratio"),  QStringLiteral("corner_radius"),
+        allowed = {QStringLiteral("shape"),
+                   QStringLiteral("stroke"),
+                   QStringLiteral("stroke_width"),
+                   QStringLiteral("factor"),
+                   QStringLiteral("connection_type"),
+                   QStringLiteral("source_outline"),
+                   QStringLiteral("leader_arrowhead"),
+                   QStringLiteral("arrow_ratio"),
+                   QStringLiteral("corner_radius"),
                    QStringLiteral("corner_radii")};
     else if (target == QStringLiteral("arrow"))
         allowed = {QStringLiteral("stroke"),           QStringLiteral("stroke_width"),
@@ -226,7 +233,7 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
                 if (!radius.isDouble() || !std::isfinite(radius.toDouble()) ||
                     radius.toDouble() < 0 || radius.toDouble() > 8192)
                     return false;
-        } else if (it.key() == QStringLiteral("show_leader")) {
+        } else if (it.key() == QStringLiteral("source_outline")) {
             if (!it->isBool())
                 return false;
         } else if (textFields.contains(it.key())) {
@@ -317,7 +324,10 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
         style.stroke = color("stroke", style.stroke);
         style.strokeWidth = number("stroke_width", style.strokeWidth);
         style.factor = number("factor", style.factor);
-        style.showLeader = patch.value(QStringLiteral("show_leader")).toBool(style.showLeader);
+        style.connectionType = static_cast<SnowCanvasMagnifierConnectionType>(
+            enumeration("connection_type", static_cast<int>(style.connectionType)));
+        style.sourceOutline =
+            patch.value(QStringLiteral("source_outline")).toBool(style.sourceOutline);
         style.leaderArrowhead = static_cast<SnowCanvasArrowhead>(
             enumeration("leader_arrowhead", static_cast<int>(style.leaderArrowhead)));
         style.arrowRatio = number("arrow_ratio", style.arrowRatio);
@@ -326,7 +336,8 @@ inline bool mcpStylePatch(Commands& commands, Canvas& canvas, const QJsonObject&
             {QStringLiteral("stroke"), SnowCanvasMagnifierStylePropertyStrokeColor},
             {QStringLiteral("stroke_width"), SnowCanvasMagnifierStylePropertyStrokeWidth},
             {QStringLiteral("factor"), SnowCanvasMagnifierStylePropertyFactor},
-            {QStringLiteral("show_leader"), SnowCanvasMagnifierStylePropertyShowLeader},
+            {QStringLiteral("connection_type"), SnowCanvasMagnifierStylePropertyConnectionType},
+            {QStringLiteral("source_outline"), SnowCanvasMagnifierStylePropertySourceOutline},
             {QStringLiteral("leader_arrowhead"), SnowCanvasMagnifierStylePropertyLeaderArrowhead},
             {QStringLiteral("arrow_ratio"), SnowCanvasMagnifierStylePropertyArrowRatio}};
         const quint32 cornerProperties = patch.contains(QStringLiteral("corner_radius")) ||

@@ -543,10 +543,17 @@ QRectF sceneItemBounds(const SceneDisplayInfo& displayInfo, const SnowSceneDispl
     const ViewProjection projection = sceneProjection(displayInfo);
     switch (item.kind) {
     case SNOW_SCENE_DISPLAY_ITEM_MAGNIFIER: {
-        SnowSceneDisplayItem lens = item;
-        lens.kind = SNOW_SCENE_DISPLAY_ITEM_DRAW_RECT;
-        QRectF bounds = sceneItemBounds(displayInfo, lens);
-        if (item.arrow_point_count >= 2) {
+        // Use the same compound paint contract as document culling and scene
+        // damage. Reconstructing only the lens here loses the bridge/source.
+        const SnowMagnifierPaintBounds body = snow_scene_magnifier_body_paint_bounds(&item);
+        QRectF bounds;
+        if (body.max_x > body.min_x && body.max_y > body.min_y) {
+            bounds = QRectF(canvasToView(projection, body.min_x, body.min_y),
+                            canvasToView(projection, body.max_x, body.max_y));
+        }
+        if (item.magnifier.connection_type == SNOW_MAGNIFIER_CONNECTION_LEADER_LINE &&
+            item.arrow_point_count >= 2) {
+            SnowSceneDisplayItem lens = item;
             lens.kind = SNOW_SCENE_DISPLAY_ITEM_ARROW;
             bounds = bounds.united(sceneItemBounds(displayInfo, lens));
         }

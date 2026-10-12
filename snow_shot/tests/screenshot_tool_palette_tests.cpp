@@ -45,6 +45,7 @@
 #include <QFrame>
 #include <QFont>
 #include <QFontDatabase>
+#include <QFontMetrics>
 #include <QGuiApplication>
 #include <QScreen>
 #include <QStyle>
@@ -11572,23 +11573,35 @@ void magnifierControlsPatchIndependentProperties() {
         return dynamic_cast<IconNumericValuePreviewButton*>(
             palette.findChild<QWidget*>(QStringLiteral("screenshotMagnifierArrowRatioButton")));
     };
-    const auto toggle = [&]() {
+    const auto connections = [&]() {
+        auto* root =
+            palette.findChild<QWidget*>(QStringLiteral("screenshotMagnifierConnectionButtonGroup"));
+        return root ? root->findChild<adqt::widgets::AdRadioButtonGroup*>() : nullptr;
+    };
+    const auto outline = [&]() {
         return palette.findChild<adqt::widgets::AdButton*>(
-            QStringLiteral("screenshotMagnifierShowLeaderButton"));
+            QStringLiteral("screenshotMagnifierSourceOutlineButton"));
     };
     const auto leader = [&]() { return controlWithAccessibleName(palette, "Leader line type"); };
     const auto initial = palette.creationStyleDefaults().magnifier;
-    require(
-        shapes() && shapes()->buttons().size() == 3 && factor() && radius() && ratio() &&
-            toggle() && leader() && initial.stroke == QColor(QStringLiteral("#f5222d")) &&
-            initial.strokeWidth == 2 && initial.factor == 2 && initial.showLeader &&
-            initial.leaderArrowhead == SnowCanvasArrowhead::None && initial.arrowRatio == 1.0 &&
-            ratio()->valueText() == QStringLiteral("1.0") &&
-            initial.cornerRadii == SnowCanvasCornerRadii{6, 6, 6, 6} && radius()->value() == 6 &&
-            factor()->valueText() == QStringLiteral("2.0×") &&
-            toggle()->accentRole() == adqt::widgets::AdButton::AccentRole::Primary &&
-            leader()->isEnabled(),
-        "magnifier controls must use independent Shape-like defaults and an active leader toggle");
+    require(shapes() && shapes()->buttons().size() == 3 && factor() && radius() && ratio() &&
+                connections() && connections()->buttons().size() == 3 && outline() && leader() &&
+                initial.stroke == QColor(QStringLiteral("#f5222d")) && initial.strokeWidth == 2 &&
+                initial.factor == 2 &&
+                initial.connectionType == SnowCanvasMagnifierConnectionType::Gradient &&
+                initial.sourceOutline && initial.leaderArrowhead == SnowCanvasArrowhead::None &&
+                initial.arrowRatio == 1.0 && ratio()->valueText() == QStringLiteral("1.0") &&
+                initial.cornerRadii == SnowCanvasCornerRadii{6, 6, 6, 6} &&
+                radius()->value() == 6 && factor()->valueText() == QStringLiteral("2.0×") &&
+                connections()->checkedId() ==
+                    static_cast<int>(SnowCanvasMagnifierConnectionType::Gradient) &&
+                outline()->isChecked() &&
+                outline()->buttonStyle() == adqt::widgets::AdButton::ButtonStyle::Solid &&
+                outline()->accentRole() == adqt::widgets::AdButton::AccentRole::Primary &&
+                !leader()->isEnabled() && !ratio()->isEnabled() && !leader()->isHidden() &&
+                !ratio()->isHidden(),
+            "magnifier controls default to Gradient and an active source outline with visible "
+            "disabled leader controls");
     const auto verifyLayout = [&]() {
         QLayout* row = radius()->parentWidget()->layout();
         QList<QWidget*> widgets;
@@ -11600,8 +11613,10 @@ void magnifierControlsPatchIndependentProperties() {
         const qsizetype leaderIndex = widgets.indexOf(
             palette.findChild<QWidget*>(QStringLiteral("screenshotMagnifierLeaderTypeButton")));
         require(factorIndex >= 0 && factorIndex + 1 < widgets.size() &&
-                    widgets.at(factorIndex + 1) == toggle(),
-                "magnifier factor must directly precede the leader toggle without a separator");
+                    widgets.at(factorIndex + 1) == connections()->parent() &&
+                    widgets.at(factorIndex + 2) == outline(),
+                "magnifier factor must directly precede the connection group and source-outline "
+                "toggle");
         require(leaderIndex > 0 && widgets.at(leaderIndex - 1) == ratio(),
                 "magnifier arrow proportions must directly precede the arrowhead editor");
         require(leaderIndex >= 0 && leaderIndex + 2 == widgets.size() - 1 &&
@@ -11637,6 +11652,34 @@ void magnifierControlsPatchIndependentProperties() {
                           Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
         return palette.handleToolbarWheel(&event) && event.isAccepted();
     };
+    for (auto connection :
+         {SnowCanvasMagnifierConnectionType::None, SnowCanvasMagnifierConnectionType::LeaderLine,
+          SnowCanvasMagnifierConnectionType::Gradient}) {
+        connections()->button(static_cast<int>(connection))->click();
+        require(emitted.connectionType == connection &&
+                    properties == SnowCanvasMagnifierStylePropertyConnectionType &&
+                    emitted.sourceOutline &&
+                    leader()->isEnabled() ==
+                        (connection == SnowCanvasMagnifierConnectionType::LeaderLine) &&
+                    ratio()->isEnabled() == leader()->isEnabled(),
+                "connection choices patch only connection type and enable leader controls only for "
+                "Leader line");
+        outline()->click();
+        require(!emitted.sourceOutline && !outline()->isChecked() &&
+                    outline()->buttonStyle() == adqt::widgets::AdButton::ButtonStyle::Text &&
+                    outline()->accentRole() == adqt::widgets::AdButton::AccentRole::Neutral &&
+                    properties == SnowCanvasMagnifierStylePropertySourceOutline &&
+                    emitted.connectionType == connection,
+                "source outline disables independently for each connection type");
+        outline()->click();
+        require(emitted.sourceOutline && outline()->isChecked() &&
+                    outline()->buttonStyle() == adqt::widgets::AdButton::ButtonStyle::Solid &&
+                    outline()->accentRole() == adqt::widgets::AdButton::AccentRole::Primary &&
+                    properties == SnowCanvasMagnifierStylePropertySourceOutline &&
+                    emitted.connectionType == connection,
+                "source outline enables independently for each connection type");
+    }
+    connections()->button(static_cast<int>(SnowCanvasMagnifierConnectionType::LeaderLine))->click();
     require(wheel(ratio(), 120) && emitted.arrowRatio == 1.1 &&
                 properties == SnowCanvasMagnifierStylePropertyArrowRatio && creationDefaults &&
                 emitted.factor == 2 && emitted.strokeWidth == 2,
@@ -11690,16 +11733,17 @@ void magnifierControlsPatchIndependentProperties() {
     require(emitted.stroke == QColor(23, 67, 109, 128) &&
                 properties == SnowCanvasMagnifierStylePropertyStrokeColor,
             "magnifier border color must preserve alpha and patch only color");
-    toggle()->click();
-    require(!emitted.showLeader && properties == SnowCanvasMagnifierStylePropertyShowLeader &&
-                !leader()->isEnabled() && !ratio()->isEnabled() &&
-                toggle()->accentRole() == adqt::widgets::AdButton::AccentRole::Neutral,
-            "hiding the leader must disable its type control and clear the active toggle style");
+    connections()->button(static_cast<int>(SnowCanvasMagnifierConnectionType::None))->click();
+    require(emitted.connectionType == SnowCanvasMagnifierConnectionType::None &&
+                properties == SnowCanvasMagnifierStylePropertyConnectionType &&
+                !leader()->isEnabled() && !ratio()->isEnabled() && emitted.sourceOutline,
+            "None disables leader controls while retaining the independent source outline");
     require(!wheel(ratio(), 120) && emitted.arrowRatio == 1.0,
             "disabled magnifier proportion controls must ignore wheel input");
-    toggle()->click();
-    require(emitted.showLeader && leader()->isEnabled() && ratio()->isEnabled(),
-            "enabling the leader must restore type editing");
+    connections()->button(static_cast<int>(SnowCanvasMagnifierConnectionType::LeaderLine))->click();
+    require(emitted.connectionType == SnowCanvasMagnifierConnectionType::LeaderLine &&
+                leader()->isEnabled() && ratio()->isEnabled(),
+            "Leader line restores type editing and previous arrow proportions");
     const char* arrowheadTooltips[] = {
         "End arrowhead none",
         "End arrowhead standard",
@@ -11780,6 +11824,37 @@ void magnifierControlsPatchIndependentProperties() {
                 shapes()->checkedId() == -1 &&
                 palette.creationStyleDefaults().magnifier == remembered,
             "selected corner edits remember their corners and preserve the other mixed properties");
+    selected.magnifierStyleMixed = SnowCanvasMagnifierStylePropertyConnectionType |
+                                   SnowCanvasMagnifierStylePropertySourceOutline;
+    const QSize outlineSize = outline()->size();
+    palette.setStyleToolbarState(selected);
+    require(connections()->checkedId() == -1 && outline()->property("mixed").toBool() &&
+                !outline()->isChecked() && !leader()->isEnabled() && !ratio()->isEnabled() &&
+                outline()->buttonStyle() == adqt::widgets::AdButton::ButtonStyle::Dashed &&
+                outline()->accentRole() == adqt::widgets::AdButton::AccentRole::Neutral &&
+                outline()->size() == outlineSize &&
+                outline()->accessibleDescription() == QStringLiteral("Mixed"),
+            "mixed connections clear the group and disable leader controls; mixed outlines expose "
+            "their state");
+    connections()->button(static_cast<int>(SnowCanvasMagnifierConnectionType::Gradient))->click();
+    remembered.connectionType = SnowCanvasMagnifierConnectionType::Gradient;
+    require(!creationDefaults &&
+                emitted.connectionType == SnowCanvasMagnifierConnectionType::Gradient &&
+                properties == SnowCanvasMagnifierStylePropertyConnectionType &&
+                outline()->property("mixed").toBool() &&
+                palette.creationStyleDefaults().magnifier == remembered,
+            "choosing a mixed connection remembers it and clears only its own flag");
+    outline()->click();
+    remembered.sourceOutline = true;
+    require(!creationDefaults && emitted.sourceOutline && outline()->isChecked() &&
+                outline()->buttonStyle() == adqt::widgets::AdButton::ButtonStyle::Solid &&
+                outline()->accentRole() == adqt::widgets::AdButton::AccentRole::Primary &&
+                outline()->size() == outlineSize &&
+                properties == SnowCanvasMagnifierStylePropertySourceOutline &&
+                !outline()->property("mixed").toBool() &&
+                emitted.connectionType == SnowCanvasMagnifierConnectionType::Gradient &&
+                palette.creationStyleDefaults().magnifier == remembered,
+            "clicking a mixed outline remembers it and clears only its mixed flag");
 }
 
 void magnifierStylesPersistSelectedEdits() {
@@ -11791,6 +11866,8 @@ void magnifierStylesPersistSelectedEdits() {
     defaults.rectangle.strokeWidth = 9;
     defaults.magnifier.cornerRadii = {3, 6, 9, 12};
     defaults.magnifier.arrowRatio = 2.3;
+    defaults.magnifier.connectionType = SnowCanvasMagnifierConnectionType::None;
+    defaults.magnifier.sourceOutline = false;
     require(persistScreenshotCanvasToolStyles(defaults), "prepare independent magnifier defaults");
     ScreenshotToolPalette::Options options;
     options.showMagnifierTool = true;
@@ -11812,16 +11889,36 @@ void magnifierStylesPersistSelectedEdits() {
         binding.lastSaveSucceeded() == true && saved.magnifier.factor == 2.1 &&
             saved.magnifier.strokeWidth == 4 &&
             saved.magnifier.cornerRadii == SnowCanvasCornerRadii{3, 6, 9, 12} &&
-            saved.magnifier.arrowRatio == 2.3 && saved.rectangle.strokeWidth == 9,
+            saved.magnifier.arrowRatio == 2.3 &&
+            saved.magnifier.connectionType == SnowCanvasMagnifierConnectionType::None &&
+            !saved.magnifier.sourceOutline && saved.rectangle.strokeWidth == 9,
         "bound magnifier controls must persist their properties without changing Shape defaults");
     auto selected = saved.magnifier;
     selected.factor = 7;
     selected.arrowRatio = 0.5;
+    selected.connectionType = SnowCanvasMagnifierConnectionType::LeaderLine;
+    selected.sourceOutline = true;
+    auto remembered = saved.magnifier;
+    require(persistScreenshotCanvasStyleEdit(
+                SnowCanvasMagnifierEdit{selected, SnowCanvasMagnifierStylePropertyConnectionType,
+                                        SnowCanvasStyleEditTarget::Selection}),
+            "persist an explicit selected magnifier connection edit");
+    remembered.connectionType = selected.connectionType;
+    require(screenshotCanvasToolStyleDefaults().magnifier == remembered,
+            "selected connection edits preserve the saved source outline and unrelated properties");
+    require(persistScreenshotCanvasStyleEdit(
+                SnowCanvasMagnifierEdit{selected, SnowCanvasMagnifierStylePropertySourceOutline,
+                                        SnowCanvasStyleEditTarget::Selection}),
+            "persist an explicit selected magnifier source outline edit");
+    remembered.sourceOutline = selected.sourceOutline;
+    require(screenshotCanvasToolStyleDefaults().magnifier == remembered,
+            "selected source outline edits preserve the saved connection and unrelated properties");
     require(persistScreenshotCanvasStyleEdit(
                 SnowCanvasMagnifierEdit{selected, SnowCanvasMagnifierStyleAllProperties,
                                         SnowCanvasStyleEditTarget::Selection}) &&
                 screenshotCanvasToolStyleDefaults().magnifier == selected,
             "selected magnifier style edits must remember their explicit properties");
+    saved = screenshotCanvasToolStyleDefaults();
     auto& storage = snow_shot::storage::ApplicationStorage::instance();
     require(storage.configuration().flushNow().success, "flush magnifier preferences to disk");
     snow_shot::storage::ConfigurationStore reopened(
@@ -11840,14 +11937,92 @@ void magnifierStylesPersistSelectedEdits() {
                             {QStringLiteral("arrow_ratio"), 100},
                             {QStringLiteral("stroke_width"), -2},
                             {QStringLiteral("shape"), 500},
+                            {QStringLiteral("connection_type"), 2},
+                            {QStringLiteral("source_outline"), true},
                             {QStringLiteral("stroke"), QStringLiteral("invalid")}}),
             "prepare malformed saved magnifier fields");
     const auto normalized = screenshotCanvasToolStyleDefaults().magnifier;
     require(
         normalized.factor == 10 && normalized.strokeWidth == 0 && normalized.arrowRatio == 3.0 &&
             normalized.shape == SnowCanvasRectangleShape::Rectangle &&
-            normalized.stroke == defaults.magnifier.stroke,
+            normalized.connectionType == SnowCanvasMagnifierConnectionType::Gradient &&
+            normalized.sourceOutline && normalized.stroke == defaults.magnifier.stroke,
         "saved magnifier values must clamp numeric ranges and retain defaults for invalid fields");
+}
+
+void magnifierPreferencesRejectIncompleteOrObsoletePayloads() {
+    using namespace snow_shot::presentation;
+    const auto original = screenshotCanvasToolStyleDefaults();
+    const auto restore =
+        qScopeGuard([&] { static_cast<void>(persistScreenshotCanvasToolStyles(original)); });
+    auto saved = screenshotCanvasStyleDefaults();
+    saved.rectangle.strokeWidth = 9;
+    saved.magnifier.factor = 7.3;
+    saved.magnifier.shape = SnowCanvasRectangleShape::Diamond;
+    saved.magnifier.stroke = QColor(23, 67, 109, 128);
+    saved.magnifier.strokeWidth = 11;
+    saved.magnifier.arrowRatio = 2.3;
+    saved.magnifier.cornerRadii = {3, 6, 9, 12};
+    saved.magnifier.connectionType = SnowCanvasMagnifierConnectionType::None;
+    saved.magnifier.sourceOutline = false;
+    require(persistScreenshotCanvasToolStyles(saved),
+            "prepare current Magnifier preference fields");
+    auto& configuration = snow_shot::storage::ApplicationStorage::instance().configuration();
+    const QString key = QStringLiteral("drawing/magnifier_style");
+    const QJsonObject complete = configuration.value(key).toObject();
+    QList<QJsonObject> rejected;
+    for (const auto& field :
+         {QStringLiteral("connection_type"), QStringLiteral("source_outline")}) {
+        QJsonObject missing = complete;
+        missing.remove(field);
+        rejected.append(missing);
+    }
+    QJsonObject missingBoth = complete;
+    missingBoth.remove(QStringLiteral("connection_type"));
+    missingBoth.remove(QStringLiteral("source_outline"));
+    rejected.append(missingBoth);
+    QJsonObject obsolete = complete;
+    obsolete.insert(QStringLiteral("show_leader"), true);
+    rejected.append(obsolete);
+    missingBoth.insert(QStringLiteral("show_leader"), false);
+    rejected.append(missingBoth);
+    for (const auto& value :
+         {QJsonValue(-1), QJsonValue(3), QJsonValue(0.5), QJsonValue(true),
+          QJsonValue(QStringLiteral("gradient")), QJsonValue(QJsonValue::Null)}) {
+        QJsonObject invalid = complete;
+        invalid.insert(QStringLiteral("connection_type"), value);
+        rejected.append(invalid);
+    }
+    for (const auto& value :
+         {QJsonValue(1), QJsonValue(QStringLiteral("true")), QJsonValue(QJsonValue::Null)}) {
+        QJsonObject invalid = complete;
+        invalid.insert(QStringLiteral("source_outline"), value);
+        rejected.append(invalid);
+    }
+    const auto creationDefaults = screenshotCanvasStyleDefaults().magnifier;
+    for (const auto& payload : rejected) {
+        require(configuration.setValue(key, payload),
+                "prepare rejected Magnifier preference payload");
+        const auto loaded = screenshotCanvasToolStyleDefaults();
+        require(loaded.magnifier == creationDefaults && loaded.rectangle == saved.rectangle,
+                "invalid Magnifier fields reject the entire object without partially loading its "
+                "style or changing other tools");
+    }
+    for (int connection = 0; connection < 3; ++connection) {
+        for (bool outline : {false, true}) {
+            QJsonObject valid = complete;
+            valid.insert(QStringLiteral("connection_type"), connection);
+            valid.insert(QStringLiteral("source_outline"), outline);
+            require(configuration.setValue(key, valid),
+                    "prepare valid Magnifier preference combination");
+            auto expected = saved.magnifier;
+            expected.connectionType = static_cast<SnowCanvasMagnifierConnectionType>(connection);
+            expected.sourceOutline = outline;
+            require(screenshotCanvasToolStyleDefaults().magnifier == expected,
+                    "all six valid current Magnifier preference combinations load every saved "
+                    "property");
+        }
+    }
 }
 
 void magnifierStyleWheelsPersistCompletedSteps() {
@@ -12050,30 +12225,72 @@ void magnifierControlsRetranslateAndRenderPreviews() {
     options.showPenHighlightTool = true;
     ScreenshotToolPalette palette(options);
     palette.setActiveTool(ScreenshotToolPalette::Tool::Magnifier);
+#if defined(Q_OS_WIN)
+    if (!qEnvironmentVariableIsEmpty("SNOW_TEST_MAGNIFIER_PREVIEW_DIR"))
+        palette.setFont(QApplication::font());
+#endif
     palette.show();
+    const auto creationDefaults = palette.creationStyleDefaults().magnifier;
+    SnowCanvasStyleToolbarState mixedOutline;
+    mixedOutline.source = SnowCanvasStyleToolbarSource::SelectedMagnifier;
+    mixedOutline.selectedElementCount = 2;
+    mixedOutline.magnifierStyle.factor = 3.4;
+    mixedOutline.magnifierStyle.connectionType = SnowCanvasMagnifierConnectionType::Gradient;
+    mixedOutline.magnifierStyle.sourceOutline = true;
+    mixedOutline.magnifierStyleMixed = SnowCanvasMagnifierStylePropertySourceOutline;
+    palette.setStyleToolbarState(mixedOutline);
     for (const auto& locale :
          {QStringLiteral("en_US"), QStringLiteral("zh_CN"), QStringLiteral("zh_TW")}) {
         require(language.setLanguage(locale), "magnifier translations must load");
         QCoreApplication::processEvents();
         auto* factor =
             palette.findChild<QWidget*>(QStringLiteral("screenshotMagnifierFactorButton"));
-        auto* leader =
-            palette.findChild<QWidget*>(QStringLiteral("screenshotMagnifierShowLeaderButton"));
+        auto* connection =
+            palette.findChild<QWidget*>(QStringLiteral("screenshotMagnifierConnectionButtonGroup"));
+        auto* outline =
+            palette.findChild<QWidget*>(QStringLiteral("screenshotMagnifierSourceOutlineButton"));
         auto* ratio =
             palette.findChild<QWidget*>(QStringLiteral("screenshotMagnifierArrowRatioButton"));
-        require(factor && leader && ratio &&
-                    ratio->toolTip() ==
-                        QCoreApplication::translate("ScreenshotToolPalette",
-                                                    "Arrow ratio (scroll to adjust)") &&
-                    factor->toolTip() ==
-                        QCoreApplication::translate("ScreenshotToolPalette",
-                                                    "Magnification factor (scroll to adjust)") &&
-                    leader->accessibleName() ==
-                        QCoreApplication::translate("ScreenshotToolPalette", "Show leader line"),
-                "magnifier tooltip and accessible names must retranslate in place");
+        require(
+            factor && connection && outline && ratio &&
+                ratio->toolTip() == QCoreApplication::translate("ScreenshotToolPalette",
+                                                                "Arrow ratio (scroll to adjust)") &&
+                factor->toolTip() ==
+                    QCoreApplication::translate("ScreenshotToolPalette",
+                                                "Magnification factor (scroll to adjust)") &&
+                connection->accessibleName() ==
+                    QCoreApplication::translate("ScreenshotToolPalette", "Connection type") &&
+                outline->accessibleName() ==
+                    QCoreApplication::translate("ScreenshotToolPalette", "Source region outline"),
+            "magnifier tooltip and accessible names must retranslate in place");
+        auto* group = connection->findChild<adqt::widgets::AdRadioButtonGroup*>();
+        require(group && group->buttons().size() == 3, "connection selector retains three options");
+        auto* outlineButton = qobject_cast<adqt::widgets::AdButton*>(outline);
+        auto* factorButton = dynamic_cast<IconNumericValuePreviewButton*>(factor);
+        require(outlineButton && factorButton && outlineButton->property("mixed").toBool() &&
+                    !outlineButton->isChecked() &&
+                    outlineButton->buttonStyle() == adqt::widgets::AdButton::ButtonStyle::Dashed &&
+                    outlineButton->accentRole() == adqt::widgets::AdButton::AccentRole::Neutral &&
+                    outlineButton->accessibleDescription() ==
+                        QCoreApplication::translate("ScreenshotToolPalette", "Mixed") &&
+                    group->checkedId() ==
+                        static_cast<int>(SnowCanvasMagnifierConnectionType::Gradient) &&
+                    factorButton->valueText() == QStringLiteral("3.4×") &&
+                    palette.creationStyleDefaults().magnifier == creationDefaults,
+                "language changes retranslate mixed source-outline descriptions while retaining "
+                "selection state and creation defaults");
+        const char* sources[] = {"None", "Leader line", "Gradient"};
+        for (int index = 0; index < 3; ++index)
+            require(group->button(index)->toolTip() ==
+                            QCoreApplication::translate("ScreenshotToolPalette", sources[index]) &&
+                        group->button(index)->accessibleName() ==
+                            QCoreApplication::translate("ScreenshotToolPalette", sources[index]),
+                    "every connection option retranslates its tooltip and accessible name");
     }
     require(language.setLanguage(QStringLiteral("en_US")),
             "restore English for magnifier previews");
+    mixedOutline.magnifierStyleMixed = 0;
+    palette.setStyleToolbarState(mixedOutline);
     const QString directory = qEnvironmentVariable("SNOW_TEST_MAGNIFIER_PREVIEW_DIR");
     if (!directory.isEmpty())
         require(QDir::isAbsolutePath(directory) && QDir().mkpath(directory),
@@ -12083,6 +12300,7 @@ void magnifierControlsRetranslateAndRenderPreviews() {
         adqt::theme::ThemeManager::instance().applyTo(*qApp);
         const auto scheme = styles::generateThemeColorScheme();
         for (qreal dpr : {1.0, 1.25, 1.5, 2.0}) {
+            palette.setStyleToolbarState(mixedOutline);
             palette.setPhysicalScale(dpr);
             palette.prepareForDisplay();
             QCoreApplication::processEvents();
@@ -12091,18 +12309,28 @@ void magnifierControlsRetranslateAndRenderPreviews() {
             const QVector<adqt::icons::IconRef> icons{
                 snow_shot::presentation::icons::custom::outlined::ToolMagnifier(),
                 snow_shot::presentation::icons::custom::outlined::MagnificationFactor(),
-                snow_shot::presentation::icons::custom::outlined::ShowLeaderLine()};
-            QImage sheet(QSize(qRound(120 * dpr), qRound(40 * dpr)), QImage::Format_RGBA8888);
+                snow_shot::presentation::icons::custom::outlined::MagnifierConnectionNone(),
+                snow_shot::presentation::icons::custom::outlined::ShowLeaderLine(),
+                snow_shot::presentation::icons::custom::outlined::MagnifierGradient(),
+                snow_shot::presentation::icons::custom::outlined::SourceRegionOutline()};
+            const QVector<QColor> colors{scheme.map.colorText, scheme.map.colorPrimary,
+                                         scheme.map.colorTextQuaternary};
+            QImage sheet(QSize(qRound(40 * icons.size() * dpr), qRound(120 * dpr)),
+                         QImage::Format_RGBA8888);
             sheet.setDevicePixelRatio(dpr);
             sheet.fill(scheme.map.colorBgContainer);
             QPainter painter(&sheet);
-            for (qsizetype index = 0; index < icons.size(); ++index) {
-                const auto pixmap = snow_shot::presentation::icons::renderTintedIconPixmap(
-                    icons[index], QSize(20, 20), dpr, scheme.map.colorText);
-                require(!pixmap.isNull() && pixmap.width() == qRound(20 * dpr),
-                        "magnifier icons must render at every supported display scale");
-                painter.drawPixmap(QPoint(static_cast<int>(index) * 40 + 10, 10), pixmap);
-            }
+            for (qsizetype row = 0; row < colors.size(); ++row)
+                for (qsizetype index = 0; index < icons.size(); ++index) {
+                    const auto pixmap = snow_shot::presentation::icons::renderTintedIconPixmap(
+                        icons[index], QSize(20, 20), dpr, colors[row]);
+                    require(!pixmap.isNull() && pixmap.width() == qRound(20 * dpr),
+                            "magnifier icons must render in neutral, active and disabled colors at "
+                            "every scale");
+                    painter.drawPixmap(
+                        QPoint(static_cast<int>(index) * 40 + 10, static_cast<int>(row) * 40 + 10),
+                        pixmap);
+                }
             painter.end();
             if (!directory.isEmpty()) {
                 require(palette.grab().save(QDir(directory).filePath(
@@ -12112,6 +12340,32 @@ void magnifierControlsRetranslateAndRenderPreviews() {
                             sheet.save(QDir(directory).filePath(QStringLiteral("icons-") + suffix +
                                                                 QStringLiteral(".png"))),
                         "save current magnifier toolbar and icons in each theme and scale");
+                for (int connection = 0; connection < 3; ++connection)
+                    for (bool outline : {false, true}) {
+                        SnowCanvasStyleToolbarState state;
+                        state.source = SnowCanvasStyleToolbarSource::SelectedMagnifier;
+                        state.selectedElementCount = 1;
+                        state.magnifierStyle.connectionType =
+                            static_cast<SnowCanvasMagnifierConnectionType>(connection);
+                        state.magnifierStyle.sourceOutline = outline;
+                        palette.setStyleToolbarState(state);
+                        QCoreApplication::processEvents();
+                        require(palette.stylePanel()->grab().save(
+                                    QDir(directory).filePath(QStringLiteral("settings-%1-%2-%3.png")
+                                                                 .arg(connection)
+                                                                 .arg(outline)
+                                                                 .arg(suffix))),
+                                "save all six connection and outline toolbar states");
+                    }
+                auto mixedPreview = mixedOutline;
+                mixedPreview.magnifierStyleMixed = SnowCanvasMagnifierStylePropertyConnectionType |
+                                                   SnowCanvasMagnifierStylePropertySourceOutline;
+                palette.setStyleToolbarState(mixedPreview);
+                QCoreApplication::processEvents();
+                require(
+                    palette.stylePanel()->grab().save(QDir(directory).filePath(
+                        QStringLiteral("settings-mixed-") + suffix + QStringLiteral(".png"))),
+                    "save the mixed connection and source-outline row in every theme and scale");
             }
         }
     }
@@ -18094,8 +18348,27 @@ int main(int argc, char** argv) {
 #if defined(Q_OS_WIN)
     // The offscreen platform plugin exposes no system fonts; register one so
     // the font family editors and their shared cache have real content.
-    require(QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/segoeui.ttf")) >= 0,
-            "the font editor tests require a system TrueType font");
+    const QString fontPath = QDir(qEnvironmentVariable("WINDIR", QStringLiteral("C:/Windows")))
+                                 .filePath(QStringLiteral("Fonts/segoeui.ttf"));
+    const int fontId = QFontDatabase::addApplicationFont(fontPath);
+    require(fontId >= 0, "the font editor tests require a system TrueType font");
+    const bool magnifierPreviews = !qEnvironmentVariableIsEmpty("SNOW_TEST_MAGNIFIER_PREVIEW_DIR");
+    const QFont previousPreviewFont = application.font();
+    const auto restorePreviewFont = qScopeGuard([&] {
+        if (magnifierPreviews)
+            application.setFont(previousPreviewFont);
+    });
+    if (magnifierPreviews) {
+        const auto families = QFontDatabase::applicationFontFamilies(fontId);
+        require(!families.isEmpty(), "magnifier previews require the registered font family");
+        QFont previewFont = application.font();
+        previewFont.setFamily(families.first());
+        const QFontMetrics metrics(previewFont);
+        require(
+            metrics.inFontUcs4('A') && metrics.inFontUcs4('3') && metrics.inFontUcs4(0x00d7),
+            "magnifier preview font must contain labels, factor digits and multiplication signs");
+        application.setFont(previewFont);
+    }
 #endif
     if (application.arguments().contains(QStringLiteral("--custom-color-presets-only"))) {
         customColorPresetSettingsPersistAndValidate(
@@ -18294,6 +18567,7 @@ int main(int argc, char** argv) {
         magnifierLayoutMigrationPreservesCustomization();
         magnifierControlsPatchIndependentProperties();
         magnifierStylesPersistSelectedEdits();
+        magnifierPreferencesRejectIncompleteOrObsoletePayloads();
         magnifierStyleWheelsPersistCompletedSteps();
         disabledSelectionOpacityRejectsWheelSteps();
         magnifierControlsRetranslateAndRenderPreviews();
@@ -18637,6 +18911,7 @@ int main(int argc, char** argv) {
     magnifierLayoutMigrationPreservesCustomization();
     magnifierControlsPatchIndependentProperties();
     magnifierStylesPersistSelectedEdits();
+    magnifierPreferencesRejectIncompleteOrObsoletePayloads();
     magnifierStyleWheelsPersistCompletedSteps();
     disabledSelectionOpacityRejectsWheelSteps();
     magnifierControlsRetranslateAndRenderPreviews();

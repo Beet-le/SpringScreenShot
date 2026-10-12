@@ -1048,7 +1048,8 @@ unsafe fn runtime_style_default_enums_are_valid(defaults: *const SnowStyleDefaul
     unsafe {
         raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).magnifier.shape))
             && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).magnifier.leader_arrowhead))
-            && (*defaults).magnifier.show_leader <= 1
+            && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).magnifier.connection_type))
+            && (*defaults).magnifier.source_outline <= 1
             && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).distance.unit))
             && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).angle.unit))
             && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).angle.angle_type))
@@ -1194,6 +1195,26 @@ pub(crate) fn runtime_config_from_c(
     })
 }
 
+impl From<SnowMagnifierConnectionType> for snow_draw_engine::MagnifierConnectionType {
+    fn from(value: SnowMagnifierConnectionType) -> Self {
+        match value {
+            SnowMagnifierConnectionType::None => Self::None,
+            SnowMagnifierConnectionType::LeaderLine => Self::LeaderLine,
+            SnowMagnifierConnectionType::Gradient => Self::Gradient,
+        }
+    }
+}
+
+impl From<snow_draw_engine::MagnifierConnectionType> for SnowMagnifierConnectionType {
+    fn from(value: snow_draw_engine::MagnifierConnectionType) -> Self {
+        match value {
+            snow_draw_engine::MagnifierConnectionType::None => Self::None,
+            snow_draw_engine::MagnifierConnectionType::LeaderLine => Self::LeaderLine,
+            snow_draw_engine::MagnifierConnectionType::Gradient => Self::Gradient,
+        }
+    }
+}
+
 impl From<SnowMagnifierStyle> for snow_draw_engine::MagnifierStyle {
     fn from(value: SnowMagnifierStyle) -> Self {
         Self {
@@ -1205,7 +1226,8 @@ impl From<SnowMagnifierStyle> for snow_draw_engine::MagnifierStyle {
             stroke: value.stroke.into(),
             stroke_width: value.stroke_width,
             factor: value.factor,
-            show_leader: value.show_leader != 0,
+            connection_type: value.connection_type.into(),
+            source_outline: value.source_outline != 0,
             leader_arrowhead: snow_arrowhead_to_rust(value.leader_arrowhead),
             arrow_ratio: value.arrow_ratio,
             corner_radii: value.corner_radii.into(),
@@ -1223,7 +1245,8 @@ impl From<snow_draw_engine::MagnifierStyle> for SnowMagnifierStyle {
             stroke: value.stroke.into(),
             stroke_width: value.stroke_width,
             factor: value.factor,
-            show_leader: u8::from(value.show_leader),
+            connection_type: value.connection_type.into(),
+            source_outline: u8::from(value.source_outline),
             reserved: [0; 3],
             leader_arrowhead: snow_arrowhead_from_rust(value.leader_arrowhead),
             arrow_ratio: value.arrow_ratio,

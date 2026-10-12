@@ -8,12 +8,31 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <array>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
 class SnowCanvasSceneItem : public SnowSceneDisplayItem {
   public:
+    struct MagnifierGeometryCache {
+        std::array<double, 14> key{};
+        std::uint8_t shape = 0;
+        bool valid = false;
+        bool sourceContained = false;
+        QPainterPath lens;
+        QPainterPath source;
+        QPainterPath hull;
+        QPainterPath outsideSource;
+        QPainterPath outsideLens;
+        QPainterPath outsideBoth;
+        QPainterPath disjointBridge;
+        double physicalScale = 0.0;
+        double failedPhysicalScale = 0.0;
+        double exteriorGuard = 0.0;
+    };
     SnowCanvasSceneItem();
+    ~SnowCanvasSceneItem();
     explicit SnowCanvasSceneItem(const SnowSceneDisplayItem& item);
     SnowCanvasSceneItem(const SnowCanvasSceneItem& other);
     SnowCanvasSceneItem(SnowCanvasSceneItem&& other) noexcept;
@@ -69,6 +88,9 @@ class SnowCanvasSceneItem : public SnowSceneDisplayItem {
                          std::vector<std::uint32_t>* outChunkIndices) const;
     std::uint64_t pathGeometryRevision() const;
     bool needsArrowTextClip(double canvasAntialiasGuard) const;
+    // Retain vector geometry with the owned snapshot. The renderer checks the key
+    // because callers may also update the public display fields directly.
+    MagnifierGeometryCache& magnifierGeometryCache() const;
 
     QRectF viewBounds;
 
@@ -97,6 +119,7 @@ class SnowCanvasSceneItem : public SnowSceneDisplayItem {
     std::uint64_t m_pathGeometryRevision = 0;
     bool m_pathClosed = false;
     mutable bool m_arrowTextClipCacheValid = false;
+    mutable std::unique_ptr<MagnifierGeometryCache> m_magnifierGeometry;
     mutable bool m_arrowTextClipNeeded = true;
     mutable std::uint64_t m_arrowTextClipGeometryRevision = 0;
     mutable double m_arrowTextClipStrokeWidth = 0.0;

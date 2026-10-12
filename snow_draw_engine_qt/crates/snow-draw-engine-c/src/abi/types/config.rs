@@ -443,6 +443,16 @@ pub struct SnowSerialNumberStyle {
     pub numeric_type: SnowSerialNumberNumericType,
 }
 
+snow_c_enum! {
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub enum SnowMagnifierConnectionType {
+        None = 0,
+        LeaderLine = 1,
+        #[default]
+        Gradient = 2,
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SnowMagnifierStyle {
@@ -450,7 +460,8 @@ pub struct SnowMagnifierStyle {
     pub stroke: SnowColorRgba8,
     pub stroke_width: f64,
     pub factor: f64,
-    pub show_leader: u8,
+    pub connection_type: SnowMagnifierConnectionType,
+    pub source_outline: u8,
     pub reserved: [u8; 3],
     pub leader_arrowhead: SnowArrowhead,
     pub corner_radii: SnowCornerRadii,
@@ -465,11 +476,12 @@ pub const SNOW_MAGNIFIER_STYLE_PROPERTY_SHAPE: u32 = 1;
 pub const SNOW_MAGNIFIER_STYLE_PROPERTY_STROKE: u32 = 2;
 pub const SNOW_MAGNIFIER_STYLE_PROPERTY_STROKE_WIDTH: u32 = 4;
 pub const SNOW_MAGNIFIER_STYLE_PROPERTY_FACTOR: u32 = 8;
-pub const SNOW_MAGNIFIER_STYLE_PROPERTY_SHOW_LEADER: u32 = 16;
+pub const SNOW_MAGNIFIER_STYLE_PROPERTY_CONNECTION_TYPE: u32 = 16;
 pub const SNOW_MAGNIFIER_STYLE_PROPERTY_LEADER_ARROWHEAD: u32 = 32;
 pub const SNOW_MAGNIFIER_STYLE_PROPERTY_CORNER_RADII: u32 = 64;
 pub const SNOW_MAGNIFIER_STYLE_PROPERTY_ARROW_RATIO: u32 = 128;
-pub const SNOW_MAGNIFIER_STYLE_PROPERTY_ALL: u32 = 255;
+pub const SNOW_MAGNIFIER_STYLE_PROPERTY_SOURCE_OUTLINE: u32 = 256;
+pub const SNOW_MAGNIFIER_STYLE_PROPERTY_ALL: u32 = 511;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -692,7 +704,7 @@ mod text_emphasis_abi_tests {
             1136
         );
         if std::mem::size_of::<usize>() == 8 {
-            assert_eq!(std::mem::size_of::<SnowSceneDisplayItem>(), 360);
+            assert_eq!(std::mem::size_of::<SnowSceneDisplayItem>(), 408);
             assert_eq!(std::mem::offset_of!(SnowSceneDisplayItem, text_bold), 137);
             assert_eq!(
                 std::mem::offset_of!(SnowSceneDisplayItem, arrow_start_head),

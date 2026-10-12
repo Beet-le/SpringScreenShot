@@ -1,6 +1,7 @@
 #include "snow_canvas_display_cache.h"
 #include "snow_canvas_export.h"
 #include "snow_canvas_ffi_handles.h"
+#include "snow_canvas_filter_tile_cache.h"
 #include "snow_canvas_magnifier_renderer.h"
 #include "snow_canvas_render_geometry.h"
 #include "snow_canvas_renderer.h"
@@ -12,12 +13,16 @@
 #include <QApplication>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QDir>
+#include <QFontDatabase>
 #include <QtMath>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <tuple>
 #include <vector>
 
@@ -70,7 +75,8 @@ QImage sourceImage() {
 
 QImage render(const std::vector<SnowCanvasSceneItem>& items,
               const QList<SnowCanvasBaseImageSource>& sources, qreal dpr = 1.0,
-              const SceneDisplayInfo& info = projection(), QRegion exposed = {}) {
+              const SceneDisplayInfo& info = projection(), QRegion exposed = {}, bool tiled = false,
+              const void* cacheNamespace = nullptr, std::uint64_t contentKey = 0) {
     QImage output(QSize(qCeil(info.surface_width * dpr), qCeil(info.surface_height * dpr)),
                   QImage::Format_ARGB32_Premultiplied);
     output.setDevicePixelRatio(dpr);
@@ -88,7 +94,13 @@ QImage render(const std::vector<SnowCanvasSceneItem>& items,
     request.exposedRegion = exposed;
     request.clearBackgroundEnabled = false;
     request.baseImageSources = &sources;
-    snow_canvas_renderer::renderSceneItems(request);
+    request.enableFilterTileCache = tiled;
+    request.cacheNamespace = cacheNamespace;
+    request.filterTileContentKey = contentKey;
+    if (tiled)
+        snow_canvas_renderer::renderSceneItemsTiled(request);
+    else
+        snow_canvas_renderer::renderSceneItems(request);
     return output;
 }
 
@@ -532,6 +544,7 @@ void inheritedOpacityAppliesToTheCompleteMagnifierSceneItem() {
     lens.stroke = {255, 0, 0, 255};
     lens.stroke_width = 4;
     lens.corner_radii = {};
+    lens.magnifier.connection_type = SNOW_MAGNIFIER_CONNECTION_LEADER_LINE;
     lens.opacity = 0.5;
     const SnowArrowPoint leader[]{{95, 70}, {35, 70}};
     lens.setArrowPoints(leader, 2);
@@ -1030,6 +1043,7 @@ void largeOffscreenSourcesKeepSharedPixelsAndCullUnexposedLayers() {
 
 void leaderRenderingUsesEveryArrowheadAndSceneBounds() {
     auto lens = magnifier();
+    lens.magnifier.connection_type = SNOW_MAGNIFIER_CONNECTION_LEADER_LINE;
     const SnowArrowPoint points[]{{99, 70}, {35, 70}};
     lens.setArrowPoints(points, 2);
     lens.arrow_type = SNOW_ARROW_TYPE_STRAIGHT;
@@ -1353,7 +1367,8 @@ void exportUsesDirectOriginalSourcesIncludingOutsideCrop() {
     require(snow_runtime_style_defaults_default(&defaults) == SNOW_OK, "load defaults");
     defaults.magnifier.factor = 2;
     defaults.magnifier.stroke_width = 2;
-    defaults.magnifier.show_leader = 1;
+    defaults.magnifier.connection_type = SNOW_MAGNIFIER_CONNECTION_LEADER_LINE;
+    defaults.magnifier.source_outline = 0;
     ScopedRuntimeHandle runtime;
     SnowRuntimeConfig config{&defaults};
     require(snow_runtime_create_with_config(&config, runtime.outParam()) == SNOW_OK,
@@ -1431,10 +1446,10 @@ void exportUsesDirectOriginalSourcesIncludingOutsideCrop() {
             previousWeight = weight;
         }
     }
-    defaults.magnifier.show_leader = 0;
+    defaults.magnifier.connection_type = SNOW_MAGNIFIER_CONNECTION_NONE;
     require(snow_viewport_set_magnifier_style_patch_ex(
                 runtime.get(), viewport.get(), &defaults.magnifier,
-                SNOW_MAGNIFIER_STYLE_PROPERTY_SHOW_LEADER, 0, changed.outParam()) == SNOW_OK &&
+                SNOW_MAGNIFIER_STYLE_PROPERTY_CONNECTION_TYPE, 0, changed.outParam()) == SNOW_OK &&
                 cache.sync(runtime.get(), viewport.get()) &&
                 cache.sceneItems()[0].arrow_point_count == 0,
             "disabling the leader must remove its scene geometry");
@@ -1442,6 +1457,701 @@ void exportUsesDirectOriginalSourcesIncludingOutsideCrop() {
                                                             QSize(60, 60), {});
     require(noBase.pixelColor(30, 30).alpha() == 0,
             "export without base sources must preserve transparent lens content");
+    defaults.magnifier.connection_type = SNOW_MAGNIFIER_CONNECTION_GRADIENT;
+    defaults.magnifier.source_outline = 1;
+    require(snow_viewport_set_magnifier_style_patch_ex(
+                runtime.get(), viewport.get(), &defaults.magnifier,
+                SNOW_MAGNIFIER_STYLE_PROPERTY_CONNECTION_TYPE |
+                    SNOW_MAGNIFIER_STYLE_PROPERTY_SOURCE_OUTLINE,
+                0, changed.outParam()) == SNOW_OK &&
+                cache.sync(runtime.get(), viewport.get()) &&
+                cache.sceneItems()[0].arrow_point_count == 0,
+            "gradient mode must remove leader geometry and publish its source outline");
+    for (const double scale : {1.0, 1.25, 2.0}) {
+        const QImage bridge =
+            snow_canvas_export::renderToImage(runtime.get(), QRectF(60, 65, 20, 10),
+                                              QSize(qRound(20 * scale), qRound(10 * scale)), {});
+        require(bridge.pixelColor(bridge.width() / 2, bridge.height() / 2).alpha() > 0,
+                "a cropped export containing only the bridge must retain the gradient");
+        const QImage sourceOutline = snow_canvas_export::renderToImage(
+            runtime.get(), QRectF(18, 65, 5, 10), QSize(qRound(5 * scale), qRound(10 * scale)), {});
+        require(sourceOutline.pixelColor(qRound(2 * scale), sourceOutline.height() / 2).alpha() >
+                    100,
+                "a cropped export outside the destination must include the source outline");
+    }
+    snow_canvas_export::resetDiagnosticsForCurrentThread();
+    const QImage gradientExport = snow_canvas_export::renderToImage(
+        runtime.get(), QRectF(100, 40, 60, 60), QSize(120, 120), sources);
+    require(gradientExport.pixelColor(70, 70) == QColor(70, 30, 200) &&
+                snow_canvas_export::diagnosticsForCurrentThread().directSourceFastPathCount == 1 &&
+                snow_canvas_export::diagnosticsForCurrentThread().fullCompositorPathCount == 0,
+            "gradient decoration must retain pristine cropped sampling and the direct export path");
+}
+
+void connectionModesAndSourceOutlinesAreIndependent() {
+    auto lens = magnifier();
+    const SnowArrowPoint leader[]{{99, 70}, {35, 70}};
+    lens.setArrowPoints(leader, 2);
+    lens.arrow_type = SNOW_ARROW_TYPE_STRAIGHT;
+    lens.arrow_ratio = 1;
+    lens.arrow_stroke_style = SNOW_STROKE_STYLE_SOLID;
+    for (const auto mode : {SNOW_MAGNIFIER_CONNECTION_NONE, SNOW_MAGNIFIER_CONNECTION_LEADER_LINE,
+                            SNOW_MAGNIFIER_CONNECTION_GRADIENT}) {
+        for (const bool outline : {false, true}) {
+            lens.magnifier.connection_type = mode;
+            lens.magnifier.source_outline = outline ? 1 : 0;
+            const QImage output = render({lens}, {});
+            require((pixel(output, 20, 70).alpha() > 100) == outline,
+                    "source outline must toggle independently of the connection mode");
+            const int connectionAlpha = pixel(output, 70, 70).alpha();
+            require(mode == SNOW_MAGNIFIER_CONNECTION_NONE ? connectionAlpha == 0
+                    : mode == SNOW_MAGNIFIER_CONNECTION_LEADER_LINE
+                        ? connectionAlpha > 200
+                        : connectionAlpha > 0 && connectionAlpha < 50,
+                    "None, Leader line and Gradient must draw only their selected connection");
+            require(pixel(output, 130, 70).alpha() == 0 && pixel(output, 100, 70).alpha() > 100,
+                    "decorations must preserve the transparent lens interior and its border");
+        }
+    }
+}
+
+void gradientUsesStrokeColorAndCombinedOpacity() {
+    for (const auto stroke : {SnowColorRgba8{230, 60, 30, 255}, SnowColorRgba8{30, 80, 220, 128}}) {
+        for (const double callerOpacity : {1.0, 0.6}) {
+            auto lens = magnifier();
+            lens.magnifier.connection_type = SNOW_MAGNIFIER_CONNECTION_GRADIENT;
+            lens.stroke = stroke;
+            lens.stroke_width = 0;
+            lens.opacity = 0.7;
+            QImage output(200, 140, QImage::Format_ARGB32_Premultiplied);
+            output.fill(Qt::transparent);
+            {
+                QPainter painter(&output);
+                painter.setRenderHint(QPainter::Antialiasing);
+                painter.setOpacity(callerOpacity);
+                snow_canvas_magnifier_renderer::render(painter, projection(), lens, nullptr);
+            }
+            int previousAlpha = -1;
+            for (const int x : {60, 75, 90}) {
+                const QRgb sample = output.pixel(x, 70);
+                const double fraction = (x + 0.5 - 35.0) / 95.0;
+                const int expected =
+                    qRound(stroke.a * (0.04 + 0.12 * fraction) * 0.7 * callerOpacity);
+                require(qAbs(qAlpha(sample) - expected) <= 2 && qAlpha(sample) > previousAlpha,
+                        "gradient opacity must increase from 4% to 16% and multiply every alpha");
+                previousAlpha = qAlpha(sample);
+                require(qAbs(qRed(sample) - qRound(stroke.r * qAlpha(sample) / 255.0)) <= 1 &&
+                            qAbs(qGreen(sample) - qRound(stroke.g * qAlpha(sample) / 255.0)) <= 1 &&
+                            qAbs(qBlue(sample) - qRound(stroke.b * qAlpha(sample) / 255.0)) <= 1,
+                        "gradient RGB must come from the stroke color");
+            }
+        }
+    }
+}
+
+void gradientContoursExcludeBodiesAcrossShapesDirectionsAndProjection() {
+    for (const auto shape : {SNOW_DISPLAY_RECT_SHAPE_RECTANGLE, SNOW_DISPLAY_RECT_SHAPE_ELLIPSE,
+                             SNOW_DISPLAY_RECT_SHAPE_DIAMOND}) {
+        for (const double rotation : {0.0, 0.63}) {
+            for (int direction = 0; direction < 8; ++direction) {
+                auto lens = magnifier(2, static_cast<std::uint8_t>(shape));
+                lens.width = 40;
+                lens.height = 30;
+                lens.magnifier.source_width = 20;
+                lens.magnifier.source_height = 15;
+                lens.magnifier.source_center_x = 100;
+                lens.magnifier.source_center_y = 70;
+                const double angle = direction * M_PI / 4.0;
+                lens.center_x = 100 + 65 * std::cos(angle);
+                lens.center_y = 70 + 65 * std::sin(angle);
+                lens.rotation = rotation;
+                lens.corner_radii = {8, 5, 3, 6};
+                lens.stroke_width = 0;
+                lens.magnifier.connection_type = SNOW_MAGNIFIER_CONNECTION_GRADIENT;
+                for (const double zoom : {0.5, 1.0, 2.0}) {
+                    auto info = projection();
+                    info.camera_zoom = zoom;
+                    QTransform toView;
+                    toView.translate(100, 70);
+                    toView.scale(zoom, zoom);
+                    toView.translate(-100, -70);
+                    const QPainterPath source =
+                        toView.map(snow_canvas_magnifier_renderer::sourcePath(lens));
+                    const QPainterPath target =
+                        toView.map(snow_canvas_magnifier_renderer::lensPath(lens));
+                    for (const double dpr : {1.0, 1.25, 2.0}) {
+                        const QImage full = render({lens}, {}, dpr, info);
+                        int bridgePixels = 0;
+                        for (int y = 2; y < 138; y += 3) {
+                            for (int x = 2; x < 198; x += 3) {
+                                const int alpha = pixel(full, x, y).alpha();
+                                const QRectF guard(x - 1, y - 1, 2, 2);
+                                if ((source.contains(guard) || target.contains(guard)) &&
+                                    alpha != 0) {
+                                    std::cerr << "gradient interior mismatch: shape " << shape
+                                              << ", rotation " << rotation << ", direction "
+                                              << direction << ", zoom " << zoom << ", DPR " << dpr
+                                              << ", pixel " << x << ',' << y << ", alpha " << alpha
+                                              << ", source " << source.contains(guard) << ", lens "
+                                              << target.contains(guard) << '\n';
+                                    require(false,
+                                            "gradient must exclude both actual curved interiors");
+                                }
+                                bridgePixels += alpha > 0 ? 1 : 0;
+                            }
+                        }
+                        require(
+                            bridgePixels > 0,
+                            "every shape and connection direction must retain a visible bridge");
+                        const QRegion exposure(QRect(65, 35, 70, 70));
+                        const QImage partial = render({lens}, {}, dpr, info, exposure);
+                        for (int y = 37; y < 103; y += 3) {
+                            for (int x = 67; x < 133; x += 3) {
+                                const int physicalX = qFloor(x * dpr);
+                                const int physicalY = qFloor(y * dpr);
+                                const QRgb a = partial.pixel(physicalX, physicalY);
+                                const QRgb b = full.pixel(physicalX, physicalY);
+                                // Splitting antialiased spans may round a premultiplied
+                                // channel by one. Unpremultiplication amplifies that
+                                // harmless difference for these translucent pixels.
+                                if (qAlpha(a) != qAlpha(b) ||
+                                    std::max({qAbs(qRed(a) - qRed(b)), qAbs(qGreen(a) - qGreen(b)),
+                                              qAbs(qBlue(a) - qBlue(b))}) > 1) {
+                                    std::cerr << "gradient exposure mismatch: shape " << shape
+                                              << ", rotation " << rotation << ", direction "
+                                              << direction << ", zoom " << zoom << ", DPR " << dpr
+                                              << ", pixel " << x << ',' << y << ", alpha "
+                                              << pixel(full, x, y).alpha() << "/"
+                                              << pixel(partial, x, y).alpha() << '\n';
+                                    require(false, "partial painting must retain the complete "
+                                                   "gradient geometry");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+void scaledSourceContoursAndOverlapRemainClean() {
+    for (const auto shape : {SNOW_DISPLAY_RECT_SHAPE_RECTANGLE, SNOW_DISPLAY_RECT_SHAPE_ELLIPSE,
+                             SNOW_DISPLAY_RECT_SHAPE_DIAMOND}) {
+        auto lens = magnifier(2, static_cast<std::uint8_t>(shape));
+        lens.corner_radii = {12, 8, 4, 16};
+        lens.rotation = 0.37;
+        QTransform scaleSource;
+        scaleSource.translate(lens.magnifier.source_center_x, lens.magnifier.source_center_y);
+        scaleSource.scale(0.5, 0.5);
+        scaleSource.translate(-lens.center_x, -lens.center_y);
+        const QPainterPath expected =
+            scaleSource.map(snow_canvas_magnifier_renderer::lensPath(lens));
+        const QPainterPath actual = snow_canvas_magnifier_renderer::sourcePath(lens);
+        require(actual.elementCount() == expected.elementCount(),
+                "source contour must preserve the magnified contour's scaled topology");
+        for (int index = 0; index < actual.elementCount(); ++index) {
+            const auto a = actual.elementAt(index);
+            const auto b = expected.elementAt(index);
+            require(std::hypot(a.x - b.x, a.y - b.y) < 1e-9,
+                    "source shape and corner radii must scale with the magnification factor");
+        }
+        lens.magnifier.connection_type = SNOW_MAGNIFIER_CONNECTION_GRADIENT;
+        lens.magnifier.source_outline = 1;
+        lens.center_x = lens.magnifier.source_center_x = 100;
+        lens.center_y = lens.magnifier.source_center_y = 70;
+        const QImage concentric = render({lens}, {});
+        require(pixel(concentric, 100, 70).alpha() == 0 && pixel(concentric, 100, 58).alpha() == 0,
+                "a contained source must not leave gradient tint or inner source marks");
+        auto noStroke = lens;
+        noStroke.stroke_width = 0;
+        noStroke.magnifier.source_outline = 0;
+        require(
+            alphaWeight(render({noStroke}, {})) == 0,
+            "contained source geometry must omit the entire bridge, including antialias fringes");
+        lens.center_x = 120;
+        const QImage overlapping = render({lens}, {});
+        require(pixel(overlapping, 112, 70).alpha() == 0,
+                "overlapping source and lens interiors must never be filled by an odd-even cutout");
+        lens.magnifier.magnification_factor = 1;
+        lens.width = lens.magnifier.source_width;
+        lens.height = lens.magnifier.source_height;
+        lens.center_x = lens.magnifier.source_center_x;
+        lens.center_y = lens.magnifier.source_center_y;
+        lens.stroke.a = 128;
+        lens.opacity = 0.5;
+        const QImage coincidentOutline = render({lens}, {});
+        lens.magnifier.source_outline = 0;
+        require(render({lens}, {}) == coincidentOutline,
+                "coincident one-times outlines must not double the magnifier border opacity");
+    }
+}
+
+void extremeFactorsTouchingAndInvalidGeometryRemainSafe() {
+    const auto requireClearBodies = [](const SnowCanvasSceneItem& lens, const QImage& output) {
+        const auto source = snow_canvas_magnifier_renderer::sourcePath(lens);
+        const auto target = snow_canvas_magnifier_renderer::lensPath(lens);
+        for (int y = 1; y < 139; y += 2) {
+            for (int x = 1; x < 199; x += 2) {
+                // An integer-addressed physical pixel covers this full square.
+                const QRectF guard(x, y, 1, 1);
+                if ((source.contains(guard) || target.contains(guard)) &&
+                    pixel(output, x, y).alpha() != 0) {
+                    std::cerr << "compact gradient interior mismatch: shape "
+                              << static_cast<int>(lens.rect_shape) << ", factor "
+                              << lens.magnifier.magnification_factor << ", rotation "
+                              << lens.rotation << ", lens " << lens.center_x << ',' << lens.center_y
+                              << ", pixel " << x << ',' << y << ", alpha "
+                              << pixel(output, x, y).alpha() << ", source "
+                              << source.contains(guard) << ", lens " << target.contains(guard)
+                              << '\n';
+                    require(false,
+                            "exact tangent connections must keep both true body interiors clear");
+                }
+            }
+        }
+    };
+    for (const auto shape : {SNOW_DISPLAY_RECT_SHAPE_RECTANGLE, SNOW_DISPLAY_RECT_SHAPE_ELLIPSE,
+                             SNOW_DISPLAY_RECT_SHAPE_DIAMOND}) {
+        for (const double factor : {1.0, 10.0}) {
+            auto lens = magnifier(factor, static_cast<std::uint8_t>(shape));
+            lens.width = 60;
+            lens.height = 40;
+            lens.magnifier.source_width = 60 / factor;
+            lens.magnifier.source_height = 40 / factor;
+            lens.magnifier.connection_type = SNOW_MAGNIFIER_CONNECTION_GRADIENT;
+            lens.stroke_width = 0;
+            lens.corner_radii = {1000, 30, 500, 70};
+            lens.rotation = 0.37;
+            std::vector<SnowCanvasSceneItem> items{lens};
+            const QImage output = render(items, {});
+            require(alphaWeight(output) > 0 &&
+                        !items[0].magnifierGeometryCache().disjointBridge.isEmpty(),
+                    "one-times and ten-times connections must use their exact curved bridge");
+            requireClearBodies(lens, output);
+            lens.corner_radii = {};
+            lens.rotation = 0;
+            const QImage aligned = render({lens}, {});
+            require(pixel(aligned, 80, 70).alpha() > 0,
+                    "aligned sharp contours must resolve flat support ties into a visible bridge");
+            requireClearBodies(lens, aligned);
+        }
+        for (const double gap : {-0.0001, 0.0, 0.0001}) {
+            auto lens = magnifier(2, static_cast<std::uint8_t>(shape));
+            lens.width = 60;
+            lens.height = 40;
+            lens.magnifier.source_width = 30;
+            lens.magnifier.source_height = 20;
+            lens.center_x = 80 + gap;
+            lens.corner_radii = {};
+            lens.stroke_width = 0;
+            lens.magnifier.connection_type = SNOW_MAGNIFIER_CONNECTION_GRADIENT;
+            const QImage output = render({lens}, {});
+            require(alphaWeight(output) > 0,
+                    "touching and nearly touching bodies must retain their exterior connection");
+            requireClearBodies(lens, output);
+        }
+    }
+    auto lens = magnifier();
+    lens.stroke_width = 0;
+    lens.magnifier.connection_type = SNOW_MAGNIFIER_CONNECTION_GRADIENT;
+    const auto requireEmpty = [&](const SnowCanvasSceneItem& invalid) {
+        require(alphaWeight(render({invalid}, {})) == 0,
+                "degenerate or nonfinite magnifier geometry must paint safely empty");
+    };
+    for (const double extent : {0.0, -1.0, std::numeric_limits<double>::infinity(),
+                                std::numeric_limits<double>::quiet_NaN()}) {
+        auto invalid = lens;
+        invalid.width = extent;
+        requireEmpty(invalid);
+        invalid = lens;
+        invalid.magnifier.source_height = extent;
+        requireEmpty(invalid);
+    }
+    for (const double coordinate :
+         {std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()}) {
+        auto invalid = lens;
+        invalid.center_x = coordinate;
+        requireEmpty(invalid);
+        invalid = lens;
+        invalid.magnifier.source_center_y = coordinate;
+        requireEmpty(invalid);
+        invalid = lens;
+        invalid.rotation = coordinate;
+        requireEmpty(invalid);
+    }
+}
+
+void decorationsPaintWhenOnlySourceOrBridgeIsExposed() {
+    auto lens = magnifier();
+    lens.center_x = 300;
+    lens.magnifier.connection_type = SNOW_MAGNIFIER_CONNECTION_GRADIENT;
+    lens.magnifier.source_outline = 1;
+    for (const double dpr : {1.0, 1.25, 2.0}) {
+        const QImage source = render({lens}, {}, dpr, projection(), QRegion(QRect(18, 65, 5, 10)));
+        require(pixel(source, 20, 70).alpha() > 100,
+                "source-only exposure must survive destination culling");
+        lens.stroke_width = 0;
+        const QImage bridge = render({lens}, {}, dpr, projection(), QRegion(QRect(70, 65, 10, 10)));
+        require(pixel(bridge, 75, 70).alpha() > 0,
+                "bridge-only exposure must paint even with no exposed lens or visible border");
+        lens.stroke_width = 2;
+    }
+    lens.stroke.a = 0;
+    require(alphaWeight(render({lens}, {})) == 0,
+            "a transparent stroke must suppress both outline and gradient decorations");
+}
+
+void retainedGeometryReusesCopiesMovesAndAppearanceChanges() {
+    std::vector<SnowCanvasSceneItem> items{magnifier()};
+    auto& lens = items.front();
+    lens.corner_radii = {10, 8, 6, 4};
+    lens.magnifier.connection_type = SNOW_MAGNIFIER_CONNECTION_GRADIENT;
+    lens.magnifier.source_outline = 1;
+    snow_canvas_magnifier_renderer::resetDiagnosticsForCurrentThread();
+    const QImage initial = render(items, {});
+    auto diagnostics = snow_canvas_magnifier_renderer::diagnosticsForCurrentThread();
+    require(diagnostics.geometryBuildCount == 1 && diagnostics.bridgeHullBuildCount == 1,
+            "the first gradient paint must build its vector geometry once");
+    snow_canvas_magnifier_renderer::resetDiagnosticsForCurrentThread();
+    require(render(items, {}) == initial, "retained geometry must preserve static appearance");
+    diagnostics = snow_canvas_magnifier_renderer::diagnosticsForCurrentThread();
+    require(diagnostics.geometryBuildCount == 0 && diagnostics.bridgeHullBuildCount == 0 &&
+                diagnostics.geometryReuseCount == 1 && diagnostics.bridgeHullReuseCount == 1,
+            "static painting must reuse both contours and the cached hull");
+    snow_canvas_magnifier_renderer::resetDiagnosticsForCurrentThread();
+    render(items, {}, 2);
+    diagnostics = snow_canvas_magnifier_renderer::diagnosticsForCurrentThread();
+    require(diagnostics.geometryBuildCount == 0 && diagnostics.bridgeHullBuildCount == 1,
+            "a higher physical scale must rebuild only hull precision");
+    snow_canvas_magnifier_renderer::resetDiagnosticsForCurrentThread();
+    lens.stroke = {220, 40, 20, 128};
+    lens.stroke_width = 4;
+    lens.opacity = 0.7;
+    render(items, {});
+    diagnostics = snow_canvas_magnifier_renderer::diagnosticsForCurrentThread();
+    require(diagnostics.geometryBuildCount == 0 && diagnostics.bridgeHullBuildCount == 0,
+            "appearance edits and reduced scale must retain vector geometry");
+    auto copy = items;
+    copy.front().magnifier.source_center_x += 5;
+    snow_canvas_magnifier_renderer::resetDiagnosticsForCurrentThread();
+    render(copy, {});
+    require(snow_canvas_magnifier_renderer::diagnosticsForCurrentThread().geometryBuildCount == 1,
+            "direct geometry mutations must invalidate a copied cache");
+    snow_canvas_magnifier_renderer::resetDiagnosticsForCurrentThread();
+    render(items, {});
+    require(snow_canvas_magnifier_renderer::diagnosticsForCurrentThread().geometryBuildCount == 0,
+            "copied cache invalidation must not alter the original item's retained geometry");
+    auto moved = std::move(items);
+    snow_canvas_magnifier_renderer::resetDiagnosticsForCurrentThread();
+    render(moved, {});
+    require(snow_canvas_magnifier_renderer::diagnosticsForCurrentThread().geometryBuildCount == 0,
+            "moving an owned item must retain its vector cache");
+    moved.front().width += 4;
+    snow_canvas_magnifier_renderer::resetDiagnosticsForCurrentThread();
+    render(moved, {});
+    require(snow_canvas_magnifier_renderer::diagnosticsForCurrentThread().geometryBuildCount == 1,
+            "direct lens dimension changes must invalidate vector geometry");
+    const QImage normalScale = render(moved, {});
+    auto extreme = projection();
+    extreme.camera_zoom = 1e12;
+    snow_canvas_magnifier_renderer::resetDiagnosticsForCurrentThread();
+    {
+        QImage boundedOutput(1, 1, QImage::Format_ARGB32_Premultiplied);
+        boundedOutput.fill(Qt::transparent);
+        QPainter painter(&boundedOutput);
+        painter.setClipRect(QRect(0, 0, 1, 1));
+        // Invoke directly: scene culling correctly rejects bounds outside the
+        // integer update-region range before dispatching this extreme zoom.
+        snow_canvas_magnifier_renderer::render(painter, extreme, moved.front(), nullptr);
+    }
+    require(snow_canvas_magnifier_renderer::diagnosticsForCurrentThread().bridgeHullBuildCount == 1,
+            "pathological precision must stop at the bounded contour budget");
+    snow_canvas_magnifier_renderer::resetDiagnosticsForCurrentThread();
+    require(
+        render(moved, {}) == normalScale &&
+            snow_canvas_magnifier_renderer::diagnosticsForCurrentThread().bridgeHullBuildCount == 0,
+        "a failed extreme-scale hull must preserve the valid zoomed-out cache");
+}
+
+void filterCachesInvalidateMagnifierDecorationsAndSampling() {
+    auto lens = magnifier();
+    lens.magnifier.connection_type = SNOW_MAGNIFIER_CONNECTION_GRADIENT;
+    lens.magnifier.source_outline = 1;
+    auto filter = lens;
+    filter.kind = SNOW_SCENE_DISPLAY_ITEM_FILTER;
+    filter.element_id = {2, 1};
+    filter.center_x = 100;
+    filter.center_y = 70;
+    filter.width = 200;
+    filter.height = 140;
+    filter.stroke.a = 0;
+    filter.filter = snow_filter_render_spec_resolve(2, 1);
+    std::vector<SnowCanvasSceneItem> items{lens, filter};
+    const QList<SnowCanvasBaseImageSource> sources{{sourceImage(), QRectF(0, 0, 200, 140), {}}};
+    for (const std::uint64_t contentKey : {0u, 17u}) {
+        snow_canvas_filter_tile_cache::clear();
+        const auto verify = [&] {
+            const QImage direct = render(items, sources);
+            const QImage tiled =
+                render(items, sources, 1, projection(), {}, true, &items, contentKey);
+            require(direct == tiled,
+                    "cached filter replay must follow every magnifier decoration and source edit");
+        };
+        verify();
+        verify();
+        items[0].magnifier.connection_type = SNOW_MAGNIFIER_CONNECTION_NONE;
+        verify();
+        items[0].magnifier.source_outline = 0;
+        verify();
+        items[0].stroke = {220, 50, 80, 180};
+        items[0].stroke_width = 4;
+        verify();
+        items[0].magnifier.connection_type = SNOW_MAGNIFIER_CONNECTION_GRADIENT;
+        items[0].magnifier.source_outline = 1;
+        verify();
+        items[0].magnifier.source_center_x += 4;
+        items[0].magnifier.magnification_factor = 3;
+        items[0].magnifier.source_width = items[0].width / 3;
+        items[0].magnifier.source_height = items[0].height / 3;
+        verify();
+    }
+    snow_canvas_filter_tile_cache::clear();
+}
+
+void gradientIncrementalRepaintsMatchFreshFrames() {
+    for (const auto shape : {SNOW_RECTANGLE_SHAPE_RECTANGLE, SNOW_RECTANGLE_SHAPE_ELLIPSE,
+                             SNOW_RECTANGLE_SHAPE_DIAMOND}) {
+        for (double dpr : {1.0, 1.25, 2.0}) {
+            SnowStyleDefaults defaults{};
+            require(snow_runtime_style_defaults_default(&defaults) == SNOW_OK, "load defaults");
+            defaults.magnifier.shape = shape;
+            defaults.magnifier.connection_type = SNOW_MAGNIFIER_CONNECTION_GRADIENT;
+            defaults.magnifier.source_outline = 1;
+            defaults.magnifier.corner_radii = {12, 8, 20, 6};
+            defaults.magnifier.stroke = {255, 32, 50, 255};
+            ScopedRuntimeHandle runtime;
+            SnowRuntimeConfig config{&defaults};
+            require(snow_runtime_create_with_config(&config, runtime.outParam()) == SNOW_OK,
+                    "create incremental magnifier runtime");
+            SnowCanvasViewport viewport;
+            require(viewport.create(runtime.get(), snow_canvas_viewport::defaultEngineConfig()) &&
+                        snow_viewport_set_surface_size(runtime.get(), viewport.get(), 600, 420) ==
+                            SNOW_OK &&
+                        snow_viewport_set_camera(runtime.get(), viewport.get(), 300, 210, 1) ==
+                            SNOW_OK,
+                    "configure incremental magnifier viewport");
+            SnowCanvasDisplayCache cache;
+            require(cache.sync(runtime.get(), viewport.get()), "initialize incremental cache");
+            QImage retained(QSize(qCeil(600 * dpr), qCeil(420 * dpr)),
+                            QImage::Format_ARGB32_Premultiplied);
+            retained.setDevicePixelRatio(dpr);
+            retained.fill(Qt::transparent);
+            const auto verify = [&](const char* stage) {
+                require(cache.sync(runtime.get(), viewport.get()), "sync magnifier edit");
+                const QRegion damage = snow_canvas_display::dirtyRectsToRegion(
+                    cache.sceneDirtyRects(), cache.sceneDirtyRectCount(), QRect(0, 0, 600, 420));
+                if (!damage.isEmpty()) {
+                    QPainter painter(&retained);
+                    painter.setClipRegion(damage);
+                    painter.setCompositionMode(QPainter::CompositionMode_Source);
+                    painter.fillRect(QRect(0, 0, 600, 420), Qt::transparent);
+                    painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+                    painter.setRenderHint(QPainter::Antialiasing);
+                    std::vector<std::uint32_t> candidates;
+                    cache.sceneCandidateIndices(damage, &candidates);
+                    snow_canvas_renderer::SceneRenderRequest request;
+                    request.painter = &painter;
+                    request.displayInfo = &cache.sceneInfo();
+                    request.sceneItems = cache.sceneItems();
+                    request.sceneItemCount = cache.sceneItemCount();
+                    request.exposedRegion = damage;
+                    request.clearBackgroundEnabled = false;
+                    request.candidateIndices = candidates.data();
+                    request.candidateCount = static_cast<std::uint32_t>(candidates.size());
+                    snow_canvas_renderer::renderSceneItems(request);
+                }
+                std::vector<SnowCanvasSceneItem> items;
+                for (std::uint32_t index = 0; index < cache.sceneItemCount(); ++index)
+                    items.push_back(cache.sceneItems()[index]);
+                const QImage fresh = render(items, {}, dpr, cache.sceneInfo());
+                for (int y = 0; y < fresh.height(); ++y) {
+                    const auto* expected = reinterpret_cast<const QRgb*>(fresh.constScanLine(y));
+                    const auto* actual = reinterpret_cast<const QRgb*>(retained.constScanLine(y));
+                    for (int x = 0; x < fresh.width(); ++x) {
+                        const QRgb a = expected[x];
+                        const QRgb b = actual[x];
+                        if (std::max({qAbs(qAlpha(a) - qAlpha(b)), qAbs(qRed(a) - qRed(b)),
+                                      qAbs(qGreen(a) - qGreen(b)), qAbs(qBlue(a) - qBlue(b))}) >
+                            1) {
+                            std::cerr << "incremental magnifier mismatch: " << stage << ", shape "
+                                      << shape << ", DPR " << dpr << ", pixel " << x << ',' << y
+                                      << ", alpha " << qAlpha(a) << '/' << qAlpha(b) << '\n';
+                            require(false, "scene damage must repaint every changed bridge, source "
+                                           "outline and lens pixel without leaving trails");
+                        }
+                    }
+                }
+            };
+            ScopedChangedViewportList changed;
+            require(snow_viewport_set_active_tool_ex(runtime.get(), viewport.get(),
+                                                     SNOW_ACTIVE_TOOL_MAGNIFIER,
+                                                     changed.outParam()) == SNOW_OK,
+                    "activate incremental magnifier");
+            pointer(runtime.get(), viewport.get(), SNOW_POINTER_EVENT_DOWN, {60, 280});
+            pointer(runtime.get(), viewport.get(), SNOW_POINTER_EVENT_MOVE, {140, 340});
+            verify("creation preview");
+            pointer(runtime.get(), viewport.get(), SNOW_POINTER_EVENT_UP, {140, 340});
+            verify("creation commit");
+            pointer(runtime.get(), viewport.get(), SNOW_POINTER_EVENT_DOWN, {100, 310});
+            pointer(runtime.get(), viewport.get(), SNOW_POINTER_EVENT_UP, {100, 310});
+            verify("selection");
+            const QPointF grip(100, 394);
+            pointer(runtime.get(), viewport.get(), SNOW_POINTER_EVENT_DOWN, grip);
+            for (int step = 1; step <= 16; ++step) {
+                const QPointF delta(340.0 * step / 16, -220.0 * step / 16);
+                pointer(runtime.get(), viewport.get(), SNOW_POINTER_EVENT_MOVE, grip + delta);
+                verify("lens drag preview");
+            }
+            pointer(runtime.get(), viewport.get(), SNOW_POINTER_EVENT_UP,
+                    grip + QPointF(340, -220));
+            verify("lens drag commit");
+            require(std::abs(cache.sceneItems()[0].center_x - 440) < 0.01,
+                    "incremental fixture must actually move the lens");
+            pointer(runtime.get(), viewport.get(), SNOW_POINTER_EVENT_DOWN, {100, 310});
+            pointer(runtime.get(), viewport.get(), SNOW_POINTER_EVENT_MOVE, {125, 280});
+            verify("source drag preview");
+            pointer(runtime.get(), viewport.get(), SNOW_POINTER_EVENT_UP, {125, 280});
+            verify("source drag commit");
+            for (double zoom : {0.5, 1.25, 2.0}) {
+                require(snow_viewport_set_camera(runtime.get(), viewport.get(), 300, 210, zoom) ==
+                            SNOW_OK,
+                        "zoom and clip the incremental magnifier");
+                verify("camera zoom");
+                for (const auto mode :
+                     {SNOW_MAGNIFIER_CONNECTION_NONE, SNOW_MAGNIFIER_CONNECTION_LEADER_LINE,
+                      SNOW_MAGNIFIER_CONNECTION_GRADIENT}) {
+                    for (bool outline : {false, true}) {
+                        defaults.magnifier.connection_type = mode;
+                        defaults.magnifier.source_outline = outline ? 1 : 0;
+                        require(snow_viewport_set_magnifier_style_patch_ex(
+                                    runtime.get(), viewport.get(), &defaults.magnifier,
+                                    SNOW_MAGNIFIER_STYLE_PROPERTY_CONNECTION_TYPE |
+                                        SNOW_MAGNIFIER_STYLE_PROPERTY_SOURCE_OUTLINE,
+                                    0, changed.outParam()) == SNOW_OK,
+                                "change incremental connection style");
+                        verify("connection style");
+                    }
+                }
+            }
+            defaults.magnifier.factor = 3;
+            require(snow_viewport_set_magnifier_style_patch_ex(
+                        runtime.get(), viewport.get(), &defaults.magnifier,
+                        SNOW_MAGNIFIER_STYLE_PROPERTY_FACTOR, 0, changed.outParam()) == SNOW_OK,
+                    "resize incremental lens");
+            verify("factor edit");
+            require(snow_runtime_undo_ex(runtime.get(), changed.outParam()) == SNOW_OK,
+                    "undo incremental factor edit");
+            verify("undo");
+            require(snow_runtime_redo_ex(runtime.get(), changed.outParam()) == SNOW_OK,
+                    "redo incremental factor edit");
+            verify("redo");
+            require(snow_viewport_delete_selected_ex(runtime.get(), viewport.get(),
+                                                     changed.outParam()) == SNOW_OK,
+                    "delete incremental magnifier");
+            verify("delete");
+            require(cache.sceneItemCount() == 0, "deletion must clear the complete magnifier");
+        }
+    }
+}
+
+void saveDecorationInspectionSheet() {
+    const QString directory = qEnvironmentVariable("SNOW_MAGNIFIER_RENDER_PREVIEW_DIR");
+    if (directory.isEmpty())
+        return;
+    require(QDir().mkpath(directory), "create magnifier inspection output directory");
+    QImage sheet(1200, 1110, QImage::Format_ARGB32_Premultiplied);
+    sheet.fill(Qt::white);
+    QPainter painter(&sheet);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QColor(35, 40, 50));
+    QString family = QFontDatabase::systemFont(QFontDatabase::GeneralFont).family();
+#if defined(Q_OS_WIN)
+    const QString fontFile = QDir(qEnvironmentVariable("WINDIR", QStringLiteral("C:/Windows")))
+                                 .filePath(QStringLiteral("Fonts/segoeui.ttf"));
+    const int fontId = QFontDatabase::addApplicationFont(fontFile);
+    if (fontId >= 0 && !QFontDatabase::applicationFontFamilies(fontId).isEmpty())
+        family = QFontDatabase::applicationFontFamilies(fontId).front();
+#endif
+    painter.setFont(QFont(family, 14));
+    painter.drawText(QPointF(25, 30),
+                     QStringLiteral("Magnifier: gradient connection and source outline"));
+    auto reference = magnifier();
+    reference.center_x = 800;
+    reference.center_y = 140;
+    reference.width = 560;
+    reference.height = 260;
+    reference.magnifier = {170, 310, 280, 130, 2, SNOW_MAGNIFIER_CONNECTION_GRADIENT, 1, {}};
+    reference.stroke = {230, 83, 70, 255};
+    reference.stroke_width = 3;
+    auto referenceInfo = projection();
+    referenceInfo.surface_width = 1200;
+    referenceInfo.surface_height = 400;
+    referenceInfo.camera_center_x = 600;
+    referenceInfo.camera_center_y = 200;
+    const QImage referenceDrawing = render({reference}, {}, 1, referenceInfo);
+    painter.drawImage(QPoint(0, 45), referenceDrawing);
+    QImage referencePreview(referenceDrawing.size(), QImage::Format_ARGB32_Premultiplied);
+    referencePreview.fill(Qt::white);
+    {
+        QPainter referencePainter(&referencePreview);
+        referencePainter.drawImage(QPoint(), referenceDrawing);
+    }
+    require(
+        referencePreview.save(QDir(directory).filePath(QStringLiteral("magnifier-reference.png"))),
+        "save standalone magnifier reference preview");
+    for (int row = 0; row < 3; ++row) {
+        for (int shape = 0; shape < 3; ++shape) {
+            auto lens = magnifier(2, static_cast<std::uint8_t>(shape));
+            lens.width = 140;
+            lens.height = 100;
+            lens.magnifier = {75, 155, 70, 50, 2, SNOW_MAGNIFIER_CONNECTION_GRADIENT, 1, {}};
+            lens.center_x = 270;
+            lens.center_y = 70;
+            lens.stroke = {33, 107, 165, 255};
+            lens.stroke_width = 2.5;
+            lens.corner_radii = {16, 10, 6, 12};
+            if (row == 1) {
+                lens.magnifier.source_center_x = 310;
+                lens.center_x = 125;
+                lens.rotation = 0.4;
+            } else if (row == 2) {
+                lens.magnifier.source_center_x = 155;
+                lens.magnifier.source_center_y = 125;
+                lens.center_x = 195;
+                lens.center_y = 115;
+                lens.rotation = -0.2;
+            }
+            auto info = projection();
+            info.surface_width = 400;
+            info.surface_height = 210;
+            info.camera_center_x = 200;
+            info.camera_center_y = 105;
+            const QPoint origin(shape * 400, 440 + row * 220);
+            painter.drawText(origin + QPoint(15, 20),
+                             QStringLiteral("%1 · %2")
+                                 .arg(shape == 0   ? QStringLiteral("Rectangle")
+                                      : shape == 1 ? QStringLiteral("Ellipse")
+                                                   : QStringLiteral("Diamond"))
+                                 .arg(row == 0   ? QStringLiteral("Diagonal")
+                                      : row == 1 ? QStringLiteral("Reversed and rotated")
+                                                 : QStringLiteral("Overlap")));
+            painter.drawImage(origin + QPoint(0, 25), render({lens}, {}, 1, info));
+        }
+    }
+    painter.end();
+    require(sheet.save(QDir(directory).filePath(QStringLiteral("magnifier-decorations.png"))),
+            "save magnifier decoration inspection sheet");
 }
 
 } // namespace
@@ -1449,6 +2159,19 @@ void exportUsesDirectOriginalSourcesIncludingOutsideCrop() {
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", QByteArrayLiteral("offscreen"));
     QApplication application(argc, argv);
+    if (application.arguments().contains(QStringLiteral("--gradient-damage-only"))) {
+        gradientIncrementalRepaintsMatchFreshFrames();
+        return 0;
+    }
+    saveDecorationInspectionSheet();
+    connectionModesAndSourceOutlinesAreIndependent();
+    gradientUsesStrokeColorAndCombinedOpacity();
+    gradientContoursExcludeBodiesAcrossShapesDirectionsAndProjection();
+    scaledSourceContoursAndOverlapRemainClean();
+    extremeFactorsTouchingAndInvalidGeometryRemainSafe();
+    decorationsPaintWhenOnlySourceOrBridgeIsExposed();
+    retainedGeometryReusesCopiesMovesAndAppearanceChanges();
+    filterCachesInvalidateMagnifierDecorationsAndSampling();
     magnifierHoverAndSelectionReuseCreationGuidesAtEveryShapeZoomAndDpr();
     samplesOnlyOriginalPixelsAtEveryFactorAndShape();
     shapesAndBorderClipCleanly();

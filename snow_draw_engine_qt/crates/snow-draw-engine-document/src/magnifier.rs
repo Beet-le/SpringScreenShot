@@ -4,10 +4,14 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use snow_draw_engine_core::arrow::{ArrowType, Arrowhead, StrokeStyle};
-use snow_draw_engine_core::{ColorRgba8, CornerRadii, DrawRect, ErrorCode, Point};
+use snow_draw_engine_core::{
+    ColorRgba8, CornerRadii, DrawRect, ErrorCode, MagnifierConnectionType, MagnifierPaintGeometry,
+    Point,
+};
 
 /// A lens samples the pristine base image, independently of annotation paint order.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MagnifierData {
     pub source_center: Point<f64>,
     pub width: f64,
@@ -18,7 +22,8 @@ pub struct MagnifierData {
     pub stroke: ColorRgba8,
     pub stroke_width: f64,
     pub factor: f64,
-    pub show_leader: bool,
+    pub connection_type: MagnifierConnectionType,
+    pub source_outline: bool,
     pub leader_arrowhead: Option<Arrowhead>,
     #[serde(
         default = "snow_draw_engine_core::arrow::default_arrow_ratio",
@@ -51,7 +56,8 @@ impl Default for MagnifierData {
             },
             stroke_width: 2.0,
             factor: 2.0,
-            show_leader: true,
+            connection_type: MagnifierConnectionType::Gradient,
+            source_outline: true,
             leader_arrowhead: None,
             arrow_ratio: 1.0,
             corner_radii: default_corner_radii(),
@@ -61,13 +67,49 @@ impl Default for MagnifierData {
 }
 
 impl MagnifierData {
+    fn magnified_corner_radii(self) -> CornerRadii {
+        crate::normalize_shape_corner_radii(
+            self.shape,
+            self.width * self.factor,
+            self.height * self.factor,
+            self.corner_radii,
+        )
+    }
+
     pub fn source_rect(self) -> RectangleData {
+        self.region_rect(
+            self.source_center,
+            self.width,
+            self.height,
+            0.0,
+            self.magnified_corner_radii().scaled(1.0 / self.factor),
+        )
+    }
+
+    pub fn magnified_rect(self) -> RectangleData {
+        self.region_rect(
+            self.magnified_center,
+            self.width * self.factor,
+            self.height * self.factor,
+            self.stroke_width,
+            self.magnified_corner_radii(),
+        )
+    }
+
+    fn region_rect(
+        self,
+        center: Point<f64>,
+        width: f64,
+        height: f64,
+        stroke_width: f64,
+        corner_radii: CornerRadii,
+    ) -> RectangleData {
         RectangleData {
             rectangle_kind: RectangleElementKind::Rectangle,
             highlight_shape: self.shape,
-            center: self.source_center,
-            width: self.width,
-            height: self.height,
+            center,
+            width,
+            height,
             rotation: self.rotation,
             // Interaction uses the full shape interior, even without a base image.
             fill: ColorRgba8 {
@@ -78,30 +120,10 @@ impl MagnifierData {
             },
             fill_style: FillStyle::Solid,
             stroke: self.stroke,
-            stroke_width: 0.0,
+            stroke_width,
             stroke_style: StrokeStyle::Solid,
-            corner_radii: crate::normalize_shape_corner_radii(
-                self.shape,
-                self.width,
-                self.height,
-                self.corner_radii,
-            ),
+            corner_radii,
             opacity: self.opacity,
-        }
-    }
-    pub fn magnified_rect(self) -> RectangleData {
-        RectangleData {
-            center: self.magnified_center,
-            width: self.width * self.factor,
-            height: self.height * self.factor,
-            stroke_width: self.stroke_width,
-            corner_radii: crate::normalize_shape_corner_radii(
-                self.shape,
-                self.width * self.factor,
-                self.height * self.factor,
-                self.corner_radii,
-            ),
-            ..self.source_rect()
         }
     }
     /// The unpainted source/lens union used by group selection and layout commands.
@@ -138,7 +160,7 @@ impl MagnifierData {
     }
     /// Ends at the source center, leaving a gap outside the lens's stroked edge.
     pub fn leader(self) -> Option<ArrowData> {
-        if !self.show_leader {
+        if self.connection_type != MagnifierConnectionType::LeaderLine {
             return None;
         }
         let (sin, cos) = self.rotation.sin_cos();
@@ -290,7 +312,21 @@ pub fn validate_magnifier(value: &MagnifierData) -> Result<(), ErrorCode> {
 }
 
 pub fn magnifier_bounds(value: &MagnifierData) -> DrawRect {
-    let mut bounds = rect_bounds(&value.magnified_rect());
+    let mut bounds = MagnifierPaintGeometry {
+        lens_center: value.magnified_center,
+        lens_width: value.width * value.factor,
+        lens_height: value.height * value.factor,
+        source_center: value.source_center,
+        source_width: value.width,
+        source_height: value.height,
+        rotation: value.rotation,
+        stroke_width: value.stroke_width,
+        stroke_visible: value.stroke.a != 0,
+        source_outline: value.source_outline,
+        connection_type: value.connection_type,
+    }
+    .bounds()
+    .unwrap_or_default();
     if let Some(leader) = value.leader() {
         let next = crate::arrow_bounds(&leader);
         bounds.min_x = bounds.min_x.min(next.min_x);
@@ -381,6 +417,130 @@ mod tests {
     use super::*;
 
     #[test]
+    fn magnifier_connection_defaults_and_payloads_are_explicit() {
+        let default = MagnifierData::default();
+        assert_eq!(default.connection_type, MagnifierConnectionType::Gradient);
+        assert!(default.source_outline);
+        for connection_type in [
+            MagnifierConnectionType::None,
+            MagnifierConnectionType::LeaderLine,
+            MagnifierConnectionType::Gradient,
+        ] {
+            for source_outline in [false, true] {
+                let value = MagnifierData {
+                    connection_type,
+                    source_outline,
+                    ..default
+                };
+                let json = serde_json::to_value(value).unwrap();
+                assert_eq!(
+                    serde_json::from_value::<MagnifierData>(json.clone()).unwrap(),
+                    value
+                );
+                for field in ["connection_type", "source_outline"] {
+                    let mut missing = json.clone();
+                    missing.as_object_mut().unwrap().remove(field);
+                    assert!(serde_json::from_value::<MagnifierData>(missing).is_err());
+                }
+                let mut obsolete = json;
+                obsolete["show_leader"] = true.into();
+                assert!(serde_json::from_value::<MagnifierData>(obsolete).is_err());
+            }
+        }
+        let mut invalid = serde_json::to_value(default).unwrap();
+        invalid["connection_type"] = "invalid".into();
+        assert!(serde_json::from_value::<MagnifierData>(invalid).is_err());
+    }
+
+    #[test]
+    fn magnifier_source_contour_is_the_scaled_lens_for_all_shapes_and_rotations() {
+        for shape in [
+            HighlightShape::Rectangle,
+            HighlightShape::Ellipse,
+            HighlightShape::Diamond,
+        ] {
+            for factor in [1.0, 2.0, 10.0] {
+                for rotation in [0.0, 0.7] {
+                    let value = MagnifierData {
+                        shape,
+                        factor,
+                        rotation,
+                        width: 40.0,
+                        height: 20.0,
+                        source_center: Point::new(300.0, 400.0),
+                        magnified_center: Point::new(-200.0, -100.0),
+                        corner_radii: CornerRadii {
+                            top_left: 200.0,
+                            top_right: 20.0,
+                            bottom_right: 100.0,
+                            bottom_left: 40.0,
+                        },
+                        ..Default::default()
+                    };
+                    let source = value.source_rect();
+                    let mut lens = value.magnified_rect();
+                    lens.stroke_width = 0.0;
+                    assert_eq!(source.corner_radii, lens.corner_radii.scaled(1.0 / factor));
+                    assert_eq!(source.rotation, lens.rotation);
+                    assert_eq!(source.stroke_width, 0.0);
+                    let (sin, cos) = rotation.sin_cos();
+                    for (x, y) in [(0.0, 0.0), (19.9, 9.9), (-19.9, -9.9), (19.0, 0.0)] {
+                        let source_point = Point::new(
+                            source.center.x + x * cos - y * sin,
+                            source.center.y + x * sin + y * cos,
+                        );
+                        let lens_point = Point::new(
+                            lens.center.x + factor * (x * cos - y * sin),
+                            lens.center.y + factor * (x * sin + y * cos),
+                        );
+                        assert_eq!(
+                            crate::rectangle_hit_test(&source, source_point, 0.0),
+                            crate::rectangle_hit_test(&lens, lens_point, 0.0),
+                            "{shape:?} {factor} {rotation}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn magnifier_visual_bounds_follow_connection_and_outline_independently() {
+        for connection_type in [
+            MagnifierConnectionType::None,
+            MagnifierConnectionType::LeaderLine,
+            MagnifierConnectionType::Gradient,
+        ] {
+            for source_outline in [false, true] {
+                let value = MagnifierData {
+                    width: 20.0,
+                    height: 30.0,
+                    stroke_width: 10.0,
+                    source_center: Point::new(500.0, 500.0),
+                    connection_type,
+                    source_outline,
+                    ..Default::default()
+                };
+                let bounds = magnifier_bounds(&value);
+                let interaction = magnifier_interaction_bounds(&value);
+                assert!(interaction.max_x >= 510.0 && interaction.max_y >= 515.0);
+                if source_outline {
+                    assert!(bounds.max_x >= 515.0 && bounds.max_y >= 520.0);
+                } else if connection_type == MagnifierConnectionType::Gradient {
+                    assert_eq!(bounds.max_x, 510.0);
+                    assert_eq!(bounds.max_y, 515.0);
+                } else if connection_type == MagnifierConnectionType::None {
+                    assert!(bounds.max_x < 100.0 && bounds.max_y < 100.0);
+                }
+                assert_eq!(
+                    value.leader().is_some(),
+                    connection_type == MagnifierConnectionType::LeaderLine
+                );
+            }
+        }
+    }
+
+    #[test]
     fn magnifier_group_rect_contains_rotated_regions_without_paint_overflow() {
         let value = MagnifierData {
             source_center: Point::new(0.0, 0.0),
@@ -410,7 +570,7 @@ mod tests {
             group,
             MagnifierData {
                 stroke_width: 0.0,
-                show_leader: false,
+                connection_type: snow_draw_engine_core::MagnifierConnectionType::None,
                 ..value
             }
             .group_rect()
@@ -443,6 +603,7 @@ mod tests {
                 width: 40.0,
                 height: 40.0,
                 leader_arrowhead: Some(head),
+                connection_type: MagnifierConnectionType::LeaderLine,
                 ..Default::default()
             };
             let mut expected = value.leader().unwrap();
@@ -530,6 +691,7 @@ mod tests {
                     source_center: source,
                     corner_radii: radii,
                     rotation,
+                    connection_type: MagnifierConnectionType::LeaderLine,
                     ..Default::default()
                 };
                 let start = value.leader().unwrap().global_points()[0];
@@ -562,7 +724,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(value.corner_radii, CornerRadii::splat(6.0));
-        assert_eq!(value.source_rect().corner_radii, CornerRadii::splat(6.0));
+        assert_eq!(value.source_rect().corner_radii, CornerRadii::splat(3.0));
         assert_eq!(value.magnified_rect().corner_radii, CornerRadii::splat(6.0));
         assert!(!magnifier_hit_test(&value, Point::new(-9.9, -9.9), 0.0));
         assert!(!magnifier_hit_test(&value, Point::new(80.1, 80.1), 0.0));
@@ -613,6 +775,7 @@ mod tests {
                     bottom_left: 24.0,
                 },
                 stroke_width: 2.0,
+                connection_type: MagnifierConnectionType::LeaderLine,
                 ..Default::default()
             };
             let edge = value.leader().unwrap().global_points()[0];
@@ -635,6 +798,7 @@ mod tests {
             source_center: Point::new(19.9, 19.9),
             corner_radii: CornerRadii::splat(10.0),
             stroke_width: 0.0,
+            connection_type: MagnifierConnectionType::LeaderLine,
             ..Default::default()
         };
         assert!(value.leader().is_none());
@@ -663,6 +827,7 @@ mod tests {
                     height: 50.0,
                     source_center: source,
                     stroke_width: 32.0,
+                    connection_type: MagnifierConnectionType::LeaderLine,
                     ..Default::default()
                 };
                 let leader = value.leader().unwrap();
@@ -710,6 +875,7 @@ mod tests {
                         rotation,
                         stroke_width,
                         corner_radii: CornerRadii::default(),
+                        connection_type: MagnifierConnectionType::LeaderLine,
                         ..Default::default()
                     };
                     let points = value.leader().unwrap().global_points();
@@ -738,6 +904,7 @@ mod tests {
                     height: 50.0,
                     stroke_width,
                     corner_radii: CornerRadii::default(),
+                    connection_type: MagnifierConnectionType::LeaderLine,
                     ..Default::default()
                 };
                 for x in [
@@ -769,7 +936,7 @@ mod tests {
     }
 
     #[test]
-    fn magnifier_leader_contains_center_and_toggle_omit_geometry() {
+    fn magnifier_leader_contains_center_and_none_connection_omits_geometry() {
         for shape in [
             HighlightShape::Rectangle,
             HighlightShape::Ellipse,
@@ -780,13 +947,14 @@ mod tests {
                 width: 80.0,
                 height: 50.0,
                 source_center: Point::new(20.0, 0.0),
+                connection_type: MagnifierConnectionType::LeaderLine,
                 ..Default::default()
             };
             assert!(value.leader().is_none());
             assert!(
                 MagnifierData {
                     source_center: Point::new(300.0, 0.0),
-                    show_leader: false,
+                    connection_type: snow_draw_engine_core::MagnifierConnectionType::None,
                     ..value
                 }
                 .leader()
@@ -840,7 +1008,8 @@ mod tests {
             width: 20.0,
             height: 30.0,
             source_center: Point::new(500.0, 500.0),
-            show_leader: false,
+            source_outline: false,
+            connection_type: snow_draw_engine_core::MagnifierConnectionType::None,
             ..Default::default()
         };
         let paint = magnifier_bounds(&value);
@@ -862,6 +1031,7 @@ mod tests {
                 height: 80.0,
                 opacity: 0.4,
                 shape,
+                connection_type: MagnifierConnectionType::LeaderLine,
                 ..Default::default()
             };
             validate_magnifier(&value).unwrap();
@@ -877,6 +1047,7 @@ mod tests {
         assert_eq!(
             validate_magnifier(&MagnifierData {
                 source_center: Point::new(f64::MAX, f64::MAX),
+                connection_type: MagnifierConnectionType::LeaderLine,
                 ..Default::default()
             }),
             Err(ErrorCode::InvalidArgument)

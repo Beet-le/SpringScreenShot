@@ -974,23 +974,55 @@ void completeToolStyleContract() {
                     (SnowCanvasSerialNumberStyleMixedNumber | SnowCanvasSerialNumberStyleMixedType |
                      SnowCanvasSerialNumberStyleMixedNumericType),
             "serial-number patches must carry exactly the requested property flags");
+    for (int connection = 0; connection < 3; ++connection) {
+        const QString types[] = {QStringLiteral("none"), QStringLiteral("leader_line"),
+                                 QStringLiteral("gradient")};
+        for (bool outline : {false, true}) {
+            require(apply(QStringLiteral("magnifier"),
+                          {{QStringLiteral("connection_type"), types[connection]},
+                           {QStringLiteral("source_outline"), outline}}) &&
+                        styles.state.magnifierStyle.connectionType ==
+                            static_cast<SnowCanvasMagnifierConnectionType>(connection) &&
+                        styles.state.magnifierStyle.sourceOutline == outline &&
+                        styles.properties == (SnowCanvasMagnifierStylePropertyConnectionType |
+                                              SnowCanvasMagnifierStylePropertySourceOutline),
+                    "MCP preserves all six connection/source-outline combinations and exact masks");
+        }
+    }
+    require(apply(QStringLiteral("magnifier"),
+                  {{QStringLiteral("connection_type"), QStringLiteral("leader_line")}}) &&
+                styles.state.magnifierStyle.connectionType ==
+                    SnowCanvasMagnifierConnectionType::LeaderLine &&
+                styles.state.magnifierStyle.sourceOutline &&
+                styles.properties == SnowCanvasMagnifierStylePropertyConnectionType,
+            "MCP connection edits preserve the independent source outline");
+    require(apply(QStringLiteral("magnifier"), {{QStringLiteral("source_outline"), false}}) &&
+                !styles.state.magnifierStyle.sourceOutline &&
+                styles.state.magnifierStyle.connectionType ==
+                    SnowCanvasMagnifierConnectionType::LeaderLine &&
+                styles.properties == SnowCanvasMagnifierStylePropertySourceOutline,
+            "MCP source-outline edits preserve the independent connection type");
     const int previous = styles.updates;
     require(
         apply(QStringLiteral("magnifier"),
               {{QStringLiteral("shape"), QStringLiteral("diamond")},
                {QStringLiteral("factor"), 10.0},
-               {QStringLiteral("show_leader"), false},
+               {QStringLiteral("connection_type"), QStringLiteral("none")},
+               {QStringLiteral("source_outline"), false},
                {QStringLiteral("leader_arrowhead"), QStringLiteral("crowfoot_one_or_many")},
                {QStringLiteral("arrow_ratio"), 2.3},
                {QStringLiteral("corner_radii"), QJsonArray{3, 6, 9, 12}}}) &&
             styles.state.magnifierStyle.shape == SnowCanvasRectangleShape::Diamond &&
-            styles.state.magnifierStyle.factor == 10.0 && !styles.state.magnifierStyle.showLeader &&
+            styles.state.magnifierStyle.factor == 10.0 &&
+            styles.state.magnifierStyle.connectionType == SnowCanvasMagnifierConnectionType::None &&
+            !styles.state.magnifierStyle.sourceOutline &&
             styles.state.magnifierStyle.leaderArrowhead == SnowCanvasArrowhead::CrowfootOneOrMany &&
             styles.state.magnifierStyle.arrowRatio == 2.3 &&
             styles.state.magnifierStyle.cornerRadii == SnowCanvasCornerRadii{3, 6, 9, 12} &&
             styles.properties ==
                 (SnowCanvasMagnifierStylePropertyShape | SnowCanvasMagnifierStylePropertyFactor |
-                 SnowCanvasMagnifierStylePropertyShowLeader |
+                 SnowCanvasMagnifierStylePropertyConnectionType |
+                 SnowCanvasMagnifierStylePropertySourceOutline |
                  SnowCanvasMagnifierStylePropertyLeaderArrowhead |
                  SnowCanvasMagnifierStylePropertyArrowRatio |
                  SnowCanvasMagnifierStylePropertyCornerRadius),
@@ -999,7 +1031,11 @@ void completeToolStyleContract() {
                 !apply(QStringLiteral("magnifier"), {{QStringLiteral("arrow_ratio"), 0.4}}) &&
                 !apply(QStringLiteral("magnifier"), {{QStringLiteral("arrow_ratio"), 3.1}}) &&
                 !apply(QStringLiteral("magnifier"), {{QStringLiteral("factor"), 10.1}}) &&
-                !apply(QStringLiteral("magnifier"), {{QStringLiteral("show_leader"), 1}}) &&
+                !apply(QStringLiteral("magnifier"), {{QStringLiteral("show_leader"), true}}) &&
+                !apply(QStringLiteral("magnifier"), {{QStringLiteral("source_outline"), 1}}) &&
+                !apply(QStringLiteral("magnifier"), {{QStringLiteral("connection_type"), 2}}) &&
+                !apply(QStringLiteral("magnifier"),
+                       {{QStringLiteral("connection_type"), QStringLiteral("unsupported")}}) &&
                 !apply(QStringLiteral("magnifier"), {{QStringLiteral("stroke_width"), 73}}) &&
                 !apply(QStringLiteral("magnifier"), {{QStringLiteral("corner_radius"), -1}}) &&
                 !apply(QStringLiteral("magnifier"),

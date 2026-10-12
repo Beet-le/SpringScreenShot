@@ -64,19 +64,19 @@ pub(crate) fn scene_display_item_bounds(
             ),
         },
         SceneDisplayItem::Magnifier(item) => {
-            let lens =
-                scene_display_item_bounds(&SceneDisplayItem::Rectangle(item.lens), frame_view);
+            let body = item.paint_geometry().bounds().map(|bounds| {
+                let min =
+                    canvas_point_to_surface(frame_view, Point::new(bounds.min_x, bounds.min_y));
+                let max =
+                    canvas_point_to_surface(frame_view, Point::new(bounds.max_x, bounds.max_y));
+                DirtyRegion::new(min.x, min.y, max.x, max.y)
+            });
             let leader = item
                 .leader
                 .as_ref()
                 .and_then(|leader| draw_path_item_bounds(frame_view, leader));
-            match (lens, leader) {
-                (Some(a), Some(b)) => Some(DirtyRegion::new(
-                    a.min_x.min(b.min_x),
-                    a.min_y.min(b.min_y),
-                    a.max_x.max(b.max_x),
-                    a.max_y.max(b.max_y),
-                )),
+            match (body, leader) {
+                (Some(a), Some(b)) => Some(a.union(b)),
                 (a, None) => a,
                 (None, b) => b,
             }
@@ -572,6 +572,71 @@ mod tests {
                 zoom: 1.0,
             },
             clear_color: ColorRgba8::default(),
+        }
+    }
+
+    #[test]
+    fn magnifier_scene_damage_covers_the_document_paint_contract() {
+        use snow_draw_engine_core::MagnifierConnectionType;
+        use snow_draw_engine_document::{HighlightShape, MagnifierData, magnifier_bounds};
+        use snow_draw_engine_model::ElementId;
+
+        for shape in [
+            HighlightShape::Rectangle,
+            HighlightShape::Ellipse,
+            HighlightShape::Diamond,
+        ] {
+            for connection_type in [
+                MagnifierConnectionType::None,
+                MagnifierConnectionType::LeaderLine,
+                MagnifierConnectionType::Gradient,
+            ] {
+                for source_outline in [false, true] {
+                    for rotation in [0.0, 0.63] {
+                        let value = MagnifierData {
+                            source_center: Point::new(-320.0, 190.0),
+                            magnified_center: Point::new(260.0, -170.0),
+                            width: 150.0,
+                            height: 90.0,
+                            stroke_width: 12.0,
+                            shape,
+                            connection_type,
+                            source_outline,
+                            rotation,
+                            ..MagnifierData::default()
+                        };
+                        let item = crate::item_conversions::scene_item_from_magnifier(
+                            ElementId {
+                                index: 1,
+                                generation: 1,
+                            },
+                            value,
+                        );
+                        for zoom in [0.5, 1.0, 2.0] {
+                            let mut frame = frame_view();
+                            frame.camera.zoom = zoom;
+                            frame.camera.center = Point::new(15.0, -30.0);
+                            let actual = scene_display_item_bounds(&item, frame).unwrap();
+                            let bounds = magnifier_bounds(&value);
+                            let min = canvas_point_to_surface(
+                                frame,
+                                Point::new(bounds.min_x, bounds.min_y),
+                            );
+                            let max = canvas_point_to_surface(
+                                frame,
+                                Point::new(bounds.max_x, bounds.max_y),
+                            );
+                            assert!(
+                                actual.min_x <= min.x + 1e-8
+                                    && actual.min_y <= min.y + 1e-8
+                                    && actual.max_x >= max.x - 1e-8
+                                    && actual.max_y >= max.y - 1e-8,
+                                "{shape:?} {connection_type:?} outline={source_outline} rotation={rotation} zoom={zoom}: {actual:?}, expected {min:?}..{max:?}"
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 

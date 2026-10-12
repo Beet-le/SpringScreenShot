@@ -4401,6 +4401,7 @@ void ScreenshotToolPalette::retranslateUi() {
     if (m_styleControls != nullptr) {
         m_styleControls->retranslateWatermarkTemplateUi();
         m_styleControls->retranslateTextEmphasisUi();
+        m_styleControls->retranslateMagnifierUi();
     }
     if (m_mainPanel != nullptr) {
         retranslateScreenshotToolPalette(m_mainPanel);

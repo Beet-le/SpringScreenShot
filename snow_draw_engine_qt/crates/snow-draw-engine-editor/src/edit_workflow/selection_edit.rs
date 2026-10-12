@@ -69,6 +69,8 @@ impl Editor {
         };
 
         EditSelectionState {
+            last_magnifier_corner_input: None,
+            magnifier_corner_input_offset: Point::default(),
             original_magnifiers: request.original_magnifiers,
             duplicate: false,
             pointer_id: request.pointer_id,
@@ -94,6 +96,15 @@ impl Editor {
         };
 
         let canvas_point = view_to_canvas(event.position, &self.camera(), self.surface_size());
+        let magnifier_corner = !state.original_magnifiers.is_empty()
+            && matches!(state.mode, SelectionEditMode::CornerRadius { .. });
+        // A factor edit rebases the source contour while preserving the current
+        // corner gesture. Releasing at the same point must commit that preview.
+        if magnifier_corner
+            && state.last_magnifier_corner_input == Some((canvas_point, event.modifiers))
+        {
+            return;
+        }
         let next_preview = self.selection_edit_preview(
             document,
             state,
@@ -106,6 +117,11 @@ impl Editor {
             || next_preview.bounds != state.preview_bounds
             || next_preview.transform != state.preview_transform;
         let guides_changed = next_preview.snap_guides != self.state.ui.snap_guides;
+        if magnifier_corner
+            && let InteractionState::EditingSelection(active) = &mut self.state.interaction
+        {
+            active.last_magnifier_corner_input = Some((canvas_point, event.modifiers));
+        }
         if !preview_changed && !guides_changed {
             return;
         }
@@ -416,7 +432,10 @@ impl Editor {
                 elements: preview_elements_for_corner_radius(
                     &state.original_elements,
                     corner,
-                    canvas_point,
+                    Point::new(
+                        canvas_point.x + state.magnifier_corner_input_offset.x,
+                        canvas_point.y + state.magnifier_corner_input_offset.y,
+                    ),
                     modifiers.shift,
                     zoom,
                 ),
@@ -1004,6 +1023,8 @@ mod tests {
             opacity: 1.0,
         };
         let state = EditSelectionState {
+            last_magnifier_corner_input: None,
+            magnifier_corner_input_offset: Point::default(),
             original_magnifiers: Default::default(),
             preview_transform: crate::geometry::SelectionTransform::Identity,
             duplicate: false,
@@ -1531,6 +1552,8 @@ mod tests {
             )
             .unwrap();
         editor.state.interaction = InteractionState::EditingSelection(EditSelectionState {
+            last_magnifier_corner_input: None,
+            magnifier_corner_input_offset: Point::default(),
             original_magnifiers: Default::default(),
             preview_transform: crate::geometry::SelectionTransform::Identity,
             duplicate: false,
@@ -1605,6 +1628,8 @@ mod tests {
             )
             .unwrap();
         editor.state.interaction = InteractionState::EditingSelection(EditSelectionState {
+            last_magnifier_corner_input: None,
+            magnifier_corner_input_offset: Point::default(),
             original_magnifiers: Default::default(),
             preview_transform: crate::geometry::SelectionTransform::Identity,
             duplicate: false,
@@ -1685,6 +1710,8 @@ mod tests {
             )
             .unwrap();
         editor.state.interaction = InteractionState::EditingSelection(EditSelectionState {
+            last_magnifier_corner_input: None,
+            magnifier_corner_input_offset: Point::default(),
             original_magnifiers: Default::default(),
             preview_transform: crate::geometry::SelectionTransform::Identity,
             duplicate: false,
@@ -1860,6 +1887,8 @@ mod tests {
             )
             .unwrap();
         editor.state.interaction = InteractionState::EditingSelection(EditSelectionState {
+            last_magnifier_corner_input: None,
+            magnifier_corner_input_offset: Point::default(),
             original_magnifiers: Default::default(),
             preview_transform: crate::geometry::SelectionTransform::Identity,
             duplicate: false,

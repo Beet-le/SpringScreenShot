@@ -525,6 +525,8 @@ bool validMagnifierStyle(const SnowCanvasMagnifierStyle& style) {
            style.arrowRatio <= 3.0 &&
            enumInRange(style.shape, SnowCanvasRectangleShape::Rectangle,
                        SnowCanvasRectangleShape::Diamond) &&
+           enumInRange(style.connectionType, SnowCanvasMagnifierConnectionType::None,
+                       SnowCanvasMagnifierConnectionType::Gradient) &&
            enumInRange(style.leaderArrowhead, SnowCanvasArrowhead::None,
                        SnowCanvasArrowhead::IndentedTriangle);
 }
@@ -534,7 +536,8 @@ SnowCanvasMagnifierStyle toCanvasMagnifierStyle(const SnowMagnifierStyle& style)
             toQColor(style.stroke),
             style.stroke_width,
             style.factor,
-            style.show_leader != 0,
+            static_cast<SnowCanvasMagnifierConnectionType>(style.connection_type),
+            style.source_outline != 0,
             toCanvasArrowhead(style.leader_arrowhead),
             toCanvasCornerRadii(style.corner_radii),
             style.arrow_ratio};
@@ -546,7 +549,8 @@ SnowMagnifierStyle toEngineMagnifierStyle(const SnowCanvasMagnifierStyle& style)
     result.stroke = toEngineColor(style.stroke);
     result.stroke_width = style.strokeWidth;
     result.factor = style.factor;
-    result.show_leader = style.showLeader ? 1 : 0;
+    result.connection_type = static_cast<SnowMagnifierConnectionType>(style.connectionType);
+    result.source_outline = style.sourceOutline ? 1 : 0;
     result.leader_arrowhead = toEngineArrowhead(style.leaderArrowhead);
     result.arrow_ratio = style.arrowRatio;
     result.corner_radii = toEngineCornerRadii(style.cornerRadii);

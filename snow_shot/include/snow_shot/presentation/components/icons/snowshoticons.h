@@ -130,6 +130,9 @@ ArrowheadTriangleStart(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef LogicalPixels(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef MagicWand(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef MagnificationFactor(const adqt::icons::IconColors& colors = {});
+[[nodiscard]] adqt::icons::IconRef
+MagnifierConnectionNone(const adqt::icons::IconColors& colors = {});
+[[nodiscard]] adqt::icons::IconRef MagnifierGradient(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef Markdown(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef Mouse(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef
@@ -213,6 +216,7 @@ SequenceNumberSolidSquare(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ShapeEllipse(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ShapeRectangle(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ShowLeaderLine(const adqt::icons::IconColors& colors = {});
+[[nodiscard]] adqt::icons::IconRef SourceRegionOutline(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef TableRecognition(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef TextRecognition(const adqt::icons::IconColors& colors = {});
 [[nodiscard]] adqt::icons::IconRef ToolArrow(const adqt::icons::IconColors& colors = {});

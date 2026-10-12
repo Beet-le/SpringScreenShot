@@ -216,6 +216,8 @@ fn magnifier_style_api_during_lens_drag_rebases_appearance_without_committing_mo
         factor: 3.0,
         shape: HighlightShape::Ellipse,
         stroke_width: 4.0,
+        connection_type: snow_draw_engine_core::MagnifierConnectionType::LeaderLine,
+        source_outline: false,
         leader_arrowhead: Some(Arrowhead::Arrow),
         ..MagnifierStyle::from_data(&original)
     };
@@ -224,6 +226,8 @@ fn magnifier_style_api_during_lens_drag_rebases_appearance_without_committing_mo
         .unwrap();
     let scene = scene_magnifier(&engine, viewport);
     assert_eq!(scene.factor, 3.0);
+    assert_eq!(scene.connection_type, style.connection_type);
+    assert!(!scene.source_outline);
     assert_eq!(scene.lens.stroke_width, 4.0);
     assert_eq!((scene.lens.center_x, scene.lens.center_y), (150.0, 15.0));
     assert_eq!(
@@ -323,6 +327,205 @@ fn magnifier_wheel_during_source_handle_drag_preserves_in_progress_geometry() {
                 ..original
             }
         );
+    }
+}
+
+#[test]
+fn magnifier_corner_drag_canonicalizes_oversized_radii_without_rescaling_other_corners() {
+    let (mut engine, viewport, id, _) = fixture();
+    engine
+        .set_viewport_magnifier_style_patch(
+            viewport,
+            MagnifierStyle {
+                corner_radii: snow_draw_engine_core::CornerRadii::splat(1000.0),
+                ..Default::default()
+            },
+            snow_draw_engine_editor::MAGNIFIER_STYLE_PROPERTY_CORNER_RADII,
+            false,
+        )
+        .unwrap();
+    let before = *engine.model.magnifier(id).unwrap();
+    let start = engine
+        .acquire_patch(viewport, None)
+        .unwrap()
+        .overlay
+        .ops
+        .iter()
+        .flat_map(|op| &op.insert_items)
+        .find_map(|item| match item {
+            OverlayDisplayItem::Rectangle(value)
+                if value.kind == UiShapeKind::SelectionCornerRadiusHandle =>
+            {
+                Some(Point::new(value.center_x, value.center_y))
+            }
+            _ => None,
+        })
+        .unwrap();
+    let end = Point::new(start.x - 5.0, start.y - 5.0);
+    pointer(&mut engine, viewport, PointerEventType::Down, start);
+    pointer(&mut engine, viewport, PointerEventType::Move, end);
+    let after = preview_magnifier(&engine, viewport, id);
+    let radii = after.magnified_rect().corner_radii;
+    assert!(radii.top_left > 20.0 && radii.top_left < 60.0);
+    assert_eq!(
+        radii.top_right,
+        before.magnified_rect().corner_radii.top_right
+    );
+    assert_eq!(
+        radii.bottom_right,
+        before.magnified_rect().corner_radii.bottom_right
+    );
+    assert_eq!(
+        radii.bottom_left,
+        before.magnified_rect().corner_radii.bottom_left
+    );
+    pointer(&mut engine, viewport, PointerEventType::Up, end);
+    assert_eq!(*engine.model.magnifier(id).unwrap(), after);
+    assert!(engine.undo().unwrap());
+    assert_eq!(*engine.model.magnifier(id).unwrap(), before);
+}
+
+#[test]
+fn magnifier_corner_drag_continues_smoothly_after_factor_wheel_rebases_the_source() {
+    for shape in [HighlightShape::Rectangle, HighlightShape::Diamond] {
+        let (mut engine, viewport, id, _) = fixture();
+        engine
+            .set_viewport_magnifier_style_patch(
+                viewport,
+                MagnifierStyle {
+                    shape,
+                    ..Default::default()
+                },
+                snow_draw_engine_editor::MAGNIFIER_STYLE_PROPERTY_SHAPE,
+                false,
+            )
+            .unwrap();
+        let start = engine
+            .acquire_patch(viewport, None)
+            .unwrap()
+            .overlay
+            .ops
+            .iter()
+            .flat_map(|op| &op.insert_items)
+            .find_map(|item| match item {
+                OverlayDisplayItem::Rectangle(value)
+                    if value.kind == UiShapeKind::SelectionCornerRadiusHandle =>
+                {
+                    Some(Point::new(value.center_x, value.center_y))
+                }
+                _ => None,
+            })
+            .unwrap();
+        let end = Point::new(start.x + 1.0, start.y + 3.0);
+        pointer(&mut engine, viewport, PointerEventType::Down, start);
+        pointer(&mut engine, viewport, PointerEventType::Move, end);
+        let before = preview_magnifier(&engine, viewport, id);
+        engine
+            .process_input(
+                viewport,
+                InputEvent::Wheel(WheelEvent {
+                    position: Point::new(400.0, 300.0),
+                    delta: Vector2 { x: 0.0, y: 2400.0 },
+                    delta_kind: WheelDeltaKind::Angle,
+                    modifiers: Modifiers::default(),
+                }),
+            )
+            .unwrap();
+        let rebased = preview_magnifier(&engine, viewport, id);
+        assert_eq!(rebased.factor, 4.0);
+        assert_eq!(rebased.corner_radii, before.corner_radii);
+        let continued = if shape == HighlightShape::Rectangle {
+            Point::new(end.x + 0.001, end.y)
+        } else {
+            Point::new(end.x, end.y + 0.001)
+        };
+        pointer(&mut engine, viewport, PointerEventType::Move, continued);
+        let after = preview_magnifier(&engine, viewport, id);
+        let delta = after.corner_radii.top_left - before.corner_radii.top_left;
+        assert!(
+            delta > 0.0 && delta < 0.1,
+            "{shape:?}: radius jumped by {delta}"
+        );
+        assert_eq!(after.corner_radii.top_right, before.corner_radii.top_right);
+        pointer(&mut engine, viewport, PointerEventType::Up, continued);
+        assert_eq!(*engine.model.magnifier(id).unwrap(), after);
+        assert!(engine.undo().unwrap());
+        assert_eq!(engine.model.magnifier(id).unwrap().factor, 4.0);
+    }
+}
+
+#[test]
+fn magnifier_corner_drag_rebases_shape_and_radii_before_release_or_further_motion() {
+    for shape in [HighlightShape::Rectangle, HighlightShape::Diamond] {
+        for continue_drag in [false, true] {
+            let (mut engine, viewport, id, original) = fixture();
+            let start = engine
+                .acquire_patch(viewport, None)
+                .unwrap()
+                .overlay
+                .ops
+                .iter()
+                .flat_map(|op| &op.insert_items)
+                .find_map(|item| match item {
+                    OverlayDisplayItem::Rectangle(value)
+                        if value.kind == UiShapeKind::SelectionCornerRadiusHandle =>
+                    {
+                        Some(Point::new(value.center_x, value.center_y))
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            let end = Point::new(start.x + 15.0, start.y + 15.0);
+            pointer(&mut engine, viewport, PointerEventType::Down, start);
+            pointer(&mut engine, viewport, PointerEventType::Move, end);
+            let style = MagnifierStyle {
+                shape,
+                factor: 3.0,
+                corner_radii: snow_draw_engine_core::CornerRadii::splat(18.0),
+                source_outline: false,
+                ..MagnifierStyle::from_data(&original)
+            };
+            engine
+                .set_viewport_magnifier_style_patch(
+                    viewport,
+                    style,
+                    MAGNIFIER_STYLE_PROPERTY_ALL,
+                    false,
+                )
+                .unwrap();
+            assert_eq!(
+                MagnifierStyle::from_data(&preview_magnifier(&engine, viewport, id)),
+                style
+            );
+            pointer(&mut engine, viewport, PointerEventType::Move, end);
+            assert_eq!(
+                MagnifierStyle::from_data(&preview_magnifier(&engine, viewport, id)),
+                style
+            );
+            let release = if continue_drag {
+                Point::new(end.x + 8.0, end.y + 8.0)
+            } else {
+                end
+            };
+            if continue_drag {
+                pointer(&mut engine, viewport, PointerEventType::Move, release);
+                assert_ne!(
+                    preview_magnifier(&engine, viewport, id).corner_radii,
+                    style.corner_radii
+                );
+            }
+            let expected = preview_magnifier(&engine, viewport, id);
+            pointer(&mut engine, viewport, PointerEventType::Up, release);
+            assert_eq!(*engine.model.magnifier(id).unwrap(), expected);
+            assert_eq!(expected.shape, shape);
+            assert_eq!(
+                expected.source_rect().corner_radii,
+                expected
+                    .magnified_rect()
+                    .corner_radii
+                    .scaled(1.0 / expected.factor)
+            );
+        }
     }
 }
 

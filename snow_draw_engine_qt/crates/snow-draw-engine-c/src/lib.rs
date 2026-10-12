@@ -13,6 +13,7 @@ mod abi {
     pub(crate) mod handles;
     pub(crate) mod history_exports;
     pub(crate) mod input_exports;
+    pub(crate) mod magnifier_exports;
     #[cfg(test)]
     mod magnifier_tests;
     pub(crate) mod patch;
@@ -35,6 +36,7 @@ pub use abi::handles::{
 };
 pub use abi::history_exports::*;
 pub use abi::input_exports::*;
+pub use abi::magnifier_exports::*;
 pub use abi::patch_exports::*;
 pub use abi::path_exports::*;
 pub use abi::stroke_exports::*;

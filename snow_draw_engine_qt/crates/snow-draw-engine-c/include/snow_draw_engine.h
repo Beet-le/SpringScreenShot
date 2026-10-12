@@ -666,12 +666,19 @@ typedef struct SnowAngleStyle {
 #define SNOW_ANGLE_STYLE_MIXED_UNIT SNOW_ANGLE_STYLE_PROPERTY_UNIT
 #define SNOW_ANGLE_STYLE_MIXED_DECIMAL_PLACES SNOW_ANGLE_STYLE_PROPERTY_DECIMAL_PLACES
 
+typedef enum SnowMagnifierConnectionType {
+    SNOW_MAGNIFIER_CONNECTION_NONE = 0,
+    SNOW_MAGNIFIER_CONNECTION_LEADER_LINE = 1,
+    SNOW_MAGNIFIER_CONNECTION_GRADIENT = 2
+} SnowMagnifierConnectionType;
+
 typedef struct SnowMagnifierStyle {
     SnowRectangleShape shape;
     SnowColorRgba8 stroke;
     double stroke_width;
     double factor;
-    uint8_t show_leader;
+    SnowMagnifierConnectionType connection_type;
+    uint8_t source_outline;
     uint8_t reserved[3];
     SnowArrowhead leader_arrowhead;
     SnowCornerRadii corner_radii;
@@ -681,11 +688,12 @@ typedef struct SnowMagnifierStyle {
 #define SNOW_MAGNIFIER_STYLE_PROPERTY_STROKE (1u << 1)
 #define SNOW_MAGNIFIER_STYLE_PROPERTY_STROKE_WIDTH (1u << 2)
 #define SNOW_MAGNIFIER_STYLE_PROPERTY_FACTOR (1u << 3)
-#define SNOW_MAGNIFIER_STYLE_PROPERTY_SHOW_LEADER (1u << 4)
+#define SNOW_MAGNIFIER_STYLE_PROPERTY_CONNECTION_TYPE (1u << 4)
 #define SNOW_MAGNIFIER_STYLE_PROPERTY_LEADER_ARROWHEAD (1u << 5)
 #define SNOW_MAGNIFIER_STYLE_PROPERTY_CORNER_RADII (1u << 6)
 #define SNOW_MAGNIFIER_STYLE_PROPERTY_ARROW_RATIO (1u << 7)
-#define SNOW_MAGNIFIER_STYLE_PROPERTY_ALL ((1u << 8) - 1u)
+#define SNOW_MAGNIFIER_STYLE_PROPERTY_SOURCE_OUTLINE (1u << 8)
+#define SNOW_MAGNIFIER_STYLE_PROPERTY_ALL ((1u << 9) - 1u)
 
 typedef struct SnowStyleToolbarState {
     SnowStyleToolbarSource source;
@@ -1199,6 +1207,13 @@ typedef struct SnowTextPaintBounds {
     double max_y;
 } SnowTextPaintBounds;
 
+typedef struct SnowMagnifierPaintBounds {
+    double min_x;
+    double min_y;
+    double max_x;
+    double max_y;
+} SnowMagnifierPaintBounds;
+
 typedef struct SnowSerialTextConnection {
     double start_x;
     double start_y;
@@ -1218,6 +1233,9 @@ typedef struct SnowMagnifierGeometry {
     double source_width;
     double source_height;
     double magnification_factor;
+    SnowMagnifierConnectionType connection_type;
+    uint8_t source_outline;
+    uint8_t reserved[3];
 } SnowMagnifierGeometry;
 
 typedef struct SnowSceneDisplayItem {
@@ -1286,6 +1304,10 @@ SnowTextPaintOutset snow_scene_text_fill_outset(const SnowSceneDisplayItem* item
 /* Conservative document-space ink bounds (aligned content box + fill padding +
    stroke halo) for dirty regions and culling. */
 SnowTextPaintBounds snow_scene_text_paint_bounds(const SnowSceneDisplayItem* item);
+
+/* Document-space bounds of the lens, source outline and Gradient connection.
+ * The leader path is bounded separately. */
+SnowMagnifierPaintBounds snow_scene_magnifier_body_paint_bounds(const SnowSceneDisplayItem* item);
 uint8_t snow_scene_resolve_serial_text_connection(const SnowSceneDisplayItem* serial,
                                                   const SnowSceneDisplayItem* text,
                                                   SnowSerialTextConnection* out_connection);

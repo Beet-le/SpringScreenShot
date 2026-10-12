@@ -99,6 +99,16 @@ pub struct SnowTextPaintBounds {
     pub max_y: f64,
 }
 
+/// Conservative document-space bounds of the magnifier bodies and Gradient bridge.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SnowMagnifierPaintBounds {
+    pub min_x: f64,
+    pub min_y: f64,
+    pub max_x: f64,
+    pub max_y: f64,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SnowSerialTextConnection {
@@ -122,6 +132,9 @@ pub struct SnowMagnifierGeometry {
     pub source_width: f64,
     pub source_height: f64,
     pub magnification_factor: f64,
+    pub connection_type: SnowMagnifierConnectionType,
+    pub source_outline: u8,
+    pub reserved: [u8; 3],
 }
 
 #[repr(C)]
@@ -406,7 +419,7 @@ mod tests {
         let scene_size = std::mem::size_of::<SnowSceneDisplayItem>();
         let overlay_size = std::mem::size_of::<SnowOverlayDisplayItem>();
         assert_eq!(
-            scene_size, 344,
+            scene_size, 408,
             "scene display ABI layout must remain stable"
         );
         assert_eq!(
