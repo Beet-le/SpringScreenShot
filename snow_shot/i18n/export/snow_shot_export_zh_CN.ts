@@ -482,20 +482,8 @@
     <context>
         <name>ScreenshotSavePreviewCanvas</name>
         <message>
-            <source>Current zoom</source>
-            <translation>当前缩放比例</translation>
-        </message>
-        <message>
             <source>Export comparison preview</source>
             <translation>导出对比预览</translation>
-        </message>
-        <message>
-            <source>Rendering preview</source>
-            <translation>正在渲染预览</translation>
-        </message>
-        <message>
-            <source>Scale: %1%</source>
-            <translation>缩放：%1%</translation>
         </message>
     </context>
 </TS>

@@ -577,10 +577,6 @@
             <translation>锁定模式</translation>
         </message>
         <message>
-            <source>Locked</source>
-            <translation>已锁定</translation>
-        </message>
-        <message>
             <source>Move window</source>
             <translation>移动窗口</translation>
         </message>
@@ -595,10 +591,6 @@
         <message>
             <source>Opacity</source>
             <translation>不透明度</translation>
-        </message>
-        <message>
-            <source>Opacity: %1%</source>
-            <translation>不透明度：%1%</translation>
         </message>
         <message>
             <source>Pause</source>
@@ -651,10 +643,6 @@
         <message>
             <source>Scale</source>
             <translation>缩放</translation>
-        </message>
-        <message>
-            <source>Scale: %1%</source>
-            <translation>缩放：%1%</translation>
         </message>
         <message>
             <source>Show all windows</source>

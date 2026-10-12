@@ -587,9 +587,6 @@ class ScreenshotPinnedWindow final : public QWidget {
     QFrame* m_borderFrame = nullptr;
     QFrame* m_controlsPanel = nullptr;
     CanvasStatusReadout* m_scaleLabel = nullptr;
-    QTimer* m_scaleLabelTimer = nullptr;
-    enum class ReadoutKind { Scale, Opacity, Locked };
-    ReadoutKind m_readoutKind = ReadoutKind::Scale;
     QTimer* m_nativeScaleSettleTimer = nullptr;
     ScreenshotPinnedEditController* m_editController = nullptr;
     adqt::widgets::AdButton* m_editButton = nullptr;

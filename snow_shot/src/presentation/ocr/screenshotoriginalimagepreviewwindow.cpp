@@ -282,11 +282,8 @@ ScreenshotOriginalImagePreviewWindow::ScreenshotOriginalImagePreviewWindow(QWidg
     setCursor(Qt::OpenHandCursor);
     m_scaleLabel = new CanvasStatusReadout(this);
     m_scaleLabel->setObjectName(QStringLiteral("originalImagePreviewScaleReadout"));
-    m_scaleLabelTimer = new QTimer(this);
-    m_scaleLabelTimer->setSingleShot(true);
-    m_scaleLabelTimer->setInterval(1000);
-    connect(m_scaleLabelTimer, &QTimer::timeout, this,
-            &ScreenshotOriginalImagePreviewWindow::hideScaleReadout);
+    connect(m_scaleLabel, &CanvasStatusReadout::presentationChanged, this,
+            &ScreenshotOriginalImagePreviewWindow::synchronizeHintSurface);
     const auto watch = [this](QScreen* screen) {
         connect(screen, &QScreen::geometryChanged, this, [this] { scheduleRefresh(); });
         connect(screen, &QScreen::availableGeometryChanged, this, [this] { scheduleRefresh(); });
@@ -440,8 +437,7 @@ bool ScreenshotOriginalImagePreviewWindow::present(
     const int previousGap = m_placementGap;
     const bool previousUserPositioned = m_userPositioned;
     const bool previousAutoPending = m_autoPlacementPending;
-    const bool previousLabelHidden = m_scaleLabel->isHidden();
-    const int previousHintRemaining = m_scaleLabelTimer->remainingTime();
+    const auto previousHint = m_scaleLabel->captureState();
     const bool canRestore =
         isVisible() && previousTarget.isValid() && !previousRaster.image.isNull();
     bool prepared = false;
@@ -527,15 +523,10 @@ bool ScreenshotOriginalImagePreviewWindow::present(
                 restoreRaster(previousRaster);
                 const PlacementContext oldContext = placementContext(previousTarget);
                 restored = oldContext.screen && applyGeometry(previousTarget, oldContext.screen);
-                m_scaleLabel->setText(tr("Scale: %1%").arg(qRound(previousPercent)));
-                m_scaleLabel->layoutIn(rect());
-                m_scaleLabel->setVisible(!previousLabelHidden);
-                if (previousHintRemaining >= 0)
-                    m_scaleLabelTimer->start(std::max(1, previousHintRemaining));
-                else
-                    m_scaleLabelTimer->stop();
+                m_scaleLabel->restoreState(previousHint);
             }
             if (restored) {
+                synchronizeHintSurface();
                 refreshStacking();
                 update();
                 reconcileNativeGeometry();
@@ -545,6 +536,7 @@ bool ScreenshotOriginalImagePreviewWindow::present(
         hide();
         return false;
     }
+    synchronizeHintSurface();
     refreshStacking();
     if (!isVisible()) {
         show();
@@ -925,8 +917,7 @@ bool ScreenshotOriginalImagePreviewWindow::applyWheelScaleSteps(int steps, const
     const QRect oldTarget = m_targetGeometry;
     const qreal oldPercent = m_scalePercent;
     const RasterState oldRaster = captureRaster();
-    const bool oldLabelHidden = m_scaleLabel->isHidden();
-    const int oldHintRemaining = m_scaleLabelTimer->remainingTime();
+    const auto oldHint = m_scaleLabel->captureState();
     bool applied = false;
     {
         const QScopedValueRollback<bool> applying(m_applyingGeometry, true);
@@ -939,17 +930,13 @@ bool ScreenshotOriginalImagePreviewWindow::applyWheelScaleSteps(int steps, const
             const PlacementContext oldContext = placementContext(oldTarget);
             if (oldContext.screen)
                 static_cast<void>(applyGeometry(oldTarget, oldContext.screen));
-            m_scaleLabel->setText(tr("Scale: %1%").arg(qRound(oldPercent)));
-            m_scaleLabel->layoutIn(rect());
-            m_scaleLabel->setVisible(!oldLabelHidden);
-            if (oldHintRemaining >= 0)
-                m_scaleLabelTimer->start(std::max(1, oldHintRemaining));
-            else
-                m_scaleLabelTimer->stop();
+            m_scaleLabel->restoreState(oldHint);
         }
     }
-    if (!applied)
+    if (!applied) {
+        synchronizeHintSurface();
         return false;
+    }
     m_userPositioned = true;
     m_siblingStackedAbove = false;
     refreshStacking();
@@ -976,36 +963,47 @@ void ScreenshotOriginalImagePreviewWindow::wheelEvent(QWheelEvent* event) {
 }
 
 void ScreenshotOriginalImagePreviewWindow::showScaleReadout() {
-    if (!m_scaleLabel || !m_scaleLabelTimer)
-        return;
-    m_scaleLabel->setText(tr("Scale: %1%").arg(qRound(m_scalePercent)));
-    m_scaleLabel->layoutIn(rect());
-    m_scaleLabel->show();
-    if (!refreshHintSurface()) {
-        hideScaleReadout();
-        return;
+    {
+        const QScopedValueRollback<bool> updating(m_updatingScaleReadout, true);
+        m_scaleLabel->setMessage(CanvasStatusReadout::Message::Scale, qRound(m_scalePercent));
+        m_scaleLabel->layoutIn(scaleReadoutAnchor());
+        m_scaleLabel->showTransient();
     }
-    m_scaleLabelTimer->start(1000);
-    update();
+    synchronizeHintSurface();
 }
 
 void ScreenshotOriginalImagePreviewWindow::hideScaleReadout() {
-    if (!m_scaleLabel || !m_scaleLabelTimer)
-        return;
-    m_scaleLabelTimer->stop();
-    m_scaleLabel->hide();
+    const QScopedValueRollback<bool> updating(m_updatingScaleReadout, true);
+    m_scaleLabel->dismiss();
     m_hintSurface.reset();
     m_nativePublicationPending = true;
     update();
 }
 
 void ScreenshotOriginalImagePreviewWindow::updateScaleReadout() {
-    if (!m_scaleLabel || m_scaleLabel->isHidden())
+    {
+        const QScopedValueRollback<bool> updating(m_updatingScaleReadout, true);
+        m_scaleLabel->setMessage(CanvasStatusReadout::Message::Scale, qRound(m_scalePercent));
+        m_scaleLabel->layoutIn(scaleReadoutAnchor());
+    }
+    synchronizeHintSurface();
+}
+
+QRectF ScreenshotOriginalImagePreviewWindow::scaleReadoutAnchor() const {
+    if (usesPhysicalGeometry() && m_targetGeometry.isValid())
+        return QRectF(QPointF(), QSizeF(m_targetGeometry.size()) / devicePixelRatioF());
+    return QRectF(rect());
+}
+
+void ScreenshotOriginalImagePreviewWindow::synchronizeHintSurface() {
+    // Geometry/raster transactions restore the hint and pixels together. Compose only once
+    // the owner has committed its final surface, including after a rollback.
+    if (m_applyingGeometry || m_updatingScaleReadout)
         return;
-    m_scaleLabel->setText(tr("Scale: %1%").arg(qRound(m_scalePercent)));
-    m_scaleLabel->layoutIn(rect());
+    const QScopedValueRollback<bool> updating(m_updatingScaleReadout, true);
     if (!refreshHintSurface())
         hideScaleReadout();
+    update();
 }
 
 bool ScreenshotOriginalImagePreviewWindow::refreshHintSurface() {
@@ -1020,7 +1018,7 @@ bool ScreenshotOriginalImagePreviewWindow::refreshHintSurface() {
         painter.setCompositionMode(QPainter::CompositionMode_Source);
         painter.drawImage(QPointF(), m_viewportImage);
         painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
-        m_scaleLabel->render(&painter, m_scaleLabel->pos());
+        m_scaleLabel->paintOverlay(painter);
         painter.end();
         m_hintSurface = std::move(surface);
     }
@@ -1098,8 +1096,6 @@ bool ScreenshotOriginalImagePreviewWindow::event(QEvent* event) {
     if (event && event->type() == QEvent::WindowDeactivate)
         m_wheelSteps.reset();
     const bool handled = QWidget::event(event);
-    if (event && event->type() == QEvent::LanguageChange)
-        updateScaleReadout();
     if (event && event->type() == QEvent::UpdateRequest)
         reconcileNativeGeometry();
     if (event && (event->type() == QEvent::Hide || event->type() == QEvent::WinIdChange))

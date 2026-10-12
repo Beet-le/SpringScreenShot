@@ -1,10 +1,10 @@
 #include "snow_shot/shortcuts/shortcutbinding.h"
 #include "snow_shot/presentation/screenshotsavepreviewcanvas.h"
+#include "snow_shot/presentation/canvasstatusreadout.h"
 #include "snow_shot/presentation/screenshotwheelinput.h"
 #include "theme/theme_manager.h"
 
 #include <QKeyEvent>
-#include <QLabel>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPolygonF>
@@ -16,8 +16,6 @@
 #include <cmath>
 
 namespace {
-constexpr int kZoomReadoutInset = 8;
-constexpr int kZoomReadoutDurationMs = 1000;
 constexpr qreal kSplitHitHalfWidth = 15.0;
 constexpr qreal kSplitTrackWidth = 8.0;
 constexpr qreal kSplitThumbRadius = 24.0;
@@ -38,33 +36,19 @@ ScreenshotSavePreviewCanvas::ScreenshotSavePreviewCanvas(QWidget* parent) : QWid
     QPainter tilePainter(&m_checkerboard);
     tilePainter.fillRect(0, 0, 12, 12, QColor(0, 0, 0, 28));
     tilePainter.fillRect(12, 12, 12, 12, QColor(0, 0, 0, 28));
-    m_readout = new QLabel(this);
+    m_readout = new CanvasStatusReadout(this);
     m_readout->setObjectName(QStringLiteral("savePreviewZoom"));
-    m_readout->setAlignment(Qt::AlignCenter);
-    m_readout->setAttribute(Qt::WA_TransparentForMouseEvents);
-    m_readout->setStyleSheet(QStringLiteral("QLabel#savePreviewZoom { "
-                                            "color: white; background-color: rgba(0, 0, 0, 150); "
-                                            "padding: 3px 6px; border-radius: 4px; }"));
-    m_readout->hide();
-    m_readoutTimer = new QTimer(this);
-    m_readoutTimer->setObjectName(QStringLiteral("savePreviewZoomTimer"));
-    m_readoutTimer->setSingleShot(true);
-    m_readoutTimer->setInterval(kZoomReadoutDurationMs);
-    connect(m_readoutTimer, &QTimer::timeout, m_readout, &QWidget::hide);
-    m_busy = new QLabel(this);
+    m_readout->dismissalTimer()->setObjectName(QStringLiteral("savePreviewZoomTimer"));
+    m_busy = new CanvasStatusReadout(this);
     m_busy->setObjectName(QStringLiteral("savePreviewStatus"));
-    m_busy->setStyleSheet(QStringLiteral(
-        "color: white; background: rgba(0,0,0,160); padding: 4px 8px; border-radius: 4px;"));
-    m_busy->setAttribute(Qt::WA_TransparentForMouseEvents);
-    m_busy->hide();
+    m_busy->setMessage(CanvasStatusReadout::Message::RenderingPreview);
     updateReadout();
 }
 void ScreenshotSavePreviewCanvas::setSource(QImage image, QSize pixels) {
     m_original = std::move(image);
     m_output = {};
     m_sourcePixels = pixels;
-    m_readoutTimer->stop();
-    m_readout->hide();
+    m_readout->dismiss();
     fitImage();
 }
 void ScreenshotSavePreviewCanvas::setPdfLayout(screenshot_pdf::Layout layout) {
@@ -97,24 +81,20 @@ void ScreenshotSavePreviewCanvas::fitImage(bool showZoomReadout) {
     update();
 }
 void ScreenshotSavePreviewCanvas::updateReadout() {
-    m_readout->setText(tr("Scale: %1%").arg(m_zoom * 100, 0, 'f', m_zoom < 0.1 ? 1 : 0));
-    m_readout->adjustSize();
-    m_readout->move(kZoomReadoutInset,
-                    std::max(0, height() - m_readout->height() - kZoomReadoutInset));
-    m_readout->setAccessibleName(tr("Current zoom"));
-    m_busy->setText(tr("Rendering preview"));
-    m_busy->adjustSize();
-    m_busy->move(12, 12);
+    m_readout->setMessage(CanvasStatusReadout::Message::Scale, m_zoom * 100, m_zoom < 0.1 ? 1 : 0);
+    m_readout->layoutIn(rect());
+    m_busy->layoutIn(rect(), CanvasStatusReadout::Corner::TopLeft);
     setAccessibleName(tr("Export comparison preview"));
     setProperty("zoom", m_zoom);
 }
 void ScreenshotSavePreviewCanvas::showReadout() {
-    m_readout->show();
-    m_readout->raise();
-    m_readoutTimer->start();
+    m_readout->showTransient();
 }
 void ScreenshotSavePreviewCanvas::setBusy(bool busy) {
-    m_busy->setVisible(busy);
+    if (busy)
+        m_busy->showPersistent();
+    else
+        m_busy->dismiss();
 }
 void ScreenshotSavePreviewCanvas::paintEvent(QPaintEvent*) {
     QPainter painter(this);
@@ -275,6 +255,6 @@ void ScreenshotSavePreviewCanvas::keyPressEvent(QKeyEvent* event) {
 }
 void ScreenshotSavePreviewCanvas::changeEvent(QEvent* event) {
     if (event->type() == QEvent::LanguageChange)
-        updateReadout();
+        setAccessibleName(tr("Export comparison preview"));
     QWidget::changeEvent(event);
 }

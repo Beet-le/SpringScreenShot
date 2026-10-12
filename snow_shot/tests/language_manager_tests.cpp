@@ -58,6 +58,13 @@ int main(int argc, char** argv) {
             "Ant Design Qt should follow the English application locale");
 
     require(manager.setLanguage(QStringLiteral("zh_CN")), "Simplified Chinese should load");
+    require(QCoreApplication::translate("CanvasStatusReadout", "Scale: %1%") ==
+                    QString::fromUtf8("缩放：%1%") &&
+                QCoreApplication::translate("CanvasStatusReadout", "Locked") ==
+                    QString::fromUtf8("已锁定") &&
+                QCoreApplication::translate("CanvasStatusReadout", "Rendering preview") ==
+                    QString::fromUtf8("正在渲染预览"),
+            "Simplified Chinese must load the shared canvas hint context");
     require(QCoreApplication::translate("SettingsCatalog", "When pinning duplicate content") ==
                     QString::fromUtf8("将重复内容固定到屏幕时") &&
                 QCoreApplication::translate("SettingsCatalog", "Shake Window") ==
@@ -89,6 +96,13 @@ int main(int argc, char** argv) {
             "Simplified Chinese management should use the same window terminology");
 
     require(manager.setLanguage(QStringLiteral("zh_TW")), "Traditional Chinese should load");
+    require(QCoreApplication::translate("CanvasStatusReadout", "Scale: %1%") ==
+                    QString::fromUtf8("縮放：%1%") &&
+                QCoreApplication::translate("CanvasStatusReadout", "Locked") ==
+                    QString::fromUtf8("已鎖定") &&
+                QCoreApplication::translate("CanvasStatusReadout", "Rendering preview") ==
+                    QString::fromUtf8("正在繪製預覽"),
+            "Traditional Chinese must load the shared canvas hint context");
     require(QCoreApplication::translate("SettingsCatalog", "When pinning duplicate content") ==
                     QString::fromUtf8("將重複內容固定到螢幕時") &&
                 QCoreApplication::translate("SettingsCatalog", "Shake Window") ==

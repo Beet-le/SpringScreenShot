@@ -583,10 +583,6 @@
             <translation>Lock mode</translation>
         </message>
         <message>
-            <source>Locked</source>
-            <translation>Locked</translation>
-        </message>
-        <message>
             <source>Move window</source>
             <translation>Move window</translation>
         </message>
@@ -601,10 +597,6 @@
         <message>
             <source>Opacity</source>
             <translation>Opacity</translation>
-        </message>
-        <message>
-            <source>Opacity: %1%</source>
-            <translation>Opacity: %1%</translation>
         </message>
         <message>
             <source>Pause</source>
@@ -657,10 +649,6 @@
         <message>
             <source>Scale</source>
             <translation>Scale</translation>
-        </message>
-        <message>
-            <source>Scale: %1%</source>
-            <translation>Scale: %1%</translation>
         </message>
         <message>
             <source>Show all windows</source>

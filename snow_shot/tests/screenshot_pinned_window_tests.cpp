@@ -512,7 +512,7 @@ class ScreenshotPinnedWindowTestAccess {
                window.m_nativeGeometryController->hasInteractiveTransaction();
     }
     static QTimer* lockReadoutTimer(ScreenshotPinnedWindow& window) {
-        return window.m_scaleLabelTimer;
+        return window.m_scaleLabel->dismissalTimer();
     }
     static void enableLockAttentionFixture(ScreenshotPinnedWindow& window) {
         window.m_sourcePinAvailable = true;
@@ -770,15 +770,16 @@ class ScreenshotPinnedWindowTestAccess {
                controller->phase() == ScreenshotPinnedNativeGeometryController::Phase::Stable &&
                controller->committedGeometry() == window.currentNativeGeometry();
     }
-    static QTimer* showReadout(ScreenshotPinnedWindow& window, bool opacity) {
-        window.m_scalePercent = 125;
+    static QTimer* showReadout(ScreenshotPinnedWindow& window, bool opacity,
+                               double scalePercent = 125) {
+        window.m_scalePercent = scalePercent;
         window.m_opacityPercent = 80;
         if (opacity) {
             window.showOpacityReadout();
         } else {
             window.showScaleReadout();
         }
-        return window.m_scaleLabelTimer;
+        return window.m_scaleLabel->dismissalTimer();
     }
     static void restoreOffscreen(ScreenshotPinnedWindow& window,
                                  const ScreenshotPinnedWindow::Config& config) {
@@ -8328,6 +8329,22 @@ void pinnedReadoutOffscreen() {
     const QRect readoutBounds(
         QPoint(qCeil(contentViewport.left()), qCeil(contentViewport.top())),
         QPoint(qFloor(contentViewport.right()) - 1, qFloor(contentViewport.bottom()) - 1));
+    class ReadoutTranslator final : public QTranslator {
+      public:
+        bool isEmpty() const override {
+            return false;
+        }
+        QString translate(const char* context, const char* sourceText, const char*,
+                          int) const override {
+            if (QByteArray(context) != "CanvasStatusReadout")
+                return {};
+            if (QByteArray(sourceText) == "Scale: %1%")
+                return QStringLiteral("Zoom: %1%");
+            if (QByteArray(sourceText) == "Opacity: %1%")
+                return QStringLiteral("Visibility: %1%");
+            return {};
+        }
+    } translator;
     for (const bool opacity : {false, true}) {
         auto* timer = ScreenshotPinnedWindowTestAccess::showReadout(window, opacity);
         const QString text =
@@ -8340,11 +8357,35 @@ void pinnedReadoutOffscreen() {
                     label->focusPolicy() == Qt::NoFocus && timer->isSingleShot() &&
                     timer->interval() == 1000 && timer->isActive(),
                 "readout must be passive and retain its one-second timeout");
+        const int remaining = timer->remainingTime();
+        require(QApplication::installTranslator(&translator),
+                "the shared pinned hint translator must install successfully");
+        QEvent languageChange(QEvent::LanguageChange);
+        QApplication::sendEvent(&window, &languageChange);
+        const QString translated =
+            opacity ? QStringLiteral("Visibility: 80%") : QStringLiteral("Zoom: 125%");
+        require(label->isVisible() && label->text() == translated &&
+                    label->toolTip() == translated && label->accessibleName() == translated &&
+                    timer->isActive() && timer->remainingTime() <= remaining,
+                "pinned hints must translate through their shared context without restarting");
         require(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection),
                 "controlled scheduler must deliver the readout timeout");
-        require(label->isHidden(), "readout timeout must hide the shared label");
-        timer->stop();
+        require(label->isHidden() && !timer->isActive(),
+                "readout timeout must dismiss the shared label and timer synchronously");
+        QApplication::removeTranslator(&translator);
+        QApplication::sendEvent(&window, &languageChange);
+        require(label->isHidden() && label->toolTip() == text && label->accessibleName() == text &&
+                    !timer->isActive(),
+                "retranslating a dismissed pinned hint must preserve its hidden lifecycle");
     }
+    auto* timer = ScreenshotPinnedWindowTestAccess::showReadout(window, false, 82.5);
+    require(label->isVisible() && label->text() == QStringLiteral("Scale: 83%") &&
+                label->toolTip() == QStringLiteral("Scale: 83%") &&
+                label->accessibleName() == QStringLiteral("Scale: 83%"),
+            "pinned scale hints must round halfway percentages upward to whole integers");
+    window.close();
+    require(label->isHidden() && !timer->isActive(),
+            "closing the pinned window must dismiss its hint and stop its timer synchronously");
 }
 
 void pinnedScalingAndAspectLockedResizing(SnowCanvasRuntime&) {
@@ -10414,15 +10455,18 @@ void pinnedLockOffscreen() {
             "Locked must reuse the passive readout, inset, and one-second timer");
     class LockTranslator final : public QTranslator {
       public:
+        bool isEmpty() const override {
+            return false;
+        }
         QString translate(const char* context, const char* sourceText, const char*,
                           int) const override {
-            if (QByteArray(context) == "ScreenshotPinnedWindow" &&
-                QByteArray(sourceText) == "Locked")
+            if (QByteArray(context) == "CanvasStatusReadout" && QByteArray(sourceText) == "Locked")
                 return QStringLiteral("Translated lock");
             return {};
         }
     } translator;
-    QApplication::installTranslator(&translator);
+    require(QApplication::installTranslator(&translator),
+            "the shared locked hint translator must install successfully");
     QEvent languageChange(QEvent::LanguageChange);
     QApplication::sendEvent(&window, &languageChange);
     require(label->text() == QStringLiteral("Translated lock"),

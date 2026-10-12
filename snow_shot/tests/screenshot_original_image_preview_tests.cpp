@@ -63,7 +63,7 @@ class ScreenshotOriginalImagePreviewWindowTestAccess final {
         return window.m_scaleLabel;
     }
     static QTimer* scaleLabelTimer(const ScreenshotOriginalImagePreviewWindow& window) {
-        return window.m_scaleLabelTimer;
+        return window.m_scaleLabel->dismissalTimer();
     }
     static bool hasHintSurface(const ScreenshotOriginalImagePreviewWindow& window) {
         return bool(window.m_hintSurface);
@@ -562,8 +562,7 @@ void visibleScaleHintRetranslatesWithoutChangingZoom() {
         }
         QString translate(const char* context, const char* source, const char*,
                           int) const override {
-            if (qstrcmp(context, "ScreenshotOriginalImagePreviewWindow") == 0 &&
-                qstrcmp(source, "Scale: %1%") == 0)
+            if (qstrcmp(context, "CanvasStatusReadout") == 0 && qstrcmp(source, "Scale: %1%") == 0)
                 return QStringLiteral("Translated scale: %1%");
             return {};
         }
@@ -628,6 +627,33 @@ void wheelGesturesRespectBoundariesAndIgnoreMomentum() {
                 sendWheelEvent(preview, position, QPoint(0, 1), {}, Qt::NoScrollPhase, 400) &&
                 qFuzzyCompare(Access::scalePercent(preview), qreal(150)),
             "separate wheel bursts must each respond to their first partial delta");
+}
+
+void scaleHintFontChangesPreservePixelsAndDeadline() {
+    if (ScreenshotOriginalImagePreviewWindow::usesPhysicalGeometry())
+        return;
+    using Access = ScreenshotOriginalImagePreviewWindowTestAccess;
+    ScreenshotOriginalImagePreviewWindow preview;
+    auto state = stateFor();
+    state.resultRect = QRect(300, 180, 320, 240);
+    require(preview.present(state) &&
+                Access::scaleSteps(preview, 1, QPointF(preview.geometry().center())),
+            "preparing the font-change hint fixture failed");
+    auto* label = Access::scaleLabel(preview);
+    const auto hint = label->captureState();
+    const QSize size = label->size();
+    const QRect geometry = preview.geometry();
+    const quint64 generation = Access::generation(preview);
+    const uchar* const pixels = Access::raster(preview).constBits();
+    QFont larger = label->font();
+    larger.setPixelSize(label->fontMetrics().height() + 8);
+    label->setFont(larger);
+    settle();
+    require(label->isVisible() && label->height() > size.height() &&
+                label->captureState().deadline == hint.deadline && preview.geometry() == geometry &&
+                Access::generation(preview) == generation &&
+                Access::raster(preview).constBits() == pixels,
+            "hint font updates must relayout without changing zoom, pixels, or dismissal time");
 }
 
 void automaticScaleAdvancesToPinnedWheelLevels() {
@@ -761,6 +787,7 @@ void rejectedZoomPreservesGeometryRasterAndScale() {
     const qreal scale = Access::scalePercent(preview);
     const quint64 generation = Access::generation(preview);
     const uchar* const pixels = Access::raster(preview).constBits();
+    const auto hint = Access::scaleLabel(preview)->captureState();
     require(
         !Access::scaleSteps(preview, 100, QPointF(geometry.center())) && preview.isVisible() &&
             preview.geometry() == geometry && qFuzzyCompare(Access::scalePercent(preview), scale) &&
@@ -772,6 +799,8 @@ void rejectedZoomPreservesGeometryRasterAndScale() {
             preview.present(state) && preview.geometry() == geometry &&
             qFuzzyCompare(Access::scalePercent(preview), scale),
         "a zoom exceeding the raster limit must preserve the visible geometry and cached state");
+    require(Access::scaleLabel(preview)->captureState().deadline == hint.deadline,
+            "a rejected zoom must preserve the hint's original dismissal deadline");
 }
 
 void rejectedAutomaticPresentationPreservesThePriorValidPreview() {
@@ -1607,6 +1636,10 @@ void nativeZoomHintSurvivesRepaintsWithoutChangingCachedPixels() {
     const qreal dpr = preview.devicePixelRatioF();
     const QRect hint(qRound(label->x() * dpr), qRound(label->y() * dpr),
                      qRound(label->width() * dpr), qRound(label->height() * dpr));
+    const QRect content(0, 0, qFloor(target.width() / dpr), qFloor(target.height() / dpr));
+    require(label->x() == content.left() + 8 &&
+                label->y() + label->height() == content.height() - 8,
+            "native hints must anchor inside the exact image extent on fractional DPI grids");
     const auto displayedImage = [&] {
         const QImage desktop = preview.windowHandle()->screen()->grabWindow(0).toImage();
         return desktop.copy(target.translated(-QPoint(info.rcMonitor.left, info.rcMonitor.top)));
@@ -1635,7 +1668,32 @@ void nativeZoomHintSurvivesRepaintsWithoutChangingCachedPixels() {
                     Access::generation(preview) == generation &&
                     Access::raster(preview).constBits() == pixels,
                 "native repaints must preserve the hint, exact extent and original cached pixels");
+        const QPoint corner = hint.topLeft();
+        const QPoint background(qRound((label->x() + label->width() / 2.0) * dpr),
+                                qRound((label->y() + 1) * dpr));
+        QImage expected(1, 1, QImage::Format_ARGB32_Premultiplied);
+        expected.fill(Access::raster(preview).pixelColor(background));
+        QPainter compositor(&expected);
+        compositor.fillRect(expected.rect(), QColor(0, 0, 0, 150));
+        compositor.end();
+        require(displayed.pixelColor(corner).rgb() ==
+                        Access::raster(preview).pixelColor(corner).rgb() &&
+                    displayed.pixelColor(background).rgb() == expected.pixelColor(0, 0).rgb(),
+                "native hints must preserve rounded corners and apply their background once");
     }
+    const auto hintState = label->captureState();
+    const int previousHeight = label->height();
+    const QImage beforeFontChange = displayedImage();
+    QFont larger = label->font();
+    larger.setPixelSize(label->fontMetrics().height() + 8);
+    label->setFont(larger);
+    settle();
+    require(label->height() > previousHeight && displayedImage() != beforeFontChange &&
+                Access::hasHintSurface(preview) &&
+                label->captureState().deadline == hintState.deadline &&
+                Access::generation(preview) == generation &&
+                Access::raster(preview).constBits() == pixels,
+            "native font changes must refresh the hint without rebuilding image pixels or timer");
     auto* timer = Access::scaleLabelTimer(preview);
     require(timer != nullptr, "native zoom hint must own its timeout timer");
     timer->stop();
@@ -2127,6 +2185,7 @@ int main(int argc, char** argv) {
             formulaErrorsFitTheCompleteImageAboveTheFooter();
             wheelZoomUsesPinnedLevelsAndShowsAnEphemeralHint();
             visibleScaleHintRetranslatesWithoutChangingZoom();
+            scaleHintFontChangesPreservePixelsAndDeadline();
             wheelGesturesRespectBoundariesAndIgnoreMomentum();
             automaticScaleAdvancesToPinnedWheelLevels();
             wheelZoomUsesConfiguredAnchors();

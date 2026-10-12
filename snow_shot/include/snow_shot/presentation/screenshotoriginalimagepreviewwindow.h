@@ -17,7 +17,6 @@ class AdDpiStableWindowController;
 
 class ScreenshotOriginalImagePreviewWindowTestAccess;
 class CanvasStatusReadout;
-class QTimer;
 
 // Geometry is in desktop physical pixels on the native Windows platform and logical pixels
 // elsewhere. The image is shared through QImage's implicit sharing; its rectangle describes the
@@ -94,6 +93,8 @@ class ScreenshotOriginalImagePreviewWindow final : public QWidget {
     void showScaleReadout();
     void hideScaleReadout();
     void updateScaleReadout();
+    [[nodiscard]] QRectF scaleReadoutAnchor() const;
+    void synchronizeHintSurface();
     [[nodiscard]] bool refreshHintSurface();
 
     QImage m_sourceImage;
@@ -108,7 +109,6 @@ class ScreenshotOriginalImagePreviewWindow final : public QWidget {
     QString m_mouseWheelZoomMode = QStringLiteral("mouse_position");
     snow_shot::presentation::WheelStepAccumulator m_wheelSteps;
     CanvasStatusReadout* m_scaleLabel = nullptr;
-    QTimer* m_scaleLabelTimer = nullptr;
     QPointF m_dragOffset;
     QPointer<QWidget> m_transientOwner;
     QPointer<QWidget> m_aboveSibling;
@@ -126,6 +126,7 @@ class ScreenshotOriginalImagePreviewWindow final : public QWidget {
     bool m_refreshPending = false;
     bool m_presenting = false;
     bool m_applyingGeometry = false;
+    bool m_updatingScaleReadout = false;
     bool m_adjustingPaintSurface = false;
     bool m_forwardingWindowEvent = false;
     bool m_siblingStackedAbove = false;

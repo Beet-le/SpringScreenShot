@@ -1,4 +1,5 @@
 #include "physical_key_test_support.h"
+#include "snow_shot/presentation/canvasstatusreadout.h"
 #include "snow_shot/presentation/screenshotgeometry.h"
 #include "snow_shot/presentation/screenshotocrpresentation.h"
 #include "snow_shot/presentation/screenshotrecognitionwindow.h"
@@ -121,10 +122,11 @@ void companionWheelZoomPreservesRecognition(ScreenshotOriginalImagePreviewWindow
     wheel(-120);
     require(preview.geometry() == originalGeometry,
             "reversing companion wheel zoom must return to the initial selection-sized preview");
-    const auto timers = preview.findChildren<QTimer*>(QString(), Qt::FindDirectChildrenOnly);
-    require(timers.size() == 1, "the companion must own its zoom hint timer");
-    timers.front()->stop();
-    require(QMetaObject::invokeMethod(timers.front(), "timeout", Qt::DirectConnection),
+    auto* readout = preview.findChild<CanvasStatusReadout*>();
+    require(readout != nullptr, "the companion must use the shared zoom hint");
+    auto* timer = readout->dismissalTimer();
+    timer->stop();
+    require(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection),
             "hiding the integration fixture zoom hint failed");
 }
 

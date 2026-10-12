@@ -522,7 +522,7 @@ void ScreenshotOverlayWindow::clearScrollingResultPreview() {
     m_scrollingResultPreviewCanvasRect = {};
     m_scrollingResultPreviewStatusVisible = false;
     if (m_scrollingResultPreviewReadout != nullptr) {
-        m_scrollingResultPreviewReadout->hide();
+        m_scrollingResultPreviewReadout->dismiss();
     }
     if (m_canvas != nullptr && isVisible() && updatesEnabled() && m_canvas->updatesEnabled()) {
         // A queued update can outlive hover exit and be captured as a new stitch frame.
@@ -537,7 +537,7 @@ void ScreenshotOverlayWindow::updateScrollingResultPreviewReadout() {
     if (!m_scrollingResultPreviewStatusVisible || m_screenshotRenderer == nullptr ||
         !m_screenshotRenderer->hasScrollingResultPreview() || m_canvas == nullptr) {
         if (m_scrollingResultPreviewReadout != nullptr) {
-            m_scrollingResultPreviewReadout->hide();
+            m_scrollingResultPreviewReadout->dismiss();
         }
         return;
     }
@@ -545,18 +545,18 @@ void ScreenshotOverlayWindow::updateScrollingResultPreviewReadout() {
         m_scrollingResultPreviewReadout = new CanvasStatusReadout(this);
         m_scrollingResultPreviewReadout->setObjectName(
             QStringLiteral("scrollingScreenshotResultPreviewLabel"));
+        m_scrollingResultPreviewReadout->setMessage(CanvasStatusReadout::Message::ResultPreview);
     }
-    const QRect anchor = m_canvas->viewRectForCanvasRect(m_scrollingResultPreviewCanvasRect, 0)
-                             .intersected(m_canvas->rect())
-                             .translated(m_canvas->pos());
+    const QRectF anchor = m_canvas->canvasToViewTransform()
+                              .mapRect(m_scrollingResultPreviewCanvasRect)
+                              .intersected(QRectF(m_canvas->rect()))
+                              .translated(m_canvas->pos());
     if (anchor.isEmpty()) {
-        m_scrollingResultPreviewReadout->hide();
+        m_scrollingResultPreviewReadout->dismiss();
         return;
     }
-    m_scrollingResultPreviewReadout->setText(tr("Result Preview in Progress"));
     m_scrollingResultPreviewReadout->layoutIn(anchor);
-    m_scrollingResultPreviewReadout->show();
-    m_scrollingResultPreviewReadout->raise();
+    m_scrollingResultPreviewReadout->showPersistent();
 }
 
 QWidget* ScreenshotOverlayWindow::scrollingThumbnailWindow() const {
@@ -884,11 +884,8 @@ bool ScreenshotOverlayWindow::event(QEvent* event) {
         retirePresentation();
         clearScrollingResultPreview();
     }
-    if (event != nullptr &&
-        (event->type() == QEvent::LanguageChange || event->type() == QEvent::FontChange ||
-         event->type() == QEvent::ApplicationFontChange ||
-         event->type() == QEvent::DevicePixelRatioChange ||
-         event->type() == QEvent::ScreenChangeInternal)) {
+    if (event != nullptr && (event->type() == QEvent::DevicePixelRatioChange ||
+                             event->type() == QEvent::ScreenChangeInternal)) {
         updateScrollingResultPreviewReadout();
     }
     if (event != nullptr && event->type() == QEvent::Show) {

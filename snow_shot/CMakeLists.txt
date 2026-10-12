@@ -115,6 +115,12 @@ snow_enable_clang_tidy()
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/SnowQt.cmake")
 snow_find_qt(COMPONENTS Widgets LinguistTools Svg Network)
+
+add_library(snow_shot_canvas_status_readout STATIC
+    include/snow_shot/presentation/canvasstatusreadout.h
+    src/presentation/components/canvasstatusreadout.cpp)
+target_include_directories(snow_shot_canvas_status_readout PUBLIC include)
+target_link_libraries(snow_shot_canvas_status_readout PUBLIC Qt6::Widgets)
 if(APPLE)
     add_library(snow_shot_macos_clipboard STATIC src/platform/macos/imageclipboard.mm)
     target_link_libraries(snow_shot_macos_clipboard PUBLIC Qt6::Gui
@@ -5149,6 +5155,11 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-export-dialog-workflow-tests --shortcuts)
     add_test(NAME snow-shot-export-preview-wheel-tests
         COMMAND snow-shot-export-dialog-workflow-tests --wheel-zoom -platform offscreen)
+    add_test(NAME snow-shot-export-preview-hint-tests
+        COMMAND snow-shot-export-dialog-workflow-tests --zoom-hint -platform offscreen)
+    set_tests_properties(snow-shot-export-preview-hint-tests PROPERTIES
+        TIMEOUT 30 LABELS unit
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(snow-shot-export-preview-wheel-tests PROPERTIES
         TIMEOUT 30 LABELS unit SNOW_TEST_CROSS_PLATFORM TRUE
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
@@ -11287,5 +11298,25 @@ if(SNOW_APPS_BUILD_BENCHMARKS AND TARGET snow-shot-recognition-session-controlle
         COMMAND snow-shot-recognition-model-benchmark -platform offscreen)
     set_tests_properties(snow-shot-recognition-model-benchmark PROPERTIES LABELS "benchmark"
         TIMEOUT 120 ENVIRONMENT "${_recognition_model_benchmark_environment}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+endif()
+
+# Standalone tests compile presentation hosts independently of the application. Keep
+# every host, including Mini and benchmark hosts, on the same compiled readout.
+get_property(_snow_readout_consumers DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+foreach(_snow_target IN LISTS _snow_readout_consumers)
+    get_target_property(_snow_sources ${_snow_target} SOURCES)
+    if("${_snow_sources}" MATCHES "(screenshot(pinnedwindow|savepreviewcanvas|overlaywindow|originalimagepreviewwindow)|recordingeffectpreview)\\.cpp")
+        target_link_libraries(${_snow_target} PRIVATE snow_shot_canvas_status_readout)
+    endif()
+endforeach()
+
+if(SNOW_SHOT_BUILD_TESTS)
+    add_executable(snow-shot-canvas-status-readout-tests tests/canvas_status_readout_tests.cpp)
+    target_link_libraries(snow-shot-canvas-status-readout-tests PRIVATE snow_shot_canvas_status_readout)
+    snow_shot_import_offscreen_platform(snow-shot-canvas-status-readout-tests)
+    add_test(NAME snow-shot-canvas-status-readout-tests
+        COMMAND snow-shot-canvas-status-readout-tests -platform offscreen)
+    set_tests_properties(snow-shot-canvas-status-readout-tests PROPERTIES LABELS unit TIMEOUT 30
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 endif()

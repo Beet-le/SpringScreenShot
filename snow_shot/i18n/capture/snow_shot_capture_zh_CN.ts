@@ -207,10 +207,6 @@
             <source>Loading screenshot history</source>
             <translation>正在加载截图历史</translation>
         </message>
-        <message>
-            <source>Result Preview in Progress</source>
-            <translation>正在预览结果</translation>
-        </message>
     </context>
     <context>
         <name>ScreenshotQrController</name>

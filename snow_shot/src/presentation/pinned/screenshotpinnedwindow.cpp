@@ -499,7 +499,6 @@ constexpr int kControlsInset = 16;
 constexpr int kControlButtonSpacing = 8;
 constexpr int kThumbnailSize = 83;
 constexpr int kThumbnailAnimationDurationMs = 150;
-constexpr int kScaleReadoutDurationMs = 1000;
 constexpr int kMinimumScalePercent = 10;
 constexpr int kMaximumScalePercent = 500;
 constexpr int kWheelScaleStep = 10;
@@ -1778,6 +1777,8 @@ bool ScreenshotPinnedWindow::prewarm(QScreen* screen) {
 
 ScreenshotPinnedWindow::~ScreenshotPinnedWindow() {
     m_destroying = true;
+    if (m_scaleLabel)
+        m_scaleLabel->dismiss();
     m_animationPlayback.reset();
     if (m_selectionController)
         m_selectionController->unregisterWindow(this);
@@ -2033,11 +2034,10 @@ void ScreenshotPinnedWindow::restorePersistentState(const Config& config) {
         static_cast<PinnedBorderFrame*>(m_borderFrame)->clearShadowCache();
     m_lockedMode = config.restorePersistentState && config.persistedLockedMode &&
                    !config.persistedThumbnailMode && !config.persistedHideToTopMode;
-    m_readoutKind = ReadoutKind::Scale;
-    if (m_scaleLabelTimer)
-        m_scaleLabelTimer->stop();
-    if (m_scaleLabel)
-        m_scaleLabel->hide();
+    if (m_scaleLabel) {
+        m_scaleLabel->setMessage(CanvasStatusReadout::Message::Scale, qRound(m_scalePercent));
+        m_scaleLabel->dismiss();
+    }
     applyRuntimeBorderColor();
     if (m_lockAction) {
         const QSignalBlocker blocker(m_lockAction);
@@ -2247,14 +2247,6 @@ void ScreenshotPinnedWindow::retranslateUi() {
             tr("Destroy this pinned window? This action cannot be undone."));
         m_destroyConfirmation->setAcceptText(tr("Destroy"));
         m_destroyConfirmation->setRejectText(tr("Cancel"));
-    }
-    if (m_scaleLabel != nullptr && m_scaleLabel->isVisible()) {
-        const QString text = m_readoutKind == ReadoutKind::Locked ? tr("Locked")
-                             : m_readoutKind == ReadoutKind::Opacity
-                                 ? tr("Opacity: %1%").arg(m_opacityPercent)
-                                 : tr("Scale: %1%").arg(qRound(m_scalePercent));
-        m_scaleLabel->setText(text);
-        m_scaleLabel->layoutIn(contentWidgetRect());
     }
     const auto updateWidget = [](QWidget* widget) {
         if (widget == nullptr) {
@@ -3273,14 +3265,6 @@ void ScreenshotPinnedWindow::updateSelectionIndicator() {
 
 void ScreenshotPinnedWindow::createUi() {
     setMinimumSize(1, 1);
-    m_scaleLabelTimer = new QTimer(this);
-    m_scaleLabelTimer->setSingleShot(true);
-    m_scaleLabelTimer->setInterval(kScaleReadoutDurationMs);
-    connect(m_scaleLabelTimer, &QTimer::timeout, this, [this]() {
-        if (m_scaleLabel != nullptr) {
-            m_scaleLabel->hide();
-        }
-    });
     m_nativeScaleSettleTimer = new QTimer(this);
     m_nativeScaleSettleTimer->setSingleShot(true);
     m_nativeScaleSettleTimer->setInterval(0);
@@ -4438,7 +4422,7 @@ void ScreenshotPinnedWindow::updateControlsGeometry() {
         return;
     }
     if (m_scaleLabel != nullptr) {
-        m_scaleLabel->layoutIn(contentWidgetRect());
+        m_scaleLabel->layoutIn(contentViewRect());
     }
     if (m_controlsPanel == nullptr) {
         return;
@@ -6947,7 +6931,7 @@ void ScreenshotPinnedWindow::printContent() {
                 {{QStringLiteral("request_kind"), QStringLiteral("pinned")},
                  {QStringLiteral("operation"), QString::number(replacement)},
                  {QStringLiteral("stage"), !snapshotSucceeded ? QStringLiteral("export_image")
-                                           : !printer ? QStringLiteral("service_destroyed")
+                                           : !printer         ? QStringLiteral("service_destroyed")
                                                       : QStringLiteral("service_rejected")}},
                 QtWarningMsg);
             finished({ScreenshotPrintService::Status::Failed,
@@ -7722,41 +7706,35 @@ void ScreenshotPinnedWindow::setEffectiveScale(double percent, bool showReadout)
 }
 
 void ScreenshotPinnedWindow::showScaleReadout() {
-    if (m_scaleLabel == nullptr || m_scaleLabelTimer == nullptr) {
+    if (m_scaleLabel == nullptr) {
         return;
     }
-    m_readoutKind = ReadoutKind::Scale;
-    m_scaleLabel->setText(tr("Scale: %1%").arg(qRound(m_scalePercent)));
-    m_scaleLabel->layoutIn(contentWidgetRect());
+    m_scaleLabel->setMessage(CanvasStatusReadout::Message::Scale, qRound(m_scalePercent));
+    m_scaleLabel->layoutIn(contentViewRect());
     updateControlsGeometry();
-    m_scaleLabel->show();
+    m_scaleLabel->showTransient();
     updateChildStackingOrder();
-    m_scaleLabelTimer->start();
 }
 
 void ScreenshotPinnedWindow::showOpacityReadout() {
-    if (m_scaleLabel == nullptr || m_scaleLabelTimer == nullptr) {
+    if (m_scaleLabel == nullptr) {
         return;
     }
-    m_readoutKind = ReadoutKind::Opacity;
-    m_scaleLabel->setText(tr("Opacity: %1%").arg(m_opacityPercent));
-    m_scaleLabel->layoutIn(contentWidgetRect());
+    m_scaleLabel->setMessage(CanvasStatusReadout::Message::Opacity, m_opacityPercent);
+    m_scaleLabel->layoutIn(contentViewRect());
     updateControlsGeometry();
-    m_scaleLabel->show();
+    m_scaleLabel->showTransient();
     updateChildStackingOrder();
-    m_scaleLabelTimer->start();
 }
 
 void ScreenshotPinnedWindow::showLockedReadout() {
-    if (!m_scaleLabel || !m_scaleLabelTimer || m_closing)
+    if (!m_scaleLabel || m_closing)
         return;
-    m_readoutKind = ReadoutKind::Locked;
-    m_scaleLabel->setText(tr("Locked"));
-    m_scaleLabel->layoutIn(contentWidgetRect());
+    m_scaleLabel->setMessage(CanvasStatusReadout::Message::Locked);
+    m_scaleLabel->layoutIn(contentViewRect());
     updateControlsGeometry();
-    m_scaleLabel->show();
+    m_scaleLabel->showTransient();
     updateChildStackingOrder();
-    m_scaleLabelTimer->start();
 }
 
 void ScreenshotPinnedWindow::setLockedMode(bool enabled) {
@@ -7787,10 +7765,8 @@ void ScreenshotPinnedWindow::setLockedMode(bool enabled) {
             return;
     }
     m_lockedMode = enabled;
-    if (!enabled && m_readoutKind == ReadoutKind::Locked) {
-        m_scaleLabelTimer->stop();
-        m_scaleLabel->hide();
-    }
+    if (!enabled && m_scaleLabel && m_scaleLabel->message() == CanvasStatusReadout::Message::Locked)
+        m_scaleLabel->dismiss();
     clearWindowDragCursor();
     if (m_clickThroughMoveButton)
         m_clickThroughMoveButton->setCursor(enabled ? Qt::ArrowCursor : Qt::SizeAllCursor);
@@ -8705,6 +8681,8 @@ void ScreenshotPinnedWindow::closeAllPinnedWindows() {
 void ScreenshotPinnedWindow::hideForClosing() {
     const bool firstClose = !m_closing;
     m_closing = true;
+    if (m_scaleLabel)
+        m_scaleLabel->dismiss();
     if (m_animationPlayback)
         m_animationPlayback->clear();
     m_pointerPresence->setActive(false);
@@ -8902,6 +8880,8 @@ void ScreenshotPinnedWindow::requestDestroy() {
     removePersistence();
     m_inactiveGroupClosing = false;
     m_closing = true;
+    if (m_scaleLabel)
+        m_scaleLabel->dismiss();
     stopRecognition();
     QTimer::singleShot(0, this, [this]() { close(); });
 }

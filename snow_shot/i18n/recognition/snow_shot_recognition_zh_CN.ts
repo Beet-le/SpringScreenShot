@@ -142,13 +142,6 @@
         </message>
     </context>
     <context>
-        <name>ScreenshotOriginalImagePreviewWindow</name>
-        <message>
-            <source>Scale: %1%</source>
-            <translation>缩放：%1%</translation>
-        </message>
-    </context>
-    <context>
         <name>ScreenshotRecognitionSessionController</name>
         <message>
             <source>Barcode recognition failed</source>

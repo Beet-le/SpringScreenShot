@@ -119,6 +119,7 @@ RecordingEffectPreview::RecordingEffectPreview(ScreenRecordingAreaWindow& area,
       m_source(source ? std::move(source) : std::make_unique<NativeRecordingEffectsSource>()),
       m_readout(new CanvasStatusReadout(&area)) {
     m_readout->setObjectName(QStringLiteral("screenRecordingMotionPreviewLabel"));
+    m_readout->setMessage(CanvasStatusReadout::Message::MotionPreview);
     area.canvas()->setCustomRenderer(this);
     qApp->installEventFilter(this);
     m_configurationTimer.setSingleShot(true);
@@ -272,7 +273,7 @@ void RecordingEffectPreview::stopAndClear(bool present) {
     m_running = false;
     m_source->stop();
     clearFrame();
-    m_readout->hide();
+    m_readout->dismiss();
     if (present && m_area.isVisible()) {
         m_area.repaint();
         m_area.canvas()->repaint();
@@ -351,14 +352,11 @@ QRegion RecordingEffectPreview::frameRegion(const RecordingEffectsFrame& frame) 
 
 void RecordingEffectPreview::updateReadout() {
     if (!m_running || !m_frame) {
-        m_readout->hide();
+        m_readout->dismiss();
         return;
     }
-    m_readout->setText(
-        QCoreApplication::translate("RecordingEffectPreview", "Motion Preview in Progress"));
-    m_readout->layoutIn(m_area.selectionRect().toAlignedRect());
-    m_readout->show();
-    m_readout->raise();
+    m_readout->layoutIn(m_area.selectionRect());
+    m_readout->showPersistent();
 }
 
 bool RecordingEffectPreview::eventFilter(QObject* watched, QEvent* event) {
@@ -396,7 +394,6 @@ bool RecordingEffectPreview::eventFilter(QObject* watched, QEvent* event) {
         case QEvent::LanguageChange:
             m_configurationDirty = true;
             m_failed = false;
-            updateReadout();
             m_configurationTimer.start();
             break;
         default:

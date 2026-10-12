@@ -21,13 +21,6 @@
         </message>
     </context>
     <context>
-        <name>RecordingEffectPreview</name>
-        <message>
-            <source>Motion Preview in Progress</source>
-            <translation>動效預覽中</translation>
-        </message>
-    </context>
-    <context>
         <name>RecordingKeyboardLabels</name>
         <message>
             <source>Left click</source>

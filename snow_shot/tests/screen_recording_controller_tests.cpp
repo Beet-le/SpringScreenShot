@@ -1292,6 +1292,14 @@ QImage previewImage(QWidget& widget) {
     widget.render(&painter);
     return image;
 }
+void requireRecordingRegionHandle(ScreenRecordingAreaWindow& area) {
+    auto* handle = area.findChild<QWidget*>(QStringLiteral("screenRecordingRegionDragHandle"));
+    require(handle && handle->parentWidget() == &area && handle->isVisible() &&
+                handle->isEnabled() && !handle->testAttribute(Qt::WA_TransparentForMouseEvents),
+            "region editing must retain its interactive move handle");
+    require(previewImage(area).pixelColor(handle->geometry().center()).alpha() > 0,
+            "region editing must retain its painted interactive move handle");
+}
 QImage previewTrimImage(QWidget& widget, const QFont& visualFont) {
     struct SavedFont {
         QPointer<QWidget> widget;
@@ -1324,8 +1332,11 @@ QImage previewTrimImage(QWidget& widget, const QFont& visualFont) {
 }
 class PreviewTestTranslator final : public QTranslator {
   public:
+    bool isEmpty() const override {
+        return false;
+    }
     QString translate(const char* context, const char* source, const char*, int) const override {
-        if (QByteArray(context) == "RecordingEffectPreview" &&
+        if (QByteArray(context) == "CanvasStatusReadout" &&
             QByteArray(source) == "Motion Preview in Progress") {
             return QStringLiteral("Preview translated");
         }
@@ -1447,6 +1458,10 @@ void effectsPreviewLifecycle() {
     auto* label = area.findChild<QLabel*>(QStringLiteral("screenRecordingMotionPreviewLabel"));
     require(state->active && preview.hasFrame() && label && label->isVisible(),
             "visible idle preview must show effects and readout");
+    auto* readout = qobject_cast<CanvasStatusReadout*>(label);
+    require(readout && readout->message() == CanvasStatusReadout::Message::MotionPreview &&
+                !readout->dismissalTimer()->isActive(),
+            "recording motion status must use the shared persistent hint component");
     require(label->text() == QStringLiteral("Motion Preview in Progress"),
             "preview label must use requested text");
     require(label->testAttribute(Qt::WA_TransparentForMouseEvents),
@@ -1457,8 +1472,8 @@ void effectsPreviewLifecycle() {
         area.setInputMode(mode);
         pumpPreview();
         require(state->active, "all idle input modes must preview");
-        const int backgroundAlpha =
-            mode == ScreenRecordingAreaWindow::InputMode::PassThrough ? 0 : 2;
+        // Region controls own hit testing; only drawing covers the annotation interior.
+        const int backgroundAlpha = mode == ScreenRecordingAreaWindow::InputMode::Drawing ? 2 : 0;
         require(previewImage(*area.canvas()).pixelColor(100, 100).alpha() == backgroundAlpha,
                 "preview clearing must preserve the input surface in editing and drawing modes");
         state->publish(false);
@@ -1470,6 +1485,8 @@ void effectsPreviewLifecycle() {
                 "stopped preview must retain the input surface in interactive modes");
         preview.setEligible(true);
         pumpPreview();
+        if (mode == ScreenRecordingAreaWindow::InputMode::RegionEditing)
+            requireRecordingRegionHandle(area);
     }
     area.setInputMode(ScreenRecordingAreaWindow::InputMode::PassThrough);
     // Exercise both capture-coordinate layers through the renderer at different export sizes.
@@ -1554,7 +1571,7 @@ void effectsPreviewLifecycle() {
     pumpPreview();
     CanvasStatusReadout narrow(&area);
     const QString complete = QStringLiteral("Motion Preview in Progress");
-    narrow.setText(complete);
+    narrow.setMessage(CanvasStatusReadout::Message::MotionPreview);
     narrow.layoutIn(QRect(0, 0, 80, 28));
     require(narrow.width() <= 64 && narrow.toolTip() == complete &&
                 narrow.accessibleName() == complete,
@@ -1754,8 +1771,9 @@ void controllerPreviewTransitions() {
     pumpPreview();
     require(area->inputMode() == ScreenRecordingAreaWindow::InputMode::RegionEditing &&
                 !area->testAttribute(Qt::WA_TransparentForMouseEvents) &&
-                previewImage(*area->canvas()).pixelColor(100, 100).alpha() == 2,
-            "idle export settings must keep the recording area clickable through preview clears");
+                previewImage(*area->canvas()).pixelColor(100, 100).alpha() == 0,
+            "idle export settings must keep the annotation interior transparent");
+    requireRecordingRegionHandle(*area);
     require(palette()->activateDrawingShortcut(QStringLiteral("shape")),
             "a drawing tool must replace export settings");
     pumpPreview();
@@ -1802,8 +1820,10 @@ void controllerPreviewTransitions() {
     waitForIdle(controller);
     pumpPreview();
     require(state->active, "completed finalization must restore fresh preview");
-    require(previewImage(*area->canvas()).pixelColor(100, 100).alpha() == 2,
-            "returning to idle export settings must restore hit-test coverage");
+    require(area->inputMode() == ScreenRecordingAreaWindow::InputMode::RegionEditing &&
+                previewImage(*area->canvas()).pixelColor(100, 100).alpha() == 0,
+            "returning to idle export settings must restore the transparent annotation interior");
+    requireRecordingRegionHandle(*area);
     palette()->recordingCloseRequested();
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
     require(!state->active, "closing must join the preview source");

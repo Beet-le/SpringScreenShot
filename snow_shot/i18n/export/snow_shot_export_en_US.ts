@@ -482,20 +482,8 @@
     <context>
         <name>ScreenshotSavePreviewCanvas</name>
         <message>
-            <source>Current zoom</source>
-            <translation>Current zoom</translation>
-        </message>
-        <message>
             <source>Export comparison preview</source>
             <translation>Export comparison preview</translation>
-        </message>
-        <message>
-            <source>Rendering preview</source>
-            <translation>Rendering preview</translation>
-        </message>
-        <message>
-            <source>Scale: %1%</source>
-            <translation>Scale: %1%</translation>
         </message>
     </context>
 </TS>

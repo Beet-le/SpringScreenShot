@@ -23,6 +23,7 @@
 #include "snow_shot/presentation/screenshotoverlayeventsink.h"
 #include "snow_shot/presentation/screenshotoverlaypool.h"
 #include "snow_shot/presentation/screenshotoverlaywindow.h"
+#include "snow_shot/presentation/canvasstatusreadout.h"
 #include "snow_shot/presentation/screenshotscrollingthumbnailwidget.h"
 #include "snow_shot/presentation/screenshotshortcuthints.h"
 #include "snow_shot/presentation/screenshotuipreferences.h"
@@ -5358,9 +5359,12 @@ void scrollingThumbnailEdgePatchesRefreshOverlap() {
 void scrollingResultPreviewRestoresTransparencyAndReadout() {
     class PreviewTranslator final : public QTranslator {
       public:
+        bool isEmpty() const override {
+            return false;
+        }
         QString translate(const char* context, const char* source, const char*,
                           int) const override {
-            if (QByteArray(context) == "ScreenshotOverlayWindow" &&
+            if (QByteArray(context) == "CanvasStatusReadout" &&
                 QByteArray(source) == "Result Preview in Progress") {
                 return QStringLiteral("Result preview translated");
             }
@@ -5388,6 +5392,10 @@ void scrollingResultPreviewRestoresTransparencyAndReadout() {
     auto* label =
         overlay.findChild<QLabel*>(QStringLiteral("scrollingScreenshotResultPreviewLabel"));
     require(label != nullptr && label->isVisible(), "result preview must show its status readout");
+    auto* readout = qobject_cast<CanvasStatusReadout*>(label);
+    require(readout && readout->message() == CanvasStatusReadout::Message::ResultPreview &&
+                !readout->dismissalTimer()->isActive(),
+            "scrolling result status must use the shared persistent hint component");
     require(label->toolTip() == QStringLiteral("Result Preview in Progress") &&
                 label->accessibleName() == label->toolTip(),
             "result preview status must retain complete accessible text");
@@ -5414,7 +5422,7 @@ void scrollingResultPreviewRestoresTransparencyAndReadout() {
             "ordinary result preview must remove the crop guide without changing the image");
     qApp->installTranslator(&translator);
     QEvent language(QEvent::LanguageChange);
-    QCoreApplication::sendEvent(&overlay, &language);
+    QCoreApplication::sendEvent(label, &language);
     require(label->toolTip() == QStringLiteral("Result preview translated"),
             "result preview status must refresh after a language change");
     qApp->removeTranslator(&translator);

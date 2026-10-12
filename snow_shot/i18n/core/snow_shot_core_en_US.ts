@@ -282,6 +282,33 @@ so every moment on screen can be expressed clearly and shared easily.</translati
         </message>
     </context>
     <context>
+        <name>CanvasStatusReadout</name>
+        <message>
+            <source>Locked</source>
+            <translation>Locked</translation>
+        </message>
+        <message>
+            <source>Motion Preview in Progress</source>
+            <translation>Motion Preview in Progress</translation>
+        </message>
+        <message>
+            <source>Opacity: %1%</source>
+            <translation>Opacity: %1%</translation>
+        </message>
+        <message>
+            <source>Rendering preview</source>
+            <translation>Rendering preview</translation>
+        </message>
+        <message>
+            <source>Result Preview in Progress</source>
+            <translation>Result Preview in Progress</translation>
+        </message>
+        <message>
+            <source>Scale: %1%</source>
+            <translation>Scale: %1%</translation>
+        </message>
+    </context>
+    <context>
         <name>ConfirmationSkipButton</name>
         <message>
             <source>Don't ask again</source>

@@ -2,6 +2,7 @@
   "core": [
     "AboutPageWidget",
     "ApplicationRestart",
+    "CanvasStatusReadout",
     "ConfirmationSkipButton",
     "DiagnosticsService",
     "EditionMetadata",

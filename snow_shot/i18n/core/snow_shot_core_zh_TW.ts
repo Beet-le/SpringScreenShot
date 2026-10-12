@@ -282,6 +282,33 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         </message>
     </context>
     <context>
+        <name>CanvasStatusReadout</name>
+        <message>
+            <source>Locked</source>
+            <translation>已鎖定</translation>
+        </message>
+        <message>
+            <source>Motion Preview in Progress</source>
+            <translation>動效預覽中</translation>
+        </message>
+        <message>
+            <source>Opacity: %1%</source>
+            <translation>不透明度：%1%</translation>
+        </message>
+        <message>
+            <source>Rendering preview</source>
+            <translation>正在繪製預覽</translation>
+        </message>
+        <message>
+            <source>Result Preview in Progress</source>
+            <translation>正在預覽結果</translation>
+        </message>
+        <message>
+            <source>Scale: %1%</source>
+            <translation>縮放：%1%</translation>
+        </message>
+    </context>
+    <context>
         <name>ConfirmationSkipButton</name>
         <message>
             <source>Don't ask again</source>

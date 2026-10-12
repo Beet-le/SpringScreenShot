@@ -1,6 +1,7 @@
 #include "physical_key_test_support.h"
 #include "snow_shot/presentation/screenshotsaveasfiledialog.h"
 #include "snow_shot/presentation/screenshotsavepreviewcanvas.h"
+#include "snow_shot/presentation/canvasstatusreadout.h"
 #include "snow_shot/presentation/screenshotexportartifact.h"
 #include "snow_shot/presentation/components/aspectratiolockbutton.h"
 #include "snow_shot/presentation/components/pathinput.h"
@@ -1038,11 +1039,24 @@ void canvasZoomHint() {
     canvas.setSource(fixture(), QSize(160, 100));
     canvas.show();
     flush();
-    auto* hint = child<QLabel>(&canvas, "savePreviewZoom");
+    auto* hint = child<CanvasStatusReadout>(&canvas, "savePreviewZoom");
+    auto* busy = child<CanvasStatusReadout>(&canvas, "savePreviewStatus");
+    require(child<QLabel>(&canvas, "savePreviewZoom") == hint &&
+                child<QLabel>(&canvas, "savePreviewStatus") == busy &&
+                hint->message() == CanvasStatusReadout::Message::Scale &&
+                busy->message() == CanvasStatusReadout::Message::RenderingPreview,
+            "export zoom and rendering hints must use the shared QLabel-compatible component");
     require(hint->isHidden(), "initial preview fitting must not show the zoom hint");
     auto* timer = child<QTimer>(&canvas, "savePreviewZoomTimer");
-    require(timer->isSingleShot() && timer->interval() == 1000 && !timer->isActive(),
+    require(timer == hint->dismissalTimer() && timer->isSingleShot() && timer->interval() == 1000 &&
+                !timer->isActive(),
             "zoom hint must use the pinned-window one-second dismissal interval");
+    canvas.setBusy(true);
+    require(busy->isVisible() && busy->pos() == QPoint(8, 8) &&
+                !busy->dismissalTimer()->isActive() &&
+                busy->toolTip() == QStringLiteral("Rendering preview") &&
+                busy->accessibleName() == busy->toolTip(),
+            "rendering status must persist at the shared top-left inset with accessible copy");
     const auto expire = [&] {
         timer->stop();
         require(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection),
@@ -1076,7 +1090,8 @@ void canvasZoomHint() {
     expire();
     canvas.setOutput(fixture(QSize(80, 50)));
     canvas.resize(640, 440);
-    require(hint->isHidden() && !timer->isActive(),
+    require(hint->isHidden() && !timer->isActive() && busy->isVisible() &&
+                busy->pos() == QPoint(8, 8) && !busy->dismissalTimer()->isActive(),
             "output and layout changes must not show the zoom hint");
     pressKey(Qt::Key_Home);
     require(hint->isVisible() && timer->isActive(),
@@ -1091,6 +1106,40 @@ void canvasZoomHint() {
     pressKey(Qt::Key_Plus);
     require(hint->isHidden() && !timer->isActive(),
             "zoom input clamped to the current value must not show the hint");
+    canvas.setSource(fixture(), QSize(12000, 8000));
+    require(qAbs(canvas.zoom() - 0.05) < 0.000001 &&
+                hint->text() == QStringLiteral("Scale: 5.0%") && hint->isHidden(),
+            "export zoom below ten percent must retain one decimal without showing a hint");
+    pressKey(Qt::Key_Plus);
+    require(hint->text() == QStringLiteral("Scale: %1%").arg(canvas.zoom() * 100, 0, 'f', 1) &&
+                hint->accessibleName() == hint->toolTip(),
+            "transient export zoom must retain decimal precision and complete accessible text");
+    expire();
+    class HintTranslator final : public QTranslator {
+      public:
+        bool isEmpty() const override {
+            return false;
+        }
+        QString translate(const char* context, const char* source, const char*,
+                          int) const override {
+            if (QByteArray(context) == "CanvasStatusReadout")
+                return QStringLiteral("Translated ") + QString::fromUtf8(source);
+            return {};
+        }
+    } translator;
+    require(QApplication::installTranslator(&translator), "shared hint translator unavailable");
+    QEvent languageChange(QEvent::LanguageChange);
+    QApplication::sendEvent(hint, &languageChange);
+    QApplication::sendEvent(busy, &languageChange);
+    require(hint->isHidden() && !timer->isActive() &&
+                hint->text().startsWith(QStringLiteral("Translated Scale: ")) &&
+                busy->isVisible() &&
+                busy->toolTip() == QStringLiteral("Translated Rendering preview"),
+            "shared language updates must preserve hidden zoom and persistent rendering status");
+    QApplication::removeTranslator(&translator);
+    canvas.setBusy(false);
+    require(busy->isHidden() && !busy->dismissalTimer()->isActive(),
+            "rendering completion must dismiss its status synchronously");
 }
 
 void canvasOriginalSizeBaseline() {
@@ -1729,7 +1778,8 @@ class ExportTestTranslator final : public QTranslator {
         return false;
     }
     QString translate(const char* context, const char* source, const char*, int) const override {
-        if (QByteArray(context).startsWith("ScreenshotSave"))
+        if (QByteArray(context).startsWith("ScreenshotSave") ||
+            QByteArray(context) == "CanvasStatusReadout")
             return QStringLiteral("Translated ") + QString::fromUtf8(source);
         return {};
     }
