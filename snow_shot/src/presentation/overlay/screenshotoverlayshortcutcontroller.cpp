@@ -1,4 +1,5 @@
 #include "snow_shot/presentation/canvashistoryshortcuts.h"
+#include "snow_shot/presentation/cursormovementshortcuts.h"
 #include "snow_shot/shortcuts/shortcutbinding.h"
 #include "snow_shot/presentation/screenshotoverlayshortcutcontroller.h"
 
@@ -19,6 +20,18 @@
 namespace {
 using ShortcutManager = snow_shot::presentation::WindowShortcutManager;
 using BindingHandle = ShortcutManager::BindingHandle;
+
+std::optional<QPoint> cursorMovementDirection(const QString& id) {
+    if (id == QStringLiteral("move_cursor_up"))
+        return QPoint(0, -1);
+    if (id == QStringLiteral("move_cursor_down"))
+        return QPoint(0, 1);
+    if (id == QStringLiteral("move_cursor_left"))
+        return QPoint(-1, 0);
+    if (id == QStringLiteral("move_cursor_right"))
+        return QPoint(1, 0);
+    return std::nullopt;
+}
 
 QString screenshotShortcutForGlobalAction(snow_shot::presentation::GlobalShortcutAction action) {
     using Action = snow_shot::presentation::GlobalShortcutAction;
@@ -270,6 +283,7 @@ struct ScreenshotOverlayShortcutController::Impl {
             QStringLiteral("cancel_screenshot"),
             QStringLiteral("copy_to_clipboard"),
         };
+        snow_shot::presentation::CursorMovementShortcuts cursorMovement;
         for (const QString& actionId : screenshotIds) {
             ShortcutManager::Binding binding;
             binding.id = QStringLiteral("screenshot.configured.") + actionId;
@@ -360,22 +374,6 @@ struct ScreenshotOverlayShortcutController::Impl {
             binding.activate = [this, actionId](const auto& context) {
                 if (actionId != QStringLiteral("cancel_screenshot") && !inputHandler.acceptInput())
                     return false;
-                if (actionId == QStringLiteral("move_cursor_up")) {
-                    return actions.moveCursorOnePixel(
-                        snow_shot::platform::PhysicalCursorDirection::Up);
-                }
-                if (actionId == QStringLiteral("move_cursor_down")) {
-                    return actions.moveCursorOnePixel(
-                        snow_shot::platform::PhysicalCursorDirection::Down);
-                }
-                if (actionId == QStringLiteral("move_cursor_left")) {
-                    return actions.moveCursorOnePixel(
-                        snow_shot::platform::PhysicalCursorDirection::Left);
-                }
-                if (actionId == QStringLiteral("move_cursor_right")) {
-                    return actions.moveCursorOnePixel(
-                        snow_shot::platform::PhysicalCursorDirection::Right);
-                }
                 if (actionId == QStringLiteral("selection_aspect_ratio_snap")) {
                     return inputHandler.activateSelectionAspectRatioSnapShortcut();
                 }
@@ -433,7 +431,11 @@ struct ScreenshotOverlayShortcutController::Impl {
                 }
                 return activateToolbarShortcut(actionId, false);
             };
-            if (actionId == QStringLiteral("move_entire_selection")) {
+            if (const auto direction = cursorMovementDirection(actionId)) {
+                cursorMovement.configureBinding(binding, *direction, [this](const auto& combined) {
+                    return inputHandler.acceptInput() && actions.moveCursorOnePixel(combined);
+                });
+            } else if (actionId == QStringLiteral("move_entire_selection")) {
                 binding.allowedAdditionalModifiers = Qt::ShiftModifier;
                 binding.cancel = [this] {
                     static_cast<void>(inputHandler.releaseMoveEntireSelectionShortcut());
@@ -453,7 +455,8 @@ struct ScreenshotOverlayShortcutController::Impl {
                     return inputHandler.releaseSelectionAspectRatioSnapShortcut();
                 };
             }
-            if (binding.release && actionId != QStringLiteral("selection_aspect_ratio_snap")) {
+            if (actionId == QStringLiteral("move_entire_selection") ||
+                actionId == QStringLiteral("keep_selection_width_and_height_consistent")) {
                 // The initiating global mouse modifiers may still be held. Only these
                 // two held selection controls tolerate them, and only during that drag.
                 auto externalBinding = binding;

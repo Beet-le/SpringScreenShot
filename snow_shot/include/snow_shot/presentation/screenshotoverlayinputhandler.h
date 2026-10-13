@@ -1,7 +1,6 @@
 #ifndef SNOW_SHOT_PRESENTATION_SCREENSHOTOVERLAYINPUTHANDLER_H
 #define SNOW_SHOT_PRESENTATION_SCREENSHOTOVERLAYINPUTHANDLER_H
 
-#include "snow_shot/platform/physicalcursor.h"
 #include "snow_shot/presentation/screenshotoverlayeventsink.h"
 #include "snow_shot/presentation/screenshotselectionaspectratio.h"
 #include "snow_shot/presentation/screenshotselectiongeometry.h"
@@ -75,8 +74,9 @@ struct ScreenshotOverlayInputActions {
     std::function<bool()> copyColorPickerColorToClipboard = []() { return false; };
     std::function<bool()> cycleColorPickerFormat = []() { return false; };
     std::function<bool()> toggleColorPickerCoordinateMode = []() { return false; };
-    std::function<bool(snow_shot::platform::PhysicalCursorDirection direction)> moveCursorOnePixel =
-        [](snow_shot::platform::PhysicalCursorDirection) { return false; };
+    std::function<bool(const QPoint& direction)> moveCursorOnePixel = [](const QPoint&) {
+        return false;
+    };
 
     // Called after a valid selection transitions the interaction into editing.
     // This is intentionally separate from showToolbar so callers can schedule

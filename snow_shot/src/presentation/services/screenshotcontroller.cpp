@@ -381,7 +381,7 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     void setCanvasColorSamplingCursor(bool enabled);
     void setCanvasColorSamplingShortcutScope(bool enabled);
     void clearCanvasColorSampling();
-    [[nodiscard]] bool moveCursorOnePixel(snow_shot::platform::PhysicalCursorDirection direction);
+    [[nodiscard]] bool moveCursorOnePixel(const QPoint& direction);
     [[nodiscard]] bool canRecapture() const;
     void prepareRecaptureWindows(quint64 generation);
     void waitForRecaptureWindowsHidden(quint64 generation);
@@ -1984,9 +1984,7 @@ void ScreenshotController::Impl::createOverlayInputPipeline() {
             return m_colorPickerController->toggleCoordinateMode(
                 m_presentationServices->colorPickerContext());
         },
-        [this](snow_shot::platform::PhysicalCursorDirection direction) {
-            return moveCursorOnePixel(direction);
-        },
+        [this](const QPoint& direction) { return moveCursorOnePixel(direction); },
         [this]() { handleSelectionConfirmed(); },
         [this]() { return selectPreviousSelection(); },
         [this](ScreenshotActiveTool tool) { return activateToolForSelectionResize(tool); },
@@ -2116,8 +2114,7 @@ void ScreenshotController::Impl::createOverlayInputPipeline() {
         });
 }
 
-bool ScreenshotController::Impl::moveCursorOnePixel(
-    snow_shot::platform::PhysicalCursorDirection direction) {
+bool ScreenshotController::Impl::moveCursorOnePixel(const QPoint& direction) {
     const bool canvasColorSampling =
         m_overlayInputHandler != nullptr && m_overlayInputHandler->canvasColorSamplingActive();
     if (m_physicalCursor == nullptr || m_colorPickerController == nullptr ||
@@ -2132,7 +2129,7 @@ bool ScreenshotController::Impl::moveCursorOnePixel(
     }
 
     const snow_shot::platform::PhysicalCursorMoveResult result =
-        m_physicalCursor->moveOnePixel(direction);
+        m_physicalCursor->movePixels(direction, 1);
     if (!result.commandApplied()) {
         return false;
     }
@@ -4437,7 +4434,7 @@ void ScreenshotController::Impl::printSelection() {
                 {{QStringLiteral("request_kind"), QStringLiteral("capture")},
                  {QStringLiteral("operation"), QString::number(epoch)},
                  {QStringLiteral("stage"), !snapshotSucceeded ? QStringLiteral("export_image")
-                                           : !printer ? QStringLiteral("service_destroyed")
+                                           : !printer         ? QStringLiteral("service_destroyed")
                                                       : QStringLiteral("service_rejected")}},
                 QtWarningMsg);
             finished({ScreenshotPrintService::Status::Failed,

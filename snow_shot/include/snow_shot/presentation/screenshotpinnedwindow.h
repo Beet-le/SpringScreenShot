@@ -53,7 +53,6 @@ class PinnedWindowPlatform;
 } // namespace snow_shot::presentation
 namespace snow_shot::platform {
 class PhysicalCursor;
-enum class PhysicalCursorDirection;
 } // namespace snow_shot::platform
 
 class QAction;
@@ -489,7 +488,7 @@ class ScreenshotPinnedWindow final : public QWidget {
     void closeAfterConfirmation();
     [[nodiscard]] std::optional<QPoint> physicalCursorPosition() const;
     bool cursorMovementEnabled() const;
-    bool moveCursorOnePixel(snow_shot::platform::PhysicalCursorDirection direction);
+    bool moveCursorOnePixel(const QPoint& direction);
     bool startWindowMove();
     void finishWindowMove();
     bool windowDragEnabled() const;
