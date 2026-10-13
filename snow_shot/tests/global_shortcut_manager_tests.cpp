@@ -601,6 +601,65 @@ void fullscreenClassificationUsesTheFocusedLayerZeroWindow() {
             "missing process, window, or display snapshots must fail closed");
 }
 
+void fullscreenClassificationIgnoresSnowShotWindows() {
+    using snow_shot::platform::focusedWindowCoversDisplay;
+    using snow_shot::platform::FocusedWindowSnapshot;
+
+    const qint64 ownProcess = QCoreApplication::applicationPid();
+    const qint64 externalProcess = ownProcess + 1;
+    const QVector<QRectF> displays{QRectF(0.0, 0.0, 1920.0, 1080.0),
+                                   QRectF(-1920.0, 0.0, 1920.0, 1080.0)};
+    const QVector<FocusedWindowSnapshot> windows{{ownProcess, 0, 1.0, displays.first()},
+                                                 {ownProcess, 0, 1.0, displays.last()},
+                                                 {externalProcess, 0, 1.0, displays.last()}};
+    require(!focusedWindowCoversDisplay(ownProcess, windows, displays),
+            "Snow Shot fullscreen windows must not trigger fullscreen suppression");
+    for (const auto& display : displays) {
+        require(!focusedWindowCoversDisplay(ownProcess, windows, {display}),
+                "Snow Shot fullscreen windows must be ignored on every monitor");
+    }
+    require(focusedWindowCoversDisplay(externalProcess, windows, displays) &&
+                focusedWindowCoversDisplay(externalProcess, windows, {displays.last()}) &&
+                !focusedWindowCoversDisplay(externalProcess, windows, {displays.first()}),
+            "own windows must not mask the focused external fullscreen window");
+}
+
+void ownFullscreenFocusPreservesAndRestoresHotkeys() {
+    auto& store = snow_shot::storage::ApplicationStorage::instance().configuration();
+    const QString key = QStringLiteral("global_shortcuts/disable_on_focused_fullscreen_window");
+    const auto previousSuppression = store.value(key);
+    require(store.setValue(key, true), "enable fullscreen ownership fixture");
+
+    const qint64 ownProcess = QCoreApplication::applicationPid();
+    const qint64 externalProcess = ownProcess + 1;
+    qint64 frontmostProcess = ownProcess;
+    const QVector<QRectF> displays{QRectF(0.0, 0.0, 1920.0, 1080.0)};
+    const QVector<snow_shot::platform::FocusedWindowSnapshot> windows{
+        {ownProcess, 0, 1.0, displays.first()}, {externalProcess, 0, 1.0, displays.first()}};
+    auto native = std::make_unique<FakeBackend>();
+    FakeBackend* input = native.get();
+    GlobalShortcutManager manager(std::move(native), nullptr, [&] {
+        return snow_shot::platform::focusedWindowCoversDisplay(frontmostProcess, windows, displays);
+    });
+    manager.initialize();
+    clearAll(manager);
+    require(manager.setShortcuts(GlobalShortcutAction::Screenshot, {QStringLiteral("Ctrl+F10")}),
+            "configure fullscreen ownership shortcut");
+    require(!manager.focusedFullscreenSuppressionActive() && input->registrations.size() == 1,
+            "starting with an own fullscreen window must keep hotkeys registered");
+
+    frontmostProcess = externalProcess;
+    manager.refreshFocusedFullscreenState();
+    require(manager.focusedFullscreenSuppressionActive() && input->registrations.isEmpty(),
+            "focusing external fullscreen must still release regular hotkeys");
+
+    frontmostProcess = ownProcess;
+    manager.refreshFocusedFullscreenState();
+    require(!manager.focusedFullscreenSuppressionActive() && input->registrations.size() == 1,
+            "focusing own fullscreen must restore hotkeys despite external fullscreen behind it");
+    require(store.setValue(key, previousSuppression), "restore fullscreen ownership preference");
+}
+
 void deterministicOwnershipPartialFailureAndSuspension() {
     auto native = std::make_unique<FakeBackend>();
     FakeBackend* input = native.get();
@@ -1640,6 +1699,8 @@ int main(int argc, char** argv) {
     macGroupInputTracksPhysicalKeys();
 #endif
     fullscreenClassificationUsesTheFocusedLayerZeroWindow();
+    fullscreenClassificationIgnoresSnowShotWindows();
+    ownFullscreenFocusPreservesAndRestoresHotkeys();
     deterministicOwnershipPartialFailureAndSuspension();
     toggleShortcutSurvivesGlobalHotkeyDisablement();
     focusedFullscreenSuppressionPublishesState();
