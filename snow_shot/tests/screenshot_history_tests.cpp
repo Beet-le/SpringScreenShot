@@ -3449,7 +3449,8 @@ void configuredScreenshotShortcutsControlMoveAndCursorNavigation() {
     defaults.insert(QStringLiteral("recapture"), {QStringLiteral("Alt+R")});
     defaults.insert(QStringLiteral("pin_to_screen"), {QStringLiteral("Ctrl+F")});
     defaults.insert(QStringLiteral("cancel_screenshot"), {QStringLiteral("Esc")});
-    defaults.insert(QStringLiteral("copy_to_clipboard"), {QStringLiteral("Ctrl+C")});
+    defaults.insert(QStringLiteral("copy_to_clipboard"),
+                    {QStringLiteral("Ctrl+C"), QStringLiteral("Return")});
     defaults.insert(QStringLiteral("undo"), {QStringLiteral("Ctrl+Z")});
     defaults.insert(QStringLiteral("redo"), {QStringLiteral("Ctrl+Y")});
     require(shortcutSettings.setAllShortcutsAtomic(defaults),
@@ -3640,6 +3641,17 @@ void configuredScreenshotShortcutsControlMoveAndCursorNavigation() {
                 genericCancelActivations == 0 && undoActivations == 1 && redoActivations == 1,
             "default toolbar command shortcuts must invoke their configured actions");
 
+    require(dispatchShortcut(shortcutWindow, Qt::Key_Return) && copyActivations == 2,
+            "Enter must copy the confirmed selection alongside Ctrl+C");
+    require(!dispatchShortcut(shortcutWindow, Qt::Key_Return, Qt::ShiftModifier) &&
+                !dispatchShortcut(shortcutWindow, Qt::Key_Return, Qt::NoModifier, true) &&
+                copyActivations == 2,
+            "the default Enter copy shortcut must reject modifiers and autorepeat");
+    localShortcutInputAllowed = false;
+    require(!dispatchShortcut(shortcutWindow, Qt::Key_Return) && copyActivations == 2,
+            "Enter must preserve text input and modal shortcut suspension");
+    localShortcutInputAllowed = true;
+
     require(dispatchShortcut(shortcutWindow, Qt::Key_Z, Qt::ControlModifier | Qt::ShiftModifier) &&
                 resetCanvasActivations == 1 && undoActivations == 1 && redoActivations == 1,
             "canvas reset must dispatch separately from Undo and Redo");
@@ -3712,6 +3724,7 @@ void configuredScreenshotShortcutsControlMoveAndCursorNavigation() {
     require(!dispatchShortcut(shortcutWindow, Qt::Key_F, Qt::ControlModifier) &&
                 !dispatchShortcut(shortcutWindow, Qt::Key_Escape) &&
                 !dispatchShortcut(shortcutWindow, Qt::Key_C, Qt::ControlModifier) &&
+                !dispatchShortcut(shortcutWindow, Qt::Key_Return) &&
                 !dispatchShortcut(shortcutWindow, Qt::Key_Z, Qt::ControlModifier) &&
                 !dispatchShortcut(shortcutWindow, Qt::Key_Y, Qt::ControlModifier),
             "custom toolbar bindings must remove every default shortcut");
@@ -3721,7 +3734,7 @@ void configuredScreenshotShortcutsControlMoveAndCursorNavigation() {
                 dispatchShortcut(shortcutWindow, Qt::Key_C, Qt::AltModifier) &&
                 dispatchShortcut(shortcutWindow, Qt::Key_Z, Qt::AltModifier) &&
                 dispatchShortcut(shortcutWindow, Qt::Key_Y, Qt::AltModifier) &&
-                pinActivations == 2 && cancelActivations == 2 && copyActivations == 2 &&
+                pinActivations == 2 && cancelActivations == 2 && copyActivations == 3 &&
                 undoActivations == 2 && redoActivations == 2,
             "custom toolbar bindings must invoke commands at their configured phase");
 
@@ -3743,7 +3756,7 @@ void configuredScreenshotShortcutsControlMoveAndCursorNavigation() {
                 dispatchShortcut(recognitionWindow, Qt::Key_Escape, Qt::AltModifier) &&
                 dispatchShortcutRelease(recognitionWindow, Qt::Key_Escape) &&
                 dispatchShortcut(recognitionWindow, Qt::Key_C, Qt::AltModifier) &&
-                pinActivations == 3 && cancelActivations == 3 && copyActivations == 3,
+                pinActivations == 3 && cancelActivations == 3 && copyActivations == 4,
             "screenshot commands must remain available from a focused recognition surface");
     require(dispatchShortcut(recognitionWindow, Qt::Key_W) && drawingToolActivations == 3,
             "drawing shortcuts must remain available from a focused recognition surface");

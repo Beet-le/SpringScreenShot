@@ -1047,7 +1047,7 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      {},
      2},
     {QStringLiteral("screenshot_shortcuts/copy_to_clipboard"),
-     QJsonArray{QStringLiteral("Ctrl+C")},
+     QJsonArray{QStringLiteral("Ctrl+C"), QStringLiteral("Return")},
      ConfigurationValueKind::StringList,
      std::nullopt,
      {},

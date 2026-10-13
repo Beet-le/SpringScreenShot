@@ -692,7 +692,8 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
         {QStringLiteral("save_as_file"), QJsonArray{QStringLiteral("Ctrl+S")}},
         {QStringLiteral("pin_to_screen"), QJsonArray{QStringLiteral("Ctrl+F")}},
         {QStringLiteral("cancel_screenshot"), QJsonArray{QStringLiteral("Esc")}},
-        {QStringLiteral("copy_to_clipboard"), QJsonArray{QStringLiteral("Ctrl+C")}},
+        {QStringLiteral("copy_to_clipboard"),
+         QJsonArray{QStringLiteral("Ctrl+C"), QStringLiteral("Return")}},
         {QStringLiteral("undo"), QJsonArray{QStringLiteral("Ctrl+Z")}},
         {QStringLiteral("redo"), QJsonArray{QStringLiteral("Ctrl+Y")}},
     };
@@ -1965,8 +1966,8 @@ void localShortcutDefaultsPreserveConfiguredBindings() {
 
     QTemporaryDir temporary;
     require(temporary.isValid(), "local shortcut default variants need isolated storage");
-    storage::ConfigurationStore store(temporary.filePath(QStringLiteral("variants.json")), true,
-                                      true, 60000);
+    const QString variantsPath = temporary.filePath(QStringLiteral("variants.json"));
+    storage::ConfigurationStore store(variantsPath, true, true, 60000);
     const QString moveKey = QStringLiteral("screenshot_shortcuts/move_tool");
     const QJsonArray customNext{shortcutObject(QStringLiteral("Alt+F6"))};
     const QMap<QString, QJsonValue> variants{
@@ -1988,6 +1989,22 @@ void localShortcutDefaultsPreserveConfiguredBindings() {
     require(store.applySnapshot({{nextKey, 42}, {quickSaveKey, nextDefault}}) &&
                 store.value(nextKey) == QJsonArray{} && store.value(quickSaveKey) == nextDefault,
             "repairing an invalid shortcut must not introduce a conflicting default");
+    const QString copyKey = QStringLiteral("screenshot_shortcuts/copy_to_clipboard");
+    const QJsonArray copyDefault{shortcutObject(QStringLiteral("Ctrl+C")),
+                                 shortcutObject(QStringLiteral("Return"))};
+    require(storage::ConfigurationSchema::defaultValue(copyKey) == copyDefault &&
+                store.applySnapshot({}) && store.value(copyKey) == copyDefault,
+            "missing screenshot copy shortcuts must default to Ctrl+C and Enter");
+    for (const auto& configured :
+         {QJsonArray{shortcutObject(QStringLiteral("Ctrl+C"))},
+          QJsonArray{shortcutObject(QStringLiteral("Alt+C"))}, QJsonArray{}}) {
+        require(store.applySnapshot({{copyKey, configured}}) &&
+                    store.value(copyKey) == configured && store.flushNow().success,
+                "the new Enter default must preserve saved and disabled copy shortcuts");
+        storage::ConfigurationStore reloaded(variantsPath, true, true, 60000);
+        require(reloaded.value(copyKey) == configured,
+                "saved screenshot copy shortcuts must survive reload without appending Enter");
+    }
 #ifdef Q_OS_MACOS
     const QJsonArray physicalTab{shortcutObject(QStringLiteral("Meta+K"), 48)};
     require(store.applySnapshot({{quickSaveKey, physicalTab}}) &&
@@ -2357,7 +2374,7 @@ void settingsAdaptersRoundTripAndRejectInvalidValues() {
             portable(screenshotDefaults.value(QStringLiteral("cancel_screenshot"))) ==
                 QStringList{QStringLiteral("Esc")} &&
             portable(screenshotDefaults.value(QStringLiteral("copy_to_clipboard"))) ==
-                QStringList{QStringLiteral("Ctrl+C")} &&
+                QStringList{QStringLiteral("Ctrl+C"), QStringLiteral("Return")} &&
             portable(screenshotDefaults.value(QStringLiteral("undo"))) ==
                 QStringList{QStringLiteral("Ctrl+Z")} &&
             portable(screenshotDefaults.value(QStringLiteral("redo"))) ==
