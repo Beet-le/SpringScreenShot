@@ -805,15 +805,22 @@ void ScreenshotOverlayWindow::setVisible(bool visible) {
     QWidget::setVisible(visible);
 }
 
-void ScreenshotOverlayWindow::releaseNativeSurface() {
+void ScreenshotOverlayWindow::hideForNativeSurfaceRelease() {
     retirePresentation();
-    clearScrollingResultPreview();
-    hide();
     setUpdatesEnabled(false);
     if (m_canvas != nullptr) {
         m_canvas->setInteractionEnabled(false);
         m_canvas->setUpdatesEnabled(false);
     }
+#ifdef Q_OS_MACOS
+    snow_shot::platform::retireScreenshotWindowPresentation(this);
+#endif
+    hide();
+}
+
+void ScreenshotOverlayWindow::releaseNativeSurface() {
+    hideForNativeSurfaceRelease();
+    clearScrollingResultPreview();
 
     // A child top-level QWidget is not necessarily WA_NativeWindow, so destroy()
     // does not recursively release it. Release the preview before its owner;

@@ -50,7 +50,7 @@ if(NOT SNOW_SHOT_OCR_STATIC_ONNXRUNTIME)
         RENAME libonnxruntime.dylib COMPONENT SnowShotMini)
 endif()
 if(NOT SNOW_SHOT_QT_STATIC)
-    install(FILES "${SNOW_QT_OFFSCREEN_PLUGIN}"
+    install(FILES "$<TARGET_FILE:Qt6::QOffscreenIntegrationPlugin>"
         DESTINATION "snow_shot_mini.app/Contents/PlugIns/platforms" COMPONENT SnowShotMini)
 endif()
 if(SNOW_SHOT_RELEASE_STATIC)

@@ -144,6 +144,9 @@ class ScreenshotOverlayWindow final : public QWidget {
     [[nodiscard]] bool showPreparedFrameForPresentation(quint64 generation,
                                                         bool deferFirstPaint = false);
     void setVisible(bool visible) override;
+    // Terminal hide: detach the compositor frame before hiding, even when native
+    // surface destruction must wait for an active export. Temporary hides use hide().
+    void hideForNativeSurfaceRelease();
     // Release the native window and backing store while retaining the QObject,
     // canvas, renderer, and signal wiring for the next capture.
     void releaseNativeSurface();
