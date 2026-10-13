@@ -2027,6 +2027,70 @@ void shortcutWrappingAndLanguageChange(QWidget& owner, const QTemporaryDir& temp
     require(settings.setSavePathShortcuts({}), "wrapping cleanup failed");
 }
 
+void duplicateFilenameWarning(QWidget& owner, const QTemporaryDir& temp) {
+    QFile existing(temp.filePath(QStringLiteral("duplicate.png")));
+    require(existing.open(QIODevice::WriteOnly) && existing.write("existing") == 8,
+            "duplicate filename fixture unavailable");
+    existing.close();
+    auto* modal = openDialog(owner, fixture());
+    auto* content = modal->contentWidget();
+    auto* directory = child<AdLineEdit>(content, "saveDirectoryInput");
+    auto* filename = child<AdLineEdit>(content, "saveFilenameInput");
+    auto* format = child<AdSelect>(content, "saveFormatSelect");
+    auto* item = content->findChild<AdForm*>()->itemForName(QStringLiteral("filename"));
+    auto* message = child<QLabel>(item, "ad-form-item-explain");
+    directory->setText(temp.path());
+    format->setCurrentValue(QStringLiteral("png"));
+    filename->setText(QStringLiteral("duplicate.jpg"));
+    flush();
+    require(item->warningMessages() ==
+                    QStringList{QStringLiteral("A file with this name already exists")} &&
+                item->validateStatus() == AdFormItem::ValidateStatus::Warning &&
+                message->isVisible() &&
+                message->palette().color(QPalette::WindowText) ==
+                    adqt::theme::ThemeManager::instance().resolveTheme(item).colorWarning,
+            "normalized duplicate filename must show an inline warning in the theme warning color");
+    require(item->errorMessages().isEmpty() && modal->acceptButton()->isEnabled() &&
+                !content->findChild<AdModal*>(QStringLiteral("saveOverwriteModal")),
+            "duplicate filename warning must not block Save or open a confirmation while typing");
+    snapshot(modal, QStringLiteral("duplicate-filename-warning"));
+    ExportTestTranslator translator;
+    require(QApplication::installTranslator(&translator), "test translator unavailable");
+    flush();
+    require(message->text() == QStringLiteral("Translated A file with this name already exists"),
+            "duplicate filename warning must retranslate while visible");
+    QApplication::removeTranslator(&translator);
+    flush();
+    filename->setText(QStringLiteral("unique"));
+    require(item->warningMessages().isEmpty() &&
+                (item->validateStatus() == AdFormItem::ValidateStatus::None ||
+                 item->validateStatus() == AdFormItem::ValidateStatus::Success) &&
+                message->isHidden(),
+            "renaming to a unique filename must clear the warning and warning style");
+    filename->setText(QStringLiteral(" duplicate "));
+    require(!item->warningMessages().isEmpty(),
+            "trimmed extensionless filename must detect the existing output file");
+    format->setCurrentValue(QStringLiteral("jpeg"));
+    require(item->warningMessages().isEmpty(), "format changes must refresh duplicate detection");
+    format->setCurrentValue(QStringLiteral("png"));
+    require(!item->warningMessages().isEmpty(), "returning to a duplicate format must warn again");
+    directory->setText(temp.filePath(QStringLiteral("other-directory")));
+    require(item->warningMessages().isEmpty(), "directory changes must clear stale warnings");
+    directory->setText(temp.path());
+    require(!item->warningMessages().isEmpty(), "returning to the original directory must warn");
+    filename->setText(QStringLiteral("invalid/name"));
+    require(item->warningMessages().isEmpty() && !item->errorMessages().isEmpty() &&
+                item->validateStatus() == AdFormItem::ValidateStatus::Error &&
+                !modal->acceptButton()->isEnabled(),
+            "invalid filenames must replace the warning with a blocking validation error");
+    filename->setText(QStringLiteral("duplicate"));
+    directory->setText(QStringLiteral("relative-directory"));
+    require(item->warningMessages().isEmpty() && !modal->acceptButton()->isEnabled(),
+            "invalid directories must suppress duplicate warnings and block Save");
+    modal->rejectButton()->click();
+    flush();
+}
+
 void overwriteRequiresConfirmation(QWidget& owner, const QTemporaryDir& temp) {
     const QString destination = temp.filePath(QStringLiteral("existing.png"));
     QFile existing(destination);
@@ -2859,6 +2923,14 @@ int main(int argc, char* argv[]) {
         QWidget owner;
         owner.resize(1200, 800);
         owner.show();
+        if (app.arguments().contains(QStringLiteral("--filename-warning"))) {
+            duplicateFilenameWarning(owner, temp);
+            overwriteRequiresConfirmation(owner, temp);
+            ScreenshotExportCoordinator::shared().shutdown();
+            storage::ApplicationStorage::instance().shutdown();
+            std::cout << "Duplicate filename warning tests passed\n";
+            return 0;
+        }
         if (app.arguments().contains(QStringLiteral("--pdf"))) {
             canvasPdfComparison();
             pdfDialogAndSettings(owner, temp);
@@ -2959,6 +3031,7 @@ int main(int argc, char* argv[]) {
         shortcutsAndCancellation(owner, temp);
         previewAndSave(owner, temp);
         sizeUnits(owner, temp);
+        duplicateFilenameWarning(owner, temp);
         overwriteRequiresConfirmation(owner, temp);
         shortcutWrappingAndLanguageChange(owner, temp);
         rowBackedDialogAndStalePreview(owner, temp);

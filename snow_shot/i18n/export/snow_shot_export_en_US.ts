@@ -259,6 +259,10 @@
             <translation>100%</translation>
         </message>
         <message>
+            <source>A file with this name already exists</source>
+            <translation>A file with this name already exists</translation>
+        </message>
+        <message>
             <source>A save path with this name already exists</source>
             <translation>A save path with this name already exists</translation>
         </message>
