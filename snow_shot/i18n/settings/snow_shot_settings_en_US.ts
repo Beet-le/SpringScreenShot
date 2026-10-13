@@ -2929,6 +2929,10 @@
             <translation>Open</translation>
         </message>
         <message>
+            <source>Open Image Stitching with selected image files, or an empty window if no images are selected</source>
+            <translation>Open Image Stitching with selected image files, or an empty window if no images are selected</translation>
+        </message>
+        <message>
             <source>Open Login Items Settings</source>
             <translation>Open Login Items Settings</translation>
         </message>
@@ -4079,6 +4083,10 @@
         <message>
             <source>Startup &amp; updates</source>
             <translation>Startup &amp; updates</translation>
+        </message>
+        <message>
+            <source>Stitch Selected Images</source>
+            <translation>Stitch Selected Images</translation>
         </message>
         <message>
             <source>Storage and privacy</source>

@@ -97,8 +97,8 @@ void everySnowShotEntryRenders() {
     const auto registered = icons::registerWith(renderer);
     require(registered.ok(), "Snow Shot pack registration should succeed");
     const adqt::icons::IconPack* staticPack = icons::pack().staticPack();
-    require(staticPack != nullptr && staticPack->entryCount == 181,
-            "Snow Shot pack should contain all 181 project-owned assets");
+    require(staticPack != nullptr && staticPack->entryCount == 182,
+            "Snow Shot pack should contain all 182 project-owned assets");
 
     adqt::icons::IconRenderRequest request;
     request.logicalSize = QSize(32, 32);
@@ -451,6 +451,47 @@ void indentedTriangleCornersAreSymmetric() {
     }
 }
 
+void imageStitchingIconFollowsAntDesign() {
+    namespace icons = snow_shot::presentation::icons::custom;
+    const auto icon = icons::outlined::ImageStitching();
+    const auto* descriptor = icon.descriptor();
+    require(descriptor && descriptor->colorModel == adqt::icons::IconColorModel::Monochrome,
+            "stitching icon belongs to the themed monochrome icon pack");
+    const QByteArray svg(descriptor->svg.data(), static_cast<qsizetype>(descriptor->svg.size()));
+    require(svg.contains("viewBox=\"0 0 1024 1024\"") && svg.contains("stroke-width=\"72\"") &&
+                svg.contains("rx=\"72\"") && !svg.contains("<text") && !svg.contains("<image"),
+            "stitching icon uses the Ant Design grid, weight and rounded vector geometry");
+    QImage preview(384, 128, QImage::Format_ARGB32_Premultiplied);
+    preview.fill(Qt::transparent);
+    QPainter painter(&preview);
+    for (int row = 0; row < 2; ++row) {
+        const QColor color = row ? QColor("#f0f0f0") : QColor("#262626");
+        painter.fillRect(QRect(0, row * 64, 384, 64), row ? QColor("#141414") : Qt::white);
+        int column = 0;
+        for (int size : {16, 20, 32}) {
+            for (qreal dpr : {1.0, 1.25, 2.0}) {
+                const QImage pixels =
+                    render(icons::outlined::ImageStitching(adqt::icons::IconColors::primary(color)),
+                           QSize(size, size), dpr)
+                        .toImage();
+                const QRect bounds = alphaBounds(pixels);
+                require(!bounds.isEmpty() && bounds.left() > 0 &&
+                            bounds.right() < pixels.width() - 1 &&
+                            containsOpaqueColor(pixels, color),
+                        "stitching icon stays legible, padded and themed at menu sizes and "
+                        "fractional DPI");
+            }
+            painter.drawPixmap(
+                column++ * 128 + 24, row * 64 + (64 - size) / 2,
+                render(icons::outlined::ImageStitching(adqt::icons::IconColors::primary(color)),
+                       QSize(size, size)));
+        }
+    }
+    painter.end();
+    if (const auto path = qEnvironmentVariable("SNOW_STITCHING_ICON_PREVIEW"); !path.isEmpty())
+        require(preview.save(path), "save stitching icon light/dark inspection sheet");
+}
+
 void numericFormatIconsRenderAtToolbarSizes() {
     namespace icons = snow_shot::presentation::icons::custom;
     QImage preview(600, 240, QImage::Format_ARGB32_Premultiplied);
@@ -497,6 +538,11 @@ void numericFormatIconsRenderAtToolbarSizes() {
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     try {
+        imageStitchingIconFollowsAntDesign();
+        if (application.arguments().contains(QStringLiteral("--image-stitching-only"))) {
+            everySnowShotEntryRenders();
+            return 0;
+        }
         magnifierDecorationIconsFollowThemeAndToolbarMetrics();
         numericFormatIconsRenderAtToolbarSizes();
         if (application.arguments().contains(QStringLiteral("--recapture-only"))) {

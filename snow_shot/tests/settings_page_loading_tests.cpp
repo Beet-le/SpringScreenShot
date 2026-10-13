@@ -21,6 +21,8 @@
 #include "widgets/checkbox.h"
 #include "snow_shot/presentation/components/sectionheaderwidget.h"
 #include "snow_shot/storage/configurationschema.h"
+#include "snow_shot/storage/settingsadapters.h"
+#include "snow_shot/presentation/components/shortcutkeyrow.h"
 
 #include <QApplication>
 #include <QDir>
@@ -997,6 +999,75 @@ void unchangedPresentation(const settings::SettingsRegistry& registry,
     require(select->model() == model, "identical options must retain the selector model");
 }
 
+class SettingsTestShortcutBackend final : public snow_shot::presentation::GlobalShortcutBackend {
+  public:
+    void setActivationHandler(ActivationHandler) override {}
+    snow_shot::presentation::GlobalShortcutValidationResult
+    validateShortcut(const snow_shot::shortcuts::ShortcutBinding& binding) const override {
+        return {binding.portableText, true,
+                snow_shot::presentation::GlobalShortcutFailureReason::None, binding};
+    }
+    snow_shot::presentation::GlobalShortcutBackendResult
+    registerShortcut(int, const snow_shot::shortcuts::ShortcutBinding&) override {
+        return {true, snow_shot::presentation::GlobalShortcutFailureReason::None, 0};
+    }
+    void unregisterShortcut(int) override {}
+};
+
+void stitchSelectedImagesSettings(const settings::SettingsRegistry& registry) {
+    using namespace snow_shot::presentation;
+    constexpr auto action = GlobalShortcutAction::StitchSelectedImages;
+    GlobalShortcutManager shortcuts(std::make_unique<SettingsTestShortcutBackend>(), nullptr,
+                                    [] { return false; });
+    settings::BuiltInSettingsBackend backend(shortcuts);
+    settings::SettingsRuntimeSession session(registry, backend);
+    SettingsPageWidget page(registry, QStringLiteral("global-hotkeys"), session);
+    page.resize(880, 760);
+    page.show();
+    page.reveal({QStringLiteral("global-hotkeys"), QStringLiteral("other"),
+                 QStringLiteral("quick.stitch-selected-images")});
+    drainEvents();
+    auto* stitch = page.findChild<ShortcutKeyRow*>(
+        QStringLiteral("settings-item-quick-stitch-selected-images"));
+    auto* canvas =
+        page.findChild<ShortcutKeyRow*>(QStringLiteral("settings-item-quick-global-canvas"));
+    require(stitch && canvas &&
+                stitch->mapTo(&page, QPoint()).y() > canvas->mapTo(&page, QPoint()).y() &&
+                session.shortcutState(action).shortcuts.isEmpty(),
+            "the stitching action materializes below the canvas with no assigned key");
+    int commands = 0;
+    QObject::connect(&page, &SettingsPageWidget::commandRequested, &page,
+                     [&](const settings::SettingsCommand& command) {
+                         require(command.kind ==
+                                         settings::SettingsCommandKind::ExecuteQuickAction &&
+                                     command.shortcutAction == action,
+                                 "the stitching row dispatches its own action");
+                         ++commands;
+                     });
+    require(QMetaObject::invokeMethod(stitch, "clicked", Qt::DirectConnection) && commands == 1,
+            "the stitching row runs without an assigned key");
+    const snow_shot::shortcuts::ShortcutBindingList bindings{QStringLiteral("Ctrl+Alt+F8"),
+                                                             QStringLiteral("Ctrl+Alt+F9")};
+    const snow_shot::storage::ShortcutSettings stored;
+    const auto screenshot = stored.screenshot();
+    require(session.applyShortcuts(action, bindings) && stored.stitchSelectedImages() == bindings &&
+                session.reset(settings::SettingsSectionReset::OtherShortcuts) &&
+                stored.stitchSelectedImages().isEmpty() && stored.screenshot() == screenshot,
+            "Other reset clears stitching keys and preserves screenshot keys");
+    auto& languages = LanguageManager::instance();
+    for (const auto* locale : {"zh_CN", "zh_TW"}) {
+        require(languages.setLanguage(QString::fromLatin1(locale)),
+                "switch stitching row language");
+        page.retranslateUi();
+        drainEvents();
+        require(stitch->accessibleName() ==
+                        QCoreApplication::translate("SettingsCatalog", "Stitch Selected Images") &&
+                    stitch->accessibleName() != QStringLiteral("Stitch Selected Images"),
+                "the stitching action retranslates in both Chinese catalogs");
+    }
+    require(languages.setLanguage(QStringLiteral("en_US")), "restore settings test language");
+}
+
 void skinControlsCommitAndRetranslate(const settings::SettingsRegistry& registry,
                                       settings::SettingsRuntimeSession& session) {
     SettingsPageWidget page(registry, QStringLiteral("general-appearance"), session);
@@ -1468,6 +1539,11 @@ int main(int argc, char** argv) {
     settings::BuiltInSettingsBackend backend(shortcuts);
     const auto registry = settings::buildBuiltInSettingsRegistry();
     settings::SettingsRuntimeSession session(registry, backend);
+    if (application.arguments().contains(QStringLiteral("--stitch-selected-images-only"))) {
+        stitchSelectedImagesSettings(registry);
+        storage.shutdown();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--tray-selection-only"))) {
         everyTrayOptionRemainsSelected(registry, session);
         storage.shutdown();
@@ -1509,6 +1585,7 @@ int main(int argc, char** argv) {
     scrollingLoadsSections(registry, session);
     unchangedPresentation(registry, session);
     skinControlsCommitAndRetranslate(registry, session);
+    stitchSelectedImagesSettings(registry);
     storage.shutdown();
     return 0;
 }

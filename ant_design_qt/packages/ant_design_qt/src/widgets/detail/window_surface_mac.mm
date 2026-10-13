@@ -8,11 +8,33 @@
 
 namespace adqt::widgets::detail {
 
-void applyMacWindowSurfaceChrome(QWidget* surface) {
+void applyMacWindowSurfaceChrome(QWidget* surface, bool minimizeEnabled, bool maximizeEnabled) {
     auto* view = reinterpret_cast<NSView*>(surface->winId());
     // Keep the native title for window menus and accessibility while the window
     // paints its own header across the expanded content area.
     view.window.titleVisibility = NSWindowTitleHidden;
+    // The Ant header paints its own controls. Retain AppKit's window-management
+    // capabilities for the Dock and Window menu without duplicate traffic lights.
+    NSWindowStyleMask style = view.window.styleMask;
+    if (minimizeEnabled || maximizeEnabled) {
+        style |= NSWindowStyleMaskClosable;
+    }
+    if (minimizeEnabled) {
+        style |= NSWindowStyleMaskMiniaturizable;
+    } else {
+        style &= ~NSWindowStyleMaskMiniaturizable;
+    }
+    if (maximizeEnabled) {
+        style |= NSWindowStyleMaskResizable;
+    }
+    if (view.window.styleMask != style) {
+        view.window.styleMask = style;
+    }
+    [view.window standardWindowButton:NSWindowCloseButton].hidden = YES;
+    [view.window standardWindowButton:NSWindowMiniaturizeButton].hidden = YES;
+    [view.window standardWindowButton:NSWindowZoomButton].hidden = YES;
+    [view.window standardWindowButton:NSWindowMiniaturizeButton].enabled = minimizeEnabled;
+    [view.window standardWindowButton:NSWindowZoomButton].enabled = maximizeEnabled;
 }
 
 void releaseMacWindowSurfaceCursor(QWindow* surface) {

@@ -26,6 +26,7 @@
 #include "snow_shot/presentation/screenshottoolbarlayoutmodel.h"
 #include "close_release_native_test_support.h"
 #include "snow_shot/presentation/screenshotpinnedwindow.h"
+#include "snow_shot/presentation/collagedocument.h"
 #include "snow_shot/presentation/screenshotanimationplayback.h"
 #include "../src/image/snowimageqtcodec.h"
 #include "pinned_animation_fixtures.h"
@@ -7973,6 +7974,8 @@ void pinnedWindowButtonsFollowSettings() {
     auto* close =
         window.findChild<adqt::widgets::AdButton*>(QStringLiteral("screenshotPinnedCloseButton"));
     require(panel && edit && close, "the settings fixture needs both window buttons");
+    require(edit->iconSize() == QSize(18, 18) && close->iconSize() == QSize(18, 18),
+            "both pinned controls must use the enlarged shared icon size");
     QEnterEvent enter(QPointF(10, 10), QPointF(10, 10), QPointF(50, 50));
     QCoreApplication::sendEvent(&window, &enter);
     require(!panel->isVisible() && !edit->isVisible() && !close->isVisible(),
@@ -20688,6 +20691,181 @@ void pinnedMultiSelectionDeferredPersistence() {
     require(fixture.writes == 0, "a resumed save leaves subsequent unchanged gestures clean");
 }
 
+QImage pinnedStitchingPixels(const ScreenshotPinnedImageSnapshot& snapshot, QObject& receiver) {
+    auto artifact = std::make_shared<ScreenshotExportArtifact>(snapshot.source);
+    QImage image;
+    require(artifact->requestImage(&receiver,
+                                   [&](ScreenshotExportImageResult result) {
+                                       require(result.succeeded(),
+                                               "render owned pinned stitching pixels");
+                                       image = std::move(result.image);
+                                   }),
+            "start owned stitching image export");
+    QElapsedTimer deadline;
+    deadline.start();
+    while (image.isNull() && deadline.elapsed() < 10000)
+        waitForUi(1);
+    require(!image.isNull() && image.size() == snapshot.outputSize,
+            "stitching snapshot predicts its export size");
+    return image;
+}
+
+void pinnedImageStitchingSnapshots() {
+    using Access = ScreenshotPinnedWindowTestAccess;
+    PinnedSelectionFixture fixture;
+    auto& first = fixture.add({40, 60});
+    auto& second = fixture.add({230, 160});
+    require(
+        !Access::applyAnnotationTransaction(
+             second,
+             R"({"version":1,"operations":[{"type":"rectangle","bounds":[20,20,40,30],"style":{"stroke":[255,0,255,255],"fill":[255,0,255,255]}}]})")
+             .isEmpty(),
+        "stitching fixture contains a current annotation");
+    Access::rotateFormattedSelectionOffscreen(second);
+    waitForUi(20);
+    Access::setGeneralOpacity(first, 50);
+    Access::setLock(first, true);
+    Access::setLock(second, true);
+    fixture.selection.toggleSelection(&second);
+    fixture.selection.toggleSelection(&first);
+    int requests = 0;
+    QVector<ScreenshotPinnedImageSnapshot> snapshots;
+    QObject::connect(&fixture.selection,
+                     &PinnedSelectionFixture::Controller::imageStitchingRequested,
+                     &fixture.selection, [&](const auto& images) {
+                         ++requests;
+                         snapshots = images;
+                     });
+    auto& menu = fixture.menu(first);
+    auto& action =
+        pinnedSelectionAction(menu, QStringLiteral("screenshotPinnedSelectionImageStitching"));
+    require(action.isEnabled() && !action.icon().isNull(),
+            "stitching is available for locked selected windows");
+    action.trigger();
+    require(
+        requests == 1 && snapshots.size() == 2 && snapshots[0].label == second.persistenceId() &&
+            snapshots[1].label == first.persistenceId() &&
+            snapshots[0].outputSize == QSize(80, 120) &&
+            snapshots[1].outputSize == QSize(120, 80) && fixture.selection.selectedCount() == 2 &&
+            first.sourcePinAvailable() && second.sourcePinAvailable(),
+        "stitching captures selection order, rotation and source resolution while keeping pins "
+        "selected");
+    fixture.selection.deselectWindow(&first);
+    action.trigger();
+    require(requests == 1, "a stale stitching menu cannot launch another import");
+    // Change the source and destroy the annotated window before either export is rendered.
+    require(
+        !Access::applyAnnotationTransaction(
+             first,
+             R"({"version":1,"operations":[{"type":"rectangle","bounds":[0,0,120,80],"style":{"stroke":[0,255,0,255],"fill":[0,255,0,255]}}]})")
+             .isEmpty(),
+        "edit a pin after its snapshot");
+    fixture.windows.pop_back();
+    const QImage edited = pinnedStitchingPixels(snapshots[0], fixture.selection);
+    bool magenta = false;
+    for (int y = 0; y < edited.height(); ++y)
+        for (int x = 0; x < edited.width(); ++x)
+            magenta |= edited.pixelColor(x, y) == QColor(Qt::magenta);
+    require(magenta,
+            "owned stitching snapshot retains rotated annotations after its pin is destroyed");
+    const QImage original = pinnedStitchingPixels(snapshots[1], fixture.selection);
+    requireColorNear(
+        original.pixelColor(40, 40), QColor(42, 84, 126, 128), 1,
+        "snapshots retain content opacity while excluding later edits and window decorations");
+}
+
+void pinnedImageStitchingTextAndDeferredContent() {
+    using Access = ScreenshotPinnedWindowTestAccess;
+    PinnedSelectionFixture fixture;
+    QScreen* screen = QGuiApplication::primaryScreen();
+    ScreenshotPinnedWindow::Config config;
+    config.screen = screen;
+    config.nativeGeometry = physicalPinGeometry(*screen, {40, 60}, {120, 80});
+    config.initialWindowSize = {120, 80};
+    config.canvasSourceRect = QRectF(0, 0, 120, 80);
+    config.automaticTextRecognition = false;
+    config.selectionController = &fixture.selection;
+    QImage image(120, 80, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::blue);
+    config.imageSource = ScreenshotImageSource::fromImage(image, config.canvasSourceRect);
+    ScreenshotImageLoadCallback complete;
+    config.imageLoader = [&](QObject*, ScreenshotImageLoadCallback callback) {
+        complete = std::move(callback);
+    };
+    ScreenshotPinnedWindow deferred;
+    deferred.setAttribute(Qt::WA_DeleteOnClose, false);
+    bool ready = false;
+    require(deferred.present(config, [&](bool success, QImage) { ready = success; }),
+            "present a deferred stitching source");
+    fixture.selection.toggleSelection(&deferred);
+    require(complete && !fixture.selection.isSelected(&deferred) &&
+                !deferred.stitchingSnapshot().source.isValid(),
+            "unloaded pins cannot publish placeholder pixels to stitching");
+    complete(image);
+    QElapsedTimer deadline;
+    deadline.start();
+    while (!ready && deadline.elapsed() < 10000)
+        waitForUi(1);
+    require(ready, "deferred source publishes its loaded image");
+    fixture.selection.toggleSelection(&deferred);
+    require(fixture.selection.isSelected(&deferred) &&
+                pinnedStitchingPixels(deferred.stitchingSnapshot(), fixture.selection)
+                        .pixelColor(40, 40) == QColor(Qt::blue),
+            "loaded deferred pins export their final content");
+    deferred.close();
+
+    QMimeData mime;
+    mime.setHtml(QStringLiteral("<p><b>Current</b> pinned text</p>"));
+    auto clipboard = ScreenshotClipboardContentReader::snapshotMimeData(&mime, 1.5, Qt::white);
+    require(clipboard.has_value(), "snapshot formatted text for stitching");
+    auto decoded = decodeScreenshotDropContent(std::move(*clipboard));
+    require(decoded && decoded->isFormattedText(), "decode the formatted stitching source");
+    config.imageLoader = {};
+    config.initialWindowSize = decoded->image.size();
+    config.nativeGeometry = physicalPinGeometry(*screen, {40, 60}, decoded->image.size());
+    config.canvasSourceRect = QRectF(QPointF(), QSizeF(decoded->image.size()));
+    config.imageSource = ScreenshotImageSource::fromImage(decoded->image, config.canvasSourceRect);
+    config.formattedTextDocument = decoded->formattedDocument;
+    config.formattedPlainText = decoded->plainText;
+    config.formattedTextDevicePixelRatio = decoded->formattedTextDevicePixelRatio;
+    ScreenshotPinnedWindow text;
+    text.setAttribute(Qt::WA_DeleteOnClose, false);
+    ready = false;
+    require(text.present(config, [&](bool success, QImage) { ready = success; }),
+            "present a formatted stitching pin");
+    deadline.restart();
+    while ((!ready || !Access::recognitionReady(text)) && deadline.elapsed() < 10000)
+        waitForUi(1);
+    require(ready && Access::recognition(text), "formatted pin initializes its text session");
+    Access::recognition(text)->activate(ScreenshotRecognitionSessionController::Mode::Text);
+    waitForUi(20);
+    auto occupied = snow_shot::presentation::reserveCollageImport(qint64{512} * 1024 * 1024);
+    require(occupied != nullptr, "occupy the shared rasterization budget before OCR capture");
+    const auto rejected = text.stitchingSnapshot();
+    require(!rejected.source.isValid() && !rejected.error.isEmpty(),
+            "OCR stitching must reject memory admission before allocating its viewport raster");
+    occupied.reset();
+    const qint64 captureBaseline = snow_shot::presentation::collageResourceUsage().reservedBytes;
+    const auto frozen = text.stitchingSnapshot();
+    require(frozen.source.isValid() && frozen.error.isEmpty() &&
+                snow_shot::presentation::collageResourceUsage().reservedBytes ==
+                    captureBaseline + decoded->image.sizeInBytes(),
+            "an OCR stitching source accounts for its raster before joining the import queue");
+    const QImage before = pinnedStitchingPixels(frozen, fixture.selection);
+    decoded->formattedDocument->setPlainText(QStringLiteral("Edited text"));
+    waitForUi(20);
+    const QImage after = pinnedStitchingPixels(text.stitchingSnapshot(), fixture.selection);
+    require(before != after && pinnedStitchingPixels(frozen, fixture.selection) == before,
+            "stitching captures rendered text edits without retaining a mutable document");
+    Access::scaleBorderFixture(text, 50);
+    waitForUi(20);
+    const auto reduced = text.stitchingSnapshot();
+    require(reduced.outputSize == decoded->image.size() &&
+                pinnedStitchingPixels(reduced, fixture.selection).size() == decoded->image.size(),
+            "text stitching retains source resolution independently of the pinned window zoom");
+    text.close();
+}
+
 void pinnedMultiSelectionMenuAndLocks() {
     using Access = ScreenshotPinnedWindowTestAccess;
     using Alignment = SnowCanvasSelectionAlignment;
@@ -20704,10 +20882,11 @@ void pinnedMultiSelectionMenuAndLocks() {
         require(first.grab().save(screenshotPath),
                 "save selected pin screenshot for visual inspection");
     require(
-        actions.size() == 9 &&
-            actions.at(0)->objectName() == QStringLiteral("screenshotPinnedSelectionCount") &&
-            !actions.at(0)->isEnabled() && actions.at(0)->text().contains(QStringLiteral("2")) &&
-            actions.at(1)->isSeparator() &&
+        actions.size() == 11 &&
+            actions.at(0)->objectName() ==
+                QStringLiteral("screenshotPinnedSelectionImageStitching") &&
+            actions.at(0)->text() == QStringLiteral("Image Stitching") &&
+            !actions.at(0)->icon().isNull() && actions.at(1)->isSeparator() &&
             actions.at(2)->objectName() == QStringLiteral("screenshotPinnedSelectionCloseOthers") &&
             actions.at(3)->menu() && actions.at(3)->text() == QStringLiteral("Align Position") &&
             actions.at(4)->menu() && actions.at(4)->text() == QStringLiteral("Group") &&
@@ -20715,8 +20894,12 @@ void pinnedMultiSelectionMenuAndLocks() {
             actions.at(6)->isSeparator() &&
             actions.at(7)->objectName() == QStringLiteral("screenshotPinnedSelectionClose") &&
             actions.at(8)->objectName() == QStringLiteral("screenshotPinnedSelectionDestroy") &&
-            !menu.actionDanger(actions.at(7)) && menu.actionDanger(actions.at(8)),
-        "multi-selection exposes exactly the requested nine rows and separators");
+            !menu.actionDanger(actions.at(7)) && menu.actionDanger(actions.at(8)) &&
+            actions.at(9)->isSeparator() &&
+            actions.at(10)->objectName() == QStringLiteral("screenshotPinnedSelectionCount") &&
+            !actions.at(10)->isEnabled() && actions.at(10)->text().contains(QStringLiteral("2")),
+        "multi-selection exposes stitching first followed by a separator and eleven rows with the "
+        "disabled selection count at the bottom");
     auto* alignment = actions.at(3)->menu();
     auto* groupMenu = qobject_cast<adqt::widgets::AdContextMenu*>(actions.at(4)->menu());
     require(groupMenu != nullptr, "multi-selection owns a group context submenu");
@@ -21193,6 +21376,8 @@ void pinnedMultiSelectionLiveLanguageAndTheme() {
                 QStringLiteral("Translated selected 2") &&
             pinnedSelectionAction(menu, QStringLiteral("screenshotPinnedSelectionLock")).text() ==
                 QStringLiteral("Translated Lock") &&
+            pinnedSelectionAction(menu, QStringLiteral("screenshotPinnedSelectionImageStitching"))
+                    .text() == QStringLiteral("Translated Image Stitching") &&
             modal->windowTitle() == QStringLiteral("Translated Destroy selected windows") &&
             modal->text() == QStringLiteral("Translated confirmation 2") &&
             modal->acceptText() == QStringLiteral("Translated Destroy") &&
@@ -23527,6 +23712,8 @@ void pinnedAnimatedImages(bool transformsOnly = false) {
         QCoreApplication::sendEvent(&window, &languageChange);
         const QImage displayed = Access::originalImage(window);
         const auto exportArtifact = window.automationArtifact(false, false);
+        const auto stitchingArtifact =
+            std::make_shared<ScreenshotExportArtifact>(window.stitchingSnapshot().source);
         require(exportArtifact != nullptr, "freeze a frame for image export");
         Access::animationCommand(window, QStringLiteral("next_frame"));
         wait(
@@ -23548,6 +23735,17 @@ void pinnedAnimatedImages(bool transformsOnly = false) {
         wait([&] { return !exported.isNull(); }, "export finishes during continued playback");
         require(exported == ScreenshotResultCompositor::normalizeImage(displayed),
                 "raster export freezes last-painted frame and excludes dormant annotations");
+        QImage stitched;
+        require(stitchingArtifact->requestImage(
+                    &window,
+                    [&](ScreenshotExportImageResult result) {
+                        require(result.succeeded(), "render the frozen animated stitching input");
+                        stitched = std::move(result.image);
+                    }),
+                "start frozen stitching frame rendering");
+        wait([&] { return !stitched.isNull(); }, "stitching finishes during continued playback");
+        require(stitched == exported,
+                "image stitching freezes the painted animation frame before playback advances");
         QByteArray copiedPng;
         require(exportArtifact->requestClipboard(&window,
                                                  [&](ScreenshotExportClipboardResult result) {
@@ -23875,7 +24073,14 @@ int main(int argc, char* argv[]) {
             pinnedMultiSelectionDeferredPersistence();
             return 0;
         }
+        if (app.arguments().contains(QStringLiteral("--stitching-snapshot-only"))) {
+            pinnedImageStitchingSnapshots();
+            pinnedImageStitchingTextAndDeferredContent();
+            return 0;
+        }
         if (app.arguments().contains(QStringLiteral("--multi-selection-only"))) {
+            pinnedImageStitchingSnapshots();
+            pinnedImageStitchingTextAndDeferredContent();
             pinnedMultiSelectionRoutingAndIndicator();
             pinnedMultiSelectionPointerThresholds();
             pinnedMultiSelectionCaptureLoss();

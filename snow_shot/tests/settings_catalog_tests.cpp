@@ -524,9 +524,9 @@ void builtInCatalogIsCompleteAndValid() {
                 itemIds.contains(QStringLiteral("screenshot-shortcut.upload_to_cloud")) &&
                 itemIds.contains(QStringLiteral("pin-to-screen-shortcut.upload_to_cloud")),
             "cloud upload must expose its configuration and shortcuts in both local scopes");
-    require(itemIds.size() == 275,
+    require(itemIds.size() == 276,
             qPrintable(QStringLiteral(
-                           "catalog must contain 275 shared settings on every platform; found %1")
+                           "catalog must contain 276 shared settings on every platform; found %1")
                            .arg(itemIds.size())));
     require(itemIds.contains(QStringLiteral("pin-to-screen.confirm-before-closing-window")) &&
                 itemIds.contains(QStringLiteral("pin-to-screen.confirm-before-destroying-window")),
@@ -2158,6 +2158,9 @@ void globalHotkeyShortcutsHaveStableContracts() {
          "global_shortcuts/switch_window_group", settings::SettingsCommandKind::ExecuteQuickAction},
         {Action::GlobalCanvas, "other", "quick.global-canvas", "global_shortcuts/global_canvas",
          settings::SettingsCommandKind::ExecuteQuickAction},
+        {Action::StitchSelectedImages, "other", "quick.stitch-selected-images",
+         "global_shortcuts/stitch_selected_images",
+         settings::SettingsCommandKind::ExecuteQuickAction},
         {Action::TranslateSelectedText, "other", "quick.translate-selected-text",
          "global_shortcuts/translate_selected_text",
          settings::SettingsCommandKind::ExecuteQuickAction},
@@ -2213,8 +2216,17 @@ void globalHotkeyShortcutsHaveStableContracts() {
         }
     }
 
-    require(actions.size() == expectations.size() && expectations.size() == 24,
-            "the global-hotkeys catalog must expose all twenty-four shortcut actions exactly once");
+    require(actions.size() == expectations.size() && expectations.size() == 25,
+            "the global-hotkeys catalog must expose all twenty-five shortcut actions exactly once");
+    const auto* stitch = catalog.itemForShortcut(Action::StitchSelectedImages);
+    const auto* stitchSchema = storage::ConfigurationSchema::entry(
+        QStringLiteral("global_shortcuts/stitch_selected_images"));
+    require(
+        stitch && stitch->title.translated() == QStringLiteral("Stitch Selected Images") &&
+            std::get<settings::SettingsShortcutActionDefinition>(stitch->payload).iconFactory() ==
+                snow_shot::presentation::icons::custom::outlined::ImageStitching() &&
+            stitchSchema && stitchSchema->defaultValue.toArray().isEmpty(),
+        "stitch selected images uses its existing icon and starts unassigned");
     const auto* pinnedManagementShortcut =
         catalog.itemForShortcut(Action::OpenPinToScreenManagement);
     const auto* pinnedManagementSchema = storage::ConfigurationSchema::entry(
@@ -2290,9 +2302,9 @@ void globalHotkeyShortcutsHaveStableContracts() {
                 trayGroups.at(2).id == QStringLiteral("screen-recording") &&
                 trayGroups.at(2).options.size() == 3 &&
                 trayGroups.at(3).id == QStringLiteral("other") &&
-                trayGroups.at(3).options.size() == 5 &&
+                trayGroups.at(3).options.size() == 6 &&
                 trayGroups.at(4).id == QStringLiteral("system") &&
-                trayGroups.at(4).options.size() == 4 && trayOptionIds.size() == 27 &&
+                trayGroups.at(4).options.size() == 4 && trayOptionIds.size() == 28 &&
                 trayOptionIds.at(6) == QStringLiteral("quick.screenshot-save") &&
                 trayOptionIds.at(7) == QStringLiteral("quick.screenshot-quick-save") &&
                 trayOptionIds.at(10) == QStringLiteral("quick.pin-clipboard-content") &&
@@ -2305,21 +2317,22 @@ void globalHotkeyShortcutsHaveStableContracts() {
                 trayOptionIds.at(17) == QStringLiteral("quick.open-screen-recording-folder") &&
                 trayOptionIds.at(18) == QStringLiteral("quick.open-capture-history") &&
                 trayOptionIds.at(19) == QStringLiteral("quick.global-canvas") &&
-                trayOptionIds.at(20) == QStringLiteral("quick.translate-selected-text") &&
-                trayOptionIds.at(21) == QStringLiteral("quick.toggle-global-hotkeys") &&
-                trayOptionIds.at(22) ==
+                trayOptionIds.at(20) == QStringLiteral("quick.stitch-selected-images") &&
+                trayOptionIds.at(21) == QStringLiteral("quick.translate-selected-text") &&
+                trayOptionIds.at(22) == QStringLiteral("quick.toggle-global-hotkeys") &&
+                trayOptionIds.at(23) ==
                     QStringLiteral("quick.toggle-disable-on-focused-fullscreen-window") &&
-                trayOptionIds.at(23) == QStringLiteral("tray.window-grouping") &&
+                trayOptionIds.at(24) == QStringLiteral("tray.window-grouping") &&
                 trayGroups.at(4).options.at(0).kind ==
                     settings::SettingsTrayMenuOptionKind::WindowGrouping &&
-                trayOptionIds.at(24) == QStringLiteral("tray.show-main-window") &&
-                trayOptionIds.at(25) == QStringLiteral("tray.restart-app") &&
+                trayOptionIds.at(25) == QStringLiteral("tray.show-main-window") &&
+                trayOptionIds.at(26) == QStringLiteral("tray.restart-app") &&
                 trayGroups.at(4).options.at(2).kind ==
                     settings::SettingsTrayMenuOptionKind::RestartApp &&
                 trayGroups.at(4).options.at(2).iconFactory &&
                 trayGroups.at(4).options.at(2).iconFactory() ==
                     snow_shot::presentation::icons::custom::outlined::Restart() &&
-                trayOptionIds.at(26) == QStringLiteral("tray.exit") && trayMenuSchema != nullptr &&
+                trayOptionIds.at(27) == QStringLiteral("tray.exit") && trayMenuSchema != nullptr &&
                 trayMenuSchema->allowedStringValues == trayOptionIds,
             "tray menu options must derive all global-hotkey groups and append system commands");
 
@@ -2332,7 +2345,8 @@ void globalHotkeyShortcutsHaveStableContracts() {
 
     for (const auto& id :
          {QStringLiteral("quick.open-pin-to-screen-management"),
-          QStringLiteral("quick.hide-show-all-windows"), QStringLiteral("quick.global-canvas")}) {
+          QStringLiteral("quick.hide-show-all-windows"), QStringLiteral("quick.global-canvas"),
+          QStringLiteral("quick.stitch-selected-images")}) {
         require(!trayMenuSchema->defaultValue.toArray().contains(id),
                 "optional tray actions must remain hidden by default");
         const auto normalized = storage::ConfigurationSchema::normalize(
@@ -2476,14 +2490,15 @@ void globalHotkeyShortcutsHaveStableContracts() {
                       QStringLiteral("quick.pin-selected-files")});
     const auto* otherShortcuts =
         catalog.section(QStringLiteral("global-hotkeys"), QStringLiteral("other"));
-    require(otherShortcuts != nullptr && otherShortcuts->items.size() == 5 &&
+    require(otherShortcuts != nullptr && otherShortcuts->items.size() == 6 &&
                 otherShortcuts->items.at(0).id == QStringLiteral("quick.open-capture-history") &&
                 otherShortcuts->items.at(1).id == QStringLiteral("quick.global-canvas") &&
-                otherShortcuts->items.at(2).id == QStringLiteral("quick.translate-selected-text") &&
-                otherShortcuts->items.at(3).id == QStringLiteral("quick.toggle-global-hotkeys") &&
-                otherShortcuts->items.at(4).id ==
+                otherShortcuts->items.at(2).id == QStringLiteral("quick.stitch-selected-images") &&
+                otherShortcuts->items.at(3).id == QStringLiteral("quick.translate-selected-text") &&
+                otherShortcuts->items.at(4).id == QStringLiteral("quick.toggle-global-hotkeys") &&
+                otherShortcuts->items.at(5).id ==
                     QStringLiteral("quick.toggle-disable-on-focused-fullscreen-window"),
-            "Other quick actions expose history, canvas, translation, and "
+            "Other quick actions expose history, canvas, stitching, translation, and "
             "hotkey toggles");
     const auto* pinSection =
         catalog.section(QStringLiteral("global-hotkeys"), QStringLiteral("pin-to-screen"));
@@ -2752,6 +2767,10 @@ void searchIndexIsGeneratedAndRanked() {
     require(!selectedFiles.isEmpty() &&
                 selectedFiles.first().location.itemId == QStringLiteral("quick.pin-selected-files"),
             "selected-file pinning must be searchable by its action title");
+    const auto stitch = index.search(QStringLiteral("Stitch Selected Images"));
+    require(!stitch.isEmpty() &&
+                stitch.first().location.itemId == QStringLiteral("quick.stitch-selected-images"),
+            "selected-image stitching is searchable by its action title");
     const auto updates = index.search(QStringLiteral("Software updates"));
     require(!updates.isEmpty() &&
                 updates.constFirst().location.itemId == QStringLiteral("updates.mode"),
@@ -3510,6 +3529,12 @@ void memoryOptimizationPolicyCatalog() {
 
 int main(int argc, char** argv) {
     QCoreApplication application(argc, argv);
+    if (application.arguments().contains(QStringLiteral("--global-hotkeys-only"))) {
+        globalHotkeyShortcutsHaveStableContracts();
+        compactTrayManifestMatchesRegistryCatalog();
+        searchIndexIsGeneratedAndRanked();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--ocr-highlighting-only"))) {
         ocrHighlightingCatalog();
         return 0;

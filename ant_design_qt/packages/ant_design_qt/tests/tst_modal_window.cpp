@@ -1216,6 +1216,170 @@ class TstModalWindow : public QObject {
     modal.close();
   }
 
+  void windowMaximizeRestoreAndIcon() {
+    QWidget mainWindow;
+    mainWindow.resize(600, 400);
+    mainWindow.show();
+    QObject lifetime(&mainWindow);
+    AdModal modal(&lifetime);
+    modal.setMode(AdModal::Mode::Window);
+    modal.setWindowModeDetached(true);
+    modal.setWindowModality(Qt::NonModal);
+    modal.setWindowScreen(qApp->primaryScreen());
+    modal.setWindowPreferredSize(QSize(480, 360));
+    modal.setWindowMinimumSize(QSize(240, 180));
+    modal.setWindowResizable(true);
+    modal.setWindowTaskbarVisible(true);
+    modal.setWindowMinimizeButtonVisible(true);
+    modal.setWindowMaximizeButtonVisible(true);
+    modal.setWindowTitle(QStringLiteral("Independent window chrome"));
+    auto* content = new QLabel(QStringLiteral("Content"));
+    modal.setContentWidget(content);
+    QPixmap firstPixmap(16, 16);
+    firstPixmap.fill(Qt::red);
+    const QIcon firstIcon(firstPixmap);
+    QSignalSpy iconChanged(&modal, &AdModal::windowIconChanged);
+    modal.setWindowIcon(firstIcon);
+    QCOMPARE(iconChanged.count(), 1);
+    modal.setWindowIcon(firstIcon);
+    QCOMPARE(iconChanged.count(), 1);
+    modal.open();
+    QWidget* surface = content->window();
+    QVERIFY(QTest::qWaitForWindowExposed(surface));
+    QVERIFY(surface != &mainWindow);
+    QVERIFY(surface->parentWidget() == nullptr);
+    QVERIFY(modal.ownerWindow() == nullptr);
+    QCOMPARE(surface->windowModality(), Qt::NonModal);
+    QCOMPARE(surface->windowFlags() & Qt::WindowType_Mask, Qt::Window);
+    QCOMPARE(surface->windowIcon().cacheKey(), firstIcon.cacheKey());
+    auto* icon = surface->findChild<QLabel*>(QStringLiteral("ad-modal-window-icon"));
+    auto* maximize = surface->findChild<QToolButton*>(QStringLiteral("ad-modal-maximize"));
+    auto* minimize = surface->findChild<QToolButton*>(QStringLiteral("ad-modal-minimize"));
+    QVERIFY(icon && icon->isVisible() && !icon->pixmap().isNull());
+    QVERIFY(maximize && maximize->isVisible() && maximize->isEnabled());
+    QVERIFY(minimize && minimize->isVisible());
+    QCOMPARE(maximize->focusPolicy(), Qt::StrongFocus);
+    QCOMPARE(maximize->accessibleName(), QStringLiteral("Maximize"));
+    QCOMPARE(maximize->toolTip(), QStringLiteral("Maximize"));
+#ifdef Q_OS_WIN
+    if (QGuiApplication::platformName() == QStringLiteral("windows")) {
+      const auto hwnd = reinterpret_cast<HWND>(surface->winId());
+      const LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);
+      QCOMPARE(style & (WS_MINIMIZEBOX | WS_MAXIMIZEBOX),
+               LONG_PTR(WS_MINIMIZEBOX | WS_MAXIMIZEBOX));
+      QCOMPARE(GetWindowLongPtr(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW, LONG_PTR(0));
+      QVERIFY(GetWindow(hwnd, GW_OWNER) == nullptr);
+      QVERIFY(SendMessageW(hwnd, WM_GETICON, ICON_SMALL, 0) != 0);
+      QVERIFY(SendMessageW(hwnd, WM_GETICON, ICON_BIG, 0) != 0);
+    }
+#endif
+#ifdef Q_OS_MACOS
+    if (QGuiApplication::platformName() == QStringLiteral("cocoa")) {
+      NSWindow* window = reinterpret_cast<NSView*>(surface->winId()).window;
+      QVERIFY(window.styleMask & NSWindowStyleMaskClosable);
+      QVERIFY(window.styleMask & NSWindowStyleMaskMiniaturizable);
+      QVERIFY(window.styleMask & NSWindowStyleMaskResizable);
+      QVERIFY([window standardWindowButton:NSWindowMiniaturizeButton].enabled);
+      QVERIFY([window standardWindowButton:NSWindowZoomButton].enabled);
+      QVERIFY([window standardWindowButton:NSWindowMiniaturizeButton].hidden);
+      QVERIFY([window standardWindowButton:NSWindowZoomButton].hidden);
+    }
+#endif
+    const QRect normal = surface->geometry();
+    maximize->click();
+    QTRY_VERIFY(surface->isMaximized());
+    QCOMPARE(maximize->accessibleName(), QStringLiteral("Restore"));
+    QCOMPARE(maximize->toolTip(), QStringLiteral("Restore"));
+    QCOMPARE(surface->normalGeometry(), normal);
+#ifdef Q_OS_WIN
+    if (QGuiApplication::platformName() == QStringLiteral("windows")) {
+      const auto hwnd = reinterpret_cast<HWND>(surface->winId());
+      MONITORINFO monitor{};
+      monitor.cbSize = sizeof(monitor);
+      QVERIFY(GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &monitor));
+      RECT bounds{};
+      QVERIFY(GetClientRect(hwnd, &bounds));
+      POINT origin{};
+      QVERIFY(ClientToScreen(hwnd, &origin));
+      QCOMPARE(origin.x, monitor.rcWork.left);
+      QCOMPARE(origin.y, monitor.rcWork.top);
+      QCOMPARE(origin.x + bounds.right, monitor.rcWork.right);
+      QCOMPARE(origin.y + bounds.bottom, monitor.rcWork.bottom);
+    }
+#endif
+    minimize->click();
+    QTRY_VERIFY(surface->isMinimized());
+    modal.present();
+    QTRY_VERIFY(surface->isMaximized() && !surface->isMinimized());
+    maximize->click();
+    QTRY_VERIFY(!surface->isMaximized());
+    QTRY_COMPARE(surface->geometry(), normal);
+    QCOMPARE(maximize->accessibleName(), QStringLiteral("Maximize"));
+#ifdef Q_OS_WIN
+    if (QGuiApplication::platformName() == QStringLiteral("windows")) {
+      const auto hwnd = reinterpret_cast<HWND>(surface->winId());
+      SendMessageW(hwnd, WM_SYSCOMMAND, SC_MAXIMIZE, 0);
+      QTRY_VERIFY(surface->isMaximized());
+      QCOMPARE(maximize->accessibleName(), QStringLiteral("Restore"));
+      SendMessageW(hwnd, WM_SYSCOMMAND, SC_RESTORE, 0);
+      QTRY_VERIFY(!surface->isMaximized());
+      QTRY_COMPARE(surface->geometry(), normal);
+      QCOMPARE(maximize->accessibleName(), QStringLiteral("Maximize"));
+    }
+#endif
+
+    QPixmap replacementPixmap(16, 16);
+    replacementPixmap.fill(Qt::blue);
+    const QIcon replacement(replacementPixmap);
+    modal.setWindowIcon(replacement);
+    QCOMPARE(iconChanged.count(), 2);
+    QCOMPARE(surface->windowIcon().cacheKey(), replacement.cacheKey());
+    QCOMPARE(icon->pixmap().toImage().pixelColor(0, 0), QColor(Qt::blue));
+    QEvent densityChange(QEvent::DevicePixelRatioChange);
+    QApplication::sendEvent(surface, &densityChange);
+    QCOMPARE(surface->geometry(), normal);
+    mainWindow.hide();
+    QVERIFY(modal.isOpen() && surface->isVisible());
+    modal.setWindowIcon({});
+    QVERIFY(modal.windowIcon().isNull());
+    QVERIFY(icon->isHidden());
+    modal.close();
+  }
+
+  void defaultWindowChromePreservesDialogCapabilities() {
+    AdModal modal;
+    modal.setMode(AdModal::Mode::Window);
+    modal.setWindowModeDetached(true);
+    modal.setWindowTitle(QStringLiteral("Default dialog chrome"));
+    QVERIFY(!modal.windowMaximizeButtonVisible());
+    QVERIFY(modal.windowIcon().isNull());
+    auto* content = new QLabel(QStringLiteral("Content"));
+    modal.setContentWidget(content);
+    modal.open();
+    QWidget* surface = content->window();
+    auto* maximize = surface->findChild<QToolButton*>(QStringLiteral("ad-modal-maximize"));
+    auto* icon = surface->findChild<QLabel*>(QStringLiteral("ad-modal-window-icon"));
+    QVERIFY(maximize && maximize->isHidden());
+    QVERIFY(icon && icon->isHidden());
+    QVERIFY(!surface->windowFlags().testFlag(Qt::WindowMaximizeButtonHint));
+#ifdef Q_OS_WIN
+    if (QGuiApplication::platformName() == QStringLiteral("windows")) {
+      const auto hwnd = reinterpret_cast<HWND>(surface->winId());
+      QCOMPARE(GetWindowLongPtr(hwnd, GWL_STYLE) & (WS_MINIMIZEBOX | WS_MAXIMIZEBOX), LONG_PTR(0));
+    }
+#endif
+    modal.setWindowMaximizeButtonVisible(true);
+    QVERIFY(maximize->isVisible() && !maximize->isEnabled());
+    QVERIFY(!surface->windowFlags().testFlag(Qt::WindowMaximizeButtonHint));
+    modal.setWindowResizable(true);
+    QVERIFY(maximize->isEnabled());
+    QVERIFY(surface->windowFlags().testFlag(Qt::WindowMaximizeButtonHint));
+    modal.setWindowMaximizeButtonVisible(false);
+    QVERIFY(maximize->isHidden());
+    QVERIFY(!surface->windowFlags().testFlag(Qt::WindowMaximizeButtonHint));
+    modal.close();
+  }
+
   void explicitScreenCentersOnEachAvailableDisplay() {
     for (QScreen* screen : qApp->screens()) {
       qInfo() << "Modal display:" << screen->name() << screen->availableGeometry()

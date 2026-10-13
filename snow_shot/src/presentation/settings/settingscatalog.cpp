@@ -278,6 +278,18 @@ SettingsItemDefinition globalCanvasItem() {
         []() { return custom_outlined_icons::FullScreenCanvas(); });
 }
 
+SettingsItemDefinition stitchSelectedImagesItem() {
+    return quickActionItem(
+        QStringLiteral("quick.stitch-selected-images"),
+        QT_TRANSLATE_NOOP("SettingsCatalog", "Stitch Selected Images"),
+        QT_TRANSLATE_NOOP("SettingsCatalog",
+                          "Open Image Stitching with selected image files, or an empty window if "
+                          "no images are selected"),
+        {}, GlobalShortcutAction::StitchSelectedImages,
+        QStringLiteral("global_shortcuts/stitch_selected_images"),
+        []() { return custom_outlined_icons::ImageStitching(); });
+}
+
 SettingsItemDefinition themeItem() {
     SettingsSelectDefinition payload;
     payload.options = {
@@ -2933,6 +2945,7 @@ QVector<SettingsPageDefinition> builtInPages() {
                     {
                         openCaptureHistoryItem(),
                         globalCanvasItem(),
+                        stitchSelectedImagesItem(),
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
                         translateSelectedTextItem(),
 #endif
@@ -4008,6 +4021,8 @@ QString shortcutConfigurationKey(GlobalShortcutAction action) {
         return QStringLiteral("global_shortcuts/switch_window_group");
     case GlobalShortcutAction::GlobalCanvas:
         return QStringLiteral("global_shortcuts/global_canvas");
+    case GlobalShortcutAction::StitchSelectedImages:
+        return QStringLiteral("global_shortcuts/stitch_selected_images");
     case GlobalShortcutAction::OpenPinToScreenManagement:
         return QStringLiteral("global_shortcuts/open_pin_to_screen_management");
     case GlobalShortcutAction::OpenSettings:
@@ -4398,6 +4413,10 @@ TrayCommandManifest buildBuiltInTrayCommandManifest() {
                                   "Full-screen canvas (enable/disable click-through)"),
                 GlobalShortcutAction::GlobalCanvas,
                 []() { return custom_outlined_icons::FullScreenCanvas(); }),
+          quick(QStringLiteral("quick.stitch-selected-images"),
+                QT_TRANSLATE_NOOP("SettingsCatalog", "Stitch Selected Images"),
+                GlobalShortcutAction::StitchSelectedImages,
+                []() { return custom_outlined_icons::ImageStitching(); }),
           quick(QStringLiteral("quick.translate-selected-text"),
                 QT_TRANSLATE_NOOP("SettingsCatalog", "Translate Selected Text"),
                 GlobalShortcutAction::TranslateSelectedText,

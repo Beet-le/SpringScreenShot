@@ -31,6 +31,7 @@
 #include <QPainter>
 #include <QSemaphore>
 #include <QStackedWidget>
+#include <QTranslator>
 #include <QStringList>
 #include <algorithm>
 #include <cstdlib>
@@ -439,8 +440,172 @@ void pinnedPreviewRetriesAcrossStorageMigration(const QString& destination) {
             "releasing a recovered preview and its cache returns large pixel pages to the OS");
 }
 
+void pinnedCollageSelectionKeepsRecordOrder() {
+    Fixture fixture;
+    for (int index = 0; index < 15; ++index) {
+        storage::PinnedWindowSummary item;
+        item.id = QStringLiteral("collage-%1").arg(index);
+        item.activitySequence = static_cast<quint64>(index) + 1;
+        item.createdUtc = QDateTime::currentDateTimeUtc();
+        fixture.items.append(item);
+    }
+    PinnedWindowManagementPageWidget page(&fixture, nullptr);
+    page.resize(980, 900);
+    page.show();
+    QCoreApplication::processEvents();
+    auto* collage =
+        page.findChild<adqt::widgets::AdButton*>(QStringLiteral("pinnedManagementCollage"));
+    auto* selectAll =
+        page.findChild<adqt::widgets::AdButton*>(QStringLiteral("pinnedManagementSelectAll"));
+    auto* deselect =
+        page.findChild<adqt::widgets::AdButton*>(QStringLiteral("pinnedManagementDeselectAll"));
+    auto* pagination =
+        page.findChild<adqt::widgets::AdPagination*>(QStringLiteral("pinnedManagementPagination"));
+    require(collage && selectAll && deselect && pagination &&
+                collage->buttonStyle() == adqt::widgets::AdButton::ButtonStyle::Link &&
+                collage->parentWidget()->layout()->indexOf(collage) + 1 ==
+                    collage->parentWidget()->layout()->indexOf(selectAll),
+            "pinned Collage is a link action immediately before Select all");
+    require(!collage->isVisible() && !collage->isEnabled(),
+            "pinned Collage is unavailable before selection");
+    QStringList requested;
+    int requests = 0;
+    QObject::connect(&page, &PinnedWindowManagementPageWidget::collageRequested, &page,
+                     [&](const QStringList& ids) {
+                         requested = ids;
+                         ++requests;
+                     });
+    const auto select = [&](int index) {
+        for (auto* row : page.findChildren<QFrame*>(QStringLiteral("pinnedManagementRecord"))) {
+            if (row->property("recordId").toString() == QStringLiteral("collage-%1").arg(index)) {
+                row->findChild<adqt::widgets::AdCheckbox*>()->setChecked(true);
+                return;
+            }
+        }
+        require(false, "requested collage record is on the current page");
+    };
+    select(14);
+    require(collage->isVisible() && collage->isEnabled(), "one selected pin enables Collage");
+    collage->click();
+    require(requested == QStringList{QStringLiteral("collage-14")},
+            "a single selected pin can start a collage");
+    pagination->setCurrentPage(2);
+    select(0);
+    pagination->setCurrentPage(1);
+    select(5);
+    collage->click();
+    require(requested == QStringList{QStringLiteral("collage-14"), QStringLiteral("collage-5"),
+                                     QStringLiteral("collage-0")},
+            "collage includes selected pins across pages in displayed record order");
+    QEvent language(QEvent::LanguageChange);
+    QApplication::sendEvent(&page, &language);
+    require(collage->text() == QStringLiteral("Collage") &&
+                collage->accessibleName() ==
+                    QStringLiteral("Create a collage from selected pinned windows"),
+            "language changes retranslate the pinned collage action");
+    fixture.items.removeLast();
+    emit fixture.changed();
+    collage->click();
+    require(requested == QStringList{QStringLiteral("collage-5"), QStringLiteral("collage-0")},
+            "removed records are excluded from the retained collage selection");
+    deselect->click();
+    const int previousRequests = requests;
+    collage->click();
+    require(!collage->isVisible() && !collage->isEnabled() && requests == previousRequests,
+            "deselecting every pin disables collage dispatch");
+    selectAll->click();
+    collage->click();
+    require(requested.size() == 10 && requested.first() == QStringLiteral("collage-13") &&
+                requested.last() == QStringLiteral("collage-4"),
+            "Select all imports only the current page in its display order");
+    page.resize(500, 900);
+    QCoreApplication::processEvents();
+    const auto* panel = page.findChild<QWidget*>(QStringLiteral("pinnedManagementSelectionPanel"));
+    const QPoint actionOrigin = collage->parentWidget()->mapTo(panel, QPoint());
+    require(actionOrigin.x() >= 0 &&
+                actionOrigin.x() + collage->parentWidget()->width() <= panel->width(),
+            "pinned selection actions fit within a narrow management page");
+    page.findChild<adqt::widgets::AdSelect*>()->setCurrentValues(
+        {static_cast<int>(storage::PinnedWindowCreationSource::Clipboard)});
+    require(!collage->isVisible() && !collage->isEnabled(),
+            "changing the source filter clears the collage selection");
+    require(fixture.fullImageRequests == 0 && fixture.removed.isEmpty() && fixture.shown.isEmpty(),
+            "selection dispatch neither decodes images nor mutates or opens saved pins");
+}
+
+void pinnedEntryStitchActionUsesOnlyItsRecord() {
+    Fixture fixture;
+    for (int index = 0; index < 3; ++index) {
+        storage::PinnedWindowSummary item;
+        item.id = QStringLiteral("stitch-%1").arg(index);
+        item.createdUtc = QDateTime::currentDateTimeUtc();
+        item.ignored = index == 0;
+        fixture.items.append(item);
+    }
+    PinnedWindowManagementPageWidget page(&fixture, nullptr);
+    page.resize(980, 900);
+    page.show();
+    QCoreApplication::processEvents();
+    QStringList requested;
+    int requests = 0;
+    QObject::connect(&page, &PinnedWindowManagementPageWidget::collageRequested, &page,
+                     [&](const QStringList& ids) {
+                         requested = ids;
+                         ++requests;
+                     });
+    const auto rows = page.findChildren<QFrame*>(QStringLiteral("pinnedManagementRecord"));
+    require(rows.size() == 3, "stitching fixtures include closed and open pins");
+    auto* selection = rows.back()->findChild<adqt::widgets::AdCheckbox*>();
+    selection->setChecked(true);
+    for (auto* row : rows) {
+        auto* show =
+            row->findChild<adqt::widgets::AdButton*>(QStringLiteral("pinnedManagementEntryShow"));
+        auto* stitch =
+            row->findChild<adqt::widgets::AdButton*>(QStringLiteral("pinnedManagementEntryStitch"));
+        auto* remove =
+            row->findChild<adqt::widgets::AdButton*>(QStringLiteral("pinnedManagementEntryDelete"));
+        require(show && stitch && remove && stitch->isVisible() && stitch->isEnabled() &&
+                    stitch->text() == QStringLiteral("Stitch Image") && stitch->iconRef().isValid(),
+                "closed and open pins expose Stitch Image with its icon");
+        bool adjacent = false;
+        for (auto* layout : show->parentWidget()->findChildren<QBoxLayout*>()) {
+            adjacent |= layout->indexOf(show) >= 0 &&
+                        layout->indexOf(stitch) == layout->indexOf(show) + 1 &&
+                        layout->indexOf(remove) == layout->indexOf(stitch) + 1;
+        }
+        require(adjacent && stitch->geometry().left() > show->geometry().right(),
+                "Stitch Image sits immediately to the right of Restore or Show, before Delete");
+        stitch->click();
+        require(requested == QStringList{row->property("recordId").toString()},
+                "entry stitching imports exactly that saved pin");
+    }
+    require(requests == 3 && selection->isChecked() && fixture.fullImageRequests == 0 &&
+                fixture.shown.isEmpty() && fixture.removed.isEmpty(),
+            "stitch dispatch preserves selection and saved pins without restoring or decoding");
+
+    QTranslator translator;
+    require(translator.load(QStringLiteral(":/i18n/snow_shot_zh_CN.qm")),
+            "load translations for the pinned stitching action");
+    QCoreApplication::installTranslator(&translator);
+    QEvent language(QEvent::LanguageChange);
+    QApplication::sendEvent(&page, &language);
+    const QString translated =
+        translator.translate("PinnedWindowManagementPageWidget", "Stitch Image");
+    auto* stitch =
+        page.findChild<adqt::widgets::AdButton*>(QStringLiteral("pinnedManagementEntryStitch"));
+    require(!translated.isEmpty() && translated != QStringLiteral("Stitch Image") && stitch &&
+                stitch->text() == translated && stitch->toolTip() == translated &&
+                stitch->accessibleName() == translated,
+            "language changes translate the pinned stitching label and accessible name");
+    QCoreApplication::removeTranslator(&translator);
+}
+
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
+    pinnedEntryStitchActionUsesOnlyItsRecord();
+    pinnedCollageSelectionKeepsRecordOrder();
+    if (QApplication::arguments().contains(QStringLiteral("--collage-only")))
+        return 0;
     QTemporaryDir directory;
     QTemporaryDir migratedDirectory;
     require(storage::ApplicationStorage::instance()

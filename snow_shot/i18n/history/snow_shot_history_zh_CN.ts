@@ -2,6 +2,365 @@
 <!DOCTYPE TS>
 <TS version="2.1" language="zh_CN" sourcelanguage="en_US">
     <context>
+        <name>CollageDocument</name>
+        <message>
+            <source>The collage exceeds the 8 GiB image limit. Try fewer images or smaller layout settings.</source>
+            <translation>拼图超过了 8 GiB 图像限制。请减少图像数量或调小布局设置。</translation>
+        </message>
+        <message>
+            <source>The collage export was cancelled.</source>
+            <translation>拼图导出已取消。</translation>
+        </message>
+        <message>
+            <source>The collage images could not be prepared for export.</source>
+            <translation>无法准备拼图图像以供导出。</translation>
+        </message>
+        <message>
+            <source>The collage is too large for the clipboard. Save it to a file instead.</source>
+            <translation>拼图过大，无法复制到剪贴板。请保存为文件。</translation>
+        </message>
+        <message>
+            <source>The collage layout settings are invalid.</source>
+            <translation>拼图布局设置无效。</translation>
+        </message>
+        <message>
+            <source>There is not enough available memory for this collage operation. Try fewer images or close other collage windows.</source>
+            <translation>可用内存不足，无法执行此拼图操作。请减少图像数量或关闭其他拼图窗口。</translation>
+        </message>
+        <message>
+            <source>This collage requires too much temporary memory. Try fewer images or smaller image sizes.</source>
+            <translation>此拼图需要过多临时内存。请减少图像数量或使用较小的图像。</translation>
+        </message>
+    </context>
+    <context>
+        <name>CollageEditorWidget</name>
+        <message>
+            <source> px</source>
+            <translation> 像素</translation>
+        </message>
+        <message>
+            <source>%1 × %2 px</source>
+            <translation>%1 × %2 像素</translation>
+        </message>
+        <message>
+            <source>Add images</source>
+            <translation>添加图像</translation>
+        </message>
+        <message>
+            <source>Add images to create a collage</source>
+            <translation>添加图像以创建拼图</translation>
+        </message>
+        <message>
+            <source>Background color</source>
+            <translation>背景颜色</translation>
+        </message>
+        <message>
+            <source>Black</source>
+            <translation>黑色</translation>
+        </message>
+        <message>
+            <source>Blue</source>
+            <translation>蓝色</translation>
+        </message>
+        <message>
+            <source>Choose a background color, including transparency</source>
+            <translation>选择背景颜色，可设置透明度</translation>
+        </message>
+        <message>
+            <source>Clear all</source>
+            <translation>全部清空</translation>
+        </message>
+        <message>
+            <source>Collage preview</source>
+            <translation>拼图预览</translation>
+        </message>
+        <message>
+            <source>Delete image</source>
+            <translation>删除图像</translation>
+        </message>
+        <message>
+            <source>Drag with the middle mouse button to pan; scroll to zoom</source>
+            <translation>按住鼠标中键拖动以平移；滚动滚轮以缩放</translation>
+        </message>
+        <message>
+            <source>Fit to canvas</source>
+            <translation>适应画布</translation>
+        </message>
+        <message>
+            <source>Flip horizontally</source>
+            <translation>水平翻转</translation>
+        </message>
+        <message>
+            <source>Flip vertically</source>
+            <translation>垂直翻转</translation>
+        </message>
+        <message>
+            <source>Gray</source>
+            <translation>灰色</translation>
+        </message>
+        <message>
+            <source>Green</source>
+            <translation>绿色</translation>
+        </message>
+        <message>
+            <source>Horizontal</source>
+            <translation>水平</translation>
+        </message>
+        <message>
+            <source>Image %1: %2</source>
+            <translation>图像 %1：%2</translation>
+        </message>
+        <message>
+            <source>Image sizing</source>
+            <translation>图像尺寸</translation>
+        </message>
+        <message>
+            <source>Image spacing</source>
+            <translation>图像间距</translation>
+        </message>
+        <message>
+            <source>Image spacing in output pixels</source>
+            <translation>图像间距（输出像素）</translation>
+        </message>
+        <message>
+            <source>Image spacing in percentage</source>
+            <translation>图像间距（百分比）</translation>
+        </message>
+        <message>
+            <source>Image spacing unit</source>
+            <translation>图像间距单位</translation>
+        </message>
+        <message>
+            <source>Layout direction</source>
+            <translation>布局方向</translation>
+        </message>
+        <message>
+            <source>Original size</source>
+            <translation>原始尺寸</translation>
+        </message>
+        <message>
+            <source>Outer border</source>
+            <translation>外边框</translation>
+        </message>
+        <message>
+            <source>Outer border in output pixels</source>
+            <translation>外边框（输出像素）</translation>
+        </message>
+        <message>
+            <source>Outer border in percentage</source>
+            <translation>外边框（百分比）</translation>
+        </message>
+        <message>
+            <source>Outer border unit</source>
+            <translation>外边框单位</translation>
+        </message>
+        <message>
+            <source>Percentage</source>
+            <translation>百分比</translation>
+        </message>
+        <message>
+            <source>Percentage of the tallest image after sizing</source>
+            <translation>调整尺寸后最高图像高度的百分比</translation>
+        </message>
+        <message>
+            <source>Percentage of the widest image after sizing</source>
+            <translation>调整尺寸后最宽图像宽度的百分比</translation>
+        </message>
+        <message>
+            <source>Pixel</source>
+            <translation>像素</translation>
+        </message>
+        <message>
+            <source>Purple</source>
+            <translation>紫色</translation>
+        </message>
+        <message>
+            <source>Red</source>
+            <translation>红色</translation>
+        </message>
+        <message>
+            <source>Replace image</source>
+            <translation>替换图像</translation>
+        </message>
+        <message>
+            <source>Reset transform</source>
+            <translation>重置变换</translation>
+        </message>
+        <message>
+            <source>Rotate clockwise by 90°</source>
+            <translation>顺时针旋转 90°</translation>
+        </message>
+        <message>
+            <source>Rotate counterclockwise by 90°</source>
+            <translation>逆时针旋转 90°</translation>
+        </message>
+        <message>
+            <source>Select to center this image; drag onto another image to swap</source>
+            <translation>选择以将此图像居中；拖到另一图像上以交换位置</translation>
+        </message>
+        <message>
+            <source>Total: %1 images</source>
+            <translation>总计：%1 张图像</translation>
+        </message>
+        <message>
+            <source>Uniform size</source>
+            <translation>统一尺寸</translation>
+        </message>
+        <message>
+            <source>Vertical</source>
+            <translation>垂直</translation>
+        </message>
+        <message>
+            <source>White</source>
+            <translation>白色</translation>
+        </message>
+        <message>
+            <source>Yellow</source>
+            <translation>黄色</translation>
+        </message>
+    </context>
+    <context>
+        <name>CollageWindow</name>
+        <message>
+            <source>%1: %2</source>
+            <translation>%1：%2</translation>
+        </message>
+        <message>
+            <source>Add images</source>
+            <translation>添加图像</translation>
+        </message>
+        <message>
+            <source>All images will be removed from this collage.</source>
+            <translation>将从此拼图中移除全部图像。</translation>
+        </message>
+        <message>
+            <source>Allow Snow Shot to access Finder in System Settings &gt; Privacy &amp; Security &gt; Automation, then try again.</source>
+            <translation>请在“系统设置 &gt; 隐私与安全性 &gt; 自动化”中允许 Snow Shot 访问访达，然后重试。</translation>
+        </message>
+        <message>
+            <source>Cancel</source>
+            <translation>取消</translation>
+        </message>
+        <message>
+            <source>Clear all</source>
+            <translation>全部清空</translation>
+        </message>
+        <message>
+            <source>Clear all images?</source>
+            <translation>清空全部图像？</translation>
+        </message>
+        <message>
+            <source>Collage</source>
+            <translation>拼图</translation>
+        </message>
+        <message>
+            <source>Copy</source>
+            <translation>复制</translation>
+        </message>
+        <message>
+            <source>Copying collage…</source>
+            <translation>正在复制拼图…</translation>
+        </message>
+        <message>
+            <source>Copying could not be started. Try again.</source>
+            <translation>无法开始复制，请重试。</translation>
+        </message>
+        <message>
+            <source>Could not read the selected image files. Please try again.</source>
+            <translation>无法读取选中的图片文件，请重试。</translation>
+        </message>
+        <message>
+            <source>Discard</source>
+            <translation>放弃</translation>
+        </message>
+        <message>
+            <source>Discard this collage?</source>
+            <translation>放弃此拼图？</translation>
+        </message>
+        <message>
+            <source>Export could not be started. Try again.</source>
+            <translation>无法开始导出，请重试。</translation>
+        </message>
+        <message>
+            <source>Image loading could not be started. Try again.</source>
+            <translation>无法开始加载图像，请重试。</translation>
+        </message>
+        <message>
+            <source>Images (%1)</source>
+            <translation>图像（%1）</translation>
+        </message>
+        <message>
+            <source>Loading images: %1 of %2</source>
+            <translation>正在加载图像：%1 / %2</translation>
+        </message>
+        <message>
+            <source>Pinned window %1</source>
+            <translation>固定到屏幕窗口 %1</translation>
+        </message>
+        <message>
+            <source>Preparing collage…</source>
+            <translation>正在准备拼图…</translation>
+        </message>
+        <message>
+            <source>Reading selected image files…</source>
+            <translation>正在读取选中的图片文件…</translation>
+        </message>
+        <message>
+            <source>Replace image</source>
+            <translation>替换图像</translation>
+        </message>
+        <message>
+            <source>Save</source>
+            <translation>保存</translation>
+        </message>
+        <message>
+            <source>Save as file</source>
+            <translation>保存为文件</translation>
+        </message>
+        <message>
+            <source>Saving collage…</source>
+            <translation>正在保存拼图…</translation>
+        </message>
+        <message>
+            <source>Saving could not be started. Try again.</source>
+            <translation>无法开始保存，请重试。</translation>
+        </message>
+        <message>
+            <source>Screenshot %1</source>
+            <translation>截图 %1</translation>
+        </message>
+        <message>
+            <source>Some images could not be loaded:
+%1</source>
+            <translation>部分图像无法加载：
+%1</translation>
+        </message>
+        <message>
+            <source>The file manager is unavailable. Open it and try again.</source>
+            <translation>文件管理器不可用，请打开后重试。</translation>
+        </message>
+        <message>
+            <source>The file manager took too long to return the selected files. Please try again.</source>
+            <translation>文件管理器返回选中文件的时间过长，请重试。</translation>
+        </message>
+        <message>
+            <source>The final screenshot is unavailable</source>
+            <translation>最终截图不可用</translation>
+        </message>
+        <message>
+            <source>The image could not be decoded or is no longer available</source>
+            <translation>无法解码图像，或图像已不可用</translation>
+        </message>
+        <message>
+            <source>The images and edits in this collage will be discarded.</source>
+            <translation>将放弃此拼图中的图像和编辑。</translation>
+        </message>
+        <message>
+            <source>The layout settings could not be remembered: %1</source>
+            <translation>无法记住布局设置：%1</translation>
+        </message>
+    </context>
+    <context>
         <name>HistoryEntryWidget</name>
         <message>
             <source>%1 x %2 px  ·  %3 display(s)</source>
@@ -92,6 +451,10 @@
             <translation>截图结果</translation>
         </message>
         <message>
+            <source>Stitch Image</source>
+            <translation>拼接图片</translation>
+        </message>
+        <message>
             <source>This action cannot be undone</source>
             <translation>此操作无法撤销</translation>
         </message>
@@ -135,6 +498,14 @@
         <message>
             <source>Closed</source>
             <translation>已关闭</translation>
+        </message>
+        <message>
+            <source>Collage</source>
+            <translation>拼图</translation>
+        </message>
+        <message>
+            <source>Create a collage from selected pinned windows</source>
+            <translation>使用选中的固定到屏幕窗口创建拼图</translation>
         </message>
         <message>
             <source>Date</source>
@@ -273,6 +644,10 @@
             <translation>开始日期</translation>
         </message>
         <message>
+            <source>Stitch Image</source>
+            <translation>拼接图片</translation>
+        </message>
+        <message>
             <source>The saved record and its open window will be removed</source>
             <translation>此记录及其打开的窗口将被移除</translation>
         </message>
@@ -318,12 +693,20 @@
             <translation>更改来源或日期范围以查看更多历史记录</translation>
         </message>
         <message>
+            <source>Collage</source>
+            <translation>拼图</translation>
+        </message>
+        <message>
             <source>Copied and pinned screenshots will appear here</source>
             <translation>已复制或固定到屏幕的截图会显示在这里</translation>
         </message>
         <message>
             <source>Copy to clipboard</source>
             <translation>复制到剪贴板</translation>
+        </message>
+        <message>
+            <source>Create a collage from selected screenshots</source>
+            <translation>使用选中的截图创建拼图</translation>
         </message>
         <message>
             <source>Current monitor</source>
@@ -888,6 +1271,10 @@
         <message>
             <source>Group</source>
             <translation>分组</translation>
+        </message>
+        <message>
+            <source>Image Stitching</source>
+            <translation>图片拼接</translation>
         </message>
         <message>
             <source>Lock</source>

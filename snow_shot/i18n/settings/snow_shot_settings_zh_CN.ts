@@ -2929,6 +2929,10 @@
             <translation>打开</translation>
         </message>
         <message>
+            <source>Open Image Stitching with selected image files, or an empty window if no images are selected</source>
+            <translation>使用选中的图片文件打开图片拼接；未选中图片时打开空白窗口</translation>
+        </message>
+        <message>
             <source>Open Login Items Settings</source>
             <translation>打开登录项设置</translation>
         </message>
@@ -4079,6 +4083,10 @@
         <message>
             <source>Startup &amp; updates</source>
             <translation>启动与更新</translation>
+        </message>
+        <message>
+            <source>Stitch Selected Images</source>
+            <translation>拼接选中的图片</translation>
         </message>
         <message>
             <source>Storage and privacy</source>

@@ -113,6 +113,9 @@
     "snow_shot::translation::TranslationService"
   ],
   "history": [
+    "CollageDocument",
+    "CollageEditorWidget",
+    "CollageWindow",
     "HistoryEntryWidget",
     "PinnedWindowManagementPageWidget",
     "snow_shot::presentation::PinnedWindowSelectionController",

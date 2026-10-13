@@ -757,6 +757,15 @@ bool ShortcutSettings::setGlobalCanvas(const shortcuts::ShortcutBindingList& bin
     return setShortcutValue(QStringLiteral("global_shortcuts/global_canvas"), bindings);
 }
 
+shortcuts::ShortcutBindingList ShortcutSettings::stitchSelectedImages() const {
+    return shortcutValue(QStringLiteral("global_shortcuts/stitch_selected_images"));
+}
+
+bool ShortcutSettings::setStitchSelectedImages(
+    const shortcuts::ShortcutBindingList& bindings) const {
+    return setShortcutValue(QStringLiteral("global_shortcuts/stitch_selected_images"), bindings);
+}
+
 shortcuts::ShortcutBindingList ShortcutSettings::openPinToScreenManagement() const {
     return shortcutValue(QStringLiteral("global_shortcuts/open_pin_to_screen_management"));
 }

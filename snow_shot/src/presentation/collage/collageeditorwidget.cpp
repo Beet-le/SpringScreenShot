@@ -1,0 +1,1592 @@
+// SPDX-License-Identifier: GPL-3.0-only
+#include "snow_shot/presentation/components/collageeditorwidget.h"
+
+#include "snow_shot/presentation/screenshotwheelinput.h"
+#include "snow_shot/presentation/screenshotexportcoordinator.h"
+#include "snow_shot/presentation/components/overlaycontrolbutton.h"
+#include "snow_shot/presentation/components/icons/snowshoticons.h"
+#include "snow_shot/presentation/styles/thememanager.h"
+#include "antd_icons.h"
+#include "theme/theme_manager.h"
+#include "widgets/button.h"
+#include "widgets/color_picker.h"
+#include "widgets/divider.h"
+#include "widgets/form.h"
+#include "widgets/input_number.h"
+#include "widgets/scroll_area.h"
+#include "widgets/segmented.h"
+
+#include <QApplication>
+#include <QCoreApplication>
+#include <QColorSpace>
+#include <QDrag>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QFocusEvent>
+#include <QFontMetrics>
+#include <QHBoxLayout>
+#include <QKeyEvent>
+#include <QLabel>
+#include <QMimeData>
+#include <QMouseEvent>
+#include <QPainter>
+#include <QPainterPath>
+#include <QPointer>
+#include <QScrollBar>
+#include <QSet>
+#include <QSignalBlocker>
+#include <QTimer>
+#include <QVBoxLayout>
+#include <QWheelEvent>
+#include "collageresourcebudget_p.h"
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <limits>
+
+namespace snow_shot::presentation::components {
+namespace {
+using adqt::widgets::AdButton;
+using adqt::widgets::AdColorPicker;
+using adqt::widgets::AdColorValue;
+using adqt::widgets::AdDivider;
+using adqt::widgets::AdForm;
+using adqt::widgets::AdFormItem;
+using adqt::widgets::AdInputNumber;
+using adqt::widgets::AdScrollArea;
+using adqt::widgets::AdSegmented;
+namespace icons = adqt::icons::antd::outlined;
+constexpr int kSettingsFormWidth = 340;
+constexpr int kSettingsFormRightMargin = 12;
+constexpr auto kDragType = "application/x-snow-shot-collage-item";
+const QSize kThumbnailSize{108, 84};
+constexpr int kThumbnailMargin = 2;
+constexpr qreal kSelectionFrameWidth = 3;
+// Match snow-draw-engine-editor's selection colors in geometry/handles.rs.
+const QColor kSelectionFrameColor{0x40, 0x96, 0xff};
+const QColor kReplacementFillColor{0x40, 0x96, 0xff, 0x33};
+constexpr std::array<const char*, 8> kColorValues{"#FFFFFF", "#000000", "#8C8C8C", "#FFCCC7",
+                                                  "#D9F7BE", "#BAE0FF", "#FFF1B8", "#EFDBFF"};
+// These strings also supply labels constructed dynamically by the form and toolbar.
+[[maybe_unused]] constexpr std::array kTranslations{
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Replace image"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Delete image"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Image %1: %2"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget",
+                      "Select to center this image; drag onto another image to swap"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Collage preview"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget",
+                      "Drag with the middle mouse button to pan; scroll to zoom"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Rotate clockwise by 90°"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Rotate counterclockwise by 90°"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Flip horizontally"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Flip vertically"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Reset transform"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Add images"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Add images to create a collage"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "%1 × %2 px"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Total: %1 images"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Vertical"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Horizontal"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Uniform size"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Original size"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Layout direction"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Image sizing"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Outer border"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Image spacing"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Background color"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Outer border in output pixels"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Image spacing in output pixels"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Outer border unit"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Image spacing unit"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Outer border in percentage"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Image spacing in percentage"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Pixel"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Percentage"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Percentage of the widest image after sizing"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Percentage of the tallest image after sizing"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Choose a background color, including transparency"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "White"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Black"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Gray"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Red"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Green"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Blue"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Yellow"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Purple"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Fit to canvas"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Clear all"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", " px"),
+};
+
+QString text(const char* value) {
+    return QCoreApplication::translate("CollageEditorWidget", value);
+}
+
+quint64 dragItem(const QMimeData* mime, const CollageDocument* document) {
+    if (!mime || !mime->hasFormat(QString::fromLatin1(kDragType)))
+        return 0;
+    bool valid = false;
+    const auto parts = mime->data(QString::fromLatin1(kDragType)).split(':');
+    if (parts.size() != 2 || parts[0].toULongLong() != reinterpret_cast<quintptr>(document))
+        return 0;
+    const auto value = parts[1].toULongLong(&valid);
+    return valid ? value : 0;
+}
+
+QPixmap checkerboard(const QWidget* widget) {
+    const auto theme = adqt::theme::ThemeManager::instance().resolveTheme(widget);
+    QPixmap tile(20, 20);
+    tile.fill(theme.colorBgContainer);
+    QPainter painter(&tile);
+    painter.fillRect(0, 0, 10, 10, theme.colorFillSecondary);
+    painter.fillRect(10, 10, 10, 10, theme.colorFillSecondary);
+    return tile;
+}
+
+void iconButton(AdButton* button, const adqt::icons::IconRef& icon, const char* name) {
+    button->setObjectName(QString::fromLatin1(name));
+    button->setIconRef(icon);
+    button->setSizeClass(AdButton::SizeClass::Small);
+    button->setButtonStyle(AdButton::ButtonStyle::Text);
+    button->setFixedSize(32, 32);
+    button->setFocusPolicy(Qt::StrongFocus);
+}
+
+void drawTransformedPreview(QPainter& painter, const QRectF& target, const QImage& image,
+                            const QTransform& transform) {
+    if (image.isNull() || target.isEmpty())
+        return;
+    const auto transformed = transform.mapRect(QRectF(QPointF{}, image.size()));
+    painter.save();
+    painter.translate(target.topLeft());
+    painter.scale(target.width() / transformed.width(), target.height() / transformed.height());
+    painter.translate(-transformed.topLeft());
+    painter.setTransform(transform, true);
+    painter.drawImage(QPointF{}, image);
+    painter.restore();
+}
+
+class TokenSurface final : public QWidget {
+  public:
+    explicit TokenSurface(QWidget* parent = nullptr) : QWidget(parent) {}
+
+  protected:
+    void paintEvent(QPaintEvent*) override {
+        const auto theme = adqt::theme::ThemeManager::instance().resolveTheme(this);
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(theme.colorBorderSecondary);
+        painter.setBrush(theme.colorBgContainer);
+        painter.drawRoundedRect(QRectF(rect()).adjusted(.5, .5, -.5, -.5), theme.borderRadiusSM,
+                                theme.borderRadiusSM);
+    }
+};
+
+class CollageColorPresetButton final : public AdButton {
+  public:
+    CollageColorPresetButton(const QColor& color, QWidget* parent)
+        : AdButton(parent), m_color(color) {
+        setSizeClass(AdButton::SizeClass::Small);
+        setShape(AdButton::Shape::Rounded);
+        setButtonStyle(AdButton::ButtonStyle::Text);
+        setFixedSize(28, 28);
+        setCheckable(true);
+        setCheckedUsesActiveStyle(false);
+        setFocusPolicy(Qt::StrongFocus);
+    }
+
+    void setSelected(bool selected) {
+        setChecked(selected);
+        setButtonStyle(selected ? AdButton::ButtonStyle::Tonal : AdButton::ButtonStyle::Text);
+        setAccentRole(selected ? AdButton::AccentRole::Primary : AdButton::AccentRole::Neutral);
+    }
+
+  protected:
+    void paintEvent(QPaintEvent* event) override {
+        AdButton::paintEvent(event);
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        if (!isEnabled())
+            painter.setOpacity(.4);
+        const QRectF swatch(QRectF(rect()).center() - QPointF(11, 11), QSizeF(22, 22));
+        QPainterPath path;
+        path.addRoundedRect(swatch, 3, 3);
+        painter.fillPath(path, m_color);
+        const auto theme = adqt::theme::ThemeManager::instance().resolveTheme(this);
+        painter.setPen(QPen(theme.colorBorder, 1.0));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawPath(path);
+    }
+
+  private:
+    QColor m_color;
+};
+
+class CollageThumbnail final : public QWidget {
+  public:
+    CollageThumbnail(CollageDocument* document, quint64 id, QWidget* parent)
+        : QWidget(parent), m_document(document), m_id(id) {
+        setObjectName(QStringLiteral("collageThumbnail_%1").arg(id));
+        setProperty("collageItemId", QVariant::fromValue(id));
+        setFixedSize(kThumbnailSize);
+        setFocusPolicy(Qt::StrongFocus);
+        setAcceptDrops(true);
+        setMouseTracking(true);
+        m_replace =
+            new OverlayControlButton(OverlayControlButton::Intent::Primary, icons::Edit(), this);
+        m_replace->setObjectName(QStringLiteral("collageReplaceImage"));
+        m_remove = new OverlayControlButton(OverlayControlButton::Intent::Destructive,
+                                            icons::IconDelete(), this);
+        m_remove->setObjectName(QStringLiteral("collageDeleteImage"));
+        for (auto* button : {m_replace, m_remove}) {
+            button->setSizeClass(AdButton::SizeClass::Small);
+            button->setFixedSize(28, 28);
+            button->setIconSize(QSize(16, 16));
+            button->setFocusPolicy(Qt::StrongFocus);
+        }
+        constexpr int actionMargin = 4;
+        constexpr int actionSpacing = 4;
+        m_remove->move(width() - m_remove->width() - actionMargin,
+                       height() - m_remove->height() - actionMargin);
+        m_replace->move(m_remove->x() - m_replace->width() - actionSpacing, m_remove->y());
+        m_replace->installEventFilter(this);
+        m_remove->installEventFilter(this);
+        connect(m_replace, &QAbstractButton::clicked, this, [this] {
+            if (editStarted)
+                editStarted();
+            if (replaceRequested)
+                replaceRequested(m_id);
+        });
+        connect(m_remove, &QAbstractButton::clicked, this, [this] {
+            if (editStarted)
+                editStarted();
+            m_document->remove(m_id);
+        });
+        retranslate();
+        reveal();
+    }
+    std::function<void(quint64)> selected;
+    std::function<void(quint64)> replaceRequested;
+    std::function<void()> editStarted;
+    void setEditingEnabled(bool enabled, bool replacementAllowed) {
+        m_editing = enabled;
+        m_replace->setEnabled(enabled && replacementAllowed);
+        m_remove->setEnabled(enabled);
+    }
+    void setItem(const CollageItem& item, int ordinal) {
+        if (m_revision != item.revision || m_preview.isNull()) {
+            m_revision = item.revision;
+            m_preview = item.preview;
+            m_transform = item.transform;
+        }
+        m_label = item.label;
+        m_ordinal = ordinal;
+        retranslate();
+        update();
+    }
+    void retranslate() {
+        m_replace->setToolTip(text("Replace image"));
+        m_replace->setAccessibleName(m_replace->toolTip());
+        m_remove->setToolTip(text("Delete image"));
+        m_remove->setAccessibleName(m_remove->toolTip());
+        setAccessibleName(text("Image %1: %2").arg(m_ordinal).arg(m_label));
+        setAccessibleDescription(
+            text("Select to center this image; drag onto another image to swap"));
+        setToolTip(m_label);
+    }
+
+  protected:
+    void paintEvent(QPaintEvent*) override {
+        const auto theme = adqt::theme::ThemeManager::instance().resolveTheme(this);
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        const QRectF outer = QRectF(rect()).adjusted(1, 1, -1, -1);
+        painter.setBrush(theme.colorBgContainer);
+        painter.setPen(
+            QPen(m_target ? kSelectionFrameColor : theme.colorBorderSecondary, m_target ? 3 : 1));
+        painter.drawRoundedRect(outer, theme.borderRadiusSM, theme.borderRadiusSM);
+        const QRectF imageArea = outer.adjusted(5, 5, -5, -20);
+        painter.fillRect(imageArea, QBrush(checkerboard(this)));
+        if (!m_preview.isNull()) {
+            const auto size = m_transform.mapRect(QRectF(QPointF{}, m_preview.size()))
+                                  .size()
+                                  .scaled(imageArea.size(), Qt::KeepAspectRatio);
+            const QRectF target(imageArea.center() - QPointF(size.width() / 2, size.height() / 2),
+                                size);
+            painter.setRenderHint(QPainter::SmoothPixmapTransform);
+            drawTransformedPreview(painter, target, m_preview, m_transform);
+        }
+        painter.setPen(theme.colorTextSecondary);
+        painter.drawText(QRect(5, height() - 20, m_replace->x() - 10, 17), Qt::AlignCenter,
+                         QString::number(m_ordinal));
+        if (m_document->selectedId() == m_id || hasFocus()) {
+            painter.setBrush(Qt::NoBrush);
+            painter.setPen(QPen(kSelectionFrameColor, 2));
+            painter.drawRoundedRect(outer, theme.borderRadiusSM, theme.borderRadiusSM);
+        }
+    }
+    void enterEvent(QEnterEvent* event) override {
+        m_hovered = true;
+        reveal();
+        QWidget::enterEvent(event);
+    }
+    void leaveEvent(QEvent* event) override {
+        m_hovered = false;
+        reveal();
+        QWidget::leaveEvent(event);
+    }
+    void focusInEvent(QFocusEvent* event) override {
+        reveal();
+        update();
+        QWidget::focusInEvent(event);
+    }
+    void focusOutEvent(QFocusEvent* event) override {
+        QTimer::singleShot(0, this, [this] {
+            reveal();
+            update();
+        });
+        QWidget::focusOutEvent(event);
+    }
+    bool eventFilter(QObject* object, QEvent* event) override {
+        if (event->type() == QEvent::FocusIn || event->type() == QEvent::FocusOut)
+            QTimer::singleShot(0, this, [this] { reveal(); });
+        return QWidget::eventFilter(object, event);
+    }
+    void mousePressEvent(QMouseEvent* event) override {
+        if (event->button() == Qt::LeftButton) {
+            m_press = event->position();
+            setFocus(Qt::MouseFocusReason);
+            if (selected)
+                selected(m_id);
+            event->accept();
+        }
+    }
+    void mouseMoveEvent(QMouseEvent* event) override {
+        if (!(event->buttons() & Qt::LeftButton) || !m_editing ||
+            (event->position() - m_press).manhattanLength() < QApplication::startDragDistance())
+            return;
+        auto* drag = new QDrag(this);
+        auto* mime = new QMimeData;
+        mime->setData(QString::fromLatin1(kDragType),
+                      QByteArray::number(reinterpret_cast<quintptr>(m_document)) + ':' +
+                          QByteArray::number(m_id));
+        drag->setMimeData(mime);
+        drag->setPixmap(QPixmap::fromImage(m_preview).scaled(80, 64, Qt::KeepAspectRatio,
+                                                             Qt::SmoothTransformation));
+        drag->exec(Qt::MoveAction);
+    }
+    void keyPressEvent(QKeyEvent* event) override {
+        if (event->key() == Qt::Key_Space || event->key() == Qt::Key_Return) {
+            if (selected)
+                selected(m_id);
+            event->accept();
+        } else if ((event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) &&
+                   m_editing) {
+            m_document->remove(m_id);
+            event->accept();
+        } else {
+            QWidget::keyPressEvent(event);
+        }
+    }
+    void dragEnterEvent(QDragEnterEvent* event) override {
+        if (m_editing && dragItem(event->mimeData(), m_document) != 0 &&
+            dragItem(event->mimeData(), m_document) != m_id) {
+            m_target = true;
+            update();
+            event->acceptProposedAction();
+        }
+    }
+    void dragMoveEvent(QDragMoveEvent* event) override {
+        event->acceptProposedAction();
+    }
+    void dragLeaveEvent(QDragLeaveEvent*) override {
+        m_target = false;
+        update();
+    }
+    void dropEvent(QDropEvent* event) override {
+        const auto source = dragItem(event->mimeData(), m_document);
+        m_target = false;
+        if (m_editing && source != 0 && m_document->swapItems(source, m_id))
+            event->acceptProposedAction();
+        update();
+    }
+
+  private:
+    void reveal() {
+        const bool visible =
+            m_hovered || hasFocus() || m_replace->hasFocus() || m_remove->hasFocus();
+        m_replace->setVisible(visible);
+        m_remove->setVisible(visible);
+    }
+    CollageDocument* m_document;
+    quint64 m_id;
+    quint64 m_revision = std::numeric_limits<quint64>::max();
+    QImage m_preview;
+    QTransform m_transform;
+    QString m_label;
+    QPointF m_press;
+    int m_ordinal = 1;
+    bool m_hovered = false;
+    bool m_target = false;
+    bool m_editing = true;
+    AdButton* m_replace = nullptr;
+    AdButton* m_remove = nullptr;
+};
+} // namespace
+
+struct CollagePreviewCanvas::Impl {
+    struct Detail {
+        QImage image;
+        QRectF transformedPixels;
+        QSize fullSize;
+        quint64 revision = 0;
+        quint64 used = 0;
+        qreal resolution = 0;
+        std::shared_ptr<void> reservation;
+    };
+    CollagePreviewCanvas* owner;
+    CollageDocument* document;
+    CollageLayout layout;
+    QVector<quint64> order;
+    QHash<quint64, QImage> previews;
+    QHash<quint64, QTransform> previewTransforms;
+    QHash<quint64, quint64> revisions;
+    QHash<quint64, Detail> details;
+    QHash<quint64, ScreenshotExportJobHandle> detailJobs;
+    QHash<quint64, qint64> pendingDetailBytes;
+    QTimer* detailTimer = nullptr;
+    quint64 detailGeneration = 0;
+    quint64 detailClock = 0;
+    QPixmap checker;
+    qreal zoom = 1;
+    QPointF offset;
+    QPointF last;
+    QPointF press;
+    quint64 pressedId = 0;
+    quint64 targetId = 0;
+    bool panning = false;
+    bool dragging = false;
+    bool automaticFit = true;
+    bool editing = true;
+    QWidget* toolbar = nullptr;
+    std::array<AdButton*, 6> actions{};
+    OverlayControlButton* fit = nullptr;
+
+    void cancelDetails() {
+        ++detailGeneration;
+        for (const auto& job : detailJobs)
+            job.cancel();
+        detailJobs.clear();
+        pendingDetailBytes.clear();
+    }
+    qint64 previewBytes() const {
+        qint64 result = 0;
+        for (const auto& item : document->items())
+            result += item.preview.sizeInBytes();
+        for (const auto& detail : details)
+            result += detail.image.sizeInBytes();
+        for (const auto bytes : pendingDetailBytes)
+            result += bytes;
+        return result;
+    }
+    QRectF detailViewport(const Detail& detail, const QRectF& item) const {
+        return {
+            item.left() + item.width() * detail.transformedPixels.left() / detail.fullSize.width(),
+            item.top() + item.height() * detail.transformedPixels.top() / detail.fullSize.height(),
+            item.width() * detail.transformedPixels.width() / detail.fullSize.width(),
+            item.height() * detail.transformedPixels.height() / detail.fullSize.height()};
+    }
+    void requestDetails() {
+        if (!layout.isValid())
+            return;
+        const auto generation = detailGeneration;
+        for (const auto& item : document->items()) {
+            const auto bounds = viewportRect(item.id);
+            const auto visible = bounds.intersected(owner->rect());
+            if (visible.isEmpty() || detailJobs.contains(item.id))
+                continue;
+            const auto fullSize = transformedSize(item);
+            const qreal screenScale = bounds.width() / fullSize.width();
+            const qreal screenScaleY = bounds.height() / fullSize.height();
+            const qreal desiredScale =
+                std::min(1.0, std::max(screenScale, screenScaleY) * owner->devicePixelRatioF());
+            const auto smallSize =
+                item.transform.mapRect(QRectF(QPointF{}, item.preview.size())).size();
+            if (bounds.width() * owner->devicePixelRatioF() <= smallSize.width() * 1.25 &&
+                bounds.height() * owner->devicePixelRatioF() <= smallSize.height() * 1.25)
+                continue;
+            if (detailJobs.size() >= 2)
+                break;
+            const auto padded = visible.adjusted(-48, -48, 48, 48).intersected(bounds);
+            const QRectF pixels((padded.left() - bounds.left()) / screenScale,
+                                (padded.top() - bounds.top()) / screenScaleY,
+                                padded.width() / screenScale, padded.height() / screenScaleY);
+            const auto sourceBounds = item.transform.mapRect(QRectF(QPointF{}, item.image.size()));
+            QTransform normalized = item.transform;
+            normalized.setMatrix(normalized.m11(), normalized.m12(), normalized.m13(),
+                                 normalized.m21(), normalized.m22(), normalized.m23(),
+                                 normalized.dx() - sourceBounds.left(),
+                                 normalized.dy() - sourceBounds.top(), normalized.m33());
+            const QRect crop = normalized.inverted().mapRect(pixels).toAlignedRect().intersected(
+                QRect(QPoint{}, item.image.size()));
+            if (crop.isEmpty())
+                continue;
+            const QRectF transformedCrop = normalized.mapRect(QRectF(crop));
+            const QSize wanted(std::max(1, qCeil(transformedCrop.width() * desiredScale)),
+                               std::max(1, qCeil(transformedCrop.height() * desiredScale)));
+            const auto tileSize = wanted.width() > 2048 || wanted.height() > 2048
+                                      ? wanted.scaled(QSize(2048, 2048), Qt::KeepAspectRatio)
+                                      : wanted;
+            const qreal resolution = qreal(tileSize.width()) / transformedCrop.width();
+            auto existing = details.find(item.id);
+            if (existing != details.end() && existing->revision == item.revision &&
+                existing->resolution >= resolution * .9 &&
+                detailViewport(*existing, bounds).contains(visible)) {
+                existing->used = ++detailClock;
+                continue;
+            }
+            const qint64 bytes = qint64(tileSize.width()) * tileSize.height() * 4;
+            while (!details.isEmpty() &&
+                   previewBytes() + bytes > collage_detail::maximumWindowPreviewBytes) {
+                auto oldest = details.begin();
+                for (auto it = details.begin(); it != details.end(); ++it)
+                    if (it->used < oldest->used)
+                        oldest = it;
+                details.erase(oldest);
+            }
+            if (previewBytes() + bytes > collage_detail::maximumWindowPreviewBytes)
+                continue;
+            auto reservation = reserveCollagePreview(bytes);
+            auto working = collage_detail::reserveWorking(qint64(crop.width()) * crop.height() * 8 +
+                                                          bytes * 2);
+            if (!reservation || !working)
+                continue;
+            auto prepared = std::make_shared<Detail>();
+            prepared->transformedPixels = transformedCrop;
+            prepared->fullSize = fullSize;
+            prepared->revision = item.revision;
+            prepared->resolution = resolution;
+            prepared->reservation = std::move(reservation);
+            const auto job = ScreenshotExportCoordinator::shared().submit(
+                owner, ScreenshotExportCoordinator::Priority::Background,
+                [image = item.image, sourceOwner = item.resourceOwner, transform = item.transform,
+                 crop, tileSize, prepared,
+                 working](const ScreenshotExportCancellation& cancellation) {
+                    Q_UNUSED(sourceOwner);
+                    Q_UNUSED(working);
+                    if (cancellation.isCancellationRequested())
+                        return ScreenshotExportTaskResult::failure(
+                            ScreenshotExportFailureStage::Cancelled, {});
+                    QImage tile = image.copy(crop);
+                    if (tile.isNull())
+                        return ScreenshotExportTaskResult::failure(
+                            ScreenshotExportFailureStage::Render, {});
+                    if (tile.colorSpace().isValid() &&
+                        tile.colorSpace() != QColorSpace(QColorSpace::SRgb))
+                        tile = tile.convertedToColorSpace(QColorSpace::SRgb);
+                    const auto cropTransformedSize =
+                        transform.mapRect(QRectF(QPointF{}, crop.size())).size();
+                    const qreal scale =
+                        std::min(qreal(tileSize.width()) / cropTransformedSize.width(),
+                                 qreal(tileSize.height()) / cropTransformedSize.height());
+                    const QSize unrotated(std::max(1, qCeil(crop.width() * scale)),
+                                          std::max(1, qCeil(crop.height() * scale)));
+                    tile = tile.scaled(unrotated, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+                    if (tile.isNull())
+                        return ScreenshotExportTaskResult::failure(
+                            ScreenshotExportFailureStage::Render, {});
+                    if (cancellation.isCancellationRequested())
+                        return ScreenshotExportTaskResult::failure(
+                            ScreenshotExportFailureStage::Cancelled, {});
+                    tile = tile.transformed(transform, Qt::FastTransformation);
+                    if (tile.isNull())
+                        return ScreenshotExportTaskResult::failure(
+                            ScreenshotExportFailureStage::Render, {});
+                    tile.setDevicePixelRatio(1);
+                    prepared->image = std::move(tile);
+                    return ScreenshotExportTaskResult{};
+                },
+                [this, id = item.id, generation,
+                 prepared](const ScreenshotExportTaskResult& result) {
+                    if (generation != detailGeneration)
+                        return;
+                    detailJobs.remove(id);
+                    pendingDetailBytes.remove(id);
+                    if (result.succeeded() && revisions.value(id) == prepared->revision &&
+                        !prepared->image.isNull()) {
+                        prepared->used = ++detailClock;
+                        details.insert(id, std::move(*prepared));
+                        owner->setProperty("detailTileCount", details.size());
+                        owner->update();
+                    }
+                    if (result.succeeded())
+                        detailTimer->start();
+                });
+            if (job.isValid()) {
+                detailJobs.insert(item.id, job);
+                pendingDetailBytes.insert(item.id, bytes);
+            }
+        }
+    }
+
+    QRectF itemRect(quint64 id) const {
+        const auto index = order.indexOf(id);
+        return index >= 0 && index < layout.rects.size() ? QRectF(layout.rects[index]) : QRectF{};
+    }
+    QRectF viewportRect(quint64 id) const {
+        const auto rect = itemRect(id);
+        return rect.isEmpty() ? QRectF{}
+                              : QRectF(offset + rect.topLeft() * zoom, rect.size() * zoom);
+    }
+    quint64 hit(QPointF position) const {
+        if (!layout.isValid() || zoom <= 0)
+            return 0;
+        const QPointF output = (position - offset) / zoom;
+        for (qsizetype i = 0; i < layout.rects.size(); ++i)
+            if (QRectF(layout.rects[i]).contains(output))
+                return order[i];
+        return 0;
+    }
+    void geometryChanged() {
+        owner->setProperty("zoom", zoom);
+        owner->setProperty("viewportOffset", offset);
+        owner->setProperty("detailPreviewBytes", previewBytes());
+        owner->setProperty("detailTileCount", details.size());
+        const auto selected = viewportRect(document->selectedId());
+        const bool layoutRecovery = !layout.isValid() && order.contains(document->selectedId());
+        const bool showToolbar =
+            editing &&
+            (layoutRecovery || (!selected.isEmpty() && selected.intersects(owner->rect())));
+        toolbar->setVisible(showToolbar);
+        if (showToolbar) {
+            toolbar->adjustSize();
+            const int maximumX = std::max(8, owner->width() - toolbar->width() - 8);
+            const int maximumY = std::max(8, owner->height() - toolbar->height() - 8);
+            int x = layoutRecovery ? (owner->width() - toolbar->width()) / 2
+                                   : qRound(selected.center().x() - toolbar->width() / 2.0);
+            int y = layoutRecovery ? owner->height() - toolbar->height() - 16
+                                   : qRound(selected.top() - toolbar->height() - 8);
+            // Keep the image's top edge unobscured when a fitted image leaves a
+            // useful side margin but no room above its floating controls.
+            if (!layoutRecovery && y < 8 && selected.left() >= toolbar->width() + 16) {
+                x = qRound(selected.left() - toolbar->width() - 8);
+                y = qRound(selected.top());
+            } else if (!layoutRecovery && y < 8 &&
+                       selected.right() + toolbar->width() + 16 <= owner->width()) {
+                x = qRound(selected.right() + 8);
+                y = qRound(selected.top());
+            }
+            x = qBound(8, x, maximumX);
+            y = qBound(8, y, maximumY);
+            toolbar->move(x, y);
+            toolbar->raise();
+        }
+        constexpr int fitInset = 12;
+        fit->move(std::max(0, owner->width() - fit->width() - fitInset),
+                  std::max(0, owner->height() - fit->height() - fitInset));
+        fit->setEnabled(layout.isValid());
+        fit->raise();
+        owner->update();
+        detailTimer->start();
+    }
+    void refresh() {
+        cancelDetails();
+        const bool wasEmpty = order.isEmpty();
+        const auto anchor = viewportRect(document->selectedId()).center();
+        const bool anchored = !itemRect(document->selectedId()).isEmpty();
+        layout = document->layout();
+        order.clear();
+        QSet<quint64> retained;
+        for (const auto& item : document->items()) {
+            order.push_back(item.id);
+            retained.insert(item.id);
+            if (!revisions.contains(item.id) || revisions.value(item.id) != item.revision) {
+                previews.insert(item.id, item.preview);
+                previewTransforms.insert(item.id, item.transform);
+                revisions.insert(item.id, item.revision);
+            }
+        }
+        for (auto it = previews.begin(); it != previews.end();) {
+            if (!retained.contains(it.key())) {
+                revisions.remove(it.key());
+                previewTransforms.remove(it.key());
+                it = previews.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        for (auto it = details.begin(); it != details.end();) {
+            if (!retained.contains(it.key()) || revisions.value(it.key()) != it->revision)
+                it = details.erase(it);
+            else
+                ++it;
+        }
+        if (wasEmpty && !order.isEmpty())
+            automaticFit = true;
+        if (automaticFit)
+            owner->fitToCanvas();
+        else if (anchored && !itemRect(document->selectedId()).isEmpty())
+            offset += anchor - viewportRect(document->selectedId()).center();
+        if (document->items().isEmpty()) {
+            automaticFit = true;
+            offset = {};
+            zoom = 1;
+        }
+        geometryChanged();
+    }
+};
+
+CollagePreviewCanvas::CollagePreviewCanvas(CollageDocument* document, QWidget* parent)
+    : QWidget(parent), m_impl(std::make_unique<Impl>()) {
+    auto& d = *m_impl;
+    d.owner = this;
+    d.document = document;
+    setObjectName(QStringLiteral("collagePreviewCanvas"));
+    setMinimumSize(280, 220);
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    setFocusPolicy(Qt::StrongFocus);
+    setMouseTracking(true);
+    setAcceptDrops(true);
+    d.checker = checkerboard(this);
+    d.detailTimer = new QTimer(this);
+    d.detailTimer->setSingleShot(true);
+    d.detailTimer->setInterval(70);
+    connect(d.detailTimer, &QTimer::timeout, this, [this] { m_impl->requestDetails(); });
+    d.toolbar = new TokenSurface(this);
+    d.toolbar->setObjectName(QStringLiteral("collageImageToolbar"));
+    auto* tools = new QHBoxLayout(d.toolbar);
+    tools->setContentsMargins(3, 2, 3, 2);
+    tools->setSpacing(0);
+    const std::array<adqt::icons::IconRef, 6> refs{
+        icons::RotateRight(), icons::RotateLeft(),
+        icons::Swap(),        snow_shot::presentation::icons::custom::outlined::FlipVertical(),
+        icons::Reload(),      icons::IconDelete()};
+    const std::array<const char*, 6> names{
+        "collageRotateClockwise", "collageRotateCounterclockwise", "collageFlipHorizontal",
+        "collageFlipVertical",    "collageResetTransform",         "collageDeleteSelected"};
+    for (std::size_t i = 0; i < d.actions.size(); ++i) {
+        if (i == 5) {
+            auto* divider = new AdDivider(d.toolbar);
+            divider->setOrientation(AdDivider::Orientation::Vertical);
+            divider->setFixedSize(7, 14);
+            tools->addWidget(divider, 0, Qt::AlignVCenter);
+        }
+        d.actions[i] = new AdButton(d.toolbar);
+        iconButton(d.actions[i], refs[i], names[i]);
+        d.actions[i]->setFixedSize(26, 26);
+        d.actions[i]->setReferenceIconSize({14, 14});
+        tools->addWidget(d.actions[i]);
+        connect(d.actions[i], &QAbstractButton::pressed, this, [this] { preserveViewport(); });
+    }
+    d.actions.back()->setAccentRole(AdButton::AccentRole::Danger);
+    connect(d.actions[0], &QAbstractButton::clicked, this,
+            [document] { document->rotate(document->selectedId(), true); });
+    connect(d.actions[1], &QAbstractButton::clicked, this,
+            [document] { document->rotate(document->selectedId(), false); });
+    connect(d.actions[2], &QAbstractButton::clicked, this,
+            [document] { document->flip(document->selectedId(), true); });
+    connect(d.actions[3], &QAbstractButton::clicked, this,
+            [document] { document->flip(document->selectedId(), false); });
+    connect(d.actions[4], &QAbstractButton::clicked, this,
+            [document] { document->resetTransform(document->selectedId()); });
+    connect(d.actions[5], &QAbstractButton::clicked, this,
+            [document] { document->remove(document->selectedId()); });
+    d.fit =
+        new OverlayControlButton(OverlayControlButton::Intent::Primary, icons::Fullscreen(), this);
+    d.fit->setObjectName(QStringLiteral("collageFitToCanvas"));
+    d.fit->setFocusPolicy(Qt::StrongFocus);
+    connect(d.fit, &QAbstractButton::clicked, this, &CollagePreviewCanvas::fitToCanvas);
+    connect(document, &CollageDocument::changed, this, [this] { m_impl->refresh(); });
+    connect(document, &CollageDocument::selectionChanged, this,
+            [this] { m_impl->geometryChanged(); });
+    connect(&adqt::theme::ThemeManager::instance(), &adqt::theme::ThemeManager::themeChanged, this,
+            [this] {
+                m_impl->checker = checkerboard(this);
+                m_impl->toolbar->update();
+                update();
+            });
+    retranslateUi();
+    d.refresh();
+}
+
+CollagePreviewCanvas::~CollagePreviewCanvas() {
+    m_impl->cancelDetails();
+}
+qreal CollagePreviewCanvas::zoom() const {
+    return m_impl->zoom;
+}
+QPointF CollagePreviewCanvas::offset() const {
+    return m_impl->offset;
+}
+QRectF CollagePreviewCanvas::imageViewportRect(quint64 id) const {
+    return m_impl->viewportRect(id);
+}
+void CollagePreviewCanvas::fitToCanvas() {
+    auto& d = *m_impl;
+    if (!d.layout.isValid())
+        return;
+    d.automaticFit = true;
+    d.zoom = std::min({1.0, qreal(std::max(1, width() - 48)) / d.layout.size.width(),
+                       qreal(std::max(1, height() - 48)) / d.layout.size.height()});
+    d.offset = (QPointF(width(), height()) -
+                QPointF(d.layout.size.width(), d.layout.size.height()) * d.zoom) /
+               2;
+    d.geometryChanged();
+}
+void CollagePreviewCanvas::centerImage(quint64 id) {
+    auto& d = *m_impl;
+    if (!d.order.contains(id))
+        return;
+    d.document->select(id);
+    const auto bounds = d.itemRect(id);
+    if (bounds.isEmpty())
+        return;
+    d.automaticFit = false;
+    d.zoom = std::min({d.zoom, qreal(std::max(1, width() - 48)) / bounds.width(),
+                       qreal(std::max(1, height() - 48)) / bounds.height()});
+    d.offset = QPointF(width() / 2.0, height() / 2.0) - bounds.center() * d.zoom;
+    d.geometryChanged();
+}
+void CollagePreviewCanvas::preserveViewport() {
+    m_impl->automaticFit = false;
+}
+void CollagePreviewCanvas::setEditingEnabled(bool enabled) {
+    m_impl->editing = enabled;
+    m_impl->pressedId = 0;
+    m_impl->targetId = 0;
+    m_impl->dragging = false;
+    m_impl->geometryChanged();
+}
+void CollagePreviewCanvas::retranslateUi() {
+    setAccessibleName(text("Collage preview"));
+    setAccessibleDescription(text("Drag with the middle mouse button to pan; scroll to zoom"));
+    const std::array<const char*, 6> labels{
+        "Rotate clockwise by 90°", "Rotate counterclockwise by 90°",
+        "Flip horizontally",       "Flip vertically",
+        "Reset transform",         "Delete image"};
+    for (std::size_t i = 0; i < labels.size(); ++i) {
+        m_impl->actions[i]->setToolTip(text(labels[i]));
+        m_impl->actions[i]->setAccessibleName(m_impl->actions[i]->toolTip());
+    }
+    m_impl->fit->setToolTip(text("Fit to canvas"));
+    m_impl->fit->setAccessibleName(m_impl->fit->toolTip());
+    update();
+}
+void CollagePreviewCanvas::paintEvent(QPaintEvent*) {
+    const auto& d = *m_impl;
+    const auto theme = adqt::theme::ThemeManager::instance().resolveTheme(this);
+    QPainter painter(this);
+    painter.fillRect(rect(), QBrush(d.checker));
+    if (d.document->items().isEmpty()) {
+        return;
+    }
+    if (!d.layout.isValid()) {
+        painter.setPen(theme.colorError);
+        painter.drawText(rect().adjusted(24, 24, -24, -24), Qt::AlignCenter | Qt::TextWordWrap,
+                         d.layout.error);
+        return;
+    }
+    const QRectF output(d.offset, QSizeF(d.layout.size) * d.zoom);
+    painter.fillRect(output, d.document->settings().background);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform);
+    for (const auto id : d.order) {
+        const auto bounds = d.viewportRect(id);
+        if (!bounds.intersects(rect()))
+            continue;
+        drawTransformedPreview(painter, bounds, d.previews.value(id),
+                               d.previewTransforms.value(id));
+        const auto detail = d.details.constFind(id);
+        if (detail != d.details.cend() && detail->revision == d.revisions.value(id)) {
+            const auto tileBounds = d.detailViewport(*detail, bounds);
+            painter.fillRect(tileBounds, QBrush(d.checker));
+            painter.fillRect(tileBounds, d.document->settings().background);
+            painter.drawImage(tileBounds, detail->image);
+        }
+    }
+    painter.setBrush(Qt::NoBrush);
+    painter.setPen(QPen(theme.colorBorder, 1));
+    painter.drawRect(output);
+    const auto selected = d.viewportRect(d.document->selectedId());
+    if (!selected.isEmpty()) {
+        painter.save();
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(QPen(kSelectionFrameColor, kSelectionFrameWidth));
+        painter.drawRect(selected);
+        painter.restore();
+    }
+    if (d.targetId && d.targetId != d.pressedId) {
+        const auto target = d.viewportRect(d.targetId);
+        painter.save();
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.fillRect(target, kReplacementFillColor);
+        painter.setPen(QPen(kSelectionFrameColor, kSelectionFrameWidth, Qt::DashLine));
+        const qreal inset = kSelectionFrameWidth / 2;
+        painter.drawRect(target.adjusted(inset, inset, -inset, -inset));
+        painter.restore();
+    }
+}
+void CollagePreviewCanvas::resizeEvent(QResizeEvent*) {
+    if (m_impl->automaticFit)
+        fitToCanvas();
+    m_impl->geometryChanged();
+}
+void CollagePreviewCanvas::mousePressEvent(QMouseEvent* event) {
+    auto& d = *m_impl;
+    setFocus(Qt::MouseFocusReason);
+    if (event->button() == Qt::MiddleButton) {
+        d.panning = true;
+        d.automaticFit = false;
+        d.last = event->position();
+        setCursor(Qt::ClosedHandCursor);
+        event->accept();
+    } else if (event->button() == Qt::LeftButton) {
+        d.automaticFit = false;
+        const auto selected = d.hit(event->position());
+        d.pressedId = d.editing ? selected : 0;
+        d.press = event->position();
+        d.document->select(selected);
+        event->accept();
+    }
+}
+void CollagePreviewCanvas::mouseMoveEvent(QMouseEvent* event) {
+    auto& d = *m_impl;
+    if (d.panning) {
+        d.offset += event->position() - d.last;
+        d.last = event->position();
+        d.geometryChanged();
+    } else if (d.pressedId && d.editing && (event->buttons() & Qt::LeftButton)) {
+        if ((event->position() - d.press).manhattanLength() >= QApplication::startDragDistance())
+            d.dragging = true;
+        d.targetId = d.dragging ? d.hit(event->position()) : 0;
+        if (d.dragging)
+            setCursor(d.targetId && d.targetId != d.pressedId ? Qt::DragMoveCursor
+                                                              : Qt::ForbiddenCursor);
+        update();
+    }
+}
+void CollagePreviewCanvas::mouseReleaseEvent(QMouseEvent* event) {
+    auto& d = *m_impl;
+    if (event->button() == Qt::MiddleButton)
+        d.panning = false;
+    if (event->button() == Qt::LeftButton) {
+        const auto target = d.hit(event->position());
+        if (d.dragging && d.editing && target && target != d.pressedId)
+            d.document->swapItems(d.pressedId, target);
+        d.pressedId = 0;
+        d.targetId = 0;
+        d.dragging = false;
+    }
+    unsetCursor();
+    d.geometryChanged();
+}
+void CollagePreviewCanvas::wheelEvent(QWheelEvent* event) {
+    auto& d = *m_impl;
+    if (!d.layout.isValid()) {
+        event->accept();
+        return;
+    }
+    const double steps = usesPreciseWheelDelta(*event) ? event->pixelDelta().y() / 100.0
+                                                       : event->angleDelta().y() / 120.0;
+    if (steps != 0) {
+        const double next = std::clamp(d.zoom * std::pow(1.15, steps), 0.000000001, 16.0);
+        d.offset = event->position() - (event->position() - d.offset) * (next / d.zoom);
+        d.zoom = next;
+        d.automaticFit = false;
+        d.geometryChanged();
+    }
+    event->accept();
+}
+void CollagePreviewCanvas::keyPressEvent(QKeyEvent* event) {
+    auto& d = *m_impl;
+    if (event->key() == Qt::Key_F || event->key() == Qt::Key_Home) {
+        fitToCanvas();
+    } else if ((event->key() == Qt::Key_Delete || event->key() == Qt::Key_Backspace) && d.editing) {
+        d.document->remove(d.document->selectedId());
+    } else if (event->key() == Qt::Key_Escape) {
+        d.pressedId = 0;
+        d.targetId = 0;
+        d.dragging = false;
+        d.document->select(0);
+        unsetCursor();
+    } else if (event->key() == Qt::Key_Left || event->key() == Qt::Key_Up ||
+               event->key() == Qt::Key_Right || event->key() == Qt::Key_Down) {
+        const auto index = d.order.indexOf(d.document->selectedId());
+        const int delta = event->key() == Qt::Key_Left || event->key() == Qt::Key_Up ? -1 : 1;
+        if (!d.order.isEmpty())
+            centerImage(d.order[qBound(qsizetype{0}, index + delta, d.order.size() - 1)]);
+    } else {
+        QWidget::keyPressEvent(event);
+        return;
+    }
+    event->accept();
+}
+void CollagePreviewCanvas::dragEnterEvent(QDragEnterEvent* event) {
+    if (m_impl->editing && dragItem(event->mimeData(), m_impl->document))
+        event->acceptProposedAction();
+}
+void CollagePreviewCanvas::dragMoveEvent(QDragMoveEvent* event) {
+    m_impl->targetId = m_impl->hit(event->position());
+    if (m_impl->targetId && m_impl->targetId != dragItem(event->mimeData(), m_impl->document))
+        event->acceptProposedAction();
+    else
+        event->ignore();
+    update();
+}
+void CollagePreviewCanvas::dragLeaveEvent(QDragLeaveEvent*) {
+    m_impl->targetId = 0;
+    update();
+}
+void CollagePreviewCanvas::dropEvent(QDropEvent* event) {
+    const auto target = m_impl->hit(event->position());
+    const auto source = dragItem(event->mimeData(), m_impl->document);
+    m_impl->targetId = 0;
+    if (m_impl->editing && target && source && m_impl->document->swapItems(source, target))
+        event->acceptProposedAction();
+    update();
+}
+void CollagePreviewCanvas::changeEvent(QEvent* event) {
+    if (event->type() == QEvent::LanguageChange)
+        retranslateUi();
+    QWidget::changeEvent(event);
+}
+
+struct CollageEditorWidget::Impl {
+    struct LengthEditor {
+        QLabel* label = nullptr;
+        AdInputNumber* input = nullptr;
+        AdSegmented* unit = nullptr;
+        bool percentage = false;
+    };
+    CollageEditorWidget* owner = nullptr;
+    CollageDocument* document = nullptr;
+    CollagePreviewCanvas* canvas = nullptr;
+    QWidget* emptyState = nullptr;
+    QLabel* emptyPrompt = nullptr;
+    AdButton* emptyAdd = nullptr;
+    QWidget* thumbnailRow = nullptr;
+    QWidget* outputDescription = nullptr;
+    QLabel* dimensions = nullptr;
+    QLabel* total = nullptr;
+    AdButton* add = nullptr;
+    AdButton* clear = nullptr;
+    AdScrollArea* strip = nullptr;
+    QWidget* thumbnails = nullptr;
+    QHBoxLayout* thumbnailLayout = nullptr;
+    QHash<quint64, CollageThumbnail*> thumbnailById;
+    AdForm* form = nullptr;
+    AdSegmented* direction = nullptr;
+    AdSegmented* sizing = nullptr;
+    LengthEditor border;
+    LengthEditor spacing;
+    AdColorPicker* color = nullptr;
+    std::array<AdFormItem*, 5> fields{};
+    std::array<CollageColorPresetButton*, 8> presets{};
+    bool syncing = false;
+    bool loading = false;
+    bool exporting = false;
+
+    int lengthReference() const {
+        const auto settings = document->settings();
+        int reference = 0;
+        for (const auto& item : document->items()) {
+            const auto size = transformedSize(item);
+            reference = std::max(reference, settings.direction == CollageDirection::Vertical
+                                                ? size.width()
+                                                : size.height());
+            if (settings.sizing == CollageSizing::Uniform)
+                break;
+        }
+        return reference;
+    }
+    void syncLengthInputs() {
+        const auto settings = document->settings();
+        const int reference = lengthReference();
+        const auto description = text(settings.direction == CollageDirection::Vertical
+                                          ? "Percentage of the widest image after sizing"
+                                          : "Percentage of the tallest image after sizing");
+        const auto sync = [reference, &description](LengthEditor& editor, int pixels,
+                                                    const char* pixelName,
+                                                    const char* percentageName) {
+            const QSignalBlocker blocker(editor.input);
+            editor.input->setRange(0, editor.percentage && reference > 0
+                                          ? 100.0 * std::numeric_limits<int>::max() / reference
+                                          : std::numeric_limits<int>::max());
+            editor.input->setSuffixText(editor.percentage ? QStringLiteral("%") : text(" px"));
+            editor.input->setAccessibleName(text(editor.percentage ? percentageName : pixelName));
+            editor.input->setToolTip(editor.percentage ? description : text(pixelName));
+            editor.unit->setToolTip(description);
+            editor.input->setEnabled(!editor.percentage || reference > 0);
+            if (editor.percentage && reference == 0)
+                editor.input->clear();
+            else
+                editor.input->setValue(editor.percentage ? 100.0 * pixels / reference : pixels);
+        };
+        // Unit and display rounding changes must never alter the stored output pixels.
+        sync(border, settings.border, "Outer border in output pixels",
+             "Outer border in percentage");
+        sync(spacing, settings.spacing, "Image spacing in output pixels",
+             "Image spacing in percentage");
+    }
+    void changeLengthUnit(LengthEditor& editor, const QVariant& value) {
+        if (syncing)
+            return;
+        if (auto* focus = QApplication::focusWidget();
+            focus && (focus == editor.input || editor.input->isAncestorOf(focus)))
+            focus->clearFocus();
+        editor.percentage = value.toString() == QStringLiteral("percentage");
+        syncLengthInputs();
+    }
+    int lengthPixels(const LengthEditor& editor, double value) const {
+        const double pixels = editor.percentage ? value * lengthReference() / 100.0 : value;
+        return qRound(std::clamp(pixels, 0.0, double(std::numeric_limits<int>::max())));
+    }
+    void enabled() {
+        add->setEnabled(!loading && !exporting);
+        add->setBusy(loading);
+        clear->setEnabled(!exporting && !document->items().isEmpty());
+        form->setEnabled(!exporting);
+        for (auto* thumbnail : thumbnailById)
+            thumbnail->setEditingEnabled(!exporting, !loading);
+        canvas->setEditingEnabled(!exporting);
+        emptyAdd->setEnabled(!loading && !exporting);
+        emptyAdd->setBusy(loading);
+    }
+    void settingsChanged(const QString& field, const std::function<void(CollageSettings&)>& edit) {
+        if (syncing)
+            return;
+        canvas->preserveViewport();
+        auto settings = document->settings();
+        const auto previousDirection = settings.direction;
+        edit(settings);
+        document->setSettings(settings);
+        if (document->settings().direction != previousDirection)
+            canvas->fitToCanvas();
+        emit owner->settingsEdited(field);
+    }
+    void refresh() {
+        syncing = true;
+        const auto settings = document->settings();
+        direction->setCurrentValue(settings.direction == CollageDirection::Vertical
+                                       ? QStringLiteral("vertical")
+                                       : QStringLiteral("horizontal"));
+        sizing->setCurrentValue(settings.sizing == CollageSizing::Uniform
+                                    ? QStringLiteral("uniform")
+                                    : QStringLiteral("original"));
+        syncLengthInputs();
+        color->setValue(AdColorValue::solid(settings.background));
+        for (std::size_t i = 0; i < presets.size(); ++i)
+            presets[i]->setSelected(settings.background ==
+                                    QColor(QString::fromLatin1(kColorValues[i])));
+        syncing = false;
+        QSet<quint64> retained;
+        int ordinal = 0;
+        for (const auto& item : document->items()) {
+            retained.insert(item.id);
+            auto* thumbnail = thumbnailById.value(item.id);
+            if (!thumbnail) {
+                thumbnail = new CollageThumbnail(document, item.id, thumbnails);
+                thumbnail->selected = [this](quint64 id) { canvas->centerImage(id); };
+                thumbnail->editStarted = [this] { canvas->preserveViewport(); };
+                thumbnail->replaceRequested = [this](quint64 id) {
+                    emit owner->replaceImageRequested(id);
+                };
+                thumbnailById.insert(item.id, thumbnail);
+            }
+            thumbnail->setItem(item, ++ordinal);
+            thumbnailLayout->removeWidget(thumbnail);
+            thumbnailLayout->insertWidget(ordinal - 1, thumbnail);
+        }
+        for (auto it = thumbnailById.begin(); it != thumbnailById.end();) {
+            if (!retained.contains(it.key())) {
+                thumbnailLayout->removeWidget(it.value());
+                it.value()->hide();
+                it.value()->deleteLater();
+                it = thumbnailById.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        thumbnails->adjustSize();
+        const bool empty = document->items().isEmpty();
+        canvas->setVisible(!empty);
+        thumbnailRow->setVisible(!empty);
+        emptyState->setVisible(empty);
+        const auto layout = document->layout();
+        dimensions->setText(
+            layout.isValid() ? text("%1 × %2 px").arg(layout.size.width()).arg(layout.size.height())
+                             : QString{});
+        dimensions->setVisible(layout.isValid());
+        total->setText(text("Total: %1 images").arg(document->items().size()));
+        enabled();
+    }
+    void theme() {
+        const auto theme = adqt::theme::ThemeManager::instance().resolveTheme(owner);
+        auto labelFont = form->font();
+        labelFont.setPixelSize(qMax(12, qRound(theme.fontSize)));
+        labelFont.setWeight(QFont::Normal);
+        for (auto* label : {border.label, spacing.label}) {
+            label->setFont(labelFont);
+            auto palette = label->palette();
+            palette.setColor(QPalette::WindowText, theme.colorText);
+            palette.setColor(QPalette::Disabled, QPalette::WindowText, theme.colorTextDisabled);
+            label->setPalette(palette);
+        }
+        auto labelPalette = owner->palette();
+        labelPalette.setColor(QPalette::WindowText, theme.colorTextSecondary);
+        dimensions->setPalette(labelPalette);
+        total->setPalette(labelPalette);
+        emptyPrompt->setPalette(labelPalette);
+        auto promptFont = owner->font();
+        promptFont.setPixelSize(qRound(theme.fontSize));
+        emptyPrompt->setFont(promptFont);
+        const auto metric = styles::ThemeManager::instance().themeColorScheme().metricAlias;
+        emptyState->layout()->setContentsMargins(metric.marginLG, metric.marginLG, metric.marginLG,
+                                                 metric.marginLG);
+        emptyState->layout()->setSpacing(metric.marginMD);
+        outputDescription->layout()->setSpacing(metric.marginSM);
+        for (auto* label : {dimensions, total}) {
+            QFont font = owner->font();
+            font.setPixelSize(metric.fontSizeSM);
+            label->setFont(font);
+        }
+        owner->update();
+        for (auto* thumbnail : thumbnailById)
+            thumbnail->update();
+    }
+};
+
+CollageEditorWidget::CollageEditorWidget(CollageDocument* document, QWidget* parent)
+    : QWidget(parent), m_impl(std::make_unique<Impl>()) {
+    auto& d = *m_impl;
+    d.owner = this;
+    d.document = document;
+    setObjectName(QStringLiteral("collageEditorWidget"));
+    const auto theme = styles::ThemeManager::instance().themeColorScheme().metricAlias;
+    d.outputDescription = new QWidget(this);
+    d.outputDescription->setObjectName(QStringLiteral("collageOutputDescription"));
+    d.outputDescription->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    d.outputDescription->hide();
+    auto* descriptionLayout = new QHBoxLayout(d.outputDescription);
+    descriptionLayout->setContentsMargins(0, 0, 0, 0);
+    descriptionLayout->setSpacing(theme.marginSM);
+    d.dimensions = new QLabel(d.outputDescription);
+    d.dimensions->setObjectName(QStringLiteral("collageOutputDimensions"));
+    d.total = new QLabel(d.outputDescription);
+    d.total->setObjectName(QStringLiteral("collageImageTotal"));
+    for (auto* label : {d.dimensions, d.total}) {
+        label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        label->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+        descriptionLayout->addWidget(label, 0, Qt::AlignVCenter);
+    }
+    descriptionLayout->addStretch(1);
+    auto* outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(theme.marginSM);
+    auto* body = new QHBoxLayout;
+    body->setSpacing(theme.marginMD);
+    auto* previewColumn = new QVBoxLayout;
+    previewColumn->setSpacing(theme.marginXS);
+    d.canvas = new CollagePreviewCanvas(document, this);
+    previewColumn->addWidget(d.canvas, 1);
+    d.emptyState = new QWidget(this);
+    d.emptyState->setObjectName(QStringLiteral("collageEmptyState"));
+    auto* emptyLayout = new QVBoxLayout(d.emptyState);
+    emptyLayout->addStretch(1);
+    d.emptyPrompt = new QLabel(d.emptyState);
+    d.emptyPrompt->setObjectName(QStringLiteral("collageEmptyPrompt"));
+    d.emptyPrompt->setAlignment(Qt::AlignCenter);
+    d.emptyPrompt->setWordWrap(true);
+    emptyLayout->addWidget(d.emptyPrompt);
+    d.emptyAdd = new AdButton(d.emptyState);
+    d.emptyAdd->setObjectName(QStringLiteral("collageEmptyAddImages"));
+    d.emptyAdd->setIconRef(icons::Plus());
+    d.emptyAdd->setButtonStyle(AdButton::ButtonStyle::Solid);
+    d.emptyAdd->setAccentRole(AdButton::AccentRole::Primary);
+    d.emptyAdd->setFocusPolicy(Qt::StrongFocus);
+    emptyLayout->addWidget(d.emptyAdd, 0, Qt::AlignHCenter);
+    emptyLayout->addStretch(1);
+    previewColumn->addWidget(d.emptyState, 1);
+    body->addLayout(previewColumn, 1);
+
+    auto* formScroll = new AdScrollArea(this);
+    formScroll->setObjectName(QStringLiteral("collageSettingsScroll"));
+    formScroll->setFixedWidth(kSettingsFormWidth);
+    formScroll->setWidgetResizable(true);
+    formScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    formScroll->setFrameShape(QFrame::NoFrame);
+    formScroll->viewport()->setAutoFillBackground(false);
+    d.form = new AdForm;
+    d.form->setObjectName(QStringLiteral("collageSettingsForm"));
+    d.form->setFormLayout(AdForm::FormLayout::Vertical);
+    d.form->setLabelAlign(AdForm::LabelAlign::Left);
+    d.form->setColon(false);
+    d.form->setRequiredMark(AdForm::RequiredMark::Hidden);
+    d.form->setContentsMargins(0, 0, kSettingsFormRightMargin, 0);
+    formScroll->setContentWidget(d.form);
+    d.form->setAutoFillBackground(false);
+    body->addWidget(formScroll);
+    outer->addLayout(body, 1);
+
+    const auto segmented = [&d](const char* name, const char* first, const char* second,
+                                std::size_t index) {
+        auto* control = new AdSegmented(d.form);
+        control->setObjectName(QString::fromLatin1(name));
+        control->setDistribution(AdSegmented::Distribution::Fill);
+        control->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        control->addOption({}, QString::fromLatin1(first));
+        control->addOption({}, QString::fromLatin1(second));
+        d.fields[index] = d.form->addField({}, control, QString::fromLatin1(name));
+        return control;
+    };
+    d.direction = segmented("collageDirection", "vertical", "horizontal", 0);
+    d.sizing = segmented("collageSizing", "uniform", "original", 1);
+    const auto number = [&d](Impl::LengthEditor& editor, const char* name, std::size_t index) {
+        auto* field = new QWidget(d.form);
+        field->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        auto* layout = new QVBoxLayout(field);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(8);
+        auto* header = new QHBoxLayout;
+        header->setSpacing(8);
+        editor.label = new QLabel(field);
+        editor.label->setObjectName(QString::fromLatin1(name) + QStringLiteral("Label"));
+        editor.label->setWordWrap(true);
+        header->addWidget(editor.label, 1);
+        editor.unit = new AdSegmented(field);
+        editor.unit->setObjectName(QString::fromLatin1(name) + QStringLiteral("UnitSegmented"));
+        editor.unit->setControlSize(AdSegmented::ControlSize::Small);
+        editor.unit->setDistribution(AdSegmented::Distribution::Content);
+        editor.unit->addOption({}, QStringLiteral("pixels"));
+        editor.unit->addOption({}, QStringLiteral("percentage"));
+        editor.unit->setCurrentValue(QStringLiteral("pixels"));
+        header->addWidget(editor.unit, 0, Qt::AlignRight | Qt::AlignVCenter);
+        layout->addLayout(header);
+        auto* input = new AdInputNumber(field);
+        input->setObjectName(QString::fromLatin1(name));
+        input->setDecimals(0);
+        input->setRange(0, std::numeric_limits<int>::max());
+        input->setSingleStep(1);
+        input->setStepButtonLayout(AdInputNumber::StepButtonLayout::Compact);
+        input->setSuffixText(text(" px"));
+        input->setKeyboardTracking(false);
+        input->setWheelStepEnabled(false);
+        input->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        layout->addWidget(input);
+        d.fields[index] = d.form->addField({}, field, QString::fromLatin1(name));
+        editor.input = input;
+    };
+    number(d.border, "collageOuterBorder", 2);
+    number(d.spacing, "collageImageSpacing", 3);
+    auto* colors = new QWidget(d.form);
+    colors->setObjectName(QStringLiteral("collageBackgroundColors"));
+    colors->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    auto* colorLayout = new QHBoxLayout(colors);
+    colorLayout->setContentsMargins(0, 0, 0, 0);
+    colorLayout->setSpacing(theme.marginXS);
+    d.color = new AdColorPicker(colors);
+    d.color->setObjectName(QStringLiteral("collageBackgroundColor"));
+    d.color->setAlphaChannelEnabled(true);
+    d.color->setAllowClear(true);
+    d.color->setMode(AdColorPicker::Mode::Solid);
+    d.color->setModeOptions({AdColorPicker::Mode::Solid});
+    d.color->setTriggerTextVisible(false);
+    d.color->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    auto* presets = new QWidget(colors);
+    auto* presetLayout = new QHBoxLayout(presets);
+    presetLayout->setContentsMargins(0, 0, 0, 0);
+    presetLayout->setSpacing(theme.marginXXS);
+    for (std::size_t i = 0; i < d.presets.size(); ++i) {
+        auto* button =
+            new CollageColorPresetButton(QColor(QString::fromLatin1(kColorValues[i])), presets);
+        d.presets[i] = button;
+        button->setObjectName(QStringLiteral("collageColorPreset_%1").arg(i));
+        presetLayout->addWidget(button);
+        connect(button, &QAbstractButton::clicked, this, [this, i, button] {
+            m_impl->settingsChanged(
+                QStringLiteral("background_color"), [i](CollageSettings& settings) {
+                    settings.background = QColor(QString::fromLatin1(kColorValues[i]));
+                });
+            button->setSelected(true);
+        });
+    }
+    colorLayout->addWidget(presets, 0, Qt::AlignVCenter);
+    auto* colorSeparator = new AdDivider(colors);
+    colorSeparator->setObjectName(QStringLiteral("collageColorSeparator"));
+    colorSeparator->setOrientation(AdDivider::Orientation::Vertical);
+    AdDivider::MetricTokens separatorMetrics;
+    separatorMetrics.verticalMarginInline = 1;
+    colorSeparator->setComponentTokens({{}, separatorMetrics});
+    colorSeparator->setFixedHeight(24);
+    colorLayout->addWidget(colorSeparator, 0, Qt::AlignVCenter);
+    colorLayout->addWidget(d.color, 0, Qt::AlignVCenter);
+    colorLayout->addStretch(1);
+    d.fields[4] = d.form->addField({}, colors, QStringLiteral("background"));
+    d.form->layout()->setAlignment(Qt::AlignTop);
+
+    d.thumbnailRow = new QWidget(this);
+    d.thumbnailRow->setObjectName(QStringLiteral("collageThumbnailRow"));
+    auto* stripRow = new QHBoxLayout(d.thumbnailRow);
+    stripRow->setContentsMargins(0, 0, 0, 0);
+    stripRow->setSpacing(theme.marginSM);
+    d.strip = new AdScrollArea(this);
+    d.strip->setObjectName(QStringLiteral("collageThumbnailStrip"));
+    d.strip->setFrameShape(QFrame::NoFrame);
+    d.strip->setWidgetResizable(false);
+    // AdScrollArea overlays its own bars; enabling Qt's bars also reserves a second row.
+    d.strip->setFitToWidth(false);
+    d.strip->setFixedHeight(kThumbnailSize.height() + 2 * kThumbnailMargin);
+    d.thumbnails = new QWidget;
+    d.thumbnails->setObjectName(QStringLiteral("collageThumbnails"));
+    d.thumbnailLayout = new QHBoxLayout(d.thumbnails);
+    d.thumbnailLayout->setContentsMargins(kThumbnailMargin, kThumbnailMargin, kThumbnailMargin,
+                                          kThumbnailMargin);
+    d.thumbnailLayout->setSpacing(theme.marginXS);
+    d.thumbnailLayout->setSizeConstraint(QLayout::SetFixedSize);
+    d.strip->setContentWidget(d.thumbnails);
+    d.strip->setAutoFillBackground(false);
+    d.strip->viewport()->setAutoFillBackground(false);
+    // QScrollArea::setWidget enables background filling on the content widget.
+    d.thumbnails->setAutoFillBackground(false);
+    stripRow->addWidget(d.strip, 1);
+    auto* imageActions = new QVBoxLayout;
+    imageActions->setSpacing(theme.marginXS);
+    imageActions->addStretch(1);
+    d.add = new AdButton(this);
+    d.add->setObjectName(QStringLiteral("collageAddImages"));
+    d.add->setIconRef(icons::Plus());
+    d.clear = new AdButton(this);
+    d.clear->setObjectName(QStringLiteral("collageClearAll"));
+    d.clear->setAccentRole(AdButton::AccentRole::Danger);
+    imageActions->addWidget(d.add);
+    imageActions->addWidget(d.clear);
+    imageActions->addStretch(1);
+    stripRow->addLayout(imageActions);
+    previewColumn->addWidget(d.thumbnailRow);
+
+    connect(d.add, &QAbstractButton::clicked, this, &CollageEditorWidget::addImagesRequested);
+    connect(d.emptyAdd, &QAbstractButton::clicked, this, &CollageEditorWidget::addImagesRequested);
+    connect(d.clear, &QAbstractButton::clicked, this, &CollageEditorWidget::clearRequested);
+    connect(d.direction, &AdSegmented::currentValueChanged, this, [this](const QVariant& value) {
+        m_impl->settingsChanged(QStringLiteral("direction"), [&value](CollageSettings& settings) {
+            settings.direction = value.toString() == QStringLiteral("horizontal")
+                                     ? CollageDirection::Horizontal
+                                     : CollageDirection::Vertical;
+        });
+    });
+    connect(d.sizing, &AdSegmented::currentValueChanged, this, [this](const QVariant& value) {
+        m_impl->settingsChanged(QStringLiteral("sizing_mode"), [&value](CollageSettings& settings) {
+            settings.sizing = value.toString() == QStringLiteral("original")
+                                  ? CollageSizing::Original
+                                  : CollageSizing::Uniform;
+        });
+    });
+    connect(d.border.unit, &AdSegmented::currentValueChanged, this,
+            [this](const QVariant& value) { m_impl->changeLengthUnit(m_impl->border, value); });
+    connect(d.spacing.unit, &AdSegmented::currentValueChanged, this,
+            [this](const QVariant& value) { m_impl->changeLengthUnit(m_impl->spacing, value); });
+    connect(d.border.input, &AdInputNumber::valueChanged, this, [this](double value) {
+        const int pixels = m_impl->lengthPixels(m_impl->border, value);
+        m_impl->settingsChanged(QStringLiteral("border_px"),
+                                [pixels](CollageSettings& settings) { settings.border = pixels; });
+    });
+    connect(d.spacing.input, &AdInputNumber::valueChanged, this, [this](double value) {
+        const int pixels = m_impl->lengthPixels(m_impl->spacing, value);
+        m_impl->settingsChanged(QStringLiteral("spacing_px"),
+                                [pixels](CollageSettings& settings) { settings.spacing = pixels; });
+    });
+    connect(d.color, &AdColorPicker::valueChanged, this, [this](const AdColorValue& value) {
+        if (value.isGradient())
+            return;
+        QColor color = value.isNone() ? QColor(Qt::transparent) : value.solidColor;
+        if (color.isValid())
+            m_impl->settingsChanged(
+                QStringLiteral("background_color"),
+                [&color](CollageSettings& settings) { settings.background = color; });
+    });
+    connect(document, &CollageDocument::changed, this, [this] { m_impl->refresh(); });
+    connect(document, &CollageDocument::selectionChanged, this, [this] {
+        for (auto* thumbnail : m_impl->thumbnailById)
+            thumbnail->update();
+    });
+    connect(&adqt::theme::ThemeManager::instance(), &adqt::theme::ThemeManager::themeChanged, this,
+            [this] { m_impl->theme(); });
+    connect(&styles::ThemeManager::instance(), &styles::ThemeManager::themeChanged, this,
+            [this, outer, body, previewColumn, colorLayout, presetLayout, stripRow,
+             imageActions](const styles::ThemeColorScheme& scheme) {
+                const auto& metric = scheme.metricAlias;
+                outer->setSpacing(metric.marginSM);
+                body->setSpacing(metric.marginMD);
+                previewColumn->setSpacing(metric.marginXS);
+                colorLayout->setSpacing(metric.marginXS);
+                presetLayout->setSpacing(metric.marginXXS);
+                stripRow->setSpacing(metric.marginSM);
+                imageActions->setSpacing(metric.marginXS);
+                m_impl->thumbnailLayout->setSpacing(metric.marginXS);
+                m_impl->theme();
+            });
+    retranslateUi();
+    d.refresh();
+    d.theme();
+}
+CollageEditorWidget::~CollageEditorWidget() = default;
+void CollageEditorWidget::setLoading(bool loading) {
+    m_impl->loading = loading;
+    m_impl->enabled();
+}
+void CollageEditorWidget::setExportBusy(bool busy) {
+    m_impl->exporting = busy;
+    m_impl->enabled();
+}
+CollagePreviewCanvas* CollageEditorWidget::canvas() const {
+    return m_impl->canvas;
+}
+QWidget* CollageEditorWidget::outputDescriptionWidget() const {
+    return m_impl->outputDescription;
+}
+void CollageEditorWidget::retranslateUi() {
+    auto& d = *m_impl;
+    d.syncing = true;
+    d.direction->setOptionLabel(0, text("Vertical"));
+    d.direction->setOptionLabel(1, text("Horizontal"));
+    d.direction->setAccessibleName(text("Layout direction"));
+    d.sizing->setOptionLabel(0, text("Uniform size"));
+    d.sizing->setOptionLabel(1, text("Original size"));
+    d.sizing->setAccessibleName(text("Image sizing"));
+    const std::array<const char*, 5> labels{"Layout direction", "Image sizing", "Outer border",
+                                            "Image spacing", "Background color"};
+    for (std::size_t i = 0; i < labels.size(); ++i)
+        if (i != 2 && i != 3)
+            d.fields[i]->setLabel(text(labels[i]));
+    d.border.label->setText(text("Outer border"));
+    d.spacing.label->setText(text("Image spacing"));
+    d.border.unit->setAccessibleName(text("Outer border unit"));
+    d.spacing.unit->setAccessibleName(text("Image spacing unit"));
+    for (auto* unit : {d.border.unit, d.spacing.unit}) {
+        unit->setOptionLabel(0, text("Pixel"));
+        unit->setOptionLabel(1, text("Percentage"));
+    }
+    d.color->setAccessibleName(text("Background color"));
+    d.color->setToolTip(text("Choose a background color, including transparency"));
+    constexpr std::array<const char*, 8> names{"White", "Black", "Gray",   "Red",
+                                               "Green", "Blue",  "Yellow", "Purple"};
+    for (std::size_t i = 0; i < d.presets.size(); ++i) {
+        d.presets[i]->setToolTip(text(names[i]));
+        d.presets[i]->setAccessibleName(text(names[i]));
+    }
+    d.add->setText(text("Add images"));
+    d.emptyPrompt->setText(text("Add images to create a collage"));
+    d.emptyAdd->setText(text("Add images"));
+    d.emptyAdd->setAccessibleName(d.emptyAdd->text());
+    d.clear->setText(text("Clear all"));
+    d.canvas->retranslateUi();
+    d.syncing = false;
+    d.refresh();
+}
+void CollageEditorWidget::changeEvent(QEvent* event) {
+    if (event->type() == QEvent::LanguageChange)
+        retranslateUi();
+    QWidget::changeEvent(event);
+}
+} // namespace snow_shot::presentation::components

@@ -53,7 +53,9 @@ class ScreenshotSelectionExportUiServices final : public ScreenshotSelectionExpo
         SnowShotApiClient* tableRecognition = nullptr,
         std::function<void()> showMainWindowRequested = {},
         std::function<ScreenshotPinnedRecognitionProviders()> recognitionProvider = {},
-        snow_shot::presentation::PinnedWindowGroupManager* groupManager = nullptr);
+        snow_shot::presentation::PinnedWindowGroupManager* groupManager = nullptr,
+        std::function<void(const QVector<ScreenshotPinnedImageSnapshot>&)> imageStitchingRequested =
+            {});
     ~ScreenshotSelectionExportUiServices() override;
 
     [[nodiscard]] bool publishClipboard(QObject* receiver, ScreenshotClipboardPayload payload,

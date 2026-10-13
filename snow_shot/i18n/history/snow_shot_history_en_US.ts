@@ -2,6 +2,365 @@
 <!DOCTYPE TS>
 <TS version="2.1" language="en_US" sourcelanguage="en_US">
     <context>
+        <name>CollageDocument</name>
+        <message>
+            <source>The collage exceeds the 8 GiB image limit. Try fewer images or smaller layout settings.</source>
+            <translation>The collage exceeds the 8 GiB image limit. Try fewer images or smaller layout settings.</translation>
+        </message>
+        <message>
+            <source>The collage export was cancelled.</source>
+            <translation>The collage export was cancelled.</translation>
+        </message>
+        <message>
+            <source>The collage images could not be prepared for export.</source>
+            <translation>The collage images could not be prepared for export.</translation>
+        </message>
+        <message>
+            <source>The collage is too large for the clipboard. Save it to a file instead.</source>
+            <translation>The collage is too large for the clipboard. Save it to a file instead.</translation>
+        </message>
+        <message>
+            <source>The collage layout settings are invalid.</source>
+            <translation>The collage layout settings are invalid.</translation>
+        </message>
+        <message>
+            <source>There is not enough available memory for this collage operation. Try fewer images or close other collage windows.</source>
+            <translation>There is not enough available memory for this collage operation. Try fewer images or close other collage windows.</translation>
+        </message>
+        <message>
+            <source>This collage requires too much temporary memory. Try fewer images or smaller image sizes.</source>
+            <translation>This collage requires too much temporary memory. Try fewer images or smaller image sizes.</translation>
+        </message>
+    </context>
+    <context>
+        <name>CollageEditorWidget</name>
+        <message>
+            <source> px</source>
+            <translation> px</translation>
+        </message>
+        <message>
+            <source>%1 × %2 px</source>
+            <translation>%1 × %2 px</translation>
+        </message>
+        <message>
+            <source>Add images</source>
+            <translation>Add images</translation>
+        </message>
+        <message>
+            <source>Add images to create a collage</source>
+            <translation>Add images to create a collage</translation>
+        </message>
+        <message>
+            <source>Background color</source>
+            <translation>Background color</translation>
+        </message>
+        <message>
+            <source>Black</source>
+            <translation>Black</translation>
+        </message>
+        <message>
+            <source>Blue</source>
+            <translation>Blue</translation>
+        </message>
+        <message>
+            <source>Choose a background color, including transparency</source>
+            <translation>Choose a background color, including transparency</translation>
+        </message>
+        <message>
+            <source>Clear all</source>
+            <translation>Clear all</translation>
+        </message>
+        <message>
+            <source>Collage preview</source>
+            <translation>Collage preview</translation>
+        </message>
+        <message>
+            <source>Delete image</source>
+            <translation>Delete image</translation>
+        </message>
+        <message>
+            <source>Drag with the middle mouse button to pan; scroll to zoom</source>
+            <translation>Drag with the middle mouse button to pan; scroll to zoom</translation>
+        </message>
+        <message>
+            <source>Fit to canvas</source>
+            <translation>Fit to canvas</translation>
+        </message>
+        <message>
+            <source>Flip horizontally</source>
+            <translation>Flip horizontally</translation>
+        </message>
+        <message>
+            <source>Flip vertically</source>
+            <translation>Flip vertically</translation>
+        </message>
+        <message>
+            <source>Gray</source>
+            <translation>Gray</translation>
+        </message>
+        <message>
+            <source>Green</source>
+            <translation>Green</translation>
+        </message>
+        <message>
+            <source>Horizontal</source>
+            <translation>Horizontal</translation>
+        </message>
+        <message>
+            <source>Image %1: %2</source>
+            <translation>Image %1: %2</translation>
+        </message>
+        <message>
+            <source>Image sizing</source>
+            <translation>Image sizing</translation>
+        </message>
+        <message>
+            <source>Image spacing</source>
+            <translation>Image spacing</translation>
+        </message>
+        <message>
+            <source>Image spacing in output pixels</source>
+            <translation>Image spacing in output pixels</translation>
+        </message>
+        <message>
+            <source>Image spacing in percentage</source>
+            <translation>Image spacing in percentage</translation>
+        </message>
+        <message>
+            <source>Image spacing unit</source>
+            <translation>Image spacing unit</translation>
+        </message>
+        <message>
+            <source>Layout direction</source>
+            <translation>Layout direction</translation>
+        </message>
+        <message>
+            <source>Original size</source>
+            <translation>Original size</translation>
+        </message>
+        <message>
+            <source>Outer border</source>
+            <translation>Outer border</translation>
+        </message>
+        <message>
+            <source>Outer border in output pixels</source>
+            <translation>Outer border in output pixels</translation>
+        </message>
+        <message>
+            <source>Outer border in percentage</source>
+            <translation>Outer border in percentage</translation>
+        </message>
+        <message>
+            <source>Outer border unit</source>
+            <translation>Outer border unit</translation>
+        </message>
+        <message>
+            <source>Percentage</source>
+            <translation>Percentage</translation>
+        </message>
+        <message>
+            <source>Percentage of the tallest image after sizing</source>
+            <translation>Percentage of the tallest image after sizing</translation>
+        </message>
+        <message>
+            <source>Percentage of the widest image after sizing</source>
+            <translation>Percentage of the widest image after sizing</translation>
+        </message>
+        <message>
+            <source>Pixel</source>
+            <translation>Pixel</translation>
+        </message>
+        <message>
+            <source>Purple</source>
+            <translation>Purple</translation>
+        </message>
+        <message>
+            <source>Red</source>
+            <translation>Red</translation>
+        </message>
+        <message>
+            <source>Replace image</source>
+            <translation>Replace image</translation>
+        </message>
+        <message>
+            <source>Reset transform</source>
+            <translation>Reset transform</translation>
+        </message>
+        <message>
+            <source>Rotate clockwise by 90°</source>
+            <translation>Rotate clockwise by 90°</translation>
+        </message>
+        <message>
+            <source>Rotate counterclockwise by 90°</source>
+            <translation>Rotate counterclockwise by 90°</translation>
+        </message>
+        <message>
+            <source>Select to center this image; drag onto another image to swap</source>
+            <translation>Select to center this image; drag onto another image to swap</translation>
+        </message>
+        <message>
+            <source>Total: %1 images</source>
+            <translation>Total: %1 images</translation>
+        </message>
+        <message>
+            <source>Uniform size</source>
+            <translation>Uniform size</translation>
+        </message>
+        <message>
+            <source>Vertical</source>
+            <translation>Vertical</translation>
+        </message>
+        <message>
+            <source>White</source>
+            <translation>White</translation>
+        </message>
+        <message>
+            <source>Yellow</source>
+            <translation>Yellow</translation>
+        </message>
+    </context>
+    <context>
+        <name>CollageWindow</name>
+        <message>
+            <source>%1: %2</source>
+            <translation>%1: %2</translation>
+        </message>
+        <message>
+            <source>Add images</source>
+            <translation>Add images</translation>
+        </message>
+        <message>
+            <source>All images will be removed from this collage.</source>
+            <translation>All images will be removed from this collage.</translation>
+        </message>
+        <message>
+            <source>Allow Snow Shot to access Finder in System Settings &gt; Privacy &amp; Security &gt; Automation, then try again.</source>
+            <translation>Allow Snow Shot to access Finder in System Settings &gt; Privacy &amp; Security &gt; Automation, then try again.</translation>
+        </message>
+        <message>
+            <source>Cancel</source>
+            <translation>Cancel</translation>
+        </message>
+        <message>
+            <source>Clear all</source>
+            <translation>Clear all</translation>
+        </message>
+        <message>
+            <source>Clear all images?</source>
+            <translation>Clear all images?</translation>
+        </message>
+        <message>
+            <source>Collage</source>
+            <translation>Collage</translation>
+        </message>
+        <message>
+            <source>Copy</source>
+            <translation>Copy</translation>
+        </message>
+        <message>
+            <source>Copying collage…</source>
+            <translation>Copying collage…</translation>
+        </message>
+        <message>
+            <source>Copying could not be started. Try again.</source>
+            <translation>Copying could not be started. Try again.</translation>
+        </message>
+        <message>
+            <source>Could not read the selected image files. Please try again.</source>
+            <translation>Could not read the selected image files. Please try again.</translation>
+        </message>
+        <message>
+            <source>Discard</source>
+            <translation>Discard</translation>
+        </message>
+        <message>
+            <source>Discard this collage?</source>
+            <translation>Discard this collage?</translation>
+        </message>
+        <message>
+            <source>Export could not be started. Try again.</source>
+            <translation>Export could not be started. Try again.</translation>
+        </message>
+        <message>
+            <source>Image loading could not be started. Try again.</source>
+            <translation>Image loading could not be started. Try again.</translation>
+        </message>
+        <message>
+            <source>Images (%1)</source>
+            <translation>Images (%1)</translation>
+        </message>
+        <message>
+            <source>Loading images: %1 of %2</source>
+            <translation>Loading images: %1 of %2</translation>
+        </message>
+        <message>
+            <source>Pinned window %1</source>
+            <translation>Pinned window %1</translation>
+        </message>
+        <message>
+            <source>Preparing collage…</source>
+            <translation>Preparing collage…</translation>
+        </message>
+        <message>
+            <source>Reading selected image files…</source>
+            <translation>Reading selected image files…</translation>
+        </message>
+        <message>
+            <source>Replace image</source>
+            <translation>Replace image</translation>
+        </message>
+        <message>
+            <source>Save</source>
+            <translation>Save</translation>
+        </message>
+        <message>
+            <source>Save as file</source>
+            <translation>Save as file</translation>
+        </message>
+        <message>
+            <source>Saving collage…</source>
+            <translation>Saving collage…</translation>
+        </message>
+        <message>
+            <source>Saving could not be started. Try again.</source>
+            <translation>Saving could not be started. Try again.</translation>
+        </message>
+        <message>
+            <source>Screenshot %1</source>
+            <translation>Screenshot %1</translation>
+        </message>
+        <message>
+            <source>Some images could not be loaded:
+%1</source>
+            <translation>Some images could not be loaded:
+%1</translation>
+        </message>
+        <message>
+            <source>The file manager is unavailable. Open it and try again.</source>
+            <translation>The file manager is unavailable. Open it and try again.</translation>
+        </message>
+        <message>
+            <source>The file manager took too long to return the selected files. Please try again.</source>
+            <translation>The file manager took too long to return the selected files. Please try again.</translation>
+        </message>
+        <message>
+            <source>The final screenshot is unavailable</source>
+            <translation>The final screenshot is unavailable</translation>
+        </message>
+        <message>
+            <source>The image could not be decoded or is no longer available</source>
+            <translation>The image could not be decoded or is no longer available</translation>
+        </message>
+        <message>
+            <source>The images and edits in this collage will be discarded.</source>
+            <translation>The images and edits in this collage will be discarded.</translation>
+        </message>
+        <message>
+            <source>The layout settings could not be remembered: %1</source>
+            <translation>The layout settings could not be remembered: %1</translation>
+        </message>
+    </context>
+    <context>
         <name>HistoryEntryWidget</name>
         <message>
             <source>%1 x %2 px  ·  %3 display(s)</source>
@@ -92,6 +451,10 @@
             <translation>Screenshot result</translation>
         </message>
         <message>
+            <source>Stitch Image</source>
+            <translation>Stitch Image</translation>
+        </message>
+        <message>
             <source>This action cannot be undone</source>
             <translation>This action cannot be undone</translation>
         </message>
@@ -136,6 +499,14 @@
         <message>
             <source>Closed</source>
             <translation>Closed</translation>
+        </message>
+        <message>
+            <source>Collage</source>
+            <translation>Collage</translation>
+        </message>
+        <message>
+            <source>Create a collage from selected pinned windows</source>
+            <translation>Create a collage from selected pinned windows</translation>
         </message>
         <message>
             <source>Date</source>
@@ -276,6 +647,10 @@
             <translation>Start date</translation>
         </message>
         <message>
+            <source>Stitch Image</source>
+            <translation>Stitch Image</translation>
+        </message>
+        <message>
             <source>The saved record and its open window will be removed</source>
             <translation>The saved record and its open window will be removed</translation>
         </message>
@@ -322,12 +697,20 @@
             <translation>Change the source or date range to see more history</translation>
         </message>
         <message>
+            <source>Collage</source>
+            <translation>Collage</translation>
+        </message>
+        <message>
             <source>Copied and pinned screenshots will appear here</source>
             <translation>Copied and pinned screenshots will appear here</translation>
         </message>
         <message>
             <source>Copy to clipboard</source>
             <translation>Copy to clipboard</translation>
+        </message>
+        <message>
+            <source>Create a collage from selected screenshots</source>
+            <translation>Create a collage from selected screenshots</translation>
         </message>
         <message>
             <source>Current monitor</source>
@@ -896,6 +1279,10 @@
         <message>
             <source>Group</source>
             <translation>Group</translation>
+        </message>
+        <message>
+            <source>Image Stitching</source>
+            <translation>Image Stitching</translation>
         </message>
         <message>
             <source>Lock</source>

@@ -177,6 +177,9 @@ void verifyTraySkinDestruction(snow_shot::presentation::SystemTrayController& co
 
 void verifyConfiguredTrayMenuOptions(snow_shot::presentation::SystemTrayController& controller) {
     using snow_shot::storage::TraySettings;
+    const auto stitchId = QStringLiteral("quick.stitch-selected-images");
+    require(!TraySettings().menuOptions().contains(stitchId),
+            "selected-image stitching starts unchecked in the tray");
     auto& appStorage = snow_shot::storage::ApplicationStorage::instance();
     require(snow_shot::storage::ExtendedFeaturesSettings().setTranslationPageEnabled(true),
             "enable all optional tray commands");
@@ -202,11 +205,25 @@ void verifyConfiguredTrayMenuOptions(snow_shot::presentation::SystemTrayControll
     QPointer<adqt::widgets::AdContextMenu> menu = controller.createContextMenu();
     QApplication::processEvents();
     QStringList visible;
+    QAction* stitching = nullptr;
     for (auto* action : menu->actions()) {
         if (!action->isSeparator() && action->isVisible())
             visible.append(action->data().toString());
+        if (action->data().toString() == stitchId)
+            stitching = action;
     }
     require(visible == options, "the tray must display every persisted selection, including Exit");
+    int stitches = 0;
+    QObject::connect(
+        &controller, &snow_shot::presentation::SystemTrayController::quickActionRequested, menu,
+        [&](snow_shot::presentation::GlobalShortcutAction action) {
+            require(action == snow_shot::presentation::GlobalShortcutAction::StitchSelectedImages,
+                    "the stitching tray entry dispatches its own action");
+            ++stitches;
+        });
+    require(stitching && stitching->isVisible(), "selected stitching tray entry is visible");
+    stitching->trigger();
+    require(stitches == 1, "the stitching tray entry activates exactly once");
     menu->dismissPopup();
     drainMenus();
     require(!menu, "the configured tray session retires after dismissal");
@@ -1670,10 +1687,12 @@ int main(int argc, char* argv[]) {
          {std::pair{QStringLiteral("quick.open-pin-to-screen-management"),
                     snow_shot::presentation::GlobalShortcutAction::OpenPinToScreenManagement},
           std::pair{QStringLiteral("quick.global-canvas"),
-                    snow_shot::presentation::GlobalShortcutAction::GlobalCanvas}}) {
+                    snow_shot::presentation::GlobalShortcutAction::GlobalCanvas},
+          std::pair{QStringLiteral("quick.stitch-selected-images"),
+                    snow_shot::presentation::GlobalShortcutAction::StitchSelectedImages}}) {
         auto* optionalAction = actionForId(entry.first);
         require(optionalAction != nullptr && !optionalAction->isVisible(),
-                "management and canvas tray actions must start hidden");
+                "management, canvas and stitching tray actions must start hidden");
         controller.setMenuOptions({entry.first, QStringLiteral("tray.exit")});
         require(optionalAction->isVisible(), "selected optional tray action must be visible");
         const auto previousCount = quickActions.size();

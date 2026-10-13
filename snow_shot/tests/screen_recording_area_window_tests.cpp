@@ -786,7 +786,7 @@ void childDragHandleOwnsCaptureAndPreservesAnnotations() {
     require(button->parentWidget() == &area && !button->isWindow() && button->window() == &area &&
                 QApplication::topLevelWidgets().size() == windows.size(),
             "the recording move button must be a child widget without an auxiliary window");
-    require(button->size() == QSize(32, 32) && button->iconSize() == QSize(16, 16) &&
+    require(button->size() == QSize(32, 32) && button->iconSize() == QSize(18, 18) &&
                 button->cursor().shape() == Qt::SizeAllCursor &&
                 button->accessibleName() == QStringLiteral("Move recording area"),
             "the move control must use the pinned window's size, icon and drag affordance");

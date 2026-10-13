@@ -9,6 +9,7 @@
 #include "snow_shot/presentation/screenshotclipboardservice.h"
 #include "snow_shot/presentation/screenshotexportcoordinator.h"
 #include "snow_shot/presentation/screenshotimagesource.h"
+#include "snow_shot/presentation/screenshotpinnedimagesnapshot.h"
 #include "snow_shot/image/screenshotanimationsource.h"
 #include "snow_shot/presentation/screenshotwheelinput.h"
 #include "snow_shot/presentation/screenshotrecognitionresults.h"
@@ -221,6 +222,7 @@ class ScreenshotPinnedWindow final : public QWidget {
     bool prewarm(QScreen* screen = nullptr);
     QRect currentNativeGeometry() const;
     [[nodiscard]] snow_shot::storage::PinnedWindowRecord persistenceSnapshot() const;
+    [[nodiscard]] ScreenshotPinnedImageSnapshot stitchingSnapshot();
     void suspendStorageWrites();
     void resumeStorageWrites(const QString& oldRoot, const QString& newRoot);
     [[nodiscard]] QString persistenceId() const {

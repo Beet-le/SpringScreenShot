@@ -537,6 +537,12 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      std::nullopt,
      {},
      2},
+    {QStringLiteral("global_shortcuts/stitch_selected_images"),
+     QJsonArray(),
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {},
+     2},
     {QStringLiteral("global_shortcuts/open_settings"),
      QJsonArray(),
      ConfigurationValueKind::StringList,
@@ -1509,6 +1515,7 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
       QStringLiteral("quick.open-screen-recording-folder"),
       QStringLiteral("quick.open-capture-history"),
       QStringLiteral("quick.global-canvas"),
+      QStringLiteral("quick.stitch-selected-images"),
       QStringLiteral("quick.translate-selected-text"),
       QStringLiteral("quick.toggle-global-hotkeys"),
       QStringLiteral("quick.toggle-disable-on-focused-fullscreen-window"),
@@ -1613,6 +1620,22 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      {QStringLiteral("system"), QStringLiteral("snow_shot")}},
     {QStringLiteral("screenshot/save_path_shortcuts"), QJsonArray(),
      ConfigurationValueKind::Structured},
+    {QStringLiteral("collage/direction"),
+     QStringLiteral("vertical"),
+     ConfigurationValueKind::String,
+     std::nullopt,
+     {QStringLiteral("vertical"), QStringLiteral("horizontal")}},
+    {QStringLiteral("collage/sizing_mode"),
+     QStringLiteral("uniform"),
+     ConfigurationValueKind::String,
+     std::nullopt,
+     {QStringLiteral("original"), QStringLiteral("uniform")}},
+    {QStringLiteral("collage/border_px"), 0, ConfigurationValueKind::Integer,
+     ConfigurationIntegerRange{0, std::numeric_limits<int>::max(), 1}},
+    {QStringLiteral("collage/spacing_px"), 0, ConfigurationValueKind::Integer,
+     ConfigurationIntegerRange{0, std::numeric_limits<int>::max(), 1}},
+    {QStringLiteral("collage/background_color"), QStringLiteral("#FFFFFFFF"),
+     ConfigurationValueKind::String},
     {QStringLiteral("screenshot/manual_save_format_options"), QJsonObject(),
      ConfigurationValueKind::Structured},
     {QStringLiteral("screenshot/image_format"),
@@ -2013,7 +2036,8 @@ ConfigurationNormalization normalizeDrawTemplates(const QJsonValue& value) {
 }
 
 bool isRgbaColorKey(const QString& key) {
-    return key == QStringLiteral("interface/theme_primary_color") ||
+    return key == QStringLiteral("collage/background_color") ||
+           key == QStringLiteral("interface/theme_primary_color") ||
            key == QStringLiteral("screenshot_selection/shadow_color") ||
            key == QStringLiteral("screenshot_ui/selection_border_color") ||
            key == QStringLiteral("screenshot_ui/selection_mask_color") ||

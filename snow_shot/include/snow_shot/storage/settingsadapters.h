@@ -189,6 +189,8 @@ class ShortcutSettings final {
     bool setSwitchWindowGroup(const shortcuts::ShortcutBindingList& bindings) const;
     [[nodiscard]] shortcuts::ShortcutBindingList globalCanvas() const;
     bool setGlobalCanvas(const shortcuts::ShortcutBindingList& bindings) const;
+    [[nodiscard]] shortcuts::ShortcutBindingList stitchSelectedImages() const;
+    bool setStitchSelectedImages(const shortcuts::ShortcutBindingList& bindings) const;
     [[nodiscard]] shortcuts::ShortcutBindingList openPinToScreenManagement() const;
     bool setOpenPinToScreenManagement(const shortcuts::ShortcutBindingList& bindings) const;
     [[nodiscard]] shortcuts::ShortcutBindingList openSettings() const;

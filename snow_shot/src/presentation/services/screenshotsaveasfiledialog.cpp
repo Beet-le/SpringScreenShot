@@ -794,7 +794,6 @@ class SaveContent final : public QWidget {
         const auto sync = [this, preserveEmpty](AdInputNumber* input, int pixels, int source) {
             const QSignalBlocker blocker(input);
             const bool empty = preserveEmpty && !input->hasValue();
-            input->setDecimals(m_percentage ? 2 : 0);
             input->setRange(0, m_percentage && source > 0 ? 100.0 * kMaximumDimension / source
                                                           : kMaximumDimension);
             input->setSuffixText(m_percentage ? QStringLiteral("%") : QString());
@@ -1298,7 +1297,8 @@ bool ScreenshotSaveDialogState::lossless() const {
 
 bool ScreenshotSaveAsFileDialog::open(QObject* lifetime, QWidget* owner,
                                       std::shared_ptr<ScreenshotExportArtifact> source, Saved saved,
-                                      Finished finished, QWidget* stackingOwner) {
+                                      Finished finished, QWidget* stackingOwner,
+                                      Qt::WindowModality modality) {
     if (!lifetime || !owner || !source || !source->isValid())
         return false;
     const QPointer<QWidget> stackingWindow(
@@ -1310,7 +1310,7 @@ bool ScreenshotSaveAsFileDialog::open(QObject* lifetime, QWidget* owner,
     if (stackingWindow) {
         QObject::connect(stackingWindow, &QObject::destroyed, modal, &AdModal::reject);
     }
-    modal->setWindowModality(Qt::ApplicationModal);
+    modal->setWindowModality(modality);
     modal->setCentered(true);
     modal->setMaskVisible(false);
     modal->setCloseOnMaskClick(false);
@@ -1359,11 +1359,12 @@ bool ScreenshotSaveAsFileDialog::open(QObject* lifetime, QWidget* owner,
     return true;
 }
 bool ScreenshotSaveAsFileDialog::open(QObject* lifetime, QWidget* owner, const QImage& image,
-                                      Saved saved, Finished finished, QWidget* stackingOwner) {
+                                      Saved saved, Finished finished, QWidget* stackingOwner,
+                                      Qt::WindowModality modality) {
     if (image.isNull())
         return false;
     return open(
         lifetime, owner,
         std::make_shared<ScreenshotExportArtifact>(ScreenshotExportSource::fromImage(image)),
-        std::move(saved), std::move(finished), stackingOwner);
+        std::move(saved), std::move(finished), stackingOwner, modality);
 }

@@ -586,7 +586,8 @@ ScreenshotSelectionExportUiServices::ScreenshotSelectionExportUiServices(
     ScreenshotOcrRecognitionPort* recognition, ScreenshotQrRecognitionPort* qrRecognition,
     SnowShotApiClient* tableRecognition, std::function<void()> showMainWindowRequested,
     std::function<ScreenshotPinnedRecognitionProviders()> recognitionProvider,
-    snow_shot::presentation::PinnedWindowGroupManager* groupManager)
+    snow_shot::presentation::PinnedWindowGroupManager* groupManager,
+    std::function<void(const QVector<ScreenshotPinnedImageSnapshot>&)> imageStitchingRequested)
     : m_recognition(recognition), m_qrRecognition(qrRecognition),
       m_tableRecognition(tableRecognition),
       m_showMainWindowRequested(std::move(showMainWindowRequested)),
@@ -597,6 +598,11 @@ ScreenshotSelectionExportUiServices::ScreenshotSelectionExportUiServices(
       m_windowPool(std::make_unique<ScreenshotPinnedWindowPool>()),
       m_pendingPinCoordinator(std::make_unique<ScreenshotPendingPinCoordinator>(
           [this]() { restorePersistedWindows(); })) {
+    if (imageStitchingRequested)
+        QObject::connect(
+            m_selectionController.get(),
+            &snow_shot::presentation::PinnedWindowSelectionController::imageStitchingRequested,
+            m_selectionController.get(), std::move(imageStitchingRequested));
     if (m_groupManager) {
         QObject::connect(
             m_groupManager,

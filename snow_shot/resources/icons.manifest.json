@@ -663,6 +663,14 @@
     },
     {
       "variant": "outlined",
+      "symbol": "ImageStitching",
+      "name": "image-stitching",
+      "source": "../src/presentation/components/icons/resources/image-stitching.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "ImportConfiguration",
       "name": "import-configuration",
       "source": "../src/presentation/components/icons/resources/import-configuration.svg",

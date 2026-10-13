@@ -222,6 +222,43 @@ void centersOnDisplayOverlay() {
     }
 }
 
+void collageWindowModalityAndRetry(QWidget& owner) {
+    QWidget neighbor;
+    neighbor.show();
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        auto artifact = std::make_shared<ScreenshotExportArtifact>(
+            ScreenshotExportSource::fromImage(fixture()));
+        int completions = 0;
+        bool saved = true;
+        require(ScreenshotSaveAsFileDialog::open(
+                    &owner, &owner, artifact, {},
+                    [&](bool completedSave) {
+                        ++completions;
+                        saved = completedSave;
+                    },
+                    &owner, Qt::WindowModal),
+                "collage save dialog accepts a fresh artifact on each attempt");
+        auto* modal = child<AdModal>(&owner, "screenshotSaveAsFileModal");
+        processUntil([&] {
+            return modal->contentWidget()->property("previewGeneration").toULongLong() > 0;
+        });
+        require(modal->windowModality() == Qt::WindowModal && modal->ownerWindow() == &owner &&
+                    modal->contentWidget()->window()->windowModality() == Qt::WindowModal &&
+                    neighbor.isVisible() && neighbor.isEnabled(),
+                "collage save is scoped to its owner and leaves other windows usable");
+        modal->reject();
+        processUntil([&] { return completions == 1; });
+        require(!saved && artifact->isCancelled(),
+                "canceling the custom save dialog reports cancellation and retires its artifact");
+        flush();
+        require(owner.findChild<AdModal*>(QStringLiteral("screenshotSaveAsFileModal")) == nullptr,
+                "the dismissed custom dialog is released before a fresh retry");
+    }
+    auto* defaultModal = openDialog(owner, fixture());
+    defaultModal->reject();
+    flush();
+}
+
 void saveDialogKeepsToolbarVisible() {
     for (const bool transientOnly : {false, true}) {
         QWidget overlay(nullptr, Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
@@ -1827,13 +1864,15 @@ void sizeUnits(QWidget& owner, const QTemporaryDir& temp) {
         require(generation() == before, "unit-only changes must not regenerate the export");
     };
     const auto initialGeneration = generation();
-    require(width->value() == 160 && height->value() == 100 && width->decimals() == 0,
+    require(width->value() == 160 && height->value() == 100 && width->decimals() == 0 &&
+                height->decimals() == 0,
             "pixel mode must use physical source pixels even for high-DPI images");
     percentage();
-    require(width->value() == 100 && height->value() == 100 && width->decimals() == 2 &&
-                width->singleStep() == 1 && width->suffixText() == QStringLiteral("%") &&
+    require(width->value() == 100 && height->value() == 100 && width->decimals() == 0 &&
+                height->decimals() == 0 && width->singleStep() == 1 &&
+                width->suffixText() == QStringLiteral("%") &&
                 height->suffixText() == QStringLiteral("%") && generation() == initialGeneration,
-            "percentage mode must initially show 100 percent without calculating again");
+            "percentage mode must show integers without calculating again");
     width->setValue(50);
     require(height->value() == 50 && description->text().isEmpty(),
             "locked percentages must follow width edits and clear stale output details");
@@ -1847,17 +1886,28 @@ void sizeUnits(QWidget& owner, const QTemporaryDir& temp) {
     require(width->value() == 25, "locked percentages must follow height edits");
     requirePixels(QSize(40, 25));
     width->setValue(12.5);
-    requirePixels(QSize(20, 13));
+    require(width->value() == 13 && height->value() == 13,
+            "percentage values must round to integers before dimension conversion");
+    requirePixels(QSize(21, 13));
+    width->stepUp();
+    require(width->value() == 14 && height->value() == 14,
+            "locked percentage steps must increment both integer inputs by one");
+    requirePixels(QSize(22, 14));
     height->setValue(150);
     requirePixels(QSize(240, 150));
     lock->click();
     width->setValue(50);
-    height->setValue(75);
+    height->setValue(74.5);
+    require(height->value() == 75,
+            "unlocked height percentages must also round fractional values to integers");
     requirePixels(QSize(80, 75));
     lock->click();
     requirePixels(QSize(80, 50));
+    width->setValue(1);
+    requirePixels(QSize(2, 1));
     width->setValue(0.01);
-    requirePixels(QSize(1, 1));
+    require(width->value() == 0 && height->value() == 1 && !modal->acceptButton()->isEnabled(),
+            "a fractional percentage rounded to zero must prevent saving");
     width->setValue(0);
     require(!modal->acceptButton()->isEnabled(), "zero percentage must prevent saving");
     width->setValue(50);
@@ -1875,8 +1925,13 @@ void sizeUnits(QWidget& owner, const QTemporaryDir& temp) {
     format->setCurrentValue(QStringLiteral("png"));
     pixels();
     width->setValue(79);
-    for (int i = 0; i < 5; ++i)
+    for (int i = 0; i < 5; ++i) {
         requirePixels(QSize(79, 49));
+        require(
+            width->value() == 49 && height->value() == 49 && width->decimals() == 0 &&
+                height->decimals() == 0,
+            "rounded percentage displays must preserve exact output pixels across unit changes");
+    }
     pixels();
     require(width->decimals() == 0 && width->suffixText().isEmpty(),
             "returning to pixels must restore integer inputs without percentage suffixes");
@@ -1953,8 +2008,8 @@ void sizeUnits(QWidget& owner, const QTemporaryDir& temp) {
     require(generation() == before, "pending percentage must not start a preview");
     modal->acceptButton()->click();
     processUntil([&] { return !savedPath.isEmpty(); });
-    require(snow_shot::image_codec::inspectFile(savedPath, snow::image::Format::png, QSize(60, 38)),
-            "saving must commit fractional percentages and write the resulting pixel size");
+    require(snow_shot::image_codec::inspectFile(savedPath, snow::image::Format::png, QSize(61, 38)),
+            "saving must round pending percentage text to an integer before writing pixels");
     flush();
     modal = openDialog(owner, fixture());
     require(child<AdSegmented>(modal->contentWidget(), "saveSizeUnitSegmented")->currentValue() ==
@@ -2923,6 +2978,13 @@ int main(int argc, char* argv[]) {
         QWidget owner;
         owner.resize(1200, 800);
         owner.show();
+        if (QApplication::arguments().contains(QStringLiteral("--collage-modality"))) {
+            collageWindowModalityAndRetry(owner);
+            ScreenshotExportCoordinator::shared().shutdown();
+            storage::ApplicationStorage::instance().shutdown();
+            std::cout << "Collage export dialog modality tests passed\n";
+            return 0;
+        }
         if (app.arguments().contains(QStringLiteral("--filename-warning"))) {
             duplicateFilenameWarning(owner, temp);
             overwriteRequiresConfirmation(owner, temp);
