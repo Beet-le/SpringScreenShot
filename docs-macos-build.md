@@ -223,8 +223,9 @@ bash install-snow-shot-macos.sh --lang zh-TW
 
 The local publisher includes `install-snow-shot-macos.sh`, a versioned DMG,
 and its matching `.sha256` asset in the GitHub release when macOS packaging
-is configured. The Gitee release workflow mirrors these exact bytes after
-GitHub publication.
+is configured. The local Gitee publisher uploads these exact installer/download
+bytes after GitHub publication. Homebrew distribution archives remain on GitHub;
+Gitee hosts only update and installer downloads within a 1 GB attachment budget.
 
 | Architecture | Release asset |
 | --- | --- |
