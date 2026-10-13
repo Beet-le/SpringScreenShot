@@ -5695,14 +5695,20 @@ ScreenshotRecognitionWindow* ScreenshotPinnedWindow::ensureRecognitionContent() 
                 }
                 const bool physical = ScreenshotOriginalImagePreviewWindow::usesPhysicalGeometry();
                 const qreal scale = physical ? m_canvas->devicePixelRatioF() : 1.0;
+                const QRectF viewport = contentViewRect();
+                // Placement and pixels share the visible content origin, without the pin's
+                // permanent decoration margins (including when its shadow is hidden).
                 QRectF imageRect =
                     m_canvas->canvasToViewTransform().mapRect(source.materializedCanvasRect);
+                imageRect.translate(-viewport.topLeft());
                 imageRect = QRectF(imageRect.topLeft() * scale, imageRect.size() * scale);
                 ScreenshotOriginalImagePreviewState state{
                     source.materializedImage,
                     imageRect,
-                    physical ? currentNativeGeometry()
-                             : ScreenshotOriginalImagePreviewWindow::nativeClientRect(this),
+                    physical ? currentContentNativeGeometry()
+                             : QRectF(QPointF(mapToGlobal(QPoint())) + viewport.topLeft(),
+                                      viewport.size())
+                                   .toRect(),
                     this,
                     true,
                     m_alwaysOnTop};

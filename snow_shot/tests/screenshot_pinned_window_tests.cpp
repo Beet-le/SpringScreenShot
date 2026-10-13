@@ -2099,8 +2099,14 @@ void pinnedOriginalImagePreviewFollowsViewAndAuxiliaryLifecycle() {
         const auto source = Access::originalPreviewSource(window);
         const bool physical = ScreenshotOriginalImagePreviewWindow::usesPhysicalGeometry();
         const qreal scale = physical ? canvas->devicePixelRatioF() : 1.0;
+        const QRect contentNative =
+            snow_shot::presentation::pinnedContentRect(window.currentNativeGeometry());
+        const qreal contentDpr =
+            snow_shot::presentation::pinnedGeometryScale(canvas->devicePixelRatioF());
+        const qreal inset = snow_shot::presentation::pinnedShadowMargin() / contentDpr;
         QRectF expectedRect =
             canvas->canvasToViewTransform().mapRect(source.materializedCanvasRect);
+        expectedRect.translate(-inset, -inset);
         expectedRect = QRectF(expectedRect.topLeft() * scale, expectedRect.size() * scale);
         if (!preview->isVisible() || PreviewAccess::imageRect(*preview) != expectedRect ||
             PreviewAccess::source(*preview).cacheKey() != source.materializedImage.cacheKey()) {
@@ -2117,9 +2123,11 @@ void pinnedOriginalImagePreviewFollowsViewAndAuxiliaryLifecycle() {
                     PreviewAccess::source(*preview).cacheKey() ==
                         source.materializedImage.cacheKey(),
                 "the preview must share the displayed source image and its exact viewport mapping");
-        const QRect result = physical
-                                 ? window.currentNativeGeometry()
-                                 : ScreenshotOriginalImagePreviewWindow::nativeClientRect(&window);
+        const QRect result =
+            physical ? contentNative
+                     : QRectF(QPointF(window.mapToGlobal(QPoint())) + QPointF(inset, inset),
+                              QSizeF(contentNative.size()) / contentDpr)
+                           .toRect();
         const auto placement = ScreenshotOriginalImagePreviewWindow::placement(
             result, PreviewAccess::workArea(*preview), PreviewAccess::gap(*preview));
         const QSize expectedSize = placement.geometry.size();
@@ -2139,6 +2147,15 @@ void pinnedOriginalImagePreviewFollowsViewAndAuxiliaryLifecycle() {
         require(ScreenshotOriginalImagePreviewWindow::nativeClientRect(preview).size() ==
                     expectedSize,
                 "the preview must use the automatically fitted recognition viewport dimensions");
+        require(ScreenshotOriginalImagePreviewWindow::nativeClientRect(preview) ==
+                    placement.geometry,
+                "the comparison gap must be measured from content edges, excluding pin shadows");
+        const QRect comparison = ScreenshotOriginalImagePreviewWindow::nativeClientRect(preview);
+        const int gap = physical ? qRound(4 * canvas->devicePixelRatioF()) : 4;
+        require(comparison.right() + 1 + gap == result.left() ||
+                    comparison.bottom() + 1 + gap == result.top() ||
+                    result.right() + 1 + gap == comparison.left(),
+                "automatic comparison must retain only the four-DIP content-edge gap");
         const QImage& raster = PreviewAccess::raster(*preview);
         require(!raster.isNull(), "the original-image preview needs a painted viewport");
         if (physical) {
@@ -2182,6 +2199,41 @@ void pinnedOriginalImagePreviewFollowsViewAndAuxiliaryLifecycle() {
         }
     };
     verifyProjection();
+    const QRect originalPin = window.currentNativeGeometry();
+    const QRect work = PreviewAccess::workArea(*preview);
+    const QSize viewportSize =
+        ScreenshotOriginalImagePreviewWindow::nativeClientRect(preview).size();
+    // Exercise each automatic direction with enough room for an unscaled comparison.
+    const qreal placementScale =
+        ScreenshotOriginalImagePreviewWindow::usesPhysicalGeometry()
+            ? 1.0
+            : snow_shot::presentation::pinnedGeometryScale(canvas->devicePixelRatioF());
+    const QPoint contentOrigin =
+        ScreenshotOriginalImagePreviewWindow::usesPhysicalGeometry()
+            ? snow_shot::presentation::pinnedContentRect(originalPin).topLeft()
+            : (QPointF(window.mapToGlobal(QPoint())) +
+               QPointF(snow_shot::presentation::pinnedShadowMargin() / placementScale,
+                       snow_shot::presentation::pinnedShadowMargin() / placementScale))
+                  .toPoint();
+    for (const QPoint contentPosition : {work.topLeft() + QPoint(viewportSize.width() + 24, 24),
+                                         work.topLeft() + QPoint(24, viewportSize.height() + 24),
+                                         work.topLeft() + QPoint(24, 24)}) {
+        const QPoint delta = contentPosition - contentOrigin;
+        const QPoint target = originalPin.topLeft() + QPoint(qRound(delta.x() * placementScale),
+                                                             qRound(delta.y() * placementScale));
+        Access::beginAuxiliaryInteraction(window);
+        require(Access::moveForOriginalPreview(window,
+                                               target - window.currentNativeGeometry().topLeft()),
+                "move the pin to exercise content-edge preview placement");
+        Access::endAuxiliaryInteraction(window);
+        verifyProjection();
+    }
+    Access::beginAuxiliaryInteraction(window);
+    require(Access::moveForOriginalPreview(window, originalPin.topLeft() -
+                                                       window.currentNativeGeometry().topLeft()),
+            "restore the pin after content-edge placement checks");
+    Access::endAuxiliaryInteraction(window);
+    verifyProjection();
 #ifdef Q_OS_WIN
     require(Access::beginPreviewNativeMove(window), "prepare a pending native preview drag");
     Access::previewNativeMessage(window, WM_CAPTURECHANGED);
@@ -2216,7 +2268,8 @@ void pinnedOriginalImagePreviewFollowsViewAndAuxiliaryLifecycle() {
     for (const auto* actionName :
          {"screenshotPinnedRotateClockwiseAction", "screenshotPinnedFlipHorizontalAction",
           "screenshotPinnedFlipVerticalAction", "screenshotPinnedIncreaseScaleAction",
-          "screenshotPinnedDecreaseScaleAction"}) {
+          "screenshotPinnedDecreaseScaleAction", "screenshotPinnedShowShadowAction",
+          "screenshotPinnedShowBorderAction"}) {
         materializePinnedMenuTree(window);
         auto* action = window.findChild<QAction*>(QString::fromLatin1(actionName));
         require(action != nullptr, "the preview fixture needs image transform actions");
