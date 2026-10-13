@@ -264,6 +264,7 @@ struct ScreenshotOverlayShortcutController::Impl {
             QStringLiteral("previous_screenshot_history"),
             QStringLiteral("next_screenshot_history"),
             QStringLiteral("select_previously_selected_area"),
+            QStringLiteral("select_next_previously_selected_area"),
             QStringLiteral("recapture"),
             QStringLiteral("toggle_cursor_visibility"),
             QStringLiteral("copy_color"),
@@ -343,7 +344,8 @@ struct ScreenshotOverlayShortcutController::Impl {
                            !recognitionTool(interaction.activeTool()) &&
                            actions.localShortcutInputAllowed();
                 }
-                if (actionId == QStringLiteral("select_previously_selected_area")) {
+                if (actionId == QStringLiteral("select_previously_selected_area") ||
+                    actionId == QStringLiteral("select_next_previously_selected_area")) {
                     return interaction.moveToolActive() && !interaction.dragging() &&
                            !interaction.scrollingCapture() && actions.localShortcutInputAllowed();
                 }
@@ -403,8 +405,16 @@ struct ScreenshotOverlayShortcutController::Impl {
                 if (actionId == QStringLiteral("next_screenshot_history")) {
                     return navigateHistory(false);
                 }
-                if (actionId == QStringLiteral("select_previously_selected_area")) {
-                    const bool selected = actions.selectPreviousSelection();
+                if (actionId == QStringLiteral("select_previously_selected_area") ||
+                    actionId == QStringLiteral("select_next_previously_selected_area")) {
+                    // A physical Shift press also arms the contextual aspect hold. This chord
+                    // consumes that intent even at a history endpoint, so its later release
+                    // must not be interpreted as a standalone color-format tap.
+                    inputHandler.cancelKeepSelectionAspectRatioShortcut();
+                    const bool selected =
+                        actionId == QStringLiteral("select_previously_selected_area")
+                            ? actions.selectPreviousSelection()
+                            : actions.selectNextPreviousSelection();
                     if (selected) {
                         actions.pauseIntelligentSelection();
                         intelligentSelection.clearPress();

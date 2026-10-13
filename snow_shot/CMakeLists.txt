@@ -3666,6 +3666,8 @@ if(SNOW_SHOT_BUILD_TESTS)
 
     add_executable(snow-shot-selection-geometry-tests
         tests/screenshot_selection_geometry_tests.cpp
+        include/snow_shot/presentation/screenshotinteractionstate.h
+        src/presentation/core/screenshotinteractionstate.cpp
         include/snow_shot/platform/windows/monitorgeometry.h
         include/snow_shot/presentation/historypinplacement.h
         include/snow_shot/presentation/screenshotgeometry.h
@@ -6485,9 +6487,13 @@ if(SNOW_SHOT_BUILD_TESTS)
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_executable(snow-shot-selection-quick-set-tests
-        tests/screenshot_selection_quick_sets_tests.cpp)
+        tests/screenshot_selection_quick_sets_tests.cpp
+        src/presentation/services/screenshothistoryservice.cpp
+        src/presentation/services/screenshotimagefileservice.cpp)
+    target_include_directories(snow-shot-selection-quick-set-tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/image")
     target_link_libraries(snow-shot-selection-quick-set-tests PRIVATE
-        snow-shot-selection-presentation-runtime)
+        snow-shot-selection-presentation-runtime snow_shot_image_codec)
     snow_shot_import_offscreen_platform(snow-shot-selection-quick-set-tests)
     add_test(NAME snow-shot-selection-quick-set-compound-tests
         COMMAND snow-shot-selection-quick-set-tests --compound-only -platform offscreen)

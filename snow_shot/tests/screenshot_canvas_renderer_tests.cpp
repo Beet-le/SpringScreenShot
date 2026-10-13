@@ -1922,7 +1922,6 @@ void shortcutHintStagesUseTheExactRequiredLines() {
                 {QStringLiteral("D"), QStringLiteral("Right")}),
     };
     const QStringList commonLines{
-        QStringLiteral("Select previously selected area: R"),
         QStringLiteral("Copy color: C"),
         keyLine(QStringLiteral("Toggle Global/Relative Coordinates"), {QStringLiteral("Shift+P")}),
         keyLine(QStringLiteral("Toggle cursor visibility"), {QStringLiteral("`")}),

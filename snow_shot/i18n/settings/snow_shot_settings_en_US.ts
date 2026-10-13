@@ -2877,6 +2877,10 @@
             <translation>Next screenshot history</translation>
         </message>
         <message>
+            <source>Next selection area</source>
+            <translation>Next selection area</translation>
+        </message>
+        <message>
             <source>Next selection type</source>
             <translation>Next selection type</translation>
         </message>
@@ -3171,6 +3175,10 @@
         <message>
             <source>Previous screenshot history</source>
             <translation>Previous screenshot history</translation>
+        </message>
+        <message>
+            <source>Previous selection area</source>
+            <translation>Previous selection area</translation>
         </message>
         <message>
             <source>Previous selection type</source>
@@ -3623,10 +3631,6 @@
         <message>
             <source>Select image save directory</source>
             <translation>Select image save directory</translation>
-        </message>
-        <message>
-            <source>Select previously selected area</source>
-            <translation>Select previously selected area</translation>
         </message>
         <message>
             <source>Select scenarios</source>

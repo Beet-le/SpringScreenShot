@@ -641,6 +641,7 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
         {QStringLiteral("spotlight"), QJsonArray()},
         {QStringLiteral("select"), QJsonArray{QStringLiteral("V")}},
         {QStringLiteral("shape"), QJsonArray{QStringLiteral("1")}},
+        {QStringLiteral("speech_bubble"), QJsonArray{}},
         {QStringLiteral("arrow"), QJsonArray{QStringLiteral("2")}},
         {QStringLiteral("brush"), QJsonArray{QStringLiteral("3"), QStringLiteral("P")}},
         {QStringLiteral("highlight"), QJsonArray{QStringLiteral("4"), QStringLiteral("H")}},
@@ -677,6 +678,8 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
         {QStringLiteral("previous_screenshot_history"), QJsonArray{QStringLiteral(",")}},
         {QStringLiteral("next_screenshot_history"), QJsonArray{QStringLiteral(".")}},
         {QStringLiteral("select_previously_selected_area"), QJsonArray{QStringLiteral("R")}},
+        {QStringLiteral("select_next_previously_selected_area"),
+         QJsonArray{QStringLiteral("Shift+R")}},
         {QStringLiteral("recapture"), QJsonArray{QStringLiteral("Alt+R")}},
         {QStringLiteral("toggle_cursor_visibility"), QJsonArray{QStringLiteral("`")}},
         {QStringLiteral("copy_color"), QJsonArray{QStringLiteral("C")}},
@@ -726,6 +729,12 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
         {QStringLiteral("save_as_file"), QJsonArray{QStringLiteral("Ctrl+S")}},
         {QStringLiteral("show_text_recognition_results"), QJsonArray{QStringLiteral("Ctrl+D")}},
         {QStringLiteral("drawing_mode"), QJsonArray{QStringLiteral("Space")}},
+        {QStringLiteral("toggle_playback"), QJsonArray{QStringLiteral("Space")}},
+        {QStringLiteral("next_frame"), QJsonArray{}},
+        {QStringLiteral("previous_frame"), QJsonArray{}},
+        {QStringLiteral("decrease_playback_speed"), QJsonArray{}},
+        {QStringLiteral("increase_playback_speed"), QJsonArray{}},
+        {QStringLiteral("reset_playback_speed"), QJsonArray{}},
         {QStringLiteral("resize_window"), QJsonArray{QStringLiteral("M")}},
         {QStringLiteral("thumbnail_mode"), QJsonArray{QStringLiteral("R")}},
         {QStringLiteral("hide_to_top"), QJsonArray{QStringLiteral("H")}},
@@ -1657,7 +1666,7 @@ void verifyPinToScreenShortcutSettings() {
     const storage::PinToScreenShortcutSettings shortcutSettings;
     const shortcuts::ShortcutBindingMap defaults = shortcutSettings.allShortcuts();
     require(
-        defaults.size() == 30 &&
+        defaults.size() == 36 &&
             portable(defaults.value(QStringLiteral("copy_to_clipboard"))) ==
                 QStringList{QStringLiteral("Ctrl+C")} &&
             portable(defaults.value(QStringLiteral("copy_original_content"))) ==
@@ -1672,6 +1681,19 @@ void verifyPinToScreenShortcutSettings() {
                 QStringList{QStringLiteral("Ctrl+D")} &&
             portable(defaults.value(QStringLiteral("drawing_mode"))) ==
                 QStringList{QStringLiteral("Space")} &&
+            defaults.contains(QStringLiteral("toggle_playback")) &&
+            portable(defaults.value(QStringLiteral("toggle_playback"))) ==
+                QStringList{QStringLiteral("Space")} &&
+            defaults.contains(QStringLiteral("next_frame")) &&
+            defaults.value(QStringLiteral("next_frame")).isEmpty() &&
+            defaults.contains(QStringLiteral("previous_frame")) &&
+            defaults.value(QStringLiteral("previous_frame")).isEmpty() &&
+            defaults.contains(QStringLiteral("decrease_playback_speed")) &&
+            defaults.value(QStringLiteral("decrease_playback_speed")).isEmpty() &&
+            defaults.contains(QStringLiteral("increase_playback_speed")) &&
+            defaults.value(QStringLiteral("increase_playback_speed")).isEmpty() &&
+            defaults.contains(QStringLiteral("reset_playback_speed")) &&
+            defaults.value(QStringLiteral("reset_playback_speed")).isEmpty() &&
             portable(defaults.value(QStringLiteral("resize_window"))) ==
                 QStringList{QStringLiteral("M")} &&
             portable(defaults.value(QStringLiteral("thumbnail_mode"))) ==
@@ -1701,7 +1723,7 @@ void verifyPinToScreenShortcutSettings() {
                                            {QStringLiteral("M")}) &&
             shortcutSettings.shortcuts(QStringLiteral("unsupported")).isEmpty() &&
             !shortcutSettings.setShortcuts(QStringLiteral("unsupported"), {QStringLiteral("Q")}),
-        "pinned-window shortcut adapter must expose thirty stable actions and defaults");
+        "pinned-window shortcut adapter must expose thirty-six stable actions and defaults");
     require(portable(defaults.value(QStringLiteral("increase_opacity"))) ==
                 QStringList{QStringLiteral("]")},
             "increase_opacity must have its default binding");
@@ -2005,12 +2027,100 @@ void localShortcutDefaultsPreserveConfiguredBindings() {
         require(reloaded.value(copyKey) == configured,
                 "saved screenshot copy shortcuts must survive reload without appending Enter");
     }
+    const QString previousAreaKey =
+        QStringLiteral("screenshot_shortcuts/select_previously_selected_area");
+    const QString nextAreaKey =
+        QStringLiteral("screenshot_shortcuts/select_next_previously_selected_area");
+    const QJsonArray previousAreaCustom{shortcutObject(QStringLiteral("Alt+F9"))};
+    const QJsonArray nextAreaDefault{shortcutObject(QStringLiteral("Shift+R"))};
+    require(storage::ConfigurationSchema::defaultValue(nextAreaKey) == nextAreaDefault &&
+                store.applySnapshot({{previousAreaKey, previousAreaCustom}}) &&
+                store.value(previousAreaKey) == previousAreaCustom &&
+                store.value(nextAreaKey) == nextAreaDefault,
+            "previous area bindings must survive while the new forward key defaults to Shift+R");
+    require(
+        store.applySnapshot({{previousAreaKey, QJsonArray{}}, {quickSaveKey, nextAreaDefault}}) &&
+            store.value(previousAreaKey) == QJsonArray{} &&
+            store.value(nextAreaKey) == QJsonArray{} &&
+            store.value(quickSaveKey) == nextAreaDefault,
+        "an existing Shift+R assignment must suppress only the new forward default");
+    for (const auto& configured :
+         {QJsonArray{shortcutObject(QStringLiteral("Alt+F10"))}, QJsonArray{}}) {
+        require(store.applySnapshot(
+                    {{previousAreaKey, previousAreaCustom}, {nextAreaKey, configured}}) &&
+                    store.value(previousAreaKey) == previousAreaCustom &&
+                    store.value(nextAreaKey) == configured && store.flushNow().success,
+                "custom and disabled selection area bindings must remain independent");
+        storage::ConfigurationStore reloaded(variantsPath, true, true, 60000);
+        require(reloaded.value(previousAreaKey) == previousAreaCustom &&
+                    reloaded.value(nextAreaKey) == configured,
+                "selection area shortcuts must survive configuration reload");
+    }
 #ifdef Q_OS_MACOS
     const QJsonArray physicalTab{shortcutObject(QStringLiteral("Meta+K"), 48)};
     require(store.applySnapshot({{quickSaveKey, physicalTab}}) &&
                 store.value(nextKey) == QJsonArray{} && store.value(quickSaveKey) == physicalTab,
             "default conflicts must compare physical key metadata rather than display text");
 #endif
+}
+
+void previousSelectionStorageIsRetired() {
+    const QString legacyKey = QStringLiteral("screenshot_selection/previous_selection");
+    const QString radiusKey = QStringLiteral("screenshot_selection/corner_radius");
+    const QJsonObject previousSelection{{QStringLiteral("left"), 10},
+                                        {QStringLiteral("top"), 20},
+                                        {QStringLiteral("width"), 100},
+                                        {QStringLiteral("height"), 60}};
+    require(!storage::ConfigurationSchema::contains(legacyKey),
+            "previous selection must no longer have a redundant configuration field");
+    for (const int version : {1, storage::ConfigurationSchema::currentVersion(),
+                              storage::ConfigurationSchema::currentVersion() + 1}) {
+        QTemporaryDir temporary;
+        require(temporary.isValid(), "previous selection migration needs isolated storage");
+        QJsonObject document = storage::ConfigurationSchema::completeDefaultDocument();
+        document.insert(QStringLiteral("storage"),
+                        QJsonObject{{QStringLiteral("schema_version"), version}});
+        auto selection = document.value(QStringLiteral("screenshot_selection")).toObject();
+        selection.insert(QStringLiteral("previous_selection"), previousSelection);
+        selection.insert(QStringLiteral("corner_radius"), 7);
+        selection.insert(QStringLiteral("unknown_selection_option"), true);
+        document.insert(QStringLiteral("screenshot_selection"), selection);
+        const QString path = temporary.filePath(QStringLiteral("config.json"));
+        const QByteArray bytes = QJsonDocument(document).toJson();
+        writeBytes(path, bytes);
+        storage::ConfigurationStore store(path, true, true, 60000);
+        require(!store.snapshot().contains(legacyKey) && store.value(radiusKey) == QJsonValue(7) &&
+                    !store.setValue(legacyKey, previousSelection),
+                "retired selection storage must be excluded from snapshots and mutations");
+        if (version > storage::ConfigurationSchema::currentVersion()) {
+            require(!store.isWritable() && !store.isDirty() && readBytes(path) == bytes,
+                    "future configuration files must retain retired fields unchanged");
+            continue;
+        }
+        require(store.isDirty() && store.flushNow().success,
+                "supported configurations must persist removal of redundant selection storage");
+        const auto cleaned = QJsonDocument::fromJson(readBytes(path))
+                                 .object()
+                                 .value(QStringLiteral("screenshot_selection"))
+                                 .toObject();
+        require(!cleaned.contains(QStringLiteral("previous_selection")) &&
+                    cleaned.value(QStringLiteral("corner_radius")) == QJsonValue(7) &&
+                    cleaned.value(QStringLiteral("unknown_selection_option")) == QJsonValue(true),
+                "removing redundant storage must preserve selection preferences and unknown keys");
+        storage::ConfigurationStore reloaded(path, true, true, 60000);
+        require(!reloaded.isDirty() && !reloaded.snapshot().contains(legacyKey),
+                "retired storage must remain absent after reload");
+        require(reloaded.applySnapshot({{legacyKey, previousSelection}, {radiusKey, 9}}) &&
+                    reloaded.flushNow().success && !reloaded.snapshot().contains(legacyKey),
+                "legacy snapshots must import without restoring redundant selection storage");
+        const auto imported = QJsonDocument::fromJson(readBytes(path))
+                                  .object()
+                                  .value(QStringLiteral("screenshot_selection"))
+                                  .toObject();
+        require(!imported.contains(QStringLiteral("previous_selection")) &&
+                    imported.value(QStringLiteral("corner_radius")) == QJsonValue(9),
+                "imported selection preferences must persist without the retired field");
+    }
 }
 
 void recordingPostProcessingPreferencesPersistAndValidate() {
@@ -2331,7 +2441,7 @@ void settingsAdaptersRoundTripAndRejectInvalidValues() {
     const storage::ScreenshotShortcutSettings screenshotShortcuts;
     const shortcuts::ShortcutBindingMap screenshotDefaults = screenshotShortcuts.allShortcuts();
     require(
-        screenshotDefaults.size() == 34 &&
+        screenshotDefaults.size() == 35 &&
             portable(screenshotShortcuts.moveTool()) ==
                 QStringList{QStringLiteral("M"), QStringLiteral("Ctrl+E")} &&
             portable(screenshotShortcuts.moveCursorUp()) ==
@@ -2354,6 +2464,8 @@ void settingsAdaptersRoundTripAndRejectInvalidValues() {
                 QStringList{QStringLiteral(".")} &&
             portable(screenshotShortcuts.selectPreviouslySelectedArea()) ==
                 QStringList{QStringLiteral("R")} &&
+            portable(screenshotShortcuts.selectNextPreviouslySelectedArea()) ==
+                QStringList{QStringLiteral("Shift+R")} &&
             portable(screenshotShortcuts.recapture()) == QStringList{QStringLiteral("Alt+R")} &&
             portable(screenshotShortcuts.shortcuts(QStringLiteral("toggle_cursor_visibility"))) ==
                 QStringList{QStringLiteral("`")} &&
@@ -2385,6 +2497,24 @@ void settingsAdaptersRoundTripAndRejectInvalidValues() {
     require(portable(screenshotDefaults.value(QStringLiteral("selection_aspect_ratio_snap"))) ==
                 QStringList{QStringLiteral("Q")},
             "snap must expose Q as its configurable default");
+    const QString previousAreaId = QStringLiteral("select_previously_selected_area");
+    const QString nextAreaId = QStringLiteral("select_next_previously_selected_area");
+    require(screenshotShortcuts.setShortcuts(previousAreaId, {QStringLiteral("K")}) &&
+                screenshotShortcuts.setShortcuts(nextAreaId, {QStringLiteral("Shift+K")}) &&
+                portable(screenshotShortcuts.selectPreviouslySelectedArea()) ==
+                    QStringList{QStringLiteral("K")} &&
+                portable(screenshotShortcuts.selectNextPreviouslySelectedArea()) ==
+                    QStringList{QStringLiteral("Shift+K")},
+            "both selection area directions must support independent remapping");
+    const auto remappedAreaShortcuts = screenshotShortcuts.allShortcuts();
+    require(!screenshotShortcuts.setShortcuts(nextAreaId, {QStringLiteral("K")}) &&
+                screenshotShortcuts.allShortcuts() == remappedAreaShortcuts &&
+                screenshotShortcuts.setShortcuts(nextAreaId, {}) &&
+                screenshotShortcuts.selectNextPreviouslySelectedArea().isEmpty() &&
+                portable(screenshotShortcuts.selectPreviouslySelectedArea()) ==
+                    QStringList{QStringLiteral("K")} &&
+                screenshotShortcuts.setAllShortcutsAtomic(screenshotDefaults),
+            "selection area conflicts must be atomic and either direction can be disabled");
     require(screenshotShortcuts.setShortcuts(QStringLiteral("toggle_guides"),
                                              {QStringLiteral("Ctrl+G")}) &&
                 portable(screenshotShortcuts.toggleGuides()) ==
@@ -2434,12 +2564,14 @@ void settingsAdaptersRoundTripAndRejectInvalidValues() {
 
     const shortcuts::ShortcutBindingMap defaults = drawingShortcuts.allShortcuts();
     require(
-        defaults.size() == 16 && defaults.contains(QStringLiteral("line")) &&
+        defaults.size() == 17 && defaults.contains(QStringLiteral("line")) &&
             defaults.value(QStringLiteral("line")).isEmpty() &&
             defaults.contains(QStringLiteral("spotlight")) &&
             defaults.value(QStringLiteral("spotlight")).isEmpty() &&
             defaults.contains(QStringLiteral("magnifier")) &&
             defaults.value(QStringLiteral("magnifier")).isEmpty() &&
+            defaults.contains(QStringLiteral("speech_bubble")) &&
+            defaults.value(QStringLiteral("speech_bubble")).isEmpty() &&
             portable(defaults.value(QStringLiteral("select"))) ==
                 QStringList{QStringLiteral("V")} &&
             portable(defaults.value(QStringLiteral("shape"))) == QStringList{QStringLiteral("1")} &&
@@ -2450,7 +2582,7 @@ void settingsAdaptersRoundTripAndRejectInvalidValues() {
                 QStringList{QStringLiteral("Ctrl+Shift+Z")} &&
             drawingShortcuts.shortcuts(QStringLiteral("unsupported")).isEmpty() &&
             !drawingShortcuts.setShortcuts(QStringLiteral("unsupported"), {QStringLiteral("Q")}),
-        "drawing shortcut adapter must expose fifteen tools and the canvas reset default");
+        "drawing shortcut adapter must expose sixteen tools and the canvas reset default");
 
     require(drawingShortcuts.setSelect({QStringLiteral("Ctrl+Shift+V")}) &&
                 portable(drawingShortcuts.select()) == QStringList{QStringLiteral("Ctrl+Shift+V")},
@@ -3397,6 +3529,7 @@ int main(int argc, char** argv) {
     }
     if (application.arguments().contains(QStringLiteral("--local-shortcut-migration-only"))) {
         localShortcutDefaultsPreserveConfiguredBindings();
+        previousSelectionStorageIsRetired();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--shortcut-settings-only"))) {
@@ -3451,6 +3584,7 @@ int main(int argc, char** argv) {
     obsoleteClickThroughShortcutIsIgnored();
     shortcutSchemaMigrationAndPhysicalMetadataRoundTrip();
     localShortcutDefaultsPreserveConfiguredBindings();
+    previousSelectionStorageIsRetired();
     invalidTrayClickSettingsUseIndependentDefaults();
     legacyTrayHotkeyCommandMigratesToQuickAction();
     trayClickSettingsSurviveRestart();

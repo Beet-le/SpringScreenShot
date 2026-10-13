@@ -159,6 +159,13 @@ MaterializedConfiguration materializeConfiguration(const QMap<QString, QJsonValu
             result.document.insert(QStringLiteral("screenshot"), screenshot);
             result.dirty = !replaceAll;
         }
+        QJsonObject screenshotSelection =
+            result.document.value(QStringLiteral("screenshot_selection")).toObject();
+        if (screenshotSelection.contains(QStringLiteral("previous_selection"))) {
+            screenshotSelection.remove(QStringLiteral("previous_selection"));
+            result.document.insert(QStringLiteral("screenshot_selection"), screenshotSelection);
+            result.dirty = !replaceAll;
+        }
     }
     QSet<QString> defaultedShortcutKeys;
 

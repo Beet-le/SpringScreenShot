@@ -324,6 +324,7 @@ class ScreenshotShortcutSettings final {
     [[nodiscard]] shortcuts::ShortcutBindingList previousScreenshotHistory() const;
     [[nodiscard]] shortcuts::ShortcutBindingList nextScreenshotHistory() const;
     [[nodiscard]] shortcuts::ShortcutBindingList selectPreviouslySelectedArea() const;
+    [[nodiscard]] shortcuts::ShortcutBindingList selectNextPreviouslySelectedArea() const;
     [[nodiscard]] shortcuts::ShortcutBindingList recapture() const;
     [[nodiscard]] shortcuts::ShortcutBindingList copyColor() const;
     [[nodiscard]] shortcuts::ShortcutBindingList toggleCoordinateMode() const;

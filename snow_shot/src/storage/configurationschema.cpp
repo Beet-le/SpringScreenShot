@@ -944,6 +944,12 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      std::nullopt,
      {},
      2},
+    {QStringLiteral("screenshot_shortcuts/select_next_previously_selected_area"),
+     QJsonArray{QStringLiteral("Shift+R")},
+     ConfigurationValueKind::StringList,
+     std::nullopt,
+     {},
+     2},
     {QStringLiteral("screenshot_shortcuts/toggle_cursor_visibility"),
      QJsonArray{QStringLiteral("`")},
      ConfigurationValueKind::StringList,
@@ -1510,8 +1516,6 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
       QStringLiteral("tray.show-main-window"),
       QStringLiteral("tray.restart-app"),
       QStringLiteral("tray.exit")}},
-    {QStringLiteral("screenshot_selection/previous_selection"), QJsonValue::Null,
-     ConfigurationValueKind::Structured},
     {QStringLiteral("screenshot_selection/region_type"),
      QStringLiteral("rectangle"),
      ConfigurationValueKind::String,
@@ -1904,17 +1908,6 @@ ConfigurationNormalization normalizeAllowedInteger(const QJsonValue& value,
         return {};
     }
     return {integer, true, false};
-}
-
-ConfigurationNormalization normalizeSelection(const QJsonValue& value) {
-    if (value.isNull()) {
-        return {QJsonValue::Null, true, false};
-    }
-    const PersistedSelectionNormalization normalized = normalizePersistedSelection(value);
-    if (!normalized.valid) {
-        return {};
-    }
-    return {persistedSelectionToJson(normalized.value), true, normalized.changed};
 }
 
 ConfigurationNormalization normalizePresets(const QJsonValue& value) {
@@ -2579,9 +2572,6 @@ ConfigurationNormalization ConfigurationSchema::normalize(const QString& key,
     }
     if (key == QStringLiteral("interface/language")) {
         return normalizeLanguage(value);
-    }
-    if (key == QStringLiteral("screenshot_selection/previous_selection")) {
-        return normalizeSelection(value);
     }
     if (key == QStringLiteral("screenshot_selection/selection_rect_presets")) {
         return normalizePresets(value);

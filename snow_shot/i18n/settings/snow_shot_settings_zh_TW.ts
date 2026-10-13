@@ -2877,6 +2877,10 @@
             <translation>下一筆截圖歷史</translation>
         </message>
         <message>
+            <source>Next selection area</source>
+            <translation>下一個選取區域</translation>
+        </message>
+        <message>
             <source>Next selection type</source>
             <translation>下一種選取區域類型</translation>
         </message>
@@ -3171,6 +3175,10 @@
         <message>
             <source>Previous screenshot history</source>
             <translation>上一筆截圖歷史</translation>
+        </message>
+        <message>
+            <source>Previous selection area</source>
+            <translation>上一個選取區域</translation>
         </message>
         <message>
             <source>Previous selection type</source>
@@ -3623,10 +3631,6 @@
         <message>
             <source>Select image save directory</source>
             <translation>選擇影像儲存目錄</translation>
-        </message>
-        <message>
-            <source>Select previously selected area</source>
-            <translation>選取先前選取的區域</translation>
         </message>
         <message>
             <source>Select scenarios</source>
