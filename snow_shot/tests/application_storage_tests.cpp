@@ -608,7 +608,7 @@ void settingsSchemaDefaultsAndValidationAreComplete() {
             !defaultValue("screen_recording/show_keyboard").toBool() &&
             storage::ConfigurationSchema::entry(
                 QStringLiteral("screen_recording/animated_image_format")) == nullptr &&
-            defaultValue("screen_recording/encoder").toString() == QStringLiteral("h264_hw") &&
+            defaultValue("screen_recording/encoder").toString() == QStringLiteral("h264") &&
             defaultValue("screen_recording/video_quality").toInt() == 80 &&
             defaultValue("screen_recording/encoding_preset").toString() ==
                 QStringLiteral("veryfast") &&
@@ -2359,7 +2359,7 @@ void settingsAdaptersRoundTripAndRejectInvalidValues() {
                 recording.outputFormat() == QStringLiteral("mp4") &&
                 recording.mouseTrailColor() == QColor(0, 0, 0, 0) &&
                 recording.mouseClickColor() == QColor(0, 0, 0, 0) && recording.showCursor() &&
-                !recording.showKeyboard() && recording.encoder() == QStringLiteral("h264_hw") &&
+                !recording.showKeyboard() && recording.encoder() == QStringLiteral("h264") &&
                 recording.videoQuality() == 80 &&
                 recording.encodingPreset() == QStringLiteral("veryfast") &&
                 recording.captureToolbarInRecording() &&
