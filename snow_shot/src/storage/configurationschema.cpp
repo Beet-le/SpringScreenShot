@@ -688,6 +688,8 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      ConfigurationValueKind::Boolean},
     {QStringLiteral("screen_recording/mouse_highlight_color"), QStringLiteral("#FFFF0080"),
      ConfigurationValueKind::String},
+    {QStringLiteral("screen_recording/mouse_highlight_radius"), 41, ConfigurationValueKind::Integer,
+     ConfigurationIntegerRange{8, 128, 1}},
     {QStringLiteral("screen_recording/encoder"),
      QStringLiteral("h264_hw"),
      ConfigurationValueKind::String,

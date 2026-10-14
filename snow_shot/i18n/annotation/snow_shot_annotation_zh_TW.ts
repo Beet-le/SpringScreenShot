@@ -788,6 +788,10 @@
             <translation>滑鼠醒目提示預覽</translation>
         </message>
         <message>
+            <source>Mouse highlight radius</source>
+            <translation>滑鼠高亮半徑</translation>
+        </message>
+        <message>
             <source>Mouse trail color</source>
             <translation>滑鼠軌跡顏色</translation>
         </message>

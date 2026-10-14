@@ -2398,18 +2398,26 @@ void settingsAdaptersRoundTripAndRejectInvalidValues() {
             "recording adapters must reject unadvertised values atomically");
 
     require(!recording.mouseHighlightEnabled() && !recording.recordMouseClicks() &&
-                recording.mouseHighlightColor() == QColor(255, 255, 0, 128),
+                recording.mouseHighlightColor() == QColor(255, 255, 0, 128) &&
+                recording.mouseHighlightRadius() == 41,
             "new mouse recording settings default off with soft yellow");
     require(recording.setMouseHighlightEnabled(true) && recording.setRecordMouseClicks(true) &&
-                recording.setMouseHighlightColor(QColor(12, 34, 56, 78)),
+                recording.setMouseHighlightColor(QColor(12, 34, 56, 78)) &&
+                recording.setMouseHighlightRadius(96),
             "mouse recording settings save");
     const storage::RecordingSettings reloadedRecording;
     require(reloadedRecording.mouseHighlightEnabled() && reloadedRecording.recordMouseClicks() &&
-                reloadedRecording.mouseHighlightColor() == QColor(12, 34, 56, 78),
+                reloadedRecording.mouseHighlightColor() == QColor(12, 34, 56, 78) &&
+                reloadedRecording.mouseHighlightRadius() == 96,
             "mouse recording settings persist across adapter instances");
     require(!recording.setMouseHighlightColor(QColor()) &&
                 recording.mouseHighlightColor() == QColor(12, 34, 56, 78),
             "invalid highlight color is rejected atomically");
+    require(!recording.setMouseHighlightRadius(7) && !recording.setMouseHighlightRadius(129) &&
+                recording.mouseHighlightRadius() == 96,
+            "highlight radius rejects values outside 8..128 atomically");
+    require(recording.setMouseHighlightRadius(8) && recording.setMouseHighlightRadius(128),
+            "highlight radius accepts both bounds");
     const storage::TraySettings tray;
     const storage::NetworkSettings network;
     const storage::GlobalShortcutSettings globalShortcuts;

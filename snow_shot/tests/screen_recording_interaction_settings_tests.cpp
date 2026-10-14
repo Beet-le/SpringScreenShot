@@ -63,6 +63,8 @@ int main(int argc, char** argv) {
     require(backend.applySwitchValue(binding, true) && backend.switchValue(binding) &&
                 storage::RecordingSettings().autoExitAfterRecordingEnds(),
             "the settings switch must apply and read the recording auto-exit preference");
+    require(storage::RecordingSettings().setMouseHighlightRadius(96),
+            "a custom highlight radius must be accepted");
     require(applicationStorage.configuration().flushNow().success,
             "recording auto-exit preference must be flushable");
     storage::ConfigurationStore reloaded(temporary.filePath(QStringLiteral("data/config.json")),
@@ -72,7 +74,10 @@ int main(int argc, char** argv) {
             "export notifications must survive configuration reload");
     require(reloaded.value(deleteKey).toBool(),
             "deleting files on recording close must survive configuration reload");
+    require(reloaded.value(QStringLiteral("screen_recording/mouse_highlight_radius")).toInt() == 96,
+            "custom highlight radius must survive configuration reload");
     require(backend.resetSection(settings::SettingsSectionReset::ScreenRecordingActionToolbar) &&
+                storage::RecordingSettings().mouseHighlightRadius() == 96 &&
                 backend.switchValue(binding) && backend.switchValue(notifyBinding) &&
                 backend.switchValue(deleteBinding),
             "Action Toolbar reset must preserve the Interaction preference");
@@ -84,8 +89,12 @@ int main(int argc, char** argv) {
                 !storage::RecordingSettings().notifyAfterExportCompletes() &&
                 !backend.switchValue(deleteBinding) &&
                 !storage::RecordingSettings().deleteFilesOnRecordingClose() &&
+                storage::RecordingSettings().mouseHighlightRadius() == 96 &&
                 !storage::RecordingSettings().captureToolbarInRecording(),
             "Interaction reset must restore auto-exit to false and preserve capture settings");
+    require(backend.resetSection(settings::SettingsSectionReset::ScreenRecording) &&
+                storage::RecordingSettings().mouseHighlightRadius() == 41,
+            "recording settings reset must restore the original highlight radius");
     applicationStorage.shutdown();
     return 0;
 }

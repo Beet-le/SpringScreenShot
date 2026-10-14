@@ -159,6 +159,7 @@ pub struct DirectRecordingConfig {
     pub mouse_trail_rgba: [u8; 4],
     pub mouse_trail_duration_ms: u64,
     pub mouse_click_rgba: [u8; 4],
+    pub mouse_highlight_radius: u32,
     pub mouse_highlight_rgba: [u8; 4],
     pub record_mouse_clicks: bool,
     pub show_keyboard: bool,
@@ -185,6 +186,7 @@ impl DirectRecordingConfig {
                 mouse_trail_rgba: self.mouse_trail_rgba,
                 mouse_trail_duration_ms: self.mouse_trail_duration_ms,
                 mouse_click_rgba: self.mouse_click_rgba,
+                mouse_highlight_radius: self.mouse_highlight_radius,
                 mouse_highlight_rgba: self.mouse_highlight_rgba,
             },
         }
@@ -195,6 +197,11 @@ impl DirectRecordingConfig {
     }
 
     pub fn validate(&self) -> std::result::Result<(), String> {
+        if !snow_recording_model::render::MOUSE_HIGHLIGHT_RADIUS_RANGE
+            .contains(&self.mouse_highlight_radius)
+        {
+            return Err("mouse highlight radius must be between 8 and 128 pixels".into());
+        }
         if !(-24..=24).contains(&self.system_audio_gain_db)
             || !(-24..=24).contains(&self.microphone_gain_db)
         {
@@ -2883,6 +2890,7 @@ impl VisualCompositor {
                     center,
                     effects.mouse_highlight_rgba,
                     true,
+                    effects.mouse_highlight_radius,
                 );
             } else {
                 snow_recording_effects::mouse_effects::draw_highlight_to(
@@ -2893,6 +2901,7 @@ impl VisualCompositor {
                     center,
                     effects.mouse_highlight_rgba,
                     true,
+                    effects.mouse_highlight_radius,
                 );
             }
         }
@@ -3395,6 +3404,7 @@ mod tests {
             mouse_trail_rgba: [0, 0, 0, 0],
             mouse_trail_duration_ms: 500,
             mouse_click_rgba: [0, 0, 0, 0],
+            mouse_highlight_radius: snow_recording_model::render::DEFAULT_MOUSE_HIGHLIGHT_RADIUS,
             mouse_highlight_rgba: [0; 4],
             record_mouse_clicks: false,
             show_keyboard: true,
@@ -4089,6 +4099,18 @@ mod tests {
         );
         assert_eq!(
             &pixels[(40 * 100 + 92) * 4..(40 * 100 + 92) * 4 + 4],
+            &[255; 4]
+        );
+        config.mouse_highlight_radius = 8;
+        let pixels = compositor
+            .compose_with_cursor(&config, &frame, 0, Some(&cursor))
+            .unwrap();
+        assert_eq!(
+            &pixels[(40 * 100 + 56) * 4..(40 * 100 + 56) * 4 + 4],
+            &[255, 255, 127, 255]
+        );
+        assert_eq!(
+            &pixels[(40 * 100 + 58) * 4..(40 * 100 + 58) * 4 + 4],
             &[255; 4]
         );
         config.show_cursor = false;

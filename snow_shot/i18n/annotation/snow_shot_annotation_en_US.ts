@@ -788,6 +788,10 @@
             <translation>Mouse highlight preview</translation>
         </message>
         <message>
+            <source>Mouse highlight radius</source>
+            <translation>Mouse highlight radius</translation>
+        </message>
+        <message>
             <source>Mouse trail color</source>
             <translation>Mouse trail color</translation>
         </message>

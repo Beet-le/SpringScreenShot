@@ -279,6 +279,7 @@ struct ScreenRecordingController::Impl {
         mouseHighlightEnabled = settings.mouseHighlightEnabled();
         recordMouseClicks = settings.recordMouseClicks();
         mouseHighlightColor = settings.mouseHighlightColor();
+        mouseHighlightRadius = settings.mouseHighlightRadius();
         showCursor = settings.showCursor();
         showKeyboard = settings.showKeyboard();
         startDelaySeconds = settings.startDelaySeconds();
@@ -758,6 +759,12 @@ struct ScreenRecordingController::Impl {
                              snow_shot::storage::RecordingSettings().setMouseHighlightColor(value);
                              syncPreview();
                          });
+        QObject::connect(palette, &ScreenshotToolPalette::recordingMouseHighlightRadiusChanged,
+                         uiSession->connections.get(), [this](int value) {
+                             setOption(mouseHighlightRadius, value);
+                             snow_shot::storage::RecordingSettings().setMouseHighlightRadius(value);
+                             syncPreview();
+                         });
         QObject::connect(palette, &ScreenshotToolPalette::recordingCursorVisibleChanged,
                          uiSession->connections.get(), [this](bool visible) {
                              setOption(showCursor, visible);
@@ -922,6 +929,7 @@ struct ScreenRecordingController::Impl {
             mouseHighlightEnabled = settings.mouseHighlightEnabled();
             recordMouseClicks = settings.recordMouseClicks();
             mouseHighlightColor = settings.mouseHighlightColor();
+            mouseHighlightRadius = settings.mouseHighlightRadius();
             showCursor = settings.showCursor();
             showKeyboard = settings.showKeyboard();
             startDelaySeconds = settings.startDelaySeconds();
@@ -1109,6 +1117,7 @@ struct ScreenRecordingController::Impl {
                         : SNOW_CAPTURE_RECORDING_AUDIO_MIXED),
                 systemAudioGainDb,
                 microphoneGainDb,
+                static_cast<uint32_t>(mouseHighlightRadius),
             };
             sessionLoopAnimatedImages = config.loop_animated_images != 0;
             const QString baseName =
@@ -1647,6 +1656,7 @@ struct ScreenRecordingController::Impl {
             {QStringLiteral("mouse_trail"), mouseTrailColor.name(QColor::HexArgb)},
             {QStringLiteral("mouse_click"), mouseClickColor.name(QColor::HexArgb)},
             {QStringLiteral("mouse_highlight_color"), mouseHighlightColor.name(QColor::HexArgb)},
+            {QStringLiteral("mouse_highlight_radius"), mouseHighlightRadius},
             {QStringLiteral("keyboard_background"), keyboardBackgroundColor.name(QColor::HexArgb)},
             {QStringLiteral("keyboard_foreground"), keyboardForegroundColor.name(QColor::HexArgb)}};
     }
@@ -1963,7 +1973,7 @@ struct ScreenRecordingController::Impl {
             mouseTrailColor, mouseClickColor, showKeyboard, mouseTrailDurationMs,
             keyboardBackgroundColor, keyboardForegroundColor, keyboardSize,
             mouseHighlightEnabled && showCursor ? mouseHighlightColor : QColor(0, 0, 0, 0),
-            recordMouseClicks);
+            recordMouseClicks, mouseHighlightRadius);
         uiSession->preview->setEligible(true);
     }
 
@@ -2002,6 +2012,7 @@ struct ScreenRecordingController::Impl {
             palette->setRecordingMouseHighlightEnabled(mouseHighlightEnabled);
             palette->setRecordingRecordMouseClicks(recordMouseClicks);
             palette->setRecordingMouseHighlightColor(mouseHighlightColor);
+            palette->setRecordingMouseHighlightRadius(mouseHighlightRadius);
             palette->setRecordingStartDelaySeconds(startDelaySeconds);
             palette->setRecordingCursorVisible(showCursor);
             palette->setRecordingKeyboardVisible(showKeyboard);
@@ -2115,6 +2126,7 @@ struct ScreenRecordingController::Impl {
     bool mouseHighlightEnabled = false;
     bool recordMouseClicks = false;
     QColor mouseHighlightColor{255, 255, 0, 128};
+    int mouseHighlightRadius = 41;
     bool showCursor = true;
     bool showKeyboard = false;
     DirectRecordingSettings sessionOutputSettings;
@@ -2306,7 +2318,8 @@ bool ScreenRecordingController::startAutomation(const QRect& region, const QJson
         {QStringLiteral("quality"), {0, 100}},
         {QStringLiteral("animated_frame_rate"), {1, 24}},
         {QStringLiteral("mouse_trail_duration_ms"), {100, 2000}},
-        {QStringLiteral("keyboard_size"), {32, 128}}};
+        {QStringLiteral("keyboard_size"), {32, 128}},
+        {QStringLiteral("mouse_highlight_radius"), {8, 128}}};
     for (auto it = options.begin(); it != options.end(); ++it) {
         if (enums.contains(it.key())) {
             if (!it->isString() || !enums.value(it.key()).contains(it->toString()))
@@ -2378,6 +2391,8 @@ bool ScreenRecordingController::startAutomation(const QRect& region, const QJson
     s.mouseTrailColor = color("mouse_trail", settings.mouseTrailColor());
     s.mouseClickColor = color("mouse_click", settings.mouseClickColor());
     s.mouseHighlightColor = color("mouse_highlight_color", settings.mouseHighlightColor());
+    s.mouseHighlightRadius = options.value(QStringLiteral("mouse_highlight_radius"))
+                                 .toInt(settings.mouseHighlightRadius());
     s.keyboardBackgroundColor = color("keyboard_background", settings.keyboardBackgroundColor());
     s.keyboardForegroundColor = color("keyboard_foreground", settings.keyboardForegroundColor());
     if (!s.allowRecording(false))

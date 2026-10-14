@@ -458,6 +458,7 @@ impl GpuVisualCompositor {
                 &self.scratch[index].clone(),
                 scale_point(sample.x, sample.y, source_size, self.size),
                 config.mouse_highlight_rgba,
+                config.mouse_highlight_radius,
             )?;
             self.processor
                 .blit(
@@ -785,6 +786,7 @@ impl GpuVisualCompositor {
         background: &Texture,
         center: (i32, i32),
         color: [u8; 4],
+        radius: u32,
     ) -> Result<()> {
         let constants: [i32; 12] = [
             self.size.0 as i32,
@@ -796,7 +798,7 @@ impl GpuVisualCompositor {
             i32::from(color[2]),
             i32::from(color[3]),
             2,
-            snow_recording_effects::mouse_effects::HIGHLIGHT_RADIUS,
+            radius as i32,
             0,
             0,
         ];
@@ -966,6 +968,7 @@ mod tests {
             mouse_trail_rgba: [255, 0, 0, 180],
             mouse_trail_duration_ms: 400,
             mouse_click_rgba: [255, 0, 0, 180],
+            mouse_highlight_radius: snow_recording_model::render::DEFAULT_MOUSE_HIGHLIGHT_RADIUS,
             mouse_highlight_rgba: [0; 4],
             record_mouse_clicks: false,
             show_keyboard: true,
@@ -2051,78 +2054,81 @@ mod tests {
         }
         .map_err(gpu_error)?;
         let staging = staging.ok_or_else(|| gpu_error("staging texture"))?;
-        let radius = snow_recording_effects::mouse_effects::HIGHLIGHT_RADIUS;
-        for center in [
-            (0, 0),
-            (64, 56),
-            (127, 111),
-            (-radius, 56),
-            (64, -radius - 1),
-        ] {
-            for color in [
-                [255, 255, 0, 128],
-                [80, 140, 220, 255],
-                [255, 255, 255, 255],
-                [0, 0, 0, 0],
+        for radius in [8, 41, 96, 128] {
+            for center in [
+                (0, 0),
+                (64, 56),
+                (127, 111),
+                (-radius, 56),
+                (64, -radius - 1),
             ] {
-                let mut expected = reference.clone();
-                snow_recording_effects::mouse_effects::draw_highlight_to(
-                    &mut snow_recording_effects::surface::RgbaSurface {
-                        pixels: &mut expected,
-                        dimensions: size,
-                    },
-                    center,
-                    color,
-                    true,
-                );
-                compositor.highlight(&background, center, color)?;
-                unsafe {
-                    device
-                        .context()
-                        .CopyResource(&staging, compositor.cursor_output.raw());
-                }
-                let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-                unsafe {
-                    device
-                        .context()
-                        .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
-                }
-                .map_err(gpu_error)?;
-                let mut actual = Vec::new();
-                for row in 0..size.1 as usize {
-                    actual.extend_from_slice(unsafe {
-                        std::slice::from_raw_parts(
-                            mapped
-                                .pData
-                                .cast::<u8>()
-                                .add(row * mapped.RowPitch as usize),
-                            stride,
-                        )
-                    });
-                }
-                unsafe {
-                    device.context().Unmap(&staging, 0);
-                }
-                assert_eq!(actual.len(), expected.len());
-                for (index, (actual, expected)) in actual.iter().zip(&expected).enumerate() {
-                    let pixel = index / 4;
-                    let channel = index % 4;
-                    let x = (pixel % size.0 as usize) as i32 - center.0;
-                    let y = (pixel / size.0 as usize) as i32 - center.1;
-                    let distance = (f64::from(x) + 0.5).hypot(f64::from(y) + 0.5);
-                    let feather = (-radius..radius).contains(&x)
-                        && (-radius..radius).contains(&y)
-                        && distance > f64::from(radius) - 0.5
-                        && distance < f64::from(radius) + 0.5;
-                    // Only feathered RGB values depend on sqrt precision. Alpha,
-                    // the interior, clipped pixels, and identity colors remain exact.
-                    let tolerance =
-                        u8::from(feather && color[3] != 0 && channel < 3 && color[channel] != 255);
-                    assert!(
-                        actual.abs_diff(*expected) <= tolerance,
-                        "highlight {center:?} {color:?} pixel ({x}, {y}) channel {channel}: \
-                         {actual} != {expected} (tolerance {tolerance})"
+                for color in [
+                    [255, 255, 0, 128],
+                    [80, 140, 220, 255],
+                    [255, 255, 255, 255],
+                    [0, 0, 0, 0],
+                ] {
+                    let mut expected = reference.clone();
+                    snow_recording_effects::mouse_effects::draw_highlight_to(
+                        &mut snow_recording_effects::surface::RgbaSurface {
+                            pixels: &mut expected,
+                            dimensions: size,
+                        },
+                        center,
+                        color,
+                        true,
+                        radius as u32,
                     );
+                    compositor.highlight(&background, center, color, radius as u32)?;
+                    unsafe {
+                        device
+                            .context()
+                            .CopyResource(&staging, compositor.cursor_output.raw());
+                    }
+                    let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+                    unsafe {
+                        device
+                            .context()
+                            .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+                    }
+                    .map_err(gpu_error)?;
+                    let mut actual = Vec::new();
+                    for row in 0..size.1 as usize {
+                        actual.extend_from_slice(unsafe {
+                            std::slice::from_raw_parts(
+                                mapped
+                                    .pData
+                                    .cast::<u8>()
+                                    .add(row * mapped.RowPitch as usize),
+                                stride,
+                            )
+                        });
+                    }
+                    unsafe {
+                        device.context().Unmap(&staging, 0);
+                    }
+                    assert_eq!(actual.len(), expected.len());
+                    for (index, (actual, expected)) in actual.iter().zip(&expected).enumerate() {
+                        let pixel = index / 4;
+                        let channel = index % 4;
+                        let x = (pixel % size.0 as usize) as i32 - center.0;
+                        let y = (pixel / size.0 as usize) as i32 - center.1;
+                        let distance = (f64::from(x) + 0.5).hypot(f64::from(y) + 0.5);
+                        let feather = (-radius..radius).contains(&x)
+                            && (-radius..radius).contains(&y)
+                            && distance > f64::from(radius) - 0.5
+                            && distance < f64::from(radius) + 0.5;
+                        // Only feathered RGB values depend on sqrt precision. Alpha,
+                        // the interior, clipped pixels, and identity colors remain exact.
+                        let tolerance = u8::from(
+                            feather && color[3] != 0 && channel < 3 && color[channel] != 255,
+                        );
+                        assert!(
+                            actual.abs_diff(*expected) <= tolerance,
+                            "highlight {center:?} {color:?} pixel ({x}, {y}) channel {channel}: \
+                         {actual} != {expected} (tolerance {tolerance})"
+                        );
+                    }
                 }
             }
         }

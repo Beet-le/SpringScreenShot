@@ -2503,6 +2503,18 @@ QColor ScreenshotToolPalette::recordingMouseHighlightColor() const {
     return m_recordingMouseHighlightColor;
 }
 
+void ScreenshotToolPalette::setRecordingMouseHighlightRadius(int value) {
+    m_recordingMouseHighlightRadius = std::clamp(value, 8, 128);
+    if (m_recordHighlightRadiusInput) {
+        const QSignalBlocker blocker(m_recordHighlightRadiusInput);
+        m_recordHighlightRadiusInput->setValue(m_recordingMouseHighlightRadius);
+    }
+}
+
+int ScreenshotToolPalette::recordingMouseHighlightRadius() const {
+    return m_recordingMouseHighlightRadius;
+}
+
 void ScreenshotToolPalette::setRecordingPostProcessingEnabled(bool enabled) {
     m_recordPostProcessingEnabled = enabled;
     if (m_recordPostProcessingButton) {
@@ -4997,7 +5009,7 @@ bool ScreenshotToolPalette::activateToolFromToolbar(Tool tool, bool toggleVisibl
         toolbar_settings::DrawingSettings().alwaysShowFirstToolbarGroupButton();
     const bool alreadyActive =
         !toggleVisibleButton || fixedGroupButton ? m_activeTool.has_value() && *m_activeTool == tool
-        : requestedButton != nullptr ? m_activeToolButton == requestedButton
+        : requestedButton != nullptr             ? m_activeToolButton == requestedButton
                                      : m_activeTool.has_value() && *m_activeTool == tool;
     const Tool requestedTool = alreadyActive && tool != Tool::Select ? Tool::Select : tool;
     activateDrawingTool(requestedTool);
@@ -7207,6 +7219,7 @@ bool ScreenshotToolPalette::ensureRecordingEffectSettingsModal() {
                 }
                 m_recordProgressBarColorPicker = nullptr;
                 m_recordHighlightColorPicker = nullptr;
+                m_recordHighlightRadiusInput = nullptr;
                 m_recordHighlightSwatch = nullptr;
                 m_recordSettingsModal = nullptr;
                 m_recordSettingsForm = nullptr;
@@ -7306,6 +7319,31 @@ bool ScreenshotToolPalette::ensureRecordingEffectSettingsModal() {
     m_recordKeyboardForegroundPicker = addKeyboardPicker(
         QStringLiteral("screenRecordingKeyboardForegroundColor"), tr("Keyboard Foreground Color"),
         QStringLiteral("foreground"), m_recordingKeyboardForegroundColor);
+    m_recordHighlightRadiusInput = new adqt::widgets::AdInputNumber;
+    m_recordHighlightRadiusInput->setObjectName(
+        QStringLiteral("screenRecordingMouseHighlightRadius"));
+    m_recordHighlightRadiusInput->setMinimum(8);
+    m_recordHighlightRadiusInput->setMaximum(128);
+    m_recordHighlightRadiusInput->setSingleStep(1);
+    m_recordHighlightRadiusInput->setDecimals(0);
+    m_recordHighlightRadiusInput->setFixedWidth(kRecordingSettingsColumnWidth);
+    m_recordHighlightRadiusInput->setStepButtonLayout(
+        adqt::widgets::AdInputNumber::StepButtonLayout::Compact);
+    {
+        const QSignalBlocker blocker(m_recordHighlightRadiusInput);
+        m_recordHighlightRadiusInput->setValue(m_recordingMouseHighlightRadius);
+    }
+    form->addField(tr("Mouse highlight radius"), m_recordHighlightRadiusInput,
+                   QStringLiteral("highlightRadius"))
+        ->setFixedWidth(kRecordingSettingsContentWidth);
+    connect(m_recordHighlightRadiusInput, &adqt::widgets::AdInputNumber::valueChanged, this,
+            [this](double value) {
+                const int previous = m_recordingMouseHighlightRadius;
+                setRecordingMouseHighlightRadius(qRound(value));
+                if (previous != m_recordingMouseHighlightRadius) {
+                    emit recordingMouseHighlightRadiusChanged(m_recordingMouseHighlightRadius);
+                }
+            });
     m_recordHighlightColorPicker = addKeyboardPicker(
         QStringLiteral("screenRecordingMouseHighlightColor"), tr("Mouse highlight color"),
         QStringLiteral("highlightColor"), m_recordingMouseHighlightColor);
@@ -7394,6 +7432,10 @@ void ScreenshotToolPalette::refreshRecordingEffectSettingsModalText() {
         return;
     }
     m_recordHighlightColorPicker->setAccessibleName(tr("Mouse highlight color"));
+    m_recordHighlightRadiusInput->setAccessibleName(tr("Mouse highlight radius"));
+    m_recordHighlightRadiusInput->setSuffixText(tr("px"));
+    m_recordSettingsForm->field(QStringLiteral("highlightRadius"))
+        ->setLabel(tr("Mouse highlight radius"));
     m_recordHighlightSwatch->setAccessibleName(tr("Mouse highlight preview"));
     m_recordSettingsForm->field(QStringLiteral("highlightColor"))
         ->setLabel(tr("Mouse highlight color"));

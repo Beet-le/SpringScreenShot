@@ -1898,6 +1898,14 @@ bool RecordingSettings::setMouseHighlightColor(const QColor& color) const {
     return setColorValue(QStringLiteral("screen_recording/mouse_highlight_color"), color);
 }
 
+int RecordingSettings::mouseHighlightRadius() const {
+    return cache().value(QStringLiteral("screen_recording/mouse_highlight_radius")).toInt();
+}
+
+bool RecordingSettings::setMouseHighlightRadius(int radius) const {
+    return cache().setValue(QStringLiteral("screen_recording/mouse_highlight_radius"), radius);
+}
+
 bool RecordingSettings::showCursor() const {
     return cache().value(QStringLiteral("screen_recording/show_cursor")).toBool();
 }

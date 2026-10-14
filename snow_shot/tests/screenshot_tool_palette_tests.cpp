@@ -748,6 +748,10 @@ void recordingEffectSettingsModal() {
                     highlight->value().solidColor == palette.recordingMouseHighlightColor(),
                 "highlight picker and multiply swatch follow palette state");
         require(!swatch->pixmap().isNull(), "highlight preview must render a swatch");
+        auto* radius = settings.modal->contentWidget()->findChild<adqt::widgets::AdInputNumber*>(
+            QStringLiteral("screenRecordingMouseHighlightRadius"));
+        require(radius && radius->value() == palette.recordingMouseHighlightRadius(),
+                "reopening effect settings restores the cached highlight radius");
         require(settings.modal != nullptr && settings.modal->isOpen(),
                 "clicking Settings must build and open the modal");
         auto* surface = settings.modal->contentWidget()->window();
@@ -873,6 +877,13 @@ void recordingEffectSettingsModal() {
         require(form->field(QStringLiteral("progressBarColor"))->label() == label &&
                     opened.progressBar->accessibleName() == label,
                 "progress bar color label and accessible name must retranslate in place");
+        const auto radiusLabel =
+            QCoreApplication::translate("ScreenshotToolPalette", "Mouse highlight radius");
+        require(form->field(QStringLiteral("highlightRadius"))->label() == radiusLabel &&
+                    form->findChild<adqt::widgets::AdInputNumber*>(
+                            QStringLiteral("screenRecordingMouseHighlightRadius"))
+                            ->accessibleName() == radiusLabel,
+                "highlight radius label and accessible name retranslate in place");
     }
     require(first.width() == form->width() && left.top() > first.top() &&
                 left.top() == right.top() && left.width() == right.width() &&
@@ -900,6 +911,21 @@ void recordingEffectSettingsModal() {
     auto* highlightPicker = form->findChild<adqt::widgets::AdColorPicker*>(
         QStringLiteral("screenRecordingMouseHighlightColor"));
     int highlightChanges = 0;
+    auto* highlightRadius = form->findChild<adqt::widgets::AdInputNumber*>(
+        QStringLiteral("screenRecordingMouseHighlightRadius"));
+    require(highlightRadius && highlightRadius->minimum() == 8 &&
+                highlightRadius->maximum() == 128 && highlightRadius->value() == 41 &&
+                highlightRadius->suffixText() == QStringLiteral("px"),
+            "highlight radius control shows its bounds, existing default and pixel units");
+    int radiusChanges = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::recordingMouseHighlightRadiusChanged,
+                     &palette, [&](int) { ++radiusChanges; });
+    highlightRadius->setValue(96);
+    require(radiusChanges == 1 && palette.recordingMouseHighlightRadius() == 96,
+            "highlight radius edits apply immediately");
+    palette.setRecordingMouseHighlightRadius(41);
+    require(radiusChanges == 1 && highlightRadius->value() == 41,
+            "highlight radius synchronization emits no user edit");
     QObject::connect(&palette, &ScreenshotToolPalette::recordingMouseHighlightColorChanged,
                      &palette, [&](const QColor&) { ++highlightChanges; });
     highlightPicker->commitValue(adqt::widgets::AdColorValue::solid(QColor(100, 150, 200, 80)));

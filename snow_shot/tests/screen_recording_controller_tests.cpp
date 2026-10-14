@@ -1738,11 +1738,15 @@ void controllerPreviewTransitions() {
             "controller edits must persist with color alpha");
     palette()->recordingMouseHighlightEnabledChanged(true);
     palette()->recordingMouseHighlightColorChanged(QColor(255, 255, 0, 128));
+    require(state->highlightRadius == 41, "highlight preview retains its original default radius");
+    palette()->recordingMouseHighlightRadiusChanged(96);
     palette()->recordingRecordMouseClicksChanged(true);
     palette()->recordingKeyboardVisibleChanged(false);
     palette()->recordingCursorVisibleChanged(true);
     pumpPreview();
-    require(state->highlight == 0xffff0080 && state->recordMouseClicks && !state->showKeyboard,
+    require(state->highlight == 0xffff0080 && state->highlightRadius == 96 &&
+                RecordingSettings().mouseHighlightRadius() == 96 && state->recordMouseClicks &&
+                !state->showKeyboard,
             "highlight and click-only recording must reach preview independently");
     palette()->recordingCursorVisibleChanged(false);
     pumpPreview();
@@ -3141,6 +3145,7 @@ void recordingSettingsDialog() {
     retired = modal;
     const auto expectedExclusions = prepareExpectedRecordingExclusions(
         toolbarPalette, snow_shot::storage::RecordingSettings().captureToolbarInRecording());
+    toolbarPalette->recordingMouseHighlightRadiusChanged(72);
     controller.startRecording();
     waitForRecording(controller);
     require(!button->isEnabled() && (retired.isNull() || !retired->isOpen()),
@@ -3151,6 +3156,7 @@ void recordingSettingsDialog() {
                 lastDirectConfig.preset == SNOW_CAPTURE_VIDEO_ENCODING_PRESET_MEDIUM &&
                 lastDirectConfig.quality == 65 && lastDirectConfig.loop_animated_images == 0 &&
                 lastDirectConfig.audio_mode == SNOW_CAPTURE_RECORDING_AUDIO_SEPARATE &&
+                lastDirectConfig.mouse_highlight_radius == 72 &&
                 lastExcludedWindows == expectedExclusions,
             "the next recording must use preferences saved in the popup");
     toolbarPalette->recordingCloseRequested();
@@ -5679,6 +5685,9 @@ int main(int argc, char** argv) {
             checkOption(QStringLiteral("keyboard_size"), 96, [](const QJsonValue& value) {
                 palette()->recordingKeyboardSizeChanged(value.toInt());
             });
+            checkOption(QStringLiteral("mouse_highlight_radius"), 72, [](const QJsonValue& value) {
+                palette()->recordingMouseHighlightRadiusChanged(value.toInt());
+            });
             checkOption(QStringLiteral("mouse_trail"), QStringLiteral("#ff123456"),
                         [](const QJsonValue& value) {
                             palette()->recordingMouseTrailColorChanged(QColor(value.toString()));
@@ -5712,15 +5721,28 @@ int main(int argc, char** argv) {
                                             {{QStringLiteral("quality"), 101}}, &error) &&
                     error == QStringLiteral("invalid_parameters") && !controller.isOpen(),
                 "out-of-range video quality must reject before opening recording UI");
+        for (const auto radius : {7.0, 129.0, 41.5}) {
+            require(!controller.startAutomation(
+                        QRect(10, 10, 320, 240),
+                        {{QStringLiteral("mouse_highlight_radius"), radius}}, &error) &&
+                        !controller.isOpen(),
+                    "automation rejects invalid highlight radii before opening recording UI");
+        }
         require(controller.startAutomation(QRect(10, 10, 320, 240),
                                            {{QStringLiteral("format"), QStringLiteral("gif")},
                                             {QStringLiteral("start_delay_seconds"), 10},
+                                            {QStringLiteral("mouse_highlight_radius"), 72},
                                             {QStringLiteral("animated_frame_rate"), 15}},
                                            &error),
                 "automation must support isolated recording options");
         require(controller.automationState().value(QStringLiteral("operation")).toString() ==
                     QStringLiteral("counting_down"),
                 "automation state must expose countdown");
+        require(controller.automationState()
+                        .value(QStringLiteral("options"))
+                        .toObject()
+                        .value(QStringLiteral("mouse_highlight_radius")) == 72,
+                "automation exposes the session-specific highlight radius");
         const int previousStarts = starts.load();
         controller.detachAutomation();
         QCoreApplication::processEvents();

@@ -788,6 +788,10 @@
             <translation>鼠标高亮预览</translation>
         </message>
         <message>
+            <source>Mouse highlight radius</source>
+            <translation>鼠标高亮半径</translation>
+        </message>
+        <message>
             <source>Mouse trail color</source>
             <translation>鼠标轨迹颜色</translation>
         </message>
