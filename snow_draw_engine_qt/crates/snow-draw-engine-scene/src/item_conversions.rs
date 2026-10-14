@@ -1305,8 +1305,8 @@ mod tests {
 
         assert_eq!(item.filter.filter_type, DisplayFilterType::GaussianBlur);
         assert_eq!(item.filter.strength, 1.0);
-        assert_eq!(item.filter.blur_sigma, 18.5);
-        assert_eq!(item.filter.sampling_radius, 56.5);
+        assert_eq!(item.filter.blur_sigma, 36.5);
+        assert_eq!(item.filter.sampling_radius, 110.5);
         assert_eq!(item.opacity, 0.65);
         assert_eq!((item.center_x, item.center_y), (12.0, 18.0));
         assert_eq!((item.width, item.height), (80.0, 40.0));
