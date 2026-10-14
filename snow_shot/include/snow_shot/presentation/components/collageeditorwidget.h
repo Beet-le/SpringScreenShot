@@ -5,6 +5,7 @@
 #include "snow_shot/presentation/collagedocument.h"
 
 #include <QWidget>
+#include <QStringList>
 #include <memory>
 
 namespace snow_shot::presentation::components {
@@ -55,12 +56,19 @@ class CollageEditorWidget final : public QWidget {
 
   signals:
     void addImagesRequested();
+    void imageFilesDropped(const QStringList& paths);
     void replaceImageRequested(quint64 id);
     void clearRequested();
     void settingsEdited(const QString& field);
 
   protected:
     void changeEvent(QEvent*) override;
+    void resizeEvent(QResizeEvent*) override;
+    void hideEvent(QHideEvent*) override;
+    void dragEnterEvent(QDragEnterEvent*) override;
+    void dragMoveEvent(QDragMoveEvent*) override;
+    void dragLeaveEvent(QDragLeaveEvent*) override;
+    void dropEvent(QDropEvent*) override;
 
   private:
     struct Impl;

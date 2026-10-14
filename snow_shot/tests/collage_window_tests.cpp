@@ -25,6 +25,8 @@
 #include <QColorSpace>
 #include <QCursor>
 #include <QDir>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
@@ -32,6 +34,7 @@
 #include <QFileInfo>
 #include <QLabel>
 #include <QMouseEvent>
+#include <QMimeData>
 #include <QPointer>
 #include <QPainter>
 #include <QScopeGuard>
@@ -41,6 +44,7 @@
 #include <QToolButton>
 #include <QTranslator>
 #include <QUuid>
+#include <QUrl>
 
 #include <cstdlib>
 #include <atomic>
@@ -1314,6 +1318,69 @@ void livePinnedQueueReleasesCompletedSnapshotsAndAccountsForCancellation() {
               "closing the window and retiring the worker releases every captured raster");
 }
 
+void droppedFilesUseCollageImporter() {
+    resetSettings();
+    QTemporaryDir directory;
+    require(directory.isValid(), "drop fixture directory");
+    const auto red = directory.filePath(QStringLiteral("red.PNG"));
+    const auto blue = directory.filePath(QStringLiteral("blue.png"));
+    const auto invalid = directory.filePath(QStringLiteral("invalid.png"));
+    require(image().save(red) && image({2, 3}, Qt::blue).save(blue), "write drop image fixtures");
+    QFile malformed(invalid);
+    require(malformed.open(QIODevice::WriteOnly) && malformed.write("not an image") > 0,
+            "write corrupt drop fixture");
+    malformed.close();
+    Ports ports;
+    CollageWindow window(nullptr, ports.services());
+    window.present();
+    flushEvents();
+    QStringList failures;
+    int completions = 0;
+    QObject::connect(&window, &CollageWindow::importFinished, &window,
+                     [&](const QStringList& errors) {
+                         failures = errors;
+                         ++completions;
+                     });
+    const auto drop = [&](QWidget* target, const QList<QUrl>& urls) {
+        QMimeData files;
+        files.setUrls(urls);
+        QDragEnterEvent enter(QRectF(target->rect()).center(), Qt::CopyAction | Qt::MoveAction,
+                              &files, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(target, &enter);
+        require(enter.isAccepted(), "window child accepts file drag");
+        // Qt routes the drop to the parent that accepted the enter event.
+        auto* editor = window.editor();
+        QDropEvent event(editor->rect().center(), Qt::CopyAction | Qt::MoveAction, &files,
+                         Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(editor, &event);
+        require(event.isAccepted() && event.dropAction() == Qt::CopyAction && window.loading(),
+                "dropping begins the existing asynchronous importer with copy semantics");
+        require(editor->findChild<QWidget*>(QStringLiteral("collageDropHint"))->isHidden(),
+                "drop feedback is dismissed before import begins");
+        waitUntil([&] { return !window.loading(); }, "dropped batch completes");
+    };
+    drop(window.editor()->findChild<QWidget*>(QStringLiteral("collageEmptyState")),
+         {QUrl::fromLocalFile(red),
+          QUrl::fromLocalFile(directory.filePath(QStringLiteral("notes.txt"))),
+          QUrl::fromLocalFile(invalid), QUrl::fromLocalFile(blue), QUrl::fromLocalFile(red)});
+    const auto firstBatch = window.document()->items();
+    require(completions == 1 && firstBatch.size() == 3 && failures.size() == 1 &&
+                failures[0].contains(invalid) && firstBatch[0].label == red &&
+                firstBatch[1].label == blue && firstBatch[2].label == red &&
+                firstBatch[0].id != firstBatch[2].id && firstBatch[0].image.size() == QSize(3, 2) &&
+                firstBatch[1].image.size() == QSize(2, 3),
+            "file drops preserve successful image order and duplicates and report decode errors");
+    require(window.document()->rotate(firstBatch[0].id, true), "transform existing collage item");
+    const auto transform = window.document()->items()[0].transform;
+    drop(window.editor()->canvas(), {QUrl::fromLocalFile(blue)});
+    const auto appended = window.document()->items();
+    require(completions == 2 && failures.isEmpty() && appended.size() == 4 &&
+                appended[0].id == firstBatch[0].id && appended[0].transform == transform &&
+                appended[3].label == blue,
+            "dropping onto an existing collage appends without replacing or swapping images");
+    window.shutdown();
+}
+
 void fileImportDuplicatesAndReplacement() {
     resetSettings();
     QTemporaryDir directory;
@@ -1995,6 +2062,15 @@ int main(int argc, char* argv[]) {
     timed("Theme initialization",
           [&] { styles::ThemeManager::instance().initialize(application); });
     const auto arguments = QApplication::arguments();
+    if (arguments.contains(QStringLiteral("--drag-drop-only"))) {
+        timed("Dropped file imports", droppedFilesUseCollageImporter);
+        waitUntil([] { return ScreenshotExportCoordinator::shared().pendingJobCount() == 0; },
+                  "drop tests drain export jobs");
+        ScreenshotExportCoordinator::shared().shutdown();
+        storage.shutdown();
+        std::cout << "Collage window drag-and-drop tests passed\n";
+        return 0;
+    }
     if (arguments.contains(QStringLiteral("--selected-files-only"))) {
         timed("Selected-file ordered imports", selectedFilesOpenAndAppendInOrder);
         timed("Empty selections and query failures", emptySelectionsAndFailuresKeepWindowOpen);
@@ -2096,6 +2172,7 @@ int main(int argc, char* argv[]) {
     timed("Clear and initial import failures", clearAndInitialImportFailures);
     timed("Clear pending import", clearingPendingImportDiscardsStaleCompletion);
     timed("File imports and replacement", fileImportDuplicatesAndReplacement);
+    timed("Dropped file imports", droppedFilesUseCollageImporter);
     timed("Owned live pin imports", livePinnedImportsPreserveOrderAndFailures);
     timed("Live pin cancellation and memory", livePinnedImportsCancelAndRespectMemoryBudget);
     timed("Live pin queued raster ownership",

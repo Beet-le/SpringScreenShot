@@ -228,6 +228,8 @@ struct CollageWindow::Impl {
         QObject::connect(document, &CollageDocument::changed, &q, [this] { updateActions(); });
         QObject::connect(editor, &components::CollageEditorWidget::addImagesRequested, &q,
                          [this] { chooseFiles(0); });
+        QObject::connect(editor, &components::CollageEditorWidget::imageFilesDropped, &q,
+                         &CollageWindow::addFiles);
         QObject::connect(editor, &components::CollageEditorWidget::replaceImageRequested, &q,
                          [this](quint64 id) { chooseFiles(id); });
         QObject::connect(editor, &components::CollageEditorWidget::clearRequested, &q,

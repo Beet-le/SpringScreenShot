@@ -51,6 +51,10 @@
             <translation>Add images to create a collage</translation>
         </message>
         <message>
+            <source>Add multiple image files at once</source>
+            <translation>Add multiple image files at once</translation>
+        </message>
+        <message>
             <source>Background color</source>
             <translation>Background color</translation>
         </message>
@@ -79,8 +83,16 @@
             <translation>Delete image</translation>
         </message>
         <message>
+            <source>Drag image files here, or choose Add images</source>
+            <translation>Drag image files here, or choose Add images</translation>
+        </message>
+        <message>
             <source>Drag with the middle mouse button to pan; scroll to zoom</source>
             <translation>Drag with the middle mouse button to pan; scroll to zoom</translation>
+        </message>
+        <message>
+            <source>Drop images to add to collage</source>
+            <translation>Drop images to add to collage</translation>
         </message>
         <message>
             <source>Fit to canvas</source>

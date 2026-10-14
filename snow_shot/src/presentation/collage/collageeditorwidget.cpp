@@ -3,10 +3,12 @@
 
 #include "snow_shot/presentation/screenshotwheelinput.h"
 #include "snow_shot/presentation/screenshotexportcoordinator.h"
+#include "snow_shot/presentation/screenshotclipboardcontent.h"
 #include "snow_shot/presentation/components/overlaycontrolbutton.h"
 #include "snow_shot/presentation/components/icons/snowshoticons.h"
 #include "snow_shot/presentation/styles/thememanager.h"
 #include "antd_icons.h"
+#include "icon_renderer.h"
 #include "theme/theme_manager.h"
 #include "widgets/button.h"
 #include "widgets/color_picker.h"
@@ -23,6 +25,7 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFocusEvent>
+#include <QFileInfo>
 #include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QKeyEvent>
@@ -36,6 +39,7 @@
 #include <QSet>
 #include <QSignalBlocker>
 #include <QTimer>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <QWheelEvent>
 #include "collageresourcebudget_p.h"
@@ -85,6 +89,9 @@ constexpr std::array<const char*, 8> kColorValues{"#FFFFFF", "#000000", "#8C8C8C
     QT_TRANSLATE_NOOP("CollageEditorWidget", "Reset transform"),
     QT_TRANSLATE_NOOP("CollageEditorWidget", "Add images"),
     QT_TRANSLATE_NOOP("CollageEditorWidget", "Add images to create a collage"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Drag image files here, or choose Add images"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Drop images to add to collage"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Add multiple image files at once"),
     QT_TRANSLATE_NOOP("CollageEditorWidget", "%1 × %2 px"),
     QT_TRANSLATE_NOOP("CollageEditorWidget", "Total: %1 images"),
     QT_TRANSLATE_NOOP("CollageEditorWidget", "Vertical"),
@@ -134,6 +141,100 @@ quint64 dragItem(const QMimeData* mime, const CollageDocument* document) {
     const auto value = parts[1].toULongLong(&valid);
     return valid ? value : 0;
 }
+
+QStringList droppedImageFiles(const QMimeData* mime) {
+    // Internal thumbnail drags belong to the existing swap interaction.
+    if (!mime || !mime->hasUrls() || mime->hasFormat(QString::fromLatin1(kDragType)))
+        return {};
+    const auto supported = ScreenshotClipboardContentReader::supportedImageFileExtensions();
+    QStringList paths;
+    for (const auto& url : mime->urls()) {
+        if (url.isLocalFile() &&
+            supported.contains(QFileInfo(url.toLocalFile()).suffix().toLower()))
+            paths.append(url.toLocalFile());
+    }
+    return paths;
+}
+
+class CollageDropIcon final : public QWidget {
+  public:
+    explicit CollageDropIcon(QWidget* parent) : QWidget(parent) {
+        setFixedSize(48, 48);
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+    }
+
+  protected:
+    void paintEvent(QPaintEvent*) override {
+        const auto theme = adqt::theme::ThemeManager::instance().resolveTheme(this);
+        QPainter painter(this);
+        adqt::icons::IconStatePalette palette;
+        palette.set(QIcon::Normal, QIcon::Off,
+                    adqt::icons::IconColors::primary(theme.colorPrimary));
+        adqt::icons::paintIcon(&painter, icons::Inbox(), rect(), {}, palette);
+    }
+};
+
+// Ant Design Upload's drag surface, using the same tokens in light and dark themes.
+class CollageDropSurface final : public QWidget {
+  public:
+    explicit CollageDropSurface(bool active, QWidget* parent) : QWidget(parent), m_active(active) {
+        auto* column = new QVBoxLayout(this);
+        column->setContentsMargins(32, 32, 32, 32);
+        column->setSpacing(8);
+        column->addStretch();
+        m_icon = new CollageDropIcon(this);
+        column->addWidget(m_icon, 0, Qt::AlignHCenter);
+        column->addSpacing(8);
+        title = new QLabel(this);
+        description = new QLabel(this);
+        for (auto* label : {title, description}) {
+            label->setAlignment(Qt::AlignCenter);
+            label->setWordWrap(true);
+            column->addWidget(label);
+        }
+        column->addStretch();
+        if (active)
+            setAttribute(Qt::WA_TransparentForMouseEvents);
+        refreshTheme();
+    }
+
+    void refreshTheme() {
+        const auto theme = adqt::theme::ThemeManager::instance().resolveTheme(this);
+        auto titleFont = font();
+        titleFont.setPixelSize(qRound(theme.fontSizeLG));
+        title->setFont(titleFont);
+        auto descriptionFont = font();
+        descriptionFont.setPixelSize(qRound(theme.fontSize));
+        description->setFont(descriptionFont);
+        auto palette = this->palette();
+        palette.setColor(QPalette::WindowText, theme.colorText);
+        title->setPalette(palette);
+        palette.setColor(QPalette::WindowText, theme.colorTextSecondary);
+        description->setPalette(palette);
+        m_icon->update();
+        update();
+    }
+
+    QLabel* title;
+    QLabel* description;
+
+  protected:
+    void paintEvent(QPaintEvent*) override {
+        const auto theme = adqt::theme::ThemeManager::instance().resolveTheme(this);
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        if (m_active)
+            painter.fillRect(rect(), theme.colorBgContainer);
+        painter.setPen(QPen(m_active ? theme.colorPrimary : theme.colorBorder, 1, Qt::DashLine));
+        painter.setBrush(m_active ? theme.colorPrimaryBg : theme.colorFillAlter);
+        painter.drawRoundedRect(QRectF(rect()).adjusted(.5, .5, -.5, -.5), theme.borderRadiusLG,
+                                theme.borderRadiusLG);
+    }
+
+  private:
+    bool m_active;
+    CollageDropIcon* m_icon;
+};
 
 QPixmap checkerboard(const QWidget* widget) {
     const auto theme = adqt::theme::ThemeManager::instance().resolveTheme(widget);
@@ -1062,9 +1163,10 @@ struct CollageEditorWidget::Impl {
     CollageEditorWidget* owner = nullptr;
     CollageDocument* document = nullptr;
     CollagePreviewCanvas* canvas = nullptr;
-    QWidget* emptyState = nullptr;
+    CollageDropSurface* emptyState = nullptr;
     QLabel* emptyPrompt = nullptr;
     AdButton* emptyAdd = nullptr;
+    CollageDropSurface* dropHint = nullptr;
     QWidget* thumbnailRow = nullptr;
     QWidget* outputDescription = nullptr;
     QLabel* dimensions = nullptr;
@@ -1087,6 +1189,16 @@ struct CollageEditorWidget::Impl {
     bool loading = false;
     bool exporting = false;
 
+    void positionDropHint() {
+        const auto* target = document->items().isEmpty() ? static_cast<QWidget*>(emptyState)
+                                                         : static_cast<QWidget*>(canvas);
+        dropHint->setGeometry(target->geometry());
+        dropHint->raise();
+    }
+    bool acceptsImageDrop(const QMimeData* mime, Qt::DropActions actions) const {
+        return !loading && !exporting && actions.testFlag(Qt::CopyAction) &&
+               !droppedImageFiles(mime).isEmpty();
+    }
     int lengthReference() const {
         const auto settings = document->settings();
         int reference = 0;
@@ -1143,6 +1255,8 @@ struct CollageEditorWidget::Impl {
         return qRound(std::clamp(pixels, 0.0, double(std::numeric_limits<int>::max())));
     }
     void enabled() {
+        if (loading || exporting)
+            dropHint->hide();
         add->setEnabled(!loading && !exporting);
         add->setBusy(loading);
         clear->setEnabled(!exporting && !document->items().isEmpty());
@@ -1213,6 +1327,7 @@ struct CollageEditorWidget::Impl {
         canvas->setVisible(!empty);
         thumbnailRow->setVisible(!empty);
         emptyState->setVisible(empty);
+        positionDropHint();
         const auto layout = document->layout();
         dimensions->setText(
             layout.isValid() ? text("%1 × %2 px").arg(layout.size.width()).arg(layout.size.height())
@@ -1237,14 +1352,9 @@ struct CollageEditorWidget::Impl {
         labelPalette.setColor(QPalette::WindowText, theme.colorTextSecondary);
         dimensions->setPalette(labelPalette);
         total->setPalette(labelPalette);
-        emptyPrompt->setPalette(labelPalette);
-        auto promptFont = owner->font();
-        promptFont.setPixelSize(qRound(theme.fontSize));
-        emptyPrompt->setFont(promptFont);
+        emptyState->refreshTheme();
+        dropHint->refreshTheme();
         const auto metric = styles::ThemeManager::instance().themeColorScheme().metricAlias;
-        emptyState->layout()->setContentsMargins(metric.marginLG, metric.marginLG, metric.marginLG,
-                                                 metric.marginLG);
-        emptyState->layout()->setSpacing(metric.marginMD);
         outputDescription->layout()->setSpacing(metric.marginSM);
         for (auto* label : {dimensions, total}) {
             QFont font = owner->font();
@@ -1263,6 +1373,7 @@ CollageEditorWidget::CollageEditorWidget(CollageDocument* document, QWidget* par
     d.owner = this;
     d.document = document;
     setObjectName(QStringLiteral("collageEditorWidget"));
+    setAcceptDrops(true);
     const auto theme = styles::ThemeManager::instance().themeColorScheme().metricAlias;
     d.outputDescription = new QWidget(this);
     d.outputDescription->setObjectName(QStringLiteral("collageOutputDescription"));
@@ -1290,25 +1401,28 @@ CollageEditorWidget::CollageEditorWidget(CollageDocument* document, QWidget* par
     previewColumn->setSpacing(theme.marginXS);
     d.canvas = new CollagePreviewCanvas(document, this);
     previewColumn->addWidget(d.canvas, 1);
-    d.emptyState = new QWidget(this);
+    d.emptyState = new CollageDropSurface(false, this);
     d.emptyState->setObjectName(QStringLiteral("collageEmptyState"));
-    auto* emptyLayout = new QVBoxLayout(d.emptyState);
-    emptyLayout->addStretch(1);
-    d.emptyPrompt = new QLabel(d.emptyState);
+    auto* emptyLayout = static_cast<QVBoxLayout*>(d.emptyState->layout());
+    d.emptyPrompt = d.emptyState->title;
     d.emptyPrompt->setObjectName(QStringLiteral("collageEmptyPrompt"));
-    d.emptyPrompt->setAlignment(Qt::AlignCenter);
-    d.emptyPrompt->setWordWrap(true);
-    emptyLayout->addWidget(d.emptyPrompt);
+    d.emptyState->description->setObjectName(QStringLiteral("collageEmptyDropDescription"));
     d.emptyAdd = new AdButton(d.emptyState);
     d.emptyAdd->setObjectName(QStringLiteral("collageEmptyAddImages"));
     d.emptyAdd->setIconRef(icons::Plus());
     d.emptyAdd->setButtonStyle(AdButton::ButtonStyle::Solid);
     d.emptyAdd->setAccentRole(AdButton::AccentRole::Primary);
     d.emptyAdd->setFocusPolicy(Qt::StrongFocus);
-    emptyLayout->addWidget(d.emptyAdd, 0, Qt::AlignHCenter);
-    emptyLayout->addStretch(1);
+    emptyLayout->insertSpacing(emptyLayout->count() - 1, 8);
+    emptyLayout->insertWidget(emptyLayout->count() - 1, d.emptyAdd, 0, Qt::AlignHCenter);
     previewColumn->addWidget(d.emptyState, 1);
     body->addLayout(previewColumn, 1);
+
+    d.dropHint = new CollageDropSurface(true, this);
+    d.dropHint->setObjectName(QStringLiteral("collageDropHint"));
+    d.dropHint->title->setObjectName(QStringLiteral("collageDropTitle"));
+    d.dropHint->description->setObjectName(QStringLiteral("collageDropDescription"));
+    d.dropHint->hide();
 
     auto* formScroll = new AdScrollArea(this);
     formScroll->setObjectName(QStringLiteral("collageSettingsScroll"));
@@ -1577,6 +1691,11 @@ void CollageEditorWidget::retranslateUi() {
     }
     d.add->setText(text("Add images"));
     d.emptyPrompt->setText(text("Add images to create a collage"));
+    d.emptyState->description->setText(text("Drag image files here, or choose Add images"));
+    d.dropHint->title->setText(text("Drop images to add to collage"));
+    d.dropHint->description->setText(text("Add multiple image files at once"));
+    d.dropHint->setAccessibleName(d.dropHint->title->text());
+    d.dropHint->setAccessibleDescription(d.dropHint->description->text());
     d.emptyAdd->setText(text("Add images"));
     d.emptyAdd->setAccessibleName(d.emptyAdd->text());
     d.clear->setText(text("Clear all"));
@@ -1588,5 +1707,55 @@ void CollageEditorWidget::changeEvent(QEvent* event) {
     if (event->type() == QEvent::LanguageChange)
         retranslateUi();
     QWidget::changeEvent(event);
+}
+
+void CollageEditorWidget::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    layout()->activate();
+    m_impl->positionDropHint();
+}
+
+void CollageEditorWidget::hideEvent(QHideEvent* event) {
+    m_impl->dropHint->hide();
+    QWidget::hideEvent(event);
+}
+
+void CollageEditorWidget::dragEnterEvent(QDragEnterEvent* event) {
+    if (!m_impl->acceptsImageDrop(event->mimeData(), event->possibleActions())) {
+        m_impl->dropHint->hide();
+        event->ignore();
+        return;
+    }
+    m_impl->positionDropHint();
+    m_impl->dropHint->show();
+    event->setDropAction(Qt::CopyAction);
+    event->accept();
+}
+
+void CollageEditorWidget::dragMoveEvent(QDragMoveEvent* event) {
+    if (!m_impl->acceptsImageDrop(event->mimeData(), event->possibleActions())) {
+        m_impl->dropHint->hide();
+        event->ignore();
+        return;
+    }
+    event->setDropAction(Qt::CopyAction);
+    event->accept();
+}
+
+void CollageEditorWidget::dragLeaveEvent(QDragLeaveEvent* event) {
+    m_impl->dropHint->hide();
+    event->accept();
+}
+
+void CollageEditorWidget::dropEvent(QDropEvent* event) {
+    m_impl->dropHint->hide();
+    if (!m_impl->acceptsImageDrop(event->mimeData(), event->possibleActions())) {
+        event->ignore();
+        return;
+    }
+    const auto paths = droppedImageFiles(event->mimeData());
+    event->setDropAction(Qt::CopyAction);
+    event->accept();
+    emit imageFilesDropped(paths);
 }
 } // namespace snow_shot::presentation::components

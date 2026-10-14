@@ -26,6 +26,7 @@
 #include <QThread>
 #include <QTranslator>
 #include <QWheelEvent>
+#include <QUrl>
 #include <QtTest/qtestspontaneevent.h>
 #include <QtMath>
 
@@ -76,6 +77,140 @@ AdButton* button(QWidget* parent, const char* name) {
     require(result != nullptr, "expected editor button is missing");
     return result;
 }
+
+void externalImageDrops() {
+    CollageDocument document;
+    CollageEditorWidget editor(&document);
+    editor.resize(1000, 650);
+    editor.show();
+    pump();
+    auto* hint = editor.findChild<QWidget*>(QStringLiteral("collageDropHint"));
+    auto* empty = editor.findChild<QWidget*>(QStringLiteral("collageEmptyState"));
+    require(hint && empty && hint->isHidden(), "drop hint starts hidden");
+    QStringList received;
+    int drops = 0;
+    QObject::connect(&editor, &CollageEditorWidget::imageFilesDropped, &editor,
+                     [&](const QStringList& paths) {
+                         received = paths;
+                         ++drops;
+                     });
+    QMimeData files;
+    const auto first = QDir::temp().filePath(QStringLiteral("collage-first.PNG"));
+    const auto second = QDir::temp().filePath(QStringLiteral("collage-second.jpg"));
+    files.setUrls({QUrl::fromLocalFile(first), QUrl::fromLocalFile(first),
+                   QUrl::fromLocalFile(QDir::temp().filePath(QStringLiteral("notes.txt"))),
+                   QUrl(QStringLiteral("https://example.com/image.png")),
+                   QUrl::fromLocalFile(second)});
+    const auto enter = [&](QWidget* target, const QMimeData* mime,
+                           Qt::DropActions actions = Qt::CopyAction | Qt::MoveAction) {
+        QDragEnterEvent event(QRectF(target->rect()).center(), actions, mime, Qt::LeftButton,
+                              Qt::NoModifier);
+        QApplication::sendEvent(target, &event);
+        return event.isAccepted() && event.dropAction() == Qt::CopyAction;
+    };
+    const auto leave = [&] {
+        QDragLeaveEvent event;
+        QApplication::sendEvent(&editor, &event);
+        require(hint->isHidden(), "leaving the editor clears drag feedback");
+    };
+    require(enter(empty, &files) && hint->isVisible() && hint->geometry() == empty->geometry(),
+            "external files propagate from the empty state and highlight its preview area");
+    require(drops == 0 && document.items().isEmpty(), "hover never imports or edits images");
+    leave();
+    QMimeData textOnly;
+    textOnly.setText(QStringLiteral("text is not an image"));
+    QMimeData invalid;
+    invalid.setUrls({QUrl(QStringLiteral("https://example.com/image.png")),
+                     QUrl::fromLocalFile(QDir::temp().filePath(QStringLiteral("notes.txt")))});
+    QMimeData bitmap;
+    bitmap.setImageData(image({2, 2}));
+    for (const auto* mime : {&textOnly, &invalid, &bitmap}) {
+        require(!enter(&editor, mime) && hint->isHidden(),
+                "unsupported payloads do not show a file import hint");
+    }
+    require(!enter(&editor, &files, Qt::MoveAction), "file imports require copy permission");
+    require(enter(&editor, &files), "image files can enter the editor");
+    QDragMoveEvent move(QRectF(editor.rect()).center(), Qt::CopyAction | Qt::MoveAction, &files,
+                        Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&editor, &move);
+    require(move.isAccepted() && move.dropAction() == Qt::CopyAction,
+            "moving over the editor preserves copy semantics");
+    QDropEvent drop(editor.rect().center(), Qt::CopyAction | Qt::MoveAction, &files, Qt::LeftButton,
+                    Qt::NoModifier);
+    QApplication::sendEvent(&editor, &drop);
+    require(drop.isAccepted() && drop.dropAction() == Qt::CopyAction && drops == 1 &&
+                received == QStringList{first, first, second} && hint->isHidden(),
+            "drop emits only local image files, preserving order and duplicates");
+
+    const auto id = document.append(image({120, 80}), QStringLiteral("existing"));
+    document.append(image({80, 80}, Qt::blue), QStringLiteral("second"));
+    pump();
+    for (auto* target : {static_cast<QWidget*>(editor.canvas()),
+                         editor.findChild<QWidget*>(QStringLiteral("collageThumbnail_%1").arg(id)),
+                         button(&editor, "collageAddImages")->parentWidget(),
+                         editor.findChild<QWidget*>(QStringLiteral("collageSettingsScroll"))}) {
+        require(target && enter(target, &files) && hint->isVisible(),
+                "external image drops work over the canvas, thumbnails, actions and settings");
+        leave();
+    }
+    require(enter(editor.canvas(), &files), "populated preview accepts external files");
+    editor.resize(1100, 720);
+    pump();
+    require(hint->geometry() == editor.canvas()->geometry(),
+            "active hint follows the resized preview without covering settings");
+    for (const auto theme : {adqt::theme::ThemeScheme::Dark, adqt::theme::ThemeScheme::Light}) {
+        adqt::theme::ThemeManager::instance().setPreset(theme);
+        pump();
+        const auto tokens = adqt::theme::ThemeManager::instance().resolveTheme(hint);
+        const auto pixels = hint->grab().toImage();
+        require(pixels.pixelColor(pixels.width() / 2, 12) == tokens.colorPrimaryBg,
+                "active surface uses Ant Design's primary background in both themes");
+    }
+    QTranslator translator;
+    require(translator.load(QStringLiteral(":/i18n/snow_shot_zh_CN.qm")),
+            "drop hint translations are available");
+    QApplication::installTranslator(&translator);
+    pump();
+    const auto title =
+        QCoreApplication::translate("CollageEditorWidget", "Drop images to add to collage");
+    require(title != QStringLiteral("Drop images to add to collage") &&
+                hint->accessibleName() == title &&
+                hint->findChild<QLabel*>(QStringLiteral("collageDropTitle"))->text() == title,
+            "visible drop hint and accessibility retranslate immediately");
+    QApplication::removeTranslator(&translator);
+    pump();
+    editor.setLoading(true);
+    require(hint->isHidden() && !enter(&editor, &files), "loading blocks file drops and feedback");
+    editor.setLoading(false);
+    require(enter(&editor, &files), "file dropping recovers after loading");
+    editor.setExportBusy(true);
+    require(hint->isHidden() && !enter(&editor, &files), "export blocks file drops and feedback");
+    editor.setExportBusy(false);
+    require(enter(&editor, &files), "file dropping recovers after export");
+    editor.setLoading(true);
+    QDropEvent busyDrop(editor.rect().center(), Qt::CopyAction, &files, Qt::LeftButton,
+                        Qt::NoModifier);
+    QApplication::sendEvent(&editor, &busyDrop);
+    require(!busyDrop.isAccepted() && drops == 1 && document.items().size() == 2,
+            "a drop racing with busy work cannot import or swap images");
+    editor.setLoading(false);
+    require(enter(&editor, &files), "files can enter before hiding");
+    editor.hide();
+    require(hint->isHidden(), "hiding the editor clears stale drag feedback");
+    editor.show();
+    pump();
+    QMimeData internal;
+    internal.setData(QStringLiteral("application/x-snow-shot-collage-item"),
+                     QByteArray::number(reinterpret_cast<quintptr>(&document)) + ':' +
+                         QByteArray::number(id));
+    QDragEnterEvent internalEnter(QRectF(editor.canvas()->rect()).center(), Qt::MoveAction,
+                                  &internal, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(editor.canvas(), &internalEnter);
+    require(internalEnter.isAccepted() && hint->isHidden(),
+            "internal item drags retain swapping without an import hint");
+    leave();
+}
+
 void selectionOutlineUsesThreePixelBorder() {
     auto& themes = adqt::theme::ThemeManager::instance();
     const auto originalConfig = themes.config();
@@ -1374,6 +1509,15 @@ int renderPreview(const QString& path, bool dark, bool percentage, bool empty) {
         pump();
         QThread::msleep(5);
     }
+    QMimeData dragFiles;
+    if (QApplication::arguments().contains(QStringLiteral("--drag"))) {
+        dragFiles.setUrls(
+            {QUrl::fromLocalFile(QDir::temp().filePath(QStringLiteral("image.png")))});
+        QDragEnterEvent enter(QRectF(editor.rect()).center(), Qt::CopyAction, &dragFiles,
+                              Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(&editor, &enter);
+        pump();
+    }
     QDir().mkpath(QFileInfo(path).absolutePath());
     const bool saved = editor.grab().save(path);
     ScreenshotExportCoordinator::shared().shutdown();
@@ -1391,6 +1535,13 @@ int main(int argc, char** argv) {
                              arguments.contains(QStringLiteral("--percentage")),
                              arguments.contains(QStringLiteral("--empty")));
     try {
+        if (arguments.contains(QStringLiteral("--drag-drop-only"))) {
+            externalImageDrops();
+            releaseOnlySwapAndCrossWindowIsolation();
+            ScreenshotExportCoordinator::shared().shutdown();
+            std::cout << "Collage drag-and-drop tests passed\n";
+            return 0;
+        }
         if (arguments.contains(QStringLiteral("--empty-state-only"))) {
             controlsEmptyBusyAndPresets();
             languageChangesPreserveSettingsAndRefreshLabels();
@@ -1445,6 +1596,7 @@ int main(int argc, char** argv) {
             return 0;
         }
         selectionOutlineUsesThreePixelBorder();
+        externalImageDrops();
         replacementHighlightMatchesDrawEngineMarquee();
         thumbnailScrollBarOverlaysTheList();
         thumbnailActionsUseTranslucentOverlays();

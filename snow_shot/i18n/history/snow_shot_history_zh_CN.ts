@@ -51,6 +51,10 @@
             <translation>添加图像以创建拼图</translation>
         </message>
         <message>
+            <source>Add multiple image files at once</source>
+            <translation>可一次添加多张图片</translation>
+        </message>
+        <message>
             <source>Background color</source>
             <translation>背景颜色</translation>
         </message>
@@ -79,8 +83,16 @@
             <translation>删除图像</translation>
         </message>
         <message>
+            <source>Drag image files here, or choose Add images</source>
+            <translation>将图片文件拖到此处，或点击“添加图片”</translation>
+        </message>
+        <message>
             <source>Drag with the middle mouse button to pan; scroll to zoom</source>
             <translation>按住鼠标中键拖动以平移；滚动滚轮以缩放</translation>
+        </message>
+        <message>
+            <source>Drop images to add to collage</source>
+            <translation>松开鼠标，将图片添加到拼图</translation>
         </message>
         <message>
             <source>Fit to canvas</source>

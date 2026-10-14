@@ -1287,6 +1287,14 @@ if(SNOW_SHOT_BUILD_TESTS)
             ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endforeach()
+    foreach(_collage_drop_test IN ITEMS editor window)
+        add_test(NAME snow-shot-collage-${_collage_drop_test}-drag-drop-tests
+            COMMAND snow-shot-collage-${_collage_drop_test}-tests --drag-drop-only -platform offscreen)
+        set_tests_properties(snow-shot-collage-${_collage_drop_test}-drag-drop-tests PROPERTIES
+            LABELS unit
+            ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endforeach()
     add_test(NAME snow-shot-collage-selection-outline-tests
         COMMAND snow-shot-collage-editor-tests --selection-outline-only -platform offscreen)
     set_tests_properties(snow-shot-collage-selection-outline-tests PROPERTIES LABELS unit
