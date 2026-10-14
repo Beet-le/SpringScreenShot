@@ -2633,6 +2633,10 @@
             <translation>Language</translation>
         </message>
         <message>
+            <source>Language Detection Confidence Threshold</source>
+            <translation>Language Detection Confidence Threshold</translation>
+        </message>
+        <message>
             <source>Language, startup and updates</source>
             <translation>Language, startup and updates</translation>
         </message>
@@ -2803,6 +2807,10 @@
         <message>
             <source>Middle mouse button action</source>
             <translation>Middle mouse button action</translation>
+        </message>
+        <message>
+            <source>Minimum confidence required to switch to the secondary target language</source>
+            <translation>Minimum confidence required to switch to the secondary target language</translation>
         </message>
         <message>
             <source>Model Hot Start</source>
@@ -3199,10 +3207,6 @@
         <message>
             <source>Process priority</source>
             <translation>Process priority</translation>
-        </message>
-        <message>
-            <source>Prompt-capable models use this language when the input matches the primary target language</source>
-            <translation>Prompt-capable models use this language when the input matches the primary target language</translation>
         </message>
         <message>
             <source>Proxy</source>
@@ -4395,6 +4399,10 @@
         <message>
             <source>Use system proxy</source>
             <translation>Use system proxy</translation>
+        </message>
+        <message>
+            <source>Use this language when local language detection matches the primary target language at the configured confidence</source>
+            <translation>Use this language when local language detection matches the primary target language at the configured confidence</translation>
         </message>
         <message>
             <source>User initiated</source>

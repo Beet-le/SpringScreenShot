@@ -1524,9 +1524,11 @@ void screenshotTranslationSettingsRoundTripSupportedValues() {
     require(translation.configuration() ==
                 storage::ScreenshotTranslationConfiguration{QStringLiteral("auto"), {}, {}},
             "translation settings should default to Auto source and runtime-derived target/model");
+    require(translation.configuration().languageDetectionConfidenceThreshold == 60,
+            "language detection confidence defaults to 60 percent");
     const storage::ScreenshotTranslationConfiguration selected{
-        QStringLiteral("ja"), QStringLiteral("zh-Hant"), QStringLiteral("model-a"),
-        QStringLiteral("original")};
+        QStringLiteral("ja"),       QStringLiteral("zh-Hant"), QStringLiteral("model-a"),
+        QStringLiteral("original"), QStringLiteral("en"),      75};
     require(translation.setConfiguration(selected) && translation.configuration() == selected,
             "translation language and model selections should persist together");
     require(translation.setOriginalImageTranslationEnabled(false) &&
@@ -1541,6 +1543,25 @@ void screenshotTranslationSettingsRoundTripSupportedValues() {
             "an explicitly disabled display toggle must survive restart");
     require(conversion.visionModel() == QStringLiteral("vision-model"),
             "vision model survives storage restart independently of translation settings");
+
+    const QString confidenceKey =
+        QStringLiteral("screenshot_translation/language_detection_confidence_threshold");
+    for (const int boundary : {30, 100}) {
+        const auto normalized = storage::ConfigurationSchema::normalize(confidenceKey, boundary);
+        require(normalized.valid && normalized.value.toInt() == boundary,
+                "language detection confidence accepts both configured boundaries");
+    }
+    for (const QJsonValue& invalid : {QJsonValue(29), QJsonValue(101), QJsonValue(60.5),
+                                      QJsonValue(QStringLiteral("60")), QJsonValue(true)}) {
+        require(!storage::ConfigurationSchema::normalize(confidenceKey, invalid).valid,
+                "language detection confidence rejects invalid percentages and types");
+    }
+    auto invalidConfiguration = selected;
+    invalidConfiguration.targetLanguage = QStringLiteral("fr");
+    invalidConfiguration.languageDetectionConfidenceThreshold = 29;
+    require(!translation.setConfiguration(invalidConfiguration) &&
+                translation.configuration() == selected,
+            "invalid confidence rejects the full translation preference update atomically");
 
     const auto unsupportedTarget = storage::ConfigurationSchema::normalize(
         QStringLiteral("screenshot_translation/target_language"), QStringLiteral("auto"));
@@ -3531,6 +3552,11 @@ int main(int argc, char** argv) {
     }
     QCoreApplication::setOrganizationName(QStringLiteral("SnowShotTests"));
     QCoreApplication::setApplicationName(QStringLiteral("storage-tests"));
+    if (application.arguments().contains(QStringLiteral("--translation-settings-only"))) {
+        screenshotTranslationSettingsRoundTripSupportedValues();
+        storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--auto-save-after-execution-only"))) {
         autoSaveAfterExecutionSettingsMigrateAndPersist();
         return 0;

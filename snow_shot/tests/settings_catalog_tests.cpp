@@ -70,6 +70,9 @@ class CatalogTranslator final : public QTranslator {
         if (source == QStringLiteral("Show Text Highlighting")) {
             return QStringLiteral("Localized Text Highlighting");
         }
+        if (source == QStringLiteral("Language Detection Confidence Threshold")) {
+            return QStringLiteral("Localized Language Confidence");
+        }
         return {};
     }
 };
@@ -165,6 +168,39 @@ void ocrDefaultOptionsShareToolbarSource(const settings::SettingsCatalog& catalo
                 QStringList{QStringLiteral("none"), QStringLiteral("keep"),
                             QStringLiteral("remove"), QStringLiteral("smart")},
             "default formatting includes Smart Typesetting after the line-break choices");
+}
+
+void translationConfidenceCatalog() {
+    const auto& registry = settings::builtInSettingsRegistry();
+    const auto& catalog = registry.catalog();
+    require(catalog.validationErrors().isEmpty(), "translation confidence catalog must validate");
+    const QString id = QStringLiteral("translation.language-detection-confidence-threshold");
+    const QString key =
+        QStringLiteral("screenshot_translation/language_detection_confidence_threshold");
+    const auto* field = registry.field(id);
+    const auto* schema = storage::ConfigurationSchema::entry(key);
+    require(field != nullptr && field->kind == settings::SettingsFieldKind::Integer &&
+                field->configurationKey == key && field->defaultValue.toInt() == 60 &&
+                field->reset == settings::SettingsSectionReset::Translation &&
+                field ==
+                    registry.fieldForInteger(settings::SettingsIntegerBinding::
+                                                 TranslationLanguageDetectionConfidenceThreshold) &&
+                schema != nullptr && schema->integerRange.has_value() &&
+                schema->integerRange->minimum == 30 && schema->integerRange->maximum == 100 &&
+                schema->integerRange->step == 1,
+            "translation confidence shares registry, persistence, reset, and range contracts");
+    const auto* integer =
+        std::get_if<settings::SettingsIntegerDefinition>(&field->definition->payload);
+    require(integer != nullptr && integer->suffix.translated() == QStringLiteral("%") &&
+                field->definition->description.isValid(),
+            "translation confidence exposes an explanation and percentage suffix");
+    CatalogTranslator translator;
+    require(QCoreApplication::installTranslator(&translator),
+            "install translation confidence translator");
+    require(field->definition->title.translated() ==
+                QStringLiteral("Localized Language Confidence"),
+            "translation confidence title resolves translations dynamically");
+    QCoreApplication::removeTranslator(&translator);
 }
 
 void builtInCatalogIsCompleteAndValid() {
@@ -3529,6 +3565,10 @@ void memoryOptimizationPolicyCatalog() {
 
 int main(int argc, char** argv) {
     QCoreApplication application(argc, argv);
+    if (application.arguments().contains(QStringLiteral("--translation-confidence-only"))) {
+        translationConfidenceCatalog();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--global-hotkeys-only"))) {
         globalHotkeyShortcutsHaveStableContracts();
         compactTrayManifestMatchesRegistryCatalog();
@@ -3646,6 +3686,7 @@ int main(int argc, char** argv) {
             "administrator controls must exist in the settings catalog");
 #endif
     builtInCatalogIsCompleteAndValid();
+    translationConfidenceCatalog();
     featureNavigationAndSearchAreConsistent();
     globalMouseSettingsHaveStableContracts();
     globalHotkeyShortcutsHaveStableContracts();

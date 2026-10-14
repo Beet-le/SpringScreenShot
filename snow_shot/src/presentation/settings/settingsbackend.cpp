@@ -423,7 +423,8 @@ QVariant BuiltInSettingsBackend::selectValue(SettingsSelectBinding binding) cons
                           ? translation::defaultTranslationTargetLanguage(
                                 LanguageManager::instance().currentLocale())
                           : config.targetLanguage,
-                      config.modelId, config.secondaryTargetLanguage};
+                      config.modelId, config.secondaryTargetLanguage,
+                      config.languageDetectionConfidenceThreshold};
         if (binding == SettingsSelectBinding::TranslationSourceLanguage)
             return preferences.sourceLanguage;
         if (binding == SettingsSelectBinding::TranslationPrimaryTargetLanguage)
@@ -1332,6 +1333,16 @@ int BuiltInSettingsBackend::integerValue(SettingsIntegerBinding binding) const {
         return storage::ApplicationStorage::instance().pinnedWindowPolicy().maxDiskMiB;
     case SettingsIntegerBinding::ScreenshotDelaySeconds:
         return storage::ScreenshotSettings().delaySeconds();
+    case SettingsIntegerBinding::TranslationLanguageDetectionConfidenceThreshold:
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
+        return m_translationService != nullptr
+                   ? m_translationService->preferences().languageDetectionConfidenceThreshold
+                   : storage::ScreenshotTranslationSettings()
+                         .configuration()
+                         .languageDetectionConfidenceThreshold;
+#else
+        return 0;
+#endif
     }
     return 0;
 }
@@ -1339,6 +1350,19 @@ int BuiltInSettingsBackend::integerValue(SettingsIntegerBinding binding) const {
 bool BuiltInSettingsBackend::applyIntegerValue(SettingsIntegerBinding binding, int value) {
     auto policy = storage::ApplicationStorage::instance().captureHistoryPolicy();
     switch (binding) {
+    case SettingsIntegerBinding::TranslationLanguageDetectionConfidenceThreshold:
+#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
+        if (m_translationService != nullptr) {
+            auto preferences = m_translationService->preferences();
+            preferences.languageDetectionConfidenceThreshold = value;
+            return m_translationService->savePreferences(preferences);
+        }
+        return storage::ApplicationStorage::instance().configuration().setValue(
+            QStringLiteral("screenshot_translation/language_detection_confidence_threshold"),
+            value);
+#else
+        return false;
+#endif
     case SettingsIntegerBinding::HistoryRetentionDays:
         policy.retentionDays = value;
         break;
@@ -2637,6 +2661,9 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
             {QStringLiteral("screenshot_translation/secondary_target_language"),
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("screenshot_translation/secondary_target_language"))},
+            {QStringLiteral("screenshot_translation/language_detection_confidence_threshold"),
+             storage::ConfigurationSchema::defaultValue(
+                 QStringLiteral("screenshot_translation/language_detection_confidence_threshold"))},
             {QStringLiteral("screenshot_translation/model"),
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("screenshot_translation/model"))},

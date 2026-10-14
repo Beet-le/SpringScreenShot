@@ -834,6 +834,8 @@ add_library(snow_shot_translation STATIC
     include/snow_shot/translation/translationservice.h
     include/snow_shot/translation/translationlanguages.h
     include/snow_shot/translation/translationlanguagecatalog.h
+    include/snow_shot/translation/translationlanguagedetector.h
+    src/app/translationlanguagedetector.cpp
     src/app/translationservice.cpp
     include/snow_shot/presentation/selectedtexttranslationcontroller.h
     src/presentation/services/selectedtexttranslationcontroller.cpp
@@ -848,7 +850,7 @@ add_library(snow_shot_translation STATIC
 snow_enable_unity_build(snow_shot_translation)
 target_include_directories(snow_shot_translation PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(snow_shot_translation PUBLIC snow_shot_storage Qt6::Network
-    PRIVATE snow_selected_text_c)
+    PRIVATE snow_selected_text_c snow_language_detection_c)
 target_compile_definitions(snow_shot_translation PRIVATE
     SNOW_SHOT_API_BASE_URL=\"${SNOW_SHOT_API_BASE_URL}\"
 )
@@ -2212,6 +2214,11 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_test(NAME snow-shot-pin-to-screen-storage-tests
         COMMAND snow-shot-application-storage-tests --pin-shortcuts-only)
     set_tests_properties(snow-shot-pin-to-screen-storage-tests PROPERTIES LABELS "unit")
+    add_test(NAME snow-shot-translation-confidence-storage-tests
+        COMMAND snow-shot-application-storage-tests --translation-settings-only)
+    set_tests_properties(snow-shot-translation-confidence-storage-tests PROPERTIES
+        LABELS "unit" TIMEOUT 30
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     # CPU contention from parallel tests can stretch the settling window.
     # The test must not run in parallel with other tests (RUN_SERIAL), and
     # intermittent failures are tolerated via the retry launcher.
@@ -2769,6 +2776,11 @@ if(SNOW_SHOT_BUILD_TESTS)
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-settings-catalog-tests
              COMMAND snow-shot-settings-catalog-tests)
+    add_test(NAME snow-shot-translation-confidence-catalog-tests
+        COMMAND snow-shot-settings-catalog-tests --translation-confidence-only)
+    set_tests_properties(snow-shot-translation-confidence-catalog-tests PROPERTIES
+        LABELS "unit" TIMEOUT 30
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-global-hotkeys-catalog-tests
         COMMAND snow-shot-settings-catalog-tests --global-hotkeys-only)
     set_tests_properties(snow-shot-global-hotkeys-catalog-tests PROPERTIES LABELS unit TIMEOUT 30
@@ -2999,6 +3011,12 @@ if(SNOW_SHOT_BUILD_TESTS)
         snow_shot_image_codec
     )
     add_test(NAME snow-shot-translation-settings-tests COMMAND snow-shot-translation-settings-tests)
+    add_test(NAME snow-shot-translation-confidence-settings-tests
+        COMMAND snow-shot-translation-settings-tests --translation-confidence-only -platform offscreen)
+    set_tests_properties(snow-shot-translation-confidence-settings-tests PROPERTIES
+        LABELS "unit" TIMEOUT 30
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-ocr-highlighting-settings-tests
         COMMAND snow-shot-translation-settings-tests --ocr-highlighting-only -platform offscreen)
     add_test(NAME snow-shot-ocr-highlighting-storage-tests
@@ -8251,6 +8269,11 @@ if(SNOW_SHOT_BUILD_TESTS)
     set_tests_properties(snow-shot-mcp-eraser-tests PROPERTIES LABELS "unit" TIMEOUT 60)
     add_test(NAME snow-shot-mcp-application-tests
         COMMAND snow-shot-mcp-document-tests --application-only -platform offscreen)
+    add_test(NAME snow-shot-mcp-translation-tests
+        COMMAND snow-shot-mcp-document-tests --translation-only -platform offscreen)
+    set_tests_properties(snow-shot-mcp-translation-tests PROPERTIES LABELS "unit" TIMEOUT 30
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     if(Python3_Interpreter_FOUND AND SNOW_SHOT_ENABLE_MCP)
         add_test(NAME snow-shot-mcp-fixture-tests
             COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/mcp_fixture_tests.py"
@@ -8347,6 +8370,12 @@ if(SNOW_SHOT_BUILD_TESTS)
     target_link_libraries(snow-shot-translation-service-tests PRIVATE snow_shot_translation)
     add_test(NAME snow-shot-translation-service-tests COMMAND snow-shot-translation-service-tests)
     set_tests_properties(snow-shot-translation-service-tests PROPERTIES LABELS "unit")
+    add_executable(snow-shot-translation-language-detection-tests
+        tests/translation_language_detection_tests.cpp)
+    target_link_libraries(snow-shot-translation-language-detection-tests PRIVATE snow_shot_translation)
+    add_test(NAME snow-shot-translation-language-detection-tests
+        COMMAND snow-shot-translation-language-detection-tests)
+    set_tests_properties(snow-shot-translation-language-detection-tests PROPERTIES LABELS "unit")
     add_test(NAME snow-shot-translation-notification-lifetime-tests
         COMMAND snow-shot-translation-service-tests --notification-lifetime-only)
     set_tests_properties(snow-shot-translation-notification-lifetime-tests PROPERTIES

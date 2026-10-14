@@ -3435,12 +3435,24 @@ QVector<SettingsPageDefinition> builtInPages() {
                       QStringLiteral("translation.secondary-target-language"),
                       QT_TRANSLATE_NOOP("SettingsCatalog", "Secondary Target Language"),
                       QT_TRANSLATE_NOOP("SettingsCatalog",
-                                        "Prompt-capable models use this language when the input "
-                                        "matches the primary target language"),
+                                        "Use this language when local language detection matches "
+                                        "the primary target language at the configured confidence"),
                       QStringLiteral("screenshot_translation/secondary_target_language"),
                       SettingsSelectBinding::TranslationSecondaryTargetLanguage,
                       translationLanguageOptions(false)),
-                  translationServiceItem(), originalImageTranslationItem(),
+                  {QStringLiteral("translation.language-detection-confidence-threshold"),
+                   settingsText(QT_TRANSLATE_NOOP("SettingsCatalog",
+                                                  "Language Detection Confidence Threshold")),
+                   settingsText(QT_TRANSLATE_NOOP(
+                       "SettingsCatalog",
+                       "Minimum confidence required to switch to the secondary target language")),
+                   {},
+                   QStringLiteral("screenshot_translation/language_detection_confidence_threshold"),
+                   SettingsIntegerDefinition{
+                       SettingsIntegerBinding::TranslationLanguageDetectionConfidenceThreshold,
+                       settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "%"))}},
+                  translationServiceItem(),
+                  originalImageTranslationItem(),
                   translationLayoutProcessingItem()},
              },
 #endif
@@ -5041,6 +5053,10 @@ QStringList SettingsCatalog::validationErrors() const {
                         break;
                     case SettingsIntegerBinding::ScreenshotDelaySeconds:
                         expectedKey = QStringLiteral("screenshot/delay_seconds");
+                        break;
+                    case SettingsIntegerBinding::TranslationLanguageDetectionConfidenceThreshold:
+                        expectedKey = QStringLiteral(
+                            "screenshot_translation/language_detection_confidence_threshold");
                         break;
                     }
                     if (itemDefinition.configurationKey != expectedKey || schemaEntry == nullptr ||

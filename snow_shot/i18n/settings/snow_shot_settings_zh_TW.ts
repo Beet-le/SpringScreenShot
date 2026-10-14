@@ -2633,6 +2633,10 @@
             <translation>語言</translation>
         </message>
         <message>
+            <source>Language Detection Confidence Threshold</source>
+            <translation>語言偵測信心度門檻</translation>
+        </message>
+        <message>
             <source>Language, startup and updates</source>
             <translation>語言、啟動與更新</translation>
         </message>
@@ -2803,6 +2807,10 @@
         <message>
             <source>Middle mouse button action</source>
             <translation>滑鼠中鍵動作</translation>
+        </message>
+        <message>
+            <source>Minimum confidence required to switch to the secondary target language</source>
+            <translation>切換至次目標語言所需的最低信心度</translation>
         </message>
         <message>
             <source>Model Hot Start</source>
@@ -3199,10 +3207,6 @@
         <message>
             <source>Process priority</source>
             <translation>處理程序優先順序</translation>
-        </message>
-        <message>
-            <source>Prompt-capable models use this language when the input matches the primary target language</source>
-            <translation>支援提示詞的模型會在輸入語言與主要目標語言相同時使用此語言</translation>
         </message>
         <message>
             <source>Proxy</source>
@@ -4395,6 +4399,10 @@
         <message>
             <source>Use system proxy</source>
             <translation>使用系統代理</translation>
+        </message>
+        <message>
+            <source>Use this language when local language detection matches the primary target language at the configured confidence</source>
+            <translation>當本機語言偵測結果與主目標語言相符且達到設定的信心度時，使用此語言</translation>
         </message>
         <message>
             <source>User initiated</source>

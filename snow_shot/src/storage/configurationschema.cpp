@@ -374,6 +374,8 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
       QStringLiteral("fr"), QStringLiteral("it"), QStringLiteral("ja"), QStringLiteral("ko"),
       QStringLiteral("pt"), QStringLiteral("ru"), QStringLiteral("tr"), QStringLiteral("zh-Hans"),
       QStringLiteral("zh-Hant")}},
+    {QStringLiteral("screenshot_translation/language_detection_confidence_threshold"), 60,
+     ConfigurationValueKind::Integer, ConfigurationIntegerRange{30, 100}},
     {QStringLiteral("screenshot_translation/model"), QString(), ConfigurationValueKind::String},
 #endif
 #if SNOW_SHOT_ENABLE_IMAGE_CONVERSION

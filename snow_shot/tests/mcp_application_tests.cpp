@@ -37,6 +37,132 @@ void require(bool value, const char* message) {
         std::exit(1);
     }
 }
+template <typename Call>
+void translationRetries(Call&& call, translation::TranslationService& translation,
+                        McpJobRegistry& jobs, translation_tests::Server& provider,
+                        int& selectionCaptures) {
+    require(call(QStringLiteral("translation_catalog")).ok, "translation catalog available");
+    translation_tests::waitUntil([&] { return !translation.loadingModels(); },
+                                 "deterministic provider catalog completes");
+    auto capturedPreferences = translation.preferences();
+    capturedPreferences.secondaryTargetLanguage = QStringLiteral("fr");
+    capturedPreferences.languageDetectionConfidenceThreshold = 60;
+    require(translation.savePreferences(capturedPreferences), "set original secondary target");
+    const auto started = call(QStringLiteral("translation_start"),
+                              {{QStringLiteral("texts"), QJsonArray{QStringLiteral("こんにちは")}},
+                               {QStringLiteral("model_id"), QStringLiteral("general")},
+                               {QStringLiteral("source_language"), QStringLiteral("ja")},
+                               {QStringLiteral("target_language"), QStringLiteral("ja")}});
+    require(started.ok, "translation returns an owned job");
+    const auto translationId = started.result.value(QStringLiteral("job_id")).toString();
+    translation_tests::waitUntil([&] { return provider.streams.size() == 1; },
+                                 "translation uses deterministic provider");
+    require(
+        call(QStringLiteral("translation_start"), {{QStringLiteral("retry_job_id"), translationId}})
+                .errorCode == QStringLiteral("invalid_state"),
+        "cannot retry active translation");
+    provider.delta(0, QStringLiteral("partial"));
+    translation_tests::waitUntil(
+        [&] {
+            return jobs.get(71, translationId)
+                       ->value(QStringLiteral("progress"))
+                       .toObject()
+                       .value(QStringLiteral("text")) == QStringLiteral("partial");
+        },
+        "streamed translation progress is observable");
+    provider.fail(0);
+    translation_tests::waitUntil(
+        [&] {
+            return jobs.get(71, translationId)->value(QStringLiteral("status")) ==
+                   QStringLiteral("failed");
+        },
+        "provider failure produces terminal job");
+    const auto snapshotInput = jobs.input(71, translationId);
+    require(snapshotInput.has_value() &&
+                snapshotInput->value(QStringLiteral("secondary_target_language")) ==
+                    QStringLiteral("fr") &&
+                snapshotInput->value(QStringLiteral("language_detection_confidence_threshold")) ==
+                    60 &&
+                !jobs.input(72, translationId),
+            "retained retry input captures target and threshold and checks ownership");
+    require(call(QStringLiteral("translation_start"),
+                 {{QStringLiteral("retry_job_id"), translationId}}, {}, {}, 72)
+                    .errorCode == QStringLiteral("job_not_found"),
+            "wrong-owner retry does not disclose private job");
+    auto changedPreferences = translation.preferences();
+    changedPreferences.targetLanguage = QStringLiteral("de");
+    changedPreferences.secondaryTargetLanguage = QStringLiteral("de");
+    changedPreferences.languageDetectionConfidenceThreshold = 90;
+    require(translation.savePreferences(changedPreferences), "UI changes translation preferences");
+    const auto retried = call(QStringLiteral("translation_start"),
+                              {{QStringLiteral("retry_job_id"), translationId}});
+    require(retried.ok, "failed translation can retry");
+    const auto retryId = retried.result.value(QStringLiteral("job_id")).toString();
+    require(retryId != translationId && jobs.input(71, retryId) == snapshotInput,
+            "retry owns a new handle and preserves captured preferences");
+    translation_tests::waitUntil([&] { return provider.streams.size() == 2; },
+                                 "retry reaches provider");
+    require(provider.streams.at(1).body == provider.streams.at(0).body,
+            "retry restores original text and both targets after shared preferences change");
+    provider.delta(1, QStringLiteral("translated"));
+    provider.finish(1);
+    translation_tests::waitUntil(
+        [&] {
+            return jobs.get(71, retryId)->value(QStringLiteral("status")) ==
+                   QStringLiteral("completed");
+        },
+        "retry completes");
+    changedPreferences.secondaryTargetLanguage = QStringLiteral("pt");
+    changedPreferences.languageDetectionConfidenceThreshold = 30;
+    require(translation.savePreferences(changedPreferences), "change targets before chained retry");
+    const auto canceled =
+        call(QStringLiteral("translation_start"), {{QStringLiteral("retry_job_id"), retryId}});
+    const auto canceledId = canceled.result.value(QStringLiteral("job_id")).toString();
+    translation_tests::waitUntil([&] { return provider.streams.size() == 3; },
+                                 "cancel fixture starts");
+    require(provider.streams.at(2).body == provider.streams.at(0).body,
+            "chained retry preserves the original secondary target");
+    require(jobs.cancel(71, canceledId), "translation cancellation accepted");
+    translation_tests::waitUntil([&] { return provider.disconnected(2); },
+                                 "translation cancellation releases provider request");
+    require(jobs.get(71, canceledId)->value(QStringLiteral("status")) == QStringLiteral("canceled"),
+            "translation cancellation remains distinct from provider failure");
+    const auto selected = call(QStringLiteral("translation_start"),
+                               {{QStringLiteral("source"), QStringLiteral("selection")},
+                                {QStringLiteral("model_id"), QStringLiteral("general")},
+                                {QStringLiteral("source_language"), QStringLiteral("ja")},
+                                {QStringLiteral("target_language"), QStringLiteral("ja")}});
+    require(selected.ok, "selected text returns a translation job");
+    const auto selectedId = selected.result.value(QStringLiteral("job_id")).toString();
+    translation_tests::waitUntil([&] { return provider.streams.size() == 4; },
+                                 "selected text reaches provider");
+    provider.fail(3);
+    translation_tests::waitUntil(
+        [&] {
+            return jobs.get(71, selectedId)->value(QStringLiteral("status")) ==
+                   QStringLiteral("failed");
+        },
+        "selected text failure produces a retryable job");
+    changedPreferences.secondaryTargetLanguage = QStringLiteral("ko");
+    changedPreferences.languageDetectionConfidenceThreshold = 100;
+    require(translation.savePreferences(changedPreferences), "change target after selection");
+    const auto selectedRetry =
+        call(QStringLiteral("translation_start"), {{QStringLiteral("retry_job_id"), selectedId}});
+    require(selectedRetry.ok, "selected text can retry from retained input");
+    translation_tests::waitUntil([&] { return provider.streams.size() == 5; },
+                                 "selected text retry reaches provider");
+    require(selectionCaptures == 1 && provider.streams.at(4).body == provider.streams.at(3).body,
+            "selected text retry retains both targets without recapturing the selection");
+    provider.delta(4, QStringLiteral("selected translation"));
+    provider.finish(4);
+    const auto selectedRetryId = selectedRetry.result.value(QStringLiteral("job_id")).toString();
+    translation_tests::waitUntil(
+        [&] {
+            return jobs.get(71, selectedRetryId)->value(QStringLiteral("status")) ==
+                   QStringLiteral("completed");
+        },
+        "selected text retry completes");
+}
 } // namespace
 
 void runMcpApplicationTests() {
@@ -58,8 +184,11 @@ void runMcpApplicationTests() {
     update::UpdateService updates(std::move(updateOptions));
     translation_tests::Server provider;
     SnowShotApiClient api(provider.url());
-    auto& translation =
-        translation::TranslationService::forClient(api, configuration, QLocale::English);
+    auto& translation = translation::TranslationService::forClient(
+        api, configuration, QLocale::English,
+        [](const QString&) -> std::optional<translation::DetectedTranslationLanguage> {
+            return translation::DetectedTranslationLanguage{QStringLiteral("jpn"), 0.65};
+        });
     McpApplicationService::Ports ports;
     ports.storage = &storage;
     ports.settings = &session;
@@ -524,121 +653,7 @@ void runMcpApplicationTests() {
                     image.pixelColor(0, 0) == largeImage.pixelColor(0, 0),
                 "history size-limit fallback preserves dimensions and pixel content");
     }
-    require(call(QStringLiteral("translation_catalog")).ok, "translation catalog available");
-    translation_tests::waitUntil([&] { return !translation.loadingModels(); },
-                                 "deterministic provider catalog completes");
-    auto capturedPreferences = translation.preferences();
-    capturedPreferences.secondaryTargetLanguage = QStringLiteral("fr");
-    require(translation.savePreferences(capturedPreferences), "set original secondary target");
-    const auto started = call(QStringLiteral("translation_start"),
-                              {{QStringLiteral("texts"), QJsonArray{QStringLiteral("こんにちは")}},
-                               {QStringLiteral("model_id"), QStringLiteral("general")},
-                               {QStringLiteral("source_language"), QStringLiteral("ja")},
-                               {QStringLiteral("target_language"), QStringLiteral("ja")}});
-    require(started.ok, "translation returns an owned job");
-    const auto translationId = started.result.value(QStringLiteral("job_id")).toString();
-    translation_tests::waitUntil([&] { return provider.streams.size() == 1; },
-                                 "translation uses deterministic provider");
-    require(
-        call(QStringLiteral("translation_start"), {{QStringLiteral("retry_job_id"), translationId}})
-                .errorCode == QStringLiteral("invalid_state"),
-        "cannot retry active translation");
-    provider.delta(0, QStringLiteral("partial"));
-    translation_tests::waitUntil(
-        [&] {
-            return jobs.get(71, translationId)
-                       ->value(QStringLiteral("progress"))
-                       .toObject()
-                       .value(QStringLiteral("text")) == QStringLiteral("partial");
-        },
-        "streamed translation progress is observable");
-    provider.fail(0);
-    translation_tests::waitUntil(
-        [&] {
-            return jobs.get(71, translationId)->value(QStringLiteral("status")) ==
-                   QStringLiteral("failed");
-        },
-        "provider failure produces terminal job");
-    const auto snapshotInput = jobs.input(71, translationId);
-    require(snapshotInput.has_value() &&
-                snapshotInput->value(QStringLiteral("secondary_target_language")) ==
-                    QStringLiteral("fr") &&
-                !jobs.input(72, translationId),
-            "retained retry input captures secondary target and checks ownership");
-    require(call(QStringLiteral("translation_start"),
-                 {{QStringLiteral("retry_job_id"), translationId}}, {}, {}, 72)
-                    .errorCode == QStringLiteral("job_not_found"),
-            "wrong-owner retry does not disclose private job");
-    auto changedPreferences = translation.preferences();
-    changedPreferences.targetLanguage = QStringLiteral("de");
-    changedPreferences.secondaryTargetLanguage = QStringLiteral("de");
-    require(translation.savePreferences(changedPreferences), "UI changes translation preferences");
-    const auto retried = call(QStringLiteral("translation_start"),
-                              {{QStringLiteral("retry_job_id"), translationId}});
-    require(retried.ok, "failed translation can retry");
-    const auto retryId = retried.result.value(QStringLiteral("job_id")).toString();
-    require(retryId != translationId && jobs.input(71, retryId) == snapshotInput,
-            "retry owns a new handle and preserves captured preferences");
-    translation_tests::waitUntil([&] { return provider.streams.size() == 2; },
-                                 "retry reaches provider");
-    require(provider.streams.at(1).body == provider.streams.at(0).body,
-            "retry restores original text and both targets after shared preferences change");
-    provider.delta(1, QStringLiteral("translated"));
-    provider.finish(1);
-    translation_tests::waitUntil(
-        [&] {
-            return jobs.get(71, retryId)->value(QStringLiteral("status")) ==
-                   QStringLiteral("completed");
-        },
-        "retry completes");
-    changedPreferences.secondaryTargetLanguage = QStringLiteral("pt");
-    require(translation.savePreferences(changedPreferences), "change targets before chained retry");
-    const auto canceled =
-        call(QStringLiteral("translation_start"), {{QStringLiteral("retry_job_id"), retryId}});
-    const auto canceledId = canceled.result.value(QStringLiteral("job_id")).toString();
-    translation_tests::waitUntil([&] { return provider.streams.size() == 3; },
-                                 "cancel fixture starts");
-    require(provider.streams.at(2).body == provider.streams.at(0).body,
-            "chained retry preserves the original secondary target");
-    require(jobs.cancel(71, canceledId), "translation cancellation accepted");
-    translation_tests::waitUntil([&] { return provider.disconnected(2); },
-                                 "translation cancellation releases provider request");
-    require(jobs.get(71, canceledId)->value(QStringLiteral("status")) == QStringLiteral("canceled"),
-            "translation cancellation remains distinct from provider failure");
-    const auto selected = call(QStringLiteral("translation_start"),
-                               {{QStringLiteral("source"), QStringLiteral("selection")},
-                                {QStringLiteral("model_id"), QStringLiteral("general")},
-                                {QStringLiteral("source_language"), QStringLiteral("ja")},
-                                {QStringLiteral("target_language"), QStringLiteral("ja")}});
-    require(selected.ok, "selected text returns a translation job");
-    const auto selectedId = selected.result.value(QStringLiteral("job_id")).toString();
-    translation_tests::waitUntil([&] { return provider.streams.size() == 4; },
-                                 "selected text reaches provider");
-    provider.fail(3);
-    translation_tests::waitUntil(
-        [&] {
-            return jobs.get(71, selectedId)->value(QStringLiteral("status")) ==
-                   QStringLiteral("failed");
-        },
-        "selected text failure produces a retryable job");
-    changedPreferences.secondaryTargetLanguage = QStringLiteral("ko");
-    require(translation.savePreferences(changedPreferences), "change target after selection");
-    const auto selectedRetry =
-        call(QStringLiteral("translation_start"), {{QStringLiteral("retry_job_id"), selectedId}});
-    require(selectedRetry.ok, "selected text can retry from retained input");
-    translation_tests::waitUntil([&] { return provider.streams.size() == 5; },
-                                 "selected text retry reaches provider");
-    require(selectionCaptures == 1 && provider.streams.at(4).body == provider.streams.at(3).body,
-            "selected text retry retains both targets without recapturing the selection");
-    provider.delta(4, QStringLiteral("selected translation"));
-    provider.finish(4);
-    const auto selectedRetryId = selectedRetry.result.value(QStringLiteral("job_id")).toString();
-    translation_tests::waitUntil(
-        [&] {
-            return jobs.get(71, selectedRetryId)->value(QStringLiteral("status")) ==
-                   QStringLiteral("completed");
-        },
-        "selected text retry completes");
+    translationRetries(call, translation, jobs, provider, selectionCaptures);
     require(call(QStringLiteral("updates_action"),
                  {{QStringLiteral("action"), QStringLiteral("download")}})
                     .errorCode ==
@@ -868,5 +883,54 @@ void runMcpApplicationTests() {
         translation_tests::flushEvents();
     }
     service.disconnected(71);
+    service.shutdown();
+}
+
+void runMcpTranslationTests() {
+    auto& storage = storage::ApplicationStorage::instance();
+    presentation::GlobalShortcutManager shortcuts;
+    const auto suspended = shortcuts.suspendRegistrations();
+    Q_UNUSED(suspended);
+    const auto registry = settings::buildBuiltInSettingsRegistry();
+    settings::BuiltInSettingsBackend backend(shortcuts);
+    settings::SettingsRuntimeSession session(registry, backend);
+    translation_tests::Server provider;
+    SnowShotApiClient api(provider.url());
+    auto& translation = translation::TranslationService::forClient(
+        api, storage.configuration(), QLocale::English,
+        [](const QString&) -> std::optional<translation::DetectedTranslationLanguage> {
+            return translation::DetectedTranslationLanguage{QStringLiteral("jpn"), 0.65};
+        });
+    McpJobRegistry jobs;
+    McpApplicationService::Ports ports;
+    ports.storage = &storage;
+    ports.settings = &session;
+    ports.jobs = &jobs;
+    ports.translation = &translation;
+    int selectionCaptures = 0;
+    ports.selectedText = [&](auto completion) {
+        ++selectionCaptures;
+        completion(QStringLiteral("こんにちは"), {});
+        return std::function<void()>{};
+    };
+    McpApplicationService service(ports);
+    quint64 sequence = 0;
+    const auto call = [&](const QString& method, QJsonObject params = {},
+                          std::optional<quint64> revision = {}, QString key = {},
+                          quint64 owner = 71) {
+        ScreenshotMcpRequest request;
+        request.connectionId = owner;
+        request.requestId = QString::number(++sequence);
+        request.method = QStringLiteral("snow_shot_") + method;
+        request.params = std::move(params);
+        request.expectedRevision = revision;
+        request.idempotencyKey = std::move(key);
+        std::optional<ScreenshotMcpResponse> result;
+        service.request(request, [&](auto response) { result = std::move(response); });
+        translation_tests::waitUntil([&] { return result.has_value(); },
+                                     "translation request completes");
+        return *result;
+    };
+    translationRetries(call, translation, jobs, provider, selectionCaptures);
     service.shutdown();
 }

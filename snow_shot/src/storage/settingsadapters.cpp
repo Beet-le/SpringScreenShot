@@ -2156,13 +2156,17 @@ bool ScreenshotTranslationSettings::setOriginalImageTranslationEnabled(bool enab
 
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
 ScreenshotTranslationConfiguration ScreenshotTranslationSettings::configuration() const {
-    return {cache().value(QStringLiteral("screenshot_translation/source_language")).toString(),
-            cache().value(QStringLiteral("screenshot_translation/target_language")).toString(),
-            cache().value(QStringLiteral("screenshot_translation/model")).toString(),
-            layoutProcessing(),
-            cache()
-                .value(QStringLiteral("screenshot_translation/secondary_target_language"))
-                .toString()};
+    return {
+        cache().value(QStringLiteral("screenshot_translation/source_language")).toString(),
+        cache().value(QStringLiteral("screenshot_translation/target_language")).toString(),
+        cache().value(QStringLiteral("screenshot_translation/model")).toString(),
+        layoutProcessing(),
+        cache()
+            .value(QStringLiteral("screenshot_translation/secondary_target_language"))
+            .toString(),
+        cache()
+            .value(QStringLiteral("screenshot_translation/language_detection_confidence_threshold"))
+            .toInt()};
 }
 #endif
 
@@ -2186,6 +2190,8 @@ bool ScreenshotTranslationSettings::setConfiguration(
         {QStringLiteral("screenshot_translation/target_language"), configuration.targetLanguage},
         {QStringLiteral("screenshot_translation/secondary_target_language"),
          configuration.secondaryTargetLanguage},
+        {QStringLiteral("screenshot_translation/language_detection_confidence_threshold"),
+         configuration.languageDetectionConfidenceThreshold},
         {QStringLiteral("screenshot_translation/model"), configuration.modelId},
         {QStringLiteral("screenshot_translation/layout_processing"),
          configuration.layoutProcessing},
