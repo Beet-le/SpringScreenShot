@@ -842,6 +842,42 @@ SettingsItemDefinition trayCustomIconItem() {
                 "Image files (*.png *.ico);;PNG images (*.png);;Icon files (*.ico)"))}};
 }
 
+SettingsItemDefinition trayDarkIconItem() {
+    SettingsRadioDefinition payload = std::get<SettingsRadioDefinition>(trayIconItem().payload);
+    payload.binding = SettingsRadioBinding::TrayDarkIcon;
+    payload.options.prepend(
+        {QStringLiteral("inherit"),
+         settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Use regular icon settings")),
+         QStringLiteral(":/snow-shot/app-icons/snow-shot-tray-default.png")});
+    return {QStringLiteral("interface.tray.dark-icon"),
+            settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Dark theme icon")),
+            settingsText(QT_TRANSLATE_NOOP(
+                "SettingsCatalog",
+                "Choose the bundled icon used in dark theme, or reuse the regular icon settings")),
+            {settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Tray appearance"))},
+            QStringLiteral("tray/dark_icon"),
+            payload};
+}
+
+SettingsItemDefinition trayDarkCustomIconItem() {
+    return {
+        QStringLiteral("interface.tray.dark-custom-icon"),
+        settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Dark theme custom icon")),
+        settingsText(QT_TRANSLATE_NOOP(
+            "SettingsCatalog",
+            "Enter or browse to a PNG or ICO file for dark theme; invalid files use the selected "
+            "bundled icon")),
+        {settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Tray icon path"))},
+        QStringLiteral("tray/dark_custom_icon"),
+        SettingsFilePathDefinition{
+            SettingsFilePathBinding::TrayDarkCustomIcon,
+            settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Browse")),
+            settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Select dark theme tray icon")),
+            settingsText(QT_TRANSLATE_NOOP(
+                "SettingsCatalog",
+                "Image files (*.png *.ico);;PNG images (*.png);;Icon files (*.ico)"))}};
+}
+
 #ifndef Q_OS_MACOS
 SettingsItemDefinition applicationPriorityItem() {
     SettingsSelectDefinition payload;
@@ -3585,8 +3621,9 @@ QVector<SettingsPageDefinition> builtInPages() {
                  settingsText(
                      QT_TRANSLATE_NOOP("SettingsCatalog", "System tray icon, actions and menu")),
                  SettingsSectionReset::Tray,
-                 {trayEnabledItem(), trayIconItem(), trayCustomIconItem(), trayLeftClickItem(),
-                  trayMiddleClickItem(), trayMenuOptionsItem()},
+                 {trayEnabledItem(), trayIconItem(), trayCustomIconItem(), trayDarkIconItem(),
+                  trayDarkCustomIconItem(), trayLeftClickItem(), trayMiddleClickItem(),
+                  trayMenuOptionsItem()},
              },
              {
                  QStringLiteral("floating-toolbar"),
@@ -5274,6 +5311,9 @@ QStringList SettingsCatalog::validationErrors() const {
                     case SettingsRadioBinding::TrayIcon:
                         expectedKey = QStringLiteral("tray/icon");
                         break;
+                    case SettingsRadioBinding::TrayDarkIcon:
+                        expectedKey = QStringLiteral("tray/dark_icon");
+                        break;
                     }
                     QSet<QString> configuredValues;
                     for (const SettingsRadioOptionDefinition& option : radio->options) {
@@ -5302,6 +5342,9 @@ QStringList SettingsCatalog::validationErrors() const {
                     switch (filePath->binding) {
                     case SettingsFilePathBinding::TrayCustomIcon:
                         expectedKey = QStringLiteral("tray/custom_icon");
+                        break;
+                    case SettingsFilePathBinding::TrayDarkCustomIcon:
+                        expectedKey = QStringLiteral("tray/dark_custom_icon");
                         break;
                     case SettingsFilePathBinding::SkinPath:
                         expectedKey = QStringLiteral("interface/skin_path");

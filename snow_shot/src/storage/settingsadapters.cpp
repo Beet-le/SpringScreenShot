@@ -2452,6 +2452,22 @@ bool TraySettings::setCustomIcon(const QString& path) const {
     return cache().setValue(QStringLiteral("tray/custom_icon"), path);
 }
 
+QString TraySettings::darkIcon() const {
+    return cache().value(QStringLiteral("tray/dark_icon")).toString();
+}
+
+bool TraySettings::setDarkIcon(const QString& icon) const {
+    return cache().setValue(QStringLiteral("tray/dark_icon"), icon);
+}
+
+QString TraySettings::darkCustomIcon() const {
+    return cache().value(QStringLiteral("tray/dark_custom_icon")).toString();
+}
+
+bool TraySettings::setDarkCustomIcon(const QString& path) const {
+    return cache().setValue(QStringLiteral("tray/dark_custom_icon"), path);
+}
+
 QString TraySettings::leftClickAction() const {
     return cache().value(QStringLiteral("tray/left_click_action")).toString();
 }

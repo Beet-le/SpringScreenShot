@@ -646,6 +646,10 @@ class TraySettings final {
     bool setIcon(const QString& icon) const;
     [[nodiscard]] QString customIcon() const;
     bool setCustomIcon(const QString& path) const;
+    [[nodiscard]] QString darkIcon() const;
+    bool setDarkIcon(const QString& icon) const;
+    [[nodiscard]] QString darkCustomIcon() const;
+    bool setDarkCustomIcon(const QString& path) const;
     [[nodiscard]] QString leftClickAction() const;
     [[nodiscard]] QString middleClickAction() const;
     bool setMiddleClickAction(const QString& action) const;

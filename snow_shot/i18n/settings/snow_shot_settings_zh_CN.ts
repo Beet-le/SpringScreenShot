@@ -1601,6 +1601,10 @@
             <translation>选择在截图中移动或标注时单击鼠标中键执行的操作</translation>
         </message>
         <message>
+            <source>Choose the bundled icon used in dark theme, or reuse the regular icon settings</source>
+            <translation>选择深色主题使用的内置图标，或沿用常规图标设置</translation>
+        </message>
+        <message>
             <source>Choose the bundled icon used in the system tray</source>
             <translation>选择系统托盘使用的内置图标</translation>
         </message>
@@ -2009,6 +2013,14 @@
             <translation>深色</translation>
         </message>
         <message>
+            <source>Dark theme custom icon</source>
+            <translation>深色主题自定义图标</translation>
+        </message>
+        <message>
+            <source>Dark theme icon</source>
+            <translation>深色主题图标</translation>
+        </message>
+        <message>
             <source>Data storage</source>
             <translation>数据存储</translation>
         </message>
@@ -2231,6 +2243,10 @@
         <message>
             <source>Enter an HTTP or HTTPS address. Changes apply immediately. Clear to use the default server.</source>
             <translation>输入 HTTP 或 HTTPS 地址。更改立即生效。清空可使用默认服务器。</translation>
+        </message>
+        <message>
+            <source>Enter or browse to a PNG or ICO file for dark theme; invalid files use the selected bundled icon</source>
+            <translation>输入或浏览选择深色主题使用的 PNG 或 ICO 文件；无效文件将使用所选内置图标</translation>
         </message>
         <message>
             <source>Enter or browse to a PNG or ICO file; invalid files use the selected bundled icon</source>
@@ -3637,6 +3653,10 @@
             <translation>截图时选择窗口中的子元素</translation>
         </message>
         <message>
+            <source>Select dark theme tray icon</source>
+            <translation>选择深色主题托盘图标</translation>
+        </message>
+        <message>
             <source>Select image save directory</source>
             <translation>选择图像保存目录</translation>
         </message>
@@ -4395,6 +4415,10 @@
         <message>
             <source>Use global mouse gestures, select individual window elements, and translate selected text.</source>
             <translation>使用全局鼠标手势、选择窗口内的单个元素，以及翻译选中的文本。</translation>
+        </message>
+        <message>
+            <source>Use regular icon settings</source>
+            <translation>沿用常规图标设置</translation>
         </message>
         <message>
             <source>Use system proxy</source>

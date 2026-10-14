@@ -823,6 +823,44 @@ void submissionCommitsValidPendingDraftsOnly() {
             "submission must reject invalid pending drafts without changing output geometry");
 }
 
+void focusedDraftsAreDiscardedOnDestruction() {
+    for (const auto* name :
+         {"imageSplitCount", "imageSplitRows", "imageSplitColumns", "imageSplitSize"}) {
+        for (const auto* draft : {"75", "0"}) {
+            ImageSplitDocument document;
+            document.setImage(image({1001, 800}));
+            auto settings = document.settings();
+            if (QString::fromLatin1(name) == QStringLiteral("imageSplitRows") ||
+                QString::fromLatin1(name) == QStringLiteral("imageSplitColumns"))
+                settings.direction = ImageSplitDirection::Grid;
+            if (QString::fromLatin1(name) == QStringLiteral("imageSplitSize"))
+                settings.type = ImageSplitType::Precise;
+            document.setSettings(settings);
+            const auto state = document.state();
+            auto editor = std::make_unique<ImageSplitEditorWidget>(&document);
+            show(*editor);
+            auto* input = child<AdInputNumber>(*editor, name);
+            auto* text = input->findChild<QLineEdit*>();
+            require(text != nullptr, "number control must expose its text editor");
+            text->setFocus();
+            pump();
+            require(text->hasFocus(), "the pending draft must retain focus during teardown");
+            text->selectAll();
+            for (const auto character : QString::fromLatin1(draft)) {
+                QKeyEvent key(QEvent::KeyPress, character.unicode(), Qt::NoModifier,
+                              QString(character));
+                QApplication::sendEvent(text, &key);
+            }
+            require(input->displayText() == QString::fromLatin1(draft) && document.state() == state,
+                    "focused keyboard drafts must stay uncommitted before teardown");
+            editor.reset();
+            pump();
+            require(document.state() == state,
+                    "destroying a focused split editor must discard pending drafts safely");
+        }
+    }
+}
+
 void zoomedCanvasUsesFullResolutionPixels() {
     ImageSplitDocument document;
     QImage source({4096, 512}, QImage::Format_ARGB32_Premultiplied);
@@ -1199,7 +1237,7 @@ void rulerHoverPreviewsSplitLines() {
                  ++across) {
                 const auto color =
                     vertical ? output.pixelColor(across, along) : output.pixelColor(along, across);
-                coverage += color.blueF();
+                coverage += static_cast<qreal>(color.blueF());
             }
         }
         return coverage > 10 * scale;
@@ -1371,7 +1409,7 @@ void splitGuidesKeepLogicalThicknessAndEngineDashes() {
                              across <= qCeil((cross + 3) * scale); ++across) {
                             const auto color = vertical ? output.pixelColor(across, along)
                                                         : output.pixelColor(along, across);
-                            coverage += color.blueF();
+                            coverage += static_cast<qreal>(color.blueF());
                         }
                         coverage /= scale;
                         minimum = std::min(minimum, coverage);
@@ -1534,6 +1572,7 @@ int main(int argc, char** argv) {
             std::cout << "Image split canvas tests passed\n";
             return 0;
         }
+        focusedDraftsAreDiscardedOnDestruction();
         defaultsConditionalControlsAndActions();
         preciseSizeUsesSharedFormLabel();
         floatingToolbarFollowsCanvas();

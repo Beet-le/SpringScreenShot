@@ -259,6 +259,7 @@ struct SettingsColorPaletteDefinition {
 
 enum class SettingsRadioBinding {
     TrayIcon,
+    TrayDarkIcon,
 };
 
 struct SettingsRadioOptionDefinition {
@@ -274,6 +275,7 @@ struct SettingsRadioDefinition {
 
 enum class SettingsFilePathBinding {
     TrayCustomIcon,
+    TrayDarkCustomIcon,
     SkinPath,
     ToolbarSkinPath,
     TrayMenuSkinPath,

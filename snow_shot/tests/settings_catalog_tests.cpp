@@ -29,6 +29,39 @@ void require(bool condition, const char* message) {
     }
 }
 
+void trayDarkIconSettingsHaveIndependentContracts() {
+    const auto& registry = settings::builtInSettingsRegistry();
+    const auto* icon = registry.fieldForRadio(settings::SettingsRadioBinding::TrayDarkIcon);
+    const auto* custom =
+        registry.fieldForFilePath(settings::SettingsFilePathBinding::TrayDarkCustomIcon);
+    require(icon && custom && registry.validationErrors().isEmpty() &&
+                icon->configurationKey == QStringLiteral("tray/dark_icon") &&
+                icon->defaultValue == QStringLiteral("inherit") &&
+                custom->configurationKey == QStringLiteral("tray/dark_custom_icon") &&
+                custom->defaultValue.toString().isEmpty() &&
+                icon->reset == settings::SettingsSectionReset::Tray &&
+                custom->reset == settings::SettingsSectionReset::Tray,
+            "dark tray icon fields must have independent schema bindings and the tray reset scope");
+    const auto& darkOptions =
+        std::get<settings::SettingsRadioDefinition>(icon->definition->payload).options;
+    const auto& regularOptions =
+        std::get<settings::SettingsRadioDefinition>(
+            registry.fieldForRadio(settings::SettingsRadioBinding::TrayIcon)->definition->payload)
+            .options;
+    require(darkOptions.size() == regularOptions.size() + 1 &&
+                darkOptions.constFirst().value == QStringLiteral("inherit"),
+            "dark icons must offer inheritance plus every regular bundled option");
+    for (qsizetype index = 0; index < regularOptions.size(); ++index) {
+        require(darkOptions.at(index + 1).value == regularOptions.at(index).value &&
+                    darkOptions.at(index + 1).iconResource == regularOptions.at(index).iconResource,
+                "both theme selectors must share the supported artwork");
+    }
+    const settings::SettingsSearchIndex search(registry);
+    require(!search.search(QStringLiteral("Dark theme icon")).isEmpty() &&
+                !search.search(QStringLiteral("Dark theme custom icon")).isEmpty(),
+            "dark theme tray icon settings must be searchable");
+}
+
 settings::TranslatableText text(const char* source) {
     return {"SettingsCatalogTests", source};
 }
@@ -553,6 +586,10 @@ void builtInCatalogIsCompleteAndValid() {
         require(itemIds.remove(id), "catalog must contain each platform-specific setting");
     for (const auto& id : excludedPlatformItems)
         require(!itemIds.contains(id), "catalog must omit settings exclusive to another platform");
+#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
+    require(itemIds.remove(QStringLiteral("system.memory-optimization-policy")),
+            "supported platforms must contain the memory optimization policy");
+#endif
     require(itemIds.contains(QStringLiteral("screenshot-shortcut.print")) &&
                 itemIds.contains(QStringLiteral("pin-to-screen-shortcut.print")),
             "printing must expose a shared shortcut setting in both local scopes");
@@ -560,9 +597,9 @@ void builtInCatalogIsCompleteAndValid() {
                 itemIds.contains(QStringLiteral("screenshot-shortcut.upload_to_cloud")) &&
                 itemIds.contains(QStringLiteral("pin-to-screen-shortcut.upload_to_cloud")),
             "cloud upload must expose its configuration and shortcuts in both local scopes");
-    require(itemIds.size() == 276,
+    require(itemIds.size() == 278,
             qPrintable(QStringLiteral(
-                           "catalog must contain 276 shared settings on every platform; found %1")
+                           "catalog must contain 278 shared settings on every platform; found %1")
                            .arg(itemIds.size())));
     require(itemIds.contains(QStringLiteral("pin-to-screen.confirm-before-closing-window")) &&
                 itemIds.contains(QStringLiteral("pin-to-screen.confirm-before-destroying-window")),
@@ -1042,15 +1079,17 @@ void builtInCatalogIsCompleteAndValid() {
 
     const auto& traySection =
         *catalog.section(QStringLiteral("desktop-tools"), QStringLiteral("tray"));
-    require(traySection.items.size() == 6 &&
-                traySection.items.at(3).id == QStringLiteral("tray.left-click-action") &&
-                traySection.items.at(4).id == QStringLiteral("tray.middle-click-action") &&
-                traySection.items.at(5).id == QStringLiteral("tray.menu-options"),
+    require(traySection.items.size() == 8 &&
+                traySection.items.at(3).id == QStringLiteral("interface.tray.dark-icon") &&
+                traySection.items.at(4).id == QStringLiteral("interface.tray.dark-custom-icon") &&
+                traySection.items.at(5).id == QStringLiteral("tray.left-click-action") &&
+                traySection.items.at(6).id == QStringLiteral("tray.middle-click-action") &&
+                traySection.items.at(7).id == QStringLiteral("tray.menu-options"),
             "middle-click action must appear immediately below left-click action");
     const auto& leftTray =
-        std::get<settings::SettingsSelectDefinition>(traySection.items.at(3).payload);
+        std::get<settings::SettingsSelectDefinition>(traySection.items.at(5).payload);
     const auto& middleTray =
-        std::get<settings::SettingsSelectDefinition>(traySection.items.at(4).payload);
+        std::get<settings::SettingsSelectDefinition>(traySection.items.at(6).payload);
     require(leftTray.binding == settings::SettingsSelectBinding::TrayLeftClickAction &&
                 middleTray.binding == settings::SettingsSelectBinding::TrayMiddleClickAction &&
                 leftTray.options.size() == 5 && middleTray.options.size() == 5,
@@ -2902,8 +2941,10 @@ void searchIndexIsGeneratedAndRanked() {
                          }),
             "removed global hotkeys must not remain in search");
     const auto option = index.search(QStringLiteral("dark"));
-    require(!option.isEmpty() &&
-                option.constFirst().location.itemId == QStringLiteral("interface.theme"),
+    require(std::any_of(option.cbegin(), option.cend(),
+                        [](const auto& result) {
+                            return result.location.itemId == QStringLiteral("interface.theme");
+                        }),
             "select option labels must be indexed");
     const auto windowElementApi = index.search(QStringLiteral("UIA"));
 #ifdef Q_OS_MACOS
@@ -3481,7 +3522,7 @@ void featureNavigationAndSearchAreConsistent() {
         catalog.section(QStringLiteral("desktop-tools"), QStringLiteral("floating-toolbar"));
     require(tray && floating && tray->reset == settings::SettingsSectionReset::Tray &&
                 floating->reset == settings::SettingsSectionReset::FloatingToolbar &&
-                registry.fieldsForReset(tray->reset).size() == 6 &&
+                registry.fieldsForReset(tray->reset).size() == 8 &&
                 registry.fieldsForReset(floating->reset).size() == 3,
             "merged desktop categories include every control in their reset scopes");
     auto pages = catalog.pages();
@@ -3686,6 +3727,7 @@ int main(int argc, char** argv) {
             "administrator controls must exist in the settings catalog");
 #endif
     builtInCatalogIsCompleteAndValid();
+    trayDarkIconSettingsHaveIndependentContracts();
     translationConfidenceCatalog();
     featureNavigationAndSearchAreConsistent();
     globalMouseSettingsHaveStableContracts();

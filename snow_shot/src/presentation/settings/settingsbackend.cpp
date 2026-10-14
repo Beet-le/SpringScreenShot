@@ -55,6 +55,7 @@ std::optional<SkinSurface> skinSurfaceForFilePath(SettingsFilePathBinding bindin
     case SettingsFilePathBinding::TrayMenuSkinPath:
         return SkinSurface::TrayMenu;
     case SettingsFilePathBinding::TrayCustomIcon:
+    case SettingsFilePathBinding::TrayDarkCustomIcon:
         return std::nullopt;
     }
     return std::nullopt;
@@ -1579,6 +1580,8 @@ QVariant BuiltInSettingsBackend::radioValue(SettingsRadioBinding binding) const 
     switch (binding) {
     case SettingsRadioBinding::TrayIcon:
         return storage::TraySettings().icon();
+    case SettingsRadioBinding::TrayDarkIcon:
+        return storage::TraySettings().darkIcon();
     }
     return {};
 }
@@ -1587,6 +1590,8 @@ bool BuiltInSettingsBackend::applyRadioValue(SettingsRadioBinding binding, const
     switch (binding) {
     case SettingsRadioBinding::TrayIcon:
         return storage::TraySettings().setIcon(value.toString());
+    case SettingsRadioBinding::TrayDarkIcon:
+        return storage::TraySettings().setDarkIcon(value.toString());
     }
     return false;
 }
@@ -1601,6 +1606,8 @@ QString BuiltInSettingsBackend::filePathValue(SettingsFilePathBinding binding) c
         return storage::InterfaceSettings().trayMenuSkinPath();
     case SettingsFilePathBinding::TrayCustomIcon:
         return storage::TraySettings().customIcon();
+    case SettingsFilePathBinding::TrayDarkCustomIcon:
+        return storage::TraySettings().darkCustomIcon();
     }
     return {};
 }
@@ -1623,6 +1630,8 @@ bool BuiltInSettingsBackend::applyFilePathValue(SettingsFilePathBinding binding,
         break;
     case SettingsFilePathBinding::TrayCustomIcon:
         return storage::TraySettings().setCustomIcon(value);
+    case SettingsFilePathBinding::TrayDarkCustomIcon:
+        return storage::TraySettings().setDarkCustomIcon(value);
     }
     if (accepted && changed && receiver && !value.isEmpty()) {
         // An explicit file edit validates even while rendering is disabled.
@@ -2700,6 +2709,10 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
              storage::ConfigurationSchema::defaultValue(QStringLiteral("tray/icon"))},
             {QStringLiteral("tray/custom_icon"),
              storage::ConfigurationSchema::defaultValue(QStringLiteral("tray/custom_icon"))},
+            {QStringLiteral("tray/dark_icon"),
+             storage::ConfigurationSchema::defaultValue(QStringLiteral("tray/dark_icon"))},
+            {QStringLiteral("tray/dark_custom_icon"),
+             storage::ConfigurationSchema::defaultValue(QStringLiteral("tray/dark_custom_icon"))},
             {QStringLiteral("tray/left_click_action"),
              storage::ConfigurationSchema::defaultValue(QStringLiteral("tray/left_click_action"))},
             {QStringLiteral("tray/middle_click_action"),

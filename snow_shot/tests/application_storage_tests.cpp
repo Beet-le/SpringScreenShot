@@ -3186,6 +3186,55 @@ void applicationQuitPreservesStorageForConsumerDestruction(
             "shutdown after quit must release its application quit observer");
 }
 
+void trayDarkIconSettingsPersistAndValidate() {
+    QTemporaryDir temporary;
+    require(temporary.isValid(), "tray theme settings require isolated storage");
+    const QString config = temporary.filePath(QStringLiteral("config.json"));
+    writeBytes(config,
+               QJsonDocument(
+                   QJsonObject{{QStringLiteral("storage"),
+                                QJsonObject{{QStringLiteral("schema_version"),
+                                             storage::ConfigurationSchema::currentVersion()}}},
+                               {QStringLiteral("tray"),
+                                QJsonObject{{QStringLiteral("icon"), QStringLiteral("snow-dark")},
+                                            {QStringLiteral("custom_icon"),
+                                             QStringLiteral("regular.ico")}}}})
+                   .toJson());
+    auto& appStorage = storage::ApplicationStorage::instance();
+    const storage::StorageInitializationOptions options{temporary.path(), temporary.path(), 60000};
+    require(appStorage.initialize(options).success, "initialize legacy tray settings");
+    storage::TraySettings settings;
+    require(settings.icon() == QStringLiteral("snow-dark") &&
+                settings.customIcon() == QStringLiteral("regular.ico") &&
+                settings.darkIcon() == QStringLiteral("inherit") &&
+                settings.darkCustomIcon().isEmpty(),
+            "existing configurations must retain their icons and inherit them in dark theme");
+    require(settings.setDarkIcon(QStringLiteral("snow-light")) &&
+                settings.setDarkCustomIcon(QStringLiteral("dark.png")) &&
+                !settings.setDarkIcon(QStringLiteral("invalid")) &&
+                settings.darkIcon() == QStringLiteral("snow-light") &&
+                appStorage.flushNow().success,
+            "dark theme settings must validate and persist independently");
+    appStorage.shutdown();
+    require(appStorage.initialize(options).success &&
+                settings.icon() == QStringLiteral("snow-dark") &&
+                settings.customIcon() == QStringLiteral("regular.ico") &&
+                settings.darkIcon() == QStringLiteral("snow-light") &&
+                settings.darkCustomIcon() == QStringLiteral("dark.png"),
+            "both regular and dark icon settings must survive a storage restart");
+    appStorage.shutdown();
+    storage::ConfigurationStore imported(config, true, true, 60000);
+    require(imported.applySnapshot(
+                {{QStringLiteral("tray/icon"), QStringLiteral("light")},
+                 {QStringLiteral("tray/custom_icon"), QStringLiteral("legacy.png")}}) &&
+                imported.value(QStringLiteral("tray/dark_icon")).toString() ==
+                    QStringLiteral("inherit") &&
+                imported.value(QStringLiteral("tray/dark_custom_icon")).toString().isEmpty() &&
+                imported.value(QStringLiteral("tray/custom_icon")).toString() ==
+                    QStringLiteral("legacy.png"),
+            "importing older snapshots must restore compatible dark icon defaults");
+}
+
 void invalidTrayClickSettingsUseIndependentDefaults() {
     QTemporaryDir temporary;
     require(temporary.isValid(), "temporary invalid tray settings directory");
@@ -3552,6 +3601,10 @@ int main(int argc, char** argv) {
     }
     QCoreApplication::setOrganizationName(QStringLiteral("SnowShotTests"));
     QCoreApplication::setApplicationName(QStringLiteral("storage-tests"));
+    if (application.arguments().contains(QStringLiteral("--tray-theme-icons-only"))) {
+        trayDarkIconSettingsPersistAndValidate();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--translation-settings-only"))) {
         screenshotTranslationSettingsRoundTripSupportedValues();
         storage::ApplicationStorage::instance().shutdown();
@@ -3620,6 +3673,7 @@ int main(int argc, char** argv) {
     localShortcutDefaultsPreserveConfiguredBindings();
     previousSelectionStorageIsRetired();
     invalidTrayClickSettingsUseIndependentDefaults();
+    trayDarkIconSettingsPersistAndValidate();
     legacyTrayHotkeyCommandMigratesToQuickAction();
     trayClickSettingsSurviveRestart();
     watermarkTemplateSettingsRepairAndSurviveRestart();

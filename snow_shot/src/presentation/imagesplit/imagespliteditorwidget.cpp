@@ -57,7 +57,6 @@ constexpr qreal kRulerHeight = 28;
 constexpr qreal kRulerWidth = 38;
 constexpr qreal kLineHitDistance = 6;
 constexpr qreal kGuideSpacing = 2;
-constexpr qint64 kCanvasCacheBytes = 64 * 1024 * 1024;
 // Match snow-draw-engine-editor's selection color in geometry/handles.rs.
 const QColor kSplitLineColor{0x40, 0x96, 0xff};
 
@@ -411,7 +410,7 @@ void ImageSplitPreviewCanvas::paintEvent(QPaintEvent*) {
                 if (index != selected && index != hovered && *line != preview)
                     drawLine(*line, false);
                 // Jump over subpixel guides instead of traversing a potentially dense axis.
-                const qreal nextCoordinate = *line + std::max(1.0, 2 / d.zoom);
+                const qreal nextCoordinate = *line + std::max(1.0, kGuideSpacing / d.zoom);
                 line = std::lower_bound(line + 1, lines.cend(), nextCoordinate);
             }
             const auto drawHighlighted = [&](int index) {
@@ -1199,7 +1198,11 @@ ImageSplitEditorWidget::ImageSplitEditorWidget(ImageSplitDocument* document, QWi
     d.refresh();
     d.theme();
 }
-ImageSplitEditorWidget::~ImageSplitEditorWidget() = default;
+ImageSplitEditorWidget::~ImageSplitEditorWidget() {
+    // QWidget teardown can commit focused inputs after m_impl has been destroyed.
+    for (auto* input : {m_impl->count, m_impl->rows, m_impl->columns, m_impl->size})
+        disconnect(input, nullptr, this, nullptr);
+}
 ImageSplitPreviewCanvas* ImageSplitEditorWidget::canvas() const {
     return m_impl->canvas;
 }

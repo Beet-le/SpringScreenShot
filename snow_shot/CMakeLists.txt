@@ -1279,14 +1279,13 @@ target_link_libraries(snow_shot_image_split PUBLIC snow_shot_image_split_core
 
 # Tests reuse the same export implementations as the application; the collage
 # library itself supplies composition and never publishes history or auto-saves.
+# Clipboard content and DIB decoding are supplied by snow_shot_settings.
 set(SNOW_SHOT_COLLAGE_EXPORT_TEST_SOURCES
     include/snow_shot/presentation/screenshotsavepreviewcanvas.h
     src/presentation/services/screenshotmanualsave.cpp
     src/presentation/services/screenshotsaveasfiledialog.cpp
     src/presentation/services/screenshotsaveexportpipeline.cpp
     src/presentation/services/screenshotsavepreviewcanvas.cpp
-    src/presentation/services/screenshotclipboardcontent.cpp
-    src/presentation/services/screenshotclipboarddibdecoder_avx2.cpp
     src/presentation/services/screenshotclipboardservice.cpp
     src/presentation/services/screenshotexportartifact.cpp
     src/presentation/services/screenshotexportcoordinator.cpp
@@ -2274,6 +2273,9 @@ if(SNOW_SHOT_BUILD_TESTS)
         tests/application_storage_tests.cpp
     )
     target_link_libraries(snow-shot-application-storage-tests PRIVATE snow_shot_storage Qt6::Core)
+    add_test(NAME snow-shot-tray-theme-icon-storage-tests
+        COMMAND snow-shot-application-storage-tests --tray-theme-icons-only)
+    set_tests_properties(snow-shot-tray-theme-icon-storage-tests PROPERTIES LABELS "unit" TIMEOUT 30)
     add_test(NAME snow-shot-local-shortcut-migration-tests
         COMMAND snow-shot-application-storage-tests --local-shortcut-migration-only)
     set_tests_properties(snow-shot-local-shortcut-migration-tests PROPERTIES LABELS "unit"
@@ -3390,6 +3392,12 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-system-tray-controller-tests --configured-menu-only -platform offscreen)
     add_test(NAME snow-shot-tray-fullscreen-suppression-tests
         COMMAND snow-shot-system-tray-controller-tests --fullscreen-suppression-only -platform offscreen)
+    add_test(NAME snow-shot-tray-theme-icon-tests
+        COMMAND snow-shot-system-tray-controller-tests --theme-icons-only -platform offscreen)
+    set_tests_properties(snow-shot-tray-theme-icon-tests PROPERTIES
+        LABELS "unit" TIMEOUT 30 SNOW_TEST_CROSS_PLATFORM TRUE
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     set_tests_properties(snow-shot-tray-fullscreen-suppression-tests PROPERTIES
         LABELS "unit" TIMEOUT 30 SNOW_TEST_CROSS_PLATFORM TRUE
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
