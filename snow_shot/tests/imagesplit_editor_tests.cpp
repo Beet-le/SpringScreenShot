@@ -19,6 +19,7 @@
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPaintEvent>
 #include <QTranslator>
 #include <QUrl>
 #include <QWheelEvent>
@@ -103,6 +104,182 @@ void show(ImageSplitEditorWidget& editor) {
     editor.resize(1100, 720);
     editor.show();
     pump();
+}
+
+class CanvasPaintObserver final : public QObject {
+  public:
+    int paints = 0;
+    QRegion damage;
+
+    void reset() {
+        paints = 0;
+        damage = {};
+    }
+
+  protected:
+    bool eventFilter(QObject*, QEvent* event) override {
+        if (event->type() == QEvent::Paint) {
+            ++paints;
+            damage += static_cast<QPaintEvent*>(event)->region();
+        }
+        return false;
+    }
+};
+
+void unchangedHoverDoesNotRepaint() {
+    ImageSplitDocument document;
+    document.setImage(image({400, 240}));
+    ImageSplitPreviewCanvas canvas(&document);
+    canvas.resize(900, 640);
+    canvas.show();
+    pump();
+    CanvasPaintObserver observer;
+    canvas.installEventFilter(&observer);
+    const auto hover = [&](QPointF point) {
+        mouse(&canvas, QEvent::MouseMove, point, Qt::NoButton, Qt::NoButton);
+        pump();
+    };
+    hover({50, 50});
+    hover({60, 60});
+    require(observer.paints == 0, "moving through blank canvas space must not repaint");
+    hover(canvas.imageToViewport({200, 80}));
+    require(observer.paints > 0, "hovering a new guide must repaint its highlight");
+    qint64 damagedPixels = 0;
+    for (const auto& rect : observer.damage)
+        damagedPixels += qint64(rect.width()) * rect.height();
+    require(damagedPixels < qint64(canvas.width()) * canvas.height() / 10,
+            "a guide highlight must damage only its strip and coordinate badge");
+    observer.reset();
+    hover(canvas.imageToViewport({200, 90}));
+    require(observer.paints == 0, "moving along the same hovered guide must not repaint");
+    hover(rulerPoint(canvas, document, true, 77));
+    require(observer.paints > 0, "a new ruler coordinate must repaint its preview");
+    observer.reset();
+    hover(rulerPoint(canvas, document, true, 77) + QPointF(.2 * canvas.zoom(), 0));
+    require(observer.paints == 0,
+            "moving within the same rounded ruler coordinate must not repaint");
+    wheel(&canvas, {50, 50}, 0);
+    pump();
+    require(observer.paints > 0,
+            "a wheel event without zoom must erase the previous ruler preview");
+    observer.reset();
+    hover({60, 60});
+    require(observer.paints == 0, "a move after a wheel event must not retain a stale overlay");
+    hover(rulerPoint(canvas, document, true, 77));
+    observer.reset();
+    mouse(&canvas, QEvent::MouseButtonPress, {50, 50}, Qt::RightButton, Qt::RightButton);
+    pump();
+    require(observer.paints > 0, "a right press off the ruler must erase the previous preview");
+    observer.reset();
+    hover({60, 60});
+    require(observer.paints == 0, "a move after a right press must not retain a stale overlay");
+    hover(rulerPoint(canvas, document, true, 77));
+    observer.reset();
+    QEvent leave(QEvent::Leave);
+    QApplication::sendEvent(&canvas, &leave);
+    pump();
+    require(observer.paints > 0, "leaving the ruler must erase its preview and coordinate badge");
+}
+
+void overlayDamageMatchesFreshRendering() {
+    for (const bool dense : {false, true}) {
+        ImageSplitDocument document;
+        const auto source = image(dense ? QSize(5001, 300) : QSize(400, 240));
+        document.setImage(source);
+        ImageSplitSettings settings;
+        settings.direction = ImageSplitDirection::Grid;
+        settings.columns = dense ? 5001 : 3;
+        settings.rows = 2;
+        require(document.setSettings(settings), "overlay damage fixture must be valid");
+        ImageSplitPreviewCanvas canvas(&document);
+        canvas.resize(900, 640);
+        canvas.show();
+        pump();
+        CanvasPaintObserver observer;
+        canvas.installEventFilter(&observer);
+        for (const auto* locale : {"en_US", "zh_CN", "zh_TW"}) {
+            QTranslator translator;
+            require(translator.load(
+                        QStringLiteral(":/i18n/snow_shot_%1.qm").arg(QString::fromLatin1(locale))),
+                    "overlay damage tests must load the application translations");
+            QApplication::installTranslator(&translator);
+            QEvent language(QEvent::LanguageChange);
+            QApplication::sendEvent(&canvas, &language);
+            for (const bool clipped : {false, true}) {
+                canvas.fitToCanvas();
+                if (clipped) {
+                    const auto viewport = canvasViewport(canvas, document);
+                    const QPointF start(450, 320);
+                    const auto end = start + viewport.topLeft() - QPointF(10, 10) - canvas.offset();
+                    mouse(&canvas, QEvent::MouseButtonPress, start, Qt::MiddleButton,
+                          Qt::MiddleButton);
+                    mouse(&canvas, QEvent::MouseMove, end, Qt::NoButton, Qt::MiddleButton);
+                    mouse(&canvas, QEvent::MouseButtonRelease, end, Qt::MiddleButton, Qt::NoButton);
+                }
+                for (const qreal scale : {1.0, 1.5, 2.0}) {
+                    QEvent leave(QEvent::Leave);
+                    QApplication::sendEvent(&canvas, &leave);
+                    pump();
+                    const std::array points{canvas.imageToViewport({dense ? 1234.0 : 133.0, 80}),
+                                            rulerPoint(canvas, document, true, dense ? 1457 : 77),
+                                            rulerPoint(canvas, document, true, dense ? 1789 : 173),
+                                            rulerPoint(canvas, document, false, 93), QPointF(1, 1)};
+                    for (const auto& point : points) {
+                        auto incremental = renderCanvas(canvas, scale);
+                        observer.reset();
+                        mouse(&canvas, QEvent::MouseMove, point, Qt::NoButton, Qt::NoButton);
+                        pump();
+                        const auto damage = observer.damage;
+                        require(!damage.isEmpty(),
+                                "changing an overlay must schedule damaged pixels");
+                        QPainter painter(&incremental);
+                        canvas.render(&painter, damage.boundingRect().topLeft(), damage);
+                        painter.end();
+                        require(incremental == renderCanvas(canvas, scale),
+                                "incremental overlays must match fresh renders across DPI, "
+                                "languages, and clipped rulers");
+                    }
+                }
+            }
+            QApplication::removeTranslator(&translator);
+        }
+    }
+}
+
+void focusedDraftTeardown() {
+    const std::array<const char*, 4> controls{"imageSplitCount", "imageSplitRows",
+                                              "imageSplitColumns", "imageSplitSize"};
+    for (const auto* name : controls) {
+        for (const bool validDraft : {false, true}) {
+            ImageSplitDocument document;
+            document.setImage(image({1001, 800}));
+            auto editor = std::make_unique<ImageSplitEditorWidget>(&document);
+            show(*editor);
+            if (QByteArray(name) == "imageSplitRows" || QByteArray(name) == "imageSplitColumns")
+                child<AdSegmented>(*editor, "imageSplitDirection")
+                    ->setCurrentValue(QStringLiteral("grid"));
+            else if (QByteArray(name) == "imageSplitSize")
+                child<AdSegmented>(*editor, "imageSplitType")
+                    ->setCurrentValue(QStringLiteral("precise"));
+            auto* input = child<AdInputNumber>(*editor, name);
+            auto* text = input->findChild<QLineEdit*>();
+            require(text, "teardown fixture must expose the numeric text editor");
+            text->setFocus();
+            pump();
+            require(text->hasFocus(), "teardown fixture must destroy a focused numeric editor");
+            text->selectAll();
+            QKeyEvent key(QEvent::KeyPress, validDraft ? Qt::Key_6 : Qt::Key_0, Qt::NoModifier,
+                          validDraft ? QStringLiteral("6") : QStringLiteral("0"));
+            QApplication::sendEvent(text, &key);
+            require(editor->configurationValid() == validDraft,
+                    "teardown fixture must retain the entered draft validation state");
+            const auto before = document.state();
+            editor.reset();
+            pump();
+            require(document.state() == before,
+                    "destroying a focused pending draft must preserve the surviving document");
+        }
+    }
 }
 
 void defaultsConditionalControlsAndActions() {
@@ -1618,7 +1795,15 @@ int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
     try {
+        if (application.arguments().contains(QStringLiteral("--teardown-only"))) {
+            focusedDraftTeardown();
+            focusedDraftsAreDiscardedOnDestruction();
+            std::cout << "Image split teardown tests passed\n";
+            return 0;
+        }
         if (application.arguments().contains(QStringLiteral("--canvas-only"))) {
+            unchangedHoverDoesNotRepaint();
+            overlayDamageMatchesFreshRendering();
             saveCanvasInspectionImages();
             canvasBackgroundAndRulersFollowImage();
             splitPositionBadgesFollowRulers();
@@ -1633,7 +1818,10 @@ int main(int argc, char** argv) {
             std::cout << "Image split canvas tests passed\n";
             return 0;
         }
+        focusedDraftTeardown();
         focusedDraftsAreDiscardedOnDestruction();
+        unchangedHoverDoesNotRepaint();
+        overlayDamageMatchesFreshRendering();
         defaultsConditionalControlsAndActions();
         preciseSizeUsesSharedFormLabel();
         floatingToolbarFollowsCanvas();

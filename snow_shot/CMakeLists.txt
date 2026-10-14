@@ -1280,6 +1280,7 @@ add_library(snow_shot_image_split STATIC
     include/snow_shot/presentation/components/imagespliteditorwidget.h
     src/presentation/imagesplit/imagespliteditorwidget.cpp
     src/presentation/imagesplit/imagesplitwindow.cpp
+    src/presentation/imagesplit/imagesplitimagepreparation_p.cpp
     src/presentation/imagesplit/imagesplitexport.cpp)
 target_link_libraries(snow_shot_image_split PUBLIC snow_shot_image_split_core
     snow_shot_collage_core snow_shot_settings)
@@ -1542,6 +1543,14 @@ if(SNOW_SHOT_BUILD_TESTS)
             ENVIRONMENT "${_SNOW_SHOT_IMAGE_SPLIT_QPA_ENVIRONMENT}"
             ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     endforeach()
+    add_executable(snow-shot-image-split-preview-tests tests/imagesplit_preview_tests.cpp)
+    target_include_directories(snow-shot-image-split-preview-tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/presentation/imagesplit")
+    target_link_libraries(snow-shot-image-split-preview-tests PRIVATE snow_shot_image_split)
+    add_test(NAME snow-shot-image-split-preview-tests COMMAND snow-shot-image-split-preview-tests)
+    set_tests_properties(snow-shot-image-split-preview-tests PROPERTIES LABELS unit
+        ENVIRONMENT "${_SNOW_SHOT_IMAGE_SPLIT_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-image-split-canvas-tests
         COMMAND snow-shot-image-split-editor-tests --canvas-only -platform offscreen)
     set_tests_properties(snow-shot-image-split-canvas-tests PROPERTIES LABELS unit
@@ -1565,11 +1574,44 @@ if(SNOW_APPS_BUILD_BENCHMARKS)
     target_link_libraries(snow-shot-image-split-performance-benchmark PRIVATE
         snow_shot_image_split snow_shot_diagnostics)
     target_include_directories(snow-shot-image-split-performance-benchmark PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/src/image")
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/image"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/presentation/imagesplit")
     if(WIN32)
         target_link_libraries(snow-shot-image-split-performance-benchmark PRIVATE psapi)
     endif()
     snow_shot_import_offscreen_platform(snow-shot-image-split-performance-benchmark)
+    # Capture these two Release libraries before a change to compare new scenarios against the
+    # actual previous implementation with the same fixture, dependencies and measurement code.
+    set(SNOW_SHOT_IMAGE_SPLIT_BASELINE_LIBRARY_DIR "" CACHE PATH
+        "Directory containing captured Release Image Splitting libraries for comparison")
+    if(SNOW_SHOT_IMAGE_SPLIT_BASELINE_LIBRARY_DIR)
+        foreach(_part IN ITEMS core ui)
+            add_library(snow_shot_image_split_baseline_${_part} STATIC IMPORTED)
+        endforeach()
+        set_target_properties(snow_shot_image_split_baseline_core PROPERTIES
+            IMPORTED_LOCATION "${SNOW_SHOT_IMAGE_SPLIT_BASELINE_LIBRARY_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}snow_shot_image_split_core${CMAKE_STATIC_LIBRARY_SUFFIX}"
+            INTERFACE_LINK_LIBRARIES Qt6::Widgets)
+        set_target_properties(snow_shot_image_split_baseline_ui PROPERTIES
+            IMPORTED_LOCATION "${SNOW_SHOT_IMAGE_SPLIT_BASELINE_LIBRARY_DIR}/${CMAKE_STATIC_LIBRARY_PREFIX}snow_shot_image_split${CMAKE_STATIC_LIBRARY_SUFFIX}"
+            INTERFACE_LINK_LIBRARIES "snow_shot_image_split_baseline_core;snow_shot_collage_core;snow_shot_settings")
+        add_executable(snow-shot-image-split-baseline-performance-benchmark
+            tests/imagesplit_performance_benchmark.cpp ${SNOW_SHOT_COLLAGE_EXPORT_TEST_SOURCES})
+        target_compile_definitions(snow-shot-image-split-baseline-performance-benchmark PRIVATE
+            SNOW_SHOT_IMAGE_SPLIT_BASELINE=1)
+        target_include_directories(snow-shot-image-split-baseline-performance-benchmark PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}/src/image"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/presentation/imagesplit")
+        target_link_libraries(snow-shot-image-split-baseline-performance-benchmark PRIVATE
+            snow_shot_image_split_baseline_ui snow_shot_diagnostics)
+        if(TARGET snow_shot_full_rust_ffi_bundle)
+            set_property(TARGET snow-shot-image-split-baseline-performance-benchmark PROPERTY
+                SNOW_RUST_BUNDLE_OVERRIDE snow_shot_full_rust_ffi_bundle)
+        endif()
+        if(WIN32)
+            target_link_libraries(snow-shot-image-split-baseline-performance-benchmark PRIVATE psapi)
+        endif()
+        snow_shot_import_offscreen_platform(snow-shot-image-split-baseline-performance-benchmark)
+    endif()
 endif()
 
 set(PROJECT_HEADERS

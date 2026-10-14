@@ -22,8 +22,8 @@ enum class ImageSplitDirection { Vertical, Horizontal, Grid };
 enum class ImageSplitType { Equal, Precise };
 enum class ImageSplitUnit { Pixels, Percentage };
 
-// Generated guides occupy arithmetic runs rather than one integer per pixel boundary. Manual edits
-// split only the affected runs; copies and undo snapshots share their small immutable backing data.
+// Generated guides occupy arithmetic runs rather than one integer per pixel boundary. A persistent
+// balanced tree shares untouched runs between manual edits and unlimited undo snapshots.
 class ImageSplitLines final {
   public:
     class const_iterator final {
@@ -103,6 +103,9 @@ class ImageSplitLines final {
     [[nodiscard]] int first() const;
     [[nodiscard]] int last() const;
     [[nodiscard]] bool contains(int coordinate) const;
+    // Coordinate searches require sorted axes; fractional viewport coordinates are not rounded.
+    [[nodiscard]] qsizetype coordinateLowerBound(double coordinate) const;
+    [[nodiscard]] qsizetype coordinateUpperBound(double coordinate) const;
     [[nodiscard]] const_iterator begin() const;
     [[nodiscard]] const_iterator end() const;
     [[nodiscard]] const_iterator cbegin() const;
@@ -125,8 +128,9 @@ class ImageSplitLines final {
     }
 
   private:
+    friend class ImageSplitDocument;
     struct Data;
-    std::shared_ptr<Data> m_data;
+    std::shared_ptr<const Data> m_data;
     void setAt(qsizetype index, int coordinate);
 };
 
@@ -182,6 +186,9 @@ class ImageSplitDocument final : public QObject {
     [[nodiscard]] ImageSplitSettings settings() const;
     [[nodiscard]] ImageSplitState state() const;
     [[nodiscard]] ImageSplitLayout layout() const;
+    // History entry capacity and unique retained run nodes, including an active drag. Shared nodes
+    // count once; image pixels, string allocations and shared_ptr control blocks are excluded.
+    [[nodiscard]] qsizetype historyStorageBytes() const;
     bool setSettings(const ImageSplitSettings& settings);
     [[nodiscard]] bool canUndo() const;
     [[nodiscard]] bool canRedo() const;

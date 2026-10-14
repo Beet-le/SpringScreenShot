@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "snow_shot/presentation/imagesplitdocument.h"
 #include "snow_shot/presentation/components/imagespliteditorwidget.h"
+#include "snow_shot/presentation/imagesplitwindow.h"
+#ifndef SNOW_SHOT_IMAGE_SPLIT_BASELINE
+#include "imagesplitimagepreparation_p.h"
+#endif
 #include "theme/theme_manager.h"
 #include "../../test-support/memorysnapshot.h"
 
@@ -10,6 +14,8 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMouseEvent>
+#include <QPaintEvent>
+#include <QColorSpace>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QWheelEvent>
@@ -55,10 +61,14 @@ void latencyReport(QJsonObject& report, const QString& prefix, const std::vector
 class MemorySampler final {
   public:
     MemorySampler()
-        : m_peak(quint64(snow::test_support::memorySnapshot().residentBytes)), m_thread([this] {
+        : m_peak(quint64(snow::test_support::memorySnapshot().residentBytes)),
+          m_privatePeak(quint64(snow::test_support::memorySnapshot().footprintBytes)),
+          m_thread([this] {
               while (!m_stop.load()) {
-                  m_peak.store(std::max(
-                      m_peak.load(), quint64(snow::test_support::memorySnapshot().residentBytes)));
+                  const auto snapshot = snow::test_support::memorySnapshot();
+                  m_peak.store(std::max(m_peak.load(), quint64(snapshot.residentBytes)));
+                  m_privatePeak.store(
+                      std::max(m_privatePeak.load(), quint64(snapshot.footprintBytes)));
                   std::this_thread::sleep_for(std::chrono::milliseconds(5));
               }
           }) {}
@@ -69,10 +79,14 @@ class MemorySampler final {
     quint64 peak() const {
         return m_peak.load();
     }
+    quint64 privatePeak() const {
+        return m_privatePeak.load();
+    }
 
   private:
     std::atomic_bool m_stop{false};
     std::atomic<quint64> m_peak;
+    std::atomic<quint64> m_privatePeak;
     std::thread m_thread;
 };
 
@@ -146,6 +160,164 @@ class CanvasSampler final {
     ImageSplitPreviewCanvas* m_canvas;
     QImage m_frame;
 };
+
+class PaintCounter final : public QObject {
+  public:
+    int count = 0;
+    qint64 area = 0;
+    void reset() {
+        count = 0;
+        area = 0;
+    }
+
+  protected:
+    bool eventFilter(QObject*, QEvent* event) override {
+        if (event->type() == QEvent::Paint) {
+            ++count;
+            for (const auto& rect : static_cast<QPaintEvent*>(event)->region())
+                area += qint64(rect.width()) * rect.height();
+        }
+        return false;
+    }
+};
+
+void hoverReport(QJsonObject& report, const QImage& image, const QImage& preview) {
+    ImageSplitDocument document;
+    document.setImage(image, preview);
+    ImageSplitEditorWidget editor(&document);
+    editor.resize(1200, 800);
+    editor.show();
+    auto* canvas = editor.canvas();
+    canvas->fitToCanvas();
+    QCoreApplication::processEvents();
+    PaintCounter counter;
+    canvas->installEventFilter(&counter);
+    const auto point = canvas->imageToViewport({image.width() * .25, image.height() * .25});
+    mouse(canvas, QEvent::MouseMove, point, Qt::NoButton, Qt::NoButton);
+    QCoreApplication::processEvents();
+    counter.reset();
+    std::vector<double> values;
+    for (int index = 0; index < 128; ++index) {
+        QElapsedTimer elapsed;
+        elapsed.start();
+        mouse(canvas, QEvent::MouseMove, point + QPointF(index % 2, index % 3), Qt::NoButton,
+              Qt::NoButton);
+        QCoreApplication::processEvents();
+        values.push_back(milliseconds(elapsed));
+    }
+    latencyReport(report, QStringLiteral("unchanged_hover"), values);
+    report.insert(QStringLiteral("unchanged_hover_paints"), counter.count);
+    report.insert(QStringLiteral("unchanged_hover_damage_pixels"), double(counter.area));
+#ifndef SNOW_SHOT_IMAGE_SPLIT_BASELINE
+    require(counter.count == 0, "unchanged hover must not repaint the canvas");
+#endif
+    canvas->removeEventFilter(&counter);
+}
+
+void historyReport(QJsonObject& report, int operations) {
+    ImageSplitDocument document;
+    document.setImage(QImage(operations * 4 + 4, 1, QImage::Format_RGBA8888));
+    auto settings = document.settings();
+    settings.count = document.image().width();
+    require(document.setSettings(settings), "fragmented history fixture is valid");
+    const auto original = document.state();
+    const auto baseline = snow::test_support::memorySnapshot();
+    MemorySampler memory;
+    std::vector<double> values;
+    qint64 retained = document.state().verticalLines.storageBytes();
+    for (int index = 1; index <= operations; ++index) {
+        const int coordinate = index * 4;
+        const auto lines = document.state().verticalLines;
+        const auto found = std::lower_bound(lines.cbegin(), lines.cend(), coordinate);
+        require(found != lines.cend() && *found == coordinate, "spaced guide exists");
+        QElapsedTimer elapsed;
+        elapsed.start();
+        require(document.removeLine(true, int(found - lines.cbegin())), "spaced deletion succeeds");
+        values.push_back(milliseconds(elapsed));
+        retained += document.state().verticalLines.storageBytes();
+    }
+#ifndef SNOW_SHOT_IMAGE_SPLIT_BASELINE
+    retained = document.historyStorageBytes();
+    require(retained < qint64(operations) * 4096,
+            "fragmented history retains shared paths within a linear-logarithmic budget");
+#endif
+    const QString prefix = QStringLiteral("history_%1").arg(operations);
+    latencyReport(report, prefix + QStringLiteral("_delete"), values);
+    report.insert(prefix + QStringLiteral("_retained_storage_bytes"), double(retained));
+    report.insert(prefix + QStringLiteral("_peak_resident_delta_bytes"),
+                  double(memory.peak() - baseline.residentBytes));
+    report.insert(prefix + QStringLiteral("_peak_private_delta_bytes"),
+                  double(memory.privatePeak() - baseline.footprintBytes));
+    const auto edited = document.state();
+    for (int index = 0; index < operations; ++index)
+        document.undo();
+    require(document.state() == original, "all fragmented edits undo exactly");
+    for (int index = 0; index < operations; ++index)
+        document.redo();
+    require(document.state() == edited, "all fragmented edits redo exactly");
+}
+
+void previewReport(QJsonObject& report, const QImage& image,
+                   const QString& prefix = QStringLiteral("preview")) {
+    const auto baseline = snow::test_support::memorySnapshot();
+    MemorySampler memory;
+    QElapsedTimer elapsed;
+    elapsed.start();
+#ifdef SNOW_SHOT_IMAGE_SPLIT_BASELINE
+    const auto preview = image.scaled({2048, 2048}, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+#else
+    const auto preview = imageSplitPreview(image);
+#endif
+    const QSize expected =
+        image.size().scaled(2048, 2048, Qt::KeepAspectRatio).expandedTo(QSize(1, 1));
+    require(!preview.isNull() && preview.size() == expected, "large preview is complete");
+    report.insert(prefix + QStringLiteral("_prepare_ms"), milliseconds(elapsed));
+    report.insert(prefix + QStringLiteral("_peak_resident_delta_bytes"),
+                  double(memory.peak() - baseline.residentBytes));
+    report.insert(prefix + QStringLiteral("_peak_private_delta_bytes"),
+                  double(memory.privatePeak() - baseline.footprintBytes));
+#ifndef SNOW_SHOT_IMAGE_SPLIT_BASELINE
+    require(memory.peak() - baseline.residentBytes < 64 * 1024 * 1024,
+            "preview preparation does not allocate a full source raster");
+#endif
+}
+
+void loadReport(QJsonObject& report, const QImage& image) {
+    const QImage native = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    ImageSplitWindowServices services;
+    services.readHistory = [native](const auto&) -> std::optional<QImage> { return native; };
+    const auto baseline = snow::test_support::memorySnapshot();
+    MemorySampler memory;
+    QElapsedTimer elapsed;
+    elapsed.start();
+    ImageSplitWindow window(nullptr, std::move(services));
+    bool complete = false;
+    bool succeeded = false;
+    QObject::connect(&window, &ImageSplitWindow::imageLoaded, [&](bool success) {
+        succeeded = success;
+        complete = true;
+    });
+    window.presentHistory({});
+    while (!complete && elapsed.elapsed() < 30000) {
+        QCoreApplication::processEvents();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    require(complete && succeeded, "native history source loads through the real window worker");
+    report.insert(QStringLiteral("native_history_load_ms"), milliseconds(elapsed));
+    report.insert(QStringLiteral("native_history_source_shared"),
+                  window.document()->image().constBits() == native.constBits());
+    report.insert(QStringLiteral("native_history_peak_resident_delta_bytes"),
+                  double(memory.peak() - baseline.residentBytes));
+    report.insert(QStringLiteral("native_history_peak_private_delta_bytes"),
+                  double(memory.privatePeak() - baseline.footprintBytes));
+#ifndef SNOW_SHOT_IMAGE_SPLIT_BASELINE
+    require(window.document()->image().constBits() == native.constBits(),
+            "history loading shares immutable native pixels");
+    require(memory.peak() - baseline.residentBytes < 96 * 1024 * 1024,
+            "native loading avoids normalized and premultiplied full-size temporaries");
+#endif
+    window.shutdown();
+}
 
 void canvasReport(QJsonObject& report, const QImage& image, const QImage& preview) {
     const auto baseline = snow::test_support::memorySnapshot();
@@ -394,14 +566,27 @@ int main(int argc, char** argv) {
         require(temporary.isValid(), "benchmark output directory exists");
         QJsonObject report;
         report.insert(QStringLiteral("build_type"), QStringLiteral("Release"));
+#ifdef SNOW_SHOT_IMAGE_SPLIT_BASELINE
+        report.insert(QStringLiteral("implementation"), QStringLiteral("captured_baseline"));
+#else
+        report.insert(QStringLiteral("implementation"), QStringLiteral("optimized"));
+#endif
         geometryReport(report);
+        historyReport(report, 1000);
+        historyReport(report, 4000);
         const QImage image = fixture({8000, 8000});
         report.insert(QStringLiteral("source_pixels"),
                       double(qint64(image.width()) * image.height()));
         report.insert(QStringLiteral("source_bytes"), double(image.sizeInBytes()));
+        previewReport(report, image);
+        const QImage coprime(image.constBits(), image.width() - 1, image.height(),
+                             image.bytesPerLine(), image.format());
+        previewReport(report, coprime, QStringLiteral("preview_coprime"));
+        loadReport(report, image);
         const auto preview =
             image.scaled({2048, 2048}, Qt::KeepAspectRatio, Qt::SmoothTransformation);
         canvasReport(report, image, preview);
+        hoverReport(report, image, preview);
         extremeCanvasReport(report, image);
         ImageSplitSettings settings;
         exportReport(report, image, temporary.path(), QStringLiteral("large_image"), settings);
@@ -409,6 +594,14 @@ int main(int argc, char** argv) {
         settings.rows = 20;
         settings.columns = 20;
         exportReport(report, image, temporary.path(), QStringLiteral("many_regions"), settings);
+        QImage profiled = image;
+        profiled.setColorSpace(QColorSpace(QColorSpace::DisplayP3));
+        settings.rows = 2;
+        settings.columns = 2;
+        exportReport(report, profiled, temporary.path(), QStringLiteral("profiled_regions"),
+                     settings);
+        const QImage opaque = image.convertToFormat(QImage::Format_RGB32);
+        exportReport(report, opaque, temporary.path(), QStringLiteral("opaque_regions"), settings);
         std::cout << QJsonDocument(report).toJson(QJsonDocument::Indented).constData();
         return 0;
     } catch (const std::exception& error) {

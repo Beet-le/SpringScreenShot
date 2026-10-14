@@ -10,8 +10,11 @@
 #include "widgets/input_number.h"
 #include "widgets/message.h"
 #include "widgets/modal.h"
+#include "pinned_animation_fixtures.h"
+#include "pinned_animation_native_fixtures.h"
 
 #include <QApplication>
+#include <QColorSpace>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QEventLoop>
@@ -160,7 +163,7 @@ void independentHistoryAndSourceWindows() {
     require(coordinator.windows().isEmpty(), "coordinator closes all owned windows on shutdown");
 }
 
-void savedPinsOpenIndependentSplitWindows(const QString& directory) {
+void savedPinsOpenIndependentSplitWindows(const QString& directory, bool styledText) {
     auto& repository = snow_shot::storage::ApplicationStorage::instance().pinnedWindows();
     const auto originalCount = repository.summaries().size();
     const auto setGeometry = [](snow_shot::storage::PinnedWindowRecord& record, QSize size) {
@@ -194,6 +197,17 @@ void savedPinsOpenIndependentSplitWindows(const QString& directory) {
     text.originalHtml = QStringLiteral("<b>Saved text pin</b>");
     text.originalText = QStringLiteral("Saved text pin");
     text.firstCreationTextDpi = 1.5;
+    text.originalFileName = QStringLiteral("saved-text.txt");
+    text.createdUtc = pixels.createdUtc;
+    if (styledText) {
+        snow_shot::storage::PinnedTextStyle style;
+        style.fontFamily = QStringLiteral("Arial");
+        style.maximumWidth = 200;
+        style.fontSize = 24;
+        style.textColor = QColor(255, 0, 0, 128);
+        style.backgroundColor = Qt::transparent;
+        text.textStyle = style;
+    }
     setGeometry(text, QSize(300, 90));
     // Publishing a new pin reveals hidden members of its group. Hide the file fixture only after
     // all sources exist, so the split loader receives a genuinely hidden saved record.
@@ -204,9 +218,14 @@ void savedPinsOpenIndependentSplitWindows(const QString& directory) {
     ScreenshotClipboardOriginalContent original;
     original.html = text.originalHtml;
     original.text = text.originalText;
+    const auto legacyRendered =
+        ScreenshotClipboardContentReader::renderOriginalText(original, text.firstCreationTextDpi);
+    original.textStyle = text.textStyle;
     const auto rendered =
         ScreenshotClipboardContentReader::renderOriginalText(original, text.firstCreationTextDpi);
     require(rendered.has_value(), "render saved text reference");
+    require(!styledText || (legacyRendered && legacyRendered->image != rendered->image),
+            "styled split fixture must differ from legacy text rendering");
 
     ImageSplitWindowCoordinator coordinator;
     for (const auto& id : {pixels.id, file.id, text.id})
@@ -217,9 +236,10 @@ void savedPinsOpenIndependentSplitWindows(const QString& directory) {
         loaded(*window);
     const auto samePixels = [](const QImage& actual, const QImage& source) {
         const QImage expected = source.convertToFormat(QImage::Format_RGBA8888);
-        return actual.size() == expected.size() && actual.format() == expected.format() &&
+        const QImage rgba = actual.convertToFormat(QImage::Format_RGBA8888);
+        return rgba.size() == expected.size() &&
                std::equal(expected.constBits(), expected.constBits() + expected.sizeInBytes(),
-                          actual.constBits());
+                          rgba.constBits());
     };
     require(samePixels(windows[0]->document()->image(), pixels.image) &&
                 samePixels(windows[1]->document()->image(), file.image) &&
@@ -228,8 +248,9 @@ void savedPinsOpenIndependentSplitWindows(const QString& directory) {
     require(windows[0]->imageName() == QStringLiteral("Screenshot_%1")
                                            .arg(pixels.createdUtc.toLocalTime().toString(
                                                QStringLiteral("yyyyMMdd-HHmmss"))) &&
-                windows[1]->imageName() == QStringLiteral("split-original"),
-            "saved split sources retain creation time and original filename");
+                windows[1]->imageName() == QStringLiteral("split-original") &&
+                windows[2]->imageName() == QStringLiteral("saved-text"),
+            "saved split sources retain creation time and filenames alongside text styling");
     windows[0]->document()->createLine(true, 100);
     require(!windows[1]->document()->canUndo() && !windows[2]->document()->canUndo(),
             "saved pin split edits remain independent");
@@ -288,6 +309,101 @@ void saveCommitsVisibleDraft() {
     require(choices == 1 && window.document()->settings().count == 2,
             "invalid visible drafts prevent saving and retain valid geometry");
     window.shutdown();
+}
+
+void nativeHistoryPixelsAreShared() {
+    QImage original(QSize(4096, 1024), QImage::Format_ARGB32_Premultiplied);
+    original.fill(QColor(55, 99, 137, 123));
+    original.setColorSpace(QColorSpace(QColorSpace::DisplayP3));
+    original.setDevicePixelRatio(2);
+    ImageSplitWindowServices ports;
+    ports.readHistory = [original](const auto&) -> std::optional<QImage> { return original; };
+    ImageSplitWindow window(nullptr, ports);
+    snow_shot::storage::CaptureHistoryRecord record;
+    record.id = QStringLiteral("native-history-source");
+    window.presentHistory(record);
+    loaded(window);
+    const auto& actual = window.document()->image();
+    require(actual.constBits() == original.constBits() && actual.format() == original.format() &&
+                actual.colorSpace() == original.colorSpace() && actual.devicePixelRatio() == 2 &&
+                actual.size() == original.size(),
+            "history loading shares immutable native pixels without metadata detachment");
+    require(window.document()->preview().size() == QSize(2048, 512) &&
+                window.document()->preview().colorSpace() == original.colorSpace() &&
+                window.document()->layout().regionAt(0) == QRect(0, 0, 2048, 1024),
+            "preview and splits preserve native color interpretation and physical dimensions");
+    window.shutdown();
+}
+
+void realAnimatedFilesKeepTheirInitialCanvas(const QString& directory) {
+    auto fixtures = pinned_animation_fixtures::images();
+    fixtures.append(pinned_animation_native_fixtures::images());
+    fixtures.append(pinned_animation_fixtures::hiddenPosterAnimation());
+    fixtures.append(pinned_animation_fixtures::singleFrameImages());
+    const QColorSpace profile(QColorSpace::DisplayP3);
+    const auto icc = profile.iccProfile();
+    require(!icc.isEmpty(), "animated split fixture must carry a real ICC profile");
+    auto profiled = pinned_animation_fixtures::images().last();
+    QByteArray profileData("split-profile", 13);
+    profileData.append('\0');
+    profileData.append('\0'); // PNG compression method: zlib.
+    profileData.append(qCompress(icc).mid(4));
+    QByteArray profileChunk;
+    pinned_animation_native_fixtures::detail::chunk(profileChunk, "iCCP", profileData);
+    profiled.bytes.insert(33, profileChunk);
+    fixtures.append(profiled);
+    const auto sameVisiblePixels = [](const QImage& actual, const QImage& expected) {
+        if (actual.isNull() || actual.size() != expected.size())
+            return false;
+        const auto actualRgba = actual.convertToFormat(QImage::Format_RGBA8888);
+        const auto expectedRgba = expected.convertToFormat(QImage::Format_RGBA8888);
+        for (int y = 0; y < expected.height(); ++y) {
+            const auto* actualRow = actualRgba.constScanLine(y);
+            const auto* expectedRow = expectedRgba.constScanLine(y);
+            for (int x = 0; x < expected.width(); ++x) {
+                const qsizetype offset = qsizetype(x) * 4;
+                if (actualRow[offset + 3] != expectedRow[offset + 3] ||
+                    (expectedRow[offset + 3] != 0 &&
+                     !std::equal(expectedRow + offset, expectedRow + offset + 3,
+                                 actualRow + offset)))
+                    return false;
+            }
+        }
+        return true;
+    };
+    for (qsizetype index = 0; index < fixtures.size(); ++index) {
+        const auto& fixture = fixtures[index];
+        const auto path = QDir(directory).filePath(
+            QStringLiteral("animated-split-%1.%2").arg(index).arg(fixture.suffix));
+        QFile file(path);
+        require(file.open(QIODevice::WriteOnly) &&
+                    file.write(fixture.bytes) == fixture.bytes.size(),
+                "write real animated split file fixture");
+        file.close();
+        const auto snapshots = ScreenshotClipboardContentReader::snapshotLocalFiles({path});
+        require(snapshots.size() == 1, "capture animated split fixture revision");
+        ScreenshotClipboardContentSnapshot snapshot;
+        snapshot.localImage = snapshots.first();
+        // The complete playback decoder is an independent reference for first-frame-only import.
+        const auto complete = ScreenshotClipboardContentReader::decode(std::move(snapshot));
+        require(complete && !complete->image.isNull(), "decode complete animated split reference");
+        if (index == fixtures.size() - 1)
+            require(complete->image.colorSpace() == profile,
+                    "the complete reference must retain the fixture's Display P3 profile");
+        ImageSplitWindow window;
+        window.replaceFile(path);
+        loaded(window);
+        const auto& actual = window.document()->image();
+        require(sameVisiblePixels(actual, complete->image) &&
+                    actual.colorSpace() == complete->image.colorSpace(),
+                "real file splitting must retain the initial composed RGBA canvas and profile");
+        require(window.imageName() == QStringLiteral("animated-split-%1").arg(index),
+                "real file import retains its filename");
+        window.shutdown();
+        waitUntil([] { return ScreenshotExportCoordinator::shared().pendingJobCount() == 0; },
+                  "animated split fixture workers drain before the next window");
+        flush();
+    }
 }
 
 void exportAndRuntimeLanguage(const QString& directory) {
@@ -705,7 +821,10 @@ int main(int argc, char** argv) {
     } else {
         replacementAndCancellation();
         independentHistoryAndSourceWindows();
-        savedPinsOpenIndependentSplitWindows(directory.path());
+        savedPinsOpenIndependentSplitWindows(directory.path(), false);
+        savedPinsOpenIndependentSplitWindows(directory.path(), true);
+        nativeHistoryPixelsAreShared();
+        realAnimatedFilesKeepTheirInitialCanvas(directory.path());
         saveCommitsVisibleDraft();
         exportAndRuntimeLanguage(directory.path());
         exportFeedbackUsesLoadingButtonAndMessages();

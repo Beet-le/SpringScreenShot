@@ -5,9 +5,11 @@
 #include <QStringView>
 
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <new>
 #include <optional>
+#include <unordered_set>
 #include <utility>
 
 namespace snow_shot::presentation {
@@ -18,10 +20,29 @@ struct ImageSplitLines::Data final {
         qint64 step = 0;
         qsizetype count = 0;
     };
-    QVector<Run> runs;
-    QVector<qsizetype> ends;
-    qsizetype count = 0;
+    using Root = std::shared_ptr<const Data>;
 
+    Run run;
+    Root left;
+    Root right;
+    qsizetype count = 0;
+    qsizetype nodes = 0;
+    int height = 0;
+    int first = 0;
+    int last = 0;
+    bool sorted = true;
+    quint64 sum = 0;
+    quint64 weightedSum = 0;
+
+    static qsizetype countOf(const Root& root) {
+        return root ? root->count : 0;
+    }
+    static qsizetype nodesOf(const Root& root) {
+        return root ? root->nodes : 0;
+    }
+    static int heightOf(const Root& root) {
+        return root ? root->height : 0;
+    }
     static bool endpoint(const Run& run, qint64& result) {
         if (run.count <= 0)
             return false;
@@ -35,76 +56,238 @@ struct ImageSplitLines::Data final {
         result = qint64(run.start) + steps * run.step;
         return true;
     }
-
-    void appendRun(Run run) {
-        if (run.count == 0)
-            return;
+    static int coordinateAt(const Run& run, qsizetype index) {
+        return static_cast<int>(qint64(run.start) + qint64(index) * run.step);
+    }
+    static quint64 indexSum(quint64 count) {
+        if (count == 0)
+            return 0;
+        return count % 2 == 0 ? (count / 2) * (count - 1) : count * ((count - 1) / 2);
+    }
+    static quint64 indexSquareSum(quint64 count) {
+        if (count == 0)
+            return 0;
+        // Divide before unsigned multiplication so the result remains the exact sum modulo 2^64.
+        std::array<quint64, 3> factors{count, count - 1, 2 * count - 1};
+        for (auto& factor : factors)
+            if (factor % 2 == 0) {
+                factor /= 2;
+                break;
+            }
+        for (auto& factor : factors)
+            if (factor % 3 == 0) {
+                factor /= 3;
+                break;
+            }
+        return factors[0] * factors[1] * factors[2];
+    }
+    Data(Run value, Root before, Root after)
+        : run(value), left(std::move(before)), right(std::move(after)) {
+        Q_ASSERT(heightOf(left) <= heightOf(right) + 1 && heightOf(right) <= heightOf(left) + 1);
         if (run.count == 1)
             run.step = 0;
-        if (!runs.isEmpty()) {
-            auto& previous = runs.last();
-            qint64 last = 0;
-            const bool valid = endpoint(previous, last);
-            Q_ASSERT(valid);
-            Q_UNUSED(valid);
-            const qint64 gap = qint64(run.start) - last;
-            const qint64 step = previous.count == 1 ? gap : previous.step;
-            if (gap == step && (run.count == 1 || run.step == step)) {
-                previous.step = step;
-                previous.count += run.count;
-                return;
+        qint64 runLast = 0;
+        const bool valid = endpoint(run, runLast);
+        Q_ASSERT(valid);
+        Q_UNUSED(valid);
+        count = countOf(left) + run.count + countOf(right);
+        nodes = nodesOf(left) + 1 + nodesOf(right);
+        height = 1 + std::max(heightOf(left), heightOf(right));
+        first = left ? left->first : run.start;
+        last = right ? right->last : static_cast<int>(runLast);
+        sorted = (run.count == 1 || run.step > 0) &&
+                 (!left || (left->sorted && left->last < run.start)) &&
+                 (!right || (right->sorted && runLast < right->first));
+        const quint64 length = static_cast<quint64>(run.count);
+        const quint64 runSum = static_cast<quint64>(run.start) * length +
+                               static_cast<quint64>(run.step) * indexSum(length);
+        const quint64 runWeighted = static_cast<quint64>(run.start) * indexSum(length) +
+                                    static_cast<quint64>(run.step) * indexSquareSum(length);
+        sum = (left ? left->sum : 0) + runSum + (right ? right->sum : 0);
+        weightedSum = (left ? left->weightedSum : 0) + runWeighted +
+                      static_cast<quint64>(countOf(left)) * runSum +
+                      (right ? right->weightedSum +
+                                   static_cast<quint64>(countOf(left) + run.count) * right->sum
+                             : 0);
+    }
+    static Root make(Run run, Root left = {}, Root right = {}) {
+        return std::make_shared<Data>(run, std::move(left), std::move(right));
+    }
+    static Root balanced(Run run, const Root& left, const Root& right) {
+        if (heightOf(left) > heightOf(right) + 1) {
+            if (heightOf(left->left) >= heightOf(left->right))
+                return make(left->run, left->left, make(run, left->right, right));
+            const auto& middle = left->right;
+            return make(middle->run, make(left->run, left->left, middle->left),
+                        make(run, middle->right, right));
+        }
+        if (heightOf(right) > heightOf(left) + 1) {
+            if (heightOf(right->right) >= heightOf(right->left))
+                return make(right->run, make(run, left, right->left), right->right);
+            const auto& middle = right->left;
+            return make(middle->run, make(run, left, middle->left),
+                        make(right->run, middle->right, right->right));
+        }
+        return make(run, left, right);
+    }
+    static Root join(const Root& left, Run run, const Root& right) {
+        if (heightOf(left) > heightOf(right) + 1)
+            return balanced(left->run, left->left, join(left->right, run, right));
+        if (heightOf(right) > heightOf(left) + 1)
+            return balanced(right->run, join(left, run, right->left), right->right);
+        return make(run, left, right);
+    }
+    static const Run& runAt(const Root& root, qsizetype index) {
+        const Data* node = root.get();
+        while (node) {
+            const qsizetype before = nodesOf(node->left);
+            if (index < before)
+                node = node->left.get();
+            else if (index == before)
+                return node->run;
+            else {
+                index -= before + 1;
+                node = node->right.get();
             }
         }
-        runs.append(run);
+        Q_UNREACHABLE();
     }
-
-    void rebuildIndex() {
-        count = 0;
-        ends.resize(runs.size());
-        for (qsizetype index = 0; index < runs.size(); ++index) {
-            Q_ASSERT(runs[index].count <= std::numeric_limits<qsizetype>::max() - count);
-            count += runs[index].count;
-            ends[index] = count;
-        }
+    static std::pair<Root, Run> popLast(const Root& root) {
+        if (!root->right)
+            return {root->left, root->run};
+        auto [remaining, run] = popLast(root->right);
+        return {join(root->left, root->run, remaining), run};
     }
-
-    void appendSlice(Data& destination, qsizetype first, qsizetype length) const {
-        if (length <= 0)
-            return;
-        qsizetype runIndex = std::upper_bound(ends.cbegin(), ends.cend(), first) - ends.cbegin();
-        qsizetype offset = first - (runIndex == 0 ? 0 : ends.at(runIndex - 1));
-        while (length > 0) {
-            const auto& run = runs.at(runIndex);
-            const qsizetype taken = std::min(length, run.count - offset);
-            const int start = static_cast<int>(qint64(run.start) + qint64(offset) * run.step);
-            destination.appendRun({start, run.step, taken});
-            length -= taken;
-            ++runIndex;
-            offset = 0;
+    static std::pair<Run, Root> popFirst(const Root& root) {
+        if (!root->left)
+            return {root->run, root->right};
+        auto [run, remaining] = popFirst(root->left);
+        return {run, join(remaining, root->run, root->right)};
+    }
+    static std::optional<Run> merged(Run first, Run second) {
+        const qint64 gap = qint64(second.start) - coordinateAt(first, first.count - 1);
+        const qint64 step = first.count == 1 ? gap : first.step;
+        if (gap != step || (second.count > 1 && second.step != step))
+            return std::nullopt;
+        return Run{first.start, step, first.count + second.count};
+    }
+    static Root concat(const Root& left, const Root& right) {
+        if (!left)
+            return right;
+        if (!right)
+            return left;
+        if (const auto run = merged(runAt(left, left->nodes - 1), runAt(right, 0))) {
+            const auto before = popLast(left).first;
+            const auto after = popFirst(right).second;
+            return join(before, *run, after);
         }
+        auto [run, after] = popFirst(right);
+        return join(left, run, after);
+    }
+    static Root coalesceLast(const Root& root) {
+        if (!root || root->nodes < 2)
+            return root;
+        const auto run = merged(runAt(root, root->nodes - 2), runAt(root, root->nodes - 1));
+        if (!run)
+            return root;
+        return join(popLast(popLast(root).first).first, *run, {});
+    }
+    static Root coalesceFirst(const Root& root) {
+        if (!root || root->nodes < 2)
+            return root;
+        const auto run = merged(runAt(root, 0), runAt(root, 1));
+        if (!run)
+            return root;
+        return join({}, *run, popFirst(popFirst(root).second).second);
+    }
+    static std::pair<Root, Root> splitRaw(const Root& root, qsizetype index) {
+        if (index == 0)
+            return {{}, root};
+        if (index == countOf(root))
+            return {root, {}};
+        const qsizetype before = countOf(root->left);
+        if (index < before) {
+            auto [first, second] = splitRaw(root->left, index);
+            return {first, join(second, root->run, root->right)};
+        }
+        if (index > before + root->run.count) {
+            auto [first, second] = splitRaw(root->right, index - before - root->run.count);
+            return {join(root->left, root->run, first), second};
+        }
+        const qsizetype offset = index - before;
+        const Root first = offset == 0
+                               ? root->left
+                               : join(root->left, {root->run.start, root->run.step, offset}, {});
+        const Root second =
+            offset == root->run.count
+                ? root->right
+                : join({},
+                       {coordinateAt(root->run, offset), root->run.step, root->run.count - offset},
+                       root->right);
+        return {first, second};
+    }
+    static std::pair<Root, Root> split(const Root& root, qsizetype index) {
+        auto [first, second] = splitRaw(root, index);
+        // Only the new end fragments can acquire a compatible neighboring run.
+        return {coalesceLast(first), coalesceFirst(second)};
+    }
+    static Root build(const QVector<Run>& runs, qsizetype first, qsizetype count) {
+        if (count == 0)
+            return {};
+        const qsizetype middle = count / 2;
+        return make(runs.at(first + middle), build(runs, first, middle),
+                    build(runs, first + middle + 1, count - middle - 1));
+    }
+    template <typename Values> static Root fromValues(const Values& values) {
+        QVector<Run> runs;
+        for (const int value : values) {
+            const Run next{value, 0, 1};
+            const auto run = runs.isEmpty() ? std::optional<Run>{} : merged(runs.last(), next);
+            if (run)
+                runs.last() = *run;
+            else
+                runs.append(next);
+        }
+        return build(runs, 0, runs.size());
+    }
+    class RunCursor final {
+      public:
+        explicit RunCursor(const Root& root) {
+            descend(root.get());
+        }
+        const Run* next() {
+            if (m_depth == 0)
+                return nullptr;
+            const Data* node = m_stack[--m_depth];
+            descend(node->right.get());
+            return &node->run;
+        }
+
+      private:
+        void descend(const Data* node) {
+            while (node) {
+                Q_ASSERT(m_depth < m_stack.size());
+                m_stack[m_depth++] = node;
+                node = node->left.get();
+            }
+        }
+        // An AVL tree whose guide count fits qsizetype cannot approach this depth.
+        std::array<const Data*, 128> m_stack{};
+        size_t m_depth = 0;
+    };
+    static qsizetype uniqueBytes(const Root& root, std::unordered_set<const Data*>& seen) {
+        if (!root || !seen.insert(root.get()).second)
+            return 0;
+        return qsizetype(sizeof(Data)) + uniqueBytes(root->left, seen) +
+               uniqueBytes(root->right, seen);
     }
 };
 
-ImageSplitLines::ImageSplitLines(std::initializer_list<int> values) {
-    if (values.size() == 0)
-        return;
-    auto next = std::make_shared<Data>();
-    for (const int value : values)
-        next->appendRun({value, 0, 1});
-    next->rebuildIndex();
-    m_data = std::move(next);
-}
-ImageSplitLines::ImageSplitLines(const QVector<int>& values) {
-    if (values.isEmpty())
-        return;
-    auto next = std::make_shared<Data>();
-    for (const int value : values)
-        next->appendRun({value, 0, 1});
-    next->rebuildIndex();
-    m_data = std::move(next);
-}
+ImageSplitLines::ImageSplitLines(std::initializer_list<int> values)
+    : m_data(Data::fromValues(values)) {}
+ImageSplitLines::ImageSplitLines(const QVector<int>& values) : m_data(Data::fromValues(values)) {}
 qsizetype ImageSplitLines::size() const {
-    return m_data ? m_data->count : 0;
+    return Data::countOf(m_data);
 }
 bool ImageSplitLines::isEmpty() const {
     return size() == 0;
@@ -113,11 +296,19 @@ int ImageSplitLines::at(qsizetype index) const {
     Q_ASSERT(index >= 0 && index < size());
     if (index < 0 || index >= size())
         return 0;
-    const auto found = std::upper_bound(m_data->ends.cbegin(), m_data->ends.cend(), index);
-    const qsizetype runIndex = found - m_data->ends.cbegin();
-    const qsizetype offset = index - (runIndex == 0 ? 0 : m_data->ends.at(runIndex - 1));
-    const auto& run = m_data->runs.at(runIndex);
-    return static_cast<int>(qint64(run.start) + qint64(offset) * run.step);
+    const Data* node = m_data.get();
+    while (node) {
+        const qsizetype before = Data::countOf(node->left);
+        if (index < before)
+            node = node->left.get();
+        else if (index < before + node->run.count)
+            return Data::coordinateAt(node->run, index - before);
+        else {
+            index -= before + node->run.count;
+            node = node->right.get();
+        }
+    }
+    Q_UNREACHABLE();
 }
 int ImageSplitLines::operator[](qsizetype index) const {
     return at(index);
@@ -126,13 +317,86 @@ ImageSplitLines::Reference ImageSplitLines::operator[](qsizetype index) {
     return Reference(this, index);
 }
 int ImageSplitLines::first() const {
-    return at(0);
+    Q_ASSERT(m_data);
+    return m_data ? m_data->first : 0;
 }
 int ImageSplitLines::last() const {
-    return at(size() - 1);
+    Q_ASSERT(m_data);
+    return m_data ? m_data->last : 0;
 }
 bool ImageSplitLines::contains(int coordinate) const {
-    return std::binary_search(cbegin(), cend(), coordinate);
+    if (m_data && !m_data->sorted) {
+        Data::RunCursor cursor(m_data);
+        while (const auto* run = cursor.next()) {
+            const qint64 difference = qint64(coordinate) - run->start;
+            if (run->step == 0) {
+                if (difference == 0)
+                    return true;
+            } else if (difference % run->step == 0 && difference / run->step >= 0 &&
+                       difference / run->step < run->count) {
+                return true;
+            }
+        }
+        return false;
+    }
+    const qsizetype index = coordinateLowerBound(coordinate);
+    return index < size() && at(index) == coordinate;
+}
+qsizetype ImageSplitLines::coordinateLowerBound(double coordinate) const {
+    Q_ASSERT(!m_data || m_data->sorted);
+    const Data* node = m_data.get();
+    qsizetype index = 0;
+    while (node) {
+        if (node->left && !(node->left->last < coordinate)) {
+            node = node->left.get();
+            continue;
+        }
+        index += Data::countOf(node->left);
+        const auto& run = node->run;
+        if (Data::coordinateAt(run, run.count - 1) < coordinate) {
+            index += run.count;
+            node = node->right.get();
+            continue;
+        }
+        if (!(run.start < coordinate))
+            return index;
+        qsizetype offset = static_cast<qsizetype>((coordinate - run.start) / double(run.step));
+        offset = std::min(offset, run.count - 1);
+        while (offset < run.count && Data::coordinateAt(run, offset) < coordinate)
+            ++offset;
+        while (offset > 0 && !(Data::coordinateAt(run, offset - 1) < coordinate))
+            --offset;
+        return index + offset;
+    }
+    return index;
+}
+qsizetype ImageSplitLines::coordinateUpperBound(double coordinate) const {
+    Q_ASSERT(!m_data || m_data->sorted);
+    const Data* node = m_data.get();
+    qsizetype index = 0;
+    while (node) {
+        if (node->left && coordinate < node->left->last) {
+            node = node->left.get();
+            continue;
+        }
+        index += Data::countOf(node->left);
+        const auto& run = node->run;
+        if (!(coordinate < Data::coordinateAt(run, run.count - 1))) {
+            index += run.count;
+            node = node->right.get();
+            continue;
+        }
+        if (coordinate < run.start)
+            return index;
+        qsizetype offset = static_cast<qsizetype>((coordinate - run.start) / double(run.step));
+        offset = std::min(offset, run.count - 1);
+        while (offset < run.count && !(coordinate < Data::coordinateAt(run, offset)))
+            ++offset;
+        while (offset > 0 && coordinate < Data::coordinateAt(run, offset - 1))
+            --offset;
+        return index + offset;
+    }
+    return index;
 }
 ImageSplitLines::const_iterator ImageSplitLines::begin() const {
     return {this, 0};
@@ -156,15 +420,8 @@ void ImageSplitLines::insert(qsizetype index, int coordinate) {
     Q_ASSERT(index >= 0 && index <= size());
     if (index < 0 || index > size() || size() == std::numeric_limits<qsizetype>::max())
         return;
-    auto next = std::make_shared<Data>();
-    next->runs.reserve(runCount() + 2);
-    if (m_data)
-        m_data->appendSlice(*next, 0, index);
-    next->appendRun({coordinate, 0, 1});
-    if (m_data)
-        m_data->appendSlice(*next, index, size() - index);
-    next->rebuildIndex();
-    m_data = std::move(next);
+    const auto [first, second] = Data::split(m_data, index);
+    m_data = Data::concat(Data::concat(first, Data::make({coordinate, 0, 1})), second);
 }
 ImageSplitLines::const_iterator ImageSplitLines::insert(const_iterator position, int coordinate) {
     Q_ASSERT(position.m_owner == this);
@@ -175,12 +432,9 @@ void ImageSplitLines::removeAt(qsizetype index) {
     Q_ASSERT(index >= 0 && index < size());
     if (index < 0 || index >= size())
         return;
-    auto next = std::make_shared<Data>();
-    next->runs.reserve(runCount() + 1);
-    m_data->appendSlice(*next, 0, index);
-    m_data->appendSlice(*next, index + 1, size() - index - 1);
-    next->rebuildIndex();
-    m_data = next->count == 0 ? std::shared_ptr<Data>{} : std::move(next);
+    const auto [first, tail] = Data::split(m_data, index);
+    const auto second = Data::split(tail, 1).second;
+    m_data = Data::concat(first, second);
 }
 void ImageSplitLines::clear() {
     m_data.reset();
@@ -189,13 +443,9 @@ void ImageSplitLines::setAt(qsizetype index, int coordinate) {
     Q_ASSERT(index >= 0 && index < size());
     if (index < 0 || index >= size() || at(index) == coordinate)
         return;
-    auto next = std::make_shared<Data>();
-    next->runs.reserve(runCount() + 2);
-    m_data->appendSlice(*next, 0, index);
-    next->appendRun({coordinate, 0, 1});
-    m_data->appendSlice(*next, index + 1, size() - index - 1);
-    next->rebuildIndex();
-    m_data = std::move(next);
+    const auto [first, tail] = Data::split(m_data, index);
+    const auto second = Data::split(tail, 1).second;
+    m_data = Data::concat(Data::concat(first, Data::make({coordinate, 0, 1})), second);
 }
 bool ImageSplitLines::appendArithmetic(int start, int step, qsizetype count) {
     if (count == 0)
@@ -205,34 +455,18 @@ bool ImageSplitLines::appendArithmetic(int start, int step, qsizetype count) {
     if (count < 0 || count > std::numeric_limits<qsizetype>::max() - size() ||
         !Data::endpoint(run, last))
         return false;
-    auto next = m_data ? std::make_shared<Data>(*m_data) : std::make_shared<Data>();
-    next->appendRun(run);
-    next->rebuildIndex();
-    m_data = std::move(next);
+    m_data = Data::concat(m_data, Data::make(run));
     return true;
 }
 bool ImageSplitLines::isValid(int dimension) const {
-    if (dimension <= 0 || size() >= dimension)
-        return false;
-    qint64 previous = 0;
-    if (m_data)
-        for (const auto& run : m_data->runs) {
-            qint64 last = 0;
-            if (run.start <= previous || (run.count > 1 && run.step <= 0) ||
-                !Data::endpoint(run, last) || last >= dimension)
-                return false;
-            previous = last;
-        }
-    return true;
+    return dimension > 0 && size() < dimension &&
+           (!m_data || (m_data->sorted && m_data->first > 0 && m_data->last < dimension));
 }
 qsizetype ImageSplitLines::runCount() const {
-    return m_data ? m_data->runs.size() : 0;
+    return Data::nodesOf(m_data);
 }
 qsizetype ImageSplitLines::storageBytes() const {
-    return m_data
-               ? qsizetype(sizeof(Data)) + m_data->runs.capacity() * qsizetype(sizeof(Data::Run)) +
-                     m_data->ends.capacity() * qsizetype(sizeof(qsizetype))
-               : 0;
+    return runCount() * qsizetype(sizeof(Data));
 }
 bool operator==(const ImageSplitLines& first, const ImageSplitLines& second) {
     if (first.m_data == second.m_data)
@@ -241,27 +475,31 @@ bool operator==(const ImageSplitLines& first, const ImageSplitLines& second) {
         return false;
     if (first.isEmpty())
         return true;
-    qsizetype firstRun = 0;
-    qsizetype secondRun = 0;
-    qsizetype firstOffset = 0;
-    qsizetype secondOffset = 0;
-    while (firstRun < first.m_data->runs.size() && secondRun < second.m_data->runs.size()) {
-        const auto& a = first.m_data->runs.at(firstRun);
-        const auto& b = second.m_data->runs.at(secondRun);
-        const qsizetype overlap = std::min(a.count - firstOffset, b.count - secondOffset);
-        if (qint64(a.start) + qint64(firstOffset) * a.step !=
-                qint64(b.start) + qint64(secondOffset) * b.step ||
-            (overlap > 1 && a.step != b.step))
+    // Signatures only reject unequal axes. Equal signatures always receive an exact run comparison.
+    if (first.m_data->sum != second.m_data->sum ||
+        first.m_data->weightedSum != second.m_data->weightedSum)
+        return false;
+    ImageSplitLines::Data::RunCursor aCursor(first.m_data);
+    ImageSplitLines::Data::RunCursor bCursor(second.m_data);
+    const auto* a = aCursor.next();
+    const auto* b = bCursor.next();
+    qsizetype aOffset = 0;
+    qsizetype bOffset = 0;
+    while (a && b) {
+        const qsizetype overlap = std::min(a->count - aOffset, b->count - bOffset);
+        if (ImageSplitLines::Data::coordinateAt(*a, aOffset) !=
+                ImageSplitLines::Data::coordinateAt(*b, bOffset) ||
+            (overlap > 1 && a->step != b->step))
             return false;
-        firstOffset += overlap;
-        secondOffset += overlap;
-        if (firstOffset == a.count) {
-            ++firstRun;
-            firstOffset = 0;
+        aOffset += overlap;
+        bOffset += overlap;
+        if (aOffset == a->count) {
+            a = aCursor.next();
+            aOffset = 0;
         }
-        if (secondOffset == b.count) {
-            ++secondRun;
-            secondOffset = 0;
+        if (bOffset == b->count) {
+            b = bCursor.next();
+            bOffset = 0;
         }
     }
     return true;
@@ -269,9 +507,12 @@ bool operator==(const ImageSplitLines& first, const ImageSplitLines& second) {
 bool operator==(const ImageSplitLines& first, const QVector<int>& second) {
     if (first.size() != second.size())
         return false;
-    for (qsizetype index = 0; index < second.size(); ++index)
-        if (first.at(index) != second.at(index))
-            return false;
+    ImageSplitLines::Data::RunCursor cursor(first.m_data);
+    qsizetype index = 0;
+    while (const auto* run = cursor.next())
+        for (qsizetype offset = 0; offset < run->count; ++offset)
+            if (ImageSplitLines::Data::coordinateAt(*run, offset) != second.at(index++))
+                return false;
     return true;
 }
 ImageSplitLines::Reference::operator int() const {
@@ -638,7 +879,9 @@ void ImageSplitDocument::setImage(QImage image, QImage preview) {
     d.layout = calculateImageSplitLayout(d.image.size(), d.state.settings);
     d.state.verticalLines = d.layout.verticalLines;
     d.state.horizontalLines = d.layout.horizontalLines;
-    d.history = {{d.state, d.layout.errors}};
+    // Initializer-list assignment reuses the old allocation. Source replacement also releases the
+    // entry capacity accumulated by the previous image's unlimited undo history.
+    d.history = QVector<Impl::HistoryEntry>{{d.state, d.layout.errors}};
     d.cursor = 0;
     emit changed();
     emit historyChanged();
@@ -651,6 +894,20 @@ ImageSplitState ImageSplitDocument::state() const {
 }
 ImageSplitLayout ImageSplitDocument::layout() const {
     return m_impl->layout;
+}
+qsizetype ImageSplitDocument::historyStorageBytes() const {
+    std::unordered_set<const ImageSplitLines::Data*> seen;
+    qsizetype bytes = m_impl->history.capacity() * qsizetype(sizeof(Impl::HistoryEntry));
+    const auto include = [&seen, &bytes](const ImageSplitState& state) {
+        bytes += ImageSplitLines::Data::uniqueBytes(state.verticalLines.m_data, seen);
+        bytes += ImageSplitLines::Data::uniqueBytes(state.horizontalLines.m_data, seen);
+    };
+    include(m_impl->state);
+    for (const auto& entry : m_impl->history)
+        include(entry.state);
+    if (m_impl->beforeDrag)
+        include(*m_impl->beforeDrag);
+    return bytes;
 }
 bool ImageSplitDocument::setSettings(const ImageSplitSettings& settings) {
     if (settings == m_impl->state.settings)
@@ -699,8 +956,8 @@ bool ImageSplitDocument::createLine(bool vertical, int coordinate) {
         return false;
     auto next = d.state;
     auto& lines = vertical ? next.verticalLines : next.horizontalLines;
-    const auto insertion = std::lower_bound(lines.begin(), lines.end(), coordinate);
-    if (insertion != lines.end() && *insertion == coordinate)
+    const qsizetype insertion = lines.coordinateLowerBound(coordinate);
+    if (insertion != lines.size() && lines.at(insertion) == coordinate)
         return false;
     lines.insert(insertion, coordinate);
     next.manuallyEdited = true;
@@ -748,12 +1005,12 @@ bool ImageSplitDocument::moveDraggedLine(int coordinate) {
     const int previousCoordinate = lines.at(d.dragIndex);
     if (previousCoordinate == coordinate)
         return false;
-    const auto insertion = std::lower_bound(lines.cbegin(), lines.cend(), coordinate);
+    const qsizetype insertion = lines.coordinateLowerBound(coordinate);
     // Cuts remain unique so preview and export never contain zero-width or zero-height regions.
     // Landing on an occupied pixel leaves the gesture active; the next move can cross that cut.
-    if (insertion != lines.cend() && *insertion == coordinate)
+    if (insertion != lines.size() && lines.at(insertion) == coordinate)
         return false;
-    int index = static_cast<int>(insertion - lines.cbegin());
+    int index = static_cast<int>(insertion);
     if (index > d.dragIndex)
         --index;
     // Keep axes sorted for hit testing and region generation, while tracking the dragged line's

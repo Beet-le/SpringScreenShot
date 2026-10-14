@@ -38,6 +38,8 @@ struct PinnedWindowPreviewSource final {
     QString originalHtml;
     QString originalText;
     double firstCreationTextDpi = 1.0;
+    QString originalFileName{};
+    QDateTime createdUtc{};
     std::optional<PinnedTextStyle> textStyle;
 };
 

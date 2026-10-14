@@ -4,6 +4,7 @@
 #include <QCoreApplication>
 
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -171,7 +172,175 @@ void compactAxes() {
         require(std::lower_bound(edited.cbegin(), edited.cend(), coordinate) - edited.cbegin() ==
                     std::lower_bound(oracle.cbegin(), oracle.cend(), coordinate) - oracle.cbegin(),
                 "edited run lookup agrees with vector lookup after every mutation");
+        for (const double threshold :
+             {double(coordinate), double(coordinate) - 0.25, double(coordinate) + 0.25}) {
+            require(edited.coordinateLowerBound(threshold) ==
+                            std::lower_bound(oracle.cbegin(), oracle.cend(), threshold) -
+                                oracle.cbegin() &&
+                        edited.coordinateUpperBound(threshold) ==
+                            std::upper_bound(oracle.cbegin(), oracle.cend(), threshold) -
+                                oracle.cbegin(),
+                    "run-aware fractional coordinate searches match sorted-vector bounds");
+        }
     }
+}
+
+void persistentRunSequences() {
+    ImageSplitLines edited;
+    QVector<int> oracle;
+    std::vector<std::pair<ImageSplitLines, QVector<int>>> snapshots;
+    quint32 random = 0x41823u;
+    const auto next = [&random] {
+        random = random * 1664525u + 1013904223u;
+        return random;
+    };
+    const auto coordinate = [&next] {
+        switch (next() % 8) {
+        case 0:
+            return std::numeric_limits<int>::min();
+        case 1:
+            return std::numeric_limits<int>::max();
+        default:
+            return int(next() % 2001) - 1000;
+        }
+    };
+    for (int operation = 0; operation < 10'000; ++operation) {
+        const int choice = int(next() % 5);
+        if (choice == 0 || oracle.isEmpty()) {
+            const qsizetype index = qsizetype(next()) % (oracle.size() + 1);
+            const int value = coordinate();
+            edited.insert(index, value);
+            oracle.insert(index, value);
+        } else if (choice == 1) {
+            const qsizetype index = qsizetype(next()) % oracle.size();
+            edited.removeAt(index);
+            oracle.removeAt(index);
+        } else if (choice == 2) {
+            const qsizetype index = qsizetype(next()) % oracle.size();
+            const int value = coordinate();
+            edited[index] = value;
+            oracle[index] = value;
+        } else if (choice == 3) {
+            const int start = int(next() % 2001) - 1000;
+            const int step = int(next() % 9) - 4;
+            const qsizetype count = next() % 7;
+            require(edited.appendArithmetic(start, step, count),
+                    "small ascending, descending and constant runs append");
+            for (qsizetype index = 0; index < count; ++index)
+                oracle.append(start + int(index) * step);
+        } else if (oracle.size() > 100) {
+            edited.clear();
+            oracle.clear();
+        }
+        const ImageSplitLines rebuilt(oracle);
+        require(edited == oracle && edited == rebuilt && rebuilt == edited,
+                "persistent sequence operations preserve arbitrary signed vector coordinates");
+        const bool valid = oracle.size() < 1000 &&
+                           std::adjacent_find(
+                               oracle.cbegin(), oracle.cend(),
+                               [](int a, int b) { return a >= b; }) == oracle.cend() &&
+                           (oracle.isEmpty() || (oracle.first() > 0 && oracle.last() < 1000));
+        require(edited.isValid(1000) == valid,
+                "cached validity rejects unsorted, duplicate and out-of-range axes");
+        const int query = coordinate();
+        require(edited.contains(query) ==
+                    (std::find(oracle.cbegin(), oracle.cend(), query) != oracle.cend()),
+                "coordinate membership remains correct for arbitrary signed run sequences");
+        if (operation % 97 == 0)
+            snapshots.emplace_back(edited, oracle);
+    }
+    for (const auto& [snapshot, expected] : snapshots)
+        require(snapshot == expected && snapshot == ImageSplitLines(expected),
+                "retained sequence snapshots survive all later mutations");
+
+    require(ImageSplitLines{10, 20, 30} != ImageSplitLines{11, 18, 31},
+            "equal sum and weighted signatures still require exact coordinate comparison");
+    ImageSplitLines fullRange;
+    const qsizetype fullCount = qsizetype(std::numeric_limits<quint32>::max()) + 1;
+    require(fullRange.appendArithmetic(std::numeric_limits<int>::min(), 1, fullCount) &&
+                fullRange.first() == std::numeric_limits<int>::min() &&
+                fullRange.last() == std::numeric_limits<int>::max() &&
+                fullRange.coordinateLowerBound(0) == fullCount / 2 &&
+                fullRange.coordinateUpperBound(0) == fullCount / 2 + 1,
+            "rank searches preserve the full signed integer coordinate range without overflow");
+    for (const double threshold :
+         {-std::numeric_limits<double>::infinity(), -100.25, 0.0, std::nextafter(0.0, 1.0), 100.75,
+          std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()}) {
+        const QVector<int> sorted{-100, -1, 0, 1, 100};
+        const ImageSplitLines lines(sorted);
+        require(
+            lines.coordinateLowerBound(threshold) ==
+                    std::lower_bound(sorted.cbegin(), sorted.cend(), threshold) - sorted.cbegin() &&
+                lines.coordinateUpperBound(threshold) ==
+                    std::upper_bound(sorted.cbegin(), sorted.cend(), threshold) - sorted.cbegin(),
+            "coordinate searches preserve fractional and nonfinite comparison semantics");
+    }
+    ImageSplitLines maximum;
+    require(maximum.appendArithmetic(1, 0, std::numeric_limits<qsizetype>::max()),
+            "constant run counts fit the complete sequence index range");
+    const auto unchanged = maximum;
+    require(!maximum.appendArithmetic(2, 0, 1) && maximum == unchanged && maximum.last() == 1 &&
+                !maximum.isValid(std::numeric_limits<int>::max()),
+            "count overflow is rejected without corrupting retained sequence signatures");
+}
+
+void fragmentedHistory() {
+    constexpr int width = 80'000;
+    constexpr int edits = 4096;
+    ImageSplitDocument document;
+    document.setImage(fixture({width, 1}));
+    auto settings = document.settings();
+    settings.count = width;
+    require(document.setSettings(settings), "fragmented history starts from a compact dense axis");
+    const auto original = document.state();
+    qsizetype halfBytes = 0;
+    for (int index = 0; index < edits; ++index) {
+        const int coordinate = 16 * (index + 1);
+        const auto lines = document.layout().verticalLines;
+        const auto position = lines.coordinateLowerBound(coordinate);
+        require(position < lines.size() && lines.at(position) == coordinate &&
+                    document.removeLine(true, int(position)),
+                "each spaced deletion creates an independent history operation");
+        if (index + 1 == edits / 2)
+            halfBytes = document.historyStorageBytes();
+    }
+    const auto final = document.state();
+    require(final.verticalLines.runCount() >= edits &&
+                document.historyStorageBytes() < 16 * 1024 * 1024 &&
+                document.historyStorageBytes() < 3 * halfBytes,
+            "fragmented undo history shares tree paths instead of copying every previous run");
+    for (int index = edits - 1; index >= 0; --index) {
+        document.undo();
+        const auto lines = document.layout().verticalLines;
+        require(lines.size() == width - 1 - index && lines.contains(16 * (index + 1)) &&
+                    (index == 0 || !lines.contains(16 * index)),
+                "every spaced deletion remains individually undoable in reverse order");
+    }
+    require(document.state() == original, "all undos restore the original compact generated axis");
+    for (int index = 0; index < edits; ++index) {
+        document.redo();
+        const auto lines = document.layout().verticalLines;
+        require(lines.size() == width - 2 - index && !lines.contains(16 * (index + 1)),
+                "all fragmented edit history entries remain individually redoable");
+    }
+    require(document.state() == final && !document.canRedo(),
+            "complete redo restores the exact retained fragmented state");
+    document.undo();
+    require(document.canRedo() && !document.layout().verticalLines.contains(16),
+            "a history branch restores a genuinely missing guide while redo is available");
+    const auto beforeBranch = document.state();
+    require(document.createLine(true, 16) && !document.canRedo() &&
+                document.layout().verticalLines.contains(16) && document.layout().isValid(),
+            "a branch after undo discards only redo entries and keeps the edited tree valid");
+    document.undo();
+    require(document.state() == beforeBranch && document.canRedo(),
+            "branch insertion retains the complete preceding history state");
+    document.redo();
+    require(document.layout().verticalLines.contains(16) && !document.canRedo(),
+            "redo follows the new branch after old redo entries are discarded");
+    document.setImage(fixture({20, 1}));
+    require(document.historyStorageBytes() < 4096 && !document.canUndo(),
+            "replacement releases all previous persistent history roots");
 }
 
 void exactPercentageConversion() {
@@ -449,6 +618,8 @@ int main(int argc, char** argv) {
     try {
         equalAndGrid();
         compactAxes();
+        persistentRunSequences();
+        fragmentedHistory();
         exactPercentageConversion();
         preciseAndValidation();
         historyAndManualEditing();

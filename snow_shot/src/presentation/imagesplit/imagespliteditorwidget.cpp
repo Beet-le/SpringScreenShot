@@ -143,11 +143,6 @@ struct ImageSplitPreviewCanvas::Impl {
         PositionLine ruler;
         bool operator==(const OverlayState&) const = default;
     };
-    struct NumberBadge {
-        qint64 index;
-        QString text;
-        QRectF rect;
-    };
     ImageSplitPreviewCanvas* owner = nullptr;
     ImageSplitDocument* document = nullptr;
     qreal zoom = 1;
@@ -164,16 +159,11 @@ struct ImageSplitPreviewCanvas::Impl {
     std::optional<QPointF> hoverPosition;
     qint64 imageKey = 0;
     ImageSplitSettings previousSettings;
-    ImageSplitLayout previousLayout;
-    OverlayState previousOverlay;
-    QVector<NumberBadge> numberBadges;
-    QImage frame;
-    qreal frameRatio = 0;
-    QPointF frameOrigin;
-    QRegion frameDamage;
-    bool fullDamage = true;
-
-    void paint(QPainter& painter, const QRegion& damage, qreal ratio) const;
+    QPixmap checkerTile;
+    QColor checkerBackground;
+    QColor checkerFill;
+    // Declared last so callbacks disconnect before their captured state is destroyed.
+    QObject callbackContext;
 
     QRectF viewport() const {
         // Reserve room for the complete Y hint even when the image is panned past the left edge.
@@ -229,6 +219,71 @@ struct ImageSplitPreviewCanvas::Impl {
         // Resolve against the current transform so zoom and pan cannot leave a stale preview.
         return rulerLineAt(*hoverPosition);
     }
+    OverlayState overlayState() const {
+        const auto layout = document->layout();
+        const auto coordinate = [&](bool vertical, int index) -> PositionLine {
+            const auto& boundaries = lines(layout, vertical);
+            return index >= 0 && index < boundaries.size()
+                       ? PositionLine{std::pair{vertical, boundaries[index]}}
+                       : std::nullopt;
+        };
+        return {coordinate(selectedVertical, selectedIndex),
+                coordinate(hoveredVertical, hoveredIndex), hoveredRulerLine()};
+    }
+    PositionLine positionLine(const OverlayState& state) const {
+        return state.ruler ? state.ruler : state.hovered ? state.hovered : state.selected;
+    }
+    QString positionText(const PositionLine& line) const {
+        return (line->first ? canvasText("X: %1 px") : canvasText("Y: %1 px")).arg(line->second);
+    }
+    QRectF positionBadgeRect(const PositionLine& line) const {
+        if (!line)
+            return {};
+        const auto [vertical, coordinate] = *line;
+        const auto ruler = rulerRect(vertical);
+        const auto point = vertical ? owner->imageToViewport({qreal(coordinate), 0})
+                                    : owner->imageToViewport({0, qreal(coordinate)});
+        const auto center = vertical ? QPointF(point.x(), ruler.center().y())
+                                     : QPointF(ruler.center().x(), point.y());
+        if (!ruler.contains(center))
+            return {};
+        const auto badge = positionBadgeSize(owner, positionText(line));
+        // Painting and overlay damage share the same bounds outside the visible image.
+        const qreal left = vertical ? center.x() - badge.width() / 2
+                                    : ruler.right() - kPositionBadgeSpacing - badge.width();
+        const qreal top = vertical ? ruler.bottom() - kPositionBadgeSpacing - badge.height()
+                                   : center.y() - badge.height() / 2;
+        return {QPointF(std::clamp(left, 0.0, std::max(0.0, owner->width() - badge.width())),
+                        std::clamp(top, 0.0, std::max(0.0, owner->height() - badge.height()))),
+                badge};
+    }
+    QRegion overlayDamage(const OverlayState& state) const {
+        QRegion result;
+        const auto visible = visibleImageRect();
+        for (const auto& line : {state.selected, state.hovered, state.ruler}) {
+            if (!line || visible.isEmpty())
+                continue;
+            const auto [vertical, coordinate] = *line;
+            const qreal position = vertical ? owner->imageToViewport({qreal(coordinate), 0}).x()
+                                            : owner->imageToViewport({0, qreal(coordinate)}).y();
+            const QRectF strip =
+                vertical ? QRectF(position - 2, visible.top() - 2, 4, visible.height() + 4)
+                         : QRectF(visible.left() - 2, position - 2, visible.width() + 4, 4);
+            result += strip.intersected(owner->rect()).toAlignedRect();
+        }
+        const auto badge = positionBadgeRect(positionLine(state));
+        if (!badge.isEmpty())
+            result += badge.adjusted(-2, -2, 2, 2).toAlignedRect();
+        return result.intersected(owner->rect());
+    }
+    void updateOverlay(const OverlayState& before) {
+        const auto after = overlayState();
+        if (before == after)
+            return;
+        const auto damage = overlayDamage(before) + overlayDamage(after);
+        if (!damage.isEmpty())
+            owner->update(damage);
+    }
     std::pair<bool, int> hit(QPointF point) const {
         const auto layout = document->layout();
         if (!viewport().contains(point) || rulerRect(true).contains(point) ||
@@ -247,9 +302,9 @@ struct ImageSplitPreviewCanvas::Impl {
                 continue;
             const auto& boundaries = lines(layout, vertical);
             const qreal value = vertical ? imagePoint.x() : imagePoint.y();
-            const auto candidate = std::lower_bound(boundaries.cbegin(), boundaries.cend(), value);
+            const auto candidate = boundaries.coordinateLowerBound(value);
             for (int shift : {-1, 0}) {
-                const int index = static_cast<int>(candidate - boundaries.cbegin()) + shift;
+                const int index = static_cast<int>(candidate) + shift;
                 if (index < 0 || index >= boundaries.size())
                     continue;
                 const qreal distance = std::abs(boundaries[index] - value) * zoom;
@@ -295,16 +350,18 @@ ImageSplitPreviewCanvas::ImageSplitPreviewCanvas(ImageSplitDocument* document, Q
     setMinimumSize(180, 160);
     setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
-    connect(document, &ImageSplitDocument::lineDragIndexChanged, this, [this](int index) {
-        auto& d = *m_impl;
-        if (d.dragging) {
-            d.selectedIndex = index;
-            d.hoveredIndex = -1;
-        }
-    });
-    connect(document, &ImageSplitDocument::changed, this, [this] { m_impl->refresh(); });
-    connect(&adqt::theme::ThemeManager::instance(), &adqt::theme::ThemeManager::themeChanged, this,
-            [this] { update(); });
+    connect(document, &ImageSplitDocument::lineDragIndexChanged, &d.callbackContext,
+            [this](int index) {
+                auto& d = *m_impl;
+                if (d.dragging) {
+                    d.selectedIndex = index;
+                    d.hoveredIndex = -1;
+                }
+            });
+    connect(document, &ImageSplitDocument::changed, &d.callbackContext,
+            [this] { m_impl->refresh(); });
+    connect(&adqt::theme::ThemeManager::instance(), &adqt::theme::ThemeManager::themeChanged,
+            &d.callbackContext, [this] { update(); });
     retranslateUi();
     d.refresh();
 }
@@ -337,6 +394,7 @@ void ImageSplitPreviewCanvas::setEditingEnabled(bool enabled) {
     auto& d = *m_impl;
     if (d.editing == enabled)
         return;
+    const auto before = d.overlayState();
     if (!enabled && d.dragging)
         d.document->cancelLineDrag();
     d.dragging = false;
@@ -344,7 +402,7 @@ void ImageSplitPreviewCanvas::setEditingEnabled(bool enabled) {
     d.hoveredIndex = -1;
     d.hoverPosition.reset();
     unsetCursor();
-    update();
+    d.updateOverlay(before);
 }
 void ImageSplitPreviewCanvas::retranslateUi() {
     setAccessibleName(canvasText("Image splitting preview"));
@@ -356,8 +414,9 @@ void ImageSplitPreviewCanvas::retranslateUi() {
     update();
 }
 
-void ImageSplitPreviewCanvas::paintEvent(QPaintEvent*) {
-    const auto& d = *m_impl;
+void ImageSplitPreviewCanvas::paintEvent(QPaintEvent* event) {
+    auto& d = *m_impl;
+    const auto damage = event->region();
     const auto theme = adqt::theme::ThemeManager::instance().resolveTheme(this);
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
@@ -370,13 +429,17 @@ void ImageSplitPreviewCanvas::paintEvent(QPaintEvent*) {
     const auto imageRect = d.imageRect();
     if (!size.isEmpty()) {
         // The checker is a small logical-pixel tile, independent of image size and canvas zoom.
-        QPixmap tile(20, 20);
-        tile.fill(theme.colorBgContainer);
-        QPainter checker(&tile);
-        checker.fillRect(0, 0, 10, 10, theme.colorFillSecondary);
-        checker.fillRect(10, 10, 10, 10, theme.colorFillSecondary);
-        checker.end();
-        painter.fillRect(imageRect, QBrush(tile));
+        if (d.checkerTile.isNull() || d.checkerBackground != theme.colorBgContainer ||
+            d.checkerFill != theme.colorFillSecondary) {
+            d.checkerBackground = theme.colorBgContainer;
+            d.checkerFill = theme.colorFillSecondary;
+            d.checkerTile = QPixmap(20, 20);
+            d.checkerTile.fill(d.checkerBackground);
+            QPainter checker(&d.checkerTile);
+            checker.fillRect(0, 0, 10, 10, d.checkerFill);
+            checker.fillRect(10, 10, 10, 10, d.checkerFill);
+        }
+        painter.fillRect(imageRect, QBrush(d.checkerTile));
         const auto& preview = d.document->preview();
         const qreal previewScale = preview.isNull()
                                        ? 0
@@ -412,6 +475,11 @@ void ImageSplitPreviewCanvas::paintEvent(QPaintEvent*) {
             const auto drawLine = [&](int coordinate, bool highlighted) {
                 const qreal position = vertical ? imageToViewport({qreal(coordinate), 0}).x()
                                                 : imageToViewport({0, qreal(coordinate)}).y();
+                const QRectF strip =
+                    vertical ? QRectF(position - 2, imageRect.top() - 2, 4, imageRect.height() + 4)
+                             : QRectF(imageRect.left() - 2, position - 2, imageRect.width() + 4, 4);
+                if (!damage.intersects(strip.intersected(viewport).toAlignedRect()))
+                    return;
                 QPen pen(kSplitLineColor, 1.0);
                 if (highlighted)
                     pen.setCapStyle(Qt::FlatCap);
@@ -425,14 +493,14 @@ void ImageSplitPreviewCanvas::paintEvent(QPaintEvent*) {
                     painter.drawLine(QPointF(imageRect.left(), position),
                                      QPointF(imageRect.right(), position));
             };
-            auto line = std::lower_bound(lines.cbegin(), lines.cend(), visibleFirst);
-            while (line != lines.cend() && *line <= visibleLast) {
-                const auto index = line - lines.cbegin();
-                if (index != selected && index != hovered && *line != preview)
-                    drawLine(*line, false);
+            auto index = lines.coordinateLowerBound(visibleFirst);
+            while (index < lines.size() && lines[index] <= visibleLast) {
+                const int coordinate = lines[index];
+                if (index != selected && index != hovered && coordinate != preview)
+                    drawLine(coordinate, false);
                 // Jump over subpixel guides instead of traversing a potentially dense axis.
-                const qreal nextCoordinate = *line + std::max(1.0, kGuideSpacing / d.zoom);
-                line = std::lower_bound(line + 1, lines.cend(), nextCoordinate);
+                const qreal nextCoordinate = coordinate + std::max(1.0, kGuideSpacing / d.zoom);
+                index = lines.coordinateLowerBound(nextCoordinate);
             }
             const auto drawHighlighted = [&](int index) {
                 if (index >= 0 && index < lines.size() && lines[index] != preview &&
@@ -464,8 +532,7 @@ void ImageSplitPreviewCanvas::paintEvent(QPaintEvent*) {
                 const qreal coordinate = (position - origin) / d.zoom;
                 if (coordinate < 0 || coordinate > dimension)
                     return;
-                const int index = static_cast<int>(
-                    std::upper_bound(lines.cbegin(), lines.cend(), coordinate) - lines.cbegin());
+                const int index = static_cast<int>(lines.coordinateUpperBound(coordinate));
                 if (index == previous)
                     return;
                 previous = index;
@@ -490,12 +557,18 @@ void ImageSplitPreviewCanvas::paintEvent(QPaintEvent*) {
                 const auto region = layout.regionAt(index);
                 const QRectF target(imageToViewport(region.topLeft()),
                                     QSizeF(region.size()) * d.zoom);
+                // An ordinal stays at the top of its cell. Avoid preparing text for badges that
+                // cannot intersect a narrow guide or coordinate-hint repaint.
+                if (!damage.intersects(
+                        QRectF(target.topLeft(), QSizeF(target.width(), 26)).toAlignedRect()))
+                    continue;
                 const auto label = QString::number(index + 1);
                 const QSizeF badge(metrics.horizontalAdvance(label) + 10, 20);
                 if (target.width() < badge.width() + 6)
                     continue;
                 const QRectF badgeRect(target.topLeft() + QPointF(4, 4), badge);
-                if (!badgeRect.intersects(viewport))
+                if (!badgeRect.intersects(viewport) ||
+                    !damage.intersects(badgeRect.adjusted(-1, -1, 1, 1).toAlignedRect()))
                     continue;
                 painter.setRenderHint(QPainter::Antialiasing);
                 painter.setPen(Qt::NoPen);
@@ -516,6 +589,8 @@ void ImageSplitPreviewCanvas::paintEvent(QPaintEvent*) {
     const QFontMetrics rulerMetrics(rulerFont);
     for (const bool horizontal : {true, false}) {
         const auto ruler = d.rulerRect(horizontal);
+        if (!damage.intersects(ruler.toAlignedRect()))
+            continue;
         painter.save();
         painter.setClipRect(ruler);
         painter.fillRect(ruler, theme.colorBgContainer);
@@ -576,36 +651,12 @@ void ImageSplitPreviewCanvas::paintEvent(QPaintEvent*) {
         }
         painter.restore();
     }
-    auto positionLine = rulerLine;
-    if (!positionLine) {
-        const int labelIndex = d.hoveredIndex >= 0 ? d.hoveredIndex : d.selectedIndex;
-        const bool labelVertical = d.hoveredIndex >= 0 ? d.hoveredVertical : d.selectedVertical;
-        const auto& labelLines = d.lines(layout, labelVertical);
-        if (labelIndex >= 0 && labelIndex < labelLines.size())
-            positionLine = std::pair{labelVertical, labelLines[labelIndex]};
-    }
-    if (positionLine) {
-        const auto [labelVertical, coordinate] = *positionLine;
-        const auto ruler = d.rulerRect(labelVertical);
-        const auto point = labelVertical ? imageToViewport({qreal(coordinate), 0})
-                                         : imageToViewport({0, qreal(coordinate)});
-        const auto center = labelVertical ? QPointF(point.x(), ruler.center().y())
-                                          : QPointF(ruler.center().x(), point.y());
-        if (!ruler.contains(center))
-            return;
+    const auto positionLine = d.positionLine(d.overlayState());
+    const auto badgeRect = d.positionBadgeRect(positionLine);
+    if (!badgeRect.isEmpty() &&
+        damage.intersects(badgeRect.adjusted(-1, -1, 1, 1).toAlignedRect())) {
         painter.setFont(positionFont(this));
-        const auto label =
-            (labelVertical ? canvasText("X: %1 px") : canvasText("Y: %1 px")).arg(coordinate);
-        const auto badge = positionBadgeSize(this, label);
-        // Keep both hints horizontal, with the same spacing outside the visible image.
-        const qreal left = labelVertical ? center.x() - badge.width() / 2
-                                         : ruler.right() - kPositionBadgeSpacing - badge.width();
-        const qreal top = labelVertical ? ruler.bottom() - kPositionBadgeSpacing - badge.height()
-                                        : center.y() - badge.height() / 2;
-        const QRectF badgeRect(
-            QPointF(std::clamp(left, 0.0, std::max(0.0, width() - badge.width())),
-                    std::clamp(top, 0.0, std::max(0.0, height() - badge.height()))),
-            badge);
+        const auto label = d.positionText(positionLine);
         painter.save();
         painter.setPen(Qt::NoPen);
         painter.setBrush(theme.colorPrimary);
@@ -623,6 +674,7 @@ void ImageSplitPreviewCanvas::resizeEvent(QResizeEvent*) {
 }
 void ImageSplitPreviewCanvas::mousePressEvent(QMouseEvent* event) {
     auto& d = *m_impl;
+    const auto before = d.overlayState();
     d.hoverPosition = event->position();
     setFocus(Qt::MouseFocusReason);
     if (event->button() == Qt::MiddleButton) {
@@ -630,20 +682,23 @@ void ImageSplitPreviewCanvas::mousePressEvent(QMouseEvent* event) {
         d.automaticFit = false;
         d.last = event->position();
         setCursor(Qt::ClosedHandCursor);
+        d.updateOverlay(before);
         event->accept();
         return;
     }
-    if (event->button() != Qt::LeftButton || !d.editing || d.document->image().isNull())
+    if (event->button() != Qt::LeftButton || !d.editing || d.document->image().isNull()) {
+        d.updateOverlay(before);
         return;
+    }
     const auto point = event->position();
     const auto create = [&d](bool vertical, int coordinate) {
         static_cast<void>(d.document->createLine(vertical, coordinate));
         const auto layout = d.document->layout();
         const auto& lines = d.lines(layout, vertical);
-        const auto line = std::lower_bound(lines.cbegin(), lines.cend(), coordinate);
-        if (line != lines.cend() && *line == coordinate) {
+        const auto index = lines.coordinateLowerBound(coordinate);
+        if (index < lines.size() && lines[index] == coordinate) {
             d.selectedVertical = vertical;
-            d.selectedIndex = static_cast<int>(line - lines.cbegin());
+            d.selectedIndex = static_cast<int>(index);
             d.hoveredIndex = -1;
         }
     };
@@ -659,11 +714,12 @@ void ImageSplitPreviewCanvas::mousePressEvent(QMouseEvent* event) {
             setCursor(vertical ? Qt::SizeHorCursor : Qt::SizeVerCursor);
         }
     }
-    update();
+    d.updateOverlay(before);
     event->accept();
 }
 void ImageSplitPreviewCanvas::mouseMoveEvent(QMouseEvent* event) {
     auto& d = *m_impl;
+    const auto before = d.overlayState();
     d.hoverPosition = event->position();
     if (d.panning) {
         d.offset += event->position() - d.last;
@@ -682,11 +738,12 @@ void ImageSplitPreviewCanvas::mouseMoveEvent(QMouseEvent* event) {
             setCursor(Qt::CrossCursor);
         else
             unsetCursor();
-        update();
+        d.updateOverlay(before);
     }
 }
 void ImageSplitPreviewCanvas::mouseReleaseEvent(QMouseEvent* event) {
     auto& d = *m_impl;
+    const auto before = d.overlayState();
     d.hoverPosition = event->position();
     if (event->button() == Qt::MiddleButton)
         d.panning = false;
@@ -695,10 +752,11 @@ void ImageSplitPreviewCanvas::mouseReleaseEvent(QMouseEvent* event) {
         d.dragging = false;
     }
     unsetCursor();
-    update();
+    d.updateOverlay(before);
 }
 void ImageSplitPreviewCanvas::wheelEvent(QWheelEvent* event) {
     auto& d = *m_impl;
+    const auto before = d.overlayState();
     d.hoverPosition = event->position();
     if (d.document->image().isNull())
         return;
@@ -710,6 +768,8 @@ void ImageSplitPreviewCanvas::wheelEvent(QWheelEvent* event) {
         d.zoom = next;
         d.automaticFit = false;
         update();
+    } else {
+        d.updateOverlay(before);
     }
     event->accept();
 }
@@ -738,11 +798,12 @@ void ImageSplitPreviewCanvas::keyPressEvent(QKeyEvent* event) {
     update();
 }
 void ImageSplitPreviewCanvas::leaveEvent(QEvent*) {
+    const auto before = m_impl->overlayState();
     m_impl->hoveredIndex = -1;
     m_impl->hoverPosition.reset();
     if (!m_impl->dragging && !m_impl->panning)
         unsetCursor();
-    update();
+    m_impl->updateOverlay(before);
 }
 void ImageSplitPreviewCanvas::changeEvent(QEvent* event) {
     if (event->type() == QEvent::LanguageChange)
@@ -786,6 +847,8 @@ struct ImageSplitEditorWidget::Impl {
     mutable std::optional<ImageSplitSettings> validatedSettings;
     mutable QSize validatedSize;
     mutable QMap<QString, QString> cachedErrors;
+    // Retire callbacks before the captured state dies and QWidget tears down focused inputs.
+    QObject callbackContext;
 
     bool busy() const {
         return loading || exporting;
@@ -1141,45 +1204,49 @@ ImageSplitEditorWidget::ImageSplitEditorWidget(ImageSplitDocument* document, QWi
     d.dropHint->title->setObjectName(QStringLiteral("imageSplitDropTitle"));
     d.dropHint->description->setObjectName(QStringLiteral("imageSplitDropDescription"));
     d.dropHint->hide();
-    const auto wireNumber = [this](AdInputNumber* input, const QString& key) {
-        connect(input, &AdInputNumber::textChanged, this, [this, key](const QString& value) {
+    const auto wireNumber = [this, context = &d.callbackContext](AdInputNumber* input,
+                                                                 const QString& key) {
+        connect(input, &AdInputNumber::textChanged, context, [this, key](const QString& value) {
             auto& state = *m_impl;
             if (state.syncing)
                 return;
             state.drafts.insert(key.isEmpty() ? state.sizeKey() : key, value);
             state.validate();
         });
-        connect(input, &AdInputNumber::valueChanged, this, [this](double) { m_impl->commit(); });
-        connect(input, &QAbstractSpinBox::editingFinished, this, [this] { m_impl->commit(); });
+        connect(input, &AdInputNumber::valueChanged, context, [this](double) { m_impl->commit(); });
+        connect(input, &QAbstractSpinBox::editingFinished, context, [this] { m_impl->commit(); });
     };
     wireNumber(d.count, QStringLiteral("count"));
     wireNumber(d.rows, QStringLiteral("rows"));
     wireNumber(d.columns, QStringLiteral("columns"));
     wireNumber(d.size, {});
-    connect(d.direction, &AdSegmented::currentValueChanged, this, [this](const QVariant& value) {
-        auto& state = *m_impl;
-        if (state.syncing || state.busy())
-            return;
-        Q_UNUSED(value);
-        state.updateVisibility();
-        state.commit();
-    });
-    connect(d.type, &AdSegmented::currentValueChanged, this, [this](const QVariant& value) {
-        auto& state = *m_impl;
-        if (state.syncing || state.busy())
-            return;
-        Q_UNUSED(value);
-        state.updateVisibility();
-        state.commit();
-    });
-    connect(d.unit, &AdSegmented::currentValueChanged, this,
+    connect(d.direction, &AdSegmented::currentValueChanged, &d.callbackContext,
+            [this](const QVariant& value) {
+                auto& state = *m_impl;
+                if (state.syncing || state.busy())
+                    return;
+                Q_UNUSED(value);
+                state.updateVisibility();
+                state.commit();
+            });
+    connect(d.type, &AdSegmented::currentValueChanged, &d.callbackContext,
+            [this](const QVariant& value) {
+                auto& state = *m_impl;
+                if (state.syncing || state.busy())
+                    return;
+                Q_UNUSED(value);
+                state.updateVisibility();
+                state.commit();
+            });
+    connect(d.unit, &AdSegmented::currentValueChanged, &d.callbackContext,
             [this](const QVariant& value) { m_impl->changeUnit(value); });
     connect(d.actions[0], &AdButton::clicked, document, &ImageSplitDocument::undo);
     connect(d.actions[1], &AdButton::clicked, document, &ImageSplitDocument::redo);
     connect(d.actions[2], &AdButton::clicked, d.canvas, &ImageSplitPreviewCanvas::fitToCanvas);
     connect(d.actions[3], &AdButton::clicked, this, &ImageSplitEditorWidget::reloadRequested);
-    connect(document, &ImageSplitDocument::changed, this, [this] { m_impl->refresh(); });
-    connect(document, &ImageSplitDocument::historyChanged, this,
+    connect(document, &ImageSplitDocument::changed, &d.callbackContext,
+            [this] { m_impl->refresh(); });
+    connect(document, &ImageSplitDocument::historyChanged, &d.callbackContext,
             [this] { m_impl->updateActions(); });
     auto* shortcuts = new WindowShortcutManager(this);
     shortcuts->addScopeWindow(this);
@@ -1204,11 +1271,12 @@ ImageSplitEditorWidget::ImageSplitEditorWidget(ImageSplitDocument* document, QWi
                 m_impl->document->redo();
             return true;
         };
-        static_cast<void>(shortcuts->addBinding(this, std::move(binding)));
+        static_cast<void>(shortcuts->addBinding(&d.callbackContext, std::move(binding)));
     }
-    connect(&adqt::theme::ThemeManager::instance(), &adqt::theme::ThemeManager::themeChanged, this,
-            [this] { m_impl->theme(); });
-    connect(&styles::ThemeManager::instance(), &styles::ThemeManager::themeChanged, this,
+    connect(&adqt::theme::ThemeManager::instance(), &adqt::theme::ThemeManager::themeChanged,
+            &d.callbackContext, [this] { m_impl->theme(); });
+    connect(&styles::ThemeManager::instance(), &styles::ThemeManager::themeChanged,
+            &d.callbackContext,
             [this, outer, descriptionLayout, grid](const styles::ThemeColorScheme& scheme) {
                 outer->setSpacing(scheme.metricAlias.marginMD);
                 descriptionLayout->setSpacing(scheme.metricAlias.marginSM);
@@ -1220,11 +1288,7 @@ ImageSplitEditorWidget::ImageSplitEditorWidget(ImageSplitDocument* document, QWi
     d.refresh();
     d.theme();
 }
-ImageSplitEditorWidget::~ImageSplitEditorWidget() {
-    // QWidget teardown can commit focused inputs after m_impl has been destroyed.
-    for (auto* input : {m_impl->count, m_impl->rows, m_impl->columns, m_impl->size})
-        disconnect(input, nullptr, this, nullptr);
-}
+ImageSplitEditorWidget::~ImageSplitEditorWidget() = default;
 ImageSplitPreviewCanvas* ImageSplitEditorWidget::canvas() const {
     return m_impl->canvas;
 }

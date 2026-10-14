@@ -99,6 +99,8 @@ void pinnedTextStyleMetadataRoundTrips() {
     auto record = recordWithId(id, {});
     record.sourceKind = storage::PinnedWindowSourceKind::ClipboardText;
     record.originalText = QStringLiteral("Captured styled text");
+    record.originalFileName = QStringLiteral("styled-source.txt");
+    record.createdUtc = QDateTime::fromString(QStringLiteral("2026-10-14T00:00:00Z"), Qt::ISODate);
     record.initialWindowSize = QSize(320, 80);
     storage::PinnedTextStyle style;
     style.fontFamily = QStringLiteral("Arial");
@@ -112,8 +114,10 @@ void pinnedTextStyleMetadataRoundTrips() {
         require(repository.upsert(record).success && repository.flush().success,
                 "persist styled text");
         const auto preview = repository.loadPreviewSource(id);
-        require(preview && preview->textStyle == style,
-                "preview sources retain effective text style");
+        require(preview && preview->textStyle == style &&
+                    preview->originalFileName == record.originalFileName &&
+                    preview->createdUtc == record.createdUtc,
+                "preview sources retain text style, original filename, and creation time");
         const auto revision = repository.previewSourceRevision(id);
         auto state = *repository.loadRecord(id);
         state.textStyle.reset();
@@ -131,10 +135,13 @@ void pinnedTextStyleMetadataRoundTrips() {
     {
         storage::PinnedWindowRepository repository(directory.path(), true, 30000);
         const auto restored = repository.loadRecord(id);
+        const auto preview = repository.loadPreviewSource(id);
         require(restored && restored->textStyle == record.textStyle &&
-                    restored->originalText == record.originalText &&
-                    repository.loadPreviewSource(id)->textStyle == record.textStyle,
-                "styled source and previews survive repository restart");
+                    restored->originalText == record.originalText && preview &&
+                    preview->textStyle == record.textStyle &&
+                    preview->originalFileName == record.originalFileName &&
+                    preview->createdUtc == record.createdUtc,
+                "styled sources and preview naming metadata survive repository restart");
     }
     const QString manifest = directory.filePath(QStringLiteral("pinned_windows_v2/index.json"));
     QFile file(manifest);
@@ -562,6 +569,8 @@ void sourceOnlyAdmissionAndCancellationExcludeDocumentPayloads() {
                                patternedImage({64, 32}, 9));
     record.canvasSession = QByteArray(1024 * 1024, 'c');
     record.recognitionResults = QByteArray(1024 * 1024, 'r');
+    record.originalFileName = QStringLiteral("split-source.png");
+    record.createdUtc = QDateTime::fromString(QStringLiteral("2026-10-14T00:00:00Z"), Qt::ISODate);
     storage::PinnedWindowRepository repository(directory.path(), true, 30000);
     require(repository.upsert(record).success && repository.flush().success,
             "persist source-only admission fixture");
@@ -582,6 +591,9 @@ void sourceOnlyAdmissionAndCancellationExcludeDocumentPayloads() {
     require(source && samePixels(source->image, record.image) && sourcePeak < fullPeak &&
                 sourcePeak >= 2 * record.image.sizeInBytes(),
             "source-only admission preserves pixels without budgeting discarded annotations");
+    require(source->originalFileName == record.originalFileName &&
+                source->createdUtc == record.createdUtc,
+            "source-only reads retain original naming and creation metadata");
     int calls = 0;
     require(!repository.loadPreviewSource(record.id,
                                           [&](qint64) {

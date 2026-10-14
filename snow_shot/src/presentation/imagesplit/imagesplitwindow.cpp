@@ -10,7 +10,7 @@
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/capturehistoryrepository.h"
 #include "snow_shot/storage/pinnedwindowrepository.h"
-#include "snow_draw_engine_qt/snow_canvas_image.h"
+#include "imagesplitimagepreparation_p.h"
 #include "icon_renderer.h"
 #include "widgets/button.h"
 #include "widgets/message.h"
@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <limits>
 #include <utility>
 
 namespace snow_shot::presentation {
@@ -92,10 +93,20 @@ struct ExportProgress final {
 QString imageMemoryError() {
     return splitText("The image is too large or there is not enough memory to load it.");
 }
-bool reserveImage(QSize size, const std::shared_ptr<LoadedImage>& loaded) {
-    const auto bytes = collageImageImportBytes(size);
+bool reserveImage(QSize size, const std::shared_ptr<LoadedImage>& loaded, qint64 nativeBytes = 0) {
+    auto bytes = collageImageImportBytes(size);
     if (bytes == 0)
         return false;
+    if (nativeBytes > 0) {
+        const bool needsPreview = size.width() > 2048 || size.height() > 2048;
+        const QSize preview = size.scaled(2048, 2048, Qt::KeepAspectRatio).expandedTo(QSize(1, 1));
+        const qint64 previewBytes = needsPreview ? qint64(preview.width()) * preview.height() * 4 +
+                                                       imageSplitPreviewMaximumWorkingBytes
+                                                 : 0;
+        if (nativeBytes > std::numeric_limits<qint64>::max() - previewBytes)
+            return false;
+        bytes = std::max(bytes, nativeBytes + previewBytes);
+    }
     if (!loaded->reservation)
         loaded->reservation = reserveCollageImport(bytes);
     else if (!loaded->reservation->resize(bytes))
@@ -116,22 +127,26 @@ ScreenshotExportTaskResult prepareImage(QImage image, const std::shared_ptr<Load
     if (image.isNull())
         return loadingFailure(loaded, ScreenshotExportFailureStage::Source,
                               "The image could not be read or is no longer available.");
-    if (!reserveImage(image.size(), loaded))
+    if (!reserveImage(image.size(), loaded, image.sizeInBytes()))
         return loadingFailure(loaded, ScreenshotExportFailureStage::Source,
                               "The image is too large or there is not enough memory to load it.");
-    image = image.convertToFormat(QImage::Format_RGBA8888);
-    image.setDevicePixelRatio(1);
-    if (image.isNull())
+    // The document and canvas use physical pixel coordinates. Retain native pixels and metadata;
+    // format/color conversion belongs to the bounded preview and export readers.
+    loaded->preview = imageSplitPreview(
+        image, [&cancellation] { return cancellation.isCancellationRequested(); });
+    if (cancellation.isCancellationRequested())
+        return ScreenshotExportTaskResult::failure(ScreenshotExportFailureStage::Cancelled, {});
+    if (loaded->preview.isNull())
         return loadingFailure(loaded, ScreenshotExportFailureStage::Source,
                               "The image could not be read or is no longer available.");
-    loaded->preview =
-        image.width() <= 2048 && image.height() <= 2048
-            ? image
-            : snowCanvasScaleImage(
-                  image,
-                  image.size().scaled(2048, 2048, Qt::KeepAspectRatio).expandedTo(QSize(1, 1)),
-                  Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
     loaded->image = std::move(image);
+    const qint64 retained =
+        loaded->image.sizeInBytes() + (loaded->preview.constBits() == loaded->image.constBits()
+                                           ? 0
+                                           : loaded->preview.sizeInBytes());
+    if (!loaded->reservation->resize(retained))
+        return loadingFailure(loaded, ScreenshotExportFailureStage::Source,
+                              "The image is too large or there is not enough memory to load it.");
     return {};
 }
 } // namespace
@@ -661,8 +676,9 @@ void ImageSplitWindow::presentPinnedRecord(const QString& recordId) {
             if (cancelled())
                 return ScreenshotExportTaskResult::failure(ScreenshotExportFailureStage::Cancelled,
                                                            {});
-            const auto record = storage::ApplicationStorage::instance().pinnedWindows().loadRecord(
-                recordId, allocate);
+            const auto record =
+                storage::ApplicationStorage::instance().pinnedWindows().loadPreviewSource(
+                    recordId, allocate, cancelled);
             QImage image;
             if (record && !cancelled()) {
                 loaded->originalFileName = record->originalFileName;
@@ -790,15 +806,10 @@ void ImageSplitWindow::replaceFile(const QString& path) {
                         ? ScreenshotClipboardContentReader::snapshotLocalFiles({path}, cancelled)
                         : QList<ScreenshotClipboardLocalImage>();
                 if (loaded->reservation && files.size() == 1) {
-                    ScreenshotClipboardContentSnapshot snapshot;
-                    snapshot.localImage = files.first();
-                    snapshot.devicePixelRatio = 1;
-                    auto content = ScreenshotClipboardContentReader::decode(
-                        std::move(snapshot), cancelled, [loaded, &error](qint64 bytes) {
+                    image = ScreenshotClipboardContentReader::decodeImageFile(
+                        files.first(), cancelled, [loaded, &error](qint64 bytes) {
                             return loaded->reservation->resize(bytes, &error);
                         });
-                    if (content && content->kind == ScreenshotClipboardContentKind::Image)
-                        image = content->image;
                 }
                 if (image.isNull() && !error.isEmpty())
                     return loadingFailure(
