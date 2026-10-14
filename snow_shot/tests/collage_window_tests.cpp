@@ -20,6 +20,7 @@
 #include "widgets/modal.h"
 #include "widgets/segmented.h"
 #include "pinned_animation_fixtures.h"
+#include "bmp_import_fixtures.h"
 
 #include <QApplication>
 #include <QColorSpace>
@@ -32,6 +33,7 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFileSystemModel>
 #include <QLabel>
 #include <QMouseEvent>
 #include <QMimeData>
@@ -213,12 +215,12 @@ void selectedFilesOpenAndAppendInOrder() {
     resetSettings();
     QTemporaryDir directory;
     require(directory.isValid(), "create selected-image fixtures");
-    const QString red = directory.filePath(QStringLiteral("first.PNG"));
+    const QString red = directory.filePath(QStringLiteral("first.BMP"));
     const QString blue = directory.filePath(QStringLiteral("second.png"));
     const QString bad = directory.filePath(QStringLiteral("broken.png"));
     const QString text = directory.filePath(QStringLiteral("notes.txt"));
     const QString folder = directory.filePath(QStringLiteral("folder.png"));
-    require(image({3, 2}, Qt::red).save(red, "PNG") && image({2, 3}, Qt::blue).save(blue, "PNG") &&
+    require(image({3, 2}, Qt::red).save(red, "BMP") && image({2, 3}, Qt::blue).save(blue, "PNG") &&
                 QDir().mkdir(folder),
             "write selected image and directory fixtures");
     for (const auto& path : {bad, text}) {
@@ -1325,8 +1327,8 @@ void droppedFilesUseCollageImporter() {
     QTemporaryDir directory;
     require(directory.isValid(), "drop fixture directory");
     const auto red = directory.filePath(QStringLiteral("red.PNG"));
-    const auto blue = directory.filePath(QStringLiteral("blue.png"));
-    const auto invalid = directory.filePath(QStringLiteral("invalid.png"));
+    const auto blue = directory.filePath(QStringLiteral("blue.bmp"));
+    const auto invalid = directory.filePath(QStringLiteral("invalid.bmp"));
     require(image().save(red) && image({2, 3}, Qt::blue).save(blue), "write drop image fixtures");
     QFile malformed(invalid);
     require(malformed.open(QIODevice::WriteOnly) && malformed.write("not an image") > 0,
@@ -1370,7 +1372,8 @@ void droppedFilesUseCollageImporter() {
                 failures[0].contains(invalid) && firstBatch[0].label == red &&
                 firstBatch[1].label == blue && firstBatch[2].label == red &&
                 firstBatch[0].id != firstBatch[2].id && firstBatch[0].image.size() == QSize(3, 2) &&
-                firstBatch[1].image.size() == QSize(2, 3),
+                firstBatch[1].image.size() == QSize(2, 3) &&
+                firstBatch[1].image.pixelColor(0, 0) == QColor(Qt::blue),
             "file drops preserve successful image order and duplicates and report decode errors");
     require(window.document()->rotate(firstBatch[0].id, true), "transform existing collage item");
     const auto transform = window.document()->items()[0].transform;
@@ -1383,6 +1386,71 @@ void droppedFilesUseCollageImporter() {
     window.shutdown();
 }
 
+void localizedFileDialogsListAllSupportedImages() {
+    resetSettings();
+    QTemporaryDir directory;
+    require(directory.isValid(), "localized file-dialog fixture directory");
+    const QString previousDirectory = QDir::currentPath();
+    require(QDir::setCurrent(directory.path()), "scope file-dialog scanning to the fixtures");
+    const auto restoreDirectory =
+        qScopeGuard([&] { static_cast<void>(QDir::setCurrent(previousDirectory)); });
+    QStringList patterns;
+    QStringList expectedFiles;
+    for (const auto& extension : ScreenshotClipboardContentReader::supportedImageFileExtensions()) {
+        patterns.append(QStringLiteral("*.") + extension);
+        expectedFiles.append(QStringLiteral("image.") + extension);
+    }
+    expectedFiles.append({QStringLiteral("uppercase.JPEG"), QStringLiteral("uppercase.AVIF"),
+                          QStringLiteral("uppercase.BMP")});
+    for (const auto& name : expectedFiles + QStringList{QStringLiteral("unsupported.txt")}) {
+        QFile file(directory.filePath(name));
+        require(file.open(QIODevice::WriteOnly) && file.write("filter fixture") > 0,
+                "write file-dialog listing fixtures");
+    }
+    for (const auto* locale : {"en_US", "zh_CN", "zh_TW"}) {
+        QTranslator translator;
+        require(translator.load(
+                    QStringLiteral(":/i18n/snow_shot_%1.qm").arg(QString::fromLatin1(locale))),
+                "file-dialog tests need the requested translation catalog");
+        QApplication::installTranslator(&translator);
+        const auto removeTranslator =
+            qScopeGuard([&] { QApplication::removeTranslator(&translator); });
+        CollageWindow window;
+        window.present();
+        const quint64 target = window.document()->append(image(), QStringLiteral("existing"));
+        for (const bool replacement : {false, true}) {
+            if (replacement)
+                window.editor()->replaceImageRequested(target);
+            else
+                button(window, "collageAddImages")->click();
+            auto* dialog = window.editor()->window()->findChild<QFileDialog*>();
+            require(dialog && dialog->fileMode() == (replacement ? QFileDialog::ExistingFile
+                                                                 : QFileDialog::ExistingFiles),
+                    "add and replace open their corresponding image-selection dialogs");
+            dialog->setOption(QFileDialog::DontUseCustomDirectoryIcons);
+            dialog->setDirectory(directory.path());
+            auto* model = dialog->findChild<QFileSystemModel*>();
+            require(model && model->nameFilters() == patterns,
+                    "Qt must parse every supported image wildcard in every collage language");
+            const auto listedFiles = [&] {
+                QStringList names;
+                const auto root = model->index(directory.path());
+                for (int row = 0; row < model->rowCount(root); ++row)
+                    names.append(model->fileName(model->index(row, 0, root)));
+                names.sort();
+                return names;
+            };
+            auto sortedFiles = expectedFiles;
+            sortedFiles.sort();
+            waitUntil([&] { return listedFiles() == sortedFiles; },
+                      "add and replace list all supported extensions and hide unsupported files");
+            dialog->reject();
+            flushEvents();
+        }
+        window.shutdown();
+    }
+}
+
 void fileImportDuplicatesAndReplacement() {
     resetSettings();
     QTemporaryDir directory;
@@ -1392,14 +1460,14 @@ void fileImportDuplicatesAndReplacement() {
             "keep file-dialog scanning in a small local fixture directory");
     const auto restoreDirectory =
         qScopeGuard([&] { static_cast<void>(QDir::setCurrent(previousDirectory)); });
-    const QString red = directory.filePath(QStringLiteral("red.png"));
+    const QString red = directory.filePath(QStringLiteral("red.bmp"));
     const QString blue = directory.filePath(QStringLiteral("blue.png"));
-    const QString replacement = directory.filePath(QStringLiteral("replacement.png"));
-    const QString invalid = directory.filePath(QStringLiteral("invalid.png"));
+    const QString replacement = directory.filePath(QStringLiteral("replacement.BMP"));
+    const QString invalid = directory.filePath(QStringLiteral("invalid.bmp"));
     const QString text = directory.filePath(QStringLiteral("text.txt"));
     const QString html = directory.filePath(QStringLiteral("page.html"));
     require(image().save(red) && image({2, 3}, Qt::blue).save(blue) &&
-                image({5, 4}, QColor(20, 40, 60, 96)).save(replacement),
+                bmp_import_fixtures::write(replacement, image({5, 4}, QColor(20, 40, 60, 96))),
             "write supported image fixtures");
     QFile malformed(invalid);
     require(malformed.open(QIODevice::WriteOnly) && malformed.write("not an image") > 0,
@@ -1417,6 +1485,13 @@ void fileImportDuplicatesAndReplacement() {
     Ports ports;
     CollageWindow window(nullptr, ports.services());
     window.present();
+    button(window, "collageAddImages")->click();
+    auto* addDialog = window.editor()->window()->findChild<QFileDialog*>();
+    require(addDialog && addDialog->fileMode() == QFileDialog::ExistingFiles &&
+                addDialog->nameFilters().join(QString()).contains(QStringLiteral("*.bmp")),
+            "collage add dialog advertises BMP alongside the existing image formats");
+    addDialog->reject();
+    flushEvents();
     QStringList failures;
     QObject::connect(&window, &CollageWindow::importFinished, &window,
                      [&](const auto& errors) { failures = errors; });
@@ -1429,7 +1504,8 @@ void fileImportDuplicatesAndReplacement() {
             "failures");
     const auto initial = window.document()->items();
     require(initial[0].label == red && initial[1].label == blue && initial[2].label == red &&
-                initial[0].id != initial[2].id,
+                initial[0].id != initial[2].id &&
+                bmp_import_fixtures::samePixels(initial[0].image, image()),
             "duplicates are independent items appended in file selection order");
     const quint64 target = initial[1].id;
     require(window.document()->rotate(target, true) && window.document()->flip(target, true),
@@ -1442,7 +1518,8 @@ void fileImportDuplicatesAndReplacement() {
         dialog->setDirectory(directory.path());
     }
     require(dialog && dialog->fileMode() == QFileDialog::ExistingFile &&
-                dialog->windowModality() == Qt::WindowModal,
+                dialog->windowModality() == Qt::WindowModal &&
+                dialog->nameFilters().join(QString()).contains(QStringLiteral("*.bmp")),
             "replacement opens a single-file dialog scoped to the collage");
     dialog->reject();
     flushEvents();
@@ -1463,7 +1540,8 @@ void fileImportDuplicatesAndReplacement() {
         replaced.size() == 3 && replaced[0].id == initial[0].id && replaced[1].id == target &&
             replaced[2].id == initial[2].id && replaced[1].transform.isIdentity() &&
             replaced[1].image.size() == QSize(5, 4) &&
-            replaced[1].image.pixelColor(0, 0).alpha() == 96,
+            bmp_import_fixtures::samePixels(replaced[1].image,
+                                            image({5, 4}, QColor(20, 40, 60, 96))),
         "successful replacement preserves order and identity, resets transforms and retains alpha");
 
     const auto animation = pinned_animation_fixtures::hiddenPosterAnimation();
@@ -2204,6 +2282,13 @@ int main(int argc, char* argv[]) {
     timed("Theme initialization",
           [&] { styles::ThemeManager::instance().initialize(application); });
     const auto arguments = QApplication::arguments();
+    if (arguments.contains(QStringLiteral("--file-dialog-only"))) {
+        timed("Localized file-dialog listings", localizedFileDialogsListAllSupportedImages);
+        ScreenshotExportCoordinator::shared().shutdown();
+        storage.shutdown();
+        std::cout << "Collage file-dialog tests passed\n";
+        return 0;
+    }
     if (arguments.contains(QStringLiteral("--drag-drop-only"))) {
         timed("Dropped file imports", droppedFilesUseCollageImporter);
         waitUntil([] { return ScreenshotExportCoordinator::shared().pendingJobCount() == 0; },
@@ -2318,6 +2403,7 @@ int main(int argc, char* argv[]) {
     timed("Clear and initial import failures", clearAndInitialImportFailures);
     timed("Clear pending import", clearingPendingImportDiscardsStaleCompletion);
     timed("File imports and replacement", fileImportDuplicatesAndReplacement);
+    timed("Localized file-dialog listings", localizedFileDialogsListAllSupportedImages);
     timed("Dropped file imports", droppedFilesUseCollageImporter);
     timed("Owned live pin imports", livePinnedImportsPreserveOrderAndFailures);
     timed("Live pin cancellation and memory", livePinnedImportsCancelAndRespectMemoryBudget);

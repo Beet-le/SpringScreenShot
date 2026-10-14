@@ -314,8 +314,8 @@
             <translation>无法开始加载图像，请重试。</translation>
         </message>
         <message>
-            <source>Images (%1)</source>
-            <translation>图像（%1）</translation>
+            <source>Images</source>
+            <translation>图像</translation>
         </message>
         <message>
             <source>Loading images: %1 of %2</source>

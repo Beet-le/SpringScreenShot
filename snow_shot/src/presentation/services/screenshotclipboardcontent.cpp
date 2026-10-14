@@ -221,6 +221,8 @@ snow::image::Format imageFileCodecFormat(snow_shot::image::ImageFileCodec codec)
         return snow::image::Format::jxl;
     case Codec::Avif:
         return snow::image::Format::avif;
+    case Codec::Bmp:
+        return snow::image::Format::bmp;
     }
     return snow::image::Format::unknown;
 }

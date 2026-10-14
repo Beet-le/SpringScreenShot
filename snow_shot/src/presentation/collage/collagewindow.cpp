@@ -59,7 +59,7 @@ using adqt::widgets::AdModal;
     QT_TRANSLATE_NOOP("CollageWindow", "Discard this collage?"),
     QT_TRANSLATE_NOOP("CollageWindow", "Export could not be started. Try again."),
     QT_TRANSLATE_NOOP("CollageWindow", "Image loading could not be started. Try again."),
-    QT_TRANSLATE_NOOP("CollageWindow", "Images (%1)"),
+    QT_TRANSLATE_NOOP("CollageWindow", "Images"),
     QT_TRANSLATE_NOOP("CollageWindow", "Loading images: %1 of %2"),
     QT_TRANSLATE_NOOP("CollageWindow", "Pinned window %1"),
     QT_TRANSLATE_NOOP("CollageWindow", "Preparing collage…"),
@@ -90,7 +90,8 @@ QString imageFilter() {
     for (const QString& extension :
          ScreenshotClipboardContentReader::supportedImageFileExtensions())
         patterns.append(QStringLiteral("*.") + extension);
-    return collageText("Images (%1)").arg(patterns.join(u' '));
+    // Qt requires ASCII parentheses around the patterns, regardless of the display language.
+    return QStringLiteral("%1 (%2)").arg(collageText("Images"), patterns.join(u' '));
 }
 
 QString selectedFileErrorText(platform::SelectedFileError error) {

@@ -1315,6 +1315,11 @@ if(SNOW_SHOT_BUILD_TESTS)
     set_tests_properties(snow-shot-collage-import-feedback-tests PROPERTIES LABELS unit
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    add_test(NAME snow-shot-collage-file-dialog-tests
+        COMMAND snow-shot-collage-window-tests --file-dialog-only -platform offscreen)
+    set_tests_properties(snow-shot-collage-file-dialog-tests PROPERTIES LABELS unit
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-collage-singleton-tests
         COMMAND snow-shot-collage-window-tests --singleton-only -platform offscreen)
     set_tests_properties(snow-shot-collage-singleton-tests PROPERTIES LABELS unit

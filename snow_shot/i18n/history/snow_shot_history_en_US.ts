@@ -314,8 +314,8 @@
             <translation>Image loading could not be started. Try again.</translation>
         </message>
         <message>
-            <source>Images (%1)</source>
-            <translation>Images (%1)</translation>
+            <source>Images</source>
+            <translation>Images</translation>
         </message>
         <message>
             <source>Loading images: %1 of %2</source>

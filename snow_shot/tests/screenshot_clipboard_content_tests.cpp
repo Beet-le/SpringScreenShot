@@ -6,6 +6,7 @@
 #include "pinned_animation_native_fixtures.h"
 #include "snow_draw_engine_qt/snow_canvas_image.h"
 #include "snow_shot/image/supportedimagefiles.h"
+#include "bmp_import_fixtures.h"
 #include "../../test-support/virtualmemory.h"
 
 #include <QAbstractTextDocumentLayout>
@@ -54,6 +55,48 @@ void imageFileExtensionsMatchShellRegistration() {
     allFiles.append({QStringLiteral("txt"), QStringLiteral("html"), QStringLiteral("htm")});
     require(ScreenshotClipboardContentReader::supportedFileExtensions() == allFiles,
             "existing file pinning retains its additional formatted-text formats");
+}
+
+void bmpFilesPreservePixelsAndIdentity() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "BMP import fixture directory must exist");
+    QImage opaque(3, 2, QImage::Format_RGB888);
+    opaque.fill(Qt::green);
+    opaque.setPixelColor(0, 0, Qt::red);
+    opaque.setPixelColor(2, 1, Qt::blue);
+    QImage alpha = opaque.convertToFormat(QImage::Format_RGBA8888);
+    alpha.setPixelColor(1, 0, QColor(10, 20, 30, 40));
+    alpha.setPixelColor(0, 1, QColor(90, 80, 70, 0));
+    const QStringList paths{directory.filePath(QStringLiteral("opaque.bmp")),
+                            directory.filePath(QStringLiteral("透明 image.BMP"))};
+    require(opaque.save(paths[0], "BMP") && bmp_import_fixtures::write(paths[1], alpha),
+            "write 24-bit opaque and 32-bit alpha BMP fixtures");
+    const auto files = ScreenshotClipboardContentReader::snapshotLocalFiles(paths);
+    require(files.size() == 2 && files[0].suffix == QStringLiteral("bmp") &&
+                files[1].suffix == QStringLiteral("bmp"),
+            "BMP snapshots accept lowercase and uppercase suffixes in source order");
+    for (qsizetype index = 0; index < paths.size(); ++index) {
+        QMimeData mime;
+        mime.setUrls({QUrl::fromLocalFile(paths[index])});
+        const auto content = ScreenshotClipboardContentReader::readMimeData(&mime, 1.0);
+        require(content && !content->isFormattedText() && !content->animationSource &&
+                    bmp_import_fixtures::samePixels(content->image, index == 0 ? opaque : alpha) &&
+                    content->originalContent.localFilePath == paths[index] &&
+                    content->sourceIdentity == files[index].sourceIdentity,
+                "BMP file imports preserve dimensions, RGBA pixels and original file identity");
+    }
+    const auto corrupt = directory.filePath(QStringLiteral("corrupt.bmp"));
+    QFile file(corrupt);
+    require(file.open(QIODevice::WriteOnly) && file.write("not a bitmap") > 0,
+            "write malformed BMP fixture");
+    file.close();
+    const auto corruptFiles = ScreenshotClipboardContentReader::snapshotLocalFiles({corrupt});
+    require(corruptFiles.size() == 1, "malformed BMP fixture must reach the decoder");
+    ScreenshotClipboardContentSnapshot snapshot;
+    snapshot.localImage = corruptFiles.first();
+    snapshot.devicePixelRatio = 1;
+    require(!ScreenshotClipboardContentReader::decode(std::move(snapshot)),
+            "malformed BMP files must fail decoding");
 }
 
 void animatedSourcesSurviveImport() {
@@ -1320,6 +1363,7 @@ int main(int argc, char** argv) {
         liveSnapshotRetainsBitmapFallback();
     }
     localTextFilesAreSupported();
+    bmpFilesPreservePixelsAndIdentity();
     animatedSourcesSurviveImport();
     animationReplacementPreparationIsAtomicAndWorkerSafe();
     animationOffersPrecedeStaticThumbnails();

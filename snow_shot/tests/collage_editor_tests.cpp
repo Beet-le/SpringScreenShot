@@ -97,10 +97,11 @@ void externalImageDrops() {
     QMimeData files;
     const auto first = QDir::temp().filePath(QStringLiteral("collage-first.PNG"));
     const auto second = QDir::temp().filePath(QStringLiteral("collage-second.jpg"));
+    const auto bitmapPath = QDir::temp().filePath(QStringLiteral("collage-bitmap.BMP"));
     files.setUrls({QUrl::fromLocalFile(first), QUrl::fromLocalFile(first),
                    QUrl::fromLocalFile(QDir::temp().filePath(QStringLiteral("notes.txt"))),
                    QUrl(QStringLiteral("https://example.com/image.png")),
-                   QUrl::fromLocalFile(second)});
+                   QUrl::fromLocalFile(second), QUrl::fromLocalFile(bitmapPath)});
     const auto enter = [&](QWidget* target, const QMimeData* mime,
                            Qt::DropActions actions = Qt::CopyAction | Qt::MoveAction) {
         QDragEnterEvent event(QRectF(target->rect()).center(), actions, mime, Qt::LeftButton,
@@ -139,7 +140,7 @@ void externalImageDrops() {
                     Qt::NoModifier);
     QApplication::sendEvent(&editor, &drop);
     require(drop.isAccepted() && drop.dropAction() == Qt::CopyAction && drops == 1 &&
-                received == QStringList{first, first, second} && hint->isHidden(),
+                received == QStringList{first, first, second, bitmapPath} && hint->isHidden(),
             "drop emits only local image files, preserving order and duplicates");
 
     const auto id = document.append(image({120, 80}), QStringLiteral("existing"));
