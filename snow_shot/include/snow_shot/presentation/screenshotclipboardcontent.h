@@ -125,6 +125,11 @@ class ScreenshotClipboardContentReader final {
     // File metadata is independent of GUI state and may be captured on a worker.
     [[nodiscard]] static QList<ScreenshotClipboardLocalImage>
     snapshotLocalFiles(const QStringList& paths, CancellationCheck cancelled = {});
+    // Validates the captured file revision at read time, then decodes only its initial image.
+    // Animated containers retain composition/orientation/profile semantics without playback state.
+    [[nodiscard]] static QImage decodeImageFile(const ScreenshotClipboardLocalImage& file,
+                                                CancellationCheck cancelled = {},
+                                                AllocationCheck allocate = {});
 
     // Snapshot methods must run on the GUI thread. Their return value owns all
     // MIME data needed by decode(), which is safe to run on an export worker.

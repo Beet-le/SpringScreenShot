@@ -175,6 +175,67 @@ QByteArray profiledApng(const QColorSpace& profile) {
     return result;
 }
 
+void firstFrameFilesKeepCompositionProfilesAndRevisionChecks() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "first-frame fixture directory must exist");
+    auto fixtures = pinned_animation_native_fixtures::images();
+    fixtures.append(pinned_animation_fixtures::hiddenPosterAnimation());
+    fixtures.append(pinned_animation_fixtures::singleFrameImages());
+    fixtures.append({QStringLiteral("apng"), QStringLiteral("image/apng"),
+                     profiledApng(QColorSpace(QColorSpace::DisplayP3))});
+    for (qsizetype index = 0; index < fixtures.size(); ++index) {
+        const auto& fixture = fixtures[index];
+        const auto path =
+            directory.filePath(QStringLiteral("first-%1.%2").arg(index).arg(fixture.suffix));
+        QFile file(path);
+        require(file.open(QIODevice::WriteOnly) &&
+                    file.write(fixture.bytes) == fixture.bytes.size(),
+                "write first-frame file fixture");
+        file.close();
+        const auto files = ScreenshotClipboardContentReader::snapshotLocalFiles({path});
+        require(files.size() == 1, "snapshot first-frame file fixture");
+        ScreenshotClipboardContentSnapshot snapshot;
+        snapshot.localImage = files.first();
+        const auto complete = ScreenshotClipboardContentReader::decode(snapshot);
+        const auto budgeted =
+            ScreenshotClipboardContentReader::decode(snapshot, {}, [](qint64) { return true; });
+        const auto image = ScreenshotClipboardContentReader::decodeImageFile(
+            files.first(), {}, [](qint64) { return true; });
+        require(
+            complete && budgeted && budgeted->image == complete->image &&
+                image == complete->image && image.colorSpace() == complete->image.colorSpace(),
+            "budgeted full/first-frame files preserve animated canvas composition and profiles");
+        require(
+            ScreenshotClipboardContentReader::decodeImageFile(files.first(), [] { return true; })
+                .isNull(),
+            "first-frame file decode honors cancellation before reading");
+        int calls = 0;
+        require(ScreenshotClipboardContentReader::decodeImageFile(
+                    files.first(), {},
+                    [&](qint64) {
+                        ++calls;
+                        return false;
+                    }).isNull() &&
+                    calls == 1,
+                "first-frame file decoding admits encoded bytes before allocation");
+        require(file.open(QIODevice::Append) && file.write("changed") == 7,
+                "mutate a captured first-frame source");
+        file.close();
+        require(ScreenshotClipboardContentReader::decodeImageFile(files.first()).isNull() &&
+                    !image.isNull(),
+                "changed file revisions fail while previously decoded first frames remain valid");
+    }
+    const auto malformed = directory.filePath(QStringLiteral("malformed.apng"));
+    QFile file(malformed);
+    require(file.open(QIODevice::WriteOnly) && file.write("not an image") > 0,
+            "write malformed first-frame fixture");
+    file.close();
+    const auto files = ScreenshotClipboardContentReader::snapshotLocalFiles({malformed});
+    require(files.size() == 1 &&
+                ScreenshotClipboardContentReader::decodeImageFile(files.first()).isNull(),
+            "first-frame-only decoding rejects malformed image files");
+}
+
 void animationReplacementPreparationIsAtomicAndWorkerSafe() {
     auto fixtures = pinned_animation_fixtures::images();
     for (const auto& profile :
@@ -1354,6 +1415,11 @@ void nativeDibMaskColoredPixelsRemainPixels() {
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     QApplication::setQuitOnLastWindowClosed(false);
+    if (application.arguments().contains(QStringLiteral("--first-frame-only"))) {
+        firstFrameFilesKeepCompositionProfilesAndRevisionChecks();
+        bmpFilesPreservePixelsAndIdentity();
+        return EXIT_SUCCESS;
+    }
     imageFileExtensionsMatchShellRegistration();
     embeddedImagesUseManagedCachedPixels();
     if (application.arguments().contains(QStringLiteral("--embedded-images-only"))) {
@@ -1365,6 +1431,7 @@ int main(int argc, char** argv) {
     localTextFilesAreSupported();
     bmpFilesPreservePixelsAndIdentity();
     animatedSourcesSurviveImport();
+    firstFrameFilesKeepCompositionProfilesAndRevisionChecks();
     animationReplacementPreparationIsAtomicAndWorkerSafe();
     animationOffersPrecedeStaticThumbnails();
     singleFrameAnimationContainersStayStatic();

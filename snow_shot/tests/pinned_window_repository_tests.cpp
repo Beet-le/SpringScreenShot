@@ -5,6 +5,7 @@
 
 #include <QCoreApplication>
 #include <QBuffer>
+#include <QColor>
 #include <QDateTime>
 #include <QDir>
 #include <QElapsedTimer>
@@ -490,6 +491,175 @@ void allocationAdmissionPrecedesSourceDecode() {
                                    }) &&
                 decodedReservations == 1,
             "encoded pin may be admitted while decoded raster allocation is rejected");
+}
+
+void sourceOnlyAdmissionAndCancellationExcludeDocumentPayloads() {
+    QTemporaryDir directory;
+    auto record = recordWithId(QUuid::createUuid().toString(QUuid::WithoutBraces),
+                               patternedImage({64, 32}, 9));
+    record.canvasSession = QByteArray(1024 * 1024, 'c');
+    record.recognitionResults = QByteArray(1024 * 1024, 'r');
+    storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+    require(repository.upsert(record).success && repository.flush().success,
+            "persist source-only admission fixture");
+    qint64 fullPeak = 0;
+    require(repository
+                .loadRecord(record.id,
+                            [&](qint64 bytes) {
+                                fullPeak = std::max(fullPeak, bytes);
+                                return true;
+                            })
+                .has_value(),
+            "load full admission reference");
+    qint64 sourcePeak = 0;
+    const auto source = repository.loadPreviewSource(record.id, [&](qint64 bytes) {
+        sourcePeak = std::max(sourcePeak, bytes);
+        return true;
+    });
+    require(source && samePixels(source->image, record.image) && sourcePeak < fullPeak &&
+                sourcePeak >= 2 * record.image.sizeInBytes(),
+            "source-only admission preserves pixels without budgeting discarded annotations");
+    int calls = 0;
+    require(!repository.loadPreviewSource(record.id,
+                                          [&](qint64) {
+                                              ++calls;
+                                              return false;
+                                          }) &&
+                calls == 1,
+            "source-only admission rejects before image payload decoding");
+    bool cancelled = false;
+    calls = 0;
+    require(!repository.loadPreviewSource(
+                record.id,
+                [&](qint64) {
+                    ++calls;
+                    cancelled = true;
+                    return true;
+                },
+                [&] { return cancelled; }) &&
+                calls == 1,
+            "source-only cancellation stops between admission and payload reads");
+    require(!repository.loadPreviewSource(record.id, {}, [] { return true; }),
+            "source-only cancellation can reject before acquiring a payload lease");
+
+    auto text = recordWithId(QUuid::createUuid().toString(QUuid::WithoutBraces), {});
+    text.sourceKind = storage::PinnedWindowSourceKind::ClipboardText;
+    text.initialWindowSize = QSize(64, 32);
+    text.originalHtml = QStringLiteral("<b>source-only text</b>");
+    text.originalText = QStringLiteral("source-only text");
+    text.firstCreationTextDpi = 2.75;
+    text.canvasSession = record.canvasSession;
+    require(repository.upsert(text).success && repository.flush().success,
+            "persist source-only text fixture");
+    const auto original = repository.loadPreviewSource(text.id, [](qint64) { return true; });
+    require(original && original->image.isNull() && original->originalHtml == text.originalHtml &&
+                original->originalText == text.originalText &&
+                original->firstCreationTextDpi == text.firstCreationTextDpi,
+            "source-only text preserves original HTML/plain text and creation DPI");
+}
+
+void persistedSourceLoadsShareTheDecodedRasterLimit() {
+    constexpr qint64 maximumRasterBytes = qint64{256} * 1024 * 1024;
+    const QSize boundarySize(8192, 8192);
+    const QColor color(31, 59, 97);
+    QTemporaryDir directory;
+    require(directory.isValid(), "large source fixture directory must exist");
+    const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    {
+        // Persist once and release the original raster before any decoded load.
+        QImage image(boundarySize, QImage::Format_RGBA8888);
+        require(!image.isNull() && image.sizeInBytes() == maximumRasterBytes,
+                "large source fixture must reach the repository's exact raster limit");
+        image.fill(color);
+        const auto prepared = storage::PreparedPngImage::fromBytes(
+            boundarySize, snow_shot::image_codec::encodePng(image, 1));
+        storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+        require(prepared && repository.create(recordWithId(id, image), *prepared).success &&
+                    repository.flush().success,
+                "persist a source larger than the former decimal 64-million-pixel cap");
+    }
+    storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+    const auto validRaster = [&](const QImage& image) {
+        return image.size() == boundarySize && image.sizeInBytes() == maximumRasterBytes &&
+               image.pixelColor(0, 0) == color && image.pixelColor(8191, 8191) == color;
+    };
+    {
+        const auto preview = repository.loadPreviewSource(id);
+        require(preview && validRaster(preview->image),
+                "unadmitted previews must accept the repository's exact decoded raster limit");
+    }
+    qint64 peak = 0;
+    const auto admit = [&](qint64 bytes) {
+        peak = std::max(peak, bytes);
+        return true;
+    };
+    {
+        const auto preview = repository.loadPreviewSource(id, admit);
+        require(preview && validRaster(preview->image) && peak >= 2 * maximumRasterBytes,
+                "admitted previews must preserve large pixels and include decoded working buffers");
+    }
+    {
+        const auto record = repository.loadRecord(id, admit);
+        require(record && validRaster(record->image),
+                "admitted full-record loads must share the preview raster limit");
+    }
+    int decodedAdmissions = 0;
+    require(!repository.loadPreviewSource(id,
+                                          [&](qint64 bytes) {
+                                              if (bytes >= 2 * maximumRasterBytes) {
+                                                  ++decodedAdmissions;
+                                                  return false;
+                                              }
+                                              return true;
+                                          }) &&
+                decodedAdmissions == 1,
+            "large preview admission must reject decoded storage before allocation");
+    bool cancelled = false;
+    decodedAdmissions = 0;
+    require(!repository.loadPreviewSource(
+                id,
+                [&](qint64 bytes) {
+                    if (bytes >= 2 * maximumRasterBytes) {
+                        ++decodedAdmissions;
+                        cancelled = true;
+                    }
+                    return true;
+                },
+                [&] { return cancelled; }) &&
+                decodedAdmissions == 1,
+            "cancellation after large decoded admission must stop before allocation");
+
+    // Produce the oversized payload with bounded rows rather than another full raster.
+    ScreenshotImageRowSource oversized;
+    oversized.size = QSize(8192, 8193);
+    oversized.isKnownOpaque = true;
+    oversized.readRows = [size = oversized.size](int first, int count, qsizetype stride,
+                                                 uchar* target, qsizetype capacity) {
+        const qsizetype rowBytes = qsizetype(size.width()) * 4;
+        if (!target || first < 0 || count <= 0 || first > size.height() ||
+            count > size.height() - first || stride < rowBytes || capacity < rowBytes ||
+            count - 1 > (capacity - rowBytes) / stride)
+            return false;
+        for (int row = 0; row < count; ++row)
+            std::memset(target + qsizetype(row) * stride, 255, size_t(rowBytes));
+        return true;
+    };
+    const QByteArray bytes = snow_shot::image_codec::encodePng(oversized, 1);
+    QFile payload(payloadFilePath(directory.path(), id));
+    require(!bytes.isEmpty() && payload.open(QIODevice::WriteOnly) &&
+                payload.write(bytes) == bytes.size(),
+            "write a valid PNG just above the decoded raster limit");
+    payload.close();
+    decodedAdmissions = 0;
+    require(!repository.loadPreviewSource(id) &&
+                !repository.loadPreviewSource(id,
+                                              [&](qint64 requested) {
+                                                  if (requested >= 2 * maximumRasterBytes)
+                                                      ++decodedAdmissions;
+                                                  return true;
+                                              }) &&
+                decodedAdmissions == 0,
+            "oversized previews must reject dimensions before decoded admission or allocation");
 }
 
 void preparedSourceIsWrittenOnceAndStateUpdatesPreserveIt() {
@@ -2571,6 +2741,17 @@ void closeRestoreAndRetentionRevealHiddenSiblings() {
 
 int main(int argc, char* argv[]) {
     QCoreApplication application(argc, argv);
+    if (application.arguments().contains(QStringLiteral("--source-limit-only"))) {
+        persistedSourceLoadsShareTheDecodedRasterLimit();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--source-only"))) {
+        sourceOnlyAdmissionAndCancellationExcludeDocumentPayloads();
+        persistedSourceLoadsShareTheDecodedRasterLimit();
+        previewsReadOnlySourcePayloadAndKeepStableRevision();
+        legacyAnimatedFileSourcesAndPlaybackDefaultsRecover();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--animation-only"))) {
         animatedSourcesRoundTripWithoutRewritingFrames();
         animationAdmissionIncludesPreparedDisplayStorage();
@@ -2636,6 +2817,8 @@ int main(int argc, char* argv[]) {
     missingOptionalPayloadDoesNotHideRestorableImage();
     preparedSourceIsWrittenOnceAndStateUpdatesPreserveIt();
     allocationAdmissionPrecedesSourceDecode();
+    sourceOnlyAdmissionAndCancellationExcludeDocumentPayloads();
+    persistedSourceLoadsShareTheDecodedRasterLimit();
     metadataOnlyUpdatesDoNotRewriteCommittedPayloads();
     changedPayloadsRecommitAndStayLazy();
     removedRecordsPruneTheirPayloads();

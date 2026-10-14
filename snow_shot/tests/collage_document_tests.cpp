@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "snow_shot/presentation/collagedocument.h"
+#include "snow_draw_engine_qt/snow_canvas_image.h"
 
 #include <QCoreApplication>
 #include <QColorSpace>
@@ -10,6 +11,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstring>
+#include <cstdint>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -402,6 +404,189 @@ void transformations() {
             "missing previews derive bounded images before transforming");
 }
 
+void transformedRowsPreserveNativePixelsAndBoundMemory() {
+    const std::array<QTransform, 8> transforms{QTransform{},
+                                               QTransform(0, 1, -1, 0, 0, 0),
+                                               QTransform(-1, 0, 0, -1, 0, 0),
+                                               QTransform(0, -1, 1, 0, 0, 0),
+                                               QTransform(-1, 0, 0, 1, 0, 0),
+                                               QTransform(1, 0, 0, -1, 0, 0),
+                                               QTransform(0, 1, 1, 0, 0, 0),
+                                               QTransform(0, -1, -1, 0, 0, 0)};
+    QImage colors(257, 129, QImage::Format_RGBA8888);
+    for (int y = 0; y < colors.height(); ++y)
+        for (int x = 0; x < colors.width(); ++x)
+            colors.setPixelColor(x, y,
+                                 QColor(x % 256, y % 256, (x * 7 + y * 11) % 256,
+                                        (x + y) % 4 == 0   ? 0
+                                        : (x + y) % 4 == 1 ? 127
+                                                           : 255));
+    colors.setColorSpace(QColorSpace(QColorSpace::DisplayP3));
+    CollageSettings settings;
+    settings.sizing = CollageSizing::Original;
+    settings.background = Qt::transparent;
+    for (const auto format :
+         {QImage::Format_RGBA8888, QImage::Format_ARGB32_Premultiplied, QImage::Format_RGB32,
+          QImage::Format_RGB888, QImage::Format_RGBA64_Premultiplied, QImage::Format_Grayscale16,
+          QImage::Format_Indexed8, QImage::Format_Mono}) {
+        const auto source = colors.convertToFormat(format);
+        for (const auto& transform : transforms) {
+            const auto native = snowCanvasTransformImage(source, transform);
+            QVector<CollageItem> expectedItems{{1, 1, native, {}, {}, {}, {}}};
+            QVector<CollageItem> actualItems{{1, 1, source, {}, transform, {}, {}}};
+            const auto expected =
+                materializeCollageRows(prepareCollageRows(expectedItems, settings));
+            auto rows = prepareCollageRows(actualItems, settings);
+            require(rows.isValid() && materializeCollageRows(rows) == expected,
+                    "bounded transforms preserve native orientation, alpha and ICC pixels");
+            const qsizetype stride = qsizetype(rows.size.width()) * 4 + 12;
+            QByteArray storage(stride * 3, char(0x5a));
+            for (const int first : {0, 63, 64, rows.size.height() - 3, 17}) {
+                require(rows.readRows(first, 3, stride, reinterpret_cast<uchar*>(storage.data()),
+                                      storage.size()),
+                        "transformed rows support padded and nonsequential reads");
+                for (int row = 0; row < 3; ++row) {
+                    require(std::memcmp(storage.constData() + row * stride,
+                                        expected.constScanLine(first + row),
+                                        size_t(expected.width()) * 4) == 0,
+                            "random transformed row pixels match native reference");
+                    for (qsizetype x = expected.width() * 4; x < stride; ++x)
+                        require(storage[row * stride + x] == char(0x5a),
+                                "transformed row reads leave destination padding untouched");
+                }
+            }
+        }
+    }
+    auto highDpiSource = colors;
+    highDpiSource.setDevicePixelRatio(2);
+    const auto highDpiKey = highDpiSource.cacheKey();
+    for (const auto& transform : transforms) {
+        const auto native = snowCanvasTransformImage(highDpiSource, transform);
+        const QVector<CollageItem> expectedItems{{1, 1, native, {}, {}, {}, {}}};
+        const QVector<CollageItem> actualItems{{1, 1, highDpiSource, {}, transform, {}, {}}};
+        const auto expected = materializeCollageRows(prepareCollageRows(expectedItems, settings));
+        const auto actual = materializeCollageRows(prepareCollageRows(actualItems, settings));
+        require(!actual.isNull() && actual == expected && native.devicePixelRatio() == 2 &&
+                    highDpiSource.cacheKey() == highDpiKey,
+                "high-DPI transforms preserve native fallback pixels and source metadata");
+    }
+    const auto baseline = collageResourceUsage().reservedBytes;
+    {
+        CollageDocument document;
+        for (int i = 0; i < 12; ++i) {
+            const auto id = document.append(fixture({1024, 1024}), QString::number(i));
+            require(id != 0 && document.rotate(id, true), "large transform fixture admission");
+        }
+        const auto owned = collageResourceUsage().reservedBytes;
+        auto rows = prepareCollageRows(document.items(), settings);
+        require(rows.isValid() && collageResourceUsage().reservedBytes - owned < 32 * 1024 * 1024,
+                "export retains bounded transform caches rather than all rotated rasters");
+        document.clear();
+        QByteArray row(rows.size.width() * 4, Qt::Uninitialized);
+        require(rows.readRows(rows.size.height() - 1, 1, row.size(),
+                              reinterpret_cast<uchar*>(row.data()), row.size()),
+                "bounded transform readers retain originals after document clear");
+    }
+    require(collageResourceUsage().reservedBytes == baseline,
+            "bounded transform resources retire with the final reader");
+}
+
+void regionReadsAndLazyResize() {
+    CollageDocument document;
+    const auto first = document.append(asymmetricFixture(), QStringLiteral("first"));
+    document.append(fixture({7, 5}, QColor(20, 100, 200, 128)), QStringLiteral("resized"));
+    document.append(fixture({4, 9}, QColor(100, 20, 60, 0)), QStringLiteral("transparent"));
+    require(document.rotate(first, true), "region rotation fixture");
+    for (const auto direction :
+         {CollageDirection::Vertical, CollageDirection::Horizontal, CollageDirection::Custom}) {
+        auto settings = customSettings(2, 2);
+        settings.direction = direction;
+        settings.border = 2;
+        settings.spacing = 3;
+        for (const auto background :
+             {QColor(Qt::transparent), QColor(70, 30, 90, 128), QColor(Qt::white)}) {
+            settings.background = background;
+            auto rows = prepareCollageRows(document.items(), settings);
+            const auto full = materializeCollageRows(rows);
+            require(!full.isNull() && rows.readRegion &&
+                        rows.isKnownOpaque == (background.alpha() == 255),
+                    "collage regions expose a structurally valid opacity guarantee");
+            const std::array<QRect, 4> regions{QRect(0, 0, 1, 1),
+                                               QRect(1, 1, full.width() - 2, full.height() - 2),
+                                               QRect(full.width() - 2, full.height() - 2, 2, 2),
+                                               QRect(full.width() / 2, 0, 1, full.height())};
+            for (const auto& region : regions) {
+                const qsizetype stride = region.width() * 4 + 7;
+                QByteArray storage(stride * region.height(), char(0x5a));
+                require(rows.readRegion(region, stride, reinterpret_cast<uchar*>(storage.data()),
+                                        storage.size()),
+                        "native region read succeeds across borders, gaps and scaled items");
+                for (int y = 0; y < region.height(); ++y) {
+                    require(std::memcmp(storage.constData() + y * stride,
+                                        full.constScanLine(region.top() + y) + region.left() * 4,
+                                        size_t(region.width()) * 4) == 0,
+                            "native region matches full composition without alpha changes");
+                    for (qsizetype x = region.width() * 4; x < stride; ++x)
+                        require(storage[y * stride + x] == char(0x5a),
+                                "native regions preserve destination padding");
+                }
+            }
+            uchar storage[4]{};
+            require(!rows.readRegion({}, 0, storage, 0) &&
+                        !rows.readRegion(QRect(-1, 0, 1, 1), 4, storage, 4) &&
+                        !rows.readRegion(QRect(full.width(), 0, 1, 1), 4, storage, 4) &&
+                        !rows.readRegion(QRect(0, 0, 1, 1), 3, storage, 4),
+                    "invalid native regions fail before arithmetic or pixel access");
+            const auto& image = document.items().front().image;
+            const auto unchanged = image.copy();
+            require(!rows.readRegion(QRect(0, 0, 1, 1), 4, const_cast<uchar*>(image.constBits()),
+                                     image.sizeInBytes()) &&
+                        image == unchanged,
+                    "aliased native regions fail without modifying immutable originals");
+            auto* wrapped =
+                reinterpret_cast<uchar*>(std::numeric_limits<std::uintptr_t>::max() - 1);
+            require(!rows.readRegion(QRect(0, 0, 1, 1), 4, wrapped, 4),
+                    "wrapped destination addresses fail before background fills");
+        }
+    }
+    {
+        CollageSettings settings;
+        settings.sizing = CollageSizing::Original;
+        settings.background = QColor(0, 0, 255, 128);
+        auto oldRows = prepareCollageRows(document.items(), settings);
+        const auto oldPixels = materializeCollageRows(oldRows);
+        require(document.replace(first, fixture({3, 2}, QColor(255, 0, 0, 128)),
+                                 QStringLiteral("replacement")),
+                "replace an original whose opacity was cached");
+        const auto replaced =
+            materializeCollageRows(prepareCollageRows(document.items(), settings));
+        const auto topLeft =
+            calculateCollageLayout(document.items(), settings).rects.front().topLeft();
+        require(replaced.pixelColor(topLeft) == QColor(170, 0, 85, 192) &&
+                    materializeCollageRows(oldRows) == oldPixels,
+                "replacement invalidates opacity while older export snapshots remain unchanged");
+    }
+    const auto baseline = collageResourceUsage().reservedBytes;
+    {
+        CollageDocument large;
+        for (int index = 0; index < 12; ++index)
+            require(large.append(fixture(index == 0 ? QSize(1024, 1024) : QSize(2048, 1024)),
+                                 QString::number(index)) != 0,
+                    "large uniform resize fixture admission");
+        const auto owned = collageResourceUsage().reservedBytes;
+        auto rows = prepareCollageRows(large.items(), CollageSettings{});
+        require(rows.isValid() && collageResourceUsage().reservedBytes - owned < 32 * 1024 * 1024,
+                "uniform export retains plans and tiles rather than every resized raster");
+        large.clear();
+        QByteArray storage(4, Qt::Uninitialized);
+        require(rows.readRegion(QRect(0, rows.size.height() - 1, 1, 1), 4,
+                                reinterpret_cast<uchar*>(storage.data()), storage.size()),
+                "lazy resized rows survive document clear");
+    }
+    require(collageResourceUsage().reservedBytes == baseline,
+            "lazy resize plans, tiles and reservations retire together");
+}
+
 void alphaAndRowReads() {
     CollageDocument document;
     QImage image = fixture({2, 2}, QColor(255, 0, 0, 128));
@@ -620,12 +805,12 @@ void scalingAndLargeAxes() {
             "row composition remains correct beyond raster painter coordinate limits");
 
     QVector<CollageItem> thinItems;
-    thinItems.reserve(120000);
+    thinItems.reserve(140000);
     const QImage thinImage = fixture({1000, 1});
-    for (int index = 0; index < 120000; ++index)
+    for (int index = 0; index < 140000; ++index)
         thinItems.append({quint64(index + 1), 1, thinImage, {}, {}, {}, {}});
     const auto thinLayout = calculateCollageLayout(thinItems, settings);
-    require(thinLayout.isValid() && thinLayout.size == QSize(120000000, 1),
+    require(thinLayout.isValid() && thinLayout.size == QSize(140000000, 1),
             "very wide single-row geometry fits the output image limit");
     QString error;
     int cancellationChecks = 0;
@@ -652,6 +837,8 @@ int main(int argc, char** argv) {
         customGridPixelsAndLimits();
         referenceAndManagement();
         transformations();
+        transformedRowsPreserveNativePixelsAndBoundMemory();
+        regionReadsAndLazyResize();
         alphaAndRowReads();
         snapshotsAndResources();
         capturedImagesAdmitMemoryBeforePaintingAndOwnTheirReservation();

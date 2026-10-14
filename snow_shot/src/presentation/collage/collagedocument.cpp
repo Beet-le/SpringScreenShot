@@ -2,21 +2,31 @@
 #include "snow_shot/presentation/collagedocument.h"
 
 #include "collageresourcebudget_p.h"
+#include "collagetransformedrows_p.h"
 #include "snow_draw_engine_qt/snow_canvas_image.h"
 #include "snowimageqtcodec.h"
 
 #include <QColorSpace>
 #include <QCoreApplication>
+#include <QPainter>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
+#include <cstdint>
 #include <limits>
 #include <mutex>
 #include <new>
 #include <vector>
 
 namespace snow_shot::presentation {
+struct CollageImageMetadata final {
+    explicit CollageImageMetadata(qint64 key) : cacheKey(key) {}
+    const qint64 cacheKey;
+    std::atomic<int> opacity{-1};
+};
+
 namespace {
 constexpr int previewExtent = 256;
 constexpr qsizetype rowScratchBytes = 8 * 1024 * 1024;
@@ -50,11 +60,14 @@ struct CapturedImageLifetime final {
 struct SourceLifetime final {
     std::shared_ptr<collage_detail::ResourceReservation> source;
     std::shared_ptr<collage_detail::ResourceReservation> preview;
+    std::shared_ptr<CollageImageMetadata> metadata;
 };
 
-std::shared_ptr<void> sourceLifetime(const QImage& image, const QImage& preview, QString* error) {
+std::shared_ptr<SourceLifetime> sourceLifetime(const QImage& image, const QImage& preview,
+                                               QString* error) {
     try {
         auto owner = std::make_shared<SourceLifetime>();
+        owner->metadata = std::make_shared<CollageImageMetadata>(image.cacheKey());
         owner->source = collage_detail::reserve(image.sizeInBytes(), error);
         if (!owner->source)
             return {};
@@ -241,6 +254,20 @@ bool imageIsOpaque(const QImage& image, const std::function<bool()>& cancelled) 
     return true;
 }
 
+bool cachedImageIsOpaque(const CollageItem& item, const QImage& pixels,
+                         const std::function<bool()>& cancelled) {
+    const bool canCache = item.metadata && item.metadata->cacheKey == pixels.cacheKey();
+    if (canCache) {
+        const int known = item.metadata->opacity.load(std::memory_order_acquire);
+        if (known >= 0)
+            return known != 0;
+    }
+    const bool opaque = imageIsOpaque(pixels, cancelled);
+    if (canCache && (!cancelled || !cancelled()))
+        item.metadata->opacity.store(opaque ? 1 : 0, std::memory_order_release);
+    return opaque;
+}
+
 struct PreparedItem final {
     ScreenshotImageRowSource rows;
     QRect rect;
@@ -248,13 +275,29 @@ struct PreparedItem final {
 };
 
 struct PreparedRows final {
+    struct StorageRange final {
+        std::uintptr_t first = 0;
+        std::uintptr_t end = 0;
+    };
+    // Declare leases first so reverse destruction retires readers, rasters and scratch
+    // before their accounted capacity becomes available to another export.
+    std::shared_ptr<collage_detail::ResourceReservation> reservation;
+    std::shared_ptr<collage_detail::ResourceReservation> working;
+    QVector<std::shared_ptr<void>> sourceOwners;
+    std::shared_ptr<collage_detail::ResourceReservation> previewOwner;
     QVector<PreparedItem> items;
     CollageLayout layout;
     QColor background;
     std::function<bool()> cancelled;
-    std::shared_ptr<collage_detail::ResourceReservation> reservation;
-    std::shared_ptr<collage_detail::ResourceReservation> working;
-    QVector<std::shared_ptr<void>> sourceOwners;
+    QVector<QImage> inputImages;
+    QVector<StorageRange> storageRanges;
+    QVector<std::uintptr_t> storageEnds;
+    QVector<qsizetype> rowOrder;
+    QVector<int> prefixEnds;
+    QVector<int> edges;
+    QVector<qsizetype> active;
+    int activeFirst = -1;
+    int activeEnd = -1;
     std::mutex mutex;
     std::vector<uchar> scratch;
 
@@ -262,67 +305,200 @@ struct PreparedRows final {
         return cancelled && cancelled();
     }
 
+    bool indexRows() {
+        rowOrder.reserve(items.size());
+        active.reserve(items.size());
+        edges.reserve(items.size() * 2 + 2);
+        edges.append(0);
+        edges.append(layout.size.height());
+        for (qsizetype index = 0; index < items.size(); ++index) {
+            rowOrder.append(index);
+            edges.append(items[index].rect.top());
+            edges.append(items[index].rect.top() + items[index].rect.height());
+        }
+        std::sort(rowOrder.begin(), rowOrder.end(), [this](qsizetype a, qsizetype b) {
+            return items[a].rect.top() < items[b].rect.top();
+        });
+        prefixEnds.reserve(items.size());
+        int end = 0;
+        for (const auto index : rowOrder) {
+            end = std::max(end, items[index].rect.top() + items[index].rect.height());
+            prefixEnds.append(end);
+        }
+        std::sort(edges.begin(), edges.end());
+        edges.erase(std::unique(edges.begin(), edges.end()), edges.end());
+        storageRanges.reserve(inputImages.size());
+        for (const auto& image : inputImages) {
+            const auto first = reinterpret_cast<std::uintptr_t>(image.constBits());
+            const auto bytes = static_cast<std::uintptr_t>(image.sizeInBytes());
+            if (bytes > std::numeric_limits<std::uintptr_t>::max() - first)
+                return false;
+            storageRanges.append({first, first + bytes});
+        }
+        std::sort(storageRanges.begin(), storageRanges.end(),
+                  [](const StorageRange& a, const StorageRange& b) { return a.first < b.first; });
+        std::uintptr_t previous = 0;
+        storageEnds.reserve(storageRanges.size());
+        for (const auto& range : storageRanges) {
+            previous = std::max(previous, range.end);
+            storageEnds.append(previous);
+        }
+        return true;
+    }
+
+    bool validDestination(const uchar* destination, qsizetype extent) const {
+        const auto first = reinterpret_cast<std::uintptr_t>(destination);
+        const auto bytes = static_cast<std::uintptr_t>(extent);
+        if (bytes > std::numeric_limits<std::uintptr_t>::max() - first)
+            return false;
+        const auto after = std::lower_bound(
+            storageRanges.begin(), storageRanges.end(), first + bytes,
+            [](const StorageRange& range, std::uintptr_t end) { return range.first < end; });
+        return after == storageRanges.begin() ||
+               storageEnds[after - storageRanges.begin() - 1] <= first;
+    }
+
+    void selectRows(int first, int end) {
+        if (first >= activeFirst && end <= activeEnd)
+            return;
+        active.clear();
+        const auto begin = std::upper_bound(prefixEnds.begin(), prefixEnds.end(), first);
+        for (auto position = begin - prefixEnds.begin(); position < rowOrder.size(); ++position) {
+            const auto index = rowOrder[position];
+            const auto& rect = items[index].rect;
+            if (rect.top() >= end)
+                break;
+            if (rect.top() + rect.height() > first)
+                active.append(index);
+        }
+        std::sort(active.begin(), active.end(), [this](qsizetype a, qsizetype b) {
+            return items[a].rect.left() < items[b].rect.left();
+        });
+        const auto next = std::upper_bound(edges.begin(), edges.end(), first);
+        activeFirst = first;
+        activeEnd = next != edges.end() && end <= *next ? *next : end;
+    }
+
     bool read(int first, int count, qsizetype stride, uchar* destination, qsizetype capacity) {
+        return readRegion(QRect(0, first, layout.size.width(), count), stride, destination,
+                          capacity);
+    }
+
+    bool readRegion(QRect region, qsizetype stride, uchar* destination, qsizetype capacity) {
         const std::lock_guard lock(mutex);
-        const qsizetype rowBytes = qsizetype(layout.size.width()) * 4;
+        const int first = region.top();
+        const int count = region.height();
+        if (region.width() <= 0 || region.left() < 0 || region.width() > layout.size.width() ||
+            region.left() > layout.size.width() - region.width())
+            return false;
+        const qsizetype rowBytes = qsizetype(region.width()) * 4;
         if (cancellationRequested() || !destination || first < 0 || count <= 0 ||
             count > layout.size.height() || first > layout.size.height() - count ||
             stride < rowBytes || capacity < rowBytes ||
             qsizetype(count - 1) > (capacity - rowBytes) / stride)
+            return false;
+        if (!validDestination(destination, qsizetype(count - 1) * stride + rowBytes))
             return false;
 
         const uchar red = static_cast<uchar>(background.red());
         const uchar green = static_cast<uchar>(background.green());
         const uchar blue = static_cast<uchar>(background.blue());
         const uchar alpha = static_cast<uchar>(background.alpha());
-        for (int row = 0; row < count; ++row) {
-            if (cancellationRequested())
-                return false;
-            uchar* pixels = destination + qsizetype(row) * stride;
-            if (alpha == 0) {
-                std::memset(pixels, 0, static_cast<size_t>(rowBytes));
-            } else if (red == 255 && green == 255 && blue == 255 && alpha == 255) {
-                std::memset(pixels, 255, static_cast<size_t>(rowBytes));
-            } else {
-                for (int x = 0; x < layout.size.width(); ++x) {
+        selectRows(first, first + count);
+        const auto fill = [red, green, blue, alpha](uchar* pixels, int countPixels) {
+            const auto bytes = static_cast<size_t>(countPixels) * 4;
+            if (alpha == 0)
+                std::memset(pixels, 0, bytes);
+            else if (red == green && green == blue && blue == alpha)
+                std::memset(pixels, red, bytes);
+            else
+                for (int x = 0; x < countPixels; ++x) {
                     pixels[x * 4] = red;
                     pixels[x * 4 + 1] = green;
                     pixels[x * 4 + 2] = blue;
                     pixels[x * 4 + 3] = alpha;
                 }
+        };
+        for (int row = 0; row < count; ++row) {
+            if (cancellationRequested())
+                return false;
+            uchar* pixels = destination + qsizetype(row) * stride;
+            int filled = region.left();
+            for (const auto index : active) {
+                const auto& item = items[index];
+                if ((alpha != 0 && !item.opaque) || first + row < item.rect.top() ||
+                    first + row >= item.rect.top() + item.rect.height() ||
+                    item.rect.left() >= region.left() + region.width() ||
+                    item.rect.left() + item.rect.width() <= region.left())
+                    continue;
+                const int left = std::max(region.left(), item.rect.left());
+                fill(pixels + qsizetype(filled - region.left()) * 4, left - filled);
+                filled =
+                    std::min(region.left() + region.width(), item.rect.left() + item.rect.width());
             }
+            fill(pixels + qsizetype(filled - region.left()) * 4,
+                 region.left() + region.width() - filled);
         }
 
-        for (const auto& item : items) {
-            const int begin = std::max(first, item.rect.top());
-            const int end = std::min(first + count, item.rect.top() + item.rect.height());
-            if (begin >= end)
+        for (const auto index : active) {
+            const auto& item = items[index];
+            const auto intersection = item.rect.intersected(region);
+            if (intersection.isEmpty())
                 continue;
+            const int begin = intersection.top();
+            const int end = intersection.top() + intersection.height();
             const qsizetype itemStride = qsizetype(item.rect.width()) * 4;
+            if ((alpha == 0 || item.opaque) &&
+                (intersection.width() == item.rect.width() || item.rows.readRegion)) {
+                const qsizetype offset = qsizetype(begin - first) * stride +
+                                         qsizetype(intersection.left() - region.left()) * 4;
+                const QRect source(intersection.topLeft() - item.rect.topLeft(),
+                                   intersection.size());
+                const bool succeeded =
+                    item.rows.readRegion
+                        ? item.rows.readRegion(source, stride, destination + offset,
+                                               capacity - offset)
+                        : item.rows.readRows(source.top(), source.height(), stride,
+                                             destination + offset, capacity - offset);
+                if (!succeeded)
+                    return false;
+                continue;
+            }
+            const bool croppedRead = static_cast<bool>(item.rows.readRegion);
+            const qsizetype scratchStride =
+                croppedRead ? qsizetype(intersection.width()) * 4 : itemStride;
             const int batch = static_cast<int>(
-                std::max<qsizetype>(1, std::min<qsizetype>(64, rowScratchBytes / itemStride)));
+                std::max<qsizetype>(1, std::min<qsizetype>(64, rowScratchBytes / scratchStride)));
             for (int start = begin; start < end; start += batch) {
                 if (cancellationRequested())
                     return false;
                 const int rows = std::min(batch, end - start);
-                const qsizetype bytes = itemStride * rows;
+                const qsizetype bytes = scratchStride * rows;
                 try {
                     scratch.resize(static_cast<size_t>(bytes));
                 } catch (const std::bad_alloc&) {
                     return false;
                 }
-                if (!item.rows.readRows(start - item.rect.top(), rows, itemStride, scratch.data(),
-                                        bytes))
+                const bool succeeded =
+                    croppedRead ? item.rows.readRegion(QRect(intersection.left() - item.rect.left(),
+                                                             start - item.rect.top(),
+                                                             intersection.width(), rows),
+                                                       scratchStride, scratch.data(), bytes)
+                                : item.rows.readRows(start - item.rect.top(), rows, scratchStride,
+                                                     scratch.data(), bytes);
+                if (!succeeded)
                     return false;
                 for (int row = 0; row < rows; ++row) {
-                    const uchar* source = scratch.data() + qsizetype(row) * itemStride;
+                    const uchar* source =
+                        scratch.data() + qsizetype(row) * scratchStride +
+                        (croppedRead ? 0 : qsizetype(intersection.left() - item.rect.left()) * 4);
                     uchar* target = destination + qsizetype(start - first + row) * stride +
-                                    qsizetype(item.rect.left()) * 4;
+                                    qsizetype(intersection.left() - region.left()) * 4;
                     if (alpha == 0 || item.opaque) {
-                        std::memcpy(target, source, static_cast<size_t>(itemStride));
+                        std::memcpy(target, source, size_t(intersection.width()) * 4);
                         continue;
                     }
-                    for (int x = 0; x < item.rect.width(); ++x) {
+                    for (int x = 0; x < intersection.width(); ++x) {
                         const unsigned sourceAlpha = source[3];
                         if (sourceAlpha == 255) {
                             std::memcpy(target, source, 4);
@@ -452,6 +628,8 @@ struct CollageDocument::Impl final {
     QString error;
     qint64 sourceBytes = 0;
     qint64 previewBytes = 0;
+    mutable bool layoutDirty = true;
+    mutable CollageLayout cachedLayout;
 
     bool admit(qint64 sources, qint64 previews) {
         if (sources < 0 || sources > collage_detail::maximumRasterBytes || previews < 0 ||
@@ -486,13 +664,18 @@ void CollageDocument::setSettings(const CollageSettings& settings) {
     if (normalized == m_impl->settings)
         return;
     m_impl->settings = normalized;
+    m_impl->layoutDirty = true;
     emit changed();
     if (!adjustedFields.isEmpty())
         emit customGridAdjusted(adjustedFields);
 }
 
 CollageLayout CollageDocument::layout() const {
-    return calculateCollageLayout(m_impl->items, m_impl->settings);
+    if (m_impl->layoutDirty) {
+        m_impl->cachedLayout = calculateCollageLayout(m_impl->items, m_impl->settings);
+        m_impl->layoutDirty = false;
+    }
+    return m_impl->cachedLayout;
 }
 
 QString CollageDocument::lastError() const {
@@ -510,7 +693,13 @@ quint64 CollageDocument::append(QImage image, QString label, QImage preview) {
         return 0;
     }
     try {
-        m_impl->items.reserve(m_impl->items.size() + 1);
+        if (m_impl->items.size() == m_impl->items.capacity()) {
+            const auto capacity = m_impl->items.capacity();
+            const auto growth = capacity <= std::numeric_limits<qsizetype>::max() / 2
+                                    ? capacity + std::max<qsizetype>(8, capacity / 2)
+                                    : m_impl->items.size() + 1;
+            m_impl->items.reserve(growth);
+        }
     } catch (const std::bad_alloc&) {
         m_impl->error = preparationError();
         return 0;
@@ -522,12 +711,20 @@ quint64 CollageDocument::append(QImage image, QString label, QImage preview) {
                        m_impl->previewBytes + preview.sizeInBytes()))
         return 0;
     const quint64 id = m_impl->nextId++;
-    m_impl->items.append(
-        {id, 1, std::move(image), std::move(preview), {}, std::move(label), std::move(owner)});
+    auto metadata = owner->metadata;
+    m_impl->items.append({id,
+                          1,
+                          std::move(image),
+                          std::move(preview),
+                          {},
+                          std::move(label),
+                          std::move(owner),
+                          std::move(metadata)});
     const QStringList adjustedFields = normalizeCustomGrid(m_impl->settings, m_impl->items.size());
     const bool selectFirst = m_impl->selected == 0;
     if (selectFirst)
         m_impl->selected = id;
+    m_impl->layoutDirty = true;
     emit changed();
     if (!adjustedFields.isEmpty())
         emit customGridAdjusted(adjustedFields);
@@ -558,9 +755,11 @@ bool CollageDocument::replace(quint64 id, QImage image, QString label, QImage pr
     item.image = std::move(image);
     item.preview = std::move(preview);
     item.label = std::move(label);
+    item.metadata = owner->metadata;
     item.resourceOwner = std::move(owner);
     item.transform = {};
     ++item.revision;
+    m_impl->layoutDirty = true;
     emit changed();
     return true;
 }
@@ -578,6 +777,7 @@ bool CollageDocument::remove(quint64 id) {
         m_impl->selected = m_impl->items.isEmpty()
                                ? 0
                                : m_impl->items[std::min(index, int(m_impl->items.size()) - 1)].id;
+    m_impl->layoutDirty = true;
     emit changed();
     if (selectionRemoved)
         emit selectionChanged();
@@ -590,6 +790,7 @@ void CollageDocument::clear() {
     m_impl->items.clear();
     m_impl->selected = 0;
     static_cast<void>(m_impl->admit(0, 0));
+    m_impl->layoutDirty = true;
     emit changed();
     emit selectionChanged();
 }
@@ -600,6 +801,7 @@ bool CollageDocument::swapItems(quint64 first, quint64 second) {
     if (a < 0 || b < 0 || a == b)
         return false;
     std::swap(m_impl->items[a], m_impl->items[b]);
+    m_impl->layoutDirty = true;
     emit changed();
     return true;
 }
@@ -613,6 +815,7 @@ bool CollageDocument::rotate(quint64 id, bool clockwise) {
         clockwise ? QTransform(0, 1, -1, 0, 0, 0) : QTransform(0, -1, 1, 0, 0, 0);
     item.transform = canonicalTransform(item.transform * operation);
     ++item.revision;
+    m_impl->layoutDirty = true;
     emit changed();
     return true;
 }
@@ -625,6 +828,7 @@ bool CollageDocument::flip(quint64 id, bool horizontal) {
     item.transform = canonicalTransform(
         item.transform * QTransform(horizontal ? -1 : 1, 0, 0, horizontal ? 1 : -1, 0, 0));
     ++item.revision;
+    m_impl->layoutDirty = true;
     emit changed();
     return true;
 }
@@ -638,6 +842,7 @@ bool CollageDocument::resetTransform(quint64 id) {
         return true;
     item.transform = {};
     ++item.revision;
+    m_impl->layoutDirty = true;
     emit changed();
     return true;
 }
@@ -678,27 +883,46 @@ ScreenshotImageRowSource prepareCollageRows(const QVector<CollageItem>& items,
         const auto& item = items[index];
         const bool transformed = !item.transform.isIdentity();
         const bool resized = transformedSize(item) != layout.rects[index].size();
-        if (resized)
-            preparedBytes += qint64(layout.rects[index].width()) * layout.rects[index].height() * 4;
-        else if (transformed)
+        const bool streamed = collage_detail::streamableTransform(item);
+        qint64 itemScratchBytes = 0;
+        if (transformed && !streamed)
             preparedBytes +=
-                ((qint64(layout.rects[index].width()) * item.image.depth() + 31) / 32) * 4 *
-                layout.rects[index].height();
-        if (!resized && (item.image.format() != QImage::Format_RGBA8888 ||
-                         (item.image.colorSpace().isValid() &&
-                          item.image.colorSpace() != QColorSpace(QColorSpace::SRgb))))
+                ((qint64(transformedSize(item).width()) * std::max(32, item.image.depth()) + 31) /
+                 32) *
+                4 * transformedSize(item).height();
+        if (streamed) {
+            readerCacheBytes += collage_detail::transformCacheBytes(item);
+            itemScratchBytes = collage_detail::transformWorkingBytes(item);
+        }
+        if (!streamed && (item.image.format() != QImage::Format_RGBA8888 ||
+                          (item.image.colorSpace().isValid() &&
+                           item.image.colorSpace() != QColorSpace(QColorSpace::SRgb)))) {
             readerCacheBytes +=
-                std::min(conversionCacheBytes,
-                         qint64(layout.rects[index].width()) * layout.rects[index].height() * 4);
+                std::min(conversionCacheBytes, qint64(transformedSize(item).width()) *
+                                                   transformedSize(item).height() * 4);
+            itemScratchBytes += 8 * 1024 * 1024;
+        }
+        if (resized) {
+            const auto resources =
+                image_codec::resizeResources(transformedSize(item), layout.rects[index].size());
+            if (!resources) {
+                report(error, resourceError());
+                return {};
+            }
+            readerCacheBytes += resources->retainedBytes;
+            itemScratchBytes += resources->scratchBytes;
+        }
         maximumRowBytes = std::max(maximumRowBytes, qint64(layout.rects[index].width()) * 4);
-        if (transformed)
-            transformScratchBytes =
-                std::max(transformScratchBytes, qint64(item.image.sizeInBytes()));
+        if (transformed && !streamed)
+            itemScratchBytes +=
+                std::max(qint64(item.image.sizeInBytes()), qint64(transformedSize(item).width()) *
+                                                               transformedSize(item).height() *
+                                                               std::max(4, item.image.depth() / 8));
+        transformScratchBytes = std::max(transformScratchBytes, itemScratchBytes);
         if (!item.resourceOwner)
             unownedSourceBytes += item.image.sizeInBytes() + item.preview.sizeInBytes();
     }
-    const qint64 transientBytes =
-        readerCacheBytes + transformScratchBytes + 64 * 1024 * 1024 + maximumRowBytes;
+    const qint64 transientBytes = readerCacheBytes + transformScratchBytes + maximumRowBytes;
     if (transientBytes > collage_detail::maximumWorkingBytes) {
         report(error, QCoreApplication::translate(
                           "CollageDocument",
@@ -723,6 +947,7 @@ ScreenshotImageRowSource prepareCollageRows(const QVector<CollageItem>& items,
         prepared->cancelled = std::move(cancelled);
         prepared->items.reserve(items.size());
         prepared->sourceOwners.reserve(items.size());
+        prepared->inputImages.reserve(items.size() * 2);
         for (qsizetype index = 0; index < items.size(); ++index) {
             if (prepared->cancellationRequested()) {
                 report(error, cancellationError());
@@ -730,47 +955,91 @@ ScreenshotImageRowSource prepareCollageRows(const QVector<CollageItem>& items,
             }
             const auto& item = items[index];
             prepared->sourceOwners.append(item.resourceOwner);
-            QImage pixels =
-                snowCanvasTransformImage(item.image, item.transform, Qt::FastTransformation);
-            if (pixels.isNull()) {
-                report(error, preparationError());
-                return {};
-            }
-            const QSize size = layout.rects[index].size();
-            if (pixels.size() != size) {
-                auto input = image_codec::srgbRowSource(pixels);
-                input.cancellationRequested = prepared->cancelled;
-                QImage resized = snowCanvasAllocateImage(size, QImage::Format_RGBA8888);
-                if (resized.isNull() ||
-                    !image_codec::resizeToRgba8(input, size, resized.bits(), resized.bytesPerLine(),
-                                                resized.sizeInBytes(), error)) {
-                    if (!error || error->isEmpty())
-                        report(error, preparationError());
-                    return {};
-                }
-                resized.setColorSpace(QColorSpace(QColorSpace::SRgb));
-                pixels = std::move(resized);
-            }
-            auto rows = image_codec::srgbRowSource(pixels);
+            prepared->inputImages.append(item.image);
+            const bool streamed = collage_detail::streamableTransform(item);
+            QImage pixels = streamed ? item.image
+                                     : snowCanvasTransformImage(item.image, item.transform,
+                                                                Qt::FastTransformation);
+            auto rows = streamed ? collage_detail::transformedRowSource(item, prepared->cancelled)
+                                 : image_codec::srgbRowSource(pixels);
             if (!rows.isValid()) {
                 report(error, preparationError());
                 return {};
             }
-            const bool opaque = imageIsOpaque(pixels, prepared->cancelled);
+            if (!streamed && !item.transform.isIdentity())
+                prepared->inputImages.append(pixels);
+            const QSize size = layout.rects[index].size();
+            if (rows.size != size) {
+                rows.cancellationRequested = prepared->cancelled;
+                rows = image_codec::resizedRowSource(std::move(rows), size, error);
+                if (!rows.isValid()) {
+                    if (!error || error->isEmpty())
+                        report(error, preparationError());
+                    return {};
+                }
+            }
+            const bool opaque = settings.background.alpha() != 0 &&
+                                cachedImageIsOpaque(item, pixels, prepared->cancelled);
             if (prepared->cancellationRequested()) {
                 report(error, cancellationError());
                 return {};
             }
             prepared->items.append({std::move(rows), layout.rects[index], opaque});
         }
-        static_cast<void>(prepared->working->resize(readerCacheBytes + maximumRowBytes));
+        if (!prepared->indexRows()) {
+            report(error, preparationError());
+            return {};
+        }
         ScreenshotImageRowSource rows;
         rows.size = layout.size;
+        rows.isKnownOpaque = settings.background.alpha() == 255;
         rows.cancellationRequested = prepared->cancelled;
         rows.readRows = [prepared](int first, int count, qsizetype stride, uchar* destination,
                                    qsizetype capacity) {
             return prepared->read(first, count, stride, destination, capacity);
         };
+        rows.readRegion = [prepared](QRect region, qsizetype stride, uchar* destination,
+                                     qsizetype capacity) {
+            return prepared->readRegion(region, stride, destination, capacity);
+        };
+        rows.reserveResources = [](qint64 retained, qint64 scratch,
+                                   QString* admissionError) -> std::shared_ptr<void> {
+            if (retained < 0 || scratch < 0 || retained > collage_detail::maximumWorkingBytes ||
+                scratch > collage_detail::maximumWorkingBytes - retained) {
+                report(admissionError, resourceError());
+                return {};
+            }
+            return collage_detail::reserveWorking(retained + scratch, admissionError);
+        };
+        if ((layout.size.width() > 2048 || layout.size.height() > 2048) &&
+            std::all_of(items.begin(), items.end(),
+                        [](const CollageItem& item) { return !item.preview.isNull(); })) {
+            QSize size = layout.size.scaled(2048, 2048, Qt::KeepAspectRatio).expandedTo({1, 1});
+            prepared->previewOwner =
+                collage_detail::reservePreview(qint64(size.width()) * size.height() * 4);
+            if (prepared->previewOwner) {
+                auto preview = snowCanvasAllocateImage(size, QImage::Format_ARGB32_Premultiplied);
+                if (!preview.isNull()) {
+                    preview.fill(settings.background);
+                    QPainter painter(&preview);
+                    painter.setRenderHint(QPainter::SmoothPixmapTransform);
+                    painter.scale(qreal(size.width()) / layout.size.width(),
+                                  qreal(size.height()) / layout.size.height());
+                    for (qsizetype index = 0; index < items.size(); ++index) {
+                        if (prepared->cancellationRequested()) {
+                            report(error, cancellationError());
+                            return {};
+                        }
+                        painter.drawImage(layout.rects[index], transformedPreview(items[index]));
+                    }
+                    painter.end();
+                    preview.setColorSpace(QColorSpace(QColorSpace::SRgb));
+                    rows.previewImage = std::move(preview);
+                } else {
+                    prepared->previewOwner.reset();
+                }
+            }
+        }
         return rows;
     } catch (const std::bad_alloc&) {
         report(error, preparationError());

@@ -122,6 +122,9 @@ class ScreenshotClipboardService final {
     prepareEncoded(const ScreenshotImageRowSource& source, const QByteArray& png,
                    std::optional<ScreenshotClipboardPlacement> placement = {},
                    std::optional<ScreenshotClipboardAppearance> appearance = {});
+    // Duplicate native ownership for simultaneous consumers without producing image rows again.
+    [[nodiscard]] static ScreenshotClipboardPayload
+    clonePrepared(const ScreenshotClipboardPayload& payload);
     [[nodiscard]] static ScreenshotClipboardCommitHandle commit(QClipboard* clipboard,
                                                                 QObject* receiver,
                                                                 ScreenshotClipboardPayload payload,

@@ -125,6 +125,7 @@ struct ImportItem {
     quint64 replacement = 0;
     std::optional<ScreenshotPinnedImageSnapshot> live = std::nullopt;
     std::optional<SelectedFilesImport> selection = std::nullopt;
+    std::optional<ScreenshotClipboardLocalImage> file = std::nullopt;
 };
 
 struct ImportedImage {
@@ -566,9 +567,10 @@ struct CollageWindow::Impl {
 
     void importSelection(const SelectedFilesImport& request, quint64 token) {
         auto selection = std::make_shared<platform::SelectedFileResult>();
+        auto files = std::make_shared<QList<ScreenshotClipboardLocalImage>>();
         job = ScreenshotExportCoordinator::shared().submit(
             &q, ScreenshotExportCoordinator::Priority::Background,
-            [request, selection](const ScreenshotExportCancellation& cancellation) {
+            [request, selection, files](const ScreenshotExportCancellation& cancellation) {
                 const auto cancelled = [&cancellation] {
                     return cancellation.isCancellationRequested();
                 };
@@ -584,15 +586,16 @@ struct CollageWindow::Impl {
                         if (extensions.contains(QFileInfo(path).suffix().toLower()))
                             images.append(path);
                     }
-                    const auto files =
+                    *files =
                         ScreenshotClipboardContentReader::snapshotLocalFiles(images, cancelled);
                     selection->paths.clear();
-                    for (const auto& file : files)
-                        selection->paths.append(file.absolutePath);
                 }
+                if (cancelled())
+                    return ScreenshotExportTaskResult::failure(
+                        ScreenshotExportFailureStage::Cancelled, {});
                 return ScreenshotExportTaskResult{};
             },
-            [this, selection, token](ScreenshotExportTaskResult result) {
+            [this, selection, files, token](ScreenshotExportTaskResult result) {
                 if (closing || token != generation)
                     return;
                 imports.removeAt(--importIndex);
@@ -601,9 +604,11 @@ struct CollageWindow::Impl {
                 } else if (selection->error != platform::SelectedFileError::None) {
                     selectionFailures.append(selection->error);
                 } else {
-                    for (qsizetype index = 0; index < selection->paths.size(); ++index) {
-                        const auto& path = selection->paths.at(index);
-                        imports.insert(importIndex + index, ImportItem{{}, {}, path, path, 0});
+                    for (qsizetype index = 0; index < files->size(); ++index) {
+                        const auto& file = files->at(index);
+                        ImportItem item{{}, {}, file.absolutePath, file.absolutePath, 0};
+                        item.file = file;
+                        imports.insert(importIndex + index, std::move(item));
                     }
                 }
                 nextImport();
@@ -680,8 +685,8 @@ struct CollageWindow::Impl {
                         return decoded->reservation->resize(allocatedBytes, &error);
                     };
                     const auto pinned =
-                        storage::ApplicationStorage::instance().pinnedWindows().loadRecord(
-                            request.pinnedId, allocate);
+                        storage::ApplicationStorage::instance().pinnedWindows().loadPreviewSource(
+                            request.pinnedId, allocate, cancelled);
                     if (pinned && !cancelled()) {
                         if (pinned->sourceKind == storage::PinnedWindowSourceKind::ClipboardText) {
                             ScreenshotClipboardOriginalContent original;
@@ -700,20 +705,18 @@ struct CollageWindow::Impl {
                     const bool supported =
                         ScreenshotClipboardContentReader::supportedImageFileExtensions().contains(
                             QFileInfo(request.path).suffix().toLower());
-                    const auto files = supported
-                                           ? ScreenshotClipboardContentReader::snapshotLocalFiles(
-                                                 {request.path}, cancelled)
-                                           : QList<ScreenshotClipboardLocalImage>{};
-                    if (!files.isEmpty()) {
-                        ScreenshotClipboardContentSnapshot snapshot;
-                        snapshot.localImage = files.first();
-                        snapshot.devicePixelRatio = 1;
-                        const auto content = ScreenshotClipboardContentReader::decode(
-                            std::move(snapshot), cancelled, [decoded, &error](qint64 bytes) {
+                    auto file = request.file;
+                    if (!file && supported) {
+                        const auto files = ScreenshotClipboardContentReader::snapshotLocalFiles(
+                            {request.path}, cancelled);
+                        if (!files.isEmpty())
+                            file = files.first();
+                    }
+                    if (file) {
+                        image = ScreenshotClipboardContentReader::decodeImageFile(
+                            *file, cancelled, [decoded, &error](qint64 bytes) {
                                 return decoded->reservation->resize(bytes, &error);
                             });
-                        if (content && content->kind == ScreenshotClipboardContentKind::Image)
-                            image = content->image;
                     }
                 }
                 if (cancelled())

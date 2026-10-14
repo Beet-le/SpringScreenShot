@@ -19,6 +19,8 @@
 #include "widgets/input_number.h"
 #include "widgets/scroll_area.h"
 #include "widgets/segmented.h"
+#include "snowimageqtcodec.h"
+#include "snow_draw_engine_qt/snow_canvas_image.h"
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -34,9 +36,11 @@
 #include <QLabel>
 #include <QMimeData>
 #include <QMouseEvent>
+#include <QMetaObject>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPointer>
+#include <QRgba64>
 #include <QScrollBar>
 #include <QSet>
 #include <QSignalBlocker>
@@ -48,8 +52,13 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <limits>
+#include <mutex>
+#include <vector>
 
 namespace snow_shot::presentation::components {
 namespace {
@@ -136,6 +145,169 @@ constexpr std::array<const char*, 8> kColorValues{"#FFFFFF", "#000000", "#8C8C8C
 QString text(const char* value) {
     return QCoreApplication::translate("CollageEditorWidget", value);
 }
+
+bool sameLayoutSettings(CollageSettings first, CollageSettings second) {
+    first.background = second.background;
+    return first == second;
+}
+
+// Borrow only the crop's pixels. Set metadata before sharing its header so Qt does not detach
+// the raster. The caller retains the original and its resource owner throughout the resize.
+ScreenshotImageRowSource croppedRows(const QImage& image, const QRect& crop,
+                                     const ScreenshotExportCancellation& cancellation) {
+    const int firstX = image.depth() < 8 ? crop.left() / 8 * 8 : crop.left();
+    const int prefix = crop.left() - firstX;
+    QImage view(image.constScanLine(crop.top()) + qsizetype(firstX) * image.depth() / 8,
+                crop.width() + prefix, crop.height(), image.bytesPerLine(), image.format());
+    view.setColorTable(image.colorTable());
+    view.setColorSpace(image.colorSpace());
+    auto source = image_codec::srgbRowSource(view);
+    source.cancellationRequested = [cancellation] {
+        return cancellation.isCancellationRequested();
+    };
+    if (prefix == 0)
+        return source;
+    struct AlignedCrop final {
+        ScreenshotImageRowSource source;
+        QByteArray row;
+        std::mutex mutex;
+    };
+    auto aligned = std::make_shared<AlignedCrop>();
+    aligned->source = std::move(source);
+    aligned->row.resize(qsizetype(view.width()) * 4);
+    ScreenshotImageRowSource result;
+    result.size = crop.size();
+    result.cancellationRequested = [cancellation] {
+        return cancellation.isCancellationRequested();
+    };
+    result.readRows = [aligned, prefix, size = crop.size(),
+                       cancellation](int first, int count, qsizetype stride, uchar* destination,
+                                     qsizetype capacity) {
+        const qsizetype rowBytes = qsizetype(size.width()) * 4;
+        if (first < 0 || count <= 0 || count > size.height() || first > size.height() - count ||
+            !destination || stride < rowBytes ||
+            qsizetype(count - 1) > (std::numeric_limits<qsizetype>::max() - rowBytes) / stride ||
+            capacity < qsizetype(count - 1) * stride + rowBytes)
+            return false;
+        const std::lock_guard lock(aligned->mutex);
+        for (int row = 0; row < count; ++row) {
+            if (cancellation.isCancellationRequested() ||
+                !aligned->source.readRows(first + row, 1, aligned->row.size(),
+                                          reinterpret_cast<uchar*>(aligned->row.data()),
+                                          aligned->row.size()))
+                return false;
+            std::memcpy(destination + qsizetype(row) * stride,
+                        aligned->row.constData() + prefix * 4, size_t(rowBytes));
+        }
+        return true;
+    };
+    return result;
+}
+
+// Large enough for Qt's parallel SIMD converter/scaler, independent of source raster height.
+constexpr qint64 maximumAreaStripBytes = 8 * 1024 * 1024;
+
+int areaStripRows(const QImage& image, QRect crop, QSize output) {
+    if (output.width() > crop.width() / 4 || output.height() > crop.height() / 4)
+        return 0;
+    // The native crop, ICC conversion and high-precision horizontal result coexist.
+    // Qt's native FP16 color transform expands to FP32 before restoring its input format.
+    const bool halfFloat = image.format() == QImage::Format_RGBX16FPx4 ||
+                           image.format() == QImage::Format_RGBA16FPx4 ||
+                           image.format() == QImage::Format_RGBA16FPx4_Premultiplied;
+    const qint64 row = qint64(crop.width()) * std::max(halfFloat ? 16 : 8, image.depth() / 8) * 3;
+    return static_cast<int>(std::min<qint64>(64, maximumAreaStripBytes / row));
+}
+
+QImage areaDetail(const QImage& image, QRect crop, QSize output, int stripRows,
+                  const ScreenshotExportCancellation& cancellation) {
+    QImage reduced = snowCanvasAllocateImage(output, QImage::Format_RGBA64_Premultiplied);
+    if (reduced.isNull())
+        return {};
+    std::vector<std::uint64_t> sums(size_t(output.width()) * 4, 0);
+    int targetRow = 0;
+    for (int first = 0; first < crop.height(); first += stripRows) {
+        if (cancellation.isCancellationRequested())
+            return {};
+        const int rows = std::min(stripRows, crop.height() - first);
+        QImage strip = image.copy(QRect(crop.left(), crop.top() + first, crop.width(), rows));
+        if (strip.isNull())
+            return {};
+        if (strip.colorSpace().isValid() && strip.colorSpace() != QColorSpace(QColorSpace::SRgb))
+            strip = strip.convertedToColorSpace(QColorSpace::SRgb);
+        strip = strip.convertToFormat(QImage::Format_RGBA64_Premultiplied);
+        strip = strip.scaled(output.width(), rows, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        if (strip.isNull())
+            return {};
+        for (int local = 0; local < rows; ++local) {
+            if (cancellation.isCancellationRequested())
+                return {};
+            const auto* pixels = reinterpret_cast<const QRgba64*>(strip.constScanLine(local));
+            // Integer source/target overlap gives each output row exactly crop.height() weight.
+            qint64 cursor = qint64(first + local) * output.height();
+            const qint64 end = cursor + output.height();
+            while (cursor < end) {
+                const qint64 boundary = qint64(targetRow + 1) * crop.height();
+                const auto weight = static_cast<std::uint64_t>(std::min(end, boundary) - cursor);
+                for (int x = 0; x < output.width(); ++x) {
+                    auto* sum = sums.data() + size_t(x) * 4;
+                    sum[0] += std::uint64_t(pixels[x].red()) * weight;
+                    sum[1] += std::uint64_t(pixels[x].green()) * weight;
+                    sum[2] += std::uint64_t(pixels[x].blue()) * weight;
+                    sum[3] += std::uint64_t(pixels[x].alpha()) * weight;
+                }
+                cursor += qint64(weight);
+                if (cursor == boundary) {
+                    auto* target = reinterpret_cast<QRgba64*>(reduced.scanLine(targetRow));
+                    for (int x = 0; x < output.width(); ++x) {
+                        const auto* sum = sums.data() + size_t(x) * 4;
+                        const auto channel = [sum, height = crop.height()](int index) {
+                            return static_cast<quint16>((sum[index] + unsigned(height) / 2) /
+                                                        unsigned(height));
+                        };
+                        target[x] =
+                            QRgba64::fromRgba64(channel(0), channel(1), channel(2), channel(3));
+                    }
+                    std::fill(sums.begin(), sums.end(), 0);
+                    ++targetRow;
+                }
+            }
+        }
+    }
+    return cancellation.isCancellationRequested()
+               ? QImage{}
+               : reduced.convertToFormat(QImage::Format_RGBA8888);
+}
+
+class DetailWorkingLifetime final {
+  public:
+    DetailWorkingLifetime(std::shared_ptr<void> reservation,
+                          std::shared_ptr<std::atomic<qint64>> total, qint64 bytes,
+                          CollagePreviewCanvas* owner)
+        : m_reservation(std::move(reservation)), m_total(std::move(total)), m_bytes(bytes),
+          m_owner(owner) {
+        m_total->fetch_add(m_bytes);
+    }
+    ~DetailWorkingLifetime() {
+        m_total->fetch_sub(m_bytes);
+        // Work captures can retire after cancellation or window destruction, independently of
+        // completion delivery. Keep diagnostics tied to the reservation's actual lifetime.
+        if (m_owner)
+            QMetaObject::invokeMethod(
+                m_owner,
+                [owner = m_owner, total = m_total] {
+                    if (owner)
+                        owner->setProperty("detailWorkingBytes", total->load());
+                },
+                Qt::QueuedConnection);
+    }
+
+  private:
+    std::shared_ptr<void> m_reservation;
+    std::shared_ptr<std::atomic<qint64>> m_total;
+    qint64 m_bytes;
+    QPointer<CollagePreviewCanvas> m_owner;
+};
 
 quint64 dragItem(const QMimeData* mime, const CollageDocument* document) {
     if (!mime || !mime->hasFormat(QString::fromLatin1(kDragType)))
@@ -277,7 +449,9 @@ class CollageThumbnail final : public QWidget {
         m_replace->setEnabled(enabled && replacementAllowed);
         m_remove->setEnabled(enabled);
     }
-    void setItem(const CollageItem& item, int ordinal) {
+    void setItem(const CollageItem& item, int ordinal, bool force = false) {
+        if (!force && m_revision == item.revision && m_ordinal == ordinal && m_label == item.label)
+            return;
         if (m_revision != item.revision || m_preview.isNull()) {
             m_revision = item.revision;
             m_preview = item.preview;
@@ -451,15 +625,27 @@ struct CollagePreviewCanvas::Impl {
     CollagePreviewCanvas* owner;
     CollageDocument* document;
     CollageLayout layout;
+    CollageSettings cachedSettings;
+    bool initialized = false;
     QVector<quint64> order;
+    QHash<quint64, qsizetype> indexById;
     QHash<quint64, QImage> previews;
     QHash<quint64, QTransform> previewTransforms;
     QHash<quint64, quint64> revisions;
     QHash<quint64, Detail> details;
-    QHash<quint64, ScreenshotExportJobHandle> detailJobs;
+    struct DetailJob {
+        ScreenshotExportJobHandle handle;
+        quint64 ticket = 0;
+        quint64 revision = 0;
+    };
+    QHash<quint64, DetailJob> detailJobs;
     QHash<quint64, qint64> pendingDetailBytes;
+    qint64 basePreviewBytes = 0;
+    qint64 detailCacheBytes = 0;
+    qint64 pendingPreviewBytes = 0;
+    std::shared_ptr<std::atomic<qint64>> workingBytes = std::make_shared<std::atomic<qint64>>(0);
     QTimer* detailTimer = nullptr;
-    quint64 detailGeneration = 0;
+    quint64 nextDetailTicket = 0;
     quint64 detailClock = 0;
     QPixmap checker;
     qreal zoom = 1;
@@ -477,21 +663,18 @@ struct CollagePreviewCanvas::Impl {
     OverlayControlButton* fit = nullptr;
 
     void cancelDetails() {
-        ++detailGeneration;
         for (const auto& job : detailJobs)
-            job.cancel();
+            job.handle.cancel();
         detailJobs.clear();
-        pendingDetailBytes.clear();
     }
     qint64 previewBytes() const {
-        qint64 result = 0;
-        for (const auto& item : document->items())
-            result += item.preview.sizeInBytes();
-        for (const auto& detail : details)
-            result += detail.image.sizeInBytes();
-        for (const auto bytes : pendingDetailBytes)
-            result += bytes;
-        return result;
+        return basePreviewBytes + detailCacheBytes + pendingPreviewBytes;
+    }
+    void previewStatisticsChanged() {
+        owner->setProperty("detailPreviewBytes", previewBytes());
+        owner->setProperty("detailTileCount", details.size());
+        owner->setProperty("detailPendingCount", pendingDetailBytes.size());
+        owner->setProperty("detailWorkingBytes", workingBytes->load());
     }
     QRectF detailViewport(const Detail& detail, const QRectF& item) const {
         return {
@@ -503,9 +686,9 @@ struct CollagePreviewCanvas::Impl {
     void requestDetails() {
         if (!layout.isValid())
             return;
-        const auto generation = detailGeneration;
-        for (const auto& item : document->items()) {
-            const auto bounds = viewportRect(item.id);
+        for (qsizetype index = 0; index < document->items().size(); ++index) {
+            const auto& item = document->items()[index];
+            const auto bounds = viewportRect(index);
             const auto visible = bounds.intersected(owner->rect());
             if (visible.isEmpty() || detailJobs.contains(item.id))
                 continue;
@@ -519,7 +702,8 @@ struct CollagePreviewCanvas::Impl {
             if (bounds.width() * owner->devicePixelRatioF() <= smallSize.width() * 1.25 &&
                 bounds.height() * owner->devicePixelRatioF() <= smallSize.height() * 1.25)
                 continue;
-            if (detailJobs.size() >= 2)
+            // Cancelled requests still own preview storage until completion retires it.
+            if (pendingDetailBytes.size() >= 2)
                 break;
             const auto padded = visible.adjusted(-48, -48, 48, 48).intersected(bounds);
             const QRectF pixels((padded.left() - bounds.left()) / screenScale,
@@ -541,7 +725,13 @@ struct CollagePreviewCanvas::Impl {
             const auto tileSize = wanted.width() > 2048 || wanted.height() > 2048
                                       ? wanted.scaled(QSize(2048, 2048), Qt::KeepAspectRatio)
                                       : wanted;
-            const qreal resolution = qreal(tileSize.width()) / transformedCrop.width();
+            const qreal scale = std::min(qreal(tileSize.width()) / transformedCrop.width(),
+                                         qreal(tileSize.height()) / transformedCrop.height());
+            const QSize unrotated(std::max(1, qCeil(crop.width() * scale)),
+                                  std::max(1, qCeil(crop.height() * scale)));
+            const auto transformedTile =
+                item.transform.mapRect(QRectF(QPointF{}, unrotated)).size();
+            const qreal resolution = transformedTile.width() / transformedCrop.width();
             auto existing = details.find(item.id);
             if (existing != details.end() && existing->revision == item.revision &&
                 existing->resolution >= resolution * .9 &&
@@ -549,98 +739,126 @@ struct CollagePreviewCanvas::Impl {
                 existing->used = ++detailClock;
                 continue;
             }
-            const qint64 bytes = qint64(tileSize.width()) * tileSize.height() * 4;
+            const qint64 bytes = qint64(unrotated.width()) * unrotated.height() * 4;
             while (!details.isEmpty() &&
                    previewBytes() + bytes > collage_detail::maximumWindowPreviewBytes) {
                 auto oldest = details.begin();
                 for (auto it = details.begin(); it != details.end(); ++it)
                     if (it->used < oldest->used)
                         oldest = it;
+                detailCacheBytes -= oldest->image.sizeInBytes();
                 details.erase(oldest);
             }
             if (previewBytes() + bytes > collage_detail::maximumWindowPreviewBytes)
                 continue;
+            const int stripRows = areaStripRows(item.image, crop, unrotated);
+            const auto resizeBytes = stripRows > 0
+                                         ? std::optional<qint64>(0)
+                                         : image_codec::resizeWorkingBytes(crop.size(), unrotated);
+            if (!resizeBytes)
+                continue;
+            // Area reduction retains native strips, a high-precision output and its accumulator.
+            // Native resize retains its sRGB cache, Qt conversion tiles and a possible mono row.
+            // Both paths also allow a transform result while it replaces the reduced raster.
+            const qint64 scratchBytes =
+                stripRows > 0
+                    ? maximumAreaStripBytes + bytes * 3 + qint64(unrotated.width()) * 32
+                    : *resizeBytes + 6 * 1024 * 1024 + qint64(crop.width() + 7) * 4 + bytes;
             auto reservation = reserveCollagePreview(bytes);
-            auto working = collage_detail::reserveWorking(qint64(crop.width()) * crop.height() * 8 +
-                                                          bytes * 2);
+            auto working = collage_detail::reserveWorking(scratchBytes);
             if (!reservation || !working)
                 continue;
+            auto workLifetime = std::make_shared<DetailWorkingLifetime>(
+                std::move(working), workingBytes, scratchBytes, owner);
             auto prepared = std::make_shared<Detail>();
             prepared->transformedPixels = transformedCrop;
             prepared->fullSize = fullSize;
             prepared->revision = item.revision;
             prepared->resolution = resolution;
             prepared->reservation = std::move(reservation);
+            const quint64 ticket = ++nextDetailTicket;
             const auto job = ScreenshotExportCoordinator::shared().submit(
                 owner, ScreenshotExportCoordinator::Priority::Background,
                 [image = item.image, sourceOwner = item.resourceOwner, transform = item.transform,
-                 crop, tileSize, prepared,
-                 working](const ScreenshotExportCancellation& cancellation) {
+                 crop, unrotated, stripRows, prepared,
+                 workLifetime](const ScreenshotExportCancellation& cancellation) {
                     Q_UNUSED(sourceOwner);
-                    Q_UNUSED(working);
+                    Q_UNUSED(workLifetime);
                     if (cancellation.isCancellationRequested())
                         return ScreenshotExportTaskResult::failure(
                             ScreenshotExportFailureStage::Cancelled, {});
-                    QImage tile = image.copy(crop);
-                    if (tile.isNull())
-                        return ScreenshotExportTaskResult::failure(
-                            ScreenshotExportFailureStage::Render, {});
-                    if (tile.colorSpace().isValid() &&
-                        tile.colorSpace() != QColorSpace(QColorSpace::SRgb))
-                        tile = tile.convertedToColorSpace(QColorSpace::SRgb);
-                    const auto cropTransformedSize =
-                        transform.mapRect(QRectF(QPointF{}, crop.size())).size();
-                    const qreal scale =
-                        std::min(qreal(tileSize.width()) / cropTransformedSize.width(),
-                                 qreal(tileSize.height()) / cropTransformedSize.height());
-                    const QSize unrotated(std::max(1, qCeil(crop.width() * scale)),
-                                          std::max(1, qCeil(crop.height() * scale)));
-                    tile = tile.scaled(unrotated, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+                    QImage tile;
+                    if (stripRows > 0) {
+                        tile = areaDetail(image, crop, unrotated, stripRows, cancellation);
+                    } else {
+                        tile = snowCanvasAllocateImage(unrotated, QImage::Format_RGBA8888);
+                        const auto rows = croppedRows(image, crop, cancellation);
+                        if (!tile.isNull() &&
+                            !image_codec::resizeToRgba8(rows, unrotated, tile.bits(),
+                                                        tile.bytesPerLine(), tile.sizeInBytes()))
+                            tile = {};
+                    }
                     if (tile.isNull())
                         return ScreenshotExportTaskResult::failure(
                             ScreenshotExportFailureStage::Render, {});
                     if (cancellation.isCancellationRequested())
                         return ScreenshotExportTaskResult::failure(
                             ScreenshotExportFailureStage::Cancelled, {});
-                    tile = tile.transformed(transform, Qt::FastTransformation);
+                    tile = snowCanvasTransformImage(tile, transform, Qt::FastTransformation);
                     if (tile.isNull())
                         return ScreenshotExportTaskResult::failure(
                             ScreenshotExportFailureStage::Render, {});
                     tile.setDevicePixelRatio(1);
+                    tile.setColorSpace(QColorSpace::SRgb);
+                    if (cancellation.isCancellationRequested())
+                        return ScreenshotExportTaskResult::failure(
+                            ScreenshotExportFailureStage::Cancelled, {});
                     prepared->image = std::move(tile);
                     return ScreenshotExportTaskResult{};
                 },
-                [this, id = item.id, generation,
-                 prepared](const ScreenshotExportTaskResult& result) {
-                    if (generation != detailGeneration)
-                        return;
-                    detailJobs.remove(id);
-                    pendingDetailBytes.remove(id);
-                    if (result.succeeded() && revisions.value(id) == prepared->revision &&
-                        !prepared->image.isNull()) {
+                [this, id = item.id, ticket, prepared](const ScreenshotExportTaskResult& result) {
+                    pendingPreviewBytes -= pendingDetailBytes.take(ticket);
+                    const auto current = detailJobs.constFind(id);
+                    const bool accepted = current != detailJobs.cend() && current->ticket == ticket;
+                    if (accepted)
+                        detailJobs.remove(id);
+                    if (accepted && result.succeeded() &&
+                        revisions.value(id) == prepared->revision && !prepared->image.isNull()) {
                         prepared->used = ++detailClock;
+                        if (const auto cachedDetail = details.constFind(id);
+                            cachedDetail != details.cend())
+                            detailCacheBytes -= cachedDetail->image.sizeInBytes();
+                        detailCacheBytes += prepared->image.sizeInBytes();
                         details.insert(id, std::move(*prepared));
-                        owner->setProperty("detailTileCount", details.size());
                         owner->update();
                     }
-                    if (result.succeeded())
+                    previewStatisticsChanged();
+                    if (!accepted || result.succeeded())
                         detailTimer->start();
                 });
             if (job.isValid()) {
-                detailJobs.insert(item.id, job);
-                pendingDetailBytes.insert(item.id, bytes);
+                detailJobs.insert(item.id, {job, ticket, item.revision});
+                pendingDetailBytes.insert(ticket, bytes);
+                pendingPreviewBytes += bytes;
             }
         }
+        previewStatisticsChanged();
     }
 
     QRectF itemRect(quint64 id) const {
-        const auto index = order.indexOf(id);
+        const auto index = indexById.value(id, -1);
         return index >= 0 && index < layout.rects.size() ? QRectF(layout.rects[index]) : QRectF{};
     }
     QRectF viewportRect(quint64 id) const {
         const auto rect = itemRect(id);
         return rect.isEmpty() ? QRectF{}
                               : QRectF(offset + rect.topLeft() * zoom, rect.size() * zoom);
+    }
+    QRectF viewportRect(qsizetype index) const {
+        if (index < 0 || index >= layout.rects.size())
+            return {};
+        const QRectF rect(layout.rects[index]);
+        return {offset + rect.topLeft() * zoom, rect.size() * zoom};
     }
     quint64 hit(QPointF position) const {
         if (!layout.isValid() || zoom <= 0)
@@ -654,10 +872,9 @@ struct CollagePreviewCanvas::Impl {
     void geometryChanged() {
         owner->setProperty("zoom", zoom);
         owner->setProperty("viewportOffset", offset);
-        owner->setProperty("detailPreviewBytes", previewBytes());
-        owner->setProperty("detailTileCount", details.size());
+        previewStatisticsChanged();
         const auto selected = viewportRect(document->selectedId());
-        const bool layoutRecovery = !layout.isValid() && order.contains(document->selectedId());
+        const bool layoutRecovery = !layout.isValid() && indexById.contains(document->selectedId());
         const bool showToolbar =
             editing &&
             (layoutRecovery || (!selected.isEmpty() && selected.intersects(owner->rect())));
@@ -694,21 +911,45 @@ struct CollagePreviewCanvas::Impl {
         detailTimer->start();
     }
     void refresh() {
-        cancelDetails();
+        const bool firstRefresh = !initialized;
+        const auto nextSettings = document->settings();
+        if (initialized && nextSettings.background != cachedSettings.background &&
+            sameLayoutSettings(nextSettings, cachedSettings) &&
+            order.size() == document->items().size()) {
+            cachedSettings = nextSettings;
+            owner->update();
+            return;
+        }
+        cachedSettings = nextSettings;
+        initialized = true;
         const bool wasEmpty = order.isEmpty();
         const auto anchor = viewportRect(document->selectedId()).center();
         const bool anchored = !itemRect(document->selectedId()).isEmpty();
-        layout = document->layout();
-        order.clear();
+        const auto nextLayout = document->layout();
+        const bool layoutChanged = nextLayout.size != layout.size ||
+                                   nextLayout.rects != layout.rects ||
+                                   nextLayout.error != layout.error;
+        layout = nextLayout;
+        QVector<quint64> nextOrder;
+        nextOrder.reserve(document->items().size());
         QSet<quint64> retained;
+        basePreviewBytes = 0;
         for (const auto& item : document->items()) {
-            order.push_back(item.id);
+            nextOrder.push_back(item.id);
             retained.insert(item.id);
+            basePreviewBytes += item.preview.sizeInBytes();
             if (!revisions.contains(item.id) || revisions.value(item.id) != item.revision) {
                 previews.insert(item.id, item.preview);
                 previewTransforms.insert(item.id, item.transform);
                 revisions.insert(item.id, item.revision);
             }
+        }
+        const bool orderChanged = nextOrder != order;
+        if (orderChanged) {
+            order = std::move(nextOrder);
+            indexById.clear();
+            for (qsizetype index = 0; index < order.size(); ++index)
+                indexById.insert(order[index], index);
         }
         for (auto it = previews.begin(); it != previews.end();) {
             if (!retained.contains(it.key())) {
@@ -720,23 +961,42 @@ struct CollagePreviewCanvas::Impl {
             }
         }
         for (auto it = details.begin(); it != details.end();) {
-            if (!retained.contains(it.key()) || revisions.value(it.key()) != it->revision)
+            if (!retained.contains(it.key()) || revisions.value(it.key()) != it->revision) {
+                detailCacheBytes -= it->image.sizeInBytes();
                 it = details.erase(it);
-            else
+            } else
                 ++it;
+        }
+        for (auto it = detailJobs.begin(); it != detailJobs.end();) {
+            if (!retained.contains(it.key()) || revisions.value(it.key()) != it->revision) {
+                it->handle.cancel();
+                it = detailJobs.erase(it);
+            } else {
+                ++it;
+            }
         }
         if (wasEmpty && !order.isEmpty())
             automaticFit = true;
-        if (automaticFit)
+        if (automaticFit && layoutChanged && layout.isValid()) {
             owner->fitToCanvas();
-        else if (anchored && !itemRect(document->selectedId()).isEmpty())
+            return;
+        } else if (!automaticFit && (layoutChanged || orderChanged) && anchored &&
+                   !itemRect(document->selectedId()).isEmpty()) {
             offset += anchor - viewportRect(document->selectedId()).center();
+        }
         if (document->items().isEmpty()) {
             automaticFit = true;
             offset = {};
             zoom = 1;
         }
-        geometryChanged();
+        // Even an empty initial layout must project its state into newly created controls.
+        if (firstRefresh || layoutChanged || orderChanged)
+            this->geometryChanged();
+        else {
+            previewStatisticsChanged();
+            owner->update();
+            detailTimer->start();
+        }
     }
 };
 
@@ -827,7 +1087,7 @@ void CollagePreviewCanvas::fitToCanvas() {
 }
 void CollagePreviewCanvas::centerImage(quint64 id) {
     auto& d = *m_impl;
-    if (!d.order.contains(id))
+    if (!d.indexById.contains(id))
         return;
     d.document->select(id);
     const auto bounds = d.itemRect(id);
@@ -843,6 +1103,8 @@ void CollagePreviewCanvas::preserveViewport() {
     m_impl->automaticFit = false;
 }
 void CollagePreviewCanvas::setEditingEnabled(bool enabled) {
+    if (m_impl->editing == enabled)
+        return;
     m_impl->editing = enabled;
     m_impl->pressedId = 0;
     m_impl->targetId = 0;
@@ -881,8 +1143,9 @@ void CollagePreviewCanvas::paintEvent(QPaintEvent*) {
     const QRectF output(d.offset, QSizeF(d.layout.size) * d.zoom);
     painter.fillRect(output, d.document->settings().background);
     painter.setRenderHint(QPainter::SmoothPixmapTransform);
-    for (const auto id : d.order) {
-        const auto bounds = d.viewportRect(id);
+    for (qsizetype index = 0; index < d.order.size(); ++index) {
+        const auto id = d.order[index];
+        const auto bounds = d.viewportRect(index);
         if (!bounds.intersects(rect()))
             continue;
         drawTransformedPreview(painter, bounds, d.previews.value(id),
@@ -1002,7 +1265,7 @@ void CollagePreviewCanvas::keyPressEvent(QKeyEvent* event) {
         unsetCursor();
     } else if (event->key() == Qt::Key_Left || event->key() == Qt::Key_Up ||
                event->key() == Qt::Key_Right || event->key() == Qt::Key_Down) {
-        const auto index = d.order.indexOf(d.document->selectedId());
+        const auto index = d.indexById.value(d.document->selectedId(), -1);
         const int delta = event->key() == Qt::Key_Left || event->key() == Qt::Key_Up ? -1 : 1;
         if (!d.order.isEmpty())
             centerImage(d.order[qBound(qsizetype{0}, index + delta, d.order.size() - 1)]);
@@ -1066,6 +1329,7 @@ struct CollageEditorWidget::Impl {
     QWidget* thumbnails = nullptr;
     QHBoxLayout* thumbnailLayout = nullptr;
     QHash<quint64, CollageThumbnail*> thumbnailById;
+    quint64 selectedThumbnail = 0;
     AdForm* form = nullptr;
     AdSegmented* direction = nullptr;
     AdFormItem* gridField = nullptr;
@@ -1079,6 +1343,9 @@ struct CollageEditorWidget::Impl {
     AdColorPicker* color = nullptr;
     std::array<AdFormItem*, 5> fields{};
     std::array<CollageColorPresetButton*, 8> presets{};
+    CollageSettings cachedSettings;
+    int referencePixels = 0;
+    bool initialized = false;
     bool syncing = false;
     bool loading = false;
     bool exporting = false;
@@ -1106,9 +1373,8 @@ struct CollageEditorWidget::Impl {
         }
         return reference;
     }
-    void syncLengthInputs() {
+    void syncLengthInputs(int reference) {
         const auto settings = document->settings();
-        const int reference = lengthReference();
         const auto description = text(settings.direction == CollageDirection::Custom
                                           ? "Percentage of the grid cell width"
                                       : settings.direction == CollageDirection::Vertical
@@ -1144,7 +1410,7 @@ struct CollageEditorWidget::Impl {
             focus && (focus == editor.input || editor.input->isAncestorOf(focus)))
             focus->clearFocus();
         editor.percentage = value.toString() == QStringLiteral("percentage");
-        syncLengthInputs();
+        syncLengthInputs(lengthReference());
     }
     int lengthPixels(const LengthEditor& editor, double value) const {
         const double pixels = editor.percentage ? value * lengthReference() / 100.0 : value;
@@ -1174,36 +1440,79 @@ struct CollageEditorWidget::Impl {
         const auto current = document->settings();
         // A too-small column count may normalize back to the existing settings without a signal.
         if (current == previousSettings)
-            refresh();
+            refresh(true);
         if (current.direction != previousSettings.direction ||
             (current.direction == CollageDirection::Custom &&
              (field == QStringLiteral("rows") || field == QStringLiteral("columns"))))
             canvas->fitToCanvas();
         emit owner->settingsEdited(field);
     }
-    void refresh() {
+    void refresh(bool force = false) {
         syncing = true;
-        const auto settings = document->settings();
-        direction->setCurrentValue(
-            settings.direction == CollageDirection::Vertical     ? QStringLiteral("vertical")
-            : settings.direction == CollageDirection::Horizontal ? QStringLiteral("horizontal")
-                                                                 : QStringLiteral("custom"));
-        gridField->setVisible(settings.direction == CollageDirection::Custom);
-        rows->setValue(settings.rows);
-        columns->setValue(settings.columns);
-        sizing->setCurrentValue(settings.sizing == CollageSizing::Uniform
-                                    ? QStringLiteral("uniform")
-                                    : QStringLiteral("original"));
-        syncLengthInputs();
-        color->setValue(AdColorValue::solid(settings.background));
-        for (std::size_t i = 0; i < presets.size(); ++i)
-            presets[i]->setSelected(settings.background ==
-                                    QColor(QString::fromLatin1(kColorValues[i])));
+        const auto nextSettings = document->settings();
+        force = force || !initialized;
+        const bool backgroundOnly = !force &&
+                                    nextSettings.background != cachedSettings.background &&
+                                    sameLayoutSettings(nextSettings, cachedSettings) &&
+                                    thumbnailById.size() == document->items().size();
+        if (force || nextSettings.background != cachedSettings.background) {
+            color->setValue(AdColorValue::solid(nextSettings.background));
+            for (std::size_t i = 0; i < presets.size(); ++i)
+                presets[i]->setSelected(nextSettings.background ==
+                                        QColor(QString::fromLatin1(kColorValues[i])));
+        }
+        if (backgroundOnly) {
+            syncing = false;
+            cachedSettings = nextSettings;
+            return;
+        }
+        if (force || nextSettings.direction != cachedSettings.direction) {
+            direction->setCurrentValue(nextSettings.direction == CollageDirection::Vertical
+                                           ? QStringLiteral("vertical")
+                                       : nextSettings.direction == CollageDirection::Horizontal
+                                           ? QStringLiteral("horizontal")
+                                           : QStringLiteral("custom"));
+            gridField->setVisible(nextSettings.direction == CollageDirection::Custom);
+        }
+        if (force || nextSettings.rows != cachedSettings.rows)
+            rows->setValue(nextSettings.rows);
+        if (force || nextSettings.columns != cachedSettings.columns)
+            columns->setValue(nextSettings.columns);
+        if (force || nextSettings.sizing != cachedSettings.sizing)
+            sizing->setCurrentValue(nextSettings.sizing == CollageSizing::Uniform
+                                        ? QStringLiteral("uniform")
+                                        : QStringLiteral("original"));
+        const int reference = lengthReference();
+        if (force || reference != referencePixels ||
+            nextSettings.direction != cachedSettings.direction ||
+            nextSettings.border != cachedSettings.border ||
+            nextSettings.spacing != cachedSettings.spacing)
+            syncLengthInputs(reference);
+        referencePixels = reference;
+        cachedSettings = nextSettings;
+        initialized = true;
         syncing = false;
         QSet<quint64> retained;
+        for (const auto& item : document->items())
+            retained.insert(item.id);
+        bool thumbnailsChanged = false;
+        const bool countChanged = thumbnailById.size() != document->items().size();
+        for (auto it = thumbnailById.begin(); it != thumbnailById.end();) {
+            if (!retained.contains(it.key())) {
+                thumbnailLayout->removeWidget(it.value());
+                it.value()->hide();
+                it.value()->deleteLater();
+                it = thumbnailById.erase(it);
+                thumbnailsChanged = true;
+            } else {
+                ++it;
+            }
+        }
+        QHash<QWidget*, int> thumbnailPositions;
+        for (int index = 0; index < thumbnailLayout->count(); ++index)
+            thumbnailPositions.insert(thumbnailLayout->itemAt(index)->widget(), index);
         int ordinal = 0;
         for (const auto& item : document->items()) {
-            retained.insert(item.id);
             auto* thumbnail = thumbnailById.value(item.id);
             if (!thumbnail) {
                 thumbnail = new CollageThumbnail(document, item.id, thumbnails);
@@ -1213,22 +1522,28 @@ struct CollageEditorWidget::Impl {
                     emit owner->replaceImageRequested(id);
                 };
                 thumbnailById.insert(item.id, thumbnail);
+                thumbnail->setEditingEnabled(!exporting, !loading);
+                thumbnailPositions.insert(thumbnail, thumbnailLayout->count());
+                thumbnailLayout->addWidget(thumbnail);
+                thumbnailsChanged = true;
             }
-            thumbnail->setItem(item, ++ordinal);
-            thumbnailLayout->removeWidget(thumbnail);
-            thumbnailLayout->insertWidget(ordinal - 1, thumbnail);
-        }
-        for (auto it = thumbnailById.begin(); it != thumbnailById.end();) {
-            if (!retained.contains(it.key())) {
-                thumbnailLayout->removeWidget(it.value());
-                it.value()->hide();
-                it.value()->deleteLater();
-                it = thumbnailById.erase(it);
-            } else {
-                ++it;
+            thumbnail->setItem(item, ++ordinal, force);
+            const int targetIndex = ordinal - 1;
+            const int currentIndex = thumbnailPositions.value(thumbnail);
+            if (currentIndex != targetIndex) {
+                // Earlier slots are final, so currentIndex is always beyond targetIndex. Swap
+                // two layout items directly instead of shifting every intervening thumbnail.
+                auto* desired = thumbnailLayout->takeAt(currentIndex);
+                auto* displaced = thumbnailLayout->takeAt(targetIndex);
+                thumbnailLayout->insertItem(targetIndex, desired);
+                thumbnailLayout->insertItem(currentIndex, displaced);
+                thumbnailPositions.insert(thumbnail, targetIndex);
+                thumbnailPositions.insert(displaced->widget(), currentIndex);
+                thumbnailsChanged = true;
             }
         }
-        thumbnails->adjustSize();
+        if (thumbnailsChanged)
+            thumbnails->adjustSize();
         const bool empty = document->items().isEmpty();
         canvas->setVisible(!empty);
         thumbnailRow->setVisible(!empty);
@@ -1240,7 +1555,8 @@ struct CollageEditorWidget::Impl {
                              : QString{});
         dimensions->setVisible(layout.isValid());
         total->setText(text("Total: %1 images").arg(document->items().size()));
-        enabled();
+        if (countChanged || force)
+            enabled();
     }
     void theme() {
         const auto theme = adqt::theme::ThemeManager::instance().resolveTheme(owner);
@@ -1278,6 +1594,7 @@ CollageEditorWidget::CollageEditorWidget(CollageDocument* document, QWidget* par
     auto& d = *m_impl;
     d.owner = this;
     d.document = document;
+    d.selectedThumbnail = document->selectedId();
     setObjectName(QStringLiteral("collageEditorWidget"));
     setAcceptDrops(true);
     const auto theme = styles::ThemeManager::instance().themeColorScheme().metricAlias;
@@ -1571,8 +1888,12 @@ CollageEditorWidget::CollageEditorWidget(CollageDocument* document, QWidget* par
     });
     connect(document, &CollageDocument::changed, this, [this] { m_impl->refresh(); });
     connect(document, &CollageDocument::selectionChanged, this, [this] {
-        for (auto* thumbnail : m_impl->thumbnailById)
+        const auto selected = m_impl->document->selectedId();
+        if (auto* thumbnail = m_impl->thumbnailById.value(m_impl->selectedThumbnail))
             thumbnail->update();
+        if (auto* thumbnail = m_impl->thumbnailById.value(selected))
+            thumbnail->update();
+        m_impl->selectedThumbnail = selected;
     });
     connect(&adqt::theme::ThemeManager::instance(), &adqt::theme::ThemeManager::themeChanged, this,
             [this] { m_impl->theme(); });
@@ -1592,7 +1913,7 @@ CollageEditorWidget::CollageEditorWidget(CollageDocument* document, QWidget* par
                 m_impl->theme();
             });
     retranslateUi();
-    d.refresh();
+    d.refresh(true);
     d.theme();
 }
 CollageEditorWidget::~CollageEditorWidget() = default;
@@ -1657,7 +1978,7 @@ void CollageEditorWidget::retranslateUi() {
     d.clear->setText(text("Clear all"));
     d.canvas->retranslateUi();
     d.syncing = false;
-    d.refresh();
+    d.refresh(true);
 }
 void CollageEditorWidget::changeEvent(QEvent* event) {
     if (event->type() == QEvent::LanguageChange)

@@ -34,6 +34,8 @@ struct CollageSettings final {
     friend bool operator==(const CollageSettings&, const CollageSettings&) = default;
 };
 
+struct CollageImageMetadata;
+
 struct CollageItem final {
     quint64 id = 0;
     quint64 revision = 0;
@@ -42,6 +44,8 @@ struct CollageItem final {
     QTransform transform;
     QString label;
     std::shared_ptr<void> resourceOwner;
+    // Shared memoization belongs to the immutable original, independently of layout/transforms.
+    std::shared_ptr<CollageImageMetadata> metadata;
 };
 
 struct CollageLayout final {

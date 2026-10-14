@@ -381,13 +381,15 @@ bool write(const Payload& payload, QIODevice* output, const ScreenshotPdfOptions
 }
 
 bool decodeTiles(const Payload& payload, const std::function<bool(QRect, const QImage&)>& consume,
-                 QString* error, const Cancelled& cancelled) {
+                 QString* error, const Cancelled& cancelled, QRect region) {
     QFile input(payload.path());
     if (!input.open(QIODevice::ReadOnly))
         return fail(error);
     for (const Tile& tile : payload.tiles) {
         if (isCancelled(cancelled, error))
             return false;
+        if (!region.isEmpty() && !tile.rect.intersects(region))
+            continue;
         if (!input.seek(tile.offset))
             return fail(error);
         QByteArray color = input.read(tile.colorBytes);

@@ -17,10 +17,12 @@
 #include <QElapsedTimer>
 #include <QLabel>
 #include <QLineEdit>
+#include <QLayout>
 #include <QKeyEvent>
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QRgba64>
 #include <QDir>
 #include <QFileInfo>
 #include <QThread>
@@ -32,6 +34,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -580,11 +583,13 @@ void thumbnailActionsUseTranslucentOverlays() {
 void floatingFitToCanvasFollowsViewport() {
     CollageDocument document;
     CollageEditorWidget editor(&document);
+    auto* canvas = editor.canvas();
+    auto* fit = button(&editor, "collageFitToCanvas");
+    require(!fit->isEnabled(),
+            "the empty preview must initialize its fit action before the editor is shown");
     editor.resize(1000, 700);
     editor.show();
     pump();
-    auto* canvas = editor.canvas();
-    auto* fit = button(&editor, "collageFitToCanvas");
     require(dynamic_cast<OverlayControlButton*>(fit) && fit->parentWidget() == canvas &&
                 fit->text().isEmpty() && fit->sizeClass() == AdButton::SizeClass::Medium &&
                 fit->size() == QSize(32, 32) && fit->iconSize() == QSize(18, 18) &&
@@ -825,11 +830,11 @@ void invalidLayoutKeepsSelectionAndTransformsUsable() {
     auto invalidSettings = initialSettings;
     invalidSettings.border = std::numeric_limits<int>::max();
     document.setSettings(invalidSettings);
-    pump();
     require(!document.layout().isValid() && canvas->imageViewportRect(first).isEmpty(),
             "resource-limited layout must retain images without invalid preview geometry");
     require(!button(canvas, "collageFitToCanvas")->isEnabled(),
             "fit must be disabled when the preview layout is invalid");
+    pump();
     require(toolbar && toolbar->isVisible() && canvas->rect().contains(toolbar->geometry()) &&
                 toolbar->geometry().top() > canvas->height() / 2,
             "invalid layout must retain transform controls below the centered error");
@@ -1447,6 +1452,326 @@ void detailTilesRemainBoundedAndOriginalsUnchanged() {
     require(qFuzzyCompare(editor.canvas()->zoom(), before), "rotation must preserve preview zoom");
 }
 
+void backgroundEditsPreservePendingNumericInput() {
+    CollageDocument document;
+    document.append(image({500, 300}), QStringLiteral("first"));
+    document.append(image({500, 300}), QStringLiteral("second"));
+    CollageEditorWidget editor(&document);
+    editor.resize(1000, 650);
+    editor.show();
+    pump();
+    auto* border =
+        editor.findChild<adqt::widgets::AdInputNumber*>(QStringLiteral("collageOuterBorder"));
+    auto* input = border->findChild<QLineEdit*>();
+    require(input != nullptr, "border editor must expose its numeric input");
+    input->setFocus(Qt::OtherFocusReason);
+    input->setText(QStringLiteral("42"));
+    const auto zoom = editor.canvas()->zoom();
+    const auto offset = editor.canvas()->offset();
+    auto settings = document.settings();
+    settings.background = QColor(20, 60, 100, 70);
+    document.setSettings(settings);
+    pump();
+    require(input->text().startsWith(QStringLiteral("42")) && input->hasFocus() &&
+                document.settings().border == 0,
+            "background edits must preserve unrelated uncommitted numeric input and focus");
+    require(qFuzzyCompare(editor.canvas()->zoom(), zoom) &&
+                (editor.canvas()->offset() - offset).manhattanLength() < .001,
+            "background edits must preserve viewport geometry");
+    input->clearFocus();
+    pump();
+    require(document.settings().border == 42,
+            "the preserved numeric edit must still commit through the normal control workflow");
+}
+
+void thumbnailReorderingPreservesWidgetsAndFocus() {
+    CollageDocument document;
+    for (int index = 0; index < 9; ++index)
+        document.append(image({150, 100}), QString::number(index));
+    CollageEditorWidget editor(&document);
+    editor.resize(1200, 700);
+    editor.show();
+    pump();
+    auto* strip = editor.findChild<QWidget*>(QStringLiteral("collageThumbnails"));
+    auto* focused = strip->layout()->itemAt(4)->widget();
+    focused->setFocus(Qt::OtherFocusReason);
+    const auto first = document.items().front().id;
+    const auto last = document.items().back().id;
+    editor.canvas()->centerImage(first);
+    const auto anchor = editor.canvas()->imageViewportRect(first).center();
+    require(document.swapItems(first, last), "thumbnail order fixture swaps distant items");
+    require((editor.canvas()->imageViewportRect(first).center() - anchor).manhattanLength() < .001,
+            "reordering equal-size images must preserve the selected viewport anchor");
+    const auto verifyOrder = [&] {
+        require(strip->layout()->count() == document.items().size(),
+                "thumbnail strip contains exactly the surviving document items");
+        for (int index = 0; index < strip->layout()->count(); ++index) {
+            auto* thumbnail = strip->layout()->itemAt(index)->widget();
+            require(thumbnail->property("collageItemId").toULongLong() ==
+                            document.items()[index].id &&
+                        thumbnail->accessibleName().startsWith(
+                            QStringLiteral("Image %1:").arg(index + 1)),
+                    "thumbnail layout and accessible ordinals follow the document order");
+        }
+    };
+    verifyOrder();
+    require(strip->layout()->itemAt(4)->widget() == focused && focused->hasFocus(),
+            "swapping distant thumbnails retains the unaffected widget and keyboard focus");
+    document.remove(last);
+    verifyOrder();
+    require(focused->hasFocus(), "removing another thumbnail retains keyboard focus");
+}
+
+void detailTilesPreserveColorOrientationAndCroppedPalette() {
+    for (const auto format : {QImage::Format_RGBA64_Premultiplied, QImage::Format_Mono}) {
+        CollageDocument document;
+        QImage source(1603, 1201, format);
+        require(!source.isNull(), "detail color fixture allocation");
+        const std::array<QColor, 4> colors{QColor(190, 40, 20, 110), QColor(20, 180, 50, 150),
+                                           QColor(20, 60, 190, 200), QColor(190, 140, 20, 90)};
+        if (format == QImage::Format_Mono) {
+            source.setColorTable({qRgb(255, 255, 255), qRgb(0, 0, 0)});
+            for (int y = 0; y < source.height(); ++y)
+                for (int x = 0; x < source.width(); ++x)
+                    source.setPixel(x, y, unsigned((x / 200 + y / 200) % 2));
+        } else {
+            source.setColorSpace(QColorSpace::DisplayP3);
+            QPainter painter(&source);
+            painter.setCompositionMode(QPainter::CompositionMode_Source);
+            for (int index = 0; index < 4; ++index)
+                painter.fillRect(QRect(index % 2 * 802, index / 2 * 601, 802, 601),
+                                 colors[size_t(index)]);
+        }
+        const auto key = source.cacheKey();
+        const auto id = document.append(source, QStringLiteral("color and palette"));
+        require(id != 0, "detail color fixture admission");
+        CollageEditorWidget editor(&document);
+        editor.resize(1200, 800);
+        editor.show();
+        document.select(0);
+        pump();
+        wheel(editor.canvas(), QRectF(editor.canvas()->rect()).center(), 300);
+        for (int orientation = 0; orientation < 3; ++orientation) {
+            if (orientation == 1)
+                require(document.rotate(id, true), "rotate detail color fixture");
+            if (orientation == 2)
+                require(document.flip(id, true), "flip detail color fixture");
+            QElapsedTimer timer;
+            timer.start();
+            while ((editor.canvas()->property("detailTileCount").toInt() == 0 ||
+                    ScreenshotExportCoordinator::shared().pendingJobCount() != 0) &&
+                   timer.elapsed() < 10000) {
+                pump();
+                QThread::msleep(5);
+            }
+            require(editor.canvas()->property("detailTileCount").toInt() > 0,
+                    "cropped high-depth and palette previews must obtain detail tiles");
+            const auto frame = editor.canvas()->grab().toImage();
+            const auto& item = document.items().front();
+            const auto sourceBounds = item.transform.mapRect(QRectF(QPointF{}, source.size()));
+            const auto bounds = editor.canvas()->imageViewportRect(id);
+            int checked = 0;
+            for (const QPoint point :
+                 {QPoint(300, 300), QPoint(1100, 300), QPoint(300, 900), QPoint(1100, 900)}) {
+                const QPointF transformed =
+                    item.transform.map(QPointF(point)) - sourceBounds.topLeft();
+                const QPointF screen =
+                    bounds.topLeft() +
+                    QPointF(transformed.x() / sourceBounds.width() * bounds.width(),
+                            transformed.y() / sourceBounds.height() * bounds.height());
+                if (!QRectF(editor.canvas()->rect()).adjusted(10, 10, -10, -10).contains(screen))
+                    continue;
+                QImage pixel(1, 1, format == QImage::Format_Mono ? QImage::Format_RGB32 : format);
+                pixel.fill(source.pixelColor(point));
+                if (source.colorSpace().isValid()) {
+                    pixel.setColorSpace(source.colorSpace());
+                    pixel = pixel.convertedToColorSpace(QColorSpace::SRgb);
+                }
+                QImage expected(1, 1, QImage::Format_ARGB32_Premultiplied);
+                expected.fill(Qt::white);
+                {
+                    QPainter painter(&expected);
+                    painter.drawImage(QPoint{}, pixel);
+                }
+                const auto actual = frame.pixelColor((screen * frame.devicePixelRatio()).toPoint());
+                const auto color = expected.pixelColor(0, 0);
+                const auto diagnostic =
+                    QStringLiteral("detail color mismatch: format=%1 orientation=%2 "
+                                   "source=(%3,%4) screen=(%5,%6) actual=%7 expected=%8")
+                        .arg(int(format))
+                        .arg(orientation)
+                        .arg(point.x())
+                        .arg(point.y())
+                        .arg(screen.x())
+                        .arg(screen.y())
+                        .arg(actual.name(QColor::HexArgb))
+                        .arg(color.name(QColor::HexArgb));
+                require(std::abs(actual.red() - color.red()) <= 3 &&
+                            std::abs(actual.green() - color.green()) <= 3 &&
+                            std::abs(actual.blue() - color.blue()) <= 3,
+                        qPrintable(diagnostic));
+                ++checked;
+            }
+            require(checked >= 2,
+                    "detail color checks must exercise multiple visible source areas");
+        }
+        require(source.cacheKey() == key && document.items().front().image.cacheKey() == key,
+                "cropped detail tiles must preserve high-depth and palette originals");
+    }
+}
+
+void stronglyReducedDetailsKeepNativeAreaQuality() {
+    QImage source(2053, 1543, QImage::Format_RGBA64_Premultiplied);
+    require(!source.isNull(), "area-detail fixture allocation");
+    for (int y = 0; y < source.height(); ++y) {
+        auto* pixels = reinterpret_cast<QRgba64*>(source.scanLine(y));
+        for (int x = 0; x < source.width(); ++x)
+            pixels[x] = QRgba64::fromRgba(static_cast<quint8>((x * 53 + y * 23) % 256),
+                                          static_cast<quint8>((x * 11 + y * 71) % 256),
+                                          static_cast<quint8>((x * 101 + y * 31) % 256),
+                                          static_cast<quint8>(31 + (x * 19 + y * 7) % 225))
+                            .premultiplied();
+    }
+    source.setColorSpace(QColorSpace::DisplayP3);
+    const auto key = source.cacheKey();
+    const auto converted = source.convertedToColorSpace(QColorSpace::SRgb);
+    CollageDocument document;
+    const auto id = document.append(source, QStringLiteral("high-frequency alpha colors"));
+    require(id != 0, "area-detail fixture admission");
+    CollageEditorWidget editor(&document);
+    editor.resize(800, 640);
+    editor.show();
+    document.select(0);
+    pump();
+    QElapsedTimer timer;
+    timer.start();
+    while ((editor.canvas()->property("detailTileCount").toInt() == 0 ||
+            ScreenshotExportCoordinator::shared().pendingJobCount() != 0) &&
+           timer.elapsed() < 10000) {
+        pump();
+        QThread::msleep(1);
+    }
+    require(editor.canvas()->property("detailTileCount").toInt() > 0,
+            "strongly reduced detail must finish");
+    const auto bounds = editor.canvas()->imageViewportRect(id);
+    const auto actual = editor.canvas()->grab().toImage();
+    const auto dpr = actual.devicePixelRatio();
+    const qreal desiredScale = std::min(
+        1.0, std::max(bounds.width() / source.width(), bounds.height() / source.height()) * dpr);
+    const QSize wanted(qCeil(source.width() * desiredScale), qCeil(source.height() * desiredScale));
+    const qreal scale =
+        std::min(qreal(wanted.width()) / source.width(), qreal(wanted.height()) / source.height());
+    const QSize tileSize(qCeil(source.width() * scale), qCeil(source.height() * scale));
+    const qint64 tileBytes = qint64(tileSize.width()) * tileSize.height() * 4;
+    require(editor.canvas()->property("detailPreviewBytes").toLongLong() -
+                    document.items().front().preview.sizeInBytes() ==
+                tileBytes,
+            "full-fit quality reference must use the completed detail tile's actual resolution");
+    require(tileSize.width() <= source.width() / 4 && tileSize.height() <= source.height() / 4,
+            "area quality fixture must shrink both dimensions by at least four");
+    const auto tile = converted.scaled(tileSize, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    QImage expected(actual.size(), QImage::Format_ARGB32_Premultiplied);
+    expected.fill(Qt::white);
+    {
+        QPainter painter(&expected);
+        painter.scale(dpr, dpr);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform);
+        painter.drawImage(bounds, tile);
+    }
+    for (int y = 1; y < 8; ++y)
+        for (int x = 1; x < 10; ++x) {
+            const auto position =
+                ((bounds.topLeft() + QPointF(bounds.width() * x / 10, bounds.height() * y / 8)) *
+                 dpr)
+                    .toPoint();
+            const auto before = expected.pixelColor(position);
+            const auto after = actual.pixelColor(position);
+            if (std::abs(before.red() - after.red()) > 2 ||
+                std::abs(before.green() - after.green()) > 2 ||
+                std::abs(before.blue() - after.blue()) > 2)
+                std::cerr << "area detail pixel=" << position.x() << ',' << position.y()
+                          << " expected=" << before.name(QColor::HexArgb).toStdString()
+                          << " actual=" << after.name(QColor::HexArgb).toStdString()
+                          << " bounds=" << bounds.x() << ',' << bounds.y() << ',' << bounds.width()
+                          << ',' << bounds.height() << " wanted=" << wanted.width() << 'x'
+                          << wanted.height() << " tile=" << tileSize.width() << 'x'
+                          << tileSize.height() << " dpr=" << dpr << " previewBytes="
+                          << editor.canvas()->property("detailPreviewBytes").toLongLong()
+                          << " baseBytes=" << document.items().front().preview.sizeInBytes()
+                          << " source=" << source.width() * x / 10 << ',' << source.height() * y / 8
+                          << '\n';
+            require(std::abs(before.red() - after.red()) <= 2 &&
+                        std::abs(before.green() - after.green()) <= 2 &&
+                        std::abs(before.blue() - after.blue()) <= 2,
+                    "bounded area details must retain native Qt edge, alpha and ICC averaging");
+        }
+    require(source.cacheKey() == key && document.items().front().image.cacheKey() == key,
+            "area filtering must preserve immutable original pixels");
+}
+
+void cancelledDetailsRetainPreviewAccountingUntilRetirement() {
+    struct Blockers final {
+        std::atomic_int started{0};
+        std::atomic_bool release{false};
+    };
+    auto blockers = std::make_shared<Blockers>();
+    struct Release final {
+        std::shared_ptr<Blockers> blockers;
+        ~Release() {
+            blockers->release.store(true);
+        }
+    } release{blockers};
+    QObject receiver;
+    const int workers = std::clamp(QThread::idealThreadCount(), 1, 2);
+    for (int index = 0; index < workers; ++index) {
+        const auto job = ScreenshotExportCoordinator::shared().submit(
+            &receiver, ScreenshotExportCoordinator::Priority::Foreground,
+            [blockers](const ScreenshotExportCancellation& cancellation) {
+                blockers->started.fetch_add(1);
+                while (!blockers->release.load() && !cancellation.isCancellationRequested())
+                    QThread::msleep(1);
+                return ScreenshotExportTaskResult{};
+            },
+            [](const ScreenshotExportTaskResult&) {});
+        require(job.isValid(), "detail retirement fixture worker admission");
+    }
+    QElapsedTimer timer;
+    timer.start();
+    while (blockers->started.load() != workers && timer.elapsed() < 10000) {
+        pump();
+        QThread::msleep(1);
+    }
+    require(blockers->started.load() == workers, "detail retirement fixture workers must start");
+    CollageDocument document;
+    document.append(image({2000, 1600}), QStringLiteral("queued detail"));
+    CollageEditorWidget editor(&document);
+    editor.resize(1200, 800);
+    editor.show();
+    timer.restart();
+    while (editor.canvas()->property("detailPendingCount").toInt() == 0 &&
+           timer.elapsed() < 10000) {
+        pump();
+        QThread::msleep(1);
+    }
+    require(editor.canvas()->property("detailPendingCount").toInt() == 1,
+            "detail retirement fixture must hold one queued preview");
+    document.clear();
+    require(editor.canvas()->property("detailPendingCount").toInt() == 1 &&
+                editor.canvas()->property("detailPreviewBytes").toLongLong() > 0,
+            "cancelling a detail keeps its reserved preview accounted until completion retires");
+    blockers->release.store(true);
+    timer.restart();
+    while ((ScreenshotExportCoordinator::shared().pendingJobCount() != 0 ||
+            editor.canvas()->property("detailPendingCount").toInt() != 0) &&
+           timer.elapsed() < 10000) {
+        pump();
+        QThread::msleep(1);
+    }
+    require(editor.canvas()->property("detailPendingCount").toInt() == 0 &&
+                editor.canvas()->property("detailPreviewBytes").toLongLong() == 0,
+            "retired cancelled detail releases its window preview reservation");
+}
+
 void languageChangesPreserveSettingsAndRefreshLabels() {
     CollageDocument document;
     document.append(image({120, 100}), QStringLiteral("sample"));
@@ -1740,6 +2065,11 @@ int main(int argc, char** argv) {
         customGridPercentagesFollowCellWidth();
         customGridDimensionChangesFitToCanvas();
         detailTilesRemainBoundedAndOriginalsUnchanged();
+        backgroundEditsPreservePendingNumericInput();
+        thumbnailReorderingPreservesWidgetsAndFocus();
+        detailTilesPreserveColorOrientationAndCroppedPalette();
+        stronglyReducedDetailsKeepNativeAreaQuality();
+        cancelledDetailsRetainPreviewAccountingUntilRetirement();
         languageChangesPreserveSettingsAndRefreshLabels();
         ScreenshotExportCoordinator::shared().shutdown();
         std::cout << "Collage editor tests passed\n";

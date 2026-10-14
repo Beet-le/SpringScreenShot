@@ -512,14 +512,15 @@ std::optional<ScreenshotClipboardContent>
 readFileContent(const ScreenshotClipboardLocalImage& localImage, qreal devicePixelRatio,
                 const QColor& baseColor,
                 const ScreenshotClipboardContentReader::CancellationCheck& cancelled,
-                const AllocationCheck& allocate, qint64 retained) {
+                const AllocationCheck& allocate, qint64 retained, bool firstFrameOnly = false) {
     const auto format =
         std::find_if(std::begin(kImageFileFormats), std::end(kImageFileFormats),
                      [&localImage](const ImageFileFormat& candidate) {
                          return localImage.suffix == QLatin1String(candidate.suffix);
                      });
     const bool textFile = isTextFile(localImage.suffix);
-    if ((!textFile && format == std::end(kImageFileFormats)) || cancellationRequested(cancelled)) {
+    if ((firstFrameOnly && textFile) || (!textFile && format == std::end(kImageFileFormats)) ||
+        cancellationRequested(cancelled)) {
         return std::nullopt;
     }
 
@@ -565,13 +566,24 @@ readFileContent(const ScreenshotClipboardLocalImage& localImage, qreal devicePix
                                                         textAllocate);
     }
     const auto codecFormat = imageFileCodecFormat(format->codec);
-    if (allocate && !admitImage(snow_shot::image_codec::inspectSize(encoded, codecFormat),
-                                retained + encoded.size(), allocate))
+    if ((allocate || firstFrameOnly) &&
+        !admitImage(snow_shot::image_codec::inspectCanvasSize(encoded, codecFormat),
+                    retained + encoded.size(), allocate))
         return std::nullopt;
     QString animationError;
     const AllocationCheck animationAdmission =
         allocate ? AllocationCheck([&](qint64 bytes) { return allocate(retained + bytes); })
                  : AllocationCheck{};
+    if (firstFrameOnly) {
+        auto image = snow_shot::image_codec::decodeAnimationFirstFrame(
+            encoded, &animationError, cancelled, animationAdmission);
+        if (!image.isNull())
+            return imageContent(std::move(image));
+        if (!animationError.isEmpty() || cancellationRequested(cancelled))
+            return std::nullopt;
+        auto result = imageContent(snow_shot::image_codec::decodeFirstFrame(encoded, codecFormat));
+        return cancellationRequested(cancelled) ? std::nullopt : std::move(result);
+    }
     auto animation = snow_shot::image_codec::decodeAnimationSource(encoded, &animationError,
                                                                    cancelled, animationAdmission);
     if (animation) {
@@ -1312,6 +1324,13 @@ ScreenshotClipboardContentReader::decode(ScreenshotClipboardContentSnapshot snap
         }
     }
     return std::nullopt;
+}
+
+QImage ScreenshotClipboardContentReader::decodeImageFile(const ScreenshotClipboardLocalImage& file,
+                                                         CancellationCheck cancelled,
+                                                         AllocationCheck allocate) {
+    const auto content = readFileContent(file, 1.0, {}, cancelled, allocate, 0, true);
+    return content ? content->image : QImage{};
 }
 
 bool ScreenshotClipboardContentReader::prepareAnimationDisplay(ScreenshotClipboardContent& content,

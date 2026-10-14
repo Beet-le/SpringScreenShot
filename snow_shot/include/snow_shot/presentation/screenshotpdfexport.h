@@ -49,5 +49,5 @@ using Cancelled = std::function<bool()>;
                          const Cancelled& cancelled = {});
 [[nodiscard]] bool decodeTiles(const Payload& payload,
                                const std::function<bool(QRect, const QImage&)>& consume,
-                               QString* error, const Cancelled& cancelled = {});
+                               QString* error, const Cancelled& cancelled = {}, QRect region = {});
 } // namespace screenshot_pdf

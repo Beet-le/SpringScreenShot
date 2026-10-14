@@ -197,6 +197,20 @@ AdModal* openDialog(QWidget& owner, const QImage& image,
     processUntil(
         [&] { return modal->contentWidget()->property("previewGeneration").toULongLong() > 0; });
     flush();
+    for (const char* name : {"saveWidthInput", "saveHeightInput", "saveAspectLockButton"}) {
+        auto* widget = child<QWidget>(modal->contentWidget(), name);
+        if (widget->isEnabled())
+            continue;
+        for (auto* ancestor = widget; ancestor; ancestor = ancestor->parentWidget()) {
+            std::cerr << "Disabled control ancestor: " << ancestor->metaObject()->className()
+                      << " name=" << ancestor->objectName().toStdString()
+                      << " enabled=" << ancestor->isEnabled()
+                      << " forceDisabled=" << ancestor->testAttribute(Qt::WA_ForceDisabled);
+            if (const auto* form = qobject_cast<AdForm*>(ancestor))
+                std::cerr << " formDisabled=" << form->disabled();
+            std::cerr << '\n';
+        }
+    }
     require(child<AdInputNumber>(modal->contentWidget(), "saveWidthInput")->isEnabled() &&
                 child<AdInputNumber>(modal->contentWidget(), "saveHeightInput")->isEnabled() &&
                 child<AdButton>(modal->contentWidget(), "saveAspectLockButton")->isEnabled(),
@@ -952,6 +966,97 @@ void canvasInteraction() {
     QApplication::sendEvent(&canvas, &move);
     QApplication::sendEvent(&canvas, &up);
     require(canvas.pan() == pan + QPointF(25, 20), "canvas dragging did not pan");
+}
+
+void canvasNativeDetailPreservesTransparency() {
+    const QSize pixels(4096, 3072);
+    const auto solidImage = [](QSize size, QColor color) {
+        QImage image(size, QImage::Format_RGBA8888);
+        image.fill(color);
+        return image;
+    };
+    const auto renderer = [solidImage](QColor color) {
+        return [solidImage, color](QRect region, const ScreenshotExportCancellation&, QString*) {
+            QSize size = region.size();
+            size.scale(1024, 1024, Qt::KeepAspectRatio);
+            return solidImage(size, color);
+        };
+    };
+    for (int alpha : {0, 127, 255}) {
+        for (bool pdf : {false, true}) {
+            ScreenshotSavePreviewCanvas reference;
+            ScreenshotSavePreviewCanvas detailed;
+            const QColor sourceColor(197, 57, 31, alpha);
+            const QColor outputColor(23, 101, 217, alpha);
+            const auto source = solidImage(QSize(256, 192), sourceColor);
+            const auto output = solidImage(source.size(), outputColor);
+            reference.setSource(source, pixels);
+            reference.setOutput(output, pixels);
+            detailed.setSource(source, pixels, renderer(sourceColor));
+            detailed.setOutput(output, pixels, renderer(outputColor));
+            for (auto* canvas : {&reference, &detailed}) {
+                canvas->resize(600, 400);
+                if (pdf)
+                    canvas->setPdfLayout(
+                        screenshot_pdf::layout(pixels, ScreenshotPdfPageSize::PortraitA4));
+                canvas->show();
+                for (int iteration = 0; iteration < 4; ++iteration) {
+                    QWheelEvent wheel(QPointF(300, 200), canvas->mapToGlobal(QPoint(300, 200)), {},
+                                      QPoint(0, 120), Qt::NoButton, Qt::NoModifier,
+                                      Qt::NoScrollPhase, false);
+                    QApplication::sendEvent(canvas, &wheel);
+                }
+                child<CanvasStatusReadout>(canvas, "savePreviewZoom")->dismiss();
+            }
+            processUntil([&] { return !detailed.outputDetailImage().isNull(); });
+            const auto verify = [&] {
+                for (double split : {0.0, 0.5, 1.0}) {
+                    reference.setSplitRatio(split);
+                    detailed.setSplitRatio(split);
+                    // Native windows may receive different pointer hover events.
+                    for (auto* canvas : {&reference, &detailed}) {
+                        QEvent leave(QEvent::Leave);
+                        QApplication::sendEvent(canvas, &leave);
+                    }
+                    const QImage expected = reference.grab().toImage();
+                    const QImage actual = detailed.grab().toImage();
+                    const QString message =
+                        QStringLiteral("native detail must composite alpha once over checkerboard "
+                                       "or PDF paper (alpha %1, PDF %2, split %3, DPR %4)")
+                            .arg(alpha)
+                            .arg(pdf)
+                            .arg(split)
+                            .arg(detailed.devicePixelRatioF());
+                    require(samePixels(expected, actual), qPrintable(message));
+                }
+            };
+            verify();
+            const QRect detailRegion = detailed.outputDetailRegion();
+            const auto detailGeneration = detailed.property("detailGeneration");
+            const QPointF pan = detailed.pan();
+            require(detailRegion != QRect(QPoint{}, pixels),
+                    "zoomed transparency fixture must retain a partial native tile");
+            for (auto* canvas : {&reference, &detailed}) {
+                canvas->setSplitRatio(0.5);
+                QMouseEvent down(QEvent::MouseButtonPress, QPointF(100, 100), QPointF(100, 100),
+                                 Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+                QMouseEvent move(QEvent::MouseMove, QPointF(125.5, 120.25), QPointF(125.5, 120.25),
+                                 Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+                QMouseEvent up(QEvent::MouseButtonRelease, QPointF(125.5, 120.25),
+                               QPointF(125.5, 120.25), Qt::LeftButton, Qt::NoButton,
+                               Qt::NoModifier);
+                QApplication::sendEvent(canvas, &down);
+                QApplication::sendEvent(canvas, &move);
+                QApplication::sendEvent(canvas, &up);
+            }
+            verify();
+            require(detailed.pan() == pan + QPointF(25.5, 20.25) &&
+                        reference.pan() == detailed.pan() &&
+                        detailed.outputDetailRegion() == detailRegion &&
+                        detailed.property("detailGeneration") == detailGeneration,
+                    "fractional panning must preserve the cached tile until replacement arrives");
+        }
+    }
 }
 
 void canvasPdfComparison() {
@@ -2498,6 +2603,291 @@ void unbackedExactPreviewRetainsPixels(QWidget& owner) {
     flush();
 }
 
+void boundedPreviewAndNativeRegions() {
+    QObject receiver;
+    bool finished = false;
+    QString failure;
+    const auto job = ScreenshotExportCoordinator::shared().submit(
+        &receiver, ScreenshotExportCoordinator::Priority::Foreground,
+        [](const ScreenshotExportCancellation& cancellation) {
+            QImage image = fixture(QSize(64, 6000));
+            auto rows = snow_shot::image_codec::srgbRowSource(image);
+            rows.backingImage = {};
+            rows.isKnownOpaque = true;
+            rows.previewImage =
+                image.scaled(QSize(22, 2048), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            auto reads = std::make_shared<std::atomic_int>(0);
+            rows.readRows = [read = rows.readRows, reads](int first, int count, qsizetype stride,
+                                                          uchar* target, qsizetype capacity) {
+                ++*reads;
+                return read(first, count, stride, target, capacity);
+            };
+            QString error;
+            const auto source = pipeline::prepare(rows, cancellation, &error);
+            require(source.rows.isValid() && reads->load() == 0 &&
+                        source.preview.constBits() == rows.previewImage.constBits(),
+                    "verified opaque previews must bypass full-source reads");
+            auto png =
+                pipeline::render(source, {image.size(), Format::Png, 100}, cancellation, &error);
+            require(png != nullptr && png->pixels->exactImage.isNull(),
+                    "large row-only PNG must retain its streaming pixels");
+            const int encodedReads = reads->load();
+            const QImage exact = pipeline::preview(*png, source, cancellation, &error);
+            require(exact.constBits() == source.preview.constBits() &&
+                        reads->load() == encodedReads,
+                    "exact row-only output must share its bounded source preview");
+            const QRect region(11, 3100, 29, 91);
+            require(samePixels(pipeline::decodeRegion(*png, region, cancellation, &error),
+                               image.copy(region)),
+                    "exact viewport rows changed native pixels");
+            auto regional = rows;
+            regional.readRows = [](int, int, qsizetype, uchar*, qsizetype) { return false; };
+            regional.readRegion = [image](QRect rect, qsizetype stride, uchar* target,
+                                          qsizetype capacity) {
+                const qsizetype rowBytes = qsizetype(rect.width()) * 4;
+                if (!QRect(QPoint{}, image.size()).contains(rect) || !target || stride < rowBytes ||
+                    capacity < rowBytes || rect.height() - 1 > (capacity - rowBytes) / stride)
+                    return false;
+                for (int row = 0; row < rect.height(); ++row)
+                    std::memcpy(target + qsizetype(row) * stride,
+                                image.constScanLine(rect.y() + row) + qsizetype(rect.x()) * 4,
+                                size_t(rowBytes));
+                return true;
+            };
+            require(samePixels(pipeline::readRegion(regional, region, cancellation, &error),
+                               image.copy(region)),
+                    "native region readers must bypass full-width row callbacks");
+            const QImage wide = fixture(QSize(3072, 1040));
+            const auto wideRows = snow_shot::image_codec::srgbRowSource(wide);
+            const QRect wideRegion(0, 8, 3072, 1024);
+            const QImage wideDetail =
+                pipeline::readRegion(wideRows, wideRegion, cancellation, &error);
+            require(wideDetail.size() == wideRegion.size() &&
+                        samePixels(wideDetail, wide.copy(wideRegion)),
+                    "wide native viewport regions fitting 16MiB must preserve every pixel");
+            const auto wideSource = pipeline::prepare(wideRows, cancellation, &error);
+            const auto wideJpeg =
+                pipeline::render(wideSource, {wide.size(), Format::Jpeg, 72}, cancellation, &error);
+            require(wideJpeg != nullptr, "wide JPEG viewport fixture encoding failed");
+            const QImage wideDecoded =
+                pipeline::decodeRegion(*wideJpeg, wideRegion, cancellation, &error);
+            const QImage wideComplete = pipeline::decode(*wideJpeg, cancellation, &error);
+            require(wideDecoded.size() == wideRegion.size() &&
+                        samePixels(wideDecoded, wideComplete.copy(wideRegion)),
+                    "wide decoded viewport regions fitting 16MiB must retain native fidelity");
+            auto scalingAdmissions = std::make_shared<QList<QPair<qint64, qint64>>>();
+            auto scalingReads = std::make_shared<std::atomic_int>(0);
+            auto scalingRows = wideRows;
+            scalingRows.readRows = [read = scalingRows.readRows,
+                                    scalingReads](int first, int count, qsizetype stride,
+                                                  uchar* target, qsizetype capacity) {
+                ++*scalingReads;
+                return read(first, count, stride, target, capacity);
+            };
+            scalingRows.reserveResources = [scalingAdmissions](qint64 retained, qint64 scratch,
+                                                               QString*) {
+                scalingAdmissions->append({retained, scratch});
+                return std::static_pointer_cast<void>(std::make_shared<int>(1));
+            };
+            const auto scalingSource = pipeline::prepare(scalingRows, cancellation, &error);
+            require(!scalingSource.preview.isNull() && scalingAdmissions->size() == 2 &&
+                        scalingAdmissions->back().second >=
+                            wide.sizeInBytes() + scalingSource.preview.sizeInBytes(),
+                    "backing preview scaling must admit Qt's complete premultiplied source copy");
+            const QSize scalingSize(4097, 1024);
+            auto scalingPixels =
+                pipeline::preparePixels(scalingSource, scalingSize, cancellation, &error);
+            require(scalingPixels && !scalingPixels->exactImage.isNull() &&
+                        scalingPixels->exactImage.sizeInBytes() > qint64{16} * 1024 * 1024 &&
+                        scalingPixels->exactImage.sizeInBytes() <=
+                            pipeline::kMaximumPreparedPixelCacheBytes &&
+                        scalingReads->load() > 0,
+                    "resized outputs above the preview cap must retain a separately bounded cache");
+            const int preparedReads = scalingReads->load();
+            const auto scalingEncoded = pipeline::render(
+                scalingPixels, {scalingSize, Format::Png, 100}, cancellation, &error);
+            const auto scalingJpeg = pipeline::render(
+                scalingPixels, {scalingSize, Format::Jpeg, 85}, cancellation, &error);
+            require(scalingEncoded && scalingJpeg && scalingReads->load() == preparedReads,
+                    "PNG and JPEG must reuse cached resized pixels without recalculating rows");
+            const QImage scaledPreview =
+                pipeline::preview(*scalingEncoded, scalingSource, cancellation, &error);
+            require(!scaledPreview.isNull() && scaledPreview.width() <= 2048 &&
+                        scaledPreview.height() <= 2048 &&
+                        scalingAdmissions->back().second >=
+                            scalingSource.preview.sizeInBytes() + scaledPreview.sizeInBytes(),
+                    "exact fit-preview scaling must admit its complete premultiplied input copy");
+            for (const bool denyScratch : {false, true}) {
+                auto partialCacheOwner = std::make_shared<std::weak_ptr<int>>();
+                auto fallback = scalingSource;
+                const qint64 cachedBytes = scalingPixels->exactImage.sizeInBytes();
+                fallback.rows.reserveResources = [denyScratch, cachedBytes, partialCacheOwner](
+                                                     qint64 retained, qint64 scratch,
+                                                     QString* admissionError) {
+                    if (retained == cachedBytes) {
+                        if (!denyScratch) {
+                            *admissionError = QStringLiteral("Cache admission rejected");
+                            return std::shared_ptr<void>{};
+                        }
+                        auto lease = std::make_shared<int>(1);
+                        *partialCacheOwner = lease;
+                        return std::static_pointer_cast<void>(lease);
+                    }
+                    if (retained == 0 && scratch > 0 && denyScratch &&
+                        !partialCacheOwner->expired()) {
+                        *admissionError = QStringLiteral("Cache scratch admission rejected");
+                        return std::shared_ptr<void>{};
+                    }
+                    require(partialCacheOwner->expired(),
+                            "failed cache scratch must release retained admission before fallback");
+                    return std::static_pointer_cast<void>(std::make_shared<int>(1));
+                };
+                error.clear();
+                const auto streamed =
+                    pipeline::preparePixels(fallback, scalingSize, cancellation, &error);
+                require(streamed && streamed->exactImage.isNull() &&
+                            streamed->rows.backingImage.isNull() && error.isEmpty(),
+                        "failed cache admission must fall back to lazy rows without a stale error");
+                const QRect fallbackRegion(2100, 500, 77, 43);
+                require(samePixels(pipeline::readRegion(streamed->rows, fallbackRegion,
+                                                        cancellation, &error),
+                                   scalingPixels->exactImage.copy(fallbackRegion)),
+                        "cache admission fallback must preserve the same native resized pixels");
+            }
+            for (const auto format :
+                 {Format::Jpeg, Format::Webp, Format::Jxl, Format::Avif, Format::Pdf}) {
+                const auto encoded =
+                    pipeline::render(source, {image.size(), format, 72}, cancellation, &error);
+                require(encoded != nullptr, "bounded codec preview encoding failed");
+                const QImage reduced = pipeline::preview(*encoded, source, cancellation, &error);
+                require(!reduced.isNull() && reduced.width() <= 2048 && reduced.height() <= 2048,
+                        "codec artifacts must retain a bounded preview");
+                const QImage native =
+                    pipeline::decodeRegion(*encoded, region, cancellation, &error);
+                const QImage complete = pipeline::decode(*encoded, cancellation, &error);
+                require(!complete.isNull() && samePixels(native, complete.copy(region)),
+                        "native viewport pixels must equal the full encoded artifact decode");
+            }
+            QImage transparent = image;
+            transparent.setPixelColor(5, 2, QColor(70, 90, 110, 21));
+            auto unknown = snow_shot::image_codec::srgbRowSource(transparent);
+            unknown.backingImage = {};
+            unknown.previewImage =
+                transparent.scaled(QSize(22, 2048), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            const auto classified = pipeline::prepare(unknown, cancellation, &error);
+            require(classified.alphaContent == snow::image::AlphaContent::non_opaque,
+                    "an unverified preview hint must not suppress source alpha classification");
+            auto admitted = std::make_shared<QList<std::weak_ptr<int>>>();
+            auto resizeRows = snow_shot::image_codec::srgbRowSource(fixture(QSize(512, 128)));
+            resizeRows.reserveResources = [admitted](qint64, qint64, QString*) {
+                auto owner = std::make_shared<int>(1);
+                admitted->append(owner);
+                return std::static_pointer_cast<void>(owner);
+            };
+            const auto resizeSource = pipeline::prepare(resizeRows, cancellation, &error);
+            const QSize largeSize(16385, 1024);
+            auto resized = pipeline::preparePixels(resizeSource, largeSize, cancellation, &error);
+            require(resized && resized->exactImage.isNull() &&
+                        resized->rows.backingImage.isNull() && admitted->size() == 1 &&
+                        !admitted->front().expired(),
+                    "large resize must admit and retain only a reusable lazy row plan");
+            QImage reference(largeSize, QImage::Format_RGBA8888);
+            require(snow_shot::image_codec::resizeToRgba8(
+                        resizeSource.rows, largeSize, reference.bits(), reference.bytesPerLine(),
+                        reference.sizeInBytes(), &error),
+                    "large resize reference could not be prepared");
+            reference.setColorSpace(QColorSpace::SRgb);
+            const QRect resizedRegion(2100, 500, 77, 43);
+            QImage native =
+                pipeline::readRegion(resized->rows, resizedRegion, cancellation, &error);
+            require(samePixels(native, reference.copy(resizedRegion)) && admitted->size() == 3 &&
+                        !admitted->at(1).expired() && admitted->at(2).expired(),
+                    "lazy resize native detail must match the full scaler and retire scratch");
+            auto encoded =
+                pipeline::render(resized, {largeSize, Format::Png, 100}, cancellation, &error);
+            require(encoded &&
+                        samePixels(pipeline::decode(*encoded, cancellation, &error), reference),
+                    "lazy PNG export must match every pixel from the full resize reference");
+            auto retainedRows = resized->rows;
+            resized.reset();
+            encoded.reset();
+            native = {};
+            require(
+                !admitted->front().expired(),
+                "row copies must keep resize admission alive after the prepared object retires");
+            retainedRows = {};
+            require(admitted->front().expired() && admitted->at(1).expired(),
+                    "retired row plans and viewport pixels must release retained admissions");
+            return ScreenshotExportTaskResult{};
+        },
+        [&](ScreenshotExportTaskResult result) {
+            failure = result.error;
+            finished = true;
+        });
+    require(job.isValid(), "bounded preview test could not enter the export queue");
+    processUntil([&] { return finished; });
+    require(failure.isEmpty(), qPrintable(failure));
+}
+
+void debouncedPreviewEdits(QWidget& owner) {
+    require(storage::ScreenshotSettings().setLastManualSaveState(QStringLiteral("jpeg"), {}),
+            "debounced preview settings setup failed");
+    auto* modal = openDialog(owner, fixture());
+    auto* content = modal->contentWidget();
+    ExportObserver observer(content);
+    auto* quality = child<AdSlider>(content, "saveQualitySlider");
+    const auto previous = content->property("previewGeneration").toULongLong();
+    for (int value : {61, 62, 63, 64})
+        quality->setValue(value);
+    require(observer.encodes == 0, "quality bursts must wait for their committed final value");
+    processUntil([&] { return content->property("previewGeneration").toULongLong() > previous; });
+    require(observer.encodes == 1 && observer.publications == 1,
+            "a rapid quality burst must encode and publish only its latest value");
+    const auto generation = content->property("previewGeneration").toULongLong();
+    child<AdSelect>(content, "saveFormatSelect")->setCurrentValue(QStringLiteral("png"));
+    processUntil([&] { return content->property("previewGeneration").toULongLong() > generation; });
+    auto* canvas = child<ScreenshotSavePreviewCanvas>(content, "savePreviewCanvas");
+    const uchar* previewPixels = canvas->outputImage().constBits();
+    const int decodes = content->property("previewDecodeCount").toInt();
+    const auto compressionGeneration = content->property("previewGeneration").toULongLong();
+    auto* compression = child<AdSelect>(content, "saveCompressionLevelSelect");
+    compression->setCurrentValue(compression->currentValue().toString() == QStringLiteral("high")
+                                     ? QStringLiteral("low")
+                                     : QStringLiteral("high"));
+    processUntil([&] {
+        return content->property("previewGeneration").toULongLong() > compressionGeneration;
+    });
+    require(canvas->outputImage().constBits() == previewPixels &&
+                content->property("previewDecodeCount").toInt() == decodes,
+            "PNG compression edits must reuse unchanged displayed pixels");
+    modal->reject();
+    flush();
+}
+
+void boundedCanvasNativeDetail(QWidget& owner) {
+    require(storage::ScreenshotSettings().setLastManualSaveState(QStringLiteral("png"), {}),
+            "native viewport settings setup failed");
+    const QImage original = fixture(QSize(128, 6000));
+    auto* modal = openDialog(owner, original);
+    auto* content = modal->contentWidget();
+    auto* canvas = child<ScreenshotSavePreviewCanvas>(content, "savePreviewCanvas");
+    require(canvas->outputImage().height() <= 2048 &&
+                content->property("previewDecodeCount").toInt() == 0,
+            "large exact outputs must display a bounded preview without file decoding");
+    for (int iteration = 0; iteration < 64 && canvas->zoom() < 1; ++iteration) {
+        QKeyEvent event(QEvent::KeyPress, Qt::Key_Plus, Qt::NoModifier);
+        QApplication::sendEvent(canvas, &event);
+    }
+    require(canvas->zoom() >= 1, "native viewport keyboard zoom failed");
+    processUntil([&] { return !canvas->outputDetailImage().isNull(); });
+    require(
+        canvas->outputDetailImage().size() == canvas->outputDetailRegion().size() &&
+            samePixels(canvas->outputDetailImage(), original.copy(canvas->outputDetailRegion())),
+        "zooming to native pixels must restore the original viewport detail");
+    modal->reject();
+    flush();
+}
+
 void oversizedManualPngStreamsWithoutPopulatingCache(QWidget& owner, const QTemporaryDir& temp) {
     const storage::ScreenshotSettings settings;
     require(settings.setLastManualSaveState(QStringLiteral("png"), {}),
@@ -2897,20 +3287,28 @@ void repeatedPreviewChangesKeepLatestRequest(QWidget& owner, const QTemporaryDir
     auto* content = modal->contentWidget();
     ExportObserver observer(content);
     WorkerGate gate;
-    gate.block(&owner);
-    processUntil(
-        [&] { return gate.started->load() == std::clamp(QThread::idealThreadCount(), 1, 2); });
+    const int workerCount = std::clamp(QThread::idealThreadCount(), 1, 2);
+    gate.block(&owner, workerCount);
+    processUntil([&] { return gate.started->load() == workerCount; });
     auto* width = child<AdInputNumber>(content, "saveWidthInput");
     for (int index = 0; index < 40; ++index) {
         width->setValue(80 + index);
-        flush(); // Each edit occurs in a separate event-loop turn, as with real input.
-        require(ScreenshotExportCoordinator::shared().pendingJobCount() == 3 &&
-                    child<QLabel>(content, "saveErrorLabel")->isHidden(),
+        require(ScreenshotExportCoordinator::shared().pendingJobCount() == workerCount,
+                "a superseded queued preview must retire before the next debounce expires");
+        // Wait for each committed edit to enter the queue before superseding it, so this
+        // exercises queued cancellation independently of rapid-edit debounce coalescing.
+        processUntil([&] {
+            return ScreenshotExportCoordinator::shared().pendingJobCount() == workerCount + 1;
+        });
+        require(ScreenshotExportCoordinator::shared().pendingJobCount() == workerCount + 1 &&
+                    child<QLabel>(content, "saveErrorLabel")->isHidden() && probe->passes == 1 &&
+                    observer.encodes == 0 && observer.publications == 0,
                 "only the latest preview may occupy a queued slot");
     }
     *gate.released = true;
     processUntil([&] { return observer.publications == 1; });
-    require(observer.encodes == 1 && probe->passes == 2 && width->value() == 119,
+    require(observer.encodes == 1 && probe->passes == 2 && width->value() == 119 &&
+                observer.displayed.width() == 119,
             "superseded preview jobs must not read or encode the source");
     child<AdLineEdit>(content, "saveDirectoryInput")->setText(temp.path());
     child<AdLineEdit>(content, "saveFilenameInput")->setText(QStringLiteral("latest-preview"));
@@ -2959,6 +3357,7 @@ int main(int argc, char* argv[]) {
                 "test storage initialization failed");
         if (app.arguments().contains(QStringLiteral("--canvas"))) {
             canvasInteraction();
+            canvasNativeDetailPreservesTransparency();
             canvasZoomHint();
             canvasOriginalSizeBaseline();
             ScreenshotExportCoordinator::shared().shutdown();
@@ -3022,6 +3421,10 @@ int main(int argc, char* argv[]) {
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--optimized-pipeline"))) {
+            canvasNativeDetailPreservesTransparency();
+            boundedPreviewAndNativeRegions();
+            debouncedPreviewEdits(owner);
+            boundedCanvasNativeDetail(owner);
             oversizedManualPngStreamsWithoutPopulatingCache(owner, temp);
             obsoleteSharedPngDoesNotBlockCurrentPreview(owner);
             optimizedPipelineBehavior(owner);
@@ -3085,6 +3488,7 @@ int main(int argc, char* argv[]) {
         rememberedManualFormat(owner, temp);
         encodingAndFullResolutionDisplay();
         canvasInteraction();
+        canvasNativeDetailPreservesTransparency();
         canvasPdfComparison();
         canvasZoomHint();
         canvasWheelZoom();

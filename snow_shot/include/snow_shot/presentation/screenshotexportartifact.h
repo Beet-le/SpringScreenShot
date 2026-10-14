@@ -202,7 +202,8 @@ class ScreenshotExportArtifact final : public QObject {
     void completeRowSource(ScreenshotImageRowSource source, QString error);
     void startPng(int compressionLevel);
     void startPngFromRows(int compressionLevel, ScreenshotImageRowSource source);
-    void completePng(int compressionLevel, ScreenshotExportEncodingResult result);
+    void completePng(int compressionLevel, ScreenshotExportEncodingResult result,
+                     std::shared_ptr<ScreenshotClipboardPayload> clipboard = {});
     [[nodiscard]] bool prepareClipboard(QObject* receiver, QByteArray canonicalPng,
                                         ClipboardCallback callback);
 };
