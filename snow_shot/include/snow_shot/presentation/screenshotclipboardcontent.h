@@ -2,6 +2,7 @@
 #define SNOW_SHOT_PRESENTATION_SCREENSHOTCLIPBOARDCONTENT_H
 
 #include "snow_shot/storage/pinnedsourceidentity.h"
+#include "snow_shot/storage/pinnedtextstyle.h"
 #include "snow_shot/image/screenshotanimationsource.h"
 #include "snow_shot/presentation/screenshotclipboardplacement.h"
 #include "snow_shot/presentation/screenshotclipboardappearance.h"
@@ -34,6 +35,7 @@ struct ScreenshotClipboardOriginalContent final {
     // Set when the clipboard supplied a local image URL. A pin persists a
     // private copy and rewrites this path to that copy on restore.
     QString localFilePath;
+    std::optional<snow_shot::storage::PinnedTextStyle> textStyle;
 
     [[nodiscard]] bool isEmpty() const {
         return html.isEmpty() && text.isEmpty() && localFilePath.isEmpty();
@@ -94,6 +96,7 @@ struct ScreenshotClipboardNativeDib final {
 };
 
 struct ScreenshotClipboardContentSnapshot final {
+    std::optional<snow_shot::storage::PinnedTextStyle> textStyle;
     QList<ScreenshotClipboardEncodedImage> encodedImages;
     std::optional<ScreenshotClipboardNativeDib> nativeDib;
     QImage detachedImage;
@@ -114,6 +117,8 @@ struct ScreenshotClipboardContentSnapshot final {
 
 class ScreenshotClipboardContentReader final {
   public:
+    // GUI thread only. Capture once at a pin/import boundary, then pass by value to workers.
+    [[nodiscard]] static snow_shot::storage::PinnedTextStyle capturePinnedTextStyle();
     using CancellationCheck = std::function<bool()>;
     // Optional admission for automation. The callback reserves total retained
     // and transient bytes before image copies, decoding, and rasterization.

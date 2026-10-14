@@ -1416,6 +1416,15 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      QStringLiteral("#00000000"), ConfigurationValueKind::String},
     {QStringLiteral("screenshot_ui/show_edit_selection_toolbar"), true,
      ConfigurationValueKind::Boolean},
+    {QStringLiteral("pin_to_screen/text_maximum_width"), 1024, ConfigurationValueKind::Integer,
+     ConfigurationIntegerRange{100, 2000, 1}},
+    {QStringLiteral("pin_to_screen/text_font_family"), QString(), ConfigurationValueKind::String},
+    {QStringLiteral("pin_to_screen/text_font_size"), 16, ConfigurationValueKind::Integer,
+     ConfigurationIntegerRange{8, 96, 1}},
+    {QStringLiteral("pin_to_screen/text_color"), QStringLiteral("system"),
+     ConfigurationValueKind::String},
+    {QStringLiteral("pin_to_screen/text_background_color"), QStringLiteral("system"),
+     ConfigurationValueKind::String},
     {QStringLiteral("pin_to_screen/show_border_by_default"), true, ConfigurationValueKind::Boolean},
     {QStringLiteral("pin_to_screen/show_shadow_by_default"), false,
      ConfigurationValueKind::Boolean},
@@ -2688,6 +2697,16 @@ ConfigurationNormalization ConfigurationSchema::normalize(const QString& key,
     }
     if (isGlobalMouseKey(key)) {
         return normalizeGlobalMouseCombination(value);
+    }
+    if (key == QStringLiteral("pin_to_screen/text_color") ||
+        key == QStringLiteral("pin_to_screen/text_background_color")) {
+        return value == QJsonValue(QStringLiteral("system"))
+                   ? ConfigurationNormalization{value, true, false}
+                   : normalizeRgbaColor(value);
+    }
+    if (key == QStringLiteral("pin_to_screen/text_font_family") &&
+        (!value.isString() || value.toString().size() > 1024)) {
+        return {};
     }
     if (isRgbaColorKey(key)) {
         return normalizeRgbaColor(value);

@@ -93,6 +93,69 @@ storage::PinnedWindowRecord recordWithId(const QString& id, const QImage& image)
     return value;
 }
 
+void pinnedTextStyleMetadataRoundTrips() {
+    QTemporaryDir directory;
+    const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    auto record = recordWithId(id, {});
+    record.sourceKind = storage::PinnedWindowSourceKind::ClipboardText;
+    record.originalText = QStringLiteral("Captured styled text");
+    record.initialWindowSize = QSize(320, 80);
+    storage::PinnedTextStyle style;
+    style.fontFamily = QStringLiteral("Arial");
+    style.maximumWidth = 320;
+    style.fontSize = 24;
+    style.textColor = QColor(255, 0, 0, 128);
+    style.backgroundColor = Qt::transparent;
+    record.textStyle = style;
+    {
+        storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+        require(repository.upsert(record).success && repository.flush().success,
+                "persist styled text");
+        const auto preview = repository.loadPreviewSource(id);
+        require(preview && preview->textStyle == style,
+                "preview sources retain effective text style");
+        const auto revision = repository.previewSourceRevision(id);
+        auto state = *repository.loadRecord(id);
+        state.textStyle.reset();
+        state.opacityPercent = 70;
+        require(repository.updateState(state).success && repository.flush().success,
+                "state-only style update");
+        require(repository.loadRecord(id)->textStyle == style &&
+                    repository.previewSourceRevision(id) == revision,
+                "state-only updates preserve style and preview revision");
+        record.textStyle->fontSize = 32;
+        require(repository.upsert(record).success && repository.flush().success &&
+                    repository.previewSourceRevision(id) != revision,
+                "a source style change invalidates its preview");
+    }
+    {
+        storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+        const auto restored = repository.loadRecord(id);
+        require(restored && restored->textStyle == record.textStyle &&
+                    restored->originalText == record.originalText &&
+                    repository.loadPreviewSource(id)->textStyle == record.textStyle,
+                "styled source and previews survive repository restart");
+    }
+    const QString manifest = directory.filePath(QStringLiteral("pinned_windows_v2/index.json"));
+    QFile file(manifest);
+    require(file.open(QIODevice::ReadOnly), "read styled manifest");
+    auto root = QJsonDocument::fromJson(file.readAll()).object();
+    file.close();
+    auto records = root.value(QStringLiteral("records")).toArray();
+    auto legacy = records.at(0).toObject();
+    legacy.remove(QStringLiteral("text_style"));
+    records.replace(0, legacy);
+    root.insert(QStringLiteral("records"), records);
+    require(file.open(QIODevice::WriteOnly | QIODevice::Truncate), "write legacy manifest");
+    const auto bytes = QJsonDocument(root).toJson();
+    require(file.write(bytes) == bytes.size(), "legacy fixture writes");
+    file.close();
+    storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+    const auto restored = repository.loadRecord(id);
+    require(restored && !restored->textStyle && restored->originalText == record.originalText,
+            "records without style metadata keep legacy rendering semantics");
+}
+
 QString payloadFilePath(const QString& root, const QString& id) {
     return QDir(root).filePath(QStringLiteral("pinned_windows_v2/pins/%1/source.png").arg(id));
 }
@@ -2778,6 +2841,11 @@ int main(int argc, char* argv[]) {
         batchGroupAssignmentPreflightsAndNotifiesOnce();
         return 0;
     }
+    if (application.arguments().contains(QStringLiteral("--text-style-only"))) {
+        pinnedTextStyleMetadataRoundTrips();
+        return 0;
+    }
+    pinnedTextStyleMetadataRoundTrips();
     payloadReadsKeepTheirRevisionWithoutBlockingMetadata();
     recordDeletionDoesNotInvalidateAdmittedPayloadRead();
     retentionWorkDoesNotBlockLifecycleUpdates();

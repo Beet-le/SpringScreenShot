@@ -671,6 +671,7 @@ void ImageSplitWindow::presentPinnedRecord(const QString& recordId) {
                     ScreenshotClipboardOriginalContent original;
                     original.html = record->originalHtml;
                     original.text = record->originalText;
+                    original.textStyle = record->textStyle;
                     const auto rendered = ScreenshotClipboardContentReader::renderOriginalText(
                         original, record->firstCreationTextDpi, {}, allocate);
                     if (rendered)

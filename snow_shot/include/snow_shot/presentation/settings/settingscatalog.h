@@ -67,6 +67,7 @@ enum class SettingsSelectBinding {
     Theme,
     Language,
     AppFont,
+    PinTextFont,
     ApplicationPriority,
     ApplicationQoS,
     MemoryOptimizationPolicy,
@@ -182,6 +183,8 @@ struct SettingsSwitchDefinition {
 };
 
 enum class SettingsIntegerBinding {
+    PinTextMaximumWidth,
+    PinTextFontSize,
     HistoryRetentionDays,
     PinnedHistoryRetentionDays,
     HistoryMaxEntries,
@@ -227,6 +230,8 @@ struct SettingsSliderDefinition {
 };
 
 enum class SettingsColorBinding {
+    PinTextColor,
+    PinTextBackgroundColor,
     ThemePrimaryColor,
     SelectionBorderColor,
     SelectionMaskColor,
@@ -494,6 +499,7 @@ enum class SettingsSectionReset {
     ScreenRecordingShortcuts,
     PinToScreen,
     PinToScreenBehavior,
+    PinTextStyle,
     Tray,
     FloatingToolbar,
     ScreenRecording,

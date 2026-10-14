@@ -2288,6 +2288,46 @@ bool DrawTemplateSettings::setTemplates(const QVector<DrawTemplate>& templates) 
     return cache().setValue(QStringLiteral("drawing/draw_templates"), array);
 }
 
+int PinToScreenSettings::textMaximumWidth() const {
+    return cache().value(QStringLiteral("pin_to_screen/text_maximum_width")).toInt();
+}
+
+bool PinToScreenSettings::setTextMaximumWidth(int value) const {
+    return cache().setValue(QStringLiteral("pin_to_screen/text_maximum_width"), value);
+}
+
+QString PinToScreenSettings::textFontFamily() const {
+    return cache().value(QStringLiteral("pin_to_screen/text_font_family")).toString();
+}
+
+bool PinToScreenSettings::setTextFontFamily(const QString& value) const {
+    return cache().setValue(QStringLiteral("pin_to_screen/text_font_family"), value);
+}
+
+int PinToScreenSettings::textFontSize() const {
+    return cache().value(QStringLiteral("pin_to_screen/text_font_size")).toInt();
+}
+
+bool PinToScreenSettings::setTextFontSize(int value) const {
+    return cache().setValue(QStringLiteral("pin_to_screen/text_font_size"), value);
+}
+
+QColor PinToScreenSettings::textColor() const {
+    return colorValue(QStringLiteral("pin_to_screen/text_color"));
+}
+
+bool PinToScreenSettings::setTextColor(const QColor& value) const {
+    return setColorValue(QStringLiteral("pin_to_screen/text_color"), value);
+}
+
+QColor PinToScreenSettings::textBackgroundColor() const {
+    return colorValue(QStringLiteral("pin_to_screen/text_background_color"));
+}
+
+bool PinToScreenSettings::setTextBackgroundColor(const QColor& value) const {
+    return setColorValue(QStringLiteral("pin_to_screen/text_background_color"), value);
+}
+
 bool PinToScreenSettings::showBorderByDefault() const {
     return cache().value(QStringLiteral("pin_to_screen/show_border_by_default")).toBool(true);
 }

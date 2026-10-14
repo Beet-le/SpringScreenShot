@@ -97,6 +97,7 @@ QImage loadPinnedImage(storage::PinnedWindowRepository* repository, const QStrin
         ScreenshotClipboardOriginalContent content;
         content.html = record->originalHtml;
         content.text = record->originalText;
+        content.textStyle = record->textStyle;
         const auto rendered = ScreenshotClipboardContentReader::renderOriginalText(
             content, record->firstCreationTextDpi);
         if (rendered) {
@@ -115,6 +116,7 @@ QImage loadPinnedPreview(storage::PinnedWindowRepository* repository, const QStr
         ScreenshotClipboardOriginalContent content;
         content.html = source->originalHtml;
         content.text = source->originalText;
+        content.textStyle = source->textStyle;
         const auto rendered = ScreenshotClipboardContentReader::renderOriginalText(
             content, source->firstCreationTextDpi);
         return rendered ? rendered->image : QImage{};

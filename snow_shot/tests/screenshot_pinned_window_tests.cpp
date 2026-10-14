@@ -9852,6 +9852,37 @@ void restoredClipboardTextUsesCurrentThemeBackground() {
     }
 }
 
+void restoredClipboardTextKeepsCapturedStyle() {
+    QScreen* screen = QGuiApplication::primaryScreen();
+    require(screen != nullptr, "styled text restore requires a screen");
+    IsolatedPinnedStorage storage;
+    ScreenshotClipboardOriginalContent original;
+    original.text = QStringLiteral("Captured text style ").repeated(20);
+    auto style = ScreenshotClipboardContentReader::capturePinnedTextStyle();
+    style.maximumWidth = 240;
+    style.fontSize = 24;
+    style.textColor = Qt::red;
+    style.backgroundColor = Qt::yellow;
+    original.textStyle = style;
+    const auto rendered = ScreenshotClipboardContentReader::renderOriginalText(original, 1.0);
+    require(rendered.has_value(), "styled restore fixture renders");
+    auto record = savedPinnedRecord(*screen, 1.0, rendered->image.size(), 100.0, QPoint(40, 40));
+    record.sourceKind = snow_shot::storage::PinnedWindowSourceKind::ClipboardText;
+    record.image = {};
+    record.originalText = original.text;
+    record.textStyle = style;
+    const snow_shot::storage::PinToScreenSettings settings;
+    require(settings.setTextMaximumWidth(800) && settings.setTextFontSize(48) &&
+                settings.setTextColor(Qt::blue) && settings.setTextBackgroundColor(Qt::green),
+            "change global defaults before reopening styled text");
+    ScreenshotSelectionExportUiServices services;
+    auto* restored = restoreSeededPinnedWindow(services, record);
+    require(ScreenshotPinnedWindowTestAccess::originalImage(*restored) == rendered->image &&
+                restored->automationOriginalContent().textStyle == style,
+            "restored text and its subsequent persistence retain the captured style");
+    closeRestoredPinnedWindow(restored, record.id);
+}
+
 void restoredPinnedWindowIgnoresMonitorDpiChange(SnowCanvasRuntime&) {
     QScreen* screen = QGuiApplication::primaryScreen();
     require(screen != nullptr, "a primary screen is required");
@@ -24985,6 +25016,7 @@ int main(int argc, char* argv[]) {
         }
         if (app.arguments().contains(QStringLiteral("--restored-text-theme-only"))) {
             restoredClipboardTextUsesCurrentThemeBackground();
+            restoredClipboardTextKeepsCapturedStyle();
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--early-ocr-snapshot-only"))) {

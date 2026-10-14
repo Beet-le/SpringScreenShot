@@ -4,6 +4,7 @@
 
 #include "snowimageqtcodec.h"
 #include "snow_shot/storage/storagelogging.h"
+#include "snow_shot/storage/settingsadapters.h"
 #include "pinnedwindowstorageconstants_p.h"
 
 #include <QBuffer>
@@ -391,7 +392,8 @@ bool samePayload(const StoredRecord& stored, const PinnedWindowRecord& incoming,
     return stored.signature == incomingSignature &&
            stored.record.sourceKind == incoming.sourceKind &&
            stored.record.originalFilePath == incoming.originalFilePath &&
-           stored.record.originalFileName == incoming.originalFileName;
+           stored.record.originalFileName == incoming.originalFileName &&
+           stored.record.textStyle == incoming.textStyle;
 }
 
 bool samePreviewSource(const StoredRecord& stored, const PinnedWindowRecord& incoming,
@@ -400,6 +402,7 @@ bool samePreviewSource(const StoredRecord& stored, const PinnedWindowRecord& inc
            stored.record.originalFilePath == incoming.originalFilePath &&
            stored.record.originalFileName == incoming.originalFileName &&
            stored.record.firstCreationTextDpi == incoming.firstCreationTextDpi &&
+           stored.record.textStyle == incoming.textStyle &&
            stored.signature.imageCacheKey == incomingSignature.imageCacheKey &&
            stored.signature.imageSize == incomingSignature.imageSize &&
            stored.signature.animationHash == incomingSignature.animationHash &&
@@ -575,6 +578,40 @@ std::optional<PinnedBorderAppearance> borderAppearanceFromJson(const QJsonValue&
     return appearance;
 }
 
+QJsonValue textStyleToJson(const std::optional<PinnedTextStyle>& style) {
+    if (!style)
+        return QJsonValue();
+    return QJsonObject{
+        {QStringLiteral("maximum_width"), style->maximumWidth},
+        {QStringLiteral("font_family"), style->fontFamily},
+        {QStringLiteral("font_size"), style->fontSize},
+        {QStringLiteral("text_color"), colorToRgbaString(style->textColor)},
+        {QStringLiteral("background_color"), colorToRgbaString(style->backgroundColor)}};
+}
+
+bool textStyleFromJson(const QJsonValue& value, std::optional<PinnedTextStyle>* result) {
+    if (value.isNull() || value.isUndefined()) {
+        result->reset();
+        return true;
+    }
+    if (!value.isObject())
+        return false;
+    const auto object = value.toObject();
+    PinnedTextStyle style;
+    style.maximumWidth = object.value(QStringLiteral("maximum_width")).toInt(-1);
+    style.fontFamily = object.value(QStringLiteral("font_family")).toString();
+    style.fontSize = object.value(QStringLiteral("font_size")).toInt(-1);
+    style.textColor = colorFromRgbaString(object.value(QStringLiteral("text_color")).toString());
+    style.backgroundColor =
+        colorFromRgbaString(object.value(QStringLiteral("background_color")).toString());
+    if (!style.isValid() ||
+        object.value(QStringLiteral("maximum_width")).toDouble(-1) != style.maximumWidth ||
+        object.value(QStringLiteral("font_size")).toDouble(-1) != style.fontSize)
+        return false;
+    *result = std::move(style);
+    return true;
+}
+
 QJsonObject recordToJson(const PinnedWindowRecord& record, const QJsonObject& payloads,
                          quint64 previewSourceRevision) {
     return QJsonObject{
@@ -600,6 +637,7 @@ QJsonObject recordToJson(const PinnedWindowRecord& record, const QJsonObject& pa
         {QStringLiteral("screen_window_geometry"), rectToJson(record.screenWindowGeometry)},
         {QStringLiteral("screen_dpi"), record.screenDpi},
         {QStringLiteral("first_creation_text_dpi"), record.firstCreationTextDpi},
+        {QStringLiteral("text_style"), textStyleToJson(record.textStyle)},
         {QStringLiteral("scale_percent"), record.scalePercent},
         {QStringLiteral("opacity_percent"), record.opacityPercent},
         {QStringLiteral("click_through_opacity_percent"), record.clickThroughOpacityPercent},
@@ -1039,6 +1077,8 @@ bool parseRecord(const QJsonObject& object, const QString& root, PinnedWindowRec
     PinnedWindowRecord record;
     record.id = object.value(QStringLiteral("id")).toString();
     record.groupId = object.value(QStringLiteral("group_id")).toString();
+    if (!textStyleFromJson(object.value(QStringLiteral("text_style")), &record.textStyle))
+        return false;
     if (!placementFromJson(object.value(QStringLiteral("placement")), &record.placement) ||
         !placementFromJson(object.value(QStringLiteral("pre_thumbnail_placement")),
                            &record.preThumbnailPlacement, true) ||
@@ -1767,6 +1807,7 @@ PinnedWindowRepository::loadPreviewSource(const QString& id,
         stored.record.id = source.id;
         stored.record.sourceKind = source.sourceKind;
         stored.record.firstCreationTextDpi = source.firstCreationTextDpi;
+        stored.record.textStyle = source.textStyle;
         if (source.sourceKind == PinnedWindowSourceKind::ClipboardText) {
             stored.record.originalHtml = source.originalHtml;
             stored.record.originalText = source.originalText;
@@ -1809,10 +1850,12 @@ PinnedWindowRepository::loadPreviewSource(const QString& id,
     }
     if (cancelled && cancelled())
         return std::nullopt;
-    return PinnedWindowPreviewSource{stored.record.sourceKind, std::move(stored.record.image),
+    return PinnedWindowPreviewSource{stored.record.sourceKind,
+                                     std::move(stored.record.image),
                                      std::move(stored.record.originalHtml),
                                      std::move(stored.record.originalText),
-                                     stored.record.firstCreationTextDpi};
+                                     stored.record.firstCreationTextDpi,
+                                     stored.record.textStyle};
 }
 
 std::optional<quint64> PinnedWindowRepository::previewSourceRevision(const QString& id) const {
@@ -2252,7 +2295,8 @@ StorageResult PinnedWindowRepository::createImpl(PinnedWindowRecord record,
         record.image.isNull() || record.image.size() != sourceImage.pixelSize()) {
         return StorageResult::failure(QStringLiteral("Pinned-window source is invalid"));
     }
-    if (record.originalHtml.toUtf8().size() > kMaximumPayloadBytes ||
+    if ((record.textStyle && !record.textStyle->isValid()) ||
+        record.originalHtml.toUtf8().size() > kMaximumPayloadBytes ||
         record.originalText.toUtf8().size() > kMaximumPayloadBytes ||
         record.resultStyle.size() > kMaximumPayloadBytes ||
         record.canvasSession.size() > kMaximumPayloadBytes ||
@@ -2340,6 +2384,7 @@ StorageResult PinnedWindowRepository::createImpl(PinnedWindowRecord record,
     if ((record.sourceKind == PinnedWindowSourceKind::ClipboardImageFile &&
          (!safeFileName(record.originalFileName) ||
           (!record.animationSource && !QFileInfo(record.originalFilePath).isFile()))) ||
+        (record.textStyle && !record.textStyle->isValid()) ||
         record.originalHtml.toUtf8().size() > kMaximumPayloadBytes ||
         record.originalText.toUtf8().size() > kMaximumPayloadBytes ||
         record.resultStyle.size() > kMaximumPayloadBytes ||
@@ -2434,6 +2479,7 @@ StorageResult PinnedWindowRepository::updateState(PinnedWindowRecord record) {
     record.originalFileName = existing->record.originalFileName;
     record.originalHtml = existing->record.originalHtml;
     record.originalText = existing->record.originalText;
+    record.textStyle = existing->record.textStyle;
     if (!record.checkerboardEnabled) {
         record.checkerboardEnabled = existing->record.checkerboardEnabled;
     }
@@ -2539,7 +2585,8 @@ StorageResult PinnedWindowRepository::upsertImpl(PinnedWindowRecord record, bool
         !record.animationSource && !QFileInfo(record.originalFilePath).isFile()) {
         return StorageResult::failure(QStringLiteral("Pinned-window source file is invalid"));
     }
-    if (record.originalHtml.toUtf8().size() > kMaximumPayloadBytes ||
+    if ((record.textStyle && !record.textStyle->isValid()) ||
+        record.originalHtml.toUtf8().size() > kMaximumPayloadBytes ||
         record.originalText.toUtf8().size() > kMaximumPayloadBytes ||
         record.resultStyle.size() > kMaximumPayloadBytes ||
         record.canvasSession.size() > kMaximumPayloadBytes ||

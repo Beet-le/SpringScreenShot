@@ -551,9 +551,9 @@ void builtInCatalogIsCompleteAndValid() {
         }
     }
 #ifdef Q_OS_MACOS
-    require(sectionCount == 51, "macOS includes permissions and merged storage and desktop groups");
+    require(sectionCount == 52, "macOS includes permissions and merged storage and desktop groups");
 #else
-    require(sectionCount == 51,
+    require(sectionCount == 52,
             "catalog includes capture and recording groups with merged storage and desktop groups");
 #endif
     // Keep the shared total in one place: adding a shared setting must update both platforms.
@@ -597,9 +597,9 @@ void builtInCatalogIsCompleteAndValid() {
                 itemIds.contains(QStringLiteral("screenshot-shortcut.upload_to_cloud")) &&
                 itemIds.contains(QStringLiteral("pin-to-screen-shortcut.upload_to_cloud")),
             "cloud upload must expose its configuration and shortcuts in both local scopes");
-    require(itemIds.size() == 279,
+    require(itemIds.size() == 284,
             qPrintable(QStringLiteral(
-                           "catalog must contain 279 shared settings on every platform; found %1")
+                           "catalog must contain 284 shared settings on every platform; found %1")
                            .arg(itemIds.size())));
     require(itemIds.contains(QStringLiteral("pin-to-screen.confirm-before-closing-window")) &&
                 itemIds.contains(QStringLiteral("pin-to-screen.confirm-before-destroying-window")),
@@ -1986,19 +1986,20 @@ void builtInCatalogIsCompleteAndValid() {
     const auto& pinSection =
         *catalog.section(QStringLiteral("pinned-windows"), QStringLiteral("pin-to-screen"));
     const auto* pinPage = catalog.page(QStringLiteral("pinned-windows"));
-    require(pinPage != nullptr && pinPage->sections.size() == 3 &&
-                pinPage->sections.at(0).id == QStringLiteral("pin-to-screen-settings") &&
-                pinPage->sections.at(0).title.translated() == QStringLiteral("Interaction") &&
-                pinPage->sections.at(0).items.size() == 10 &&
-                pinPage->sections.at(1).id == pinSection.id &&
-                pinSection.title.translated() == QStringLiteral("Window interface") &&
-                pinPage->sections.at(2).id == QStringLiteral("pin-to-screen-toolbar") &&
-                pinPage->sections.at(2).title.translated() == QStringLiteral("Action Toolbar") &&
-                pinPage->sections.at(2).items.size() == 1 &&
-                pinPage->sections.at(2).items.constFirst().id == pinnedEditor->id &&
-                pinSection.reset == settings::SettingsSectionReset::PinToScreen &&
-                pinPage->sections.at(2).reset == settings::SettingsSectionReset::PinToScreenToolbar,
-            "pinned settings separate interaction, window interface and action toolbar");
+    require(
+        pinPage != nullptr && pinPage->sections.size() == 4 &&
+            pinPage->sections.at(0).id == QStringLiteral("pin-to-screen-settings") &&
+            pinPage->sections.at(0).title.translated() == QStringLiteral("Interaction") &&
+            pinPage->sections.at(0).items.size() == 10 &&
+            pinPage->sections.at(1).id == pinSection.id &&
+            pinSection.title.translated() == QStringLiteral("Window interface") &&
+            pinPage->sections.at(3).id == QStringLiteral("pin-to-screen-toolbar") &&
+            pinPage->sections.at(3).title.translated() == QStringLiteral("Action Toolbar") &&
+            pinPage->sections.at(3).items.size() == 1 &&
+            pinPage->sections.at(3).items.constFirst().id == pinnedEditor->id &&
+            pinSection.reset == settings::SettingsSectionReset::PinToScreen &&
+            pinPage->sections.at(3).reset == settings::SettingsSectionReset::PinToScreenToolbar,
+        "pinned settings separate interaction, window interface, text style and action toolbar");
     const auto& pinRegistry = settings::builtInSettingsRegistry();
     for (const auto& section : pinPage->sections) {
         const auto& fields = pinRegistry.fieldsForReset(section.reset);
@@ -2012,7 +2013,7 @@ void builtInCatalogIsCompleteAndValid() {
     const auto pinnedToolbarResults = pinSearch.search(QStringLiteral("custom pinned toolbar"));
     require(!pinnedToolbarResults.isEmpty() &&
                 pinnedToolbarResults.constFirst().location ==
-                    settings::SettingsLocation{pinPage->id, pinPage->sections.at(2).id,
+                    settings::SettingsLocation{pinPage->id, QStringLiteral("pin-to-screen-toolbar"),
                                                pinnedEditor->id},
             "pinned toolbar search navigates to its separate section");
     const auto* pinBorderActiveColor =

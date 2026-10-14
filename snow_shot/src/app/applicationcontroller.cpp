@@ -1289,14 +1289,13 @@ class ApplicationController::Impl {
                         return result;
                     result.image = record->image;
                     result.originalContent = {record->originalHtml, record->originalText,
-                                              record->originalFilePath};
+                                              record->originalFilePath, record->textStyle};
                     result.recognitionResults =
                         liveRecognition.value_or(ScreenshotPinnedWindow::decodeRecognitionSnapshot(
                             record->recognitionResults));
                     if (record->sourceKind == storage::PinnedWindowSourceKind::ClipboardText) {
                         const auto content = ScreenshotClipboardContentReader::renderOriginalText(
-                            {record->originalHtml, record->originalText, {}},
-                            record->firstCreationTextDpi, {}, budget);
+                            result.originalContent, record->firstCreationTextDpi, {}, budget);
                         if (content)
                             result.image = content->image;
                     }

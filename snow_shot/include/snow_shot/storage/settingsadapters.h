@@ -602,6 +602,17 @@ class DrawTemplateSettings final {
 
 class PinToScreenSettings final {
   public:
+    [[nodiscard]] int textMaximumWidth() const;
+    bool setTextMaximumWidth(int value) const;
+    [[nodiscard]] QString textFontFamily() const;
+    bool setTextFontFamily(const QString& value) const;
+    [[nodiscard]] int textFontSize() const;
+    bool setTextFontSize(int value) const;
+    // Invalid colors represent the system palette until customized.
+    [[nodiscard]] QColor textColor() const;
+    bool setTextColor(const QColor& value) const;
+    [[nodiscard]] QColor textBackgroundColor() const;
+    bool setTextBackgroundColor(const QColor& value) const;
     [[nodiscard]] bool showBorderByDefault() const;
     bool setShowBorderByDefault(bool enabled) const;
     [[nodiscard]] bool showShadowByDefault() const;

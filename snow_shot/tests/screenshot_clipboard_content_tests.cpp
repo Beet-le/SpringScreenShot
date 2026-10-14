@@ -1229,6 +1229,91 @@ void htmlSourceBackgroundOverridesApplicationTheme() {
     QApplication::setPalette(originalPalette);
 }
 
+void pinnedTextStylesPreserveFormattingAndSnapshots() {
+    snow_shot::storage::PinnedTextStyle style;
+    style.maximumWidth = 320;
+    style.fontFamily = QApplication::font().family();
+    style.fontSize = 28;
+    style.textColor = QColor(255, 0, 255, 128);
+    style.backgroundColor = Qt::transparent;
+    ScreenshotClipboardContentSnapshot snapshot;
+    snapshot.text = QStringLiteral("Pinned text ").repeated(100);
+    snapshot.textStyle = style;
+    snapshot.devicePixelRatio = 2.0;
+    const auto content = ScreenshotClipboardContentReader::decode(snapshot);
+    require(content && content->formattedDocument->defaultFont().pixelSize() == 28 &&
+                content->formattedDocument->defaultFont().family() == style.fontFamily &&
+                content->image.width() == 640 && content->image.devicePixelRatio() == 2.0 &&
+                content->image.pixelColor(0, 0).alpha() == 0 &&
+                content->originalContent.textStyle == style,
+            "pinned text uses captured dimensions, font, transparent background, and DPI");
+    require(
+        content->formattedDocument->begin().begin().fragment().charFormat().foreground().color() ==
+            style.textColor,
+        "unstyled text materializes the captured foreground including alpha");
+    const auto restored = ScreenshotClipboardContentReader::renderOriginalText(
+        content->originalContent, 2.0, Qt::red);
+    require(restored && restored->image == content->image &&
+                restored->originalContent.text == snapshot.text,
+            "restoring captured text ignores later palette defaults and retains original source");
+    for (const int width : {100, 2000}) {
+        snapshot.textStyle->maximumWidth = width;
+        const auto wrapped = ScreenshotClipboardContentReader::decode(snapshot);
+        require(wrapped && wrapped->image.width() == width * 2,
+                "configured width boundaries cap long text in logical pixels");
+    }
+    for (const int size : {8, 96}) {
+        snapshot.text = QStringLiteral("Text");
+        snapshot.textStyle->fontSize = size;
+        const auto sized = ScreenshotClipboardContentReader::decode(snapshot);
+        require(sized && sized->formattedDocument->defaultFont().pixelSize() == size,
+                "configured font-size boundaries render successfully");
+    }
+    snapshot.textStyle->maximumWidth = 99;
+    require(!ScreenshotClipboardContentReader::decode(snapshot),
+            "invalid captured styles cannot reach raster allocation");
+
+    snapshot.textStyle = style;
+    snapshot.html =
+        QStringLiteral("<p>Default <span style=\"font-family: serif; font-size: 11px; color: "
+                       "#00ff00; background-color: #ffff00\">Explicit</span></p>");
+    const auto html = ScreenshotClipboardContentReader::decode(snapshot);
+    require(html && html->originalContent.html == snapshot.html, "HTML keeps its original source");
+    bool inherited = false, explicitStyle = false;
+    for (auto block = html->formattedDocument->begin(); block.isValid(); block = block.next()) {
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const auto fragment = it.fragment();
+            if (fragment.text().contains(QStringLiteral("Default")))
+                inherited = fragment.charFormat().foreground().color() == style.textColor;
+            if (fragment.text().contains(QStringLiteral("Explicit"))) {
+                const auto format = fragment.charFormat();
+                explicitStyle =
+                    format.foreground().color() == QColor(Qt::green) &&
+                    format.background().color() == QColor(Qt::yellow) &&
+                    format.intProperty(QTextFormat::FontPixelSize) == 11 &&
+                    format.fontFamilies().toStringList().contains(QStringLiteral("serif"));
+            }
+        }
+    }
+    require(inherited && explicitStyle,
+            "explicit HTML styles override inherited defaults without affecting unstyled text");
+    snapshot.html =
+        QStringLiteral("<body style=\"background-color: #123456\"><p>Source background</p></body>");
+    const auto body = ScreenshotClipboardContentReader::decode(snapshot);
+    require(body && body->image.pixelColor(0, 0) == QColor(QStringLiteral("#123456")),
+            "HTML body background overrides a configured default");
+
+    snapshot.html.clear();
+    snapshot.text = QStringLiteral("Worker captured text");
+    auto future = std::async(std::launch::async, [snapshot] {
+        return ScreenshotClipboardContentReader::decode(snapshot);
+    });
+    const auto worker = future.get();
+    require(worker && worker->originalContent.textStyle == style &&
+                worker->formattedDocument->thread() == qApp->thread(),
+            "workers consume immutable style snapshots and return GUI-affine documents");
+}
+
 void formattedTextUsesOwningDisplayDevicePixelRatio() {
     QMimeData mime;
     mime.setHtml(
@@ -1455,6 +1540,7 @@ int main(int argc, char** argv) {
     formattedTextHasPaddingOnEverySide();
     formattedTextBackgroundFollowsApplicationTheme();
     htmlSourceBackgroundOverridesApplicationTheme();
+    pinnedTextStylesPreserveFormattingAndSnapshots();
     formattedTextUsesOwningDisplayDevicePixelRatio();
 #if defined(Q_OS_WIN) || defined(_WIN32)
     standardRgbDibOrientationAndAlphaAreHandled();

@@ -1477,6 +1477,7 @@ bool ScreenshotSelectionExportUiServices::presentRestoredRecord(
         ScreenshotClipboardOriginalContent original;
         original.html = record.originalHtml;
         original.text = record.originalText;
+        original.textStyle = record.textStyle;
         const auto rendered = ScreenshotClipboardContentReader::renderOriginalText(
             original, record.firstCreationTextDpi, QApplication::palette().color(QPalette::Base));
         if (!rendered.has_value() || !rendered->isValid()) {

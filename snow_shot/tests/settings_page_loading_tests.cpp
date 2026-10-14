@@ -8,6 +8,7 @@
 #include "snow_shot/presentation/settings/settingsbackend.h"
 #include "snow_shot/presentation/settings/settingsruntimesession.h"
 #include "snow_shot/presentation/styles/thememanager.h"
+#include "snow_shot/presentation/screenshotclipboardcontent.h"
 #include "snow_shot/storage/applicationstorage.h"
 #include "widgets/scroll_area.h"
 #include "widgets/color_picker.h"
@@ -36,6 +37,7 @@
 #include <QProxyStyle>
 #include <QResizeEvent>
 #include <QPixmap>
+#include <QPalette>
 #include <QPointer>
 #include <QScrollBar>
 #include <QSet>
@@ -701,6 +703,148 @@ bool hasSelectableOption(const QAbstractItemModel* model) {
     return false;
 }
 
+void pinnedTextColorsFollowApplicationPalette(const settings::SettingsRegistry& registry,
+                                              settings::SettingsRuntimeSession& session) {
+    namespace storage = snow_shot::storage;
+    using snow_shot::presentation::styles::ThemeMode;
+    auto& theme = snow_shot::presentation::styles::ThemeManager::instance();
+    const auto originalMode = theme.themeMode();
+    theme.setThemeMode(ThemeMode::FollowSystem);
+    const QPalette originalPalette = QApplication::palette();
+    require(session.reset(settings::SettingsSectionReset::PinTextStyle),
+            "start with theme-derived pinned text colors");
+    drainEvents();
+
+    SettingsPageWidget page(registry, QStringLiteral("pinned-windows"), session);
+    page.resize(880, 760);
+    page.show();
+    page.reveal({page.pageId(), QStringLiteral("pin-to-screen-text-style"),
+                 QStringLiteral("pin-to-screen.text-background-color")});
+    drainEvents();
+    auto* foreground = page.findChild<adqt::widgets::AdColorPicker*>(
+        QStringLiteral("settings-control-pin-to-screen-text-color"));
+    auto* background = page.findChild<adqt::widgets::AdColorPicker*>(
+        QStringLiteral("settings-control-pin-to-screen-text-background-color"));
+    require(foreground && background, "both pinned text color controls are materialized");
+    const auto verifyColors = [&](const QColor& text, const QColor& base) {
+        require(session.colorValue(settings::SettingsColorBinding::PinTextColor) == text &&
+                    session.colorValue(settings::SettingsColorBinding::PinTextBackgroundColor) ==
+                        base &&
+                    foreground->value().solidColor == text &&
+                    background->value().solidColor == base,
+                "session, swatches and pickers resolve the same current text colors");
+        const auto captured = ScreenshotClipboardContentReader::capturePinnedTextStyle();
+        require(captured.textColor == text && captured.backgroundColor == base,
+                "new pin snapshots use the colors shown in settings");
+        for (const auto binding : {settings::SettingsColorBinding::PinTextColor,
+                                   settings::SettingsColorBinding::PinTextBackgroundColor}) {
+            const auto state = session.state(registry.fieldForColor(binding)->id);
+            require(!state.dirty && !state.busy && !state.conflicted && state.error.isEmpty() &&
+                        state.phase == settings::SettingsWritePhase::Clean,
+                    "palette changes refresh clean fields without creating pending edits");
+        }
+        require(theme.themeMode() == ThemeMode::FollowSystem &&
+                    session.selectValue(settings::SettingsSelectBinding::Theme) ==
+                        QStringLiteral("system"),
+                "palette changes refresh colors without changing the selected theme mode");
+    };
+    const auto changePalette = [&](const QColor& text, const QColor& base) {
+        QPalette palette = originalPalette;
+        palette.setColor(QPalette::Text, text);
+        palette.setColor(QPalette::Base, base);
+        QApplication::setPalette(palette);
+    };
+    const storage::PinToScreenSettings stored;
+    foreground->setPopupVisible(true);
+    drainEvents();
+    const QColor lightText(20, 30, 40), lightBase(240, 245, 250);
+    changePalette(lightText, lightBase);
+    drainEvents();
+    verifyColors(lightText, lightBase);
+    require(foreground->state()->editableColor() == lightText,
+            "an already-open color editor follows the new palette");
+    foreground->setPopupVisible(false);
+    const auto existingPinStyle = ScreenshotClipboardContentReader::capturePinnedTextStyle();
+    const QColor darkText(220, 225, 230), darkBase(10, 15, 20);
+    changePalette(QColor(Qt::red), QColor(Qt::blue));
+    changePalette(darkText, darkBase);
+    drainEvents();
+    verifyColors(darkText, darkBase);
+    require(!stored.textColor().isValid() && !stored.textBackgroundColor().isValid() &&
+                existingPinStyle.textColor == lightText &&
+                existingPinStyle.backgroundColor == lightBase,
+            "refresh keeps system defaults implicit and existing pin snapshots unchanged");
+
+    const QColor explicitText(170, 20, 80, 128), explicitBase(10, 30, 60, 64);
+    require(session.applyColorValue(settings::SettingsColorBinding::PinTextColor, explicitText),
+            "customize only the pinned text foreground");
+    drainEvents();
+    changePalette(lightText, lightBase);
+    drainEvents();
+    verifyColors(explicitText, lightBase);
+    require(session.applyColorValue(settings::SettingsColorBinding::PinTextBackgroundColor,
+                                    explicitBase),
+            "customize the pinned text background");
+    drainEvents();
+    changePalette(darkText, darkBase);
+    drainEvents();
+    verifyColors(explicitText, explicitBase);
+    require(stored.textColor() == explicitText && stored.textBackgroundColor() == explicitBase,
+            "palette changes retain both explicit RGBA preferences");
+    require(session.reset(settings::SettingsSectionReset::PinTextStyle),
+            "reset customized text colors to the current theme");
+    drainEvents();
+    verifyColors(darkText, darkBase);
+    changePalette(lightText, lightBase);
+    drainEvents();
+    verifyColors(lightText, lightBase);
+
+    theme.setThemeMode(originalMode);
+    QApplication::setPalette(originalPalette);
+    drainEvents();
+}
+
+void pinnedTextFontControl(const settings::SettingsRegistry& registry,
+                           settings::SettingsRuntimeSession& session) {
+    SettingsPageWidget page(registry, QStringLiteral("pinned-windows"), session);
+    page.resize(880, 760);
+    page.show();
+    page.reveal({page.pageId(), QStringLiteral("pin-to-screen-text-style"),
+                 QStringLiteral("pin-to-screen.text-font-family")});
+    drainEvents();
+    auto* font = page.findChild<adqt::widgets::AdSelect*>(
+        QStringLiteral("settings-control-pin-to-screen-text-font-family"));
+    require(font && font->model()->rowCount() == 1 && font->currentValue().toString().isEmpty(),
+            "pinned font selector starts lazy at System default");
+    font->showPopup();
+    drainEvents();
+    font->hidePopup();
+    require(font->model()->rowCount() > 1, "pinned font popup loads installed families");
+    const QString unavailable = QStringLiteral("Snow Shot Missing Pin Font");
+    require(session.applySelectValue(settings::SettingsSelectBinding::PinTextFont, unavailable),
+            "save unavailable pin font");
+    drainEvents();
+    require(font->currentValue().toString() == unavailable && font->currentText() == unavailable,
+            "pinned font selector displays an unavailable saved family");
+    require(session.applySelectValue(settings::SettingsSelectBinding::PinTextFont, QString()),
+            "restore System default");
+    TestTranslator translator;
+    QCoreApplication::installTranslator(&translator);
+    drainEvents();
+    require(font->currentValue().toString().isEmpty() &&
+                font->currentText().startsWith(QStringLiteral("Translated: ")),
+            "language changes preserve and retranslate pinned System default");
+    QCoreApplication::removeTranslator(&translator);
+    drainEvents();
+    const QString snapshots = qEnvironmentVariable("SNOW_PIN_TEXT_STYLE_SNAPSHOT");
+    if (!snapshots.isEmpty()) {
+        page.reveal({page.pageId(), QStringLiteral("pin-to-screen-text-style"),
+                     QStringLiteral("pin-to-screen.text-background-color")});
+        drainEvents();
+        require(page.grab().save(snapshots), "save pinned Text Style preview");
+    }
+}
+
 void fontPreviewAndFiltering(const settings::SettingsRegistry& registry,
                              settings::SettingsRuntimeSession& session) {
     SettingsPageWidget page(registry, QStringLiteral("general-appearance"), session);
@@ -1362,12 +1506,12 @@ void pinnedSettingsGroups(const settings::SettingsRegistry& registry,
         const QStringList titles =
             locale == u"en_US"
                 ? QStringList{QStringLiteral("Interaction"), QStringLiteral("Window interface"),
-                              QStringLiteral("Action Toolbar")}
+                              QStringLiteral("Text Style"), QStringLiteral("Action Toolbar")}
             : locale == u"zh_CN"
                 ? QStringList{QString::fromUtf8("操作方式"), QString::fromUtf8("窗口界面"),
-                              QString::fromUtf8("操作工具栏")}
+                              QString::fromUtf8("文本样式"), QString::fromUtf8("操作工具栏")}
                 : QStringList{QString::fromUtf8("操作方式"), QString::fromUtf8("視窗介面"),
-                              QString::fromUtf8("操作工具列")};
+                              QString::fromUtf8("文字樣式"), QString::fromUtf8("操作工具列")};
         const auto& sections = registry.catalog().page(page.pageId())->sections;
         for (qsizetype index = 0; index < sections.size(); ++index) {
             auto* header = page.findChild<SectionHeaderWidget*>(settings::generatedObjectName(
@@ -1539,6 +1683,11 @@ int main(int argc, char** argv) {
     settings::BuiltInSettingsBackend backend(shortcuts);
     const auto registry = settings::buildBuiltInSettingsRegistry();
     settings::SettingsRuntimeSession session(registry, backend);
+    if (application.arguments().contains(QStringLiteral("--pinned-text-colors-only"))) {
+        pinnedTextColorsFollowApplicationPalette(registry, session);
+        storage.shutdown();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--stitch-selected-images-only"))) {
         stitchSelectedImagesSettings(registry);
         storage.shutdown();
@@ -1576,6 +1725,7 @@ int main(int argc, char** argv) {
     if (application.arguments().contains(QStringLiteral("--selects-only"))) {
         fontPreviewAndFiltering(registry, session);
         multiSettingsSelectsSearch(registry, session);
+        pinnedTextFontControl(registry, session);
         storage.shutdown();
         return 0;
     }

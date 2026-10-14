@@ -706,6 +706,54 @@ SettingsItemDefinition floatingToolbarEnabledItem() {
             SettingsSwitchDefinition{SettingsSwitchBinding::FloatingToolbarEnabled}};
 }
 
+QVector<SettingsItemDefinition> pinTextStyleItems() {
+    SettingsSelectDefinition font;
+    font.binding = SettingsSelectBinding::PinTextFont;
+    font.source = SettingsSelectSource::FontFamilies;
+    font.options = {
+        {QStringLiteral(""), settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "System default"))}};
+    return {
+        {QStringLiteral("pin-to-screen.text-maximum-width"),
+         settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Maximum text width")),
+         settingsText(QT_TRANSLATE_NOOP("SettingsCatalog",
+                                        "Limit the width of pinned text, including padding")),
+         {},
+         QStringLiteral("pin_to_screen/text_maximum_width"),
+         SettingsIntegerDefinition{SettingsIntegerBinding::PinTextMaximumWidth,
+                                   settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "px"))}},
+        {QStringLiteral("pin-to-screen.text-font-family"),
+         settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Default text font")),
+         settingsText(
+             QT_TRANSLATE_NOOP("SettingsCatalog", "Choose the default font for newly pinned text")),
+         {},
+         QStringLiteral("pin_to_screen/text_font_family"),
+         font},
+        {QStringLiteral("pin-to-screen.text-font-size"),
+         settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Default text font size")),
+         settingsText(QT_TRANSLATE_NOOP("SettingsCatalog",
+                                        "Choose the default font size for newly pinned text")),
+         {},
+         QStringLiteral("pin_to_screen/text_font_size"),
+         SettingsIntegerDefinition{SettingsIntegerBinding::PinTextFontSize,
+                                   settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "px"))}},
+        screenshotColorItem(
+            QStringLiteral("pin-to-screen.text-color"),
+            QT_TRANSLATE_NOOP("SettingsCatalog", "Default text color"),
+            QT_TRANSLATE_NOOP(
+                "SettingsCatalog",
+                "Use the theme text color until customized. Reset Text Style to restore it."),
+            QStringLiteral("pin_to_screen/text_color"), SettingsColorBinding::PinTextColor),
+        screenshotColorItem(
+            QStringLiteral("pin-to-screen.text-background-color"),
+            QT_TRANSLATE_NOOP("SettingsCatalog", "Background color"),
+            QT_TRANSLATE_NOOP(
+                "SettingsCatalog",
+                "Use the theme background until customized. Reset Text Style to restore it."),
+            QStringLiteral("pin_to_screen/text_background_color"),
+            SettingsColorBinding::PinTextBackgroundColor),
+    };
+}
+
 SettingsItemDefinition pinBorderColorItem() {
     return screenshotColorItem(
         QStringLiteral("interface.pin-to-screen.border-color"),
@@ -3355,6 +3403,15 @@ QVector<SettingsPageDefinition> builtInPages() {
                   pinShadowActiveColorItem(), pinLockedShadowColorItem()},
              },
              {
+                 QStringLiteral("pin-to-screen-text-style"),
+                 settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Text Style")),
+                 settingsText(QT_TRANSLATE_NOOP(
+                     "SettingsCatalog",
+                     "Defaults for newly pinned text; source formatting is preserved")),
+                 SettingsSectionReset::PinTextStyle,
+                 pinTextStyleItems(),
+             },
+             {
                  QStringLiteral("pin-to-screen-toolbar"),
                  settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Action Toolbar")),
                  settingsText(
@@ -4683,6 +4740,10 @@ QStringList SettingsCatalog::validationErrors() const {
                     case SettingsSelectBinding::TrayMenuSkinPosition:
                         expectedKey = QStringLiteral("interface/tray_menu_skin_position");
                         break;
+                    case SettingsSelectBinding::PinTextFont:
+                        expectedKey = QStringLiteral("pin_to_screen/text_font_family");
+                        expectedSource = SettingsSelectSource::FontFamilies;
+                        break;
                     case SettingsSelectBinding::AppFont:
                         expectedKey = QStringLiteral("interface/app_font");
                         expectedSource = SettingsSelectSource::FontFamilies;
@@ -5085,6 +5146,12 @@ QStringList SettingsCatalog::validationErrors() const {
                         std::get_if<SettingsIntegerDefinition>(&itemDefinition.payload)) {
                     QString expectedKey;
                     switch (integer->binding) {
+                    case SettingsIntegerBinding::PinTextMaximumWidth:
+                        expectedKey = QStringLiteral("pin_to_screen/text_maximum_width");
+                        break;
+                    case SettingsIntegerBinding::PinTextFontSize:
+                        expectedKey = QStringLiteral("pin_to_screen/text_font_size");
+                        break;
                     case SettingsIntegerBinding::HistoryRetentionDays:
                         expectedKey = QStringLiteral("capture_history/retention_days");
                         break;
@@ -5253,6 +5320,12 @@ QStringList SettingsCatalog::validationErrors() const {
                         std::get_if<SettingsColorDefinition>(&itemDefinition.payload)) {
                     QString expectedKey;
                     switch (color->binding) {
+                    case SettingsColorBinding::PinTextColor:
+                        expectedKey = QStringLiteral("pin_to_screen/text_color");
+                        break;
+                    case SettingsColorBinding::PinTextBackgroundColor:
+                        expectedKey = QStringLiteral("pin_to_screen/text_background_color");
+                        break;
                     case SettingsColorBinding::ThemePrimaryColor:
                         expectedKey = QStringLiteral("interface/theme_primary_color");
                         break;

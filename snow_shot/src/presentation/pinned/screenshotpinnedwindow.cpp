@@ -1946,6 +1946,7 @@ snow_shot::storage::PinnedWindowRecord ScreenshotPinnedWindow::persistenceRecord
     record.originalFileName = QFileInfo(record.originalFilePath).fileName();
     record.originalHtml = m_originalClipboardContent.html;
     record.originalText = m_originalClipboardContent.text;
+    record.textStyle = m_originalClipboardContent.textStyle;
     record.checkerboardEnabled = m_checkerboardEnabled;
     record.firstCreationTextDpi = m_firstCreationTextDpi;
     record.canvasSourceRect = m_canvasSourceRect;
@@ -6679,13 +6680,16 @@ void ScreenshotPinnedWindow::requestContentReplacement(
         return;
     }
     cancelContentReplacement();
+    const auto textStyle = ScreenshotClipboardContentReader::capturePinnedTextStyle();
+    if (snapshot)
+        snapshot->textStyle = textStyle;
     const quint64 generation = m_contentReplacementGeneration;
     const QTransform imageTransform = m_imageTransform;
     auto content = std::make_shared<std::optional<ScreenshotClipboardContent>>();
     m_contentReplacementJob = ScreenshotExportCoordinator::shared().submit(
         this, ScreenshotExportCoordinator::Priority::Foreground,
-        [paths = std::move(paths), snapshot = std::move(snapshot), content,
-         imageTransform](const ScreenshotExportCancellation& token) mutable {
+        [paths = std::move(paths), snapshot = std::move(snapshot), content, imageTransform,
+         textStyle](const ScreenshotExportCancellation& token) mutable {
             const auto cancelled = [&token]() { return token.isCancellationRequested(); };
             if (!paths.isEmpty()) {
                 const auto files =
@@ -6696,6 +6700,7 @@ void ScreenshotPinnedWindow::requestContentReplacement(
                     }
                     ScreenshotClipboardContentSnapshot fileSnapshot;
                     fileSnapshot.localImage = file;
+                    fileSnapshot.textStyle = textStyle;
                     *content = ScreenshotClipboardContentReader::decode(std::move(fileSnapshot),
                                                                         cancelled);
                     if (content->has_value()) {

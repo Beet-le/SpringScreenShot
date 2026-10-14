@@ -1413,6 +1413,10 @@
             <translation>背景填充</translation>
         </message>
         <message>
+            <source>Background color</source>
+            <translation>背景顏色</translation>
+        </message>
+        <message>
             <source>Background image</source>
             <translation>背景圖片</translation>
         </message>
@@ -1623,6 +1627,14 @@
         <message>
             <source>Choose the compression effort used for image output and history results</source>
             <translation>選擇影像輸出和歷史記錄結果影像的壓縮等級</translation>
+        </message>
+        <message>
+            <source>Choose the default font for newly pinned text</source>
+            <translation>選擇新貼圖文字的預設字型</translation>
+        </message>
+        <message>
+            <source>Choose the default font size for newly pinned text</source>
+            <translation>選擇新貼圖文字的預設字型大小</translation>
         </message>
         <message>
             <source>Choose the dialog used for manual image saves</source>
@@ -2051,6 +2063,22 @@
         <message>
             <source>Default Punctuation</source>
             <translation>預設標點</translation>
+        </message>
+        <message>
+            <source>Default text color</source>
+            <translation>預設文字顏色</translation>
+        </message>
+        <message>
+            <source>Default text font</source>
+            <translation>預設文字字型</translation>
+        </message>
+        <message>
+            <source>Default text font size</source>
+            <translation>預設文字字型大小</translation>
+        </message>
+        <message>
+            <source>Defaults for newly pinned text; source formatting is preserved</source>
+            <translation>設定新貼圖文字的預設樣式，並保留來源格式</translation>
         </message>
         <message>
             <source>Delay %1s to execute</source>
@@ -2705,6 +2733,10 @@
             <translation>限制長邊（更快）</translation>
         </message>
         <message>
+            <source>Limit the width of pinned text, including padding</source>
+            <translation>限制貼圖文字的寬度，包括內距</translation>
+        </message>
+        <message>
             <source>Line</source>
             <translation>直線</translation>
         </message>
@@ -2795,6 +2827,10 @@
         <message>
             <source>Maximum entries</source>
             <translation>最大項目數</translation>
+        </message>
+        <message>
+            <source>Maximum text width</source>
+            <translation>最大文字寬度</translation>
         </message>
         <message>
             <source>Medium</source>
@@ -4189,6 +4225,10 @@
             <translation>文字偵測處理</translation>
         </message>
         <message>
+            <source>Text Style</source>
+            <translation>文字樣式</translation>
+        </message>
+        <message>
             <source>Text background</source>
             <translation>文字背景</translation>
         </message>
@@ -4433,6 +4473,14 @@
             <translation>使用系統代理</translation>
         </message>
         <message>
+            <source>Use the theme background until customized. Reset Text Style to restore it.</source>
+            <translation>未自訂時使用佈景主題背景顏色。重設文字樣式可還原佈景主題顏色。</translation>
+        </message>
+        <message>
+            <source>Use the theme text color until customized. Reset Text Style to restore it.</source>
+            <translation>未自訂時使用佈景主題文字顏色。重設文字樣式可還原佈景主題顏色。</translation>
+        </message>
+        <message>
             <source>Use this language when local language detection matches the primary target language at the configured confidence</source>
             <translation>當本機語言偵測結果與主目標語言相符且達到設定的信心度時，使用此語言</translation>
         </message>
@@ -4535,6 +4583,10 @@
         <message>
             <source>Zip archives (*.zip);;All files (*.*)</source>
             <translation>Zip 壓縮檔 (*.zip);;所有檔案 (*.*)</translation>
+        </message>
+        <message>
+            <source>px</source>
+            <translation>像素</translation>
         </message>
     </context>
     <context>

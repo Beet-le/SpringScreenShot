@@ -692,6 +692,7 @@ struct CollageWindow::Impl {
                             ScreenshotClipboardOriginalContent original;
                             original.html = pinned->originalHtml;
                             original.text = pinned->originalText;
+                            original.textStyle = pinned->textStyle;
                             const auto rendered =
                                 ScreenshotClipboardContentReader::renderOriginalText(
                                     original, pinned->firstCreationTextDpi, {}, allocate);

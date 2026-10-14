@@ -1413,6 +1413,10 @@
             <translation>Background Fill</translation>
         </message>
         <message>
+            <source>Background color</source>
+            <translation>Background color</translation>
+        </message>
+        <message>
             <source>Background image</source>
             <translation>Background image</translation>
         </message>
@@ -1623,6 +1627,14 @@
         <message>
             <source>Choose the compression effort used for image output and history results</source>
             <translation>Choose the compression effort used for image output and history results</translation>
+        </message>
+        <message>
+            <source>Choose the default font for newly pinned text</source>
+            <translation>Choose the default font for newly pinned text</translation>
+        </message>
+        <message>
+            <source>Choose the default font size for newly pinned text</source>
+            <translation>Choose the default font size for newly pinned text</translation>
         </message>
         <message>
             <source>Choose the dialog used for manual image saves</source>
@@ -2051,6 +2063,22 @@
         <message>
             <source>Default Punctuation</source>
             <translation>Default Punctuation</translation>
+        </message>
+        <message>
+            <source>Default text color</source>
+            <translation>Default text color</translation>
+        </message>
+        <message>
+            <source>Default text font</source>
+            <translation>Default text font</translation>
+        </message>
+        <message>
+            <source>Default text font size</source>
+            <translation>Default text font size</translation>
+        </message>
+        <message>
+            <source>Defaults for newly pinned text; source formatting is preserved</source>
+            <translation>Defaults for newly pinned text; source formatting is preserved</translation>
         </message>
         <message>
             <source>Delay %1s to execute</source>
@@ -2705,6 +2733,10 @@
             <translation>Limit long side (faster)</translation>
         </message>
         <message>
+            <source>Limit the width of pinned text, including padding</source>
+            <translation>Limit the width of pinned text, including padding</translation>
+        </message>
+        <message>
             <source>Line</source>
             <translation>Line</translation>
         </message>
@@ -2795,6 +2827,10 @@
         <message>
             <source>Maximum entries</source>
             <translation>Maximum entries</translation>
+        </message>
+        <message>
+            <source>Maximum text width</source>
+            <translation>Maximum text width</translation>
         </message>
         <message>
             <source>Medium</source>
@@ -4189,6 +4225,10 @@
             <translation>Text Detection Processing</translation>
         </message>
         <message>
+            <source>Text Style</source>
+            <translation>Text Style</translation>
+        </message>
+        <message>
             <source>Text background</source>
             <translation>Text background</translation>
         </message>
@@ -4433,6 +4473,14 @@
             <translation>Use system proxy</translation>
         </message>
         <message>
+            <source>Use the theme background until customized. Reset Text Style to restore it.</source>
+            <translation>Use the theme background until customized. Reset Text Style to restore it.</translation>
+        </message>
+        <message>
+            <source>Use the theme text color until customized. Reset Text Style to restore it.</source>
+            <translation>Use the theme text color until customized. Reset Text Style to restore it.</translation>
+        </message>
+        <message>
             <source>Use this language when local language detection matches the primary target language at the configured confidence</source>
             <translation>Use this language when local language detection matches the primary target language at the configured confidence</translation>
         </message>
@@ -4535,6 +4583,10 @@
         <message>
             <source>Zip archives (*.zip);;All files (*.*)</source>
             <translation>Zip archives (*.zip);;All files (*.*)</translation>
+        </message>
+        <message>
+            <source>px</source>
+            <translation>px</translation>
         </message>
     </context>
     <context>

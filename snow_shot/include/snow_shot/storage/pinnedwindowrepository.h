@@ -38,6 +38,7 @@ struct PinnedWindowPreviewSource final {
     QString originalHtml;
     QString originalText;
     double firstCreationTextDpi = 1.0;
+    std::optional<PinnedTextStyle> textStyle;
 };
 
 enum class PinnedWindowOperation {

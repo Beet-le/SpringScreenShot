@@ -1,6 +1,8 @@
 #include "snow_shot/presentation/screenshotfilepinbatch.h"
 
 #include "snow_shot/platform/selectedfiles.h"
+#include "snow_shot/storage/applicationstorage.h"
+#include "snow_shot/storage/settingsadapters.h"
 #include "pinned_animation_fixtures.h"
 #include "bmp_import_fixtures.h"
 
@@ -85,6 +87,45 @@ class FakeBackend final : public SelectedFileBackend {
         return {cancelled() ? QStringList{} : paths, error};
     }
 };
+
+void textBatchesCaptureOneStyle() {
+    QTemporaryDir directory;
+    auto& storage = snow_shot::storage::ApplicationStorage::instance();
+    require(
+        storage.initialize({directory.filePath(QStringLiteral("bin")), directory.path()}).success,
+        "isolated style settings initialize");
+    const snow_shot::storage::PinToScreenSettings settings;
+    require(settings.setTextMaximumWidth(240) && settings.setTextFontSize(20),
+            "configure batch style");
+    QStringList paths;
+    for (int index = 0; index < 5; ++index) {
+        const auto path = directory.filePath(QStringLiteral("%1.txt").arg(index));
+        QFile file(path);
+        require(file.open(QIODevice::WriteOnly) && file.write("Pinned batch text") > 0,
+                "write text file");
+        paths.append(path);
+    }
+    auto backend = std::make_shared<FakeBackend>();
+    backend->paths = paths;
+    backend->block = true;
+    ScreenshotFilePinBatch batch;
+    int presented = 0;
+    batch.startSelection(backend, backend->target, [&](ScreenshotClipboardContent content) {
+        require(content.originalContent.textStyle &&
+                    content.originalContent.textStyle->maximumWidth == 240 &&
+                    content.originalContent.textStyle->fontSize == 20,
+                "every file uses the style captured before selection and decoding");
+        ++presented;
+        return true;
+    });
+    require(backend->entered.tryAcquire(1, 5000), "selection worker starts");
+    require(settings.setTextMaximumWidth(800) && settings.setTextFontSize(48),
+            "change settings while import waits");
+    backend->release.release();
+    finish(batch);
+    require(presented == 5, "all text files pin using the same captured style");
+    storage.shutdown();
+}
 
 void mixedFilesAndLargeBatches() {
     QTemporaryDir directory;
@@ -630,6 +671,7 @@ void queuedAnimatedShellRequestsRetainSources() {
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
+    textBatchesCaptureOneStyle();
     mixedFilesAndLargeBatches();
     profiledFilesSurviveBatchDecode();
     alphaBmpFilesSurviveBatchDecode();
