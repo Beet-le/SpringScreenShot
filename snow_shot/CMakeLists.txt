@@ -4462,6 +4462,7 @@ if(SNOW_SHOT_BUILD_TESTS)
 
     add_executable(snow-shot-screenshot-canvas-renderer-tests
         tests/screenshot_canvas_renderer_tests.cpp
+        tests/screenshot_overlay_input_tests.cpp
         tests/screenshot_selection_effect_editor_tests.cpp
         src/presentation/overlay/screenshotoverlayinputhandler.cpp
         src/presentation/overlay/screenshotoverlayinteractionadapter.cpp
@@ -4607,7 +4608,17 @@ if(SNOW_SHOT_BUILD_TESTS)
     set_tests_properties(snow-shot-overlay-window-shadow-tests PROPERTIES LABELS "unit")
     add_test(NAME snow-shot-overlay-boundary-input-tests
         COMMAND snow-shot-screenshot-canvas-renderer-tests --overlay-boundary-input -platform offscreen)
-    set_tests_properties(snow-shot-overlay-boundary-input-tests PROPERTIES LABELS "unit")
+    set_tests_properties(snow-shot-overlay-boundary-input-tests PROPERTIES
+        LABELS "unit" SNOW_TEST_CROSS_PLATFORM TRUE TIMEOUT 60)
+    foreach(_overlay_boundary_dpr IN ITEMS 1.25 1.5 1.75 2)
+        set(_overlay_boundary_test "snow-shot-overlay-boundary-input-dpr${_overlay_boundary_dpr}-tests")
+        add_test(NAME ${_overlay_boundary_test}
+            COMMAND snow-shot-screenshot-canvas-renderer-tests --overlay-boundary-input -platform offscreen)
+        set_tests_properties(${_overlay_boundary_test} PROPERTIES
+            LABELS "unit" SNOW_TEST_CROSS_PLATFORM TRUE TIMEOUT 60
+            ENVIRONMENT "QT_SCALE_FACTOR=${_overlay_boundary_dpr};${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endforeach()
     add_test(NAME snow-shot-overlay-backing-store-tests
         COMMAND snow-shot-screenshot-canvas-renderer-tests --overlay-backing-store-only -platform offscreen)
     add_test(NAME snow-shot-overlay-backing-store-dpr2-tests

@@ -9007,6 +9007,7 @@ void overlayWindowHasNoNativeShadow() {
 
 void runScreenshotCursorTests();
 void runScreenshotSelectionEffectEditorTests();
+void runScreenshotOverlayInputTests();
 #if defined(SNOW_SHOT_CURSOR_BENCHMARK)
 void runScreenshotCursorBenchmark();
 #endif
@@ -9143,6 +9144,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--overlay-boundary-input"))) {
+        runScreenshotOverlayInputTests();
 #ifdef Q_OS_MACOS
         if (QGuiApplication::platformName() == QStringLiteral("cocoa")) {
             if (!macCanPostMouseEvents())

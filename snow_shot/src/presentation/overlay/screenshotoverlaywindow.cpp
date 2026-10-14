@@ -869,9 +869,15 @@ void ScreenshotOverlayWindow::initializeScreenshotSurface() {
     m_canvas->setAttribute(Qt::WA_TranslucentBackground, true);
     m_canvas->setAttribute(Qt::WA_NoSystemBackground, true);
     m_canvas->setAttribute(Qt::WA_TransparentForMouseEvents, false);
+    // The canvas and its event filter own pointer input. Ignored canvas events
+    // must not bubble back to the window's canvas-input forwarding path.
+    m_canvas->setAttribute(Qt::WA_NoMousePropagation, true);
 }
 
 bool ScreenshotOverlayWindow::event(QEvent* event) {
+    if (event != nullptr && forwardCanvasInputEvent(event)) {
+        return true;
+    }
     if (event != nullptr && event->type() == backingStorePreparationEventType()) {
         continueBackingStorePreparation(
             static_cast<BackingStorePreparationEvent*>(event)->generation);
@@ -1092,6 +1098,79 @@ void ScreenshotOverlayWindow::layoutScrollingThumbnail() {
     m_scrollingThumbnail->move(QPoint(x, y) + displayOrigin);
 }
 
+bool ScreenshotOverlayWindow::forwardCanvasInputEvent(QEvent* event) {
+    switch (event->type()) {
+    case QEvent::MouseButtonPress:
+    case QEvent::MouseButtonRelease:
+    case QEvent::MouseButtonDblClick:
+    case QEvent::MouseMove:
+    case QEvent::Wheel:
+    case QEvent::TabletPress:
+    case QEvent::TabletMove:
+    case QEvent::TabletRelease:
+        break;
+    default:
+        return false;
+    }
+    if (m_canvas == nullptr || !m_canvas->isVisible() || !m_canvas->isEnabled() ||
+        m_canvas->testAttribute(Qt::WA_TransparentForMouseEvents)) {
+        return false;
+    }
+
+    const auto* pointer = static_cast<QSinglePointEvent*>(event);
+    const QPointF position = m_canvas->mapFrom(this, pointer->position());
+    const bool continuingGesture =
+        event->type() == QEvent::MouseButtonRelease || event->type() == QEvent::TabletRelease ||
+        ((event->type() == QEvent::MouseMove || event->type() == QEvent::TabletMove) &&
+         pointer->buttons() != Qt::NoButton);
+    if (!continuingGesture) {
+        if (position.x() < 0 || position.y() < 0 || position.x() >= m_canvas->width() ||
+            position.y() >= m_canvas->height()) {
+            return false;
+        }
+        if (const QWidget* child = childAt(pointer->position());
+            child != nullptr && child != m_canvas) {
+            return false;
+        }
+    }
+
+    // Qt's QWidget child hit test excludes the fractional strip beyond width-1
+    // and height-1. Those valid display coordinates land on this window instead
+    // of its canvas. Route them through the same canvas path, including drawing
+    // tools and the remainder of Qt's implicit grab, without changing geometry.
+    std::unique_ptr<QSinglePointEvent> mapped;
+    if (event->type() == QEvent::Wheel) {
+        const auto* wheel = static_cast<QWheelEvent*>(event);
+        mapped = std::make_unique<QWheelEvent>(
+            position, wheel->globalPosition(), wheel->pixelDelta(), wheel->angleDelta(),
+            wheel->buttons(), wheel->modifiers(), wheel->phase(), wheel->inverted(),
+            wheel->source(), wheel->pointingDevice());
+    } else if (event->type() == QEvent::TabletPress || event->type() == QEvent::TabletMove ||
+               event->type() == QEvent::TabletRelease) {
+        const auto* tablet = static_cast<QTabletEvent*>(event);
+        mapped = std::make_unique<QTabletEvent>(
+            tablet->type(), tablet->pointingDevice(), position, tablet->globalPosition(),
+            tablet->pressure(), tablet->xTilt(), tablet->yTilt(), tablet->tangentialPressure(),
+            tablet->rotation(), tablet->z(), tablet->modifiers(), tablet->button(),
+            tablet->buttons());
+    } else {
+        const auto* mouse = static_cast<QMouseEvent*>(event);
+        mapped = std::make_unique<QMouseEvent>(mouse->type(), position, mouse->scenePosition(),
+                                               mouse->globalPosition(), mouse->button(),
+                                               mouse->buttons(), mouse->modifiers(),
+                                               mouse->source(), mouse->pointingDevice());
+    }
+    mapped->setTimestamp(pointer->timestamp());
+    // sendEvent marks the remapped event synthetic. Preserve its actual origin
+    // for the startup gate, scoped to this exact event rather than nested input.
+    const QScopedValueRollback forwardedEvent(m_forwardedCanvasInputEvent,
+                                              static_cast<const QEvent*>(mapped.get()));
+    const QScopedValueRollback genuine(m_forwardedCanvasInputGenuine, event->spontaneous());
+    QCoreApplication::sendEvent(m_canvas, mapped.get());
+    event->setAccepted(mapped->isAccepted());
+    return true;
+}
+
 bool ScreenshotOverlayWindow::handleCanvasEvent(QEvent* event) {
     if (event == nullptr) {
         return false;
@@ -1103,7 +1182,9 @@ bool ScreenshotOverlayWindow::handleCanvasEvent(QEvent* event) {
     if ((tablet || event->type() == QEvent::KeyPress || event->type() == QEvent::MouseButtonPress ||
          event->type() == QEvent::MouseMove || event->type() == QEvent::MouseButtonRelease ||
          event->type() == QEvent::MouseButtonDblClick || event->type() == QEvent::Wheel) &&
-        !m_eventSink.acceptOverlayInput(event->spontaneous())) {
+        !m_eventSink.acceptOverlayInput(event == m_forwardedCanvasInputEvent
+                                            ? m_forwardedCanvasInputGenuine
+                                            : event->spontaneous())) {
         event->accept();
         return true;
     }
