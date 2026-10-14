@@ -22,7 +22,7 @@ struct ScreenshotRecognitionFileSnapshot {
     ScreenshotRecognitionFileKind kind = ScreenshotRecognitionFileKind::Qr;
     QString source;
 #if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
-    std::optional<ScreenshotTableDocument> table;
+    std::optional<ScreenshotTableDocument> table = std::nullopt;
 #endif
 
     [[nodiscard]] bool hasContent() const {

@@ -286,7 +286,7 @@ void emptySelectionsAndFailuresKeepWindowOpen() {
     require(file.open(QIODevice::WriteOnly) && file.write("plain text") > 0,
             "write a non-image selection fixture");
     file.close();
-    for (const QStringList paths : {QStringList{}, QStringList{text, directory.path()}}) {
+    for (const QStringList& paths : {QStringList{}, QStringList{text, directory.path()}}) {
         CollageWindowCoordinator coordinator;
         auto backend = std::make_shared<SelectedFilesTestBackend>();
         backend->result.paths = paths;
@@ -451,8 +451,8 @@ void singletonImportsAppendMixedSourcesInRequestOrder() {
     waitUntil([&] { return started->load(std::memory_order_acquire); },
               "the first singleton import reaches its history reader");
     const QImage blue = image({2, 4}, Qt::blue);
-    const ScreenshotPinnedImageSnapshot live{ScreenshotExportSource::fromImage(blue), blue.size(),
-                                             QStringLiteral("live")};
+    const ScreenshotPinnedImageSnapshot live{
+        ScreenshotExportSource::fromImage(blue), blue.size(), QStringLiteral("live"), {}, {}, {}};
     coordinator.presentPinnedWindows({live});
     coordinator.presentPinnedRecords({pin.id});
     coordinator.present({record(QStringLiteral("missing")), record(QStringLiteral("history"))});
@@ -612,7 +612,10 @@ void singletonCancellationDiscardsQueuedAndStaleImports() {
                 return image();
             }),
             {3, 2},
-            QStringLiteral("queued-live")};
+            QStringLiteral("queued-live"),
+            {},
+            {},
+            {}};
         coordinator.presentPinnedWindows({queued});
         coordinator.presentPinnedRecords({QStringLiteral("queued-missing-pin")});
 
@@ -708,7 +711,10 @@ void singletonExportsIgnoreNewOperationsWithoutPresenting() {
                 return image();
             }),
             {3, 2},
-            QStringLiteral("ignored-live")};
+            QStringLiteral("ignored-live"),
+            {},
+            {},
+            {}};
         const auto requestWhileBusy = [&] {
             const auto selection = std::make_shared<SelectedFilesTestBackend>();
             coordinator.presentSelectedFiles(selection, selection->captureTarget());
@@ -1165,8 +1171,8 @@ void livePinnedImportsPreserveOrderAndFailures() {
     CollageWindow window(nullptr, ports.services());
     QImage red = image({540, 270}, Qt::red);
     const QImage frozen = red;
-    ScreenshotPinnedImageSnapshot first{ScreenshotExportSource::fromImage(red), red.size(),
-                                        QStringLiteral("first")};
+    ScreenshotPinnedImageSnapshot first{
+        ScreenshotExportSource::fromImage(red), red.size(), QStringLiteral("first"), {}, {}, {}};
     red.fill(Qt::green);
     const auto oversizeRenders = std::make_shared<std::atomic_int>(0);
     ScreenshotPinnedImageSnapshot oversized{
@@ -1175,21 +1181,32 @@ void livePinnedImportsPreserveOrderAndFailures() {
             return image();
         }),
         {8001, 8000},
-        QStringLiteral("oversized")};
+        QStringLiteral("oversized"),
+        {},
+        {},
+        {}};
     ScreenshotPinnedImageSnapshot failed{
         ScreenshotExportSource::fromProducer([](const auto&) { return QImage{}; }),
         {30, 20},
-        QStringLiteral("failed")};
+        QStringLiteral("failed"),
+        {},
+        {},
+        {}};
     const QImage blue = image({420, 300}, Qt::blue);
-    ScreenshotPinnedImageSnapshot last{ScreenshotExportSource::fromImage(blue), blue.size(),
-                                       QStringLiteral("last")};
+    ScreenshotPinnedImageSnapshot last{
+        ScreenshotExportSource::fromImage(blue), blue.size(), QStringLiteral("last"), {}, {}, {}};
     ScreenshotPinnedImageSnapshot rejected{
-        {}, {3, 2}, QStringLiteral("admission"), QStringLiteral("Capture admission rejected")};
+        {}, {3, 2}, QStringLiteral("admission"), QStringLiteral("Capture admission rejected"),
+        {}, {}};
     QStringList failures;
     QObject::connect(&window, &CollageWindow::importFinished, &window,
                      [&](const auto& errors) { failures = errors; });
-    window.presentPinnedWindows(
-        {first, {{}, {}, QStringLiteral("missing")}, failed, oversized, rejected, last});
+    window.presentPinnedWindows({first,
+                                 {{}, {}, QStringLiteral("missing"), {}, {}, {}},
+                                 failed,
+                                 oversized,
+                                 rejected,
+                                 last});
     require(window.loading() && statusMessage(window) &&
                 statusMessage(window)->content() == QStringLiteral("Loading images: 1 of 6"),
             "live pinned images use existing import progress");
@@ -1225,7 +1242,10 @@ void livePinnedImportsCancelAndRespectMemoryBudget() {
                 return cancellation.isCancellationRequested() ? QImage{} : image({512, 256});
             }),
             {512, 256},
-            QStringLiteral("slow")};
+            QStringLiteral("slow"),
+            {},
+            {},
+            {}};
         int completions = 0;
         QObject::connect(&window, &CollageWindow::importFinished, &window,
                          [&](const auto&) { ++completions; });
@@ -1252,7 +1272,10 @@ void livePinnedImportsCancelAndRespectMemoryBudget() {
             return image();
         }),
         {3, 2},
-        QStringLiteral("budget")};
+        QStringLiteral("budget"),
+        {},
+        {},
+        {}};
     QStringList failures;
     QObject::connect(&window, &CollageWindow::importFinished, &window,
                      [&](const auto& errors) { failures = errors; });
@@ -1278,7 +1301,10 @@ void livePinnedQueueReleasesCompletedSnapshotsAndAccountsForCancellation() {
                 return image({3, 2});
             }),
             {3, 2},
-            QStringLiteral("completed")};
+            QStringLiteral("completed"),
+            {},
+            {},
+            {}};
         owner.reset();
         ScreenshotPinnedImageSnapshot slow{
             ScreenshotExportSource::fromProducer(
@@ -1292,11 +1318,17 @@ void livePinnedQueueReleasesCompletedSnapshotsAndAccountsForCancellation() {
                     return pixels;
                 }),
             {8, 4},
-            QStringLiteral("worker")};
+            QStringLiteral("worker"),
+            {},
+            {},
+            {}};
         ScreenshotPinnedImageSnapshot queued{ScreenshotExportSource::fromImage(captureCollageImage(
                                                  {96, 64}, [] { return image({96, 64}); })),
                                              {96, 64},
-                                             QStringLiteral("queued")};
+                                             QStringLiteral("queued"),
+                                             {},
+                                             {},
+                                             {}};
         require(collageResourceUsage().reservedBytes == baseline + (8 * 4 + 96 * 64) * 4,
                 "queued captured rasters are admitted before the import worker starts");
         window.presentPinnedWindows({first, slow, queued});

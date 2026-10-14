@@ -145,6 +145,7 @@ void independentHistoryAndSourceWindows() {
     coordinator.presentSource({ScreenshotExportSource::fromImage(image({600, 800})),
                                QStringLiteral("pin.png"),
                                record.createdUtc,
+                               {},
                                {}});
     auto windows = coordinator.windows();
     require(windows.size() == 2 && windows[0] != windows[1],
