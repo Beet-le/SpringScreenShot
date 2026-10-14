@@ -2158,7 +2158,13 @@ mod tests {
             .map_err(gpu_error)?;
         let mut reference = vec![0; 64 * 48 * 4];
         for (index, pixel) in reference.chunks_exact_mut(4).enumerate() {
-            pixel.copy_from_slice(&[index as u8, (index / 7) as u8, (index / 11) as u8, 255]);
+            // Include the mid-gray inversion boundary as well as colored pixels.
+            let color = if index / 64 < 24 {
+                [0x7f, 0x7f, 0x7f, 255]
+            } else {
+                [index as u8, (index / 7) as u8, (index / 11) as u8, 255]
+            };
+            pixel.copy_from_slice(&color);
         }
         let mut bgra = reference.clone();
         for pixel in bgra.chunks_exact_mut(4) {

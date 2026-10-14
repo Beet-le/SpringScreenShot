@@ -387,7 +387,10 @@ fn has_visible_pixel(rgba: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use windows::Win32::UI::WindowsAndMessaging::{CreateCursor, DestroyCursor};
+    use windows::Win32::Graphics::Gdi::GdiFlush;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateCursor, DestroyCursor, IDC_CROSS, LoadCursorW,
+    };
 
     struct CursorGuard(HCURSOR);
 
@@ -395,6 +398,97 @@ mod tests {
         fn drop(&mut self) {
             let _ = unsafe { DestroyCursor(self.0) };
         }
+    }
+
+    // This oracle never installs a cursor or draws to a window/screen DC.
+    // DrawIconEx(DI_NORMAL) specifies SRCAND followed by SRCINVERT for non-alpha cursors:
+    // https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-drawiconex
+    fn draw_cursor_on_dib(cursor: HCURSOR, shape: &CursorShape, rgb: [u8; 3]) -> Vec<u8> {
+        let dc = MemoryDc::new().expect("memory DC");
+        let info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: shape.width as i32,
+                biHeight: -(shape.height as i32),
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut bits = ptr::null_mut();
+        let bitmap =
+            unsafe { CreateDIBSection(Some(dc.0), &info, DIB_RGB_COLORS, &mut bits, None, 0) }
+                .expect("offscreen DIB");
+        let bitmap = BitmapGuard::new(bitmap).expect("valid bitmap");
+        let _selection = SelectedBitmap::new(dc.0, bitmap.handle()).expect("selected bitmap");
+        let len = checked_rgba_len(shape.width, shape.height).unwrap();
+        assert!(!bits.is_null());
+        // Do not retain a Rust slice while GDI writes to the allocation.
+        for pixel in
+            unsafe { std::slice::from_raw_parts_mut(bits.cast::<u8>(), len) }.chunks_exact_mut(4)
+        {
+            pixel.copy_from_slice(&[rgb[2], rgb[1], rgb[0], 255]);
+        }
+        unsafe {
+            DrawIconEx(
+                dc.0,
+                0,
+                0,
+                HICON(cursor.0),
+                shape.width as i32,
+                shape.height as i32,
+                0,
+                None,
+                DI_NORMAL,
+            )
+        }
+        .expect("DrawIconEx");
+        // Synchronize GDI before directly reading a DIB section's memory.
+        assert!(unsafe { GdiFlush() }.as_bool());
+        let mut rgba = unsafe { std::slice::from_raw_parts(bits.cast::<u8>(), len) }.to_vec();
+        for pixel in rgba.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+            pixel[3] = 255; // GDI's destination alpha is not part of the RGB raster operation.
+        }
+        rgba
+    }
+
+    fn assert_masked_cursor_matches_windows(cursor: HCURSOR) {
+        let shape = extract_shape(cursor).expect("native cursor extraction");
+        assert_eq!(shape.composition_mode, CursorCompositionMode::MaskedColor);
+        assert!(shape.shape_rgba.chunks_exact(4).any(|p| p == [255; 4]));
+        for rgb in (0..=255u8).map(|gray| [gray; 3]).chain([
+            [255, 0, 0],
+            [0, 255, 0],
+            [0, 0, 255],
+            [37, 91, 163],
+        ]) {
+            let actual = draw_cursor_on_dib(cursor, &shape, rgb);
+            for (index, (mask, pixel)) in shape
+                .shape_rgba
+                .chunks_exact(4)
+                .zip(actual.chunks_exact(4))
+                .enumerate()
+            {
+                let expected = [
+                    (rgb[0] & mask[3]) ^ mask[0],
+                    (rgb[1] & mask[3]) ^ mask[1],
+                    (rgb[2] & mask[3]) ^ mask[2],
+                    255,
+                ];
+                assert_eq!(pixel, expected, "background {rgb:?}, cursor pixel {index}");
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the standard Windows inverse IDC_CROSS resource"]
+    fn system_crosshair_masks_match_windows_drawiconex_across_gray_ramp() {
+        // Shared system handle: do not destroy it. Loading does not display it.
+        let cursor = unsafe { LoadCursorW(None, IDC_CROSS) }.expect("system crosshair");
+        assert_masked_cursor_matches_windows(cursor);
     }
 
     #[test]
@@ -427,8 +521,8 @@ mod tests {
         // CreateCursor expects one bit per pixel with scanlines aligned to a
         // 16-bit boundary. These planes describe a 2x2 cursor with all four
         // AND/XOR composition combinations.
-        let and_plane = [0b1000_0000, 0, 0b0100_0000, 0];
-        let xor_plane = [0b0100_0000, 0, 0b1000_0000, 0];
+        let and_plane: [u8; 4] = [0b0000_0000, 0, 0b1100_0000, 0];
+        let xor_plane: [u8; 4] = [0b0100_0000, 0, 0b0100_0000, 0];
         let cursor = CursorGuard(
             unsafe {
                 CreateCursor(
@@ -450,5 +544,13 @@ mod tests {
         assert_eq!((shape.width, shape.height), (2, 2));
         assert_eq!(shape.composition_mode, CursorCompositionMode::MaskedColor);
         assert_eq!(shape.shape_rgba.len(), 16);
+        assert_eq!(
+            shape.shape_rgba.as_ref(),
+            &[
+                0, 0, 0, 0, 255, 255, 255, 0, 0, 0, 0, 255, 255, 255, 255, 255
+            ],
+            "the native sampler must preserve black, white, transparent and inverse pixels"
+        );
+        assert_masked_cursor_matches_windows(cursor.0);
     }
 }

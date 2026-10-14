@@ -4290,7 +4290,13 @@ mod tests {
             (CursorCompositionMode::AlphaBlend, [53, 170, 204, 128]),
             (CursorCompositionMode::AlphaBlend, [53, 170, 204, 255]),
         ];
-        for background in [[37, 91, 163, 255], [255, 255, 255, 255], [0, 0, 0, 255]] {
+        for background in [
+            [37, 91, 163, 255],
+            [255, 255, 255, 255],
+            [0, 0, 0, 255],
+            [0x7f, 0x7f, 0x7f, 255],
+            [0x80, 0x80, 0x80, 255],
+        ] {
             for (mode, pixel) in cases {
                 let mut expected = background;
                 if mode == CursorCompositionMode::MaskedColor && matches!(pixel[3], 0 | 255) {

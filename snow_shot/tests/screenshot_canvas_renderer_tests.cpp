@@ -9109,6 +9109,8 @@ int main(int argc, char** argv) {
     }
     if (application.arguments().contains(QStringLiteral("--cursor-only"))) {
         runScreenshotCursorTests();
+        canvasCursorLayersKeepToolCursorAfterScreenshotSelection();
+        overlaySelectionCursorUpdatesAreIdempotentWhileSelecting();
         return 0;
     }
 #if defined(SNOW_SHOT_CURSOR_BENCHMARK)

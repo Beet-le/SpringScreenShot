@@ -84,10 +84,23 @@ fn decode_monochrome_dxgi_shape(
     hotspot_x: u32,
     hotspot_y: u32,
     width: u32,
-    height: u32,
+    stacked_height: u32,
     pitch: usize,
     buffer: &[u8],
 ) -> Option<CursorShape> {
+    // DXGI's height includes both one-bit planes: AND above XOR. Treating
+    // it as the visible height rejects valid buffers and retains a stale
+    // cursor shape when switching from a color cursor to an inverse cursor.
+    // Microsoft Desktop Duplication sample, OutputManager::ProcessMonoMask:
+    // https://github.com/microsoft/Windows-classic-samples/blob/main/Samples/DXGIDesktopDuplication/cpp/OutputManager.cpp
+    if width == 0
+        || stacked_height < 2
+        || !stacked_height.is_multiple_of(2)
+        || pitch < (width as usize).div_ceil(8)
+    {
+        return None;
+    }
+    let height = stacked_height / 2;
     let half_len = pitch.checked_mul(height as usize)?;
     let total_len = half_len.checked_mul(2)?;
     if buffer.len() < total_len {
@@ -210,18 +223,131 @@ mod tests {
 
     #[test]
     fn dxgi_monochrome_decode_produces_expected_pixels() {
-        let shape = decode_monochrome_dxgi_shape(
-            0,
-            0,
-            2,
-            2,
-            1,
-            &[0b1000_0000, 0b0100_0000, 0b0100_0000, 0b1000_0000],
-        )
-        .expect("shape should decode");
+        // DXGI reports the combined height of the AND and XOR planes.
+        // Exercise the actual decoder entry point, including padded scanlines.
+        let info = monochrome_info(2, 4, 2);
+        let shape =
+            decode_dxgi_pointer_shape(&info, &[0x00, 0xa5, 0xc0, 0xa5, 0x40, 0xa5, 0x40, 0xa5])
+                .expect("a valid stacked DXGI mask must decode");
 
         assert_eq!(shape.width, 2);
         assert_eq!(shape.height, 2);
+        assert_eq!((shape.hotspot_x, shape.hotspot_y), (1, 1));
         assert_eq!(shape.composition_mode, CursorCompositionMode::MaskedColor);
+        assert_eq!(
+            shape.shape_rgba.as_ref(),
+            &[
+                0, 0, 0, 0, 255, 255, 255, 0, 0, 0, 0, 255, 255, 255, 255, 255
+            ],
+            "black, white, transparent and inverse pixels must retain their ROPs"
+        );
+    }
+
+    fn monochrome_info(
+        width: u32,
+        stacked_height: u32,
+        pitch: u32,
+    ) -> DXGI_OUTDUPL_POINTER_SHAPE_INFO {
+        DXGI_OUTDUPL_POINTER_SHAPE_INFO {
+            Type: DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MONOCHROME.0 as u32,
+            Width: width,
+            Height: stacked_height,
+            Pitch: pitch,
+            HotSpot: POINT { x: 1, y: 1 },
+        }
+    }
+
+    #[test]
+    fn dxgi_monochrome_crosshair_inverts_gray_and_clips_at_hotspot() {
+        use crate::frame::Frame;
+        use snow_cursor::{AttachedCursorSample, CursorShapeState};
+
+        let shape = decode_dxgi_pointer_shape(
+            &monochrome_info(3, 6, 1),
+            &[0xe0, 0xe0, 0xe0, 0x40, 0xe0, 0x40],
+        )
+        .expect("inverse crosshair must decode");
+
+        for bgra in [false, true] {
+            for (x, y) in [(1, 1), (0, 0), (2, 2)] {
+                let pixels = [0x7f, 0x7f, 0x7f, 255].repeat(9);
+                let mut frame = if bgra {
+                    Frame::from_bgra8(3, 3, pixels).unwrap()
+                } else {
+                    Frame::from_rgba8(3, 3, pixels).unwrap()
+                };
+                frame.metadata.cursor = Some(AttachedCursorSample {
+                    x,
+                    y,
+                    visible: true,
+                    shape: CursorShapeState::Embedded(shape.clone()),
+                });
+                assert!(frame.composite_attached_cursor());
+                for py in 0i32..3 {
+                    for px in 0i32..3 {
+                        let on_crosshair =
+                            (px == x && (py - y).abs() <= 1) || (py == y && (px - x).abs() <= 1);
+                        let value = if on_crosshair { 0x80 } else { 0x7f };
+                        let offset = ((py * 3 + px) * 4) as usize;
+                        assert_eq!(
+                            &frame.as_bytes()[offset..offset + 4],
+                            &[value, value, value, 255]
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dxgi_monochrome_rejects_incomplete_planes_and_invalid_layouts() {
+        for (width, height, pitch, buffer_len) in [
+            (0, 4, 1, 4),
+            (2, 0, 1, 0),
+            (2, 1, 1, 2),
+            (2, 3, 1, 6),
+            (9, 4, 1, 8),
+            (2, 4, 0, 0),
+            (2, 4, 2, 7),
+        ] {
+            assert!(
+                decode_dxgi_pointer_shape(
+                    &monochrome_info(width, height, pitch),
+                    &vec![0xff; buffer_len],
+                )
+                .is_none(),
+                "invalid monochrome layout: {width}x{height}, pitch {pitch}, bytes {buffer_len}"
+            );
+        }
+    }
+
+    #[test]
+    fn dxgi_color_shapes_keep_full_height_and_bgra_channels() {
+        for (kind, mode) in [
+            (
+                DXGI_OUTDUPL_POINTER_SHAPE_TYPE_COLOR,
+                CursorCompositionMode::AlphaBlend,
+            ),
+            (
+                DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MASKED_COLOR,
+                CursorCompositionMode::MaskedColor,
+            ),
+        ] {
+            let info = DXGI_OUTDUPL_POINTER_SHAPE_INFO {
+                Type: kind.0 as u32,
+                Width: 1,
+                Height: 2,
+                Pitch: 8,
+                ..Default::default()
+            };
+            let shape = decode_dxgi_pointer_shape(
+                &info,
+                &[1, 2, 3, 0, 99, 99, 99, 99, 4, 5, 6, 255, 99, 99, 99, 99],
+            )
+            .unwrap();
+            assert_eq!((shape.width, shape.height), (1, 2));
+            assert_eq!(shape.composition_mode, mode);
+            assert_eq!(shape.shape_rgba.as_ref(), &[3, 2, 1, 0, 6, 5, 4, 255]);
+        }
     }
 }
