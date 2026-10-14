@@ -91,6 +91,7 @@ constexpr char kRoleForegroundColor[] = "foreground-color";
 constexpr char kRoleTextFont[] = "text-font";
 constexpr char kRoleTextFill[] = "text-fill";
 constexpr char kRoleCornerRadius[] = "corner-radius";
+constexpr char kRoleMagnifierRadius[] = "magnifier-corner-radius";
 constexpr char kRoleShapeKind[] = "shape-kind";
 constexpr char kRoleArrowType[] = "arrow-type";
 constexpr char kRoleLineType[] = "line-type";
@@ -100,6 +101,8 @@ constexpr char kRoleArrowShaft[] = "arrow-shaft-type";
 constexpr char kSignatureArrowShaft[] = "icon-options:arrow-shaft-type";
 constexpr char kRoleStartArrowhead[] = "start-arrowhead";
 constexpr char kRoleEndArrowhead[] = "end-arrowhead";
+constexpr char kRoleTextEmphasis[] = "text-emphasis";
+constexpr char kSignatureTextEmphasis[] = "toggle:bold-italic";
 constexpr char kRoleTextAlignment[] = "text-alignment";
 constexpr char kRoleTextStroke[] = "text-stroke";
 constexpr char kRoleSerialValue[] = "serial-value";
@@ -183,6 +186,57 @@ constexpr char kRoleDistanceEndpoint[] = "distance-endpoint";
 constexpr char kSignatureDistanceValue[] = "input:distance-value";
 constexpr char kSignatureDistanceUnit[] = "radio:distance-unit";
 constexpr char kSignatureDistanceDecimals[] = "select:distance-decimals";
+constexpr char kRoleMagnifierColor[] = "magnifier-color";
+constexpr char kRoleMagnifierWidth[] = "magnifier-width";
+constexpr char kRoleMagnifierShape[] = "magnifier-shape";
+constexpr char kRoleMagnifierFactor[] = "magnifier-factor";
+constexpr char kRoleMagnifierConnection[] = "magnifier-connection";
+constexpr char kRoleMagnifierSourceOutline[] = "magnifier-source-outline";
+constexpr char kRoleMagnifierArrowhead[] = "magnifier-arrowhead";
+constexpr char kRoleMagnifierArrowRatio[] = "magnifier-arrow-ratio";
+constexpr char kSignatureMagnifierFactor[] = "numeric:magnifier-factor";
+constexpr char kSignatureMagnifierConnection[] = "radio:magnifier-connection";
+constexpr char kSignatureMagnifierSourceOutline[] = "toggle:magnifier-source-outline";
+[[maybe_unused]] constexpr const char* kMagnifierTranslationSources[] = {
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Magnifier"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Magnifier shape"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Magnifier stroke color"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Magnifier stroke color %1"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Current magnifier stroke width"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Magnifier stroke width %1"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Magnification factor (scroll to adjust)"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Connection type"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "None"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Leader line"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Gradient"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Source region outline"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Leader line type"),
+};
+constexpr char kRoleAngleColor[] = "angle-color";
+constexpr char kRoleAngleType[] = "angle-type";
+constexpr char kSignatureAngleType[] = "radio:angle-type";
+constexpr char kRoleAngleUnit[] = "angle-unit";
+constexpr char kRoleAngleDecimals[] = "angle-decimals";
+constexpr char kSignatureAngleUnit[] = "radio:angle-unit";
+constexpr char kSignatureAngleDecimals[] = "select:angle-decimals";
+
+constexpr quint32 angleProperty(SnowCanvasAngleStyleProperty property) {
+    return static_cast<quint32>(property);
+}
+
+[[maybe_unused]] constexpr const char* kAngleTranslationSources[] = {
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Angle annotation"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Angle stroke color"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Angle stroke color %1"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Current angle stroke width"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Angle stroke width %1"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Angle type"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "360° angle"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "180° angle"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Angle unit"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Degrees"),
+    QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Radians"),
+};
 
 class DistanceValueTextPolicy final : public adqt::widgets::AdInputNumberTextPolicy {
   public:
@@ -196,6 +250,7 @@ class DistanceValueTextPolicy final : public adqt::widgets::AdInputNumberTextPol
 QVector<QByteArray> styleEditorRoles(ScreenshotToolPalette::Tool tool) {
     using Tool = ScreenshotToolPalette::Tool;
     switch (tool) {
+    case Tool::SpeechBubble:
     case Tool::Shape:
         return {"shape-kind", kRoleOutlineStroke, kRoleOutlineWidth, kRoleShapeFill,
                 kRoleCornerRadius};
@@ -206,6 +261,13 @@ QVector<QByteArray> styleEditorRoles(ScreenshotToolPalette::Tool tool) {
     case Tool::Distance:
         return {kRoleDistanceColor,    kRoleOutlineWidth,  kRoleDistanceValue,   kRoleDistanceUnit,
                 kRoleDistanceDecimals, kRoleDistanceScale, kRoleDistanceEndpoint};
+    case Tool::Magnifier:
+        return {kRoleMagnifierShape,         kRoleMagnifierColor,      kRoleMagnifierWidth,
+                kRoleMagnifierRadius,        kRoleMagnifierFactor,     kRoleMagnifierConnection,
+                kRoleMagnifierSourceOutline, kRoleMagnifierArrowRatio, kRoleMagnifierArrowhead};
+    case Tool::Angle:
+        return {kRoleAngleColor, kRoleOutlineWidth, kRoleAngleType, kRoleAngleUnit,
+                kRoleAngleDecimals};
     case Tool::Arrow:
         return {kRoleOutlineStroke, kRoleOutlineWidth, "arrow-type",   kRoleArrowRatio,
                 "start-arrowhead",  kRoleArrowShaft,   "end-arrowhead"};
@@ -214,9 +276,9 @@ QVector<QByteArray> styleEditorRoles(ScreenshotToolPalette::Tool tool) {
     case Tool::PenHighlight:
         return {kRoleHighlightMode, kRoleHighlightColor, kRoleBrushWidth};
     case Tool::Spotlight:
-        return {kRoleShapeKind, kRoleMaskColor, kRoleOpacity};
+        return {kRoleShapeKind, kRoleMaskColor, kRoleOpacity, kRoleCornerRadius};
     case Tool::Text:
-        return {kRoleForegroundColor, kRoleTextFont, "text-alignment",
+        return {kRoleForegroundColor, kRoleTextFont, kRoleTextEmphasis, "text-alignment",
                 "text-stroke",        kRoleTextFill, kRoleCornerRadius};
     case Tool::SerialNumber:
         return {kRoleForegroundColor, kRoleSerialType, kRoleSerialNumericType,
@@ -718,6 +780,41 @@ ScreenshotToolPaletteStyleControls::ScreenshotToolPaletteStyleControls(
     : m_state(defaults), m_callbacks(std::move(callbacks)), m_defaults(defaults),
       m_watermarkTemplateClock(std::move(watermarkTemplateClock)) {}
 
+ScreenshotToolPaletteStyleControls::~ScreenshotToolPaletteStyleControls() {
+    releaseControlCallbacksExcept(nullptr);
+    releaseWatermarkTemplateBindings();
+}
+
+QObject* ScreenshotToolPaletteStyleControls::controlCallbackContext(QWidget* owner) {
+    for (const auto& context : m_controlCallbackContexts) {
+        if (context != nullptr && context->parent() == owner) {
+            return context;
+        }
+    }
+    auto* context = new QObject(owner);
+    m_controlCallbackContexts.push_back(context);
+    return context;
+}
+
+void ScreenshotToolPaletteStyleControls::releaseControlCallbacksExcept(QWidget* retainedControls) {
+    m_controlCallbackContexts.erase(
+        std::remove_if(m_controlCallbackContexts.begin(), m_controlCallbackContexts.end(),
+                       [retainedControls](const QPointer<QObject>& context) {
+                           if (context == nullptr) {
+                               return true;
+                           }
+                           auto* owner = qobject_cast<QWidget*>(context->parent());
+                           if (retainedControls != nullptr && owner != nullptr &&
+                               (owner == retainedControls ||
+                                retainedControls->isAncestorOf(owner))) {
+                               return false;
+                           }
+                           delete context.data();
+                           return true;
+                       }),
+        m_controlCallbackContexts.end());
+}
+
 ScreenshotToolPaletteStyleState& ScreenshotToolPaletteStyleControls::styleState() {
     return m_state;
 }
@@ -824,6 +921,11 @@ void ScreenshotToolPaletteStyleControls::rebuildRegisteredComponents() {
     append(m_distanceColorEditor);
     append(m_distanceWidthEditor);
     append(m_distanceEndpointEditor);
+    append(m_magnifierColorEditor);
+    append(m_magnifierWidthEditor);
+    append(m_magnifierLeaderEditor);
+    append(m_angleColorEditor);
+    append(m_angleWidthEditor);
     append(m_arrowStrokeWidthEditor);
     append(m_arrowStrokeEditor);
     append(m_startArrowheadEditor);
@@ -831,6 +933,7 @@ void ScreenshotToolPaletteStyleControls::rebuildRegisteredComponents() {
     append(m_endArrowheadEditor);
     append(m_textColorEditor);
     append(m_textFontEditor);
+    append(m_textEmphasisEditor);
     append(m_textStrokeEditor);
     append(m_textFillEditor);
     append(m_textAlignmentEditor);
@@ -860,6 +963,7 @@ void ScreenshotToolPaletteStyleControls::parkStyleEditors(int tool, QWidget* con
 
     using Tool = ScreenshotToolPalette::Tool;
     switch (static_cast<Tool>(tool)) {
+    case Tool::SpeechBubble:
     case Tool::Shape:
     case Tool::Line:
     case Tool::FreeDraw:
@@ -871,6 +975,15 @@ void ScreenshotToolPaletteStyleControls::parkStyleEditors(int tool, QWidget* con
         park(kRoleDistanceColor, kSignatureForegroundColor, m_distanceColorEditor);
         park(kRoleOutlineWidth, kSignatureStrokeWidth, m_distanceWidthEditor);
         park(kRoleDistanceEndpoint, kSignatureArrowhead, m_distanceEndpointEditor);
+        break;
+    case Tool::Magnifier:
+        park(kRoleMagnifierColor, kSignatureForegroundColor, m_magnifierColorEditor);
+        park(kRoleMagnifierWidth, kSignatureStrokeWidth, m_magnifierWidthEditor);
+        park(kRoleMagnifierArrowhead, kSignatureArrowhead, m_magnifierLeaderEditor);
+        break;
+    case Tool::Angle:
+        park(kRoleAngleColor, kSignatureForegroundColor, m_angleColorEditor);
+        park(kRoleOutlineWidth, kSignatureStrokeWidth, m_angleWidthEditor);
         break;
     case Tool::Arrow:
         park(kRoleOutlineStroke, kSignatureStroke, m_arrowStrokeEditor);
@@ -893,6 +1006,7 @@ void ScreenshotToolPaletteStyleControls::parkStyleEditors(int tool, QWidget* con
     case Tool::Text:
         park(kRoleForegroundColor, kSignatureForegroundColor, m_textColorEditor);
         park(kRoleTextFont, kSignatureTextFont, m_textFontEditor);
+        park(kRoleTextEmphasis, kSignatureTextEmphasis, m_textEmphasisEditor);
         park(kRoleTextAlignment, kSignatureTextAlignment, m_textAlignmentEditor);
         park(kRoleTextStroke, kSignatureTextStroke, m_textStrokeEditor);
         park(kRoleTextFill, kSignatureTextFill, m_textFillEditor);
@@ -938,6 +1052,7 @@ void ScreenshotToolPaletteStyleControls::restoreStyleEditors(int tool, QWidget* 
 
     using Tool = ScreenshotToolPalette::Tool;
     switch (static_cast<Tool>(tool)) {
+    case Tool::SpeechBubble:
     case Tool::Shape:
     case Tool::Line:
     case Tool::FreeDraw:
@@ -949,6 +1064,15 @@ void ScreenshotToolPaletteStyleControls::restoreStyleEditors(int tool, QWidget* 
         restore(kRoleDistanceColor, m_distanceColorEditor);
         restore(kRoleOutlineWidth, m_distanceWidthEditor);
         restore(kRoleDistanceEndpoint, m_distanceEndpointEditor);
+        break;
+    case Tool::Magnifier:
+        restore(kRoleMagnifierColor, m_magnifierColorEditor);
+        restore(kRoleMagnifierWidth, m_magnifierWidthEditor);
+        restore(kRoleMagnifierArrowhead, m_magnifierLeaderEditor);
+        break;
+    case Tool::Angle:
+        restore(kRoleAngleColor, m_angleColorEditor);
+        restore(kRoleOutlineWidth, m_angleWidthEditor);
         break;
     case Tool::Arrow:
         restore(kRoleOutlineStroke, m_arrowStrokeEditor);
@@ -971,6 +1095,7 @@ void ScreenshotToolPaletteStyleControls::restoreStyleEditors(int tool, QWidget* 
     case Tool::Text:
         restore(kRoleForegroundColor, m_textColorEditor);
         restore(kRoleTextFont, m_textFontEditor);
+        restore(kRoleTextEmphasis, m_textEmphasisEditor);
         restore(kRoleTextAlignment, m_textAlignmentEditor);
         restore(kRoleTextStroke, m_textStrokeEditor);
         restore(kRoleTextFill, m_textFillEditor);
@@ -1092,6 +1217,8 @@ void ScreenshotToolPaletteStyleControls::prepareStyleReconcile(int sourceTool, i
     if (shared(kRoleOutlineWidth)) {
         if (source == ScreenshotToolPalette::Tool::Distance) {
             stageComponent(kRoleOutlineWidth, kSignatureStrokeWidth, m_distanceWidthEditor);
+        } else if (source == ScreenshotToolPalette::Tool::Angle) {
+            stageComponent(kRoleOutlineWidth, kSignatureStrokeWidth, m_angleWidthEditor);
         } else if (source == ScreenshotToolPalette::Tool::Arrow) {
             stageComponent(kRoleOutlineWidth, kSignatureStrokeWidth, m_arrowStrokeWidthEditor);
         } else {
@@ -1232,13 +1359,14 @@ void ScreenshotToolPaletteStyleControls::stageDestinationStyleEditors(
 
     using Tool = ScreenshotToolPalette::Tool;
     switch (destination) {
+    case Tool::SpeechBubble:
     case Tool::Shape:
     case Tool::Line:
     case Tool::FreeDraw:
         stageComponent(kRoleOutlineStroke, kSignatureStroke, m_shapeStrokeEditor);
         stageComponent(kRoleOutlineWidth, kSignatureStrokeWidth, m_shapeStrokeWidthEditor);
         stageComponent(kRoleShapeFill, kSignatureShapeFill, m_shapeFillEditor);
-        if (destination == Tool::Shape) {
+        if (destination == Tool::Shape || destination == Tool::SpeechBubble) {
             stageWidget(kRoleShapeKind);
             stageWidget(kRoleCornerRadius);
         } else if (destination == Tool::Line) {
@@ -1253,6 +1381,24 @@ void ScreenshotToolPaletteStyleControls::stageDestinationStyleEditors(
         stageWidget(kRoleDistanceUnit);
         stageWidget(kRoleDistanceDecimals);
         stageWidget(kRoleDistanceScale);
+        break;
+    case Tool::Magnifier:
+        stageComponent(kRoleMagnifierColor, kSignatureForegroundColor, m_magnifierColorEditor);
+        stageComponent(kRoleMagnifierWidth, kSignatureStrokeWidth, m_magnifierWidthEditor);
+        stageComponent(kRoleMagnifierArrowhead, kSignatureArrowhead, m_magnifierLeaderEditor);
+        stageWidget(kRoleMagnifierShape);
+        stageWidget(kRoleMagnifierRadius);
+        stageWidget(kRoleMagnifierFactor);
+        stageWidget(kRoleMagnifierConnection);
+        stageWidget(kRoleMagnifierSourceOutline);
+        stageWidget(kRoleMagnifierArrowRatio);
+        break;
+    case Tool::Angle:
+        stageComponent(kRoleAngleColor, kSignatureForegroundColor, m_angleColorEditor);
+        stageComponent(kRoleOutlineWidth, kSignatureStrokeWidth, m_angleWidthEditor);
+        stageWidget(kRoleAngleType);
+        stageWidget(kRoleAngleUnit);
+        stageWidget(kRoleAngleDecimals);
         break;
     case Tool::Arrow:
         stageComponent(kRoleOutlineStroke, kSignatureStroke, m_arrowStrokeEditor);
@@ -1277,10 +1423,12 @@ void ScreenshotToolPaletteStyleControls::stageDestinationStyleEditors(
         stageWidget(kRoleShapeKind);
         stageComponent(kRoleMaskColor, kSignatureMaskColor, m_spotlightColorEditor);
         stageWidget(kRoleOpacity);
+        stageWidget(kRoleCornerRadius);
         break;
     case Tool::Text:
         stageComponent(kRoleForegroundColor, kSignatureForegroundColor, m_textColorEditor);
         stageComponent(kRoleTextFont, kSignatureTextFont, m_textFontEditor);
+        stageComponent(kRoleTextEmphasis, kSignatureTextEmphasis, m_textEmphasisEditor);
         stageComponent(kRoleTextAlignment, kSignatureTextAlignment, m_textAlignmentEditor);
         stageComponent(kRoleTextStroke, kSignatureTextStroke, m_textStrokeEditor);
         stageComponent(kRoleTextFill, kSignatureTextFill, m_textFillEditor);
@@ -1416,8 +1564,8 @@ ScreenshotToolPaletteShapeFamilyResult ScreenshotToolPaletteStyleControls::build
     container->setProperty("screenshotStyleEditorSignature", kSignatureShapeKind);
     QObject::disconnect(group, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged, nullptr,
                         nullptr);
-    QObject::connect(group, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged, controls,
-                     [this, spotlight](int id) {
+    QObject::connect(group, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
+                     controlCallbackContext(controls), [this, spotlight](int id) {
                          const auto shape = id == 1   ? SnowCanvasRectangleShape::Ellipse
                                             : id == 2 ? SnowCanvasRectangleShape::Diamond
                                                       : SnowCanvasRectangleShape::Rectangle;
@@ -1451,12 +1599,18 @@ ScreenshotToolPaletteShapeFamilyResult ScreenshotToolPaletteStyleControls::build
         return result;
     }
     const auto styleTool = static_cast<ScreenshotToolPalette::Tool>(tool);
-    const bool includeShapeOnlyEditors = styleTool == ScreenshotToolPalette::Tool::Shape;
+    const bool includeShapeOnlyEditors = styleTool == ScreenshotToolPalette::Tool::Shape ||
+                                         styleTool == ScreenshotToolPalette::Tool::SpeechBubble;
+    const auto& buildingStyle = styleTool == ScreenshotToolPalette::Tool::SpeechBubble
+                                    ? m_state.m_speechBubbleStyle
+                                    : m_state.m_rectangleStyle;
     const bool includeLineTypeEditor = styleTool == ScreenshotToolPalette::Tool::Line;
     const QString controlsObjectName = styleTool == ScreenshotToolPalette::Tool::Line
                                            ? QStringLiteral("screenshotLineStyleControls")
                                        : styleTool == ScreenshotToolPalette::Tool::FreeDraw
                                            ? QStringLiteral("screenshotFreeDrawStyleControls")
+                                       : styleTool == ScreenshotToolPalette::Tool::SpeechBubble
+                                           ? QStringLiteral("screenshotSpeechBubbleStyleControls")
                                            : QStringLiteral("screenshotRectangleStyleControls");
     QWidget* controls = createRowWidget(panel, controlsObjectName, host);
     auto* layout = static_cast<QHBoxLayout*>(controls->layout());
@@ -1469,7 +1623,7 @@ ScreenshotToolPaletteShapeFamilyResult ScreenshotToolPaletteStyleControls::build
     strokeConfig.accessibleName = QStringLiteral("Stroke color");
     strokeConfig.popupObjectName = QStringLiteral("screenshotStrokeOptions");
     strokeConfig.styleRowObjectName = QStringLiteral("screenshotStrokeStyles");
-    strokeConfig.colorValues = m_state.m_rectangleStyle.strokeColorValues();
+    strokeConfig.colorValues = buildingStyle.strokeColorValues();
     strokeConfig.presetSource =
         snow_shot::presentation::ScreenshotToolPaletteColorPresetSource::Stroke;
     strokeConfig.colorTooltip = [](const QColor& color) {
@@ -1491,9 +1645,8 @@ ScreenshotToolPaletteShapeFamilyResult ScreenshotToolPaletteStyleControls::build
     } else {
         m_shapeStrokeEditor = std::make_unique<ScreenshotToolPaletteStrokeEditor>();
         m_shapeStrokeEditor->build(
-            layout, controls, controls, strokeConfig, m_state.m_rectangleStyle.strokeColor(),
-            m_state.m_rectangleStyle.strokeStyle(),
-            [this](const QColor& color) { setStrokeColor(color); },
+            layout, controls, controls, strokeConfig, buildingStyle.strokeColor(),
+            buildingStyle.strokeStyle(), [this](const QColor& color) { setStrokeColor(color); },
             [this](SnowCanvasStrokeStyle style) { setStrokeStyle(style); }, editorServices(),
             metrics);
     }
@@ -1521,7 +1674,7 @@ ScreenshotToolPaletteShapeFamilyResult ScreenshotToolPaletteStyleControls::build
     } else {
         m_shapeStrokeWidthEditor = std::make_unique<ScreenshotToolPaletteNumericPresetEditor>();
         m_shapeStrokeWidthEditor->build(
-            layout, controls, controls, strokeWidthConfig, m_state.m_rectangleStyle.strokeWidth(),
+            layout, controls, controls, strokeWidthConfig, buildingStyle.strokeWidth(),
             [this]() { cycleStrokeWidth(); }, [this](double value) { setStrokeWidth(value); },
             metrics);
     }
@@ -1558,8 +1711,8 @@ ScreenshotToolPaletteShapeFamilyResult ScreenshotToolPaletteStyleControls::build
         lineTypeControlsContainer->setProperty("screenshotStyleEditorSignature",
                                                kSignatureLineType);
         QObject::connect(
-            m_lineTypeButtonGroup, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged, controls,
-            [this](int id) {
+            m_lineTypeButtonGroup, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
+            controlCallbackContext(controls), [this](int id) {
                 setLineType(id == 0 ? SnowCanvasArrowType::Straight : SnowCanvasArrowType::Curve);
             });
     }
@@ -1572,7 +1725,7 @@ ScreenshotToolPaletteShapeFamilyResult ScreenshotToolPaletteStyleControls::build
     fillConfig.accessibleName = QStringLiteral("Fill color");
     fillConfig.popupObjectName = QStringLiteral("screenshotFillOptions");
     fillConfig.presetRowObjectName = QStringLiteral("screenshotFillColorPresets");
-    fillConfig.colorValues = m_state.m_rectangleStyle.fillColorValues();
+    fillConfig.colorValues = buildingStyle.fillColorValues();
     fillConfig.presetSource = snow_shot::presentation::ScreenshotToolPaletteColorPresetSource::Fill;
     fillConfig.colorTooltip = [](const QColor& color) {
         return color.alpha() == 0
@@ -1594,46 +1747,50 @@ ScreenshotToolPaletteShapeFamilyResult ScreenshotToolPaletteStyleControls::build
     } else {
         m_shapeFillEditor = std::make_unique<ScreenshotToolPaletteFillEditor>();
         m_shapeFillEditor->build(
-            layout, controls, controls, fillConfig, m_state.m_rectangleStyle.fillColor(),
-            m_state.m_rectangleStyle.fillStyle(),
-            [this](const QColor& color) { setFillColor(color); },
+            layout, controls, controls, fillConfig, buildingStyle.fillColor(),
+            buildingStyle.fillStyle(), [this](const QColor& color) { setFillColor(color); },
             [this](SnowCanvasFillStyle style) { setFillStyle(style); }, editorServices(), metrics);
     }
     tagEditor(m_shapeFillEditor.get(), kRoleShapeFill, kSignatureShapeFill);
     registerEditor(m_shapeFillEditor.get());
 
     if (includeShapeOnlyEditors) {
-        if (host.addItemSpacing) {
-            host.addItemSpacing(layout);
-        }
-
-        m_cornerRadiusEditor = dynamic_cast<CornerRadiusEditorButton*>(
-            takeReusableWidget(kRoleCornerRadius, kSignatureCornerRadius, layout, controls));
-        if (m_cornerRadiusEditor == nullptr) {
-            m_cornerRadiusEditor = createScreenshotToolPaletteCornerRadiusEditor(
-                controls, "Corner radius (scroll to adjust)",
-                custom_outlined_icons::SelectionRadius(), m_state.m_rectangleStyle.cornerRadius(),
-                metrics);
-            layout->addWidget(m_cornerRadiusEditor);
-        } else {
-            configureScreenshotToolPaletteTooltip(
-                m_cornerRadiusEditor,
-                ScreenshotToolPaletteTranslationText("Corner radius (scroll to adjust)"));
-            configureScreenshotToolPaletteCornerRadiusEditor(m_cornerRadiusEditor, metrics);
-        }
-        m_cornerRadiusEditor->setProperty("screenshotStyleEditorRoot", true);
-        m_cornerRadiusEditor->setProperty("screenshotStyleEditorRole", kRoleCornerRadius);
-        m_cornerRadiusEditor->setProperty("screenshotStyleEditorSignature", kSignatureCornerRadius);
-        m_cornerRadiusEditor->setObjectName(
-            QStringLiteral("screenshotSelectionCornerRadiusButton"));
-        QObject::connect(m_cornerRadiusEditor, &adqt::widgets::AdButton::clicked, controls,
-                         [this]() { setCornerRadius(defaultCornerRadius()); });
+        buildCornerRadiusEditor(controls, buildingStyle.cornerRadius(), host, metrics);
     }
 
     registerShapeEntries();
     updateRectangleStyleControls();
     result.controls = controls;
     return result;
+}
+
+void ScreenshotToolPaletteStyleControls::buildCornerRadiusEditor(
+    QWidget* controls, int radius, const ScreenshotToolPaletteStyleFamilyHost& host,
+    const ScreenshotToolPaletteButtonMetrics& metrics) {
+    auto* layout = static_cast<QHBoxLayout*>(controls->layout());
+    if (host.addItemSpacing) {
+        host.addItemSpacing(layout);
+    }
+    m_cornerRadiusEditor = dynamic_cast<CornerRadiusEditorButton*>(
+        takeReusableWidget(kRoleCornerRadius, kSignatureCornerRadius, layout, controls));
+    if (m_cornerRadiusEditor == nullptr) {
+        m_cornerRadiusEditor = createScreenshotToolPaletteCornerRadiusEditor(
+            controls, "Corner radius (scroll to adjust)", custom_outlined_icons::SelectionRadius(),
+            radius, metrics);
+        layout->addWidget(m_cornerRadiusEditor);
+    } else {
+        configureScreenshotToolPaletteTooltip(
+            m_cornerRadiusEditor,
+            ScreenshotToolPaletteTranslationText("Corner radius (scroll to adjust)"));
+        configureScreenshotToolPaletteCornerRadiusEditor(m_cornerRadiusEditor, metrics);
+    }
+    m_cornerRadiusEditor->setProperty("screenshotStyleEditorRoot", true);
+    m_cornerRadiusEditor->setProperty("screenshotStyleEditorRole", kRoleCornerRadius);
+    m_cornerRadiusEditor->setProperty("screenshotStyleEditorSignature", kSignatureCornerRadius);
+    m_cornerRadiusEditor->setObjectName(QStringLiteral("screenshotSelectionCornerRadiusButton"));
+    QObject::connect(m_cornerRadiusEditor, &adqt::widgets::AdButton::clicked,
+                     controlCallbackContext(controls),
+                     [this]() { setCornerRadius(defaultCornerRadius()); });
 }
 
 QWidget* ScreenshotToolPaletteStyleControls::buildArrowFamily(
@@ -1737,7 +1894,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildArrowFamily(
     arrowTypeControlsContainer->setProperty("screenshotStyleEditorRole", kRoleArrowType);
     arrowTypeControlsContainer->setProperty("screenshotStyleEditorSignature", kSignatureArrowType);
     QObject::connect(m_arrowTypeButtonGroup, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
-                     controls, [this](int id) {
+                     controlCallbackContext(controls), [this](int id) {
                          setArrowType(id == 1   ? SnowCanvasArrowType::Curve
                                       : id == 2 ? SnowCanvasArrowType::Elbow
                                                 : SnowCanvasArrowType::Straight);
@@ -1765,8 +1922,8 @@ QWidget* ScreenshotToolPaletteStyleControls::buildArrowFamily(
     m_arrowRatioEditor->setProperty("screenshotStyleEditorRoot", true);
     m_arrowRatioEditor->setProperty("screenshotStyleEditorRole", kRoleArrowRatio);
     m_arrowRatioEditor->setProperty("screenshotStyleEditorSignature", kSignatureArrowRatio);
-    QObject::connect(m_arrowRatioEditor, &adqt::widgets::AdButton::clicked, controls,
-                     [this]() { setArrowRatio(1.0); });
+    QObject::connect(m_arrowRatioEditor, &adqt::widgets::AdButton::clicked,
+                     controlCallbackContext(controls), [this]() { setArrowRatio(1.0); });
 
     const QVector<SnowCanvasArrowhead> arrowheads{
         SnowCanvasArrowhead::None,
@@ -1814,7 +1971,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildArrowFamily(
                 [this, start](int value) {
                     setArrowhead(start, static_cast<SnowCanvasArrowhead>(value));
                 },
-                metrics);
+                editorServices(), metrics);
         }
         registerEditor(editor.get());
         return editor;
@@ -1843,7 +2000,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildArrowFamily(
         m_arrowShaftEditor = std::make_unique<ScreenshotToolPaletteIconOptionEditor>();
         m_arrowShaftEditor->build(layout, controls, controls, shaftConfig,
                                   static_cast<int>(m_state.m_arrowStyle.arrowShaftType),
-                                  changeShaft, metrics);
+                                  changeShaft, editorServices(), metrics);
     }
     registerEditor(m_arrowShaftEditor.get());
     m_endArrowheadEditor =
@@ -1854,6 +2011,648 @@ QWidget* ScreenshotToolPaletteStyleControls::buildArrowFamily(
 
     registerArrowEntries();
     updateArrowStyleControls();
+    return controls;
+}
+
+template <typename Apply>
+void ScreenshotToolPaletteStyleControls::commitMagnifierProperty(quint32 property, Apply apply) {
+    const auto previous = m_state.magnifierStyle;
+    apply(m_state.magnifierStyle);
+    const bool mixed =
+        m_state.showingSelectedMagnifier && (m_state.magnifierStyleMixed & property) != 0;
+    if (previous == m_state.magnifierStyle && !mixed)
+        return;
+    m_state.magnifierStyleMixed &= ~property;
+    updateMagnifierStyleControls();
+    if (m_callbacks.magnifierStyleChanged)
+        m_callbacks.magnifierStyleChanged(m_state.magnifierStyle, property);
+}
+
+void ScreenshotToolPaletteStyleControls::setMagnifierFactor(double factor) {
+    if (!std::isfinite(factor))
+        return;
+    factor = std::clamp(std::round(factor * 10.0) / 10.0, 1.0, 10.0);
+    commitMagnifierProperty(SnowCanvasMagnifierStylePropertyFactor,
+                            [factor](SnowCanvasMagnifierStyle& style) { style.factor = factor; });
+}
+
+void ScreenshotToolPaletteStyleControls::setMagnifierStrokeWidth(double width) {
+    if (!std::isfinite(width))
+        return;
+    width = std::clamp(width, 1.0, 72.0);
+    commitMagnifierProperty(
+        SnowCanvasMagnifierStylePropertyStrokeWidth,
+        [width](SnowCanvasMagnifierStyle& style) { style.strokeWidth = width; });
+}
+
+void ScreenshotToolPaletteStyleControls::setMagnifierCornerRadius(int radius) {
+    ScreenshotToolPaletteRectangleStyleModel model;
+    static_cast<void>(model.setCornerRadius(radius));
+    const auto radii = model.rectangleStyle().cornerRadii;
+    commitMagnifierProperty(
+        SnowCanvasMagnifierStylePropertyCornerRadius,
+        [radii](SnowCanvasMagnifierStyle& style) { style.cornerRadii = radii; });
+}
+
+void ScreenshotToolPaletteStyleControls::setMagnifierArrowRatio(double ratio) {
+    ratio = std::clamp(snowCanvasNormalizeArrowRatio(ratio), 0.5, 3.0);
+    commitMagnifierProperty(SnowCanvasMagnifierStylePropertyArrowRatio,
+                            [ratio](SnowCanvasMagnifierStyle& style) { style.arrowRatio = ratio; });
+}
+
+void ScreenshotToolPaletteStyleControls::updateMagnifierStyleControls() {
+    const auto mixed = [this](quint32 property) {
+        return m_state.showingSelectedMagnifier && (m_state.magnifierStyleMixed & property) != 0;
+    };
+    const auto& style = m_state.magnifierStyle;
+    if (m_magnifierCornerRadiusEditor != nullptr) {
+        m_magnifierCornerRadiusEditor->setCornerRadius(qRound(style.cornerRadii.topLeft));
+        m_magnifierCornerRadiusEditor->setMixed(
+            mixed(SnowCanvasMagnifierStylePropertyCornerRadius));
+        m_magnifierCornerRadiusEditor->setVisible(mixed(SnowCanvasMagnifierStylePropertyShape) ||
+                                                  style.shape != SnowCanvasRectangleShape::Ellipse);
+    }
+    if (m_magnifierShapeGroup != nullptr) {
+        const QSignalBlocker blocker(m_magnifierShapeGroup);
+        m_magnifierShapeGroup->setCheckedId(
+            mixed(SnowCanvasMagnifierStylePropertyShape) ? -1 : static_cast<int>(style.shape));
+    }
+    if (m_magnifierColorEditor != nullptr)
+        m_magnifierColorEditor->update(style.stroke,
+                                       mixed(SnowCanvasMagnifierStylePropertyStrokeColor));
+    if (m_magnifierWidthEditor != nullptr)
+        m_magnifierWidthEditor->update(style.strokeWidth,
+                                       mixed(SnowCanvasMagnifierStylePropertyStrokeWidth));
+    if (m_magnifierFactorEditor != nullptr) {
+        m_magnifierFactorEditor->setValue(style.factor);
+        m_magnifierFactorEditor->setMixed(mixed(SnowCanvasMagnifierStylePropertyFactor));
+    }
+    if (m_magnifierArrowRatioEditor != nullptr) {
+        m_magnifierArrowRatioEditor->setValue(style.arrowRatio);
+        m_magnifierArrowRatioEditor->setMixed(mixed(SnowCanvasMagnifierStylePropertyArrowRatio));
+        m_magnifierArrowRatioEditor->setEnabled(
+            style.connectionType == SnowCanvasMagnifierConnectionType::LeaderLine &&
+            !mixed(SnowCanvasMagnifierStylePropertyConnectionType));
+    }
+    if (m_magnifierConnectionGroup != nullptr) {
+        const QSignalBlocker blocker(m_magnifierConnectionGroup);
+        m_magnifierConnectionGroup->setCheckedId(
+            mixed(SnowCanvasMagnifierStylePropertyConnectionType)
+                ? -1
+                : static_cast<int>(style.connectionType));
+    }
+    if (m_magnifierSourceOutlineToggle != nullptr) {
+        const QSignalBlocker blocker(m_magnifierSourceOutlineToggle);
+        const bool isMixed = mixed(SnowCanvasMagnifierStylePropertySourceOutline);
+        const bool active = style.sourceOutline && !isMixed;
+        m_magnifierSourceOutlineToggle->setChecked(active);
+        setScreenshotToolPaletteButtonActive(m_magnifierSourceOutlineToggle, active);
+        if (isMixed)
+            m_magnifierSourceOutlineToggle->setButtonStyle(
+                adqt::widgets::AdButton::ButtonStyle::Dashed);
+        m_magnifierSourceOutlineToggle->setProperty("mixed", isMixed);
+        retranslateMagnifierUi();
+    }
+    if (m_magnifierLeaderEditor != nullptr) {
+        m_magnifierLeaderEditor->update(static_cast<int>(style.leaderArrowhead),
+                                        mixed(SnowCanvasMagnifierStylePropertyLeaderArrowhead));
+        m_magnifierLeaderEditor->rootWidget()->setEnabled(
+            style.connectionType == SnowCanvasMagnifierConnectionType::LeaderLine &&
+            !mixed(SnowCanvasMagnifierStylePropertyConnectionType));
+    }
+}
+
+QWidget* ScreenshotToolPaletteStyleControls::buildMagnifierFamily(
+    QWidget* panel, const ScreenshotToolPaletteStyleFamilyHost& host,
+    const ScreenshotToolPaletteButtonMetrics& metrics) {
+    if (panel == nullptr)
+        return nullptr;
+    QWidget* controls =
+        createRowWidget(panel, QStringLiteral("screenshotMagnifierStyleControls"), host);
+    auto* layout = static_cast<QHBoxLayout*>(controls->layout());
+    const auto tagWidget = [](QWidget* widget, const char* role, const char* signature) {
+        widget->setProperty("screenshotStyleEditorRoot", true);
+        widget->setProperty("screenshotStyleEditorRole", role);
+        widget->setProperty("screenshotStyleEditorSignature", signature);
+    };
+    QWidget* shapes =
+        takeReusableWidget(kRoleMagnifierShape, kSignatureShapeKind, layout, controls);
+    if (shapes == nullptr) {
+        ScreenshotToolPaletteRadioEditorConfig config;
+        config.objectName = QStringLiteral("screenshotMagnifierShapeButtonGroup");
+        config.options = {
+            {static_cast<int>(SnowCanvasRectangleShape::Rectangle), "Rectangle",
+             custom_outlined_icons::ShapeRectangle()},
+            {static_cast<int>(SnowCanvasRectangleShape::Ellipse), "Ellipse",
+             custom_outlined_icons::ShapeEllipse()},
+            {static_cast<int>(SnowCanvasRectangleShape::Diamond), "Diamond",
+             custom_outlined_icons::ShapeDiamond()},
+        };
+        auto editor = createScreenshotToolPaletteRadioEditor(controls, config, metrics);
+        shapes = editor.container;
+        m_magnifierShapeGroup = editor.group;
+        layout->addWidget(shapes);
+    } else {
+        m_magnifierShapeGroup = shapes->findChild<adqt::widgets::AdRadioButtonGroup*>();
+    }
+    tagWidget(shapes, kRoleMagnifierShape, kSignatureShapeKind);
+    configureScreenshotToolPaletteTooltip(shapes, "Magnifier shape");
+    setScreenshotToolPaletteAccessibleNameSource(shapes, "Magnifier shape");
+    shapes->setAccessibleName(ScreenshotToolPaletteTranslationText("Magnifier shape").translated());
+    QObject::disconnect(m_magnifierShapeGroup, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
+                        nullptr, nullptr);
+    QObject::connect(m_magnifierShapeGroup, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
+                     controlCallbackContext(controls), [this](int id) {
+                         if (id < 0 || id > static_cast<int>(SnowCanvasRectangleShape::Diamond))
+                             return;
+                         commitMagnifierProperty(SnowCanvasMagnifierStylePropertyShape,
+                                                 [id](SnowCanvasMagnifierStyle& style) {
+                                                     style.shape =
+                                                         static_cast<SnowCanvasRectangleShape>(id);
+                                                 });
+                     });
+    if (host.addGroupSeparator)
+        host.addGroupSeparator(layout);
+
+    ScreenshotToolPaletteColorEditorConfig colorConfig;
+    colorConfig.accessibleName = QStringLiteral("Magnifier stroke color");
+    colorConfig.pickerObjectName = QStringLiteral("screenshotMagnifierColorPicker");
+    colorConfig.triggerObjectName = QStringLiteral("screenshotMagnifierColorTrigger");
+    colorConfig.presetValues = style_presets::strokeColors();
+    colorConfig.presetSource =
+        snow_shot::presentation::ScreenshotToolPaletteColorPresetSource::Stroke;
+    colorConfig.presetTooltip = [](const QColor& color) {
+        return ScreenshotToolPaletteTranslationText("Magnifier stroke color %1").arg(color.name());
+    };
+    const auto setColor = [this](const QColor& color) {
+        if (color.isValid())
+            commitMagnifierProperty(
+                SnowCanvasMagnifierStylePropertyStrokeColor,
+                [color](SnowCanvasMagnifierStyle& style) { style.stroke = color; });
+    };
+    if (auto reused =
+            takeReusableEditor(kRoleMagnifierColor, kSignatureForegroundColor, layout, controls)) {
+        m_magnifierColorEditor.reset(
+            static_cast<ScreenshotToolPaletteColorEditor*>(reused.release()));
+        m_magnifierColorEditor->rebind(colorConfig, setColor, {});
+    } else {
+        m_magnifierColorEditor = std::make_unique<ScreenshotToolPaletteColorEditor>();
+        m_magnifierColorEditor->build(layout, controls, controls, colorConfig,
+                                      m_state.magnifierStyle.stroke, setColor, {}, editorServices(),
+                                      metrics);
+    }
+    tagEditor(m_magnifierColorEditor.get(), kRoleMagnifierColor, kSignatureForegroundColor);
+    registerEditor(m_magnifierColorEditor.get());
+    if (host.addGroupSeparator)
+        host.addGroupSeparator(layout);
+
+    ScreenshotToolPaletteNumericPresetEditorConfig widthConfig;
+    widthConfig.summaryTooltip = QStringLiteral("Current magnifier stroke width");
+    widthConfig.summaryObjectName = QStringLiteral("screenshotMagnifierStrokeWidthButton");
+    widthConfig.values = style_presets::strokePresetWidths();
+    widthConfig.strokePreview = true;
+    widthConfig.presetTooltip = [](int, double width) {
+        return ScreenshotToolPaletteTranslationText("Magnifier stroke width %1")
+            .arg(width, 0, 'g', 2);
+    };
+    const auto cycleWidth = [this]() {
+        const auto widths = style_presets::strokePresetWidths();
+        for (double width : widths) {
+            if (width > m_state.magnifierStyle.strokeWidth) {
+                setMagnifierStrokeWidth(width);
+                return;
+            }
+        }
+        if (!widths.isEmpty())
+            setMagnifierStrokeWidth(widths.first());
+    };
+    const auto setWidth = [this](double width) { setMagnifierStrokeWidth(width); };
+    if (auto reused =
+            takeReusableEditor(kRoleMagnifierWidth, kSignatureStrokeWidth, layout, controls)) {
+        m_magnifierWidthEditor.reset(
+            static_cast<ScreenshotToolPaletteNumericPresetEditor*>(reused.release()));
+        m_magnifierWidthEditor->rebind(widthConfig, cycleWidth, setWidth);
+    } else {
+        m_magnifierWidthEditor = std::make_unique<ScreenshotToolPaletteNumericPresetEditor>();
+        m_magnifierWidthEditor->build(layout, controls, controls, widthConfig,
+                                      m_state.magnifierStyle.strokeWidth, cycleWidth, setWidth,
+                                      metrics);
+    }
+    tagEditor(m_magnifierWidthEditor.get(), kRoleMagnifierWidth, kSignatureStrokeWidth);
+    registerEditor(m_magnifierWidthEditor.get());
+    if (host.addGroupSeparator)
+        host.addGroupSeparator(layout);
+
+    m_magnifierFactorEditor = dynamic_cast<IconNumericValuePreviewButton*>(
+        takeReusableWidget(kRoleMagnifierFactor, kSignatureMagnifierFactor, layout, controls));
+    if (m_magnifierFactorEditor == nullptr) {
+        m_magnifierFactorEditor = createScreenshotToolPaletteIconNumericValueButton(
+            controls, "Magnification factor (scroll to adjust)",
+            custom_outlined_icons::MagnificationFactor(), 2, QStringLiteral("10.0×"), metrics);
+        layout->addWidget(m_magnifierFactorEditor);
+    }
+    m_magnifierFactorEditor->setObjectName(QStringLiteral("screenshotMagnifierFactorButton"));
+    m_magnifierFactorEditor->setDecimalPlaces(1);
+    m_magnifierFactorEditor->setValueSuffix(QStringLiteral("×"));
+    tagWidget(m_magnifierFactorEditor, kRoleMagnifierFactor, kSignatureMagnifierFactor);
+    QObject::disconnect(m_magnifierFactorEditor, &adqt::widgets::AdButton::clicked, nullptr,
+                        nullptr);
+    QObject::connect(m_magnifierFactorEditor, &adqt::widgets::AdButton::clicked,
+                     controlCallbackContext(controls), [this]() { setMagnifierFactor(2.0); });
+
+    QWidget* connections = takeReusableWidget(kRoleMagnifierConnection,
+                                              kSignatureMagnifierConnection, layout, controls);
+    if (connections == nullptr) {
+        ScreenshotToolPaletteRadioEditorConfig config;
+        config.objectName = QStringLiteral("screenshotMagnifierConnectionButtonGroup");
+        config.options = {
+            {static_cast<int>(SnowCanvasMagnifierConnectionType::None), "None",
+             custom_outlined_icons::MagnifierConnectionNone()},
+            {static_cast<int>(SnowCanvasMagnifierConnectionType::LeaderLine), "Leader line",
+             custom_outlined_icons::ShowLeaderLine()},
+            {static_cast<int>(SnowCanvasMagnifierConnectionType::Gradient), "Gradient",
+             custom_outlined_icons::MagnifierGradient()},
+        };
+        auto editor = createScreenshotToolPaletteRadioEditor(controls, config, metrics);
+        connections = editor.container;
+        m_magnifierConnectionGroup = editor.group;
+        layout->addWidget(connections);
+    } else {
+        m_magnifierConnectionGroup = connections->findChild<adqt::widgets::AdRadioButtonGroup*>();
+    }
+    tagWidget(connections, kRoleMagnifierConnection, kSignatureMagnifierConnection);
+    configureScreenshotToolPaletteTooltip(connections, "Connection type");
+    setScreenshotToolPaletteAccessibleNameSource(connections, "Connection type");
+    connections->setAccessibleName(
+        ScreenshotToolPaletteTranslationText("Connection type").translated());
+    for (auto* radio : m_magnifierConnectionGroup->buttons()) {
+        const char* source = m_magnifierConnectionGroup->id(radio) == 0   ? "None"
+                             : m_magnifierConnectionGroup->id(radio) == 1 ? "Leader line"
+                                                                          : "Gradient";
+        setScreenshotToolPaletteAccessibleNameSource(radio, source);
+        radio->setAccessibleName(ScreenshotToolPaletteTranslationText(source).translated());
+    }
+    QObject::disconnect(m_magnifierConnectionGroup,
+                        &adqt::widgets::AdRadioButtonGroup::checkedIdChanged, nullptr, nullptr);
+    QObject::connect(
+        m_magnifierConnectionGroup, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
+        controlCallbackContext(controls), [this](int id) {
+            if (id < 0 || id > static_cast<int>(SnowCanvasMagnifierConnectionType::Gradient))
+                return;
+            commitMagnifierProperty(SnowCanvasMagnifierStylePropertyConnectionType,
+                                    [id](SnowCanvasMagnifierStyle& style) {
+                                        style.connectionType =
+                                            static_cast<SnowCanvasMagnifierConnectionType>(id);
+                                    });
+        });
+
+    m_magnifierSourceOutlineToggle = qobject_cast<adqt::widgets::AdButton*>(takeReusableWidget(
+        kRoleMagnifierSourceOutline, kSignatureMagnifierSourceOutline, layout, controls));
+    if (m_magnifierSourceOutlineToggle == nullptr) {
+        m_magnifierSourceOutlineToggle = createScreenshotToolPaletteStyleActionButton(
+            controls, "Source region outline", custom_outlined_icons::SourceRegionOutline(),
+            metrics);
+        m_magnifierSourceOutlineToggle->setCheckable(true);
+        m_magnifierSourceOutlineToggle->setCheckedUsesActiveStyle(false);
+        layout->addWidget(m_magnifierSourceOutlineToggle);
+    }
+    m_magnifierSourceOutlineToggle->setObjectName(
+        QStringLiteral("screenshotMagnifierSourceOutlineButton"));
+    tagWidget(m_magnifierSourceOutlineToggle, kRoleMagnifierSourceOutline,
+              kSignatureMagnifierSourceOutline);
+    QObject::disconnect(m_magnifierSourceOutlineToggle, &adqt::widgets::AdButton::clicked, nullptr,
+                        nullptr);
+    QObject::connect(m_magnifierSourceOutlineToggle, &adqt::widgets::AdButton::clicked,
+                     controlCallbackContext(controls), [this](bool checked) {
+                         const bool enabled =
+                             checked || (m_state.magnifierStyleMixed &
+                                         SnowCanvasMagnifierStylePropertySourceOutline) != 0;
+                         commitMagnifierProperty(SnowCanvasMagnifierStylePropertySourceOutline,
+                                                 [enabled](SnowCanvasMagnifierStyle& style) {
+                                                     style.sourceOutline = enabled;
+                                                 });
+                     });
+
+    m_magnifierArrowRatioEditor = dynamic_cast<IconNumericValuePreviewButton*>(
+        takeReusableWidget(kRoleMagnifierArrowRatio, kSignatureArrowRatio, layout, controls));
+    if (m_magnifierArrowRatioEditor == nullptr) {
+        m_magnifierArrowRatioEditor = createScreenshotToolPaletteIconNumericValueButton(
+            controls, "Arrow ratio (scroll to adjust)", custom_outlined_icons::ArrowRatio(), 1,
+            QStringLiteral("3.0"), metrics);
+        layout->addWidget(m_magnifierArrowRatioEditor);
+    } else {
+        configureScreenshotToolPaletteIconNumericValueButton(m_magnifierArrowRatioEditor, metrics);
+    }
+    m_magnifierArrowRatioEditor->setObjectName(
+        QStringLiteral("screenshotMagnifierArrowRatioButton"));
+    m_magnifierArrowRatioEditor->setDecimalPlaces(1);
+    tagWidget(m_magnifierArrowRatioEditor, kRoleMagnifierArrowRatio, kSignatureArrowRatio);
+    QObject::disconnect(m_magnifierArrowRatioEditor, &adqt::widgets::AdButton::clicked, nullptr,
+                        nullptr);
+    QObject::connect(m_magnifierArrowRatioEditor, &adqt::widgets::AdButton::clicked,
+                     controlCallbackContext(controls), [this]() { setMagnifierArrowRatio(1.0); });
+
+    ScreenshotToolPaletteIconOptionEditorConfig leaderConfig;
+    leaderConfig.accessibleName = QStringLiteral("Leader line type");
+    leaderConfig.triggerTooltip = QStringLiteral("Leader line type");
+    leaderConfig.gridColumnCount = 4;
+    const QVector<SnowCanvasArrowhead> arrowheads{
+        SnowCanvasArrowhead::None,
+        SnowCanvasArrowhead::Arrow,
+        SnowCanvasArrowhead::Bar,
+        SnowCanvasArrowhead::Dot,
+        SnowCanvasArrowhead::Circle,
+        SnowCanvasArrowhead::CircleOutline,
+        SnowCanvasArrowhead::IndentedTriangle,
+        SnowCanvasArrowhead::Triangle,
+        SnowCanvasArrowhead::TriangleOutline,
+        SnowCanvasArrowhead::Diamond,
+        SnowCanvasArrowhead::DiamondOutline,
+        SnowCanvasArrowhead::CrowfootOne,
+        SnowCanvasArrowhead::CrowfootMany,
+        SnowCanvasArrowhead::CrowfootOneOrMany,
+    };
+    for (auto arrowhead : arrowheads)
+        leaderConfig.options.push_back({static_cast<int>(arrowhead),
+                                        arrowheadOptionTooltipSource(false, arrowhead),
+                                        arrowheadIcon(arrowhead, false)});
+    const auto setArrowhead = [this](int value) {
+        commitMagnifierProperty(SnowCanvasMagnifierStylePropertyLeaderArrowhead,
+                                [value](SnowCanvasMagnifierStyle& style) {
+                                    style.leaderArrowhead = static_cast<SnowCanvasArrowhead>(value);
+                                });
+    };
+    if (auto reused =
+            takeReusableEditor(kRoleMagnifierArrowhead, kSignatureArrowhead, layout, controls)) {
+        m_magnifierLeaderEditor.reset(
+            static_cast<ScreenshotToolPaletteIconOptionEditor*>(reused.release()));
+        m_magnifierLeaderEditor->rebind(leaderConfig, setArrowhead);
+    } else {
+        m_magnifierLeaderEditor = std::make_unique<ScreenshotToolPaletteIconOptionEditor>();
+        m_magnifierLeaderEditor->build(layout, controls, controls, leaderConfig,
+                                       static_cast<int>(m_state.magnifierStyle.leaderArrowhead),
+                                       setArrowhead, editorServices(), metrics);
+    }
+    tagEditor(m_magnifierLeaderEditor.get(), kRoleMagnifierArrowhead, kSignatureArrowhead);
+    m_magnifierLeaderEditor->rootWidget()->setObjectName(
+        QStringLiteral("screenshotMagnifierLeaderTypeButton"));
+    registerEditor(m_magnifierLeaderEditor.get());
+    if (host.addGroupSeparator)
+        host.addGroupSeparator(layout);
+
+    m_magnifierCornerRadiusEditor = dynamic_cast<CornerRadiusEditorButton*>(
+        takeReusableWidget(kRoleMagnifierRadius, kSignatureCornerRadius, layout, controls));
+    if (m_magnifierCornerRadiusEditor == nullptr) {
+        m_magnifierCornerRadiusEditor = createScreenshotToolPaletteCornerRadiusEditor(
+            controls, "Corner radius (scroll to adjust)", custom_outlined_icons::SelectionRadius(),
+            qRound(m_state.magnifierStyle.cornerRadii.topLeft), metrics);
+        layout->addWidget(m_magnifierCornerRadiusEditor);
+    } else {
+        configureScreenshotToolPaletteCornerRadiusEditor(m_magnifierCornerRadiusEditor, metrics);
+    }
+    m_magnifierCornerRadiusEditor->setObjectName(
+        QStringLiteral("screenshotMagnifierCornerRadiusButton"));
+    tagWidget(m_magnifierCornerRadiusEditor, kRoleMagnifierRadius, kSignatureCornerRadius);
+    QObject::disconnect(m_magnifierCornerRadiusEditor, &adqt::widgets::AdButton::clicked, nullptr,
+                        nullptr);
+    QObject::connect(m_magnifierCornerRadiusEditor, &adqt::widgets::AdButton::clicked,
+                     controlCallbackContext(controls),
+                     [this]() { setMagnifierCornerRadius(defaultCornerRadius()); });
+
+    updateMagnifierStyleControls();
+    return controls;
+}
+
+bool ScreenshotToolPaletteStyleControls::stepMagnifierFactor(int direction) {
+    if (direction == 0)
+        return false;
+    setMagnifierFactor(m_state.magnifierStyle.factor + (direction > 0 ? 0.1 : -0.1));
+    return true;
+}
+
+bool ScreenshotToolPaletteStyleControls::handleMagnifierWheel(const QPoint& globalPosition,
+                                                              int direction) {
+    if (direction == 0)
+        return false;
+    if (m_magnifierArrowRatioEditor != nullptr && m_magnifierArrowRatioEditor->isVisible() &&
+        m_magnifierArrowRatioEditor->isEnabled() &&
+        m_magnifierArrowRatioEditor->rect().contains(
+            m_magnifierArrowRatioEditor->mapFromGlobal(globalPosition))) {
+        const int tenths = qRound(m_state.magnifierStyle.arrowRatio * 10.0);
+        setMagnifierArrowRatio(std::clamp(tenths + (direction > 0 ? 1 : -1), 5, 30) / 10.0);
+        return true;
+    }
+    if (m_magnifierCornerRadiusEditor != nullptr && m_magnifierCornerRadiusEditor->isVisible() &&
+        m_magnifierCornerRadiusEditor->rect().contains(
+            m_magnifierCornerRadiusEditor->mapFromGlobal(globalPosition))) {
+        setMagnifierCornerRadius(qRound(m_state.magnifierStyle.cornerRadii.topLeft) +
+                                 (direction > 0 ? 1 : -1));
+        return true;
+    }
+    if (m_magnifierFactorEditor != nullptr && m_magnifierFactorEditor->isVisible() &&
+        m_magnifierFactorEditor->rect().contains(
+            m_magnifierFactorEditor->mapFromGlobal(globalPosition)))
+        return stepMagnifierFactor(direction);
+    if (m_magnifierWidthEditor != nullptr && m_magnifierWidthEditor->rootWidget() != nullptr &&
+        m_magnifierWidthEditor->rootWidget()->isVisible() &&
+        m_magnifierWidthEditor->rootWidget()->rect().contains(
+            m_magnifierWidthEditor->rootWidget()->mapFromGlobal(globalPosition))) {
+        setMagnifierStrokeWidth(m_state.magnifierStyle.strokeWidth + (direction > 0 ? 1.0 : -1.0));
+        return true;
+    }
+    return false;
+}
+
+QWidget* ScreenshotToolPaletteStyleControls::buildAngleFamily(
+    QWidget* panel, const ScreenshotToolPaletteStyleFamilyHost& host,
+    const ScreenshotToolPaletteButtonMetrics& metrics) {
+    if (panel == nullptr)
+        return nullptr;
+    QWidget* controls =
+        createRowWidget(panel, QStringLiteral("screenshotAngleStyleControls"), host);
+    auto* layout = static_cast<QHBoxLayout*>(controls->layout());
+    const auto tagWidget = [](QWidget* widget, const char* role, const char* signature) {
+        widget->setProperty("screenshotStyleEditorRoot", true);
+        widget->setProperty("screenshotStyleEditorRole", role);
+        widget->setProperty("screenshotStyleEditorSignature", signature);
+    };
+
+    ScreenshotToolPaletteColorEditorConfig colorConfig;
+    colorConfig.accessibleName = QStringLiteral("Angle stroke color");
+    colorConfig.pickerObjectName = QStringLiteral("screenshotAngleColorPicker");
+    colorConfig.presetValues = style_presets::strokeColors();
+    colorConfig.presetSource =
+        snow_shot::presentation::ScreenshotToolPaletteColorPresetSource::Stroke;
+    colorConfig.presetTooltip = [](const QColor& color) {
+        return ScreenshotToolPaletteTranslationText("Angle stroke color %1").arg(color.name());
+    };
+    const auto setColor = [this](const QColor& color) {
+        if (!color.isValid())
+            return;
+        commitAngleProperty(angleProperty(SnowCanvasAngleStyleProperty::Stroke),
+                            [color](SnowCanvasAngleStyle& style) { style.stroke = color; });
+    };
+    if (auto reused =
+            takeReusableEditor(kRoleAngleColor, kSignatureForegroundColor, layout, controls)) {
+        m_angleColorEditor.reset(static_cast<ScreenshotToolPaletteColorEditor*>(reused.release()));
+        m_angleColorEditor->rebind(colorConfig, setColor, {});
+    } else {
+        m_angleColorEditor = std::make_unique<ScreenshotToolPaletteColorEditor>();
+        m_angleColorEditor->build(layout, controls, controls, colorConfig,
+                                  m_state.angleStyle.stroke, setColor, {}, editorServices(),
+                                  metrics);
+    }
+    tagEditor(m_angleColorEditor.get(), kRoleAngleColor, kSignatureForegroundColor);
+    registerEditor(m_angleColorEditor.get());
+
+    if (host.addGroupSeparator)
+        host.addGroupSeparator(layout);
+    ScreenshotToolPaletteNumericPresetEditorConfig widthConfig;
+    widthConfig.summaryTooltip = QStringLiteral("Current angle stroke width");
+    widthConfig.values = style_presets::strokePresetWidths();
+    widthConfig.strokePreview = true;
+    widthConfig.presetTooltip = [](int, double value) {
+        return ScreenshotToolPaletteTranslationText("Angle stroke width %1").arg(value, 0, 'g', 2);
+    };
+    const auto cycleWidth = [this]() {
+        const auto values = style_presets::strokePresetWidths();
+        for (double value : values) {
+            if (value > m_state.angleStyle.strokeWidth) {
+                setAngleStrokeWidth(value);
+                return;
+            }
+        }
+        if (!values.isEmpty())
+            setAngleStrokeWidth(values.first());
+    };
+    const auto setWidth = [this](double width) { setAngleStrokeWidth(width); };
+    if (auto reused =
+            takeReusableEditor(kRoleOutlineWidth, kSignatureStrokeWidth, layout, controls)) {
+        m_angleWidthEditor.reset(
+            static_cast<ScreenshotToolPaletteNumericPresetEditor*>(reused.release()));
+        m_angleWidthEditor->rebind(widthConfig, cycleWidth, setWidth);
+    } else {
+        m_angleWidthEditor = std::make_unique<ScreenshotToolPaletteNumericPresetEditor>();
+        m_angleWidthEditor->build(layout, controls, controls, widthConfig,
+                                  m_state.angleStyle.strokeWidth, cycleWidth, setWidth, metrics);
+    }
+    tagEditor(m_angleWidthEditor.get(), kRoleOutlineWidth, kSignatureStrokeWidth);
+    registerEditor(m_angleWidthEditor.get());
+
+    if (host.addGroupSeparator)
+        host.addGroupSeparator(layout);
+    QWidget* types = takeReusableWidget(kRoleAngleType, kSignatureAngleType, layout, controls);
+    if (types == nullptr) {
+        ScreenshotToolPaletteRadioEditorConfig config;
+        config.objectName = QStringLiteral("screenshotAngleTypeButtonGroup");
+        config.useButtonMetrics = true;
+        config.options = {
+            {static_cast<int>(SnowCanvasAngleType::Directed), "360° angle",
+             custom_outlined_icons::AngleType360()},
+            {static_cast<int>(SnowCanvasAngleType::Interior), "180° angle",
+             custom_outlined_icons::AngleType180()},
+        };
+        auto editor = createScreenshotToolPaletteRadioEditor(controls, config, metrics);
+        types = editor.container;
+        m_angleTypeGroup = editor.group;
+        layout->addWidget(types);
+    } else {
+        m_angleTypeGroup = types->findChild<adqt::widgets::AdRadioButtonGroup*>();
+    }
+    tagWidget(types, kRoleAngleType, kSignatureAngleType);
+    configureScreenshotToolPaletteTooltip(types, "Angle type");
+    setScreenshotToolPaletteAccessibleNameSource(types, "Angle type");
+    types->setAccessibleName(ScreenshotToolPaletteTranslationText("Angle type").translated());
+    QObject::disconnect(m_angleTypeGroup, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
+                        nullptr, nullptr);
+    QObject::connect(m_angleTypeGroup, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
+                     controlCallbackContext(controls), [this](int id) {
+                         if (id < static_cast<int>(SnowCanvasAngleType::Directed) ||
+                             id > static_cast<int>(SnowCanvasAngleType::Interior))
+                             return;
+                         commitAngleProperty(angleProperty(SnowCanvasAngleStyleProperty::Type),
+                                             [id](SnowCanvasAngleStyle& style) {
+                                                 style.angleType =
+                                                     static_cast<SnowCanvasAngleType>(id);
+                                             });
+                     });
+
+    QWidget* units = takeReusableWidget(kRoleAngleUnit, kSignatureAngleUnit, layout, controls);
+    if (units == nullptr) {
+        ScreenshotToolPaletteRadioEditorConfig config;
+        config.objectName = QStringLiteral("screenshotAngleUnitButtonGroup");
+        config.useButtonMetrics = true;
+        config.options = {
+            {static_cast<int>(SnowCanvasAngleUnit::Degrees), "Degrees",
+             custom_outlined_icons::AngleUnitDegrees()},
+            {static_cast<int>(SnowCanvasAngleUnit::Radians), "Radians",
+             custom_outlined_icons::AngleUnitRadians()},
+        };
+        auto editor = createScreenshotToolPaletteRadioEditor(controls, config, metrics);
+        units = editor.container;
+        m_angleUnitGroup = editor.group;
+        layout->addWidget(units);
+    } else {
+        m_angleUnitGroup = units->findChild<adqt::widgets::AdRadioButtonGroup*>();
+    }
+    tagWidget(units, kRoleAngleUnit, kSignatureAngleUnit);
+    configureScreenshotToolPaletteTooltip(units, "Angle unit");
+    setScreenshotToolPaletteAccessibleNameSource(units, "Angle unit");
+    units->setAccessibleName(ScreenshotToolPaletteTranslationText("Angle unit").translated());
+    QObject::disconnect(m_angleUnitGroup, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
+                        nullptr, nullptr);
+    QObject::connect(m_angleUnitGroup, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
+                     controlCallbackContext(controls), [this](int id) {
+                         if (id < static_cast<int>(SnowCanvasAngleUnit::Degrees) ||
+                             id > static_cast<int>(SnowCanvasAngleUnit::Radians))
+                             return;
+                         commitAngleProperty(angleProperty(SnowCanvasAngleStyleProperty::Unit),
+                                             [id](SnowCanvasAngleStyle& style) {
+                                                 style.unit = static_cast<SnowCanvasAngleUnit>(id);
+                                             });
+                     });
+
+    m_angleDecimalsEditor.select = qobject_cast<adqt::widgets::AdSelect*>(
+        takeReusableWidget(kRoleAngleDecimals, kSignatureAngleDecimals, layout, controls));
+    if (m_angleDecimalsEditor.select == nullptr) {
+        ScreenshotToolPaletteSelectEditorConfig config;
+        config.objectName = QStringLiteral("screenshotAngleDecimalsSelect");
+        config.accessibleName = QStringLiteral("Decimal places");
+        config.tooltip = QStringLiteral("Decimal places");
+        config.baseWidth = 128;
+        m_angleDecimalsEditor = createScreenshotToolPaletteSelectEditor(controls, config, metrics);
+        auto* model = new QStandardItemModel(m_angleDecimalsEditor.select);
+        const char* labels[] = {"Integers", "1 decimal place", "2 decimal places",
+                                "3 decimal places"};
+        for (int i = 0; i < 4; ++i) {
+            auto* item = new QStandardItem;
+            item->setData(i, adqt::widgets::AdSelect::DefaultValueRole);
+            setScreenshotToolPaletteItemTranslationSource(item, labels[i]);
+            model->appendRow(item);
+        }
+        m_angleDecimalsEditor.select->setModel(model);
+        layout->addWidget(m_angleDecimalsEditor.select);
+    }
+    tagWidget(m_angleDecimalsEditor.select, kRoleAngleDecimals, kSignatureAngleDecimals);
+    QObject::disconnect(m_angleDecimalsEditor.select, &adqt::widgets::AdSelect::currentValueChanged,
+                        nullptr, nullptr);
+    QObject::connect(m_angleDecimalsEditor.select, &adqt::widgets::AdSelect::currentValueChanged,
+                     controlCallbackContext(controls), [this](const QVariant& value) {
+                         if (!value.isValid())
+                             return;
+                         const int places = value.toInt();
+                         if (places < 0 || places > 3)
+                             return;
+                         commitAngleProperty(
+                             angleProperty(SnowCanvasAngleStyleProperty::DecimalPlaces),
+                             [places](SnowCanvasAngleStyle& style) {
+                                 style.decimalPlaces = static_cast<quint32>(places);
+                             });
+                     });
+
+    registerAngleEntries();
+    updateAngleStyleControls();
+    refreshToolbarMetrics(metrics);
     return controls;
 }
 
@@ -1963,7 +2762,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildDistanceFamily(
     QObject::disconnect(m_distanceValueInput, &adqt::widgets::AdInputNumber::exactValueChanged,
                         nullptr, nullptr);
     QObject::connect(m_distanceValueInput, &adqt::widgets::AdInputNumber::exactValueChanged,
-                     controls, [this](const QString& text) {
+                     controlCallbackContext(controls), [this](const QString& text) {
                          bool ok = false;
                          const double value = text.toDouble(&ok);
                          if (ok)
@@ -2000,7 +2799,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildDistanceFamily(
     QObject::disconnect(m_distanceUnitGroup, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
                         nullptr, nullptr);
     QObject::connect(m_distanceUnitGroup, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
-                     controls, [this](int id) {
+                     controlCallbackContext(controls), [this](int id) {
                          if (id < static_cast<int>(SnowCanvasDistanceUnit::Px) ||
                              id > static_cast<int>(SnowCanvasDistanceUnit::Mm))
                              return;
@@ -2037,7 +2836,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildDistanceFamily(
     QObject::disconnect(m_distanceDecimalsEditor.select,
                         &adqt::widgets::AdSelect::currentValueChanged, nullptr, nullptr);
     QObject::connect(m_distanceDecimalsEditor.select, &adqt::widgets::AdSelect::currentValueChanged,
-                     controls, [this](const QVariant& value) {
+                     controlCallbackContext(controls), [this](const QVariant& value) {
                          if (!value.isValid())
                              return;
                          const int places = value.toInt();
@@ -2063,8 +2862,8 @@ QWidget* ScreenshotToolPaletteStyleControls::buildDistanceFamily(
     m_distanceScaleEditor->setDecimalPlaces(1);
     tagWidget(m_distanceScaleEditor, kRoleDistanceScale, kSignatureArrowRatio);
     QObject::disconnect(m_distanceScaleEditor, &adqt::widgets::AdButton::clicked, nullptr, nullptr);
-    QObject::connect(m_distanceScaleEditor, &adqt::widgets::AdButton::clicked, controls,
-                     [this]() { setDistanceEndpointScale(1.0); });
+    QObject::connect(m_distanceScaleEditor, &adqt::widgets::AdButton::clicked,
+                     controlCallbackContext(controls), [this]() { setDistanceEndpointScale(1.0); });
 
     ScreenshotToolPaletteIconOptionEditorConfig endpointConfig;
     endpointConfig.accessibleName = QStringLiteral("Endpoint style");
@@ -2106,7 +2905,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildDistanceFamily(
         m_distanceEndpointEditor = std::make_unique<ScreenshotToolPaletteIconOptionEditor>();
         m_distanceEndpointEditor->build(layout, controls, controls, endpointConfig,
                                         static_cast<int>(m_state.distanceStyle.endpointStyle),
-                                        setEndpoint, metrics);
+                                        setEndpoint, editorServices(), metrics);
     }
     tagEditor(m_distanceEndpointEditor.get(), kRoleDistanceEndpoint, kSignatureArrowhead);
     registerEditor(m_distanceEndpointEditor.get());
@@ -2379,9 +3178,10 @@ QWidget* ScreenshotToolPaletteStyleControls::buildSpotlightFamily(
         m_spotlightOpacityEditor.slider->setToolTip(opacityConfig.sliderTooltip);
         configureScreenshotToolPaletteSliderEditor(m_spotlightOpacityEditor, metrics);
     }
-    QObject::disconnect(m_spotlightOpacityEditor.slider, nullptr, opacityRoot, nullptr);
+    QObject::disconnect(m_spotlightOpacityEditor.slider, nullptr,
+                        controlCallbackContext(opacityRoot), nullptr);
     QObject::connect(m_spotlightOpacityEditor.slider, &adqt::widgets::AdSlider::valueChanged,
-                     opacityRoot, [this, spotlightCallbacks](double value) {
+                     controlCallbackContext(opacityRoot), [this, spotlightCallbacks](double value) {
                          m_spotlightOpacityEditor.slider->setAccessibleDescription(
                              QStringLiteral("%1%").arg(qRound(value)));
                          if (spotlightCallbacks.setOpacity) {
@@ -2394,6 +3194,8 @@ QWidget* ScreenshotToolPaletteStyleControls::buildSpotlightFamily(
         m_spotlightOpacityEditor.slider->setAccessibleDescription(
             QStringLiteral("%1%").arg(opacityConfig.initialValue));
     }
+    buildCornerRadiusEditor(controls, qRound(m_state.spotlightCornerRadii.topLeft), host, metrics);
+    updateSpotlightShapeControls();
     return controls;
 }
 
@@ -2458,10 +3260,26 @@ QWidget* ScreenshotToolPaletteStyleControls::buildTextFamily(
     tagEditor(m_textFontEditor.get(), kRoleTextFont, kSignatureTextFont);
     registerEditor(m_textFontEditor.get());
 
+    const auto commitEmphasis = [this](quint32 property, bool enabled) {
+        setTextEmphasis(property, enabled);
+    };
+    if (auto reused =
+            takeReusableEditor(kRoleTextEmphasis, kSignatureTextEmphasis, layout, controls)) {
+        m_textEmphasisEditor.reset(
+            static_cast<ScreenshotToolPaletteTextEmphasisEditor*>(reused.release()));
+        m_textEmphasisEditor->rebind(commitEmphasis);
+    } else {
+        m_textEmphasisEditor = std::make_unique<ScreenshotToolPaletteTextEmphasisEditor>();
+        m_textEmphasisEditor->build(layout, controls, controls, commitEmphasis, metrics);
+    }
+    tagEditor(m_textEmphasisEditor.get(), kRoleTextEmphasis, kSignatureTextEmphasis);
+    registerEditor(m_textEmphasisEditor.get());
+
     ScreenshotToolPaletteIconOptionEditorConfig alignmentConfig;
     alignmentConfig.accessibleName = QStringLiteral("Text alignment");
     alignmentConfig.triggerTooltip = QStringLiteral("Text alignment");
     alignmentConfig.minimizeTitleWidth = true;
+    alignmentConfig.observePopup = true;
     const struct AlignmentOption {
         SnowCanvasTextHorizontalAlign value;
         ScreenshotToolPaletteTranslationText tooltip;
@@ -2491,7 +3309,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildTextFamily(
             [this](int value) {
                 setTextHorizontalAlign(static_cast<SnowCanvasTextHorizontalAlign>(value));
             },
-            metrics);
+            editorServices(), metrics);
     }
     registerEditor(m_textAlignmentEditor.get());
     tagEditor(m_textAlignmentEditor.get(), kRoleTextAlignment, kSignatureTextAlignment);
@@ -2588,7 +3406,8 @@ QWidget* ScreenshotToolPaletteStyleControls::buildTextFamily(
     m_textCornerRadiusEditor->setProperty("screenshotStyleEditorRoot", true);
     m_textCornerRadiusEditor->setProperty("screenshotStyleEditorRole", kRoleCornerRadius);
     m_textCornerRadiusEditor->setProperty("screenshotStyleEditorSignature", kSignatureCornerRadius);
-    QObject::connect(m_textCornerRadiusEditor, &adqt::widgets::AdButton::clicked, controls,
+    QObject::connect(m_textCornerRadiusEditor, &adqt::widgets::AdButton::clicked,
+                     controlCallbackContext(controls),
                      [this]() { setTextCornerRadius(defaultCornerRadius()); });
 
     registerTextEntries();
@@ -2682,8 +3501,8 @@ QWidget* ScreenshotToolPaletteStyleControls::buildSerialNumberFamily(
                                           ScreenshotToolPaletteTranslationText(QT_TRANSLATE_NOOP(
                                               "ScreenshotToolPalette", "Sequence number type")));
     QObject::connect(m_serialNumberTypeButtonGroup,
-                     &adqt::widgets::AdRadioButtonGroup::checkedIdChanged, controls,
-                     [this](int id) {
+                     &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
+                     controlCallbackContext(controls), [this](int id) {
                          if (id >= static_cast<int>(SnowCanvasSerialNumberType::OutlinedCircle) &&
                              id <= static_cast<int>(SnowCanvasSerialNumberType::Circle)) {
                              setSerialNumberType(static_cast<SnowCanvasSerialNumberType>(id));
@@ -2747,7 +3566,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildSerialNumberFamily(
             QT_TRANSLATE_NOOP("ScreenshotToolPalette", "Sequence number numeric type")));
     QObject::connect(
         m_serialNumberNumericTypeButtonGroup, &adqt::widgets::AdRadioButtonGroup::checkedIdChanged,
-        controls, [this](int id) {
+        controlCallbackContext(controls), [this](int id) {
             if (id >= static_cast<int>(SnowCanvasSerialNumberNumericType::Arabic) &&
                 id <= static_cast<int>(SnowCanvasSerialNumberNumericType::Chinese)) {
                 setSerialNumberNumericType(static_cast<SnowCanvasSerialNumberNumericType>(id));
@@ -2784,17 +3603,18 @@ QWidget* ScreenshotToolPaletteStyleControls::buildSerialNumberFamily(
         qMax(1, qRound(kSerialNumberInputWidth * metrics.physicalScale)),
         qMax(1, qRound(metrics.buttonSize * metrics.physicalScale)));
     stampScreenshotToolbarReferenceWidth(m_serialNumberEditor, kSerialNumberInputWidth);
-    QObject::connect(m_serialNumberEditor, &QLineEdit::editingFinished, controls, [this]() {
-        if (m_serialNumberEditor == nullptr) {
-            return;
-        }
-        bool valid = false;
-        const qint64 number = m_serialNumberEditor->text().toLongLong(&valid);
-        if (valid && number >= 0) {
-            setSerialNumber(number);
-        }
-        updateSerialNumberStyleControls(SerialNumberValueRefresh);
-    });
+    QObject::connect(m_serialNumberEditor, &QLineEdit::editingFinished,
+                     controlCallbackContext(controls), [this]() {
+                         if (m_serialNumberEditor == nullptr) {
+                             return;
+                         }
+                         bool valid = false;
+                         const qint64 number = m_serialNumberEditor->text().toLongLong(&valid);
+                         if (valid && number >= 0) {
+                             setSerialNumber(number);
+                         }
+                         updateSerialNumberStyleControls(SerialNumberValueRefresh);
+                     });
     m_serialNumberEditor->setProperty("screenshotStyleEditorRoot", true);
     m_serialNumberEditor->setProperty("screenshotStyleEditorRole", kRoleSerialValue);
     m_serialNumberEditor->setProperty("screenshotStyleEditorSignature", kSignatureSerialValue);
@@ -2959,7 +3779,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildWatermarkFamily(
         const QSignalBlocker blocker(m_watermarkTextEdit);
         m_watermarkTextEdit->setText(config.text);
     }
-    QObject::connect(m_watermarkTextEdit, &QLineEdit::textChanged, controls,
+    QObject::connect(m_watermarkTextEdit, &QLineEdit::textChanged, controlCallbackContext(controls),
                      [this](const QString& text) {
                          const QString normalized = text.trimmed();
                          if (m_state.m_watermarkConfig.text == normalized) {
@@ -2968,12 +3788,13 @@ QWidget* ScreenshotToolPaletteStyleControls::buildWatermarkFamily(
                          m_state.m_watermarkConfig.text = normalized;
                          notifyWatermarkConfigChanged(SnowCanvasWatermarkText);
                      });
-    QObject::connect(m_watermarkTextEdit, &QLineEdit::editingFinished, controls, [this]() {
-        const QString normalized = m_watermarkTextEdit->text().trimmed();
-        m_state.m_watermarkConfig.text = normalized;
-        const QSignalBlocker blocker(m_watermarkTextEdit);
-        m_watermarkTextEdit->setText(normalized);
-    });
+    QObject::connect(m_watermarkTextEdit, &QLineEdit::editingFinished,
+                     controlCallbackContext(controls), [this]() {
+                         const QString normalized = m_watermarkTextEdit->text().trimmed();
+                         m_state.m_watermarkConfig.text = normalized;
+                         const QSignalBlocker blocker(m_watermarkTextEdit);
+                         m_watermarkTextEdit->setText(normalized);
+                     });
 
     ScreenshotToolPaletteFontEditorConfig watermarkFontConfig;
     watermarkFontConfig.accessibleName = QStringLiteral("Watermark font family");
@@ -3009,6 +3830,7 @@ QWidget* ScreenshotToolPaletteStyleControls::buildWatermarkFamily(
         takeReusableWidget(kRoleWatermarkTemplate, kSignatureWatermarkTemplate, layout, controls));
     if (m_watermarkTemplateSelect == nullptr) {
         m_watermarkTemplateSelect = new adqt::widgets::AdSelect(controls);
+        m_watermarkTemplateCallbackContext = controlCallbackContext(m_watermarkTemplateSelect);
         layout->addWidget(m_watermarkTemplateSelect);
         m_watermarkTemplateSelect->setMode(adqt::widgets::AdSelect::Mode::Single);
         m_watermarkTemplateSelect->setEditable(true);
@@ -3025,36 +3847,35 @@ QWidget* ScreenshotToolPaletteStyleControls::buildWatermarkFamily(
         m_watermarkTemplateEmptyLabel->setContentsMargins(12, 8, 12, 8);
         m_watermarkTemplateSelect->setNotFoundContentWidget(m_watermarkTemplateEmptyLabel);
 
-        m_watermarkTemplateSelect->setPopupExtraContentFactory([this](QWidget* parent) {
-            auto* addButton = new adqt::widgets::AdButton(parent);
-            addButton->setObjectName(QStringLiteral("screenshotWatermarkTemplateAddButton"));
-            addButton->setButtonStyle(adqt::widgets::AdButton::ButtonStyle::Text);
-            addButton->setAccentRole(adqt::widgets::AdButton::AccentRole::Primary);
-            addButton->setIconRef(outlined_icons::Plus());
-            addButton->setIconPosition(adqt::widgets::AdButton::IconPosition::Leading);
-            addButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-            addButton->setText(watermarkTemplateText("Add"));
-            addButton->setToolTip(watermarkTemplateText("Add template"));
-            addButton->setAccessibleName(watermarkTemplateText("Add template"));
-            m_watermarkTemplateAddButton = addButton;
-            QObject::connect(addButton, &QAbstractButton::clicked, addButton, [this]() {
-                if (m_watermarkTemplateSelect != nullptr) {
-                    m_watermarkTemplateSelect->hidePopup();
+        m_watermarkTemplateSelect->setPopupExtraContentFactory(
+            [this, context = m_watermarkTemplateCallbackContext](QWidget* parent) -> QWidget* {
+                if (context == nullptr) {
+                    return nullptr;
                 }
-                openCreateWatermarkTemplateModal();
+                auto* addButton = new adqt::widgets::AdButton(parent);
+                addButton->setObjectName(QStringLiteral("screenshotWatermarkTemplateAddButton"));
+                addButton->setButtonStyle(adqt::widgets::AdButton::ButtonStyle::Text);
+                addButton->setAccentRole(adqt::widgets::AdButton::AccentRole::Primary);
+                addButton->setIconRef(outlined_icons::Plus());
+                addButton->setIconPosition(adqt::widgets::AdButton::IconPosition::Leading);
+                addButton->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+                addButton->setText(watermarkTemplateText("Add"));
+                addButton->setToolTip(watermarkTemplateText("Add template"));
+                addButton->setAccessibleName(watermarkTemplateText("Add template"));
+                m_watermarkTemplateAddButton = addButton;
+                QObject::connect(addButton, &QAbstractButton::clicked, context, [this]() {
+                    if (m_watermarkTemplateSelect != nullptr) {
+                        m_watermarkTemplateSelect->hidePopup();
+                    }
+                    openCreateWatermarkTemplateModal();
+                });
+                QObject::connect(addButton, &QObject::destroyed, context, [this, addButton]() {
+                    if (m_watermarkTemplateAddButton == addButton) {
+                        m_watermarkTemplateAddButton = nullptr;
+                    }
+                });
+                return addButton;
             });
-            // Scope the connection to the select rather than the button: the
-            // popup frame outlives the palette when its deferred delete lands
-            // later, and a receiver that dies with the palette keeps the
-            // handler from dereferencing freed style controls.
-            QObject::connect(addButton, &QObject::destroyed, m_watermarkTemplateSelect,
-                             [this, addButton]() {
-                                 if (m_watermarkTemplateAddButton == addButton) {
-                                     m_watermarkTemplateAddButton = nullptr;
-                                 }
-                             });
-            return addButton;
-        });
 
     } else {
         m_watermarkTemplateEmptyLabel = m_watermarkTemplateSelect->findChild<QLabel*>(
@@ -3079,7 +3900,8 @@ QWidget* ScreenshotToolPaletteStyleControls::buildWatermarkFamily(
     setScreenshotToolPaletteTooltipSource(m_watermarkTemplateSelect, "Template");
     setScreenshotToolPaletteAccessibleNameSource(m_watermarkTemplateSelect, "Template");
     QObject::connect(
-        m_watermarkTemplateSelect, &adqt::widgets::AdSelect::popupOpening, controls, [this]() {
+        m_watermarkTemplateSelect, &adqt::widgets::AdSelect::popupOpening,
+        m_watermarkTemplateCallbackContext, [this, context = m_watermarkTemplateCallbackContext]() {
             if (m_watermarkTemplateSelect == nullptr) {
                 return;
             }
@@ -3089,7 +3911,10 @@ QWidget* ScreenshotToolPaletteStyleControls::buildWatermarkFamily(
                                        view->itemDelegate()) == nullptr) {
                 auto* delegate = new WatermarkTemplateOptionActionDelegate(
                     m_watermarkTemplateSelect, view, view->itemDelegate(),
-                    [this](const QString& key) {
+                    [this, context](const QString& key) {
+                        if (context == nullptr) {
+                            return;
+                        }
                         if (m_watermarkTemplateSelect != nullptr) {
                             m_watermarkTemplateSelect->hidePopup();
                         }
@@ -3099,7 +3924,8 @@ QWidget* ScreenshotToolPaletteStyleControls::buildWatermarkFamily(
             }
             refreshWatermarkTemplateOptions();
         });
-    QObject::connect(m_watermarkTemplateSelect, &adqt::widgets::AdSelect::selected, controls,
+    QObject::connect(m_watermarkTemplateSelect, &adqt::widgets::AdSelect::selected,
+                     m_watermarkTemplateCallbackContext,
                      [this](const QVariant& selected, const QString&) {
                          const int index = watermarkTemplateIndex(selected.toString());
                          if (index < 0 || index >= m_watermarkTemplates.size() ||
@@ -3111,14 +3937,14 @@ QWidget* ScreenshotToolPaletteStyleControls::buildWatermarkFamily(
                          setWatermarkTemplateValue(templateValue);
                      });
     if (m_watermarkTemplateSelect->lineEdit() != nullptr) {
-        QObject::connect(m_watermarkTemplateSelect->lineEdit(), &QLineEdit::textEdited, controls,
-                         [this](const QString& templateValue) {
+        QObject::connect(m_watermarkTemplateSelect->lineEdit(), &QLineEdit::textEdited,
+                         m_watermarkTemplateCallbackContext, [this](const QString& templateValue) {
                              syncWatermarkTemplateEditorValue(templateValue);
                              setWatermarkTemplateValue(templateValue);
                          });
     }
     QObject::connect(m_watermarkTemplateSelect, &adqt::widgets::AdSelect::popupVisibleChanged,
-                     controls, [this](bool visible) {
+                     m_watermarkTemplateCallbackContext, [this](bool visible) {
                          if (!visible) {
                              syncWatermarkTemplateEditorValue(
                                  m_state.m_watermarkConfig.templateValue);
@@ -3143,8 +3969,8 @@ QWidget* ScreenshotToolPaletteStyleControls::buildWatermarkFamily(
     m_watermarkAngleEditor->setProperty("screenshotStyleEditorRoot", true);
     m_watermarkAngleEditor->setProperty("screenshotStyleEditorRole", kRoleAngle);
     m_watermarkAngleEditor->setProperty("screenshotStyleEditorSignature", kSignatureAngle);
-    QObject::connect(m_watermarkAngleEditor, &adqt::widgets::AdButton::clicked, controls,
-                     [this]() { setWatermarkAngle(30.0); });
+    QObject::connect(m_watermarkAngleEditor, &adqt::widgets::AdButton::clicked,
+                     controlCallbackContext(controls), [this]() { setWatermarkAngle(30.0); });
 
     m_watermarkGapEditor = dynamic_cast<IconNumericValuePreviewButton*>(
         takeReusableWidget(kRoleGap, kSignatureGap, layout, controls));
@@ -3158,8 +3984,8 @@ QWidget* ScreenshotToolPaletteStyleControls::buildWatermarkFamily(
     m_watermarkGapEditor->setProperty("screenshotStyleEditorRoot", true);
     m_watermarkGapEditor->setProperty("screenshotStyleEditorRole", kRoleGap);
     m_watermarkGapEditor->setProperty("screenshotStyleEditorSignature", kSignatureGap);
-    QObject::connect(m_watermarkGapEditor, &adqt::widgets::AdButton::clicked, controls,
-                     [this]() { setWatermarkGap(56.0); });
+    QObject::connect(m_watermarkGapEditor, &adqt::widgets::AdButton::clicked,
+                     controlCallbackContext(controls), [this]() { setWatermarkGap(56.0); });
 
     if (host.addGroupSeparator) {
         host.addGroupSeparator(layout);
@@ -3195,9 +4021,11 @@ QWidget* ScreenshotToolPaletteStyleControls::buildWatermarkFamily(
         m_watermarkOpacityEditor.slider->setToolTip(opacityConfig.sliderTooltip);
         configureScreenshotToolPaletteSliderEditor(m_watermarkOpacityEditor, metrics);
     }
-    QObject::disconnect(m_watermarkOpacityEditor.slider, nullptr, opacityRoot, nullptr);
+    QObject::disconnect(m_watermarkOpacityEditor.slider, nullptr,
+                        controlCallbackContext(opacityRoot), nullptr);
     QObject::connect(m_watermarkOpacityEditor.slider, &adqt::widgets::AdSlider::valueChanged,
-                     opacityRoot, [this](double value) { setWatermarkOpacity(value / 100.0); });
+                     controlCallbackContext(opacityRoot),
+                     [this](double value) { setWatermarkOpacity(value / 100.0); });
     refreshWatermarkOpacityMetrics(metrics);
 
     registerWatermarkEntries();
@@ -3426,10 +4254,11 @@ ScreenshotToolPaletteFilterFamilyResult ScreenshotToolPaletteStyleControls::buil
     result.intensitySlider->setObjectName(config.intensitySliderObjectName);
     result.intensitySlider->setAccessibleName(QStringLiteral("Filter intensity"));
     result.intensitySlider->setToolTip(QStringLiteral("Adjust filter intensity"));
-    QObject::disconnect(result.intensitySlider, nullptr, intensityRoot, nullptr);
+    QObject::disconnect(result.intensitySlider, nullptr, controlCallbackContext(intensityRoot),
+                        nullptr);
 
     QObject::connect(result.typeSelect, &adqt::widgets::AdSelect::currentValueChanged,
-                     result.controls, [callbacks](const QVariant& value) {
+                     controlCallbackContext(result.controls), [callbacks](const QVariant& value) {
                          if (!value.canConvert<int>()) {
                              return;
                          }
@@ -3437,8 +4266,8 @@ ScreenshotToolPaletteFilterFamilyResult ScreenshotToolPaletteStyleControls::buil
                              callbacks.setType(value.toInt());
                          }
                      });
-    QObject::connect(result.intensitySlider, &adqt::widgets::AdSlider::valueChanged, intensityRoot,
-                     [callbacks](double value) {
+    QObject::connect(result.intensitySlider, &adqt::widgets::AdSlider::valueChanged,
+                     controlCallbackContext(intensityRoot), [callbacks](double value) {
                          if (callbacks.setStrength) {
                              callbacks.setStrength(qBound(0.0, value / 100.0, 1.0));
                          }
@@ -3535,7 +4364,7 @@ void ScreenshotToolPaletteStyleControls::registerShapeEntries() {
         {ShapeCornerRefresh,
          [this, mixed]() {
              SNOW_SHOT_TOOLBAR_PERF_COUNTER("style.shape.corner_refresh");
-             if (m_cornerRadiusEditor != nullptr) {
+             if (m_cornerRadiusEditor != nullptr && m_spotlightShapeButtonGroup == nullptr) {
                  m_cornerRadiusEditor->setCornerRadius(activeShapeStyle().cornerRadius());
                  m_cornerRadiusEditor->setMixed(mixed(SnowCanvasShapeStylePropertyCornerRadius));
              }
@@ -3648,6 +4477,61 @@ void ScreenshotToolPaletteStyleControls::updateDistanceStyleControls() {
     applyEditorEntries(m_distanceEntries, kAllRefreshGroups);
 }
 
+void ScreenshotToolPaletteStyleControls::registerAngleEntries() {
+    const auto mixed = [this](SnowCanvasAngleStyleProperty property) {
+        return m_state.showingSelectedAngle &&
+               (m_state.angleStyleMixed & angleProperty(property)) != 0;
+    };
+    m_angleEntries = {
+        {angleProperty(SnowCanvasAngleStyleProperty::Stroke),
+         [this, mixed]() {
+             if (m_angleColorEditor != nullptr)
+                 m_angleColorEditor->update(m_state.angleStyle.stroke,
+                                            mixed(SnowCanvasAngleStyleProperty::Stroke));
+         }},
+        {angleProperty(SnowCanvasAngleStyleProperty::StrokeWidth),
+         [this, mixed]() {
+             if (m_angleWidthEditor != nullptr)
+                 m_angleWidthEditor->update(m_state.angleStyle.strokeWidth,
+                                            mixed(SnowCanvasAngleStyleProperty::StrokeWidth));
+         }},
+        {angleProperty(SnowCanvasAngleStyleProperty::Type),
+         [this, mixed]() {
+             if (m_angleTypeGroup != nullptr) {
+                 const QSignalBlocker blocker(m_angleTypeGroup);
+                 m_angleTypeGroup->setCheckedId(
+                     mixed(SnowCanvasAngleStyleProperty::Type)
+                         ? -1
+                         : static_cast<int>(m_state.angleStyle.angleType));
+             }
+         }},
+        {angleProperty(SnowCanvasAngleStyleProperty::Unit),
+         [this, mixed]() {
+             if (m_angleUnitGroup != nullptr) {
+                 const QSignalBlocker blocker(m_angleUnitGroup);
+                 m_angleUnitGroup->setCheckedId(mixed(SnowCanvasAngleStyleProperty::Unit)
+                                                    ? -1
+                                                    : static_cast<int>(m_state.angleStyle.unit));
+             }
+         }},
+        {angleProperty(SnowCanvasAngleStyleProperty::DecimalPlaces),
+         [this, mixed]() {
+             if (m_angleDecimalsEditor.select != nullptr) {
+                 const QSignalBlocker blocker(m_angleDecimalsEditor.select);
+                 m_angleDecimalsEditor.select->setCurrentValue(
+                     mixed(SnowCanvasAngleStyleProperty::DecimalPlaces)
+                         ? QVariant()
+                         : QVariant(static_cast<int>(m_state.angleStyle.decimalPlaces)));
+             }
+         }},
+    };
+}
+
+void ScreenshotToolPaletteStyleControls::updateAngleStyleControls(quint32 properties) {
+    refreshEditorEntries(m_angleEntries, properties,
+                         angleProperty(SnowCanvasAngleStyleProperty::All));
+}
+
 void ScreenshotToolPaletteStyleControls::registerArrowEntries() {
     const auto mixed = [this](quint32 property) { return hasMixedProperty(property); };
     m_arrowEntries = {
@@ -3740,6 +4624,13 @@ void ScreenshotToolPaletteStyleControls::registerTextEntries() {
                      mixed(SnowCanvasTextStyleMixedFontFamily), TextFontFamilyRefresh,
                      TextFontSizeRefresh, TextFontFamilyRefresh);
              }
+         }},
+        {TextEmphasisRefresh,
+         [this]() {
+             if (m_textEmphasisEditor != nullptr)
+                 m_textEmphasisEditor->update(
+                     m_state.m_textStyle.textStyle(),
+                     m_state.m_showingSelectedTextStyle ? m_state.m_textStyleMixed : 0);
          }},
         {TextStrokeRefresh,
          [this, mixed]() {
@@ -3990,6 +4881,7 @@ void ScreenshotToolPaletteStyleControls::reset() {
     updateRectangleStyleControls();
     updateArrowStyleControls();
     updateDistanceStyleControls();
+    updateAngleStyleControls();
     updateTextStyleControls();
     updateWatermarkControls();
     updateSerialNumberStyleControls();
@@ -3997,12 +4889,15 @@ void ScreenshotToolPaletteStyleControls::reset() {
 
 void ScreenshotToolPaletteStyleControls::releaseControlBindings() {
     clearTextStylePopupInteractions();
+    releaseControlCallbacksExcept(nullptr);
     finishStyleReconcile(-1);
     m_parkedEditors.clear();
 
     m_state.m_arrowControlsActive = false;
     m_state.distanceControlsActive = false;
+    m_state.angleControlsActive = false;
     m_state.m_lineControlsActive = false;
+    m_state.m_speechBubbleControlsActive = false;
     m_state.m_freeDrawControlsActive = false;
     m_state.m_highlightControlsActive = false;
     m_state.m_penHighlightControlsActive = false;
@@ -4031,6 +4926,20 @@ void ScreenshotToolPaletteStyleControls::releaseControlBindings() {
     m_distanceUnitGroup = nullptr;
     m_distanceDecimalsEditor = {};
     m_distanceScaleEditor = nullptr;
+    m_magnifierColorEditor.reset();
+    m_magnifierWidthEditor.reset();
+    m_magnifierLeaderEditor.reset();
+    m_magnifierShapeGroup = nullptr;
+    m_magnifierFactorEditor = nullptr;
+    m_magnifierArrowRatioEditor = nullptr;
+    m_magnifierCornerRadiusEditor = nullptr;
+    m_magnifierConnectionGroup = nullptr;
+    m_magnifierSourceOutlineToggle = nullptr;
+    m_angleColorEditor.reset();
+    m_angleWidthEditor.reset();
+    m_angleTypeGroup = nullptr;
+    m_angleUnitGroup = nullptr;
+    m_angleDecimalsEditor = {};
     m_arrowStrokeWidthEditor.reset();
     m_arrowStrokeEditor.reset();
     m_arrowTypeButtonGroup = nullptr;
@@ -4040,6 +4949,7 @@ void ScreenshotToolPaletteStyleControls::releaseControlBindings() {
     m_endArrowheadEditor.reset();
     m_textColorEditor.reset();
     m_textFontEditor.reset();
+    m_textEmphasisEditor.reset();
     m_textStrokeEditor.reset();
     m_textFillEditor.reset();
     m_textCornerRadiusEditor = nullptr;
@@ -4060,12 +4970,7 @@ void ScreenshotToolPaletteStyleControls::releaseControlBindings() {
     m_watermarkTemplateView = nullptr;
     m_watermarkTemplateEmptyLabel = nullptr;
     m_watermarkTemplateAddButton = nullptr;
-    m_createWatermarkTemplateModal = nullptr;
-    m_createWatermarkTemplateNameItem = nullptr;
-    m_createWatermarkTemplateValueItem = nullptr;
-    m_createWatermarkTemplateAlert = nullptr;
-    m_deleteWatermarkTemplateModal = nullptr;
-    m_deleteWatermarkTemplateName.clear();
+    releaseWatermarkTemplateBindings();
     m_watermarkTemplates.clear();
     m_watermarkAngleEditor = nullptr;
     m_watermarkGapEditor = nullptr;
@@ -4078,6 +4983,7 @@ void ScreenshotToolPaletteStyleControls::releaseControlBindings() {
     m_penHighlightEntries.clear();
     m_arrowEntries.clear();
     m_distanceEntries.clear();
+    m_angleEntries.clear();
     m_textEntries.clear();
     m_serialNumberEntries.clear();
     m_watermarkEntries.clear();
@@ -4086,12 +4992,15 @@ void ScreenshotToolPaletteStyleControls::releaseControlBindings() {
 
 void ScreenshotToolPaletteStyleControls::discardBindingsExcept(int destinationTool,
                                                                QWidget* destinationControls) {
+    releaseControlCallbacksExcept(destinationControls);
     using Tool = ScreenshotToolPalette::Tool;
     const Tool destination = static_cast<Tool>(destinationTool);
-    const bool keepShape =
-        destination == Tool::Shape || destination == Tool::Line || destination == Tool::FreeDraw;
+    const bool keepShape = destination == Tool::Shape || destination == Tool::SpeechBubble ||
+                           destination == Tool::Line || destination == Tool::FreeDraw;
     const bool keepArrow = destination == Tool::Arrow;
     const bool keepDistance = destination == Tool::Distance;
+    const bool keepAngle = destination == Tool::Angle;
+    const bool keepMagnifier = destination == Tool::Magnifier;
     const bool keepRectangleHighlight = destination == Tool::RectangleHighlight;
     const bool keepPenHighlight = destination == Tool::PenHighlight;
     const bool keepSpotlight = destination == Tool::Spotlight;
@@ -4119,6 +5028,19 @@ void ScreenshotToolPaletteStyleControls::discardBindingsExcept(int destinationTo
     resetUnless(keepDistance, m_distanceColorEditor);
     resetUnless(keepDistance, m_distanceWidthEditor);
     resetUnless(keepDistance, m_distanceEndpointEditor);
+    resetUnless(keepMagnifier, m_magnifierColorEditor);
+    resetUnless(keepMagnifier, m_magnifierWidthEditor);
+    resetUnless(keepMagnifier, m_magnifierLeaderEditor);
+    if (!keepMagnifier) {
+        m_magnifierShapeGroup = nullptr;
+        m_magnifierFactorEditor = nullptr;
+        m_magnifierArrowRatioEditor = nullptr;
+        m_magnifierCornerRadiusEditor = nullptr;
+        m_magnifierConnectionGroup = nullptr;
+        m_magnifierSourceOutlineToggle = nullptr;
+    }
+    resetUnless(keepAngle, m_angleColorEditor);
+    resetUnless(keepAngle, m_angleWidthEditor);
     resetUnless(keepArrow, m_arrowStrokeWidthEditor);
     resetUnless(keepArrow, m_arrowStrokeEditor);
     resetUnless(keepArrow, m_startArrowheadEditor);
@@ -4126,6 +5048,7 @@ void ScreenshotToolPaletteStyleControls::discardBindingsExcept(int destinationTo
     resetUnless(keepArrow, m_endArrowheadEditor);
     resetUnless(keepText, m_textColorEditor);
     resetUnless(keepText, m_textFontEditor);
+    resetUnless(keepText, m_textEmphasisEditor);
     resetUnless(keepText, m_textStrokeEditor);
     resetUnless(keepText, m_textFillEditor);
     resetUnless(keepText, m_textAlignmentEditor);
@@ -4136,10 +5059,12 @@ void ScreenshotToolPaletteStyleControls::discardBindingsExcept(int destinationTo
     resetUnless(keepWatermark, m_watermarkFontEditor);
     m_parkedEditors.clear();
 
-    if (destination != Tool::Shape) {
-        m_cornerRadiusEditor = nullptr;
+    if (destination != Tool::Shape && destination != Tool::SpeechBubble) {
         m_shapeControlsContainer = nullptr;
         m_shapeButtonGroup = nullptr;
+    }
+    if (destination != Tool::Shape && destination != Tool::SpeechBubble && !keepSpotlight) {
+        m_cornerRadiusEditor = nullptr;
     }
     if (!keepSpotlight) {
         m_spotlightShapeControlsContainer = nullptr;
@@ -4153,6 +5078,11 @@ void ScreenshotToolPaletteStyleControls::discardBindingsExcept(int destinationTo
         m_distanceUnitGroup = nullptr;
         m_distanceDecimalsEditor = {};
         m_distanceScaleEditor = nullptr;
+    }
+    if (!keepAngle) {
+        m_angleTypeGroup = nullptr;
+        m_angleUnitGroup = nullptr;
+        m_angleDecimalsEditor = {};
     }
     if (!keepArrow) {
         m_arrowRatioEditor = nullptr;
@@ -4169,6 +5099,7 @@ void ScreenshotToolPaletteStyleControls::discardBindingsExcept(int destinationTo
         m_serialNumberEditor = nullptr;
     }
     if (!keepWatermark) {
+        releaseWatermarkTemplateBindings();
         m_watermarkColorPreviewPending = false;
         m_watermarkTextEdit = nullptr;
         m_watermarkTemplateSelect = nullptr;
@@ -4195,6 +5126,17 @@ void ScreenshotToolPaletteStyleControls::discardBindingsExcept(int destinationTo
         m_toolbarSpacingItems.end());
 }
 
+void ScreenshotToolPaletteStyleControls::releaseWatermarkTemplateBindings() {
+    delete m_watermarkTemplateCallbackContext.data();
+    m_watermarkTemplateCallbackContext.clear();
+    m_createWatermarkTemplateModal = nullptr;
+    m_createWatermarkTemplateNameItem = nullptr;
+    m_createWatermarkTemplateValueItem = nullptr;
+    m_createWatermarkTemplateAlert = nullptr;
+    m_deleteWatermarkTemplateModal = nullptr;
+    m_deleteWatermarkTemplateName.clear();
+}
+
 int ScreenshotToolPaletteStyleControls::spacerReferenceWidth(const QSpacerItem* spacer) const {
     if (spacer == nullptr) {
         return 0;
@@ -4218,6 +5160,7 @@ void ScreenshotToolPaletteStyleControls::setCreationStyleDefaults(
     updateRectangleStyleControls();
     updateArrowStyleControls();
     updateDistanceStyleControls();
+    updateAngleStyleControls();
     updateHighlightStyleControls();
     updatePenHighlightStyleControls();
     updateBrushEraserStrokeWidthControls(m_state.brushEraserStyle.strokeWidth);
@@ -4227,6 +5170,10 @@ void ScreenshotToolPaletteStyleControls::setCreationStyleDefaults(
 
 void ScreenshotToolPaletteStyleControls::setDistanceControlsActive(bool active) {
     m_state.distanceControlsActive = active;
+}
+
+void ScreenshotToolPaletteStyleControls::setAngleControlsActive(bool active) {
+    m_state.angleControlsActive = active;
 }
 
 bool ScreenshotToolPaletteStyleControls::handleDistanceWheel(const QPoint& globalPosition,
@@ -4260,6 +5207,13 @@ void ScreenshotToolPaletteStyleControls::setArrowControlsActive(bool active) {
         return;
     }
     m_state.m_arrowControlsActive = active;
+}
+
+void ScreenshotToolPaletteStyleControls::setSpeechBubbleControlsActive(bool active) {
+    if (m_state.m_speechBubbleControlsActive == active)
+        return;
+    m_state.m_speechBubbleControlsActive = active;
+    updateRectangleStyleControls();
 }
 
 void ScreenshotToolPaletteStyleControls::setLineControlsActive(bool active) {
@@ -4340,6 +5294,8 @@ void ScreenshotToolPaletteStyleControls::clearTextStylePopupInteractions() {
             picker->setPopupVisible(false);
         } else if (auto* select = qobject_cast<adqt::widgets::AdSelect*>(popup)) {
             select->setPopupVisible(false);
+        } else if (auto* popover = qobject_cast<adqt::widgets::AdPopover*>(popup)) {
+            popover->hide();
         }
     }
     if (m_openTextStylePopups.isEmpty()) {
@@ -4352,6 +5308,8 @@ void ScreenshotToolPaletteStyleControls::clearTextStylePopupInteractions() {
 }
 
 bool ScreenshotToolPaletteStyleControls::stepStrokeWidth(int direction) {
+    if (m_state.angleControlsActive)
+        return false;
     if (m_state.m_penHighlightControlsActive) {
         if (direction == 0) {
             return false;
@@ -4415,7 +5373,10 @@ bool ScreenshotToolPaletteStyleControls::handleCornerRadiusWheel(const QPoint& g
         return false;
     }
 
-    setCornerRadius(m_state.m_rectangleStyle.cornerRadius() + (direction > 0 ? 1 : -1));
+    const int current = m_spotlightShapeButtonGroup != nullptr
+                            ? qRound(m_state.spotlightCornerRadii.topLeft)
+                            : activeShapeStyle().cornerRadius();
+    setCornerRadius(current + (direction > 0 ? 1 : -1));
     return true;
 }
 
@@ -4533,38 +5494,43 @@ SnowCanvasShapeStyle ScreenshotToolPaletteStyleControls::rectangleStyle() const 
 }
 
 ScreenshotToolPaletteRectangleStyleModel& ScreenshotToolPaletteStyleControls::activeShapeStyle() {
-    return m_state.m_highlightControlsActive  ? m_state.m_highlightStyle
-           : m_state.m_freeDrawControlsActive ? m_state.m_freeDrawStyle
-           : m_state.m_lineControlsActive     ? m_state.m_lineStyle
-                                              : m_state.m_rectangleStyle;
+    return m_state.m_highlightControlsActive      ? m_state.m_highlightStyle
+           : m_state.m_freeDrawControlsActive     ? m_state.m_freeDrawStyle
+           : m_state.m_lineControlsActive         ? m_state.m_lineStyle
+           : m_state.m_speechBubbleControlsActive ? m_state.m_speechBubbleStyle
+                                                  : m_state.m_rectangleStyle;
 }
 
 const ScreenshotToolPaletteRectangleStyleModel&
 ScreenshotToolPaletteStyleControls::activeShapeStyle() const {
-    return m_state.m_highlightControlsActive  ? m_state.m_highlightStyle
-           : m_state.m_freeDrawControlsActive ? m_state.m_freeDrawStyle
-           : m_state.m_lineControlsActive     ? m_state.m_lineStyle
-                                              : m_state.m_rectangleStyle;
+    return m_state.m_highlightControlsActive      ? m_state.m_highlightStyle
+           : m_state.m_freeDrawControlsActive     ? m_state.m_freeDrawStyle
+           : m_state.m_lineControlsActive         ? m_state.m_lineStyle
+           : m_state.m_speechBubbleControlsActive ? m_state.m_speechBubbleStyle
+                                                  : m_state.m_rectangleStyle;
 }
 
 ScreenshotToolPaletteRectangleStyleModel&
 ScreenshotToolPaletteStyleControls::activeCreationShapeStyle() {
-    return m_state.m_highlightControlsActive  ? m_state.m_creationHighlightStyle
-           : m_state.m_freeDrawControlsActive ? m_state.m_creationFreeDrawStyle
-           : m_state.m_lineControlsActive     ? m_state.m_creationLineStyle
-                                              : m_state.m_creationRectangleStyle;
+    return m_state.m_highlightControlsActive      ? m_state.m_creationHighlightStyle
+           : m_state.m_freeDrawControlsActive     ? m_state.m_creationFreeDrawStyle
+           : m_state.m_lineControlsActive         ? m_state.m_creationLineStyle
+           : m_state.m_speechBubbleControlsActive ? m_state.m_creationSpeechBubbleStyle
+                                                  : m_state.m_creationRectangleStyle;
 }
 
 SnowCanvasShapeKind ScreenshotToolPaletteStyleControls::activeShapeKind() const {
-    return m_state.m_highlightControlsActive  ? SnowCanvasShapeKind::RectangleHighlight
-           : m_state.m_freeDrawControlsActive ? SnowCanvasShapeKind::FreeDraw
-           : m_state.m_lineControlsActive     ? SnowCanvasShapeKind::Line
-                                              : SnowCanvasShapeKind::Rectangle;
+    return m_state.m_highlightControlsActive      ? SnowCanvasShapeKind::RectangleHighlight
+           : m_state.m_freeDrawControlsActive     ? SnowCanvasShapeKind::FreeDraw
+           : m_state.m_lineControlsActive         ? SnowCanvasShapeKind::Line
+           : m_state.m_speechBubbleControlsActive ? SnowCanvasShapeKind::SpeechBubble
+                                                  : SnowCanvasShapeKind::Rectangle;
 }
 
 SnowCanvasStyleDefaults ScreenshotToolPaletteStyleControls::creationStyleDefaults() const {
     SnowCanvasStyleDefaults defaults = m_defaults;
     defaults.rectangle = m_state.m_creationRectangleStyle.rectangleStyle();
+    defaults.speechBubble = m_state.m_creationSpeechBubbleStyle.rectangleStyle();
     defaults.line = m_state.m_creationLineStyle.rectangleStyle();
     defaults.freeDraw = m_state.m_creationFreeDrawStyle.rectangleStyle();
     defaults.rectangleHighlight = m_state.m_creationHighlightStyle.rectangleStyle();
@@ -4578,6 +5544,8 @@ SnowCanvasStyleDefaults ScreenshotToolPaletteStyleControls::creationStyleDefault
     defaults.arrow.arrowShaftType = m_state.m_creationArrowStyle.arrowShaftType;
     defaults.arrow.arrowRatio = m_state.m_creationArrowStyle.arrowRatio;
     defaults.distance = m_state.creationDistanceStyle;
+    defaults.angle = m_state.creationAngleStyle;
+    defaults.magnifier = m_state.creationMagnifierStyle;
     defaults.text = m_state.m_creationTextStyle.textStyle();
     defaults.serialNumber = m_state.m_creationSerialNumberStyle;
     defaults.rectangleFilter = m_state.creationRectangleFilterStyle;
@@ -4586,20 +5554,31 @@ SnowCanvasStyleDefaults ScreenshotToolPaletteStyleControls::creationStyleDefault
     defaults.watermark = m_state.creationWatermarkConfig;
     defaults.spotlight = m_state.creationSpotlightConfig;
     defaults.spotlightShape = m_state.creationSpotlightShape;
+    defaults.spotlightCornerRadii = m_state.creationSpotlightCornerRadii;
     return defaults;
 }
 
 void ScreenshotToolPaletteStyleControls::rememberStyleEdit(const SnowCanvasStyleEdit& edit) {
     auto defaults = creationStyleDefaults();
     snowCanvasMergeStyleEdit(defaults, edit);
+    if (const auto* serial = std::get_if<SnowCanvasSerialNumberEdit>(&edit);
+        serial != nullptr && (serial->properties & SnowCanvasSerialNumberStyleMixedNumber) != 0 &&
+        m_state.m_styleSource != SnowCanvasStyleToolbarSource::SelectedSerialNumber) {
+        // Standalone palettes retain their current sequence value. Bound palettes
+        // receive the selected number's successor from the runtime on deselection.
+        defaults.serialNumber.number = serial->style.number;
+    }
     const ScreenshotToolPaletteStyleState remembered(defaults);
     m_state.m_creationRectangleStyle = remembered.m_creationRectangleStyle;
+    m_state.m_creationSpeechBubbleStyle = remembered.m_creationSpeechBubbleStyle;
     m_state.m_creationLineStyle = remembered.m_creationLineStyle;
     m_state.m_creationFreeDrawStyle = remembered.m_creationFreeDrawStyle;
     m_state.m_creationHighlightStyle = remembered.m_creationHighlightStyle;
     m_state.m_creationPenHighlightStyle = remembered.m_creationPenHighlightStyle;
     m_state.m_creationArrowStyle = remembered.m_creationArrowStyle;
     m_state.creationDistanceStyle = remembered.creationDistanceStyle;
+    m_state.creationAngleStyle = remembered.creationAngleStyle;
+    m_state.creationMagnifierStyle = remembered.creationMagnifierStyle;
     m_state.m_creationTextStyle = remembered.m_creationTextStyle;
     m_state.m_creationSerialNumberStyle = remembered.m_creationSerialNumberStyle;
     m_state.creationRectangleFilterStyle = remembered.creationRectangleFilterStyle;
@@ -4608,6 +5587,7 @@ void ScreenshotToolPaletteStyleControls::rememberStyleEdit(const SnowCanvasStyle
     m_state.creationWatermarkConfig = defaults.watermark;
     m_state.creationSpotlightConfig = defaults.spotlight;
     m_state.creationSpotlightShape = defaults.spotlightShape;
+    m_state.creationSpotlightCornerRadii = defaults.spotlightCornerRadii;
 }
 
 void ScreenshotToolPaletteStyleControls::setRectangleStyle(const SnowCanvasShapeStyle& style) {
@@ -4618,10 +5598,10 @@ void ScreenshotToolPaletteStyleControls::setRectangleStyle(const SnowCanvasShape
     updateRectangleStyleControls();
 }
 
-void ScreenshotToolPaletteStyleControls::setWatermarkConfig(
-    const SnowCanvasWatermarkConfig& config) {
+void ScreenshotToolPaletteStyleControls::setWatermarkConfig(const SnowCanvasWatermarkConfig& config,
+                                                            bool refreshEditors) {
     m_watermarkColorPreviewPending = false;
-    if (m_state.m_watermarkConfig == config) {
+    if (m_state.m_watermarkConfig == config && !refreshEditors) {
         return;
     }
     m_state.m_watermarkConfig = config;
@@ -4682,6 +5662,11 @@ void ScreenshotToolPaletteStyleControls::refreshToolbarMetrics(
     configureScreenshotToolPaletteStyleRadioButtonGroup(m_distanceUnitGroup, metrics, true);
     configureScreenshotToolPaletteIconNumericValueButton(m_distanceScaleEditor, metrics);
     configureScreenshotToolPaletteSelectEditor(m_distanceDecimalsEditor, metrics);
+    configureScreenshotToolPaletteStyleRadioButtonGroup(m_angleTypeGroup, metrics, true);
+    configureScreenshotToolPaletteStyleRadioButtonGroup(m_angleUnitGroup, metrics, true);
+    configureScreenshotToolPaletteStyleRadioButtonGroup(m_magnifierShapeGroup, metrics);
+    configureScreenshotToolPaletteStyleRadioButtonGroup(m_magnifierConnectionGroup, metrics);
+    configureScreenshotToolPaletteSelectEditor(m_angleDecimalsEditor, metrics);
     if (applies(m_distanceValueInput)) {
         m_distanceValueInput->setFixedSize(
             qMax(1, qRound(100 * metrics.physicalScale)),
@@ -4711,6 +5696,12 @@ void ScreenshotToolPaletteStyleControls::refreshToolbarMetrics(
     }
     configureScreenshotToolPaletteCornerRadiusEditor(m_cornerRadiusEditor, metrics);
     configureScreenshotToolPaletteIconNumericValueButton(m_arrowRatioEditor, metrics);
+    configureScreenshotToolPaletteIconNumericValueButton(m_magnifierFactorEditor, metrics);
+    configureScreenshotToolPaletteIconNumericValueButton(m_magnifierArrowRatioEditor, metrics);
+    configureScreenshotToolPaletteCornerRadiusEditor(m_magnifierCornerRadiusEditor, metrics);
+    if (m_magnifierSourceOutlineToggle != nullptr)
+        configureScreenshotToolPaletteStyleButton(m_magnifierSourceOutlineToggle,
+                                                  "Source region outline", metrics);
     configureScreenshotToolPaletteCornerRadiusEditor(m_textCornerRadiusEditor, metrics);
     if (applies(m_serialNumberEditor)) {
         m_serialNumberEditor->setFixedSize(
@@ -4821,6 +5812,27 @@ void ScreenshotToolPaletteStyleControls::commitDistanceProperty(quint32 property
     updateDistanceStyleControls();
     if (m_callbacks.distanceStyleChanged)
         m_callbacks.distanceStyleChanged(m_state.distanceStyle, property);
+}
+
+template <typename Apply>
+void ScreenshotToolPaletteStyleControls::commitAngleProperty(quint32 property, Apply apply) {
+    const auto previous = m_state.angleStyle;
+    apply(m_state.angleStyle);
+    const bool wasMixed = m_state.showingSelectedAngle && (m_state.angleStyleMixed & property) != 0;
+    if (previous == m_state.angleStyle && !wasMixed)
+        return;
+    m_state.angleStyleMixed &= ~property;
+    updateAngleStyleControls(property);
+    if (m_callbacks.angleStyleChanged)
+        m_callbacks.angleStyleChanged(m_state.angleStyle, property);
+}
+
+void ScreenshotToolPaletteStyleControls::setAngleStrokeWidth(double width) {
+    if (!std::isfinite(width))
+        return;
+    width = std::clamp(width, 1.0, 72.0);
+    commitAngleProperty(angleProperty(SnowCanvasAngleStyleProperty::StrokeWidth),
+                        [width](SnowCanvasAngleStyle& style) { style.strokeWidth = width; });
 }
 
 void ScreenshotToolPaletteStyleControls::setDistanceValue(double value) {
@@ -4948,45 +5960,68 @@ void ScreenshotToolPaletteStyleControls::setFillStyle(SnowCanvasFillStyle fillSt
 }
 
 void ScreenshotToolPaletteStyleControls::setCornerRadius(int cornerRadius) {
+    if (m_spotlightShapeButtonGroup != nullptr) {
+        SnowCanvasShapeStyle style;
+        style.cornerRadii = m_state.spotlightCornerRadii;
+        ScreenshotToolPaletteRectangleStyleModel model;
+        model.setRectangleStyle(style);
+        const bool mixed =
+            (m_state.spotlightShapeMixed & SnowCanvasShapeStyleMixedCornerRadii) != 0;
+        if (!model.setCornerRadius(cornerRadius) && !mixed)
+            return;
+        style.cornerRadii = model.rectangleStyle().cornerRadii;
+        m_state.spotlightCornerRadii = style.cornerRadii;
+        m_state.spotlightShapeMixed &= ~SnowCanvasShapeStyleMixedCornerRadii;
+        updateSpotlightShapeControls();
+        notifyShapeStyleChanged(style, SnowCanvasShapeStylePropertyCornerRadius,
+                                SnowCanvasShapeKind::Spotlight);
+        return;
+    }
     const bool wasMixed = hasMixedProperty(SnowCanvasShapeStylePropertyCornerRadius);
-    if (!m_state.m_rectangleStyle.setCornerRadius(cornerRadius) && !wasMixed) {
+    if (!activeShapeStyle().setCornerRadius(cornerRadius) && !wasMixed) {
         return;
     }
 
     clearMixedProperties(SnowCanvasShapeStylePropertyCornerRadius);
     updateRectangleStyleControls();
-    notifyShapeStyleChanged(m_state.m_rectangleStyle.rectangleStyle(),
-                            SnowCanvasShapeStylePropertyCornerRadius,
-                            SnowCanvasShapeKind::Rectangle);
+    notifyShapeStyleChanged(activeShapeStyle().rectangleStyle(),
+                            SnowCanvasShapeStylePropertyCornerRadius, activeShapeKind());
 }
 
 void ScreenshotToolPaletteStyleControls::setShape(SnowCanvasRectangleShape shape) {
     const bool wasMixed = hasMixedProperty(SnowCanvasShapeStylePropertyShape);
-    if (!m_state.m_rectangleStyle.setShape(shape) && !wasMixed) {
+    if (!activeShapeStyle().setShape(shape) && !wasMixed) {
         return;
     }
     clearMixedProperties(SnowCanvasShapeStylePropertyShape);
     updateRectangleStyleControls();
-    notifyShapeStyleChanged(m_state.m_rectangleStyle.rectangleStyle(),
-                            SnowCanvasShapeStylePropertyShape, SnowCanvasShapeKind::Rectangle);
+    notifyShapeStyleChanged(activeShapeStyle().rectangleStyle(), SnowCanvasShapeStylePropertyShape,
+                            activeShapeKind());
 }
 
 void ScreenshotToolPaletteStyleControls::updateSpotlightShapeControls() {
     if (m_spotlightShapeButtonGroup == nullptr)
         return;
+    if (m_cornerRadiusEditor != nullptr) {
+        m_cornerRadiusEditor->setCornerRadius(qRound(m_state.spotlightCornerRadii.topLeft));
+        m_cornerRadiusEditor->setMixed(
+            (m_state.spotlightShapeMixed & SnowCanvasShapeStyleMixedCornerRadii) != 0);
+    }
     const QSignalBlocker blocker(m_spotlightShapeButtonGroup);
     const auto shape = m_state.spotlightShape;
-    m_spotlightShapeButtonGroup->setCheckedId(m_state.spotlightShapeMixed != 0             ? -1
-                                              : shape == SnowCanvasRectangleShape::Ellipse ? 1
-                                              : shape == SnowCanvasRectangleShape::Diamond ? 2
-                                                                                           : 0);
+    m_spotlightShapeButtonGroup->setCheckedId(
+        (m_state.spotlightShapeMixed & SnowCanvasShapeStyleMixedShape) != 0 ? -1
+        : shape == SnowCanvasRectangleShape::Ellipse                        ? 1
+        : shape == SnowCanvasRectangleShape::Diamond                        ? 2
+                                                                            : 0);
 }
 
 void ScreenshotToolPaletteStyleControls::setSpotlightShape(SnowCanvasRectangleShape shape) {
-    if (m_state.spotlightShape == shape && m_state.spotlightShapeMixed == 0)
+    if (m_state.spotlightShape == shape &&
+        (m_state.spotlightShapeMixed & SnowCanvasShapeStyleMixedShape) == 0)
         return;
     m_state.spotlightShape = shape;
-    m_state.spotlightShapeMixed = 0;
+    m_state.spotlightShapeMixed &= ~SnowCanvasShapeStyleMixedShape;
     updateSpotlightShapeControls();
     SnowCanvasShapeStyle style;
     style.shape = shape;
@@ -5143,6 +6178,26 @@ void ScreenshotToolPaletteStyleControls::setTextFontFamily(const QString& fontFa
                        [fontFamily](ScreenshotToolPaletteTextStyleModel& style) {
                            return style.setFontFamily(fontFamily);
                        });
+}
+
+void ScreenshotToolPaletteStyleControls::setTextEmphasis(quint32 property, bool enabled) {
+    commitTextProperty(property, [property, enabled](ScreenshotToolPaletteTextStyleModel& style) {
+        return property == SnowCanvasTextStyleMixedBold ? style.setBold(enabled)
+                                                        : style.setItalic(enabled);
+    });
+}
+
+void ScreenshotToolPaletteStyleControls::retranslateTextEmphasisUi() {
+    if (m_textEmphasisEditor != nullptr)
+        m_textEmphasisEditor->retranslate();
+}
+
+void ScreenshotToolPaletteStyleControls::retranslateMagnifierUi() {
+    if (m_magnifierSourceOutlineToggle != nullptr)
+        m_magnifierSourceOutlineToggle->setAccessibleDescription(
+            m_magnifierSourceOutlineToggle->property("mixed").toBool()
+                ? ScreenshotToolPaletteTranslationText("Mixed").translated()
+                : QString());
 }
 
 void ScreenshotToolPaletteStyleControls::setTextStrokeColor(const QColor& color) {
@@ -5397,32 +6452,43 @@ void ScreenshotToolPaletteStyleControls::openCreateWatermarkTemplateModal() {
     const QPointer<adqt::widgets::AdForm> formGuard(form);
     const QPointer<adqt::widgets::AdLineEdit> nameGuard(nameInput);
     const QPointer<adqt::widgets::AdLineEdit> valueGuard(valueInput);
-    QObject::connect(modal, &adqt::widgets::AdModal::closeRequested, modal,
-                     [this, modal, formGuard, nameGuard,
-                      valueGuard](adqt::widgets::AdModal::CloseReason reason) {
-                         if (reason != adqt::widgets::AdModal::CloseReason::OkAction) {
-                             modal->reject();
-                             return;
-                         }
-                         if (formGuard == nullptr || nameGuard == nullptr ||
-                             valueGuard == nullptr || !formGuard->submit()) {
-                             return;
-                         }
-                         const snow_shot::storage::WatermarkTemplateSettings settings;
-                         QVector<snow_shot::storage::WatermarkTemplate> templates =
-                             settings.templates();
-                         const QString templateValue = valueGuard->text();
-                         templates.push_back({nameGuard->text().trimmed(), templateValue});
-                         if (!settings.setTemplates(templates)) {
-                             return;
-                         }
-                         m_watermarkTemplates = templates;
-                         syncWatermarkTemplateEditorValue(templateValue);
-                         setWatermarkTemplateValue(templateValue);
-                         refreshWatermarkTemplateOptions();
-                         modal->accept();
-                     });
-    QObject::connect(modal, &adqt::widgets::AdModal::finished, modal,
+    QObject::connect(
+        modal, &adqt::widgets::AdModal::closeRequested, m_watermarkTemplateCallbackContext,
+        [this, modal = QPointer<adqt::widgets::AdModal>(modal),
+         context = m_watermarkTemplateCallbackContext, formGuard, nameGuard,
+         valueGuard](adqt::widgets::AdModal::CloseReason reason) {
+            if (reason != adqt::widgets::AdModal::CloseReason::OkAction) {
+                modal->reject();
+                return;
+            }
+            if (formGuard == nullptr || nameGuard == nullptr || valueGuard == nullptr ||
+                !formGuard->submit()) {
+                return;
+            }
+            if (context == nullptr || modal == nullptr || nameGuard == nullptr ||
+                valueGuard == nullptr) {
+                return;
+            }
+            const snow_shot::storage::WatermarkTemplateSettings settings;
+            QVector<snow_shot::storage::WatermarkTemplate> templates = settings.templates();
+            const QString templateValue = valueGuard->text();
+            templates.push_back({nameGuard->text().trimmed(), templateValue});
+            if (!settings.setTemplates(templates)) {
+                return;
+            }
+            if (context == nullptr || modal == nullptr) {
+                return;
+            }
+            m_watermarkTemplates = templates;
+            syncWatermarkTemplateEditorValue(templateValue);
+            setWatermarkTemplateValue(templateValue);
+            if (context == nullptr || modal == nullptr) {
+                return;
+            }
+            refreshWatermarkTemplateOptions();
+            modal->accept();
+        });
+    QObject::connect(modal, &adqt::widgets::AdModal::finished, m_watermarkTemplateCallbackContext,
                      [this, modal](adqt::widgets::AdModal::DialogCode) {
                          if (m_createWatermarkTemplateModal == modal) {
                              m_createWatermarkTemplateModal = nullptr;
@@ -5463,16 +6529,20 @@ void ScreenshotToolPaletteStyleControls::openDeleteWatermarkTemplateModal(
     m_deleteWatermarkTemplateName = m_watermarkTemplates.at(index).name;
     retranslateWatermarkTemplateUi();
 
-    QObject::connect(modal, &adqt::widgets::AdModal::closeRequested, modal,
-                     [this, modal, templateKey](adqt::widgets::AdModal::CloseReason reason) {
+    QObject::connect(modal, &adqt::widgets::AdModal::closeRequested,
+                     m_watermarkTemplateCallbackContext,
+                     [this, modal = QPointer<adqt::widgets::AdModal>(modal),
+                      templateKey](adqt::widgets::AdModal::CloseReason reason) {
                          if (reason == adqt::widgets::AdModal::CloseReason::OkAction) {
                              deleteWatermarkTemplate(templateKey);
-                             modal->accept();
+                             if (modal != nullptr) {
+                                 modal->accept();
+                             }
                              return;
                          }
                          modal->reject();
                      });
-    QObject::connect(modal, &adqt::widgets::AdModal::finished, modal,
+    QObject::connect(modal, &adqt::widgets::AdModal::finished, m_watermarkTemplateCallbackContext,
                      [this, modal](adqt::widgets::AdModal::DialogCode) {
                          if (m_deleteWatermarkTemplateModal == modal) {
                              m_deleteWatermarkTemplateModal = nullptr;
@@ -5494,7 +6564,11 @@ void ScreenshotToolPaletteStyleControls::deleteWatermarkTemplate(const QString& 
     QVector<snow_shot::storage::WatermarkTemplate> templates = m_watermarkTemplates;
     templates.removeAt(index);
     const snow_shot::storage::WatermarkTemplateSettings settings;
+    const QPointer<QObject> context = m_watermarkTemplateCallbackContext;
     if (!settings.setTemplates(templates)) {
+        return;
+    }
+    if (context == nullptr) {
         return;
     }
     m_watermarkTemplates = templates;
@@ -5732,6 +6806,62 @@ void ScreenshotToolPaletteStyleControls::setStyleToolbarState(
     const auto editorInteracting = [](const auto& editor) {
         return editor != nullptr && editor->isInteracting();
     };
+    if (state.source == SnowCanvasStyleToolbarSource::DefaultMagnifier ||
+        state.source == SnowCanvasStyleToolbarSource::SelectedMagnifier) {
+        const bool selected = state.source == SnowCanvasStyleToolbarSource::SelectedMagnifier;
+        auto displayed = state.magnifierStyle;
+        if (editorInteracting(m_magnifierColorEditor))
+            displayed.stroke = m_state.magnifierStyle.stroke;
+        const quint32 mixed = selected ? state.magnifierStyleMixed : 0;
+        if (m_state.m_styleSource == state.source && m_state.magnifierStyle == displayed &&
+            m_state.magnifierStyleMixed == mixed)
+            return;
+        m_state.m_styleSource = state.source;
+        m_state.showingSelectedMagnifier = selected;
+        m_state.magnifierStyle = displayed;
+        m_state.magnifierStyleMixed = mixed;
+        if (!selected)
+            m_state.creationMagnifierStyle = displayed;
+        updateMagnifierStyleControls();
+        return;
+    }
+    if (state.source == SnowCanvasStyleToolbarSource::DefaultAngle ||
+        state.source == SnowCanvasStyleToolbarSource::SelectedAngle) {
+        const bool selected = state.source == SnowCanvasStyleToolbarSource::SelectedAngle;
+        auto displayed = state.angleStyle;
+        if (editorInteracting(m_angleColorEditor))
+            displayed.stroke = m_state.angleStyle.stroke;
+        const quint32 mixed = selected ? state.angleStyleMixed : 0;
+        if (m_state.m_styleSource == state.source && m_state.angleStyle == displayed &&
+            m_state.angleStyleMixed == mixed) {
+#if defined(SNOW_SHOT_TEST_HOOKS)
+            ++m_styleStateNoopCount;
+#endif
+            SNOW_SHOT_TOOLBAR_PERF_COUNTER("style.state.noop");
+            return;
+        }
+        quint32 changed = m_state.angleStyleMixed ^ mixed;
+        if (m_state.m_styleSource != state.source)
+            changed = angleProperty(SnowCanvasAngleStyleProperty::All);
+        if (m_state.angleStyle.stroke != displayed.stroke)
+            changed |= angleProperty(SnowCanvasAngleStyleProperty::Stroke);
+        if (m_state.angleStyle.strokeWidth != displayed.strokeWidth)
+            changed |= angleProperty(SnowCanvasAngleStyleProperty::StrokeWidth);
+        if (m_state.angleStyle.angleType != displayed.angleType)
+            changed |= angleProperty(SnowCanvasAngleStyleProperty::Type);
+        if (m_state.angleStyle.unit != displayed.unit)
+            changed |= angleProperty(SnowCanvasAngleStyleProperty::Unit);
+        if (m_state.angleStyle.decimalPlaces != displayed.decimalPlaces)
+            changed |= angleProperty(SnowCanvasAngleStyleProperty::DecimalPlaces);
+        m_state.m_styleSource = state.source;
+        m_state.showingSelectedAngle = selected;
+        m_state.angleStyle = displayed;
+        m_state.angleStyleMixed = mixed;
+        if (!selected)
+            m_state.creationAngleStyle = displayed;
+        updateAngleStyleControls(changed);
+        return;
+    }
     if (state.source == SnowCanvasStyleToolbarSource::DefaultDistance ||
         state.source == SnowCanvasStyleToolbarSource::SelectedDistance) {
         const bool selected = state.source == SnowCanvasStyleToolbarSource::SelectedDistance;
@@ -5759,11 +6889,16 @@ void ScreenshotToolPaletteStyleControls::setStyleToolbarState(
         m_state.showingSelectedSpotlight =
             state.source == SnowCanvasStyleToolbarSource::SelectedSpotlight;
         m_state.spotlightShape = state.shapeStyle.shape;
-        m_state.spotlightShapeMixed = m_state.showingSelectedSpotlight
-                                          ? state.shapeStyleMixed & SnowCanvasShapeStyleMixedShape
-                                          : 0;
-        if (!m_state.showingSelectedSpotlight)
+        m_state.spotlightCornerRadii = state.shapeStyle.cornerRadii;
+        m_state.spotlightShapeMixed =
+            m_state.showingSelectedSpotlight
+                ? state.shapeStyleMixed &
+                      (SnowCanvasShapeStyleMixedShape | SnowCanvasShapeStyleMixedCornerRadii)
+                : 0;
+        if (!m_state.showingSelectedSpotlight) {
             m_state.creationSpotlightShape = state.shapeStyle.shape;
+            m_state.creationSpotlightCornerRadii = state.shapeStyle.cornerRadii;
+        }
         updateSpotlightShapeControls();
         return;
     }
@@ -5866,6 +7001,10 @@ void ScreenshotToolPaletteStyleControls::setStyleToolbarState(
             if (previous.fontSize != normalized.fontSize ||
                 (mixedChanged & SnowCanvasTextStyleMixedFontSize) != 0)
                 groups |= TextFontSizeRefresh;
+            if (previous.bold != normalized.bold || previous.italic != normalized.italic ||
+                (mixedChanged & (SnowCanvasTextStyleMixedBold | SnowCanvasTextStyleMixedItalic)) !=
+                    0)
+                groups |= TextEmphasisRefresh;
             if (previous.fontFamily != normalized.fontFamily ||
                 (mixedChanged & SnowCanvasTextStyleMixedFontFamily) != 0)
                 groups |= TextFontFamilyRefresh;
@@ -6004,26 +7143,32 @@ void ScreenshotToolPaletteStyleControls::setStyleToolbarState(
     const bool highlightStyleSource =
         state.source == SnowCanvasStyleToolbarSource::DefaultRectangleHighlight ||
         state.source == SnowCanvasStyleToolbarSource::SelectedRectangleHighlight;
+    const bool speechBubbleStyleSource =
+        state.source == SnowCanvasStyleToolbarSource::DefaultSpeechBubble ||
+        state.source == SnowCanvasStyleToolbarSource::SelectedSpeechBubble;
     const bool rectangleStyleSource =
         state.source == SnowCanvasStyleToolbarSource::DefaultRectangle ||
         state.source == SnowCanvasStyleToolbarSource::SelectedRectangle;
-    if (!rectangleStyleSource && !lineStyleSource && !freeDrawStyleSource &&
-        !highlightStyleSource) {
+    if (!rectangleStyleSource && !speechBubbleStyleSource && !lineStyleSource &&
+        !freeDrawStyleSource && !highlightStyleSource) {
         return;
     }
     const bool selectedShape =
+        state.source == SnowCanvasStyleToolbarSource::SelectedSpeechBubble ||
         state.source == SnowCanvasStyleToolbarSource::SelectedRectangle ||
         state.source == SnowCanvasStyleToolbarSource::SelectedLine ||
         state.source == SnowCanvasStyleToolbarSource::SelectedFreeDraw ||
         state.source == SnowCanvasStyleToolbarSource::SelectedRectangleHighlight;
-    auto& displayedModel = highlightStyleSource  ? m_state.m_highlightStyle
-                           : freeDrawStyleSource ? m_state.m_freeDrawStyle
-                           : lineStyleSource     ? m_state.m_lineStyle
-                                                 : m_state.m_rectangleStyle;
-    auto& creationModel = highlightStyleSource  ? m_state.m_creationHighlightStyle
-                          : freeDrawStyleSource ? m_state.m_creationFreeDrawStyle
-                          : lineStyleSource     ? m_state.m_creationLineStyle
-                                                : m_state.m_creationRectangleStyle;
+    auto& displayedModel = highlightStyleSource      ? m_state.m_highlightStyle
+                           : freeDrawStyleSource     ? m_state.m_freeDrawStyle
+                           : lineStyleSource         ? m_state.m_lineStyle
+                           : speechBubbleStyleSource ? m_state.m_speechBubbleStyle
+                                                     : m_state.m_rectangleStyle;
+    auto& creationModel = highlightStyleSource      ? m_state.m_creationHighlightStyle
+                          : freeDrawStyleSource     ? m_state.m_creationFreeDrawStyle
+                          : lineStyleSource         ? m_state.m_creationLineStyle
+                          : speechBubbleStyleSource ? m_state.m_creationSpeechBubbleStyle
+                                                    : m_state.m_creationRectangleStyle;
     SnowCanvasShapeStyle displayedStyle = state.shapeStyle;
     if (lineStyleSource && displayedStyle.arrowType != SnowCanvasArrowType::Straight &&
         displayedStyle.arrowType != SnowCanvasArrowType::Curve) {
@@ -6049,6 +7194,7 @@ void ScreenshotToolPaletteStyleControls::setStyleToolbarState(
         return;
     }
     m_state.m_lineControlsActive = lineStyleSource;
+    m_state.m_speechBubbleControlsActive = speechBubbleStyleSource;
     m_state.m_freeDrawControlsActive = freeDrawStyleSource;
     m_state.m_highlightControlsActive = highlightStyleSource;
     m_state.m_showingSelectedStyle = selectedShape;

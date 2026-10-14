@@ -50,12 +50,15 @@ enum class Item {
     FreeDraw,
     Highlighter,
     Spotlight,
+    Magnifier,
     Text,
     SerialNumber,
     Filter,
     Eraser,
     Watermark,
     Distance,
+    Angle,
+    SpeechBubble,
 };
 
 enum class Icon {
@@ -68,6 +71,7 @@ enum class Icon {
     FreeDraw,
     Highlight,
     Spotlight,
+    Magnifier,
     Text,
     SerialNumber,
     Filter,
@@ -101,6 +105,8 @@ enum class Icon {
     RecordingFolder,
     RecordingTrim,
     Distance,
+    Angle,
+    SpeechBubble,
 };
 
 struct Descriptor {
@@ -123,11 +129,16 @@ struct EditorDescriptor {
          QT_TRANSLATE_NOOP("DrawingToolbarEditorSettingsWidget", "Select elements"), Icon::Select},
         {Item::Shape, "shape", QT_TRANSLATE_NOOP("DrawingToolbarEditorSettingsWidget", "Shape"),
          Icon::Shape},
+        {Item::SpeechBubble, "speech-bubble",
+         QT_TRANSLATE_NOOP("DrawingToolbarEditorSettingsWidget", "Speech Bubble"),
+         Icon::SpeechBubble},
         {Item::Arrow, "arrow", QT_TRANSLATE_NOOP("DrawingToolbarEditorSettingsWidget", "Arrow"),
          Icon::Arrow},
         {Item::Distance, "distance",
          QT_TRANSLATE_NOOP("DrawingToolbarEditorSettingsWidget", "Distance annotation"),
          Icon::Distance},
+        {Item::Angle, "angle",
+         QT_TRANSLATE_NOOP("DrawingToolbarEditorSettingsWidget", "Angle annotation"), Icon::Angle},
         {Item::Line, "line", QT_TRANSLATE_NOOP("DrawingToolbarEditorSettingsWidget", "Line"),
          Icon::Line},
         {Item::FreeDraw, "free-draw",
@@ -136,6 +147,8 @@ struct EditorDescriptor {
          QT_TRANSLATE_NOOP("DrawingToolbarEditorSettingsWidget", "Highlight"), Icon::Highlight},
         {Item::Spotlight, "spotlight",
          QT_TRANSLATE_NOOP("DrawingToolbarEditorSettingsWidget", "Spotlight"), Icon::Spotlight},
+        {Item::Magnifier, "magnifier",
+         QT_TRANSLATE_NOOP("DrawingToolbarEditorSettingsWidget", "Magnifier"), Icon::Magnifier},
         {Item::Text, "text", QT_TRANSLATE_NOOP("DrawingToolbarEditorSettingsWidget", "Text"),
          Icon::Text},
         {Item::SerialNumber, "serial-number",
@@ -404,11 +417,12 @@ editorDescriptors(storage::ScreenshotToolbarLayoutKind kind) {
         {QStringLiteral("select")},
         {QStringLiteral("select-separator")},
         {QStringLiteral("shape")},
-        {QStringLiteral("distance"), QStringLiteral("line"), QStringLiteral("arrow")},
+        {QStringLiteral("angle"), QStringLiteral("distance"), QStringLiteral("line"),
+         QStringLiteral("arrow")},
         {QStringLiteral("free-draw")},
-        {QStringLiteral("spotlight"), QStringLiteral("highlighter")},
+        {QStringLiteral("magnifier"), QStringLiteral("spotlight"), QStringLiteral("highlighter")},
         {QStringLiteral("text")},
-        {QStringLiteral("serial-number")},
+        {QStringLiteral("speech-bubble"), QStringLiteral("serial-number")},
         {QStringLiteral("filter")},
         {QStringLiteral("eraser")},
         {QStringLiteral("watermark")},
@@ -680,12 +694,73 @@ normalizedLayout(const storage::ScreenshotToolbarLayout& input, const QStringLis
             hidden.insert(QStringLiteral("latex-recognition"));
         }
     }
+    auto previousDrawingDefaults = defaultLayout;
+    QStringList missingAnnotations;
+    for (const QString& id :
+         {QStringLiteral("angle"), QStringLiteral("distance"), QStringLiteral("magnifier")}) {
+        if (known.contains(id) && !positioned.contains(id) && !hidden.contains(id)) {
+            missingAnnotations.push_back(id);
+            for (auto& position : previousDrawingDefaults)
+                position.removeAll(id);
+        }
+    }
+    for (auto& position : previousDrawingDefaults) {
+        for (const QString& id : result.hidden)
+            position.removeAll(id);
+    }
+    previousDrawingDefaults.removeIf(
+        [](const QStringList& position) { return position.isEmpty(); });
+    if (!missingAnnotations.isEmpty() && result.positions == previousDrawingDefaults) {
+        result.positions = defaultLayout;
+        for (auto& position : result.positions) {
+            for (const QString& id : result.hidden)
+                position.removeAll(id);
+        }
+        result.positions.removeIf([](const QStringList& position) { return position.isEmpty(); });
+        for (const QString& id : missingAnnotations)
+            positioned.insert(id);
+    }
     // These controls used to be fixed ahead of the configurable drawing positions.
     for (const QString& itemId : {QStringLiteral("select-separator"), QStringLiteral("select")}) {
         if (known.contains(itemId) && !positioned.contains(itemId) && !hidden.contains(itemId)) {
             result.positions.prepend({itemId});
             positioned.insert(itemId);
         }
+    }
+    const QString magnifier = QStringLiteral("magnifier");
+    if (known.contains(magnifier) && !positioned.contains(magnifier) &&
+        !hidden.contains(magnifier)) {
+        qsizetype anchor = -1;
+        bool joined = false;
+        for (qsizetype index = 0; index < result.positions.size(); ++index) {
+            auto& position = result.positions[index];
+            const bool hasHighlight = position.contains(QStringLiteral("highlighter"));
+            const bool hasSpotlight = position.contains(QStringLiteral("spotlight"));
+            if (hasHighlight && hasSpotlight) {
+                position.prepend(magnifier);
+                joined = true;
+                break;
+            }
+            if (hasHighlight || hasSpotlight)
+                anchor = index;
+        }
+        if (!joined) {
+            qsizetype insertion = anchor + 1;
+            if (anchor < 0) {
+                insertion = result.positions.size();
+                for (qsizetype index = 0; index < result.positions.size(); ++index) {
+                    const auto& position = result.positions[index];
+                    if (position.contains(QStringLiteral("separator")) ||
+                        position.contains(QStringLiteral("undo")) ||
+                        position.contains(QStringLiteral("redo"))) {
+                        insertion = index;
+                        break;
+                    }
+                }
+            }
+            result.positions.insert(insertion, {magnifier});
+        }
+        positioned.insert(magnifier);
     }
     for (const QStringList& defaultPosition : defaultLayout) {
         QStringList missing;
@@ -864,10 +939,14 @@ moveItemToHidden(const storage::ScreenshotToolbarLayout& input,
         return custom::ToolSelect();
     case Icon::Shape:
         return custom::ToolRectangle();
+    case Icon::SpeechBubble:
+        return custom::ToolSpeechBubble();
     case Icon::Arrow:
         return custom::ToolArrow();
     case Icon::Distance:
         return custom::DistanceAnnotation();
+    case Icon::Angle:
+        return custom::AngleAnnotation();
     case Icon::Line:
         return custom::ToolLine();
     case Icon::FreeDraw:
@@ -876,6 +955,8 @@ moveItemToHidden(const storage::ScreenshotToolbarLayout& input,
         return custom::ToolHighlight();
     case Icon::Spotlight:
         return custom::ToolSpotlight();
+    case Icon::Magnifier:
+        return custom::ToolMagnifier();
     case Icon::Text:
         return custom::ToolText();
     case Icon::SerialNumber:

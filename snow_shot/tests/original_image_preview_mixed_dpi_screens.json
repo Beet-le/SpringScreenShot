@@ -1,0 +1,22 @@
+{
+  "screens": [
+    {
+      "name": "retina",
+      "x": 0,
+      "y": 0,
+      "width": 1920,
+      "height": 1080,
+      "dpr": 1
+    },
+    {
+      "name": "external",
+      "x": 1920,
+      "y": 0,
+      "width": 3840,
+      "height": 2400,
+      "dpr": 1
+    }
+  ],
+  "windowFrameMargins": false,
+  "synchronousWindowSystemEvents": true
+}

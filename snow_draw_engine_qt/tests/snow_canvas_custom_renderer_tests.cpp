@@ -7,6 +7,7 @@
 #include "snow_canvas_renderer.h"
 #include "snow_canvas_fill_render.h"
 #include "snow_canvas_watermark_renderer.h"
+#include "snow_canvas_compositor.h"
 #include "snow_canvas_runtime_access.h"
 #include "snow_canvas_runtime_cleanup.h"
 #include "snow_canvas_viewport.h"
@@ -89,6 +90,47 @@ QImage renderCanvas(SnowCanvasWidget& canvas) {
     canvas.render(&painter);
     painter.end();
     return image;
+}
+
+void opaqueCustomBackgroundSkipsOnlyRedundantCanvasClearing() {
+    class CoverageRenderer final : public SnowCanvasCustomRenderer {
+      public:
+        bool covered = false;
+        bool coversWidgetRect(const QRect&) const override {
+            return covered;
+        }
+    } renderer;
+    QWidget widget;
+    widget.resize(24, 16);
+    SceneDisplayInfo sceneInfo{};
+    sceneInfo.clear_color = SnowColorRgba8{12, 34, 56, 255};
+    snow_canvas_compositor::Frame frame;
+    frame.widget = &widget;
+    frame.sceneInfo = &sceneInfo;
+    frame.backgroundRenderer = &renderer;
+    QImage image(widget.size(), QImage::Format_ARGB32_Premultiplied);
+    const QColor previous(210, 90, 180);
+    const auto clear = [&]() {
+        image.fill(previous);
+        QPainter painter(&image);
+        painter.setClipRegion(QRegion(widget.rect()));
+        snow_canvas_compositor::clearSurface(painter, frame);
+    };
+    clear();
+    require(image.pixelColor(8, 8) == QColor(12, 34, 56),
+            "the default custom renderer contract must retain canvas clearing");
+    renderer.covered = true;
+    clear();
+    require(image.pixelColor(8, 8) == previous,
+            "a proven replacement background makes canvas clearing redundant");
+    renderer.covered = false;
+    clear();
+    require(image.pixelColor(8, 8) == QColor(12, 34, 56),
+            "losing background coverage must restore canvas clearing immediately");
+    frame.backgroundRenderer = nullptr;
+    clear();
+    require(image.pixelColor(8, 8) == QColor(12, 34, 56),
+            "ordinary canvases must preserve their clear behavior");
 }
 
 struct StrokeRunStats {
@@ -263,6 +305,46 @@ void ownedAxisAlignedFreeDrawChunksRenderWithoutRawGeometry() {
     item.queryPathChunks(QRectF(-50.0, -10.0, 100.0, 60.0), &visibleChunks);
     require(visibleChunks == std::vector<std::uint32_t>({0, 1}),
             "axis-aligned free-draw chunks must survive spatial culling");
+    item.queryPathChunks(QRectF(-30.0, -1.0, 10.0, 2.0), &visibleChunks);
+    require(visibleChunks == std::vector<std::uint32_t>({0}),
+            "short paths cull unrelated chunks with thin axis-aligned bounds");
+    item.queryPathChunks(QRectF(0.0, 0.0, 0.0, 0.0), &visibleChunks);
+    require(visibleChunks == std::vector<std::uint32_t>({0, 1}),
+            "short path culling retains shared boundary points");
+    item.queryPathChunks(QRectF(90.0, 90.0, 1.0, 1.0), &visibleChunks);
+    require(visibleChunks.empty(), "short path culling clears previous results on a miss");
+
+    item.arrow_text_bounds[0] = 12.0;
+    item.arrow_text_bounds[1] = 12.0;
+    item.arrow_text_bounds[2] = 24.0;
+    item.arrow_text_bounds[3] = 24.0;
+    require(!item.needsArrowTextClip(2.0) && !item.needsArrowTextClip(2.0),
+            "separated labels reuse a no-clip decision");
+    require(item.needsArrowTextClip(8.0),
+            "zoom-dependent antialias guard invalidates a no-clip decision");
+    item.arrow_text_bounds[0] = -24.0;
+    item.arrow_text_bounds[1] = -4.0;
+    item.arrow_text_bounds[2] = -12.0;
+    item.arrow_text_bounds[3] = 4.0;
+    require(item.needsArrowTextClip(2.0), "labels crossing rays keep clipping");
+    item.arrow_text_bounds[0] = 12.0;
+    item.arrow_text_bounds[1] = 12.0;
+    item.arrow_text_bounds[2] = 24.0;
+    item.arrow_text_bounds[3] = 24.0;
+    require(!item.needsArrowTextClip(2.0), "moving the label invalidates clip bounds");
+    item.stroke_width = 24.0;
+    require(item.needsArrowTextClip(2.0), "wider strokes invalidate clip decisions");
+    item.stroke_width = 6.0;
+    item.arrow_end_head = SNOW_ARROWHEAD_ARROW;
+    require(item.needsArrowTextClip(2.0), "fallback arrowheads retain conservative clipping");
+    item.arrow_end_head = SNOW_ARROWHEAD_NONE;
+    SnowCanvasSceneItem copied(item);
+    require(!copied.needsArrowTextClip(2.0), "copied geometry recomputes its clip decision");
+    commands[2].point.x = 18.0;
+    chunks[1].max_x = 18.0;
+    require(copied.applyPathGeometryPatch(0, 1, &range, 1, chunks, 2, commands, 3, false, true) &&
+                copied.needsArrowTextClip(2.0),
+            "full resets invalidate clipping even when geometry revisions are reused");
 
     SceneDisplayInfo sceneInfo{};
     sceneInfo.item_count = 1;
@@ -1332,11 +1414,19 @@ void rotationHandleCursorMatchesTheReferencePlatformBehavior() {
 
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
+    if (application.arguments().contains(QStringLiteral("--background-coverage-only"))) {
+        opaqueCustomBackgroundSkipsOnlyRedundantCanvasClearing();
+        return 0;
+    }
 #ifdef Q_OS_WIN
     require(QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/segoeui.ttf")) >= 0,
             "load Segoe UI for offscreen drawing cache checks");
     application.setFont(QFont(QStringLiteral("Segoe UI")));
 #endif
+    if (application.arguments().contains(QStringLiteral("--path-culling-only"))) {
+        ownedAxisAlignedFreeDrawChunksRenderWithoutRawGeometry();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--stroke-cursor-only"))) {
         strokeCursorsUseNativeBitmapsAndRefreshWithStyle();
         return 0;

@@ -1,5 +1,8 @@
 #pragma once
 
+#include "snow_canvas_image_source_types.h"
+
+#include <QList>
 #include <QRect>
 #include <QRegion>
 #include <QTransform>
@@ -35,11 +38,19 @@ class SnowCanvasCustomRenderer {
     // can keep eraser source tiles stable; the default follows contentRevision().
     [[nodiscard]] virtual std::uint64_t originalBackgroundRevision() const;
 
+    // Shared original image layers in paint order, in canvas coordinates. Decorations,
+    // annotations and temporary effect previews must not be included.
+    [[nodiscard]] virtual QList<SnowCanvasBaseImageSource> baseImageSources() const;
+
     // Retain the background and scene at this resolution when filters are present.
     // Zoom, viewport size, and display DPR only transform the retained output.
     // The rectangle must cover the complete scene presented by the host.
     [[nodiscard]] virtual std::optional<SnowCanvasFilterRenderReference>
     filterRenderReference() const;
+
+    // True only if renderBeforeCanvas replaces every pixel of this widget-space
+    // rectangle. Allows the canvas to omit a redundant background fill.
+    [[nodiscard]] virtual bool coversWidgetRect(const QRect& widgetRect) const;
 
     // Releases derived data while preserving the sources and rendered content.
     virtual void clearRenderState();

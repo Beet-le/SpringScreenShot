@@ -46,6 +46,10 @@
             <translation>無法插入標註範本</translation>
         </message>
         <message>
+            <source>Could not open the selected image file: %1</source>
+            <translation>無法開啟所選影像檔案：%1</translation>
+        </message>
+        <message>
             <source>Could not read the selected files from Finder. Please try again.</source>
             <translation>無法讀取 Finder 中所選的檔案，請再試一次。</translation>
         </message>
@@ -130,6 +134,10 @@
             <translation>無法還原固定到螢幕視窗</translation>
         </message>
         <message>
+            <source>The pinned windows could not be hidden</source>
+            <translation>無法隱藏固定到螢幕視窗</translation>
+        </message>
+        <message>
             <source>The recognition text could not be saved: %1</source>
             <translation>無法儲存辨識文字：%1</translation>
         </message>
@@ -198,10 +206,6 @@
         <message>
             <source>Loading screenshot history</source>
             <translation>正在載入截圖歷史</translation>
-        </message>
-        <message>
-            <source>Result Preview in Progress</source>
-            <translation>正在預覽結果</translation>
         </message>
     </context>
     <context>
@@ -403,6 +407,10 @@
             <translation>9:16</translation>
         </message>
         <message>
+            <source>Aspect ratio presets</source>
+            <translation>長寬比預設</translation>
+        </message>
+        <message>
             <source>Corner radius</source>
             <translation>圓角半徑</translation>
         </message>
@@ -431,8 +439,16 @@
             <translation>像素</translation>
         </message>
         <message>
+            <source>Previous selection</source>
+            <translation>上一個選取範圍</translation>
+        </message>
+        <message>
             <source>Selection aspect ratio</source>
             <translation>選取範圍長寬比</translation>
+        </message>
+        <message>
+            <source>Selection presets</source>
+            <translation>選取範圍預設</translation>
         </message>
         <message>
             <source>Shadow width</source>
@@ -516,6 +532,13 @@
         <message>
             <source>mouse wheel</source>
             <translation>滑鼠滾輪</translation>
+        </message>
+    </context>
+    <context>
+        <name>SnowImageQtCodec</name>
+        <message>
+            <source>Could not decode animated image.</source>
+            <translation>無法解碼動畫圖片。</translation>
         </message>
     </context>
     <context>

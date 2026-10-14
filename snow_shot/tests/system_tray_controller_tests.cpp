@@ -27,6 +27,7 @@
 #include <QFileInfo>
 #include <QImage>
 #include <QImageReader>
+#include <QJsonArray>
 #include <QLineEdit>
 #include <QMenu>
 #include <QPalette>
@@ -145,6 +146,147 @@ void verifyTrayMenuPosition() {
             "mouse context requests inside the icon must retain their pointer position");
     require(systemTrayMenuPosition(QRect(), mouseClick) == mouseClick,
             "platforms without tray geometry must keep a usable pointer-based placement");
+}
+
+void verifyTraySkinDestruction(snow_shot::presentation::SystemTrayController& controller) {
+    auto& configuration = snow_shot::storage::ApplicationStorage::instance().configuration();
+    require(configuration.setValue(QStringLiteral("interface/tray_menu_skin_path"), QString()),
+            "use an unskinned tray for destruction callbacks");
+    for (int state = 0; state < 3; ++state) {
+        QPointer<adqt::widgets::AdContextMenu> menu = controller.createContextMenu();
+        menu->setNativeMenuEnabled(false);
+        if (state > 0)
+            menu->popupAt(QPoint(20, 20));
+        if (state == 2)
+            menu->dismissPopup();
+        bool settingsUpdated = false;
+        QObject::connect(menu, &QObject::destroyed, &controller, [&] {
+            // Qt emits destroyed after AdContextMenu's private state has been released,
+            // but before deleting its child observers. Settings must be safe to change here.
+            settingsUpdated =
+                configuration.setValue(QStringLiteral("interface/skin_opacity"), 70 + state);
+        });
+        delete menu.data();
+        require(!menu && settingsUpdated,
+                "tray menu teardown must detach skin settings before destruction observers run");
+        drainMenus();
+    }
+    require(configuration.setValue(QStringLiteral("interface/skin_opacity"), 100),
+            "restore skin opacity");
+}
+
+void verifyConfiguredTrayMenuOptions(snow_shot::presentation::SystemTrayController& controller) {
+    using snow_shot::storage::TraySettings;
+    auto& appStorage = snow_shot::storage::ApplicationStorage::instance();
+    require(snow_shot::storage::ExtendedFeaturesSettings().setTranslationPageEnabled(true),
+            "enable all optional tray commands");
+    QStringList options;
+    for (const auto& group :
+         snow_shot::presentation::settings::builtInTrayCommandManifest().groups) {
+        for (const auto& option : group.options)
+            options.append(option.id);
+    }
+    require(TraySettings().setMenuOptions(options) && TraySettings().menuOptions() == options,
+            "saving every tray option must preserve the final Restart App and Exit selections");
+    require(appStorage.configuration().flushNow().success,
+            "all tray selections must flush to disk");
+    snow_shot::storage::ConfigurationStore reloaded(
+        QDir(appStorage.status().effectiveDirectory).filePath(QStringLiteral("config.json")), true,
+        false, 60000);
+    QStringList persisted;
+    for (const auto& value : reloaded.value(QStringLiteral("tray/menu_options")).toArray()) {
+        persisted.append(value.toString());
+    }
+    require(persisted == options, "loading saved tray selections must preserve every option");
+    controller.setMenuOptions(persisted);
+    QPointer<adqt::widgets::AdContextMenu> menu = controller.createContextMenu();
+    QApplication::processEvents();
+    QStringList visible;
+    for (auto* action : menu->actions()) {
+        if (!action->isSeparator() && action->isVisible())
+            visible.append(action->data().toString());
+    }
+    require(visible == options, "the tray must display every persisted selection, including Exit");
+    menu->dismissPopup();
+    drainMenus();
+    require(!menu, "the configured tray session retires after dismissal");
+
+    options.removeAll(QStringLiteral("tray.restart-app"));
+    options.removeAll(QStringLiteral("tray.exit"));
+    require(TraySettings().setMenuOptions(options) && TraySettings().menuOptions() == options,
+            "a customized selection must not automatically re-enable unchecked system commands");
+    require(TraySettings().setMenuOptions({}) && TraySettings().menuOptions().isEmpty(),
+            "an intentionally empty tray selection must remain empty");
+}
+
+void verifyFullscreenSuppressionBadge(snow_shot::presentation::SystemTrayController& controller,
+                                      const QTemporaryDir& storageDirectory) {
+    using Action = snow_shot::presentation::GlobalShortcutAction;
+    auto* trayIcon =
+        controller.findChild<QSystemTrayIcon*>(QStringLiteral("snowShotSystemTrayIcon"));
+    require(trayIcon != nullptr, "fullscreen suppression requires a tray icon");
+    controller.setMenuOptions(
+        {QStringLiteral("quick.toggle-global-hotkeys"),
+         QStringLiteral("quick.toggle-disable-on-focused-fullscreen-window")});
+    QPointer<adqt::widgets::AdContextMenu> menu = controller.createContextMenu();
+    require(menu != nullptr, "fullscreen suppression requires a tray menu");
+    QAction* manualToggle = nullptr;
+    for (auto* action : menu->actions()) {
+        if (action && action->data().toString() == QStringLiteral("quick.toggle-global-hotkeys")) {
+            manualToggle = action;
+        }
+    }
+    require(manualToggle != nullptr, "the manual toggle must be available for state checks");
+    int quickActions = 0;
+    const auto connection = QObject::connect(
+        &controller, &snow_shot::presentation::SystemTrayController::quickActionRequested,
+        &controller, [&](Action) { ++quickActions; });
+    const auto artwork = [&]() { return trayIcon->icon().pixmap(QSize(32, 32), 1.0).toImage(); };
+    const auto verify = [&]() {
+        const QImage original = artwork();
+        controller.setQuickActionChecked(Action::ToggleDisableOnFocusedFullscreenWindow, true);
+        require(artwork() == original,
+                "enabling the fullscreen setting alone must not add a badge");
+        controller.setQuickActionChecked(Action::ToggleGlobalHotkeys, true);
+        const QImage disabled = artwork();
+        require(disabled != original, "manual disablement must provide the reference badge");
+        controller.setQuickActionChecked(Action::ToggleGlobalHotkeys, false);
+        controller.setFocusedFullscreenSuppressionActive(true);
+        require(
+            artwork() == disabled && !manualToggle->isChecked(),
+            "fullscreen suppression uses the disabled badge without checking the manual toggle");
+        controller.show();
+        require(artwork() == disabled, "tray refresh must retain the fullscreen suppression badge");
+        controller.setQuickActionChecked(Action::ToggleGlobalHotkeys, true);
+        controller.setFocusedFullscreenSuppressionActive(false);
+        require(artwork() == disabled && manualToggle->isChecked(),
+                "leaving fullscreen must preserve the badge when hotkeys are manually disabled");
+        controller.setFocusedFullscreenSuppressionActive(true);
+        controller.setQuickActionChecked(Action::ToggleGlobalHotkeys, false);
+        require(artwork() == disabled && !manualToggle->isChecked(),
+                "re-enabling manual hotkeys must retain the badge while fullscreen is focused");
+        controller.setFocusedFullscreenSuppressionActive(false);
+        require(artwork() == original, "clearing both disablement reasons restores tray artwork");
+    };
+    for (const auto& selection : {QStringLiteral("default"), QStringLiteral("light"),
+                                  QStringLiteral("dark"), QStringLiteral("snow-default"),
+                                  QStringLiteral("snow-light"), QStringLiteral("snow-dark")}) {
+        controller.setIconSelection(selection);
+        verify();
+    }
+    const QString customPath = storageDirectory.filePath(QStringLiteral("fullscreen-tray.png"));
+    QImage custom(32, 32, QImage::Format_ARGB32_Premultiplied);
+    custom.fill(Qt::blue);
+    require(custom.save(customPath), "save the fullscreen suppression custom icon fixture");
+    controller.setCustomIconPath(customPath);
+    verify();
+    controller.setCustomIconPath(storageDirectory.filePath(QStringLiteral("missing.png")));
+    verify();
+    require(quickActions == 0,
+            "suppression and manual state synchronization never dispatch commands");
+    QObject::disconnect(connection);
+    menu->dismissPopup();
+    drainMenus();
 }
 
 void verifyTraySkins(snow_shot::presentation::SystemTrayController& controller,
@@ -390,6 +532,46 @@ void verifyLazyGroupMenuRefresh() {
         groups.completePendingPin(QStringLiteral("lazy-tray-%1").arg(index));
 }
 
+void verifyHideShowTrayAction(snow_shot::presentation::SystemTrayController& controller) {
+    using Action = snow_shot::presentation::GlobalShortcutAction;
+    const QString id = QStringLiteral("quick.hide-show-all-windows");
+    const snow_shot::storage::TraySettings settings;
+    const auto defaults = settings.menuOptions();
+    require(!defaults.contains(id), "hide/show all windows is omitted from default tray options");
+    controller.setMenuOptions(defaults);
+    QPointer<adqt::widgets::AdContextMenu> menu = controller.createContextMenu();
+    require(!menu.isNull(), "hide/show tray action requires a context menu");
+    QAction* hideShow = nullptr;
+    for (auto* action : menu->actions())
+        if (action && action->data().toString() == id)
+            hideShow = action;
+    require(hideShow && !hideShow->isVisible() &&
+                hideShow->text() == QStringLiteral("Hide/Show All Windows"),
+            "hide/show is an optional tray action with the canonical title");
+    auto customized = defaults;
+    customized.append(id);
+    require(settings.setMenuOptions(customized) && settings.menuOptions().contains(id),
+            "customized hide/show tray inclusion persists");
+    controller.setMenuOptions(settings.menuOptions());
+    require(hideShow->isVisible(), "users can include hide/show all windows in the tray");
+    int activations = 0;
+    const auto connection = QObject::connect(
+        &controller, &snow_shot::presentation::SystemTrayController::quickActionRequested,
+        &controller, [&](Action action) {
+            require(action == Action::HideShowAllWindows,
+                    "hide/show tray action dispatches the shared global action");
+            ++activations;
+        });
+    hideShow->trigger();
+    require(activations == 1, "customized hide/show tray action activates exactly once");
+    QObject::disconnect(connection);
+    require(settings.setMenuOptions(defaults), "restore default tray options");
+    controller.setMenuOptions(defaults);
+    require(!hideShow->isVisible(), "restoring default tray options hides hide/show again");
+    menu->dismissPopup();
+    drainMenus();
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -424,6 +606,21 @@ int main(int argc, char* argv[]) {
         return 0;
     }
     snow_shot::presentation::SystemTrayController controller;
+    if (application.arguments().contains(QStringLiteral("--fullscreen-suppression-only"))) {
+        verifyFullscreenSuppressionBadge(controller, storageDirectory);
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--hide-show-tray-only"))) {
+        verifyHideShowTrayAction(controller);
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--configured-menu-only"))) {
+        verifyConfiguredTrayMenuOptions(controller);
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
 #ifdef Q_OS_MACOS
     if (application.arguments().contains(QStringLiteral("--native-menu"))) {
         int result = 1;
@@ -438,6 +635,7 @@ int main(int argc, char* argv[]) {
 #endif
     if (application.arguments().contains(QStringLiteral("--skin-only"))) {
         controller.setMenuOptions(snow_shot::storage::TraySettings().menuOptions());
+        verifyTraySkinDestruction(controller);
         verifyTraySkins(controller, storageDirectory);
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
@@ -946,6 +1144,9 @@ int main(int argc, char* argv[]) {
     auto* restoreClosedAction = actionForId(QStringLiteral("quick.restore-last-closed-windows"));
     require(restoreClosedAction && restoreClosedAction->isVisible(),
             "restore closed pins must appear in the default tray menu");
+    require(actionForId(QStringLiteral("quick.hide-show-all-windows")) &&
+                !actionForId(QStringLiteral("quick.hide-show-all-windows"))->isVisible(),
+            "hide/show all windows must be excluded from the default tray menu");
     const QStringList normalizedDefaultMenuOptions = controller.menuOptions();
     require(
         QSet<QString>(normalizedDefaultMenuOptions.cbegin(), normalizedDefaultMenuOptions.cend()) ==

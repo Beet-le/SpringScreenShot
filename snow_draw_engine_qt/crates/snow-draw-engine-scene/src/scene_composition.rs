@@ -13,6 +13,11 @@ pub(crate) fn compose_scene_items(
         camera: frame_view.camera,
         surface: frame_view.surface,
     });
+    let preview_magnifiers: HashMap<_, _> = presentation
+        .preview_magnifiers
+        .iter()
+        .map(|value| (value.id, value.magnifier))
+        .collect();
     let preview_rects: HashMap<_, _> = presentation
         .preview_elements
         .iter()
@@ -36,6 +41,16 @@ pub(crate) fn compose_scene_items(
         .cloned()
         .map(|preview| (preview.id, preview.arrow))
         .collect();
+    let preview_bubbles: HashMap<_, _> = presentation
+        .speech_bubble_previews
+        .iter()
+        .map(|(id, bubble)| (*id, bubble))
+        .collect();
+    let preview_bubble_texts: HashMap<_, _> = presentation
+        .speech_bubble_text_previews
+        .iter()
+        .map(|(id, text)| (*id, text))
+        .collect();
     let mut emitted_preview_ids = HashMap::<ElementId, bool>::new();
     let mut items = Vec::new();
     let serial_connectors = SerialConnectorEmission {
@@ -48,10 +63,22 @@ pub(crate) fn compose_scene_items(
     let mut extra: Vec<_> = preview_rects
         .keys()
         .chain(preview_arrows.keys())
+        .chain(preview_bubbles.keys())
+        .chain(preview_bubble_texts.keys())
+        .chain(preview_magnifiers.keys())
         .chain(active_existing_text.iter().map(|(id, _)| id))
         .chain(presentation.free_draw_replacement.iter().map(|(id, _)| id))
         .copied()
-        .filter(|id| model.paint_rank(*id).is_some() && present.insert(*id))
+        .filter(|id| {
+            model.element(*id).is_ok_and(|element| element.meta.visible)
+                && model.speech_bubble_id_for_text(*id).is_none_or(|owner| {
+                    model
+                        .element(owner)
+                        .is_ok_and(|element| element.meta.visible)
+                })
+                && model.paint_rank(*id).is_some()
+                && present.insert(*id)
+        })
         .collect();
     extra.sort_unstable_by_key(|id| model.paint_rank(*id));
     if !extra.is_empty() {
@@ -71,6 +98,26 @@ pub(crate) fn compose_scene_items(
     }
 
     for id in &ordered_ids {
+        if let Some(bubble) = preview_bubbles.get(id) {
+            if bounds_visible(
+                snow_draw_engine_document::speech_bubble_bounds(bubble),
+                viewport,
+            ) {
+                items.push(scene_item_from_speech_bubble(*id, bubble));
+            }
+            emitted_preview_ids.insert(*id, true);
+            continue;
+        }
+        if let Some(text) = preview_bubble_texts.get(id)
+            && active_existing_text
+                .as_ref()
+                .is_none_or(|(active, _)| active != id)
+        {
+            if bounds_visible(text_bounds(text), viewport) {
+                items.push(scene_item_from_text(*id, (*text).clone()));
+            }
+            continue;
+        }
         if let Some((target, preview)) = &presentation.free_draw_replacement
             && id == target
         {
@@ -85,6 +132,13 @@ pub(crate) fn compose_scene_items(
             emitted_preview_ids.insert(*id, true);
             if bounds_visible(text_bounds(active_text), viewport) {
                 items.push(scene_item_from_text(*id, active_text.clone()));
+            }
+            continue;
+        }
+        if let Some(value) = preview_magnifiers.get(id) {
+            emitted_preview_ids.insert(*id, true);
+            if bounds_visible(snow_draw_engine_document::magnifier_bounds(value), viewport) {
+                items.push(scene_item_from_magnifier(*id, *value));
             }
             continue;
         }
@@ -129,6 +183,17 @@ pub(crate) fn compose_scene_items(
         }
     }
 
+    for preview in &presentation.preview_magnifiers {
+        if !emitted_preview_ids.contains_key(&preview.id)
+            && bounds_visible(
+                snow_draw_engine_document::magnifier_bounds(&preview.magnifier),
+                viewport,
+            )
+        {
+            items.push(scene_item_from_magnifier(preview.id, preview.magnifier));
+            emitted_preview_ids.insert(preview.id, true);
+        }
+    }
     for preview in &presentation.preview_elements {
         if emitted_preview_ids.contains_key(&preview.id) {
             continue;
@@ -156,6 +221,14 @@ pub(crate) fn compose_scene_items(
     if let Some(preview) = presentation.creation_preview.as_ref() {
         let id = model.peek_next_element_id();
         match preview {
+            ElementCreationPreview::SpeechBubble(value) => {
+                items.push(scene_item_from_speech_bubble(id, value));
+            }
+            ElementCreationPreview::Magnifier(value)
+                if bounds_visible(snow_draw_engine_document::magnifier_bounds(value), viewport) =>
+            {
+                items.push(scene_item_from_magnifier(id, *value));
+            }
             ElementCreationPreview::Rectangle(rect)
                 if !rect.is_spotlight() && bounds_visible(rect_bounds(*rect), viewport) =>
             {
@@ -204,10 +277,28 @@ pub(crate) fn compose_scene_items(
         && active_draft.existing_id().is_none()
         && bounds_visible(text_bounds(&active_draft.text), viewport)
     {
-        items.push(scene_item_from_text(
-            active_draft.display_id(),
-            active_draft.text.clone(),
-        ));
+        let item = scene_item_from_text(active_draft.display_id(), active_draft.text.clone());
+        if let snow_draw_engine_editor::ActiveTextDraftTarget::NewSpeechBubble(owner) =
+            active_draft.target
+        {
+            if model
+                .element(owner)
+                .is_ok_and(|element| element.meta.visible)
+                && let Some(rank) = model.paint_rank(owner)
+            {
+                let position = items
+                    .iter()
+                    .position(|item| {
+                        scene_element_id(item)
+                            .and_then(|id| model.paint_rank(id))
+                            .is_none_or(|item_rank| item_rank > rank)
+                    })
+                    .unwrap_or(items.len());
+                items.insert(position, item);
+            }
+        } else {
+            items.push(item);
+        }
     }
 
     for item in &mut items {
@@ -237,7 +328,18 @@ pub(crate) fn compose_scene_items(
         }
         items.extend(copies);
     }
-    if presentation.creation_preview.is_some() || presentation.duplicate_preview.is_some() {
+    let smart_erase_creation = presentation
+        .creation_preview
+        .as_ref()
+        .is_some_and(|preview| {
+            let kind = match preview {
+                ElementCreationPreview::Filter(filter) => Some(filter.filter_type),
+                ElementCreationPreview::PenFilter(filter) => Some(filter.filter_type),
+                _ => None,
+            };
+            kind == Some(snow_draw_engine_document::CanvasFilterType::SmartErase)
+        });
+    if smart_erase_creation || presentation.duplicate_preview.is_some() {
         // Smart Erase previews keep the fixed bottom layer.
         items.sort_by_key(|item| match item {
             SceneDisplayItem::Filter(f)
@@ -257,13 +359,23 @@ pub(crate) fn compose_scene_items(
     items
 }
 
+fn new_bound_text_draft_owner(
+    draft: &snow_draw_engine_editor::ActiveTextDraftPresentation,
+) -> Option<ElementId> {
+    match draft.target {
+        snow_draw_engine_editor::ActiveTextDraftTarget::NewArrow(owner)
+        | snow_draw_engine_editor::ActiveTextDraftTarget::NewSpeechBubble(owner) => Some(owner),
+        _ => None,
+    }
+}
+
 pub(crate) fn compose_scene_render_plan(
     cache: &DocumentSceneCache,
     model: &DocumentModel,
     presentation: &EditorPresentationState,
     items: &[SceneDisplayItem],
 ) -> Vec<snow_draw_engine_display::SceneRenderRun> {
-    use crate::scene_order::{OrderNode, SceneOrderPlan};
+    use crate::scene_order::{OrderNode, PreviewOrderKey, SceneOrderPlan};
     let mut overrides = HashMap::new();
     for preview in &presentation.preview_elements {
         let node = scene_item_from_selection_preview(model, preview.id, preview.rect, None)
@@ -292,18 +404,84 @@ pub(crate) fn compose_scene_render_plan(
             }),
         );
     }
-    if presentation.creation_preview.is_none()
-        && presentation.duplicate_preview.is_none()
-        && presentation
-            .active_text_draft
-            .as_ref()
-            .is_none_or(|draft| draft.existing_id().is_some())
-        && overrides
-            .iter()
-            .all(|(id, node)| cache.order_plan.node(*id) == node.as_ref())
+    let unchanged_overrides = overrides
+        .iter()
+        .all(|(id, node)| cache.order_plan.node(*id) == node.as_ref());
+    let creation = presentation.creation_preview.as_ref().and_then(|preview| {
+        let id = model.peek_next_element_id();
+        let item = match preview {
+            ElementCreationPreview::Filter(filter) => Some(scene_item_from_filter(id, *filter)),
+            ElementCreationPreview::PenFilter(filter) => {
+                scene_item_from_pen_filter_preview(id, filter).map(|(item, _)| item)
+            }
+            ElementCreationPreview::Arrow(arrow) if arrow_is_degenerate(arrow) => None,
+            ElementCreationPreview::Rectangle(rect) if rect.is_spotlight() => None,
+            _ => Some(SceneDisplayItem::Image),
+        };
+        item.as_ref().map(|item| OrderNode::new(id, item))
+    });
+    let draft = presentation.active_text_draft.as_ref().and_then(|draft| {
+        if draft.existing_id().is_some() {
+            return None;
+        }
+        let node = OrderNode {
+            id: draft.display_id(),
+            effect: None,
+            smart_erase: false,
+        };
+        if let Some(owner) = new_bound_text_draft_owner(draft) {
+            model
+                .element(owner)
+                .is_ok_and(|element| element.meta.visible)
+                .then(|| model.paint_rank(owner))
+                .flatten()
+                .map(|rank| (node, Some(rank)))
+        } else {
+            Some((node, None))
+        }
+    });
+    // Appended drawables cannot change earlier filter memberships. A new label
+    // after an existing drawable shares the owner's already-present boundary.
+    let draft_preserves_boundaries = draft.is_none_or(|(_, rank)| {
+        rank.is_none()
+            || presentation
+                .active_text_draft
+                .as_ref()
+                .and_then(new_bound_text_draft_owner)
+                .is_some_and(|owner| {
+                    cache
+                        .order_plan
+                        .node(owner)
+                        .is_some_and(|node| node.effect.is_none())
+                })
+    });
+    if presentation.duplicate_preview.is_none()
+        && unchanged_overrides
+        && creation.is_none_or(|node| node.effect.is_none() && !node.smart_erase)
+        && draft_preserves_boundaries
     {
         return cache.order_plan.project(items);
     }
+    let key = (presentation.duplicate_preview.is_none() && unchanged_overrides).then(|| {
+        PreviewOrderKey {
+            base_generation: cache.order_plan_generation(),
+            creation,
+            creation_label: presentation
+                .distance_creation_text
+                .as_ref()
+                .map(|(id, _)| *id),
+            draft,
+        }
+    });
+    if let Some(key) = &key {
+        let retained = cache.preview_order_plan.lock().expect("preview plan lock");
+        if retained.key.as_ref() == Some(key) {
+            return retained.plan.project(items);
+        }
+    }
+    cache
+        .preview_order_input_builds
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut nodes = Vec::with_capacity(cache.order_plan.nodes.len() + overrides.len());
     for node in &cache.order_plan.nodes {
         if let Some(replacement) = overrides.remove(&node.id) {
@@ -316,21 +494,7 @@ pub(crate) fn compose_scene_render_plan(
         nodes.extend(overrides.into_values().flatten());
         nodes.sort_by_key(|node| model.paint_rank(node.id).unwrap_or(u32::MAX));
     }
-    if let Some(preview) = &presentation.creation_preview {
-        let id = model.peek_next_element_id();
-        let item = match preview {
-            ElementCreationPreview::Filter(filter) => Some(scene_item_from_filter(id, *filter)),
-            ElementCreationPreview::PenFilter(filter) => {
-                scene_item_from_pen_filter_preview(id, filter).map(|(item, _)| item)
-            }
-            ElementCreationPreview::Arrow(arrow) if arrow_is_degenerate(arrow) => None,
-            ElementCreationPreview::Rectangle(rect) if rect.is_spotlight() => None,
-            _ => Some(SceneDisplayItem::Image),
-        };
-        if let Some(item) = item {
-            nodes.push(OrderNode::new(id, &item));
-        }
-    }
+    nodes.extend(creation);
     if let Some((text_id, _)) = &presentation.distance_creation_text {
         nodes.push(OrderNode {
             id: *text_id,
@@ -338,26 +502,13 @@ pub(crate) fn compose_scene_render_plan(
             smart_erase: false,
         });
     }
-    if let Some(draft) = &presentation.active_text_draft
-        && draft.existing_id().is_none()
-    {
-        let node = OrderNode {
-            id: draft.display_id(),
-            effect: None,
-            smart_erase: false,
-        };
-        if let snow_draw_engine_editor::ActiveTextDraftTarget::NewArrow(owner) = draft.target {
-            if model
-                .element(owner)
-                .is_ok_and(|element| element.meta.visible)
-                && let Some(rank) = model.paint_rank(owner)
-            {
-                let position = nodes
-                    .iter()
-                    .position(|node| model.paint_rank(node.id).is_none_or(|r| r > rank))
-                    .unwrap_or(nodes.len());
-                nodes.insert(position, node);
-            }
+    if let Some((node, rank)) = draft {
+        if let Some(rank) = rank {
+            let position = nodes
+                .iter()
+                .position(|node| model.paint_rank(node.id).is_none_or(|r| r > rank))
+                .unwrap_or(nodes.len());
+            nodes.insert(position, node);
         } else {
             nodes.push(node);
         }
@@ -379,13 +530,14 @@ pub(crate) fn compose_scene_render_plan(
         }
     });
     let mut retained = cache.preview_order_plan.lock().expect("preview plan lock");
-    if retained.nodes != nodes {
-        *retained = SceneOrderPlan::new(nodes);
+    if retained.plan.nodes != nodes {
+        retained.plan = SceneOrderPlan::new(nodes);
         cache
             .preview_order_builds
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
-    retained.project(items)
+    retained.key = key;
+    retained.plan.project(items)
 }
 
 #[derive(Debug)]
@@ -452,6 +604,9 @@ pub(crate) fn duplicate_preview_scene(
                 ElementData::SerialNumber(serial) => {
                     serial.text_element_id = serial.text_element_id.and_then(local_id);
                 }
+                ElementData::SpeechBubble(bubble) => {
+                    bubble.text_element_id = bubble.text_element_id.and_then(local_id);
+                }
                 _ => {}
             }
             compact.push(Operation::InsertElement {
@@ -507,6 +662,19 @@ fn remap_copy_display_ids(item: &mut SceneDisplayItem, ids: &[ElementId]) {
         *id = display_item_id(ids[id.index as usize]);
     };
     match item {
+        SceneDisplayItem::Magnifier(item) => {
+            remap(&mut item.lens.id);
+            if let Some(leader) = &mut item.leader {
+                remap(&mut leader.id);
+            }
+        }
+        SceneDisplayItem::SpeechBubble(item) => {
+            remap(&mut item.body.id);
+            remap(&mut item.path.id);
+            if let Some(id) = &mut item.path.bound_text_id {
+                remap(id);
+            }
+        }
         SceneDisplayItem::Rectangle(item) => remap(&mut item.id),
         SceneDisplayItem::Filter(item) => remap(&mut item.id),
         SceneDisplayItem::Text(item) => remap(&mut item.id),
@@ -527,6 +695,75 @@ fn remap_copy_display_ids(item: &mut SceneDisplayItem, ids: &[ElementId]) {
     }
 }
 
+struct ArrowTextCandidates<'a> {
+    bindings: HashMap<ElementId, ElementId>,
+    previews: HashMap<ElementId, &'a TextData>,
+}
+
+fn arrow_text_candidates<'a>(
+    items: &[SceneDisplayItem],
+    model: &DocumentModel,
+    presentation: &'a EditorPresentationState,
+    arrows: &HashMap<ElementId, ArrowData>,
+    viewport: (f64, f64, f64, f64),
+) -> ArrowTextCandidates<'a> {
+    let mut bindings = HashMap::new();
+    for item in items {
+        match item {
+            SceneDisplayItem::Arrow(arrow) => {
+                let owner = ElementId {
+                    index: arrow.id.index,
+                    generation: arrow.id.generation,
+                };
+                if let Some(text) = model.bound_text_id_for_arrow(owner) {
+                    bindings.insert(owner, text);
+                }
+            }
+            SceneDisplayItem::Text(text) => {
+                let text = ElementId {
+                    index: text.id.index,
+                    generation: text.id.generation,
+                };
+                if let Some(owner) = model.arrow_label_owner(text) {
+                    bindings.insert(owner, text);
+                }
+            }
+            _ => {}
+        }
+    }
+    // A geometry preview can move a label into view while both the committed
+    // label and the preview's rays are outside the viewport.
+    for &owner in arrows.keys() {
+        if let Some(text) = model.bound_text_id_for_arrow(owner) {
+            bindings.insert(owner, text);
+        }
+    }
+    if let Some(draft) = &presentation.active_text_draft {
+        let text = draft.display_id();
+        let owner = match draft.target {
+            snow_draw_engine_editor::ActiveTextDraftTarget::NewArrow(owner) => Some(owner),
+            _ => model.arrow_label_owner(text),
+        };
+        if let Some(owner) = owner {
+            bindings.insert(owner, text);
+        }
+    }
+    let mut previews = HashMap::new();
+    for (text_id, text) in &presentation.arrow_text_previews {
+        // Measured previews already carry their owner-derived anchor. Their
+        // measured bounds can enter the viewport independently of the owner's
+        // spatial bounds, so retain visible labels as well as candidate owners.
+        let visible = bounds_visible(text_bounds(text), viewport);
+        if let Some(owner) = model.arrow_label_owner(*text_id)
+            && (visible || bindings.contains_key(&owner))
+        {
+            bindings.insert(owner, *text_id);
+            previews.insert(*text_id, text);
+        }
+    }
+    ArrowTextCandidates { bindings, previews }
+}
+
 fn compose_arrow_text(
     items: &mut Vec<SceneDisplayItem>,
     model: &DocumentModel,
@@ -534,29 +771,25 @@ fn compose_arrow_text(
     arrows: &HashMap<ElementId, ArrowData>,
     viewport: (f64, f64, f64, f64),
 ) {
-    let previews: HashMap<_, _> = presentation
-        .arrow_text_previews
-        .iter()
-        .map(|(id, text)| (*id, text))
-        .collect();
-    let mut bindings = model.arrow_label_bindings().to_vec();
-    let new_draft = presentation.active_text_draft.as_ref().and_then(|draft| {
-        if let snow_draw_engine_editor::ActiveTextDraftTarget::NewArrow(id) = draft.target {
-            Some((id, draft.display_id()))
-        } else {
-            None
-        }
-    });
-    if let Some(binding) = new_draft {
-        bindings.push(binding);
+    let ArrowTextCandidates { bindings, previews } =
+        arrow_text_candidates(items, model, presentation, arrows, viewport);
+    if bindings.is_empty() {
+        return;
     }
-    let label_ids: std::collections::HashSet<_> = bindings
-        .iter()
-        .map(|(_, id)| display_item_id(*id))
-        .collect();
-    items.retain(
-        |item| !matches!(item, SceneDisplayItem::Text(text) if label_ids.contains(&text.id)),
-    );
+    let new_label = presentation.active_text_draft.as_ref().and_then(|draft| {
+        matches!(
+            draft.target,
+            snow_draw_engine_editor::ActiveTextDraftTarget::NewArrow(_)
+        )
+        .then(|| display_item_id(draft.display_id()))
+    });
+    items.retain(|item| {
+        !matches!(item, SceneDisplayItem::Text(text)
+            if Some(text.id) == new_label || model.arrow_label_owner(ElementId {
+                index: text.id.index,
+                generation: text.id.generation,
+            }).is_some())
+    });
     let arrow_positions: HashMap<_, _> = items
         .iter()
         .enumerate()
@@ -587,7 +820,8 @@ fn compose_arrow_text(
         else {
             continue;
         };
-        text.center = snow_draw_engine_document::arrow_text_anchor(arrow);
+        text.center = snow_draw_engine_document::angle_label_anchor(arrow, text.layout)
+            .unwrap_or_else(|| snow_draw_engine_document::arrow_text_anchor(arrow));
         text.rotation = 0.0;
         if let Ok(committed) = model.arrow(arrow_id)
             && committed.opacity > 0.0
@@ -599,14 +833,15 @@ fn compose_arrow_text(
         if !owner.meta.visible {
             continue;
         }
+        let bounds = text_bounds(&text);
         if !text.text.trim().is_empty()
             && let Some(&index) = arrow_positions.get(&display_item_id(arrow_id))
             && let SceneDisplayItem::Arrow(item) = &mut items[index]
         {
             item.bound_text_id = Some(text_display_id);
-            item.label_bounds = Some(text_bounds(&text));
+            item.label_bounds = Some(bounds);
         }
-        if !bounds_visible(text_bounds(&text), viewport) {
+        if !bounds_visible(bounds, viewport) {
             continue;
         }
         labels.push((
@@ -643,6 +878,8 @@ fn scene_element_id(item: &SceneDisplayItem) -> Option<ElementId> {
     let id = match item {
         SceneDisplayItem::Arrow(item) => item.id,
         SceneDisplayItem::Text(item) => item.id,
+        SceneDisplayItem::Magnifier(item) => item.lens.id,
+        SceneDisplayItem::SpeechBubble(item) => item.body.id,
         SceneDisplayItem::Rectangle(item) => item.id,
         SceneDisplayItem::Filter(item) => item.id,
         SceneDisplayItem::Stroke | SceneDisplayItem::Image => return None,
@@ -864,6 +1101,247 @@ mod tests {
             },
             clear_color: ColorRgba8::default(),
         }
+    }
+
+    fn angle_with_label(owner: ElementId, text_id: ElementId, vertex: Point<f64>) -> ArrowData {
+        let mut arrow = ArrowData::from_global_points(
+            &[
+                Point::new(vertex.x + 20.0, vertex.y),
+                vertex,
+                Point::new(vertex.x, vertex.y - 20.0),
+            ],
+            ColorRgba8::default(),
+            2.0,
+            StrokeStyle::Solid,
+            ArrowType::Straight,
+            None,
+            None,
+        )
+        .unwrap();
+        arrow.linear_kind = snow_draw_engine_document::LinearElementKind::Angle;
+        arrow.angle = Some(snow_draw_engine_document::AngleAnnotation::default());
+        arrow.text_element_id = Some(text_id);
+        assert_ne!(owner, text_id);
+        arrow
+    }
+
+    #[test]
+    fn arrow_text_candidates_exclude_offscreen_angle_labels() {
+        let mut model = DocumentModel::new();
+        let mut tx = Transaction::new("angle label candidates");
+        let mut previews = Vec::new();
+        for index in 0..128 {
+            let owner = ElementId {
+                index: index * 2,
+                generation: 1,
+            };
+            let text_id = ElementId {
+                index: index * 2 + 1,
+                generation: 1,
+            };
+            let vertex = Point::new(if index == 0 { 0.0 } else { 2000.0 }, 0.0);
+            let arrow = angle_with_label(owner, text_id, vertex);
+            let text = snow_draw_engine_document::angle_label(
+                &arrow,
+                Some(TextLayoutSize::new(60.0, 24.0)),
+            )
+            .unwrap();
+            tx.insert_arrow(owner, ElementMeta::default(), arrow);
+            tx.insert_text(text_id, ElementMeta::default(), text.clone());
+            previews.push((text_id, text));
+        }
+        model.apply_transaction(tx).unwrap();
+        let mut cache = DocumentSceneCache::new();
+        cache.sync(&model, None);
+        let presentation = EditorPresentationState {
+            arrow_text_previews: previews,
+            ..Default::default()
+        };
+        let items = compose_scene_items(&cache, &model, &presentation, default_frame_view());
+        assert_eq!(items.len(), 2);
+        let candidates = arrow_text_candidates(
+            &items,
+            &model,
+            &presentation,
+            &HashMap::new(),
+            canvas_viewport(default_frame_view().camera, default_frame_view().surface),
+        );
+        assert_eq!(candidates.bindings.len(), 1);
+        assert_eq!(candidates.previews.len(), 1);
+    }
+
+    #[test]
+    fn arrow_text_measured_angle_label_enters_view_without_owner_geometry() {
+        let owner = ElementId {
+            index: 0,
+            generation: 1,
+        };
+        let text_id = ElementId {
+            index: 1,
+            generation: 1,
+        };
+        let arrow = angle_with_label(owner, text_id, Point::new(-600.0, 600.0));
+        let committed = snow_draw_engine_document::angle_label(&arrow, None).unwrap();
+        let mut model = DocumentModel::new();
+        let mut tx = Transaction::new("offscreen angle");
+        tx.insert_arrow(owner, ElementMeta::default(), arrow.clone());
+        tx.insert_text(text_id, ElementMeta::default(), committed);
+        model.apply_transaction(tx).unwrap();
+        let mut cache = DocumentSceneCache::new();
+        cache.sync(&model, None);
+        let mut composer = ViewportComposer::new();
+        composer.refresh_with_presentation(
+            &cache,
+            &model,
+            default_frame_view(),
+            &EditorPresentationState::default(),
+            SnapConfig::default(),
+        );
+        assert!(composer.scene_items.is_empty());
+        let cursor = composer.current_cursor();
+        let measured =
+            snow_draw_engine_document::angle_label(&arrow, Some(TextLayoutSize::new(400.0, 40.0)))
+                .unwrap();
+        let presentation = EditorPresentationState {
+            arrow_text_previews: vec![(text_id, measured.clone())],
+            ..Default::default()
+        };
+        composer.refresh_with_presentation(
+            &cache,
+            &model,
+            default_frame_view(),
+            &presentation,
+            SnapConfig::default(),
+        );
+        assert_eq!(composer.scene_items.len(), 1);
+        let SceneDisplayItem::Text(display) = &composer.scene_items[0] else {
+            panic!("only the measured label should enter the viewport");
+        };
+        assert_close(display.center_x, measured.center.x);
+        assert_close(display.center_y, measured.center.y);
+        let patch = composer.acquire_patch(Some(cursor));
+        assert!(!patch.scene.reset);
+        assert_eq!(patch.scene.ops.len(), 1);
+        assert_eq!(patch.scene.ops[0].insert_items.len(), 1);
+        assert!(!patch.scene.dirty_regions.is_empty());
+    }
+
+    #[test]
+    fn arrow_text_angle_geometry_preview_keeps_label_only_visibility_and_opacity() {
+        let owner = ElementId {
+            index: 0,
+            generation: 1,
+        };
+        let text_id = ElementId {
+            index: 1,
+            generation: 1,
+        };
+        let mut arrow = angle_with_label(owner, text_id, Point::new(2000.0, 2000.0));
+        let text =
+            snow_draw_engine_document::angle_label(&arrow, Some(TextLayoutSize::new(400.0, 40.0)))
+                .unwrap();
+        let mut model = DocumentModel::new();
+        let mut tx = Transaction::new("offscreen angle preview");
+        tx.insert_arrow(owner, ElementMeta::default(), arrow.clone());
+        tx.insert_text(text_id, ElementMeta::default(), text);
+        model.apply_transaction(tx).unwrap();
+        let mut cache = DocumentSceneCache::new();
+        cache.sync(&model, None);
+        arrow.x -= 2600.0;
+        arrow.y -= 1400.0;
+        arrow.opacity = 0.25;
+        let presentation = EditorPresentationState {
+            preview_arrows: vec![SelectionArrowState {
+                id: owner,
+                arrow: arrow.clone(),
+            }],
+            ..Default::default()
+        };
+        let items = compose_scene_items(&cache, &model, &presentation, default_frame_view());
+        assert_eq!(items.len(), 1);
+        let SceneDisplayItem::Text(display) = &items[0] else {
+            panic!("only the preview's label should enter the viewport");
+        };
+        let expected = snow_draw_engine_document::angle_label_anchor(
+            &arrow,
+            model.text(text_id).unwrap().layout,
+        )
+        .unwrap();
+        assert_close(display.center_x, expected.x);
+        assert_close(display.center_y, expected.y);
+        assert_close(display.opacity, 0.25);
+        let mut tx = Transaction::new("hide angle owner");
+        tx.update_element_meta(
+            owner,
+            ElementMeta {
+                visible: false,
+                ..Default::default()
+            },
+        );
+        let result = model.apply_transaction(tx).unwrap();
+        cache.sync(&model, Some(&result.changes));
+        assert!(
+            compose_scene_items(&cache, &model, &presentation, default_frame_view()).is_empty()
+        );
+    }
+
+    #[test]
+    fn arrow_text_angle_label_only_uses_owner_filter_boundary() {
+        let id = |index| ElementId {
+            index,
+            generation: 1,
+        };
+        let arrow = angle_with_label(id(0), id(2), Point::new(-600.0, 600.0));
+        let mut model = DocumentModel::new();
+        let mut tx = Transaction::new("angle label filter boundary");
+        tx.insert_arrow(id(0), ElementMeta::default(), arrow.clone());
+        for index in 1..=3 {
+            if index == 2 {
+                tx.insert_text(
+                    id(2),
+                    ElementMeta::default(),
+                    snow_draw_engine_document::angle_label(&arrow, None).unwrap(),
+                );
+                continue;
+            }
+            tx.insert_filter(
+                id(index),
+                ElementMeta::default(),
+                snow_draw_engine_document::FilterData {
+                    center: Point::new(-400.0, 440.0),
+                    width: 40.0,
+                    height: 40.0,
+                    filter_type: snow_draw_engine_document::CanvasFilterType::Inversion,
+                    ..Default::default()
+                },
+            );
+        }
+        model.apply_transaction(tx).unwrap();
+        assert_eq!(model.paint_order(), &[id(0), id(2), id(1), id(3)]);
+        let mut cache = DocumentSceneCache::new();
+        cache.sync(&model, None);
+        let presentation = EditorPresentationState {
+            arrow_text_previews: vec![(
+                id(2),
+                snow_draw_engine_document::angle_label(
+                    &arrow,
+                    Some(TextLayoutSize::new(400.0, 40.0)),
+                )
+                .unwrap(),
+            )],
+            ..Default::default()
+        };
+        let items = compose_scene_items(&cache, &model, &presentation, default_frame_view());
+        assert_eq!(
+            items
+                .iter()
+                .filter_map(scene_element_id)
+                .collect::<Vec<_>>(),
+            vec![id(2), id(1), id(3)]
+        );
+        let plan = compose_scene_render_plan(&cache, &model, &presentation, &items);
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].count, 2);
     }
 
     #[test]

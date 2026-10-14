@@ -17,6 +17,7 @@
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/configurationschema.h"
 #include "snow_shot/storage/configurationstore.h"
+#include "snow_shot/storage/settingsadapters.h"
 #include "snow_shot/shortcuts/shortcutdisplayservice.h"
 #include "snow_draw_engine_qt/snow_canvas_widget.h"
 #include "snow_draw_engine_qt/snow_canvas_runtime.h"
@@ -44,6 +45,7 @@
 #include <QFrame>
 #include <QFont>
 #include <QFontDatabase>
+#include <QFontMetrics>
 #include <QGuiApplication>
 #include <QScreen>
 #include <QStyle>
@@ -67,6 +69,8 @@
 #include <QString>
 #include <QTemporaryDir>
 #include <QTimer>
+#include <QTranslator>
+#include <QWindow>
 #include <QSlider>
 #include <QSpacerItem>
 #include <QPushButton>
@@ -292,6 +296,7 @@ void recordingControlsRemainLaidOutAcrossStateChanges() {
     options.showShapeTool = false;
     options.showArrowTool = false;
     options.showDistanceTool = false;
+    options.showAngleTool = false;
     options.showRecordingControls = true;
     options.enableStyleToolbar = false;
     ScreenshotToolPalette palette(options);
@@ -745,6 +750,14 @@ void recordingEffectSettingsModal() {
         require(!swatch->pixmap().isNull(), "highlight preview must render a swatch");
         require(settings.modal != nullptr && settings.modal->isOpen(),
                 "clicking Settings must build and open the modal");
+        auto* surface = settings.modal->contentWidget()->window();
+        require(surface->isVisible() && surface->windowHandle()->isExposed() &&
+                    !surface->windowHandle()->format().hasAlpha() &&
+                    settings.modal->contentWidget()->isVisible(),
+                "each Settings open must expose an opaque window with visible form content");
+        require(surface->windowHandle()->transientParent() ==
+                    settings.modal->ownerWindow()->windowHandle(),
+                "each Settings open must retain native recording-window ownership");
         require(settings.modal == palette.findChild<adqt::widgets::AdModal*>(
                                       QStringLiteral("screenRecordingEffectSettingsModal")),
                 "the rebuilt modal must keep its object name");
@@ -766,7 +779,8 @@ void recordingEffectSettingsModal() {
         return settings;
     };
 
-    QWidget recordingOwner;
+    QWidget recordingOwner(nullptr, Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
+    recordingOwner.setAttribute(Qt::WA_TranslucentBackground);
     recordingOwner.setGeometry(40, 40, 600, 500);
     recordingOwner.move(QGuiApplication::primaryScreen()->availableGeometry().center() -
                         recordingOwner.rect().center());
@@ -2126,12 +2140,15 @@ void styleToolReuseMapPreservesEveryCompatibleRole() {
            1);
     verify(Tool::RectangleFilter, Tool::PenFilter,
            {"filter-mode", "filter-type", "filter-intensity"}, 0, 1);
-    verify(Tool::Text, Tool::SerialNumber, {"foreground-color", "text-font", "text-fill"}, 3, 3);
+    verify(Tool::Text, Tool::SerialNumber, {"foreground-color", "text-font", "text-fill"}, 4, 3);
     verify(Tool::PenHighlight, Tool::PenFilter, {"brush-width"}, 2, 3);
-    verify(Tool::Spotlight, Tool::Watermark, {"opacity"}, 2, 6);
-    verify(Tool::Shape, Tool::Spotlight, {"shape-kind"}, 4, 2);
-    verify(Tool::Shape, Tool::Text, {"corner-radius"}, 4, 5);
-    verify(Tool::Text, Tool::Watermark, {"foreground-color"}, 5, 6);
+    verify(Tool::Spotlight, Tool::Watermark, {"opacity"}, 3, 6);
+    verify(Tool::Shape, Tool::Spotlight, {"shape-kind", "corner-radius"}, 3, 2);
+    verify(Tool::Spotlight, Tool::Shape, {"shape-kind", "corner-radius"}, 2, 3);
+    verify(Tool::Spotlight, Tool::Text, {"corner-radius"}, 3, 6);
+    verify(Tool::Text, Tool::Spotlight, {"corner-radius"}, 6, 3);
+    verify(Tool::Shape, Tool::Text, {"corner-radius"}, 4, 6);
+    verify(Tool::Text, Tool::Watermark, {"foreground-color"}, 6, 6);
 }
 
 void retainedOutlineEditorsRebindStateLabelsAndCommands() {
@@ -3378,6 +3395,7 @@ void moveToolPresentationUsesTheOwningShortcutScope() {
     screenshotOptions.showShapeTool = false;
     screenshotOptions.showArrowTool = false;
     screenshotOptions.showDistanceTool = false;
+    screenshotOptions.showAngleTool = false;
     screenshotOptions.enableStyleToolbar = false;
     ScreenshotToolPalette screenshotPalette(screenshotOptions);
     const QList<adqt::widgets::AdButton*> screenshotButtons = mainToolbarButtons(screenshotPalette);
@@ -3397,6 +3415,7 @@ void moveToolPresentationUsesTheOwningShortcutScope() {
     pinnedOptions.showShapeTool = false;
     pinnedOptions.showArrowTool = false;
     pinnedOptions.showDistanceTool = false;
+    pinnedOptions.showAngleTool = false;
     pinnedOptions.enableStyleToolbar = false;
     ScreenshotToolPalette pinnedPalette(pinnedOptions);
     const QList<adqt::widgets::AdButton*> pinnedButtons = mainToolbarButtons(pinnedPalette);
@@ -3684,10 +3703,12 @@ void commandGroupsKeepFirstButtonWhenEnabled() {
 
 void configurableToolbarLayoutSupportsArbitraryPopoverGroups() {
     ScreenshotToolPalette::Options options;
+    options.showSpeechBubbleTool = false;
     options.showSelectTool = true;
     options.showShapeTool = true;
     options.showArrowTool = true;
     options.showDistanceTool = false;
+    options.showAngleTool = false;
     options.showLineTool = true;
     options.showFreeDrawTool = true;
     options.showHighlightTool = true;
@@ -3838,9 +3859,11 @@ void configurableToolbarLayoutSupportsArbitraryPopoverGroups() {
 
 void arrowAndLineUseConfiguredPopoverGroup() {
     ScreenshotToolPalette::Options options;
+    options.showSpeechBubbleTool = false;
     options.showShapeTool = false;
     options.showArrowTool = true;
     options.showDistanceTool = false;
+    options.showAngleTool = false;
     options.showLineTool = true;
     options.enableStyleToolbar = false;
     options.toolbarLayout = snow_shot::storage::ScreenshotToolbarLayout{
@@ -3990,6 +4013,80 @@ void tableBusyStatePreservesSiblingGroupPopovers(bool recoverFromMove = false) {
     verifyPopup(drawingPopup);
 }
 
+void toolbarGroupCommandsCanReplaceTheirOwningPopover() {
+    ScreenshotToolPalette::Options options;
+    options.showScreenRecordButton = true;
+    options.showOcrTool = true;
+    options.enableStyleToolbar = false;
+    options.actionToolsLayout = snow_shot::storage::ScreenshotToolbarLayout{
+        {{QStringLiteral("record-screen"), QStringLiteral("text-recognition")}}, {}};
+    ScreenshotToolPalette palette(options);
+    auto* trigger = palette.findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotActionToolGroupButton0"));
+    require(trigger != nullptr, "the replaceable action stack must expose its trigger");
+    materializeLazyPopover(trigger);
+    QPointer<adqt::widgets::AdPopover> popover(popoverForTrigger(trigger));
+    auto* record = popoverButtonWithTooltip(popover, "Record screen");
+    require(popover != nullptr && record != nullptr,
+            "the action stack must materialize its record command");
+    int requests = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::screenRecordRequested, &palette, [&]() {
+        ++requests;
+        palette.setActionToolsLayout(snow_shot::storage::ScreenshotToolbarLayout{
+            {{QStringLiteral("record-screen")}, {QStringLiteral("text-recognition")}}, {}});
+    });
+    require(QMetaObject::invokeMethod(record, "clicked", Qt::DirectConnection, Q_ARG(bool, false)),
+            "dispatch the action command across synchronous layout replacement");
+    require(requests == 1 && popover == nullptr,
+            "an action command may replace its owning group exactly once without a stale popup");
+
+    options.toolbarLayout = snow_shot::storage::ScreenshotToolbarLayout{
+        {{QStringLiteral("arrow"), QStringLiteral("line")}}, {}};
+    options.showShapeTool = false;
+    options.showLineTool = true;
+    ScreenshotToolPalette drawingPalette(options);
+    trigger = drawingPalette.findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotArrowLineButton"));
+    require(trigger != nullptr, "the replaceable drawing stack must expose its trigger");
+    materializeLazyPopover(trigger);
+    popover = popoverForTrigger(trigger);
+    auto* line = popoverButtonWithTooltip(popover, "Line");
+    require(popover != nullptr && line != nullptr,
+            "the drawing stack must materialize its line command");
+    requests = 0;
+    QObject::connect(
+        &drawingPalette, &ScreenshotToolPalette::lineRequested, &drawingPalette, [&]() {
+            ++requests;
+            drawingPalette.setToolbarLayout(snow_shot::storage::ScreenshotToolbarLayout{
+                {{QStringLiteral("arrow")}, {QStringLiteral("line")}}, {}});
+        });
+    require(QMetaObject::invokeMethod(line, "clicked", Qt::DirectConnection, Q_ARG(bool, false)),
+            "dispatch the drawing command across synchronous layout replacement");
+    require(requests == 1 && popover == nullptr,
+            "a drawing command may replace its owning group without accessing its retired popup");
+
+    ScreenshotToolPalette materializingPalette(options);
+    trigger = materializingPalette.findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotActionToolGroupButton0"));
+    popover = popoverForTrigger(trigger);
+    require(popover != nullptr, "the materializing action stack must expose its lazy popup");
+    int materializations = 0;
+    QObject::connect(
+        &materializingPalette, &ScreenshotToolPalette::materializedScope, &materializingPalette,
+        [&](QWidget* scope) {
+            if (scope->objectName() == QStringLiteral("screenshotActionToolGroupPopoverContent")) {
+                ++materializations;
+                materializingPalette.setActionToolsLayout(
+                    snow_shot::storage::ScreenshotToolbarLayout{
+                        {{QStringLiteral("record-screen")}, {QStringLiteral("text-recognition")}},
+                        {}});
+            }
+        });
+    popover->preparePopup();
+    require(materializations == 1 && popover == nullptr,
+            "a popup materialization observer may retire the originating group safely");
+}
+
 void mainToolbarGroupPopoversRecreateTheirOptions() {
     const auto flushDeferredDeletes = []() {
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
@@ -4086,6 +4183,7 @@ void mainToolbarGroupPopoversRecreateTheirOptions() {
     actionOptions.showShapeTool = false;
     actionOptions.showArrowTool = false;
     actionOptions.showDistanceTool = false;
+    actionOptions.showAngleTool = false;
     actionOptions.showTableTool = true;
     actionOptions.showQrTool = true;
     actionOptions.enableStyleToolbar = false;
@@ -4343,6 +4441,7 @@ void tableQrPopoverSharesOneEntryAndRemembersTheSelectedMode() {
     options.showShapeTool = false;
     options.showArrowTool = false;
     options.showDistanceTool = false;
+    options.showAngleTool = false;
     options.showTableTool = true;
     options.showQrTool = true;
     options.enableStyleToolbar = false;
@@ -4458,10 +4557,12 @@ void drawingGroupClicksActivateOnceAfterPointerReentry() {
         options.showShapeTool = groups.at(index).contains(QStringLiteral("shape"));
         options.showArrowTool = groups.at(index).contains(QStringLiteral("arrow"));
         options.showDistanceTool = groups.at(index).contains(QStringLiteral("distance"));
+        options.showAngleTool = groups.at(index).contains(QStringLiteral("angle"));
         options.showLineTool = groups.at(index).contains(QStringLiteral("line"));
         options.showFreeDrawTool = groups.at(index).contains(QStringLiteral("free-draw"));
         options.showHighlightTool = groups.at(index).contains(QStringLiteral("highlighter"));
         options.showSpotlightTool = groups.at(index).contains(QStringLiteral("spotlight"));
+        options.showSpeechBubbleTool = groups.at(index).contains(QStringLiteral("speech-bubble"));
         options.enableStyleToolbar = false;
         options.toolbarLayout = snow_shot::storage::ScreenshotToolbarLayout{{groups.at(index)}, {}};
         ScreenshotToolPalette palette(options);
@@ -5173,6 +5274,7 @@ void screenshotResultActionsFollowCustomLayout() {
     ScreenshotToolPalette::Options options;
     options.showSelectTool = options.showShapeTool = options.showArrowTool =
         options.showDistanceTool = false;
+    options.showAngleTool = false;
     options.showScreenRecordButton = true;
     options.enableStyleToolbar = false;
     options.actions = ScreenshotToolPalette::CancelAction | ScreenshotToolPalette::CopyAction;
@@ -5999,6 +6101,7 @@ void arrowAndLineRemainDirectWhenConfiguredIndividually() {
     arrowOptions.showShapeTool = false;
     arrowOptions.showArrowTool = true;
     arrowOptions.showDistanceTool = false;
+    arrowOptions.showAngleTool = false;
     arrowOptions.enableStyleToolbar = false;
     ScreenshotToolPalette arrowPalette(arrowOptions);
     const QList<adqt::widgets::AdButton*> arrowButtons = mainToolbarButtons(arrowPalette);
@@ -6012,6 +6115,7 @@ void arrowAndLineRemainDirectWhenConfiguredIndividually() {
     lineOptions.showShapeTool = false;
     lineOptions.showArrowTool = false;
     lineOptions.showDistanceTool = false;
+    lineOptions.showAngleTool = false;
     lineOptions.showLineTool = true;
     lineOptions.enableStyleToolbar = false;
     ScreenshotToolPalette linePalette(lineOptions);
@@ -6796,6 +6900,407 @@ void originalImageToggleLeadsRecognitionActions() {
             "selection toolbar does not show the toggle");
 }
 
+void latexHistoryActionsUseFormulaHistory() {
+    ScreenshotToolPalette::Options options;
+    options.showHistoryActions = true;
+    options.showSelectTool = true;
+    options.showImageConversionTools = true;
+    ScreenshotToolPalette palette(options);
+    palette.setHistoryState({true, true});
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Latex);
+    palette.setLatexEditingState(false, false, false);
+    require(!palette.canActivateScreenshotShortcut(QStringLiteral("undo")) &&
+                !palette.canActivateScreenshotShortcut(QStringLiteral("redo")),
+            "LaTeX history does not inherit available canvas history");
+    int undos = 0;
+    int redos = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::undoRequested, &palette, [&]() { ++undos; });
+    QObject::connect(&palette, &ScreenshotToolPalette::redoRequested, &palette, [&]() { ++redos; });
+    palette.setLatexEditingState(true, true, false);
+    require(palette.activateScreenshotShortcut(QStringLiteral("undo")) && undos == 1 &&
+                !palette.canActivateScreenshotShortcut(QStringLiteral("redo")),
+            "LaTeX undo is enabled only by formula history");
+    palette.setLatexEditingState(true, false, true);
+    require(palette.activateScreenshotShortcut(QStringLiteral("redo")) && redos == 1 &&
+                !palette.canActivateScreenshotShortcut(QStringLiteral("undo")),
+            "LaTeX redo follows formula history");
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Qr);
+    require(!palette.canActivateScreenshotShortcut(QStringLiteral("redo")),
+            "leaving LaTeX does not expose its history in QR mode");
+}
+
+void recognitionModelsDefaultToDedicated() {
+    using Tool = ScreenshotToolPalette::Tool;
+    using adqt::widgets::AdSelect;
+    for (const Tool tool : {Tool::Table, Tool::Latex}) {
+        ScreenshotToolPalette::Options options;
+        options.showTableTool = true;
+        options.showImageConversionTools = true;
+        ScreenshotToolPalette palette(options);
+        int modelChanges = 0;
+        QObject::connect(&palette, &ScreenshotToolPalette::recognitionModelChanged, &palette,
+                         [&](const QString&) { ++modelChanges; });
+        palette.setActiveTool(tool);
+        auto* select =
+            palette.findChild<AdSelect*>(QStringLiteral("screenshotRecognitionModelSelect"));
+        require(select &&
+                    select->currentValue().toString() == screenshotDedicatedRecognitionModelId() &&
+                    modelChanges == 0,
+                "Table and LaTeX selectors initially choose their dedicated models silently");
+        palette.setRecognitionModelState(tool, {});
+        require(select->currentValue().toString() == screenshotDedicatedRecognitionModelId() &&
+                    modelChanges == 0,
+                "empty Table and LaTeX model states fall back to their dedicated models silently");
+    }
+}
+
+void recognitionModelSelectorGroupsOptionsAndRetainsIndependentSelections() {
+    recognitionModelsDefaultToDedicated();
+    using Tool = ScreenshotToolPalette::Tool;
+    using adqt::widgets::AdSelect;
+    ScreenshotToolPalette::Options options;
+    options.showTableTool = true;
+    options.showQrTool = true;
+    options.showImageConversionTools = true;
+    options.showSelectTool = true;
+    ScreenshotToolPalette palette(options);
+    ScreenshotRecognitionModelState tableState;
+    tableState.selection = screenshotDedicatedRecognitionModelId();
+    tableState.models = {
+        {QStringLiteral("text"), QStringLiteral("Text-only model"), false,
+         QStringLiteral("default"), false},
+        {QStringLiteral("vision-default"), QStringLiteral("First server vision model"), false,
+         QStringLiteral("default"), true},
+        {QStringLiteral("vision-other"), QStringLiteral("Other vision model"), false,
+         QStringLiteral("default"), true},
+        {QStringLiteral("custom:vision"), QStringLiteral("A long custom vision model name"), false,
+         QStringLiteral("default"), true},
+        {QStringLiteral("custom:vision-other"), QStringLiteral("Second custom vision model"), false,
+         QStringLiteral("default"), true},
+        {QStringLiteral("custom:text"), QStringLiteral("Custom text-only model"), false,
+         QStringLiteral("default"), false},
+        {QStringLiteral("vision-default"), QStringLiteral("Duplicate vision model"), false,
+         QStringLiteral("default"), true},
+        {screenshotDedicatedRecognitionModelId(), QStringLiteral("Reserved dedicated identity"),
+         false, QStringLiteral("default"), true},
+        {screenshotDefaultVisionRecognitionModelId(), QStringLiteral("Reserved default identity"),
+         false, QStringLiteral("default"), true},
+    };
+    palette.setRecognitionModelState(Tool::Table, tableState);
+    auto latexState = tableState;
+    latexState.selection = screenshotDefaultVisionRecognitionModelId();
+    palette.setRecognitionModelState(Tool::Latex, latexState);
+    require(palette.findChild<AdSelect*>(QStringLiteral("screenshotRecognitionModelSelect")) ==
+                nullptr,
+            "publishing recognition models must not materialize an inactive toolbar");
+    int modelChanges = 0;
+    QString lastSelection;
+    QObject::connect(&palette, &ScreenshotToolPalette::recognitionModelChanged, &palette,
+                     [&](const QString& selection) {
+                         ++modelChanges;
+                         lastSelection = selection;
+                     });
+    palette.setActiveTool(Tool::Table);
+    auto* select = palette.findChild<AdSelect*>(QStringLiteral("screenshotRecognitionModelSelect"));
+    require(select != nullptr && !select->isHidden() &&
+                select->currentValue().toString() == screenshotDedicatedRecognitionModelId() &&
+                modelChanges == 0,
+            "Table must default to Dedicated Model without emitting a recognition request");
+    const auto requireCatalogOptions = [&](const QString& dedicatedLabel) {
+        const auto grouped = select->options();
+        const QStringList expectedIds{
+            screenshotDedicatedRecognitionModelId(), QStringLiteral("vision-default"),
+            QStringLiteral("vision-other"), QStringLiteral("custom:vision"),
+            QStringLiteral("custom:vision-other")};
+        const QStringList expectedLabels{
+            dedicatedLabel, QStringLiteral("First server vision model"),
+            QStringLiteral("Other vision model"), QStringLiteral("A long custom vision model name"),
+            QStringLiteral("Second custom vision model")};
+        require(grouped.size() == expectedIds.size(),
+                "catalog options must include every server and custom vision model and exclude "
+                "both kinds of text-only model");
+        for (qsizetype index = 0; index < grouped.size(); ++index) {
+            require(grouped[index].value.toString() == expectedIds[index] &&
+                        grouped[index].label == expectedLabels[index] && !grouped[index].disabled &&
+                        grouped[index].group == (index == 0 ? QStringLiteral("Dedicated Model")
+                                                            : QStringLiteral("Vision Model")),
+                    "each grouped recognition option must preserve its exact model identity and "
+                    "name, including the first server vision model");
+        }
+    };
+    requireCatalogOptions(QStringLiteral("Table-Specific Model"));
+    auto* layout = qobject_cast<QBoxLayout*>(palette.actionPanel()->layout());
+    require(layout != nullptr && layout->itemAt(layout->count() - 1)->widget() == select &&
+                select->accessibleName() == QStringLiteral("Recognition model"),
+            "recognition model selection must be the named far-right sub-toolbar control");
+    select->setCurrentValue(QStringLiteral("vision-default"));
+    require(modelChanges == 1 && lastSelection == QStringLiteral("vision-default") &&
+                select->currentValue().toString() == QStringLiteral("vision-default") &&
+                select->toolTip() == QStringLiteral("First server vision model"),
+            "choosing the first server model must emit its real ID and display its catalog name");
+    tableState.selection = QStringLiteral("vision-default");
+    palette.setRecognitionModelState(Tool::Table, tableState);
+    require(modelChanges == 1 &&
+                select->currentValue().toString() == QStringLiteral("vision-default"),
+            "restoring an explicit first-server selection must not turn it into a semantic alias");
+    select->setCurrentValue(QStringLiteral("custom:vision"));
+    require(modelChanges == 2 && lastSelection == QStringLiteral("custom:vision") &&
+                select->toolTip() == QStringLiteral("A long custom vision model name") &&
+                select->accessibleDescription() == select->toolTip(),
+            "a model change must emit once and expose the complete model name");
+    palette.setTableBusy(true);
+    require(select->isEnabled(), "model selection must remain available while recognition is busy");
+    palette.setActiveTool(Tool::Latex);
+    require(select->currentValue().toString() == QStringLiteral("vision-default") &&
+                select->toolTip() == QStringLiteral("First server vision model") &&
+                !select->isHidden() && modelChanges == 2,
+            "LaTeX must display the default server model's real identity without emitting a model "
+            "choice");
+    requireCatalogOptions(QStringLiteral("LaTeX-Specific Model"));
+    std::swap(latexState.models[1], latexState.models[2]);
+    latexState.effectiveModel = QStringLiteral("vision-default");
+    palette.setRecognitionModelState(Tool::Latex, latexState);
+    require(select->currentValue().toString() == QStringLiteral("vision-default") &&
+                select->toolTip() == QStringLiteral("First server vision model") &&
+                modelChanges == 2,
+            "a semantic default must display the active extraction model when catalog order "
+            "changes without emitting a model choice");
+    latexState.effectiveModel.clear();
+    palette.setRecognitionModelState(Tool::Latex, latexState);
+    require(select->currentValue().toString() == QStringLiteral("vision-other") &&
+                select->toolTip() == QStringLiteral("Other vision model") && modelChanges == 2,
+            "an unbound semantic default must follow the first server vision model without "
+            "emitting a model choice");
+    select->setCurrentValue(QStringLiteral("vision-default"));
+    require(select->currentValue().toString() == QStringLiteral("vision-default") &&
+                lastSelection == QStringLiteral("vision-default") && modelChanges == 3,
+            "choosing the original first server model after another model must retain its real "
+            "identity");
+    latexState.selection = QStringLiteral("vision-default");
+    std::swap(latexState.models[1], latexState.models[2]);
+    palette.setRecognitionModelState(Tool::Latex, latexState);
+    require(select->currentValue().toString() == QStringLiteral("vision-default") &&
+                select->toolTip() == QStringLiteral("First server vision model") &&
+                modelChanges == 3,
+            "an explicit first-server choice must survive catalog reordering without becoming a "
+            "semantic default or replaying a signal");
+    select->setCurrentValue(screenshotDedicatedRecognitionModelId());
+    require(modelChanges == 4, "LaTeX must permit choosing its dedicated recognition model");
+    palette.setActiveTool(Tool::Qr);
+    palette.setRecognitionModelState(Tool::Qr, tableState);
+    require(select->isHidden() && modelChanges == 4,
+            "barcode recognition must neither display nor accept a recognition model selector");
+    palette.setActiveTool(Tool::Table);
+    require(select->currentValue().toString() == QStringLiteral("custom:vision") &&
+                modelChanges == 4,
+            "returning to Table must retain its separate selection without requesting work");
+    palette.setActiveTool(Tool::Select);
+    require(palette.findChild<AdSelect*>(QStringLiteral("screenshotRecognitionModelSelect")) ==
+                nullptr,
+            "leaving recognition must evict its model selector");
+    palette.setActiveTool(Tool::Latex);
+    select = palette.findChild<AdSelect*>(QStringLiteral("screenshotRecognitionModelSelect"));
+    require(select != nullptr &&
+                select->currentValue().toString() == screenshotDedicatedRecognitionModelId() &&
+                modelChanges == 4,
+            "rehydrating LaTeX must retain its selection and suppress replay signals");
+    latexState.selection = screenshotDefaultVisionRecognitionModelId();
+    latexState.models = {
+        {QStringLiteral("custom:vision"), QStringLiteral("A long custom vision model name"), false,
+         QStringLiteral("default"), true},
+        {QStringLiteral("custom:vision-other"), QStringLiteral("Second custom vision model"), false,
+         QStringLiteral("default"), true},
+    };
+    latexState.loading = true;
+    palette.setRecognitionModelState(Tool::Latex, latexState);
+    const auto unavailableDefault = select->options();
+    require(unavailableDefault.size() == 4 &&
+                unavailableDefault[0].label == QStringLiteral("LaTeX-Specific Model") &&
+                unavailableDefault[1].value.toString() == QStringLiteral("custom:vision") &&
+                unavailableDefault[2].value.toString() == QStringLiteral("custom:vision-other") &&
+                unavailableDefault[3].value.toString() ==
+                    screenshotDefaultVisionRecognitionModelId() &&
+                unavailableDefault[3].label == QStringLiteral("Snow Shot visual understanding") &&
+                unavailableDefault[3].disabled && !select->currentValue().isValid() &&
+                select->placeholder() == QStringLiteral("Snow Shot visual understanding") &&
+                select->lineEdit()->placeholderText() == select->placeholder() &&
+                select->loading() && modelChanges == 4,
+            "an unresolved server default must stay a disabled placeholder alongside all custom "
+            "vision models without choosing a custom fallback");
+}
+
+void recognitionModelSelectorPreservesPopupStateAndScalesAndRetranslates() {
+    using Tool = ScreenshotToolPalette::Tool;
+    using adqt::widgets::AdSelect;
+    ScreenshotToolPalette::Options options;
+    options.showTableTool = true;
+    options.showSelectTool = true;
+    options.showImageConversionTools = true;
+    ScreenshotToolPalette palette(options);
+    ScreenshotRecognitionModelState state;
+    state.selection = QStringLiteral("custom:vision");
+    const QString longName =
+        QStringLiteral("Long custom vision model name that remains available in the full tooltip");
+    state.models = {
+        {QStringLiteral("custom:vision"), longName, false, QStringLiteral("default"), true}};
+    palette.setRecognitionModelState(Tool::Table, state);
+    palette.setRecognitionModelState(Tool::Latex, state);
+    palette.setActiveTool(Tool::Table);
+    palette.show();
+    QCoreApplication::processEvents();
+    auto* select = palette.findChild<AdSelect*>(QStringLiteral("screenshotRecognitionModelSelect"));
+    require(select != nullptr, "recognition selector must materialize");
+    const auto customOnly = select->options();
+    require(customOnly.size() == 2 &&
+                customOnly[0].value.toString() == screenshotDedicatedRecognitionModelId() &&
+                customOnly[1].value.toString() == QStringLiteral("custom:vision") &&
+                customOnly[1].label == longName,
+            "an explicit custom selection must not add an unused semantic-default placeholder");
+    select->setPopupVisible(true);
+    QCoreApplication::processEvents();
+    select->setSearchText(QStringLiteral("Long"));
+    auto* originalModel = select->model();
+    palette.setRecognitionModelState(Tool::Table, state);
+    require(select->model() == originalModel && select->searchText() == QStringLiteral("Long") &&
+                select->popupVisible(),
+            "unchanged recognition state must preserve the open model popup and search");
+    state.loading = true;
+    state.error = QStringLiteral("Unable to load vision models");
+    palette.setRecognitionModelState(Tool::Table, state);
+    require(select->isEnabled() && select->loading() &&
+                select->status() == AdSelect::Status::Warning &&
+                select->toolTip().contains(state.error) && select->toolTip().contains(longName) &&
+                select->accessibleDescription() == select->toolTip() && select->width() == 200 &&
+                select->lineEdit()->fontMetrics().horizontalAdvance(longName) >
+                    select->lineEdit()->width(),
+            "model loading failures must keep dedicated and cached model choices usable");
+    select->setPopupVisible(false);
+    int keyboardSelections = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::recognitionModelChanged, &palette,
+                     [&](const QString&) { ++keyboardSelections; });
+    PhysicalKeyEvent open(QEvent::KeyPress, Qt::Key_Down, Qt::NoModifier);
+    QApplication::sendEvent(select, &open);
+    QCoreApplication::processEvents();
+    auto* input = select->lineEdit();
+    auto* view = select->view();
+    require(select->popupVisible() && select->loading() && input && !input->isReadOnly() && view &&
+                view->isVisible() && view->window()->isVisible() &&
+                select->screen()->availableGeometry().contains(
+                    QRect(view->mapToGlobal(QPoint()), view->size())),
+            "keyboard opening during model loading must show a usable popup inside screen bounds");
+    input->selectAll();
+    PhysicalKeyEvent search(QEvent::KeyPress, Qt::Key_unknown, Qt::NoModifier,
+                            QStringLiteral("Table-Specific Model"));
+    QApplication::sendEvent(input, &search);
+    QCoreApplication::processEvents();
+    require(select->searchText() == QStringLiteral("Table-Specific Model") &&
+                view->model()->rowCount() == 2 && keyboardSelections == 0,
+            "typing while model loading must filter grouped options without committing a model");
+    PhysicalKeyEvent home(QEvent::KeyPress, Qt::Key_Home, Qt::NoModifier);
+    QApplication::sendEvent(input, &home);
+    PhysicalKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QApplication::sendEvent(input, &enter);
+    QCoreApplication::processEvents();
+    require(select->currentValue().toString() == screenshotDedicatedRecognitionModelId() &&
+                keyboardSelections == 1 && select->loading() && !select->popupVisible() &&
+                select->searchText().isEmpty(),
+            "Enter must commit the searched model exactly once and close its popup while loading");
+    palette.setRecognitionModelState(Tool::Table, state);
+    require(keyboardSelections == 1 && select->currentValue().toString() == state.selection,
+            "replaying the selected loading state must not emit another model change");
+    adqt::widgets::AdControlScaleScope scaleScope(&palette);
+    for (const qreal scale : {1.0, 0.64, 1.25, 0.8}) {
+        scaleScope.publishScale(
+            adqt::widgets::AdControlScaleContext::fromDprsAndContentScale(1.0, 1.0, scale));
+        palette.setPhysicalScale(scale);
+        require(select->width() == qRound(200 * scale) && select->height() == qRound(32 * scale),
+                "recognition model select must follow fractional toolbar scaling");
+        select->setStatus(AdSelect::Status::None);
+        select->setStatus(AdSelect::Status::Warning);
+        require(select->height() == qRound(32 * scale),
+                "style refresh must retain the recognition model selector height");
+    }
+    auto defaultState = state;
+    defaultState.selection = screenshotDefaultVisionRecognitionModelId();
+    palette.setRecognitionModelState(Tool::Table, defaultState);
+    palette.setRecognitionModelState(Tool::Latex, defaultState);
+    class RecognitionTranslator final : public QTranslator {
+      public:
+        bool isEmpty() const override {
+            return false;
+        }
+        QString translate(const char* context, const char* source, const char*,
+                          int) const override {
+            if (qstrcmp(context, "ScreenshotToolPalette") == 0) {
+                return QStringLiteral("Translated ") + QString::fromUtf8(source);
+            }
+            return {};
+        }
+    } translator;
+    QCoreApplication::installTranslator(&translator);
+    QCoreApplication::processEvents();
+    const auto translated = select->options();
+    require(
+        translated.size() == 3 &&
+            select->accessibleName() == QStringLiteral("Translated Recognition model") &&
+            translated[0].label == QStringLiteral("Translated Table-Specific Model") &&
+            translated[0].group == QStringLiteral("Translated Dedicated Model") &&
+            translated[1].group == QStringLiteral("Translated Vision Model") &&
+            translated[1].value.toString() == QStringLiteral("custom:vision") &&
+            translated[1].label == longName && translated[2].group == translated[1].group &&
+            translated[2].label == QStringLiteral("Translated Snow Shot visual understanding") &&
+            translated[2].disabled && !select->currentValue().isValid() &&
+            select->placeholder() == QStringLiteral("Translated Snow Shot visual understanding") &&
+            select->lineEdit()->placeholderText() == select->placeholder(),
+        "language changes must translate recognition groups while preserving model identities");
+    palette.setActiveTool(Tool::Latex);
+    const auto translatedLatex = select->options();
+    require(translatedLatex.size() == 3 &&
+                translatedLatex[0].label == QStringLiteral("Translated LaTeX-Specific Model") &&
+                translatedLatex[0].group == QStringLiteral("Translated Dedicated Model") &&
+                translatedLatex[1].group == QStringLiteral("Translated Vision Model") &&
+                translatedLatex[1].label == longName &&
+                translatedLatex[1].value.toString() == QStringLiteral("custom:vision") &&
+                translatedLatex[2].group == translatedLatex[1].group &&
+                translatedLatex[2].label ==
+                    QStringLiteral("Translated Snow Shot visual understanding") &&
+                translatedLatex[2].disabled && !select->currentValue().isValid() &&
+                select->placeholder() ==
+                    QStringLiteral("Translated Snow Shot visual understanding") &&
+                select->lineEdit()->placeholderText() == select->placeholder() &&
+                keyboardSelections == 1,
+            "language changes must translate the LaTeX-specific label without translating catalog "
+            "model names or changing model choices");
+    defaultState.models.prepend({QStringLiteral("server-vision"),
+                                 QStringLiteral("Actual server vision name"), false,
+                                 QStringLiteral("default"), true});
+    palette.setRecognitionModelState(Tool::Latex, defaultState);
+    const auto translatedCatalog = select->options();
+    require(translatedCatalog.size() == 3 &&
+                translatedCatalog[0].label == QStringLiteral("Translated LaTeX-Specific Model") &&
+                translatedCatalog[1].group == QStringLiteral("Translated Vision Model") &&
+                translatedCatalog[1].value.toString() == QStringLiteral("server-vision") &&
+                translatedCatalog[1].label == QStringLiteral("Actual server vision name") &&
+                translatedCatalog[2].value.toString() == QStringLiteral("custom:vision") &&
+                translatedCatalog[2].label == longName &&
+                select->currentValue().toString() == QStringLiteral("server-vision") &&
+                select->placeholder() == QStringLiteral("Translated Recognition model") &&
+                keyboardSelections == 1,
+            "translated recognition options must retain actual server and custom names and IDs "
+            "without adding a duplicate semantic default");
+    palette.setActiveTool(Tool::Table);
+    QCoreApplication::removeTranslator(&translator);
+    QCoreApplication::processEvents();
+    select->setPopupVisible(true);
+    QCoreApplication::processEvents();
+    QPointer<AdSelect> retiredSelect(select);
+    palette.setActiveTool(Tool::Select);
+    require(retiredSelect != nullptr && !retiredSelect->popupVisible(),
+            "eviction must synchronously close a model popup before detaching the direct select");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    require(retiredSelect.isNull(), "evicted recognition model selectors must be released");
+}
+
 void imageConversionToolsExposeRecognitionActions() {
     require(snow_shot::storage::ScreenshotToolbarSettings().setTableQrTool(QStringLiteral("qr")),
             "recognition group fixture starts with the remembered barcode entry");
@@ -7323,6 +7828,7 @@ void repeatingDrawingShortcutsReturnsToSelect() {
     ScreenshotToolPalette::Options options;
     options.showLineTool = true;
     options.showSpotlightTool = true;
+    options.showMagnifierTool = true;
     options.showFreeDrawTool = true;
     options.showHighlightTool = true;
     options.showTextTool = true;
@@ -7337,11 +7843,17 @@ void repeatingDrawingShortcutsReturnsToSelect() {
                      [&selectRequests]() { ++selectRequests; });
 
     const std::pair<const char*, Tool> shortcuts[] = {
-        {"line", Tool::Line},           {"spotlight", Tool::Spotlight},
-        {"shape", Tool::Shape},         {"arrow", Tool::Arrow},
-        {"brush", Tool::FreeDraw},      {"highlight", Tool::PenHighlight},
-        {"text", Tool::Text},           {"serial_number", Tool::SerialNumber},
-        {"filter", Tool::PenFilter},    {"eraser", Tool::Eraser},
+        {"magnifier", Tool::Magnifier},
+        {"line", Tool::Line},
+        {"spotlight", Tool::Spotlight},
+        {"shape", Tool::Shape},
+        {"arrow", Tool::Arrow},
+        {"brush", Tool::FreeDraw},
+        {"highlight", Tool::PenHighlight},
+        {"text", Tool::Text},
+        {"serial_number", Tool::SerialNumber},
+        {"filter", Tool::PenFilter},
+        {"eraser", Tool::Eraser},
         {"watermark", Tool::Watermark},
     };
     for (const auto& [id, tool] : shortcuts) {
@@ -7974,6 +8486,7 @@ void lineToolIsDiscoverableSelectableAndUsesLinearStyleControls() {
     options.showShapeTool = false;
     options.showArrowTool = false;
     options.showDistanceTool = false;
+    options.showAngleTool = false;
     options.showLineTool = true;
     ScreenshotToolPalette palette(options);
 
@@ -8030,6 +8543,7 @@ void freeDrawToolIsDistinctAndUsesIndependentPathStyleControls() {
     options.showShapeTool = false;
     options.showArrowTool = false;
     options.showDistanceTool = false;
+    options.showAngleTool = false;
     options.showLineTool = true;
     options.showFreeDrawTool = true;
     ScreenshotToolPalette palette(options);
@@ -8075,6 +8589,7 @@ void highlightVariantsUseConfiguredPopoverGroup() {
     options.showShapeTool = false;
     options.showArrowTool = false;
     options.showDistanceTool = false;
+    options.showAngleTool = false;
     options.showFreeDrawTool = true;
     options.showHighlightTool = true;
     options.showPenHighlightTool = true;
@@ -8663,6 +9178,7 @@ void filterToolExposesTypeAndIntensityControls() {
     options.showShapeTool = false;
     options.showArrowTool = false;
     options.showDistanceTool = false;
+    options.showAngleTool = false;
     options.showFilterTool = true;
     ScreenshotToolPalette palette(options);
 
@@ -8978,6 +9494,7 @@ void filterStyleEditorsMatchShapeAndSpotlightMetrics() {
 
 void drawingToolbarGroupsUseToolbarPopoverMetrics() {
     ScreenshotToolPalette::Options options;
+    options.showSpeechBubbleTool = false;
     options.showSelectTool = false;
     options.showShapeTool = true;
     options.showArrowTool = true;
@@ -10468,21 +10985,26 @@ void spotlightShapePreferencesRoundTripAndAcceptLegacySettings() {
     auto styles = screenshotCanvasStyleDefaults();
     styles.rectangle.shape = SnowCanvasRectangleShape::Ellipse;
     styles.spotlightShape = SnowCanvasRectangleShape::Diamond;
+    styles.spotlightCornerRadii = SnowCanvasCornerRadii{17, 12, 8, 4};
     require(persistScreenshotCanvasToolStyles(styles), "Spotlight shape defaults must persist");
-    require(screenshotCanvasToolStyleDefaults().spotlightShape ==
-                    SnowCanvasRectangleShape::Diamond &&
-                screenshotCanvasToolStyleDefaults().rectangle.shape ==
-                    SnowCanvasRectangleShape::Ellipse,
-            "Spotlight and Shape must round-trip independent defaults");
+    require(
+        screenshotCanvasToolStyleDefaults().spotlightShape == SnowCanvasRectangleShape::Diamond &&
+            screenshotCanvasToolStyleDefaults().rectangle.shape ==
+                SnowCanvasRectangleShape::Ellipse &&
+            screenshotCanvasToolStyleDefaults().spotlightCornerRadii == styles.spotlightCornerRadii,
+        "Spotlight and Shape must round-trip independent defaults");
     const QString key = QStringLiteral("drawing/spotlight_style");
     QJsonObject value = configuration.snapshot().value(key).toObject();
     require(value.value(QStringLiteral("shape")).toInt(-1) == 2,
             "the Spotlight shape must use the existing three-value enum");
     value.remove(QStringLiteral("shape"));
+    value.remove(QStringLiteral("corner_radii"));
     require(configuration.setValue(key, value) &&
                 screenshotCanvasToolStyleDefaults().spotlightShape ==
-                    SnowCanvasRectangleShape::Rectangle,
-            "legacy Spotlight preferences must use Rectangle");
+                    SnowCanvasRectangleShape::Rectangle &&
+                screenshotCanvasToolStyleDefaults().spotlightCornerRadii ==
+                    SnowCanvasCornerRadii{6.0, 6.0, 6.0, 6.0},
+            "legacy Spotlight preferences must use Rectangle with six-pixel corners");
     for (const QJsonValue& invalid :
          {QJsonValue(-1), QJsonValue(3), QJsonValue(1.5), QJsonValue(QStringLiteral("1"))}) {
         value.insert(QStringLiteral("shape"), invalid);
@@ -10491,6 +11013,79 @@ void spotlightShapePreferencesRoundTripAndAcceptLegacySettings() {
                         SnowCanvasRectangleShape::Rectangle,
                 "invalid Spotlight shapes must use Rectangle");
     }
+}
+
+void spotlightCornerRadiusEditorReusesShapeBehavior() {
+    using Tool = ScreenshotToolPalette::Tool;
+    ScreenshotToolPalette::Options options;
+    options.showSpotlightTool = true;
+    options.styleDefaults = snow_shot::presentation::screenshotCanvasStyleDefaults();
+    options.styleDefaults.rectangle.shape = SnowCanvasRectangleShape::Diamond;
+    options.styleDefaults.spotlightCornerRadii = SnowCanvasCornerRadii{17, 17, 17, 17};
+    ScreenshotToolPalette palette(options);
+    palette.setActiveTool(Tool::Shape);
+    QPointer<CornerRadiusEditorButton> editor = dynamic_cast<CornerRadiusEditorButton*>(
+        palette.findChild<QWidget*>(QStringLiteral("screenshotSelectionCornerRadiusButton")));
+    require(editor != nullptr, "Shape must expose the shared corner radius editor");
+    const QSize referenceSize = editor->size();
+    const int shapeRadius = qRound(editor->value());
+    int edits = 0;
+    SnowCanvasShapeStyle lastStyle;
+    QObject::connect(
+        &palette, &ScreenshotToolPalette::shapeStyleChanged,
+        [&](const SnowCanvasShapeStyle& style, quint32 properties, SnowCanvasShapeKind kind) {
+            require(properties == SnowCanvasShapeStylePropertyCornerRadius &&
+                        kind == SnowCanvasShapeKind::Spotlight,
+                    "Spotlight radius edits must change only its corner radii");
+            ++edits;
+            lastStyle = style;
+        });
+    for (int iteration = 0; iteration < 4; ++iteration) {
+        palette.setActiveTool(Tool::Spotlight);
+        palette.show();
+        QCoreApplication::processEvents();
+        auto* radius = dynamic_cast<CornerRadiusEditorButton*>(
+            palette.findChild<QWidget*>(QStringLiteral("screenshotSelectionCornerRadiusButton")));
+        require(radius == editor && radius->size() == referenceSize &&
+                    radius->cursor().shape() == Qt::SplitVCursor && radius->value() == 17,
+                "Spotlight must reuse Shape's radius editor with its independent value");
+        SnowCanvasStyleToolbarState state;
+        state.source = SnowCanvasStyleToolbarSource::SelectedSpotlight;
+        state.shapeStyle.shape = iteration % 2 == 0 ? SnowCanvasRectangleShape::Diamond
+                                                    : SnowCanvasRectangleShape::Rectangle;
+        state.shapeStyle.cornerRadii = SnowCanvasCornerRadii{23, 23, 23, 23};
+        state.shapeStyleMixed = SnowCanvasShapeStyleMixedCornerRadii;
+        const int before = edits;
+        palette.setStyleToolbarState(state);
+        require(edits == before && radius->valueText() == QStringLiteral("-") &&
+                    radius->value() == 23,
+                "selected Spotlight radii must synchronize silently and display mixed state");
+        const QPoint local = radius->rect().center();
+        QWheelEvent wheel(QPointF(local), radius->mapToGlobal(local), QPoint(), QPoint(0, 120),
+                          Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        auto* selectedShape = qobject_cast<QAbstractButton*>(controlWithTooltip(
+            palette,
+            state.shapeStyle.shape == SnowCanvasRectangleShape::Diamond ? "Diamond" : "Rectangle"));
+        require(palette.handleToolbarWheel(&wheel) && edits == before + 1 &&
+                    radius->value() == 24 && radius->valueText() == QStringLiteral("24") &&
+                    selectedShape != nullptr && selectedShape->isChecked() &&
+                    lastStyle.cornerRadii == SnowCanvasCornerRadii{24, 24, 24, 24},
+                "Spotlight scrolling must adjust the radius one pixel and resolve mixed state");
+        radius->click();
+        require(edits == before + 2 && radius->value() == shapeRadius,
+                "Spotlight radius clicks must restore the same default as Shape");
+        palette.setActiveTool(Tool::Shape);
+        require(editor != nullptr && editor->value() == shapeRadius,
+                "Spotlight radius edits must preserve Shape's independent default");
+        auto defaults = palette.creationStyleDefaults();
+        defaults.spotlightCornerRadii = SnowCanvasCornerRadii{17, 17, 17, 17};
+        palette.setCreationStyleDefaults(defaults);
+    }
+    palette.setActiveTool(Tool::Spotlight);
+    require(palette.setPhysicalScale(1.5) &&
+                editor->size() == QSize(qRound(referenceSize.width() * 1.5),
+                                        qRound(referenceSize.height() * 1.5)),
+            "Spotlight radius controls must use Shape's physical scale metrics");
 }
 
 void shapeSelectorIsExclusiveToTheShapeTool() {
@@ -10869,6 +11464,1156 @@ void lineStyleControlsExposeStraightAndCurveTypes() {
             "Free Draw should not expose the Line type editor");
 }
 
+void magnifierLayoutMigrationPreservesCustomization() {
+    namespace layout = snow_shot::presentation::toolbar_layout;
+    using snow_shot::storage::ScreenshotToolbarLayout;
+    const QString magnifier = QStringLiteral("magnifier");
+    const QStringList grouped{magnifier, QStringLiteral("spotlight"),
+                              QStringLiteral("highlighter")};
+    const auto checkSchema = [](const ScreenshotToolbarLayout& input,
+                                const ScreenshotToolbarLayout& expected) {
+        QJsonArray positions;
+        for (const auto& position : input.positions)
+            positions.append(QJsonArray::fromStringList(position));
+        const auto normalized = snow_shot::storage::ConfigurationSchema::normalize(
+            QStringLiteral("screenshot_toolbar/layout"),
+            QJsonObject{{QStringLiteral("positions"), positions},
+                        {QStringLiteral("hidden"), QJsonArray::fromStringList(input.hidden)}});
+        QJsonArray expectedPositions;
+        for (const auto& position : expected.positions)
+            expectedPositions.append(QJsonArray::fromStringList(position));
+        require(normalized.valid &&
+                    normalized.value.toObject().value(QStringLiteral("positions")) ==
+                        expectedPositions &&
+                    normalized.value.toObject().value(QStringLiteral("hidden")) ==
+                        QJsonArray::fromStringList(expected.hidden),
+                "storage and presentation must agree on the magnifier layout migration");
+    };
+    ScreenshotToolbarLayout current{layout::defaultPositions(), {}};
+    require(current.positions.contains(grouped) &&
+                layout::stackPresentation(grouped, [](const QString&) { return true; })
+                        .popoverItemIds == QStringList{QStringLiteral("highlighter"),
+                                                       QStringLiteral("spotlight"), magnifier},
+            "the magnifier must appear at the right of the Highlight and Spotlight popup");
+    auto legacy = current;
+    for (auto& position : legacy.positions)
+        position.removeAll(magnifier);
+    auto migrated = layout::normalizedLayout(legacy);
+    require(migrated == current, "a previous default layout must upgrade in place");
+    checkSchema(legacy, migrated);
+    auto customized = legacy;
+    std::swap(customized.positions[2], customized.positions[3]);
+    migrated = layout::normalizedLayout(customized);
+    auto expected = customized;
+    for (auto& position : expected.positions) {
+        if (position.contains(QStringLiteral("highlighter")) &&
+            position.contains(QStringLiteral("spotlight")))
+            position.prepend(magnifier);
+    }
+    require(migrated == expected, "a customized layout must retain its existing stacks and order");
+    checkSchema(customized, migrated);
+    auto split = customized;
+    for (qsizetype index = 0; index < split.positions.size(); ++index) {
+        if (split.positions[index].contains(QStringLiteral("spotlight"))) {
+            split.positions[index].removeAll(QStringLiteral("spotlight"));
+            split.positions.insert(index + 1, {QStringLiteral("spotlight")});
+            break;
+        }
+    }
+    expected = split;
+    for (qsizetype index = 0; index < expected.positions.size(); ++index) {
+        if (expected.positions[index] == QStringList{QStringLiteral("spotlight")}) {
+            expected.positions.insert(index + 1, {magnifier});
+            break;
+        }
+    }
+    migrated = layout::normalizedLayout(split);
+    require(migrated == expected,
+            "separated customized tools must keep their individual positions");
+    checkSchema(split, migrated);
+    auto hidden = legacy;
+    hidden.hidden.append(magnifier);
+    require(layout::normalizedLayout(hidden) == hidden,
+            "explicitly hidden magnifiers must stay hidden");
+    checkSchema(hidden, hidden);
+    auto relocated = legacy;
+    relocated.positions.prepend({magnifier});
+    require(layout::normalizedLayout(relocated) == relocated,
+            "an explicit magnifier placement must be retained");
+    checkSchema(relocated, relocated);
+}
+
+void magnifierControlsPatchIndependentProperties() {
+    using Tool = ScreenshotToolPalette::Tool;
+    ScreenshotToolPalette::Options options;
+    options.showMagnifierTool = true;
+    options.showSpotlightTool = true;
+    options.showPenHighlightTool = true;
+    options.styleDefaults = snow_shot::presentation::screenshotCanvasStyleDefaults();
+    options.styleDefaults.rectangle.stroke = QColor(QStringLiteral("#1677ff"));
+    options.styleDefaults.rectangle.strokeWidth = 9;
+    ScreenshotToolPalette palette(options);
+    int activations = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::magnifierRequested, [&] { ++activations; });
+    require(palette.activateDrawingShortcut(QStringLiteral("magnifier")) && activations == 1 &&
+                palette.activeTool() == Tool::Magnifier,
+            "the magnifier must use the common tool activation path");
+    palette.show();
+    QCoreApplication::processEvents();
+    const auto shapes = [&]() {
+        auto* root =
+            palette.findChild<QWidget*>(QStringLiteral("screenshotMagnifierShapeButtonGroup"));
+        return root ? root->findChild<adqt::widgets::AdRadioButtonGroup*>() : nullptr;
+    };
+    const auto factor = [&]() {
+        return dynamic_cast<IconNumericValuePreviewButton*>(
+            palette.findChild<QWidget*>(QStringLiteral("screenshotMagnifierFactorButton")));
+    };
+    const auto radius = [&]() {
+        return dynamic_cast<CornerRadiusEditorButton*>(
+            palette.findChild<QWidget*>(QStringLiteral("screenshotMagnifierCornerRadiusButton")));
+    };
+    const auto ratio = [&]() {
+        return dynamic_cast<IconNumericValuePreviewButton*>(
+            palette.findChild<QWidget*>(QStringLiteral("screenshotMagnifierArrowRatioButton")));
+    };
+    const auto connections = [&]() {
+        auto* root =
+            palette.findChild<QWidget*>(QStringLiteral("screenshotMagnifierConnectionButtonGroup"));
+        return root ? root->findChild<adqt::widgets::AdRadioButtonGroup*>() : nullptr;
+    };
+    const auto outline = [&]() {
+        return palette.findChild<adqt::widgets::AdButton*>(
+            QStringLiteral("screenshotMagnifierSourceOutlineButton"));
+    };
+    const auto leader = [&]() { return controlWithAccessibleName(palette, "Leader line type"); };
+    const auto initial = palette.creationStyleDefaults().magnifier;
+    require(shapes() && shapes()->buttons().size() == 3 && factor() && radius() && ratio() &&
+                connections() && connections()->buttons().size() == 3 && outline() && leader() &&
+                initial.stroke == QColor(QStringLiteral("#f5222d")) && initial.strokeWidth == 2 &&
+                initial.factor == 2 &&
+                initial.connectionType == SnowCanvasMagnifierConnectionType::Gradient &&
+                initial.sourceOutline && initial.leaderArrowhead == SnowCanvasArrowhead::None &&
+                initial.arrowRatio == 1.0 && ratio()->valueText() == QStringLiteral("1.0") &&
+                initial.cornerRadii == SnowCanvasCornerRadii{6, 6, 6, 6} &&
+                radius()->value() == 6 && factor()->valueText() == QStringLiteral("2.0×") &&
+                connections()->checkedId() ==
+                    static_cast<int>(SnowCanvasMagnifierConnectionType::Gradient) &&
+                outline()->isChecked() &&
+                outline()->buttonStyle() == adqt::widgets::AdButton::ButtonStyle::Solid &&
+                outline()->accentRole() == adqt::widgets::AdButton::AccentRole::Primary &&
+                !leader()->isEnabled() && !ratio()->isEnabled() && !leader()->isHidden() &&
+                !ratio()->isHidden(),
+            "magnifier controls default to Gradient and an active source outline with visible "
+            "disabled leader controls");
+    const auto verifyLayout = [&]() {
+        QLayout* row = radius()->parentWidget()->layout();
+        QList<QWidget*> widgets;
+        for (int index = 0; index < row->count(); ++index) {
+            if (QWidget* widget = row->itemAt(index)->widget())
+                widgets.append(widget);
+        }
+        const qsizetype factorIndex = widgets.indexOf(factor());
+        const qsizetype leaderIndex = widgets.indexOf(
+            palette.findChild<QWidget*>(QStringLiteral("screenshotMagnifierLeaderTypeButton")));
+        require(factorIndex >= 0 && factorIndex + 1 < widgets.size() &&
+                    widgets.at(factorIndex + 1) == connections()->parent() &&
+                    widgets.at(factorIndex + 2) == outline(),
+                "magnifier factor must directly precede the connection group and source-outline "
+                "toggle");
+        require(leaderIndex > 0 && widgets.at(leaderIndex - 1) == ratio(),
+                "magnifier arrow proportions must directly precede the arrowhead editor");
+        require(leaderIndex >= 0 && leaderIndex + 2 == widgets.size() - 1 &&
+                    qobject_cast<QFrame*>(widgets.at(leaderIndex + 1)) != nullptr &&
+                    widgets.constLast() == radius(),
+                "magnifier corner radius must be the last control with a separator to its left");
+    };
+    verifyLayout();
+    SnowCanvasMagnifierStyle emitted = initial;
+    quint32 properties = 0;
+    bool creationDefaults = true;
+    palette.setStyleEditHandler([&](const SnowCanvasStyleEdit& edit) {
+        const auto* magnifier = std::get_if<SnowCanvasMagnifierEdit>(&edit);
+        require(magnifier != nullptr, "magnifier controls must emit magnifier style patches");
+        emitted = magnifier->style;
+        properties = magnifier->properties;
+        creationDefaults = magnifier->target == SnowCanvasStyleEditTarget::Creation;
+        palette.rememberStyleEdit(edit);
+        return true;
+    });
+    for (auto shape : {SnowCanvasRectangleShape::Ellipse, SnowCanvasRectangleShape::Diamond,
+                       SnowCanvasRectangleShape::Rectangle}) {
+        shapes()->button(static_cast<int>(shape))->click();
+        require(emitted.shape == shape && properties == SnowCanvasMagnifierStylePropertyShape,
+                "magnifier shape choices must patch only shape");
+        require(radius()->isHidden() == (shape == SnowCanvasRectangleShape::Ellipse),
+                "magnifier radius editing applies to rectangle and diamond lenses");
+        verifyLayout();
+    }
+    const auto wheel = [&](QWidget* control, int delta) {
+        const QPoint point = control->rect().center();
+        QWheelEvent event(QPointF(point), control->mapToGlobal(point), QPoint(), QPoint(0, delta),
+                          Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        return palette.handleToolbarWheel(&event) && event.isAccepted();
+    };
+    for (auto connection :
+         {SnowCanvasMagnifierConnectionType::None, SnowCanvasMagnifierConnectionType::LeaderLine,
+          SnowCanvasMagnifierConnectionType::Gradient}) {
+        connections()->button(static_cast<int>(connection))->click();
+        require(emitted.connectionType == connection &&
+                    properties == SnowCanvasMagnifierStylePropertyConnectionType &&
+                    emitted.sourceOutline &&
+                    leader()->isEnabled() ==
+                        (connection == SnowCanvasMagnifierConnectionType::LeaderLine) &&
+                    ratio()->isEnabled() == leader()->isEnabled(),
+                "connection choices patch only connection type and enable leader controls only for "
+                "Leader line");
+        outline()->click();
+        require(!emitted.sourceOutline && !outline()->isChecked() &&
+                    outline()->buttonStyle() == adqt::widgets::AdButton::ButtonStyle::Text &&
+                    outline()->accentRole() == adqt::widgets::AdButton::AccentRole::Neutral &&
+                    properties == SnowCanvasMagnifierStylePropertySourceOutline &&
+                    emitted.connectionType == connection,
+                "source outline disables independently for each connection type");
+        outline()->click();
+        require(emitted.sourceOutline && outline()->isChecked() &&
+                    outline()->buttonStyle() == adqt::widgets::AdButton::ButtonStyle::Solid &&
+                    outline()->accentRole() == adqt::widgets::AdButton::AccentRole::Primary &&
+                    properties == SnowCanvasMagnifierStylePropertySourceOutline &&
+                    emitted.connectionType == connection,
+                "source outline enables independently for each connection type");
+    }
+    connections()->button(static_cast<int>(SnowCanvasMagnifierConnectionType::LeaderLine))->click();
+    require(wheel(ratio(), 120) && emitted.arrowRatio == 1.1 &&
+                properties == SnowCanvasMagnifierStylePropertyArrowRatio && creationDefaults &&
+                emitted.factor == 2 && emitted.strokeWidth == 2,
+            "magnifier proportions must use the Arrow control's tenths and independent patch");
+    for (int index = 0; index < 40; ++index)
+        wheel(ratio(), 120);
+    require(emitted.arrowRatio == 3.0 && ratio()->valueText() == QStringLiteral("3.0"),
+            "magnifier arrow proportions must stop at the Arrow control's maximum");
+    for (int index = 0; index < 40; ++index)
+        wheel(ratio(), -120);
+    require(emitted.arrowRatio == 0.5, "magnifier arrow proportions must stop at one half");
+    ratio()->click();
+    require(emitted.arrowRatio == 1.0,
+            "clicking magnifier proportions must restore the Arrow control's default");
+    shapes()->button(static_cast<int>(SnowCanvasRectangleShape::Diamond))->click();
+    require(wheel(radius(), 120) && emitted.shape == SnowCanvasRectangleShape::Diamond &&
+                emitted.cornerRadii == SnowCanvasCornerRadii{7, 7, 7, 7} &&
+                properties == SnowCanvasMagnifierStylePropertyCornerRadius && creationDefaults &&
+                emitted.factor == 2,
+            "radius wheel adjustments must patch only magnifier corners in one-pixel steps");
+    for (int index = 0; index < 100; ++index)
+        wheel(radius(), -120);
+    require(emitted.cornerRadii == SnowCanvasCornerRadii{},
+            "magnifier corner radii must stop at zero");
+    for (int index = 0; index < 100; ++index)
+        wheel(radius(), 120);
+    require(emitted.cornerRadii == SnowCanvasCornerRadii{83, 83, 83, 83},
+            "magnifier radius must use the Shape control's upper limit");
+    radius()->click();
+    require(emitted.cornerRadii == SnowCanvasCornerRadii{6, 6, 6, 6},
+            "clicking magnifier radius must restore the six-pixel default");
+    require(wheel(factor(), 120) && emitted.factor == 2.1 &&
+                properties == SnowCanvasMagnifierStylePropertyFactor && creationDefaults,
+            "factor wheel adjustments must use tenths and patch only the factor");
+    for (int index = 0; index < 100; ++index)
+        palette.stepMagnifierFactor(1);
+    require(emitted.factor == 10 && factor()->valueText() == QStringLiteral("10.0×"),
+            "factor adjustments must stop at ten");
+    for (int index = 0; index < 100; ++index)
+        palette.stepMagnifierFactor(-1);
+    require(emitted.factor == 1, "factor adjustments must stop at one");
+    factor()->click();
+    require(emitted.factor == 2, "clicking the numeric factor must restore its default");
+    clickStyleControl(palette, "Magnifier stroke width 4");
+    require(emitted.strokeWidth == 4 && properties == SnowCanvasMagnifierStylePropertyStrokeWidth,
+            "magnifier width presets must commit independently");
+    auto* color = palette.findChild<adqt::widgets::AdColorPicker*>(
+        QStringLiteral("screenshotMagnifierColorPicker"));
+    require(color && color->alphaChannelEnabled(), "magnifier border colors must support alpha");
+    color->commitValue(adqt::widgets::AdColorValue::solid(QColor(23, 67, 109, 128)));
+    require(emitted.stroke == QColor(23, 67, 109, 128) &&
+                properties == SnowCanvasMagnifierStylePropertyStrokeColor,
+            "magnifier border color must preserve alpha and patch only color");
+    connections()->button(static_cast<int>(SnowCanvasMagnifierConnectionType::None))->click();
+    require(emitted.connectionType == SnowCanvasMagnifierConnectionType::None &&
+                properties == SnowCanvasMagnifierStylePropertyConnectionType &&
+                !leader()->isEnabled() && !ratio()->isEnabled() && emitted.sourceOutline,
+            "None disables leader controls while retaining the independent source outline");
+    require(!wheel(ratio(), 120) && emitted.arrowRatio == 1.0,
+            "disabled magnifier proportion controls must ignore wheel input");
+    connections()->button(static_cast<int>(SnowCanvasMagnifierConnectionType::LeaderLine))->click();
+    require(emitted.connectionType == SnowCanvasMagnifierConnectionType::LeaderLine &&
+                leader()->isEnabled() && ratio()->isEnabled(),
+            "Leader line restores type editing and previous arrow proportions");
+    const char* arrowheadTooltips[] = {
+        "End arrowhead none",
+        "End arrowhead standard",
+        "End arrowhead bar",
+        "End arrowhead dot",
+        "End arrowhead circle",
+        "End arrowhead circle outline",
+        "End arrowhead triangle",
+        "End arrowhead triangle outline",
+        "End arrowhead diamond",
+        "End arrowhead diamond outline",
+        "End arrowhead crowfoot one",
+        "End arrowhead crowfoot many",
+        "End arrowhead crowfoot one or many",
+        "End arrowhead indented triangle",
+    };
+    for (int iteration = 0; iteration < static_cast<int>(std::size(arrowheadTooltips));
+         ++iteration) {
+        const int index = (iteration + 1) % static_cast<int>(std::size(arrowheadTooltips));
+        auto* popup = showPopoverForTrigger(leader());
+        require(popoverButtonWithTooltip(popup, arrowheadTooltips[index]) != nullptr,
+                "every Arrow endpoint type must be available for the magnifier leader");
+        clickPopoverStyleControl(popup, arrowheadTooltips[index]);
+        require(emitted.leaderArrowhead == static_cast<SnowCanvasArrowhead>(index) &&
+                    properties == SnowCanvasMagnifierStylePropertyLeaderArrowhead,
+                "leader endpoint choices must commit only the endpoint");
+    }
+    wheel(ratio(), 120);
+    auto remembered = palette.creationStyleDefaults().magnifier;
+    require(palette.creationStyleDefaults().rectangle == options.styleDefaults.rectangle,
+            "magnifier edits must leave the saved Shape style independent");
+    require(palette.creationStyleDefaults().arrow == options.styleDefaults.arrow,
+            "magnifier proportions must leave Arrow defaults independent");
+    for (int index = 0; index < 4; ++index) {
+        palette.setActiveTool(Tool::Shape);
+        palette.setActiveTool(Tool::Arrow);
+        palette.setActiveTool(Tool::Magnifier);
+        require(factor() && shapes() && leader() && radius() && ratio() && radius()->value() == 6 &&
+                    ratio()->valueText() == QStringLiteral("1.1") &&
+                    palette.creationStyleDefaults().magnifier == remembered,
+                "rebuilding the magnifier row must retain its own controls and defaults");
+        verifyLayout();
+    }
+    SnowCanvasStyleToolbarState selected;
+    selected.source = SnowCanvasStyleToolbarSource::SelectedMagnifier;
+    selected.selectedElementCount = 2;
+    selected.magnifierStyle = remembered;
+    selected.magnifierStyle.factor = 3;
+    selected.magnifierStyleMixed =
+        SnowCanvasMagnifierStylePropertyShape | SnowCanvasMagnifierStylePropertyFactor |
+        SnowCanvasMagnifierStylePropertyArrowRatio | SnowCanvasMagnifierStylePropertyCornerRadius;
+    palette.setStyleToolbarState(selected);
+    require(shapes()->checkedId() == -1 && factor()->valueText() == QStringLiteral("-×") &&
+                ratio()->valueText() == QStringLiteral("-") &&
+                palette.creationStyleDefaults().magnifier == remembered,
+            "mixed selected magnifiers must clear their controls and preserve creation defaults");
+    verifyLayout();
+    ratio()->click();
+    remembered.arrowRatio = 1.0;
+    require(!creationDefaults && emitted.arrowRatio == 1.0 &&
+                properties == SnowCanvasMagnifierStylePropertyArrowRatio &&
+                ratio()->valueText() == QStringLiteral("1.0") &&
+                factor()->valueText() == QStringLiteral("-×") && shapes()->checkedId() == -1 &&
+                palette.creationStyleDefaults().magnifier == remembered,
+            "selected proportion edits clear their mixed flag and remember only that property");
+    factor()->click();
+    require(!creationDefaults && emitted.factor == 2 &&
+                properties == SnowCanvasMagnifierStylePropertyFactor &&
+                shapes()->checkedId() == -1 &&
+                palette.creationStyleDefaults().magnifier == remembered,
+            "a selected factor edit remembers its factor and preserves the other mixed properties");
+    require(radius()->valueText() == QStringLiteral("-"),
+            "mixed magnifier corner values must be shown in the control");
+    radius()->click();
+    require(!creationDefaults && radius()->valueText() == QStringLiteral("6") &&
+                emitted.cornerRadii == SnowCanvasCornerRadii{6, 6, 6, 6} &&
+                properties == SnowCanvasMagnifierStylePropertyCornerRadius &&
+                shapes()->checkedId() == -1 &&
+                palette.creationStyleDefaults().magnifier == remembered,
+            "selected corner edits remember their corners and preserve the other mixed properties");
+    selected.magnifierStyleMixed = SnowCanvasMagnifierStylePropertyConnectionType |
+                                   SnowCanvasMagnifierStylePropertySourceOutline;
+    const QSize outlineSize = outline()->size();
+    palette.setStyleToolbarState(selected);
+    require(connections()->checkedId() == -1 && outline()->property("mixed").toBool() &&
+                !outline()->isChecked() && !leader()->isEnabled() && !ratio()->isEnabled() &&
+                outline()->buttonStyle() == adqt::widgets::AdButton::ButtonStyle::Dashed &&
+                outline()->accentRole() == adqt::widgets::AdButton::AccentRole::Neutral &&
+                outline()->size() == outlineSize &&
+                outline()->accessibleDescription() == QStringLiteral("Mixed"),
+            "mixed connections clear the group and disable leader controls; mixed outlines expose "
+            "their state");
+    connections()->button(static_cast<int>(SnowCanvasMagnifierConnectionType::Gradient))->click();
+    remembered.connectionType = SnowCanvasMagnifierConnectionType::Gradient;
+    require(!creationDefaults &&
+                emitted.connectionType == SnowCanvasMagnifierConnectionType::Gradient &&
+                properties == SnowCanvasMagnifierStylePropertyConnectionType &&
+                outline()->property("mixed").toBool() &&
+                palette.creationStyleDefaults().magnifier == remembered,
+            "choosing a mixed connection remembers it and clears only its own flag");
+    outline()->click();
+    remembered.sourceOutline = true;
+    require(!creationDefaults && emitted.sourceOutline && outline()->isChecked() &&
+                outline()->buttonStyle() == adqt::widgets::AdButton::ButtonStyle::Solid &&
+                outline()->accentRole() == adqt::widgets::AdButton::AccentRole::Primary &&
+                outline()->size() == outlineSize &&
+                properties == SnowCanvasMagnifierStylePropertySourceOutline &&
+                !outline()->property("mixed").toBool() &&
+                emitted.connectionType == SnowCanvasMagnifierConnectionType::Gradient &&
+                palette.creationStyleDefaults().magnifier == remembered,
+            "clicking a mixed outline remembers it and clears only its mixed flag");
+}
+
+void magnifierStylesPersistSelectedEdits() {
+    using namespace snow_shot::presentation;
+    const auto original = screenshotCanvasToolStyleDefaults();
+    const auto restore =
+        qScopeGuard([&] { static_cast<void>(persistScreenshotCanvasToolStyles(original)); });
+    auto defaults = screenshotCanvasStyleDefaults();
+    defaults.rectangle.strokeWidth = 9;
+    defaults.magnifier.cornerRadii = {3, 6, 9, 12};
+    defaults.magnifier.arrowRatio = 2.3;
+    defaults.magnifier.connectionType = SnowCanvasMagnifierConnectionType::None;
+    defaults.magnifier.sourceOutline = false;
+    require(persistScreenshotCanvasToolStyles(defaults), "prepare independent magnifier defaults");
+    ScreenshotToolPalette::Options options;
+    options.showMagnifierTool = true;
+    options.styleDefaults = screenshotCanvasToolStyleDefaults();
+    ScreenshotToolPalette palette(options);
+    SnowCanvasWidget canvas;
+    ScreenshotStyleBinding binding(palette, canvas, &palette);
+    applyScreenshotCanvasToolStyles(canvas, options.styleDefaults);
+    QObject::connect(&canvas, &SnowCanvasWidget::styleToolbarStateChanged, &palette,
+                     [&] { palette.setStyleToolbarState(canvas.canvasStyleToolbarState()); });
+    require(canvas.setCanvasTool(SnowCanvasTool::Magnifier),
+            "activate a magnifier for style persistence");
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Magnifier);
+    palette.setStyleToolbarState(canvas.canvasStyleToolbarState());
+    palette.stepMagnifierFactor(1);
+    clickStyleControl(palette, "Magnifier stroke width 4");
+    auto saved = screenshotCanvasToolStyleDefaults();
+    require(
+        binding.lastSaveSucceeded() == true && saved.magnifier.factor == 2.1 &&
+            saved.magnifier.strokeWidth == 4 &&
+            saved.magnifier.cornerRadii == SnowCanvasCornerRadii{3, 6, 9, 12} &&
+            saved.magnifier.arrowRatio == 2.3 &&
+            saved.magnifier.connectionType == SnowCanvasMagnifierConnectionType::None &&
+            !saved.magnifier.sourceOutline && saved.rectangle.strokeWidth == 9,
+        "bound magnifier controls must persist their properties without changing Shape defaults");
+    auto selected = saved.magnifier;
+    selected.factor = 7;
+    selected.arrowRatio = 0.5;
+    selected.connectionType = SnowCanvasMagnifierConnectionType::LeaderLine;
+    selected.sourceOutline = true;
+    auto remembered = saved.magnifier;
+    require(persistScreenshotCanvasStyleEdit(
+                SnowCanvasMagnifierEdit{selected, SnowCanvasMagnifierStylePropertyConnectionType,
+                                        SnowCanvasStyleEditTarget::Selection}),
+            "persist an explicit selected magnifier connection edit");
+    remembered.connectionType = selected.connectionType;
+    require(screenshotCanvasToolStyleDefaults().magnifier == remembered,
+            "selected connection edits preserve the saved source outline and unrelated properties");
+    require(persistScreenshotCanvasStyleEdit(
+                SnowCanvasMagnifierEdit{selected, SnowCanvasMagnifierStylePropertySourceOutline,
+                                        SnowCanvasStyleEditTarget::Selection}),
+            "persist an explicit selected magnifier source outline edit");
+    remembered.sourceOutline = selected.sourceOutline;
+    require(screenshotCanvasToolStyleDefaults().magnifier == remembered,
+            "selected source outline edits preserve the saved connection and unrelated properties");
+    require(persistScreenshotCanvasStyleEdit(
+                SnowCanvasMagnifierEdit{selected, SnowCanvasMagnifierStyleAllProperties,
+                                        SnowCanvasStyleEditTarget::Selection}) &&
+                screenshotCanvasToolStyleDefaults().magnifier == selected,
+            "selected magnifier style edits must remember their explicit properties");
+    saved = screenshotCanvasToolStyleDefaults();
+    auto& storage = snow_shot::storage::ApplicationStorage::instance();
+    require(storage.configuration().flushNow().success, "flush magnifier preferences to disk");
+    snow_shot::storage::ConfigurationStore reopened(
+        QDir(storage.configurationDirectory()).filePath(QStringLiteral("config.json")), true,
+        false);
+    require(reopened.value(QStringLiteral("drawing/magnifier_style")) ==
+                storage.configuration().value(QStringLiteral("drawing/magnifier_style")),
+            "magnifier preferences must survive reopening configuration");
+    SnowCanvasWidget restored;
+    applyScreenshotCanvasToolStyles(restored, saved);
+    require(restored.canvasMagnifierStyle() == saved.magnifier,
+            "restoring tool styles must apply all magnifier defaults to a new canvas");
+    require(storage.configuration().setValue(
+                QStringLiteral("drawing/magnifier_style"),
+                QJsonObject{{QStringLiteral("factor"), 100},
+                            {QStringLiteral("arrow_ratio"), 100},
+                            {QStringLiteral("stroke_width"), -2},
+                            {QStringLiteral("shape"), 500},
+                            {QStringLiteral("connection_type"), 2},
+                            {QStringLiteral("source_outline"), true},
+                            {QStringLiteral("stroke"), QStringLiteral("invalid")}}),
+            "prepare malformed saved magnifier fields");
+    const auto normalized = screenshotCanvasToolStyleDefaults().magnifier;
+    require(
+        normalized.factor == 10 && normalized.strokeWidth == 0 && normalized.arrowRatio == 3.0 &&
+            normalized.shape == SnowCanvasRectangleShape::Rectangle &&
+            normalized.connectionType == SnowCanvasMagnifierConnectionType::Gradient &&
+            normalized.sourceOutline && normalized.stroke == defaults.magnifier.stroke,
+        "saved magnifier values must clamp numeric ranges and retain defaults for invalid fields");
+}
+
+void magnifierPreferencesRejectIncompleteOrObsoletePayloads() {
+    using namespace snow_shot::presentation;
+    const auto original = screenshotCanvasToolStyleDefaults();
+    const auto restore =
+        qScopeGuard([&] { static_cast<void>(persistScreenshotCanvasToolStyles(original)); });
+    auto saved = screenshotCanvasStyleDefaults();
+    saved.rectangle.strokeWidth = 9;
+    saved.magnifier.factor = 7.3;
+    saved.magnifier.shape = SnowCanvasRectangleShape::Diamond;
+    saved.magnifier.stroke = QColor(23, 67, 109, 128);
+    saved.magnifier.strokeWidth = 11;
+    saved.magnifier.arrowRatio = 2.3;
+    saved.magnifier.cornerRadii = {3, 6, 9, 12};
+    saved.magnifier.connectionType = SnowCanvasMagnifierConnectionType::None;
+    saved.magnifier.sourceOutline = false;
+    require(persistScreenshotCanvasToolStyles(saved),
+            "prepare current Magnifier preference fields");
+    auto& configuration = snow_shot::storage::ApplicationStorage::instance().configuration();
+    const QString key = QStringLiteral("drawing/magnifier_style");
+    const QJsonObject complete = configuration.value(key).toObject();
+    QList<QJsonObject> rejected;
+    for (const auto& field :
+         {QStringLiteral("connection_type"), QStringLiteral("source_outline")}) {
+        QJsonObject missing = complete;
+        missing.remove(field);
+        rejected.append(missing);
+    }
+    QJsonObject missingBoth = complete;
+    missingBoth.remove(QStringLiteral("connection_type"));
+    missingBoth.remove(QStringLiteral("source_outline"));
+    rejected.append(missingBoth);
+    QJsonObject obsolete = complete;
+    obsolete.insert(QStringLiteral("show_leader"), true);
+    rejected.append(obsolete);
+    missingBoth.insert(QStringLiteral("show_leader"), false);
+    rejected.append(missingBoth);
+    for (const auto& value :
+         {QJsonValue(-1), QJsonValue(3), QJsonValue(0.5), QJsonValue(true),
+          QJsonValue(QStringLiteral("gradient")), QJsonValue(QJsonValue::Null)}) {
+        QJsonObject invalid = complete;
+        invalid.insert(QStringLiteral("connection_type"), value);
+        rejected.append(invalid);
+    }
+    for (const auto& value :
+         {QJsonValue(1), QJsonValue(QStringLiteral("true")), QJsonValue(QJsonValue::Null)}) {
+        QJsonObject invalid = complete;
+        invalid.insert(QStringLiteral("source_outline"), value);
+        rejected.append(invalid);
+    }
+    const auto creationDefaults = screenshotCanvasStyleDefaults().magnifier;
+    for (const auto& payload : rejected) {
+        require(configuration.setValue(key, payload),
+                "prepare rejected Magnifier preference payload");
+        const auto loaded = screenshotCanvasToolStyleDefaults();
+        require(loaded.magnifier == creationDefaults && loaded.rectangle == saved.rectangle,
+                "invalid Magnifier fields reject the entire object without partially loading its "
+                "style or changing other tools");
+    }
+    for (int connection = 0; connection < 3; ++connection) {
+        for (bool outline : {false, true}) {
+            QJsonObject valid = complete;
+            valid.insert(QStringLiteral("connection_type"), connection);
+            valid.insert(QStringLiteral("source_outline"), outline);
+            require(configuration.setValue(key, valid),
+                    "prepare valid Magnifier preference combination");
+            auto expected = saved.magnifier;
+            expected.connectionType = static_cast<SnowCanvasMagnifierConnectionType>(connection);
+            expected.sourceOutline = outline;
+            require(screenshotCanvasToolStyleDefaults().magnifier == expected,
+                    "all six valid current Magnifier preference combinations load every saved "
+                    "property");
+        }
+    }
+}
+
+void magnifierStyleWheelsPersistCompletedSteps() {
+    using namespace snow_shot::presentation;
+    const auto original = screenshotCanvasToolStyleDefaults();
+    const auto restore =
+        qScopeGuard([&] { static_cast<void>(persistScreenshotCanvasToolStyles(original)); });
+    auto defaults = original;
+    defaults.magnifier.factor = 2;
+    require(persistScreenshotCanvasToolStyles(defaults), "prepare magnifier wheel preferences");
+    ScreenshotToolPalette::Options options;
+    options.showMagnifierTool = true;
+    options.styleDefaults = defaults;
+    ScreenshotToolPalette palette(options);
+    SnowCanvasRuntime runtime;
+    SnowCanvasWidget canvas(runtime);
+    canvas.resize(400, 300);
+    canvas.show();
+    QApplication::processEvents();
+    applyScreenshotCanvasToolStyles(canvas, defaults);
+    ScreenshotStyleBinding binding(palette, canvas, &palette);
+    QObject::connect(&canvas, &SnowCanvasWidget::styleToolbarStateChanged, &palette,
+                     [&] { palette.setStyleToolbarState(canvas.canvasStyleToolbarState()); });
+    int opacityEdits = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::selectionOpacityChanged, &canvas,
+                     [&](qreal opacity) {
+                         ++opacityEdits;
+                         require(canvas.setSelectedOpacity(opacity),
+                                 "selection opacity commands must reach the canvas");
+                     });
+    require(canvas.setViewportCamera(200, 150, 1) &&
+                canvas.setCanvasTool(SnowCanvasTool::Magnifier),
+            "activate the pinned-style magnifier wheel fixture");
+    canvas.setWheelZoomEnabled(false);
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Magnifier);
+    palette.setStyleToolbarState(canvas.canvasStyleToolbarState());
+    int commits = 0;
+    QObject::connect(&canvas, &SnowCanvasWidget::styleEditCommitted, &palette,
+                     [&](const SnowCanvasStyleEdit& edit) {
+                         const auto* patch = std::get_if<SnowCanvasMagnifierEdit>(&edit);
+                         require(patch &&
+                                     patch->properties == SnowCanvasMagnifierStylePropertyFactor,
+                                 "style wheel commits must patch only the magnifier factor");
+                         ++commits;
+                     });
+    WheelStepAccumulator accumulator;
+    const auto wheel = [&](int pixels, int angle) {
+        QWheelEvent event(QPointF(40, 35), canvas.mapToGlobal(QPoint(40, 35)), QPoint(0, pixels),
+                          QPoint(0, angle), Qt::NoButton, Qt::NoModifier, Qt::ScrollUpdate, false);
+        require(handleScreenshotStyleWheel(palette, canvas, event, accumulator),
+                "pinned style wheels must route magnifier input even with camera zoom disabled");
+    };
+    const auto camera = canvas.canvasToViewTransform();
+    for (int index = 0; index < 9; ++index)
+        wheel(10, 120);
+    require(commits == 0 && !binding.lastSaveSucceeded().has_value() &&
+                screenshotCanvasToolStyleDefaults().magnifier == defaults.magnifier,
+            "incomplete precise gestures must not save magnifier preferences");
+    wheel(10, 120);
+    require(commits == 1 && binding.lastSaveSucceeded() == true &&
+                canvas.canvasMagnifierStyle().factor == 2.1 &&
+                screenshotCanvasToolStyleDefaults().magnifier.factor == 2.1 &&
+                palette.creationStyleDefaults().magnifier.factor == 2.1,
+            "completed precise gestures must save and remember the actual engine factor");
+    wheel(0, 360);
+    require(commits == 2 && canvas.canvasMagnifierStyle().factor == 2.4 &&
+                screenshotCanvasToolStyleDefaults().magnifier.factor == 2.4 &&
+                canvas.canvasToViewTransform() == camera,
+            "coalesced wheel input must save one completed edit and preserve the camera");
+    const auto saved = screenshotCanvasToolStyleDefaults();
+    const auto mouse = [&](QEvent::Type type, QPointF point, Qt::MouseButton button,
+                           Qt::MouseButtons buttons) {
+        QMouseEvent event(type, point, point, point, button, buttons, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &event);
+    };
+    mouse(QEvent::MouseButtonPress, {20, 20}, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseMove, {60, 50}, Qt::NoButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, {60, 50}, Qt::LeftButton, Qt::NoButton);
+    mouse(QEvent::MouseButtonPress, {40, 35}, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, {40, 35}, Qt::LeftButton, Qt::NoButton);
+    require(canvas.canvasStyleToolbarState().source ==
+                SnowCanvasStyleToolbarSource::SelectedMagnifier,
+            "select the magnifier before editing its factor through pinned style wheels");
+    wheel(100, 0);
+    auto expectedSelected = saved;
+    expectedSelected.magnifier.factor = 2.5;
+    require(commits == 3 && canvas.canvasMagnifierStyle().factor == 2.5 &&
+                screenshotCanvasToolStyleDefaults() == expectedSelected &&
+                palette.creationStyleDefaults().magnifier == expectedSelected.magnifier,
+            "selected magnifier wheel edits remember only the completed factor change");
+    require(canvas.setCanvasTool(SnowCanvasTool::Select),
+            "select pinned magnifiers through the Select tool");
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Select);
+    mouse(QEvent::MouseButtonPress, {40, 35}, Qt::LeftButton, Qt::LeftButton);
+    mouse(QEvent::MouseButtonRelease, {40, 35}, Qt::LeftButton, Qt::NoButton);
+    require(canvas.canvasStyleToolbarState().source ==
+                SnowCanvasStyleToolbarSource::SelectedMagnifier,
+            "the pinned Select tool must expose the selected magnifier factor");
+    const auto magnifier = [&] {
+        const auto elementSlots = QJsonDocument::fromJson(runtime.serializeDocumentSession())
+                                      .object()
+                                      .value(QStringLiteral("document"))
+                                      .toObject()
+                                      .value(QStringLiteral("slots"))
+                                      .toArray();
+        for (const auto& slot : elementSlots) {
+            const auto data = slot.toObject().value(QStringLiteral("data")).toObject();
+            if (data.contains(QStringLiteral("Magnifier")))
+                return data.value(QStringLiteral("Magnifier")).toObject();
+        }
+        require(false, "the pinned wheel fixture must retain its magnifier");
+        return QJsonObject();
+    };
+    const auto beforeSelectedWheel = magnifier();
+    wheel(-90, -120);
+    require(commits == 3 && opacityEdits == 0 && magnifier() == beforeSelectedWheel,
+            "partial Select-tool wheel gestures must leave magnifier factor and opacity unchanged");
+    wheel(-10, -120);
+    require(commits == 4 && canvas.canvasMagnifierStyle().factor == 2.4 && opacityEdits == 0 &&
+                magnifier().value(QStringLiteral("opacity")) ==
+                    beforeSelectedWheel.value(QStringLiteral("opacity")) &&
+                screenshotCanvasToolStyleDefaults() == saved &&
+                palette.creationStyleDefaults().magnifier == saved.magnifier,
+            "pinned Select-tool wheels remember factors while preserving other preferences");
+    wheel(30, 0);
+    const auto beforeModifiedWheel = magnifier();
+    for (const auto modifiers : {Qt::ControlModifier, Qt::AltModifier, Qt::MetaModifier}) {
+        QWheelEvent event(QPointF(40, 35), canvas.mapToGlobal(QPoint(40, 35)), QPoint(0, 100),
+                          QPoint(0, 120), Qt::NoButton, modifiers, Qt::ScrollUpdate, false);
+        require(!handleScreenshotStyleWheel(palette, canvas, event, accumulator) &&
+                    magnifier() == beforeModifiedWheel && commits == 4 && opacityEdits == 0 &&
+                    canvas.canvasToViewTransform() == camera,
+                "modified pinned magnifier wheels must preserve factors, opacity and camera");
+    }
+    wheel(70, 0);
+    require(commits == 4 && canvas.canvasMagnifierStyle().factor == 2.4,
+            "modified pinned input must discard incomplete selected factor gestures");
+    wheel(30, 0);
+    require(commits == 5 && canvas.canvasMagnifierStyle().factor == 2.5 && opacityEdits == 0,
+            "pinned selected factor gestures must resume after modified input");
+    require(canvas.resetEditingState(), "clear the pinned magnifier adjustment target");
+    const auto withoutTarget = magnifier();
+    QWheelEvent event(QPointF(100, 100), canvas.mapToGlobal(QPoint(100, 100)), QPoint(),
+                      QPoint(0, -120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+    require(!handleScreenshotStyleWheel(palette, canvas, event, accumulator) &&
+                magnifier() == withoutTarget && commits == 5 && opacityEdits == 0,
+            "Select-tool wheels without an adjustment target must not edit magnifiers or opacity");
+}
+
+void disabledSelectionOpacityRejectsWheelSteps() {
+    ScreenshotToolPalette palette(ScreenshotToolPalette::Options{});
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Select);
+    int edits = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::selectionOpacityChanged, &palette,
+                     [&](qreal) { ++edits; });
+    auto* slider = palette.findChild<adqt::widgets::AdSlider*>(
+        QStringLiteral("screenshotSelectionOpacitySlider"));
+    require(slider != nullptr, "Select must materialize the selection opacity control");
+    SnowCanvasStyleToolbarState rectangle;
+    rectangle.source = SnowCanvasStyleToolbarSource::SelectedRectangle;
+    rectangle.selectedElementCount = 1;
+    rectangle.shapeStyle.opacity = 0.5;
+    palette.setStyleToolbarState(rectangle);
+    require(slider->isEnabled() && slider->value() == 50,
+            "a selected rectangle must enable its opacity control");
+    for (const auto source : {SnowCanvasStyleToolbarSource::SelectedMagnifier,
+                              SnowCanvasStyleToolbarSource::SelectedSpotlight}) {
+        SnowCanvasStyleToolbarState selected;
+        selected.source = source;
+        selected.selectedElementCount = 1;
+        palette.setStyleToolbarState(selected);
+        require(!slider->isEnabled(),
+                "changing the selected kind must disable opacity even with the same item count");
+        palette.setSelectionOpacity(0.65, true);
+        const auto before = slider->value();
+        require(!palette.stepSelectionOpacity(-1) && !palette.stepSelectionOpacity(1) &&
+                    slider->value() == before && slider->property("mixed").toBool() && edits == 0,
+                "disabled opacity steps must preserve mixed values without emitting commands");
+    }
+    palette.setStyleToolbarState(rectangle);
+    require(slider->isEnabled() && palette.stepSelectionOpacity(-1) && slider->value() == 45 &&
+                edits == 1,
+            "enabled selection opacity controls must retain their ordinary five-percent steps");
+}
+
+void magnifierControlsRetranslateAndRenderPreviews() {
+    using namespace snow_shot::presentation;
+    auto& language = LanguageManager::instance();
+    auto& theme = styles::ThemeManager::instance();
+    const auto previousTheme = theme.themeMode();
+    const auto restore = qScopeGuard([&] {
+        theme.setThemeMode(previousTheme);
+        adqt::theme::ThemeManager::instance().applyTo(*qApp);
+        require(language.setLanguage(QStringLiteral("en_US")),
+                "restore the magnifier test language");
+    });
+    ScreenshotToolPalette::Options options;
+    options.showMagnifierTool = true;
+    options.showSpotlightTool = true;
+    options.showPenHighlightTool = true;
+    ScreenshotToolPalette palette(options);
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Magnifier);
+#if defined(Q_OS_WIN)
+    if (!qEnvironmentVariableIsEmpty("SNOW_TEST_MAGNIFIER_PREVIEW_DIR"))
+        palette.setFont(QApplication::font());
+#endif
+    palette.show();
+    const auto creationDefaults = palette.creationStyleDefaults().magnifier;
+    SnowCanvasStyleToolbarState mixedOutline;
+    mixedOutline.source = SnowCanvasStyleToolbarSource::SelectedMagnifier;
+    mixedOutline.selectedElementCount = 2;
+    mixedOutline.magnifierStyle.factor = 3.4;
+    mixedOutline.magnifierStyle.connectionType = SnowCanvasMagnifierConnectionType::Gradient;
+    mixedOutline.magnifierStyle.sourceOutline = true;
+    mixedOutline.magnifierStyleMixed = SnowCanvasMagnifierStylePropertySourceOutline;
+    palette.setStyleToolbarState(mixedOutline);
+    for (const auto& locale :
+         {QStringLiteral("en_US"), QStringLiteral("zh_CN"), QStringLiteral("zh_TW")}) {
+        require(language.setLanguage(locale), "magnifier translations must load");
+        QCoreApplication::processEvents();
+        auto* factor =
+            palette.findChild<QWidget*>(QStringLiteral("screenshotMagnifierFactorButton"));
+        auto* connection =
+            palette.findChild<QWidget*>(QStringLiteral("screenshotMagnifierConnectionButtonGroup"));
+        auto* outline =
+            palette.findChild<QWidget*>(QStringLiteral("screenshotMagnifierSourceOutlineButton"));
+        auto* ratio =
+            palette.findChild<QWidget*>(QStringLiteral("screenshotMagnifierArrowRatioButton"));
+        require(
+            factor && connection && outline && ratio &&
+                ratio->toolTip() == QCoreApplication::translate("ScreenshotToolPalette",
+                                                                "Arrow ratio (scroll to adjust)") &&
+                factor->toolTip() ==
+                    QCoreApplication::translate("ScreenshotToolPalette",
+                                                "Magnification factor (scroll to adjust)") &&
+                connection->accessibleName() ==
+                    QCoreApplication::translate("ScreenshotToolPalette", "Connection type") &&
+                outline->accessibleName() ==
+                    QCoreApplication::translate("ScreenshotToolPalette", "Source region outline"),
+            "magnifier tooltip and accessible names must retranslate in place");
+        auto* group = connection->findChild<adqt::widgets::AdRadioButtonGroup*>();
+        require(group && group->buttons().size() == 3, "connection selector retains three options");
+        auto* outlineButton = qobject_cast<adqt::widgets::AdButton*>(outline);
+        auto* factorButton = dynamic_cast<IconNumericValuePreviewButton*>(factor);
+        require(outlineButton && factorButton && outlineButton->property("mixed").toBool() &&
+                    !outlineButton->isChecked() &&
+                    outlineButton->buttonStyle() == adqt::widgets::AdButton::ButtonStyle::Dashed &&
+                    outlineButton->accentRole() == adqt::widgets::AdButton::AccentRole::Neutral &&
+                    outlineButton->accessibleDescription() ==
+                        QCoreApplication::translate("ScreenshotToolPalette", "Mixed") &&
+                    group->checkedId() ==
+                        static_cast<int>(SnowCanvasMagnifierConnectionType::Gradient) &&
+                    factorButton->valueText() == QStringLiteral("3.4×") &&
+                    palette.creationStyleDefaults().magnifier == creationDefaults,
+                "language changes retranslate mixed source-outline descriptions while retaining "
+                "selection state and creation defaults");
+        const char* sources[] = {"None", "Leader line", "Gradient"};
+        for (int index = 0; index < 3; ++index)
+            require(group->button(index)->toolTip() ==
+                            QCoreApplication::translate("ScreenshotToolPalette", sources[index]) &&
+                        group->button(index)->accessibleName() ==
+                            QCoreApplication::translate("ScreenshotToolPalette", sources[index]),
+                    "every connection option retranslates its tooltip and accessible name");
+    }
+    require(language.setLanguage(QStringLiteral("en_US")),
+            "restore English for magnifier previews");
+    mixedOutline.magnifierStyleMixed = 0;
+    palette.setStyleToolbarState(mixedOutline);
+    const QString directory = qEnvironmentVariable("SNOW_TEST_MAGNIFIER_PREVIEW_DIR");
+    if (!directory.isEmpty())
+        require(QDir::isAbsolutePath(directory) && QDir().mkpath(directory),
+                "create the magnifier preview directory");
+    for (bool dark : {false, true}) {
+        theme.setThemeMode(dark ? styles::ThemeMode::Dark : styles::ThemeMode::Light);
+        adqt::theme::ThemeManager::instance().applyTo(*qApp);
+        const auto scheme = styles::generateThemeColorScheme();
+        for (qreal dpr : {1.0, 1.25, 1.5, 2.0}) {
+            palette.setStyleToolbarState(mixedOutline);
+            palette.setPhysicalScale(dpr);
+            palette.prepareForDisplay();
+            QCoreApplication::processEvents();
+            const QString suffix = QStringLiteral("%1-%2").arg(
+                dark ? QStringLiteral("dark") : QStringLiteral("light"), QString::number(dpr));
+            const QVector<adqt::icons::IconRef> icons{
+                snow_shot::presentation::icons::custom::outlined::ToolMagnifier(),
+                snow_shot::presentation::icons::custom::outlined::MagnificationFactor(),
+                snow_shot::presentation::icons::custom::outlined::MagnifierConnectionNone(),
+                snow_shot::presentation::icons::custom::outlined::ShowLeaderLine(),
+                snow_shot::presentation::icons::custom::outlined::MagnifierGradient(),
+                snow_shot::presentation::icons::custom::outlined::SourceRegionOutline()};
+            const QVector<QColor> colors{scheme.map.colorText, scheme.map.colorPrimary,
+                                         scheme.map.colorTextQuaternary};
+            QImage sheet(
+                QSize(qRound(40 * static_cast<qreal>(icons.size()) * dpr), qRound(120 * dpr)),
+                QImage::Format_RGBA8888);
+            sheet.setDevicePixelRatio(dpr);
+            sheet.fill(scheme.map.colorBgContainer);
+            QPainter painter(&sheet);
+            for (qsizetype row = 0; row < colors.size(); ++row)
+                for (qsizetype index = 0; index < icons.size(); ++index) {
+                    const auto pixmap = snow_shot::presentation::icons::renderTintedIconPixmap(
+                        icons[index], QSize(20, 20), dpr, colors[row]);
+                    require(!pixmap.isNull() && pixmap.width() == qRound(20 * dpr),
+                            "magnifier icons must render in neutral, active and disabled colors at "
+                            "every scale");
+                    painter.drawPixmap(
+                        QPoint(static_cast<int>(index) * 40 + 10, static_cast<int>(row) * 40 + 10),
+                        pixmap);
+                }
+            painter.end();
+            if (!directory.isEmpty()) {
+                require(palette.grab().save(QDir(directory).filePath(
+                            QStringLiteral("toolbar-") + suffix + QStringLiteral(".png"))) &&
+                            palette.stylePanel()->grab().save(QDir(directory).filePath(
+                                QStringLiteral("settings-") + suffix + QStringLiteral(".png"))) &&
+                            sheet.save(QDir(directory).filePath(QStringLiteral("icons-") + suffix +
+                                                                QStringLiteral(".png"))),
+                        "save current magnifier toolbar and icons in each theme and scale");
+                for (int connection = 0; connection < 3; ++connection)
+                    for (bool outline : {false, true}) {
+                        SnowCanvasStyleToolbarState state;
+                        state.source = SnowCanvasStyleToolbarSource::SelectedMagnifier;
+                        state.selectedElementCount = 1;
+                        state.magnifierStyle.connectionType =
+                            static_cast<SnowCanvasMagnifierConnectionType>(connection);
+                        state.magnifierStyle.sourceOutline = outline;
+                        palette.setStyleToolbarState(state);
+                        QCoreApplication::processEvents();
+                        require(palette.stylePanel()->grab().save(
+                                    QDir(directory).filePath(QStringLiteral("settings-%1-%2-%3.png")
+                                                                 .arg(connection)
+                                                                 .arg(outline)
+                                                                 .arg(suffix))),
+                                "save all six connection and outline toolbar states");
+                    }
+                auto mixedPreview = mixedOutline;
+                mixedPreview.magnifierStyleMixed = SnowCanvasMagnifierStylePropertyConnectionType |
+                                                   SnowCanvasMagnifierStylePropertySourceOutline;
+                palette.setStyleToolbarState(mixedPreview);
+                QCoreApplication::processEvents();
+                require(
+                    palette.stylePanel()->grab().save(QDir(directory).filePath(
+                        QStringLiteral("settings-mixed-") + suffix + QStringLiteral(".png"))),
+                    "save the mixed connection and source-outline row in every theme and scale");
+            }
+        }
+    }
+}
+
+void angleSettingsAndWheelPreserveIndependentProperties() {
+    ScreenshotToolPalette palette(ScreenshotToolPalette::Options{});
+    int activations = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::angleToolRequested,
+                     [&activations]() { ++activations; });
+    require(palette.activateDrawingShortcut(QStringLiteral("angle")) && activations == 1 &&
+                palette.activeTool() == ScreenshotToolPalette::Tool::Angle,
+            "angle shortcut activation should select and publish the tool");
+    palette.show();
+    QCoreApplication::processEvents();
+    const auto unitGroup = [&palette]() {
+        auto* container =
+            palette.findChild<QWidget*>(QStringLiteral("screenshotAngleUnitButtonGroup"));
+        return container == nullptr ? nullptr
+                                    : container->findChild<adqt::widgets::AdRadioButtonGroup*>();
+    };
+    const auto decimalsSelect = [&palette]() {
+        return palette.findChild<adqt::widgets::AdSelect*>(
+            QStringLiteral("screenshotAngleDecimalsSelect"));
+    };
+    auto* units = unitGroup();
+    auto* decimals = decimalsSelect();
+    require(units != nullptr && units->buttons().size() == 2 && decimals != nullptr &&
+                decimals->model()->rowCount() == 4,
+            "angle settings should expose two units and four precision choices");
+    const auto initial = palette.creationStyleDefaults().angle;
+    require(initial.stroke == QColor(QStringLiteral("#f5222d")) && initial.strokeWidth == 2 &&
+                initial.unit == SnowCanvasAngleUnit::Degrees && initial.decimalPlaces == 0 &&
+                units->checkedId() == static_cast<int>(SnowCanvasAngleUnit::Degrees) &&
+                decimals->currentValue().toInt() == 0,
+            "angle defaults should use red two-pixel strokes and integer degrees");
+    if (const QString path = qEnvironmentVariable("SNOW_ANGLE_PALETTE_PREVIEW"); !path.isEmpty()) {
+        require(QDir::isAbsolutePath(path), "angle palette preview path should be absolute");
+        require(palette.grab().save(path, "PNG"), "save default angle palette preview");
+    }
+    const auto bit = [](SnowCanvasAngleStyleProperty property) {
+        return static_cast<quint32>(property);
+    };
+    SnowCanvasAngleStyle emitted = initial;
+    quint32 properties = 0;
+    int edits = 0;
+    palette.setStyleEditHandler([&](const SnowCanvasStyleEdit& edit) {
+        const auto* angle = std::get_if<SnowCanvasAngleStyleEdit>(&edit);
+        require(angle != nullptr, "angle controls should emit only angle style edits");
+        emitted = angle->style;
+        properties = angle->properties;
+        ++edits;
+        palette.rememberStyleEdit(edit);
+        return true;
+    });
+    auto* typeContainer =
+        palette.findChild<QWidget*>(QStringLiteral("screenshotAngleTypeButtonGroup"));
+    auto* types =
+        typeContainer ? typeContainer->findChild<adqt::widgets::AdRadioButtonGroup*>() : nullptr;
+    require(types && types->buttons().size() == 2 &&
+                types->checkedId() == static_cast<int>(SnowCanvasAngleType::Directed),
+            "angle types retain the existing 360-degree default");
+    for (auto type : {SnowCanvasAngleType::Interior, SnowCanvasAngleType::Directed}) {
+        auto* button = types->button(static_cast<int>(type));
+        require(button && !button->icon().isNull() &&
+                    button->accessibleName() == (type == SnowCanvasAngleType::Interior
+                                                     ? QStringLiteral("180° angle")
+                                                     : QStringLiteral("360° angle")),
+                "angle type buttons expose distinct icons and accessible labels");
+        button->click();
+        require(emitted.angleType == type &&
+                    properties == bit(SnowCanvasAngleStyleProperty::Type) &&
+                    emitted.unit == initial.unit && emitted.decimalPlaces == initial.decimalPlaces,
+                "angle type changes preserve independent display preferences");
+    }
+    for (SnowCanvasAngleUnit unit : {SnowCanvasAngleUnit::Radians, SnowCanvasAngleUnit::Degrees}) {
+        auto* button = units->button(static_cast<int>(unit));
+        require(button != nullptr && !button->icon().isNull() &&
+                    button->accessibleName() == (unit == SnowCanvasAngleUnit::Degrees
+                                                     ? QStringLiteral("Degrees")
+                                                     : QStringLiteral("Radians")),
+                "angle units should use the supplied theme-aware icons");
+        button->click();
+        require(emitted.unit == unit && properties == bit(SnowCanvasAngleStyleProperty::Unit),
+                "unit changes should commit only the angle unit");
+    }
+    for (int places : {1, 2, 3, 0}) {
+        decimals->setCurrentValue(places);
+        require(emitted.decimalPlaces == static_cast<quint32>(places) &&
+                    properties == bit(SnowCanvasAngleStyleProperty::DecimalPlaces),
+                "precision choices should commit only decimal places");
+    }
+    clickStyleControl(palette, "Angle stroke width 4");
+    require(emitted.strokeWidth == 4 &&
+                properties == bit(SnowCanvasAngleStyleProperty::StrokeWidth),
+            "angle width presets should commit independently");
+    clickStyleControl(palette, "Angle stroke color #1677ff");
+    require(emitted.stroke == QColor(QStringLiteral("#1677ff")) &&
+                properties == bit(SnowCanvasAngleStyleProperty::Stroke),
+            "angle stroke colors should commit independently");
+    const auto remembered = palette.creationStyleDefaults().angle;
+    const auto widthEditorRoot = [&palette]() -> QWidget* {
+        auto* controls =
+            palette.findChild<QWidget*>(QStringLiteral("screenshotAngleStyleControls"));
+        if (controls == nullptr)
+            return nullptr;
+        for (QWidget* widget : controls->findChildren<QWidget*>()) {
+            if (widget->property("screenshotStyleEditorRoot").toBool() &&
+                widget->property("screenshotStyleEditorRole").toByteArray() == "outline-width")
+                return widget;
+        }
+        return nullptr;
+    };
+    QPointer<QWidget> widthRoot = widthEditorRoot();
+    require(widthRoot != nullptr, "angle width should use the shared editor role");
+    for (int i = 0; i < 5; ++i) {
+        palette.setActiveTool(ScreenshotToolPalette::Tool::Shape);
+        palette.setActiveTool(ScreenshotToolPalette::Tool::Angle);
+        require(widthRoot != nullptr && widthEditorRoot() == widthRoot &&
+                    palette.creationStyleDefaults().angle == remembered &&
+                    palette.lastStyleReconcileStatsForTests().retained >= 1,
+                "tool switching should reuse the width editor and retain angle defaults");
+    }
+    units = unitGroup();
+    decimals = decimalsSelect();
+    typeContainer = palette.findChild<QWidget*>(QStringLiteral("screenshotAngleTypeButtonGroup"));
+    types =
+        typeContainer ? typeContainer->findChild<adqt::widgets::AdRadioButtonGroup*>() : nullptr;
+    require(types != nullptr, "angle type controls are restored with the angle tool");
+    require(units != nullptr && decimals != nullptr, "angle controls should rebuild on demand");
+    SnowCanvasStyleToolbarState selected;
+    selected.source = SnowCanvasStyleToolbarSource::SelectedAngle;
+    selected.selectedElementCount = 2;
+    selected.angleStyle = remembered;
+    selected.angleStyle.unit = SnowCanvasAngleUnit::Radians;
+    selected.angleStyle.decimalPlaces = 3;
+    selected.angleStyleMixed = bit(SnowCanvasAngleStyleProperty::Unit) |
+                               bit(SnowCanvasAngleStyleProperty::DecimalPlaces) |
+                               bit(SnowCanvasAngleStyleProperty::Type);
+    palette.setStyleToolbarState(selected);
+    require(types->checkedId() == -1 && units->checkedId() == -1 &&
+                !decimals->currentValue().isValid() &&
+                palette.creationStyleDefaults().angle == remembered,
+            "mixed selected values should clear controls without replacing creation defaults");
+    const int beforeResolving = edits;
+    units->button(static_cast<int>(SnowCanvasAngleUnit::Radians))->click();
+    auto expectedSelectedAngle = remembered;
+    expectedSelectedAngle.unit = SnowCanvasAngleUnit::Radians;
+    require(
+        edits == beforeResolving + 1 && properties == bit(SnowCanvasAngleStyleProperty::Unit) &&
+            !decimals->currentValue().isValid() &&
+            palette.creationStyleDefaults().angle == expectedSelectedAngle,
+        "resolving one mixed property remembers only that property and preserves mixed controls");
+    const auto creationBeforeWheel = palette.creationStyleDefaults().angle;
+    QVector<QPair<int, bool>> adjustments;
+    QObject::connect(&palette, &ScreenshotToolPalette::angleValueAdjustmentRequested,
+                     [&](int steps, bool fine) { adjustments.append({steps, fine}); });
+    const auto wheel = [&palette](int delta, Qt::KeyboardModifiers modifiers) {
+        const QPoint point = palette.rect().center();
+        QWheelEvent event(QPointF(point), palette.mapToGlobal(point), QPoint(), QPoint(0, delta),
+                          Qt::NoButton, modifiers, Qt::NoScrollPhase, false);
+        return palette.handleToolbarWheel(&event) && event.isAccepted();
+    };
+    const int beforeWheel = edits;
+    require(
+        wheel(120, Qt::NoModifier) && adjustments.constLast() == QPair<int, bool>{1, false} &&
+            wheel(240, Qt::ShiftModifier) && adjustments.constLast() == QPair<int, bool>{2, true} &&
+            wheel(-120, Qt::NoModifier) && adjustments.constLast() == QPair<int, bool>{-1, false},
+        "angle wheel should retain notch counts, direction, and fine adjustment modifiers");
+    const auto beforeControlWheel = adjustments.size();
+    require(!wheel(120, Qt::ControlModifier) && adjustments.size() == beforeControlWheel &&
+                edits == beforeWheel &&
+                palette.creationStyleDefaults().angle == creationBeforeWheel,
+            "angle wheel should preserve style defaults and leave control-wheel navigation alone");
+    const auto pixelWheel = [&palette](int delta, Qt::ScrollPhase phase) {
+        const QPoint point = palette.rect().center();
+        QWheelEvent event(QPointF(point), palette.mapToGlobal(point), QPoint(0, delta), QPoint(),
+                          Qt::NoButton, Qt::NoModifier, phase, false);
+        return palette.handleToolbarWheel(&event);
+    };
+    require(pixelWheel(50, Qt::ScrollUpdate), "precise angle wheel should be consumed");
+    const auto beforeWheelEnd = adjustments.size();
+    static_cast<void>(pixelWheel(0, Qt::ScrollEnd));
+    require(pixelWheel(50, Qt::ScrollUpdate) && adjustments.size() == beforeWheelEnd + 1 &&
+                adjustments.constLast() == QPair<int, bool>{1, false},
+            "zero-delta scroll end should reset the angle gesture remainder");
+    const auto beforeWheelBegin = adjustments.size();
+    static_cast<void>(pixelWheel(0, Qt::ScrollBegin));
+    require(pixelWheel(50, Qt::ScrollUpdate) && adjustments.size() == beforeWheelBegin + 1 &&
+                adjustments.constLast() == QPair<int, bool>{1, false},
+            "zero-delta scroll begin should reset the angle gesture remainder");
+    palette.resetAngleWheelInput();
+    const auto beforeTargetChange = adjustments.size();
+    require(pixelWheel(50, Qt::ScrollUpdate) && adjustments.size() == beforeTargetChange + 1 &&
+                adjustments.constLast() == QPair<int, bool>{1, false},
+            "changing the angle adjustment target should reset the wheel gesture remainder");
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Select);
+    palette.setStyleToolbarState(selected);
+    require(unitGroup() == nullptr && decimalsSelect() == nullptr,
+            "Select should release angle style editors while retaining selected angle state");
+    auto* opacity = palette.findChild<adqt::widgets::AdSlider*>(
+        QStringLiteral("screenshotSelectionOpacitySlider"));
+    require(opacity != nullptr, "angle selection should expose common opacity");
+    const double opacityBeforeWheel = opacity->value();
+    require(wheel(120, Qt::ShiftModifier) && adjustments.constLast() == QPair<int, bool>{1, true} &&
+                opacity->value() == opacityBeforeWheel,
+            "selected angles should receive wheel before selection opacity");
+    const auto& language = snow_shot::presentation::LanguageManager::instance();
+    const QString previousLanguage = language.languagePreference();
+    auto& mutableLanguage = snow_shot::presentation::LanguageManager::instance();
+    const auto restoreLanguage =
+        qScopeGuard([&]() { static_cast<void>(mutableLanguage.setLanguage(previousLanguage)); });
+    selected.angleStyleMixed = 0;
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Angle);
+    palette.setStyleToolbarState(selected);
+    units = unitGroup();
+    decimals = decimalsSelect();
+    require(units != nullptr && decimals != nullptr,
+            "angle tool should expose selected angle style controls");
+    typeContainer = palette.findChild<QWidget*>(QStringLiteral("screenshotAngleTypeButtonGroup"));
+    types =
+        typeContainer ? typeContainer->findChild<adqt::widgets::AdRadioButtonGroup*>() : nullptr;
+    require(types != nullptr, "angle type controls are available for retranslation");
+    const int beforeLanguage = edits;
+    const auto beforeLanguageDefaults = palette.creationStyleDefaults().angle;
+    for (const QString& locale :
+         {QStringLiteral("en_US"), QStringLiteral("zh_CN"), QStringLiteral("zh_TW")}) {
+        require(mutableLanguage.setLanguage(locale), "angle controls should support every locale");
+        QCoreApplication::processEvents();
+        require(
+            types->button(static_cast<int>(SnowCanvasAngleType::Interior))->accessibleName() ==
+                    QCoreApplication::translate("ScreenshotToolPalette", "180° angle") &&
+                units->button(static_cast<int>(SnowCanvasAngleUnit::Degrees))->accessibleName() ==
+                    QCoreApplication::translate("ScreenshotToolPalette", "Degrees") &&
+                decimals->model()->index(3, 0).data(decimals->labelRole()).toString() ==
+                    QCoreApplication::translate("ScreenshotToolPalette", "3 decimal places") &&
+                units->checkedId() == static_cast<int>(SnowCanvasAngleUnit::Radians) &&
+                decimals->currentValue().toInt() == 3 && edits == beforeLanguage &&
+                palette.creationStyleDefaults().angle == beforeLanguageDefaults,
+            "language changes should preserve selected values while translating angle controls");
+    }
+}
+
 void distanceSettingsExposeIndependentPropertiesAndHoverWheel() {
     ScreenshotToolPalette palette(ScreenshotToolPalette::Options{});
     int activations = 0;
@@ -11184,6 +12929,7 @@ void distanceSettingsExposeIndependentPropertiesAndHoverWheel() {
     ScreenshotToolPalette::Options hiddenOptions;
     hiddenOptions.showSelectTool = false;
     hiddenOptions.showArrowTool = false;
+    hiddenOptions.showAngleTool = false;
     hiddenOptions.toolbarLayout = snow_shot::storage::ScreenshotToolbarLayout{
         {{QStringLiteral("shape")}}, {QStringLiteral("distance")}};
     ScreenshotToolPalette hiddenPalette(hiddenOptions);
@@ -11659,6 +13405,302 @@ void selectPopupPreservesModelFontRole() {
             "select popup should render an option with its model font");
 }
 
+void textEmphasisButtonsToggleMixedStylesAndSurviveReuse() {
+    ScreenshotToolPalette::Options options;
+    options.showTextTool = true;
+    auto paletteOwner = std::make_unique<ScreenshotToolPalette>(options);
+    auto& palette = *paletteOwner;
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Text);
+    palette.show();
+    QCoreApplication::processEvents();
+    const auto findButton = [&](const char* name) {
+        return palette.findChild<adqt::widgets::AdButton*>(QString::fromLatin1(name));
+    };
+    auto* bold = findButton("screenshotTextBoldButton");
+    auto* italic = findButton("screenshotTextItalicButton");
+    require(bold != nullptr && italic != nullptr && bold->isCheckable() && italic->isCheckable(),
+            "text styles expose independent checkable emphasis buttons");
+    auto* font = controlWithTooltip(palette, "Current text font size");
+    auto* alignment = controlWithAccessibleName(palette, "Text alignment");
+    auto* row = palette.findChild<QWidget*>(QStringLiteral("screenshotTextStyleControls"));
+    require(font != nullptr && alignment != nullptr && row != nullptr &&
+                font->mapTo(row, QPoint()).x() < bold->mapTo(row, QPoint()).x() &&
+                bold->mapTo(row, QPoint()).x() < italic->mapTo(row, QPoint()).x() &&
+                italic->mapTo(row, QPoint()).x() < alignment->mapTo(row, QPoint()).x(),
+            "bold and italic follow font controls and precede alignment");
+    int edits = 0;
+    SnowCanvasTextStyle changed;
+    quint32 properties = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::textStyleChanged, &palette,
+                     [&](const SnowCanvasTextStyle& style, quint32 flags) {
+                         ++edits;
+                         changed = style;
+                         properties = flags;
+                     });
+    SnowCanvasStyleToolbarState state;
+    state.source = SnowCanvasStyleToolbarSource::DefaultText;
+    palette.setStyleToolbarState(state);
+    bold->click();
+    require(edits == 1 && changed.bold && !changed.italic &&
+                properties == SnowCanvasTextStyleMixedBold && bold->isChecked() &&
+                bold->buttonStyle() == adqt::widgets::AdButton::ButtonStyle::Solid &&
+                bold->accentRole() == adqt::widgets::AdButton::AccentRole::Primary,
+            "bold commits only its flag and uses the recording-toggle active style");
+    italic->click();
+    require(edits == 2 && changed.bold && changed.italic &&
+                properties == SnowCanvasTextStyleMixedItalic,
+            "italic can be enabled independently alongside bold");
+    bold->click();
+    require(edits == 3 && !changed.bold && changed.italic && !bold->isChecked() &&
+                bold->buttonStyle() == adqt::widgets::AdButton::ButtonStyle::Text,
+            "disabling bold preserves italic and restores the inactive style");
+
+    state.source = SnowCanvasStyleToolbarSource::SelectedText;
+    state.textStyle.bold = true;
+    state.textStyle.italic = true;
+    state.textStyleMixed = SnowCanvasTextStyleMixedBold | SnowCanvasTextStyleMixedItalic;
+    palette.setStyleToolbarState(state);
+    require(!bold->isChecked() && !italic->isChecked() &&
+                bold->accessibleDescription() == QStringLiteral("Mixed"),
+            "mixed emphasis is unchecked and described accessibly");
+    auto& language = snow_shot::presentation::LanguageManager::instance();
+    for (const auto& locale :
+         {QStringLiteral("zh_CN"), QStringLiteral("zh_TW"), QStringLiteral("en_US")}) {
+        require(language.setLanguage(locale), "load emphasis translations");
+        QCoreApplication::processEvents();
+        const auto translated = [&](const char* source) {
+            return QCoreApplication::translate("ScreenshotToolPalette", source);
+        };
+        require(bold->toolTip() == translated("Bold") &&
+                    italic->accessibleName() == translated("Italic") &&
+                    bold->accessibleDescription() == translated("Mixed") && edits == 3,
+                "language changes retranslate names and mixed state without committing edits");
+        require(locale == QStringLiteral("en_US") || translated("Bold") != QStringLiteral("Bold"),
+                "both Chinese catalogs translate emphasis controls");
+    }
+    bold->click();
+    require(edits == 4 && changed.bold && bold->isChecked() && !italic->isChecked() &&
+                bold->accessibleDescription().isEmpty(),
+            "clicking mixed bold enables it and leaves italic mixed");
+    const QSize originalSize = bold->size();
+    require(palette.setPhysicalScale(1.5), "scale text emphasis controls");
+    require(bold->width() > originalSize.width() && bold->size() == italic->size(),
+            "emphasis controls use shared DPI metrics");
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Shape);
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Text);
+    QCoreApplication::processEvents();
+    bold = findButton("screenshotTextBoldButton");
+    italic = findButton("screenshotTextItalicButton");
+    require(bold != nullptr && italic != nullptr, "emphasis controls survive style editor reuse");
+    state.textStyleMixed = 0;
+    palette.setStyleToolbarState(state);
+    bold->click();
+    require(edits == 5 && !changed.bold && changed.italic,
+            "reused emphasis controls retain exactly one correctly rebound callback");
+    if (const auto path = qEnvironmentVariable("SNOW_TEXT_EMPHASIS_TOOLBAR_PREVIEW");
+        !path.isEmpty())
+        require(palette.stylePanel()->grab().save(path), "save text emphasis toolbar preview");
+    QPointer<adqt::widgets::AdButton> releasedBold(bold);
+    QPointer<adqt::widgets::AdButton> releasedItalic(italic);
+    palette.clearActiveTool();
+    if (!releasedBold.isNull())
+        releasedBold->click();
+    require(edits == 5, "retired emphasis controls must release their commit callback");
+    paletteOwner.reset();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    require(releasedBold.isNull() && releasedItalic.isNull(),
+            "destroying the palette releases both emphasis controls");
+}
+
+void colorSamplerStopsWhenPopupClosureRetiresItsEditor() {
+    using namespace snow_shot::presentation;
+    for (bool retire : {false, true}) {
+        QWidget owner;
+        auto* layout = new QHBoxLayout(&owner);
+        auto editor = std::make_unique<ScreenshotToolPaletteColorEditor>();
+        ScreenshotToolPaletteColorEditorConfig config;
+        config.accessibleName = QStringLiteral("Test color");
+        config.observePopup = true;
+        ScreenshotToolPaletteEditorServices services;
+        int closed = 0;
+        int samplingRequests = 0;
+        services.popupInteractionEnded = [&](QObject*) {
+            ++closed;
+            if (retire) {
+                editor.reset();
+            }
+        };
+        services.canvasColorSamplingRequested = [&](adqt::widgets::AdColorPicker*) {
+            ++samplingRequests;
+        };
+        editor->build(layout, &owner, &owner, config, QColor(Qt::red), {}, {}, services,
+                      ScreenshotToolPaletteButtonMetrics{24, 16, 1.0});
+        owner.show();
+        auto* picker = owner.findChild<adqt::widgets::AdColorPicker*>();
+        require(picker != nullptr, "the sampler fixture must expose its color picker");
+        picker->setPopupVisible(true);
+        auto* sampler = qobject_cast<QAbstractButton*>(picker->previewContent());
+        require(picker->popupVisible() && sampler != nullptr,
+                "opening the color picker must expose its sampling command");
+        require(
+            QMetaObject::invokeMethod(sampler, "clicked", Qt::DirectConnection, Q_ARG(bool, false)),
+            "dispatch sampling while popup closure may retire the editor");
+        require(closed == 1 && !picker->popupVisible(),
+                "sampling closes the color popup exactly once");
+        require(samplingRequests == (retire ? 0 : 1),
+                "sampling must proceed only while its editor callback context remains alive");
+    }
+}
+
+void retiredStyleEditorsIgnorePendingCommands() {
+    ScreenshotToolPalette::Options options;
+    options.showTextTool = true;
+    options.styleDefaults.arrow.arrowRatio = 2.3;
+    ScreenshotToolPalette palette(options);
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Text);
+    QPointer<adqt::widgets::AdButton> fontSummary(qobject_cast<adqt::widgets::AdButton*>(
+        controlWithTooltip(palette, "Current text font size")));
+    require(fontSummary != nullptr, "Text must expose a font size command before retirement");
+    int textEdits = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::textStyleChanged, &palette,
+                     [&](const SnowCanvasTextStyle&, quint32) { ++textEdits; });
+    require(QMetaObject::invokeMethod(fontSummary, "click", Qt::QueuedConnection),
+            "queue a font command before capture cancellation");
+    palette.clearActiveTool();
+    require(fontSummary != nullptr,
+            "retired controls stay alive until their pending input can unwind");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    require(textEdits == 0, "pending retired font commands must not edit a canceled capture");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    require(fontSummary == nullptr, "retired font controls must still be deferred-deleted");
+
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Shape);
+    QPointer<adqt::widgets::AdColorPicker> strokePicker(
+        colorPickerWithAccessibleName(palette, "Stroke color"));
+    require(strokePicker != nullptr && strokePicker->popupContent() == nullptr,
+            "Shape must expose its unmaterialized stroke editor before retirement");
+    int shapeEdits = 0;
+    QObject::connect(
+        &palette, &ScreenshotToolPalette::shapeStyleChanged, &palette,
+        [&](const SnowCanvasShapeStyle&, quint32, SnowCanvasShapeKind) { ++shapeEdits; });
+    const auto defaults = palette.creationStyleDefaults();
+    QMetaObject::invokeMethod(
+        strokePicker,
+        [strokePicker]() {
+            strokePicker->commitValue(
+                adqt::widgets::AdColorValue::solid(QColor(QStringLiteral("#123456"))));
+            strokePicker->popupOpening();
+        },
+        Qt::QueuedConnection);
+    palette.clearActiveTool();
+    require(strokePicker != nullptr, "retired picker must survive until deferred deletion");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    require(shapeEdits == 0 && palette.creationStyleDefaults() == defaults,
+            "pending retired color commands must preserve the retained style model");
+    require(strokePicker->popupContent() == nullptr,
+            "pending popup input must not recreate a retired editor's content");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    require(strokePicker == nullptr, "retired color controls must be deferred-deleted");
+
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Arrow);
+    QPointer<adqt::widgets::AdButton> arrowRatio(
+        palette.findChild<adqt::widgets::AdButton*>(QStringLiteral("screenshotArrowRatioButton")));
+    require(arrowRatio != nullptr, "Arrow must expose its ratio reset command before retirement");
+    QPointer<adqt::widgets::AdPopover> shaftPopover(
+        popoverForTrigger(controlWithAccessibleName(palette, "Arrow shaft type")));
+    require(shaftPopover != nullptr && shaftPopover->contentWidget() == nullptr,
+            "Arrow must expose its lazy shaft popup before retirement");
+    const auto arrowDefaults = palette.creationStyleDefaults();
+    QMetaObject::invokeMethod(arrowRatio, "click", Qt::QueuedConnection);
+    QMetaObject::invokeMethod(
+        shaftPopover, [shaftPopover]() { shaftPopover->preparePopup(); }, Qt::QueuedConnection);
+    palette.clearActiveTool();
+    require(arrowRatio != nullptr, "retired direct row controls await deferred deletion");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    require(palette.creationStyleDefaults() == arrowDefaults,
+            "pending retired row commands must preserve the retained style model");
+    require(shaftPopover->contentWidget() == nullptr,
+            "pending factory preparation must not materialize a retired editor");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    require(arrowRatio == nullptr && shaftPopover == nullptr,
+            "retired direct row controls and their popups must be deferred-deleted");
+
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Spotlight);
+    QPointer<adqt::widgets::AdSlider> opacitySlider(palette.findChild<adqt::widgets::AdSlider*>(
+        QStringLiteral("screenshotSpotlightOpacitySlider")));
+    require(opacitySlider != nullptr, "Spotlight must expose its opacity slider before retirement");
+    QMetaObject::invokeMethod(
+        opacitySlider, [opacitySlider]() { opacitySlider->setValue(30.0); }, Qt::QueuedConnection);
+    palette.clearActiveTool();
+    require(opacitySlider != nullptr, "retired sliders await deferred deletion");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    require(opacitySlider == nullptr, "retired sliders must be deferred-deleted");
+}
+
+void watermarkTemplateDialogBindingsRetireWithTheirEditor() {
+    ScreenshotToolPalette palette(ScreenshotToolPalette::Options{});
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Watermark);
+    palette.show();
+    const auto openCreateDialog = [&]() {
+        auto* select = palette.findChild<adqt::widgets::AdSelect*>(
+            QStringLiteral("screenshotWatermarkTemplateSelect"));
+        require(select != nullptr, "Watermark must expose its template selector");
+        select->showPopup();
+        auto* popup = select->view() != nullptr ? select->view()->window() : nullptr;
+        auto* addButton = popup != nullptr
+                              ? popup->findChild<adqt::widgets::AdButton*>(
+                                    QStringLiteral("screenshotWatermarkTemplateAddButton"))
+                              : nullptr;
+        require(addButton != nullptr, "template popup must expose its Add command");
+        addButton->click();
+        QPointer<adqt::widgets::AdModal> modal(palette.findChild<adqt::widgets::AdModal*>(
+            QStringLiteral("screenshotWatermarkTemplateCreateModal")));
+        require(modal != nullptr && modal->isOpen(), "Add must open its template dialog");
+        return modal;
+    };
+    auto retiredModal = openCreateDialog();
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Shape);
+    require(retiredModal == nullptr, "switching tool must destroy the template dialog owner");
+    QEvent languageChange(QEvent::LanguageChange);
+    QCoreApplication::sendEvent(&palette, &languageChange);
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Watermark);
+    auto replacementModal = openCreateDialog();
+    replacementModal->reject();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    require(replacementModal == nullptr, "the rematerialized dialog must close normally");
+
+    const snow_shot::storage::WatermarkTemplateSettings settings;
+    const auto previousTemplates = settings.templates();
+    const auto restoreTemplates = qScopeGuard([&]() { settings.setTemplates(previousTemplates); });
+    auto committingModal = openCreateDialog();
+    auto* form = qobject_cast<adqt::widgets::AdForm*>(committingModal->contentWidget());
+    require(form != nullptr, "the committing template dialog must expose its form");
+    auto* name = form->findChild<adqt::widgets::AdLineEdit*>(
+        QStringLiteral("screenshotWatermarkTemplateNameInput"));
+    auto* value = form->findChild<adqt::widgets::AdLineEdit*>(
+        QStringLiteral("screenshotWatermarkTemplateValueInput"));
+    require(name != nullptr && value != nullptr, "the template dialog must expose its fields");
+    name->setText(QStringLiteral("Retirement test"));
+    value->setText(QStringLiteral("{text} retirement"));
+    int commits = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::watermarkConfigChanged, &palette,
+                     [&](const SnowCanvasWatermarkConfig& config) {
+                         if (config.templateValue == QStringLiteral("{text} retirement")) {
+                             ++commits;
+                             palette.setActiveTool(ScreenshotToolPalette::Tool::Shape);
+                         }
+                     });
+    committingModal->closeRequested(adqt::widgets::AdModal::CloseReason::OkAction);
+    require(commits == 1 && committingModal == nullptr &&
+                palette.activeToolForTests() == ScreenshotToolPalette::Tool::Shape,
+            "template acceptance may retire the editor during its commit notification");
+    const auto committedTemplates = settings.templates();
+    require(committedTemplates.size() == previousTemplates.size() + 1 &&
+                committedTemplates.constLast().value == QStringLiteral("{text} retirement"),
+            "retiring the template dialog during notification must preserve its committed value");
+}
+
 void textStyleControlsExposeAndEmitAllRequestedProperties() {
     ScreenshotToolPalette::Options options;
     options.showTextTool = true;
@@ -11922,8 +13964,10 @@ void textStylePopupLifecyclesAreBalanced() {
     auto* fillPicker = pickerWithName(QStringLiteral("Text fill color"));
     auto* fontSelect = qobject_cast<adqt::widgets::AdSelect*>(
         controlWithAccessibleName(palette, "Text font family"));
+    auto* alignmentPopover =
+        popoverForTrigger(controlWithAccessibleName(palette, "Text alignment"));
     require(colorPicker != nullptr && strokePicker != nullptr && fillPicker != nullptr &&
-                fontSelect != nullptr,
+                fontSelect != nullptr && alignmentPopover != nullptr,
             "all text style popup controls should be present");
 
     for (adqt::widgets::AdColorPicker* picker : {
@@ -11934,6 +13978,7 @@ void textStylePopupLifecyclesAreBalanced() {
         picker->setPopupLayerMode(adqt::widgets::AdColorPicker::PopupLayerMode::InWindow);
     }
     fontSelect->setPopupLayerMode(adqt::widgets::AdSelect::PopupLayerMode::InWindow);
+    alignmentPopover->setPopupLayerMode(adqt::widgets::AdPopover::PopupLayerMode::InWindow);
 
     int begins = 0;
     int ends = 0;
@@ -11946,6 +13991,7 @@ void textStylePopupLifecyclesAreBalanced() {
     strokePicker->setPopupVisible(true);
     fillPicker->setPopupVisible(true);
     fontSelect->setPopupVisible(true);
+    alignmentPopover->show();
     QCoreApplication::processEvents();
     require(begins == 1 && ends == 0,
             "the first text style popup should begin one shared interaction");
@@ -11958,6 +14004,11 @@ void textStylePopupLifecyclesAreBalanced() {
             "closing all but one text style popup should retain the interaction");
 
     fontSelect->setPopupVisible(false);
+    QCoreApplication::processEvents();
+    require(begins == 1 && ends == 0,
+            "alignment options should retain the shared interaction after other popups close");
+
+    alignmentPopover->hide();
     QCoreApplication::processEvents();
     require(begins == 1 && ends == 1,
             "closing the final text style popup should end the interaction");
@@ -11972,6 +14023,30 @@ void textStylePopupLifecyclesAreBalanced() {
             "switching tools should close a retained shared popup subtree");
     require(begins == 2 && ends == 2,
             "switching tools with an open popup should balance the interaction lifecycle");
+
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Text);
+    auto* currentAlignment =
+        popoverForTrigger(controlWithAccessibleName(palette, "Text alignment"));
+    require(currentAlignment != nullptr, "returning to text must restore its alignment editor");
+    currentAlignment->setPopupLayerMode(adqt::widgets::AdPopover::PopupLayerMode::InWindow);
+    QPointer<adqt::widgets::AdPopover> openAlignment = currentAlignment;
+    currentAlignment->show();
+    QCoreApplication::processEvents();
+    require(begins == 3 && ends == 2, "reopening alignment starts one interaction");
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Watermark);
+    QCoreApplication::processEvents();
+    require((openAlignment == nullptr || !openAlignment->isVisible()) && begins == 3 && ends == 3,
+            "switching tools must close alignment options and balance their interaction");
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Text);
+    currentAlignment = popoverForTrigger(controlWithAccessibleName(palette, "Text alignment"));
+    require(currentAlignment != nullptr,
+            "returning to text must restore observed alignment options");
+    currentAlignment->setPopupLayerMode(adqt::widgets::AdPopover::PopupLayerMode::InWindow);
+    currentAlignment->show();
+    clickPopoverStyleControl(currentAlignment, "Align text center");
+    require(
+        begins == 4 && ends == 4,
+        "restored alignment option clicks must close one interaction without duplicate observers");
 }
 
 void retainedEditorsApplyDestinationMixedStateDuringReconciliation() {
@@ -12074,6 +14149,7 @@ void serialNumberNumericTypeEditorPreservesValuesAndRetranslates() {
     state.source = SnowCanvasStyleToolbarSource::SelectedSerialNumber;
     state.serialNumberStyle.number = 27;
     palette.setStyleToolbarState(state);
+    const auto creationDefaults = palette.creationStyleDefaults();
     palette.show();
     QCoreApplication::processEvents();
     auto findGroup = [&]() {
@@ -12093,6 +14169,10 @@ void serialNumberNumericTypeEditorPreservesValuesAndRetranslates() {
         require(serial->style.number == 27, "format edits keep the exact decimal value");
         state.serialNumberStyle = serial->style;
         palette.rememberStyleEdit(edit);
+        auto expected = creationDefaults;
+        expected.serialNumber.numericType = serial->style.numericType;
+        require(palette.creationStyleDefaults() == expected,
+                "selected numeric format edits remember only the format property");
         ++changes;
         return true;
     });
@@ -13741,9 +15821,11 @@ void eraserResetRemainsAvailableWithoutSelection() {
                 "canvas reset should be available without a selection");
         require(reset->accentRole() == adqt::widgets::AdButton::AccentRole::Danger,
                 "canvas reset should use the danger accent");
-        require(reset->toolTip() == QStringLiteral("Reset") &&
+        require(reset->toolTip() == QStringLiteral("Reset (%1)")
+                                        .arg(snow_shot::shortcuts::formatShortcutListDisplayText(
+                                            {QStringLiteral("Ctrl+Shift+Z")})) &&
                     reset->accessibleName() == QStringLiteral("Reset"),
-                "canvas reset should have a tooltip and accessible name");
+                "canvas reset should expose its default shortcut and accessible name");
         auto* layout = qobject_cast<QBoxLayout*>(controls->layout());
         const int index = layout->indexOf(reset);
         require(index >= 2, "canvas reset should follow the eraser controls");
@@ -13764,6 +15846,38 @@ void eraserResetRemainsAvailableWithoutSelection() {
         reset->click();
     }
     require(resetCount == 3, "each reset click should emit exactly one canvas reset command");
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Select);
+    require(palette.canActivateDrawingShortcut(QStringLiteral("reset_canvas")) &&
+                palette.activateDrawingShortcut(QStringLiteral("reset_canvas")) &&
+                resetCount == 4 && palette.activeTool() == ScreenshotToolPalette::Tool::Select,
+            "canvas reset shortcut must work without selecting an eraser or changing tools");
+    const snow_shot::storage::DrawingShortcutSettings settings;
+    const auto original = settings.shortcuts(QStringLiteral("reset_canvas"));
+    palette.setActiveTool(ScreenshotToolPalette::Tool::BrushEraser);
+    for (const auto& bindings :
+         {snow_shot::shortcuts::ShortcutBindingList{QStringLiteral("Ctrl+Alt+F12")},
+          snow_shot::shortcuts::ShortcutBindingList{}}) {
+        require(settings.setShortcuts(QStringLiteral("reset_canvas"), bindings),
+                "customize or disable the canvas reset shortcut");
+        static_cast<void>(palette.setPhysicalScale(bindings.isEmpty() ? 1.0 : 1.5));
+        palette.prepareForDisplay();
+        QEvent languageChange(QEvent::LanguageChange);
+        QApplication::sendEvent(&palette, &languageChange);
+        for (auto* reset : palette.findChildren<adqt::widgets::AdButton*>(
+                 QStringLiteral("screenshotResetCanvasButton"))) {
+            const QString hint = snow_shot::shortcuts::formatShortcutListDisplayText(bindings);
+            require(reset->toolTip() == (hint.isEmpty() ? QStringLiteral("Reset")
+                                                        : QStringLiteral("Reset (%1)").arg(hint)),
+                    "every materialized eraser reset tooltip must follow live shortcut changes");
+        }
+    }
+    require(settings.setShortcuts(QStringLiteral("reset_canvas"), original),
+            "restore the canvas reset shortcut");
+    options.showEraserTool = false;
+    ScreenshotToolPalette unavailable(options);
+    require(!unavailable.canActivateDrawingShortcut(QStringLiteral("reset_canvas")) &&
+                !unavailable.activateDrawingShortcut(QStringLiteral("reset_canvas")),
+            "canvas reset shortcut must respect eraser availability");
 }
 
 void selectionAlignmentActionsFollowSelectionUnitCount() {
@@ -14447,7 +16561,8 @@ void screenshotProductStyleProfileIsComplete() {
                 exact(defaults.watermark.gap, 56.0) && exact(defaults.watermark.opacity, 0.16),
             "watermark defaults should match the Snow Shot product profile");
     require(defaults.spotlight.color == QColor(0, 0, 0, 255) &&
-                exact(defaults.spotlight.opacity, 0.64),
+                exact(defaults.spotlight.opacity, 0.64) &&
+                defaults.spotlightCornerRadii == SnowCanvasCornerRadii{6.0, 6.0, 6.0, 6.0},
             "spotlight defaults should match the Snow Shot product profile");
 }
 
@@ -15193,6 +17308,47 @@ void customColorPresetsRefreshCurrentAndLazyDrawingEditors() {
             "an already materialized fill button must commit its updated alpha color once");
     fillPicker->setPopupVisible(false);
 
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Angle);
+    auto angleButtons = swatches(palette.stylePanel(), QStringLiteral("Angle stroke color "));
+    requireColors(angleButtons, stroke);
+    int angleCommands = 0;
+    quint32 angleProperties = 0;
+    SnowCanvasAngleStyle changedAngle;
+    palette.setStyleEditHandler([&](const SnowCanvasStyleEdit& edit) {
+        if (const auto* angle = std::get_if<SnowCanvasAngleStyleEdit>(&edit)) {
+            changedAngle = angle->style;
+            angleProperties = angle->properties;
+            ++angleCommands;
+        }
+        palette.rememberStyleEdit(edit);
+        return true;
+    });
+    const auto originalAngle = palette.creationStyleDefaults().angle;
+    stroke[3] = QColor(23, 45, 67, 89);
+    require(settings.setStrokeColors(stroke),
+            "stroke presets must remain editable with the angle toolbar open");
+    requireColors(angleButtons, stroke);
+    require(angleCommands == 0 && palette.creationStyleDefaults().angle == originalAngle &&
+                angleButtons.at(3)->toolTip() == QStringLiteral("Angle stroke color #172d43"),
+            "angle preset refresh must preserve styles and update translated tooltips");
+    angleButtons.at(3)->click();
+    auto expectedAngle = originalAngle;
+    expectedAngle.stroke = stroke.at(3);
+    require(angleCommands == 1 && changedAngle == expectedAngle &&
+                angleProperties == static_cast<quint32>(SnowCanvasAngleStyleProperty::Stroke),
+            "angle presets must commit the refreshed RGBA color once without editing units");
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Distance);
+    requireColors(swatches(palette.stylePanel(), QStringLiteral("Distance stroke color ")), stroke);
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Angle);
+    angleButtons = swatches(palette.stylePanel(), QStringLiteral("Angle stroke color "));
+    stroke[3] = QColor(32, 54, 76, 98);
+    require(settings.setStrokeColors(stroke), "reactivated angle controls must follow settings");
+    requireColors(angleButtons, stroke);
+    angleButtons.at(3)->click();
+    expectedAngle.stroke = stroke.at(3);
+    require(angleCommands == 2 && changedAngle == expectedAngle,
+            "reactivated angle presets must retain exactly one correctly bound command");
+
     palette.setActiveTool(ScreenshotToolPalette::Tool::Text);
     auto textButtons = swatches(palette.stylePanel(), QStringLiteral("Text color "));
     requireColors(textButtons, stroke);
@@ -15239,6 +17395,11 @@ void customColorPresetsRefreshCurrentAndLazyDrawingEditors() {
     requireColors(textFillButtons, defaultFill);
     require(textCommands == 1 && palette.creationStyleDefaults().text == styleBeforeReset,
             "resetting presets must refresh open editors without editing drawing styles");
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Angle);
+    requireColors(swatches(palette.stylePanel(), QStringLiteral("Angle stroke color ")),
+                  defaultStroke);
+    require(angleCommands == 2 && palette.creationStyleDefaults().angle == expectedAngle,
+            "resetting presets must preserve the remembered angle style");
     palette.setActiveTool(ScreenshotToolPalette::Tool::Shape);
     requireColors(swatches(palette.stylePanel(), QStringLiteral("Stroke color ")), defaultStroke);
     require(style_presets::strokeColors() == defaultStroke &&
@@ -16135,24 +18296,62 @@ void regionSwitcherRetranslatesAndRenders() {
                         scheme.map.colorBgContainer,
                     "floating region surface uses the drawing toolbar container background");
             auto* hint = floating.findChild<QLabel*>();
-            require(hint &&
-                        hint->text() == QCoreApplication::translate("ScreenshotRegionTypeControl",
-                                                                    "%1 to switch region type")
-                                            .arg(QKeySequence(screenshotRegionTypeCycleKey())
-                                                     .toString(QKeySequence::NativeText)),
-                    "region hint must show the active platform shortcut in every language");
+            require(hint && hint->text() ==
+                                QCoreApplication::translate("ScreenshotRegionTypeControl",
+                                                            "%1 to switch region type")
+                                    .arg(snow_shot::shortcuts::formatShortcutListDisplayText(
+                                        snow_shot::storage::ScreenshotShortcutSettings().shortcuts(
+                                            QStringLiteral("next_selection_type")))),
+                    "region hint must show the configured next shortcut in every language");
             require(hint &&
                         hint->heightForWidth(hint->width()) ==
                             hint->heightForWidth(hint->width() * 2) &&
                         hint->palette().color(QPalette::WindowText) ==
                             scheme.map.colorTextSecondary,
                     "floating hint stays on one line and uses the secondary theme text color");
+            // Recreate the pre-configuration layout with the same shortcut text.
+            ScreenshotRegionTypeControl original(nullptr, true);
+            original.layout()->itemAt(0)->layout()->setAlignment({});
+            auto* originalHint = original.findChild<QLabel*>();
+            require(originalHint != nullptr, "the original region layout exposes its hint");
+            originalHint->setText(
+                QCoreApplication::translate("ScreenshotRegionTypeControl",
+                                            "%1 to switch region type")
+                    .arg(snow_shot::shortcuts::formatShortcutListDisplayText(
+                        snow_shot::storage::ScreenshotShortcutSettings().shortcuts(
+                            QStringLiteral("next_selection_type")))));
+            const QSize originalBase = original.QWidget::sizeHint();
+            const int originalWidth = std::max(
+                originalBase.width(),
+                originalHint->fontMetrics().boundingRect(originalHint->text()).width() + 32);
+            original.resize(originalWidth, original.layout()->heightForWidth(originalWidth));
+            original.show();
+            original.layout()->activate();
+            require(floating.size() == original.size() &&
+                        hint->geometry() == originalHint->geometry() &&
+                        hint->font() == originalHint->font(),
+                    "configured next shortcuts must preserve the original hint size, text layout, "
+                    "and font");
+            for (const auto* id : {"rectangle", "polyline", "curve", "freehand"}) {
+                const auto name = QStringLiteral("screenshotRegionType_") + QLatin1StringView(id);
+                const auto* actualButton = floating.findChild<adqt::widgets::AdButton*>(name);
+                const auto* originalButton = original.findChild<adqt::widgets::AdButton*>(name);
+                require(actualButton && originalButton &&
+                            actualButton->geometry() == originalButton->geometry() &&
+                            actualButton->iconSize() == originalButton->iconSize(),
+                        "configured next shortcuts must preserve the original icon distribution "
+                        "and sizes");
+            }
             if (!snapshots.isEmpty()) {
                 const auto suffix =
                     locale + (dark ? QStringLiteral("-dark") : QStringLiteral("-light"));
                 require(floating.grab().save(QDir(snapshots).filePath(
                             QStringLiteral("region-switcher-") + suffix + QStringLiteral(".png"))),
                         "save floating switcher snapshot");
+                require(original.grab().save(
+                            QDir(snapshots).filePath(QStringLiteral("region-switcher-original-") +
+                                                     suffix + QStringLiteral(".png"))),
+                        "save original floating switcher snapshot");
                 require(palette.actionPanel()->grab().save(QDir(snapshots).filePath(
                             QStringLiteral("region-toolbar-") + suffix + QStringLiteral(".png"))),
                         "save Move toolbar snapshot");
@@ -16167,8 +18366,11 @@ void regionSwitcherRetranslatesAndRenders() {
 } // namespace
 
 void runScreenshotStyleBindingTests();
+void runScreenshotTextAlignmentTests();
+void runAngleStyleBindingTests();
 void runScreenshotSerialNumberRestartTests();
 void runScreenshotStylePersistenceFailureTest();
+void runWatermarkPersistenceTests();
 
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
@@ -16185,8 +18387,27 @@ int main(int argc, char** argv) {
 #if defined(Q_OS_WIN)
     // The offscreen platform plugin exposes no system fonts; register one so
     // the font family editors and their shared cache have real content.
-    require(QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/segoeui.ttf")) >= 0,
-            "the font editor tests require a system TrueType font");
+    const QString fontPath = QDir(qEnvironmentVariable("WINDIR", QStringLiteral("C:/Windows")))
+                                 .filePath(QStringLiteral("Fonts/segoeui.ttf"));
+    const int fontId = QFontDatabase::addApplicationFont(fontPath);
+    require(fontId >= 0, "the font editor tests require a system TrueType font");
+    const bool magnifierPreviews = !qEnvironmentVariableIsEmpty("SNOW_TEST_MAGNIFIER_PREVIEW_DIR");
+    const QFont previousPreviewFont = application.font();
+    const auto restorePreviewFont = qScopeGuard([&] {
+        if (magnifierPreviews)
+            application.setFont(previousPreviewFont);
+    });
+    if (magnifierPreviews) {
+        const auto families = QFontDatabase::applicationFontFamilies(fontId);
+        require(!families.isEmpty(), "magnifier previews require the registered font family");
+        QFont previewFont = application.font();
+        previewFont.setFamily(families.first());
+        const QFontMetrics metrics(previewFont);
+        require(
+            metrics.inFontUcs4('A') && metrics.inFontUcs4('3') && metrics.inFontUcs4(0x00d7),
+            "magnifier preview font must contain labels, factor digits and multiplication signs");
+        application.setFont(previewFont);
+    }
 #endif
     if (application.arguments().contains(QStringLiteral("--custom-color-presets-only"))) {
         customColorPresetSettingsPersistAndValidate(
@@ -16201,6 +18422,11 @@ int main(int argc, char** argv) {
         eraserStyleToolbarHeightMatchesOtherTools();
         eraserToolsExposeRememberedModesAndIndependentWidth();
         recordingEraserActivationReturnsToSelect();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--watermark-persistence-only"))) {
+        runWatermarkPersistenceTests();
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
@@ -16231,11 +18457,31 @@ int main(int argc, char** argv) {
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
+    if (application.arguments().contains(QStringLiteral("--text-alignment-only"))) {
+        runScreenshotTextAlignmentTests();
+        textStylePopupLifecyclesAreBalanced();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--text-style-only"))) {
         fontEditorLoadsOnFirstOpen();
         fontFamilyListIsCachedForEditorBuilds();
+        textEmphasisButtonsToggleMixedStylesAndSurviveReuse();
         textStyleControlsExposeAndEmitAllRequestedProperties();
         textStylePopupLifecyclesAreBalanced();
+        runScreenshotTextAlignmentTests();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--retired-style-editors-only"))) {
+        colorSamplerStopsWhenPopupClosureRetiresItsEditor();
+        retiredStyleEditorsIgnorePendingCommands();
+        watermarkTemplateDialogBindingsRetireWithTheirEditor();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--watermark-dialog-retirement-only"))) {
+        watermarkTemplateDialogBindingsRetireWithTheirEditor();
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
@@ -16302,6 +18548,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--popover-lifecycle-only"))) {
+        toolbarGroupCommandsCanReplaceTheirOwningPopover();
         mainToolbarGroupPopoversRecreateTheirOptions();
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
         QCoreApplication::processEvents();
@@ -16349,6 +18596,33 @@ int main(int argc, char** argv) {
         recordingActionLayoutSupportsStacksHidingAndStatefulSlots();
         recordingAudioStacksUseVisibleAnchorsWithoutCompetingHoverPopovers();
         recordingExportSettingsAndDrawingAvailabilityFollowSessionState();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--selected-magnifier-wheel-only"))) {
+        magnifierStyleWheelsPersistCompletedSteps();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--disabled-selection-opacity-only"))) {
+        disabledSelectionOpacityRejectsWheelSteps();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--magnifier-only"))) {
+        magnifierLayoutMigrationPreservesCustomization();
+        magnifierControlsPatchIndependentProperties();
+        magnifierStylesPersistSelectedEdits();
+        magnifierPreferencesRejectIncompleteOrObsoletePayloads();
+        magnifierStyleWheelsPersistCompletedSteps();
+        disabledSelectionOpacityRejectsWheelSteps();
+        magnifierControlsRetranslateAndRenderPreviews();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--angle-only"))) {
+        angleSettingsAndWheelPreserveIndependentProperties();
+        runAngleStyleBindingTests();
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
@@ -16441,6 +18715,18 @@ int main(int argc, char** argv) {
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
+    if (application.arguments().contains(QStringLiteral("--latex-only"))) {
+        latexHistoryActionsUseFormulaHistory();
+        recognitionModelSelectorGroupsOptionsAndRetainsIndependentSelections();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--recognition-model-only"))) {
+        recognitionModelSelectorGroupsOptionsAndRetainsIndependentSelections();
+        recognitionModelSelectorPreservesPopupStateAndScalesAndRetranslates();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--screenshot-actions-tooltips-only"))) {
         screenshotActionTooltipsUseConfiguredShortcuts();
         screenshotActionTooltipsFollowStorageChangesWithoutRetranslation();
@@ -16473,6 +18759,8 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--spotlight-shape-only"))) {
+        screenshotProductStyleProfileIsComplete();
+        spotlightCornerRadiusEditorReusesShapeBehavior();
         spotlightShapeSelectorMatchesShapeAndRebindsEdits();
         spotlightShapePreferencesRoundTripAndAcceptLegacySettings();
         shapeSelectorIsTheLeftmostStyleGroup();
@@ -16573,6 +18861,8 @@ int main(int argc, char** argv) {
     dynamicToolbarLabelsUseEveryTranslationCatalog();
     numericStrokeWidthPreviewUsesLineWithinPreviewBounds();
     secondaryControlsMaterializeOnlyForTheRequestedFamily();
+    recognitionModelSelectorGroupsOptionsAndRetainsIndependentSelections();
+    recognitionModelSelectorPreservesPopupStateAndScalesAndRetranslates();
     regionControlsFollowTheActiveCaptureType();
     moveToolExposesCaptureCursorAndRecaptureOptions();
     textAndHighlightStrokeWidthTriggersUseSharedPreviewButton();
@@ -16614,6 +18904,7 @@ int main(int argc, char** argv) {
     repeatingActionShortcutsReturnsToSelect();
     groupedToolShortcutsToggleOnlyTheRequestedTool();
     tableToolExposesStructureActionsAndOwnHistoryState();
+    toolbarGroupCommandsCanReplaceTheirOwningPopover();
     tableBusyStatePreservesSiblingGroupPopovers();
     tableQrPopoverSharesOneEntryAndRemembersTheSelectedMode();
     tableRecognitionClickActivatesOnceAfterPointerReentry();
@@ -16659,14 +18950,24 @@ int main(int argc, char** argv) {
     shapeSelectorIsTheLeftmostStyleGroup();
     spotlightShapeSelectorMatchesShapeAndRebindsEdits();
     spotlightShapePreferencesRoundTripAndAcceptLegacySettings();
+    spotlightCornerRadiusEditorReusesShapeBehavior();
     shapeSelectorIsExclusiveToTheShapeTool();
     arrowStyleUsesScreenshotCreationColorOverride();
     distanceSettingsExposeIndependentPropertiesAndHoverWheel();
+    magnifierLayoutMigrationPreservesCustomization();
+    magnifierControlsPatchIndependentProperties();
+    magnifierStylesPersistSelectedEdits();
+    magnifierPreferencesRejectIncompleteOrObsoletePayloads();
+    magnifierStyleWheelsPersistCompletedSteps();
+    disabledSelectionOpacityRejectsWheelSteps();
+    magnifierControlsRetranslateAndRenderPreviews();
+    angleSettingsAndWheelPreserveIndependentProperties();
     distanceActualValueUpdatesTheCanvasAndUndo();
     arrowRatioEditorAdjustsAndResets();
     arrowStyleControlsExposeAndEmitAllStyleProperties();
     lineStyleControlsExposeStraightAndCurveTypes();
     selectedArrowMixedPropertiesResolveIndependently();
+    textEmphasisButtonsToggleMixedStylesAndSurviveReuse();
     textStyleControlsExposeAndEmitAllRequestedProperties();
     serialNumberCreationValuesAreIndependentPerNumericType();
     serialNumberNumericTypeEditorPreservesValuesAndRetranslates();
@@ -16674,6 +18975,7 @@ int main(int argc, char** argv) {
     serialNumberInputCommitsEditsAndSupportsWheel();
     stylePopoverTriggersProvideMouseFeedback();
     cornerRadiusButtonsRestoreTheDefaultValue();
+    colorSamplerStopsWhenPopupClosureRetiresItsEditor();
     selectedStrokeColorDragKeepsPickerIndicatorInSync();
     fillStyleButtonsFollowFillColorPickerTrigger();
     configurationDrivenStyleEditorsShareStructuralContracts();

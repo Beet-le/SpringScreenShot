@@ -21,13 +21,6 @@
         </message>
     </context>
     <context>
-        <name>RecordingEffectPreview</name>
-        <message>
-            <source>Motion Preview in Progress</source>
-            <translation>Motion Preview in Progress</translation>
-        </message>
-    </context>
-    <context>
         <name>RecordingKeyboardLabels</name>
         <message>
             <source>Left click</source>
@@ -144,8 +137,20 @@
     <context>
         <name>RecordingTrimToolbar</name>
         <message>
+            <source>%1x</source>
+            <translation>%1x</translation>
+        </message>
+        <message>
+            <source>Playback and export speed</source>
+            <translation>Playback and export speed</translation>
+        </message>
+        <message>
             <source>Replay</source>
             <translation>Replay</translation>
+        </message>
+        <message>
+            <source>Speed</source>
+            <translation>Speed</translation>
         </message>
         <message>
             <source>Trim end</source>

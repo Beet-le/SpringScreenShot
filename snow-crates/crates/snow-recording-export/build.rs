@@ -57,6 +57,7 @@ fn configure_static_ffmpeg_linking(ffmpeg_dir: &Path, profile: &str) {
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     let mut linked = Vec::new();
     for module in [
+        "libavfilter",
         "libavformat",
         "libavcodec",
         "libswresample",
@@ -105,7 +106,7 @@ fn pkgconfig_link_libraries(metadata: &str) -> Vec<String> {
 fn is_ffmpeg_library(library: &str) -> bool {
     matches!(
         library,
-        "avformat" | "avcodec" | "swresample" | "swscale" | "avutil"
+        "avfilter" | "avformat" | "avcodec" | "swresample" | "swscale" | "avutil"
     )
 }
 

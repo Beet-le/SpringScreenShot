@@ -1,9 +1,12 @@
 #include "snow_shot/presentation/screenshotimageconversioncontroller.h"
+#include "snow_shot/presentation/languagemanager.h"
 #include "snow_shot/presentation/screenshotimageconversionpersistence.h"
 #include "snow_shot/presentation/screenshotimageconversionview.h"
 #include "snow_shot/presentation/screenshottoolbarlayoutmodel.h"
 #include "snow_shot/presentation/screenshotrecognitionsessioncontroller.h"
 #include "snow_shot/presentation/screenshotrecognitionwindow.h"
+#include "snow_shot/presentation/screenshotocrtexteditingsession.h"
+#include "snow_shot/presentation/screenshotocrpresentation.h"
 #include "snow_shot/storage/settingsadapters.h"
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/translation/translationservice.h"
@@ -11,25 +14,39 @@
 #include "widgets/modal.h"
 #include "widgets/select.h"
 #include "widgets/button.h"
+#include "widgets/context_menu.h"
+#include "widgets/input_text_edit.h"
+#include "physical_key_test_support.h"
 
 #include <QApplication>
+#include <QAction>
 #include <QClipboard>
+#include <QContextMenuEvent>
 #include <QEventLoop>
 #include <QPushButton>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTextBrowser>
+#include <QTextEdit>
+#include <QTextCursor>
 #include <QTimer>
+#include <QScopeGuard>
 #include <QDir>
 #include <QFontDatabase>
 #include <QMimeData>
 #include <QScrollBar>
+#include <QScreen>
 #include <QKeyEvent>
+#include <QKeySequence>
+#include <QMouseEvent>
 #include <QLabel>
+#include <QTextDocument>
 
 #include <cstdlib>
 #include <functional>
 #include <iostream>
+#include <memory>
+#include <utility>
 
 namespace {
 void require(bool condition, const char* message) {
@@ -39,7 +56,8 @@ void require(bool condition, const char* message) {
     }
 }
 
-void until(const std::function<bool()>& predicate) {
+void until(const std::function<bool()>& predicate,
+           const char* timeoutMessage = "asynchronous conversion test timed out") {
     if (predicate()) {
         return;
     }
@@ -56,7 +74,7 @@ void until(const std::function<bool()>& predicate) {
     poll.start(5);
     timeout.start(5000);
     loop.exec();
-    require(predicate(), "asynchronous conversion test timed out");
+    require(predicate(), timeoutMessage);
 }
 
 class ConversionServer final : public QTcpServer {
@@ -84,6 +102,10 @@ class ConversionServer final : public QTcpServer {
                 socket->setProperty("answered", true);
                 if (buffer->startsWith("GET ")) {
                     ++modelRequests;
+                    if (holdModels) {
+                        heldModels = socket;
+                        return;
+                    }
                     respond(socket,
                             QJsonDocument(QJsonObject{{QStringLiteral("code"), 0},
                                                       {QStringLiteral("data"), models}})
@@ -132,13 +154,764 @@ class ConversionServer final : public QTcpServer {
     QJsonArray models;
     QString source = QStringLiteral("# Hello\n\n| Name | Value |\n| --- | --- |\n| Item | 42 |\n");
     bool hold = false;
+    bool holdModels = false;
     QPointer<QTcpSocket> held;
+    QPointer<QTcpSocket> heldModels;
 };
 
 QImage sampleImage() {
     QImage image(240, 120, QImage::Format_RGBA8888);
     image.fill(Qt::white);
     return image;
+}
+
+void conversionNotificationsAllowOwnerDeletion() {
+    using Controller = ScreenshotImageConversionController;
+    using State = Controller::State;
+    using Format = SnowShotImageConversionFormat;
+    for (int scenario = 0; scenario < 6; ++scenario) {
+        ConversionServer server;
+        SnowShotApiClient api(server.url());
+        auto* controller = new Controller;
+        QPointer<Controller> lifetime(controller);
+        if (scenario >= 3)
+            controller->setProvider(&api);
+        int changes = 0;
+        int results = 0;
+        QObject::connect(controller, &Controller::resultsChanged, QCoreApplication::instance(),
+                         [&] {
+                             ++results;
+                             if (scenario == 1)
+                                 delete controller;
+                         });
+        QObject::connect(controller, &Controller::changed, QCoreApplication::instance(), [&] {
+            ++changes;
+            const State state = controller->state();
+            if (scenario <= 2 || (scenario == 3 && state == State::LoadingModels) ||
+                (scenario == 4 && state == State::Converting) ||
+                (scenario == 5 && state == State::Completed)) {
+                if (scenario == 0)
+                    require(controller->entries(QStringLiteral("retired")).isEmpty(),
+                            "invalidation commits cache retirement before publishing");
+                delete controller;
+            }
+        });
+        if (scenario == 0) {
+            controller->seed(
+                QStringLiteral("retired"),
+                {{Format::Markdown, QStringLiteral("vision-a"), QStringLiteral("old")}});
+            controller->invalidate();
+        } else if (scenario == 1) {
+            controller->setProvider(&api);
+        } else {
+            controller->activate(QStringLiteral("delete-conversion"), sampleImage(),
+                                 Format::Markdown);
+        }
+        until([&] { return lifetime.isNull(); });
+        require(scenario == 1 ? results == 1 : results == 0,
+                "deleted conversion stops remaining result publications");
+        if (scenario <= 3)
+            require(server.modelRequests == 0 && server.requests.isEmpty(),
+                    "deleted conversion starts no additional request");
+        if (scenario == 4)
+            require(server.requests.isEmpty(),
+                    "converting observer cancels before image streaming");
+        if (scenario == 0 || scenario == 2)
+            require(changes == 1, "conversion teardown publishes no new state");
+    }
+}
+
+void conversionProviderBindingsSurviveNotificationReentry() {
+    using Controller = ScreenshotImageConversionController;
+    using Format = SnowShotImageConversionFormat;
+    const snow_shot::storage::ScreenshotImageConversionSettings settings;
+    const QString previousModel = settings.visionModel();
+    const auto restoreModel = qScopeGuard([&] { settings.setVisionModel(previousModel); });
+    for (int scenario = 0; scenario < 3; ++scenario) {
+        ConversionServer server;
+        auto api = std::make_unique<SnowShotApiClient>(server.url());
+        Controller controller;
+        require(settings.setVisionModel(QStringLiteral("vision-a")),
+                "select the test vision model");
+        bool reentered = false;
+        QObject::connect(&controller, &Controller::resultsChanged, &controller, [&] {
+            if (std::exchange(reentered, true))
+                return;
+            if (scenario == 0)
+                controller.deactivate();
+            else if (scenario == 1)
+                controller.invalidate();
+            else
+                controller.activate(QStringLiteral("nested"), sampleImage(), Format::Markdown);
+            controller.setProvider(api.get());
+        });
+        controller.setProvider(api.get());
+        require(reentered, "provider publication permits a nested conversion reset or start");
+        if (scenario != 2)
+            controller.activate(QStringLiteral("after-reset"), sampleImage(), Format::Markdown);
+        require(controller.state() == Controller::State::LoadingModels,
+                "a bound provider can begin model discovery after reentry");
+        api.reset();
+        require(!controller.busy() && controller.state() == Controller::State::Failed &&
+                    !controller.error().isEmpty(),
+                "provider retirement settles conversions even when binding observers reset work");
+    }
+
+    for (bool custom : {false, true}) {
+        ConversionServer server;
+        ConversionServer replacement;
+        SnowShotApiClient api(server.url());
+        snow_shot::CustomAiModelConfiguration model{
+            QStringLiteral("4dcf0d8e-f0d0-4c6e-bc06-7f99547b91c0"),
+            QStringLiteral("Test vision"),
+            server.url() + QStringLiteral("/v1"),
+            {},
+            QStringLiteral("local-vision"),
+            true};
+        if (custom)
+            api.setCustomModels({model});
+        require(settings.setVisionModel(custom ? model.selectionId() : QStringLiteral("vision-a")),
+                "select the provider invalidation fixture");
+        Controller controller;
+        bool reset = false;
+        QObject::connect(&controller, &Controller::resultsChanged, &controller, [&] {
+            if (!std::exchange(reset, true))
+                controller.deactivate();
+        });
+        controller.setProvider(&api);
+        controller.activate(QStringLiteral("provider-event"), sampleImage(), Format::Markdown);
+        require(controller.busy(), "provider invalidation begins with active conversion work");
+        if (custom) {
+            model.model = QStringLiteral("replacement-model");
+            api.setCustomModels({model});
+        } else {
+            require(api.setBaseUrl(replacement.url()), "change the bound server");
+        }
+        require(controller.state() == Controller::State::Failed && !controller.busy() &&
+                    controller.source().isEmpty(),
+                "bound server and custom-model changes invalidate work after a nested reset");
+    }
+}
+
+void conversionProviderReplacementKeepsOnlyCurrentBindings() {
+    using Controller = ScreenshotImageConversionController;
+    using Format = SnowShotImageConversionFormat;
+    const snow_shot::storage::ScreenshotImageConversionSettings settings;
+    const QString previousModel = settings.visionModel();
+    const auto restoreModel = qScopeGuard([&] { settings.setVisionModel(previousModel); });
+    require(settings.setVisionModel(QStringLiteral("vision-a")),
+            "select the provider replacement model");
+    for (bool replaceFromModal : {false, true}) {
+        ConversionServer server;
+        auto original = std::make_unique<SnowShotApiClient>(server.url());
+        auto replacement = std::make_unique<SnowShotApiClient>(server.url());
+        Controller controller;
+        bool replaced = false;
+        const auto replace = [&] {
+            if (!std::exchange(replaced, true))
+                controller.setProvider(replacement.get());
+        };
+        QWidget owner;
+        if (replaceFromModal) {
+            controller.openSettings(&owner);
+            auto* modal = controller.findChild<adqt::widgets::AdModal*>();
+            require(modal, "provider replacement owns an open settings modal");
+            QObject::connect(modal, &adqt::widgets::AdModal::finished, &controller, replace);
+        } else {
+            QObject::connect(&controller, &Controller::resultsChanged, &controller, replace);
+        }
+        controller.setProvider(original.get());
+        require(replaced, "a nested provider replacement is accepted");
+        original.reset();
+        controller.activate(QStringLiteral("current-provider"), sampleImage(), Format::Markdown);
+        require(controller.state() == Controller::State::LoadingModels,
+                "the latest provider remains usable after the retired provider is destroyed");
+        replacement.reset();
+        require(controller.state() == Controller::State::Failed && !controller.busy(),
+                "only the latest binding supplies provider retirement notifications");
+    }
+
+    {
+        ConversionServer server;
+        auto original = std::make_unique<SnowShotApiClient>(server.url());
+        auto replacement = std::make_unique<SnowShotApiClient>(server.url());
+        Controller controller;
+        controller.setProvider(original.get());
+        QWidget owner;
+        controller.openSettings(&owner);
+        auto* modal = controller.findChild<adqt::widgets::AdModal*>();
+        require(modal, "retiring a bound provider owns an open settings modal");
+        QObject::connect(modal, &adqt::widgets::AdModal::finished, &controller,
+                         [&] { original.reset(); });
+        controller.setProvider(replacement.get());
+        require(!original, "closing settings retires the preceding provider");
+        controller.activate(QStringLiteral("modal-provider-retirement"), sampleImage(),
+                            Format::Markdown);
+        require(controller.state() == Controller::State::LoadingModels,
+                "retiring the old provider cannot cancel its pending replacement binding");
+        replacement.reset();
+        require(controller.state() == Controller::State::Failed && !controller.busy(),
+                "the replacement retains its destruction subscription after modal reentry");
+    }
+
+    ConversionServer server;
+    auto api = std::make_unique<SnowShotApiClient>(server.url());
+    Controller controller;
+    ScreenshotImageConversionEntry entry{Format::Markdown, QStringLiteral("vision-a"),
+                                         QStringLiteral("# Cached")};
+    entry.modelFingerprint = api->modelFingerprint(entry.model);
+    controller.seed(QStringLiteral("restored"), {entry});
+    controller.activate(QStringLiteral("restored"), sampleImage(), Format::Markdown);
+    QObject::connect(&controller, &Controller::changed, &controller, [&] { api.reset(); });
+    controller.setProvider(api.get());
+    require(!api && controller.state() == Controller::State::Completed && !controller.busy(),
+            "cached-result publication safely permits bound-provider destruction");
+}
+
+void settingsIgnoreRetiredProviderCallbacks() {
+    using adqt::widgets::AdButton;
+    using adqt::widgets::AdModal;
+    using adqt::widgets::AdSelect;
+    for (const bool destroyOriginal : {false, true}) {
+        ConversionServer originalServer;
+        ConversionServer replacementServer;
+        auto original = std::make_unique<SnowShotApiClient>(originalServer.url());
+        SnowShotApiClient replacement(replacementServer.url());
+        ScreenshotImageConversionController controller;
+        QWidget owner;
+        controller.setProvider(original.get());
+        controller.openSettings(&owner);
+        const QPointer<AdModal> retired(controller.findChild<AdModal*>());
+        require(retired, "original settings modal exists");
+        controller.setProvider(&replacement);
+        require(retired, "retired modal remains alive until deferred deletion");
+        controller.openSettings(&owner);
+        AdModal* current = nullptr;
+        for (auto* candidate : controller.findChildren<AdModal*>()) {
+            if (candidate != retired) {
+                current = candidate;
+            }
+        }
+        require(current, "replacement settings modal exists");
+        auto* retry = current->contentWidget()->findChild<AdButton*>(
+            QStringLiteral("screenshotVisionModelsRetry"));
+        auto* select =
+            current->contentWidget()->findChild<AdSelect*>(QStringLiteral("screenshotVisionModel"));
+        require(retry && select && retry->busy(), "current settings starts loading models");
+        if (destroyOriginal) {
+            original.reset();
+        } else {
+            require(original->setBaseUrl(QStringLiteral("http://127.0.0.1:1")),
+                    "retired provider changes its URL");
+        }
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        require(!retired, "retired settings modal is deleted");
+        bool catalogLoaded = false;
+        const auto token = replacement.ensureChatModels(
+            snow_shot::presentation::LanguageManager::instance().currentLocale().name(),
+            &controller, [&catalogLoaded](SnowShotChatModelsResult result) {
+                catalogLoaded = result.succeeded();
+            });
+        require(token != 0, "replacement catalog request starts");
+        until([&]() { return catalogLoaded; });
+        require(select->isEnabled() && !retry->busy(),
+                "retired provider callbacks preserve the current settings subscription");
+        current->reject();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    }
+
+    ConversionServer server;
+    auto api = std::make_unique<SnowShotApiClient>(server.url());
+    ScreenshotImageConversionController controller;
+    QWidget owner;
+    controller.setProvider(api.get());
+    controller.openSettings(&owner);
+    auto* modal = controller.findChild<AdModal*>();
+    require(modal, "current-provider retirement settings modal exists");
+    auto* retry =
+        modal->contentWidget()->findChild<AdButton*>(QStringLiteral("screenshotVisionModelsRetry"));
+    auto* select =
+        modal->contentWidget()->findChild<AdSelect*>(QStringLiteral("screenshotVisionModel"));
+    require(retry && select && retry->busy(), "current provider starts settings discovery");
+    api.reset();
+    require(!retry->busy() && !select->loading(),
+            "current-provider destruction still settles the current settings window");
+    modal->reject();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+}
+
+void sessionNotificationsAllowOwnerDeletion() {
+    using Session = ScreenshotRecognitionSessionController;
+    for (int scenario = 0; scenario < 9; ++scenario) {
+        ConversionServer server;
+        SnowShotApiClient api(server.url());
+        ScreenshotRecognitionSessionActions actions;
+        actions.ensureContent = []() -> ScreenshotRecognitionWindow* { return nullptr; };
+        auto* session = new Session(nullptr, nullptr, &api, actions);
+        QPointer<Session> lifetime(session);
+        session->setTarget(
+            {QStringLiteral("session-delete"), sampleImage(), QRectF(0, 0, 240, 120)});
+        if (scenario != 0 && scenario != 7)
+            session->activate(Session::Mode::Markdown);
+        int notifications = 0;
+        QObject::connect(session, &Session::workflowStateChanged, QCoreApplication::instance(),
+                         [&] {
+                             if (scenario == 7 && !session->busy(Session::Mode::Markdown))
+                                 return;
+                             ++notifications;
+                             delete session;
+                         });
+        if (scenario == 0 || scenario == 7)
+            session->activate(Session::Mode::Markdown);
+        else if (scenario == 1)
+            session->deactivate();
+        else if (scenario == 2)
+            session->invalidate();
+        else if (scenario == 3)
+            session->setTarget(
+                {QStringLiteral("replacement"), sampleImage(), QRectF(0, 0, 240, 120)});
+        else if (scenario == 4)
+            session->cancelWorkflow();
+        else if (scenario == 5)
+            session->synchronizeUiState();
+        else if (scenario == 6) {
+            ScreenshotRecognitionResults results;
+            results.key = QStringLiteral("session-delete");
+            session->seedRecognitionResults(results);
+        } else
+            session->activate(Session::Mode::Text);
+        require(lifetime.isNull() && notifications == 1,
+                "session observer deletion stops both inner and outer publishing frames");
+    }
+
+    auto document = std::make_shared<QTextDocument>();
+    document->setPlainText(QStringLiteral("original"));
+    ScreenshotRecognitionSessionActions actions;
+    actions.ensureContent = []() -> ScreenshotRecognitionWindow* { return nullptr; };
+    auto* session = new Session(nullptr, nullptr, nullptr, actions);
+    QPointer<Session> lifetime(session);
+    session->setTarget({QStringLiteral("editing-delete"), sampleImage(), QRectF(0, 0, 240, 120),
+                        document, QStringLiteral("original")});
+    session->activate(Session::Mode::Text);
+    session->beginTextEditing();
+    QObject::connect(session, &Session::textDraftChanged, QCoreApplication::instance(),
+                     [&] { delete session; });
+    session->setTextDraft(QStringLiteral("edited"));
+    require(lifetime.isNull(), "document edit retains its editing owner while session retires");
+}
+
+void recognitionCallbacksRetainOwnedStateDuringRetirement() {
+    using Session = ScreenshotRecognitionSessionController;
+    for (bool deleteFromFactory : {false, true}) {
+        Session* session = nullptr;
+        bool armed = false;
+        bool resumed = false;
+        ScreenshotRecognitionSessionActions actions;
+        auto capture = std::make_shared<int>(42);
+        if (deleteFromFactory) {
+            actions.ensureContent = [&, capture]() -> ScreenshotRecognitionWindow* {
+                if (armed) {
+                    delete session;
+                    resumed = *capture == 42;
+                }
+                return nullptr;
+            };
+        } else {
+            actions.setBusyState = [&, capture](bool, bool, bool) {
+                if (armed) {
+                    delete session;
+                    resumed = *capture == 42;
+                }
+            };
+        }
+        capture.reset();
+        session = new Session(nullptr, nullptr, nullptr, std::move(actions));
+        QPointer<Session> lifetime(session);
+        session->setTarget(
+            {QStringLiteral("callback-delete"), sampleImage(), QRectF(0, 0, 240, 120)});
+        armed = true;
+        session->activate(Session::Mode::Text);
+        require(lifetime.isNull() && resumed,
+                "UI callback retains its captures until the retiring owner's callback returns");
+    }
+
+    for (bool conversion : {false, true}) {
+        QObject* owner = conversion
+                             ? static_cast<QObject*>(new ScreenshotImageConversionController)
+                             : static_cast<QObject*>(new Session(nullptr, nullptr, nullptr, {}));
+        auto* first = new QObject(owner);
+        QPointer<QObject> second = new QObject(owner);
+        QObject::connect(first, &QObject::destroyed, QCoreApplication::instance(),
+                         [&] { delete second.data(); });
+        delete owner;
+        require(second.isNull(), "child retirement tolerates observers retiring later siblings");
+    }
+}
+
+void recognitionPublicationCallbacksAllowRetirement() {
+    using Session = ScreenshotRecognitionSessionController;
+    for (const bool publishModels : {false, true}) {
+        Session* session = nullptr;
+        bool armed = false;
+        bool resumed = false;
+        int notifications = 0;
+        ScreenshotRecognitionSessionActions actions;
+        auto capture = std::make_shared<int>(42);
+        const std::weak_ptr<int> weakCapture = capture;
+        std::function<void()> retire = [&, capture] {
+            if (!armed)
+                return;
+            ++notifications;
+            delete session;
+            require(!weakCapture.expired(), "the active publication must retain its callback");
+            resumed = *capture == 42;
+        };
+        if (publishModels) {
+            actions.setRecognitionModelState = [retire](int, const auto&) { retire(); };
+        } else {
+            actions.showStatus = [retire](const QString& message, bool error) {
+                const QString expected = message;
+                retire();
+                require(error && !message.isEmpty() && message == expected,
+                        "status text must remain valid after its controller retires");
+            };
+        }
+        retire = {};
+        capture.reset();
+        ConversionServer server;
+        SnowShotApiClient api(server.url());
+        session = new Session(nullptr, nullptr, &api, std::move(actions));
+        QPointer<Session> lifetime(session);
+        armed = true;
+        if (publishModels)
+            api.chatModelsChanged();
+        else
+            session->activate(Session::Mode::Text);
+        require(!lifetime && notifications == 1 && resumed && weakCapture.expired(),
+                "publication callbacks retain their payload and stop after owner retirement");
+    }
+}
+
+void recognitionEditorsRetainDisplayedDocumentOwners() {
+    using Editing = ScreenshotOcrTextEditingSession;
+    for (bool latex : {false, true}) {
+        auto window =
+            std::make_unique<ScreenshotRecognitionWindow>(ScreenshotRecognitionWindowActions{});
+        auto owner = std::make_shared<Editing>(QStringLiteral("retained source"), latex);
+        std::weak_ptr<Editing> weakOwner = owner;
+        QPointer<QTextDocument> document(owner->document());
+        auto binding = std::shared_ptr<QTextDocument>(owner, owner->document());
+        if (latex) {
+            window->showLatexEditor(std::move(binding), [weakOwner] {
+                const auto current = weakOwner.lock();
+                return current ? current->text() : QString();
+            });
+        } else {
+            window->showTextEditor(std::move(binding));
+        }
+        owner.reset();
+        auto* editor = window->findChild<QTextEdit*>(QStringLiteral("screenshotOcrEditor"));
+        require(editor && !weakOwner.expired() && editor->document() == document &&
+                    editor->toPlainText() == QStringLiteral("retained source"),
+                "recognition editor keeps its document owner while displaying borrowed content");
+        if (latex) {
+            window->showLatexEditor(nullptr);
+            window->showLatexEditor(document.data());
+            window->clearLatexPreview();
+        } else {
+            window->showTextEditor(nullptr);
+            window->showTextEditor(document.data());
+        }
+        require(!weakOwner.expired() && editor->document() == document,
+                "null and same-document bindings preserve the displayed owner lease");
+
+        bool oldDocumentDetached = false;
+        auto* borrowed = document.data();
+        QObject::connect(document, &QObject::destroyed, QCoreApplication::instance(),
+                         [&] { oldDocumentDetached = editor->document() != borrowed; });
+        auto replacement = std::make_shared<Editing>(QStringLiteral("replacement"));
+        std::weak_ptr<Editing> weakReplacement = replacement;
+        window->showTextEditor(std::shared_ptr<QTextDocument>(replacement, replacement->document()),
+                               true, false);
+        replacement.reset();
+        require(weakOwner.expired() && document.isNull() && oldDocumentDetached &&
+                    !weakReplacement.expired() &&
+                    editor->toPlainText() == QStringLiteral("replacement"),
+                "document swaps detach the old document before releasing its owner");
+        window->hideTextEditor();
+        require(weakReplacement.expired(), "clearing the editor releases its displayed owner");
+
+        auto finalOwner = std::make_shared<Editing>(QStringLiteral("final"));
+        std::weak_ptr<Editing> weakFinalOwner = finalOwner;
+        QPointer<QTextDocument> finalDocument(finalOwner->document());
+        window->showTextEditor(std::shared_ptr<QTextDocument>(finalOwner, finalOwner->document()));
+        finalOwner.reset();
+        QPointer<QTextEdit> finalEditor =
+            window->findChild<QTextEdit*>(QStringLiteral("screenshotOcrEditor"));
+        auto* finalBorrowed = finalDocument.data();
+        bool detachedDuringDestruction = false;
+        QObject::connect(finalDocument, &QObject::destroyed, QCoreApplication::instance(), [&] {
+            detachedDuringDestruction = finalEditor && finalEditor->document() != finalBorrowed;
+        });
+        window.reset();
+        require(weakFinalOwner.expired() && detachedDuringDestruction,
+                "window destruction detaches the document before retiring its owner");
+    }
+
+    using Session = ScreenshotRecognitionSessionController;
+    const snow_shot::storage::ScreenshotTranslationSettings settings;
+    const bool priorOverlay = settings.originalImageTranslationEnabled();
+    require(settings.setOriginalImageTranslationEnabled(false),
+            "use an editable translation for owner-retention coverage");
+    const auto restoreOverlay = qScopeGuard([&] {
+        require(settings.setOriginalImageTranslationEnabled(priorOverlay),
+                "restore translation display settings");
+    });
+    for (int mode = 0; mode < 3; ++mode) {
+        ScreenshotRecognitionWindow window({});
+        ScreenshotRecognitionSessionActions actions;
+        actions.ensureContent = [&] { return &window; };
+        auto session = std::make_unique<Session>(nullptr, nullptr, nullptr, std::move(actions));
+        session->setTarget(
+            {QStringLiteral("displayed-owner"), sampleImage(), QRectF(0, 0, 240, 120)});
+        auto presentation = std::make_shared<ScreenshotOcrPresentation>();
+        presentation->lines = {{QStringLiteral("original"), 1.0, QPolygonF(QRectF(0, 0, 100, 20))}};
+        presentation->prepareForRendering();
+        ScreenshotRecognitionResults results;
+        results.key = QStringLiteral("displayed-owner");
+        results.text = ScreenshotOcrRecognitionResult{presentation};
+        if (mode == 2)
+            results.latex = SnowShotLatexResult{QStringLiteral("x^2"), {}, {}};
+        session->seedRecognitionResults(results);
+        session->activate(mode == 2 ? Session::Mode::Latex : Session::Mode::Text);
+        if (mode == 0)
+            session->beginTextEditing();
+        else if (mode == 1)
+            session->beginTextTranslation();
+        auto* editor = window.findChild<QTextEdit*>(QStringLiteral("screenshotOcrEditor"));
+        require(editor, "each recognition mode binds an editor document");
+        QPointer<QTextDocument> document(editor->document());
+        int notifications = 0;
+        QObject::connect(session.get(), &Session::workflowStateChanged,
+                         QCoreApplication::instance(), [&] { ++notifications; });
+        session.reset();
+        require(document && editor->document() == document && notifications == 0,
+                "text, translation and LaTeX documents outlive silent controller retirement");
+        window.hideTextEditor();
+        require(document.isNull(), "retired controller documents release after editor detach");
+    }
+
+    auto borrowedDocument = std::make_shared<QTextDocument>();
+    {
+        ScreenshotRecognitionWindow window({});
+        window.showTextEditor(borrowedDocument.get(), true);
+        require(borrowedDocument.use_count() == 1,
+                "borrowed document bindings do not silently acquire ownership");
+        window.hideTextEditor();
+    }
+}
+
+void recognitionWindowActionsRetainCapturesDuringRetirement() {
+    for (bool copy : {false, true}) {
+        ScreenshotRecognitionWindow* window = nullptr;
+        bool resumed = false;
+        auto capture = std::make_shared<int>(42);
+        std::weak_ptr<int> weakCapture = capture;
+        ScreenshotRecognitionWindowActions actions;
+        auto retire = [&, capture] {
+            // Snapshot the test's references before deleting the callback's own storage.
+            auto* result = &resumed;
+            auto* weak = &weakCapture;
+            const auto* value = capture.get();
+            delete window;
+            *result = !weak->expired() && *value == 42;
+        };
+        if (copy)
+            actions.handleCopy = std::move(retire);
+        else
+            actions.handleCancel = std::move(retire);
+        capture.reset();
+        window = new ScreenshotRecognitionWindow(std::move(actions));
+        QPointer<ScreenshotRecognitionWindow> lifetime(window);
+        auto presentation = std::make_shared<ScreenshotOcrPresentation>();
+        presentation->lines = {
+            {QStringLiteral("action copy"), 1.0, QPolygonF(QRectF(0, 0, 100, 20))}};
+        presentation->prepareForRendering();
+        window->setOcrPresentation(std::move(presentation));
+        window->show();
+        window->activateWindow();
+        window->setFocus();
+        QCoreApplication::processEvents();
+        if (copy) {
+            QKeyEvent press(QEvent::KeyPress, Qt::Key_C, Qt::ControlModifier);
+            QApplication::sendEvent(window, &press);
+            require(press.isAccepted() &&
+                        QApplication::clipboard()->text() == QStringLiteral("action copy"),
+                    "recognition Copy consumes input and publishes content before retirement");
+        } else {
+            QKeyEvent press(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+            QApplication::sendEvent(window, &press);
+            require(press.isAccepted() && lifetime && !resumed,
+                    "recognition Escape waits for the real release before cancellation");
+            QKeyEvent release(QEvent::KeyRelease, Qt::Key_Escape, Qt::NoModifier);
+            QApplication::sendEvent(window, &release);
+            require(release.isAccepted(), "recognition Escape release consumes cancellation");
+        }
+        require(lifetime.isNull() && resumed && weakCapture.expired(),
+                "window action captures survive synchronous retirement until handler return");
+    }
+
+    ScreenshotRecognitionWindow* window = nullptr;
+    auto source = std::make_unique<QString>(QStringLiteral("copied edit payload"));
+    bool payloadSurvived = false;
+    ScreenshotRecognitionWindowActions editActions;
+    editActions.handleTextEdited = [&](const QString& text) {
+        auto* result = &payloadSurvived;
+        auto* sourceOwner = &source;
+        delete window;
+        sourceOwner->reset();
+        *result = text == QStringLiteral("copied edit payload");
+    };
+    window = new ScreenshotRecognitionWindow(std::move(editActions));
+    QPointer<ScreenshotRecognitionWindow> editLifetime(window);
+    auto document = std::make_shared<QTextDocument>();
+    window->showTextEditor(document.get(), true);
+    auto* editor =
+        window->findChild<adqt::widgets::AdTextEdit*>(QStringLiteral("screenshotOcrEditor"));
+    require(editor, "recognition text action has an editor signal source");
+    editor->textEdited(*source);
+    require(editLifetime.isNull() && payloadSurvived,
+            "text action receives a copied payload through sender and source retirement");
+}
+
+void recognitionCopyStopsAfterClipboardRetirement() {
+    int completionCalls = 0;
+    ScreenshotRecognitionWindowActions actions;
+    actions.handleCopy = [&] { ++completionCalls; };
+    auto* window = new ScreenshotRecognitionWindow(std::move(actions));
+    QPointer<ScreenshotRecognitionWindow> lifetime(window);
+    auto presentation = std::make_shared<ScreenshotOcrPresentation>();
+    presentation->lines = {
+        {QStringLiteral("clipboard retirement"), 1.0, QPolygonF(QRectF(0, 0, 100, 20))}};
+    presentation->prepareForRendering();
+    window->setOcrPresentation(std::move(presentation));
+    window->show();
+    window->activateWindow();
+    window->setFocus();
+    QCoreApplication::processEvents();
+    const auto connection = QObject::connect(QApplication::clipboard(), &QClipboard::dataChanged,
+                                             qApp, [&] { delete lifetime.data(); });
+    const auto disconnect = qScopeGuard([&] { QObject::disconnect(connection); });
+    QKeyEvent press(QEvent::KeyPress, Qt::Key_C, Qt::ControlModifier);
+    QApplication::sendEvent(window, &press);
+    require(lifetime.isNull() && press.isAccepted() && completionCalls == 0,
+            "clipboard retirement stops Copy before invoking a stale completion action");
+}
+
+void recognitionResizeConsumesRetiredEditorInput() {
+    ScreenshotRecognitionWindow* window = nullptr;
+    QMouseEvent* activePress = nullptr;
+    ScreenshotRecognitionWindowActions actions;
+    actions.selectionResizeDragMode = [](const QPointF&) {
+        return ScreenshotSelectionDragMode::All;
+    };
+    actions.beginSelectionResize = [&](const QPointF&) {
+        require(activePress && activePress->isAccepted(),
+                "selection resize accepts input before entering the retirement callback");
+        window->hideTextEditor();
+        return true;
+    };
+    window = new ScreenshotRecognitionWindow(std::move(actions));
+    auto document = std::make_shared<QTextDocument>();
+    window->showTextEditor(document.get(), true);
+    window->show();
+    QCoreApplication::processEvents();
+    auto* editor = window->findChild<QTextEdit*>(QStringLiteral("screenshotOcrEditor"));
+    require(editor, "recognition resize begins from an existing editor");
+    QPointer<QWidget> viewport(editor->viewport());
+    const QPointF position(5, 5);
+    QMouseEvent press(QEvent::MouseButtonPress, position, position, Qt::LeftButton, Qt::LeftButton,
+                      Qt::NoModifier);
+    activePress = &press;
+    press.ignore();
+    QApplication::sendEvent(viewport.data(), &press);
+    require(viewport.isNull() && press.isAccepted(),
+            "selection resize consumes input before retiring the pressed editor viewport");
+    QMouseEvent release(QEvent::MouseButtonRelease, position, position, Qt::LeftButton,
+                        Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(window, &release);
+    delete window;
+}
+
+void synchronousRecognitionCompletionAllowsOwnerDeletion() {
+    using Session = ScreenshotRecognitionSessionController;
+    class OcrPort final : public ScreenshotOcrRecognitionPort {
+      public:
+        bool returnPresentation = false;
+        int recognitions = 0;
+        int renders = 0;
+        RequestToken recognize(ScreenshotOcrRequest request, QObject*,
+                               Completion completion) override {
+            ++recognitions;
+            ScreenshotOcrRecognitionResult result;
+            if (returnPresentation) {
+                result.presentation = std::make_shared<ScreenshotOcrPresentation>();
+                result.presentation->selection = request.canvasRect.toRect();
+                ScreenshotOcrLine line;
+                line.text = QStringLiteral("recognized");
+                line.quad =
+                    QPolygonF{QPointF(0, 0), QPointF(100, 0), QPointF(100, 20), QPointF(0, 20)};
+                result.presentation->lines.append(line);
+                result.presentation->prepareForRendering();
+            } else {
+                result.error = QStringLiteral("recognition failure");
+            }
+            completion(std::move(result));
+            return 1;
+        }
+        RequestToken render(ScreenshotOcrRequest, QObject*, Completion completion) override {
+            ++renders;
+            ScreenshotOcrRecognitionResult result;
+            result.error = QStringLiteral("render failure");
+            completion(std::move(result));
+            return 2;
+        }
+        void cancel(RequestToken) override {}
+        bool reprioritize(RequestToken, ScreenshotOcrRequestPriority) override {
+            return false;
+        }
+    };
+    class QrPort final : public ScreenshotQrRecognitionPort {
+      public:
+        int recognitions = 0;
+        RequestToken recognize(QImage, QObject*, Completion completion,
+                               ScreenshotQrRecognitionMode) override {
+            ++recognitions;
+            completion({{}, QStringLiteral("QR failure"), {}});
+            return 3;
+        }
+        void cancel(RequestToken) override {}
+    };
+    for (int scenario = 0; scenario < 3; ++scenario) {
+        OcrPort ocr;
+        ocr.returnPresentation = scenario == 1;
+        QrPort qr;
+        ScreenshotRecognitionSessionActions actions;
+        actions.applyOcrBackgroundImage = [](std::shared_ptr<ScreenshotOcrPresentation>, QImage,
+                                             QRectF) {};
+        auto* session = new Session(&ocr, &qr, nullptr, std::move(actions));
+        QPointer<Session> lifetime(session);
+        session->setTarget({QStringLiteral("sync-delete"), sampleImage(), QRectF(0, 0, 240, 120)});
+        QObject::connect(session, &Session::workflowStateChanged, QCoreApplication::instance(),
+                         [&] {
+                             if (scenario == 0   ? ocr.recognitions > 0
+                                 : scenario == 1 ? ocr.renders > 0
+                                                 : qr.recognitions > 0)
+                                 delete session;
+                         });
+        session->activate(scenario == 2 ? Session::Mode::Qr : Session::Mode::Text);
+        require(lifetime.isNull(), "synchronous recognition completion retires every caller frame");
+    }
 }
 
 void settingsInitialAvailability() {
@@ -269,12 +1042,23 @@ void conversionLifecycleAndSettings() {
     require(settings.visionModel() == QStringLiteral("vision-b") && server.requests.size() == 2 &&
                 server.requests.last().value(QStringLiteral("model")) == QStringLiteral("vision-b"),
             "accept persists the shared model and reruns only the active window");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    controller.openSettings(&owner);
+    modal = controller.findChild<adqt::widgets::AdModal*>();
+    select = modal->contentWidget()->findChild<adqt::widgets::AdSelect*>(
+        QStringLiteral("screenshotVisionModel"));
+    select->setCurrentValue(QStringLiteral("vision-a"));
+    modal->closeRequested(adqt::widgets::AdModal::CloseReason::OkAction);
+    require(controller.state() == Controller::State::Completed && server.requests.size() == 2 &&
+                controller.source() == saved.first().source,
+            "changing settings back to a completed model restores its result without uploading");
+    settings.setVisionModel(QStringLiteral("vision-b"));
     server.source = QStringLiteral("```html\n<h1>Hello</h1>\n```");
     controller.activate(QStringLiteral("image-one"), sampleImage(), Format::Html);
     until([&]() { return controller.state() == Controller::State::Completed; });
     require(controller.source() == QStringLiteral("<h1>Hello</h1>") &&
-                controller.entries(QStringLiteral("image-one")).size() == 2,
-            "formats have independent results and only the explicit outer fence is removed");
+                controller.entries(QStringLiteral("image-one")).size() == 3,
+            "formats and models have independent results and only the outer fence is removed");
     server.hold = true;
     controller.activate(QStringLiteral("image-two"), sampleImage(), Format::Markdown);
     until([&]() { return controller.source() == QStringLiteral("# Partial"); });
@@ -312,6 +1096,182 @@ void conversionLifecycleAndSettings() {
     controller.deactivate();
 }
 
+void conversionServerAndProviderIdentity() {
+    using Controller = ScreenshotImageConversionController;
+    using Format = SnowShotImageConversionFormat;
+    const snow_shot::storage::ScreenshotImageConversionSettings settings;
+    settings.setVisionModel(QStringLiteral("vision-a"));
+    ConversionServer original, replacement;
+    original.source = QStringLiteral("# Original server");
+    replacement.source = QStringLiteral("# Replacement server");
+    SnowShotApiClient api(original.url());
+    Controller controller;
+    controller.setProvider(&api);
+    const QString key = QStringLiteral("server-identity");
+    controller.activate(key, sampleImage(), Format::Markdown);
+    until([&]() { return controller.state() == Controller::State::Completed; });
+    const auto saved = controller.entries(key);
+    require(saved.size() == 1 &&
+                saved.first().modelFingerprint == api.modelFingerprint(QStringLiteral("vision-a")),
+            "built-in conversion records the server identity used for its request");
+    Controller restored;
+    restored.setProvider(&api);
+    restored.seed(key, saved);
+    restored.activate(key, sampleImage(), Format::Markdown);
+    require(restored.state() == Controller::State::Completed && original.requests.size() == 1,
+            "matching built-in server identity permits persisted cache reuse");
+    require(api.setBaseUrl(replacement.url()), "switch the built-in conversion server");
+    require(controller.state() == Controller::State::Failed && controller.source().isEmpty() &&
+                controller.entries(key).isEmpty() && replacement.requests.isEmpty(),
+            "changing the server invalidates completed results without starting a request");
+    controller.seed(key, saved);
+    require(controller.entries(key).isEmpty(), "old built-in fingerprints cannot be reseeded");
+    controller.activate(key, sampleImage(), Format::Markdown);
+    until([&]() { return controller.state() == Controller::State::Completed; });
+    require(controller.source() == replacement.source && replacement.requests.size() == 1,
+            "an unchanged model ID requests a new result from the replacement server");
+
+    replacement.hold = true;
+    const QString pendingKey = QStringLiteral("server-pending");
+    controller.activate(pendingKey, sampleImage(), Format::Html);
+    until([&]() { return controller.source() == QStringLiteral("# Partial"); });
+    const QPointer<QTcpSocket> oldSocket = replacement.held;
+    require(api.setBaseUrl(original.url()), "switch the server during conversion");
+    require(!controller.busy() && controller.source().isEmpty() &&
+                controller.entries(pendingKey).isEmpty(),
+            "a server change cancels the old stream before its content can be cached");
+    until([&]() { return !oldSocket || oldSocket->state() == QAbstractSocket::UnconnectedState; },
+          "the old conversion transport is aborted");
+    controller.activate(pendingKey, sampleImage(), Format::Html);
+    until([&]() { return controller.state() == Controller::State::Completed; });
+    require(controller.source() == original.source && original.requests.size() == 2 &&
+                controller.entries(pendingKey).first().modelFingerprint ==
+                    api.modelFingerprint(QStringLiteral("vision-a")),
+            "retry after a server change retains only the new server's result and fingerprint");
+
+    SnowShotApiClient sameServer(original.url());
+    controller.setProvider(&sameServer);
+    require(controller.state() == Controller::State::Completed &&
+                controller.source() == original.source && original.requests.size() == 2,
+            "a replacement client for the same server can retain completed conversions");
+    SnowShotApiClient otherServer(replacement.url());
+    controller.setProvider(&otherServer);
+    require(controller.state() == Controller::State::Failed && controller.source().isEmpty() &&
+                controller.entries(pendingKey).isEmpty(),
+            "a replacement provider validates all cached built-in server identities");
+
+    Controller legacy;
+    legacy.seed(key, {{Format::Markdown, QStringLiteral("vision-a"), QStringLiteral("# Legacy")}});
+    legacy.activate(key, sampleImage(), Format::Markdown);
+    require(legacy.state() == Controller::State::Completed,
+            "legacy results without a fingerprint remain viewable offline");
+    legacy.setProvider(&api);
+    require(legacy.entries(key).isEmpty() && legacy.state() == Controller::State::Failed,
+            "offline legacy results cannot acquire the current server's fingerprint");
+}
+
+void conversionCacheBoundsAndSeededModels() {
+    using Controller = ScreenshotImageConversionController;
+    using Format = SnowShotImageConversionFormat;
+    const snow_shot::storage::ScreenshotImageConversionSettings settings;
+    settings.setVisionModel(QStringLiteral("vision-a"));
+    Controller controller;
+    for (qsizetype index = 0; index < snow_shot::presentation::kMaximumImageConversionEntries;
+         ++index) {
+        controller.seed(QString::number(index),
+                        {{Format::Markdown, QStringLiteral("vision-a"), QString::number(index)}});
+    }
+    controller.activate(QStringLiteral("0"), sampleImage(), Format::Markdown);
+    require(controller.state() == Controller::State::Completed,
+            "a cache hit refreshes the retained target's recency");
+    controller.seed(QStringLiteral("newest"),
+                    {{Format::Markdown, QStringLiteral("vision-a"), QStringLiteral("# Newest")}});
+    require(!controller.entries(QStringLiteral("0")).isEmpty() &&
+                controller.entries(QStringLiteral("1")).isEmpty() &&
+                !controller.entries(QStringLiteral("newest")).isEmpty(),
+            "the bounded conversion cache evicts the least recently used completed result");
+
+    Controller large;
+    const QString source(4 * 1024 * 1024, u'x');
+    for (int index = 0; index < 3; ++index)
+        large.seed(QString::number(index),
+                   {{Format::Markdown, QStringLiteral("vision-a"), source}});
+    qsizetype retainedBytes = 0;
+    for (int index = 0; index < 3; ++index)
+        for (const auto& entry : large.entries(QString::number(index)))
+            retainedBytes += entry.source.size() * static_cast<qsizetype>(sizeof(QChar));
+    require(retainedBytes <= snow_shot::presentation::kMaximumImageConversionCacheBytes &&
+                large.entries(QStringLiteral("0")).isEmpty() &&
+                !large.entries(QStringLiteral("2")).isEmpty(),
+            "conversion cache memory is bounded even when a few source documents are large");
+
+    const QString key = QStringLiteral("seeded-models");
+    Controller seeded;
+    seeded.seed(key,
+                {{Format::Markdown, QStringLiteral("vision-a"), QStringLiteral("# Model A")},
+                 {Format::Markdown, QStringLiteral("vision-b"), QStringLiteral("# Model B")},
+                 {Format::Html, QStringLiteral("vision-a"), QStringLiteral("<p>Model A</p>")}});
+    for (const QString& model :
+         {QStringLiteral("vision-a"), QStringLiteral("vision-b"), QStringLiteral("vision-a")}) {
+        settings.setVisionModel(model);
+        seeded.activate(key, sampleImage(), Format::Markdown);
+        require(seeded.state() == Controller::State::Completed &&
+                    seeded.source() == (model == QStringLiteral("vision-a")
+                                            ? QStringLiteral("# Model A")
+                                            : QStringLiteral("# Model B")),
+                "seeded results retain independent models for the same conversion format");
+    }
+    require(seeded.entries(key).size() == 3, "seeded formats and models retain separate entries");
+}
+
+void conversionDiscoveryJoinsPendingRefresh() {
+    using Controller = ScreenshotImageConversionController;
+    using Format = SnowShotImageConversionFormat;
+    const snow_shot::storage::ScreenshotImageConversionSettings settings;
+    settings.setVisionModel(QStringLiteral("vision-a"));
+    ConversionServer server;
+    SnowShotApiClient api(server.url());
+    const QString locale =
+        snow_shot::presentation::LanguageManager::instance().currentLocale().name();
+    bool warmed = false;
+    require(api.ensureChatModels(locale, &api,
+                                 [&](SnowShotChatModelsResult result) {
+                                     require(result.succeeded(),
+                                             "warm the conversion model catalog");
+                                     warmed = true;
+                                 }) != 0,
+            "initial conversion model discovery starts");
+    until([&]() { return warmed; });
+    server.holdModels = true;
+    bool refreshed = false;
+    require(api.ensureChatModels(
+                locale, &api,
+                [&](SnowShotChatModelsResult result) {
+                    require(result.succeeded(), "refresh the conversion model catalog");
+                    refreshed = true;
+                },
+                SnowShotApiClient::ChatModelsCachePolicy::Refresh) != 0,
+            "explicit model refresh starts with a warm catalog");
+    until([&]() { return server.heldModels != nullptr; });
+    Controller controller;
+    controller.setProvider(&api);
+    controller.activate(QStringLiteral("pending-model-refresh"), sampleImage(), Format::Markdown);
+    require(controller.state() == Controller::State::LoadingModels && server.requests.isEmpty() &&
+                server.modelRequests == 2,
+            "normal conversion discovery joins a pending refresh despite a warm catalog");
+    server.models = QJsonArray{server.models.first(), server.models.last()};
+    ConversionServer::respond(server.heldModels,
+                              QJsonDocument(QJsonObject{{QStringLiteral("code"), 0},
+                                                        {QStringLiteral("data"), server.models}})
+                                  .toJson(QJsonDocument::Compact),
+                              "application/json");
+    until([&]() { return refreshed && controller.state() == Controller::State::Completed; });
+    require(server.modelRequests == 2 && server.requests.size() == 1 &&
+                server.requests.first().value(QStringLiteral("model")) ==
+                    QStringLiteral("vision-b"),
+            "joined discovery selects the refreshed catalog without uploading to a removed model");
+}
+
 void customModelWorkflows() {
     using Controller = ScreenshotImageConversionController;
     using Format = SnowShotImageConversionFormat;
@@ -347,6 +1307,12 @@ void customModelWorkflows() {
     controller.activate(QStringLiteral("custom-image"), sampleImage(), Format::Markdown);
     require(server.requests.size() == 1 && controller.state() == Controller::State::Completed,
             "rename preserves completed conversion");
+    require(api.setBaseUrl(QStringLiteral("http://127.0.0.1:2")),
+            "change the built-in server while a custom conversion is selected");
+    require(controller.state() == Controller::State::Completed &&
+                controller.entries(QStringLiteral("custom-image")).size() == 1 &&
+                server.requests.size() == 1,
+            "changing the built-in server preserves independent custom model results");
     model.model = QStringLiteral("changed-provider-id");
     require(apiSettings.setCustomModels({model, second}), "edit shared custom model connection");
     require(controller.entries(QStringLiteral("custom-image")).isEmpty() && !controller.busy(),
@@ -542,6 +1508,40 @@ void renderingCopyAndPersistence() {
     snow_shot::presentation::decodeImageConversions(QByteArrayLiteral("{invalid"), restored);
     require(restored.qr.has_value() && restored.conversions.size() == 2,
             "malformed optional data preserves recognition results");
+
+    results.conversions.append(
+        {Format::Markdown, QStringLiteral("vision-b"), QStringLiteral("# Another model")});
+    results.conversions.append(results.conversions.first());
+    snow_shot::presentation::decodeImageConversions(
+        snow_shot::presentation::encodeImageConversions(results), restored);
+    require(restored.conversions.size() == 3 && restored.visibleConversion == Format::Html &&
+                std::any_of(restored.conversions.cbegin(), restored.conversions.cend(),
+                            [](const auto& entry) {
+                                return entry.model == QStringLiteral("vision-b") &&
+                                       entry.source == QStringLiteral("# Another model");
+                            }),
+            "persistence retains multiple models per format and deduplicates request identities");
+    QJsonArray excessive;
+    for (qsizetype index = 0; index <= snow_shot::presentation::kMaximumImageConversionEntries;
+         ++index)
+        excessive.append(legacyEntries.first());
+    snow_shot::presentation::decodeImageConversions(
+        QJsonDocument(QJsonObject{{QStringLiteral("entries"), excessive}}).toJson(), restored);
+    require(restored.conversions.size() == 3 && restored.visibleConversion == Format::Html,
+            "over-limit optional conversion payloads cannot replace retained results");
+
+    ScreenshotRecognitionResults large;
+    large.conversions = {
+        {Format::Markdown, QStringLiteral("vision-a"), QString(4 * 1024 * 1024, QChar(0x4e00))},
+        {Format::Markdown, QStringLiteral("vision-b"), QString(4 * 1024 * 1024, QChar(0x4e8c))}};
+    const auto bounded = snow_shot::presentation::encodeImageConversions(large);
+    ScreenshotRecognitionResults boundedRestored;
+    snow_shot::presentation::decodeImageConversions(bounded, boundedRestored);
+    require(!bounded.isEmpty() &&
+                bounded.size() <= snow_shot::presentation::kMaximumImageConversionPayload &&
+                boundedRestored.conversions.size() == 1 &&
+                boundedRestored.conversions.first().model == QStringLiteral("vision-b"),
+            "the persistence byte budget retains the newest usable result instead of losing all");
 }
 
 void conversionSessionRoutesSourceAndClearsOldViews() {
@@ -588,6 +1588,111 @@ void conversionSessionRoutesSourceAndClearsOldViews() {
             "session deactivation keeps completed source but not visible state");
 }
 
+void conversionClipboardPreservesFormats() {
+    using Format = SnowShotImageConversionFormat;
+    using Mode = ScreenshotRecognitionSessionController::Mode;
+    const snow_shot::storage::ScreenshotImageConversionSettings settings;
+    const QString previousModel = settings.visionModel();
+    const auto restoreModel = qScopeGuard([&] { settings.setVisionModel(previousModel); });
+    settings.setVisionModel(QStringLiteral("vision-clipboard"));
+    const QString html = QStringLiteral("<p><b>Snow \u96ea \u03a9</b> &amp; HTML</p>\n"
+                                        "<table><tr><th>Name</th><th>Value</th></tr>"
+                                        "<tr><td>Item</td><td>42</td></tr></table>");
+    const QString markdown = QStringLiteral("# Snow \u96ea\n\n**Markdown**");
+    int captureCopies = 0;
+    ScreenshotRecognitionWindowActions windowActions;
+    windowActions.handleCopy = [&] { ++captureCopies; };
+    ScreenshotRecognitionWindow window(windowActions);
+    ScreenshotRecognitionSessionActions actions;
+    actions.ensureContent = [&] { return &window; };
+    ScreenshotRecognitionSessionController session(nullptr, nullptr, nullptr, actions);
+    session.setTarget({QStringLiteral("clipboard"), sampleImage(), QRectF(0, 0, 240, 120)});
+    ScreenshotRecognitionResults results;
+    results.key = QStringLiteral("clipboard");
+    results.conversions = {{Format::Html, QStringLiteral("vision-clipboard"), html},
+                           {Format::Markdown, QStringLiteral("vision-clipboard"), markdown}};
+    session.seedRecognitionResults(results);
+    session.activate(Mode::Html);
+    const auto sourceMime = session.recognitionClipboardMimeData();
+    require(sourceMime && sourceMime->hasFormat(QStringLiteral("text/html")) &&
+                sourceMime->html() == html && sourceMime->text() == html,
+            "HTML toolbar Copy publishes exact HTML with the existing source text fallback");
+    window.show();
+    window.activateWindow();
+    auto* view = window.findChild<ScreenshotImageConversionView*>();
+    auto* browser = view ? view->findChild<QTextBrowser*>() : nullptr;
+    require(browser != nullptr, "cached HTML displays its preview without a provider");
+    require(window.copyVisibleContentToClipboard() &&
+                QApplication::clipboard()->mimeData()->html() == html &&
+                QApplication::clipboard()->text() == html,
+            "HTML preview Copy without a selection publishes exact HTML source");
+    QTextCursor selected = browser->document()->find(QStringLiteral("Snow \u96ea \u03a9"));
+    require(selected.hasSelection(), "find the formatted Unicode HTML selection");
+    browser->setTextCursor(selected);
+    require(view->copyToClipboard() && QApplication::clipboard()->text() == selected.selectedText(),
+            "HTML selection Copy preserves the selected Unicode text fallback");
+    const auto requireSelectedHtml = [&] {
+        const auto* mime = QApplication::clipboard()->mimeData();
+        require(mime->hasHtml(), "HTML selection Copy publishes a dedicated HTML format");
+        QTextDocument copied;
+        copied.setHtml(mime->html());
+        require(copied.toPlainText() == selected.selectedText() &&
+                    copied.find(selected.selectedText()).charFormat().fontWeight() > QFont::Normal,
+                "selected HTML includes only the selected content and preserves bold formatting");
+    };
+    requireSelectedHtml();
+    browser->setFocus();
+    QCoreApplication::processEvents();
+    QApplication::clipboard()->setText(QStringLiteral("keyboard sentinel"));
+    QKeyEvent copy(QEvent::KeyPress, Qt::Key_C, Qt::ControlModifier);
+    QApplication::sendEvent(browser, &copy);
+    require(copy.isAccepted() && captureCopies == 0,
+            "HTML preview keyboard Copy stays local to recognition");
+    requireSelectedHtml();
+    QTimer::singleShot(0, view, [&] {
+        auto* menu = view->findChild<adqt::widgets::AdContextMenu*>(
+            QStringLiteral("screenshotImageConversionContextMenu"));
+        require(menu && !menu->actions().isEmpty(), "HTML preview exposes context Copy");
+        menu->actions().first()->trigger();
+        menu->close();
+    });
+    QApplication::clipboard()->setText(QStringLiteral("context sentinel"));
+    browser->customContextMenuRequested(browser->viewport()->rect().center());
+    requireSelectedHtml();
+    browser->selectAll();
+    require(view->copyToClipboard() &&
+                QApplication::clipboard()->mimeData()->html().contains(QStringLiteral("<table")),
+            "multi-block HTML selection Copy preserves table structure");
+    const auto selectedSourceMime = session.recognitionClipboardMimeData();
+    require(selectedSourceMime && selectedSourceMime->html() == html &&
+                selectedSourceMime->text() == html,
+            "HTML toolbar Copy exports full source independently of preview selection");
+    ScreenshotRecognitionSessionController transferred(nullptr, nullptr, nullptr, {});
+    transferred.setTarget({results.key, sampleImage(), QRectF(0, 0, 240, 120)});
+    transferred.seedRecognitionResults(session.recognitionResultsSnapshot());
+    transferred.activate(Mode::Html);
+    const auto transferredMime = transferred.recognitionClipboardMimeData();
+    require(transferredMime && transferredMime->html() == html,
+            "HTML recognition transferred to a pin retains its clipboard format without a view");
+    session.activate(Mode::Markdown);
+    const auto markdownMime = session.recognitionClipboardMimeData();
+    require(markdownMime && markdownMime->text() == markdown && !markdownMime->hasHtml(),
+            "Markdown toolbar Copy retains its plain source format");
+    browser = window.findChild<QTextBrowser*>(QStringLiteral("screenshotImageConversionPreview"));
+    QTextCursor clear(browser->document());
+    browser->setTextCursor(clear);
+    require(window.copyVisibleContentToClipboard() &&
+                QApplication::clipboard()->text() == markdown &&
+                !QApplication::clipboard()->mimeData()->hasHtml(),
+            "Markdown preview Copy replaces HTML with plain source text");
+    view = window.findChild<ScreenshotImageConversionView*>();
+    view->setContent(Format::Html, {}, true, {});
+    require(!view->copyToClipboard() && QApplication::clipboard()->text() == markdown,
+            "an empty HTML conversion leaves the clipboard unchanged");
+    session.deactivate();
+    window.hide();
+}
+
 void recognitionFileSnapshotTracksPartialConversionAndQrValues() {
     using Mode = ScreenshotRecognitionSessionController::Mode;
     ConversionServer server;
@@ -617,6 +1722,11 @@ void recognitionFileSnapshotTracksPartialConversionAndQrValues() {
                                                    ? ScreenshotRecognitionFileKind::Markdown
                                                    : ScreenshotRecognitionFileKind::Html),
                 "conversion file snapshot preserves active format and partial source");
+        const auto mime = session.recognitionClipboardMimeData();
+        require(mime && mime->text() == snapshot->source &&
+                    mime->hasHtml() == (mode == Mode::Html) &&
+                    (mode != Mode::Html || mime->html() == snapshot->source),
+                "partial conversions retain their active clipboard format");
     }
     session.activate(Mode::Qr);
     const auto qr = session.fileExportSnapshot();
@@ -807,10 +1917,10 @@ void conversionToolbarMigration() {
                                                         QStringLiteral("convert-to-markdown"),
                                                         QStringLiteral("latex-recognition"),
                                                         QStringLiteral("convert-to-html")} &&
-                // quick-save always mirrors save-as-file: hiding the manual
-                // save hides its companion too.
+                // Upload, quick-save, and print inherit the manual save action's visibility.
                 migrated.hidden ==
-                    QStringList{QStringLiteral("save-as-file"), QStringLiteral("quick-save")},
+                    QStringList{QStringLiteral("save-as-file"), QStringLiteral("upload-to-cloud"),
+                                QStringLiteral("quick-save"), QStringLiteral("print")},
             "older layouts gain conversions inside recognition without rearranging other tools");
     const storage::ScreenshotToolbarSettings settings;
     settings.setLayout(storage::ScreenshotToolbarLayoutKind::ActionTools, original);
@@ -837,15 +1947,46 @@ void conversionToolbarMigration() {
         require(settings.layout(storage::ScreenshotToolbarLayoutKind::ActionTools) == result,
                 "storage and presentation agree on every migration branch");
     };
+    for (const auto kind : {storage::ScreenshotToolbarLayoutKind::ActionTools,
+                            storage::ScreenshotToolbarLayoutKind::PinnedActionTools}) {
+        for (bool hideSave : {false, true}) {
+            storage::ScreenshotToolbarLayout saveLayout;
+            if (hideSave)
+                saveLayout.hidden = {QStringLiteral("save-as-file")};
+            else
+                saveLayout.positions = {{QStringLiteral("save-as-file")}};
+            const auto result = layout::normalizedLayout(saveLayout, kind);
+            if (hideSave) {
+                require(result.hidden == QStringList{QStringLiteral("save-as-file"),
+                                                     QStringLiteral("upload-to-cloud"),
+                                                     QStringLiteral("quick-save"),
+                                                     QStringLiteral("print")},
+                        "print inherits hidden save visibility for both action toolbars");
+            } else {
+                require(result.positions.front() == QStringList{QStringLiteral("upload-to-cloud"),
+                                                                QStringLiteral("print"),
+                                                                QStringLiteral("quick-save"),
+                                                                QStringLiteral("save-as-file")},
+                        "print joins the saved manual save stack for both action toolbars");
+            }
+            require(settings.setLayout(kind, saveLayout) && settings.layout(kind) == result,
+                    "storage preserves print's inherited save placement and visibility");
+        }
+    }
     verify(hidden, retained);
     storage::ScreenshotToolbarLayout defaults{layout::actionDefaultPositions(), {}};
-    auto previousDefault = defaults;
+    const QVector<QStringList> formerFixedPositions{
+        {QStringLiteral("separator")}, {QStringLiteral("cancel")}, {QStringLiteral("copy")}};
+    auto historicalDefaults = defaults;
+    historicalDefaults.positions.removeIf(
+        [&](const QStringList& position) { return formerFixedPositions.contains(position); });
+    auto previousDefault = historicalDefaults;
     previousDefault.positions[0] = {QStringLiteral("barcode-recognition"),
                                     QStringLiteral("table-recognition")};
     previousDefault.positions.insert(1, QStringList{QStringLiteral("convert-to-markdown")});
     previousDefault.positions.insert(2, QStringList{QStringLiteral("convert-to-html")});
     verify(previousDefault, defaults);
-    auto previousGroupedDefault = defaults;
+    auto previousGroupedDefault = historicalDefaults;
     previousGroupedDefault.positions[0] = {
         QStringLiteral("table-recognition"), QStringLiteral("barcode-recognition"),
         QStringLiteral("convert-to-markdown"), QStringLiteral("convert-to-html")};
@@ -854,20 +1995,21 @@ void conversionToolbarMigration() {
     customGrouped.positions.move(0, 1);
     auto expectedCustomGrouped = customGrouped;
     expectedCustomGrouped.positions[1].insert(3, QStringLiteral("latex-recognition"));
+    expectedCustomGrouped.positions += formerFixedPositions;
     verify(customGrouped, expectedCustomGrouped);
     verify({}, defaults);
     auto customized = previousDefault;
     customized.positions.move(1, customized.positions.size() - 1);
     auto expectedCustomized = customized;
     expectedCustomized.positions.last().append(QStringLiteral("latex-recognition"));
+    expectedCustomized.positions += formerFixedPositions;
     verify(customized, expectedCustomized);
     auto qrHidden = original;
     qrHidden.positions[1].removeAll(QStringLiteral("barcode-recognition"));
     qrHidden.hidden.push_back(QStringLiteral("barcode-recognition"));
     auto tableGroup = migrated;
     tableGroup.positions[1].removeAll(QStringLiteral("barcode-recognition"));
-    // The migration preserves the input's hidden order and appends the
-    // quick-save companion last, so barcode-recognition slots in before it.
+    // Recognition keeps its input position before the inherited hidden save companions.
     tableGroup.hidden.insert(1, QStringLiteral("barcode-recognition"));
     verify(qrHidden, tableGroup);
     auto recognitionHidden = defaults;
@@ -882,7 +2024,8 @@ void conversionToolbarMigration() {
 }
 } // namespace
 
-void runImageConversionTests() {
+namespace {
+void initializeRecognitionTestFonts() {
 #if defined(Q_OS_WIN)
     require(QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/segoeui.ttf")) >= 0,
             "offscreen conversion tests require a font");
@@ -893,12 +2036,40 @@ void runImageConversionTests() {
     adqt::theme::ThemeManager::instance().setConfig(theme);
     adqt::theme::ThemeManager::instance().applyTo(*qApp);
 #endif
+}
+} // namespace
+
+void runImageConversionNetworkTests() {
+    initializeRecognitionTestFonts();
     settingsInitialAvailability();
+    settingsIgnoreRetiredProviderCallbacks();
     conversionCacheUsesRecognitionKeys();
     conversionLifecycleAndSettings();
+    conversionServerAndProviderIdentity();
+    conversionCacheBoundsAndSeededModels();
+    conversionDiscoveryJoinsPendingRefresh();
     customModelWorkflows();
     conversionSourceNormalization();
     renderingCopyAndPersistence();
+}
+
+void runRecognitionNotificationLifetimeTests() {
+    conversionNotificationsAllowOwnerDeletion();
+    conversionProviderBindingsSurviveNotificationReentry();
+    conversionProviderReplacementKeepsOnlyCurrentBindings();
+    sessionNotificationsAllowOwnerDeletion();
+    recognitionCallbacksRetainOwnedStateDuringRetirement();
+    recognitionPublicationCallbacksAllowRetirement();
+    recognitionEditorsRetainDisplayedDocumentOwners();
+    recognitionWindowActionsRetainCapturesDuringRetirement();
+    recognitionCopyStopsAfterClipboardRetirement();
+    recognitionResizeConsumesRetiredEditorInput();
+    synchronousRecognitionCompletionAllowsOwnerDeletion();
+}
+
+void runImageConversionTests() {
+    runImageConversionNetworkTests();
+    conversionClipboardPreservesFormats();
     conversionSessionRoutesSourceAndClearsOldViews();
     recognitionFileSnapshotTracksPartialConversionAndQrValues();
     conversionUsesRecognitionMessages();
@@ -906,12 +2077,17 @@ void runImageConversionTests() {
     conversionToolbarMigration();
 }
 
+void runImageConversionClipboardTests() {
+    conversionClipboardPreservesFormats();
+    recognitionFileSnapshotTracksPartialConversionAndQrValues();
+}
+
 void latexSessionRequestsAreIsolated() {
     using Mode = ScreenshotRecognitionSessionController::Mode;
     QTcpServer server;
     require(server.listen(QHostAddress::LocalHost), "LaTeX session fixture listens");
     int requests = 0;
-    bool hold = false;
+    bool hold = true;
     bool fail = false;
     QPointer<QTcpSocket> held;
     QObject::connect(&server, &QTcpServer::newConnection, &server, [&]() {
@@ -922,6 +2098,14 @@ void latexSessionRequestsAreIsolated() {
             const auto end = bytes->indexOf("\r\n\r\n");
             if (end < 0 || socket->property("answered").toBool())
                 return;
+            if (bytes->startsWith("GET /api/v2/chat/models ")) {
+                socket->setProperty("answered", true);
+                ConversionServer::respond(
+                    socket,
+                    R"({"data":[{"model":"vision","name":"Vision","supports_vision":true}]})",
+                    "application/json");
+                return;
+            }
             qsizetype length = 0;
             for (const auto& line : bytes->left(end).split('\n'))
                 if (line.toLower().startsWith("content-length:"))
@@ -944,18 +2128,51 @@ void latexSessionRequestsAreIsolated() {
     });
     auto api = std::make_unique<SnowShotApiClient>(
         QStringLiteral("http://127.0.0.1:%1").arg(server.serverPort()));
-    ScreenshotRecognitionSessionController session(nullptr, nullptr, api.get(), {});
+    ScreenshotRecognitionWindow window(ScreenshotRecognitionWindowActions{});
+    ScreenshotRecognitionSessionActions actions;
+    actions.ensureContent = [&]() { return &window; };
+    ScreenshotRecognitionSessionController session(nullptr, nullptr, api.get(), actions);
+    auto* screen = QGuiApplication::primaryScreen();
+    require(screen != nullptr, "LaTeX recognition lifecycle fixture has a screen");
+    const QRect geometry(screen->availableGeometry().topLeft() + QPoint(320, 120), QSize(360, 220));
+    require(window.present({screen, nullptr, geometry, QRectF(0, 0, 240, 120)}),
+            "LaTeX recognition lifecycle fixture presents");
+    const auto preview = [&]() {
+        return window.findChild<ScreenshotOriginalImagePreviewWindow*>();
+    };
+    const auto requireNoPreview = [&](const char* message) {
+        QCoreApplication::processEvents();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        require(preview() == nullptr, message);
+    };
+    const auto requirePreviewVisible = [&]() {
+        until([&] { return preview() && preview()->isVisible(); },
+              "successful LaTeX recognition displays the formula preview");
+    };
     const auto target = [&](const QString& key) {
         session.setTarget({key, sampleImage(), QRectF(0, 0, 240, 120)});
     };
     target(QStringLiteral("success"));
     session.activate(Mode::Latex);
+    until([&] { return held != nullptr; });
+    require(session.busy(Mode::Latex), "LaTeX recognition remains pending until the response");
+    requireNoPreview("switching to LaTeX cannot create a preview before successful recognition");
+    ConversionServer::respond(held, R"({"data":{"latex":"x^2"}})", "application/json");
+    held.clear();
+    hold = false;
     until([&] { return !session.busy(Mode::Latex); });
     require(requests == 1 && session.cachedRecognitionResults().latex.has_value(),
             "successful LaTeX request caches result");
+    requirePreviewVisible();
     session.deactivate();
+    requireNoPreview("deactivation releases the successful formula preview");
     session.activate(Mode::Latex);
     require(requests == 1 && !session.busy(), "cached reactivation does not upload");
+    requirePreviewVisible();
+    session.activate(Mode::Qr);
+    requireNoPreview("switching recognition tools releases the formula preview");
+    session.activate(Mode::Latex);
+    requirePreviewVisible();
     fail = true;
     target(QStringLiteral("retry"));
     session.activate(Mode::Latex);
@@ -963,15 +2180,19 @@ void latexSessionRequestsAreIsolated() {
     require(!session.cachedRecognitionResults().latex &&
                 !session.workflowState().value(QStringLiteral("error")).toString().isEmpty(),
             "failed recognition reports error without caching");
+    requireNoPreview("failed LaTeX recognition cannot create or retain a preview");
     fail = false;
     session.activate(Mode::Latex);
     until([&] { return !session.busy(); });
     require(requests == 3 && session.cachedRecognitionResults().latex.has_value(),
             "reactivation retries a failed request");
+    requirePreviewVisible();
     hold = true;
     target(QStringLiteral("old"));
     session.activate(Mode::Latex);
     until([&] { return held != nullptr; });
+    requireNoPreview(
+        "a new target cannot display the preceding formula while recognition is pending");
     session.deactivate();
     require(!session.active(), "mode exit retains no active result view");
     target(QStringLiteral("new"));
@@ -980,16 +2201,396 @@ void latexSessionRequestsAreIsolated() {
     QCoreApplication::processEvents();
     require(!session.cachedRecognitionResults().latex && !session.busy(),
             "target changes cancel stale results");
+    requireNoPreview("a stale recognition response cannot create a formula preview");
     held.clear();
     session.activate(Mode::Latex);
     until([&] { return held != nullptr; });
     api.reset();
     require(!session.busy() && !session.cachedRecognitionResults().latex,
             "provider destruction releases pending recognition");
+    requireNoPreview("provider destruction cannot create a formula preview");
+    session.activate(Mode::Latex);
+    requireNoPreview("an unavailable recognition provider cannot create a formula preview");
+}
+
+void latexPendingResultReplacesBorrowedDocumentSafely() {
+    using Mode = ScreenshotRecognitionSessionController::Mode;
+    QTcpServer server;
+    require(server.listen(QHostAddress::LocalHost), "LaTeX replacement fixture listens");
+    QPointer<QTcpSocket> held;
+    QObject::connect(&server, &QTcpServer::newConnection, &server, [&]() {
+        auto* socket = server.nextPendingConnection();
+        auto bytes = std::make_shared<QByteArray>();
+        QObject::connect(socket, &QTcpSocket::readyRead, &server, [&, socket, bytes]() {
+            *bytes += socket->readAll();
+            const auto end = bytes->indexOf("\r\n\r\n");
+            if (end < 0)
+                return;
+            if (bytes->startsWith("GET /api/v2/chat/models ")) {
+                socket->setProperty("answered", true);
+                ConversionServer::respond(
+                    socket,
+                    R"({"data":[{"model":"vision","name":"Vision","supports_vision":true}]})",
+                    "application/json");
+                return;
+            }
+            qsizetype length = 0;
+            for (const auto& line : bytes->left(end).split('\n'))
+                if (line.toLower().startsWith("content-length:"))
+                    length = line.mid(line.indexOf(':') + 1).trimmed().toLongLong();
+            if (bytes->size() >= end + 4 + length)
+                held = socket;
+        });
+    });
+    SnowShotApiClient api(QStringLiteral("http://127.0.0.1:%1").arg(server.serverPort()));
+    ScreenshotRecognitionWindow window(ScreenshotRecognitionWindowActions{});
+    ScreenshotRecognitionSessionActions actions;
+    actions.ensureContent = [&]() { return &window; };
+    ScreenshotRecognitionSessionController session(nullptr, nullptr, &api, actions);
+    const QString key = QStringLiteral("latex-pending-seed");
+    session.setTarget({key, sampleImage(), QRectF(0, 0, 240, 120)});
+    session.activate(Mode::Latex);
+    until([&]() { return held != nullptr; });
+    ScreenshotRecognitionResults seed;
+    seed.key = key;
+    seed.latex = SnowShotLatexResult{QStringLiteral("a\r\n+b"), {}, {}};
+    session.seedRecognitionResults(seed);
+    auto* editor = window.findChild<QTextEdit*>(QStringLiteral("screenshotOcrEditor"));
+    require(editor && session.busy(),
+            "active seeding attaches a source while recognition is pending");
+    auto* originalDocument = editor->document();
+    QPointer<QTextDocument> originalGuard(originalDocument);
+    bool oldDocumentRetired = false;
+    QObject::connect(originalDocument, &QObject::destroyed, &window, [&]() {
+        const auto* currentEditor =
+            window.findChild<QTextEdit*>(QStringLiteral("screenshotOcrEditor"));
+        require(currentEditor && currentEditor->document() != originalDocument,
+                "a replaced source document must outlive the editor's detach");
+        oldDocumentRetired = true;
+    });
+    QTextCursor cursor(originalDocument);
+    cursor.movePosition(QTextCursor::End);
+    cursor.insertText(QStringLiteral("+c"));
+    require(session.latexDraft() == QStringLiteral("a\r\n+b+c"),
+            "the seeded document remains editable while the request is pending");
+    const QByteArray body = R"({"data":{"latex":"x^2"}})";
+    held->write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " +
+                QByteArray::number(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
+    held->disconnectFromHost();
+    until([&]() { return !session.busy(); });
+    editor = window.findChild<QTextEdit*>(QStringLiteral("screenshotOcrEditor"));
+    require(editor && editor->toPlainText() == QStringLiteral("x^2") &&
+                session.latexDraft() == QStringLiteral("x^2") &&
+                session.fileExportSnapshot()->source == QStringLiteral("x^2") &&
+                oldDocumentRetired && originalGuard.isNull(),
+            "late recognition safely rebinds the editor before retiring the seeded source");
+}
+
+void latexRepeatedSeedingPreservesBaselineAndHistory() {
+    using Mode = ScreenshotRecognitionSessionController::Mode;
+    ScreenshotRecognitionWindow window(ScreenshotRecognitionWindowActions{});
+    ScreenshotRecognitionSessionActions actions;
+    actions.ensureContent = [&]() { return &window; };
+    ScreenshotRecognitionSessionController session(nullptr, nullptr, nullptr, actions);
+    ScreenshotRecognitionResults initial;
+    initial.key = QStringLiteral("latex-repeated-seed");
+    const QString original = QStringLiteral("\\alpha\r\n+\u00a0a");
+    initial.latex = SnowShotLatexResult{original, {}, {}};
+    session.setTarget({initial.key, sampleImage(), QRectF(0, 0, 240, 120)});
+    session.seedRecognitionResults(initial);
+    session.activate(Mode::Latex);
+    auto* editor = window.findChild<QTextEdit*>(QStringLiteral("screenshotOcrEditor"));
+    require(editor != nullptr, "repeated LaTeX seeding fixture exposes an editor");
+    QPointer<QTextDocument> sourceDocument(editor->document());
+    const QString edited = original + QStringLiteral("+x");
+    session.setTextDraft(edited);
+    ScreenshotRecognitionResults repeated;
+    repeated.key = initial.key;
+    repeated.latex = SnowShotLatexResult{QStringLiteral("\\beta\u2028+b"), {}, {}};
+    repeated.latexDraft = QStringLiteral("\\gamma\u2029+c");
+    session.seedRecognitionResults(repeated);
+    const auto cached = session.cachedRecognitionResults();
+    require(sourceDocument && editor->document() == sourceDocument && cached.latex &&
+                cached.latex->latex == original && cached.latexDraft == edited &&
+                session.latexDraft() == edited,
+            "repeated seeding preserves the paired recognized baseline and edited document");
+    session.undoTextEdit();
+    require(session.latexDraft() == original && !session.cachedRecognitionResults().latexDraft,
+            "repeated seeding preserves formula undo history and its original exact source");
+    session.redoTextEdit();
+    require(session.latexDraft() == edited, "repeated seeding preserves formula redo history");
+    require(session.editWorkflow({{QStringLiteral("action"), QStringLiteral("reset_text")}}) &&
+                session.latexDraft() == cached.latex->latex,
+            "reset restores the same recognition baseline exported by the cached snapshot");
+}
+
+void latexSourcePreservesWhitespace() {
+    using Mode = ScreenshotRecognitionSessionController::Mode;
+    const QString source = QStringLiteral("\\text{a\u00a0b}\r\n+x\u2028+y\u2029+z\r+1\n");
+    ScreenshotRecognitionWindow window(ScreenshotRecognitionWindowActions{});
+    ScreenshotRecognitionSessionActions actions;
+    actions.ensureContent = [&]() { return &window; };
+    ScreenshotRecognitionSessionController session(nullptr, nullptr, nullptr, actions);
+    session.setTarget({QStringLiteral("latex-whitespace"), sampleImage(), QRectF(0, 0, 240, 120)});
+    ScreenshotRecognitionResults seed;
+    seed.key = QStringLiteral("latex-whitespace");
+    seed.latex = SnowShotLatexResult{source, {}, {}};
+    session.seedRecognitionResults(seed);
+    session.activate(Mode::Latex);
+    auto* editor = window.findChild<QTextEdit*>(QStringLiteral("screenshotOcrEditor"));
+    require(editor && editor->document()->toPlainText() != source,
+            "fixture includes whitespace normalized by QTextDocument");
+    const auto sourceIs = [&](const QString& expected) {
+        const auto file = session.fileExportSnapshot();
+        return session.latexDraft() == expected &&
+               session.recognitionClipboardMimeData()->text() == expected && file &&
+               file->source == expected &&
+               session.workflowResult().value(QStringLiteral("text")).toString() == expected;
+    };
+    require(sourceIs(source) && !session.cachedRecognitionResults().latexDraft,
+            "recognized whitespace remains verbatim through every source export");
+    QTextCursor copyCursor(editor->document());
+    editor->setTextCursor(copyCursor);
+    QApplication::clipboard()->setText(QStringLiteral("clipboard sentinel"));
+    require(window.copyVisibleContentToClipboard() && QApplication::clipboard()->text() == source,
+            "LaTeX copy without a selection preserves every original source character");
+    copyCursor.select(QTextCursor::Document);
+    editor->setTextCursor(copyCursor);
+    QApplication::clipboard()->setText(QStringLiteral("clipboard sentinel"));
+    require(window.copyVisibleContentToClipboard() && QApplication::clipboard()->text() == source,
+            "LaTeX Select All copy preserves CRLF, NBSP and Unicode separators");
+    const QString raw = editor->document()->toRawText();
+    copyCursor.setPosition(static_cast<int>(raw.indexOf(QLatin1Char('a'))));
+    copyCursor.setPosition(static_cast<int>(raw.indexOf(QLatin1Char('z')) + 1),
+                           QTextCursor::KeepAnchor);
+    editor->setTextCursor(copyCursor);
+    const qsizetype sourceStart = source.indexOf(QLatin1Char('a'));
+    const QString selectedSource =
+        source.mid(sourceStart, source.indexOf(QLatin1Char('z')) + 1 - sourceStart);
+    QApplication::clipboard()->setText(QStringLiteral("clipboard sentinel"));
+    require(window.copyVisibleContentToClipboard() &&
+                QApplication::clipboard()->text() == selectedSource,
+            "partial LaTeX copy maps document positions to exact source spans");
+    const int paragraphPosition = static_cast<int>(raw.indexOf(QChar::ParagraphSeparator));
+    copyCursor.setPosition(paragraphPosition);
+    copyCursor.setPosition(paragraphPosition + 1, QTextCursor::KeepAnchor);
+    editor->setTextCursor(copyCursor);
+    QApplication::clipboard()->setText(QStringLiteral("clipboard sentinel"));
+    require(window.copyVisibleContentToClipboard() &&
+                QApplication::clipboard()->text() == QStringLiteral("\r\n"),
+            "copying one document paragraph preserves the source CRLF pair");
+
+    QString edited = source;
+    QTextCursor cursor(editor->document());
+    cursor.setPosition(static_cast<int>(editor->document()->toRawText().indexOf(QChar(0x00a0))));
+    cursor.insertText(QStringLiteral("X"));
+    edited.insert(edited.indexOf(QChar(0x00a0)), QStringLiteral("X"));
+    require(sourceIs(edited), "native insertion preserves adjacent NBSP and all line separators");
+    const auto separator =
+        static_cast<int>(editor->document()->toRawText().indexOf(QChar::ParagraphSeparator));
+    cursor.setPosition(separator);
+    cursor.setPosition(separator + 1, QTextCursor::KeepAnchor);
+    cursor.removeSelectedText();
+    edited.remove(edited.indexOf(QStringLiteral("\r\n")), 2);
+    require(sourceIs(edited), "native paragraph deletion consumes exactly its retained CRLF pair");
+    cursor.movePosition(QTextCursor::End);
+    cursor.insertText(QStringLiteral("\n"));
+    edited += QLatin1Char('\n');
+    require(sourceIs(edited), "new paragraphs use LF while untouched source spans stay exact");
+    session.undoTextEdit();
+    require(sourceIs(edited.chopped(1)), "undo preserves original line separator spelling");
+    session.redoTextEdit();
+    require(sourceIs(edited), "redo preserves original line separator spelling");
+
+    const QString replacement = QStringLiteral("\\alpha\r\n+\u00a0x\u2028+y\u2029+z\r");
+    require(session.editWorkflow({{QStringLiteral("action"), QStringLiteral("set_text")},
+                                  {QStringLiteral("text"), replacement}}) &&
+                sourceIs(replacement) &&
+                session.cachedRecognitionResults().latexDraft == replacement,
+            "workflow replacement and persisted draft retain exact source whitespace");
+    session.undoTextEdit();
+    require(sourceIs(edited), "workflow undo restores the native source without normalization");
+    session.redoTextEdit();
+    require(sourceIs(replacement),
+            "workflow redo restores the supplied source without normalization");
+    require(session.editWorkflow({{QStringLiteral("action"), QStringLiteral("reset_text")}}) &&
+                sourceIs(source) && !session.cachedRecognitionResults().latexDraft,
+            "reset restores the exact recognized baseline and clears the persisted draft");
+
+    ScreenshotOcrTextEditingSession detached(source, true);
+    QTextCursor detachedCursor(detached.document());
+    detachedCursor.setPosition(
+        static_cast<int>(detached.document()->toRawText().indexOf(QChar(0x00a0)) + 1));
+    detachedCursor.insertText(QStringLiteral("Y"));
+    QString detachedExpected = source;
+    detachedExpected.insert(detachedExpected.indexOf(QChar(0x00a0)) + 1, QStringLiteral("Y"));
+    require(detached.text() == detachedExpected,
+            "headless document edits also retain untouched source spans");
+    ScreenshotOcrTextEditingSession repeated(QStringLiteral("a\r\n\r\n\nb"), true);
+    static_cast<void>(repeated.document()->documentLayout());
+    QTextCursor repeatedCursor(repeated.document());
+    repeatedCursor.setPosition(2);
+    repeatedCursor.deleteChar();
+    require(repeated.text() == QStringLiteral("a\r\n\nb"),
+            "native deletion identifies the correct span among repeated normalized paragraphs");
+    ScreenshotOcrTextEditingSession textRecognition(source);
+    require(textRecognition.text() == textRecognition.document()->toPlainText(),
+            "OCR editing keeps its existing plain-text normalization");
+    QTextEdit survivingEditor;
+    bool documentDestroyed = false;
+    auto transient = std::make_unique<ScreenshotOcrTextEditingSession>(source, true);
+    survivingEditor.setDocument(transient->document());
+    QObject::connect(transient->document(), &QObject::destroyed, &survivingEditor,
+                     [&]() { documentDestroyed = true; });
+    QTextCursor transientCursor(transient->document());
+    transientCursor.insertText(QStringLiteral("X"));
+    survivingEditor.setDocument(nullptr);
+    transient.reset();
+    require(documentDestroyed && survivingEditor.toPlainText().isEmpty(),
+            "detached session teardown preserves the editor and external destruction observers");
+}
+
+void latexKeyboardHistoryRoutesToSession() {
+    using Mode = ScreenshotRecognitionSessionController::Mode;
+    QPointer<ScreenshotRecognitionSessionController> activeSession;
+    int undoCallbacks = 0;
+    int redoCallbacks = 0;
+    int copyCallbacks = 0;
+    ScreenshotRecognitionWindowActions windowActions;
+    windowActions.handleUndoTextEdit = [&]() {
+        require(activeSession != nullptr, "LaTeX keyboard undo has a live session");
+        ++undoCallbacks;
+        activeSession->undoTextEdit();
+    };
+    windowActions.handleRedoTextEdit = [&]() {
+        require(activeSession != nullptr, "LaTeX keyboard redo has a live session");
+        ++redoCallbacks;
+        activeSession->redoTextEdit();
+    };
+    windowActions.handleCopy = [&]() { ++copyCallbacks; };
+    ScreenshotRecognitionWindow window(windowActions);
+    ScreenshotRecognitionSessionActions actions;
+    actions.ensureContent = [&]() { return &window; };
+    ScreenshotRecognitionSessionController session(nullptr, nullptr, nullptr, actions);
+    activeSession = &session;
+    const QString original = QStringLiteral("\\alpha");
+    ScreenshotRecognitionResults seed;
+    seed.key = QStringLiteral("latex-keyboard-history");
+    seed.latex = SnowShotLatexResult{original, {}, {}};
+    session.setTarget({seed.key, sampleImage(), QRectF(0, 0, 240, 120)});
+    session.seedRecognitionResults(seed);
+    session.activate(Mode::Latex);
+    auto* editor = window.findChild<QTextEdit*>(QStringLiteral("screenshotOcrEditor"));
+    require(editor != nullptr, "LaTeX keyboard fixture attaches the source editor");
+    auto* screen = QGuiApplication::primaryScreen();
+    require(screen != nullptr, "LaTeX keyboard fixture has a screen");
+    const QRect geometry(screen->availableGeometry().topLeft() + QPoint(320, 120), QSize(360, 220));
+    require(window.present({screen, nullptr, geometry, QRectF(0, 0, 240, 120)}),
+            "LaTeX keyboard fixture presents the selection and source editor");
+    // The offscreen platform activates passive tool windows on their first show.
+    // Settle the companion before focusing the input whose shortcuts are under test.
+    until(
+        [&]() {
+            const auto* preview = window.findChild<ScreenshotOriginalImagePreviewWindow*>();
+            return preview && preview->isVisible() && preview->accessibleDescription().isEmpty();
+        },
+        "LaTeX keyboard fixture's initial formula preview did not settle");
+    window.activateWindow();
+    editor->setFocus();
+    until([&]() { return editor->hasFocus(); },
+          "LaTeX keyboard fixture's presented source editor did not receive focus");
+    QTextCursor cursor(editor->document());
+    cursor.movePosition(QTextCursor::End);
+    cursor.insertText(QStringLiteral("+x"));
+    const QString edited = original + QStringLiteral("+x");
+    require(session.latexDraft() == edited, "keyboard fixture records a native source edit");
+    const auto sendStandardKey = [&](QKeySequence::StandardKey standard) {
+        const auto bindings = QKeySequence::keyBindings(standard);
+        require(!bindings.isEmpty() && bindings.front().count() == 1,
+                "LaTeX source editing has a platform standard shortcut");
+        const auto combination = bindings.front()[0];
+        PhysicalKeyEvent press(QEvent::KeyPress, combination.key(),
+                               combination.keyboardModifiers());
+        QApplication::sendEvent(editor, &press);
+        PhysicalKeyEvent release(QEvent::KeyRelease, combination.key(),
+                                 combination.keyboardModifiers());
+        QApplication::sendEvent(editor, &release);
+    };
+    sendStandardKey(QKeySequence::Undo);
+    require(undoCallbacks == 1 && redoCallbacks == 0 && session.latexDraft() == original &&
+                editor->toPlainText() == original,
+            "focused LaTeX Undo invokes the window callback and session history");
+    sendStandardKey(QKeySequence::Redo);
+    require(undoCallbacks == 1 && redoCallbacks == 1 && session.latexDraft() == edited &&
+                editor->toPlainText() == edited,
+            "focused LaTeX Redo invokes the window callback and session history");
+    const QString exactSource = QStringLiteral("\\text{a\u00a0b}\r\n+x\u2028+y\u2029+z\r+w\n");
+    session.setTextDraft(exactSource);
+    const QString raw = editor->document()->toRawText();
+    QTextCursor selection(editor->document());
+    selection.setPosition(static_cast<int>(raw.indexOf(QLatin1Char('a'))));
+    selection.setPosition(static_cast<int>(raw.indexOf(QLatin1Char('z')) + 1),
+                          QTextCursor::KeepAnchor);
+    editor->setTextCursor(selection);
+    const qsizetype sourceStart = exactSource.indexOf(QLatin1Char('a'));
+    const QString selectedSource =
+        exactSource.mid(sourceStart, exactSource.indexOf(QLatin1Char('z')) + 1 - sourceStart);
+    QApplication::clipboard()->setText(QStringLiteral("clipboard sentinel"));
+    sendStandardKey(QKeySequence::Copy);
+    require(QApplication::clipboard()->text() == selectedSource && copyCallbacks == 0 &&
+                session.active() && session.latexDraft() == exactSource,
+            "LaTeX keyboard Copy preserves a selected source span without finishing capture");
+    bool contextCopyTriggered = false;
+    QApplication::clipboard()->setText(QStringLiteral("clipboard sentinel"));
+    QTimer::singleShot(0, &window, [&]() {
+        auto* menu = window.findChild<adqt::widgets::AdContextMenu*>(
+            QStringLiteral("screenshotTextEditorContextMenu"));
+        require(menu && !menu->actions().isEmpty() && menu->actions().first()->isEnabled(),
+                "selected LaTeX source exposes the local context Copy action");
+        menu->actions().first()->trigger();
+        contextCopyTriggered = true;
+        menu->close();
+    });
+    const QPoint menuPosition = editor->viewport()->rect().center();
+    QContextMenuEvent context(QContextMenuEvent::Mouse, menuPosition,
+                              editor->viewport()->mapToGlobal(menuPosition));
+    QApplication::sendEvent(editor->viewport(), &context);
+    require(contextCopyTriggered && context.isAccepted() &&
+                QApplication::clipboard()->text() == selectedSource && copyCallbacks == 0,
+            "LaTeX context Copy preserves the selected source without finishing capture");
+    window.activateWindow();
+    editor->setFocus();
+    until([&]() { return editor->hasFocus(); },
+          "LaTeX source editor did not regain focus after its context menu");
+    sendStandardKey(QKeySequence::SelectAll);
+    QApplication::clipboard()->setText(QStringLiteral("clipboard sentinel"));
+    sendStandardKey(QKeySequence::Copy);
+    require(QApplication::clipboard()->text() == exactSource && copyCallbacks == 0,
+            "LaTeX keyboard Select All and Copy preserve the complete exact source");
+    selection = editor->textCursor();
+    selection.clearSelection();
+    editor->setTextCursor(selection);
+    QApplication::clipboard()->setText(QStringLiteral("clipboard sentinel"));
+    sendStandardKey(QKeySequence::Copy);
+    require(QApplication::clipboard()->text() == exactSource && copyCallbacks == 0 &&
+                session.active(),
+            "LaTeX keyboard Copy without a selection stays local and preserves the whole source");
+    session.deactivate();
+    window.hide();
 }
 
 void runLatexRecognitionTests() {
+    const snow_shot::storage::ScreenshotRecognitionModelSettings modelSettings;
+    const QString previousModel = modelSettings.latexModel();
+    const auto restoreModel = qScopeGuard([&] { modelSettings.setLatexModel(previousModel); });
+    // These lifecycle regressions explicitly exercise the retained dedicated API contract.
+    modelSettings.setLatexModel(screenshotDedicatedRecognitionModelId());
+    initializeRecognitionTestFonts();
     latexSessionRequestsAreIsolated();
+    latexPendingResultReplacesBorrowedDocumentSafely();
+    latexRepeatedSeedingPreservesBaselineAndHistory();
+    latexSourcePreservesWhitespace();
+    latexKeyboardHistoryRoutesToSession();
     using Mode = ScreenshotRecognitionSessionController::Mode;
     namespace layout = snow_shot::presentation::toolbar_layout;
     using Kind = snow_shot::storage::ScreenshotToolbarLayoutKind;
@@ -1004,9 +2605,10 @@ void runLatexRecognitionTests() {
     seed.latex = SnowShotLatexResult{source, {}, {}};
     session.seedRecognitionResults(seed);
     session.activate(Mode::Latex);
-    auto* browser = window.findChild<QTextBrowser*>(QStringLiteral("screenshotQrContents"));
-    require(browser && browser->isReadOnly() && browser->toPlainText() == source,
-            "LaTeX reuses QR's read-only view without interpreting source");
+    auto* editor = window.findChild<QTextEdit*>(QStringLiteral("screenshotOcrEditor"));
+    require(editor && !editor->isReadOnly() && editor->toPlainText() == source,
+            "LaTeX opens an editable source document without interpreting source");
+    QPointer<QTextDocument> sourceDocument(editor->document());
     require(session.recognitionClipboardMimeData()->text() == source,
             "LaTeX clipboard source is verbatim");
     const auto file = session.fileExportSnapshot();
@@ -1016,9 +2618,10 @@ void runLatexRecognitionTests() {
     require(session.showOriginalImage() && session.recognitionClipboardMimeData()->text() == source,
             "original image toggle retains source");
     session.activate(Mode::Latex);
-    require(!session.busy() &&
+    editor = window.findChild<QTextEdit*>(QStringLiteral("screenshotOcrEditor"));
+    require(editor && sourceDocument && editor->document() == sourceDocument && !session.busy() &&
                 session.workflowResult().value(QStringLiteral("text")).toString() == source,
-            "reactivation reuses the cached source");
+            "reactivation reuses the cached source document in the current editor");
     const auto snapshot = session.recognitionResultsSnapshot();
     require(snapshot.latex && snapshot.visibleLatex, "snapshot preserves visible LaTeX result");
     ScreenshotRecognitionSessionController pinned(nullptr, nullptr, nullptr, {});
@@ -1027,6 +2630,55 @@ void runLatexRecognitionTests() {
     pinned.activate(Mode::Latex);
     require(pinned.recognitionClipboardMimeData()->text() == source,
             "pin transfer needs no API call");
+    const QString edited = QStringLiteral("\\frac{x+1}{y} \\text{edited}\n");
+    int changes = 0;
+    QObject::connect(&session, &ScreenshotRecognitionSessionController::recognitionResultsChanged,
+                     &window, [&]() { ++changes; });
+    QTextCursor cursor(editor->document());
+    cursor.select(QTextCursor::Document);
+    cursor.insertText(edited);
+    require(changes > 0 && session.latexDraft() == edited &&
+                session.workflowResult().value(QStringLiteral("text")) == edited &&
+                session.recognitionClipboardMimeData()->text() == edited &&
+                session.fileExportSnapshot()->source == edited,
+            "direct document edits reach persistence, workflow, clipboard and save source");
+    require(session.cachedRecognitionResults().latex->latex == source &&
+                session.cachedRecognitionResults().latexDraft == edited,
+            "edited LaTeX preserves the successful recognition baseline");
+    session.undoTextEdit();
+    require(session.latexDraft() == source, "LaTeX undo restores the original source");
+    session.redoTextEdit();
+    require(session.latexDraft() == edited, "LaTeX redo restores the edited source");
+    session.deactivate();
+    session.activate(Mode::Latex);
+    editor = window.findChild<QTextEdit*>(QStringLiteral("screenshotOcrEditor"));
+    require(editor && sourceDocument && editor->document() == sourceDocument &&
+                editor->toPlainText() == edited && !session.busy(),
+            "reactivation preserves the document, edit and history without recognition");
+    require(session.editWorkflow({{QStringLiteral("action"), QStringLiteral("set_text")},
+                                  {QStringLiteral("text"), QString()}}),
+            "LaTeX workflow accepts an empty draft");
+    const auto emptySnapshot = session.recognitionResultsSnapshot();
+    require(emptySnapshot.latex && emptySnapshot.latex->succeeded() && emptySnapshot.latexDraft &&
+                emptySnapshot.latexDraft->isEmpty() &&
+                session.workflowState().value(QStringLiteral("editing")).toBool(),
+            "an empty edit remains a recognized editable result");
+    ScreenshotRecognitionSessionController emptyTransfer(nullptr, nullptr, nullptr, {});
+    emptyTransfer.setTarget({seed.key, sampleImage(), QRectF(0, 0, 240, 120)});
+    emptyTransfer.seedRecognitionResults(emptySnapshot);
+    emptyTransfer.activate(Mode::Latex);
+    require(emptyTransfer.recognitionClipboardMimeData()->text().isEmpty() &&
+                emptyTransfer.fileExportSnapshot()->source.isEmpty() &&
+                emptyTransfer.editWorkflow(
+                    {{QStringLiteral("action"), QStringLiteral("reset_text")}}) &&
+                emptyTransfer.latexDraft() == source,
+            "headless transfer preserves empty source and reset baseline");
+    require(!session.editWorkflow({{QStringLiteral("action"), QStringLiteral("format")},
+                                   {QStringLiteral("value"), QStringLiteral("smart")}}),
+            "LaTeX source does not accept text recognition transforms");
+    require(session.editWorkflow({{QStringLiteral("action"), QStringLiteral("reset_text")}}) &&
+                session.latexDraft() == source,
+            "reset restores recognized LaTeX exactly");
     session.setTarget({QStringLiteral("other"), sampleImage(), QRectF(0, 0, 240, 120)});
     require(!session.cachedRecognitionResults().latex, "another target cannot reuse this formula");
     for (const auto kind : {Kind::ActionTools, Kind::PinnedActionTools}) {

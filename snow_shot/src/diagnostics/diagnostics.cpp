@@ -1,6 +1,7 @@
 #include "snow_shot/app/edition.h"
 #include "snow_shot/platform/applicationqos.h"
 #include "snow_shot/diagnostics/diagnostics.h"
+#include "snow_shot/runtime/runtimeactivitytracker.h"
 #include "diagnosticsbridge.h"
 
 #include <QCoreApplication>
@@ -150,10 +151,16 @@ qint64 treeBytes(const QString& path) {
 struct DiagnosticsService::Impl {
     explicit Impl(DiagnosticsService& service) : owner(service) {}
     struct Task {
+        Task() = default;
+        Task(QByteArray value, QDate day, QtMsgType severity, std::function<void()> work,
+             bool restartsQuiet = false)
+            : record(std::move(value)), date(day), level(severity), command(std::move(work)),
+              activity(runtime::RuntimeActivityTracker::shared().acquire(restartsQuiet)) {}
         QByteArray record;
         QDate date;
         QtMsgType level = QtInfoMsg;
         std::function<void()> command;
+        runtime::RuntimeActivityLease activity;
     };
     DiagnosticsService& owner;
     DiagnosticsOptions options;
@@ -303,9 +310,6 @@ struct DiagnosticsService::Impl {
                                            QStringLiteral("selection"),
                                            QStringLiteral("physical_selection"),
                                            QStringLiteral("overlay_rect"),
-                                           QStringLiteral("hole_rect"),
-                                           QStringLiteral("full_hole"),
-                                           QStringLiteral("mask_empty"),
                                            QStringLiteral("thumbnail_visible"),
                                            QStringLiteral("restore_colors"),
                                            QStringLiteral("mode"),
@@ -314,8 +318,6 @@ struct DiagnosticsService::Impl {
                                            QStringLiteral("target_is_self"),
                                            QStringLiteral("capture_is_self"),
                                            QStringLiteral("target_found"),
-                                           QStringLiteral("native_region_type"),
-                                           QStringLiteral("native_hole_contains_center"),
                                            QStringLiteral("inactive_scroll_enabled"),
                                            QStringLiteral("preview_received"),
                                            QStringLiteral("reason"),
@@ -869,6 +871,10 @@ struct DiagnosticsService::Impl {
                         reportedDrops = dropped;
                     }
                 }
+                // The resident writer sleeps without a reservation. Its periodic flush and
+                // retention work blocks admission without extending the user's quiet period.
+                const auto maintenanceActivity =
+                    runtime::RuntimeActivityTracker::shared().acquire(false);
                 platform::applyApplicationQoSToCurrentThread();
                 if (task.command)
                     task.command();
@@ -911,6 +917,7 @@ struct DiagnosticsService::Impl {
                     maintenance();
                 }
             }
+            const auto shutdownActivity = runtime::RuntimeActivityTracker::shared().acquire(false);
             if (output.isOpen() && !output.flush())
                 writeFailed = true;
             output.close();
@@ -1257,7 +1264,10 @@ std::shared_future<LogExportResult> DiagnosticsService::exportDay(const QDate& d
         session->state.exporting = true;
     }
     session->tasks.push_back(
-        {{}, {}, QtInfoMsg, [session, date, promise] {
+        {{},
+         {},
+         QtInfoMsg,
+         [session, date, promise] {
              LogExportResult result;
              try {
                  result = session->exportNow(date);
@@ -1271,7 +1281,8 @@ std::shared_future<LogExportResult> DiagnosticsService::exportDay(const QDate& d
              }
              promise->set_value(std::move(result));
              session->notify();
-         }});
+         },
+         true});
     session->wake.notify_one();
     session->notify();
     return future;

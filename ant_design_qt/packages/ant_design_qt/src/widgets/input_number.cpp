@@ -23,6 +23,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPalette>
+#include <QPointer>
 #include <QRegion>
 #include <QSignalBlocker>
 #include <QToolButton>
@@ -770,7 +771,9 @@ AdInputNumber::AdInputNumber(QWidget* parent)
     }
 
     userTyping_ = true;
-    emitTextChangedIfNeeded(text);
+    if (!emitTextChangedIfNeeded(text)) {
+      return;
+    }
     const auto parser = [this](const QString& source) {
       return textPolicy_ ? textPolicy_->parseText(source) : source;
     };
@@ -864,12 +867,16 @@ void AdInputNumber::setStepButtonLayout(StepButtonLayout value) {
   if (stepButtonLayout_ == value) {
     return;
   }
+  const QPointer<AdInputNumber> guard(this);
   stepButtonLayout_ = value;
   if (!customTextAlignment_) {
     const Qt::Alignment nextAlignment = defaultTextAlignmentForLayout(stepButtonLayout_);
     if (textAlignment_ != nextAlignment) {
       textAlignment_ = nextAlignment;
       emit textAlignmentChanged(textAlignment_);
+      if (!guard) {
+        return;
+      }
     }
   }
   updateAffixVisual();
@@ -939,6 +946,7 @@ void AdInputNumber::setValueMode(ValueMode value) {
   if (valueMode_ == value) {
     return;
   }
+  const QPointer<AdInputNumber> guard(this);
 
   const bool previousHasValue = hasValue();
   const QVariant previousValue = value_;
@@ -959,24 +967,31 @@ void AdInputNumber::setValueMode(ValueMode value) {
   value_ = valueModel_->committedValue(value_);
 
   syncValueModelConfig();
-  updateEditorTextFromValue(false);
+  if (!updateEditorTextFromValue(false)) {
+    return;
+  }
   refreshVisualState(false);
 
   emit valueModeChanged(valueMode_);
-  if (inputNumberValueChanged(valueModel_.get(), previousMinimum, minimum_)) {
-    emit minimumChanged(minimum());
-    emit exactMinimumChanged(exactMinimum());
-  }
-  if (inputNumberValueChanged(valueModel_.get(), previousMaximum, maximum_)) {
-    emit maximumChanged(maximum());
-    emit exactMaximumChanged(exactMaximum());
+  if (!guard ||
+      !emitRangeSignals(inputNumberValueChanged(valueModel_.get(), previousMinimum, minimum_),
+                        inputNumberValueChanged(valueModel_.get(), previousMaximum, maximum_))) {
+    return;
   }
   if (inputNumberValueChanged(valueModel_.get(), previousStep, singleStep_)) {
     emit singleStepChanged(singleStep());
+    if (!guard) {
+      return;
+    }
     emit exactSingleStepChanged(exactSingleStep());
+    if (!guard) {
+      return;
+    }
   }
   if (inputNumberValueChanged(valueModel_.get(), previousValue, value_)) {
-    emitCommittedValueSignals(previousValue, previousHasValue);
+    if (!emitCommittedValueSignals(previousValue, previousHasValue)) {
+      return;
+    }
   }
   syncAccessibleState();
   notifyAccessibleDescriptionChange();
@@ -988,20 +1003,28 @@ void AdInputNumber::setRangeMode(RangeMode value) {
   if (rangeMode_ == value) {
     return;
   }
+  const QPointer<AdInputNumber> guard(this);
 
   const bool previousHasValue = hasValue();
   const QVariant previousValue = value_;
   rangeMode_ = value;
   syncValueModelConfig();
   if (rangeMode_ == RangeMode::Strict) {
-    setCommittedValueInternal(value_, false, false, true);
+    if (!setCommittedValueInternal(value_, false, false, true)) {
+      return;
+    }
   } else {
-    updateEditorTextFromValue(false);
+    if (!updateEditorTextFromValue(false)) {
+      return;
+    }
     refreshVisualState(false);
     syncAccessibleState();
   }
 
   emit rangeModeChanged(rangeMode_);
+  if (!guard) {
+    return;
+  }
   if (inputNumberValueChanged(valueModel_.get(), previousValue, value_)) {
     emitCommittedValueSignals(previousValue, previousHasValue);
   }
@@ -1073,16 +1096,22 @@ void AdInputNumber::setDecimals(int value) {
   if (decimals_ == normalized) {
     return;
   }
+  const QPointer<AdInputNumber> guard(this);
 
   const bool previousHasValue = hasValue();
   const QVariant previousValue = value_;
   decimals_ = normalized;
   syncValueModelConfig();
   value_ = valueModel_->committedValue(value_);
-  updateEditorTextFromValue(false);
+  if (!updateEditorTextFromValue(false)) {
+    return;
+  }
   refreshVisualState(false);
 
   emit decimalsChanged(decimals_);
+  if (!guard) {
+    return;
+  }
   if (inputNumberValueChanged(valueModel_.get(), previousValue, value_)) {
     emitCommittedValueSignals(previousValue, previousHasValue);
   } else {
@@ -1265,7 +1294,9 @@ void AdInputNumber::setTextPolicy(AdInputNumberTextPolicy* value) {
     return;
   }
   textPolicy_ = value;
-  updateEditorTextFromValue(false);
+  if (!updateEditorTextFromValue(false)) {
+    return;
+  }
   refreshVisualState(true);
   syncAccessibleState();
   notifyAccessibleValueChange();
@@ -1276,13 +1307,19 @@ QString AdInputNumber::displayText() const { return editor_ ? editor_->text() : 
 
 void AdInputNumber::clear() {
   userTyping_ = false;
-  setCommittedValueInternal(QVariant(), true, false, false);
+  if (!setCommittedValueInternal(QVariant(), true, false, false)) {
+    return;
+  }
   if (editor_ && !editor_->text().isEmpty()) {
-    QSignalBlocker blocker(editor_);
-    internalTextUpdate_ = true;
-    editor_->clear();
-    internalTextUpdate_ = false;
-    emitTextChangedIfNeeded(QString());
+    {
+      QSignalBlocker blocker(editor_);
+      internalTextUpdate_ = true;
+      editor_->clear();
+      internalTextUpdate_ = false;
+    }
+    if (!emitTextChangedIfNeeded(QString())) {
+      return;
+    }
     refreshVisualState(false);
   }
 }
@@ -1381,7 +1418,11 @@ void AdInputNumber::focusEditor(FocusSelection selection) {
     return;
   }
 
+  const QPointer<AdInputNumber> guard(this);
   editor_->setFocus(Qt::OtherFocusReason);
+  if (!guard) {
+    return;
+  }
   if (joinedLeft_ || joinedRight_) {
     raise();
   }
@@ -1533,21 +1574,34 @@ void AdInputNumber::applyRangeValues(const QVariant& minimumValue, const QVarian
   maximum_ = maximumValue;
   syncValueModelConfig();
 
-  emitRangeSignals(minimumChanged, maximumChanged);
-  setCommittedValueInternal(value_, true, false, rangeMode_ == RangeMode::Strict);
+  if (!emitRangeSignals(minimumChanged, maximumChanged) ||
+      !setCommittedValueInternal(value_, true, false, rangeMode_ == RangeMode::Strict)) {
+    return;
+  }
   syncAccessibleState();
   notifyAccessibleDescriptionChange();
 }
 
-void AdInputNumber::emitRangeSignals(bool minimumDidChange, bool maximumDidChange) {
+bool AdInputNumber::emitRangeSignals(bool minimumDidChange, bool maximumDidChange) {
+  const QPointer<AdInputNumber> guard(this);
   if (minimumDidChange) {
     emit minimumChanged(minimum());
+    if (!guard) {
+      return false;
+    }
     emit exactMinimumChanged(exactMinimum());
+    if (!guard) {
+      return false;
+    }
   }
   if (maximumDidChange) {
     emit maximumChanged(maximum());
+    if (!guard) {
+      return false;
+    }
     emit exactMaximumChanged(exactMaximum());
   }
+  return guard != nullptr;
 }
 
 void AdInputNumber::applySingleStepValue(const QVariant& value) {
@@ -1557,12 +1611,17 @@ void AdInputNumber::applySingleStepValue(const QVariant& value) {
 
   singleStep_ = value;
   syncValueModelConfig();
-  updateEditorTextFromValue(false);
+  if (!updateEditorTextFromValue(false)) {
+    return;
+  }
   refreshVisualState(false);
   syncAccessibleState();
   notifyAccessibleDescriptionChange();
+  const QPointer<AdInputNumber> guard(this);
   emit singleStepChanged(singleStep());
-  emit exactSingleStepChanged(exactSingleStep());
+  if (guard) {
+    emit exactSingleStepChanged(exactSingleStep());
+  }
 }
 
 void AdInputNumber::syncValueModelConfig() {
@@ -1580,39 +1639,56 @@ void AdInputNumber::syncValueModelConfig() {
   valueModel_->setConfig(config);
 }
 
-void AdInputNumber::updateEditorTextFromValue(bool userTyping) {
+bool AdInputNumber::updateEditorTextFromValue(bool userTyping, bool deferNotification) {
   if (!editor_ || internalTextUpdate_) {
-    return;
+    return true;
   }
 
   const bool editing = userTyping || focused_ || hasFocus() || editor_->hasFocus();
   const QString currentInput = editor_->text();
   const QString nextText = displayTextForValue(value_, editing, currentInput);
   if (currentInput == nextText) {
-    emitTextChangedIfNeeded(nextText);
-    return;
+    return emitTextChangedIfNeeded(nextText, deferNotification);
   }
 
   const int oldCursor = editor_->cursorPosition();
-  QSignalBlocker blocker(editor_);
-  internalTextUpdate_ = true;
-  editor_->setText(nextText);
-  internalTextUpdate_ = false;
+  {
+    QSignalBlocker blocker(editor_);
+    internalTextUpdate_ = true;
+    editor_->setText(nextText);
+    internalTextUpdate_ = false;
 
-  if (userTyping) {
-    editor_->setCursorPosition(std::clamp(oldCursor, 0, static_cast<int>(nextText.size())));
-  } else {
-    editor_->setCursorPosition(static_cast<int>(nextText.size()));
+    if (userTyping) {
+      editor_->setCursorPosition(std::clamp(oldCursor, 0, static_cast<int>(nextText.size())));
+    } else {
+      editor_->setCursorPosition(static_cast<int>(nextText.size()));
+    }
   }
-  emitTextChangedIfNeeded(nextText);
+  return emitTextChangedIfNeeded(nextText, deferNotification);
 }
 
-void AdInputNumber::emitTextChangedIfNeeded(const QString& text) {
+bool AdInputNumber::emitTextChangedIfNeeded(const QString& text, bool deferNotification) {
   if (lastEmittedText_ == text) {
-    return;
+    return true;
   }
   lastEmittedText_ = text;
+  const quint64 generation = ++textNotificationGeneration_;
+  if (deferNotification) {
+    // Qt's focus transition still owns the editor after delivering its focus
+    // event. Let that transition finish before observers may destroy either.
+    QMetaObject::invokeMethod(
+        this,
+        [this, text, generation] {
+          if (textNotificationGeneration_ == generation) {
+            emit textChanged(text);
+          }
+        },
+        Qt::QueuedConnection);
+    return true;
+  }
+  const QPointer<AdInputNumber> guard(this);
   emit textChanged(text);
+  return guard != nullptr;
 }
 
 void AdInputNumber::commitFromEditor() {
@@ -1623,7 +1699,9 @@ void AdInputNumber::commitFromEditor() {
   const QString text = editor_->text();
   const QVariant next = effectiveUserInputValue(true);
   if (!text.trimmed().isEmpty() && !next.isValid()) {
-    updateEditorTextFromValue(false);
+    if (!updateEditorTextFromValue(false)) {
+      return;
+    }
     refreshVisualState(false);
     return;
   }
@@ -1706,12 +1784,14 @@ bool AdInputNumber::performStep(int steps, StepEmitter emitter) {
   }
 
   userTyping_ = false;
-  setCommittedValueInternal(next, true, false, false);
+  if (!setCommittedValueInternal(next, true, false, false)) {
+    return true;
+  }
   emit stepped(steps, steps > 0 ? StepType::Up : StepType::Down, emitter);
   return true;
 }
 
-void AdInputNumber::setCommittedValueInternal(const QVariant& value, bool emitSignal,
+bool AdInputNumber::setCommittedValueInternal(const QVariant& value, bool emitSignal,
                                               bool preserveEditorText, bool clampToRange) {
   const bool previousHasValue = hasValue();
   const QVariant previousValue = value_;
@@ -1729,45 +1809,61 @@ void AdInputNumber::setCommittedValueInternal(const QVariant& value, bool emitSi
 
   if (!inputNumberValueChanged(valueModel_.get(), previousValue, normalized)) {
     if (!preserveEditorText) {
-      updateEditorTextFromValue(false);
-    } else {
-      emitTextChangedIfNeeded(editor_ ? editor_->text() : QString());
+      if (!updateEditorTextFromValue(false)) {
+        return false;
+      }
+    } else if (!emitTextChangedIfNeeded(editor_ ? editor_->text() : QString())) {
+      return false;
     }
     refreshVisualState(false);
     syncAccessibleState();
-    return;
+    return true;
   }
 
   value_ = normalized;
   if (!preserveEditorText) {
-    updateEditorTextFromValue(false);
-  } else {
-    emitTextChangedIfNeeded(editor_ ? editor_->text() : QString());
+    if (!updateEditorTextFromValue(false)) {
+      return false;
+    }
+  } else if (!emitTextChangedIfNeeded(editor_ ? editor_->text() : QString())) {
+    return false;
   }
   refreshVisualState(false);
   if (emitSignal) {
-    emitCommittedValueSignals(previousValue, previousHasValue);
+    return emitCommittedValueSignals(previousValue, previousHasValue);
   } else {
     syncAccessibleState();
   }
+  return true;
 }
 
-void AdInputNumber::emitCommittedValueSignals(const QVariant& previousValue,
+bool AdInputNumber::emitCommittedValueSignals(const QVariant& previousValue,
                                               bool previousHasValue) {
+  const QPointer<AdInputNumber> guard(this);
   const bool currentHasValue = hasValue();
   if (previousHasValue != currentHasValue) {
     emit hasValueChanged(currentHasValue);
+    if (!guard) {
+      return false;
+    }
   }
 
   const bool numericChanged = previousHasValue != currentHasValue ||
                               !qFuzzyCompare(value() + 1.0, previousValue.toDouble() + 1.0);
   if (numericChanged) {
     emit valueChanged(value());
+    if (!guard) {
+      return false;
+    }
   }
   emit exactValueChanged(exactValue());
+  if (!guard) {
+    return false;
+  }
   syncAccessibleState();
   notifyAccessibleValueChange();
   notifyAccessibleDescriptionChange();
+  return guard != nullptr;
 }
 
 QString AdInputNumber::displayTextForValue(const QVariant& value, bool editing,
@@ -2362,8 +2458,11 @@ void AdInputNumber::focusFromMouseGlobalPos(const QPoint& globalPos, Qt::FocusRe
     editor_->setCursorPosition(static_cast<int>(editor_->text().size()));
   }
 
+  const QPointer<AdInputNumber> guard(this);
   editor_->setFocus(reason);
-  bumpJoinedZOrder();
+  if (guard) {
+    bumpJoinedZOrder();
+  }
 }
 
 void AdInputNumber::bumpJoinedZOrder() {
@@ -2414,6 +2513,7 @@ void AdInputNumber::notifyAccessibleFocusChange() const {
 }
 
 bool AdInputNumber::eventFilter(QObject* watched, QEvent* event) {
+  const QPointer<AdInputNumber> guard(this);
   if (!event) {
     return QAbstractSpinBox::eventFilter(watched, event);
   }
@@ -2422,13 +2522,17 @@ bool AdInputNumber::eventFilter(QObject* watched, QEvent* event) {
     if (event->type() == QEvent::FocusIn) {
       focused_ = true;
       bumpJoinedZOrder();
-      updateEditorTextFromValue(false);
+      if (!updateEditorTextFromValue(false, true)) {
+        return true;
+      }
       refreshVisualState(false);
       syncAccessibleState();
     } else if (event->type() == QEvent::FocusOut) {
       focused_ = false;
       userTyping_ = false;
-      updateEditorTextFromValue(false);
+      if (!updateEditorTextFromValue(false, true)) {
+        return true;
+      }
       refreshVisualState(false);
       syncAccessibleState();
     } else if (event->type() == QEvent::KeyPress) {
@@ -2452,8 +2556,8 @@ bool AdInputNumber::eventFilter(QObject* watched, QEvent* event) {
       auto* wheel = static_cast<QWheelEvent*>(event);
       const int steps = consumeWheelSteps(wheel->angleDelta().y());
       if (steps != 0) {
-        performStep(steps, StepEmitter::Wheel);
         wheel->accept();
+        performStep(steps, StepEmitter::Wheel);
         return true;
       }
     }
@@ -2464,6 +2568,9 @@ bool AdInputNumber::eventFilter(QObject* watched, QEvent* event) {
         const auto* mouseEvent = static_cast<const QMouseEvent*>(event);
         focusFromMouseGlobalPos(source->mapToGlobal(mouseEventPos(mouseEvent)),
                                 Qt::MouseFocusReason);
+        if (!guard) {
+          return true;
+        }
       }
     }
     if (event->type() == QEvent::Enter || event->type() == QEvent::Leave ||
@@ -2489,20 +2596,30 @@ bool AdInputNumber::eventFilter(QObject* watched, QEvent* event) {
 }
 
 void AdInputNumber::focusInEvent(QFocusEvent* event) {
+  const QPointer<AdInputNumber> guard(this);
   QAbstractSpinBox::focusInEvent(event);
+  if (!guard) {
+    return;
+  }
   const bool effectiveFocused = hasFocus() || (editor_ && editor_->hasFocus());
   if (focused_ != effectiveFocused) {
     focused_ = effectiveFocused;
   }
   bumpJoinedZOrder();
-  updateEditorTextFromValue(false);
+  if (!updateEditorTextFromValue(false, true)) {
+    return;
+  }
   refreshVisualState(false);
   syncAccessibleState();
   notifyAccessibleFocusChange();
 }
 
 void AdInputNumber::focusOutEvent(QFocusEvent* event) {
+  const QPointer<AdInputNumber> guard(this);
   QAbstractSpinBox::focusOutEvent(event);
+  if (!guard) {
+    return;
+  }
   const bool effectiveFocused = hasFocus() || (editor_ && editor_->hasFocus());
   if (focused_ != effectiveFocused) {
     focused_ = effectiveFocused;
@@ -2510,7 +2627,9 @@ void AdInputNumber::focusOutEvent(QFocusEvent* event) {
   if (!effectiveFocused) {
     userTyping_ = false;
   }
-  updateEditorTextFromValue(false);
+  if (!updateEditorTextFromValue(false, true)) {
+    return;
+  }
   refreshVisualState(false);
   syncAccessibleState();
   notifyAccessibleFocusChange();
@@ -2605,7 +2724,9 @@ void AdInputNumber::changeEvent(QEvent* event) {
   if (event->type() == QEvent::LocaleChange) {
     userTyping_ = false;
     syncValueModelConfig();
-    updateEditorTextFromValue(false);
+    if (!updateEditorTextFromValue(false)) {
+      return;
+    }
     refreshVisualState(true);
     syncAccessibleState();
     notifyAccessibleValueChange();
@@ -2662,8 +2783,8 @@ void AdInputNumber::wheelEvent(QWheelEvent* event) {
   if (event && isEnabled() && !readOnly_ && wheelStepEnabled_) {
     const int steps = consumeWheelSteps(event->angleDelta().y());
     if (steps != 0) {
-      performStep(steps, StepEmitter::Wheel);
       event->accept();
+      performStep(steps, StepEmitter::Wheel);
       return;
     }
   }
@@ -2674,8 +2795,8 @@ void AdInputNumber::wheelEvent(QWheelEvent* event) {
 
 void AdInputNumber::mousePressEvent(QMouseEvent* event) {
   if (event && event->button() == Qt::LeftButton && isEnabled() && editor_) {
-    focusFromMouseGlobalPos(mapToGlobal(mouseEventPos(event)), Qt::MouseFocusReason);
     event->accept();
+    focusFromMouseGlobalPos(mapToGlobal(mouseEventPos(event)), Qt::MouseFocusReason);
     return;
   }
   QAbstractSpinBox::mousePressEvent(event);
@@ -2722,8 +2843,9 @@ void AdInputNumber::stepBy(int steps) {
   if (steps == 0) {
     return;
   }
-  performStep(steps, currentStepEmitter_);
+  const StepEmitter emitter = currentStepEmitter_;
   currentStepEmitter_ = StepEmitter::Handler;
+  performStep(steps, emitter);
 }
 
 AdInputNumber::StepEnabled AdInputNumber::stepEnabled() const {

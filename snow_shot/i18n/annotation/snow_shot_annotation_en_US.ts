@@ -12,12 +12,20 @@
             <translation>1 decimal place</translation>
         </message>
         <message>
+            <source>180° angle</source>
+            <translation>180° angle</translation>
+        </message>
+        <message>
             <source>2 decimal places</source>
             <translation>2 decimal places</translation>
         </message>
         <message>
             <source>3 decimal places</source>
             <translation>3 decimal places</translation>
+        </message>
+        <message>
+            <source>360° angle</source>
+            <translation>360° angle</translation>
         </message>
         <message>
             <source>Actual distance value</source>
@@ -74,6 +82,30 @@
         <message>
             <source>Align top</source>
             <translation>Align top</translation>
+        </message>
+        <message>
+            <source>Angle annotation</source>
+            <translation>Angle annotation</translation>
+        </message>
+        <message>
+            <source>Angle stroke color</source>
+            <translation>Angle stroke color</translation>
+        </message>
+        <message>
+            <source>Angle stroke color %1</source>
+            <translation>Angle stroke color %1</translation>
+        </message>
+        <message>
+            <source>Angle stroke width %1</source>
+            <translation>Angle stroke width %1</translation>
+        </message>
+        <message>
+            <source>Angle type</source>
+            <translation>Angle type</translation>
+        </message>
+        <message>
+            <source>Angle unit</source>
+            <translation>Angle unit</translation>
         </message>
         <message>
             <source>Animated recording formats do not contain audio</source>
@@ -136,6 +168,10 @@
             <translation>Blue</translation>
         </message>
         <message>
+            <source>Bold</source>
+            <translation>Bold</translation>
+        </message>
+        <message>
             <source>Brightness</source>
             <translation>Brightness</translation>
         </message>
@@ -196,6 +232,10 @@
             <translation>Confirm edit</translation>
         </message>
         <message>
+            <source>Connection type</source>
+            <translation>Connection type</translation>
+        </message>
+        <message>
             <source>Convert to HTML</source>
             <translation>Convert to HTML</translation>
         </message>
@@ -244,6 +284,10 @@
             <translation>Cross-line text fill</translation>
         </message>
         <message>
+            <source>Current angle stroke width</source>
+            <translation>Current angle stroke width</translation>
+        </message>
+        <message>
             <source>Current arrow stroke width</source>
             <translation>Current arrow stroke width</translation>
         </message>
@@ -254,6 +298,10 @@
         <message>
             <source>Current distance stroke width</source>
             <translation>Current distance stroke width</translation>
+        </message>
+        <message>
+            <source>Current magnifier stroke width</source>
+            <translation>Current magnifier stroke width</translation>
         </message>
         <message>
             <source>Current pen filter stroke width</source>
@@ -308,8 +356,16 @@
             <translation>Decimal places</translation>
         </message>
         <message>
+            <source>Dedicated Model</source>
+            <translation>Dedicated Model</translation>
+        </message>
+        <message>
             <source>Default</source>
             <translation>Default</translation>
+        </message>
+        <message>
+            <source>Degrees</source>
+            <translation>Degrees</translation>
         </message>
         <message>
             <source>Delay recording (scroll to adjust)</source>
@@ -536,6 +592,10 @@
             <translation>Gaussian blur</translation>
         </message>
         <message>
+            <source>Gradient</source>
+            <translation>Gradient</translation>
+        </message>
+        <message>
             <source>Grayscale</source>
             <translation>Grayscale</translation>
         </message>
@@ -592,6 +652,10 @@
             <translation>Inversion</translation>
         </message>
         <message>
+            <source>Italic</source>
+            <translation>Italic</translation>
+        </message>
+        <message>
             <source>Jump to Translation Page</source>
             <translation>Jump to Translation Page</translation>
         </message>
@@ -610,6 +674,18 @@
         <message>
             <source>LaTeX Formula Recognition</source>
             <translation>LaTeX Formula Recognition</translation>
+        </message>
+        <message>
+            <source>LaTeX-Specific Model</source>
+            <translation>LaTeX-Specific Model</translation>
+        </message>
+        <message>
+            <source>Leader line</source>
+            <translation>Leader line</translation>
+        </message>
+        <message>
+            <source>Leader line type</source>
+            <translation>Leader line type</translation>
         </message>
         <message>
             <source>Line</source>
@@ -634,6 +710,30 @@
         <message>
             <source>Lowercase letters</source>
             <translation>Lowercase letters</translation>
+        </message>
+        <message>
+            <source>Magnification factor (scroll to adjust)</source>
+            <translation>Magnification factor (scroll to adjust)</translation>
+        </message>
+        <message>
+            <source>Magnifier</source>
+            <translation>Magnifier</translation>
+        </message>
+        <message>
+            <source>Magnifier shape</source>
+            <translation>Magnifier shape</translation>
+        </message>
+        <message>
+            <source>Magnifier stroke color</source>
+            <translation>Magnifier stroke color</translation>
+        </message>
+        <message>
+            <source>Magnifier stroke color %1</source>
+            <translation>Magnifier stroke color %1</translation>
+        </message>
+        <message>
+            <source>Magnifier stroke width %1</source>
+            <translation>Magnifier stroke width %1</translation>
         </message>
         <message>
             <source>Mask color</source>
@@ -714,6 +814,10 @@
         <message>
             <source>No templates yet</source>
             <translation>No templates yet</translation>
+        </message>
+        <message>
+            <source>None</source>
+            <translation>None</translation>
         </message>
         <message>
             <source>Opacity</source>
@@ -812,8 +916,16 @@
             <translation>Quick save</translation>
         </message>
         <message>
+            <source>Radians</source>
+            <translation>Radians</translation>
+        </message>
+        <message>
             <source>Recapture</source>
             <translation>Recapture</translation>
+        </message>
+        <message>
+            <source>Recognition model</source>
+            <translation>Recognition model</translation>
         </message>
         <message>
             <source>Record microphone</source>
@@ -908,6 +1020,10 @@
             <translation>Select elements</translation>
         </message>
         <message>
+            <source>Selected model (%1)</source>
+            <translation>Selected model (%1)</translation>
+        </message>
+        <message>
             <source>Send backward</source>
             <translation>Send backward</translation>
         </message>
@@ -1000,6 +1116,10 @@
             <translation>Smart Erase</translation>
         </message>
         <message>
+            <source>Snow Shot visual understanding</source>
+            <translation>Snow Shot visual understanding</translation>
+        </message>
+        <message>
             <source>Solid arrow stroke</source>
             <translation>Solid arrow stroke</translation>
         </message>
@@ -1026,6 +1146,14 @@
         <message>
             <source>Solid text fill</source>
             <translation>Solid text fill</translation>
+        </message>
+        <message>
+            <source>Source region outline</source>
+            <translation>Source region outline</translation>
+        </message>
+        <message>
+            <source>Speech Bubble</source>
+            <translation>Speech Bubble</translation>
         </message>
         <message>
             <source>Split cells</source>
@@ -1130,6 +1258,10 @@
         <message>
             <source>Table recognition</source>
             <translation>Table recognition</translation>
+        </message>
+        <message>
+            <source>Table-Specific Model</source>
+            <translation>Table-Specific Model</translation>
         </message>
         <message>
             <source>Tapered shaft</source>
@@ -1262,6 +1394,10 @@
         <message>
             <source>Vertical scrolling</source>
             <translation>Vertical scrolling</translation>
+        </message>
+        <message>
+            <source>Vision Model</source>
+            <translation>Vision Model</translation>
         </message>
         <message>
             <source>Watermark</source>

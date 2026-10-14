@@ -444,6 +444,10 @@
     <context>
         <name>DrawingToolbarEditorSettingsWidget</name>
         <message>
+            <source>Angle annotation</source>
+            <translation>角度标注</translation>
+        </message>
+        <message>
             <source>Annotation toolbar preview</source>
             <translation>标注工具栏预览</translation>
         </message>
@@ -488,6 +492,10 @@
             <translation>直线</translation>
         </message>
         <message>
+            <source>Magnifier</source>
+            <translation>放大镜</translation>
+        </message>
+        <message>
             <source>No hidden tools</source>
             <translation>没有隐藏的工具</translation>
         </message>
@@ -514,6 +522,10 @@
         <message>
             <source>Shape</source>
             <translation>图形</translation>
+        </message>
+        <message>
+            <source>Speech Bubble</source>
+            <translation>对话气泡</translation>
         </message>
         <message>
             <source>Spotlight</source>
@@ -1026,6 +1038,10 @@
     <context>
         <name>SettingsBackend</name>
         <message>
+            <source>Could not restore the Windows context menu preference.</source>
+            <translation>无法恢复 Windows 右键菜单偏好设置。</translation>
+        </message>
+        <message>
             <source>Enter a valid HTTP or HTTPS server address without credentials, a query, or a fragment.</source>
             <translation>请输入有效的 HTTP 或 HTTPS 服务器地址，不包含凭据、查询参数或片段。</translation>
         </message>
@@ -1153,6 +1169,14 @@
             <translation>活动窗口</translation>
         </message>
         <message>
+            <source>Add Edit with Snow Shot to the classic Windows context menu to pin an image file to the screen.</source>
+            <translation>在经典 Windows 右键菜单中添加“使用 Snow Shot 编辑”，将图像文件固定到屏幕。</translation>
+        </message>
+        <message>
+            <source>Add a mask to highlight text recognition results</source>
+            <translation>添加遮罩以高亮显示文本识别结果</translation>
+        </message>
+        <message>
             <source>Adjust MP4 quality and file size</source>
             <translation>调整 MP4 画质和文件大小</translation>
         </message>
@@ -1211,6 +1235,10 @@
         <message>
             <source>Always show</source>
             <translation>始终显示</translation>
+        </message>
+        <message>
+            <source>Angle annotation</source>
+            <translation>角度标注</translation>
         </message>
         <message>
             <source>Animate transitions between smart screenshot selections</source>
@@ -1329,16 +1357,16 @@
             <translation>自动调整窗口大小</translation>
         </message>
         <message>
-            <source>Auto save after copy</source>
-            <translation>复制后自动保存</translation>
-        </message>
-        <message>
             <source>Auto start at boot</source>
             <translation>开机时自动启动</translation>
         </message>
         <message>
             <source>Auto-recognize QR Code</source>
             <translation>自动识别二维码</translation>
+        </message>
+        <message>
+            <source>Auto-save after execution</source>
+            <translation>执行后自动保存</translation>
         </message>
         <message>
             <source>Auto-save image filename format</source>
@@ -1689,6 +1717,10 @@
             <translation>选择网络请求是否使用系统代理</translation>
         </message>
         <message>
+            <source>Choose which actions also save an image in the selected image format and save directory</source>
+            <translation>选择执行哪些操作时，同时以所选图像格式保存到指定目录</translation>
+        </message>
+        <message>
             <source>Clear</source>
             <translation>清除</translation>
         </message>
@@ -1833,6 +1865,14 @@
             <translation>复制颜色</translation>
         </message>
         <message>
+            <source>Copy current monitor</source>
+            <translation>复制当前显示器</translation>
+        </message>
+        <message>
+            <source>Copy focused window</source>
+            <translation>复制焦点窗口</translation>
+        </message>
+        <message>
             <source>Copy image file to clipboard</source>
             <translation>将图像文件复制到剪贴板</translation>
         </message>
@@ -1841,12 +1881,20 @@
             <translation>复制原始内容</translation>
         </message>
         <message>
+            <source>Copy pinned window</source>
+            <translation>复制固定到屏幕窗口</translation>
+        </message>
+        <message>
             <source>Copy recording</source>
             <translation>复制录制内容</translation>
         </message>
         <message>
             <source>Copy screenshot</source>
             <translation>复制截图</translation>
+        </message>
+        <message>
+            <source>Copy scrolling screenshot</source>
+            <translation>复制滚动截图</translation>
         </message>
         <message>
             <source>Copy text</source>
@@ -1934,7 +1982,7 @@
         </message>
         <message>
             <source>Customize the pinned window toolbar</source>
-            <translation>自定义贴图窗口工具栏</translation>
+            <translation>自定义固定到屏幕窗口的工具栏</translation>
         </message>
         <message>
             <source>Customize the quick-set buttons for annotation fill colors</source>
@@ -1971,6 +2019,10 @@
         <message>
             <source>Decrease scale by 10%</source>
             <translation>缩放比例减少 10%</translation>
+        </message>
+        <message>
+            <source>Decrease speed</source>
+            <translation>降低速度</translation>
         </message>
         <message>
             <source>Default</source>
@@ -2013,6 +2065,10 @@
             <translation>删除文件</translation>
         </message>
         <message>
+            <source>Delete files on recording close</source>
+            <translation>关闭录制时删除文件</translation>
+        </message>
+        <message>
             <source>Delete history</source>
             <translation>删除历史记录</translation>
         </message>
@@ -2027,6 +2083,10 @@
         <message>
             <source>Delete temporary recording files?</source>
             <translation>删除屏幕录制临时文件？</translation>
+        </message>
+        <message>
+            <source>Delete the current recording files when closing an active recording. Stopping recording still saves the output.</source>
+            <translation>关闭进行中的录制时，删除本次录制的文件。停止录制仍会保存输出文件。</translation>
         </message>
         <message>
             <source>Desktop access to your capture tools</source>
@@ -2055,6 +2115,10 @@
         <message>
             <source>Disable/Enable global hotkeys</source>
             <translation>禁用/启用全局快捷键</translation>
+        </message>
+        <message>
+            <source>Disabled</source>
+            <translation>禁用</translation>
         </message>
         <message>
             <source>Disk limit</source>
@@ -2381,12 +2445,20 @@
             <translation>隐藏的工具</translation>
         </message>
         <message>
+            <source>Hide or show all windows in the current group</source>
+            <translation>隐藏或显示当前分组中的所有窗口</translation>
+        </message>
+        <message>
             <source>Hide to Top</source>
             <translation>顶部隐藏</translation>
         </message>
         <message>
             <source>Hide when outside selection</source>
             <translation>移出选区时隐藏</translation>
+        </message>
+        <message>
+            <source>Hide/Show All Windows</source>
+            <translation>隐藏/显示所有窗口</translation>
         </message>
         <message>
             <source>High</source>
@@ -2415,6 +2487,10 @@
         <message>
             <source>Image export</source>
             <translation>图像导出</translation>
+        </message>
+        <message>
+            <source>Image files</source>
+            <translation>图像文件</translation>
         </message>
         <message>
             <source>Image files (*.png *.ico);;PNG images (*.png);;Icon files (*.ico)</source>
@@ -2483,6 +2559,10 @@
         <message>
             <source>Increase scale by 10%</source>
             <translation>缩放比例增加 10%</translation>
+        </message>
+        <message>
+            <source>Increase speed</source>
+            <translation>提高速度</translation>
         </message>
         <message>
             <source>Input Monitoring</source>
@@ -2613,6 +2693,10 @@
             <translation>锁定边框颜色</translation>
         </message>
         <message>
+            <source>Locked shadow color</source>
+            <translation>锁定阴影颜色</translation>
+        </message>
+        <message>
             <source>Loop Animated Images</source>
             <translation>循环播放动图</translation>
         </message>
@@ -2631,6 +2715,10 @@
         <message>
             <source>MSAA</source>
             <translation>MSAA</translation>
+        </message>
+        <message>
+            <source>Magnifier</source>
+            <translation>放大镜</translation>
         </message>
         <message>
             <source>Magnifier visibility</source>
@@ -2695,6 +2783,10 @@
         <message>
             <source>Medium V6</source>
             <translation>中型 V6</translation>
+        </message>
+        <message>
+            <source>Memory Optimization Policy</source>
+            <translation>内存优化策略</translation>
         </message>
         <message>
             <source>Menu options</source>
@@ -2777,8 +2869,16 @@
             <translation>网络代理</translation>
         </message>
         <message>
+            <source>Next frame</source>
+            <translation>下一帧</translation>
+        </message>
+        <message>
             <source>Next screenshot history</source>
             <translation>下一条截图历史</translation>
+        </message>
+        <message>
+            <source>Next selection type</source>
+            <translation>下一种选区类型</translation>
         </message>
         <message>
             <source>No action</source>
@@ -2941,6 +3041,10 @@
             <translation>将剪贴板中的图像、图像文件、格式化文本或 HTML 固定到屏幕</translation>
         </message>
         <message>
+            <source>Pin screenshot to screen</source>
+            <translation>将截图固定到屏幕</translation>
+        </message>
+        <message>
             <source>Pin selected image files from File Explorer or the desktop to the screen</source>
             <translation>将文件资源管理器或桌面中选中的图像文件固定到屏幕</translation>
         </message>
@@ -2997,6 +3101,10 @@
             <translation>固定到屏幕窗口激活边框</translation>
         </message>
         <message>
+            <source>Pinned window active shadow</source>
+            <translation>固定到屏幕窗口激活阴影</translation>
+        </message>
+        <message>
             <source>Pinned window behavior, appearance and tools</source>
             <translation>固定到屏幕窗口的行为、外观与工具</translation>
         </message>
@@ -3006,11 +3114,23 @@
         </message>
         <message>
             <source>Pinned window locked border</source>
-            <translation>贴图窗口锁定边框</translation>
+            <translation>固定到屏幕窗口的锁定边框</translation>
+        </message>
+        <message>
+            <source>Pinned window locked shadow</source>
+            <translation>固定到屏幕窗口锁定阴影</translation>
+        </message>
+        <message>
+            <source>Pinned window shadow</source>
+            <translation>固定到屏幕窗口阴影</translation>
         </message>
         <message>
             <source>Pinned-window shortcuts</source>
             <translation>固定到屏幕窗口快捷键</translation>
+        </message>
+        <message>
+            <source>Play / Pause</source>
+            <translation>播放 / 暂停</translation>
         </message>
         <message>
             <source>Play a shutter sound when capturing the focused window or current display.</source>
@@ -3045,8 +3165,16 @@
             <translation>预览窗口分组，松开所有快捷键后切换</translation>
         </message>
         <message>
+            <source>Previous frame</source>
+            <translation>上一帧</translation>
+        </message>
+        <message>
             <source>Previous screenshot history</source>
             <translation>上一条截图历史</translation>
+        </message>
+        <message>
+            <source>Previous selection type</source>
+            <translation>上一种选区类型</translation>
         </message>
         <message>
             <source>Primary Target Language</source>
@@ -3219,6 +3347,14 @@
         <message>
             <source>Reset Zoom</source>
             <translation>重置缩放</translation>
+        </message>
+        <message>
+            <source>Reset canvas</source>
+            <translation>重置画布</translation>
+        </message>
+        <message>
+            <source>Reset speed</source>
+            <translation>重置速度</translation>
         </message>
         <message>
             <source>Reset transform</source>
@@ -3493,6 +3629,10 @@
             <translation>选择之前选中的区域</translation>
         </message>
         <message>
+            <source>Select scenarios</source>
+            <translation>选择场景</translation>
+        </message>
+        <message>
             <source>Select skin image</source>
             <translation>选择皮肤图像</translation>
         </message>
@@ -3558,7 +3698,7 @@
         </message>
         <message>
             <source>Set the border color of locked pinned screenshots</source>
-            <translation>设置已锁定贴图的边框颜色</translation>
+            <translation>设置已锁定并固定到屏幕的截图的边框颜色</translation>
         </message>
         <message>
             <source>Set the border color of pinned screenshots</source>
@@ -3609,6 +3749,18 @@
             <translation>设置屏幕录制帧率</translation>
         </message>
         <message>
+            <source>Set the shadow color of locked pinned screenshots</source>
+            <translation>设置已锁定并固定到屏幕的截图的阴影颜色</translation>
+        </message>
+        <message>
+            <source>Set the shadow color of pinned screenshots</source>
+            <translation>设置固定到屏幕的截图的阴影颜色</translation>
+        </message>
+        <message>
+            <source>Set the shadow color of pinned screenshots while they have focus</source>
+            <translation>设置固定到屏幕的截图获得焦点时的阴影颜色</translation>
+        </message>
+        <message>
             <source>Set up to two keys for this pinned window action</source>
             <translation>为此固定到屏幕窗口操作设置最多两个快捷键</translation>
         </message>
@@ -3627,6 +3779,14 @@
         <message>
             <source>Settings</source>
             <translation>设置</translation>
+        </message>
+        <message>
+            <source>Shadow active color</source>
+            <translation>阴影激活颜色</translation>
+        </message>
+        <message>
+            <source>Shadow color</source>
+            <translation>阴影颜色</translation>
         </message>
         <message>
             <source>Shake Window</source>
@@ -3677,6 +3837,10 @@
             <translation>默认显示辅助线</translation>
         </message>
         <message>
+            <source>Show Text Highlighting</source>
+            <translation>显示文本高亮</translation>
+        </message>
+        <message>
             <source>Show a button in the text recognition toolbar that sends recognized text to the Translation page.</source>
             <translation>在文本识别工具栏中显示一个按钮，将识别出的文本发送到翻译页面。</translation>
         </message>
@@ -3687,6 +3851,10 @@
         <message>
             <source>Show border</source>
             <translation>显示边框</translation>
+        </message>
+        <message>
+            <source>Show border by default</source>
+            <translation>默认显示边框</translation>
         </message>
         <message>
             <source>Show main interface</source>
@@ -3705,6 +3873,14 @@
             <translation>开始截图时显示辅助线</translation>
         </message>
         <message>
+            <source>Show shadow</source>
+            <translation>显示阴影</translation>
+        </message>
+        <message>
+            <source>Show shadow by default</source>
+            <translation>默认显示阴影</translation>
+        </message>
+        <message>
             <source>Show text recognition results</source>
             <translation>显示文本识别结果</translation>
         </message>
@@ -3721,12 +3897,20 @@
             <translation>在截图窗口顶部显示区域类型提示</translation>
         </message>
         <message>
+            <source>Show the border on new pinned windows</source>
+            <translation>在新建的固定到屏幕窗口中显示边框</translation>
+        </message>
+        <message>
             <source>Show the captured mouse cursor by default in new normal screenshots.</source>
             <translation>在新的普通截图中默认显示捕获的鼠标光标。</translation>
         </message>
         <message>
             <source>Show the floating toolbar on the desktop</source>
             <translation>在桌面上显示悬浮工具栏</translation>
+        </message>
+        <message>
+            <source>Show the shadow on new pinned windows</source>
+            <translation>在新建的固定到屏幕窗口中显示阴影</translation>
         </message>
         <message>
             <source>Show the sub-toolbar for the Edit Selection tool</source>
@@ -3777,6 +3961,18 @@
             <translation>小型 V6</translation>
         </message>
         <message>
+            <source>Smart Control</source>
+            <translation>智能控制</translation>
+        </message>
+        <message>
+            <source>Smart Control releases unused heap memory while the app is idle. Active captures and pinned images are kept.</source>
+            <translation>智能控制会在应用空闲时释放未使用的堆内存。正在进行的捕获和已固定到屏幕的图像会保留。</translation>
+        </message>
+        <message>
+            <source>Smart Control trims resident memory while the app is idle. The next use may briefly take longer.</source>
+            <translation>智能控制会在应用空闲时缩减驻留内存。下次使用时可能会短暂增加响应时间。</translation>
+        </message>
+        <message>
             <source>Smart Merge</source>
             <translation>智能合并</translation>
         </message>
@@ -3819,6 +4015,10 @@
         <message>
             <source>Source Language</source>
             <translation>源语言</translation>
+        </message>
+        <message>
+            <source>Speech Bubble</source>
+            <translation>对话气泡</translation>
         </message>
         <message>
             <source>Speed First</source>
@@ -4253,12 +4453,8 @@
             <translation>WebP</translation>
         </message>
         <message>
-            <source>When copying an image to the clipboard, also save it in the selected image format and save directory</source>
-            <translation>将图像复制到剪贴板时，同时按所选图像格式保存到指定目录</translation>
-        </message>
-        <message>
             <source>When pinning duplicate content</source>
-            <translation>固定重复内容时</translation>
+            <translation>将重复内容固定到屏幕时</translation>
         </message>
         <message>
             <source>Window Element API</source>
@@ -4275,6 +4471,10 @@
         <message>
             <source>Window interface</source>
             <translation>窗口界面</translation>
+        </message>
+        <message>
+            <source>Windows context menu</source>
+            <translation>Windows 右键菜单</translation>
         </message>
         <message>
             <source>Write the image to a file and copy that file to the clipboard</source>
@@ -4338,6 +4538,41 @@
         <message>
             <source>selected-text translation</source>
             <translation>选中文本翻译</translation>
+        </message>
+    </context>
+    <context>
+        <name>ShellContextMenuRegistration</name>
+        <message>
+            <source>Could not access the Windows context menu registry. Windows error %1.</source>
+            <translation>无法访问 Windows 右键菜单注册表。Windows 错误 %1。</translation>
+        </message>
+        <message>
+            <source>Could not read the Windows context menu registration.</source>
+            <translation>无法读取 Windows 右键菜单注册信息。</translation>
+        </message>
+        <message>
+            <source>Could not restore the Windows context menu registration. %1</source>
+            <translation>无法恢复 Windows 右键菜单注册信息。%1</translation>
+        </message>
+        <message>
+            <source>Could not save the Windows context menu preference.</source>
+            <translation>无法保存 Windows 右键菜单偏好设置。</translation>
+        </message>
+        <message>
+            <source>Edit with Snow Shot</source>
+            <translation>使用 Snow Shot 编辑</translation>
+        </message>
+        <message>
+            <source>Edit with Snow Shot Mini</source>
+            <translation>使用 Snow Shot Mini 编辑</translation>
+        </message>
+        <message>
+            <source>The Windows context menu entry is owned by another application.</source>
+            <translation>此 Windows 右键菜单项属于其他应用程序。</translation>
+        </message>
+        <message>
+            <source>The Windows context menu is only supported on Windows.</source>
+            <translation>Windows 右键菜单仅在 Windows 上受支持。</translation>
         </message>
     </context>
     <context>
@@ -4405,6 +4640,14 @@ Unavailable: %2</source>
             <translation>部分快捷键不可用
 可用：%1
 不可用：%2</translation>
+        </message>
+        <message>
+            <source>Temporarily disabled</source>
+            <translation>暂时禁用</translation>
+        </message>
+        <message>
+            <source>This shortcut is temporarily disabled and released for use by other applications. It will be restored when global hotkeys are enabled and the focused window allows them.</source>
+            <translation>此快捷键已暂时禁用并解除注册，其他应用程序可以使用该组合键。启用全局快捷键且当前焦点窗口允许使用时，将恢复此快捷键。</translation>
         </message>
         <message>
             <source>already used by another application or action</source>

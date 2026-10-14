@@ -3,6 +3,7 @@
 #include <QBoxLayout>
 #include <QLabel>
 #include <QMetaProperty>
+#include <QPointer>
 #include <QSignalSpy>
 #include <QTest>
 #include <QTranslator>
@@ -36,6 +37,12 @@ class PaginationTest final : public QObject {
  private slots:
   void defaultsAndRange();
   void clampsWhenInputsChange();
+  void stateIsCommittedBeforePropertyNotifications();
+  void propertyNotificationsSurviveOwnerDeletion();
+  void userNavigationSurvivesOwnerDeletion();
+  void propertyNotificationsTrackNestedChanges();
+  void userNotificationsTrackNestedChanges();
+  void nestedNotificationsSurviveOwnerDeletion();
   void automaticSizeChangerBoundary();
   void pageSizeChangerUsesDesktopComboBehavior();
   void publicPropertyMetadataAndTokenResolution();
@@ -91,6 +98,203 @@ void PaginationTest::clampsWhenInputsChange() {
   QCOMPARE(pagination.total(), 0);
   QCOMPARE(pagination.pageCount(), 0);
   QCOMPARE(pagination.currentPage(), 1);
+}
+
+void PaginationTest::stateIsCommittedBeforePropertyNotifications() {
+  AdPagination pagination;
+  pagination.setTotal(100);
+  pagination.setCurrentPage(10);
+  connect(&pagination, &AdPagination::pageSizeChanged, this, [&](int) {
+    QCOMPARE(pagination.currentPage(), 4);
+    auto* current = pagination.findChild<QAbstractButton*>(QStringLiteral("paginationPage4"));
+    QVERIFY(current);
+    QVERIFY(current->isChecked());
+  });
+  pagination.setPageSize(30);
+  connect(&pagination, &AdPagination::totalChanged, this, [&](int) {
+    QCOMPARE(pagination.currentPage(), 1);
+    QCOMPARE(pagination.pageCount(), 1);
+  });
+  pagination.setTotal(20);
+}
+
+void PaginationTest::propertyNotificationsSurviveOwnerDeletion() {
+  for (const int signal : {0, 1, 2, 3}) {
+    QPointer<AdPagination> pagination = new AdPagination;
+    pagination->setTotal(100);
+    pagination->setCurrentPage(10);
+    const auto deleteOwner = [&] { delete pagination.data(); };
+    if (signal == 0) {
+      connect(pagination, &AdPagination::totalChanged, this, deleteOwner);
+      pagination->setTotal(20);
+    } else if (signal == 1) {
+      connect(pagination, &AdPagination::pageSizeChanged, this, deleteOwner);
+      pagination->setPageSize(30);
+    } else if (signal == 2) {
+      connect(pagination, &AdPagination::currentPageChanged, this, deleteOwner);
+      pagination->setTotal(20);
+    } else {
+      connect(pagination, &AdPagination::pageCountChanged, this, deleteOwner);
+      pagination->setPageSize(30);
+    }
+    QVERIFY(pagination.isNull());
+  }
+}
+
+void PaginationTest::userNavigationSurvivesOwnerDeletion() {
+  for (const int entry : {0, 1, 2}) {
+    QPointer<AdPagination> pagination = new AdPagination;
+    pagination->setTotal(100);
+    connect(pagination, &AdPagination::currentPageChanged, this, [&] { delete pagination.data(); });
+    if (entry == 0) {
+      pagination->nextPage();
+    } else if (entry == 1) {
+      auto* button = pagination->findChild<QAbstractButton*>(QStringLiteral("paginationPage2"));
+      QVERIFY(button);
+      button->click();
+    } else {
+      pagination->setShowQuickJumper(true);
+      auto* input = pagination->findChild<AdLineEdit*>(QStringLiteral("paginationQuickInput"));
+      QVERIFY(input);
+      input->setText(QStringLiteral("2"));
+      emit input->editingFinished();
+    }
+    QVERIFY(pagination.isNull());
+  }
+}
+
+void PaginationTest::propertyNotificationsTrackNestedChanges() {
+  for (const bool changeTotal : {false, true}) {
+    AdPagination pagination;
+    pagination.setTotal(100);
+    pagination.setCurrentPage(10);
+    QList<int> pages;
+    QList<int> counts;
+    const auto resetPage = [&] { pagination.setCurrentPage(1); };
+    if (changeTotal) {
+      connect(&pagination, &AdPagination::totalChanged, this, resetPage);
+    } else {
+      connect(&pagination, &AdPagination::pageSizeChanged, this, resetPage);
+    }
+    connect(&pagination, &AdPagination::currentPageChanged, this, [&](int page) {
+      QCOMPARE(page, pagination.currentPage());
+      pages.append(page);
+    });
+    connect(&pagination, &AdPagination::pageCountChanged, this, [&](int count) {
+      QCOMPARE(count, pagination.pageCount());
+      counts.append(count);
+    });
+    if (changeTotal) {
+      pagination.setTotal(20);
+    } else {
+      pagination.setPageSize(30);
+    }
+    QCOMPARE(pages, QList<int>({1}));
+    QCOMPARE(counts, QList<int>({changeTotal ? 2 : 4}));
+    QCOMPARE(pagination.currentPage(), 1);
+  }
+  AdPagination pagination;
+  pagination.setTotal(100);
+  pagination.setCurrentPage(10);
+  QList<int> totals;
+  QList<int> counts;
+  connect(&pagination, &AdPagination::totalChanged, this, [&](int total) {
+    QCOMPARE(total, pagination.total());
+    totals.append(total);
+    if (total == 20) {
+      pagination.setTotal(50);
+      pagination.setPageSize(20);
+      pagination.setCurrentPage(1);
+    }
+  });
+  connect(&pagination, &AdPagination::pageCountChanged, this, [&](int count) {
+    QCOMPARE(count, pagination.pageCount());
+    counts.append(count);
+  });
+  pagination.setTotal(20);
+  QCOMPARE(totals, QList<int>({20, 50}));
+  QCOMPARE(counts, QList<int>({3}));
+  QCOMPARE(pagination.currentPage(), 1);
+  QCOMPARE(pagination.pageSize(), 20);
+}
+
+void PaginationTest::userNotificationsTrackNestedChanges() {
+  {
+    AdPagination pagination;
+    pagination.setTotal(100);
+    QSignalSpy changed(&pagination, &AdPagination::changed);
+    connect(&pagination, &AdPagination::currentPageChanged, this, [&](int page) {
+      QCOMPARE(page, pagination.currentPage());
+      if (page == 2) {
+        pagination.setPageSize(20);
+        pagination.jumpToPage(3);
+      }
+    });
+    connect(&pagination, &AdPagination::changed, this, [&](int page, int size) {
+      QCOMPARE(page, pagination.currentPage());
+      QCOMPARE(size, pagination.pageSize());
+    });
+    pagination.nextPage();
+    QCOMPARE(changed.count(), 1);
+    QCOMPARE(changed.at(0).at(0).toInt(), 3);
+    QCOMPARE(changed.at(0).at(1).toInt(), 20);
+  }
+  {
+    AdPagination pagination;
+    pagination.setTotal(100);
+    pagination.setCurrentPage(10);
+    pagination.setShowSizeChanger(true);
+    QSignalSpy selected(&pagination, &AdPagination::pageSizeSelected);
+    QSignalSpy changed(&pagination, &AdPagination::changed);
+    QList<int> sizes;
+    connect(&pagination, &AdPagination::pageSizeSelected, this, [&](int page, int size) {
+      QCOMPARE(page, 10);
+      QCOMPARE(size, 20);
+      pagination.setPageSize(50);
+      pagination.setCurrentPage(1);
+    });
+    connect(&pagination, &AdPagination::pageSizeChanged, this, [&](int size) {
+      QCOMPARE(size, pagination.pageSize());
+      sizes.append(size);
+    });
+    connect(&pagination, &AdPagination::changed, this, [&](int page, int size) {
+      QCOMPARE(page, pagination.currentPage());
+      QCOMPARE(size, pagination.pageSize());
+    });
+    auto* changer = pagination.findChild<AdComboBox*>(QStringLiteral("paginationSizeChanger"));
+    QVERIFY(changer);
+    changer->setCurrentValue(20);
+    QCOMPARE(selected.count(), 1);
+    QCOMPARE(sizes, QList<int>({50}));
+    QCOMPARE(changed.count(), 1);
+    QCOMPARE(changed.at(0).at(0).toInt(), 1);
+    QCOMPARE(changed.at(0).at(1).toInt(), 50);
+  }
+}
+
+void PaginationTest::nestedNotificationsSurviveOwnerDeletion() {
+  for (const bool userAction : {false, true}) {
+    QPointer<AdPagination> pagination = new AdPagination;
+    pagination->setTotal(100);
+    pagination->setCurrentPage(userAction ? 1 : 10);
+    int trailingNotifications = 0;
+    if (userAction) {
+      connect(pagination, &AdPagination::currentPageChanged, this,
+              [&] { pagination->setPageSize(20); });
+      connect(pagination, &AdPagination::pageSizeChanged, this, [&] { delete pagination.data(); });
+      connect(pagination, &AdPagination::changed, this, [&] { ++trailingNotifications; });
+      pagination->nextPage();
+    } else {
+      connect(pagination, &AdPagination::totalChanged, this,
+              [&] { pagination->setCurrentPage(1); });
+      connect(pagination, &AdPagination::currentPageChanged, this,
+              [&] { delete pagination.data(); });
+      connect(pagination, &AdPagination::pageCountChanged, this, [&] { ++trailingNotifications; });
+      pagination->setTotal(20);
+    }
+    QVERIFY(pagination.isNull());
+    QCOMPARE(trailingNotifications, 0);
+  }
 }
 
 void PaginationTest::automaticSizeChangerBoundary() {

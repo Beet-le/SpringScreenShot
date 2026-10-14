@@ -9,11 +9,13 @@
 #include <QLocalSocket>
 #include <QUuid>
 #include "snow_shot/app/singleinstancecoordinator.h"
+#include "snow_shot/app/shellimagelaunch.h"
 #include "snow_shot/presentation/languagemanager.h"
 #include "snow_shot/presentation/components/icons/snowshoticons.h"
 #include "snow_shot/presentation/styles/thememanager.h"
 #include "snow_shot/presentation/settings/applicationpriority.h"
 #include "snow_shot/platform/windows/administratorlaunch.h"
+#include "snow_shot/platform/windows/shellcontextmenuregistration.h"
 #include "widgets/message.h"
 #include "widgets/platform_compatibility.h"
 #include "snow_shot/presentation/components/screenshothistorypagewidget.h"
@@ -25,6 +27,7 @@
 #include "snow_shot/storage/settingsadapters.h"
 #include "snow_shot/presentation/capture/screenshotcapturepolicy.h"
 #include "../presentation/capture/screenshotcaptureperfinstrumentation.h"
+#include "../presentation/capture/screenshotscrollingpipeline.h"
 #include "../presentation/pinned/screenshotpintoperfinstrumentation.h"
 
 #include "icon_renderer.h"
@@ -65,6 +68,10 @@
 #endif
 
 extern "C" void snow_diagnostics_install_panic_hook(void (*callback)(const unsigned char*, size_t));
+
+#ifdef SNOW_SHOT_CONTROLLER_LIFETIME_TESTS
+int runScreenshotControllerLifetimeTests(int argc, char** argv);
+#endif
 
 namespace {
 #ifndef Q_OS_MACOS
@@ -116,6 +123,11 @@ int main(int argc, char* argv[]) {
     }
     QCoreApplication::setApplicationName(applicationName);
     QCoreApplication::setApplicationVersion(QStringLiteral(SNOW_DIAGNOSTICS_VERSION));
+#ifdef SNOW_SHOT_CONTROLLER_LIFETIME_TESTS
+    if (argc == 2 && QString::fromLocal8Bit(argv[1]) == u"--controller-lifetime-tests") {
+        return runScreenshotControllerLifetimeTests(argc, argv);
+    }
+#endif
 #ifdef SNOW_SHOT_MCP_TEST_FIXTURE
     // Only test builds expose this isolated production-router fixture. It bypasses
     // singleton acquisition, startup registration, and the user's configuration.
@@ -543,8 +555,9 @@ int main(int argc, char* argv[]) {
         launchArguments, snow_shot::platform::macos::initialNativeLoginItemLaunch());
 #endif
     snow_shot::app::SingleInstanceCoordinator singleInstance;
-    const snow_shot::app::SingleInstanceResult instanceResult =
-        singleInstance.acquireOrForward(launchArguments);
+    const snow_shot::app::SingleInstanceResult instanceResult = singleInstance.acquireOrForward(
+        launchArguments,
+        snow_shot::app::parseShellImageLaunchRequest(launchArguments).requested ? 10000 : 1500);
     if (instanceResult.outcome == snow_shot::app::SingleInstanceOutcome::Forwarded) {
         return 0;
     }
@@ -552,6 +565,8 @@ int main(int argc, char* argv[]) {
         qWarning().noquote() << instanceResult.error;
         return 2;
     }
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, &singleInstance,
+                     [&singleInstance] { singleInstance.stopAcceptingLaunchRequests(); });
 
     static_cast<void>(
         snow_shot::storage::ApplicationStorage::instance().initialize(storageOptions));
@@ -565,6 +580,9 @@ int main(int argc, char* argv[]) {
     // rejects straggler submissions; no history task runs after main returns.
     struct HistoryTaskDrain {
         ~HistoryTaskDrain() {
+            // Controllers have retired capture before this terminal join. Keep storage,
+            // diagnostics and Qt alive, without dispatching timers owned by those controllers.
+            snow_shot::capture_detail::ScreenshotScrollingPipeline::waitForShutdowns();
             shutdownScreenshotHistoryTasks();
         }
     } historyTaskDrain;
@@ -599,26 +617,52 @@ int main(int argc, char* argv[]) {
         startupUpdate.setSystemProxy(
             applicationStorage.configuration().value(QStringLiteral("network/proxy")).toString() ==
             u"system");
-        bool foregroundRequested = administratorRestart;
+        bool foregroundRequested =
+            administratorRestart || launchArguments.contains(QStringLiteral("--show-main-window"));
+        const auto initialImageRequest =
+            snow_shot::app::parseShellImageLaunchRequest(launchArguments);
+        QStringList pendingImagePaths =
+            initialImageRequest.valid ? initialImageRequest.paths : QStringList{};
+        const auto relaunchArguments = [&] {
+            return snow_shot::update::startupUpdateRelaunchArguments(foregroundRequested,
+                                                                     pendingImagePaths);
+        };
         const auto forwardedLaunch = QObject::connect(
             &singleInstance, &snow_shot::app::SingleInstanceCoordinator::launchRequestReceived,
             &app, [&](const QStringList& arguments) {
+                const auto imageRequest = snow_shot::app::parseShellImageLaunchRequest(arguments);
+                if (imageRequest.valid)
+                    pendingImagePaths.append(imageRequest.paths);
                 foregroundRequested =
-                    foregroundRequested || !arguments.contains(QStringLiteral("--autostart"));
-                startupUpdate.setRelaunchArguments(
-                    snow_shot::update::startupUpdateRelaunchArguments(foregroundRequested));
+                    foregroundRequested ||
+                    arguments.contains(QStringLiteral("--show-main-window")) ||
+                    (!imageRequest.requested && !arguments.contains(QStringLiteral("--autostart")));
+                startupUpdate.setRelaunchArguments(relaunchArguments());
             });
         const auto startupUpdateResult = snow_shot::update::runStartupUpdate(
             startupUpdate, [&applicationStorage] { return applicationStorage.flushNow().success; },
-            [&] { return foregroundRequested; });
+            [&] { return foregroundRequested; }, std::chrono::seconds(210), relaunchArguments);
         QObject::disconnect(forwardedLaunch);
-        if (startupUpdateResult == snow_shot::update::StartupUpdateResult::ExitForUpdate)
+        if (startupUpdateResult == snow_shot::update::StartupUpdateResult::ExitForUpdate) {
+            singleInstance.stopAcceptingLaunchRequests();
             return 0;
+        }
     }
 #else
     static_cast<void>(updaterRelaunch);
 #endif
     const auto startupSettings = snow_shot::storage::SystemSettings();
+#ifdef Q_OS_WIN
+    QString shellRegistrationError;
+    const snow_shot::platform::windows::ShellContextMenuRegistration shellRegistration;
+    if (!shellRegistration.setEnabled(snow_shot::storage::ApplicationStorage::instance()
+                                              .configuration()
+                                              .value(QStringLiteral("system/context_menu_mode"))
+                                              .toString() == QStringLiteral("image_files"),
+                                      &shellRegistrationError)) {
+        snow_shot::app::reportStartupRegistrationFailure(shellRegistrationError);
+    }
+#endif
 #ifdef Q_OS_MACOS
     const auto startupResult =
         snow_shot::platform::macos::loginItemAutomaticRegistrationAllowed(launchArguments)
@@ -636,11 +680,16 @@ int main(int argc, char* argv[]) {
     adqt::widgets::AdTooltip::installApplicationTooltips();
 
     snow_shot::app::ApplicationController applicationController(app);
-    singleInstance.setLaunchRequestHandler([&applicationController](const QStringList& arguments) {
-        applicationController.handleLaunchRequest(
-            snow_shot::update::normalStartupArguments(arguments));
-    });
     applicationController.start();
+    QTimer::singleShot(0, &app, [&] {
+        if (snow_shot::app::parseShellImageLaunchRequest(launchArguments).requested)
+            applicationController.handleLaunchRequest(launchArguments);
+        singleInstance.setLaunchRequestHandler(
+            [&applicationController](const QStringList& arguments) {
+                applicationController.handleLaunchRequest(
+                    snow_shot::update::normalStartupArguments(arguments));
+            });
+    });
     if (!startupResult.success) {
         snow_shot::app::reportStartupRegistrationFailure(startupResult.error);
 #ifdef Q_OS_MACOS

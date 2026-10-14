@@ -7,13 +7,17 @@
 
 #include <QColor>
 #include <QPointF>
+#include <QPointer>
 #include <QRectF>
 #include <QThreadPool>
 #include <QWindow>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 #if QT_CONFIG(vulkan) && __has_include(<QVulkanInstance>) && __has_include(<vulkan/vulkan.h>)
@@ -160,6 +164,44 @@ class RhiImageWindow final : public QWindow {
     struct ExactRasterResources;
     struct ExactRasterJob;
 
+    // Rendering owns GPU command buffers until its transaction finishes. Publish
+    // copied notifications afterward so observers can freely replace or retire us.
+    template <typename Signal, typename... Arguments>
+    bool publishRenderingNotification(Signal signal, Arguments&&... arguments) {
+        return publishRenderingNotificationForScope(false, signal,
+                                                    std::forward<Arguments>(arguments)...);
+    }
+
+    template <typename Signal, typename... Arguments>
+    bool publishComparisonNotification(Signal signal, Arguments&&... arguments) {
+        return publishRenderingNotificationForScope(true, signal,
+                                                    std::forward<Arguments>(arguments)...);
+    }
+
+    template <typename Signal, typename... Arguments>
+    bool publishRenderingNotificationForScope(bool comparison, Signal signal,
+                                              Arguments&&... arguments) {
+        const QPointer<RhiImageWindow> window(this);
+        const quint64 generation = renderNotificationGeneration_;
+        const quint64 comparisonGeneration = comparisonNotificationGeneration_;
+        auto values = std::make_tuple(std::forward<Arguments>(arguments)...);
+        auto publish = [window, signal, generation, comparison, comparisonGeneration,
+                        values = std::move(values)]() mutable {
+            if (window && window->renderNotificationGeneration_ == generation &&
+                (!comparison ||
+                 window->comparisonNotificationGeneration_ == comparisonGeneration)) {
+                std::apply([&](auto&... value) { (window.data()->*signal)(value...); }, values);
+            }
+        };
+        if (renderNotifications_ != nullptr) {
+            renderNotifications_->emplace_back(std::move(publish));
+            return true;
+        }
+        publish();
+        return window && renderNotificationGeneration_ == generation &&
+               (!comparison || comparisonNotificationGeneration_ == comparisonGeneration);
+    }
+
     bool hasImage() const;
     void setImageInternal(const DecodedImage& image);
     bool isNavigationControlHit(NavigationDirection direction, const QPointF& position) const;
@@ -282,6 +324,9 @@ class RhiImageWindow final : public QWindow {
     bool comparisonHandlePressed_ = false;
     bool pointerWithinWindow_ = false;
     bool renderPending_ = false;
+    quint64 renderNotificationGeneration_ = 0;
+    quint64 comparisonNotificationGeneration_ = 0;
+    std::vector<std::function<void()>>* renderNotifications_ = nullptr;
     quint64 pendingVisualFrameRequestId_ = 0;
     std::optional<std::pair<quint64, EditExportSettings>> pendingExactRaster_;
     std::shared_ptr<ExactRasterJob> activeExactRaster_;

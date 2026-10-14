@@ -5,8 +5,7 @@
 #include <QPixmap>
 #include <QWidget>
 
-class QLabel;
-class QTimer;
+class CanvasStatusReadout;
 
 class ScreenshotSavePreviewCanvas final : public QWidget {
     Q_OBJECT
@@ -64,7 +63,6 @@ class ScreenshotSavePreviewCanvas final : public QWidget {
     bool m_splitDragging = false;
     bool m_splitHovered = false;
     bool m_fit = true;
-    QLabel* m_readout = nullptr;
-    QTimer* m_readoutTimer = nullptr;
-    QLabel* m_busy = nullptr;
+    CanvasStatusReadout* m_readout = nullptr;
+    CanvasStatusReadout* m_busy = nullptr;
 };

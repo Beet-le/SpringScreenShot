@@ -130,15 +130,21 @@ int fakeSidecar(int argc, char** argv) {
         const auto command = QJsonDocument::fromJson(QByteArray::fromStdString(line)).object();
         const qint64 id = command.value(QStringLiteral("id")).toInteger();
         const QString name = command.value(QStringLiteral("command")).toString();
+        bool rejectedHandoff = false;
         if (name == u"handoff_decision") {
             writeJson(QDir(cache).filePath(QStringLiteral("handoff.json")), command);
             if (scenario == u"delayed-handoff")
                 QThread::msleep(80);
+            if (scenario == u"retry-shell-handoff")
+                rejectedHandoff =
+                    incrementCounter(QDir(cache).filePath(QStringLiteral("handoff-count"))) == 1;
         }
         frame({{QStringLiteral("protocol"), 2},
                {QStringLiteral("type"), QStringLiteral("command_result")},
                {QStringLiteral("id"), id},
-               {QStringLiteral("ok"), true}});
+               {QStringLiteral("ok"), !rejectedHandoff}});
+        if (rejectedHandoff)
+            return 0;
         if (name == u"execute") {
             writeJson(QDir(cache).filePath(QStringLiteral("execute.json")), command);
             const QString operation = command.value(QStringLiteral("operation")).toString();
@@ -329,6 +335,8 @@ int main(int argc, char** argv) {
 #ifndef Q_OS_WIN
     return 0;
 #else
+    qputenv("PATH", QDir::toNativeSeparators(QCoreApplication::applicationDirPath()).toLocal8Bit() +
+                        ';' + qgetenv("PATH"));
     QTemporaryDir directory;
     require(directory.isValid(), "create adapter test directory");
     const QString root = directory.filePath(QStringLiteral("Snow Shot"));
@@ -895,6 +903,41 @@ int main(int argc, char** argv) {
             decision.value(QStringLiteral("relaunchArguments")).toArray() ==
                 QJsonArray{QStringLiteral("--autostart"), QStringLiteral("--skip-startup-update")},
             "the final handoff includes arguments chosen by preparation callbacks");
+    }
+
+    {
+        auto retryOptions = options(QStringLiteral("retry-shell-handoff"));
+        const QString cache = retryOptions.cacheDirectory;
+        UpdateService service(std::move(retryOptions));
+        const QString image = directory.filePath(QStringLiteral("selected image.png"));
+        service.setMode(QStringLiteral("manual"));
+        service.setRelaunchArguments({QStringLiteral("--edit-with-snow-shot"), image,
+                                      QStringLiteral("--skip-startup-update")});
+        QObject::connect(&service, &UpdateService::handoffPendingChanged, &app, [&](bool pending) {
+            if (!pending)
+                service.clearRelaunchArguments();
+        });
+        bool committed = false;
+        bool failed = false;
+        QObject::connect(&service, &UpdateService::operationFinished, &app,
+                         [&](const QString& operation, const QString& outcome) {
+                             failed = failed || (operation == u"apply" && outcome == u"failed");
+                         });
+        QObject::connect(&service, &UpdateService::handoffCommitted, &app,
+                         [&] { committed = true; });
+        service.beginApply();
+        require(waitUntil([&] { return failed && !service.busy(); }),
+                "first shell handoff fails and restores local processing");
+        require(readJson(QDir(cache).filePath(QStringLiteral("handoff.json")))
+                    .value(QStringLiteral("relaunchArguments"))
+                    .toArray()
+                    .contains(image),
+                "failed handoff initially carried the selected image");
+        service.beginApply();
+        require(waitUntil([&] { return committed; }), "retry handoff commits");
+        require(!readJson(QDir(cache).filePath(QStringLiteral("handoff.json")))
+                     .contains(QStringLiteral("relaunchArguments")),
+                "retry preserves ordinary relaunch behavior without replaying consumed images");
     }
 
     {

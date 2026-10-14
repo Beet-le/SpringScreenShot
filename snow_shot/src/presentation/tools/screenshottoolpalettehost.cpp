@@ -10,6 +10,7 @@
 #include <QPaintEvent>
 #include <QPainter>
 #include <QPainterPathStroker>
+#include <QPointer>
 #include <QRegion>
 #include <QWheelEvent>
 
@@ -260,8 +261,11 @@ void ScreenshotToolPaletteHost::setStyleToolbarAboveMain(bool above) {
     }
 
     m_anchorPaletteToBottom = above;
+    const QPointer<ScreenshotToolPaletteHost> guard(this);
     m_palette->setStyleToolbarAboveMain(above);
-    applyHostSize();
+    if (guard != nullptr) {
+        applyHostSize();
+    }
 }
 
 void ScreenshotToolPaletteHost::setStyleToolbarVisible(bool visible) {

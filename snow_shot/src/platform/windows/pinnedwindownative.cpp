@@ -11,6 +11,8 @@
 #include <QWindow>
 
 #include <algorithm>
+#include <limits>
+#include <optional>
 
 #if defined(Q_OS_WIN) || defined(_WIN32)
 #include <qpa/qplatformnativeinterface.h>
@@ -25,6 +27,99 @@ constexpr UINT_PTR kSynchronizedResizeSubclassId = 0x5353525A; // "SSRZ"
 
 HWND toNativeHwnd(WId windowId) {
     return reinterpret_cast<HWND>(windowId); // NOLINT(performance-no-int-to-ptr)
+}
+
+std::optional<QPoint> windowPlacementOffset(HWND hwnd, HMONITOR monitor) {
+    SetLastError(ERROR_SUCCESS);
+    const LONG_PTR extendedStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    if (extendedStyle == 0 && GetLastError() != ERROR_SUCCESS)
+        return std::nullopt;
+    // Tool-window placement is already in screen coordinates. Other top-level
+    // windows store normal placement relative to their monitor's work area.
+    if ((extendedStyle & WS_EX_TOOLWINDOW) != 0)
+        return QPoint();
+    MONITORINFO info{};
+    info.cbSize = sizeof(info);
+    if (monitor == nullptr || GetMonitorInfoW(monitor, &info) == FALSE)
+        return std::nullopt;
+    const qint64 x = static_cast<qint64>(info.rcWork.left) - info.rcMonitor.left;
+    const qint64 y = static_cast<qint64>(info.rcWork.top) - info.rcMonitor.top;
+    if (x < std::numeric_limits<int>::min() || x > std::numeric_limits<int>::max() ||
+        y < std::numeric_limits<int>::min() || y > std::numeric_limits<int>::max())
+        return std::nullopt;
+    return QPoint(static_cast<int>(x), static_cast<int>(y));
+}
+
+std::optional<RECT> nativeRect(const QRect& geometry, const QPoint& offset = {}) {
+    const qint64 left = static_cast<qint64>(geometry.x()) - offset.x();
+    const qint64 top = static_cast<qint64>(geometry.y()) - offset.y();
+    const qint64 right = left + geometry.width();
+    const qint64 bottom = top + geometry.height();
+    if (!geometry.isValid() || left < std::numeric_limits<LONG>::min() ||
+        right > std::numeric_limits<LONG>::max() || top < std::numeric_limits<LONG>::min() ||
+        bottom > std::numeric_limits<LONG>::max())
+        return std::nullopt;
+    return RECT{static_cast<LONG>(left), static_cast<LONG>(top), static_cast<LONG>(right),
+                static_cast<LONG>(bottom)};
+}
+
+QRect normalClientGeometry(HWND hwnd) {
+    WINDOWPLACEMENT placement{};
+    placement.length = sizeof(placement);
+    if (GetWindowPlacement(hwnd, &placement) == FALSE)
+        return {};
+    // MonitorFromWindow uses the pre-minimize rectangle for an iconic HWND.
+    const auto offset =
+        windowPlacementOffset(hwnd, MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST));
+    if (!offset)
+        return {};
+    const RECT& rect = placement.rcNormalPosition;
+    const qint64 left = static_cast<qint64>(rect.left) + offset->x();
+    const qint64 top = static_cast<qint64>(rect.top) + offset->y();
+    const qint64 width = static_cast<qint64>(rect.right) - rect.left;
+    const qint64 height = static_cast<qint64>(rect.bottom) - rect.top;
+    if (left < std::numeric_limits<int>::min() || left > std::numeric_limits<int>::max() ||
+        top < std::numeric_limits<int>::min() || top > std::numeric_limits<int>::max() ||
+        width <= 0 || width > std::numeric_limits<int>::max() || height <= 0 ||
+        height > std::numeric_limits<int>::max() ||
+        left + width > std::numeric_limits<int>::max() ||
+        top + height > std::numeric_limits<int>::max())
+        return {};
+    // Snow Shot's pinned HWND is frameless: normal window placement is also
+    // the normal client rectangle, including the app-drawn shadow margin.
+    return QRect(static_cast<int>(left), static_cast<int>(top), static_cast<int>(width),
+                 static_cast<int>(height));
+}
+
+bool applyMinimizedClientGeometry(HWND hwnd, const QRect& geometry) {
+    WINDOWPLACEMENT placement{};
+    placement.length = sizeof(placement);
+    if (GetWindowPlacement(hwnd, &placement) == FALSE)
+        return false;
+    const auto screenRect = nativeRect(geometry);
+    if (!screenRect)
+        return false;
+    const auto offset =
+        windowPlacementOffset(hwnd, MonitorFromRect(&*screenRect, MONITOR_DEFAULTTONEAREST));
+    if (!offset)
+        return false;
+    const auto normalRect = nativeRect(geometry, *offset);
+    if (!normalRect)
+        return false;
+
+    const bool visible = IsWindowVisible(hwnd) != FALSE;
+    // GetWindowPlacement does not encode SW_HIDE. Explicitly preserve hidden
+    // state, and avoid activation when updating a visible minimized surface.
+    placement.showCmd = visible ? SW_SHOWMINNOACTIVE : SW_HIDE;
+    const WINDOWPLACEMENT previous = placement;
+    placement.rcNormalPosition = *normalRect;
+    if (SetWindowPlacement(hwnd, &placement) != FALSE && IsIconic(hwnd) != FALSE &&
+        (IsWindowVisible(hwnd) != FALSE) == visible && normalClientGeometry(hwnd) == geometry)
+        return true;
+    // Keep failure atomic as far as USER32 permits; the caller can then roll
+    // its content/geometry transaction back without adopting icon dimensions.
+    static_cast<void>(SetWindowPlacement(hwnd, &previous));
+    return false;
 }
 
 LRESULT CALLBACK synchronizedResizeSubclassProc(HWND hwnd, UINT message, WPARAM wParam,
@@ -190,6 +285,8 @@ bool screenshot_pinned_window_native::applyClientGeometry(WId windowId, const QR
     if (hwnd == nullptr) {
         return false;
     }
+    if (IsIconic(hwnd) != FALSE)
+        return applyMinimizedClientGeometry(hwnd, geometry);
 
     UINT flags = SWP_NOZORDER | SWP_NOACTIVATE;
     if (update == GeometryUpdate::DiscardClientPixels) {
@@ -214,12 +311,24 @@ bool screenshot_pinned_window_native::applyClientGeometry(WId windowId, const QR
 #endif
 }
 
+bool screenshot_pinned_window_native::isMinimized(WId windowId) {
+#if defined(Q_OS_WIN) || defined(_WIN32)
+    const HWND hwnd = toNativeHwnd(windowId);
+    return hwnd != nullptr && IsIconic(hwnd) != FALSE;
+#else
+    Q_UNUSED(windowId);
+    return false;
+#endif
+}
+
 QRect screenshot_pinned_window_native::currentClientGeometry(WId windowId) {
 #if defined(Q_OS_WIN) || defined(_WIN32)
     const HWND hwnd = toNativeHwnd(windowId);
     if (hwnd == nullptr) {
         return {};
     }
+    if (IsIconic(hwnd) != FALSE)
+        return normalClientGeometry(hwnd);
 
     RECT clientRect{};
     POINT clientTopLeft{};

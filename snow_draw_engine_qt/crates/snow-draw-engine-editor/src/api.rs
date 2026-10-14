@@ -33,6 +33,9 @@ pub enum ActiveTool {
     RectangleEraser,
     BrushEraser,
     Distance,
+    Angle,
+    Magnifier,
+    SpeechBubble,
 }
 
 impl ActiveTool {
@@ -69,7 +72,10 @@ impl ActiveTool {
             | Self::Text
             | Self::SerialNumber
             | Self::Spotlight
-            | Self::Distance => false,
+            | Self::Distance
+            | Self::Angle
+            | Self::Magnifier
+            | Self::SpeechBubble => false,
         }
     }
 }
@@ -155,6 +161,12 @@ pub enum StyleToolbarSource {
     DefaultBrushEraser,
     DefaultDistance,
     SelectedDistance,
+    DefaultAngle,
+    SelectedAngle,
+    DefaultMagnifier,
+    SelectedMagnifier,
+    DefaultSpeechBubble,
+    SelectedSpeechBubble,
 }
 
 impl StyleToolbarSource {
@@ -204,9 +216,11 @@ pub const FILTER_STYLE_PROPERTY_ALL: u32 = FILTER_STYLE_PROPERTY_TYPE
     | FILTER_STYLE_PROPERTY_STRENGTH
     | FILTER_STYLE_PROPERTY_OPACITY
     | FILTER_STYLE_PROPERTY_STROKE_WIDTH;
+pub const FILTER_STYLE_MIXED_CONTAINS_BOTH_FILTERS: u32 = 1 << 30;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShapeKind {
+    SpeechBubble,
     Rectangle,
     Arrow,
     Line,
@@ -268,7 +282,7 @@ pub const SHAPE_STYLE_PROPERTY_ALL: u32 = SHAPE_STYLE_PROPERTY_RECTANGLE
 impl ShapeKind {
     pub const fn supported_properties(self) -> u32 {
         match self {
-            Self::Rectangle => SHAPE_STYLE_PROPERTY_RECTANGLE,
+            Self::Rectangle | Self::SpeechBubble => SHAPE_STYLE_PROPERTY_RECTANGLE,
             Self::Arrow => SHAPE_STYLE_PROPERTY_ARROW,
             Self::Line => SHAPE_STYLE_PROPERTY_LINE,
             Self::FreeDraw => SHAPE_STYLE_PROPERTY_FREE_DRAW,
@@ -278,7 +292,7 @@ impl ShapeKind {
                     | SHAPE_STYLE_PROPERTY_STROKE_WIDTH
             }
             Self::PenHighlight => SHAPE_STYLE_PROPERTY_STROKE | SHAPE_STYLE_PROPERTY_STROKE_WIDTH,
-            Self::Spotlight => SHAPE_STYLE_PROPERTY_SHAPE,
+            Self::Spotlight => SHAPE_STYLE_PROPERTY_SHAPE | SHAPE_STYLE_PROPERTY_CORNER_RADII,
         }
     }
 }
@@ -316,7 +330,9 @@ pub const TEXT_STYLE_MIXED_CORNER_RADII: u32 = 1 << 7;
 pub const TEXT_STYLE_MIXED_HORIZONTAL_ALIGN: u32 = 1 << 8;
 pub const TEXT_STYLE_MIXED_VERTICAL_ALIGN: u32 = 1 << 9;
 pub const TEXT_STYLE_MIXED_OPACITY: u32 = 1 << 10;
-pub const TEXT_STYLE_ALL_PROPERTIES: u32 = (1 << 11) - 1;
+pub const TEXT_STYLE_MIXED_BOLD: u32 = 1 << 11;
+pub const TEXT_STYLE_MIXED_ITALIC: u32 = 1 << 12;
+pub const TEXT_STYLE_ALL_PROPERTIES: u32 = (1 << 13) - 1;
 
 pub const SERIAL_NUMBER_STYLE_MIXED_NUMBER: u32 = 1 << 0;
 pub const SERIAL_NUMBER_STYLE_MIXED_COLOR: u32 = 1 << 1;
@@ -351,6 +367,10 @@ pub struct StyleToolbarState {
     pub brush_eraser_style: BrushEraserStyle,
     pub distance_style: crate::DistanceStyle,
     pub distance_style_mixed: u32,
+    pub angle_style: crate::AngleStyle,
+    pub angle_style_mixed: u32,
+    pub magnifier_style: crate::MagnifierStyle,
+    pub magnifier_style_mixed: u32,
     pub distance_measured_length: f64,
 }
 
@@ -395,7 +415,9 @@ pub struct FreeDrawPreview {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ElementCreationPreview {
+    SpeechBubble(snow_draw_engine_document::SpeechBubbleData),
     Rectangle(RectangleData),
+    Magnifier(snow_draw_engine_document::MagnifierData),
     Filter(FilterData),
     PenFilter(PenFilterPreview),
     FreeDraw(Arc<FreeDrawPreview>),
@@ -431,6 +453,12 @@ pub struct EditorPresentationState {
     pub active_text_draft: Option<ActiveTextDraftPresentation>,
     pub arrow_text_previews: Vec<(ElementId, TextData)>,
     pub preview_arrows: Vec<SelectionArrowState>,
+    pub speech_bubble_previews: Vec<(ElementId, snow_draw_engine_document::SpeechBubbleData)>,
+    pub speech_bubble_text_previews: Vec<(ElementId, TextData)>,
+    pub speech_bubble_handles: Vec<(u8, Point<f64>)>,
+    pub speech_bubble_handle_leaders: Vec<(Point<f64>, Point<f64>)>,
+    pub preview_magnifiers: Vec<crate::SelectionMagnifierState>,
+    pub selected_magnifiers: Vec<crate::SelectionMagnifierState>,
     pub preview_elements: Vec<SelectionRectState>,
     pub preview_text_paints: Vec<TextPreviewPaint>,
     pub auto_filter_highlights: Vec<RectangleData>,
@@ -439,6 +467,7 @@ pub struct EditorPresentationState {
     pub marquee_candidate_arrows: Vec<SelectionArrowState>,
     pub text_rect_ids: Vec<ElementId>,
     pub hovered_rect: Option<RectangleData>,
+    pub hovered_magnifier: Option<snow_draw_engine_document::MagnifierData>,
     pub hovered_free_draw: Option<FreeDrawData>,
     pub hovered_pen_filter: Option<PenFilterData>,
     pub hovered_text_rect: Option<RectangleData>,
@@ -522,6 +551,7 @@ pub struct SelectionArrowState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArrowHandleKind {
     Endpoint,
+    AngleArc,
     LoopStart,
     LoopEnd,
     FocusPoint,
@@ -548,6 +578,7 @@ pub struct SelectionBounds {
 pub enum ActiveTextDraftTarget {
     New,
     NewArrow(ElementId),
+    NewSpeechBubble(ElementId),
     Existing(ElementId),
 }
 
@@ -561,7 +592,9 @@ pub struct ActiveTextDraftPresentation {
 impl ActiveTextDraftPresentation {
     pub fn existing_id(&self) -> Option<ElementId> {
         match self.target {
-            ActiveTextDraftTarget::New | ActiveTextDraftTarget::NewArrow(_) => None,
+            ActiveTextDraftTarget::New
+            | ActiveTextDraftTarget::NewArrow(_)
+            | ActiveTextDraftTarget::NewSpeechBubble(_) => None,
             ActiveTextDraftTarget::Existing(id) => Some(id),
         }
     }

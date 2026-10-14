@@ -74,6 +74,7 @@ QColor shortcutStatusColor(snow_shot::presentation::GlobalShortcutStatus status,
     case snow_shot::presentation::GlobalShortcutStatus::Failed:
         return map.colorError;
     case snow_shot::presentation::GlobalShortcutStatus::Unset:
+    case snow_shot::presentation::GlobalShortcutStatus::Disabled:
         return map.colorTextTertiary;
     }
     return map.colorError;
@@ -549,10 +550,22 @@ class ShortcutKeyConfigContent final : public QWidget {
     }
 
     bool event(QEvent* event) override {
-        // A key being recorded belongs to this editor, including the modal's Escape shortcut.
-        if (event->type() == QEvent::ShortcutOverride && m_recordingConfigIndex >= 0) {
-            event->accept();
-            return true;
+        if (m_recordingConfigIndex >= 0) {
+            // QWidget::event handles focus traversal before keyPressEvent. While recording,
+            // all key input belongs to this editor, including navigation and modal shortcuts.
+            switch (event->type()) {
+            case QEvent::ShortcutOverride:
+                event->accept();
+                return true;
+            case QEvent::KeyPress:
+                keyPressEvent(static_cast<QKeyEvent*>(event));
+                return true;
+            case QEvent::KeyRelease:
+                keyReleaseEvent(static_cast<QKeyEvent*>(event));
+                return true;
+            default:
+                break;
+            }
         }
         return QWidget::event(event);
     }
@@ -1311,6 +1324,9 @@ void ShortcutKeyRow::syncRegistrationStatus() {
     case snow_shot::presentation::GlobalShortcutStatus::Unset:
         statusName = tr("Not configured");
         break;
+    case snow_shot::presentation::GlobalShortcutStatus::Disabled:
+        statusName = tr("Temporarily disabled");
+        break;
     }
 
     const QString tooltipText = m_showRegistrationStatus ? registrationTooltipText() : QString();
@@ -1318,6 +1334,7 @@ void ShortcutKeyRow::syncRegistrationStatus() {
     if (m_shortcutButton != nullptr) {
         auto* const button = static_cast<ShortcutConfigurationButton*>(m_shortcutButton);
         button->setRegistrationStatusTooltipVisible(showTooltip);
+        button->setAccessibleDescription(tooltipText);
         if (InfoTooltipIcon* const trigger = button->registrationStatusTooltipTrigger();
             trigger != nullptr) {
             trigger->setProperty("registrationStatus", static_cast<int>(status));
@@ -1329,6 +1346,11 @@ void ShortcutKeyRow::syncRegistrationStatus() {
 }
 
 QString ShortcutKeyRow::registrationTooltipText() const {
+    if (m_registrationState.status == snow_shot::presentation::GlobalShortcutStatus::Disabled) {
+        return tr("This shortcut is temporarily disabled and released for use by other "
+                  "applications. It will be restored when global hotkeys are enabled and the "
+                  "focused window allows them.");
+    }
     if (m_registrationState.status == snow_shot::presentation::GlobalShortcutStatus::Registered ||
         m_registrationState.status == snow_shot::presentation::GlobalShortcutStatus::Unset) {
         return {};

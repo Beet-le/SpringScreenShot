@@ -1,5 +1,7 @@
 #include "snow_canvas_commands.h"
 
+#include <cmath>
+
 namespace snow_canvas_commands {
 namespace {
 
@@ -31,6 +33,9 @@ SnowTextCommitDraft CommitTextRequest::toAbi() const {
     SnowTextCommitDraft draft{};
     draft.element_id = elementId;
     draft.arrow_id = arrowId;
+    draft.bubble_id = bubbleId;
+    draft.minimum_grapheme_width = minimumGraphemeWidth;
+    draft.text_ink_reserve = textInkReserve;
     draft.has_existing_element = hasExistingElement ? 1 : 0;
     draft.auto_resize = autoResize ? 1 : 0;
     draft.update_default_style = updateDefaultStyle ? 1 : 0;
@@ -47,6 +52,9 @@ SnowActiveTextDraftPresentation ActiveTextDraftPresentationRequest::toAbi() cons
     SnowActiveTextDraftPresentation draft{};
     draft.element_id = elementId;
     draft.arrow_id = arrowId;
+    draft.bubble_id = bubbleId;
+    draft.minimum_grapheme_width = minimumGraphemeWidth;
+    draft.text_ink_reserve = textInkReserve;
     draft.has_existing_element = hasExistingElement ? 1 : 0;
     draft.auto_resize = autoResize ? 1 : 0;
     draft.center_x = centerX;
@@ -324,6 +332,39 @@ MutationResult setDistanceStylePatch(SnowRuntime runtime, SnowViewport viewport,
     result.success =
         snow_viewport_set_distance_style_patch_ex(runtime, viewport, &style, properties,
                                                   result.changedViewports.outParam()) == SNOW_OK;
+    return result;
+}
+
+MutationResult setAngleStylePatch(SnowRuntime runtime, SnowViewport viewport,
+                                  const SnowAngleStyle& style, std::uint32_t properties) {
+    MutationResult result;
+    if (!hasViewport(runtime, viewport))
+        return result;
+    result.success =
+        snow_viewport_set_angle_style_patch_ex(runtime, viewport, &style, properties,
+                                               result.changedViewports.outParam()) == SNOW_OK;
+    return result;
+}
+
+MutationResult adjustAngleValue(SnowRuntime runtime, SnowViewport viewport, double deltaRadians) {
+    MutationResult result;
+    if (!hasViewport(runtime, viewport) || !std::isfinite(deltaRadians))
+        return result;
+    result.success =
+        snow_viewport_adjust_angle_value_ex(runtime, viewport, deltaRadians,
+                                            result.changedViewports.outParam()) == SNOW_OK;
+    return result;
+}
+
+MutationResult setMagnifierStylePatch(SnowRuntime runtime, SnowViewport viewport,
+                                      const SnowMagnifierStyle& style, std::uint32_t properties,
+                                      bool creationDefaults) {
+    MutationResult result;
+    if (!hasViewport(runtime, viewport))
+        return result;
+    result.success = snow_viewport_set_magnifier_style_patch_ex(
+                         runtime, viewport, &style, properties, creationDefaults ? 1 : 0,
+                         result.changedViewports.outParam()) == SNOW_OK;
     return result;
 }
 

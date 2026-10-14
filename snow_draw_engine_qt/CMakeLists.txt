@@ -122,6 +122,12 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_DEMO)
 endif()
 
 if(SNOW_DRAW_ENGINE_QT_BUILD_BENCHMARKS)
+    add_executable(snow-canvas-magnifier-benchmark tests/snow_canvas_magnifier_benchmark.cpp)
+    target_include_directories(snow-canvas-magnifier-benchmark PRIVATE
+        ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
+        "${CMAKE_CURRENT_SOURCE_DIR}/crates/snow-draw-engine-c/include")
+    target_link_libraries(snow-canvas-magnifier-benchmark PRIVATE snow_draw_engine_qt_canvas)
+    snow_shot_import_offscreen_platform(snow-canvas-magnifier-benchmark)
     add_executable(snow-canvas-image-memory-benchmark
         tests/snow_canvas_image_memory_benchmark.cpp)
     target_link_libraries(snow-canvas-image-memory-benchmark PRIVATE snow_canvas_image)
@@ -148,6 +154,13 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_BENCHMARKS)
     add_executable(snow-canvas-stroke-filter-benchmark tests/snow_canvas_stroke_filter_benchmark.cpp)
     target_link_libraries(snow-canvas-stroke-filter-benchmark PRIVATE snow_draw_engine_qt_canvas)
 
+    add_executable(snow-canvas-speech-bubble-benchmark tests/snow_canvas_speech_bubble_benchmark.cpp)
+    target_include_directories(snow-canvas-speech-bubble-benchmark PRIVATE
+        ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
+        "${CMAKE_CURRENT_SOURCE_DIR}/crates/snow-draw-engine-c/include")
+    target_link_libraries(snow-canvas-speech-bubble-benchmark PRIVATE snow_draw_engine_qt_canvas)
+    snow_shot_import_offscreen_platform(snow-canvas-speech-bubble-benchmark)
+
     add_executable(snow-canvas-arrow-text-benchmark tests/snow_canvas_arrow_text_benchmark.cpp)
     target_link_libraries(snow-canvas-arrow-text-benchmark PRIVATE snow_draw_engine_qt_canvas)
     snow_shot_import_offscreen_platform(snow-canvas-arrow-text-benchmark)
@@ -155,6 +168,10 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_BENCHMARKS)
     add_executable(snow-canvas-distance-benchmark tests/snow_canvas_distance_benchmark.cpp)
     target_link_libraries(snow-canvas-distance-benchmark PRIVATE snow_draw_engine_qt_canvas)
     snow_shot_import_offscreen_platform(snow-canvas-distance-benchmark)
+
+    add_executable(snow-canvas-angle-benchmark tests/snow_canvas_angle_benchmark.cpp)
+    target_link_libraries(snow-canvas-angle-benchmark PRIVATE snow_draw_engine_qt_canvas)
+    snow_shot_import_offscreen_platform(snow-canvas-angle-benchmark)
 
     snow_add_rust_executable(snow-scene-order-benchmark
         PACKAGE snow-draw-engine-scene
@@ -234,6 +251,56 @@ endif()
 
 if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
     enable_testing()
+    add_executable(snow-canvas-lifetime-tests tests/snow_canvas_lifetime_tests.cpp)
+    target_include_directories(snow-canvas-lifetime-tests PRIVATE
+        ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
+        "${CMAKE_CURRENT_SOURCE_DIR}/crates/snow-draw-engine-c/include")
+    target_link_libraries(snow-canvas-lifetime-tests PRIVATE snow_draw_engine_qt_canvas)
+    snow_shot_import_offscreen_platform(snow-canvas-lifetime-tests)
+    add_test(NAME snow-canvas-lifetime-tests COMMAND snow-canvas-lifetime-tests)
+    snow_shot_offscreen_qpa_environment(_snow_canvas_lifetime_qpa_environment)
+    set_tests_properties(snow-canvas-lifetime-tests PROPERTIES
+        LABELS "unit" TIMEOUT 60
+        ENVIRONMENT "${_snow_canvas_lifetime_qpa_environment}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    add_executable(snow-canvas-rounded-diamond-tests tests/snow_canvas_rounded_diamond_tests.cpp)
+    target_include_directories(snow-canvas-rounded-diamond-tests PRIVATE
+        ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
+        "${CMAKE_CURRENT_SOURCE_DIR}/crates/snow-draw-engine-c/include")
+    target_link_libraries(snow-canvas-rounded-diamond-tests PRIVATE snow_draw_engine_qt_canvas)
+    snow_shot_import_offscreen_platform(snow-canvas-rounded-diamond-tests)
+    add_test(NAME snow-canvas-rounded-diamond-tests COMMAND snow-canvas-rounded-diamond-tests)
+    snow_shot_offscreen_qpa_environment(_snow_canvas_diamond_qpa_environment)
+    set_tests_properties(snow-canvas-rounded-diamond-tests PROPERTIES
+        LABELS "unit" TIMEOUT 60
+        ENVIRONMENT "${_snow_canvas_diamond_qpa_environment}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    add_executable(snow-canvas-magnifier-render-tests tests/snow_canvas_magnifier_render_tests.cpp)
+    target_include_directories(snow-canvas-magnifier-render-tests PRIVATE
+        ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
+        "${CMAKE_CURRENT_SOURCE_DIR}/crates/snow-draw-engine-c/include")
+    target_link_libraries(snow-canvas-magnifier-render-tests PRIVATE
+        snow_draw_engine_qt_canvas snow_test_cli_guard_qt)
+    snow_shot_import_offscreen_platform(snow-canvas-magnifier-render-tests)
+    add_test(NAME snow-canvas-magnifier-render-tests COMMAND snow-canvas-magnifier-render-tests)
+    add_test(NAME snow-canvas-magnifier-damage-tests
+        COMMAND snow-canvas-magnifier-render-tests --gradient-damage-only)
+    snow_shot_offscreen_qpa_environment(_snow_canvas_magnifier_qpa_environment)
+    set_tests_properties(snow-canvas-magnifier-render-tests snow-canvas-magnifier-damage-tests PROPERTIES
+        LABELS "unit" TIMEOUT 60
+        ENVIRONMENT "${_snow_canvas_magnifier_qpa_environment}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    add_executable(snow-canvas-magnifier-interaction-tests
+        tests/snow_canvas_magnifier_interaction_tests.cpp)
+    target_link_libraries(snow-canvas-magnifier-interaction-tests PRIVATE
+        snow_draw_engine_qt_canvas snow_test_cli_guard_qt)
+    snow_shot_import_offscreen_platform(snow-canvas-magnifier-interaction-tests)
+    add_test(NAME snow-canvas-magnifier-interaction-tests
+        COMMAND snow-canvas-magnifier-interaction-tests)
+    set_tests_properties(snow-canvas-magnifier-interaction-tests PROPERTIES
+        LABELS "unit" TIMEOUT 60
+        ENVIRONMENT "${_snow_canvas_magnifier_qpa_environment}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_executable(snow-canvas-image-tests tests/snow_canvas_image_tests.cpp)
     target_link_libraries(snow-canvas-image-tests PRIVATE snow_canvas_image snow_pixel_buffer)
     add_test(NAME snow-canvas-image-tests COMMAND snow-canvas-image-tests)
@@ -292,6 +359,16 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )
 
+    add_executable(snow-canvas-text-emphasis-tests tests/snow_canvas_text_emphasis_tests.cpp)
+    target_include_directories(snow-canvas-text-emphasis-tests PRIVATE
+        ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
+        "${CMAKE_CURRENT_SOURCE_DIR}/crates/snow-draw-engine-c/include"
+    )
+    target_link_libraries(snow-canvas-text-emphasis-tests PRIVATE snow_draw_engine_qt_canvas)
+    snow_shot_import_offscreen_platform(snow-canvas-text-emphasis-tests)
+    add_test(NAME snow-canvas-text-emphasis-tests COMMAND snow-canvas-text-emphasis-tests -platform offscreen)
+    set_tests_properties(snow-canvas-text-emphasis-tests PROPERTIES LABELS "unit" TIMEOUT 60)
+
     add_executable(snow-canvas-text-overlay-tests tests/snow_canvas_text_overlay_tests.cpp)
     target_include_directories(snow-canvas-text-overlay-tests PRIVATE
         ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
@@ -305,6 +382,16 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
         LABELS "unit"
     )
 
+    add_executable(snow-canvas-speech-bubble-tests tests/snow_canvas_speech_bubble_tests.cpp)
+    target_include_directories(snow-canvas-speech-bubble-tests PRIVATE
+        ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
+        "${CMAKE_CURRENT_SOURCE_DIR}/crates/snow-draw-engine-c/include"
+    )
+    target_link_libraries(snow-canvas-speech-bubble-tests PRIVATE snow_draw_engine_qt_canvas)
+    snow_shot_import_offscreen_platform(snow-canvas-speech-bubble-tests)
+    add_test(NAME snow-canvas-speech-bubble-tests COMMAND snow-canvas-speech-bubble-tests -platform offscreen)
+    set_tests_properties(snow-canvas-speech-bubble-tests PROPERTIES LABELS "unit" TIMEOUT 90)
+
     add_executable(snow-canvas-arrow-text-tests tests/snow_canvas_arrow_text_tests.cpp)
     target_include_directories(snow-canvas-arrow-text-tests PRIVATE
         ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
@@ -314,6 +401,19 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
     qt_import_plugins(snow-canvas-arrow-text-tests INCLUDE Qt6::QOffscreenIntegrationPlugin)
     add_test(NAME snow-canvas-arrow-text-tests COMMAND snow-canvas-arrow-text-tests)
     set_tests_properties(snow-canvas-arrow-text-tests PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        LABELS "unit"
+    )
+
+    add_executable(snow-canvas-angle-tests tests/snow_canvas_angle_tests.cpp)
+    target_include_directories(snow-canvas-angle-tests PRIVATE
+        ${SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS}
+        "${CMAKE_CURRENT_SOURCE_DIR}/crates/snow-draw-engine-c/include"
+    )
+    target_link_libraries(snow-canvas-angle-tests PRIVATE snow_draw_engine_qt_canvas)
+    qt_import_plugins(snow-canvas-angle-tests INCLUDE Qt6::QOffscreenIntegrationPlugin)
+    add_test(NAME snow-canvas-angle-tests COMMAND snow-canvas-angle-tests)
+    set_tests_properties(snow-canvas-angle-tests PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
         LABELS "unit"
     )
@@ -402,6 +502,19 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
         COMMAND snow-canvas-custom-renderer-tests --eraser-only)
     snow_shot_import_offscreen_platform(snow-canvas-custom-renderer-tests)
     snow_shot_offscreen_qpa_environment(_snow_canvas_reset_qpa_environment)
+    add_test(NAME snow-canvas-background-coverage-tests
+        COMMAND snow-canvas-custom-renderer-tests --background-coverage-only)
+    set_tests_properties(snow-canvas-background-coverage-tests PROPERTIES
+        ENVIRONMENT "${_snow_canvas_reset_qpa_environment}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+        LABELS "unit" TIMEOUT 60)
+    add_test(NAME snow-canvas-path-culling-tests
+        COMMAND snow-canvas-custom-renderer-tests --path-culling-only)
+    set_tests_properties(snow-canvas-path-culling-tests PROPERTIES
+        ENVIRONMENT "${_snow_canvas_reset_qpa_environment}"
+        ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+        LABELS "unit")
     set_tests_properties(snow-canvas-document-reset-tests snow-canvas-render-state-tests
         snow-canvas-filter-creation-tests snow-canvas-eraser-widget-tests PROPERTIES
         ENVIRONMENT "${_snow_canvas_reset_qpa_environment}"
@@ -529,19 +642,22 @@ if(SNOW_DRAW_ENGINE_QT_BUILD_TESTS)
     )
     snow_shot_import_offscreen_platform(snow-canvas-filter-render-tests)
     add_test(NAME snow-canvas-filter-render-tests COMMAND snow-canvas-filter-render-tests)
+    add_test(NAME snow-canvas-serial-number-font-tests
+        COMMAND snow-canvas-filter-render-tests --serial-number-font-only)
     add_test(NAME snow-canvas-retained-filter-paint-tests
         COMMAND snow-canvas-filter-render-tests --retained-filter-paint-only)
     add_test(NAME snow-canvas-sparse-filter-damage-tests
         COMMAND snow-canvas-filter-render-tests --sparse-filter-damage-only)
     set_tests_properties(
         snow-canvas-filter-render-tests snow-canvas-retained-filter-paint-tests
-        snow-canvas-sparse-filter-damage-tests PROPERTIES
+        snow-canvas-sparse-filter-damage-tests snow-canvas-serial-number-font-tests PROPERTIES
         ENVIRONMENT
             "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::QOffscreenIntegrationPlugin>"
         ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )
     set_tests_properties(snow-canvas-sparse-filter-damage-tests PROPERTIES LABELS "unit")
+    set_tests_properties(snow-canvas-serial-number-font-tests PROPERTIES LABELS "unit" TIMEOUT 60)
 
     add_executable(snow-canvas-spotlight-render-tests
         tests/snow_canvas_spotlight_render_tests.cpp

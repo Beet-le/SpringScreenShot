@@ -84,7 +84,7 @@ int main(int argc, char* argv[]) {
     const QRect selection(120, 140, 320, 180);
     const auto synchronize = [&toolbar](const QRect& rectangle) {
         toolbar.setPointerInteractionEnabled(true);
-        toolbar.setSelectionResizable(true);
+        toolbar.setSelectionEditCapabilities(true, true);
         toolbar.setCornerRadiusApplicable(true);
         toolbar.setSelectionState(rectangle, false, 8, 4,
                                   ScreenshotSelectionToolbarWidget::DisplayMode::Full, false,
@@ -102,6 +102,29 @@ int main(int argc, char* argv[]) {
         synchronize(QRect(selection.topLeft(),
                           QSize(selection.width() + index % 2, selection.height() + index % 2)));
     });
+    const auto synchronizeSmart = [&toolbar](const QRect& rectangle) {
+        toolbar.setPointerInteractionEnabled(true);
+        toolbar.setSelectionEditCapabilities(false, false);
+        toolbar.setCornerRadiusApplicable(true);
+        toolbar.setSelectionState(rectangle, false, 8, 4,
+                                  ScreenshotSelectionToolbarWidget::DisplayMode::SizeOnly, false,
+                                  std::nullopt);
+    };
+    synchronizeSmart(selection);
+    QCoreApplication::processEvents();
+    measure("smart_position_only", samples, iterations, [&synchronizeSmart, &selection](int index) {
+        synchronizeSmart(selection.translated(10000 + index % 2, -10000 - index % 2));
+    });
+    measure("smart_dimensions", samples, iterations, [&synchronizeSmart, &selection](int index) {
+        synchronizeSmart(QRect(selection.topLeft(), QSize(selection.width() + index % 2,
+                                                          selection.height() + index % 2)));
+    });
+    measure("smart_to_editing", samples, std::max(10, iterations / 10),
+            [&synchronize, &synchronizeSmart, &selection](int index) {
+                const QRect moved = selection.translated(index % 2, index % 2);
+                synchronizeSmart(moved);
+                synchronize(moved);
+            });
 #ifndef SNOW_SELECTION_TOOLBAR_BASELINE
     ScreenshotSelectionModel model;
     model.setSelectionRect(QRectF(selection));

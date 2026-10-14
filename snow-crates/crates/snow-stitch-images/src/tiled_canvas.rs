@@ -28,8 +28,10 @@ pub struct TiledCanvasSnapshot {
     axis: StitchAxis,
     cross_extent: u32,
     pixel_format: PixelFormat,
-    extent: u32,
     tiles: VecDeque<Arc<CanvasTile>>,
+    // Immutable snapshots index arbitrary tile spans once. Live scrolling does
+    // not maintain or rebuild this index while replacing boundary pixels.
+    tile_ends: Vec<u32>,
     start: u32,
     end: u32,
 }
@@ -63,6 +65,10 @@ impl TiledCanvas {
     }
 
     pub fn new_for_axis(frame: Frame, axis: StitchAxis) -> Result<Self, StitchError> {
+        Self::new_from_frame(&frame, axis)
+    }
+
+    pub(crate) fn new_from_frame(frame: &Frame, axis: StitchAxis) -> Result<Self, StitchError> {
         let cross_extent = match axis {
             StitchAxis::Vertical => frame.width(),
             StitchAxis::Horizontal => frame.height(),
@@ -76,7 +82,7 @@ impl TiledCanvas {
             tiles: VecDeque::new(),
             spare_tiles: Vec::new(),
         };
-        canvas.append_axis(&frame, 0, frame_extent)?;
+        canvas.append_axis(frame, 0, frame_extent)?;
         Ok(canvas)
     }
 
@@ -522,8 +528,32 @@ impl TiledCanvas {
         destination: &mut [u8],
     ) -> Result<(), StitchError> {
         self.require_vertical()?;
-        self.snapshot_axis(0, self.extent)?
-            .copy_rows(top, rows, destination)
+        let bottom = top.checked_add(rows).ok_or(StitchError::Arithmetic {
+            operation: "calculating canvas row range",
+        })?;
+        if rows == 0 || bottom > self.extent {
+            return Err(StitchError::InvalidFrame {
+                message: format!(
+                    "canvas row range {top}..{bottom} is outside image height {}",
+                    self.extent
+                ),
+            });
+        }
+        let required = (rows as usize)
+            .checked_mul(self.cross_extent as usize)
+            .and_then(|pixels| pixels.checked_mul(self.channels()))
+            .ok_or(StitchError::Arithmetic {
+                operation: "calculating canvas row destination size",
+            })?;
+        if destination.len() < required {
+            return Err(StitchError::InvalidFrame {
+                message: format!(
+                    "canvas row destination needs {required} bytes, got {}",
+                    destination.len()
+                ),
+            });
+        }
+        self.copy_axis(top, bottom, &mut destination[..required])
     }
 
     pub fn materialize_rows(&self, top: u32, bottom: u32) -> Result<Frame, StitchError> {
@@ -569,6 +599,7 @@ impl TiledCanvasSnapshot {
         end: u32,
     ) -> Self {
         let mut tiles = VecDeque::new();
+        let mut tile_ends = Vec::new();
         let mut position = 0;
         let mut origin = 0;
         let mut extent = 0;
@@ -580,6 +611,7 @@ impl TiledCanvasSnapshot {
                 }
                 extent += tile.span;
                 tiles.push_back(Arc::clone(tile));
+                tile_ends.push(extent);
             }
             position = tile_end;
             if position >= end {
@@ -590,8 +622,8 @@ impl TiledCanvasSnapshot {
             axis,
             cross_extent,
             pixel_format,
-            extent,
             tiles,
+            tile_ends,
             start: start - origin,
             end: end - origin,
         }
@@ -648,14 +680,29 @@ impl TiledCanvasSnapshot {
                 ),
             });
         }
-        Ok(Self::retained_range(
-            self.axis,
-            self.cross_extent,
-            self.pixel_format,
-            &self.tiles,
-            self.start + start,
-            self.start + end,
-        ))
+        let start = self.start + start;
+        let end = self.start + end;
+        let first_tile = self
+            .tile_ends
+            .partition_point(|&tile_end| tile_end <= start);
+        let last_tile = self.tile_ends.partition_point(|&tile_end| tile_end < end) + 1;
+        let origin = if first_tile == 0 {
+            0
+        } else {
+            self.tile_ends[first_tile - 1]
+        };
+        Ok(Self {
+            axis: self.axis,
+            cross_extent: self.cross_extent,
+            pixel_format: self.pixel_format,
+            tiles: self.tiles.range(first_tile..last_tile).cloned().collect(),
+            tile_ends: self.tile_ends[first_tile..last_tile]
+                .iter()
+                .map(|&tile_end| tile_end - origin)
+                .collect(),
+            start: start - origin,
+            end: end - origin,
+        })
     }
 
     pub fn slice_rows(&self, top: u32, bottom: u32) -> Result<Self, StitchError> {
@@ -668,7 +715,9 @@ impl TiledCanvasSnapshot {
     }
 
     pub fn materialize(&self) -> Result<Frame, StitchError> {
-        self.canvas().materialize_axis(self.start, self.end)
+        let mut pixels = RasterBuffer::zeroed(self.rgba_len()?);
+        self.copy_rows(0, self.height(), pixels.as_mut_slice())?;
+        Frame::from_buffer(self.width(), self.height(), self.pixel_format, pixels)
     }
 
     pub fn copy_rows(
@@ -733,8 +782,15 @@ impl TiledCanvasSnapshot {
             StitchAxis::Vertical => {
                 let global_start = self.start + top;
                 let global_end = global_start + rows;
-                let mut tile_start = 0_u32;
-                for tile in &self.tiles {
+                let first_tile = self
+                    .tile_ends
+                    .partition_point(|&tile_end| tile_end <= global_start);
+                let mut tile_start = if first_tile == 0 {
+                    0
+                } else {
+                    self.tile_ends[first_tile - 1]
+                };
+                for tile in self.tiles.range(first_tile..) {
                     let tile_end = tile_start + tile.span;
                     let copy_start = global_start.max(tile_start);
                     let copy_end = global_end.min(tile_end);
@@ -858,17 +914,6 @@ impl TiledCanvasSnapshot {
         }
         Frame::from_buffer(width, height, PixelFormat::Rgba8, pixels)
     }
-
-    fn canvas(&self) -> TiledCanvas {
-        TiledCanvas {
-            axis: self.axis,
-            cross_extent: self.cross_extent,
-            pixel_format: self.pixel_format,
-            extent: self.extent,
-            tiles: self.tiles.clone(),
-            spare_tiles: Vec::new(),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -879,6 +924,248 @@ mod tests {
         let mut pixels = RasterBuffer::zeroed(width as usize * height as usize * 4);
         pixels.fill(value);
         Frame::from_buffer(width, height, PixelFormat::Rgba8, pixels).unwrap()
+    }
+
+    fn axis_values_frame(axis: StitchAxis, cross: u32, values: &[u32]) -> Frame {
+        let extent = values.len() as u32;
+        let (width, height) = match axis {
+            StitchAxis::Vertical => (cross, extent),
+            StitchAxis::Horizontal => (extent, cross),
+        };
+        let mut pixels = Vec::with_capacity(width as usize * height as usize * 4);
+        for y in 0..height {
+            for x in 0..width {
+                let (primary, secondary) = match axis {
+                    StitchAxis::Vertical => (y, x),
+                    StitchAxis::Horizontal => (x, y),
+                };
+                let value = values[primary as usize];
+                pixels.extend_from_slice(&[
+                    value as u8,
+                    (value >> 8) as u8,
+                    (value >> 16) as u8 ^ secondary as u8,
+                    255,
+                ]);
+            }
+        }
+        Frame::new(width, height, PixelFormat::Rgba8, pixels).unwrap()
+    }
+
+    fn require_tile_storage_bounds(canvas: &TiledCanvas) {
+        assert_eq!(
+            canvas.tiles.iter().map(|tile| tile.span).sum::<u32>(),
+            canvas.extent
+        );
+        for tile in &canvas.tiles {
+            assert!(tile.span > 0 && tile.span <= CANVAS_TILE_SPAN);
+            assert!(
+                tile.pixels.capacity()
+                    <= tile_capacity_limit(
+                        tile.span as usize * canvas.cross_extent as usize * canvas.channels()
+                    )
+            );
+        }
+        assert!(canvas.spare_tiles.len() <= MAX_SPARE_TILES);
+        assert!(
+            canvas
+                .spare_tiles
+                .iter()
+                .map(|tile| tile.pixels.capacity())
+                .sum::<usize>()
+                <= MAX_SPARE_TILE_BYTES
+        );
+    }
+
+    #[test]
+    fn irregular_tile_growth_and_reversals_preserve_pixels_and_indexed_snapshots() {
+        for axis in [StitchAxis::Vertical, StitchAxis::Horizontal] {
+            for growth in [1, 64] {
+                for direction in 0..3 {
+                    let mut expected: Vec<u32> = (0..2160).collect();
+                    let source = axis_values_frame(axis, 3, &expected);
+                    let mut canvas = TiledCanvas::new_from_frame(&source, axis).unwrap();
+                    let mut leases = vec![(canvas.snapshot_axis(0, 2160).unwrap(), source)];
+                    for step in 0..1000_u32 {
+                        let band = 1080;
+                        let incoming_values: Vec<_> = (0..band)
+                            .map(|position| 10_000 + step * band + position)
+                            .collect();
+                        let incoming = axis_values_frame(axis, 3, &incoming_values);
+                        let append = direction == 0 || (direction == 2 && (step / 250) % 2 == 0);
+                        if append {
+                            let keep = expected.len() as u32 + growth - band;
+                            canvas.truncate_end(keep).unwrap();
+                            canvas.append_axis(&incoming, 0, band).unwrap();
+                            expected.truncate(keep as usize);
+                            expected.extend_from_slice(&incoming_values);
+                        } else {
+                            let remove = band - growth;
+                            canvas.truncate_start(remove).unwrap();
+                            canvas.prepend_axis(&incoming, 0, band).unwrap();
+                            expected.drain(..remove as usize);
+                            expected.splice(0..0, incoming_values);
+                        }
+                        require_tile_storage_bounds(&canvas);
+                        if step % 37 == 0 || step == 999 {
+                            let reference = axis_values_frame(axis, 3, &expected);
+                            assert_eq!(canvas.materialize().unwrap(), reference);
+                            let first = 333;
+                            let end = canvas.extent() - 222;
+                            let crop =
+                                axis_values_frame(axis, 3, &expected[first as usize..end as usize]);
+                            assert_eq!(canvas.materialize_axis(first, end).unwrap(), crop);
+                            assert_eq!(
+                                canvas
+                                    .snapshot_axis(first, end)
+                                    .unwrap()
+                                    .materialize()
+                                    .unwrap(),
+                                crop
+                            );
+                        }
+                        if [137, 539, 901].contains(&step) {
+                            leases.push((
+                                canvas.snapshot_axis(333, canvas.extent() - 222).unwrap(),
+                                axis_values_frame(axis, 3, &expected[333..expected.len() - 222]),
+                            ));
+                        }
+                    }
+                    if direction == 0 {
+                        // Keep the established independent-band layout: this
+                        // read optimization does not coalesce pixel storage.
+                        assert_eq!(canvas.tiles.len(), 1009);
+                    }
+                    let whole = canvas.snapshot_axis(0, canvas.extent()).unwrap();
+                    let mut cumulative = 0;
+                    for (tile, &tile_end) in whole.tiles.iter().zip(&whole.tile_ends) {
+                        cumulative += tile.span;
+                        assert_eq!(tile_end, cumulative);
+                    }
+                    assert_eq!(whole.tile_ends.len(), whole.tiles.len());
+                    let outer = whole.slice_axis(333, canvas.extent() - 222).unwrap();
+                    let selected = outer.slice_axis(19, outer.axis_extent() - 17).unwrap();
+                    let reference =
+                        axis_values_frame(axis, 3, &expected[352..expected.len() - 239]);
+                    assert_eq!(selected.materialize().unwrap(), reference);
+                    let row_bytes = selected.width() as usize * 4;
+                    for index in 0..16_u32 {
+                        let top =
+                            (index.wrapping_mul(1_664_525) + 1_013_904_223) % selected.height();
+                        let count = (selected.height() - top).min(5);
+                        let stride = row_bytes + 3;
+                        let mut actual = vec![0xcd; stride * count as usize + 11];
+                        let mut expected_rows = actual.clone();
+                        for row in 0..count as usize {
+                            expected_rows[row * stride..row * stride + row_bytes]
+                                .copy_from_slice(reference.row(top + row as u32).unwrap());
+                        }
+                        selected
+                            .copy_rows_strided(top, count, stride, &mut actual)
+                            .unwrap();
+                        assert_eq!(actual, expected_rows);
+                    }
+                    for (snapshot, reference) in leases {
+                        assert_eq!(snapshot.materialize().unwrap(), reference);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn indexed_snapshot_reads_match_crops_for_random_rows_strides_and_tails() {
+        for format in [PixelFormat::Gray8, PixelFormat::Rgb8, PixelFormat::Rgba8] {
+            for axis in [StitchAxis::Vertical, StitchAxis::Horizontal] {
+                let extent = CANVAS_TILE_SPAN * 17 + 29;
+                let (width, height) = match axis {
+                    StitchAxis::Vertical => (7, extent),
+                    StitchAxis::Horizontal => (extent, 7),
+                };
+                let channels = format.channels() as usize;
+                let source = Frame::new(
+                    width,
+                    height,
+                    format,
+                    (0..width as usize * height as usize * channels)
+                        .map(|index| (index.wrapping_mul(37) ^ (index >> 7)) as u8)
+                        .collect(),
+                )
+                .unwrap();
+                let mut canvas = TiledCanvas::new_from_frame(&source, axis).unwrap();
+                canvas.truncate_start(37).unwrap();
+                let outer = canvas.snapshot_axis(19, canvas.extent() - 11).unwrap();
+                let snapshot = outer.slice_axis(13, outer.axis_extent() - 7).unwrap();
+                let expected = match axis {
+                    StitchAxis::Vertical => source.crop(0, 69, width, extent - 87),
+                    StitchAxis::Horizontal => source.crop(69, 0, extent - 87, height),
+                }
+                .unwrap();
+                assert_eq!(snapshot.materialize().unwrap(), expected);
+                let row_bytes = snapshot.width() as usize * channels;
+                let mut seed = 173_u32;
+                for index in 0..100 {
+                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                    let top = if index == 0 {
+                        snapshot.height() - 1
+                    } else {
+                        seed % snapshot.height()
+                    };
+                    let rows = 1 + (seed >> 16) % (snapshot.height() - top).min(23);
+                    let stride = row_bytes + if index % 2 == 0 { 5 } else { 0 };
+                    let length = stride * (rows - 1) as usize + row_bytes + 11;
+                    let mut actual = vec![0xcd; length];
+                    let mut reference = actual.clone();
+                    for row in 0..rows as usize {
+                        reference[row * stride..row * stride + row_bytes]
+                            .copy_from_slice(expected.row(top + row as u32).unwrap());
+                    }
+                    snapshot
+                        .copy_rows_strided(top, rows, stride, &mut actual)
+                        .unwrap();
+                    assert_eq!(actual, reference, "{format:?} {axis:?} {top} {rows}");
+                }
+                assert!(snapshot.copy_rows(0, 0, &mut []).is_err());
+                assert!(snapshot.copy_rows(u32::MAX, 1, &mut []).is_err());
+                assert!(snapshot.copy_rows(snapshot.height(), 1, &mut []).is_err());
+                assert!(
+                    snapshot
+                        .copy_rows(0, 1, &mut vec![0; row_bytes - 1])
+                        .is_err()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn active_canvas_copies_rows_and_preserves_extra_destination_bytes() {
+        for format in [PixelFormat::Gray8, PixelFormat::Rgb8, PixelFormat::Rgba8] {
+            let width = 17;
+            let height = CANVAS_TILE_SPAN * 3 + 29;
+            let channels = format.channels() as usize;
+            let source = Frame::new(
+                width,
+                height,
+                format,
+                (0..width as usize * height as usize * channels)
+                    .map(|index| (index.wrapping_mul(37) ^ (index >> 7)) as u8)
+                    .collect(),
+            )
+            .unwrap();
+            let mut canvas = TiledCanvas::new_from_frame(&source, StitchAxis::Vertical).unwrap();
+            canvas.truncate_start(37).unwrap();
+            let row_bytes = width as usize * channels;
+            let mut output = vec![0xcd; row_bytes * 17 + 11];
+            canvas.copy_rows(245, 17, &mut output).unwrap();
+            assert_eq!(
+                &output[..row_bytes * 17],
+                source.crop(0, 37 + 245, width, 17).unwrap().pixels()
+            );
+            assert_eq!(&output[row_bytes * 17..], &[0xcd; 11]);
+            assert!(canvas.copy_rows(0, 0, &mut []).is_err());
+            assert!(canvas.copy_rows(u32::MAX, 1, &mut []).is_err());
+            assert!(canvas.copy_rows(canvas.extent(), 1, &mut []).is_err());
+            assert!(canvas.copy_rows(0, 1, &mut vec![0; row_bytes - 1]).is_err());
+        }
     }
 
     #[test]

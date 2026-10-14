@@ -9,6 +9,12 @@ impl Editor {
         modifiers: Modifiers,
     ) -> PrimaryPointerIntent {
         if modifiers.shift
+            && let CanvasHit::SelectionHandle(target @ SelectionHitTarget::CornerRadius(_)) =
+                self.resolve_canvas_hit(document, policy, canvas_point, true)
+        {
+            return PrimaryPointerIntent::BeginSelectionInteraction { target };
+        }
+        if modifiers.shift
             && policy.allow_shift_toggle
             && let CanvasHit::EligibleElement(id, _) =
                 self.resolve_canvas_hit(document, policy, canvas_point, false)
@@ -18,7 +24,7 @@ impl Editor {
 
         if matches!(
             self.state.active_tool,
-            ActiveTool::Arrow | ActiveTool::Line | ActiveTool::Distance
+            ActiveTool::Arrow | ActiveTool::Line | ActiveTool::Distance | ActiveTool::Angle
         ) {
             return match self.resolve_canvas_hit(document, policy, canvas_point, true) {
                 CanvasHit::SelectionHandle(target) => {
@@ -30,7 +36,7 @@ impl Editor {
                 CanvasHit::EligibleElement(id, ElementKind::Arrow) => {
                     PrimaryPointerIntent::BeginArrowElementInteraction { id }
                 }
-                CanvasHit::EligibleElement(id, ElementKind::Distance) => {
+                CanvasHit::EligibleElement(id, ElementKind::Distance | ElementKind::Angle) => {
                     PrimaryPointerIntent::BeginArrowElementInteraction { id }
                 }
                 CanvasHit::EligibleElement(id, ElementKind::Line) => {
@@ -41,6 +47,7 @@ impl Editor {
         }
 
         match self.resolve_canvas_hit(document, policy, canvas_point, true) {
+            CanvasHit::MagnifierLens(id) => PrimaryPointerIntent::BeginMagnifierLens { id },
             CanvasHit::SelectionHandle(target) => {
                 if target == SelectionHitTarget::Move
                     && let Some(id) = self.hit_text_at(document, canvas_point)
@@ -72,7 +79,10 @@ impl Editor {
 
                 if matches!(
                     kind,
-                    ElementKind::Arrow | ElementKind::Line | ElementKind::Distance
+                    ElementKind::Arrow
+                        | ElementKind::Line
+                        | ElementKind::Distance
+                        | ElementKind::Angle
                 ) {
                     return PrimaryPointerIntent::BeginArrowElementInteraction { id };
                 }
@@ -90,6 +100,10 @@ impl Editor {
         intent: PrimaryPointerIntent,
     ) -> (CursorStyle, Option<ElementId>) {
         match intent {
+            PrimaryPointerIntent::BeginMagnifierLens { id } => (
+                CursorStyle::Move,
+                (!self.state.selection.contains(id)).then_some(id),
+            ),
             PrimaryPointerIntent::ToggleSelection { id }
             | PrimaryPointerIntent::BeginElementSelectionMove { id }
             | PrimaryPointerIntent::BeginArrowElementInteraction { id } => (

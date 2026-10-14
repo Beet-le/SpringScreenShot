@@ -391,24 +391,24 @@ class AdInputNumber final : public QAbstractSpinBox {
   QVariant normalizeBoundaryValue(const QVariant& value) const;
   QVariant normalizeSingleStepValue(const QVariant& value) const;
   void applyRangeValues(const QVariant& minimumValue, const QVariant& maximumValue);
-  void emitRangeSignals(bool minimumDidChange, bool maximumDidChange);
+  bool emitRangeSignals(bool minimumDidChange, bool maximumDidChange);
   void applySingleStepValue(const QVariant& value);
 
   StyleContext buildStyleContext(bool interactiveControls, const QVariant& visualValue) const;
   ResolvedVisualState resolvedVisualState() const;
 
   void syncValueModelConfig();
-  void updateEditorTextFromValue(bool userTyping);
-  void emitTextChangedIfNeeded(const QString& text);
+  bool updateEditorTextFromValue(bool userTyping, bool deferNotification = false);
+  bool emitTextChangedIfNeeded(const QString& text, bool deferNotification = false);
   void commitFromEditor();
   bool performStep(int steps, StepEmitter emitter);
   int consumeWheelSteps(int angleDelta);
   QVariant effectiveUserInputValue(bool committed) const;
   QVariant visualValue() const;
   QString canonicalTextForValue(const QVariant& value) const;
-  void setCommittedValueInternal(const QVariant& value, bool emitSignal, bool preserveEditorText,
+  bool setCommittedValueInternal(const QVariant& value, bool emitSignal, bool preserveEditorText,
                                  bool clampToRange);
-  void emitCommittedValueSignals(const QVariant& previousValue, bool previousHasValue);
+  bool emitCommittedValueSignals(const QVariant& previousValue, bool previousHasValue);
   QString displayTextForValue(const QVariant& value, bool editing, const QString& input) const;
   void refreshVisualState(bool geometryChanged);
   void layoutChildren(const ResolvedVisualState& state);
@@ -476,6 +476,7 @@ class AdInputNumber final : public QAbstractSpinBox {
   int wheelStepRemainder_ = 0;
   StepEmitter currentStepEmitter_ = StepEmitter::Handler;
   QString lastEmittedText_;
+  quint64 textNotificationGeneration_ = 0;
 
   std::unique_ptr<detail::InputNumberValueModel> valueModel_;
 };

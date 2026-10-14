@@ -37,9 +37,10 @@ pub use export::{
     ExportStageDurationsMs, ExportTask,
 };
 pub use hdr::preserves_hdr_output;
+pub use snow_recording_model::PlaybackSpeed;
 pub use streaming::{
     StreamingAudioConfig, StreamingEncoder, StreamingEncoderBuilder, StreamingEncoderConfig,
-    StreamingEncoderReport, cleanup_stale_staging_files, scaled_output_dimensions,
+    StreamingEncoderReport, VideoFrameReuse, cleanup_stale_staging_files, scaled_output_dimensions,
 };
 
 #[cfg(target_os = "macos")]
@@ -50,3 +51,4 @@ mod hdr;
 pub mod clip;
 pub(crate) mod decoder;
 pub mod playback;
+pub(crate) mod tempo;

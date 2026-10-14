@@ -1,24 +1,35 @@
 #include "snow_shot/presentation/screenshotstylebinding.h"
 #include "snow_shot/presentation/screenshotcanvastoolstyles.h"
 #include "snow_shot/presentation/screenshottoolpalette.h"
+#include "snow_shot/storage/applicationstorage.h"
+#include "snow_shot/storage/settingsadapters.h"
 #include "snow_draw_engine_qt/snow_canvas_widget.h"
 #include "snow_draw_engine_qt/snow_canvas_runtime.h"
 #include <QKeyEvent>
+#include <QInputMethodEvent>
 #include "widgets/button.h"
 #include "widgets/input_line_edit.h"
+#include "widgets/popover.h"
+#include "widgets/select.h"
 
 #include <QApplication>
 #include <QContextMenuEvent>
+#include <QFocusEvent>
 #include <QCursor>
+#include <QDateTime>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QScopeGuard>
+#include <QTimeZone>
+#include <QToolButton>
 #include <limits>
 #include <cstdlib>
 #include <iostream>
+
+void runScreenshotSelectedFilterStyleTests();
 
 namespace {
 using namespace snow_shot::presentation;
@@ -255,6 +266,336 @@ void serialNumberAppearanceDefaultsPreserveSessionSequences() {
         }
     }
 }
+void selectedSerialNumberToolbarEditsContinueCreationSequence() {
+    for (int editPath = 0; editPath < 3; ++editPath) {
+        SnowCanvasRuntime runtime;
+        SnowCanvasWidget canvas(runtime);
+        ScreenshotToolPalette palette(options());
+        ScreenshotStyleBinding binding(palette, canvas, &palette, {},
+                                       [](const SnowCanvasStyleEdit&) { return true; });
+        QObject::connect(&canvas, &SnowCanvasWidget::styleToolbarStateChanged, &palette,
+                         [&] { palette.setStyleToolbarState(canvas.canvasStyleToolbarState()); });
+        auto defaults = screenshotCanvasToolStyleDefaults();
+        defaults.serialNumber = SnowCanvasSerialNumberStyle{};
+        applyScreenshotCanvasToolStyles(canvas, defaults);
+        canvas.resize(800, 600);
+        canvas.show();
+        require(canvas.setViewportCamera(400, 300, 1) &&
+                    canvas.setCanvasTool(SnowCanvasTool::SerialNumber),
+                "prepare sequence toolbar fixture");
+        const auto creationStyle = canvas.canvasStyleToolbarState().serialNumberStyle;
+        palette.setActiveTool(ScreenshotToolPalette::Tool::SerialNumber);
+        palette.show();
+        QApplication::processEvents();
+        for (const QPointF point : {QPointF(80, 80), QPointF(250, 80), QPointF(420, 80)}) {
+            mouse(canvas, QEvent::MouseButtonPress, point);
+            mouse(canvas, QEvent::MouseButtonRelease, point);
+        }
+        const QPointF point(80, 80);
+        QMouseEvent press(QEvent::MouseButtonPress, point, canvas.mapToGlobal(point.toPoint()),
+                          Qt::RightButton, Qt::RightButton, Qt::NoModifier);
+        QMouseEvent release(QEvent::MouseButtonRelease, point, canvas.mapToGlobal(point.toPoint()),
+                            Qt::RightButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &press);
+        QApplication::sendEvent(&canvas, &release);
+        require(canvas.canvasStyleToolbarState().source ==
+                    SnowCanvasStyleToolbarSource::SelectedSerialNumber,
+                "select the first sequence number for editing");
+        qint64 editedNumber = 0;
+        if (editPath < 2) {
+            const QString name = editPath == 0
+                                     ? QStringLiteral("snowSerialNumberToolbarIncreaseButton")
+                                     : QStringLiteral("snowSerialNumberToolbarDecreaseButton");
+            auto* button = canvas.findChild<QToolButton*>(name);
+            require(button != nullptr && button->isVisible() && button->isEnabled(),
+                    "floating sequence toolbar exposes an enabled adjustment button");
+            button->click();
+            editedNumber = editPath == 0 ? 2 : 0;
+        } else {
+            adqt::widgets::AdLineEdit* input = nullptr;
+            for (auto* candidate : palette.findChildren<adqt::widgets::AdLineEdit*>()) {
+                if (candidate->toolTip() == QStringLiteral("Sequence number (scroll to adjust)")) {
+                    input = candidate;
+                    break;
+                }
+            }
+            require(input != nullptr, "sequence style toolbar exposes its value editor");
+            input->setText(QStringLiteral("55"));
+            require(QMetaObject::invokeMethod(input, "editingFinished", Qt::DirectConnection),
+                    "commit the selected sequence value from its input");
+            editedNumber = 55;
+        }
+        require(canvas.canvasStyleToolbarState().serialNumberStyle.number == editedNumber,
+                "toolbar edit updates the selected annotation");
+        require(canvas.resetEditingState() && canvas.setCanvasTool(SnowCanvasTool::SerialNumber),
+                "return to sequence creation after editing");
+        auto expected = creationStyle;
+        expected.number = editedNumber + 1;
+        require(canvas.canvasStyleToolbarState().serialNumberStyle == expected &&
+                    palette.creationStyleDefaults().serialNumber == expected,
+                "canvas and style toolbar continue from the edited number");
+        mouse(canvas, QEvent::MouseButtonPress, {600, 300});
+        mouse(canvas, QEvent::MouseButtonRelease, {600, 300});
+        require(documentSlots(runtime)
+                        .last()
+                        .toObject()
+                        .value(QStringLiteral("data"))
+                        .toObject()
+                        .value(QStringLiteral("SerialNumber"))
+                        .toObject()
+                        .value(QStringLiteral("number"))
+                        .toVariant()
+                        .toLongLong() == editedNumber + 1,
+                "the next created annotation uses the successor of the toolbar value");
+    }
+}
+
+void selectedSerialNumberSizeEditsUpdateCreationAppearance() {
+    const auto original = screenshotCanvasToolStyleDefaults();
+    const auto restore =
+        qScopeGuard([&] { static_cast<void>(persistScreenshotCanvasToolStyles(original)); });
+    for (int editPath = 0; editPath < 3; ++editPath) {
+        auto defaults = original;
+        defaults.serialNumber.fontSize = 24;
+        require(persistScreenshotCanvasToolStyles(defaults), "save sequence size fixture defaults");
+        SnowCanvasRuntime runtime;
+        SnowCanvasWidget canvas(runtime);
+        auto settings = options();
+        settings.styleDefaults = defaults;
+        ScreenshotToolPalette palette(settings);
+        int saves = 0;
+        int replications = 0;
+        ScreenshotStyleBinding binding(
+            palette, canvas, &palette, [&](const SnowCanvasStyleEdit&) { ++replications; },
+            [&](const SnowCanvasStyleEdit& edit) {
+                ++saves;
+                return persistScreenshotCanvasStyleEdit(edit);
+            });
+        QObject::connect(&canvas, &SnowCanvasWidget::styleToolbarStateChanged, &palette,
+                         [&] { palette.setStyleToolbarState(canvas.canvasStyleToolbarState()); });
+        auto olderAppearance = defaults;
+        olderAppearance.serialNumber.color = QColor(17, 29, 43);
+        olderAppearance.serialNumber.fill = QColor(50, 60, 70, 128);
+        olderAppearance.serialNumber.strokeWidth = 7;
+        olderAppearance.serialNumber.fontFamily = QStringLiteral("Older badge font");
+        applyScreenshotCanvasToolStyles(canvas, olderAppearance);
+        canvas.resize(400, 300);
+        canvas.show();
+        require(canvas.setViewportCamera(200, 150, 1) &&
+                    canvas.setCanvasTool(SnowCanvasTool::SerialNumber),
+                "prepare selected sequence size fixture");
+        palette.setActiveTool(ScreenshotToolPalette::Tool::SerialNumber);
+        mouse(canvas, QEvent::MouseButtonPress, {80, 80});
+        mouse(canvas, QEvent::MouseButtonRelease, {80, 80});
+        applyScreenshotCanvasToolStyles(canvas, defaults);
+        palette.setCreationStyleDefaults(defaults);
+        palette.setStyleToolbarState(canvas.canvasStyleToolbarState());
+        palette.show();
+        QApplication::processEvents();
+        const QPointF point(80, 80);
+        QMouseEvent press(QEvent::MouseButtonPress, point, canvas.mapToGlobal(point.toPoint()),
+                          Qt::RightButton, Qt::RightButton, Qt::NoModifier);
+        QMouseEvent release(QEvent::MouseButtonRelease, point, canvas.mapToGlobal(point.toPoint()),
+                            Qt::RightButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(&canvas, &press);
+        QApplication::sendEvent(&canvas, &release);
+        require(canvas.canvasStyleToolbarState().source ==
+                    SnowCanvasStyleToolbarSource::SelectedSerialNumber,
+                "select an older badge whose untouched appearance differs from creation defaults");
+        double expectedSize = 25;
+        if (editPath == 0) {
+            wheel(canvas, 120);
+        } else if (editPath == 1) {
+            adqt::widgets::AdButton* preset = nullptr;
+            for (auto* button : palette.findChildren<adqt::widgets::AdButton*>()) {
+                if (button->toolTip() == QStringLiteral("Sequence number font size 42px"))
+                    preset = button;
+            }
+            require(preset != nullptr && preset->isEnabled(), "sequence size preset exists");
+            preset->click();
+            expectedSize = 42;
+        } else {
+            auto selected = canvas.canvasStyleToolbarState().serialNumberStyle;
+            selected.fontSize = 37;
+            require(canvas.commitStyleEdit(SnowCanvasSerialNumberEdit{
+                        selected, SnowCanvasSerialNumberStyleMixedFontSize}),
+                    "commit a direct selected sequence size edit");
+            expectedSize = 37;
+        }
+        auto expectedSelected = olderAppearance.serialNumber;
+        expectedSelected.number = 1;
+        expectedSelected.fontSize = expectedSize;
+        require(canvas.canvasStyleToolbarState().serialNumberStyle == expectedSelected &&
+                    saves == 1 && replications == 1,
+                "selected size paths apply and save exactly one property edit");
+        auto expectedSaved = defaults;
+        expectedSaved.serialNumber.fontSize = expectedSize;
+        require(screenshotCanvasToolStyleDefaults() == expectedSaved,
+                "selected size edits persist only font size without the sequence counter");
+        auto expectedCreation = expectedSaved;
+        expectedCreation.serialNumber.number = 2;
+        require(palette.creationStyleDefaults() == expectedCreation && canvas.resetEditingState() &&
+                    canvas.setCanvasTool(SnowCanvasTool::SerialNumber) &&
+                    canvas.canvasStyleToolbarState().serialNumberStyle ==
+                        expectedCreation.serialNumber,
+                "selected size edits preserve every untouched creation property and sequence");
+        mouse(canvas, QEvent::MouseButtonPress, {250, 180});
+        mouse(canvas, QEvent::MouseButtonRelease, {250, 180});
+        const auto created = documentSlots(runtime)
+                                 .last()
+                                 .toObject()
+                                 .value(QStringLiteral("data"))
+                                 .toObject()
+                                 .value(QStringLiteral("SerialNumber"))
+                                 .toObject();
+        require(created.value(QStringLiteral("font_size")).toDouble() == expectedSize &&
+                    created.value(QStringLiteral("number")).toInt() == 2,
+                "the subsequent badge uses the selected size edit and the next sequence number");
+    }
+}
+
+void selectedSerialNumberEditsUpdateCreationAppearance() {
+    constexpr quint32 properties =
+        SnowCanvasSerialNumberStyleMixedNumber | SnowCanvasSerialNumberStyleMixedColor |
+        SnowCanvasSerialNumberStyleMixedFill | SnowCanvasSerialNumberStyleMixedFillStyle |
+        SnowCanvasSerialNumberStyleMixedFontSize | SnowCanvasSerialNumberStyleMixedFontFamily |
+        SnowCanvasSerialNumberStyleMixedStrokeWidth | SnowCanvasSerialNumberStyleMixedStrokeStyle |
+        SnowCanvasSerialNumberStyleMixedOpacity | SnowCanvasSerialNumberStyleMixedType |
+        SnowCanvasSerialNumberStyleMixedNumericType;
+    const auto originalDefaults = screenshotCanvasToolStyleDefaults();
+    const auto restore = qScopeGuard(
+        [&] { static_cast<void>(persistScreenshotCanvasToolStyles(originalDefaults)); });
+    SnowCanvasRuntime runtime;
+    SnowCanvasWidget canvas(runtime);
+    ScreenshotToolPalette palette(options());
+    int saves = 0;
+    int replications = 0;
+    ScreenshotStyleBinding binding(
+        palette, canvas, &palette, [&](const SnowCanvasStyleEdit&) { ++replications; },
+        [&](const SnowCanvasStyleEdit& edit) {
+            ++saves;
+            return persistScreenshotCanvasStyleEdit(edit);
+        });
+    QObject::connect(&canvas, &SnowCanvasWidget::styleToolbarStateChanged, &palette,
+                     [&] { palette.setStyleToolbarState(canvas.canvasStyleToolbarState()); });
+    auto defaults = originalDefaults;
+    defaults.serialNumber = SnowCanvasSerialNumberStyle{};
+    require(persistScreenshotCanvasToolStyles(defaults), "save selected sequence style defaults");
+    palette.setCreationStyleDefaults(defaults);
+    applyScreenshotCanvasToolStyles(canvas, defaults);
+    canvas.resize(400, 300);
+    canvas.show();
+    require(canvas.setViewportCamera(200, 150, 1) &&
+                canvas.setCanvasTool(SnowCanvasTool::SerialNumber),
+            "prepare selected serial number style fixture");
+    palette.setActiveTool(ScreenshotToolPalette::Tool::SerialNumber);
+    palette.show();
+    QApplication::processEvents();
+    mouse(canvas, QEvent::MouseButtonPress, {80, 80});
+    mouse(canvas, QEvent::MouseButtonRelease, {80, 80});
+    const auto creationDefaults = palette.creationStyleDefaults();
+    const auto configuration =
+        snow_shot::storage::ApplicationStorage::instance().configuration().snapshot();
+    const QPointF point(80, 80);
+    QMouseEvent press(QEvent::MouseButtonPress, point, canvas.mapToGlobal(point.toPoint()),
+                      Qt::RightButton, Qt::RightButton, Qt::NoModifier);
+    QMouseEvent release(QEvent::MouseButtonRelease, point, canvas.mapToGlobal(point.toPoint()),
+                        Qt::RightButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(&canvas, &press);
+    QApplication::sendEvent(&canvas, &release);
+    require(canvas.canvasStyleToolbarState().source ==
+                SnowCanvasStyleToolbarSource::SelectedSerialNumber,
+            "fixture sequence number is selected");
+    adqt::widgets::AdLineEdit* input = nullptr;
+    for (auto* candidate : palette.findChildren<adqt::widgets::AdLineEdit*>()) {
+        if (candidate->toolTip() == QStringLiteral("Sequence number (scroll to adjust)")) {
+            input = candidate;
+            break;
+        }
+    }
+    require(input != nullptr, "selected sequence number exposes its number editor");
+    input->setText(QStringLiteral("55"));
+    require(QMetaObject::invokeMethod(input, "editingFinished", Qt::DirectConnection) &&
+                canvas.canvasStyleToolbarState().serialNumberStyle.number == 55,
+            "number editor updates the selected sequence number");
+    require(saves == 0 && replications == 0 &&
+                snow_shot::storage::ApplicationStorage::instance().configuration().snapshot() ==
+                    configuration,
+            "selected number edits continue the session without persisting a counter");
+    auto selected = canvas.canvasStyleToolbarState().serialNumberStyle;
+    selected.type = SnowCanvasSerialNumberType::OutlinedSquare;
+    selected.numericType = SnowCanvasSerialNumberNumericType::Roman;
+    selected.color = QColor(17, 29, 43);
+    selected.fill = QColor(50, 60, 70, 128);
+    selected.fillStyle = SnowCanvasFillStyle::CrossLine;
+    selected.fontSize = 40;
+    selected.fontFamily = QStringLiteral("Selected font");
+    selected.strokeWidth = 3;
+    selected.strokeStyle = SnowCanvasStrokeStyle::Dashed;
+    selected.opacity = 0.5;
+    require(canvas.commitStyleEdit(SnowCanvasSerialNumberEdit{selected, properties}) &&
+                canvas.canvasStyleToolbarState().serialNumberStyle == selected,
+            "selected sequence number accepts appearance and format edits");
+    auto expectedDefaults = creationDefaults;
+    snowCanvasMergeStyleEdit(expectedDefaults, SnowCanvasSerialNumberEdit{selected, properties});
+    auto expectedSaved = expectedDefaults;
+    expectedSaved.serialNumber.number = 1;
+    require(saves == 1 && replications == 1 &&
+                palette.creationStyleDefaults() == expectedDefaults &&
+                screenshotCanvasToolStyleDefaults() == expectedSaved,
+            "selected sequence appearance edits update and persist creation preferences");
+    const auto appearanceConfiguration =
+        snow_shot::storage::ApplicationStorage::instance().configuration().snapshot();
+    require(persistScreenshotCanvasStyleEdit(
+                SnowCanvasSerialNumberEdit{selected, SnowCanvasSerialNumberStyleMixedNumber}) &&
+                snow_shot::storage::ApplicationStorage::instance().configuration().snapshot() ==
+                    appearanceConfiguration,
+            "direct number-only persistence preserves stored appearance and omits the counter");
+    require(canvas.resetEditingState(), "leave sequence number selection");
+    for (int repeat = 0; repeat < 2; ++repeat) {
+        require(canvas.undo(), "undo selected sequence number styling");
+    }
+    for (int repeat = 0; repeat < 2; ++repeat) {
+        require(canvas.redo(), "redo selected sequence number styling");
+    }
+    auto expectedCreation = expectedDefaults.serialNumber;
+    expectedCreation.number = 1;
+    require(canvas.setCanvasTool(SnowCanvasTool::SerialNumber) &&
+                canvas.canvasStyleToolbarState().serialNumberStyle == expectedCreation,
+            "selected appearance carries forward while each format retains its own sequence");
+    mouse(canvas, QEvent::MouseButtonPress, {250, 180});
+    mouse(canvas, QEvent::MouseButtonRelease, {250, 180});
+    require(documentSlots(runtime)
+                    .last()
+                    .toObject()
+                    .value(QStringLiteral("data"))
+                    .toObject()
+                    .value(QStringLiteral("SerialNumber"))
+                    .toObject()
+                    .value(QStringLiteral("number"))
+                    .toInt() == expectedCreation.number,
+            "new Roman sequence number uses its independent creation counter");
+    auto creation = canvas.canvasStyleToolbarState().serialNumberStyle;
+    auto switched = creation;
+    switched.numericType = SnowCanvasSerialNumberNumericType::Arabic;
+    require(canvas.applyStyleEdit(SnowCanvasSerialNumberEdit{
+                switched, SnowCanvasSerialNumberStyleMixedNumericType}) &&
+                canvas.canvasStyleToolbarState().serialNumberStyle.number == 56,
+            "the original Arabic format continues after its selected value edit");
+    switched.numericType = SnowCanvasSerialNumberNumericType::Roman;
+    require(canvas.applyStyleEdit(SnowCanvasSerialNumberEdit{
+                switched, SnowCanvasSerialNumberStyleMixedNumericType}) &&
+                canvas.canvasStyleToolbarState().serialNumberStyle == creation &&
+                creation.number == 2 && saves == 1 && replications == 1,
+            "restoring Roman retains its next counter without persisting programmatic switches");
+    creation.fontSize = 32;
+    require(canvas.commitStyleEdit(
+                SnowCanvasSerialNumberEdit{creation, SnowCanvasSerialNumberStyleMixedFontSize}) &&
+                saves == 2 && replications == 2 &&
+                palette.creationStyleDefaults().serialNumber.fontSize == 32 &&
+                screenshotCanvasToolStyleDefaults().serialNumber.fontSize == 32,
+            "editing creation styles still remembers and saves future preferences");
+}
 void newScreenshotDocumentRestartsSerialNumberSequences() {
     const SnowCanvasSerialNumberNumericType types[] = {
         SnowCanvasSerialNumberNumericType::Arabic,
@@ -334,6 +675,59 @@ void newScreenshotDocumentRestartsSerialNumberSequences() {
         }
     }
 }
+void textEmphasisButtonsPersistDefaultsWithoutEndingDrafts() {
+    auto defaults = screenshotCanvasToolStyleDefaults();
+    defaults.text.bold = false;
+    defaults.text.italic = false;
+    require(persistScreenshotCanvasToolStyles(defaults), "reset emphasis defaults");
+    Editor editor;
+    editor.text();
+    const auto button = [&](const char* name) {
+        auto* result =
+            editor.palette.findChild<adqt::widgets::AdButton*>(QString::fromLatin1(name));
+        require(result != nullptr, "materialize text emphasis button");
+        return result;
+    };
+    button("screenshotTextBoldButton")->click();
+    require(screenshotCanvasToolStyleDefaults().text.bold &&
+                !screenshotCanvasToolStyleDefaults().text.italic &&
+                editor.canvas.canvasStyleToolbarState().textStyle.bold,
+            "bold button persists and updates canvas defaults");
+    mouse(editor.canvas, QEvent::MouseButtonPress, {100, 100});
+    mouse(editor.canvas, QEvent::MouseButtonRelease, {100, 100});
+    QInputMethodEvent input;
+    input.setCommitString(QStringLiteral("Draft emphasis"));
+    QApplication::sendEvent(&editor.canvas, &input);
+    require(editor.canvas.hasActiveTextEditing(), "begin a styled text draft");
+    button("screenshotTextItalicButton")->click();
+    const auto style = editor.canvas.canvasStyleToolbarState().textStyle;
+    require(editor.canvas.hasActiveTextEditing() && style.bold && style.italic &&
+                screenshotCanvasToolStyleDefaults().text.bold &&
+                screenshotCanvasToolStyleDefaults().text.italic,
+            "italic updates the draft and remembered defaults without ending editing");
+    require(editor.canvas.cancelActiveTextEditing(), "cancel the styled draft");
+    Editor fresh;
+    fresh.text();
+    require(fresh.canvas.canvasStyleToolbarState().textStyle.bold &&
+                fresh.canvas.canvasStyleToolbarState().textStyle.italic,
+            "new editors restore emphasis choices even after draft cancellation");
+    auto& configuration = snow_shot::storage::ApplicationStorage::instance().configuration();
+    const auto key = QStringLiteral("drawing/text_style");
+    auto remembered = configuration.value(key).toObject();
+    require(remembered.value(QStringLiteral("bold")).isBool() &&
+                remembered.value(QStringLiteral("bold")).toBool() &&
+                remembered.value(QStringLiteral("italic")).isBool() &&
+                remembered.value(QStringLiteral("italic")).toBool(),
+            "remembered emphasis is stored as independent booleans");
+    remembered.remove(QStringLiteral("bold"));
+    remembered.remove(QStringLiteral("italic"));
+    require(configuration.setValue(key, remembered), "load legacy text settings");
+    const auto legacy = screenshotCanvasToolStyleDefaults().text;
+    require(!legacy.bold && !legacy.italic && legacy.fontSize == style.fontSize &&
+                legacy.fontFamily == style.fontFamily,
+            "legacy text settings default emphasis to false and preserve existing typography");
+}
+
 void fontWheelRemembersDefaultsAndDraftChoice() {
     Editor editor;
     editor.text();
@@ -361,6 +755,116 @@ void fontWheelRemembersDefaultsAndDraftChoice() {
     Editor fresh;
     require(fresh.palette.creationStyleDefaults().text.fontSize == initial + 2,
             "new editor loads the remembered font size");
+}
+void textAlignmentPopupPreservesEditing(bool editExisting) {
+    const auto original = screenshotCanvasToolStyleDefaults();
+    const auto restore =
+        qScopeGuard([&] { static_cast<void>(persistScreenshotCanvasToolStyles(original)); });
+    auto defaults = original;
+    defaults.text.horizontalAlign = SnowCanvasTextHorizontalAlign::Left;
+    require(persistScreenshotCanvasToolStyles(defaults), "reset text alignment defaults");
+    SnowCanvasRuntime runtime;
+    SnowCanvasWidget canvas(runtime);
+    ScreenshotToolPalette palette(options());
+    ScreenshotStyleBinding binding(palette, canvas, &palette);
+    applyScreenshotCanvasToolStyles(canvas, palette.creationStyleDefaults());
+    canvas.resize(400, 300);
+    canvas.setInteractionEnabled(true);
+    QObject::connect(&canvas, &SnowCanvasWidget::styleToolbarStateChanged, &palette,
+                     [&] { palette.setStyleToolbarState(canvas.canvasStyleToolbarState()); });
+    QObject::connect(&palette, &ScreenshotToolPalette::textStylePopupInteractionBegan, &canvas,
+                     [&] { canvas.beginTextStylePopupInteraction(); });
+    QObject::connect(&palette, &ScreenshotToolPalette::textStylePopupInteractionEnded, &canvas,
+                     [&] { canvas.endTextStylePopupInteraction(&palette); });
+    require(canvas.setCanvasTool(SnowCanvasTool::Text), "activate text alignment fixture");
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Text);
+    canvas.show();
+    palette.show();
+    QApplication::processEvents();
+    mouse(canvas, QEvent::MouseButtonPress, {100, 100});
+    mouse(canvas, QEvent::MouseButtonRelease, {100, 100});
+    QInputMethodEvent input;
+    input.setCommitString(QStringLiteral("Alignment draft\nShort"));
+    QApplication::sendEvent(&canvas, &input);
+    require(canvas.hasActiveTextEditing() && documentSlots(runtime).isEmpty() &&
+                canvas.canvasStyleToolbarState().source ==
+                    SnowCanvasStyleToolbarSource::DefaultText,
+            "new text must be an unselected draft outside the document");
+    if (editExisting) {
+        QFocusEvent focusOut(QEvent::FocusOut, Qt::OtherFocusReason);
+        QApplication::sendEvent(&canvas, &focusOut);
+        const auto center = documentSlots(runtime)
+                                .first()
+                                .toObject()
+                                .value(QStringLiteral("data"))
+                                .toObject()
+                                .value(QStringLiteral("Text"))
+                                .toObject()
+                                .value(QStringLiteral("center"))
+                                .toObject();
+        const auto point = canvas.canvasToViewTransform().map(
+            QPointF(center.value(QStringLiteral("x")).toDouble(),
+                    center.value(QStringLiteral("y")).toDouble()));
+        mouse(canvas, QEvent::MouseButtonPress, point);
+        mouse(canvas, QEvent::MouseButtonRelease, point);
+        require(canvas.hasActiveTextEditing() && canvas.canvasStyleToolbarState().source ==
+                                                     SnowCanvasStyleToolbarSource::SelectedText,
+                "reopening committed text must edit the existing selected element");
+    }
+    const auto before = documentSlots(runtime);
+
+    adqt::widgets::AdPopover* popover = nullptr;
+    for (QWidget* control : palette.findChildren<QWidget*>()) {
+        if (control->accessibleName() == QStringLiteral("Text alignment")) {
+            popover = control->findChild<adqt::widgets::AdPopover*>();
+            if (popover != nullptr)
+                break;
+        }
+    }
+    require(popover != nullptr, "text alignment must own an option popover");
+    popover->setPopupLayerMode(adqt::widgets::AdPopover::PopupLayerMode::InWindow);
+    for (const auto alignment :
+         {SnowCanvasTextHorizontalAlign::Center, SnowCanvasTextHorizontalAlign::Right}) {
+        popover->show();
+        // Deliver the native popup's focus transfer explicitly so this also reproduces offscreen.
+        QFocusEvent focusOut(QEvent::FocusOut, Qt::OtherFocusReason);
+        QApplication::sendEvent(&canvas, &focusOut);
+        require(canvas.hasActiveTextEditing() && documentSlots(runtime) == before,
+                "opening alignment options must retain text editing before focus loss");
+        auto* content = popover->contentWidget();
+        require(content != nullptr, "alignment options must materialize on each open");
+        const auto tooltip = alignment == SnowCanvasTextHorizontalAlign::Center
+                                 ? QStringLiteral("Align text center")
+                                 : QStringLiteral("Align text right");
+        adqt::widgets::AdButton* option = nullptr;
+        for (auto* button : content->findChildren<adqt::widgets::AdButton*>()) {
+            if (button->toolTip() == tooltip)
+                option = button;
+        }
+        require(option != nullptr, "requested alignment option must be present");
+        option->click();
+        QApplication::processEvents();
+        require(!popover->isVisible() && canvas.hasActiveTextEditing() &&
+                    documentSlots(runtime) == before &&
+                    canvas.canvasStyleToolbarState().textStyle.horizontalAlign == alignment &&
+                    screenshotCanvasToolStyleDefaults().text.horizontalAlign == alignment,
+                "alignment clicks must update the active draft and defaults without committing it");
+    }
+    QFocusEvent unrelatedFocusOut(QEvent::FocusOut, Qt::OtherFocusReason);
+    QApplication::sendEvent(&canvas, &unrelatedFocusOut);
+    require(!canvas.hasActiveTextEditing() && documentSlots(runtime).size() == 1,
+            "ordinary focus loss must still commit after the alignment popup closes");
+    const auto text = documentSlots(runtime)
+                          .first()
+                          .toObject()
+                          .value(QStringLiteral("data"))
+                          .toObject()
+                          .value(QStringLiteral("Text"))
+                          .toObject();
+    require(
+        text.value(QStringLiteral("text")).toString() == QStringLiteral("Alignment draft\nShort") &&
+            text.value(QStringLiteral("horizontal_align")).toString() == QStringLiteral("Right"),
+        "committed text must preserve the content and alignment chosen during editing");
 }
 void propertyPatchesPreserveOtherEditorsAndProgrammaticState() {
     Editor first;
@@ -532,7 +1036,256 @@ void toolbarAndCanvasShareFontCommit() {
     require(screenshotCanvasToolStyleDefaults().serialNumber.fontSize == 512,
             "serial wheel uses the same upper limit as direct input");
 }
+ScreenshotToolPalette::Options watermarkOptions(std::function<QDateTime()> clock) {
+    auto result = options();
+    result.watermarkTemplateClock = clock ? std::move(clock) : [] {
+        return QDateTime(QDate(2026, 10, 9), QTime(12, 34, 56), QTimeZone::LocalTime);
+    };
+    return result;
+}
+
+struct WatermarkEditor {
+    SnowCanvasRuntime runtime{SnowCanvasRuntimeConfig{screenshotCanvasToolStyleDefaults()}};
+    SnowCanvasWidget canvas{runtime};
+    ScreenshotToolPalette palette;
+    ScreenshotStyleBinding binding;
+
+    explicit WatermarkEditor(std::function<QDateTime()> clock = {})
+        : palette(watermarkOptions(std::move(clock))), binding(palette, canvas, &palette) {
+        canvas.resize(400, 300);
+        canvas.setInteractionEnabled(true);
+        QObject::connect(&canvas, &SnowCanvasWidget::styleToolbarStateChanged, &palette, [this] {
+            palette.setStyleToolbarState(canvas.canvasStyleToolbarState());
+            palette.setWatermarkConfig(canvas.canvasWatermarkConfig());
+        });
+        QObject::connect(&palette, &ScreenshotToolPalette::watermarkRequested, &canvas, [this] {
+            require(canvas.setCanvasTool(SnowCanvasTool::Watermark), "activate watermark canvas");
+        });
+        QObject::connect(&palette, &ScreenshotToolPalette::selectRequested, &canvas, [this] {
+            require(canvas.setCanvasTool(SnowCanvasTool::Select), "activate selection canvas");
+        });
+    }
+
+    void activate() {
+        require(palette.activateToolShortcut(ScreenshotToolPalette::Tool::Watermark),
+                "watermark toolbar activation succeeds");
+    }
+
+    void reopen() {
+        require(palette.activateToolShortcut(ScreenshotToolPalette::Tool::Select),
+                "switch away from watermark");
+        activate();
+    }
+
+    QLineEdit* text() {
+        auto* editor = palette.findChild<QLineEdit*>(QStringLiteral("screenshotWatermarkTextEdit"));
+        require(editor != nullptr, "watermark text editor exists");
+        return editor;
+    }
+
+    QLineEdit* templateText() {
+        auto* select = palette.findChild<adqt::widgets::AdSelect*>(
+            QStringLiteral("screenshotWatermarkTemplateSelect"));
+        require(select != nullptr && select->lineEdit() != nullptr,
+                "watermark template editor exists");
+        return select->lineEdit();
+    }
+
+    void editTemplate(const QString& value) {
+        auto* editor = templateText();
+        editor->setText(value);
+        emit editor->textEdited(value);
+    }
+};
+
+void watermarkContentEditsPersistOnlyCommittedFields() {
+    const snow_shot::storage::WatermarkContentSettings settings;
+    require(settings.setContent({}), "start watermark edits without saved content");
+    WatermarkEditor editor;
+    editor.activate();
+    editor.text()->setText(QStringLiteral("  版权所有 © 雪  "));
+    const QString text = QStringLiteral("版权所有 © 雪");
+    const QString templateValue = QStringLiteral("  {text} / {YYYY-MM-DD_HH-mm-ss}  ");
+    editor.editTemplate(templateValue);
+    require(editor.binding.lastSaveSucceeded() == true &&
+                settings.content() == snow_shot::storage::WatermarkContent{text, templateValue} &&
+                editor.canvas.canvasWatermarkConfig().text == text &&
+                editor.canvas.canvasWatermarkConfig().templateValue == templateValue,
+            "successful editor commits save trimmed text and exact manual template whitespace");
+    const auto stored = snow_shot::storage::ApplicationStorage::instance()
+                            .configuration()
+                            .value(QStringLiteral("drawing/watermark_content"))
+                            .toObject();
+    require(stored.size() == 2 && !stored.contains(QStringLiteral("template_application_time")),
+            "content preferences never save application timestamps");
+    auto stale = editor.canvas.canvasWatermarkConfig();
+    stale.text = QStringLiteral("stale text");
+    stale.templateValue = QStringLiteral("stale template");
+    stale.fontSize = 37;
+    require(editor.canvas.commitStyleEdit(
+                SnowCanvasWatermarkEdit{stale, SnowCanvasWatermarkFontSize}) &&
+                settings.content() == snow_shot::storage::WatermarkContent{text, templateValue},
+            "appearance-only commits preserve saved text and template");
+    stale.text = QStringLiteral("Updated");
+    require(
+        editor.canvas.commitStyleEdit(SnowCanvasWatermarkEdit{stale, SnowCanvasWatermarkText}) &&
+            settings.content() == snow_shot::storage::WatermarkContent{stale.text, templateValue},
+        "text-only patches preserve the latest template rather than a stale editor value");
+    editor.editTemplate(QString());
+    require(settings.content() == snow_shot::storage::WatermarkContent{stale.text, QString()},
+            "clearing the template preserves saved text");
+    WatermarkEditor plain;
+    plain.activate();
+    require(plain.canvas.canvasWatermarkConfig().text == stale.text &&
+                plain.canvas.canvasWatermarkConfig().templateValue.isEmpty() &&
+                !plain.canvas.canvasWatermarkConfig().templateApplicationTime.has_value(),
+            "plain text restores without a template or application time");
+    plain.text()->clear();
+    require(settings.content() == snow_shot::storage::WatermarkContent{},
+            "clearing text persists empty content");
+    plain.reopen();
+    require(plain.canvas.canvasWatermarkConfig().text.isEmpty(),
+            "reopening a cleared watermark does not resurrect previous text");
+    WatermarkEditor empty;
+    empty.activate();
+    require(!empty.runtime.hasDocumentContent() && !empty.runtime.canUndo(),
+            "empty saved content creates no watermark or history entry");
+    empty.editTemplate(QStringLiteral("{YYYY}"));
+    WatermarkEditor templateOnly;
+    templateOnly.activate();
+    require(templateOnly.canvas.canvasWatermarkConfig().text.isEmpty() &&
+                templateOnly.canvas.canvasWatermarkConfig().templateValue ==
+                    QStringLiteral("{YYYY}") &&
+                templateOnly.canvas.canvasWatermarkConfig().templateApplicationTime ==
+                    std::optional<SnowCanvasWatermarkTemplateApplicationTime>{
+                        {2026, 10, 9, 12, 34, 56}},
+            "a timestamp-only template restores even with empty watermark text");
+}
+
+void rememberedWatermarkAppliesOncePerCaptureWithFreshTime() {
+    const snow_shot::storage::WatermarkContentSettings settings;
+    const snow_shot::storage::WatermarkContent saved{
+        QStringLiteral("CONFIDENTIAL"), QStringLiteral("  {text} {YYYY-MM-DD_HH-mm-ss}  ")};
+    require(settings.setContent(saved), "prepare remembered watermark content");
+    int clockCalls = 0;
+    WatermarkEditor editor([&clockCalls] {
+        return QDateTime(QDate(2026, 10, 9), QTime(12, 34, 10 + clockCalls++),
+                         QTimeZone::LocalTime);
+    });
+    const QRectF bounds(0, 0, 400, 300);
+    QImage base(400, 300, QImage::Format_ARGB32_Premultiplied);
+    base.fill(Qt::white);
+    const QList<CanvasExportSource> sources{{base, bounds}};
+    const QImage before = editor.runtime.renderToImage(bounds, base.size(), sources);
+    require(!before.isNull() && !editor.runtime.hasDocumentContent() && !editor.runtime.canUndo() &&
+                editor.canvas.canvasWatermarkConfig().text.isEmpty() && clockCalls == 0,
+            "remembered content does not apply during canvas construction");
+    editor.activate();
+    const auto first = editor.canvas.canvasWatermarkConfig();
+    require(
+        first.text == saved.text && first.templateValue == saved.templateValue &&
+            first.templateApplicationTime ==
+                std::optional<SnowCanvasWatermarkTemplateApplicationTime>{
+                    {2026, 10, 9, 12, 34, 10}} &&
+            editor.text()->text() == saved.text &&
+            editor.templateText()->text() == saved.templateValue && clockCalls == 1,
+        "activation populates both editors and applies remembered content with the current time");
+    const QImage after = editor.runtime.renderToImage(bounds, base.size(), sources);
+    require(!after.isNull() && after != before && editor.runtime.hasDocumentContent(),
+            "the remembered watermark is rendered on the capture after activation");
+    editor.reopen();
+    require(editor.canvas.canvasWatermarkConfig() == first && clockCalls == 1 &&
+                editor.templateText()->text() == saved.templateValue,
+            "tool switching preserves watermark content and its application time");
+    require(editor.canvas.undo() && !editor.runtime.hasDocumentContent() &&
+                !editor.runtime.canUndo(),
+            "restored text and template undo together as one edit");
+    editor.reopen();
+    require(!editor.runtime.hasDocumentContent() && editor.runtime.canRedo() && clockCalls == 1 &&
+                settings.content() == saved,
+            "undo and reopening do not reapply saved content or overwrite preferences");
+    require(editor.canvas.redo() && editor.canvas.canvasWatermarkConfig() == first,
+            "redo restores the original application timestamp");
+    require(editor.canvas.clearDocument(), "start a new capture using the same canvas");
+    editor.palette.resetStyleState();
+    editor.palette.setActiveTool(ScreenshotToolPalette::Tool::Select);
+    editor.activate();
+    require(clockCalls == 2 && editor.canvas.canvasWatermarkConfig().text == saved.text &&
+                editor.canvas.canvasWatermarkConfig().templateApplicationTime ==
+                    std::optional<SnowCanvasWatermarkTemplateApplicationTime>{
+                        {2026, 10, 9, 12, 34, 11}},
+            "a new capture rearms restoration and takes a fresh timestamp");
+    WatermarkEditor existing([&clockCalls] {
+        ++clockCalls;
+        return QDateTime(QDate(2026, 10, 9), QTime(12, 34, 56), QTimeZone::LocalTime);
+    });
+    auto document = first;
+    document.text = QStringLiteral("Existing document");
+    document.templateValue = QStringLiteral("{text} {YYYY}");
+    document.templateApplicationTime =
+        SnowCanvasWatermarkTemplateApplicationTime{2024, 2, 29, 1, 2, 3};
+    require(existing.canvas.setCanvasWatermarkConfig(document),
+            "load an existing document watermark");
+    existing.activate();
+    require(
+        existing.canvas.canvasWatermarkConfig() == document &&
+            existing.text()->text() == document.text &&
+            existing.templateText()->text() == document.templateValue && clockCalls == 2 &&
+            settings.content() == saved,
+        "existing document content and timestamps take precedence without changing preferences");
+    require(existing.canvas.undo(), "undo the loaded document watermark");
+    existing.reopen();
+    require(!existing.runtime.hasDocumentContent() && clockCalls == 2,
+            "an existing document's empty undo state does not trigger preference restoration");
+}
+
+void rejectedWatermarkRestorationCanRetryWithoutSaving() {
+    const snow_shot::storage::WatermarkContentSettings settings;
+    const snow_shot::storage::WatermarkContent saved{QStringLiteral("Saved"),
+                                                     QStringLiteral("{text} {YYYY}")};
+    require(settings.setContent(saved), "prepare content for rejected restoration");
+    WatermarkEditor editor;
+    editor.palette.setStyleEditHandler([](const SnowCanvasStyleEdit&) { return false; });
+    editor.activate();
+    require(!editor.runtime.hasDocumentContent() &&
+                !editor.binding.lastSaveSucceeded().has_value() && settings.content() == saved,
+            "a rejected restoration neither changes the document nor persists content");
+    editor.palette.setStyleEditHandler(
+        [&editor](const SnowCanvasStyleEdit& edit) { return editor.canvas.commitStyleEdit(edit); });
+    editor.reopen();
+    require(editor.canvas.canvasWatermarkConfig().text == saved.text &&
+                editor.canvas.canvasWatermarkConfig().templateValue == saved.templateValue &&
+                editor.binding.lastSaveSucceeded() == true,
+            "rejected restoration remains pending and succeeds on the next activation");
+    const auto applied = editor.canvas.canvasWatermarkConfig();
+    editor.palette.setStyleEditHandler([&editor](const SnowCanvasStyleEdit&) {
+        editor.palette.setWatermarkConfig(editor.canvas.canvasWatermarkConfig());
+        return false;
+    });
+    editor.text()->setText(QStringLiteral("Rejected"));
+    require(editor.canvas.canvasWatermarkConfig() == applied && settings.content() == saved &&
+                editor.text()->text() == applied.text,
+            "rejected text edits preserve the document, saved content, and synchronized editor");
+}
 } // namespace
+
+void runScreenshotTextAlignmentTests() {
+    textAlignmentPopupPreservesEditing(false);
+    textAlignmentPopupPreservesEditing(true);
+}
+
+void runWatermarkPersistenceTests() {
+    const snow_shot::storage::WatermarkContentSettings settings;
+    const auto originalContent = settings.content();
+    const auto originalStyles = screenshotCanvasToolStyleDefaults();
+    const auto restore = qScopeGuard([&] {
+        static_cast<void>(settings.setContent(originalContent));
+        static_cast<void>(persistScreenshotCanvasToolStyles(originalStyles));
+    });
+    watermarkContentEditsPersistOnlyCommittedFields();
+    rememberedWatermarkAppliesOncePerCaptureWithFreshTime();
+    rejectedWatermarkRestorationCanRetryWithoutSaving();
+}
 
 void runScreenshotStyleBindingTests() {
     const auto original = snow_shot::presentation::screenshotCanvasToolStyleDefaults();
@@ -543,13 +1296,19 @@ void runScreenshotStyleBindingTests() {
     creationDefaultsDoNotActivateFilterTools();
     creationDefaultsPreserveDocumentAndEditingCleanup();
     fontWheelRemembersDefaultsAndDraftChoice();
+    textEmphasisButtonsPersistDefaultsWithoutEndingDrafts();
     propertyPatchesPreserveOtherEditorsAndProgrammaticState();
     allStyleFamiliesPersistOnlyTheirPatch();
     toolbarAndCanvasShareFontCommit();
     sharedScreenshotRuntimeKeepsDraftEditsTransient();
+    runScreenshotSelectedFilterStyleTests();
+    runWatermarkPersistenceTests();
 }
 
 void runScreenshotSerialNumberRestartTests() {
+    selectedSerialNumberToolbarEditsContinueCreationSequence();
+    selectedSerialNumberSizeEditsUpdateCreationAppearance();
+    selectedSerialNumberEditsUpdateCreationAppearance();
     serialNumberAppearanceDefaultsPreserveSessionSequences();
     newScreenshotDocumentRestartsSerialNumberSequences();
     const auto original = screenshotCanvasToolStyleDefaults();
@@ -742,4 +1501,138 @@ void runScreenshotStylePersistenceFailureTest() {
             "a storage failure does not invalidate a successful canvas edit");
     require(binding.lastSaveSucceeded() == false,
             "binding exposes the persistence dependency's failed save");
+}
+
+void runAngleStyleBindingTests() {
+    SnowCanvasRuntime runtime;
+    SnowCanvasWidget canvas(runtime);
+    auto defaults = screenshotCanvasToolStyleDefaults();
+    defaults.angle.decimalPlaces = 1;
+    auto settings = options();
+    settings.showAngleTool = true;
+    settings.styleDefaults = defaults;
+    ScreenshotToolPalette palette(settings);
+    int saves = 0;
+    ScreenshotStyleBinding binding(palette, canvas, &palette, {},
+                                   [&saves](const SnowCanvasStyleEdit&) {
+                                       ++saves;
+                                       return true;
+                                   });
+    applyScreenshotCanvasToolStyles(canvas, defaults);
+    canvas.resize(400, 300);
+    canvas.setInteractionEnabled(true);
+    canvas.show();
+    QApplication::processEvents();
+    QObject::connect(&canvas, &SnowCanvasWidget::styleToolbarStateChanged, &palette,
+                     [&] { palette.setStyleToolbarState(canvas.canvasStyleToolbarState()); });
+    require(canvas.setCanvasTool(SnowCanvasTool::Angle), "activate angle style binding fixture");
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Angle);
+    const auto click = [&](QPointF point) {
+        mouse(canvas, QEvent::MouseButtonPress, point);
+        mouse(canvas, QEvent::MouseButtonRelease, point);
+    };
+    const auto label = [&] {
+        for (const auto& slot : documentSlots(runtime)) {
+            const auto text = slot.toObject()
+                                  .value(QStringLiteral("data"))
+                                  .toObject()
+                                  .value(QStringLiteral("Text"))
+                                  .toObject();
+            if (!text.isEmpty())
+                return text.value(QStringLiteral("text")).toString();
+        }
+        return QString();
+    };
+    const auto sourceWidth = [&] {
+        for (const auto& slot : documentSlots(runtime)) {
+            const auto arrow = slot.toObject()
+                                   .value(QStringLiteral("data"))
+                                   .toObject()
+                                   .value(QStringLiteral("Arrow"))
+                                   .toObject();
+            if (!arrow.isEmpty())
+                return arrow.value(QStringLiteral("stroke_width")).toDouble();
+        }
+        return 0.0;
+    };
+    click({300, 150});
+    click({180, 150});
+    click({180, 40});
+    require(label() == QStringLiteral("90.0°"), "angle fixture has a generated measured label");
+    require(canvas.setCanvasTool(SnowCanvasTool::Select), "select angle through selection tool");
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Select);
+    click({260, 150});
+    require(canvas.canvasStyleToolbarState().source == SnowCanvasStyleToolbarSource::SelectedAngle,
+            "selected angle exposes its dedicated style editor");
+    WheelStepAccumulator accumulator;
+    const auto hostWheel = [&](int delta, Qt::KeyboardModifiers modifiers = Qt::NoModifier,
+                               Qt::ScrollPhase phase = Qt::NoScrollPhase) {
+        QWheelEvent event({260, 150}, {260, 150}, {}, {0, delta}, Qt::NoButton, modifiers, phase,
+                          false);
+        event.setTimestamp(100);
+        return handleScreenshotStyleWheel(palette, canvas, event, accumulator);
+    };
+    require(hostWheel(240) && label() == QStringLiteral("92.0°") && sourceWidth() == 2,
+            "host wheel applies all coalesced angle steps ahead of selection opacity");
+    require(hostWheel(120, Qt::ShiftModifier) && label() == QStringLiteral("92.1°"),
+            "shift wheel uses a tenth-degree increment");
+    const auto beforeControl = runtime.serializeDocumentSession();
+    require(!hostWheel(120, Qt::ControlModifier) &&
+                runtime.serializeDocumentSession() == beforeControl,
+            "control wheel retains host navigation without editing the angle");
+    require(hostWheel(120, Qt::NoModifier, Qt::ScrollMomentum) &&
+                runtime.serializeDocumentSession() == beforeControl,
+            "momentum consumes without changing discrete angle values");
+    palette.angleValueAdjustmentRequested(-1, true);
+    require(label() == QStringLiteral("92.0°"), "palette angle wheel signal reaches the canvas");
+    auto selected = canvas.canvasAngleStyle();
+    selected.strokeWidth = 7;
+    selected.unit = SnowCanvasAngleUnit::Radians;
+    const auto properties = static_cast<quint32>(SnowCanvasAngleStyleProperty::StrokeWidth) |
+                            static_cast<quint32>(SnowCanvasAngleStyleProperty::Unit);
+    selected.decimalPlaces = 3;
+    require(canvas.commitStyleEdit(SnowCanvasAngleStyleEdit{
+                selected, properties, SnowCanvasStyleEditTarget::Selection}) &&
+                sourceWidth() == 7 && saves == 1,
+            "selected angle styling changes the document and saves its property patch once");
+    auto expectedDefaults = defaults;
+    expectedDefaults.angle.strokeWidth = 7;
+    expectedDefaults.angle.unit = SnowCanvasAngleUnit::Radians;
+    require(palette.creationStyleDefaults() == expectedDefaults,
+            "selected angle styling preserves untouched properties and other tool defaults");
+    require(canvas.resetEditingState() && canvas.setCanvasTool(SnowCanvasTool::Angle) &&
+                canvas.canvasAngleStyle() == expectedDefaults.angle,
+            "selected styling updates future angle creation defaults property by property");
+    selected = defaults.angle;
+    selected.strokeWidth = 4;
+    require(canvas.commitStyleEdit(SnowCanvasAngleStyleEdit{
+                selected, static_cast<quint32>(SnowCanvasAngleStyleProperty::StrokeWidth)}) &&
+                saves == 2 && palette.creationStyleDefaults().angle.strokeWidth == 4 &&
+                palette.creationStyleDefaults().angle.unit == SnowCanvasAngleUnit::Radians,
+            "creation style commits are remembered and saved once");
+
+    click({150, 270});
+    click({30, 270});
+    click({30, 180});
+    require(canvas.setCanvasTool(SnowCanvasTool::Select), "select among multiple angles");
+    palette.setActiveTool(ScreenshotToolPalette::Tool::Select);
+    click({260, 150});
+    const auto palettePixelWheel = [&] {
+        QWheelEvent event({100, 30}, {100, 30}, {0, 1}, {}, Qt::NoButton, Qt::NoModifier,
+                          Qt::ScrollUpdate, false);
+        QApplication::sendEvent(&palette, &event);
+    };
+    const auto firstSelection = runtime.serializeDocumentHistory();
+    palettePixelWheel();
+    const auto firstStep = runtime.serializeDocumentHistory();
+    require(firstStep != firstSelection,
+            "selected angle responds to the first precise wheel delta");
+    palettePixelWheel();
+    require(runtime.serializeDocumentHistory() == firstStep,
+            "subsequent precise deltas accumulate without extra angle steps");
+    click({90, 270});
+    const auto secondSelection = runtime.serializeDocumentHistory();
+    palettePixelWheel();
+    require(runtime.serializeDocumentHistory() != secondSelection,
+            "changing selected angle resets the palette's fractional wheel remainder");
 }

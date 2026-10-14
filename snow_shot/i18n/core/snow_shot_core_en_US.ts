@@ -282,6 +282,33 @@ so every moment on screen can be expressed clearly and shared easily.</translati
         </message>
     </context>
     <context>
+        <name>CanvasStatusReadout</name>
+        <message>
+            <source>Locked</source>
+            <translation>Locked</translation>
+        </message>
+        <message>
+            <source>Motion Preview in Progress</source>
+            <translation>Motion Preview in Progress</translation>
+        </message>
+        <message>
+            <source>Opacity: %1%</source>
+            <translation>Opacity: %1%</translation>
+        </message>
+        <message>
+            <source>Rendering preview</source>
+            <translation>Rendering preview</translation>
+        </message>
+        <message>
+            <source>Result Preview in Progress</source>
+            <translation>Result Preview in Progress</translation>
+        </message>
+        <message>
+            <source>Scale: %1%</source>
+            <translation>Scale: %1%</translation>
+        </message>
+    </context>
+    <context>
         <name>ConfirmationSkipButton</name>
         <message>
             <source>Don't ask again</source>
@@ -618,6 +645,22 @@ so every moment on screen can be expressed clearly and shared easily.</translati
             <translation>Image conversion timed out. Try a smaller area.</translation>
         </message>
         <message>
+            <source>Image recognition failed</source>
+            <translation>Image recognition failed</translation>
+        </message>
+        <message>
+            <source>Image recognition is incomplete. Try a smaller area.</source>
+            <translation>Image recognition is incomplete. Try a smaller area.</translation>
+        </message>
+        <message>
+            <source>Image recognition stream ended unexpectedly</source>
+            <translation>Image recognition stream ended unexpectedly</translation>
+        </message>
+        <message>
+            <source>Image recognition timed out. Try a smaller area.</source>
+            <translation>Image recognition timed out. Try a smaller area.</translation>
+        </message>
+        <message>
             <source>Invalid LaTeX recognition response</source>
             <translation>Invalid LaTeX recognition response</translation>
         </message>
@@ -678,8 +721,16 @@ so every moment on screen can be expressed clearly and shared easily.</translati
             <translation>The image could not be prepared for conversion</translation>
         </message>
         <message>
+            <source>The image could not be prepared for recognition</source>
+            <translation>The image could not be prepared for recognition</translation>
+        </message>
+        <message>
             <source>The image is too large to convert. Select a smaller area.</source>
             <translation>The image is too large to convert. Select a smaller area.</translation>
+        </message>
+        <message>
+            <source>The image is too large to recognize. Select a smaller area.</source>
+            <translation>The image is too large to recognize. Select a smaller area.</translation>
         </message>
         <message>
             <source>The model response is too large</source>
@@ -688,6 +739,18 @@ so every moment on screen can be expressed clearly and shared easily.</translati
         <message>
             <source>The model returned no content</source>
             <translation>The model returned no content</translation>
+        </message>
+        <message>
+            <source>The model returned no usable formula</source>
+            <translation>The model returned no usable formula</translation>
+        </message>
+        <message>
+            <source>The model returned no usable table</source>
+            <translation>The model returned no usable table</translation>
+        </message>
+        <message>
+            <source>The model service changed. Retry to load its models.</source>
+            <translation>The model service changed. Retry to load its models.</translation>
         </message>
         <message>
             <source>The text is too large to translate.</source>
@@ -783,6 +846,10 @@ so every moment on screen can be expressed clearly and shared easily.</translati
             <translation>Cancel</translation>
         </message>
         <message>
+            <source>Could not open the selected image file: %1</source>
+            <translation>Could not open the selected image file: %1</translation>
+        </message>
+        <message>
             <source>Could not pin selected files</source>
             <translation>Could not pin selected files</translation>
         </message>
@@ -813,6 +880,10 @@ so every moment on screen can be expressed clearly and shared easily.</translati
         <message>
             <source>Snow Shot will close and restart to install the update. Continue?</source>
             <translation>Snow Shot will close and restart to install the update. Continue?</translation>
+        </message>
+        <message>
+            <source>The selected image file path is invalid</source>
+            <translation>The selected image file path is invalid</translation>
         </message>
         <message>
             <source>Your settings could not be saved. Please retry before updating.</source>

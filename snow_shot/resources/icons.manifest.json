@@ -103,6 +103,46 @@
     },
     {
       "variant": "outlined",
+      "symbol": "AngleAnnotation",
+      "name": "angle-annotation",
+      "source": "../src/presentation/components/icons/resources/angle-annotation.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "AngleType180",
+      "name": "angle-type-180",
+      "source": "../src/presentation/components/icons/resources/angle-type-180.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "AngleType360",
+      "name": "angle-type-360",
+      "source": "../src/presentation/components/icons/resources/angle-type-360.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "AngleUnitDegrees",
+      "name": "angle-unit-degrees",
+      "source": "../src/presentation/components/icons/resources/angle-unit-degrees.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "AngleUnitRadians",
+      "name": "angle-unit-radians",
+      "source": "../src/presentation/components/icons/resources/angle-unit-radians.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "ArrowRatio",
       "name": "arrow-ratio",
       "source": "../src/presentation/components/icons/resources/arrow-ratio.svg",
@@ -687,6 +727,30 @@
     },
     {
       "variant": "outlined",
+      "symbol": "MagnificationFactor",
+      "name": "magnification-factor",
+      "source": "../src/presentation/components/icons/resources/magnification-factor.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "MagnifierConnectionNone",
+      "name": "magnifier-connection-none",
+      "source": "../src/presentation/components/icons/resources/magnifier-connection-none.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "MagnifierGradient",
+      "name": "magnifier-gradient",
+      "source": "../src/presentation/components/icons/resources/magnifier-gradient.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "Markdown",
       "name": "markdown",
       "source": "../src/presentation/components/icons/resources/markdown.svg",
@@ -762,6 +826,22 @@
       "symbol": "PinToScreenManagement",
       "name": "pin-to-screen-management",
       "source": "../src/presentation/components/icons/resources/pin-to-screen-management.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "PinnedWindowBorder",
+      "name": "pinned-window-border",
+      "source": "../src/presentation/components/icons/resources/pinned-window-border.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "PinnedWindowShadow",
+      "name": "pinned-window-shadow",
+      "source": "../src/presentation/components/icons/resources/pinned-window-shadow.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },
@@ -1167,6 +1247,22 @@
     },
     {
       "variant": "outlined",
+      "symbol": "ShowLeaderLine",
+      "name": "show-leader-line",
+      "source": "../src/presentation/components/icons/resources/show-leader-line.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "SourceRegionOutline",
+      "name": "source-region-outline",
+      "source": "../src/presentation/components/icons/resources/source-region-outline.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "TableRecognition",
       "name": "table-recognition",
       "source": "../src/presentation/components/icons/resources/table-recognition.svg",
@@ -1231,6 +1327,14 @@
     },
     {
       "variant": "outlined",
+      "symbol": "ToolMagnifier",
+      "name": "tool-magnifier",
+      "source": "../src/presentation/components/icons/resources/tool-magnifier.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "ToolMove",
       "name": "tool-move",
       "source": "../src/presentation/components/icons/resources/tool-move.svg",
@@ -1266,6 +1370,14 @@
       "symbol": "ToolSerialNumber",
       "name": "tool-serial-number",
       "source": "../src/presentation/components/icons/resources/tool-serial-number.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "ToolSpeechBubble",
+      "name": "tool-speech-bubble",
+      "source": "../src/presentation/components/icons/resources/tool-speech-bubble.svg",
       "colorModel": "monochrome",
       "fit": "contain"
     },

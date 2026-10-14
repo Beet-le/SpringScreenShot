@@ -3,6 +3,8 @@
 #include "snowimageqtcodec.h"
 #include "snow_stitch_images.h"
 #include "../src/presentation/capture/scrollingsnapshotrequest.h"
+#include "snow_shot/platform/applicationqos.h"
+#include "snow_shot/runtime/runtimeactivitytracker.h"
 
 #include <QApplication>
 #include <QEventLoop>
@@ -18,12 +20,18 @@
 #include <mutex>
 #include <QTimer>
 #include <QColorSpace>
+#include <QThread>
+
+#ifdef Q_OS_MACOS
+#include <pthread/qos.h>
+#endif
 
 #include <iostream>
 #include <array>
 #include <atomic>
 #include <limits>
 #include <stdexcept>
+#include <thread>
 
 namespace {
 using namespace snow_shot::scrolling_benchmark;
@@ -32,6 +40,22 @@ void require(bool value, const char* message) {
         std::cerr << message << '\n';
         throw std::runtime_error(message);
     }
+}
+template <typename Predicate> void waitUntil(Predicate complete, const char* message) {
+    QEventLoop loop;
+    QTimer progress;
+    QTimer timeout;
+    timeout.setSingleShot(true);
+    QObject::connect(&progress, &QTimer::timeout, &loop, [&] {
+        if (complete())
+            loop.quit();
+    });
+    QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
+    progress.start(1);
+    timeout.start(5000);
+    if (!complete())
+        loop.exec();
+    require(complete(), message);
 }
 bool snapshotMatchesSrgbPixels(const QImage& snapshot, QImage expected) {
     expected.setColorSpace(QColorSpace::SRgb);
@@ -176,6 +200,180 @@ class ManualSource final : public ScrollingFrameSource {
     std::shared_ptr<ManualState> m_state;
 };
 
+struct BlockingShutdownState {
+    std::mutex mutex;
+    std::condition_variable wake;
+    bool receiving = false;
+    bool releaseStop = false;
+    bool stopEntered = false;
+    bool stopped = false;
+    bool guiProgressed = false;
+    bool safetyReleasedStop = false;
+    std::atomic_bool destroyed = false;
+};
+
+class BlockingShutdownSource final : public ScrollingFrameSource {
+  public:
+    explicit BlockingShutdownSource(std::shared_ptr<BlockingShutdownState> state)
+        : m_state(std::move(state)) {}
+    ~BlockingShutdownSource() override {
+        m_state->destroyed = true;
+    }
+    ScrollingSourceEvent receive(int milliseconds) override {
+        std::unique_lock lock(m_state->mutex);
+        m_state->receiving = true;
+        m_state->wake.notify_all();
+        m_state->wake.wait_for(lock, std::chrono::milliseconds(milliseconds),
+                               [this] { return m_state->stopped; });
+        return {};
+    }
+    void setTargetFps(int) override {}
+    ScrollingSourceStats stats() const override {
+        return {};
+    }
+    void stop() override {
+        std::unique_lock lock(m_state->mutex);
+        m_state->stopEntered = true;
+        m_state->wake.notify_all();
+        m_state->wake.wait(lock, [this] { return m_state->releaseStop; });
+        m_state->stopped = true;
+        m_state->wake.notify_all();
+    }
+
+  private:
+    std::shared_ptr<BlockingShutdownState> m_state;
+};
+
+void nativeShutdownDoesNotBlockGui() {
+    using snow_shot::runtime::RuntimeActivityTracker;
+    waitUntil([] { return RuntimeActivityTracker::shared().snapshot().activeCount == 0; },
+              "earlier scrolling sessions must finish cleanup before the shutdown fixture");
+    const auto baseline = RuntimeActivityTracker::shared().snapshot().activeCount;
+    auto state = std::make_shared<BlockingShutdownState>();
+    auto pipeline = std::make_unique<ScreenshotScrollingPipeline>(
+        [](ScrollingPipelineFrame) { require(false, "shutdown source must not deliver frames"); },
+        [](quint64, QString) { require(false, "shutdown source must not fail"); });
+    pipeline->begin(1, QSize(64, 64), ScreenshotScrollingRecognitionMode::Vertical,
+                    [state] { return std::make_unique<BlockingShutdownSource>(state); });
+    {
+        std::unique_lock lock(state->mutex);
+        require(
+            state->wake.wait_for(lock, std::chrono::seconds(5), [&] { return state->receiving; }),
+            "shutdown fixture must start its native receive operation");
+    }
+    QObject gui;
+    QTimer::singleShot(0, &gui, [state, baseline] {
+        require(RuntimeActivityTracker::shared().snapshot().activeCount > baseline,
+                "native teardown must retain runtime activity until it finishes");
+        std::lock_guard lock(state->mutex);
+        state->guiProgressed = true;
+        state->releaseStop = true;
+        state->wake.notify_all();
+    });
+    // This guard only prevents the old blocking destructor from hanging the test. The
+    // assertion is ordering-based: the GUI callback must release stop(), never this guard.
+    std::thread safety([state] {
+        std::unique_lock lock(state->mutex);
+        if (!state->wake.wait_for(lock, std::chrono::seconds(5),
+                                  [&] { return state->releaseStop; })) {
+            state->safetyReleasedStop = true;
+            state->releaseStop = true;
+            state->wake.notify_all();
+        }
+    });
+    pipeline.reset();
+    waitUntil([&] { return state->destroyed.load(); },
+              "detached teardown must release its native source");
+    safety.join();
+    require(state->guiProgressed && !state->safetyReleasedStop,
+            "native shutdown must let the GUI dispatch events before stop completes");
+    waitUntil([&] { return RuntimeActivityTracker::shared().snapshot().activeCount == baseline; },
+              "detached teardown must release every runtime activity lease");
+}
+
+void shutdownCompletionHasGuiLifetime() {
+    using snow_shot::runtime::RuntimeActivityTracker;
+    for (const bool cancel : {true, false}) {
+        auto state = std::make_shared<BlockingShutdownState>();
+        auto pipeline = std::make_unique<ScreenshotScrollingPipeline>(
+            ScreenshotScrollingPipeline::FrameCallback{},
+            ScreenshotScrollingPipeline::ErrorCallback{});
+        pipeline->begin(1, QSize(64, 64), ScreenshotScrollingRecognitionMode::Vertical,
+                        [state] { return std::make_unique<BlockingShutdownSource>(state); });
+        {
+            std::unique_lock lock(state->mutex);
+            require(state->wake.wait_for(lock, std::chrono::seconds(5),
+                                         [&] { return state->receiving; }),
+                    "completion lifetime fixture must start native capture");
+        }
+        int releases = 0;
+        int completed = 0;
+        auto resource = std::shared_ptr<int>(new int, [&](int* value) {
+            require(QThread::currentThread() == QCoreApplication::instance()->thread(),
+                    "shutdown completion resources must be released on the GUI thread");
+            ++releases;
+            delete value;
+        });
+        QObject* receiver = new QObject;
+        pipeline->shutdown(receiver, [resource = std::move(resource), &receiver, &completed] {
+            ++completed;
+            // A completion may destroy its own receiver and child completion object.
+            delete std::exchange(receiver, nullptr);
+        });
+        pipeline.reset();
+        if (cancel) {
+            delete std::exchange(receiver, nullptr);
+            require(releases == 1, "receiver destruction must release its completion capture");
+        }
+        {
+            std::lock_guard lock(state->mutex);
+            state->releaseStop = true;
+            state->wake.notify_all();
+        }
+        waitUntil(
+            [&] {
+                return state->destroyed.load() &&
+                       RuntimeActivityTracker::shared().snapshot().activeCount == 0;
+            },
+            "cleanup must finish after the completion receiver is destroyed");
+        require(completed == (cancel ? 0 : 1) && releases == 1 && receiver == nullptr,
+                "shutdown completion must run or cancel exactly once on the GUI thread");
+    }
+}
+
+void terminalShutdownJoinsCleanupWithoutGuiEvents() {
+    using snow_shot::runtime::RuntimeActivityTracker;
+    auto state = std::make_shared<BlockingShutdownState>();
+    auto pipeline = std::make_unique<ScreenshotScrollingPipeline>(
+        ScreenshotScrollingPipeline::FrameCallback{}, ScreenshotScrollingPipeline::ErrorCallback{});
+    pipeline->begin(1, QSize(64, 64), ScreenshotScrollingRecognitionMode::Vertical,
+                    [state] { return std::make_unique<BlockingShutdownSource>(state); });
+    {
+        std::unique_lock lock(state->mutex);
+        require(
+            state->wake.wait_for(lock, std::chrono::seconds(5), [&] { return state->receiving; }),
+            "terminal shutdown fixture must start native capture");
+    }
+    QObject gui;
+    bool guiEventDelivered = false;
+    QTimer::singleShot(0, &gui, [&] { guiEventDelivered = true; });
+    pipeline.reset();
+    bool releasedAfterStopEntered = false;
+    std::thread release([state, &releasedAfterStopEntered] {
+        std::unique_lock lock(state->mutex);
+        releasedAfterStopEntered =
+            state->wake.wait_for(lock, std::chrono::seconds(5), [&] { return state->stopEntered; });
+        state->releaseStop = true;
+        state->wake.notify_all();
+    });
+    ScreenshotScrollingPipeline::waitForShutdowns();
+    release.join();
+    require(releasedAfterStopEntered && state->destroyed.load() && !guiEventDelivered,
+            "terminal shutdown must join native cleanup without dispatching GUI events");
+    require(RuntimeActivityTracker::shared().snapshot().activeCount == 0,
+            "terminal shutdown must join after cleanup releases runtime activity");
+}
+
 QImage fixture() {
     QImage image(640, 640, QImage::Format_RGBA8888);
     image.fill(Qt::white);
@@ -191,6 +389,120 @@ QImage fixture() {
     }
     return image;
 }
+
+#ifdef Q_OS_MACOS
+struct ScrollingQoSSourceState {
+    std::atomic_uint producerClass = 0;
+    std::atomic_uint consumerClass = 0;
+    std::atomic_bool captureThread = false;
+};
+
+class ScrollingQoSSource final : public ScrollingFrameSource {
+  public:
+    ScrollingQoSSource(std::shared_ptr<ManualState> frames,
+                       std::shared_ptr<ScrollingQoSSourceState> qos)
+        : m_source(std::move(frames)), m_qos(std::move(qos)) {
+        m_qos->producerClass = qos_class_self();
+        m_qos->captureThread =
+            QThread::currentThread()->objectName() == QStringLiteral("snow-shot-scrolling-capture");
+    }
+    ScrollingSourceEvent receive(int milliseconds) override {
+        m_qos->consumerClass = qos_class_self();
+        return m_source.receive(milliseconds);
+    }
+    void setTargetFps(int fps) override {
+        m_source.setTargetFps(fps);
+    }
+    ScrollingSourceStats stats() const override {
+        return m_source.stats();
+    }
+    void stop() override {
+        m_source.stop();
+    }
+
+  private:
+    ManualSource m_source;
+    std::shared_ptr<ScrollingQoSSourceState> m_qos;
+};
+
+struct ScrollingQoSImageLease {
+    QImage pixels;
+    std::atomic_uint workerClass = 0;
+    std::atomic_bool stitchThread = false;
+    std::atomic_bool released = false;
+};
+
+void scrollingQoSTest(const QString& profile) {
+    namespace platform = snow_shot::platform;
+    const auto selected = platform::applicationQoSForValue(profile);
+    require(selected.has_value(), "scrolling QoS requires a valid application profile");
+    platform::initializeApplicationQoS(*selected);
+    const unsigned int classes[] = {QOS_CLASS_USER_INTERACTIVE, QOS_CLASS_USER_INITIATED,
+                                    QOS_CLASS_DEFAULT, QOS_CLASS_UTILITY, QOS_CLASS_BACKGROUND};
+    const unsigned int expected = classes[static_cast<unsigned int>(*selected)];
+    require(qos_class_self() == expected, "main thread must retain application QoS");
+    int received = 0;
+    bool failed = false;
+    ScreenshotScrollingPipeline pipeline(
+        [&](ScrollingPipelineFrame frame) {
+            require(!frame.fatalError && frame.changed && frame.sourceSize == QSize(400, 400),
+                    "QoS fixture must produce an initial stitched frame");
+            ++received;
+        },
+        [&](quint64, QString) { failed = true; });
+    for (quint64 generation = 1; generation <= 2; ++generation) {
+        auto lease = std::make_shared<ScrollingQoSImageLease>();
+        lease->pixels = fixture().copy(0, 0, 400, 400);
+        auto frames = std::make_shared<ManualState>();
+        QImage frame(
+            lease->pixels.constBits(), lease->pixels.width(), lease->pixels.height(),
+            lease->pixels.bytesPerLine(), lease->pixels.format(),
+            [](void* value) {
+                const std::unique_ptr<std::shared_ptr<ScrollingQoSImageLease>> owner(
+                    static_cast<std::shared_ptr<ScrollingQoSImageLease>*>(value));
+                (*owner)->workerClass = qos_class_self();
+                (*owner)->stitchThread = QThread::currentThread()->objectName() ==
+                                         QStringLiteral("snow-shot-scrolling-stitch");
+                (*owner)->released = true;
+            },
+            new std::shared_ptr<ScrollingQoSImageLease>(lease));
+        frames->push(std::move(frame));
+        auto sourceQoS = std::make_shared<ScrollingQoSSourceState>();
+        pipeline.begin(generation, lease->pixels.size(),
+                       ScreenshotScrollingRecognitionMode::Vertical, [frames, sourceQoS] {
+                           return std::make_unique<ScrollingQoSSource>(frames, sourceQoS);
+                       });
+        waitUntil([&] { return failed || received == static_cast<int>(generation); },
+                  "QoS fixture must finish stitching");
+        require(!failed && !lease->released.load(),
+                "the stitch session must retain its accepted native input");
+        require(sourceQoS->producerClass == expected && sourceQoS->consumerClass == expected &&
+                    sourceQoS->captureThread,
+                "capture control and receive threads must retain application QoS");
+        bool paused = false;
+        pipeline.pause(generation, [&] { paused = true; });
+        waitUntil([&] { return paused; }, "QoS fixture must acknowledge pause");
+        require(!lease->released.load(), "pause must preserve the stitch session input");
+        auto resumedFrames = std::make_shared<ManualState>();
+        auto resumedQoS = std::make_shared<ScrollingQoSSourceState>();
+        pipeline.resume(generation, lease->pixels.size(), [resumedFrames, resumedQoS] {
+            return std::make_unique<ScrollingQoSSource>(resumedFrames, resumedQoS);
+        });
+        waitUntil([&] { return resumedQoS->consumerClass.load() != 0; },
+                  "QoS fixture must reopen capture after resume");
+        require(resumedQoS->producerClass == expected && resumedQoS->consumerClass == expected &&
+                    resumedQoS->captureThread,
+                "resumed capture threads must retain application QoS");
+        pipeline.reset(generation + 1);
+        waitUntil([&] { return lease->released.load(); },
+                  "reset must release the native input on the stitch worker");
+        require(lease->stitchThread && lease->workerClass == QOS_CLASS_DEFAULT,
+                "stitch worker must keep native Default QoS across pause, resume, and reset");
+        require(qos_class_self() == expected,
+                "stitching must preserve main thread application QoS");
+    }
+}
+#endif
 
 void pipelineTest(ScreenshotScrollingRecognitionMode mode) {
     const bool horizontal = mode == ScreenshotScrollingRecognitionMode::Horizontal;
@@ -334,9 +646,9 @@ void pauseWithDispatchedFramePreservesPreview() {
                                      [&] { return state->receiveCalls >= 2; }),
                 "source must publish a frame before the pause race");
     }
-    // sendPostedEvents processes the capture notification already queued at entry,
-    // dispatching the worker. Its newly posted result stays queued until below.
-    QCoreApplication::sendPostedEvents(&pipeline, QEvent::MetaCall);
+    // Dispatch the GUI notification batch already queued at entry, including the pipeline's
+    // private delivery context. The newly posted stitch result stays queued until below.
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
     require(delivered == 0 && !pipeline.idle(), "frame must be in flight at pause");
     bool acknowledged = false;
     pipeline.pause(19, [&] {
@@ -649,7 +961,8 @@ void acceptedSnapshotsSurviveTeardown() {
         // dispatches any result. Accepted snapshots belong to their receivers.
         pipeline->reset(2);
         pipeline.reset();
-        QCoreApplication::sendPostedEvents(&loop, QEvent::MetaCall);
+        waitUntil([&] { return completed == requests; },
+                  "teardown must finish accepted snapshot delivery asynchronously");
         require(completed == requests,
                 "teardown must deliver every accepted snapshot exactly once");
     }
@@ -705,7 +1018,8 @@ void nativeFrameLeasesRemainBoundedAndSurviveStitching() {
     loop.exec();
     require(snapshot.isValid(), "native input must produce a snapshot");
     pipeline.reset();
-    require(released.back().load(), "teardown must release the final native input lease");
+    waitUntil([&] { return released.back().load(); },
+              "teardown must release the final native input lease");
     require(snapshotMatchesSrgbPixels(snapshot.materialize(), pixels),
             "canvas snapshot must remain independent of released native inputs");
 }
@@ -910,6 +1224,7 @@ void pipelineDiagnosticsTest() {
     QObject::connect(&timeout, &QTimer::timeout, &loop, &QEventLoop::quit);
     bool preview = false;
     bool failed = false;
+    bool stopped = false;
     {
         ScreenshotScrollingPipeline pipeline(
             [&](ScrollingPipelineFrame frame) {
@@ -924,7 +1239,10 @@ void pipelineDiagnosticsTest() {
                        [] { return std::make_unique<Source>(); });
         timeout.start(5000);
         loop.exec();
+        pipeline.shutdown(&loop, [&] { stopped = true; });
     }
+    waitUntil([&] { return stopped; },
+              "diagnostics must outlive asynchronous source shutdown and its capture summary");
     require(preview && !failed,
             "diagnostics must preserve first preview delivery after rejected frames");
     require(service.flush(), "pipeline diagnostics flush");
@@ -1008,7 +1326,21 @@ void sourceFailureTest() {
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
+    struct ShutdownDrain {
+        ~ShutdownDrain() {
+            ScreenshotScrollingPipeline::waitForShutdowns();
+            snow_shot::diagnostics::DiagnosticsService::instance().shutdown();
+        }
+    } shutdownDrain;
     try {
+#ifdef Q_OS_MACOS
+        if (application.arguments().contains(QStringLiteral("--qos-only"))) {
+            require(application.arguments().size() == 3,
+                    "scrolling QoS expects one application profile");
+            scrollingQoSTest(application.arguments().at(2));
+            return 0;
+        }
+#endif
         if (application.arguments().contains(QStringLiteral("--thumbnail-drag-only"))) {
             interruptedThumbnailDragTest();
             return 0;
@@ -1017,6 +1349,12 @@ int main(int argc, char** argv) {
             snapshotRequestLifetime();
             snapshotCancellationLifetime();
             acceptedSnapshotsSurviveTeardown();
+            return 0;
+        }
+        if (application.arguments().contains(QStringLiteral("--async-teardown-only"))) {
+            nativeShutdownDoesNotBlockGui();
+            shutdownCompletionHasGuiLifetime();
+            terminalShutdownJoinsCleanupWithoutGuiEvents();
             return 0;
         }
         if (application.arguments().contains(QStringLiteral("--hover-preview-only"))) {
@@ -1037,6 +1375,9 @@ int main(int argc, char** argv) {
         snapshotRequestLifetime();
         snapshotCancellationLifetime();
         acceptedSnapshotsSurviveTeardown();
+        nativeShutdownDoesNotBlockGui();
+        shutdownCompletionHasGuiLifetime();
+        terminalShutdownJoinsCleanupWithoutGuiEvents();
         nativeFrameLeasesRemainBoundedAndSurviveStitching();
         overloadTest();
         replaySourceTest();

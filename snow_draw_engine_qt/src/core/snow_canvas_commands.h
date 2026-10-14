@@ -40,6 +40,9 @@ struct CommitTextRequest {
     bool autoResize = false;
     bool updateDefaultStyle = false;
     SnowElementId arrowId{};
+    SnowElementId bubbleId{};
+    double minimumGraphemeWidth = 1.0;
+    double textInkReserve = 0.0;
 
     SnowTextCommitDraft toAbi() const;
 };
@@ -60,6 +63,9 @@ struct ActiveTextDraftPresentationRequest {
     bool autoResize = false;
 
     SnowElementId arrowId{};
+    SnowElementId bubbleId{};
+    double minimumGraphemeWidth = 1.0;
+    double textInkReserve = 0.0;
     SnowActiveTextDraftPresentation toAbi() const;
 };
 
@@ -107,6 +113,12 @@ MutationResult setActiveTextDraftPresentation(SnowRuntime runtime, SnowViewport 
 MutationResult clearActiveTextDraftPresentation(SnowRuntime runtime, SnowViewport viewport);
 MutationResult setDistanceStylePatch(SnowRuntime runtime, SnowViewport viewport,
                                      const SnowDistanceStyle& style, std::uint32_t properties);
+MutationResult setAngleStylePatch(SnowRuntime runtime, SnowViewport viewport,
+                                  const SnowAngleStyle& style, std::uint32_t properties);
+MutationResult setMagnifierStylePatch(SnowRuntime runtime, SnowViewport viewport,
+                                      const SnowMagnifierStyle& style, std::uint32_t properties,
+                                      bool creationDefaults);
+MutationResult adjustAngleValue(SnowRuntime runtime, SnowViewport viewport, double deltaRadians);
 MutationResult setDistancePixelScale(SnowRuntime runtime, SnowViewport viewport, double scaleX,
                                      double scaleY);
 MutationResult setShapeStylePatch(SnowRuntime runtime, SnowViewport viewport,

@@ -10,6 +10,7 @@
 
 #include "snow_canvas_display_cache.h"
 #include "snow_canvas_text_draft.h"
+#include "snow_canvas_text_measurement.h"
 #include "snow_draw_engine.h"
 
 #include <optional>
@@ -26,6 +27,9 @@ class SnowCanvasTextEditorSession final {
         QPointF canvasCenter;
         SnowElementId elementId{};
         SnowElementId arrowId{};
+        SnowElementId bubbleId{};
+        double minimumGraphemeWidth = 1.0;
+        double textInkReserve = 0.0;
         bool hasExistingElement = false;
         SnowTextLayoutSize measuredLayout{1.0, 1.0, 0.0, 0.0};
         SnowTextStyle style{};
@@ -53,12 +57,22 @@ class SnowCanvasTextEditorSession final {
     FinishedEdit finish(const QFont& baseFont);
     void cancel();
     void releaseRetainedState();
+    void invalidateFontMetrics(const QFont& baseFont);
     std::optional<QRectF> textEditingBounds() const;
     // Returns whether changed bounds reflowed an eligible active draft.
     bool setTextEditingBounds(const std::optional<QRectF>& bounds, const QFont& baseFont);
 
     SnowElementId arrowId() const {
         return m_arrowId;
+    }
+    SnowElementId bubbleId() const {
+        return m_bubbleId;
+    }
+    double minimumGraphemeWidth() const {
+        return m_minimumGraphemeWidth;
+    }
+    double textInkReserve() const {
+        return m_textInkReserve;
     }
     bool isActive() const;
     bool containsViewPosition(const SceneDisplayInfo& sceneInfo, const QPointF& viewPosition) const;
@@ -101,6 +115,11 @@ class SnowCanvasTextEditorSession final {
     QPointF m_canvasAnchor;
     SnowElementId m_elementId{};
     SnowElementId m_arrowId{};
+    SnowElementId m_bubbleId{};
+    SnowTextElementInfo m_bubbleInfo{};
+    double m_minimumGraphemeWidth = 1.0;
+    double m_textInkReserve = 0.0;
+    snow_canvas_text_measurement::BubbleTextLayoutCache m_bubbleLayouts;
     double m_arrowWidth = 0.0;
     bool m_hasExistingElement = false;
     SnowCanvasSceneItem m_previewItem;

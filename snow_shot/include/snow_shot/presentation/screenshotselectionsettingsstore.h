@@ -14,13 +14,16 @@ class ScreenshotSelectionSettingsStore final : public ScreenshotSelectionParamsS
 
     [[nodiscard]] bool hasPreviousSelectionParams() const;
     [[nodiscard]] ScreenshotSelectionParams previousSelectionParams() const;
+    [[nodiscard]] std::optional<ScreenshotSelectionParams>
+    previousSelectionParams(const QRect& bounds) const;
     void setPreviousSelectionParams(const ScreenshotSelectionParams& params) override;
 
     ScreenshotRegionType regionType() const;
     void setRegionType(ScreenshotRegionType type);
     [[nodiscard]] int cornerRadius() const;
     [[nodiscard]] int shadowWidth() const;
-    void setSelectionEffects(int cornerRadius, int shadowWidth);
+    [[nodiscard]] QColor shadowColor() const;
+    void setSelectionEffects(int cornerRadius, int shadowWidth, const QColor& shadowColor);
     [[nodiscard]] ScreenshotSelectionAspectRatioPreset aspectRatioPreset() const;
     [[nodiscard]] bool aspectRatioLocked() const;
     void setAspectRatioPreference(ScreenshotSelectionAspectRatioPreset preset, bool locked);

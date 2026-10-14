@@ -237,6 +237,7 @@ class AdPagination final : public QWidget {
   struct Private;
 
   void rebuild();
+  bool publishStateChanges();
   void applyPageSizeFromUser(int value);
   void navigateFromUser(int page);
   int boundedPage(int page) const;

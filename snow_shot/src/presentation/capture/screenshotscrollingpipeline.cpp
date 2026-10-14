@@ -1,3 +1,4 @@
+#include "snow_shot/runtime/runtimeactivitytracker.h"
 #include "snow_draw_engine_qt/snow_canvas_image.h"
 #include "snow_shot/platform/applicationqos.h"
 #include "screenshotscrollingpipeline.h"
@@ -12,13 +13,19 @@
 #include <QThread>
 #include <QColorSpace>
 
+#ifdef Q_OS_MACOS
+#include <pthread/qos.h>
+#endif
+
 #include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <thread>
 #include <utility>
+#include <vector>
 
 Q_LOGGING_CATEGORY(snowShotScrollingCaptureLog, "snowshot.capture.scrolling", QtWarningMsg)
 
@@ -98,6 +105,84 @@ class OwnedScrollFrame {
 };
 
 using ScrollFrameMailbox = snow_shot::capture_detail::LatestFrameMailbox<OwnedScrollFrame, quint64>;
+
+// Native cleanup never owns GUI resources captured by completion. The receiver owns this
+// object, so cancellation during application teardown also releases those resources on the
+// receiver's thread.
+class ScrollingShutdownCompletion final : public QObject {
+  public:
+    ScrollingShutdownCompletion(QObject* receiver, std::function<void()> completed)
+        : QObject(receiver),
+          m_completed(snow_shot::runtime::trackRuntimeWork(std::move(completed))) {}
+    void complete() {
+        auto completed = std::exchange(m_completed, {});
+        deleteLater();
+        completed();
+    }
+
+  private:
+    std::function<void()> m_completed;
+};
+
+class ScrollingShutdownTasks final {
+  public:
+    static ScrollingShutdownTasks& shared() {
+        // Application teardown explicitly joins these tasks before its services and Qt
+        // disappear. The admission registry itself remains valid through static teardown.
+        static auto* tasks = new ScrollingShutdownTasks;
+        return *tasks;
+    }
+
+    template <typename Work> void submit(Work work) {
+        std::vector<std::thread> finished;
+        const std::lock_guard lock(m_mutex);
+        for (auto entry = m_threads.begin(); entry != m_threads.end();) {
+            if (entry->finished->load()) {
+                finished.push_back(std::move(entry->thread));
+                entry = m_threads.erase(entry);
+            } else {
+                ++entry;
+            }
+        }
+        auto done = std::make_shared<std::atomic_bool>(false);
+        std::thread thread(
+            [work = std::move(work), done, finished = std::move(finished)]() mutable {
+                // Reap previous finished threads here, keeping every join off ordinary UI stop.
+                for (auto& previous : finished)
+                    previous.join();
+                {
+                    auto execute = std::move(work);
+                    execute();
+                }
+                // The invocation and its runtime activity reservation are already destroyed.
+                // A terminal join also waits for the cleanup thread's Qt/TLS destruction.
+                done->store(true);
+            });
+        m_threads.push_back({std::move(thread), std::move(done)});
+    }
+
+    void wait() {
+        for (;;) {
+            std::vector<Entry> threads;
+            {
+                const std::lock_guard lock(m_mutex);
+                threads = std::exchange(m_threads, {});
+            }
+            if (threads.empty())
+                return;
+            for (auto& entry : threads)
+                entry.thread.join();
+        }
+    }
+
+  private:
+    struct Entry {
+        std::thread thread;
+        std::shared_ptr<std::atomic_bool> finished;
+    };
+    std::mutex m_mutex;
+    std::vector<Entry> m_threads;
+};
 
 void releaseScrollSourceImage(void* image) {
     delete static_cast<QImage*>(image);
@@ -481,18 +566,20 @@ class ScreenshotScrollingCaptureProducer final : public QObject {
                           {{QStringLiteral("width"), viewport.width()},
                            {QStringLiteral("height"), viewport.height()}});
         m_diagnostics = {};
+        m_sourceActivity = snow_shot::runtime::RuntimeActivityTracker::shared().acquire();
         m_source = factory();
         if (!m_source) {
+            m_sourceActivity = {};
             m_callback({generation, false, false, true,
                         QStringLiteral("could not initialize scrolling frame source")});
             return;
         }
         logScrollingEvent("scrolling.source_ready", generation, m_diagnostics.fields());
         m_active.store(true);
-        m_consumer = std::thread([this, generation]() {
+        m_consumer = std::thread(snow_shot::runtime::trackRuntimeWork([this, generation]() {
             snow_shot::platform::applyApplicationQoSToCurrentThread();
             consume(generation);
-        });
+        }));
     }
     void reset(quint64 generation) {
         m_active.store(false);
@@ -501,6 +588,7 @@ class ScreenshotScrollingCaptureProducer final : public QObject {
         if (m_consumer.joinable())
             m_consumer.join();
         m_source.reset();
+        m_sourceActivity = {};
         m_generation = generation;
     }
     void pause(quint64 generation) {
@@ -634,6 +722,7 @@ class ScreenshotScrollingCaptureProducer final : public QObject {
     std::shared_ptr<ScrollFrameMailbox> m_mailbox;
     Callback m_callback;
     std::unique_ptr<ScrollingFrameSource> m_source;
+    snow_shot::runtime::RuntimeActivityLease m_sourceActivity;
     QSize m_viewport;
     ScrollingCaptureDiagnostics m_diagnostics;
     quint64 m_generation = 0;
@@ -665,16 +754,18 @@ struct ScreenshotScrollingPipeline::Impl {
     Impl(ScreenshotScrollingPipeline& ownerValue, FrameCallback frames, ErrorCallback errors)
         : owner(ownerValue), frameCallback(std::move(frames)), errorCallback(std::move(errors)) {
         const QPointer<ScreenshotScrollingPipeline> receiver(&owner);
-        producer =
-            new ScreenshotScrollingCaptureProducer(mailbox, [receiver](ScrollCaptureResult result) {
-                if (!receiver)
+        const QPointer<QObject> delivery(deliveryContext.get());
+        producer = new ScreenshotScrollingCaptureProducer(
+            mailbox, [receiver, delivery](ScrollCaptureResult result) {
+                if (!delivery)
                     return;
                 QMetaObject::invokeMethod(
-                    receiver,
-                    [receiver, result = std::move(result)]() mutable {
-                        if (receiver)
-                            receiver->m_impl->handleCapture(std::move(result));
-                    },
+                    delivery,
+                    snow_shot::runtime::trackRuntimeWork(
+                        [receiver, delivery, result = std::move(result)]() mutable {
+                            if (delivery)
+                                receiver->m_impl->handleCapture(std::move(result));
+                        }),
                     Qt::QueuedConnection);
             });
         producer->moveToThread(&captureThread);
@@ -686,19 +777,41 @@ struct ScreenshotScrollingPipeline::Impl {
         stitchThread.setObjectName(QStringLiteral("snow-shot-scrolling-stitch"));
         snow_shot::platform::configureApplicationQoSThread(&captureThread);
         captureThread.start();
+#ifdef Q_OS_MACOS
+        // CPU-intensive stitching must not inherit the application's interactive QoS.
+        QObject::connect(
+            &stitchThread, &QThread::started, &stitchThread,
+            [] {
+                const int code = pthread_set_qos_class_self_np(QOS_CLASS_DEFAULT, 0);
+                if (code != 0) {
+                    snow_shot::diagnostics::logEvent(
+                        QStringLiteral("snow_shot.platform"),
+                        QStringLiteral("scheduling.qos_failed"),
+                        {{QStringLiteral("code"), code},
+                         {QStringLiteral("thread"), QStringLiteral("snow-shot-scrolling-stitch")},
+                         {QStringLiteral("qos"), QStringLiteral("default")}},
+                        QtWarningMsg);
+                }
+            },
+            Qt::DirectConnection);
+#else
         snow_shot::platform::configureApplicationQoSThread(&stitchThread);
+#endif
         stitchThread.start();
     }
     ~Impl() {
-        active = false;
-        QMetaObject::invokeMethod(
-            producer, [this]() { producer->reset(generation); }, Qt::BlockingQueuedConnection);
+        QMetaObject::invokeMethod(producer, snow_shot::runtime::trackRuntimeWork([this]() {
+                                      producer->reset(generation);
+                                  }),
+                                  Qt::BlockingQueuedConnection);
         captureThread.quit();
         captureThread.wait();
         // Export snapshots accepted before reset must be delivered even when
         // capture immediately destroys the pipeline. quit() from this thread
         // can discard queued work; enqueue it behind the accepted worker jobs.
-        QMetaObject::invokeMethod(worker, [this]() { stitchThread.quit(); }, Qt::QueuedConnection);
+        QMetaObject::invokeMethod(
+            worker, snow_shot::runtime::trackRuntimeWork([this]() { stitchThread.quit(); }),
+            Qt::QueuedConnection);
         stitchThread.wait();
     }
     void handleCapture(ScrollCaptureResult result) {
@@ -711,7 +824,9 @@ struct ScreenshotScrollingPipeline::Impl {
         }
         if (result.streamPressure) {
             QMetaObject::invokeMethod(
-                producer, [this, value = generation]() { producer->recordStreamPressure(value); },
+                producer, snow_shot::runtime::trackRuntimeWork([this, value = generation]() {
+                    producer->recordStreamPressure(value);
+                }),
                 Qt::QueuedConnection);
         }
         if (result.wakeConsumer)
@@ -730,9 +845,12 @@ struct ScreenshotScrollingPipeline::Impl {
         SNOW_SCROLL_TRACE(trace, trace->record(scrolling_perf::Stage::MailboxWait,
                                                trace->dispatchedAt - trace->publishedAt));
         const QPointer<ScreenshotScrollingPipeline> receiver(&owner);
+        const QPointer<QObject> delivery(deliveryContext.get());
         QMetaObject::invokeMethod(
             worker,
-            [receiver, target = worker, value = next->generation, frame, trace]() mutable {
+            snow_shot::runtime::trackRuntimeWork([receiver, delivery, target = worker,
+                                                  value = next->generation, frame,
+                                                  trace]() mutable {
                 SNOW_SCROLL_TRACE(trace,
                                   trace->record(scrolling_perf::Stage::WorkerDispatch,
                                                 scrolling_perf::now() - trace->dispatchedAt));
@@ -741,16 +859,17 @@ struct ScreenshotScrollingPipeline::Impl {
                 result.processingDuration = ScrollClock::now() - started;
                 result.change = stitchChange(result.event);
                 SNOW_SCROLL_TRACE(trace, trace->completedAt = scrolling_perf::now());
-                if (!receiver)
+                if (!delivery)
                     return;
                 QMetaObject::invokeMethod(
-                    receiver,
-                    [receiver, result = std::move(result)]() mutable {
-                        if (receiver)
-                            receiver->m_impl->handleFrame(std::move(result));
-                    },
+                    delivery,
+                    snow_shot::runtime::trackRuntimeWork(
+                        [receiver, delivery, result = std::move(result)]() mutable {
+                            if (delivery)
+                                receiver->m_impl->handleFrame(std::move(result));
+                        }),
                     Qt::QueuedConnection);
-            },
+            }),
             Qt::QueuedConnection);
     }
     void handleFrame(ScrollingPipelineFrame result) {
@@ -781,9 +900,10 @@ struct ScreenshotScrollingPipeline::Impl {
         SNOW_SCROLL_TRACE(trace, trace->outputHeight = result.sourceSize.height());
         QMetaObject::invokeMethod(
             producer,
-            [this, value = generation, duration = result.processingDuration]() {
-                producer->recordStitch(value, duration);
-            },
+            snow_shot::runtime::trackRuntimeWork(
+                [this, value = generation, duration = result.processingDuration]() {
+                    producer->recordStitch(value, duration);
+                }),
             Qt::QueuedConnection);
         if (next && !result.fatalError)
             schedule();
@@ -794,6 +914,7 @@ struct ScreenshotScrollingPipeline::Impl {
     ScreenshotScrollingPipeline& owner;
     FrameCallback frameCallback;
     ErrorCallback errorCallback;
+    std::unique_ptr<QObject> deliveryContext = std::make_unique<QObject>();
     std::shared_ptr<ScrollFrameMailbox> mailbox = std::make_shared<ScrollFrameMailbox>();
     QThread captureThread;
     QThread stitchThread;
@@ -810,7 +931,49 @@ ScreenshotScrollingPipeline::ScreenshotScrollingPipeline(FrameCallback frames, E
                                                          QObject* parent)
     : QObject(parent), m_impl(std::make_unique<Impl>(*this, std::move(frames), std::move(errors))) {
 }
-ScreenshotScrollingPipeline::~ScreenshotScrollingPipeline() = default;
+ScreenshotScrollingPipeline::~ScreenshotScrollingPipeline() {
+    shutdown(nullptr, {});
+}
+
+void ScreenshotScrollingPipeline::shutdown(QObject* receiver, std::function<void()> completed) {
+    if (!m_impl)
+        return;
+    m_impl->active = false;
+    // Cancel UI/control delivery before detaching ownership. Queued worker operations retain
+    // their targets until the cleanup thread joins both Qt threads; export snapshots instead
+    // belong to their independent receivers and must drain before the stitch thread quits.
+    m_impl->deliveryContext.reset();
+    m_impl->frameCallback = {};
+    m_impl->errorCallback = {};
+    m_impl->mailbox->reset(m_impl->generation);
+    // QThread objects are control handles with GUI affinity, separate from the workers they
+    // run. Detach that affinity so the cleanup thread can adopt and destroy the handles after
+    // wait() without posting their destruction back to the GUI event loop.
+    m_impl->captureThread.moveToThread(nullptr);
+    m_impl->stitchThread.moveToThread(nullptr);
+    const QPointer<ScrollingShutdownCompletion> completion(
+        receiver && completed ? new ScrollingShutdownCompletion(receiver, std::move(completed))
+                              : nullptr);
+    ScrollingShutdownTasks::shared().submit(
+        snow_shot::runtime::trackRuntimeWork([impl = std::move(m_impl), completion]() mutable {
+            impl->captureThread.moveToThread(QThread::currentThread());
+            impl->stitchThread.moveToThread(QThread::currentThread());
+            impl.reset();
+            if (completion) {
+                QMetaObject::invokeMethod(
+                    completion,
+                    [completion] {
+                        if (completion)
+                            completion->complete();
+                    },
+                    Qt::QueuedConnection);
+            }
+        }));
+}
+
+void ScreenshotScrollingPipeline::waitForShutdowns() {
+    ScrollingShutdownTasks::shared().wait();
+}
 
 void ScreenshotScrollingPipeline::begin(quint64 generation, QSize viewport,
                                         ScreenshotScrollingRecognitionMode mode,
@@ -819,14 +982,15 @@ void ScreenshotScrollingPipeline::begin(quint64 generation, QSize viewport,
     reset(generation);
     QMetaObject::invokeMethod(
         m_impl->worker,
-        [target = m_impl->worker, generation, mode]() { target->begin(generation, mode); },
+        snow_shot::runtime::trackRuntimeWork(
+            [target = m_impl->worker, generation, mode]() { target->begin(generation, mode); }),
         Qt::QueuedConnection);
     m_impl->active = true;
     QMetaObject::invokeMethod(
         m_impl->producer,
-        [target = m_impl->producer, generation, viewport, source = std::move(source), cadence]() {
-            target->begin(generation, viewport, source, cadence);
-        },
+        snow_shot::runtime::trackRuntimeWork(
+            [target = m_impl->producer, generation, viewport, source = std::move(source),
+             cadence]() { target->begin(generation, viewport, source, cadence); }),
         Qt::QueuedConnection);
 }
 void ScreenshotScrollingPipeline::reset(quint64 generation) {
@@ -837,10 +1001,14 @@ void ScreenshotScrollingPipeline::reset(quint64 generation) {
     m_impl->processedFrames = 0;
     m_impl->mailbox->reset(generation);
     QMetaObject::invokeMethod(
-        m_impl->producer, [target = m_impl->producer, generation]() { target->reset(generation); },
+        m_impl->producer,
+        snow_shot::runtime::trackRuntimeWork(
+            [target = m_impl->producer, generation]() { target->reset(generation); }),
         Qt::QueuedConnection);
     QMetaObject::invokeMethod(
-        m_impl->worker, [target = m_impl->worker, generation]() { target->reset(generation); },
+        m_impl->worker,
+        snow_shot::runtime::trackRuntimeWork(
+            [target = m_impl->worker, generation]() { target->reset(generation); }),
         Qt::QueuedConnection);
 }
 void ScreenshotScrollingPipeline::pause(quint64 generation, std::function<void()> acknowledged) {
@@ -850,36 +1018,42 @@ void ScreenshotScrollingPipeline::pause(quint64 generation, std::function<void()
     m_impl->active = false;
     m_impl->mailbox->reset(generation);
     const QPointer<ScreenshotScrollingPipeline> receiver(this);
+    const QPointer<QObject> delivery(m_impl->deliveryContext.get());
     QMetaObject::invokeMethod(
         m_impl->producer,
-        [target = m_impl->producer, worker = m_impl->worker, receiver, generation, revision,
-         acknowledged = std::move(acknowledged)]() mutable {
+        snow_shot::runtime::trackRuntimeWork([target = m_impl->producer, worker = m_impl->worker,
+                                              receiver, delivery, generation, revision,
+                                              acknowledged = std::move(acknowledged)]() mutable {
             target->pause(generation);
-            if (!receiver || !acknowledged)
+            if (!delivery || !acknowledged)
                 return;
             // The source has stopped and joined. This worker barrier posts to the same GUI
             // receiver as stitch results, so their extent/trim updates precede acknowledgment.
             QMetaObject::invokeMethod(
                 worker,
-                [receiver, generation, revision, acknowledged = std::move(acknowledged)]() mutable {
-                    if (!receiver)
-                        return;
-                    QMetaObject::invokeMethod(
-                        receiver,
-                        [receiver, generation, revision,
-                         acknowledged = std::move(acknowledged)]() mutable {
-                            if (!receiver || receiver->m_impl->generation != generation ||
-                                receiver->m_impl->controlRevision != revision)
-                                return;
-                            // A consumer already copying a frame may publish after the first
-                            // reset. It is now joined, so this removes every race-admitted frame.
-                            receiver->m_impl->mailbox->reset(generation);
-                            acknowledged();
-                        },
-                        Qt::QueuedConnection);
-                },
+                snow_shot::runtime::trackRuntimeWork(
+                    [receiver, delivery, generation, revision,
+                     acknowledged = std::move(acknowledged)]() mutable {
+                        if (!delivery)
+                            return;
+                        QMetaObject::invokeMethod(
+                            delivery,
+                            snow_shot::runtime::trackRuntimeWork(
+                                [receiver, delivery, generation, revision,
+                                 acknowledged = std::move(acknowledged)]() mutable {
+                                    if (!delivery || receiver->m_impl->generation != generation ||
+                                        receiver->m_impl->controlRevision != revision)
+                                        return;
+                                    // A consumer already copying a frame may publish after the
+                                    // first reset. It is now joined, so this removes every
+                                    // race-admitted frame.
+                                    receiver->m_impl->mailbox->reset(generation);
+                                    acknowledged();
+                                }),
+                            Qt::QueuedConnection);
+                    }),
                 Qt::QueuedConnection);
-        },
+        }),
         Qt::QueuedConnection);
 }
 void ScreenshotScrollingPipeline::resume(quint64 generation, QSize viewport,
@@ -889,40 +1063,46 @@ void ScreenshotScrollingPipeline::resume(quint64 generation, QSize viewport,
     m_impl->active = false;
     m_impl->generation = generation;
     const QPointer<ScreenshotScrollingPipeline> receiver(this);
+    const QPointer<QObject> delivery(m_impl->deliveryContext.get());
     // Producer ordering ensures the previous source has stopped. Worker ordering
     // then delivers all committed stitch results before reopening frame acceptance.
     QMetaObject::invokeMethod(
         m_impl->producer,
-        [receiver, generation, viewport, source = std::move(source), cadence, revision]() mutable {
-            if (!receiver)
+        snow_shot::runtime::trackRuntimeWork([receiver, delivery, worker = m_impl->worker,
+                                              generation, viewport, source = std::move(source),
+                                              cadence, revision]() mutable {
+            if (!delivery)
                 return;
             QMetaObject::invokeMethod(
-                receiver->m_impl->worker,
-                [receiver, generation, viewport, source = std::move(source), cadence,
-                 revision]() mutable {
-                    if (!receiver)
+                worker,
+                snow_shot::runtime::trackRuntimeWork([receiver, delivery, generation, viewport,
+                                                      source = std::move(source), cadence,
+                                                      revision]() mutable {
+                    if (!delivery)
                         return;
                     QMetaObject::invokeMethod(
-                        receiver,
-                        [receiver, generation, viewport, source = std::move(source), cadence,
-                         revision]() mutable {
-                            if (!receiver || receiver->m_impl->controlRevision != revision)
+                        delivery,
+                        snow_shot::runtime::trackRuntimeWork([receiver, delivery, generation,
+                                                              viewport, source = std::move(source),
+                                                              cadence, revision]() mutable {
+                            if (!delivery || receiver->m_impl->controlRevision != revision)
                                 return;
                             auto* impl = receiver->m_impl.get();
                             impl->mailbox->reset(generation);
                             impl->active = true;
                             QMetaObject::invokeMethod(
                                 impl->producer,
-                                [target = impl->producer, generation, viewport,
-                                 source = std::move(source), cadence]() {
-                                    target->begin(generation, viewport, source, cadence);
-                                },
+                                snow_shot::runtime::trackRuntimeWork(
+                                    [target = impl->producer, generation, viewport,
+                                     source = std::move(source), cadence]() {
+                                        target->begin(generation, viewport, source, cadence);
+                                    }),
                                 Qt::QueuedConnection);
-                        },
+                        }),
                         Qt::QueuedConnection);
-                },
+                }),
                 Qt::QueuedConnection);
-        },
+        }),
         Qt::QueuedConnection);
 }
 
@@ -930,21 +1110,21 @@ bool ScreenshotScrollingPipeline::idle() const {
     return !m_impl->busy && m_impl->mailbox->pendingDepth() == 0;
 }
 void ScreenshotScrollingPipeline::finishInput(std::function<void()> callback) {
-    const QPointer<ScreenshotScrollingPipeline> receiver(this);
+    const QPointer<QObject> delivery(m_impl->deliveryContext.get());
     QMetaObject::invokeMethod(
         m_impl->producer,
-        [target = m_impl->producer, value = m_impl->generation, receiver,
-         callback = std::move(callback)]() mutable {
+        snow_shot::runtime::trackRuntimeWork([target = m_impl->producer, value = m_impl->generation,
+                                              delivery, callback = std::move(callback)]() mutable {
             target->pause(value);
-            if (receiver)
-                QMetaObject::invokeMethod(
-                    receiver,
-                    [receiver, callback = std::move(callback)]() {
-                        if (receiver)
-                            callback();
-                    },
-                    Qt::QueuedConnection);
-        },
+            if (delivery)
+                QMetaObject::invokeMethod(delivery,
+                                          snow_shot::runtime::trackRuntimeWork(
+                                              [delivery, callback = std::move(callback)]() {
+                                                  if (delivery)
+                                                      callback();
+                                              }),
+                                          Qt::QueuedConnection);
+        }),
         Qt::QueuedConnection);
 }
 bool ScreenshotScrollingPipeline::requestSnapshot(int top, int bottom, QObject* receiver,
@@ -952,18 +1132,20 @@ bool ScreenshotScrollingPipeline::requestSnapshot(int top, int bottom, QObject* 
     const QPointer<QObject> guarded(receiver);
     return QMetaObject::invokeMethod(
         m_impl->worker,
-        [target = m_impl->worker, top, bottom, guarded, callback = std::move(callback)]() mutable {
+        snow_shot::runtime::trackRuntimeWork([target = m_impl->worker, top, bottom, guarded,
+                                              callback = std::move(callback)]() mutable {
             auto result = target->trimmedSnapshot(top, bottom);
             if (!guarded)
                 return;
             QMetaObject::invokeMethod(
                 guarded,
-                [guarded, callback = std::move(callback), result = std::move(result)]() mutable {
+                snow_shot::runtime::trackRuntimeWork([guarded, callback = std::move(callback),
+                                                      result = std::move(result)]() mutable {
                     if (guarded)
                         callback(std::move(result));
-                },
+                }),
                 Qt::QueuedConnection);
-        },
+        }),
         Qt::QueuedConnection);
 }
 
@@ -974,28 +1156,31 @@ bool ScreenshotScrollingPipeline::requestViewportPreview(int start, int end, QOb
         return false;
     const QPointer<QObject> guarded(receiver);
     const QPointer<ScreenshotScrollingPipeline> pipeline(this);
+    const QPointer<QObject> delivery(m_impl->deliveryContext.get());
     const auto generation = m_impl->generation;
     const auto revision = m_impl->controlRevision;
     return QMetaObject::invokeMethod(
         m_impl->worker,
-        [target = m_impl->worker, pipeline, generation, revision, start, end, guarded,
-         callback = std::move(callback)]() mutable {
-            if (!guarded || !pipeline)
+        snow_shot::runtime::trackRuntimeWork([target = m_impl->worker, pipeline, delivery,
+                                              generation, revision, start, end, guarded,
+                                              callback = std::move(callback)]() mutable {
+            if (!guarded || !delivery)
                 return;
             QImage result = target->viewportPreview(generation, start, end);
             QMetaObject::invokeMethod(
                 guarded,
-                [pipeline, generation, revision, guarded, callback = std::move(callback),
-                 result = std::move(result)]() mutable {
-                    if (!pipeline || !guarded)
+                snow_shot::runtime::trackRuntimeWork([pipeline, delivery, generation, revision,
+                                                      guarded, callback = std::move(callback),
+                                                      result = std::move(result)]() mutable {
+                    if (!delivery || !guarded)
                         return;
                     if (pipeline->m_impl->generation != generation ||
                         pipeline->m_impl->controlRevision != revision)
                         result = {};
                     callback(std::move(result));
-                },
+                }),
                 Qt::QueuedConnection);
-        },
+        }),
         Qt::QueuedConnection);
 }
 } // namespace snow_shot::capture_detail

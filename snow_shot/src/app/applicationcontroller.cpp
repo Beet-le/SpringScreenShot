@@ -1,6 +1,10 @@
 #include "snow_draw_engine_qt/snow_canvas_image.h"
 #include "snow_shot/app/edition.h"
 #include "snow_shot/app/applicationcontroller.h"
+#include "snow_shot/app/shellimagelaunch.h"
+#include "snow_shot/image/supportedimagefiles.h"
+#include "snow_shot/runtime/memoryoptimizationcontroller.h"
+#include "snow_shot/runtime/memoryoptimizationuisafety.h"
 #include "snow_shot/app/applicationrestart.h"
 #include "snow_shot/app/updateconfirmationdialog.h"
 #include "snow_shot/app/featureavailability.h"
@@ -80,6 +84,7 @@
 #include <QUuid>
 
 #include <memory>
+#include <utility>
 #include <atomic>
 #include <cmath>
 #ifdef Q_OS_WIN
@@ -91,6 +96,9 @@ namespace {
 const QString kPinBorderColorKey = QStringLiteral("pin_to_screen/border_color");
 const QString kPinBorderActiveColorKey = QStringLiteral("pin_to_screen/border_active_color");
 const QString kPinLockedBorderColorKey = QStringLiteral("pin_to_screen/locked_border_color");
+const QString kPinShadowColorKey = QStringLiteral("pin_to_screen/shadow_color");
+const QString kPinShadowActiveColorKey = QStringLiteral("pin_to_screen/shadow_active_color");
+const QString kPinLockedShadowColorKey = QStringLiteral("pin_to_screen/locked_shadow_color");
 const QString kTrayEnabledKey = QStringLiteral("tray/enabled");
 const QString kTrayIconKey = QStringLiteral("tray/icon");
 const QString kTrayCustomIconKey = QStringLiteral("tray/custom_icon");
@@ -264,6 +272,10 @@ class ApplicationController::Impl {
                              systemTray.setQuickActionChecked(
                                  presentation::GlobalShortcutAction::ToggleGlobalHotkeys, !enabled);
                          });
+        QObject::connect(
+            &globalShortcutManager,
+            &presentation::GlobalShortcutManager::focusedFullscreenSuppressionChanged, &systemTray,
+            &presentation::SystemTrayController::setFocusedFullscreenSuppressionActive);
         QObject::connect(&app, &QCoreApplication::aboutToQuit, &systemTray,
                          &presentation::SystemTrayController::hide);
         QObject::connect(&app, &QCoreApplication::aboutToQuit, &globalMouseManager,
@@ -437,6 +449,18 @@ class ApplicationController::Impl {
                 if (ocrRecognition)
                     ocrRecognition->drainStorage();
             });
+        QObject::connect(
+            &applicationStorage, &storage::ApplicationStorage::directoryChangeFinished, &q, [this] {
+                const auto paths = std::move(deferredStorageShellImagePaths);
+                deferredStorageShellImagePaths.clear();
+                const bool foreground = std::exchange(deferredStorageShellForeground, false);
+                if (paths.isEmpty())
+                    return;
+                auto arguments = shellImageLaunchArguments(paths);
+                if (foreground)
+                    arguments.append(QStringLiteral("--show-main-window"));
+                q.handleLaunchRequest(arguments);
+            });
 #endif
         QObject::connect(updates, &update::UpdateService::restartRequested, &q, [this] {
             if (platform::windows::administratorOperationPending())
@@ -486,6 +510,11 @@ class ApplicationController::Impl {
                                   kPinBorderActiveColorKey);
         applyRuntimeConfiguration(configuration.value(kPinLockedBorderColorKey),
                                   kPinLockedBorderColorKey);
+        applyRuntimeConfiguration(configuration.value(kPinShadowColorKey), kPinShadowColorKey);
+        applyRuntimeConfiguration(configuration.value(kPinShadowActiveColorKey),
+                                  kPinShadowActiveColorKey);
+        applyRuntimeConfiguration(configuration.value(kPinLockedShadowColorKey),
+                                  kPinLockedShadowColorKey);
         applyRuntimeConfiguration(configuration.value(kTrayEnabledKey), kTrayEnabledKey);
         applyRuntimeConfiguration(configuration.value(kTrayIconKey), kTrayIconKey);
         applyRuntimeConfiguration(configuration.value(kTrayCustomIconKey), kTrayCustomIconKey);
@@ -525,9 +554,23 @@ class ApplicationController::Impl {
         reopenHandler = std::make_unique<platform::macos::ApplicationReopenHandler>(
             [this]() { showMainWindow(); });
 #endif
+#if defined(Q_OS_WIN) || defined(Q_OS_MACOS)
+        auto memoryOptions = runtime::nativeMemoryOptimizationOptions();
+        memoryOptions.enabled = [] {
+            return storage::ApplicationStorage::instance()
+                       .configuration()
+                       .value(QStringLiteral("system/memory_optimization_policy"))
+                       .toString() == QStringLiteral("smart_control");
+        };
+        memoryOptions.safe = [this] { return memoryTrimmingIsSafe(); };
+        memoryOptimization = std::make_unique<runtime::MemoryOptimizationController>(
+            runtime::RuntimeActivityTracker::shared(), std::move(memoryOptions), &q);
+#endif
     }
 
     ~Impl() {
+        if (memoryOptimization)
+            memoryOptimization->stop();
         floatingToolbar.shutdown();
         stopMcp();
         platform::windows::setAdministratorRestartGuard({});
@@ -543,6 +586,23 @@ class ApplicationController::Impl {
                updates->status().state != update::UpdateState::Applying &&
                !(screenshotController && screenshotController->blocksApplicationUpdate()) &&
                !(directCaptureController && directCaptureController->blocksApplicationUpdate());
+    }
+
+    [[nodiscard]] bool memoryTrimmingIsSafe() const {
+        if (runtime::currentProcessOwnsForegroundWindow() ||
+            storage::ApplicationStorage::instance().directoryChanging() ||
+            storage::ApplicationStorage::instance().status().diagnostics.exporting ||
+            (updates && (updates->busy() || updates->handoffPending())) ||
+            (screenshotController && screenshotController->blocksMemoryTrimming()) ||
+            (directCaptureController && directCaptureController->blocksApplicationUpdate()) ||
+            (ocrRecognition && ocrRecognition->storageBusy()) || mcpSourceWork > 0 ||
+            (mcpJobs && mcpJobs->hasRunningJobs()) || floatingToolbar.blocksMemoryTrimming())
+            return false;
+        return runtime::memoryOptimizationUiIsSafe([this](const QWidget* window) {
+            if (const auto* pin = qobject_cast<const ScreenshotPinnedWindow*>(window))
+                return !pin->blocksMemoryTrimming();
+            return floatingToolbar.ownsIdleSurface(window);
+        });
     }
 
     void setUpdateHandoffPending(bool pending) {
@@ -571,8 +631,49 @@ class ApplicationController::Impl {
                                   .toBool())
                 startMcp();
             handoffMcp = false;
+#ifdef Q_OS_WIN
+            const auto deferredPaths = std::move(deferredShellImagePaths);
+            deferredShellImagePaths.clear();
+            const bool foreground = std::exchange(deferredShellForeground, false);
+            updates->clearRelaunchArguments();
+            if (!deferredPaths.isEmpty())
+                pinShellImageFiles(deferredPaths);
+            if (foreground)
+                showMainWindow();
+#endif
         }
     }
+
+    void reportSelectedFilePinFailure(const QString& message) {
+        if (!mainWindow || !mainWindow->isVisible() || mainWindow->isMinimized()) {
+            systemTray.showWarningMessage(ApplicationController::tr("Could not pin selected files"),
+                                          message);
+            return;
+        }
+        MainWindow& window = ensureMainWindow();
+        window.showAndActivate();
+        adqt::widgets::AdMessage::Request request;
+        request.key = QStringLiteral("pin-selected-files-error");
+        request.content = message;
+        adqt::widgets::AdMessageService::warning(std::move(request), &window);
+    }
+
+#ifdef Q_OS_WIN
+    void pinShellImageFiles(QStringList paths) {
+        static_cast<void>(featureRouter.dispatch(
+            FeatureFamily::PinToScreen, [this, paths = std::move(paths)]() mutable {
+                if (auto* controller = ensureScreenshotController())
+                    controller->pinImageFilesToScreen(std::move(paths));
+            }));
+    }
+
+    void preserveShellLaunchForUpdate(const QStringList& paths, bool foreground) {
+        deferredShellImagePaths.append(paths);
+        deferredShellForeground = deferredShellForeground || foreground;
+        updates->setRelaunchArguments(update::startupUpdateRelaunchArguments(
+            deferredShellForeground, deferredShellImagePaths));
+    }
+#endif
 
     void applyOcrConfiguration() {
         if (ocrRecognition == nullptr)
@@ -1386,19 +1487,7 @@ class ApplicationController::Impl {
                 });
             QObject::connect(
                 screenshotController.get(), &ScreenshotController::selectedFilePinFailed, &q,
-                [this](const QString& message) {
-                    if (!mainWindow || !mainWindow->isVisible() || mainWindow->isMinimized()) {
-                        systemTray.showWarningMessage(
-                            ApplicationController::tr("Could not pin selected files"), message);
-                        return;
-                    }
-                    MainWindow& window = ensureMainWindow();
-                    window.showAndActivate();
-                    adqt::widgets::AdMessage::Request request;
-                    request.key = QStringLiteral("pin-selected-files-error");
-                    request.content = message;
-                    adqt::widgets::AdMessageService::warning(std::move(request), &window);
-                });
+                [this](const QString& message) { reportSelectedFilePinFailure(message); });
             QObject::connect(screenshotController.get(),
                              &ScreenshotController::showMainWindowRequested, &q,
                              [this]() { showMainWindow(); });
@@ -1424,6 +1513,8 @@ class ApplicationController::Impl {
     }
 
     void applyRuntimeConfiguration(const QJsonValue& value, const QString& key) {
+        if (key == u"system/memory_optimization_policy" && memoryOptimization)
+            memoryOptimization->synchronizePolicy();
         if (key == QStringLiteral("screen_recording/enable_microphone"))
             permissions.setMicrophoneEnabled(value.toBool());
 #if SNOW_SHOT_ENABLE_EXTENDED_FEATURES
@@ -1452,6 +1543,15 @@ class ApplicationController::Impl {
                 color = QColor(105, 177, 255, 255);
             }
             ScreenshotPinnedWindow::setRuntimeBorderActiveColor(color);
+        } else if (key == kPinShadowColorKey) {
+            ScreenshotPinnedWindow::setRuntimeShadowColor(
+                storage::colorFromRgbaString(value.toString()));
+        } else if (key == kPinShadowActiveColorKey) {
+            ScreenshotPinnedWindow::setRuntimeShadowActiveColor(
+                storage::colorFromRgbaString(value.toString()));
+        } else if (key == kPinLockedShadowColorKey) {
+            ScreenshotPinnedWindow::setRuntimeLockedShadowColor(
+                storage::colorFromRgbaString(value.toString()));
         } else if (key == kTrayEnabledKey) {
             const bool enabled = value.isBool() ? value.toBool() : true;
             systemTray.setEnabled(enabled);
@@ -1577,6 +1677,7 @@ class ApplicationController::Impl {
     }
 
     void dispatchFloatingAction(const QString& id) {
+        runtime::RuntimeActivityTracker::shared().markActivity();
         using Quick = presentation::GlobalShortcutAction;
         static const QHash<QString, Quick> quickActions{
             {QStringLiteral("screenshot"), Quick::Screenshot},
@@ -1614,6 +1715,7 @@ class ApplicationController::Impl {
 
     void dispatchQuickAction(presentation::GlobalShortcutAction action,
                              QuickActionOrigin origin = QuickActionOrigin::Other) {
+        runtime::RuntimeActivityTracker::shared().markActivity();
         if (storage::ApplicationStorage::instance().directoryChanging() ||
             (updates && updates->handoffPending()))
             return;
@@ -1745,6 +1847,10 @@ class ApplicationController::Impl {
             if (ScreenshotController* controller = ensureScreenshotController())
                 controller->restoreLastClosedPinnedWindow();
             break;
+        case presentation::GlobalShortcutAction::HideShowAllWindows:
+            if (ScreenshotController* controller = ensureScreenshotController())
+                controller->togglePinnedWindowsVisibility();
+            break;
         case presentation::GlobalShortcutAction::PinClipboardContent:
             if (ScreenshotController* controller = ensureScreenshotController()) {
                 controller->pinClipboardContentToScreen();
@@ -1818,6 +1924,7 @@ class ApplicationController::Impl {
     }
 
     void dispatchGlobalMouseEvent(const presentation::GlobalMouseDragEvent& event) {
+        runtime::RuntimeActivityTracker::shared().markActivity();
         auto* controller = ensureScreenshotController();
         using Kind = presentation::GlobalMouseDragEvent::Kind;
         switch (event.kind) {
@@ -1934,7 +2041,14 @@ class ApplicationController::Impl {
     std::unique_ptr<platform::macos::ApplicationReopenHandler> reopenHandler;
 #endif
     bool started = false;
+    std::unique_ptr<runtime::MemoryOptimizationController> memoryOptimization;
     update::UpdateService* updates = nullptr;
+#ifdef Q_OS_WIN
+    QStringList deferredShellImagePaths;
+    bool deferredShellForeground = false;
+    QStringList deferredStorageShellImagePaths;
+    bool deferredStorageShellForeground = false;
+#endif
 };
 
 ApplicationController::ApplicationController(QApplication& application, QObject* parent)
@@ -1955,12 +2069,50 @@ void ApplicationController::requestScreenshot() {
 }
 
 void ApplicationController::handleLaunchRequest(const QStringList& arguments) {
+#ifdef Q_OS_WIN
+    const auto request = parseShellImageLaunchRequest(arguments);
+    if (request.requested) {
+        if (!request.valid) {
+            m_impl->reportSelectedFilePinFailure(tr("The selected image file path is invalid"));
+            return;
+        }
+        QStringList supportedPaths;
+        const auto supported = image::supportedImageFileExtensions();
+        for (const QString& path : request.paths) {
+            if (supported.contains(QFileInfo(path).suffix().toLower()))
+                supportedPaths.append(path);
+            else
+                m_impl->reportSelectedFilePinFailure(
+                    tr("Could not open the selected image file: %1").arg(path));
+        }
+        const bool foreground = arguments.contains(QStringLiteral("--show-main-window"));
+        if (storage::ApplicationStorage::instance().directoryChanging()) {
+            m_impl->deferredStorageShellImagePaths.append(supportedPaths);
+            m_impl->deferredStorageShellForeground =
+                m_impl->deferredStorageShellForeground || foreground;
+        } else if (m_impl->updates && m_impl->updates->handoffPending()) {
+            m_impl->preserveShellLaunchForUpdate(supportedPaths, foreground);
+        } else {
+            if (!supportedPaths.isEmpty())
+                m_impl->pinShellImageFiles(std::move(supportedPaths));
+            if (foreground)
+                m_impl->showMainWindow();
+        }
+        return;
+    }
+#endif
     if (storage::ApplicationStorage::instance().directoryChanging())
         return;
     switch (launchActionForForwardedRequest(arguments)) {
     case LaunchAction::None:
         return;
     case LaunchAction::ShowMainWindow:
+#ifdef Q_OS_WIN
+        if (m_impl->updates && m_impl->updates->handoffPending()) {
+            m_impl->preserveShellLaunchForUpdate({}, true);
+            return;
+        }
+#endif
         m_impl->showMainWindow();
         return;
     case LaunchAction::Screenshot:

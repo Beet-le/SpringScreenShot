@@ -75,6 +75,16 @@ void nonDrawingToolsDisableCanvasInteraction() {
     workflow.setMoveTool();
     require(!canvasInteractionEnabled && interactionChanges == 3,
             "returning to Move must disable canvas interaction again");
+    workflow.setAngleTool();
+    require(canvasInteractionEnabled && interactionChanges == 4 && canvasToolChanges == 2 &&
+                selectedCanvasTool == SnowCanvasTool::Angle &&
+                interaction.activeTool() == ScreenshotActiveTool::Angle,
+            "activating Angle forwards its drawing tool and re-enables canvas interaction");
+    workflow.setSpeechBubbleTool();
+    require(canvasInteractionEnabled && canvasToolChanges == 3 &&
+                selectedCanvasTool == SnowCanvasTool::SpeechBubble &&
+                interaction.activeTool() == ScreenshotActiveTool::SpeechBubble,
+            "activating Speech Bubble forwards its drawing tool and editing state");
 }
 void serialNumberStylePatchesPreservePropertyMask() {
     ScreenshotCaptureState captureState;

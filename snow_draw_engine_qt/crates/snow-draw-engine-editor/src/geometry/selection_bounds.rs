@@ -99,6 +99,29 @@ pub(crate) fn selection_bounds_from_selection(
     })
 }
 
+pub(crate) fn selection_bounds_include_local_rect(
+    bounds: SelectionBounds,
+    rect: snow_draw_engine_core::DrawRect,
+) -> SelectionBounds {
+    let (sin, cos) = bounds.rotation.sin_cos();
+    let (mut min_x, mut min_y) = (-bounds.width / 2.0, -bounds.height / 2.0);
+    let (mut max_x, mut max_y) = (-min_x, -min_y);
+    min_x = min_x.min(rect.min_x);
+    max_x = max_x.max(rect.max_x);
+    min_y = min_y.min(rect.min_y);
+    max_y = max_y.max(rect.max_y);
+    let (x, y) = (f64::midpoint(min_x, max_x), f64::midpoint(min_y, max_y));
+    SelectionBounds {
+        center: Point::new(
+            bounds.center.x + x * cos - y * sin,
+            bounds.center.y + x * sin + y * cos,
+        ),
+        width: max_x - min_x,
+        height: max_y - min_y,
+        rotation: bounds.rotation,
+    }
+}
+
 fn selection_bounds_from_arrow(arrow: &ArrowData) -> SelectionBounds {
     // The reference engine stores arrow points in element-local coordinates and
     // builds a single-selection frame from that rect plus the element rotation.
@@ -904,7 +927,7 @@ mod tests {
     }
 
     #[test]
-    fn spotlight_corner_radius_controls_are_not_hittable() {
+    fn spotlight_corner_radius_controls_are_hittable() {
         let bounds = selection_bounds();
         let spotlight = text_rect(bounds).into_spotlight();
         let handle = rect_local_to_canvas(
@@ -915,19 +938,17 @@ mod tests {
 
         let target = selection_hit_target(&bounds, Some(&spotlight), None, 4.0, 0.0, 1.0, handle);
 
-        assert_ne!(
+        assert_eq!(
             target,
             Some(SelectionHitTarget::CornerRadius(RectCorner::TopLeft))
         );
     }
 
     #[test]
-    fn ellipse_and_diamond_corner_radius_controls_are_not_hittable() {
+    fn ellipse_corner_radius_controls_are_not_hittable() {
         let bounds = selection_bounds();
-        for shape in [
-            snow_draw_engine_document::HighlightShape::Ellipse,
-            snow_draw_engine_document::HighlightShape::Diamond,
-        ] {
+        {
+            let shape = snow_draw_engine_document::HighlightShape::Ellipse;
             let mut selected_rect = text_rect(bounds);
             selected_rect.highlight_shape = shape;
             let handle = rect_local_to_canvas(

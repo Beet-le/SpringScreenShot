@@ -59,6 +59,7 @@ class SystemTrayController final : public QObject {
     void setMenuOptions(const QStringList& options);
     [[nodiscard]] QStringList menuOptions() const;
     void setQuickActionChecked(GlobalShortcutAction action, bool checked);
+    void setFocusedFullscreenSuppressionActive(bool active);
 
   signals:
     void notificationDeliveryFinished(const snow_shot::platform::SystemNotificationRequest& request,

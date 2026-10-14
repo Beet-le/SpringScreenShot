@@ -139,8 +139,10 @@ struct Coordinator::Impl {
         }
         if (activeJobs == 0)
             timer.stop();
-        if (changed)
-            repaint();
+        if (changed) {
+            const auto callback = repaint;
+            callback();
+        }
     }
     std::function<void()> repaint;
     Compute compute;
@@ -165,7 +167,10 @@ Coordinator::~Coordinator() = default;
 void Coordinator::setSources(const void* owner, const QList<SnowCanvasBaseImageSource>& sources,
                              bool notify) {
     auto& state = *m_impl;
-    state.owners[owner] = sources;
+    if (sources.isEmpty())
+        state.owners.erase(owner);
+    else
+        state.owners[owner] = sources;
     QList<SnowCanvasBaseImageSource> combined;
     QByteArray bytes;
     QDataStream stream(&bytes, QIODevice::WriteOnly);
@@ -204,13 +209,14 @@ void Coordinator::setSources(const void* owner, const QList<SnowCanvasBaseImageS
         (void)id;
         record.entry.result.reset();
     }
-    if (notify)
-        state.repaint();
+    if (notify) {
+        const auto callback = state.repaint;
+        callback();
+    }
 }
 
 void Coordinator::removeSources(const void* owner) {
     setSources(owner, {});
-    m_impl->owners.erase(owner);
 }
 
 void Coordinator::reset() {

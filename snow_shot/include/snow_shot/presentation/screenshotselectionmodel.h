@@ -63,7 +63,8 @@ class ScreenshotSelectionModel final {
     // Pointer drags must use setDraggedSelectionRect with the shared drag geometry
     // (draggedScreenshotSelectionRect / grabAdjustedScreenshotSelectionRect) so confirmation
     // preserves any gesture-specific aspect ratio.
-    void setSelectionRect(const QRectF& selection);
+    // Returns whether the displayed geometry changed, including replacement of a custom region.
+    bool setSelectionRect(const QRectF& selection);
     // Stores a selection spanning the pointer cells under the press and
     // release positions: both cells are inclusive, exactly like a marquee
     // drag, so pointer-seeded state always addresses whole canvas pixels.
@@ -108,8 +109,15 @@ class ScreenshotSelectionModel final {
     [[nodiscard]] bool applyParams(const ScreenshotSelectionParams& params, const QRect& bounds);
 
   private:
+    struct MarqueeRegion {
+        QRect pixels;
+        ScreenshotRegionGeometry region;
+    };
     QVector<QPointF> m_draftVertices;
+    // Keep the capture target pinned while animation replaces its displayed frame.
+    // Both caches belong to the current confirmed-region/operation transaction.
     mutable std::optional<ScreenshotRegionGeometry> m_cachedSelectionRegion;
+    mutable std::optional<MarqueeRegion> m_cachedMarqueeRegion;
     ScreenshotRegionType m_regionType = ScreenshotRegionType::Rectangle;
     std::optional<ScreenshotRegionGeometry> m_draftRegion;
     std::optional<ScreenshotRegionGeometry> m_region;

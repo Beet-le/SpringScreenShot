@@ -255,7 +255,7 @@ pub(crate) fn arrow_target_position(
 ) -> Option<Point<f64>> {
     let points = arrow.global_points();
     match target {
-        ArrowHitTarget::Move => None,
+        ArrowHitTarget::Move | ArrowHitTarget::AngleArc => None,
         ArrowHitTarget::Label => Some(snow_draw_engine_document::arrow_text_anchor(arrow)),
         ArrowHitTarget::Endpoint(edge) => points
             .get(arrow_endpoint_index(points.len(), edge))
@@ -408,6 +408,9 @@ fn transformed_arrow_from_points(
     )?;
     next.inherit_linear_metadata_from(arrow);
     next.rotation = arrow.rotation;
+    if next.is_angle() {
+        snow_draw_engine_document::normalize_angle_in_place(&mut next).ok()?;
+    }
     next.start_binding = None;
     next.end_binding = None;
     next.start_is_special = None;
@@ -435,7 +438,20 @@ pub(crate) fn resized_arrow_for_selection(
             )
         })
         .collect::<Vec<_>>();
-    transformed_arrow_from_points(arrow, transformed_points)
+    let mut next = transformed_arrow_from_points(arrow, transformed_points)?;
+    if &next == arrow {
+        return Some(next);
+    }
+    if let Some(radius) = arrow.angle.and_then(|angle| angle.arc_radius) {
+        let old_geometry = snow_draw_engine_document::angle_geometry(arrow)?;
+        let new_geometry = snow_draw_engine_document::angle_geometry(&next)?;
+        next.angle.as_mut()?.arc_radius = Some(
+            (radius.min(old_geometry.maximum_radius) * new_geometry.maximum_radius
+                / old_geometry.maximum_radius)
+                .min(new_geometry.maximum_radius),
+        );
+    }
+    Some(next)
 }
 
 pub(crate) fn rotated_arrow_for_selection(

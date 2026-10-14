@@ -114,7 +114,11 @@ class ScreenshotCanvasRenderer final : public SnowCanvasCustomRenderer {
 
     void setRenderMode(RenderMode mode);
     void setImage(QImage image, const QRectF& canvasRect);
-    void setImageSource(ScreenshotImageSource source, const QRectF& damage = {});
+    // Sampling can use captures outside this overlay's background viewport.
+    void setImageSource(ScreenshotImageSource source, const QRectF& damage = {},
+                        const ScreenshotImageSource& samplingSource = {});
+    // Pinned animation bypasses canvas reconstruction and annotation caches.
+    void setPinnedAnimationFrame(const QImage& image, const QRectF& canvasRect);
     [[nodiscard]] ScreenshotImageSource imageSourceSnapshot() const {
         return m_imageSource;
     }
@@ -123,9 +127,11 @@ class ScreenshotCanvasRenderer final : public SnowCanvasCustomRenderer {
     void clearScrollingResultPreview();
     [[nodiscard]] bool hasScrollingResultPreview() const;
     void setImageViewportPhysicalSize(const QSize& size);
+    // View-space bounds of a pinned window's content, excluding its permanent shadow margin.
+    // Fractional coordinates are intentional: 16 Windows device pixels need not be integral dp.
+    void setPinnedViewportRect(const QRectF& rect);
     void setPinnedResultSurface(const QRectF& contentCanvasRect, const QRectF& surfaceCanvasRect,
                                 const ScreenshotResultStyle& style);
-    void setBakedSelectionPath(const QPainterPath& path);
     qsizetype selectionOutlineCacheBytes() const {
         return m_outlineCache.bytes();
     }
@@ -179,6 +185,7 @@ class ScreenshotCanvasRenderer final : public SnowCanvasCustomRenderer {
 
     [[nodiscard]] std::uint64_t contentRevision() const override;
     [[nodiscard]] std::uint64_t originalBackgroundRevision() const override;
+    [[nodiscard]] QList<SnowCanvasBaseImageSource> baseImageSources() const override;
     [[nodiscard]] std::optional<SnowCanvasFilterRenderReference>
     filterRenderReference() const override;
     [[nodiscard]] RenderMode renderMode() const;
@@ -194,7 +201,7 @@ class ScreenshotCanvasRenderer final : public SnowCanvasCustomRenderer {
     [[nodiscard]] QRectF selection() const;
     // True when the next paint will Source-fill or blit screenshot content over
     // every pixel of widgetRect, so a parent translucent clear is redundant.
-    [[nodiscard]] bool coversWidgetRect(const QRect& widgetRect) const;
+    [[nodiscard]] bool coversWidgetRect(const QRect& widgetRect) const override;
 #if defined(SNOW_SHOT_BENCH_INTERNALS)
     [[nodiscard]] quint64 ocrGeometrySynchronizationCountForTesting() const;
 #endif
@@ -211,6 +218,9 @@ class ScreenshotCanvasRenderer final : public SnowCanvasCustomRenderer {
         QRect viewportRect;
         int cornerRadius = 0;
         int borderCornerRadius = 0;
+        QRectF effectiveRect;
+        QRectF outlineRect;
+        bool rectangular = false;
         QPainterPath effectivePath;
         QPainterPath outlinePath;
         QPainterPath draftPath;
@@ -235,10 +245,12 @@ class ScreenshotCanvasRenderer final : public SnowCanvasCustomRenderer {
                   const QRect& viewport);
     };
     void invalidateCachedContent(bool originalChanged = true);
+    void refreshBaseImageSources();
     void paintBackground(QPainter& painter, const SnowCanvasRenderContext& context,
                          bool originalOnly);
-    const SelectionViewGeometry& selectionViewGeometry(const SnowCanvasRenderContext& context,
-                                                       int cornerRadius, int borderCornerRadius);
+    [[nodiscard]] QRectF pinnedViewportForContext(const SnowCanvasRenderContext& context) const;
+    SelectionViewGeometry& selectionViewGeometry(const SnowCanvasRenderContext& context,
+                                                 int cornerRadius, int borderCornerRadius);
     [[nodiscard]] ScreenshotOcrTextLayer* ensureOcrTextLayer();
     // Widget-space repaint region for an image canvas rect; empty when the
     // rect maps outside the viewport, the full viewport when the display cache is
@@ -251,15 +263,23 @@ class ScreenshotCanvasRenderer final : public SnowCanvasCustomRenderer {
     std::uint64_t m_contentRevision = 0;
     std::uint64_t m_originalBackgroundRevision = 0;
     ScreenshotImageSource m_imageSource;
+    ScreenshotImageSource m_samplingImageSource;
+    QList<SnowCanvasBaseImageSource> m_baseImageSources;
+    // Source opacity is checked once per image, independently of moving selection damage.
+    QList<QRectF> m_opaqueImageCanvasRects;
+    mutable QRegion m_opaqueImageViewCoverage;
+    mutable QTransform m_opaqueCoverageTransform;
+    mutable QRect m_opaqueCoverageViewport;
+    mutable bool m_opaqueCoverageValid = false;
     QImage m_scrollingResultPreviewImage;
     QRectF m_scrollingResultPreviewCanvasRect;
     std::optional<Qt::Orientation> m_scrollingCropGuide;
     QSize m_imageViewportPhysicalSize;
+    std::optional<QRectF> m_pinnedViewportRect;
     QRectF m_pinnedContentCanvasRect;
     QRectF m_pinnedSurfaceCanvasRect;
     ScreenshotResultStyle m_pinnedResultStyle;
     QColor m_pinnedBackgroundColor;
-    QPainterPath m_bakedSelectionPath;
     PathRasterCache m_outlineCache;
     PathRasterCache m_maskCache;
     std::optional<ScreenshotRegionGeometry> m_regionHoverCacheRegion;

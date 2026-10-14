@@ -17,6 +17,9 @@ use snow_stitch_images::{
     StitchError, StitchOptions, Stitcher, TiledCanvasSnapshot,
 };
 
+#[cfg(target_os = "macos")]
+mod execution;
+
 const DEFAULT_MAX_OUTPUT_HEIGHT: u32 = 2_160 * 32;
 
 #[cfg(feature = "perf-instrumentation")]
@@ -438,6 +441,9 @@ impl StitchSession {
     ) -> Result<FrameOutcome, StitchError> {
         let frame = frame?;
         let initial = self.stitcher.input_count() == 0;
+        #[cfg(target_os = "macos")]
+        let decision = execution::install(|| self.stitcher.push(frame))??;
+        #[cfg(not(target_os = "macos"))]
         let decision = self.stitcher.push(frame)?;
         let (width, height) = self
             .stitcher

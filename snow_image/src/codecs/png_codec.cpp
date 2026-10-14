@@ -1,4 +1,5 @@
 #include "codecs/png_codec.h"
+#include "codecs/png_jump.h"
 
 #include <snow/memory/pixel_array.h>
 #include "exif_orientation.h"
@@ -16,10 +17,38 @@
 #include <optional>
 #include <string>
 #include <memory>
+#include <type_traits>
 #include <vector>
 
 namespace snow::image::internal {
 namespace {
+
+template <class Operation> bool run_png(png_structp png, Operation operation) {
+    static_assert(std::is_trivially_destructible_v<Operation>);
+    return snow_png_run(
+               png, [](void* context) { (*static_cast<Operation*>(context))(); }, &operation) != 0;
+}
+
+class PngLifetime final {
+  public:
+    PngLifetime(png_structp& png, png_infop& info, bool reading)
+        : png_(png), info_(info), reading_(reading) {}
+    ~PngLifetime() {
+        if (!png_)
+            return;
+        if (reading_)
+            png_destroy_read_struct(&png_, &info_, nullptr);
+        else
+            png_destroy_write_struct(&png_, &info_);
+    }
+    PngLifetime(const PngLifetime&) = delete;
+    PngLifetime& operator=(const PngLifetime&) = delete;
+
+  private:
+    png_structp& png_;
+    png_infop& info_;
+    bool reading_;
+};
 
 constexpr std::array<std::byte, 8> kPngSignature{std::byte{0x89}, std::byte{'P'},  std::byte{'N'},
                                                  std::byte{'G'},  std::byte{0x0D}, std::byte{0x0A},
@@ -62,7 +91,6 @@ struct PngReadState final {
     DocumentInfo document;
     snow::memory::PixelArray<std::byte> pixels;
     snow::memory::PixelArray<std::byte> row;
-    std::vector<png_bytep> rows;
 };
 
 void read_png_bytes(png_structp png, png_bytep destination, png_size_t count) {
@@ -84,21 +112,28 @@ void read_png_bytes(png_structp png, png_bytep destination, png_size_t count) {
     }
     std::size_t completed = 0;
     while (completed < count) {
-        Result<std::size_t> read = state->source->read_at(
-            state->offset + completed,
-            std::span(reinterpret_cast<std::byte*>(destination + completed), count - completed));
-        if (!read) {
-            state->failure = read.error();
-            png_error(png, "PNG input read failed.");
+        const char* failure = nullptr;
+        {
+            Result<std::size_t> read = state->source->read_at(
+                state->offset + completed,
+                std::span(reinterpret_cast<std::byte*>(destination + completed),
+                          count - completed));
+            if (!read) {
+                state->failure = read.error();
+                failure = "PNG input read failed.";
+            } else if (read.value() == 0 || read.value() > count - completed) {
+                state->failure = Status::error(ErrorCode::truncated_data,
+                                               "PNG input ended unexpectedly.", "libpng");
+                failure = "PNG input ended unexpectedly.";
+            } else {
+                completed += read.value();
+            }
+        }
+        // read_at's Result owns a Status string. Destroy it before libpng jumps.
+        if (failure) {
+            png_error(png, failure);
             return;
         }
-        if (read.value() == 0) {
-            state->failure =
-                Status::error(ErrorCode::truncated_data, "PNG input ended unexpectedly.", "libpng");
-            png_error(png, "PNG input ended unexpectedly.");
-            return;
-        }
-        completed += read.value();
     }
     state->offset += count;
 }
@@ -112,44 +147,50 @@ Result<void> configure_png_output(png_structp png, png_infop info, const PixelFo
         return Status::error(ErrorCode::unsupported_feature,
                              "PNG decode requested an unsupported output layout.", "libpng");
     }
-    const int color_type = png_get_color_type(png, info);
-    const int bit_depth = png_get_bit_depth(png, info);
-    const bool source_alpha = (color_type & PNG_COLOR_MASK_ALPHA) != 0;
-    const bool transparency = png_get_valid(png, info, PNG_INFO_tRNS) != 0;
-    if (bit_depth == 16 && target.bits_per_channel == 8)
-        png_set_strip_16(png);
-    if (bit_depth < 16 && target.bits_per_channel == 16)
-        png_set_expand_16(png);
-    if (color_type == PNG_COLOR_TYPE_PALETTE)
-        png_set_palette_to_rgb(png);
-    if (color_type == PNG_COLOR_TYPE_GRAY && bit_depth < 8) {
-        png_set_expand_gray_1_2_4_to_8(png);
+    if (!run_png(png, [&] {
+            const int color_type = png_get_color_type(png, info);
+            const int bit_depth = png_get_bit_depth(png, info);
+            const bool source_alpha = (color_type & PNG_COLOR_MASK_ALPHA) != 0;
+            const bool transparency = png_get_valid(png, info, PNG_INFO_tRNS) != 0;
+            if (bit_depth == 16 && target.bits_per_channel == 8)
+                png_set_strip_16(png);
+            if (bit_depth < 16 && target.bits_per_channel == 16)
+                png_set_expand_16(png);
+            if (color_type == PNG_COLOR_TYPE_PALETTE)
+                png_set_palette_to_rgb(png);
+            if (color_type == PNG_COLOR_TYPE_GRAY && bit_depth < 8) {
+                png_set_expand_gray_1_2_4_to_8(png);
+            }
+            if (transparency)
+                png_set_tRNS_to_alpha(png);
+            const bool target_rgb =
+                target.channels == ChannelLayout::rgb || target.channels == ChannelLayout::rgba ||
+                target.channels == ChannelLayout::bgr || target.channels == ChannelLayout::bgra;
+            const bool source_gray =
+                color_type == PNG_COLOR_TYPE_GRAY || color_type == PNG_COLOR_TYPE_GRAY_ALPHA;
+            if (target_rgb && source_gray) {
+                png_set_gray_to_rgb(png);
+            }
+            if (!target_rgb && !source_gray && color_type != PNG_COLOR_TYPE_PALETTE) {
+                png_set_rgb_to_gray_fixed(png, 1, -1, -1);
+            }
+            const bool target_alpha = target.channels == ChannelLayout::gray_alpha ||
+                                      target.channels == ChannelLayout::rgba ||
+                                      target.channels == ChannelLayout::bgra;
+            if (target_alpha && !source_alpha && !transparency)
+                png_set_add_alpha(png, target.bits_per_channel == 16 ? 0xFFFFU : 0xFFU,
+                                  PNG_FILLER_AFTER);
+            if (!target_alpha && (source_alpha || transparency))
+                png_set_strip_alpha(png);
+            if (target.channels == ChannelLayout::bgr || target.channels == ChannelLayout::bgra)
+                png_set_bgr(png);
+            if (target.bits_per_channel == 16 && target.little_endian &&
+                std::endian::native == std::endian::little)
+                png_set_swap(png);
+        })) {
+        return Status::error(ErrorCode::decode_failed, "libpng could not configure the PNG output.",
+                             "libpng");
     }
-    if (transparency)
-        png_set_tRNS_to_alpha(png);
-    const bool target_rgb =
-        target.channels == ChannelLayout::rgb || target.channels == ChannelLayout::rgba ||
-        target.channels == ChannelLayout::bgr || target.channels == ChannelLayout::bgra;
-    const bool source_gray =
-        color_type == PNG_COLOR_TYPE_GRAY || color_type == PNG_COLOR_TYPE_GRAY_ALPHA;
-    if (target_rgb && source_gray) {
-        png_set_gray_to_rgb(png);
-    }
-    if (!target_rgb && !source_gray && color_type != PNG_COLOR_TYPE_PALETTE) {
-        png_set_rgb_to_gray_fixed(png, 1, -1, -1);
-    }
-    const bool target_alpha = target.channels == ChannelLayout::gray_alpha ||
-                              target.channels == ChannelLayout::rgba ||
-                              target.channels == ChannelLayout::bgra;
-    if (target_alpha && !source_alpha && !transparency)
-        png_set_add_alpha(png, target.bits_per_channel == 16 ? 0xFFFFU : 0xFFU, PNG_FILLER_AFTER);
-    if (!target_alpha && (source_alpha || transparency))
-        png_set_strip_alpha(png);
-    if (target.channels == ChannelLayout::bgr || target.channels == ChannelLayout::bgra)
-        png_set_bgr(png);
-    if (target.bits_per_channel == 16 && target.little_endian &&
-        std::endian::native == std::endian::little)
-        png_set_swap(png);
     return {};
 }
 
@@ -241,12 +282,19 @@ Result<void> write_png_metadata(png_structp png, png_infop info, const Document&
             return Status::error(ErrorCode::limit_exceeded,
                                  "PNG ICC profile exceeds libpng limits.", "libpng");
         }
-        png_set_iCCP(png, info, "ICC profile", PNG_COMPRESSION_TYPE_BASE,
-                     reinterpret_cast<png_const_bytep>(color.icc_profile.data()),
-                     static_cast<png_uint_32>(color.icc_profile.size()));
+        if (!run_png(png, [&] {
+                png_set_iCCP(png, info, "ICC profile", PNG_COMPRESSION_TYPE_BASE,
+                             reinterpret_cast<png_const_bytep>(color.icc_profile.data()),
+                             static_cast<png_uint_32>(color.icc_profile.size()));
+            }))
+            return Status::error(ErrorCode::encode_failed, "libpng could not encode PNG metadata.",
+                                 "libpng");
     } else if (color.primaries == ColorPrimaries::srgb &&
                color.transfer == TransferFunction::srgb) {
-        png_set_sRGB_gAMA_and_cHRM(png, info, PNG_sRGB_INTENT_PERCEPTUAL);
+        if (!run_png(png,
+                     [&] { png_set_sRGB_gAMA_and_cHRM(png, info, PNG_sRGB_INTENT_PERCEPTUAL); }))
+            return Status::error(ErrorCode::encode_failed, "libpng could not encode PNG metadata.",
+                                 "libpng");
     }
     if (metadata.horizontal_dpi && metadata.vertical_dpi &&
         std::isfinite(*metadata.horizontal_dpi) && std::isfinite(*metadata.vertical_dpi) &&
@@ -255,8 +303,13 @@ Result<void> write_png_metadata(png_structp png, png_infop info, const Document&
         const double pixels_y = *metadata.vertical_dpi / 0.0254;
         if (pixels_x <= std::numeric_limits<png_uint_32>::max() &&
             pixels_y <= std::numeric_limits<png_uint_32>::max()) {
-            png_set_pHYs(png, info, static_cast<png_uint_32>(std::llround(pixels_x)),
-                         static_cast<png_uint_32>(std::llround(pixels_y)), PNG_RESOLUTION_METER);
+            if (!run_png(png, [&] {
+                    png_set_pHYs(png, info, static_cast<png_uint_32>(std::llround(pixels_x)),
+                                 static_cast<png_uint_32>(std::llround(pixels_y)),
+                                 PNG_RESOLUTION_METER);
+                }))
+                return Status::error(ErrorCode::encode_failed,
+                                     "libpng could not encode PNG metadata.", "libpng");
         }
     }
 #if defined(PNG_eXIf_SUPPORTED)
@@ -265,8 +318,13 @@ Result<void> write_png_metadata(png_structp png, png_infop info, const Document&
             return Status::error(ErrorCode::limit_exceeded,
                                  "PNG EXIF payload exceeds libpng limits.", "libpng");
         }
-        png_set_eXIf_1(png, info, static_cast<png_uint_32>(metadata.exif.size()),
-                       reinterpret_cast<png_bytep>(const_cast<std::byte*>(metadata.exif.data())));
+        if (!run_png(png, [&] {
+                png_set_eXIf_1(
+                    png, info, static_cast<png_uint_32>(metadata.exif.size()),
+                    reinterpret_cast<png_bytep>(const_cast<std::byte*>(metadata.exif.data())));
+            }))
+            return Status::error(ErrorCode::encode_failed, "libpng could not encode PNG metadata.",
+                                 "libpng");
     }
 #endif
     text_chunks->clear();
@@ -294,8 +352,11 @@ Result<void> write_png_metadata(png_structp png, png_infop info, const Document&
         text.lang_key = const_cast<png_charp>("");
         text_chunks->push_back(text);
     }
-    if (!text_chunks->empty())
-        png_set_text(png, info, text_chunks->data(), static_cast<int>(text_chunks->size()));
+    if (!text_chunks->empty() && !run_png(png, [&] {
+            png_set_text(png, info, text_chunks->data(), static_cast<int>(text_chunks->size()));
+        }))
+        return Status::error(ErrorCode::encode_failed, "libpng could not encode PNG metadata.",
+                             "libpng");
     return {};
 }
 
@@ -340,6 +401,7 @@ class OwningPngSink final : public PixelSink {
         active_ = std::move(allocated).value();
         active_info_ = info;
         next_row_ = 0;
+        direct_storage_ = false;
         used_bytes_ += required;
         return {};
     }
@@ -349,6 +411,7 @@ class OwningPngSink final : public PixelSink {
         if (!active_ || frame_index != document_.frames.size() ||
             row_stride != active_->row_stride() || byte_size > active_->pixels().size())
             return {};
+        direct_storage_ = true;
         return active_->pixels().first(byte_size);
     }
 
@@ -377,7 +440,8 @@ class OwningPngSink final : public PixelSink {
     }
 
     Result<void> end_frame(std::uint32_t frame_index) override {
-        if (!active_ || frame_index != document_.frames.size() || next_row_ != active_->height())
+        if (!active_ || frame_index != document_.frames.size() ||
+            (!direct_storage_ && next_row_ != active_->height()))
             return Status::error(ErrorCode::truncated_data,
                                  "PNG decoder ended an incomplete frame.", "libpng");
         Frame frame;
@@ -417,6 +481,7 @@ class OwningPngSink final : public PixelSink {
     FrameInfo active_info_;
     std::optional<MutableImage> active_;
     std::uint32_t next_row_ = 0;
+    bool direct_storage_ = false;
     bool ended_ = false;
 };
 
@@ -426,17 +491,23 @@ void write_png_bytes(png_structp png, png_bytep data, png_size_t size) {
         png_error(png, "PNG writer state is unavailable.");
         return;
     }
-    if (!state->failure.ok())
+    if (!state->failure.ok()) {
+        png_error(png, "PNG output write failed.");
         return;
+    }
     if (state->stop.stop_requested()) {
         state->failure = cancelled_status();
+        png_error(png, "PNG encode cancelled.");
         return;
     }
-    Result<void> written =
-        state->sink->write(std::span(reinterpret_cast<const std::byte*>(data), size));
-    if (!written) {
-        state->failure = written.error();
+    {
+        Result<void> written =
+            state->sink->write(std::span(reinterpret_cast<const std::byte*>(data), size));
+        if (!written)
+            state->failure = written.error();
     }
+    if (!state->failure.ok())
+        png_error(png, "PNG output write failed.");
 }
 
 void flush_png_bytes(png_structp png) {
@@ -585,15 +656,12 @@ Result<DocumentInfo> PngCodec::inspect(const Input& input, const DecodeOptions& 
         return Status::error(ErrorCode::out_of_memory,
                              "Could not allocate PNG inspection metadata.", "libpng");
     }
-#if defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(disable : 4611)
-#endif
+    const PngLifetime lifetime(png, png_info, true);
     auto state = std::make_unique<PngReadState>();
     state->source = input.source.get();
     state->source_size = size.value();
     state->stop = stop;
-    if (setjmp(png_jmpbuf(png)) != 0) {
+    const auto failed = [&] {
         const Status failure =
             state->failure.ok()
                 ? Status::error(ErrorCode::corrupt_data, "libpng could not inspect the PNG stream.",
@@ -601,14 +669,14 @@ Result<DocumentInfo> PngCodec::inspect(const Input& input, const DecodeOptions& 
                 : state->failure;
         png_destroy_read_struct(&png, &png_info, nullptr);
         return failure;
-    }
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
-    png_set_read_fn(png, state.get(), read_png_bytes);
-    png_set_user_limits(png, options.limits.maximum_width, options.limits.maximum_height);
-    png_set_chunk_malloc_max(png, options.limits.maximum_metadata_bytes);
-    png_read_info(png, png_info);
+    };
+    if (!run_png(png, [&] {
+            png_set_read_fn(png, state.get(), read_png_bytes);
+            png_set_user_limits(png, options.limits.maximum_width, options.limits.maximum_height);
+            png_set_chunk_malloc_max(png, options.limits.maximum_metadata_bytes);
+            png_read_info(png, png_info);
+        }))
+        return failed();
     const std::uint32_t width = png_get_image_width(png, png_info);
     const std::uint32_t height = png_get_image_height(png, png_info);
     const Result<void> dimensions = validate_dimensions(width, height, options.limits);
@@ -689,29 +757,26 @@ Result<void> PngCodec::decode_to_sink(const Input& input, PixelSink& sink,
                              "libpng");
     }
 
-#if defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(disable : 4611)
-#endif
+    const PngLifetime lifetime(png, info, true);
     auto state = std::make_unique<PngReadState>();
     state->source = input.source.get();
     state->source_size = source_size.value();
     state->stop = stop;
-    if (setjmp(png_jmpbuf(png)) != 0) {
+    const auto failed = [&] {
         const Status failure =
             state->failure.ok() ? Status::error(ErrorCode::decode_failed,
                                                 "libpng could not decode the PNG stream.", "libpng")
                                 : state->failure;
         png_destroy_read_struct(&png, &info, nullptr);
         return failure;
-    }
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
-    png_set_read_fn(png, state.get(), read_png_bytes);
-    png_set_user_limits(png, options.limits.maximum_width, options.limits.maximum_height);
-    png_set_chunk_malloc_max(png, options.limits.maximum_metadata_bytes);
-    png_read_info(png, info);
+    };
+    if (!run_png(png, [&] {
+            png_set_read_fn(png, state.get(), read_png_bytes);
+            png_set_user_limits(png, options.limits.maximum_width, options.limits.maximum_height);
+            png_set_chunk_malloc_max(png, options.limits.maximum_metadata_bytes);
+            png_read_info(png, info);
+        }))
+        return failed();
 
     const png_uint_32 width = png_get_image_width(png, info);
     const png_uint_32 height = png_get_image_height(png, info);
@@ -736,8 +801,12 @@ Result<void> PngCodec::decode_to_sink(const Input& input, PixelSink& sink,
         png_destroy_read_struct(&png, &info, nullptr);
         return configured;
     }
-    const int passes = png_set_interlace_handling(png);
-    png_read_update_info(png, info);
+    int passes = 0;
+    if (!run_png(png, [&] {
+            passes = png_set_interlace_handling(png);
+            png_read_update_info(png, info);
+        }))
+        return failed();
     const png_size_t row_bytes = png_get_rowbytes(png, info);
     Result<std::size_t> bytes_per_pixel = output_format.bytes_per_pixel();
     if (!bytes_per_pixel) {
@@ -775,44 +844,66 @@ Result<void> PngCodec::decode_to_sink(const Input& input, PixelSink& sink,
         }
     }
 
+    if (expected_row_bytes > std::numeric_limits<std::size_t>::max() / height) {
+        png_destroy_read_struct(&png, &info, nullptr);
+        return Status::error(ErrorCode::limit_exceeded, "PNG output size overflows.", "libpng");
+    }
+    const std::size_t image_bytes = static_cast<std::size_t>(expected_row_bytes) * height;
+    std::span<std::byte> storage = sink.frame_storage(0, row_bytes, image_bytes);
+    const bool direct_storage = storage.size() == image_bytes;
     if (interlaced) {
-        const std::uint64_t image_bytes = expected_row_bytes * height;
-        if (image_bytes > options.limits.maximum_working_bytes ||
-            image_bytes > std::numeric_limits<std::size_t>::max()) {
-            png_destroy_read_struct(&png, &info, nullptr);
-            return Status::error(
-                ErrorCode::limit_exceeded,
-                "Interlaced PNG streaming exceeds the configured working-memory limit.", "libpng");
-        }
-        state->pixels.resize(static_cast<std::size_t>(image_bytes));
-        state->rows.resize(height);
-        for (png_uint_32 y = 0; y < height; ++y) {
-            state->rows[y] = reinterpret_cast<png_bytep>(state->pixels.data() +
-                                                         static_cast<std::size_t>(y) * row_bytes);
-        }
-        for (int pass = 0; pass < passes; ++pass) {
-            if (stop.stop_requested()) {
+        if (!direct_storage) {
+            if (image_bytes > options.limits.maximum_working_bytes) {
                 png_destroy_read_struct(&png, &info, nullptr);
-                return cancelled_status();
+                return Status::error(
+                    ErrorCode::limit_exceeded,
+                    "Interlaced PNG streaming exceeds the configured working-memory limit.",
+                    "libpng");
             }
-            png_read_rows(png, state->rows.data(), nullptr, height);
+            state->pixels.resize(image_bytes);
+            storage = state->pixels;
         }
-        {
-            Result<void> status = sink.write_rows(0, height, row_bytes, state->pixels);
+        // Adam7 combines successive passes with the rows already decoded. A sink
+        // may supply uninitialized storage, so establish defined partial rows.
+        std::fill(storage.begin(), storage.end(), std::byte{});
+        for (int pass = 0; pass < passes; ++pass) {
+            for (png_uint_32 y = 0; y < height; ++y) {
+                if (stop.stop_requested()) {
+                    png_destroy_read_struct(&png, &info, nullptr);
+                    return cancelled_status();
+                }
+                if (!run_png(png, [&] {
+                        png_read_row(png,
+                                     reinterpret_cast<png_bytep>(
+                                         storage.data() + static_cast<std::size_t>(y) * row_bytes),
+                                     nullptr);
+                    }))
+                    return failed();
+            }
+        }
+        if (!direct_storage) {
+            Result<void> status = sink.write_rows(0, height, row_bytes, storage);
             if (!status) {
                 png_destroy_read_struct(&png, &info, nullptr);
                 return status;
             }
         }
     } else {
-        state->row.resize(row_bytes);
+        if (!direct_storage)
+            state->row.resize(row_bytes);
         for (png_uint_32 y = 0; y < height; ++y) {
             if (stop.stop_requested()) {
                 png_destroy_read_struct(&png, &info, nullptr);
                 return cancelled_status();
             }
-            png_read_row(png, reinterpret_cast<png_bytep>(state->row.data()), nullptr);
-            {
+            std::byte* destination = direct_storage
+                                         ? storage.data() + static_cast<std::size_t>(y) * row_bytes
+                                         : state->row.data();
+            if (!run_png(png, [&] {
+                    png_read_row(png, reinterpret_cast<png_bytep>(destination), nullptr);
+                }))
+                return failed();
+            if (!direct_storage) {
                 Result<void> status = sink.write_rows(y, 1, row_bytes, state->row);
                 if (!status) {
                     png_destroy_read_struct(&png, &info, nullptr);
@@ -821,8 +912,15 @@ Result<void> PngCodec::decode_to_sink(const Input& input, PixelSink& sink,
             }
         }
     }
-    png_read_end(png, info);
+    if (stop.stop_requested()) {
+        png_destroy_read_struct(&png, &info, nullptr);
+        return cancelled_status();
+    }
+    if (!run_png(png, [&] { png_read_end(png, info); }))
+        return failed();
     png_destroy_read_struct(&png, &info, nullptr);
+    if (stop.stop_requested())
+        return cancelled_status();
     Result<void> status = sink.end_frame(0);
     if (!status)
         return status;
@@ -866,6 +964,7 @@ Result<EncodedArtifactReceipt> PngCodec::encode_to_sink(const Document& document
         png_destroy_write_struct(&png, nullptr);
         return Status::error(ErrorCode::out_of_memory, "Could not create PNG metadata.", "libpng");
     }
+    const PngLifetime lifetime(png, info, false);
     PngWriteState state;
     state.sink = output.sink.get();
     state.stop = stop;
@@ -890,22 +989,18 @@ Result<EncodedArtifactReceipt> PngCodec::encode_to_sink(const Document& document
                                     (view.format.channels == ChannelLayout::gray_alpha ||
                                      view.format.channels == ChannelLayout::rgba ||
                                      view.format.channels == ChannelLayout::bgra);
-#if defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(disable : 4611)
-#endif
-    if (setjmp(png_jmpbuf(png)) != 0) {
+    const auto failed = [&] {
         png_destroy_write_struct(&png, &info);
         return state.failure.ok() ? Status::error(ErrorCode::encode_failed,
                                                   "libpng could not encode the image.", "libpng")
                                   : state.failure;
-    }
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
-    png_set_write_fn(png, &state, &write_png_bytes, &flush_png_bytes);
-    png_set_compression_level(png, std::clamp(options.compression_level, 0, 9));
-    png_set_compression_buffer_size(png, 256U * 1024U);
+    };
+    if (!run_png(png, [&] {
+            png_set_write_fn(png, &state, &write_png_bytes, &flush_png_bytes);
+            png_set_compression_level(png, std::clamp(options.compression_level, 0, 9));
+            png_set_compression_buffer_size(png, 256U * 1024U);
+        }))
+        return failed();
     int color_type = indexed ? PNG_COLOR_TYPE_PALETTE : PNG_COLOR_TYPE_RGBA;
     if (!indexed)
         switch (view.format.channels) {
@@ -931,46 +1026,56 @@ Result<EncodedArtifactReceipt> PngCodec::encode_to_sink(const Document& document
         color_type = view.format.channels == ChannelLayout::gray_alpha ? PNG_COLOR_TYPE_GRAY
                                                                        : PNG_COLOR_TYPE_RGB;
     }
-    png_set_IHDR(png, info, view.width, view.height, view.format.bits_per_channel, color_type,
-                 options.interlaced ? PNG_INTERLACE_ADAM7 : PNG_INTERLACE_NONE,
-                 PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
-    if (indexed) {
-        png_set_PLTE(png, info, indexed->palette.data(), static_cast<int>(indexed->palette.size()));
-        if (!indexed->alpha.empty()) {
-            png_set_tRNS(png, info, indexed->alpha.data(), static_cast<int>(indexed->alpha.size()),
-                         nullptr);
-        }
-    } else if (view.format.channels == ChannelLayout::bgr ||
-               view.format.channels == ChannelLayout::bgra) {
-        png_set_bgr(png);
-    }
+    if (!run_png(png, [&] {
+            png_set_IHDR(png, info, view.width, view.height, view.format.bits_per_channel,
+                         color_type, options.interlaced ? PNG_INTERLACE_ADAM7 : PNG_INTERLACE_NONE,
+                         PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
+            if (indexed) {
+                png_set_PLTE(png, info, indexed->palette.data(),
+                             static_cast<int>(indexed->palette.size()));
+                if (!indexed->alpha.empty()) {
+                    png_set_tRNS(png, info, indexed->alpha.data(),
+                                 static_cast<int>(indexed->alpha.size()), nullptr);
+                }
+            } else if (view.format.channels == ChannelLayout::bgr ||
+                       view.format.channels == ChannelLayout::bgra) {
+                png_set_bgr(png);
+            }
+        }))
+        return failed();
     Result<void> metadata_status =
         write_png_metadata(png, info, document, options, &text_chunks, &text_values);
     if (!metadata_status) {
         png_destroy_write_struct(&png, &info);
         return metadata_status.error();
     }
-    png_write_info(png, info);
-    if (view.format.bits_per_channel == 16 && view.format.little_endian &&
-        std::endian::native == std::endian::little)
-        png_set_swap(png);
-    if (strip_opaque_alpha)
-        png_set_filler(png, 0, PNG_FILLER_AFTER);
-    const int passes = options.interlaced ? png_set_interlace_handling(png) : 1;
+    int passes = 0;
+    if (!run_png(png, [&] {
+            png_write_info(png, info);
+            if (view.format.bits_per_channel == 16 && view.format.little_endian &&
+                std::endian::native == std::endian::little)
+                png_set_swap(png);
+            if (strip_opaque_alpha)
+                png_set_filler(png, 0, PNG_FILLER_AFTER);
+            passes = options.interlaced ? png_set_interlace_handling(png) : 1;
+        }))
+        return failed();
     for (int pass = 0; pass < passes; ++pass) {
         for (std::uint32_t y = 0; y < view.height; ++y) {
             if (stop.stop_requested()) {
-                state.failure = cancelled_status();
-                png_error(png, "PNG encode cancelled.");
+                png_destroy_write_struct(&png, &info);
+                return cancelled_status();
             }
             png_bytep row =
                 indexed ? indexed->indices.get() + static_cast<std::size_t>(y) * view.width
                         : reinterpret_cast<png_bytep>(const_cast<std::byte*>(
                               view.pixels.data() + static_cast<std::size_t>(y) * view.row_stride));
-            png_write_row(png, row);
+            if (!run_png(png, [&] { png_write_row(png, row); }))
+                return failed();
         }
     }
-    png_write_end(png, info);
+    if (!run_png(png, [&] { png_write_end(png, info); }))
+        return failed();
     png_destroy_write_struct(&png, &info);
     if (!state.failure.ok())
         return state.failure;
@@ -1026,28 +1131,25 @@ Result<EncodedArtifactReceipt> PngCodec::encode_raster_to_sink(const RasterSourc
             return Status::error(ErrorCode::out_of_memory, "Could not create PNG metadata.",
                                  "libpng");
         }
+        const PngLifetime lifetime(png, info, false);
         PngWriteState state;
         state.sink = output.sink.get();
         state.stop = stop;
         std::vector<png_text> text_chunks;
         std::vector<std::string> text_values;
-#if defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(disable : 4611)
-#endif
-        if (setjmp(png_jmpbuf(png)) != 0) {
+        const auto failed = [&] {
             png_destroy_write_struct(&png, &info);
             return state.failure.ok()
                        ? Status::error(ErrorCode::encode_failed,
                                        "libpng could not encode the image.", "libpng")
                        : state.failure;
-        }
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
-        png_set_write_fn(png, &state, &write_png_bytes, &flush_png_bytes);
-        png_set_compression_level(png, std::clamp(options.compression_level, 0, 9));
-        png_set_compression_buffer_size(png, 256U * 1024U);
+        };
+        if (!run_png(png, [&] {
+                png_set_write_fn(png, &state, &write_png_bytes, &flush_png_bytes);
+                png_set_compression_level(png, std::clamp(options.compression_level, 0, 9));
+                png_set_compression_buffer_size(png, 256U * 1024U);
+            }))
+            return failed();
         int color_type = PNG_COLOR_TYPE_RGBA;
         switch (plane.format.channels) {
         case ChannelLayout::gray:
@@ -1076,14 +1178,17 @@ Result<EncodedArtifactReceipt> PngCodec::encode_raster_to_sink(const RasterSourc
         if (strip_opaque_alpha)
             color_type = plane.format.channels == ChannelLayout::gray_alpha ? PNG_COLOR_TYPE_GRAY
                                                                             : PNG_COLOR_TYPE_RGB;
-        png_set_IHDR(png, info, source_frame.width, source_frame.height,
-                     plane.format.bits_per_channel, color_type,
-                     options.interlaced ? PNG_INTERLACE_ADAM7 : PNG_INTERLACE_NONE,
-                     PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
-        if (plane.format.channels == ChannelLayout::bgr ||
-            plane.format.channels == ChannelLayout::bgra) {
-            png_set_bgr(png);
-        }
+        if (!run_png(png, [&] {
+                png_set_IHDR(png, info, source_frame.width, source_frame.height,
+                             plane.format.bits_per_channel, color_type,
+                             options.interlaced ? PNG_INTERLACE_ADAM7 : PNG_INTERLACE_NONE,
+                             PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
+                if (plane.format.channels == ChannelLayout::bgr ||
+                    plane.format.channels == ChannelLayout::bgra) {
+                    png_set_bgr(png);
+                }
+            }))
+            return failed();
         Document metadata_document;
         metadata_document.format = descriptor.format;
         metadata_document.canvas_width = descriptor.canvas_width;
@@ -1097,29 +1202,36 @@ Result<EncodedArtifactReceipt> PngCodec::encode_raster_to_sink(const RasterSourc
             png_destroy_write_struct(&png, &info);
             return metadata_status.error();
         }
-        png_write_info(png, info);
-        if (plane.format.bits_per_channel == 16 && plane.format.little_endian &&
-            std::endian::native == std::endian::little) {
-            png_set_swap(png);
-        }
-        if (strip_opaque_alpha)
-            png_set_filler(png, 0, PNG_FILLER_AFTER);
-        const int passes = options.interlaced ? png_set_interlace_handling(png) : 1;
+        int passes = 0;
+        if (!run_png(png, [&] {
+                png_write_info(png, info);
+                if (plane.format.bits_per_channel == 16 && plane.format.little_endian &&
+                    std::endian::native == std::endian::little) {
+                    png_set_swap(png);
+                }
+                if (strip_opaque_alpha)
+                    png_set_filler(png, 0, PNG_FILLER_AFTER);
+                passes = options.interlaced ? png_set_interlace_handling(png) : 1;
+            }))
+            return failed();
         for (int pass = 0; pass < passes; ++pass) {
             for (std::uint32_t y = 0; y < source_frame.height; ++y) {
                 if (stop.stop_requested()) {
-                    state.failure = cancelled_status();
-                    png_error(png, "PNG encode cancelled.");
+                    png_destroy_write_struct(&png, &info);
+                    return cancelled_status();
                 }
                 Result<void> read = source.read_rows(0, 0, y, 1, row_bytes, row, stop);
                 if (!read) {
-                    state.failure = read.error();
-                    png_error(png, "PNG row source failed.");
+                    png_destroy_write_struct(&png, &info);
+                    return read.error();
                 }
-                png_write_row(png, reinterpret_cast<png_bytep>(row.data()));
+                if (!run_png(png,
+                             [&] { png_write_row(png, reinterpret_cast<png_bytep>(row.data())); }))
+                    return failed();
             }
         }
-        png_write_end(png, info);
+        if (!run_png(png, [&] { png_write_end(png, info); }))
+            return failed();
         png_destroy_write_struct(&png, &info);
         if (!state.failure.ok())
             return state.failure;

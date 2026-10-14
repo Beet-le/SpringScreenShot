@@ -78,6 +78,8 @@ struct ScreenshotShortcutHintContext {
     QSet<SnowCanvasTool> quickSelectionDisabledTools;
     std::optional<snow_shot::shortcuts::ShortcutBindingMap> configuredShortcuts = std::nullopt;
     bool smartSelectionEnabled = true;
+
+    [[nodiscard]] bool operator==(const ScreenshotShortcutHintContext&) const = default;
 };
 
 [[nodiscard]] inline bool screenshotShortcutHintAreaIsObscured(const QRectF& hintArea,
@@ -380,6 +382,19 @@ screenshotShortcutHintRows(const ScreenshotShortcutHintContext& context) {
         append(rows, "Auto-align: Ctrl");
         append(rows, "Delete selected elements: Delete");
         break;
+    case ScreenshotActiveTool::Magnifier:
+        append(rows, "Maintain aspect ratio: Shift");
+        append(rows, "Scale from center: Alt");
+        append(rows, "Auto-align: Ctrl");
+        append(rows, "Delete selected elements: Delete", !disabled(SnowCanvasTool::Magnifier));
+        break;
+    case ScreenshotActiveTool::SpeechBubble:
+        append(rows, "Maintain aspect ratio: Shift");
+        append(rows, "Fixed-angle rotation: Shift", !disabled(SnowCanvasTool::SpeechBubble));
+        append(rows, "Scale from center: Alt");
+        append(rows, "Auto-align: Ctrl");
+        append(rows, "Delete selected elements: Delete", !disabled(SnowCanvasTool::SpeechBubble));
+        break;
     case ScreenshotActiveTool::Shape:
         append(rows, "Maintain aspect ratio: Shift");
         append(rows, "Fixed-angle rotation: Shift", !disabled(SnowCanvasTool::Shape));
@@ -400,6 +415,13 @@ screenshotShortcutHintRows(const ScreenshotShortcutHintContext& context) {
         append(rows, "Scale from center: Alt", !disabled(SnowCanvasTool::Distance));
         append(rows, "Auto-align: Ctrl");
         append(rows, "Delete selected elements: Delete", !disabled(SnowCanvasTool::Distance));
+        break;
+    case ScreenshotActiveTool::Angle:
+        append(rows, "Maintain aspect ratio: Shift", !disabled(SnowCanvasTool::Angle));
+        append(rows, "Fixed-angle rotation: Shift");
+        append(rows, "Scale from center: Alt", !disabled(SnowCanvasTool::Angle));
+        append(rows, "Auto-align: Ctrl");
+        append(rows, "Delete selected elements: Delete", !disabled(SnowCanvasTool::Angle));
         break;
     case ScreenshotActiveTool::Line:
         append(rows, "Maintain aspect ratio: Shift", !disabled(SnowCanvasTool::Line));

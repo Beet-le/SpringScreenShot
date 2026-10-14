@@ -109,15 +109,26 @@ void syncTopLevelToolTransientParent(QWidget* toolWindow, QWidget* ownerWindow) 
   if (!ownerTopLevel || ownerTopLevel == toolWindow) {
     return;
   }
+  const QPointer<QWidget> toolLifetime(toolWindow);
+  const QPointer<QWidget> ownerLifetime(ownerTopLevel);
 
   const bool ownerStaysOnTop = ownerTopLevel->windowFlags().testFlag(Qt::WindowStaysOnTopHint);
   if (toolWindow->windowFlags().testFlag(Qt::WindowStaysOnTopHint) != ownerStaysOnTop) {
     toolWindow->setWindowFlag(Qt::WindowStaysOnTopHint, ownerStaysOnTop);
+    if (!toolLifetime || !ownerLifetime) {
+      return;
+    }
   }
 
   ownerTopLevel->winId();
+  if (!toolLifetime || !ownerLifetime) {
+    return;
+  }
   const bool creating = !toolWindow->windowHandle();
   toolWindow->winId();
+  if (!toolLifetime || !ownerLifetime) {
+    return;
+  }
   if (creating) {
     qCDebug(popupLog) << "native.create" << toolWindow->objectName();
   }

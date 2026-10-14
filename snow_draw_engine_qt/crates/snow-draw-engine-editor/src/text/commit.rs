@@ -10,6 +10,7 @@ use super::TextStyle;
 pub enum TextCommitTarget {
     New,
     NewArrow(ElementId),
+    NewSpeechBubble(ElementId),
     Existing(ElementId),
 }
 
@@ -22,6 +23,8 @@ pub struct TextDraftCommit {
     pub style: TextStyle,
     pub auto_resize: bool,
     pub update_default_style: bool,
+    pub minimum_grapheme_width: f64,
+    pub text_ink_reserve: f64,
 }
 
 impl TextDraftCommit {
@@ -42,12 +45,16 @@ impl TextDraftCommit {
             style,
             auto_resize,
             update_default_style,
+            minimum_grapheme_width: 0.0,
+            text_ink_reserve: 0.0,
         }
     }
 
     pub fn existing_id(&self) -> Option<ElementId> {
         match self.target {
-            TextCommitTarget::New | TextCommitTarget::NewArrow(_) => None,
+            TextCommitTarget::New
+            | TextCommitTarget::NewArrow(_)
+            | TextCommitTarget::NewSpeechBubble(_) => None,
             TextCommitTarget::Existing(id) => Some(id),
         }
     }
@@ -61,6 +68,8 @@ pub(crate) fn text_with_style_attributes(text: &TextData, style: &TextStyle) -> 
     let mut updated = text.clone();
     updated.color = style.color;
     updated.font_size = style.font_size;
+    updated.bold = style.bold;
+    updated.italic = style.italic;
     updated.font_family = normalize_font_family(style.font_family.clone());
     updated.fill = style.fill;
     updated.fill_style = style.fill_style;
@@ -86,6 +95,7 @@ pub(crate) fn text_with_committed_draft(
     updated = text_with_measured_layout(&updated, layout)?;
     updated.text = draft.text.clone();
     updated.auto_resize = draft.auto_resize;
+    updated.text_ink_reserve = draft.text_ink_reserve;
     Ok(updated)
 }
 
@@ -104,6 +114,8 @@ mod tests {
                 a: 255,
             },
             font_size: 21.0,
+            bold: false,
+            italic: false,
             font_family: Some("Inter".to_owned()),
             fill: ColorRgba8::default(),
             fill_style: FillStyle::Solid,
@@ -148,6 +160,8 @@ mod tests {
             "committed",
             TextLayoutSize::new(120.0, 40.0),
             TextStyle {
+                bold: true,
+                italic: true,
                 font_family: Some("  Inter  ".to_owned()),
                 ..style()
             },
@@ -170,6 +184,7 @@ mod tests {
         assert_eq!(updated.width(), 120.0);
         assert_eq!(updated.height(), 40.0);
         assert_eq!(updated.font_size, draft.style.font_size);
+        assert!(updated.bold && updated.italic);
         assert_eq!(updated.font_family, Some("Inter".to_owned()));
         assert_eq!(updated.color, draft.style.color);
         assert_eq!(updated.fill_style, draft.style.fill_style);

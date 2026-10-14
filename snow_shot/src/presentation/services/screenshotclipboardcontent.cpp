@@ -1,6 +1,7 @@
 #include "snow_draw_engine_qt/snow_canvas_image.h"
 #include "snow_shot/platform/applicationqos.h"
 #include "snow_shot/presentation/screenshotclipboardcontent.h"
+#include "snow_shot/image/supportedimagefiles.h"
 #include "screenshotclipboardcontentsnapshot.h"
 
 #include "../../image/snowimageqtcodec.h"
@@ -12,9 +13,11 @@
 #include <QAbstractTextDocumentLayout>
 #include <QBuffer>
 #include <QClipboard>
+#include <QColorSpace>
 #include <QCoreApplication>
 #include <QFile>
 #include <QFileInfo>
+#include <QFont>
 #include <QDir>
 #include <QSet>
 #include <QGuiApplication>
@@ -37,6 +40,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <iterator>
 #include <limits>
 #include <thread>
 #include <vector>
@@ -60,6 +64,7 @@ constexpr qint64 kMaximumRichTextPixels = 64LL * 1024LL * 1024LL;
 constexpr qint64 kMaximumClipboardImagePixels = 64LL * 1000LL * 1000LL;
 constexpr qint64 kMaximumClipboardImageBytes = 256LL * 1024LL * 1024LL;
 constexpr qint64 kMaximumEncodedImageBytes = 256LL * 1024LL * 1024LL;
+constexpr int kFormattedTextFontPixelSize = 16;
 constexpr qreal kFormattedTextPadding = 16.0;
 
 using AllocationCheck = ScreenshotClipboardContentReader::AllocationCheck;
@@ -195,18 +200,30 @@ constexpr EncodedImageFormat kEncodedImageFormats[] = {
     {"image/png", snow::image::Format::png},  {"image/jpeg", snow::image::Format::jpeg},
     {"image/jpg", snow::image::Format::jpeg}, {"image/webp", snow::image::Format::webp},
     {"image/jxl", snow::image::Format::jxl},  {"image/avif", snow::image::Format::avif},
+    {"image/gif", snow::image::Format::gif},  {"image/apng", snow::image::Format::png},
 };
 
-struct FileImageFormat {
-    const char* suffix;
-    snow::image::Format format;
-};
+using snow_shot::image::ImageFileFormat;
+using snow_shot::image::kImageFileFormats;
 
-constexpr FileImageFormat kFileImageFormats[] = {
-    {"png", snow::image::Format::png},   {"jpg", snow::image::Format::jpeg},
-    {"jpeg", snow::image::Format::jpeg}, {"webp", snow::image::Format::webp},
-    {"jxl", snow::image::Format::jxl},   {"avif", snow::image::Format::avif},
-};
+snow::image::Format imageFileCodecFormat(snow_shot::image::ImageFileCodec codec) {
+    using Codec = snow_shot::image::ImageFileCodec;
+    switch (codec) {
+    case Codec::Gif:
+        return snow::image::Format::gif;
+    case Codec::Png:
+        return snow::image::Format::png;
+    case Codec::Jpeg:
+        return snow::image::Format::jpeg;
+    case Codec::WebP:
+        return snow::image::Format::webp;
+    case Codec::Jxl:
+        return snow::image::Format::jxl;
+    case Codec::Avif:
+        return snow::image::Format::avif;
+    }
+    return snow::image::Format::unknown;
+}
 
 QImage normalizedImage(QImage image) {
     if (image.isNull() || image.width() <= 0 || image.height() <= 0) {
@@ -383,6 +400,11 @@ std::shared_ptr<QTextDocument> makeDocument(const QString& source, bool html, QS
     if (allocate && (source.size() > 1024 * 1024 || !allocate(retained + source.size() * 32)))
         return {};
     auto document = makeRestrictedDocument(allocate, retained + source.size() * 32);
+    // Pinned content needs a readable default independent of the small application UI font.
+    // Set it before HTML parsing so explicit source sizes still override inherited text.
+    QFont font = document->defaultFont();
+    font.setPixelSize(kFormattedTextFontPixelSize);
+    document->setDefaultFont(font);
     if (html) {
         if (source.trimmed().isEmpty()) {
             return {};
@@ -407,7 +429,49 @@ std::optional<ScreenshotClipboardContent>
 readEncodedImage(const QList<ScreenshotClipboardEncodedImage>& images,
                  const ScreenshotClipboardContentReader::CancellationCheck& cancelled,
                  const AllocationCheck& allocate, qint64 retained) {
-    for (const ScreenshotClipboardEncodedImage& imageData : images) {
+    // Clipboard providers commonly offer a static PNG thumbnail alongside the
+    // original animated image. Inspect all encoded alternatives before choosing
+    // the ordinary static fallback, preserving the complete source when present.
+    QSet<qsizetype> invalidAnimations;
+    QSet<qsizetype> singleFrameAnimations;
+    for (qsizetype index = 0; index < images.size(); ++index) {
+        const auto& imageData = images.at(index);
+        if (cancellationRequested(cancelled))
+            return std::nullopt;
+        const auto format =
+            std::find_if(std::begin(kEncodedImageFormats), std::end(kEncodedImageFormats),
+                         [&imageData](const EncodedImageFormat& candidate) {
+                             return imageData.mimeType == QLatin1String(candidate.mimeType);
+                         });
+        if (format == std::end(kEncodedImageFormats) ||
+            (format->format != snow::image::Format::gif &&
+             format->format != snow::image::Format::png &&
+             format->format != snow::image::Format::webp) ||
+            imageData.bytes.isEmpty() || imageData.bytes.size() > kMaximumEncodedImageBytes)
+            continue;
+        QString error;
+        const AllocationCheck animationAdmission =
+            allocate ? AllocationCheck([&](qint64 bytes) { return allocate(retained + bytes); })
+                     : AllocationCheck{};
+        auto animation = snow_shot::image_codec::decodeAnimationSource(
+            imageData.bytes, &error, cancelled, animationAdmission);
+        if (animation && animation->isAnimated()) {
+            auto content = imageContent(animation->firstFrame);
+            if (content) {
+                content->preparedDisplayImage = animation->firstDisplayFrame;
+                content->animationSource = std::move(animation);
+            }
+            return content;
+        }
+        if (animation)
+            singleFrameAnimations.insert(index);
+        if (!error.isEmpty())
+            invalidAnimations.insert(index);
+    }
+    for (qsizetype index = 0; index < images.size(); ++index) {
+        const auto& imageData = images.at(index);
+        if (invalidAnimations.contains(index))
+            continue;
         if (cancellationRequested(cancelled)) {
             return std::nullopt;
         }
@@ -424,6 +488,15 @@ readEncodedImage(const QList<ScreenshotClipboardEncodedImage>& images,
             !admitImage(snow_shot::image_codec::inspectSize(imageData.bytes, format->format),
                         retained, allocate))
             return std::nullopt;
+        if (singleFrameAnimations.contains(index)) {
+            const AllocationCheck animationAdmission =
+                allocate ? AllocationCheck([&](qint64 bytes) { return allocate(retained + bytes); })
+                         : AllocationCheck{};
+            const auto source = snow_shot::image_codec::decodeAnimationSource(
+                imageData.bytes, nullptr, cancelled, animationAdmission);
+            if (source)
+                return imageContent(source->firstFrame);
+        }
         if (QImage image =
                 snow_shot::image_codec::decode(imageData.bytes, format->format, format->mimeType);
             !image.isNull()) {
@@ -439,12 +512,12 @@ readFileContent(const ScreenshotClipboardLocalImage& localImage, qreal devicePix
                 const ScreenshotClipboardContentReader::CancellationCheck& cancelled,
                 const AllocationCheck& allocate, qint64 retained) {
     const auto format =
-        std::find_if(std::begin(kFileImageFormats), std::end(kFileImageFormats),
-                     [&localImage](const FileImageFormat& candidate) {
+        std::find_if(std::begin(kImageFileFormats), std::end(kImageFileFormats),
+                     [&localImage](const ImageFileFormat& candidate) {
                          return localImage.suffix == QLatin1String(candidate.suffix);
                      });
     const bool textFile = isTextFile(localImage.suffix);
-    if ((!textFile && format == std::end(kFileImageFormats)) || cancellationRequested(cancelled)) {
+    if ((!textFile && format == std::end(kImageFileFormats)) || cancellationRequested(cancelled)) {
         return std::nullopt;
     }
 
@@ -489,10 +562,27 @@ readFileContent(const ScreenshotClipboardLocalImage& localImage, qreal devicePix
         return ScreenshotClipboardContentReader::decode(std::move(textSnapshot), cancelled,
                                                         textAllocate);
     }
-    if (allocate && !admitImage(snow_shot::image_codec::inspectSize(encoded, format->format),
+    const auto codecFormat = imageFileCodecFormat(format->codec);
+    if (allocate && !admitImage(snow_shot::image_codec::inspectSize(encoded, codecFormat),
                                 retained + encoded.size(), allocate))
         return std::nullopt;
-    return imageContent(snow_shot::image_codec::decode(encoded, format->format,
+    QString animationError;
+    const AllocationCheck animationAdmission =
+        allocate ? AllocationCheck([&](qint64 bytes) { return allocate(retained + bytes); })
+                 : AllocationCheck{};
+    auto animation = snow_shot::image_codec::decodeAnimationSource(encoded, &animationError,
+                                                                   cancelled, animationAdmission);
+    if (animation) {
+        auto content = imageContent(animation->firstFrame);
+        if (content && animation->isAnimated()) {
+            content->preparedDisplayImage = animation->firstDisplayFrame;
+            content->animationSource = std::move(animation);
+        }
+        return content;
+    }
+    if (!animationError.isEmpty() || cancellationRequested(cancelled))
+        return std::nullopt;
+    return imageContent(snow_shot::image_codec::decode(encoded, codecFormat,
                                                        QByteArray("image/") + format->suffix));
 }
 
@@ -592,8 +682,9 @@ snow_shot::presentation::detail::snapshotClipboardMimeData(
 
 namespace {
 #if defined(Q_OS_WIN) || defined(_WIN32)
-QByteArray captureNativePng(const AllocationCheck& allocate, qint64 retained) {
-    const UINT format = RegisterClipboardFormatW(L"PNG");
+QByteArray captureNativeEncodedImage(const wchar_t* name, const AllocationCheck& allocate,
+                                     qint64 retained) {
+    const UINT format = RegisterClipboardFormatW(name);
     if (format == 0 || !IsClipboardFormatAvailable(format))
         return {};
     const auto handle = static_cast<HGLOBAL>(GetClipboardData(format));
@@ -891,11 +982,12 @@ ScreenshotClipboardContentReader::readMimeData(const QMimeData* mimeData, qreal 
     return captured.has_value() ? decode(std::move(*captured)) : std::nullopt;
 }
 
+QStringList ScreenshotClipboardContentReader::supportedImageFileExtensions() {
+    return snow_shot::image::supportedImageFileExtensions();
+}
+
 QStringList ScreenshotClipboardContentReader::supportedFileExtensions() {
-    QStringList extensions;
-    for (const auto& format : kFileImageFormats) {
-        extensions.append(QString::fromLatin1(format.suffix));
-    }
+    auto extensions = supportedImageFileExtensions();
     extensions.append({QStringLiteral("txt"), QStringLiteral("html"), QStringLiteral("htm")});
     return extensions;
 }
@@ -925,8 +1017,8 @@ ScreenshotClipboardContentReader::snapshotLocalFiles(const QStringList& paths,
         const QString suffix = info.suffix().toLower();
         const bool supported =
             isTextFile(suffix) ||
-            std::any_of(std::begin(kFileImageFormats), std::end(kFileImageFormats),
-                        [&suffix](const FileImageFormat& format) {
+            std::any_of(std::begin(kImageFileFormats), std::end(kImageFileFormats),
+                        [&suffix](const ImageFileFormat& format) {
                             return suffix == QLatin1String(format.suffix);
                         });
         if (!supported || !info.isFile() || !info.isReadable() || info.size() <= 0 ||
@@ -981,9 +1073,22 @@ snapshotClipboardOnce(QClipboard* clipboard, qreal devicePixelRatio, AllocationC
         nativeSnapshot.emplace();
     if (nativeSnapshot && OpenClipboard(nullptr)) {
         const auto close = qScopeGuard([] { CloseClipboard(); });
-        QByteArray png = captureNativePng(checked, 0);
-        if (!png.isEmpty())
-            nativeSnapshot->encodedImages.push_back({std::move(png), QStringLiteral("image/png")});
+        const std::pair<const wchar_t*, const char*> formats[] = {
+            {L"PNG", "image/png"},         {L"GIF", "image/gif"},
+            {L"WebP", "image/webp"},       {L"image/gif", "image/gif"},
+            {L"image/webp", "image/webp"}, {L"image/apng", "image/apng"},
+        };
+        for (const auto& [nativeName, mimeType] : formats) {
+            const auto mime = QString::fromLatin1(mimeType);
+            if (std::any_of(nativeSnapshot->encodedImages.cbegin(),
+                            nativeSnapshot->encodedImages.cend(),
+                            [&mime](const auto& image) { return image.mimeType == mime; }))
+                continue;
+            auto bytes =
+                captureNativeEncodedImage(nativeName, checked, snapshotBytes(*nativeSnapshot));
+            if (!bytes.isEmpty())
+                nativeSnapshot->encodedImages.push_back({std::move(bytes), mime});
+        }
         if (auto native = captureNativeDib(checked, snapshotBytes(*nativeSnapshot)); native) {
             SNOW_SHOT_PIN_PERF_MILESTONE("clipboard.native_dib_copied");
             nativeSnapshot->nativeDib = std::move(*native);
@@ -1205,6 +1310,77 @@ ScreenshotClipboardContentReader::decode(ScreenshotClipboardContentSnapshot snap
         }
     }
     return std::nullopt;
+}
+
+bool ScreenshotClipboardContentReader::prepareAnimationDisplay(ScreenshotClipboardContent& content,
+                                                               const QTransform& transform,
+                                                               CancellationCheck cancelled,
+                                                               AllocationCheck allocate) {
+    if (cancellationRequested(cancelled))
+        return false;
+    if (!content.animationSource || !content.animationSource->isAnimated())
+        return true;
+    const auto& source = *content.animationSource;
+    const auto& display = source.firstDisplayFrame;
+    if (content.image.isNull() || content.image.size() != source.canvasSize || display.isNull() ||
+        display.size() != source.canvasSize ||
+        display.format() != QImage::Format_ARGB32_Premultiplied ||
+        (display.colorSpace().isValid() &&
+         display.colorSpace() != QColorSpace(QColorSpace::SRgb)) ||
+        display.devicePixelRatio() != 1.0 || !transform.isAffine() || !transform.isInvertible())
+        return false;
+    const QRectF bounds = transform.mapRect(QRectF(QPointF(), QSizeF(source.canvasSize)));
+    if (!std::isfinite(bounds.left()) || !std::isfinite(bounds.top()) ||
+        !std::isfinite(bounds.width()) || !std::isfinite(bounds.height()) || bounds.width() <= 0 ||
+        bounds.height() <= 0 || bounds.width() > std::numeric_limits<int>::max() - 2 ||
+        bounds.height() > std::numeric_limits<int>::max() - 2)
+        return false;
+    QTransform normalized;
+    normalized.setMatrix(transform.m11(), transform.m12(), transform.m13(), transform.m21(),
+                         transform.m22(), transform.m23(), transform.dx() - bounds.left(),
+                         transform.dy() - bounds.top(), transform.m33());
+    const qint64 width = static_cast<qint64>(std::ceil(bounds.width()));
+    const qint64 height = static_cast<qint64>(std::ceil(bounds.height()));
+    if (width * height > kMaximumClipboardImagePixels ||
+        width * height * 4 > kMaximumClipboardImageBytes)
+        return false;
+
+    qint64 retained = source.encoded.size();
+    const QImage* rasters[] = {&source.firstFrame, &display, &content.image,
+                               &content.preparedDisplayImage};
+    for (size_t index = 0; index < std::size(rasters); ++index) {
+        if (rasters[index]->isNull())
+            continue;
+        bool shared = false;
+        for (size_t earlier = 0; earlier < index; ++earlier)
+            shared = shared || rasters[earlier]->constBits() == rasters[index]->constBits();
+        if (!shared)
+            retained += rasters[index]->sizeInBytes();
+    }
+    // Quarter turns and flips write directly into their final raster. Other
+    // transforms may retain Qt's temporary while transferring its result into
+    // managed storage; aligned rotation bounds can add a pixel at each edge.
+    const auto unit = [](qreal value) { return value == 0 || value == 1 || value == -1; };
+    const bool orthogonal =
+        unit(normalized.m11()) && unit(normalized.m12()) && unit(normalized.m21()) &&
+        unit(normalized.m22()) &&
+        normalized.m11() * normalized.m11() + normalized.m12() * normalized.m12() == 1 &&
+        normalized.m21() * normalized.m21() + normalized.m22() * normalized.m22() == 1 &&
+        normalized.m11() * normalized.m21() + normalized.m12() * normalized.m22() == 0;
+    const qint64 transformedBytes = normalized.isIdentity() ? 0
+                                    : orthogonal            ? width * height * 4
+                                                            : (width + 2) * (height + 2) * 8;
+    if ((allocate && !allocate(retained + transformedBytes)) || cancellationRequested(cancelled))
+        return false;
+    QImage prepared = normalized.isIdentity()
+                          ? display
+                          : snowCanvasTransformImage(display, normalized, Qt::SmoothTransformation);
+    if (prepared.isNull() || prepared.sizeInBytes() > kMaximumClipboardImageBytes ||
+        cancellationRequested(cancelled))
+        return false;
+    content.preparedDisplayImage = std::move(prepared);
+    content.preparedImageTransform = normalized;
+    return true;
 }
 
 std::optional<ScreenshotClipboardContent> ScreenshotClipboardContentReader::renderOriginalText(

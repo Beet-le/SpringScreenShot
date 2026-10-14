@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use snow_draw_engine_core::{DrawRect, ErrorCode, Point};
 use snow_draw_engine_document::{
-    ElementData, ElementId, ElementMeta, SerialNumberNumericType, TextLayoutSize, Transaction,
-    serial_number_with_label_style, serial_number_with_selection_rect, text_hit_test,
+    ElementData, ElementId, ElementMeta, Operation, SerialNumberNumericType, TextLayoutSize,
+    Transaction, serial_number_with_label_style, serial_number_with_selection_rect, text_hit_test,
     text_with_auto_resize_layout, text_with_content_and_layout, validate_arrow, validate_filter,
     validate_free_draw, validate_pen_filter, validate_rectangle, validate_serial_number,
     validate_text,
@@ -18,6 +18,7 @@ use crate::{
         selection_bounds_to_draw_rect,
     },
     polyline_simplification::simplify_pen_filter_geometry,
+    snapping::BindableElementOverride,
     state::ResizeHandle,
     style::stepped_font_size,
     text::{
@@ -35,6 +36,25 @@ pub(crate) fn append_selection_element_update(
     single_text_resize: bool,
     measured_resize: Option<MeasuredTextResize>,
 ) -> Result<(), ErrorCode> {
+    if let Ok(value) = document.speech_bubble(preview.id) {
+        let next =
+            snow_draw_engine_document::speech_bubble_with_selection_rect(value, preview.rect);
+        if next != *value {
+            transaction.update_speech_bubble(preview.id, next);
+        }
+        return Ok(());
+    }
+    if let Ok(value) = document.magnifier(preview.id) {
+        let next = value.translated(Point::new(
+            preview.rect.center.x - value.source_center.x,
+            preview.rect.center.y - value.source_center.y,
+        ));
+        snow_draw_engine_document::validate_magnifier(&next)?;
+        if next != *value {
+            transaction.update_magnifier(preview.id, next);
+        }
+        return Ok(());
+    }
     if document.rectangle(preview.id).is_ok() {
         validate_rectangle(&preview.rect)?;
         transaction.update_rectangle(preview.id, preview.rect);
@@ -151,6 +171,11 @@ pub(crate) fn append_delete_dependencies(
         {
             delete_ids.push(text_id);
         }
+        if let Some(text_id) = document.bound_text_id_for_speech_bubble(id)
+            && !delete_ids.contains(&text_id)
+        {
+            delete_ids.push(text_id);
+        }
         if let Some(text_id) = document.bound_text_id_for_arrow(id)
             && !delete_ids.contains(&text_id)
         {
@@ -159,6 +184,14 @@ pub(crate) fn append_delete_dependencies(
     }
 
     for id in ids {
+        if let Some(owner) = document.speech_bubble_id_for_text(*id)
+            && !delete_ids.contains(&owner)
+            && let Ok(value) = document.speech_bubble(owner)
+        {
+            let mut bubble = value.clone();
+            bubble.text_element_id = None;
+            transaction.update_speech_bubble(owner, bubble);
+        }
         if let Some(arrow_id) = document.arrow_id_for_text(*id)
             && !delete_ids.contains(&arrow_id)
             && let Ok(arrow) = document.arrow(arrow_id)
@@ -206,6 +239,11 @@ pub(crate) fn expanded_duplicate_ids(
         {
             ids.push(text_id);
         }
+        if let Some(text_id) = document.bound_text_id_for_speech_bubble(id)
+            && !ids.contains(&text_id)
+        {
+            ids.push(text_id);
+        }
         if let Some(text_id) = document.bound_text_id_for_arrow(id)
             && !ids.contains(&text_id)
         {
@@ -232,6 +270,7 @@ pub(crate) fn duplicate_selection_transaction(
     document: &DocumentModel,
     selected_ids: &[ElementId],
     offset: Point<f64>,
+    data_overrides: &HashMap<ElementId, ElementData>,
 ) -> Result<(Transaction, Vec<ElementId>), ErrorCode> {
     let ids = expanded_duplicate_ids(document, selected_ids);
     if ids.is_empty() {
@@ -245,13 +284,25 @@ pub(crate) fn duplicate_selection_transaction(
             continue;
         };
         let element = document.element(id)?;
-        match &element.data {
+        match data_overrides.get(&id).unwrap_or(&element.data) {
             ElementData::Rectangle(rect) => {
                 let mut duplicate = *rect;
                 duplicate.center.x += offset.x;
                 duplicate.center.y += offset.y;
                 validate_rectangle(&duplicate)?;
                 transaction.insert_rectangle(new_id, element.meta, duplicate);
+            }
+            ElementData::SpeechBubble(value) => {
+                let mut bubble = value.clone();
+                bubble.body.center.x += offset.x;
+                bubble.body.center.y += offset.y;
+                bubble.text_element_id = value
+                    .text_element_id
+                    .and_then(|id| id_map.get(&id).copied());
+                transaction.insert_speech_bubble(new_id, element.meta, bubble);
+            }
+            ElementData::Magnifier(value) => {
+                transaction.insert_magnifier(new_id, element.meta, value.translated(offset));
             }
             ElementData::Filter(filter) => {
                 let mut duplicate = *filter;
@@ -451,6 +502,8 @@ fn align_unit_bounds(document: &DocumentModel, id: ElementId) -> Option<DrawRect
                 arrow: arrow.clone(),
             }],
         )?)
+    } else if let Ok(value) = document.magnifier(id) {
+        rotated_rectangle_aabb(&value.group_rect())
     } else {
         rotated_rectangle_aabb(&document.element_rect_proxy(id)?)
     };
@@ -597,6 +650,8 @@ impl Editor {
             let Ok(text) = document.text(*id) else {
                 continue;
             };
+            let bubble_text = self.speech_bubble_text_display_snapshot(document, *id);
+            let text = bubble_text.as_ref().unwrap_or(text);
             if text_hit_test(text, point, hit_tolerance) {
                 return Some(*id);
             }
@@ -676,11 +731,26 @@ impl Editor {
             .map(|rect| rect.rotation);
         let text_is_empty = draft.text_is_empty();
         let existing_id = draft.existing_id();
+        let bubble_id = match draft.target {
+            crate::TextCommitTarget::NewSpeechBubble(id) => Some(id),
+            crate::TextCommitTarget::Existing(id) => document.speech_bubble_id_for_text(id),
+            _ => None,
+        };
         let arrow_id = match draft.target {
             crate::TextCommitTarget::NewArrow(id) => Some(id),
             crate::TextCommitTarget::Existing(id) => document.arrow_id_for_text(id),
-            crate::TextCommitTarget::New => None,
+            crate::TextCommitTarget::New | crate::TextCommitTarget::NewSpeechBubble(_) => None,
         };
+        if let Some(id) = bubble_id {
+            let bubble = document.speech_bubble(id)?;
+            let meta = document.element(id)?.meta;
+            if meta.locked
+                || !meta.visible
+                || (existing_id.is_none() && bubble.text_element_id.is_some())
+            {
+                return Err(ErrorCode::InvalidState);
+            }
+        }
         if let Some(id) = arrow_id {
             let arrow = document.arrow(id)?;
             if arrow.linear_kind != snow_draw_engine_document::LinearElementKind::Arrow
@@ -692,8 +762,32 @@ impl Editor {
             }
         }
         if existing_id.is_none() && text_is_empty {
+            let history_undo_snapshot = self.capture_document_sync_snapshot(document);
+            let mut transaction = Transaction::new("resize speech bubble");
+            if let Some(owner) = bubble_id {
+                if let Some((_, value)) = self
+                    .speech_bubble_draft_geometry
+                    .as_ref()
+                    .filter(|(id, _)| *id == owner)
+                {
+                    let mut value = value.clone();
+                    value.text_element_id = None;
+                    if *document.speech_bubble(owner)? != value {
+                        transaction.update_speech_bubble(owner, value);
+                    }
+                }
+                self.set_selection_state_with_document(Some(document), vec![owner], Some(owner));
+            }
             self.clear_active_text_draft_presentation();
-            return Ok(None);
+            if transaction.is_empty() {
+                return Ok(None);
+            }
+            return Ok(Some(EditorCommand::ApplyTransaction(
+                ApplyTransactionCommand::with_history_undo_snapshot(
+                    transaction,
+                    history_undo_snapshot,
+                ),
+            )));
         }
 
         let history_undo_snapshot = self.capture_document_sync_snapshot(document);
@@ -711,6 +805,15 @@ impl Editor {
             } else {
                 let current = document.text(id)?.clone();
                 let mut updated = text_with_committed_draft(&current, &draft)?;
+                if let Some(owner) = bubble_id {
+                    self.fit_speech_bubble_draft(
+                        document,
+                        owner,
+                        &mut updated,
+                        draft.minimum_grapheme_width,
+                        draft.text_ink_reserve,
+                    )?;
+                }
                 if let Some(rotation) = active_text_rotation {
                     updated.rotation = rotation;
                 }
@@ -720,7 +823,16 @@ impl Editor {
                 }
             }
         } else {
-            let updated = text_with_committed_draft(&self.state.default_text, &draft)?;
+            let mut updated = text_with_committed_draft(&self.state.default_text, &draft)?;
+            if let Some(owner) = bubble_id {
+                self.fit_speech_bubble_draft(
+                    document,
+                    owner,
+                    &mut updated,
+                    draft.minimum_grapheme_width,
+                    draft.text_ink_reserve,
+                )?;
+            }
             validate_text(&updated)?;
             transaction.insert_text(
                 document.peek_next_element_id(),
@@ -734,12 +846,26 @@ impl Editor {
             }
         }
 
+        if let Some(owner) = bubble_id {
+            let mut bubble = self
+                .speech_bubble_draft_geometry
+                .as_ref()
+                .filter(|(id, _)| *id == owner)
+                .map(|(_, v)| v.clone())
+                .unwrap_or(document.speech_bubble(owner)?.clone());
+            if text_is_empty {
+                bubble.text_element_id = None;
+            } else if existing_id.is_none() {
+                bubble.text_element_id = Some(document.peek_next_element_id());
+            }
+            transaction.update_speech_bubble(owner, bubble);
+        }
         self.clear_active_text_draft_presentation();
         if draft.update_default_style && !text_is_empty {
             self.state.default_text =
                 text_with_style_attributes(&self.state.default_text, &draft.style);
         }
-        if let Some(id) = arrow_id {
+        if let Some(id) = arrow_id.or(bubble_id) {
             self.set_selection_state_with_document(Some(document), vec![id], Some(id));
         } else {
             self.clear_selection();
@@ -772,6 +898,29 @@ impl Editor {
         )))
     }
 
+    pub(crate) fn duplicate_selection_transaction(
+        &self,
+        document: &DocumentModel,
+        offset: Point<f64>,
+    ) -> Result<(Transaction, Vec<ElementId>), ErrorCode> {
+        let mut overrides = HashMap::new();
+        for id in &self.state.selection.ids {
+            let owner = document.speech_bubble_id_for_text(*id).unwrap_or(*id);
+            if overrides.contains_key(&owner) {
+                continue;
+            }
+            if let Some((bubble, text)) =
+                self.speech_bubble_measured_document_values(document, owner)
+            {
+                if let Some(label) = bubble.text_element_id {
+                    overrides.insert(label, ElementData::Text(text));
+                }
+                overrides.insert(owner, ElementData::SpeechBubble(bubble));
+            }
+        }
+        duplicate_selection_transaction(document, &self.state.selection.ids, offset, &overrides)
+    }
+
     pub fn duplicate_selected(
         &mut self,
         document: &DocumentModel,
@@ -782,7 +931,7 @@ impl Editor {
         }
         let history_undo_snapshot = self.capture_document_sync_snapshot(document);
         let (transaction, next_selection) =
-            duplicate_selection_transaction(document, &self.state.selection.ids, offset)?;
+            self.duplicate_selection_transaction(document, offset)?;
         if transaction.is_empty() {
             return Ok(None);
         }
@@ -881,8 +1030,15 @@ impl Editor {
         let deltas = alignment_deltas(alignment, &unit_bounds, reference);
         let history_undo_snapshot = self.capture_document_sync_snapshot(document);
         let mut transaction = Transaction::new("align selection");
-        let mut next_elements: Vec<SelectionRectState> = Vec::with_capacity(selected.len());
+        let mut next_elements = Self::selection_elements_from_ids(document, &selected);
+        for element in &mut next_elements {
+            let owner = label_owner.get(&element.id).copied().unwrap_or(element.id);
+            let delta = deltas.get(&owner).copied().unwrap_or(Point::new(0.0, 0.0));
+            element.rect.center.x += delta.x;
+            element.rect.center.y += delta.y;
+        }
         let mut next_arrows: Vec<SelectionArrowState> = Vec::new();
+        let mut binding_overrides = Vec::new();
         for id in &selected {
             let owner = label_owner.get(id).copied().unwrap_or(*id);
             let delta = deltas.get(&owner).copied().unwrap_or(Point::new(0.0, 0.0));
@@ -906,7 +1062,7 @@ impl Editor {
             };
             rect.center.x += delta.x;
             rect.center.y += delta.y;
-            next_elements.push(SelectionRectState { id: *id, rect });
+            binding_overrides.push(BindableElementOverride { id: *id, rect });
             // A selected label rides along with its owner's update; an
             // unselected one is appended by the owner instead.
             if !label_owner.contains_key(id) {
@@ -927,7 +1083,7 @@ impl Editor {
         // the new geometry.
         let selected_arrow_ids: Vec<ElementId> = next_arrows.iter().map(|state| state.id).collect();
         for (arrow_id, arrow, reorder_targets) in self
-            .recompute_bound_arrows(document, &next_elements)
+            .recompute_bound_arrows(document, &binding_overrides)
             .into_iter()
             .filter(|(arrow_id, _, _)| !selected_arrow_ids.contains(arrow_id))
         {
@@ -998,6 +1154,18 @@ impl Editor {
                         transaction.update_rectangle(*id, updated);
                     }
                 }
+                ElementData::SpeechBubble(value) => {
+                    let mut bubble = value.clone();
+                    bubble.body.opacity = opacity;
+                    transaction.update_speech_bubble(*id, bubble);
+                }
+                ElementData::Magnifier(value) => {
+                    let mut next = *value;
+                    next.opacity = opacity;
+                    if next != *value {
+                        transaction.update_magnifier(*id, next);
+                    }
+                }
                 ElementData::Filter(value) => {
                     let mut updated = *value;
                     updated.opacity = opacity;
@@ -1050,6 +1218,42 @@ impl Editor {
         )))
     }
 
+    pub(crate) fn continue_serial_number_sequences_after_value_edits(
+        &mut self,
+        document: &DocumentModel,
+        transaction: &Transaction,
+    ) {
+        let mut next_values: [Option<(SerialNumberNumericType, i64)>; 5] = [None; 5];
+        for operation in transaction.operations() {
+            let Operation::UpdateElementData {
+                id,
+                data: ElementData::SerialNumber(serial),
+            } = operation
+            else {
+                continue;
+            };
+            if !serial.serial_number_type.supports_number()
+                || document
+                    .serial_number(*id)
+                    .is_ok_and(|current| current.number == serial.number)
+            {
+                continue;
+            }
+            // A mixed selection continues after its largest edited value in each format.
+            let next = &mut next_values[serial.numeric_type as usize];
+            let number = serial.number.saturating_add(1);
+            *next = Some((
+                serial.numeric_type,
+                next.map_or(number, |(_, value)| value.max(number)),
+            ));
+        }
+        for (numeric_type, number) in next_values.into_iter().flatten() {
+            self.state.set_serial_number_value(numeric_type, number);
+            // Explicit edits may restart below numbers already present on the canvas.
+            self.state.serial_number_sequence_overridden[numeric_type as usize] = true;
+        }
+    }
+
     pub fn adjust_selected_serial_numbers(
         &mut self,
         document: &DocumentModel,
@@ -1086,6 +1290,7 @@ impl Editor {
         if transaction.is_empty() {
             return Ok(None);
         }
+        self.continue_serial_number_sequences_after_value_edits(document, &transaction);
         Ok(Some(EditorCommand::ApplyTransaction(
             ApplyTransactionCommand::with_history_undo_snapshot(transaction, history_undo_snapshot),
         )))
@@ -1219,7 +1424,7 @@ mod tests {
             snow_draw_engine_document::SerialNumberType::Circle;
         editor.state.default_serial_number.number = 6;
         let preview = editor
-            .serial_number_creation_preview(&document, Point::new(40.0, 50.0))
+            .serial_number_creation_preview(Point::new(40.0, 50.0))
             .unwrap();
         assert_eq!(preview.diameter, 12.0);
         let circle_id = editor
@@ -1250,7 +1455,7 @@ mod tests {
         editor.state.default_serial_number.serial_number_type =
             snow_draw_engine_document::SerialNumberType::OutlinedCircle;
         let numbered = editor
-            .serial_number_creation_preview(&document, Point::default())
+            .serial_number_creation_preview(Point::default())
             .unwrap();
         assert_eq!(numbered.number, 7);
         assert!(numbered.diameter > 12.0);
@@ -1261,6 +1466,73 @@ mod tests {
             panic!("expected transaction command");
         };
         document.apply_transaction(command.transaction).unwrap();
+    }
+
+    #[test]
+    fn serial_number_adjustment_continues_each_selected_format_independently_of_order() {
+        for reverse_selection in [false, true] {
+            let mut document = DocumentModel::new();
+            let mut editor = Editor::new(EngineConfig::default()).unwrap();
+            let defaults = editor.state.default_serial_number.clone();
+            let mut ids = Vec::new();
+            for (numeric_type, number) in [
+                (SerialNumberNumericType::Arabic, 10),
+                (SerialNumberNumericType::Arabic, 3),
+                (SerialNumberNumericType::Roman, 20),
+            ] {
+                ids.push(insert_serial_number(
+                    &mut document,
+                    SerialNumberData {
+                        numeric_type,
+                        number,
+                        ..Default::default()
+                    },
+                ));
+            }
+            if reverse_selection {
+                ids.reverse();
+            }
+            editor.set_selection_state(ids.clone(), Some(ids[0]));
+            let command = editor
+                .adjust_selected_serial_numbers(&document, -2)
+                .unwrap()
+                .unwrap();
+            apply_editor_command(&mut document, command);
+            editor.clear_selection();
+            let mut expected = defaults;
+            expected.number = 9;
+            assert_eq!(editor.state.default_serial_number, expected);
+            assert_eq!(editor.state.serial_number_values(), [9, 19, 1, 1, 1]);
+            assert_eq!(
+                editor.state.serial_number_sequence_overridden,
+                [true, true, false, false, false]
+            );
+        }
+    }
+
+    #[test]
+    fn serial_number_adjustment_noops_preserve_creation_sequences() {
+        for (number, delta) in [(0, -1), (i64::MAX, 1), (3, 0)] {
+            let mut document = DocumentModel::new();
+            let mut editor = Editor::new(EngineConfig::default()).unwrap();
+            let id = insert_serial_number(
+                &mut document,
+                SerialNumberData {
+                    number,
+                    ..Default::default()
+                },
+            );
+            editor.set_selection_state(vec![id], Some(id));
+            assert!(
+                editor
+                    .adjust_selected_serial_numbers(&document, delta)
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(editor.state.serial_number_values(), [1; 5]);
+            assert_eq!(editor.state.serial_number_sequence_overridden, [false; 5]);
+            assert_eq!(document.serial_number(id).unwrap().number, number);
+        }
     }
 
     fn insert_rectangle(document: &mut DocumentModel, rectangle: RectangleData) -> ElementId {
@@ -1421,6 +1693,8 @@ mod tests {
         TextStyle {
             color,
             font_size,
+            bold: false,
+            italic: false,
             font_family: Some("Inter".to_owned()),
             fill: ColorRgba8 {
                 r: 12,
@@ -2400,6 +2674,158 @@ mod tests {
             document.rectangle(second_id).unwrap().center,
             Point::new(300.0, 150.0)
         );
+    }
+
+    #[test]
+    fn magnifier_alignment_uses_both_regions_and_caches_compound_selection_bounds() {
+        for mode in [2, 0, 1, 3, 4, 5] {
+            for rotation in [0.0, std::f64::consts::FRAC_PI_3] {
+                let mut document = DocumentModel::new();
+                let magnifier_id = document.allocate_element_id();
+                let original = snow_draw_engine_document::MagnifierData {
+                    source_center: Point::new(0.0, 0.0),
+                    magnified_center: Point::new(200.0, 100.0),
+                    width: 100.0,
+                    height: 80.0,
+                    rotation,
+                    factor: 2.0,
+                    ..Default::default()
+                };
+                let mut transaction = Transaction::new("alignment fixture");
+                transaction.insert_magnifier(magnifier_id, ElementMeta::default(), original);
+                document.apply_transaction(transaction).unwrap();
+                let rectangle_id = insert_rectangle(
+                    &mut document,
+                    rectangle_at(Point::new(500.0, 400.0), 100.0, 60.0, 0.0),
+                );
+                let mut editor = Editor::new(EngineConfig::default()).unwrap();
+                editor.set_selection_state_with_document(
+                    Some(&document),
+                    vec![magnifier_id, rectangle_id],
+                    Some(magnifier_id),
+                );
+                let command = editor.align_selected(&document, mode).unwrap().unwrap();
+                let cached = editor.state.selection.clone();
+                apply_editor_command(&mut document, command);
+
+                let updated = document.magnifier(magnifier_id).unwrap();
+                let source = rotated_rectangle_aabb(&updated.source_rect());
+                let lens = rotated_rectangle_aabb(&updated.magnified_rect());
+                let compound = DrawRect::new(
+                    source.min_x.min(lens.min_x),
+                    source.min_y.min(lens.min_y),
+                    source.max_x.max(lens.max_x),
+                    source.max_y.max(lens.max_y),
+                );
+                let other = rotated_rectangle_aabb(document.rectangle(rectangle_id).unwrap());
+                let coordinate = |bounds: DrawRect| match mode {
+                    0 => bounds.min_x,
+                    1 => f64::midpoint(bounds.min_x, bounds.max_x),
+                    2 => bounds.max_x,
+                    3 => bounds.min_y,
+                    4 => f64::midpoint(bounds.min_y, bounds.max_y),
+                    _ => bounds.max_y,
+                };
+                assert!(
+                    (coordinate(compound) - coordinate(other)).abs() < 1e-9,
+                    "mode {mode}, rotation {rotation}: both regions must align as one unit"
+                );
+                assert!(
+                    (updated.magnified_center.x - updated.source_center.x - 200.0).abs() < 1e-9
+                );
+                assert!(
+                    (updated.magnified_center.y - updated.source_center.y - 100.0).abs() < 1e-9
+                );
+                let proxy = cached
+                    .elements
+                    .iter()
+                    .find(|value| value.id == magnifier_id)
+                    .unwrap();
+                let cached_compound = rotated_rectangle_aabb(&proxy.rect);
+                for (actual, expected) in [
+                    (cached_compound.min_x, compound.min_x),
+                    (cached_compound.min_y, compound.min_y),
+                    (cached_compound.max_x, compound.max_x),
+                    (cached_compound.max_y, compound.max_y),
+                ] {
+                    assert!(
+                        (actual - expected).abs() < 1e-9,
+                        "cached compound bounds drifted"
+                    );
+                }
+                let cached_bounds = selection_bounds_to_draw_rect(&cached.bounds.unwrap());
+                assert!((cached_bounds.min_x - compound.min_x.min(other.min_x)).abs() < 1e-9);
+                assert!((cached_bounds.min_y - compound.min_y.min(other.min_y)).abs() < 1e-9);
+                assert!((cached_bounds.max_x - compound.max_x.max(other.max_x)).abs() < 1e-9);
+                assert!((cached_bounds.max_y - compound.max_y.max(other.max_y)).abs() < 1e-9);
+            }
+        }
+    }
+
+    #[test]
+    fn magnifier_distribution_spaces_compound_regions_on_both_axes() {
+        for mode in [6, 7] {
+            let mut document = DocumentModel::new();
+            let first_id = insert_rectangle(
+                &mut document,
+                rectangle_at(Point::new(50.0, 50.0), 40.0, 20.0, 0.0),
+            );
+            let magnifier_id = document.allocate_element_id();
+            let original = snow_draw_engine_document::MagnifierData {
+                source_center: Point::new(200.0, 200.0),
+                magnified_center: Point::new(260.0, 220.0),
+                width: 20.0,
+                height: 30.0,
+                factor: 2.0,
+                ..Default::default()
+            };
+            let mut transaction = Transaction::new("distribution fixture");
+            transaction.insert_magnifier(magnifier_id, ElementMeta::default(), original);
+            document.apply_transaction(transaction).unwrap();
+            let last_id = insert_rectangle(
+                &mut document,
+                rectangle_at(Point::new(600.0, 600.0), 60.0, 40.0, 0.0),
+            );
+            let mut editor = Editor::new(EngineConfig::default()).unwrap();
+            editor.set_selection_state_with_document(
+                Some(&document),
+                vec![first_id, magnifier_id, last_id],
+                Some(magnifier_id),
+            );
+            let command = editor.align_selected(&document, mode).unwrap().unwrap();
+            apply_editor_command(&mut document, command);
+            let updated = document.magnifier(magnifier_id).unwrap();
+            let source = rotated_rectangle_aabb(&updated.source_rect());
+            let lens = rotated_rectangle_aabb(&updated.magnified_rect());
+            let first = document.rectangle(first_id).unwrap();
+            let last = document.rectangle(last_id).unwrap();
+            let (first_end, middle_start, middle_end, last_start) = if mode == 6 {
+                (
+                    first.center.x + first.width / 2.0,
+                    source.min_x.min(lens.min_x),
+                    source.max_x.max(lens.max_x),
+                    last.center.x - last.width / 2.0,
+                )
+            } else {
+                (
+                    first.center.y + first.height / 2.0,
+                    source.min_y.min(lens.min_y),
+                    source.max_y.max(lens.max_y),
+                    last.center.y - last.height / 2.0,
+                )
+            };
+            assert!((middle_start - first_end - (last_start - middle_end)).abs() < 1e-9);
+            assert_eq!(first.center, Point::new(50.0, 50.0));
+            assert_eq!(last.center, Point::new(600.0, 600.0));
+            assert_eq!(
+                updated.magnified_center.x - updated.source_center.x,
+                original.magnified_center.x - original.source_center.x
+            );
+            assert_eq!(
+                updated.magnified_center.y - updated.source_center.y,
+                original.magnified_center.y - original.source_center.y
+            );
+        }
     }
 
     #[test]

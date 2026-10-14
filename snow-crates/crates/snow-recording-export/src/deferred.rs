@@ -19,8 +19,9 @@ use ffmpeg_next as ffmpeg;
 use snow_core::cancellation::CancellationToken;
 use snow_recording_effects::RecordedEffects;
 use snow_recording_model::{
-    BundleAssetKind, FinalizedTimeline, InputStoreReader, RecordingBundleFooter, RenderMetadata,
-    VideoIndexReader, read_bundle_render_metadata, read_recording_bundle_footer,
+    BundleAssetKind, FinalizedTimeline, FixedFrameTimeline, InputStoreReader, PlaybackSpeed,
+    RecordingBundleFooter, RenderMetadata, VideoIndexReader, read_bundle_render_metadata,
+    read_recording_bundle_footer,
 };
 
 use crate::error::Result;
@@ -325,6 +326,27 @@ pub fn render_bundle_range(
     metadata: RenderMetadata,
     range: snow_recording_model::TrimRange,
     cancellation: &CancellationToken,
+    progress: impl FnMut(ExportStage, u64, u64, Instant),
+) -> Result<ExportResult> {
+    render_bundle_range_with_speed(
+        path,
+        config,
+        metadata,
+        range,
+        PlaybackSpeed::default(),
+        cancellation,
+        progress,
+    )
+}
+
+/// Retiming changes the output clock while input effects remain on the source clock.
+pub fn render_bundle_range_with_speed(
+    path: &Path,
+    config: StreamingEncoderConfig,
+    metadata: RenderMetadata,
+    range: snow_recording_model::TrimRange,
+    speed: PlaybackSpeed,
+    cancellation: &CancellationToken,
     mut progress: impl FnMut(ExportStage, u64, u64, Instant),
 ) -> Result<ExportResult> {
     check_cancel(cancellation)?;
@@ -340,6 +362,7 @@ pub fn render_bundle_range(
     let source = snow_recording_model::SourceDescription::deferred(&footer.manifest, &metadata)?;
     let source_hdr = source.media.color == snow_media::ColorDescription::HDR10;
     let output_hdr = crate::preserves_hdr_output(source_hdr, config.format, config.codec);
+    let fixed_rate_retime = speed.percent() != 100 && !config.format.is_animated_image();
     snow_recording_model::TrimRange::new(
         range.start_us,
         range.end_us,
@@ -348,15 +371,35 @@ pub fn render_bundle_range(
     .map_err(RecordingExportError::InvalidConfig)?;
     let first =
         (u128::from(range.start_us) * u128::from(source.timeline.fps())).div_ceil(1_000_000) as u64;
+    let last = ((u128::from(range.end_us) * u128::from(source.timeline.fps())).div_ceil(1_000_000)
+        as u64)
+        .saturating_sub(1)
+        .min(source.timeline.frame_count() - 1);
     let origin_ms = source
         .timeline
         .frame(first)
         .ok_or_else(|| decode("empty trim range"))?
         .timestamp_ms;
-    let timeline =
-        FinalizedTimeline::new((range.duration_us() / 1000).max(1), source.timeline.fps())
+    let timing =
+        FixedFrameTimeline::new(source.timeline.duration_ms() * 1000, source.timeline.fps())
+            .and_then(|timeline| timeline.retime(range, speed))
             .map_err(RecordingExportError::InvalidConfig)?;
-    let total = timeline.frame_count();
+    let output_duration_us = timing
+        .duration_us()
+        .map_err(RecordingExportError::InvalidConfig)?;
+    let timeline =
+        FinalizedTimeline::new((output_duration_us / 1000).max(1), source.timeline.fps())
+            .map_err(RecordingExportError::InvalidConfig)?;
+    let total = timing
+        .frame_count()
+        .map_err(RecordingExportError::InvalidConfig)?;
+    let audio_samples = if speed.percent() == 100 {
+        range.sample_count(48_000)
+    } else {
+        timing
+            .sample_count(48_000)
+            .map_err(RecordingExportError::InvalidConfig)?
+    };
     if config.fps != timeline.fps()
         || (config.width, config.height)
             != (metadata.render.output_width, metadata.render.output_height)
@@ -405,12 +448,6 @@ pub fn render_bundle_range(
         builder = builder.hdr10_cpu_input();
     }
     let mut encoder = builder.create()?;
-    // A progress bar changes its geometry on most slots. Avoid a full-canvas
-    // equality scan in that common continuously changing output domain.
-    let reuse_pixels = !matches!(
-        metadata.render.playback_overlay,
-        snow_recording_model::PlaybackOverlay::ProgressBar { .. }
-    );
     let mut video = SequentialVideoSource::open(
         path,
         source.timeline,
@@ -420,8 +457,7 @@ pub fn render_bundle_range(
         cancellation,
     )?;
     video.seek_to(first, cancellation)?;
-    let mut audio = AudioReplay::open(path, &footer, &config)?;
-    audio.skip_samples(range.sample_offset(48_000))?;
+    let mut audio = ExportAudioReplay::open(path, &footer, &config, range, speed)?;
     let mut rgba = RasterBuffer::zeroed(config.width as usize * config.height as usize * 4);
     let mut hdr_conversion = if output_hdr {
         let mut conversion = ffmpeg::software::scaling::Context::get(
@@ -445,7 +481,7 @@ pub fn render_bundle_range(
     let mut hdr_encoded = output_hdr.then(|| {
         ffmpeg::frame::Video::new(encoder.input_pixel_format(), config.width, config.height)
     });
-    let mut previous_hdr = (output_hdr && reuse_pixels).then(|| {
+    let mut previous_hdr = output_hdr.then(|| {
         ffmpeg::frame::Video::new(ffmpeg::format::Pixel::RGB48LE, config.width, config.height)
     });
     let mut hdr_valid = false;
@@ -458,19 +494,52 @@ pub fn render_bundle_range(
         stage_times[0] = started.elapsed();
     }
     let mut previous_telemetry = Instant::now();
-    for output_frame in timeline.iter() {
+    let mut previous_progress_width = None;
+    for index in 0..total {
+        let output_frame = snow_recording_model::RenderFrame {
+            index,
+            pts: index,
+            timestamp_ms: (u128::from(index) * 1000 / u128::from(config.fps)) as u64,
+            progress: if total == 1 {
+                1.0
+            } else {
+                index as f64 / (total - 1) as f64
+            },
+        };
+        let source_index = if speed.percent() == 100 {
+            first + index
+        } else {
+            first
+                .saturating_add((u128::from(index) * u128::from(speed.percent()) / 100) as u64)
+                .min(last)
+        };
         let frame = snow_recording_model::RenderFrame {
-            timestamp_ms: source
-                .timeline
-                .frame(first + output_frame.index)
-                .ok_or_else(|| decode("trim exceeds source frames"))?
-                .timestamp_ms,
+            timestamp_ms: if speed.percent() == 100 {
+                source
+                    .timeline
+                    .frame(source_index)
+                    .ok_or_else(|| decode("trim exceeds source frames"))?
+                    .timestamp_ms
+            } else {
+                // Keep the source origin and output slot in one rational expression;
+                // independently rounded microseconds can miss a boundary observation.
+                (((u128::from(first) * 100 + u128::from(index) * u128::from(speed.percent()))
+                    * 1_000_000
+                    / (u128::from(config.fps) * 100))
+                    .min(u128::from(range.end_us - 1))
+                    / 1000) as u64
+            },
             ..output_frame
+        };
+        let playback_ms = if speed.percent() == 100 {
+            frame.timestamp_ms.saturating_sub(origin_ms)
+        } else {
+            output_frame.timestamp_ms
         };
         check_cancel(cancellation)?;
         #[cfg(feature = "bench-timing")]
         let stage_started = Instant::now();
-        video.advance(first + frame.pts, cancellation)?;
+        video.advance(source_index, cancellation)?;
         #[cfg(feature = "bench-timing")]
         {
             stage_times[1] += stage_started.elapsed();
@@ -482,21 +551,31 @@ pub fn render_bundle_range(
                 .observe(&event)
                 .map_err(snow_recording_model::RecordingModelError::Decode)
         })?;
+        let progress_width = match metadata.render.playback_overlay {
+            snow_recording_model::PlaybackOverlay::ProgressBar { .. } => Some(
+                snow_recording_effects::playback::progress_bar_width(config.width, frame.progress),
+            ),
+            _ => None,
+        };
+        // A changed progress width is already proof of changed pixels. Compare
+        // complete composed images only when the bar could actually be held.
+        let playback_unchanged = progress_width == previous_progress_width;
+        previous_progress_width = progress_width;
         if let Some(conversion) = &mut hdr_conversion {
             let rgb = hdr_rgb.as_mut().expect("HDR composition frame");
             video.copy_rgb48(rgb)?;
             let tiles = effects
-                .render_tiles(frame)
+                .render_tiles_at_playback_time(frame, playback_ms)
                 .map_err(RecordingExportError::Export)?;
             blend_hdr_tiles(rgb, &tiles);
             let converted = hdr_encoded.as_mut().expect("HDR encode frame");
-            let reusable =
-                reuse_pixels && reusable_effect_frame(&effects, &metadata, frame.timestamp_ms);
+            let reusable = reusable_effect_frame(&effects, &metadata, frame.timestamp_ms);
             #[cfg(feature = "bench-timing")]
-            if reusable && hdr_valid {
+            if reusable && playback_unchanged && hdr_valid {
                 hdr_reuse_checks += 1;
             }
             let unchanged = reusable
+                && playback_unchanged
                 && previous_hdr
                     .as_ref()
                     .is_some_and(|previous| hdr_valid && equal_rgb48(rgb, previous));
@@ -517,7 +596,9 @@ pub fn render_bundle_range(
             }
             #[cfg(feature = "bench-timing")]
             let stage_started = Instant::now();
-            encoder.push_prepared_video_frame_ref_at_pts(frame.pts, converted)?;
+            if !unchanged || fixed_rate_retime {
+                encoder.push_prepared_video_frame_ref_at_pts(frame.pts, converted)?;
+            }
             #[cfg(feature = "bench-timing")]
             {
                 stage_times[3] += stage_started.elapsed();
@@ -525,12 +606,22 @@ pub fn render_bundle_range(
         } else {
             video.copy_rgba(&mut rgba)?;
             effects
-                .apply_rgba(&mut rgba, frame)
+                .apply_rgba_at_playback_time(&mut rgba, frame, playback_ms)
                 .map_err(RecordingExportError::Export)?;
             // Known changing animations cannot reuse prepared pixels. For
             // other slots, exact complete-pixel equality remains authoritative.
-            encoder.set_reuse_identical_rgba(
-                reuse_pixels && reusable_effect_frame(&effects, &metadata, frame.timestamp_ms),
+            encoder.set_frame_reuse(
+                if playback_unchanged
+                    && reusable_effect_frame(&effects, &metadata, frame.timestamp_ms)
+                {
+                    if fixed_rate_retime {
+                        crate::streaming::VideoFrameReuse::ReuseConversion
+                    } else {
+                        crate::streaming::VideoFrameReuse::Coalesce
+                    }
+                } else {
+                    crate::streaming::VideoFrameReuse::Encode
+                },
             );
             #[cfg(feature = "bench-timing")]
             {
@@ -549,7 +640,7 @@ pub fn render_bundle_range(
         let stage_started = Instant::now();
         audio.emit_until(
             (((u128::from(frame.pts + 1) * 48_000) / u128::from(config.fps))
-                .min(u128::from(timeline.duration_ms()) * 48)) as u64,
+                .min(u128::from(audio_samples))) as u64,
             &mut encoder,
             cancellation,
         )?;
@@ -571,8 +662,12 @@ pub fn render_bundle_range(
     progress(ExportStage::Finalize, total, total, started);
     #[cfg(feature = "bench-timing")]
     let stage_started = Instant::now();
-    audio.emit_until(range.sample_count(48_000), &mut encoder, cancellation)?;
-    let report = encoder.finish_at_duration_us_cancelable(range.duration_us(), cancellation)?;
+    audio.emit_until(audio_samples, &mut encoder, cancellation)?;
+    let report = encoder.finish_at_duration_us_with_end_pts_cancelable(
+        output_duration_us,
+        total,
+        cancellation,
+    )?;
     #[cfg(feature = "bench-timing")]
     {
         let conversions = if output_hdr {
@@ -581,13 +676,14 @@ pub fn render_bundle_range(
             report.timings.cpu_conversions
         };
         eprintln!(
-            "deferred prepared pixels: slots={total}, conversions={conversions}, reused={}, equality_checks={}, equality_guard={reuse_pixels}",
+            "deferred prepared pixels: slots={total}, conversions={conversions}, reused={}, equality_checks={}, coalesced={}",
             total.saturating_sub(conversions),
             if output_hdr {
                 hdr_reuse_checks
             } else {
                 report.timings.cpu_reuse_checks
             },
+            total.saturating_sub(report.encoded_frames),
         );
     }
     #[cfg(feature = "bench-timing")]
@@ -650,17 +746,8 @@ fn equal_rgb48(a: &ffmpeg::frame::Video, b: &ffmpeg::frame::Video) -> bool {
     })
 }
 
-fn copy_rgb48(source: &ffmpeg::frame::Video, output: &mut ffmpeg::frame::Video) {
-    let width = source.width() as usize * 6;
-    let output_stride = output.stride(0);
-    for y in 0..source.height() as usize {
-        output.data_mut(0)[y * output_stride..y * output_stride + width]
-            .copy_from_slice(&source.data(0)[y * source.stride(0)..y * source.stride(0) + width]);
-    }
-}
-
 fn cache_rgb48(
-    pixels: &ffmpeg::frame::Video,
+    pixels: &mut ffmpeg::frame::Video,
     previous: &mut Option<ffmpeg::frame::Video>,
     valid: &mut bool,
     reusable: bool,
@@ -669,7 +756,9 @@ fn cache_rgb48(
     // after animation settles before comparing again, avoiding a full copy while busy.
     *valid = false;
     if reusable && let Some(previous) = previous.as_mut() {
-        copy_rgb48(pixels, previous);
+        // The composition buffer and history exchange ownership; no canvas
+        // copy is needed, and the encoder retains only converted immutable pixels.
+        std::mem::swap(pixels, previous);
         *valid = true;
     }
 }
@@ -967,6 +1056,66 @@ struct PcmTrack {
     bytes: Vec<u8>,
     samples: Vec<i16>,
 }
+
+enum ExportAudioReplay {
+    Original(AudioReplay),
+    Retimed {
+        reader: Box<crate::tempo::RetimedAudioReader>,
+        output: Vec<crate::StreamingAudioConfig>,
+    },
+}
+
+impl ExportAudioReplay {
+    fn open(
+        path: &Path,
+        footer: &RecordingBundleFooter,
+        config: &StreamingEncoderConfig,
+        range: snow_recording_model::TrimRange,
+        speed: PlaybackSpeed,
+    ) -> Result<Self> {
+        if speed.percent() == 100 || config.audio.is_empty() {
+            let mut original = AudioReplay::open(path, footer, config)?;
+            original.skip_samples(range.sample_offset(48_000))?;
+            return Ok(Self::Original(original));
+        }
+        let mut source = crate::clip::ClipSource::open(path, None)?;
+        source.config.audio = config.audio.clone();
+        Ok(Self::Retimed {
+            reader: Box::new(crate::tempo::RetimedAudioReader::open(
+                &source, range, speed,
+            )?),
+            output: config.audio.clone(),
+        })
+    }
+
+    fn emit_until(
+        &mut self,
+        end: u64,
+        encoder: &mut StreamingEncoder,
+        cancellation: &CancellationToken,
+    ) -> Result<()> {
+        match self {
+            Self::Original(original) => original.emit_until(end, encoder, cancellation),
+            Self::Retimed { reader, output } => {
+                while reader.position() < end.min(reader.total_samples()) {
+                    check_cancel(cancellation)?;
+                    let position = reader.position();
+                    let count = (end.min(reader.total_samples()) - position).min(960) as usize;
+                    let tracks = reader.read(count, cancellation)?;
+                    for (track, samples) in output.iter().zip(tracks) {
+                        encoder.push_audio_track_pcm_i16_at_frame(
+                            &track.track_id,
+                            position,
+                            samples,
+                        )?;
+                    }
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
 struct AudioReplay {
     sources: Vec<PcmTrack>,
     output: Vec<crate::StreamingAudioConfig>,

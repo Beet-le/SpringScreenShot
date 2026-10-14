@@ -9,17 +9,22 @@
 #include "snow_shot/presentation/screenshotscrollingthumbnailwidget.h"
 #include "snow_draw_engine_qt/snow_canvas_widget.h"
 #include <QEvent>
+#include <QBackingStore>
+#include <QCoreApplication>
 #include "snow_shot/platform/windows/windowchrome.h"
 #ifdef Q_OS_MACOS
 #include "snow_shot/platform/screenshotnative.h"
 #endif
 #include <QGuiApplication>
+#include <QImage>
+#include <QScreen>
 #include "../capture/screenshotscrollingdiagnostics.h"
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPaintEvent>
 #include <QRegion>
+#include <QScopedValueRollback>
 #include "snow_shot/presentation/screenshotregiontypecontrol.h"
 #include <QResizeEvent>
 #include <QVBoxLayout>
@@ -34,6 +39,22 @@ namespace {
 constexpr int kScrollingThumbnailGap = 8;
 constexpr int kScrollingThumbnailMargin = 8;
 constexpr auto kHistoryLoadingMessageKey = "screenshot-history-loading";
+constexpr qsizetype kBackingStorePreparationSliceBytes = 1024 * 1024;
+// A conservative stride also covers platforms with larger (for example, 16 KiB) pages.
+constexpr qsizetype kBackingStorePreparationPageBytes = 4096;
+
+QEvent::Type backingStorePreparationEventType() {
+    static const auto type = static_cast<QEvent::Type>(QEvent::registerEventType());
+    return type;
+}
+
+class BackingStorePreparationEvent final : public QEvent {
+  public:
+    explicit BackingStorePreparationEvent(quint64 preparationGeneration)
+        : QEvent(backingStorePreparationEventType()), generation(preparationGeneration) {}
+
+    const quint64 generation;
+};
 
 #if defined(SNOW_SHOT_CAPTURE_PERF_INSTRUMENTATION)
 qint64 paintRegionArea(const QRegion& region) {
@@ -71,6 +92,7 @@ ScreenshotOverlayWindow::ScreenshotOverlayWindow(ScreenshotOverlayEventSink& eve
     layout->addWidget(m_canvas);
 
     m_regionTypeControl = new ScreenshotRegionTypeControl(this, true);
+    m_regionTypeControl->installEventFilter(this);
     m_regionTypeControl->hide();
     m_framePresenter = std::make_unique<ScreenshotOverlayFramePresenter>(*this);
 
@@ -95,6 +117,7 @@ ScreenshotOverlayWindow::ScreenshotOverlayWindow(ScreenshotOverlayEventSink& eve
 }
 
 ScreenshotOverlayWindow::~ScreenshotOverlayWindow() {
+    cancelBackingStorePreparation();
     setScrollingCaptureMode(false);
     if (m_canvas != nullptr) {
         m_canvas->setTextEditingBounds(std::nullopt);
@@ -115,8 +138,10 @@ void ScreenshotOverlayWindow::setCaptureGeometry(const QRect& displayGeometry) {
 #endif
     layout()->setContentsMargins(m_captureFrameMargins);
     const QRect frame = displayGeometry.marginsAdded(m_captureFrameMargins);
-    if (geometry() != frame)
+    if (geometry() != frame) {
+        cancelBackingStorePreparation();
         setGeometry(frame);
+    }
     layout()->activate();
 }
 
@@ -129,6 +154,7 @@ QPoint ScreenshotOverlayWindow::canvasLocalPosition(const QPoint& globalPosition
 }
 
 void ScreenshotOverlayWindow::setScreenshotImage(QImage image, const QRectF& canvasRect) {
+    cancelBackingStorePreparation();
     if (m_screenshotRenderer != nullptr) {
         m_screenshotRenderer->setImage(std::move(image), canvasRect);
     }
@@ -136,8 +162,15 @@ void ScreenshotOverlayWindow::setScreenshotImage(QImage image, const QRectF& can
 
 void ScreenshotOverlayWindow::setScreenshotImageSource(ScreenshotImageSource source,
                                                        const QRectF& damage) {
+    setScreenshotImageSource(std::move(source), damage, {});
+}
+
+void ScreenshotOverlayWindow::setScreenshotImageSource(
+    ScreenshotImageSource source, const QRectF& damage,
+    const ScreenshotImageSource& samplingSource) {
+    cancelBackingStorePreparation();
     if (m_screenshotRenderer)
-        m_screenshotRenderer->setImageSource(std::move(source), damage);
+        m_screenshotRenderer->setImageSource(std::move(source), damage, samplingSource);
 }
 
 void ScreenshotOverlayWindow::setScreenshotMaskVisible(bool visible) {
@@ -295,6 +328,7 @@ void ScreenshotOverlayWindow::setHistoryLoadingVisible(bool visible) {
 }
 
 void ScreenshotOverlayWindow::resetScreenshotRendering() {
+    retirePresentation();
     setScrollingCaptureMode(false);
     if (m_canvas != nullptr) {
         m_canvas->setTextEditingBounds(std::nullopt);
@@ -327,32 +361,13 @@ void ScreenshotOverlayWindow::setCanvasClearBackgroundEnabled(bool enabled) {
 
 QJsonObject ScreenshotOverlayWindow::scrollingDiagnostics() const {
     using snow_shot::capture_detail::scrollingRect;
-    const QRect hole =
-        m_scrollingVisualHole.translated(m_captureFrameMargins.left(), m_captureFrameMargins.top())
-            .intersected(rect());
     QJsonObject fields{{QStringLiteral("overlay_rect"), scrollingRect(geometry())},
-                       {QStringLiteral("hole_rect"), scrollingRect(hole)},
-                       {QStringLiteral("full_hole"),
-                        !hole.isEmpty() && hole == rect().marginsRemoved(m_captureFrameMargins)},
-                       {QStringLiteral("mask_empty"), mask().isEmpty()},
                        {QStringLiteral("dpr"), devicePixelRatioF()},
                        {QStringLiteral("thumbnail_visible"),
                         m_scrollingThumbnail != nullptr && m_scrollingThumbnail->isVisible()}};
 #if defined(Q_OS_WIN) || defined(_WIN32)
     if (QGuiApplication::platformName() == QStringLiteral("windows") && internalWinId() != 0) {
         const auto hwnd = reinterpret_cast<HWND>(internalWinId());
-        const HRGN region = CreateRectRgn(0, 0, 0, 0);
-        if (region != nullptr) {
-            const int type = GetWindowRgn(hwnd, region);
-            fields.insert(QStringLiteral("native_region_type"), type);
-            if (type != ERROR && !hole.isEmpty()) {
-                const QPoint center = hole.center();
-                fields.insert(QStringLiteral("native_hole_contains_center"),
-                              PtInRegion(region, qRound(center.x() * devicePixelRatioF()),
-                                         qRound(center.y() * devicePixelRatioF())) != FALSE);
-            }
-            DeleteObject(region);
-        }
         DWORD affinity = 0;
         if (GetWindowDisplayAffinity(hwnd, &affinity))
             fields.insert(QStringLiteral("code"), static_cast<qint64>(affinity));
@@ -368,21 +383,8 @@ QJsonObject ScreenshotOverlayWindow::scrollingDiagnostics() const {
     return fields;
 }
 
-void ScreenshotOverlayWindow::setScrollingVisualHole(const QRect& localRect) {
-    m_scrollingVisualHole = localRect;
-    updateWindowMask();
-}
-
-void ScreenshotOverlayWindow::clearScrollingVisualHole() {
-    m_scrollingVisualHole = {};
-    updateWindowMask();
-}
-
 void ScreenshotOverlayWindow::setScrollingCaptureMode(bool enabled) {
     if (!enabled) {
-        // Standard rendering draws into the scrolling visual hole, so
-        // restore the full window surface before its synchronous repaint.
-        clearScrollingVisualHole();
         clearScrollingResultPreview();
         clearScrollingThumbnail();
     }
@@ -504,7 +506,6 @@ void ScreenshotOverlayWindow::setScrollingResultPreview(const QImage& image,
     }
     m_scrollingResultPreviewCanvasRect = canvasRect.normalized();
     m_scrollingResultPreviewStatusVisible = showStatus;
-    updateWindowMask();
     updateScrollingResultPreviewReadout();
 }
 
@@ -521,9 +522,8 @@ void ScreenshotOverlayWindow::clearScrollingResultPreview() {
     m_scrollingResultPreviewCanvasRect = {};
     m_scrollingResultPreviewStatusVisible = false;
     if (m_scrollingResultPreviewReadout != nullptr) {
-        m_scrollingResultPreviewReadout->hide();
+        m_scrollingResultPreviewReadout->dismiss();
     }
-    updateWindowMask();
     if (m_canvas != nullptr && isVisible() && updatesEnabled() && m_canvas->updatesEnabled()) {
         // A queued update can outlive hover exit and be captured as a new stitch frame.
         // Present the transparent restoration synchronously, before source restart.
@@ -537,7 +537,7 @@ void ScreenshotOverlayWindow::updateScrollingResultPreviewReadout() {
     if (!m_scrollingResultPreviewStatusVisible || m_screenshotRenderer == nullptr ||
         !m_screenshotRenderer->hasScrollingResultPreview() || m_canvas == nullptr) {
         if (m_scrollingResultPreviewReadout != nullptr) {
-            m_scrollingResultPreviewReadout->hide();
+            m_scrollingResultPreviewReadout->dismiss();
         }
         return;
     }
@@ -545,18 +545,18 @@ void ScreenshotOverlayWindow::updateScrollingResultPreviewReadout() {
         m_scrollingResultPreviewReadout = new CanvasStatusReadout(this);
         m_scrollingResultPreviewReadout->setObjectName(
             QStringLiteral("scrollingScreenshotResultPreviewLabel"));
+        m_scrollingResultPreviewReadout->setMessage(CanvasStatusReadout::Message::ResultPreview);
     }
-    const QRect anchor = m_canvas->viewRectForCanvasRect(m_scrollingResultPreviewCanvasRect, 0)
-                             .intersected(m_canvas->rect())
-                             .translated(m_canvas->pos());
+    const QRectF anchor = m_canvas->canvasToViewTransform()
+                              .mapRect(m_scrollingResultPreviewCanvasRect)
+                              .intersected(QRectF(m_canvas->rect()))
+                              .translated(m_canvas->pos());
     if (anchor.isEmpty()) {
-        m_scrollingResultPreviewReadout->hide();
+        m_scrollingResultPreviewReadout->dismiss();
         return;
     }
-    m_scrollingResultPreviewReadout->setText(tr("Result Preview in Progress"));
     m_scrollingResultPreviewReadout->layoutIn(anchor);
-    m_scrollingResultPreviewReadout->show();
-    m_scrollingResultPreviewReadout->raise();
+    m_scrollingResultPreviewReadout->showPersistent();
 }
 
 QWidget* ScreenshotOverlayWindow::scrollingThumbnailWindow() const {
@@ -585,10 +585,6 @@ ScreenshotScrollingTrimRange ScreenshotOverlayWindow::scrollingThumbnailTrim() c
 }
 
 #if defined(SNOW_SHOT_BENCH_INTERNALS)
-quint64 ScreenshotOverlayWindow::windowMaskApplicationCountForTesting() const {
-    return m_windowMaskApplicationCount;
-}
-
 quint64 ScreenshotOverlayWindow::transparentClearCountForTesting() const {
     return m_transparentClearCount;
 }
@@ -596,28 +592,224 @@ quint64 ScreenshotOverlayWindow::transparentClearCountForTesting() const {
 ScreenshotCanvasRenderer* ScreenshotOverlayWindow::screenshotRendererForTesting() const {
     return m_screenshotRenderer.get();
 }
+
+void ScreenshotOverlayWindow::setBackingStorePreparationModeForTesting(
+    ScreenshotBackingStorePreparationMode mode) {
+    cancelBackingStorePreparation();
+    m_backingStorePreparationMode = mode;
+}
+
+void ScreenshotOverlayWindow::resetBackingStorePreparationCountersForTesting() {
+    m_backingStorePreparationCounters = {};
+}
+
+ScreenshotBackingStorePreparationCounters
+ScreenshotOverlayWindow::backingStorePreparationCountersForTesting() const {
+    return m_backingStorePreparationCounters;
+}
+
+bool ScreenshotOverlayWindow::isBackingStorePreparationPendingForTesting() const {
+    return m_backingStorePreparationActive;
+}
 #endif
 
+void ScreenshotOverlayWindow::prepareBackingStore() {
+#if defined(SNOW_SHOT_BENCH_INTERNALS)
+    if (m_backingStorePreparationMode == ScreenshotBackingStorePreparationMode::Disabled)
+        return;
+#endif
+    if (isVisible() || size().isEmpty() || internalWinId() == 0)
+        return;
+
+    const qreal dpr = devicePixelRatioF();
+    if ((m_backingStorePreparationActive || m_backingStorePreparationComplete) &&
+        m_backingStorePreparationSize == size() && m_backingStorePreparationScreen == screen() &&
+        qFuzzyCompare(m_backingStorePreparationDevicePixelRatio, dpr) &&
+        m_backingStorePreparationNativeId == internalWinId()) {
+        return;
+    }
+
+    cancelBackingStorePreparation();
+    m_backingStorePreparationSize = size();
+    m_backingStorePreparationScreen = screen();
+    m_backingStorePreparationDevicePixelRatio = dpr;
+    m_backingStorePreparationNativeId = internalWinId();
+    m_backingStorePreparationActive = true;
+    postBackingStorePreparation();
+}
+
+void ScreenshotOverlayWindow::cancelBackingStorePreparation() {
+#if defined(SNOW_SHOT_BENCH_INTERNALS)
+    if (m_backingStorePreparationActive)
+        ++m_backingStorePreparationCounters.canceledPreparations;
+#endif
+    ++m_backingStorePreparationGeneration;
+    m_backingStorePreparationActive = false;
+    m_backingStorePreparationAllocated = false;
+    m_backingStorePreparationComplete = false;
+    m_backingStorePreparationNextByte = 0;
+    m_backingStorePreparationSize = {};
+    m_backingStorePreparationScreen = nullptr;
+    m_backingStorePreparationDevicePixelRatio = 0.0;
+    m_backingStorePreparationNativeId = 0;
+}
+
+void ScreenshotOverlayWindow::postBackingStorePreparation() {
+    // Ready capture results and input outrank speculative page preparation.
+    QCoreApplication::postEvent(
+        this, new BackingStorePreparationEvent(m_backingStorePreparationGeneration),
+        Qt::LowEventPriority);
+}
+
+void ScreenshotOverlayWindow::continueBackingStorePreparation(quint64 generation) {
+    if (!m_backingStorePreparationActive || generation != m_backingStorePreparationGeneration)
+        return;
+    if (isVisible() || internalWinId() == 0 ||
+        m_backingStorePreparationNativeId != internalWinId() ||
+        m_backingStorePreparationSize != size() || m_backingStorePreparationScreen != screen() ||
+        !qFuzzyCompare(m_backingStorePreparationDevicePixelRatio, devicePixelRatioF())) {
+        cancelBackingStorePreparation();
+        return;
+    }
+
+    SNOW_SHOT_CAPTURE_PERF_SCOPE("presentation.window.backing_store_prepare_slice");
+    QBackingStore* store = backingStore();
+    if (store == nullptr) {
+        cancelBackingStorePreparation();
+        return;
+    }
+    if (!m_backingStorePreparationAllocated) {
+        store->resize(size());
+#if defined(SNOW_SHOT_BENCH_INTERNALS)
+        ++m_backingStorePreparationCounters.allocationRequests;
+#endif
+    }
+
+    // Cocoa allocates its IOSurface in beginPaint, rather than resize. An empty
+    // region avoids clearing a desktop-sized alpha surface in each slice and
+    // leaves its dirty state intact for Qt's complete first visible paint.
+    store->beginPaint(QRegion());
+    m_backingStorePreparationAllocated = true;
+    bool preparePages = true;
+#if defined(SNOW_SHOT_BENCH_INTERNALS)
+    preparePages =
+        m_backingStorePreparationMode != ScreenshotBackingStorePreparationMode::AllocationOnly;
+#endif
+    QPaintDevice* device = store->paintDevice();
+    if (preparePages && device != nullptr && device->devType() == QInternal::Image) {
+        auto* image = static_cast<QImage*>(device);
+        const qsizetype totalBytes = image->sizeInBytes();
+        const qsizetype sliceEnd = std::min(totalBytes, m_backingStorePreparationNextByte +
+                                                            kBackingStorePreparationSliceBytes);
+        const qsizetype sliceBytes = sliceEnd - m_backingStorePreparationNextByte;
+        volatile uchar* pixels = image->bits();
+        if (pixels != nullptr && sliceBytes > 0) {
+            quint64 pageWrites = 0;
+            for (qsizetype offset = m_backingStorePreparationNextByte; offset < sliceEnd;
+                 offset += kBackingStorePreparationPageBytes) {
+                pixels[offset] = 0;
+                ++pageWrites;
+            }
+            // The final allocation page can extend beyond the last stride, including
+            // when the image's address is not aligned to a system page boundary.
+            pixels[sliceEnd - 1] = 0;
+            ++pageWrites;
+            m_backingStorePreparationNextByte = sliceEnd;
+#if defined(SNOW_SHOT_BENCH_INTERNALS)
+            ++m_backingStorePreparationCounters.pageTouchSlices;
+            m_backingStorePreparationCounters.touchedBytes += static_cast<quint64>(sliceBytes);
+            m_backingStorePreparationCounters.pageWrites += pageWrites;
+            m_backingStorePreparationCounters.maximumSliceBytes =
+                std::max(m_backingStorePreparationCounters.maximumSliceBytes,
+                         static_cast<quint64>(sliceBytes));
+#else
+            Q_UNUSED(pageWrites);
+#endif
+            preparePages = sliceEnd < totalBytes;
+        } else {
+            preparePages = false;
+        }
+    } else {
+        preparePages = false;
+    }
+    store->endPaint();
+
+    if (preparePages) {
+        postBackingStorePreparation();
+    } else {
+        m_backingStorePreparationActive = false;
+        m_backingStorePreparationComplete = true;
+#if defined(SNOW_SHOT_BENCH_INTERNALS)
+        ++m_backingStorePreparationCounters.completedPreparations;
+#endif
+    }
+}
+
 void ScreenshotOverlayWindow::warmPresentationSurface() {
+    retirePresentation();
     if (m_framePresenter != nullptr) {
         m_framePresenter->warmPresentationSurface();
     }
 }
 
 void ScreenshotOverlayWindow::showPreparedFrame(bool deferFirstPaint) {
+    static_cast<void>(showPreparedFrameForPresentation(beginPresentation(), deferFirstPaint));
+}
+
+quint64 ScreenshotOverlayWindow::beginPresentation() {
+    cancelBackingStorePreparation();
+    ++m_presentationGeneration;
+    m_presentationActive = true;
+    return m_presentationGeneration;
+}
+
+quint64 ScreenshotOverlayWindow::presentationGeneration() const {
+    return m_presentationGeneration;
+}
+
+bool ScreenshotOverlayWindow::isPresentationCurrent(quint64 generation) const {
+    return m_presentationActive && generation == m_presentationGeneration;
+}
+
+void ScreenshotOverlayWindow::retirePresentation() {
+    cancelBackingStorePreparation();
+    ++m_presentationGeneration;
+    m_presentationActive = false;
+}
+
+bool ScreenshotOverlayWindow::showPreparedFrameForPresentation(quint64 generation,
+                                                               bool deferFirstPaint) {
+    if (!isPresentationCurrent(generation)) {
+        return false;
+    }
+    // The presenter's internal show() publishes this reservation. A separate public
+    // show() starts a new presentation even when the pooled widget remains visible.
+    const QScopedValueRollback<bool> showingPreparedFrame(m_showingPreparedFrame, !isVisible());
     if (m_framePresenter != nullptr) {
         m_framePresenter->presentPreparedFrame(deferFirstPaint);
     }
+    return isPresentationCurrent(generation) && isVisible();
+}
+
+void ScreenshotOverlayWindow::setVisible(bool visible) {
+    // Consume the prepared show's reservation before Qt dispatches Show/focus events;
+    // a reentrant public show() must acquire its own generation.
+    const bool showingPreparedFrame = visible && std::exchange(m_showingPreparedFrame, false);
+    if (!visible) {
+        // hide() can cancel a pending reveal while the widget is already hidden;
+        // QWidget does not emit a Hide event in that case.
+        retirePresentation();
+    } else if (!showingPreparedFrame) {
+        static_cast<void>(beginPresentation());
+    }
+    QWidget::setVisible(visible);
 }
 
 void ScreenshotOverlayWindow::releaseNativeSurface() {
+    retirePresentation();
     clearScrollingResultPreview();
     hide();
     setUpdatesEnabled(false);
-    clearMask();
-    m_scrollingVisualHole = {};
-    m_appliedWindowMask = QRegion();
-    m_windowMaskInitialized = false;
     if (m_canvas != nullptr) {
         m_canvas->setInteractionEnabled(false);
         m_canvas->setUpdatesEnabled(false);
@@ -637,6 +829,7 @@ void ScreenshotOverlayWindow::releaseNativeSurface() {
 }
 
 void ScreenshotOverlayWindow::restoreNativeSurface() {
+    retirePresentation();
     setUpdatesEnabled(true);
     if (m_canvas != nullptr) {
         m_canvas->setUpdatesEnabled(true);
@@ -671,19 +864,28 @@ void ScreenshotOverlayWindow::initializeScreenshotSurface() {
 }
 
 bool ScreenshotOverlayWindow::event(QEvent* event) {
+    if (event != nullptr && event->type() == backingStorePreparationEventType()) {
+        continueBackingStorePreparation(
+            static_cast<BackingStorePreparationEvent*>(event)->generation);
+        return true;
+    }
+    if (event != nullptr &&
+        (event->type() == QEvent::Resize || event->type() == QEvent::ScreenChangeInternal ||
+         event->type() == QEvent::DevicePixelRatioChange ||
+         event->type() == QEvent::PlatformSurface)) {
+        cancelBackingStorePreparation();
+    }
     if (event != nullptr &&
         (event->type() == QEvent::Hide || event->type() == QEvent::WindowDeactivate)) {
         m_eventSink.cancelEffectDrag();
         m_eventSink.leaveEffectEditors();
     }
     if (event != nullptr && event->type() == QEvent::Hide) {
+        retirePresentation();
         clearScrollingResultPreview();
     }
-    if (event != nullptr &&
-        (event->type() == QEvent::LanguageChange || event->type() == QEvent::FontChange ||
-         event->type() == QEvent::ApplicationFontChange ||
-         event->type() == QEvent::DevicePixelRatioChange ||
-         event->type() == QEvent::ScreenChangeInternal)) {
+    if (event != nullptr && (event->type() == QEvent::DevicePixelRatioChange ||
+                             event->type() == QEvent::ScreenChangeInternal)) {
         updateScrollingResultPreviewReadout();
     }
     if (event != nullptr && event->type() == QEvent::Show) {
@@ -728,15 +930,13 @@ bool ScreenshotOverlayWindow::event(QEvent* event) {
 }
 
 bool ScreenshotOverlayWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (watched == m_regionTypeControl && event != nullptr && event->type() == QEvent::Resize)
+        layoutRegionTypeControl();
     if (watched == m_canvas && event != nullptr) {
         if (event->type() == QEvent::Leave)
             m_eventSink.leaveEffectEditors();
         if (event->type() == QEvent::UngrabMouse || event->type() == QEvent::Hide)
             m_eventSink.cancelEffectDrag();
-    }
-    if (watched == m_canvas && event != nullptr && event->type() == QEvent::MouseMove &&
-        m_screenshotRenderer != nullptr) {
-        m_screenshotRenderer->setGuideCursorPosition(static_cast<QMouseEvent*>(event)->position());
     }
     if (watched == m_canvas && event != nullptr && event->type() == QEvent::Paint) {
         SNOW_SHOT_CAPTURE_PERF_COUNTER("presentation.window.canvas.paint_dispatches", 1);
@@ -830,7 +1030,6 @@ void ScreenshotOverlayWindow::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
     layoutScrollingThumbnail();
     layoutRegionTypeControl();
-    updateWindowMask();
     updateScrollingResultPreviewReadout();
 }
 
@@ -885,32 +1084,6 @@ void ScreenshotOverlayWindow::layoutScrollingThumbnail() {
     m_scrollingThumbnail->move(QPoint(x, y) + displayOrigin);
 }
 
-void ScreenshotOverlayWindow::updateWindowMask() {
-    const QRect hole =
-        m_scrollingVisualHole.translated(m_captureFrameMargins.left(), m_captureFrameMargins.top())
-            .intersected(rect());
-    QRegion visibleRegion;
-    if (hole.isEmpty() ||
-        (m_screenshotRenderer != nullptr && m_screenshotRenderer->hasScrollingResultPreview())) {
-        visibleRegion = {};
-    } else {
-        visibleRegion = QRegion(rect()).subtracted(QRegion(hole));
-    }
-    if (m_windowMaskInitialized && visibleRegion == m_appliedWindowMask) {
-        return;
-    }
-    m_windowMaskInitialized = true;
-    m_appliedWindowMask = visibleRegion;
-#if defined(SNOW_SHOT_BENCH_INTERNALS)
-    ++m_windowMaskApplicationCount;
-#endif
-    if (visibleRegion.isEmpty()) {
-        clearMask();
-    } else {
-        setMask(visibleRegion);
-    }
-}
-
 bool ScreenshotOverlayWindow::handleCanvasEvent(QEvent* event) {
     if (event == nullptr) {
         return false;
@@ -922,6 +1095,11 @@ bool ScreenshotOverlayWindow::handleCanvasEvent(QEvent* event) {
         !m_eventSink.acceptOverlayInput(event->spontaneous())) {
         event->accept();
         return true;
+    }
+    if (event->type() == QEvent::MouseMove && m_screenshotRenderer) {
+        const QPointF position = static_cast<QMouseEvent*>(event)->position();
+        if (!m_eventSink.presentOverlayPointer(this, position))
+            m_screenshotRenderer->setGuideCursorPosition(position);
     }
     if (event->type() == QEvent::KeyPress) {
         return handleCanvasKeyPress(static_cast<QKeyEvent*>(event));

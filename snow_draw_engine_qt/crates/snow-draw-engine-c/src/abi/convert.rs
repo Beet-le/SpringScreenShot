@@ -3,18 +3,18 @@ mod patch_payloads;
 pub(crate) use patch_payloads::*;
 
 use snow_draw_engine::{
-    ActiveTool, ArrowPathCommand, ArrowType, Arrowhead, ArrowheadDisplayDashMode,
-    ArrowheadDisplayFillMode, ArrowheadDisplayPrimitive, ArrowheadDisplayPrimitiveKind,
-    CanvasFilterType, ColorRgba8, CornerRadii, CursorCommand, CursorStyle, DisplayFillStyle,
-    DisplayTextHorizontalAlign, DisplayTextVerticalAlign, DistanceStyle, DistanceUnit, ElementId,
-    EngineConfig, FillStyle, FilterStyle, GridConfig, HistoryState, InputEvent, InteractionOutput,
-    KeyCode, KeyEvent, KeyEventType, Modifiers, Point, PointerButton, PointerButtons,
-    PointerCaptureCommand, PointerDevice, PointerEvent, PointerEventType, RectangleShapeStyle,
-    RuntimeConfig, SerialNumberStyle, SerialNumberType, ShapeKind, ShapeStyle, SnapConfig,
-    SpotlightConfig, StrokeStyle, StyleDefaults, StyleToolbarSource, TextElementInfo,
-    TextHorizontalAlign, TextLayoutOverride, TextLayoutSize, TextStyle, TextVerticalAlign, Vector2,
-    WatermarkConfig, WatermarkTemplateApplicationTime, WheelDeltaKind, WheelEvent, ZoomFocus,
-    normalize_font_family,
+    ActiveTool, AngleStyle, AngleType, AngleUnit, ArrowPathCommand, ArrowType, Arrowhead,
+    ArrowheadDisplayDashMode, ArrowheadDisplayFillMode, ArrowheadDisplayPrimitive,
+    ArrowheadDisplayPrimitiveKind, CanvasFilterType, ColorRgba8, CornerRadii, CursorCommand,
+    CursorStyle, DisplayFillStyle, DisplayTextHorizontalAlign, DisplayTextVerticalAlign,
+    DistanceStyle, DistanceUnit, ElementId, EngineConfig, FillStyle, FilterStyle, GridConfig,
+    HistoryState, InputEvent, InteractionOutput, KeyCode, KeyEvent, KeyEventType, Modifiers, Point,
+    PointerButton, PointerButtons, PointerCaptureCommand, PointerDevice, PointerEvent,
+    PointerEventType, RectangleShapeStyle, RuntimeConfig, SerialNumberStyle, SerialNumberType,
+    ShapeKind, ShapeStyle, SnapConfig, SpotlightConfig, StrokeStyle, StyleDefaults,
+    StyleToolbarSource, TextElementInfo, TextHorizontalAlign, TextLayoutOverride, TextLayoutSize,
+    TextStyle, TextVerticalAlign, Vector2, WatermarkConfig, WatermarkTemplateApplicationTime,
+    WheelDeltaKind, WheelEvent, ZoomFocus, normalize_font_family,
 };
 
 use crate::abi::text::{
@@ -259,6 +259,7 @@ pub(crate) fn snow_shape_kind_to_rust(value: SnowShapeKind) -> ShapeKind {
         SnowShapeKind::RectangleHighlight => ShapeKind::RectangleHighlight,
         SnowShapeKind::PenHighlight => ShapeKind::PenHighlight,
         SnowShapeKind::Spotlight => ShapeKind::Spotlight,
+        SnowShapeKind::SpeechBubble => ShapeKind::SpeechBubble,
     }
 }
 
@@ -507,6 +508,24 @@ pub(crate) fn snow_text_element_info_from_rust(value: TextElementInfo) -> SnowTe
             .map(snow_element_id_from_rust)
             .unwrap_or_default(),
         arrow_width: value.arrow_width,
+        bubble_id: value
+            .bubble_id
+            .map(snow_element_id_from_rust)
+            .unwrap_or_default(),
+        text_ink_reserve: value.text_ink_reserve,
+        bubble_body_width: value.bubble_body.map_or(0.0, |b| b.width),
+        bubble_body_height: value.bubble_body.map_or(0.0, |b| b.height),
+        bubble_shape: value
+            .bubble_body
+            .map_or(SnowRectangleShape::Rectangle, |b| match b.highlight_shape {
+                snow_draw_engine::HighlightShape::Rectangle => SnowRectangleShape::Rectangle,
+                snow_draw_engine::HighlightShape::Ellipse => SnowRectangleShape::Ellipse,
+                snow_draw_engine::HighlightShape::Diamond => SnowRectangleShape::Diamond,
+            }),
+        bubble_stroke_width: value.bubble_body.map_or(0.0, |b| b.stroke_width),
+        bubble_corner_radii: value
+            .bubble_body
+            .map_or(SnowCornerRadii::default(), |b| b.corner_radii.into()),
         center_x: value.center.x,
         center_y: value.center.y,
         width: value.width,
@@ -515,6 +534,8 @@ pub(crate) fn snow_text_element_info_from_rust(value: TextElementInfo) -> SnowTe
         content_height: value.content_height,
         rotation: value.rotation,
         font_size: value.font_size,
+        bold: u8::from(value.bold),
+        italic: u8::from(value.italic),
         auto_resize: u8::from(value.auto_resize),
         horizontal_align: snow_document_text_horizontal_align_from_rust(value.horizontal_align),
         vertical_align: snow_document_text_vertical_align_from_rust(value.vertical_align),
@@ -611,6 +632,46 @@ impl From<CornerRadii> for SnowCornerRadii {
             bottom_right: value.bottom_right,
             bottom_left: value.bottom_left,
         }
+    }
+}
+
+impl From<SnowAngleStyle> for AngleStyle {
+    fn from(value: SnowAngleStyle) -> Self {
+        Self {
+            angle_type: match value.angle_type {
+                SnowAngleType::Directed => AngleType::Directed,
+                SnowAngleType::Interior => AngleType::Interior,
+            },
+            stroke: value.stroke.into(),
+            stroke_width: value.stroke_width,
+            unit: match value.unit {
+                SnowAngleUnit::Degrees => AngleUnit::Degrees,
+                SnowAngleUnit::Radians => AngleUnit::Radians,
+            },
+            decimal_places: value.decimal_places.min(255) as u8,
+        }
+    }
+}
+impl From<AngleStyle> for SnowAngleStyle {
+    fn from(value: AngleStyle) -> Self {
+        Self {
+            angle_type: match value.angle_type {
+                AngleType::Directed => SnowAngleType::Directed,
+                AngleType::Interior => SnowAngleType::Interior,
+            },
+            stroke: value.stroke.into(),
+            stroke_width: value.stroke_width,
+            unit: match value.unit {
+                AngleUnit::Degrees => SnowAngleUnit::Degrees,
+                AngleUnit::Radians => SnowAngleUnit::Radians,
+            },
+            decimal_places: u32::from(value.decimal_places),
+        }
+    }
+}
+impl Default for SnowAngleStyle {
+    fn default() -> Self {
+        AngleStyle::default().into()
     }
 }
 
@@ -792,6 +853,8 @@ impl From<SnowTextStyle> for TextStyle {
             color: value.color.into(),
             font_size: value.font_size,
             font_family: font_family_from_c(&value.font_family_utf8, value.font_family_utf8_len),
+            bold: value.bold != 0,
+            italic: value.italic != 0,
             fill: value.fill.into(),
             fill_style: snow_fill_style_to_rust(value.fill_style),
             stroke: value.stroke.into(),
@@ -824,7 +887,9 @@ impl From<TextStyle> for SnowTextStyle {
             reserved0: [0; 4],
             font_family_utf8_len: 0,
             font_family_truncated: 0,
-            reserved1: [0; 3],
+            bold: u8::from(value.bold),
+            italic: u8::from(value.italic),
+            reserved1: [0; 1],
             font_family_utf8: [0; SNOW_FONT_FAMILY_UTF8_CAPACITY],
         };
         copy_optional_str_to_c_char_field(
@@ -1000,7 +1065,13 @@ unsafe fn runtime_style_default_enums_are_valid(defaults: *const SnowStyleDefaul
     }
 
     unsafe {
-        raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).distance.unit))
+        raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).magnifier.shape))
+            && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).magnifier.leader_arrowhead))
+            && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).magnifier.connection_type))
+            && (*defaults).magnifier.source_outline <= 1
+            && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).distance.unit))
+            && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).angle.unit))
+            && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).angle.angle_type))
             && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).distance.endpoint_style))
             && (*defaults).distance.decimal_places <= 3
             && raw_c_enum_is_valid(std::ptr::addr_of!((*defaults).spotlight_shape))
@@ -1060,6 +1131,7 @@ pub(crate) fn runtime_config_from_c(
     Ok(RuntimeConfig {
         style_defaults: StyleDefaults {
             editor: snow_draw_engine::EditorStyleDefaults {
+                spotlight_corner_radii: defaults.spotlight_corner_radii.into(),
                 spotlight_shape: match defaults.spotlight_shape {
                     SnowRectangleShape::Rectangle => snow_draw_engine::HighlightShape::Rectangle,
                     SnowRectangleShape::Ellipse => snow_draw_engine::HighlightShape::Ellipse,
@@ -1075,10 +1147,15 @@ pub(crate) fn runtime_config_from_c(
                 pen_filter: defaults.pen_filter.into(),
                 brush_eraser: defaults.brush_eraser.into(),
                 distance: defaults.distance.into(),
+                angle: defaults.angle.into(),
+                magnifier: defaults.magnifier.into(),
+                speech_bubble: ShapeStyle::from(defaults.speech_bubble).rectangle_shape_style(),
                 text: TextStyle {
                     color: defaults.text.color.into(),
                     font_size: defaults.text.font_size,
                     font_family: normalize_font_family(Some(text_font_family)),
+                    bold: defaults.text.bold != 0,
+                    italic: defaults.text.italic != 0,
                     fill: defaults.text.fill.into(),
                     fill_style: snow_fill_style_to_rust(defaults.text.fill_style),
                     stroke: defaults.text.stroke.into(),
@@ -1138,6 +1215,66 @@ pub(crate) fn runtime_config_from_c(
     })
 }
 
+impl From<SnowMagnifierConnectionType> for snow_draw_engine::MagnifierConnectionType {
+    fn from(value: SnowMagnifierConnectionType) -> Self {
+        match value {
+            SnowMagnifierConnectionType::None => Self::None,
+            SnowMagnifierConnectionType::LeaderLine => Self::LeaderLine,
+            SnowMagnifierConnectionType::Gradient => Self::Gradient,
+        }
+    }
+}
+
+impl From<snow_draw_engine::MagnifierConnectionType> for SnowMagnifierConnectionType {
+    fn from(value: snow_draw_engine::MagnifierConnectionType) -> Self {
+        match value {
+            snow_draw_engine::MagnifierConnectionType::None => Self::None,
+            snow_draw_engine::MagnifierConnectionType::LeaderLine => Self::LeaderLine,
+            snow_draw_engine::MagnifierConnectionType::Gradient => Self::Gradient,
+        }
+    }
+}
+
+impl From<SnowMagnifierStyle> for snow_draw_engine::MagnifierStyle {
+    fn from(value: SnowMagnifierStyle) -> Self {
+        Self {
+            shape: match value.shape {
+                SnowRectangleShape::Rectangle => snow_draw_engine::HighlightShape::Rectangle,
+                SnowRectangleShape::Ellipse => snow_draw_engine::HighlightShape::Ellipse,
+                SnowRectangleShape::Diamond => snow_draw_engine::HighlightShape::Diamond,
+            },
+            stroke: value.stroke.into(),
+            stroke_width: value.stroke_width,
+            factor: value.factor,
+            connection_type: value.connection_type.into(),
+            source_outline: value.source_outline != 0,
+            leader_arrowhead: snow_arrowhead_to_rust(value.leader_arrowhead),
+            arrow_ratio: value.arrow_ratio,
+            corner_radii: value.corner_radii.into(),
+        }
+    }
+}
+impl From<snow_draw_engine::MagnifierStyle> for SnowMagnifierStyle {
+    fn from(value: snow_draw_engine::MagnifierStyle) -> Self {
+        Self {
+            shape: match value.shape {
+                snow_draw_engine::HighlightShape::Rectangle => SnowRectangleShape::Rectangle,
+                snow_draw_engine::HighlightShape::Ellipse => SnowRectangleShape::Ellipse,
+                snow_draw_engine::HighlightShape::Diamond => SnowRectangleShape::Diamond,
+            },
+            stroke: value.stroke.into(),
+            stroke_width: value.stroke_width,
+            factor: value.factor,
+            connection_type: value.connection_type.into(),
+            source_outline: u8::from(value.source_outline),
+            reserved: [0; 3],
+            leader_arrowhead: snow_arrowhead_from_rust(value.leader_arrowhead),
+            arrow_ratio: value.arrow_ratio,
+            corner_radii: value.corner_radii.into(),
+        }
+    }
+}
+
 impl From<StyleDefaults> for SnowStyleDefaults {
     fn from(value: StyleDefaults) -> Self {
         let rectangle = value.editor.rectangle;
@@ -1186,11 +1323,18 @@ impl From<StyleDefaults> for SnowStyleDefaults {
             spotlight: value.spotlight.into(),
             brush_eraser: value.editor.brush_eraser.into(),
             distance: value.editor.distance.into(),
+            angle: value.editor.angle.into(),
+            magnifier: value.editor.magnifier.into(),
+            speech_bubble: snow_draw_engine::ShapeStyle::from_rectangle_shape_style(
+                value.editor.speech_bubble,
+            )
+            .into(),
             spotlight_shape: match value.editor.spotlight_shape {
                 snow_draw_engine::HighlightShape::Rectangle => SnowRectangleShape::Rectangle,
                 snow_draw_engine::HighlightShape::Ellipse => SnowRectangleShape::Ellipse,
                 snow_draw_engine::HighlightShape::Diamond => SnowRectangleShape::Diamond,
             },
+            spotlight_corner_radii: value.editor.spotlight_corner_radii.into(),
         }
     }
 }
@@ -1211,7 +1355,11 @@ impl Default for SnowStyleToolbarState {
             brush_eraser_style: SnowBrushEraserStyle::default(),
             distance_style: SnowDistanceStyle::default(),
             distance_style_mixed: 0,
+            angle_style: SnowAngleStyle::default(),
+            angle_style_mixed: 0,
             distance_measured_length: 0.0,
+            magnifier_style: SnowMagnifierStyle::default(),
+            magnifier_style_mixed: 0,
         }
     }
 }
@@ -1260,6 +1408,9 @@ pub(crate) fn snow_active_tool_to_rust(value: SnowActiveTool) -> ActiveTool {
         SnowActiveTool::RectangleEraser => ActiveTool::RectangleEraser,
         SnowActiveTool::BrushEraser => ActiveTool::BrushEraser,
         SnowActiveTool::Distance => ActiveTool::Distance,
+        SnowActiveTool::Angle => ActiveTool::Angle,
+        SnowActiveTool::Magnifier => ActiveTool::Magnifier,
+        SnowActiveTool::SpeechBubble => ActiveTool::SpeechBubble,
         SnowActiveTool::Watermark => ActiveTool::Watermark,
         SnowActiveTool::Text => ActiveTool::Text,
         SnowActiveTool::SerialNumber => ActiveTool::SerialNumber,
@@ -1283,6 +1434,9 @@ pub(crate) fn snow_active_tool_from_rust(value: ActiveTool) -> SnowActiveTool {
         ActiveTool::RectangleEraser => SnowActiveTool::RectangleEraser,
         ActiveTool::BrushEraser => SnowActiveTool::BrushEraser,
         ActiveTool::Distance => SnowActiveTool::Distance,
+        ActiveTool::Angle => SnowActiveTool::Angle,
+        ActiveTool::Magnifier => SnowActiveTool::Magnifier,
+        ActiveTool::SpeechBubble => SnowActiveTool::SpeechBubble,
         ActiveTool::Watermark => SnowActiveTool::Watermark,
         ActiveTool::Text => SnowActiveTool::Text,
         ActiveTool::SerialNumber => SnowActiveTool::SerialNumber,
@@ -1290,7 +1444,7 @@ pub(crate) fn snow_active_tool_from_rust(value: ActiveTool) -> SnowActiveTool {
 }
 
 pub(crate) fn snow_active_tool_mask_to_rust(value: u64) -> u64 {
-    const TOOLS: [SnowActiveTool; 18] = [
+    const TOOLS: [SnowActiveTool; 21] = [
         SnowActiveTool::Select,
         SnowActiveTool::Shape,
         SnowActiveTool::Arrow,
@@ -1309,6 +1463,9 @@ pub(crate) fn snow_active_tool_mask_to_rust(value: u64) -> u64 {
         SnowActiveTool::RectangleEraser,
         SnowActiveTool::BrushEraser,
         SnowActiveTool::Distance,
+        SnowActiveTool::Angle,
+        SnowActiveTool::Magnifier,
+        SnowActiveTool::SpeechBubble,
     ];
 
     TOOLS.into_iter().fold(0, |mask, tool| {
@@ -1347,6 +1504,12 @@ pub(crate) fn snow_style_toolbar_source_from_rust(
         StyleToolbarSource::DefaultBrushEraser => SnowStyleToolbarSource::DefaultBrushEraser,
         StyleToolbarSource::DefaultDistance => SnowStyleToolbarSource::DefaultDistance,
         StyleToolbarSource::SelectedDistance => SnowStyleToolbarSource::SelectedDistance,
+        StyleToolbarSource::DefaultAngle => SnowStyleToolbarSource::DefaultAngle,
+        StyleToolbarSource::SelectedAngle => SnowStyleToolbarSource::SelectedAngle,
+        StyleToolbarSource::DefaultMagnifier => SnowStyleToolbarSource::DefaultMagnifier,
+        StyleToolbarSource::SelectedMagnifier => SnowStyleToolbarSource::SelectedMagnifier,
+        StyleToolbarSource::DefaultSpeechBubble => SnowStyleToolbarSource::DefaultSpeechBubble,
+        StyleToolbarSource::SelectedSpeechBubble => SnowStyleToolbarSource::SelectedSpeechBubble,
         StyleToolbarSource::DefaultRectangleFilter => {
             SnowStyleToolbarSource::DefaultRectangleFilter
         }
@@ -1607,6 +1770,9 @@ mod tests {
         let (family_prefix, family) = boundary_test_string(SNOW_FONT_FAMILY_UTF8_CAPACITY - 1);
 
         let info = snow_text_element_info_from_rust(TextElementInfo {
+            bubble_id: None,
+            bubble_body: None,
+            text_ink_reserve: 0.0,
             arrow_id: None,
             arrow_width: 0.0,
             id: ElementId {
@@ -1621,6 +1787,8 @@ mod tests {
             rotation: 0.0,
             text,
             font_size: 21.0,
+            bold: false,
+            italic: false,
             font_family: Some(family),
             horizontal_align: TextHorizontalAlign::Right,
             vertical_align: TextVerticalAlign::Bottom,
@@ -1656,6 +1824,8 @@ mod tests {
         let text_style: SnowTextStyle = TextStyle {
             color: ColorRgba8::default(),
             font_size: 21.0,
+            bold: false,
+            italic: false,
             font_family: Some(family.clone()),
             fill: ColorRgba8::default(),
             fill_style: FillStyle::Solid,
@@ -1763,10 +1933,12 @@ mod tests {
         expected.watermark.opacity = 0.24;
         expected.spotlight.opacity = 0.62;
         expected.editor.spotlight_shape = snow_draw_engine::HighlightShape::Diamond;
+        expected.editor.spotlight_corner_radii = snow_draw_engine::CornerRadii::splat(17.0);
 
         let c_defaults: SnowStyleDefaults = expected.clone().into();
         assert_eq!(c_defaults.rectangle.fill.a, 0);
         assert_eq!(c_defaults.spotlight_shape, SnowRectangleShape::Diamond);
+        assert_eq!(c_defaults.spotlight_corner_radii.top_left, 17.0);
         assert_eq!(
             c_defaults.rectangle_filter.filter_type,
             SnowFilterType::Emboss

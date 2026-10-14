@@ -52,21 +52,45 @@ impl Editor {
             return CanvasHit::ArrowHandle(target);
         }
 
-        if include_selection_handles
-            && selection_box_visible
-            && let Some(bounds) = self.selection_bounds_snapshot(document)
-            && let Some(target) = selection_hit_target(
-                &bounds,
-                single_rect.as_ref(),
-                single_text_rect.as_ref(),
-                selection_frame_padding,
-                selection_corner_handle_outset,
-                self.camera().zoom,
-                canvas_point,
-            )
+        let selection_target = if include_selection_handles && selection_box_visible {
+            self.selection_bounds_snapshot(document).and_then(|bounds| {
+                selection_hit_target(
+                    &bounds,
+                    single_rect.as_ref(),
+                    single_text_rect.as_ref(),
+                    selection_frame_padding,
+                    selection_corner_handle_outset,
+                    self.camera().zoom,
+                    canvas_point,
+                )
+            })
+        } else {
+            None
+        };
+        if let Some(target) = selection_target
+            && (target != SelectionHitTarget::Move
+                || !self
+                    .state
+                    .selection
+                    .ids
+                    .iter()
+                    .any(|id| document.magnifier(*id).is_ok()))
         {
             return CanvasHit::SelectionHandle(target);
         }
+
+        // Magnifier lenses must be resolved before the generic move area. A selected
+        // source/body still moves the whole group once the actual topmost hit is known.
+        let element_hit = |id, kind| {
+            if selection_target == Some(SelectionHitTarget::Move)
+                && self.state.selection.ids.len() > 1
+                && self.state.selection.contains(id)
+            {
+                CanvasHit::SelectionHandle(SelectionHitTarget::Move)
+            } else {
+                CanvasHit::EligibleElement(id, kind)
+            }
+        };
 
         if include_selection_handles
             && let Some((arrow_id, arrow)) = single_arrow
@@ -75,7 +99,34 @@ impl Editor {
             return CanvasHit::ArrowHandle(target);
         }
 
+        if include_selection_handles {
+            for id in &self.state.selection.ids {
+                if let Some(value) = self.magnifier_snapshot(document, *id) {
+                    let grip = crate::magnifier_move_grip(value, self.camera().zoom);
+                    let half = 9.0 / self.camera().zoom.max(0.0001);
+                    if (canvas_point.x - grip.x).abs() <= half
+                        && (canvas_point.y - grip.y).abs() <= half
+                    {
+                        return CanvasHit::MagnifierLens(*id);
+                    }
+                }
+            }
+        }
+
         if !policy.quick_selection_enabled {
+            if include_selection_handles {
+                for id in &self.state.selection.ids {
+                    if let Some(value) = self.magnifier_snapshot(document, *id) {
+                        let tolerance = element_hit_tolerance(self.camera().zoom);
+                        if rectangle_hit_test(&value.source_rect(), canvas_point, tolerance) {
+                            return element_hit(*id, ElementKind::Magnifier);
+                        }
+                        if rectangle_hit_test(&value.magnified_rect(), canvas_point, tolerance) {
+                            return CanvasHit::MagnifierLens(*id);
+                        }
+                    }
+                }
+            }
             return CanvasHit::Empty;
         }
 
@@ -110,6 +161,42 @@ impl Editor {
                     {
                         rect.element_kind()
                     }
+                    ElementData::SpeechBubble(_) => {
+                        let Some(value) = self.speech_bubble_display_snapshot(document, *id) else {
+                            continue;
+                        };
+                        if !snow_draw_engine_document::speech_bubble_hit_test(
+                            &value,
+                            canvas_point,
+                            hit_tolerance,
+                        ) {
+                            continue;
+                        }
+                        ElementKind::SpeechBubble
+                    }
+                    ElementData::Magnifier(value) => {
+                        if !Self::selection_scope_matches_document(
+                            document,
+                            policy.selection_scope,
+                            *id,
+                            ElementKind::Magnifier,
+                        ) {
+                            continue;
+                        }
+                        let value = self.magnifier_snapshot(document, *id).unwrap_or(*value);
+                        if rectangle_hit_test(&value.source_rect(), canvas_point, hit_tolerance) {
+                            return element_hit(*id, ElementKind::Magnifier);
+                        }
+                        if rectangle_hit_test(&value.magnified_rect(), canvas_point, hit_tolerance)
+                        {
+                            return if include_selection_handles {
+                                CanvasHit::MagnifierLens(*id)
+                            } else {
+                                CanvasHit::EligibleElement(*id, ElementKind::Magnifier)
+                            };
+                        }
+                        continue;
+                    }
                     ElementData::Filter(filter)
                         if filter_hit_test(filter, canvas_point, hit_tolerance) =>
                     {
@@ -134,13 +221,15 @@ impl Editor {
                     {
                         ElementKind::FreeDraw
                     }
-                    ElementData::Text(text)
-                        if text_hit_test(
-                            labels.get(id).unwrap_or(text),
-                            canvas_point,
-                            hit_tolerance,
-                        ) =>
-                    {
+                    ElementData::Text(text) => {
+                        let bubble_text = self.speech_bubble_text_display_snapshot(document, *id);
+                        let text = bubble_text
+                            .as_ref()
+                            .or_else(|| labels.get(id))
+                            .unwrap_or(text);
+                        if !text_hit_test(text, canvas_point, hit_tolerance) {
+                            continue;
+                        }
                         ElementKind::Text
                     }
                     ElementData::SerialNumber(serial)
@@ -151,13 +240,15 @@ impl Editor {
                     _ => continue,
                 }
             };
-            let owner = document.arrow_id_for_text(*id);
+            let owner = document
+                .arrow_id_for_text(*id)
+                .or_else(|| document.speech_bubble_id_for_text(*id));
             let (hit_id, kind) = owner.map_or((*id, kind), |id| {
                 (
                     id,
                     document
-                        .arrow(id)
-                        .map_or(ElementKind::Arrow, |arrow| arrow.element_kind()),
+                        .element(id)
+                        .map_or(ElementKind::Arrow, |element| element.data.kind()),
                 )
             });
             if Self::selection_scope_matches_document(
@@ -166,8 +257,11 @@ impl Editor {
                 hit_id,
                 kind,
             ) {
-                return CanvasHit::EligibleElement(hit_id, kind);
+                return element_hit(hit_id, kind);
             }
+        }
+        if selection_target == Some(SelectionHitTarget::Move) {
+            return CanvasHit::SelectionHandle(SelectionHitTarget::Move);
         }
         CanvasHit::Empty
     }
@@ -275,6 +369,70 @@ mod tests {
             buttons: PointerButtons::default(),
             modifiers: Modifiers::default(),
         })
+    }
+
+    #[test]
+    fn angle_arc_controls_keep_point_priority_and_separate_arc_drag_from_arm_move() {
+        use snow_draw_engine_document::{angle_arc_control_point, angle_geometry};
+        let mut document = DocumentModel::new();
+        let mut arrow = test_arrow(&[
+            Point::new(100.0, 0.0),
+            Point::new(0.0, 0.0),
+            Point::new(0.0, -100.0),
+        ]);
+        crate::AngleStyle::default().apply_to_arrow(&mut arrow);
+        let id = insert_arrow(&mut document, arrow.clone());
+        let editor = selected_arrow_editor(&document, id);
+        let control = angle_arc_control_point(&arrow).unwrap();
+        assert_eq!(
+            editor.arrow_hit_target(&document, id, &arrow, control),
+            Some(ArrowHitTarget::AngleArc)
+        );
+        let arc_body = Point::new(
+            40.5 * 20.0_f64.to_radians().cos(),
+            -40.5 * 20.0_f64.to_radians().sin(),
+        );
+        assert_eq!(
+            editor.arrow_hit_target(&document, id, &arrow, arc_body),
+            Some(ArrowHitTarget::AngleArc)
+        );
+        assert_eq!(
+            editor.arrow_hit_target(&document, id, &arrow, Point::new(80.0, 0.0)),
+            Some(ArrowHitTarget::Move)
+        );
+        arrow.angle.as_mut().unwrap().arc_radius = Some(1.0);
+        assert_eq!(
+            editor.arrow_hit_target(
+                &document,
+                id,
+                &arrow,
+                angle_arc_control_point(&arrow).unwrap()
+            ),
+            Some(ArrowHitTarget::Point(1)),
+            "vertex stays editable when the arc handle overlaps it"
+        );
+        arrow.angle.as_mut().unwrap().arc_radius = Some(100.0);
+        assert_eq!(
+            editor.arrow_hit_target(&document, id, &arrow, Point::new(100.0, 0.0)),
+            Some(ArrowHitTarget::Endpoint(ArrowEndpointEdge::Start))
+        );
+        let handles = editor.arrow_handle_states(&document, id, &arrow);
+        assert_eq!(
+            handles
+                .iter()
+                .filter(|handle| handle.kind == crate::ArrowHandleKind::AngleArc)
+                .count(),
+            1
+        );
+        let mut zero = arrow.clone();
+        zero.points[2] = zero.points[0];
+        assert!(angle_arc_control_point(&zero).is_none());
+        zero.angle.as_mut().unwrap().full_turn = true;
+        let geometry = angle_geometry(&zero).unwrap();
+        assert!(
+            (angle_arc_control_point(&zero).unwrap().x - geometry.vertex.x + geometry.radius).abs()
+                < 1e-9
+        );
     }
 
     #[test]

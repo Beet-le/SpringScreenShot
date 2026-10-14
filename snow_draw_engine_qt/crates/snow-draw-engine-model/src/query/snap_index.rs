@@ -19,11 +19,11 @@ impl SnapIndex {
             if !state.visible {
                 continue;
             }
-            let ElementData::Rectangle(rect) = state.data else {
+            let Some(rect) = snap_rectangle(state.data) else {
                 continue;
             };
             self.ensure_capacity(state.id.index as usize);
-            self.rects[state.id.index as usize] = Some(rect_bounds(rect));
+            self.rects[state.id.index as usize] = Some(rect_bounds(&rect));
         }
     }
 
@@ -44,10 +44,10 @@ impl SnapIndex {
             if !element.meta.visible {
                 continue;
             }
-            let ElementData::Rectangle(rect) = &element.data else {
+            let Some(rect) = snap_rectangle(&element.data) else {
                 continue;
             };
-            self.rects[id.index as usize] = Some(rect_bounds(rect));
+            self.rects[id.index as usize] = Some(rect_bounds(&rect));
         }
     }
 
@@ -78,10 +78,14 @@ impl SnapIndex {
                 let Some(bounds) = self.rect(*id) else {
                     continue;
                 };
-                let Ok(rect) = document.rectangle(*id) else {
+                let Some(rect) = document
+                    .element(*id)
+                    .ok()
+                    .and_then(|element| snap_rectangle(&element.data))
+                else {
                     continue;
                 };
-                if !include_candidate(*id, rect) {
+                if !include_candidate(*id, &rect) {
                     continue;
                 }
 
@@ -150,6 +154,16 @@ impl SnapIndex {
         if self.rects.len() <= index {
             self.rects.resize(index + 1, None);
         }
+    }
+}
+
+fn snap_rectangle(data: &ElementData) -> Option<RectangleData> {
+    match data {
+        ElementData::Rectangle(rect) => Some(*rect),
+        ElementData::SpeechBubble(value) => {
+            Some(snow_draw_engine_document::speech_bubble_body_proxy(value))
+        }
+        _ => None,
     }
 }
 

@@ -55,6 +55,12 @@ inline QJsonValue settingsJson(const QVariant& value) {
     }
     if (value.metaType() == QMetaType::fromType<QColor>())
         return storage::colorToRgbaString(value.value<QColor>());
+    if (value.metaType() == QMetaType::fromType<QVector<QColor>>()) {
+        QJsonArray colors;
+        for (const auto& color : value.value<QVector<QColor>>())
+            colors.append(storage::colorToRgbaString(color));
+        return colors;
+    }
 #if SNOW_SHOT_ENABLE_API_CONFIGURATION
     if (value.metaType() == QMetaType::fromType<CustomAiModels>())
         return publicModels(value.value<CustomAiModels>());
@@ -113,6 +119,23 @@ inline bool settingsValue(const settings::SettingsFieldDescriptor& field, const 
         if (!color.isValid())
             return false;
         *value = color;
+        return true;
+    }
+    case Kind::ColorPalette: {
+        const auto& palette =
+            std::get<settings::SettingsColorPaletteDefinition>(field.definition->payload);
+        if (!json.isArray() || json.toArray().size() != palette.colorCount)
+            return false;
+        QVector<QColor> colors;
+        for (const auto& item : json.toArray()) {
+            if (!item.isString())
+                return false;
+            const auto color = storage::colorFromRgbaString(item.toString());
+            if (!color.isValid())
+                return false;
+            colors.append(color);
+        }
+        *value = QVariant::fromValue(colors);
         return true;
     }
     case Kind::ShortcutAction:

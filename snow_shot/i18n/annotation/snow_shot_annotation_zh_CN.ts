@@ -12,12 +12,20 @@
             <translation>1 位小数</translation>
         </message>
         <message>
+            <source>180° angle</source>
+            <translation>180° 角</translation>
+        </message>
+        <message>
             <source>2 decimal places</source>
             <translation>2 位小数</translation>
         </message>
         <message>
             <source>3 decimal places</source>
             <translation>3 位小数</translation>
+        </message>
+        <message>
+            <source>360° angle</source>
+            <translation>360° 角</translation>
         </message>
         <message>
             <source>Actual distance value</source>
@@ -74,6 +82,30 @@
         <message>
             <source>Align top</source>
             <translation>顶对齐</translation>
+        </message>
+        <message>
+            <source>Angle annotation</source>
+            <translation>角度标注</translation>
+        </message>
+        <message>
+            <source>Angle stroke color</source>
+            <translation>角度线条颜色</translation>
+        </message>
+        <message>
+            <source>Angle stroke color %1</source>
+            <translation>角度线条颜色 %1</translation>
+        </message>
+        <message>
+            <source>Angle stroke width %1</source>
+            <translation>角度线条宽度 %1</translation>
+        </message>
+        <message>
+            <source>Angle type</source>
+            <translation>角度类型</translation>
+        </message>
+        <message>
+            <source>Angle unit</source>
+            <translation>角度单位</translation>
         </message>
         <message>
             <source>Animated recording formats do not contain audio</source>
@@ -136,6 +168,10 @@
             <translation>蓝色</translation>
         </message>
         <message>
+            <source>Bold</source>
+            <translation>粗体</translation>
+        </message>
+        <message>
             <source>Brightness</source>
             <translation>亮度</translation>
         </message>
@@ -196,6 +232,10 @@
             <translation>确认编辑</translation>
         </message>
         <message>
+            <source>Connection type</source>
+            <translation>连接类型</translation>
+        </message>
+        <message>
             <source>Convert to HTML</source>
             <translation>转换为 HTML</translation>
         </message>
@@ -244,6 +284,10 @@
             <translation>交叉线文本填充</translation>
         </message>
         <message>
+            <source>Current angle stroke width</source>
+            <translation>当前角度线条宽度</translation>
+        </message>
+        <message>
             <source>Current arrow stroke width</source>
             <translation>当前箭头描边宽度</translation>
         </message>
@@ -254,6 +298,10 @@
         <message>
             <source>Current distance stroke width</source>
             <translation>当前距离描边宽度</translation>
+        </message>
+        <message>
+            <source>Current magnifier stroke width</source>
+            <translation>当前放大镜描边宽度</translation>
         </message>
         <message>
             <source>Current pen filter stroke width</source>
@@ -308,8 +356,16 @@
             <translation>小数位数</translation>
         </message>
         <message>
+            <source>Dedicated Model</source>
+            <translation>专用模型</translation>
+        </message>
+        <message>
             <source>Default</source>
             <translation>默认</translation>
+        </message>
+        <message>
+            <source>Degrees</source>
+            <translation>度</translation>
         </message>
         <message>
             <source>Delay recording (scroll to adjust)</source>
@@ -536,6 +592,10 @@
             <translation>高斯模糊</translation>
         </message>
         <message>
+            <source>Gradient</source>
+            <translation>渐变</translation>
+        </message>
+        <message>
             <source>Grayscale</source>
             <translation>灰度</translation>
         </message>
@@ -592,6 +652,10 @@
             <translation>反相</translation>
         </message>
         <message>
+            <source>Italic</source>
+            <translation>斜体</translation>
+        </message>
+        <message>
             <source>Jump to Translation Page</source>
             <translation>跳转到翻译页面</translation>
         </message>
@@ -610,6 +674,18 @@
         <message>
             <source>LaTeX Formula Recognition</source>
             <translation>LaTeX 公式识别</translation>
+        </message>
+        <message>
+            <source>LaTeX-Specific Model</source>
+            <translation>LaTeX 专用模型</translation>
+        </message>
+        <message>
+            <source>Leader line</source>
+            <translation>引导线</translation>
+        </message>
+        <message>
+            <source>Leader line type</source>
+            <translation>引线类型</translation>
         </message>
         <message>
             <source>Line</source>
@@ -634,6 +710,30 @@
         <message>
             <source>Lowercase letters</source>
             <translation>小写字母</translation>
+        </message>
+        <message>
+            <source>Magnification factor (scroll to adjust)</source>
+            <translation>放大倍数（滚动调整）</translation>
+        </message>
+        <message>
+            <source>Magnifier</source>
+            <translation>放大镜</translation>
+        </message>
+        <message>
+            <source>Magnifier shape</source>
+            <translation>放大镜形状</translation>
+        </message>
+        <message>
+            <source>Magnifier stroke color</source>
+            <translation>放大镜描边颜色</translation>
+        </message>
+        <message>
+            <source>Magnifier stroke color %1</source>
+            <translation>放大镜描边颜色 %1</translation>
+        </message>
+        <message>
+            <source>Magnifier stroke width %1</source>
+            <translation>放大镜描边宽度 %1</translation>
         </message>
         <message>
             <source>Mask color</source>
@@ -714,6 +814,10 @@
         <message>
             <source>No templates yet</source>
             <translation>暂无模板</translation>
+        </message>
+        <message>
+            <source>None</source>
+            <translation>无</translation>
         </message>
         <message>
             <source>Opacity</source>
@@ -812,8 +916,16 @@
             <translation>快速保存</translation>
         </message>
         <message>
+            <source>Radians</source>
+            <translation>弧度</translation>
+        </message>
+        <message>
             <source>Recapture</source>
             <translation>重新截图</translation>
+        </message>
+        <message>
+            <source>Recognition model</source>
+            <translation>识别模型</translation>
         </message>
         <message>
             <source>Record microphone</source>
@@ -908,6 +1020,10 @@
             <translation>选择元素</translation>
         </message>
         <message>
+            <source>Selected model (%1)</source>
+            <translation>已选模型（%1）</translation>
+        </message>
+        <message>
             <source>Send backward</source>
             <translation>下移一层</translation>
         </message>
@@ -1000,6 +1116,10 @@
             <translation>智能擦除</translation>
         </message>
         <message>
+            <source>Snow Shot visual understanding</source>
+            <translation>Snow Shot 视觉理解</translation>
+        </message>
+        <message>
             <source>Solid arrow stroke</source>
             <translation>实线箭头描边</translation>
         </message>
@@ -1026,6 +1146,14 @@
         <message>
             <source>Solid text fill</source>
             <translation>纯色文本填充</translation>
+        </message>
+        <message>
+            <source>Source region outline</source>
+            <translation>源区域轮廓</translation>
+        </message>
+        <message>
+            <source>Speech Bubble</source>
+            <translation>对话气泡</translation>
         </message>
         <message>
             <source>Split cells</source>
@@ -1130,6 +1258,10 @@
         <message>
             <source>Table recognition</source>
             <translation>表格识别</translation>
+        </message>
+        <message>
+            <source>Table-Specific Model</source>
+            <translation>表格专用模型</translation>
         </message>
         <message>
             <source>Tapered shaft</source>
@@ -1262,6 +1394,10 @@
         <message>
             <source>Vertical scrolling</source>
             <translation>垂直滚动</translation>
+        </message>
+        <message>
+            <source>Vision Model</source>
+            <translation>视觉模型</translation>
         </message>
         <message>
             <source>Watermark</source>

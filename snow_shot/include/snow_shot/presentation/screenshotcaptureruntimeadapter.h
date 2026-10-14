@@ -51,6 +51,7 @@ class ScreenshotCaptureRuntimeAdapter final : public ScreenshotCaptureRuntimePor
     void destroyDisplayPool(ScreenshotDisplaySession& displaySession) override;
     void resetForNewCapture(ScreenshotDisplaySession& displaySession) override;
     void prepareDisplayModels(ScreenshotDisplaySession& displaySession) override;
+    void prepareOverlayBackingStores(const ScreenshotDisplaySession& displaySession) override;
     void applyDisplayModels(ScreenshotDisplaySession& displaySession) override;
     [[nodiscard]] bool
     preparePreCaptureOverlayWindows(ScreenshotDisplaySession& displaySession) override;

@@ -252,7 +252,7 @@ class FloatingToolbarController::Impl {
         reveal.setInterval(100);
         retreat.setSingleShot(true);
         retreat.setInterval(200);
-        fullscreen.setInterval(2000);
+        fullscreen.setInterval(1000);
         fullscreen.setTimerType(Qt::PreciseTimer);
         QObject::connect(&reveal, &QTimer::timeout, &q, [this] { showToolbar(); });
         QObject::connect(&retreat, &QTimer::timeout, &q, [this] {
@@ -1043,6 +1043,19 @@ void FloatingToolbarController::shutdown() {
     m_impl->reveal.stop();
     m_impl->retreat.stop();
     m_impl->syncVisibility();
+}
+bool FloatingToolbarController::ownsIdleSurface(const QWidget* widget) const {
+    return widget == m_impl->iconWindow.get() || widget == m_impl->toolbarWindow.get();
+}
+bool FloatingToolbarController::blocksMemoryTrimming() const {
+    if (m_impl->pressed || m_impl->dragging || m_impl->menuDepth || m_impl->dropReady() ||
+        m_impl->containsCursor())
+        return true;
+    for (const auto& group : m_impl->groups) {
+        if (group.popover && group.popover->isVisible())
+            return true;
+    }
+    return false;
 }
 bool FloatingToolbarController::eventFilter(QObject* watched, QEvent* event) {
     return m_impl && m_impl->event(watched, event);

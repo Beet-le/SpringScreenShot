@@ -15,6 +15,7 @@
 
 #include <functional>
 #include <memory>
+#include <variant>
 
 class ScreenshotScrollingSnapshot;
 struct ScreenshotRecognitionImageSnapshot;
@@ -27,7 +28,6 @@ struct ScreenshotPinnedViewportExportSource final {
     ScreenshotResultStyle resultStyle;
     SnowCanvasSmartEraseSnapshot smartErase;
     qreal outputOpacity = 1.0;
-    QPainterPath bakedSelectionPath;
     std::optional<ScreenshotClipboardPlacement> clipboardPlacement = std::nullopt;
     std::optional<ScreenshotClipboardAppearance> clipboardAppearance = std::nullopt;
 };
@@ -162,6 +162,13 @@ class ScreenshotExportArtifact final : public QObject {
                                             ScreenshotExportCoordinator::Completion callback,
                                             ScreenshotPdfOptions pdf = {},
                                             QDateTime requestedAt = {});
+    // Capture the configured path without filesystem access; resolve existing-directory
+    // preference and platform fallbacks on the export worker when saving.
+    [[nodiscard]] bool requestAutomaticSaveToConfiguredDirectory(
+        QObject* receiver, QString configuredDirectory, ScreenshotImageFileFormat format,
+        QString filenameFormat, ScreenshotImageEncodingOptions encoding,
+        ScreenshotExportCoordinator::Completion callback, ScreenshotPdfOptions pdf = {},
+        QDateTime requestedAt = {});
     [[nodiscard]] bool requestQuickSave(QObject* receiver,
                                         ScreenshotExportCoordinator::Completion callback);
     void cancel();
@@ -178,7 +185,8 @@ class ScreenshotExportArtifact final : public QObject {
                                          FileSourceCallback callback);
     void requestPreparedFile(ScreenshotImageRowSource rows, ScreenshotImageFileFormat format,
                              ScreenshotImageEncodingOptions encoding, FileSourceCallback callback);
-    [[nodiscard]] bool requestFileSave(QObject* receiver, QStringList directories,
+    using FileSaveDestination = std::variant<QStringList, QString>;
+    [[nodiscard]] bool requestFileSave(QObject* receiver, FileSaveDestination destination,
                                        ScreenshotImageFileFormat format, QString filenameFormat,
                                        ScreenshotImageEncodingOptions encoding,
                                        ScreenshotExportCoordinator::Completion callback,

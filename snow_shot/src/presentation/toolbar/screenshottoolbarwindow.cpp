@@ -23,12 +23,15 @@ ScreenshotToolPalette::Options screenshotToolbarOptions() {
     options.enableMoveOptionsToolbar = true;
     options.showSelectTool = true;
     options.showShapeTool = true;
+    options.showSpeechBubbleTool = true;
     options.showArrowTool = true;
     options.showLineTool = true;
     options.showDistanceTool = true;
+    options.showAngleTool = true;
     options.showFreeDrawTool = true;
     options.showHighlightTool = true;
     options.showSpotlightTool = true;
+    options.showMagnifierTool = true;
     options.showEraserTool = true;
     options.showFilterTool = true;
     options.showWatermarkTool = true;
@@ -187,6 +190,10 @@ void ScreenshotToolbarWindow::connectToolCommands(ScreenshotToolPalette& toolPal
         m_commands.setSelectTool();
         setActiveToolAndReposition(ScreenshotToolPalette::Tool::Select);
     });
+    connect(&toolPalette, &ScreenshotToolPalette::speechBubbleRequested, this, [this]() {
+        m_commands.setSpeechBubbleTool();
+        setActiveToolAndReposition(ScreenshotToolPalette::Tool::SpeechBubble);
+    });
     connect(&toolPalette, &ScreenshotToolPalette::shapeRequested, this, [this]() {
         m_commands.setShapeTool();
         setActiveToolAndReposition(ScreenshotToolPalette::Tool::Shape);
@@ -194,6 +201,10 @@ void ScreenshotToolbarWindow::connectToolCommands(ScreenshotToolPalette& toolPal
     connect(&toolPalette, &ScreenshotToolPalette::distanceToolRequested, this, [this]() {
         m_commands.setDistanceTool();
         setActiveToolAndReposition(ScreenshotToolPalette::Tool::Distance);
+    });
+    connect(&toolPalette, &ScreenshotToolPalette::angleToolRequested, this, [this]() {
+        m_commands.setAngleTool();
+        setActiveToolAndReposition(ScreenshotToolPalette::Tool::Angle);
     });
     connect(&toolPalette, &ScreenshotToolPalette::arrowRequested, this, [this]() {
         m_commands.setArrowTool();
@@ -253,6 +264,8 @@ void ScreenshotToolbarWindow::connectToolCommands(ScreenshotToolPalette& toolPal
 #endif
     connect(&toolPalette, &ScreenshotToolPalette::showOriginalImageRequested, this,
             [this](bool show) { m_commands.setShowOriginalImage(show); });
+    connect(&toolPalette, &ScreenshotToolPalette::recognitionModelChanged, this,
+            [this](const QString& selection) { m_commands.setRecognitionModel(selection); });
     connect(&toolPalette, &ScreenshotToolPalette::textEditRequested, this,
             [this]() { m_commands.toggleTextEditing(); });
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
@@ -407,6 +420,10 @@ void ScreenshotToolbarWindow::connectStyleCommands(ScreenshotToolPalette& toolPa
     connect(&toolPalette, &ScreenshotToolPalette::filterRequested, this, [this]() {
         m_commands.setFilterTool();
         setActiveToolAndReposition(ScreenshotToolPalette::Tool::Filter);
+    });
+    connect(&toolPalette, &ScreenshotToolPalette::magnifierRequested, this, [this]() {
+        m_commands.setMagnifierTool();
+        setActiveToolAndReposition(ScreenshotToolPalette::Tool::Magnifier);
     });
     connect(&toolPalette, &ScreenshotToolPalette::spotlightRequested, this, [this]() {
         m_commands.setSpotlightTool();
@@ -675,6 +692,13 @@ void ScreenshotToolbarWindow::setQrBusy(bool busy) {
 void ScreenshotToolbarWindow::setImageConversionBusy(bool markdownBusy, bool htmlBusy) {
     if (auto* toolPalette = palette()) {
         toolPalette->setImageConversionBusy(markdownBusy, htmlBusy);
+    }
+}
+
+void ScreenshotToolbarWindow::setRecognitionModelState(
+    ScreenshotToolPalette::Tool tool, const ScreenshotRecognitionModelState& state) {
+    if (auto* toolPalette = palette()) {
+        toolPalette->setRecognitionModelState(tool, state);
     }
 }
 

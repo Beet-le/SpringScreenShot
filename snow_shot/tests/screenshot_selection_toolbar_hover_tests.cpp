@@ -10,6 +10,7 @@
 #include <QDir>
 #include <QEnterEvent>
 #include <QEvent>
+#include <QEventLoop>
 #include <QHideEvent>
 #include <QImage>
 #include <QKeyEvent>
@@ -46,6 +47,15 @@ class NoOpSelectionToolbarCommands final : public ScreenshotSelectionToolbarComm
             presetSelectionObserver(preset);
         }
     }
+    ScreenshotSelectionToolbarQuickSets selectionQuickSetsForToolbar() const override {
+        return quickSets;
+    }
+    void applySelectionParamsFromToolbar(const ScreenshotSelectionParams& params) override {
+        appliedParams.push_back(params);
+        if (selectionParamsObserver) {
+            selectionParamsObserver(params);
+        }
+    }
     void openSelectionResizeModalFromToolbar() override {
         ++resizeModalCount;
         ++interactionCount;
@@ -79,6 +89,9 @@ class NoOpSelectionToolbarCommands final : public ScreenshotSelectionToolbarComm
     int lockToggleCount = 0;
     int resizeModalCount = 0;
     std::vector<ScreenshotSelectionAspectRatioPreset> selectedPresets;
+    ScreenshotSelectionToolbarQuickSets quickSets;
+    std::vector<ScreenshotSelectionParams> appliedParams;
+    std::function<void(const ScreenshotSelectionParams&)> selectionParamsObserver;
     std::function<void(ScreenshotSelectionAspectRatioPreset)> presetSelectionObserver;
     std::vector<bool> popupVisibility;
     std::function<void(bool)> popupVisibilityObserver;
@@ -114,6 +127,15 @@ class AspectRatioTranslator final : public QTranslator {
         }
         if (QByteArray(source) == "Selection aspect ratio") {
             return QStringLiteral("Translated aspect ratio");
+        }
+        if (QByteArray(source) == "Selection presets") {
+            return QStringLiteral("Translated selection presets");
+        }
+        if (QByteArray(source) == "Aspect ratio presets") {
+            return QStringLiteral("Translated ratio presets");
+        }
+        if (QByteArray(source) == "Previous selection") {
+            return QStringLiteral("Translated previous selection");
         }
         return {};
     }
@@ -739,11 +761,348 @@ void selectionToolbarUsesCanvasUnitsForEditingAndSmartSelection() {
     checkUnits(0, 4);
 }
 
+void smartSelectionDefersHiddenFieldsUntilEditing() {
+    NoOpSelectionToolbarCommands commands;
+    QWidget host;
+    ScreenshotSelectionToolbarWidget toolbar(commands, &host);
+    using Mode = ScreenshotSelectionToolbarWidget::DisplayMode;
+    using Preset = ScreenshotSelectionAspectRatioPreset;
+    const QRect initial(80, 70, 317, 181);
+    toolbar.setSelectionState(initial, false, 4, 2);
+    const auto field = [&](const char* name) -> QLabel* {
+        for (QLabel* label : toolbar.findChildren<QLabel*>()) {
+            if (label->accessibleName() == QString::fromLatin1(name)) {
+                return label;
+            }
+        }
+        require(false, "selection toolbar field missing");
+        return nullptr;
+    };
+    const auto* x = field("X coordinate");
+    const auto* y = field("Y coordinate");
+    const auto* radius = field("Corner radius");
+    const auto* shadow = field("Shadow width");
+    toolbar.setSelectionState(initial, false, 4, 2, Mode::SizeOnly);
+    const QSize sizeOnlySize = toolbar.contentSizeHint();
+    const auto* select = toolbar.findChild<adqt::widgets::AdSelect*>(
+        QStringLiteral("screenshotSelectionAspectRatioSelect"));
+    require(select != nullptr, "selection toolbar must expose its ratio selector");
+    for (int index = 0; index < 100; ++index) {
+        toolbar.setSelectionState(QRect(10000 + index, -10000 - index, 317, 181), true, 12, 8,
+                                  Mode::SizeOnly, false, std::nullopt, Preset::Square);
+        require(toolbar.contentSizeHint() == sizeOnlySize,
+                "smart-selection positions and hidden effects must not change the size readout");
+    }
+    require(x->text() == QStringLiteral("80") && y->text() == QStringLiteral("70") &&
+                radius->text() == QStringLiteral("4") && shadow->text() == QStringLiteral("2") &&
+                select->currentValue() == QStringLiteral("free"),
+            "smart-selection frames must defer hidden field and ratio presentation");
+    const QRect latest(10099, -10099, 1024, 576);
+    toolbar.setSelectionState(latest, true, 12, 8, Mode::SizeOnly, false, std::nullopt,
+                              Preset::Square);
+    require(field("Width")->text() == QStringLiteral("1024") &&
+                field("Height")->text() == QStringLiteral("576"),
+            "smart-selection dimensions must continue to update immediately");
+    toolbar.setSelectionState(latest, true, 12, 8, Mode::Full, false, std::nullopt, Preset::Square);
+    require(x->text() == QStringLiteral("10099") && y->text() == QStringLiteral("-10099") &&
+                radius->text() == QStringLiteral("12") && shadow->text() == QStringLiteral("8") &&
+                select->currentValue() == QStringLiteral("1:1"),
+            "entering editing must present the latest deferred values and ratio");
+    require(commands.selectedPresets.empty(),
+            "revealing a deferred ratio must not dispatch a selection edit");
+}
+
 adqt::widgets::AdSelect* ratioSelect(ScreenshotSelectionToolbarWidget& toolbar) {
     auto* select = toolbar.findChild<adqt::widgets::AdSelect*>(
         QStringLiteral("screenshotSelectionAspectRatioSelect"));
     require(select != nullptr, "selection toolbar must expose the aspect-ratio Select");
     return select;
+}
+
+QModelIndex optionIndex(adqt::widgets::AdSelect* select, const QString& value) {
+    auto* model = select->view()->model();
+    for (int row = 0; row < model->rowCount(); ++row) {
+        const QModelIndex index = model->index(row, 0);
+        if (index.data(select->valueRole()) == value) {
+            return index;
+        }
+    }
+    return {};
+}
+
+void aspectRatioPopupFollowsPointerHover() {
+    NoOpSelectionToolbarCommands commands;
+    QWidget host;
+    host.resize(800, 400);
+    ScreenshotSelectionToolbarWidget toolbar(commands, &host);
+    toolbar.setSelectionState(QRect(50, 50, 320, 180), false, 0, 0);
+    toolbar.move(100, 40);
+    host.show();
+    toolbar.show();
+    QCoreApplication::processEvents();
+    auto* select = ratioSelect(toolbar);
+
+    sendEnter(select);
+    require(select->popupVisible() && commands.popupVisibility == std::vector<bool>({true}) &&
+                commands.selectedPresets.empty(),
+            "hovering the ratio Select must open its popup without changing the selection");
+    const QPointF triggerPosition(select->lineEdit()->rect().center());
+    QMouseEvent triggerPress(QEvent::MouseButtonPress, triggerPosition, triggerPosition,
+                             select->lineEdit()->mapToGlobal(triggerPosition.toPoint()),
+                             Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(select->lineEdit(), &triggerPress);
+    require(select->popupVisible(), "clicking a hovered ratio trigger must keep its popup open");
+    QWidget* popup = select->view()->window();
+    sendLeave(select);
+    sendEnter(popup);
+    QEventLoop transition;
+    QTimer::singleShot(200, &transition, &QEventLoop::quit);
+    transition.exec();
+    require(select->popupVisible(),
+            "the ratio popup must stay open while the pointer moves from its trigger to options");
+
+    sendLeave(popup);
+    QEventLoop dismissal;
+    QTimer::singleShot(200, &dismissal, &QEventLoop::quit);
+    dismissal.exec();
+    require(!select->popupVisible() &&
+                commands.popupVisibility == std::vector<bool>({true, false}) &&
+                commands.selectedPresets.empty(),
+            "leaving the ratio trigger and popup must dismiss without selecting an option");
+
+    toolbar.setSelectionEditCapabilities(false, false);
+    sendEnter(select);
+    require(!select->popupVisible(), "a disabled ratio Select must not open on hover");
+}
+
+void aspectRatioTriggerInputStaysWithSelect() {
+    NoOpSelectionToolbarCommands commands;
+    QWidget host;
+    host.resize(800, 400);
+    ScreenshotSelectionToolbarWidget toolbar(commands, &host);
+    toolbar.setSelectionState(QRect(50, 50, 320, 180), false, 0, 0);
+    host.show();
+    toolbar.show();
+    QCoreApplication::processEvents();
+    auto* select = ratioSelect(toolbar);
+    const auto click = [](QWidget* trigger) {
+        const QPointF position(trigger->rect().center());
+        const QPointF globalPosition(trigger->mapToGlobal(position.toPoint()));
+        QMouseEvent press(QEvent::MouseButtonPress, position, position, globalPosition,
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(trigger, &press);
+        QMouseEvent release(QEvent::MouseButtonRelease, position, position, globalPosition,
+                            Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(trigger, &release);
+    };
+    for (QWidget* trigger :
+         {static_cast<QWidget*>(select), static_cast<QWidget*>(select->lineEdit())}) {
+        sendEnter(select);
+        click(trigger);
+        require(select->popupVisible() && commands.resizeModalCount == 0,
+                "clicking either hovered ratio trigger must retain the popup");
+        QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QApplication::sendEvent(select->view(), &escape);
+        require(!select->popupVisible(), "Escape must dismiss the hovered ratio popup");
+        click(trigger);
+        require(select->popupVisible() && commands.resizeModalCount == 0,
+                "clicking either ratio trigger after Escape must reopen the dropdown");
+        select->view()->setCurrentIndex(optionIndex(select, QStringLiteral("16:9")));
+        QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        QApplication::sendEvent(select->view(), &enter);
+        require(!select->popupVisible(), "confirming a ratio must dismiss the popup");
+        click(trigger);
+        require(select->popupVisible() && commands.resizeModalCount == 0,
+                "clicking either ratio trigger after selection must reopen the dropdown");
+        toolbar.setSelectionEditCapabilities(false, false);
+        require(!select->popupVisible() && commands.resizeModalCount == 0,
+                "disabling ratio input must dismiss its popup without opening a resize modal");
+        toolbar.setSelectionEditCapabilities(true, true);
+    }
+}
+
+void selectionQuickSetRefreshReleasesPreviousOptionsModel() {
+    NoOpSelectionToolbarCommands commands;
+    QWidget host;
+    ScreenshotSelectionToolbarWidget toolbar(commands, &host);
+    toolbar.setSelectionState(QRect(50, 50, 320, 180), false, 0, 0);
+    host.show();
+    toolbar.show();
+    QCoreApplication::processEvents();
+    auto* select = ratioSelect(toolbar);
+    for (int opening = 0; opening < 20; ++opening) {
+        QPointer<QAbstractItemModel> previousModel(select->model());
+        select->showPopup();
+        select->hidePopup();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        require(previousModel.isNull(),
+                "each popup refresh must release its previous options model");
+        require(select->model() != nullptr && select->currentValue() == QStringLiteral("free"),
+                "releasing stale models must preserve the active ratio");
+    }
+}
+
+void selectionQuickSetsApplyFullParamsAndRefreshOnOpen() {
+    NoOpSelectionToolbarCommands commands;
+    QWidget host;
+    host.resize(800, 400);
+    ScreenshotSelectionToolbarWidget toolbar(commands, &host);
+    toolbar.setSelectionState(QRect(50, 50, 320, 180), true, 0, 0,
+                              ScreenshotSelectionToolbarWidget::DisplayMode::Full, false,
+                              std::nullopt, ScreenshotSelectionAspectRatioPreset::Landscape16x9);
+    host.show();
+    toolbar.show();
+    QCoreApplication::processEvents();
+    auto* select = ratioSelect(toolbar);
+
+    ScreenshotSelectionParams previous;
+    previous.selection = QRect(8, 12, 140, 90);
+    previous.region = QRegion(previous.selection).subtracted(QRect(20, 30, 15, 15));
+    previous.radius = 5;
+    previous.shadowWidth = 7;
+    previous.lockAspectRatio = true;
+    previous.lockDragAspectRatio = true;
+    ScreenshotSelectionParams saved;
+    saved.selection = QRect(20, 30, 640, 360);
+    saved.radius = 10;
+    saved.shadowWidth = 4;
+    saved.shadowColor = QColor(12, 34, 56);
+    saved.lockAspectRatio = true;
+    saved.lockDragAspectRatio = true;
+    commands.quickSets.previous = previous;
+    commands.quickSets.presets = {{QStringLiteral("Saved 640 x 360"), saved}};
+
+    select->showPopup();
+    QCoreApplication::processEvents();
+    const auto options = select->options();
+    require(options.size() == 10 && options[0].value == QStringLiteral("selection:previous") &&
+                !options[0].disabled && options[0].group == QStringLiteral("Selection presets") &&
+                options[1].label == QStringLiteral("Saved 640 x 360") &&
+                options[1].group == options[0].group &&
+                options[2].value == QStringLiteral("free") &&
+                options[2].group == QStringLiteral("Aspect ratio presets"),
+            "the refreshed dropdown must put available selection presets above ratio presets");
+
+    auto* view = select->view();
+    view->setCurrentIndex(optionIndex(select, QStringLiteral("selection:preset:0")));
+    QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QApplication::sendEvent(view, &enter);
+    QCoreApplication::processEvents();
+    require(!select->popupVisible() && commands.appliedParams.size() == 1 &&
+                commands.appliedParams[0] == saved &&
+                select->currentValue() == QStringLiteral("16:9") &&
+                commands.selectedPresets.empty(),
+            "Enter must apply all saved selection parameters and retain the active ratio label");
+
+    select->showPopup();
+    QCoreApplication::processEvents();
+    const QModelIndex previousIndex = optionIndex(select, QStringLiteral("selection:previous"));
+    require(previousIndex.isValid(), "Previous selection must remain selectable");
+    view->setCurrentIndex(previousIndex);
+    const QPointF position(view->visualRect(previousIndex).center());
+    QMouseEvent press(QEvent::MouseButtonPress, position, position,
+                      view->viewport()->mapToGlobal(position.toPoint()), Qt::LeftButton,
+                      Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(view->viewport(), &press);
+    QMouseEvent release(QEvent::MouseButtonRelease, position, position,
+                        view->viewport()->mapToGlobal(position.toPoint()), Qt::LeftButton,
+                        Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(view->viewport(), &release);
+    QCoreApplication::processEvents();
+    require(!select->popupVisible() && commands.appliedParams.size() == 2 &&
+                commands.appliedParams[1] == previous &&
+                commands.appliedParams[1].region == previous.region &&
+                select->currentValue() == QStringLiteral("16:9"),
+            "clicking Previous selection must preserve compound geometry and all effects");
+
+    commands.quickSets.previous.reset();
+    commands.quickSets.presets = {{QStringLiteral("Replacement"), saved}};
+    select->showPopup();
+    QCoreApplication::processEvents();
+    const auto refreshed = select->options();
+    require(refreshed[0].disabled && refreshed[1].label == QStringLiteral("Replacement") &&
+                refreshed[1].value == QStringLiteral("selection:preset:0") &&
+                !optionIndex(select, QStringLiteral("selection:previous"))
+                     .flags()
+                     .testFlag(Qt::ItemIsEnabled),
+            "each open must reflect the latest stored presets and disable missing Previous");
+    select->hidePopup();
+}
+
+void selectionQuickSetsKeepToolbarFittedToCurrentContent() {
+    for (const bool keyboard : {false, true}) {
+        for (const bool previous : {false, true}) {
+            for (const bool locked : {false, true}) {
+                NoOpSelectionToolbarCommands commands;
+                QWidget host;
+                host.resize(1000, 400);
+                ScreenshotSelectionToolbarWidget toolbar(commands, &host);
+                toolbar.setSelectionState(
+                    QRect(50, 50, 320, 180), locked, 0, 0,
+                    ScreenshotSelectionToolbarWidget::DisplayMode::Full, false, std::nullopt,
+                    locked ? ScreenshotSelectionAspectRatioPreset::Landscape16x9
+                           : ScreenshotSelectionAspectRatioPreset::Free);
+                host.show();
+                toolbar.show();
+                QCoreApplication::processEvents();
+
+                ScreenshotSelectionParams params;
+                params.selection = QRect(8, 12, 140, 90);
+                params.radius = 12;
+                params.shadowWidth = 8;
+                commands.quickSets.previous = params;
+                commands.quickSets.presets = {
+                    {QStringLiteral("Saved selection with a long descriptive name"), params}};
+                commands.selectionParamsObserver = [&toolbar](const auto& applied) {
+                    // Showing the toolbar presents the new selection synchronously.
+                    toolbar.setSelectionState(applied.selection, applied.lockAspectRatio,
+                                              applied.radius, applied.shadowWidth);
+                };
+
+                auto* select = ratioSelect(toolbar);
+                select->showPopup();
+                QCoreApplication::processEvents();
+                auto* view = select->view();
+                const QModelIndex index =
+                    optionIndex(select, previous ? QStringLiteral("selection:previous")
+                                                 : QStringLiteral("selection:preset:0"));
+                require(index.isValid(), "selection size preset must be available");
+                view->setCurrentIndex(index);
+                if (keyboard) {
+                    QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+                    QApplication::sendEvent(view, &enter);
+                } else {
+                    view->scrollTo(index);
+                    const QPointF position(view->visualRect(index).center());
+                    const QPointF globalPosition(view->viewport()->mapToGlobal(position.toPoint()));
+                    QMouseEvent press(QEvent::MouseButtonPress, position, position, globalPosition,
+                                      Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+                    QApplication::sendEvent(view->viewport(), &press);
+                    QMouseEvent release(QEvent::MouseButtonRelease, position, position,
+                                        globalPosition, Qt::LeftButton, Qt::NoButton,
+                                        Qt::NoModifier);
+                    QApplication::sendEvent(view->viewport(), &release);
+                }
+                QCoreApplication::processEvents();
+                require(commands.appliedParams.size() == 1 &&
+                            commands.appliedParams.front() == params &&
+                            select->currentValue() == QStringLiteral("free") &&
+                            !select->popupVisible(),
+                        "size preset must apply once and show the resulting active ratio");
+
+                NoOpSelectionToolbarCommands referenceCommands;
+                ScreenshotSelectionToolbarWidget reference(referenceCommands, &host);
+                reference.setSelectionState(params.selection, params.lockAspectRatio, params.radius,
+                                            params.shadowWidth);
+                reference.show();
+                QCoreApplication::processEvents();
+                require(toolbar.contentSizeHint() == reference.contentSizeHint() &&
+                            toolbar.size() == reference.size() &&
+                            select->geometry() == ratioSelect(reference)->geometry(),
+                        "applying a size preset must fit the final controls without blank space");
+            }
+        }
+    }
 }
 
 void aspectRatioSelectSynchronizesWithoutDispatchingCommands() {
@@ -760,9 +1119,14 @@ void aspectRatioSelectSynchronizesWithoutDispatchingCommands() {
                                         QStringLiteral("16:9"), QStringLiteral("2:3"),
                                         QStringLiteral("3:4"),  QStringLiteral("9:16")};
     const auto options = select->options();
-    require(options.size() == expectedLabels.size(), "aspect-ratio options must be complete");
-    for (qsizetype index = 0; index < options.size(); ++index) {
-        require(options[index].label == expectedLabels[index], "aspect-ratio option order changed");
+    require(options.size() == expectedLabels.size() + 1 &&
+                options[0].label == QStringLiteral("Previous selection") && options[0].disabled &&
+                options[0].group == QStringLiteral("Selection presets"),
+            "unavailable Previous selection must lead the selection preset group");
+    for (qsizetype index = 0; index < expectedLabels.size(); ++index) {
+        require(options[index + 1].label == expectedLabels[index] &&
+                    options[index + 1].group == QStringLiteral("Aspect ratio presets"),
+                "aspect-ratio option order or group changed");
     }
     require(select->currentValue() == QStringLiteral("free") && select->currentText() == "Free",
             "new captures must default to Free");
@@ -785,7 +1149,7 @@ void aspectRatioSelectSynchronizesWithoutDispatchingCommands() {
     QObject::connect(select, &adqt::widgets::AdSelect::optionsChanged, &toolbar,
                      [&optionUpdates]() { ++optionUpdates; });
     for (int index = 0; index < 100; ++index) {
-        toolbar.setSelectionResizable(true);
+        toolbar.setSelectionEditCapabilities(true, true);
         toolbar.setPointerInteractionEnabled(true);
         toolbar.setSelectionState(QRect(80, 70, 320 + index % 2, 180), false, 4, 2);
     }
@@ -818,7 +1182,7 @@ void aspectRatioSelectSynchronizesWithoutDispatchingCommands() {
                 select->height() == screenshot_selection_toolbar::PanelHeight - 4,
             "aspect-ratio Select must follow the dimensions and fit the panel");
     const QImage unlockedIcon = renderWidget(lockLabel);
-    for (qsizetype index = 1; index < options.size(); ++index) {
+    for (qsizetype index = 2; index < options.size(); ++index) {
         const Preset preset =
             screenshotSelectionAspectRatioPresetFromId(options[index].value.toString());
         toolbar.setSelectionState(selection, true, 4, 2,
@@ -851,7 +1215,11 @@ void aspectRatioSelectSynchronizesWithoutDispatchingCommands() {
                 select->accessibleName() == "Translated aspect ratio" &&
                 select->width() > initialSelectWidth,
             "language changes must retranslate Free, accessibility, and measured trigger width");
-    require(select->options()[4].label == "16:9" && select->options()[0].value == "free",
+    require(select->options()[0].label == "Translated previous selection" &&
+                select->options()[0].group == "Translated selection presets" &&
+                select->options()[1].group == "Translated ratio presets",
+            "language changes must retranslate both popup groups and Previous selection");
+    require(select->options()[5].label == "16:9" && select->options()[1].value == "free",
             "language changes must preserve ratio labels and stable option identifiers");
     toolbar.setSelectionState(selection, true, 4, 2,
                               ScreenshotSelectionToolbarWidget::DisplayMode::Full, false,
@@ -885,25 +1253,28 @@ void disabledAspectRatioSelectPreservesItsTextColor() {
         input->clearFocus();
         input->deselect();
         const QColor textColor = input->palette().color(QPalette::Active, QPalette::Text);
+        const QString ratioText = input->text();
         const QImage textImage = renderWidget(input, QWidget::DrawChildren);
         const QSize toolbarSize = toolbar.contentSizeHint();
         for (const bool disablePointer : {true, false}) {
             if (disablePointer) {
                 toolbar.setPointerInteractionEnabled(false);
             } else {
-                toolbar.setSelectionResizable(false);
+                toolbar.setSelectionEditCapabilities(false, false);
             }
             require(select->disabled() && !input->isEnabled(),
                     "selection modification must disable ratio input");
             require(input->palette().color(QPalette::Disabled, QPalette::Text) == textColor,
                     "temporarily disabled ratio text must keep its normal palette color");
             const QImage disabledTextImage = renderWidget(input, QWidget::DrawChildren);
+            require(input->text() == ratioText,
+                    "temporarily disabled ratio input must preserve its displayed ratio");
             require(disabledTextImage == textImage,
                     "temporarily disabled ratio text must keep its rendered appearance");
             require(toolbar.contentSizeHint() == toolbarSize,
                     "disabling the ratio selector must preserve its compact geometry");
             toolbar.setPointerInteractionEnabled(true);
-            toolbar.setSelectionResizable(true);
+            toolbar.setSelectionEditCapabilities(true, true);
             require(!select->disabled() && renderWidget(input, QWidget::DrawChildren) == textImage,
                     "reenabling ratio input must preserve its text appearance");
         }
@@ -960,7 +1331,7 @@ void aspectRatioPopupOwnsInputAndEndsWithToolbarLifecycle() {
     require(!toolbar.containsInteractiveGlobalPoint(host.mapToGlobal(QPoint(799, 399))),
             "popup hit testing must not capture unrelated canvas points");
 
-    view->setCurrentIndex(view->model()->index(4, 0));
+    view->setCurrentIndex(optionIndex(select, QStringLiteral("16:9")));
     QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
     QApplication::sendEvent(view, &enter);
     QCoreApplication::processEvents();
@@ -987,10 +1358,10 @@ void aspectRatioPopupOwnsInputAndEndsWithToolbarLifecycle() {
             "selection drags must dismiss and disable the dropdown synchronously");
     toolbar.setPointerInteractionEnabled(true);
     select->showPopup();
-    toolbar.setSelectionResizable(false);
+    toolbar.setSelectionEditCapabilities(false, false);
     require(!select->popupVisible() && select->disabled(),
-            "a nonresizable selection must not retain an interactive ratio popup");
-    toolbar.setSelectionResizable(true);
+            "an ineligible selection must not retain an interactive preset popup");
+    toolbar.setSelectionEditCapabilities(true, true);
     select->showPopup();
     toolbar.setSelectionState(QRect(50, 50, 320, 180), false, 0, 0,
                               ScreenshotSelectionToolbarWidget::DisplayMode::SizeOnly);
@@ -1086,7 +1457,7 @@ void choosingFreeDispatchesExactlyOneExplicitCommand() {
         select->showPopup();
         QCoreApplication::processEvents();
         auto* view = select->view();
-        view->setCurrentIndex(view->model()->index(0, 0));
+        view->setCurrentIndex(optionIndex(select, QStringLiteral("free")));
         const QPointF position(view->visualRect(view->currentIndex()).center());
         QMouseEvent press(QEvent::MouseButtonPress, position, position,
                           view->viewport()->mapToGlobal(position.toPoint()), Qt::LeftButton,
@@ -1101,7 +1472,7 @@ void choosingFreeDispatchesExactlyOneExplicitCommand() {
         select->showPopup();
         QCoreApplication::processEvents();
         auto* view = select->view();
-        view->setCurrentIndex(view->model()->index(0, 0));
+        view->setCurrentIndex(optionIndex(select, QStringLiteral("free")));
         QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
         QApplication::sendEvent(view, &enter);
     };
@@ -1319,6 +1690,14 @@ int main(int argc, char* argv[]) {
         valueLabelCentersIconsAtEveryRenderScale();
         return 0;
     }
+    if (arguments.contains(QStringLiteral("--popup-regression-tests"))) {
+        aspectRatioTriggerInputStaysWithSelect();
+        selectionQuickSetRefreshReleasesPreviousOptionsModel();
+        selectionQuickSetsApplyFullParamsAndRefreshOnOpen();
+        selectionQuickSetsKeepToolbarFittedToCurrentContent();
+        choosingFreeDispatchesExactlyOneExplicitCommand();
+        return 0;
+    }
     selectionDragCannotActivateToolbarPreview();
     panelBoundaryExclusivelyOwnsToolbarHoverState();
     valueLabelPaintsFromQtHoverState();
@@ -1326,9 +1705,15 @@ int main(int argc, char* argv[]) {
     selectionToolbarInputSurfaceMatchesInteractivePanel();
     selectionToolbarLabelsFollowApplicationFontFamily();
     selectionToolbarUsesCanvasUnitsForEditingAndSmartSelection();
+    smartSelectionDefersHiddenFieldsUntilEditing();
     smartSelectionToolbarIsClickThroughAcrossCaptureLifecycles();
     smartSelectionToolbarShedsNativeWindowForcedByNativeSiblingEmbed();
     aspectRatioSelectSynchronizesWithoutDispatchingCommands();
+    aspectRatioPopupFollowsPointerHover();
+    aspectRatioTriggerInputStaysWithSelect();
+    selectionQuickSetRefreshReleasesPreviousOptionsModel();
+    selectionQuickSetsApplyFullParamsAndRefreshOnOpen();
+    selectionQuickSetsKeepToolbarFittedToCurrentContent();
     disabledAspectRatioSelectPreservesItsTextColor();
     aspectRatioPopupOwnsInputAndEndsWithToolbarLifecycle();
     aspectRatioPopupSuspendsScreenshotShortcutsThroughDismissal();

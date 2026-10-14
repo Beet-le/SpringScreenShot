@@ -6,7 +6,7 @@
 #include <QBoxLayout>
 #include <QEvent>
 #include <QLayoutItem>
-#include <QScopedValueRollback>
+#include <QScopeGuard>
 #include <QWidget>
 
 #include <algorithm>
@@ -81,7 +81,11 @@ AdRadioButtonGroup::AdRadioButtonGroup(QObject* parent) : QButtonGroup(parent) {
       return;
     }
     if (!syncing_) {
+      const QPointer<AdRadioButtonGroup> guard(this);
       emit checkedIdChanged(id);
+      if (!guard) {
+        return;
+      }
     }
     updateButtonStackingOrder();
   });
@@ -90,16 +94,20 @@ AdRadioButtonGroup::AdRadioButtonGroup(QObject* parent) : QButtonGroup(parent) {
 AdRadioButtonGroup::~AdRadioButtonGroup() {
   removeManagedLayoutFilters(managedLayout_);
 
-  const QList<AdRadio*> currentRadios = radios();
-  for (AdRadio* radio : currentRadios) {
+  QList<QPointer<AdRadio>> currentRadios;
+  for (AdRadio* radio : radios()) currentRadios.append(radio);
+  for (const QPointer<AdRadio>& radio : currentRadios) {
     if (!radio) {
       continue;
     }
     radio->removeEventFilter(this);
-    radio->setGroupPosition(AdRadio::GroupPosition::None);
-    radio->setGroupVertical(false);
-    radio->setGroup(nullptr);
+    // Detach without publishing property changes from a partially destroyed group.
+    radio->group_ = nullptr;
+    radio->groupPosition_ = AdRadio::GroupPosition::None;
+    radio->groupVertical_ = false;
     radio->setAutoExclusive(true);
+    radio->syncManagedSizePolicy();
+    if (radio) radio->refreshAfterPropertyChange();
   }
 }
 
@@ -108,12 +116,17 @@ void AdRadioButtonGroup::addButton(QAbstractButton* button, int id) {
     return;
   }
 
-  AdRadio* radio = qobject_cast<AdRadio*>(button);
+  const QPointer<AdRadioButtonGroup> guard(this);
+  const QPointer<QAbstractButton> buttonGuard(button);
+  QPointer<AdRadio> radio = qobject_cast<AdRadio*>(button);
   AdRadio::EffectiveStateSnapshot beforeState;
   if (radio) {
     beforeState = radio->captureEffectiveState(true);
     if (radio->group_ && radio->group_ != this) {
       radio->group_->removeButton(radio);
+      if (!guard || !buttonGuard) {
+        return;
+      }
     }
   }
 
@@ -126,12 +139,18 @@ void AdRadioButtonGroup::addButton(QAbstractButton* button, int id) {
 
   if (radio) {
     attachRadio(radio);
+    if (!guard || !buttonGuard) {
+      return;
+    }
   }
 
   refreshManagedLayoutState();
 
   if (radio) {
     radio->applyEffectiveStateChange(beforeState, true);
+    if (!guard) {
+      return;
+    }
   }
 
   maybeEmitCheckedIdChanged(previousCheckedId);
@@ -142,7 +161,8 @@ void AdRadioButtonGroup::removeButton(QAbstractButton* button) {
     return;
   }
 
-  AdRadio* radio = qobject_cast<AdRadio*>(button);
+  const QPointer<AdRadioButtonGroup> guard(this);
+  QPointer<AdRadio> radio = qobject_cast<AdRadio*>(button);
   AdRadio::EffectiveStateSnapshot beforeState;
   if (radio) {
     beforeState = radio->captureEffectiveState(true);
@@ -153,12 +173,18 @@ void AdRadioButtonGroup::removeButton(QAbstractButton* button) {
 
   if (radio) {
     detachRadio(radio);
+    if (!guard) {
+      return;
+    }
   }
 
   refreshManagedLayoutState();
 
   if (radio) {
     radio->applyEffectiveStateChange(beforeState, true);
+    if (!guard) {
+      return;
+    }
   }
 
   maybeEmitCheckedIdChanged(previousCheckedId);
@@ -181,13 +207,21 @@ void AdRadioButtonGroup::setCheckedId(int id) {
   if (previousCheckedId == id) {
     return;
   }
-  QScopedValueRollback<bool> guard(syncing_, true);
+  const QPointer<AdRadioButtonGroup> guard(this);
+  const bool previousSyncing = syncing_;
+  syncing_ = true;
+  const auto restoreSyncing = qScopeGuard([guard, previousSyncing] {
+    if (guard) {
+      guard->syncing_ = previousSyncing;
+    }
+  });
 
-  QAbstractButton* target = nullptr;
+  QPointer<QAbstractButton> target;
+  QList<QPointer<QAbstractButton>> currentButtons;
   for (QAbstractButton* button : buttons()) {
+    currentButtons.append(button);
     if (button && this->id(button) == id) {
       target = button;
-      break;
     }
   }
 
@@ -196,13 +230,16 @@ void AdRadioButtonGroup::setCheckedId(int id) {
     setExclusive(false);
   }
 
-  for (QAbstractButton* button : buttons()) {
-    if (!button) {
+  for (const auto& button : currentButtons) {
+    if (!button || !buttons().contains(button)) {
       continue;
     }
     const bool shouldCheck = button == target;
     if (button->isChecked() != shouldCheck) {
       button->setChecked(shouldCheck);
+      if (!guard) {
+        return;
+      }
     }
   }
 
@@ -211,6 +248,9 @@ void AdRadioButtonGroup::setCheckedId(int id) {
   }
 
   maybeEmitCheckedIdChanged(previousCheckedId);
+  if (!guard) {
+    return;
+  }
   updateButtonStackingOrder();
 }
 
@@ -224,7 +264,7 @@ void AdRadioButtonGroup::setControlSize(AdRadio::ControlSize value) {
   const QList<RadioSnapshot> snapshots = snapshotRadios(true);
   controlSize_ = value;
   refreshManagedLayoutState();
-  applySnapshots(snapshots, true);
+  if (!applySnapshots(snapshots, true)) return;
   emit controlSizeChanged(controlSize_);
 }
 
@@ -238,7 +278,7 @@ void AdRadioButtonGroup::setVariant(AdRadio::Variant value) {
   const QList<RadioSnapshot> snapshots = snapshotRadios(true);
   variant_ = value;
   refreshManagedLayoutState();
-  applySnapshots(snapshots, true);
+  if (!applySnapshots(snapshots, true)) return;
   emit variantChanged(variant_);
 }
 
@@ -252,7 +292,7 @@ void AdRadioButtonGroup::setButtonStyle(AdRadio::ButtonStyle value) {
   const QList<RadioSnapshot> snapshots = snapshotRadios(true);
   buttonStyle_ = value;
   refreshManagedLayoutState();
-  applySnapshots(snapshots, true);
+  if (!applySnapshots(snapshots, true)) return;
   emit buttonStyleChanged(buttonStyle_);
 }
 
@@ -266,7 +306,7 @@ void AdRadioButtonGroup::setDistribution(Distribution value) {
   const QList<RadioSnapshot> snapshots = snapshotRadios(true);
   distribution_ = value;
   refreshManagedLayoutState();
-  applySnapshots(snapshots, true);
+  if (!applySnapshots(snapshots, true)) return;
   emit distributionChanged(distribution_);
 }
 
@@ -278,7 +318,7 @@ void AdRadioButtonGroup::setComponentTokens(const ComponentTokens& value) {
   const QList<RadioSnapshot> snapshots = snapshotRadios(true);
   componentTokens_ = value;
   refreshManagedLayoutState();
-  applySnapshots(snapshots, true);
+  if (!applySnapshots(snapshots, true)) return;
   emit componentTokensChanged();
 }
 
@@ -286,7 +326,7 @@ void AdRadioButtonGroup::resetComponentTokens() {
   const QList<RadioSnapshot> snapshots = snapshotRadios(true);
   componentTokens_ = {};
   refreshManagedLayoutState();
-  applySnapshots(snapshots, true);
+  if (!applySnapshots(snapshots, true)) return;
   emit componentTokensChanged();
 }
 
@@ -300,7 +340,7 @@ void AdRadioButtonGroup::setComponentTokenResolver(ComponentTokenResolver resolv
   const QList<RadioSnapshot> snapshots = snapshotRadios(true);
   componentTokenResolver_ = std::move(resolver);
   refreshManagedLayoutState();
-  applySnapshots(snapshots, true);
+  if (!applySnapshots(snapshots, true)) return;
   emit componentTokensChanged();
 }
 
@@ -329,20 +369,25 @@ AdRadio* AdRadioButtonGroup::checkedRadio() const {
 }
 
 bool AdRadioButtonGroup::eventFilter(QObject* watched, QEvent* event) {
+  const QPointer<AdRadioButtonGroup> guard(this);
   const bool handled = QButtonGroup::eventFilter(watched, event);
   if (!refreshingLayout_ && event && event->type() == QEvent::LayoutRequest) {
     // A LayoutRequest means the managed layout is already invalid. Reusing the
     // full refresh path here would invalidate it again and post another
     // LayoutRequest, keeping the GUI event queue permanently busy.
-    QScopedValueRollback<bool> guard(refreshingLayout_, true);
+    refreshingLayout_ = true;
+    const auto restoreRefreshing = qScopeGuard([guard] {
+      if (guard) guard->refreshingLayout_ = false;
+    });
     syncManagedLayoutGeometry();
+    if (!guard) return true;
     refreshSegmentStates();
-    return handled;
+    return !guard || handled;
   }
   if (!refreshingLayout_ && event && shouldRefreshForEventType(event->type())) {
     refreshManagedLayoutState();
   }
-  return handled;
+  return !guard || handled;
 }
 
 QList<AdRadioButtonGroup::RadioSnapshot> AdRadioButtonGroup::snapshotRadios(
@@ -359,14 +404,17 @@ QList<AdRadioButtonGroup::RadioSnapshot> AdRadioButtonGroup::snapshotRadios(
   return snapshots;
 }
 
-void AdRadioButtonGroup::applySnapshots(const QList<RadioSnapshot>& snapshots,
+bool AdRadioButtonGroup::applySnapshots(const QList<RadioSnapshot>& snapshots,
                                         bool tokensMayChange) {
+  const QPointer<AdRadioButtonGroup> guard(this);
   for (const RadioSnapshot& snapshot : snapshots) {
-    if (!snapshot.radio) {
+    if (!snapshot.radio || snapshot.radio->group_ != this) {
       continue;
     }
     snapshot.radio->applyEffectiveStateChange(snapshot.state, tokensMayChange);
+    if (!guard) return false;
   }
+  return true;
 }
 
 QList<AdRadio*> AdRadioButtonGroup::radios() const {
@@ -453,11 +501,19 @@ void AdRadioButtonGroup::refreshManagedLayoutState() {
     return;
   }
 
-  QScopedValueRollback<bool> guard(refreshingLayout_, true);
+  const QPointer<AdRadioButtonGroup> guard(this);
+  refreshingLayout_ = true;
+  const auto restoreRefreshing = qScopeGuard([guard] {
+    if (guard) guard->refreshingLayout_ = false;
+  });
   refreshManagedLayoutSpacing();
+  if (!guard) return;
   refreshManagedLayoutDistribution();
+  if (!guard) return;
   syncManagedLayoutGeometry();
+  if (!guard) return;
   refreshSegmentStates();
+  if (!guard) return;
 
   if (managedLayout_) {
     managedLayout_->invalidate();
@@ -609,6 +665,7 @@ void AdRadioButtonGroup::updateButtonStackingOrder() {
 }
 
 bool AdRadioButtonGroup::tryHandleNavigation(AdRadio* radio, int key) const {
+  const QPointer<const AdRadioButtonGroup> guard(this);
   if (!radio || !radio->isEnabled()) {
     return false;
   }
@@ -643,11 +700,14 @@ bool AdRadioButtonGroup::tryHandleNavigation(AdRadio* radio, int key) const {
   const int count = static_cast<int>(candidates.size());
   for (int offset = 1; offset < count; ++offset) {
     const int nextIndex = (currentIndex + delta * offset + count * 2) % count;
-    AdRadio* candidate = candidates.value(nextIndex);
+    const QPointer<AdRadio> candidate = candidates.value(nextIndex);
     if (!candidate || candidate == radio || !candidate->isEnabled()) {
       continue;
     }
     candidate->setFocus(Qt::TabFocusReason);
+    if (!guard || !candidate || candidate->group() != this) {
+      return true;
+    }
     if (!candidate->isChecked()) {
       candidate->setChecked(true);
     }
@@ -728,10 +788,10 @@ void AdRadioButtonGroup::attachRadio(AdRadio* radio) {
   }
 
   radio->setAutoExclusive(false);
-  radio->setGroup(this);
   radio->installEventFilter(this);
   disconnect(radio, &QObject::destroyed, this, nullptr);
   connect(radio, &QObject::destroyed, this, [this]() { refreshManagedLayoutState(); });
+  radio->setGroup(this);
 }
 
 void AdRadioButtonGroup::detachRadio(AdRadio* radio) {
@@ -742,8 +802,8 @@ void AdRadioButtonGroup::detachRadio(AdRadio* radio) {
   radio->removeEventFilter(this);
   radio->setGroupPosition(AdRadio::GroupPosition::None);
   radio->setGroupVertical(false);
-  radio->setGroup(nullptr);
   radio->setAutoExclusive(true);
+  radio->setGroup(nullptr);
 }
 
 void AdRadioButtonGroup::installManagedLayoutFilters(QBoxLayout* layout) {

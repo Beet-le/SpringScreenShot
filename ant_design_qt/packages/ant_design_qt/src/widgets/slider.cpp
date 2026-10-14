@@ -21,6 +21,7 @@
 #include <QPainter>
 #include <QPointer>
 #include <QResizeEvent>
+#include <QScopeGuard>
 #include <QSet>
 #include <QShowEvent>
 #include <QSlider>
@@ -48,6 +49,11 @@ struct HandleEntry {
 };
 
 bool fuzzyEq(double lhs, double rhs) { return std::abs(lhs - rhs) <= kEpsilon; }
+
+bool boundValueEquals(double lhs, double rhs) {
+  // Delivered state must compare equal to itself, including non-finite bounds.
+  return lhs == rhs || (std::isnan(lhs) && std::isnan(rhs)) || fuzzyEq(lhs, rhs);
+}
 
 double clampValue(double value, double minValue, double maxValue) {
   if (maxValue < minValue) {
@@ -572,6 +578,7 @@ AdMultiSlider::AdMultiSlider(QWidget* parent) : QWidget(parent) {
   setMouseTracking(true);
   handles_ = {minimum_, minimum_};
   committedHandles_ = handles_;
+  lastNotifiedHandleValues_ = committedHandles_;
   handleIds_ = {nextHandleId_++, nextHandleId_++};
   setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
   lastDisabledState_ = disabled();
@@ -605,63 +612,37 @@ void AdMultiSlider::setMode(Mode value) {
     return;
   }
   mode_ = value;
-  setHandlesInternal(handles_, true, false);
   refreshAfterPropertyChange();
+  setHandlesInternal(handles_, true, false);
 }
 
 double AdMultiSlider::minimum() const { return minimum_; }
 
 void AdMultiSlider::setMinimum(double value) {
-  if (fuzzyEq(minimum_, value)) {
-    return;
-  }
-  const double previousMinimum = minimum_;
-  const double previousMaximum = maximum_;
-  minimum_ = value;
-  if (maximum_ < minimum_) {
-    maximum_ = minimum_;
-    emit maximumChanged(maximum_);
-  }
-  setHandlesInternal(handles_, true, false);
-  emit minimumChanged(minimum_);
-  if (!fuzzyEq(previousMinimum, minimum_) || !fuzzyEq(previousMaximum, maximum_)) {
-    emit rangeChanged(minimum_, maximum_);
-  }
-  refreshAfterPropertyChange();
+  if (fuzzyEq(minimum_, value)) return;
+  setRangeInternal(value, std::max(maximum_, value), BoundNotificationOrder::MaximumFirst);
 }
 
 double AdMultiSlider::maximum() const { return maximum_; }
 
 void AdMultiSlider::setMaximum(double value) {
-  if (fuzzyEq(maximum_, value)) {
-    return;
-  }
-  const double previousMinimum = minimum_;
-  const double previousMaximum = maximum_;
-  maximum_ = value;
-  if (minimum_ > maximum_) {
-    minimum_ = maximum_;
-    emit minimumChanged(minimum_);
-  }
-  setHandlesInternal(handles_, true, false);
-  emit maximumChanged(maximum_);
-  if (!fuzzyEq(previousMinimum, minimum_) || !fuzzyEq(previousMaximum, maximum_)) {
-    emit rangeChanged(minimum_, maximum_);
-  }
-  refreshAfterPropertyChange();
+  if (fuzzyEq(maximum_, value)) return;
+  setRangeInternal(std::min(minimum_, value), value, BoundNotificationOrder::MinimumFirst);
 }
 
 double AdMultiSlider::singleStep() const { return step_; }
 
 void AdMultiSlider::setSingleStep(double value) {
+  const QPointer<AdMultiSlider> guard(this);
   const double normalized = value <= 0.0 ? 0.0 : value;
   if (fuzzyEq(step_, normalized)) {
     return;
   }
   step_ = normalized;
-  setHandlesInternal(handles_, true, false);
-  emit singleStepChanged(step_);
   refreshAfterPropertyChange(false);
+  setHandlesInternal(handles_, true, false);
+  if (!guard) return;
+  emit singleStepChanged(normalized);
 }
 
 double AdMultiSlider::pageStep() const { return pageStep_; }
@@ -700,13 +681,15 @@ void AdMultiSlider::setInvertedControls(bool value) {
 bool AdMultiSlider::markSnapEnabled() const { return marksOnly_; }
 
 void AdMultiSlider::setMarkSnapEnabled(bool value) {
+  const QPointer<AdMultiSlider> guard(this);
   if (marksOnly_ == value) {
     return;
   }
   marksOnly_ = value;
-  setHandlesInternal(handles_, true, false);
-  emit markSnapEnabledChanged(marksOnly_);
   refreshAfterPropertyChange(false);
+  setHandlesInternal(handles_, true, false);
+  if (!guard) return;
+  emit markSnapEnabledChanged(value);
 }
 
 bool AdMultiSlider::markIndicatorsVisible() const { return markIndicatorsVisible_; }
@@ -716,20 +699,22 @@ void AdMultiSlider::setMarkIndicatorsVisible(bool value) {
     return;
   }
   markIndicatorsVisible_ = value;
-  emit markIndicatorsVisibleChanged(markIndicatorsVisible_);
   update();
+  emit markIndicatorsVisibleChanged(value);
 }
 
 bool AdMultiSlider::markStepSnapEnabled() const { return markStepSnapEnabled_; }
 
 void AdMultiSlider::setMarkStepSnapEnabled(bool value) {
+  const QPointer<AdMultiSlider> guard(this);
   if (markStepSnapEnabled_ == value) {
     return;
   }
   markStepSnapEnabled_ = value;
-  setHandlesInternal(handles_, true, false);
-  emit markStepSnapEnabledChanged(markStepSnapEnabled_);
   refreshAfterPropertyChange(false);
+  setHandlesInternal(handles_, true, false);
+  if (!guard) return;
+  emit markStepSnapEnabledChanged(value);
 }
 
 bool AdMultiSlider::selectionHighlightVisible() const { return included_; }
@@ -739,8 +724,8 @@ void AdMultiSlider::setSelectionHighlightVisible(bool value) {
     return;
   }
   included_ = value;
-  emit selectionHighlightVisibleChanged(included_);
   update();
+  emit selectionHighlightVisibleChanged(value);
 }
 
 void AdMultiSlider::setTrackFillRatio(double ratio) {
@@ -752,8 +737,8 @@ void AdMultiSlider::setTrackFillRatio(double ratio) {
     return;
   }
   trackFillRatio_ = normalized;
-  emit trackFillRatioChanged(trackFillRatio_);
   update();
+  emit trackFillRatioChanged(normalized);
 }
 
 void AdMultiSlider::resetTrackFillRatio() {
@@ -761,8 +746,8 @@ void AdMultiSlider::resetTrackFillRatio() {
     return;
   }
   trackFillRatio_ = -1.0;
-  emit trackFillRatioChanged(trackFillRatio_);
   update();
+  emit trackFillRatioChanged(-1.0);
 }
 
 Qt::Orientation AdMultiSlider::orientation() const { return orientation_; }
@@ -774,27 +759,32 @@ void AdMultiSlider::setOrientation(Qt::Orientation value) {
   orientation_ = value;
   setSizePolicy(orientation_ == Qt::Horizontal ? QSizePolicy::Expanding : QSizePolicy::Fixed,
                 orientation_ == Qt::Horizontal ? QSizePolicy::Fixed : QSizePolicy::Expanding);
-  emit orientationChanged(orientation_);
   refreshAfterPropertyChange();
+  emit orientationChanged(value);
 }
 
 bool AdMultiSlider::disabled() const { return !isEnabled(); }
 
 void AdMultiSlider::setDisabled(bool value) {
+  const QPointer<AdMultiSlider> guard(this);
   if (disabled() == value) {
     return;
   }
   setEnabled(!value);
+  if (!guard) return;
 
   setHoverHandleIndex(-1);
+  if (!guard) return;
   dragMode_ = DragMode::None;
   dragging_ = false;
   pressedHandleIndex_ = -1;
   setSliderDownInternal(false);
+  if (!guard) return;
   dragChanged_ = false;
   pendingPrimaryValueChange_ = false;
   pendingValuesChange_ = false;
   setDragHandleIndex(-1);
+  if (!guard) return;
   invalidateLayoutCache();
   requestTooltipSync();
   update();
@@ -899,54 +889,68 @@ void AdMultiSlider::setCurrentHandle(int index) { setFocusHandleIndex(index); }
 bool AdMultiSlider::selectionDragEnabled() const { return draggableTrack_; }
 
 void AdMultiSlider::setSelectionDragEnabled(bool value) {
+  const QPointer<AdMultiSlider> guard(this);
   if (draggableTrack_ == value) {
     return;
   }
   draggableTrack_ = value;
-  if (draggableTrack_ && editableHandles_) {
+  const bool editingChanged = draggableTrack_ && editableHandles_;
+  if (editingChanged) {
     editableHandles_ = false;
-    emit handleEditingEnabledChanged(editableHandles_);
   }
-  emit selectionDragEnabledChanged(draggableTrack_);
   invalidateLayoutCache();
   requestTooltipSync();
   update();
+  if (editingChanged) {
+    emit handleEditingEnabledChanged(false);
+    if (!guard) return;
+  }
+  emit selectionDragEnabledChanged(value);
 }
 
 bool AdMultiSlider::handleEditingEnabled() const { return editableHandles_; }
 
 void AdMultiSlider::setHandleEditingEnabled(bool value) {
+  const QPointer<AdMultiSlider> guard(this);
   if (editableHandles_ == value) {
     return;
   }
   editableHandles_ = value;
-  if (editableHandles_ && draggableTrack_) {
+  const bool draggingChanged = editableHandles_ && draggableTrack_;
+  if (draggingChanged) {
     draggableTrack_ = false;
-    emit selectionDragEnabledChanged(draggableTrack_);
   }
-  setHandlesInternal(handles_, true, false);
-  emit handleEditingEnabledChanged(editableHandles_);
   invalidateLayoutCache();
   requestTooltipSync();
   update();
+  setHandlesInternal(handles_, true, false);
+  if (!guard) return;
+  if (draggingChanged) {
+    emit selectionDragEnabledChanged(false);
+    if (!guard) return;
+  }
+  emit handleEditingEnabledChanged(value);
 }
 
 int AdMultiSlider::minimumHandleCount() const { return minHandleCount_; }
 
 void AdMultiSlider::setMinimumHandleCount(int value) {
+  const QPointer<AdMultiSlider> guard(this);
   const int normalized = std::max(0, value);
   if (minHandleCount_ == normalized) {
     return;
   }
   minHandleCount_ = normalized;
-  setHandlesInternal(handles_, true, false);
-  emit minimumHandleCountChanged(minHandleCount_);
   update();
+  setHandlesInternal(handles_, true, false);
+  if (!guard) return;
+  emit minimumHandleCountChanged(normalized);
 }
 
 int AdMultiSlider::maximumHandleCount() const { return maxHandleCount_; }
 
 void AdMultiSlider::setMaximumHandleCount(int value) {
+  const QPointer<AdMultiSlider> guard(this);
   int normalized = value;
   if (normalized == 0) {
     normalized = -1;
@@ -958,9 +962,10 @@ void AdMultiSlider::setMaximumHandleCount(int value) {
     return;
   }
   maxHandleCount_ = normalized;
-  setHandlesInternal(handles_, true, false);
-  emit maximumHandleCountChanged(maxHandleCount_);
   update();
+  setHandlesInternal(handles_, true, false);
+  if (!guard) return;
+  emit maximumHandleCountChanged(normalized);
 }
 
 bool AdMultiSlider::tooltipEnabled() const { return tooltipEnabled_; }
@@ -970,9 +975,9 @@ void AdMultiSlider::setTooltipEnabled(bool value) {
     return;
   }
   tooltipEnabled_ = value;
-  emit tooltipEnabledChanged(tooltipEnabled_);
   requestTooltipSync();
   update();
+  emit tooltipEnabledChanged(value);
 }
 
 AdMultiSlider::TooltipVisibleMode AdMultiSlider::tooltipVisibleMode() const {
@@ -984,9 +989,9 @@ void AdMultiSlider::setTooltipVisibleMode(TooltipVisibleMode value) {
     return;
   }
   tooltipVisibleMode_ = value;
-  emit tooltipVisibleModeChanged(tooltipVisibleMode_);
   requestTooltipSync();
   update();
+  emit tooltipVisibleModeChanged(value);
 }
 
 AdMultiSlider::TooltipPlacement AdMultiSlider::tooltipPlacement() const {
@@ -998,31 +1003,35 @@ void AdMultiSlider::setTooltipPlacement(TooltipPlacement value) {
     return;
   }
   tooltipPlacement_ = value;
-  emit tooltipPlacementChanged(tooltipPlacement_);
   requestTooltipSync();
   update();
+  emit tooltipPlacementChanged(value);
 }
 
 AdMultiSlider::MarkMap AdMultiSlider::marks() const { return marks_; }
 
 void AdMultiSlider::setMarks(const MarkMap& marks) {
+  const QPointer<AdMultiSlider> guard(this);
   if (marksEqual(marks_, marks)) {
     return;
   }
   marks_ = marks;
-  setHandlesInternal(handles_, true, false);
-  emit marksChanged();
   refreshAfterPropertyChange();
+  setHandlesInternal(handles_, true, false);
+  if (!guard) return;
+  emit marksChanged();
 }
 
 void AdMultiSlider::clearMarks() {
+  const QPointer<AdMultiSlider> guard(this);
   if (marks_.isEmpty()) {
     return;
   }
   marks_.clear();
-  setHandlesInternal(handles_, true, false);
-  emit marksChanged();
   refreshAfterPropertyChange();
+  setHandlesInternal(handles_, true, false);
+  if (!guard) return;
+  emit marksChanged();
 }
 
 AdMultiSlider::TooltipFormatter AdMultiSlider::tooltipFormatter() const {
@@ -1036,28 +1045,36 @@ void AdMultiSlider::setTooltipFormatter(TooltipFormatter formatter) {
 }
 
 void AdMultiSlider::setRange(double minimum, double maximum) {
-  const double normalizedMinimum = minimum;
-  const double normalizedMaximum = std::max(minimum, maximum);
-  if (fuzzyEq(minimum_, normalizedMinimum) && fuzzyEq(maximum_, normalizedMaximum)) {
-    return;
-  }
+  setRangeInternal(minimum, std::max(minimum, maximum), BoundNotificationOrder::MinimumFirst);
+}
 
-  const bool minimumChangedState = !fuzzyEq(minimum_, normalizedMinimum);
-  const bool maximumChangedState = !fuzzyEq(maximum_, normalizedMaximum);
-  minimum_ = normalizedMinimum;
-  maximum_ = normalizedMaximum;
-  setHandlesInternal(handles_, true, false);
-  if (minimumChangedState) {
-    emit minimumChanged(minimum_);
+void AdMultiSlider::setRangeInternal(double minimum, double maximum,
+                                     BoundNotificationOrder notificationOrder) {
+  if (fuzzyEq(minimum_, minimum) && fuzzyEq(maximum_, maximum)) return;
+  const QPointer<AdMultiSlider> guard(this);
+  {
+    // Accessibility refresh can synchronously reenter through an event filter.
+    // Keep the shared drain suspended until the bound and handle commit finishes.
+    const bool wasPublishing = publishingState_;
+    publishingState_ = true;
+    const auto restorePublishing = qScopeGuard([guard, wasPublishing] {
+      if (guard) guard->publishingState_ = wasPublishing;
+    });
+    minimum_ = minimum;
+    maximum_ = maximum;
+    boundNotificationOrder_ = notificationOrder;
+    refreshAfterPropertyChange();
+    if (!guard) return;
+    setHandlesInternal(handles_, true, false);
+    if (!guard) return;
   }
-  if (maximumChangedState) {
-    emit maximumChanged(maximum_);
-  }
-  emit rangeChanged(minimum_, maximum_);
-  refreshAfterPropertyChange();
+  // Bounds can change without clamping a handle, so normalization's early
+  // return must not skip their notifications.
+  publishStateChanges();
 }
 
 void AdMultiSlider::triggerAction(QAbstractSlider::SliderAction action) {
+  const QPointer<AdMultiSlider> guard(this);
   if (disabled() || handles_.isEmpty() || action == QAbstractSlider::SliderNoAction) {
     return;
   }
@@ -1101,7 +1118,9 @@ void AdMultiSlider::triggerAction(QAbstractSlider::SliderAction action) {
   QList<double> next = handles_;
   next[index] = normalizeValue(nextValue);
   emitHandleActionTriggered(action, index);
+  if (!guard) return;
   setHandlesInternal(next, true, true, true);
+  if (!guard) return;
   setFocusHandleIndex(index);
 }
 
@@ -1109,14 +1128,14 @@ AdMultiSlider::ComponentTokens AdMultiSlider::componentTokens() const { return c
 
 void AdMultiSlider::setComponentTokens(const ComponentTokens& tokens) {
   componentTokens_ = tokens;
-  emit componentTokensChanged();
   refreshAfterPropertyChange();
+  emit componentTokensChanged();
 }
 
 void AdMultiSlider::resetComponentTokens() {
   componentTokens_ = {};
-  emit componentTokensChanged();
   refreshAfterPropertyChange();
+  emit componentTokensChanged();
 }
 
 AdMultiSlider::SemanticStyles AdMultiSlider::semanticStyles() const { return semanticStyles_; }
@@ -1126,21 +1145,21 @@ void AdMultiSlider::setSemanticStyles(const SemanticStyles& styles) {
     return;
   }
   semanticStyles_ = styles;
-  emit semanticStylesChanged();
   // Semantic slots only carry colors and brushes. Apply them over the cached
   // base style instead of resolving theme and geometry again.
   invalidateSemanticStyleCache();
   requestTooltipSync();
   update();
+  emit semanticStylesChanged();
 }
 
 void AdMultiSlider::setSemanticStyleResolver(SemanticStyleResolver resolver) {
   semanticStyleResolver_ = std::move(resolver);
-  emit semanticStylesChanged();
   // A resolver has the same color/brush-only semantic surface as direct styles.
   invalidateSemanticStyleCache();
   requestTooltipSync();
   update();
+  emit semanticStylesChanged();
 }
 
 QSize AdMultiSlider::sizeHint() const {
@@ -1254,6 +1273,7 @@ AdMultiSlider::SemanticStyles AdMultiSlider::resolvedSemanticStyles() const {
 }
 
 void AdMultiSlider::setInversionState(bool invertedAppearance, bool invertedControls) {
+  const QPointer<AdMultiSlider> guard(this);
   const bool normalizedAppearance = invertedAppearance;
   const bool normalizedControls = invertedControls;
   const bool appearanceChanged = invertedAppearance_ != normalizedAppearance;
@@ -1264,15 +1284,15 @@ void AdMultiSlider::setInversionState(bool invertedAppearance, bool invertedCont
 
   invertedAppearance_ = normalizedAppearance;
   invertedControls_ = normalizedControls;
+  refreshAfterPropertyChange(false);
 
   if (appearanceChanged) {
-    emit invertedAppearanceChanged(invertedAppearance_);
+    emit invertedAppearanceChanged(normalizedAppearance);
+    if (!guard) return;
   }
   if (controlsChanged) {
-    emit invertedControlsChanged(invertedControls_);
+    emit invertedControlsChanged(normalizedControls);
   }
-
-  refreshAfterPropertyChange(false);
 }
 
 int AdMultiSlider::sliderHandleIndex() const {
@@ -1291,10 +1311,10 @@ void AdMultiSlider::setSliderDownInternal(bool value) {
     return;
   }
   sliderDown_ = value;
-  emit sliderDownChanged(sliderDown_);
   invalidateLayoutCache();
   requestTooltipSync();
   update();
+  emit sliderDownChanged(value);
 }
 
 void AdMultiSlider::setPendingChangeStateFromVisuals() {
@@ -1311,28 +1331,10 @@ void AdMultiSlider::commitPendingChanges() {
   }
 
   committedHandles_ = handles_;
-  emitChangedSignalsForCurrentMode();
+  committedValueNotificationsPending_ = true;
   notifyAccessibleValueChange();
   notifyAccessibleDescriptionChange();
-}
-
-void AdMultiSlider::emitActiveHandleIndexChangedIfNeeded(int previousIndex) {
-  const int currentIndex = activeHandleIndex();
-  if (previousIndex != currentIndex) {
-    emit activeHandleIndexChanged(currentIndex);
-    notifyAccessibleValueChange();
-    notifyAccessibleDescriptionChange();
-    if (hasFocus()) {
-      notifyAccessibleFocusChange();
-    }
-  }
-}
-
-void AdMultiSlider::emitSliderPositionChangedIfNeeded(double previousPosition) {
-  const double currentPosition = sliderPosition();
-  if (!fuzzyEq(previousPosition, currentPosition)) {
-    emit sliderPositionChanged(currentPosition);
-  }
+  publishStateChanges();
 }
 
 void AdMultiSlider::setFocusVisible(bool visible) {
@@ -1346,9 +1348,6 @@ void AdMultiSlider::setFocusVisible(bool visible) {
 }
 
 void AdMultiSlider::setFocusHandleIndex(int index) {
-  const int previousActiveIndex = activeHandleIndex();
-  const int previousCurrentIndex = currentHandle();
-  const double previousSliderPosition = sliderPosition();
   int nextIndex = index;
   if (handles_.isEmpty()) {
     nextIndex = -1;
@@ -1363,15 +1362,10 @@ void AdMultiSlider::setFocusHandleIndex(int index) {
   focusHandleId_ = nextIndex >= 0 && nextIndex < handleIds_.size() ? handleIds_.at(nextIndex) : -1;
   invalidateLayoutCache();
   requestTooltipSync();
-  emitActiveHandleIndexChangedIfNeeded(previousActiveIndex);
-  if (previousCurrentIndex != currentHandle()) {
-    emit currentHandleChanged(currentHandle());
-  }
-  emitSliderPositionChangedIfNeeded(previousSliderPosition);
+  publishStateChanges();
 }
 
 void AdMultiSlider::setHoverHandleIndex(int index) {
-  const int previousActiveIndex = activeHandleIndex();
   int nextIndex = index;
   if (handles_.isEmpty()) {
     nextIndex = -1;
@@ -1387,11 +1381,10 @@ void AdMultiSlider::setHoverHandleIndex(int index) {
   hoverHandleId_ = nextIndex >= 0 && nextIndex < handleIds_.size() ? handleIds_.at(nextIndex) : -1;
   invalidateLayoutCache();
   requestTooltipSync();
-  emitActiveHandleIndexChangedIfNeeded(previousActiveIndex);
+  publishStateChanges();
 }
 
 void AdMultiSlider::setDragHandleIndex(int index) {
-  const int previousActiveIndex = activeHandleIndex();
   int nextIndex = index;
   if (handles_.isEmpty()) {
     nextIndex = -1;
@@ -1407,7 +1400,7 @@ void AdMultiSlider::setDragHandleIndex(int index) {
   dragHandleId_ = nextIndex >= 0 && nextIndex < handleIds_.size() ? handleIds_.at(nextIndex) : -1;
   invalidateLayoutCache();
   requestTooltipSync();
-  emitActiveHandleIndexChangedIfNeeded(previousActiveIndex);
+  publishStateChanges();
 }
 
 void AdMultiSlider::emitHandleActionTriggered(QAbstractSlider::SliderAction action, int index) {
@@ -1549,11 +1542,6 @@ void AdMultiSlider::setHandlesInternal(const QList<double>& handles, bool emitVa
                                        bool fromUserAction, bool commitResult,
                                        bool valueOnlyLayoutChange) {
   const double previousCommittedValue = value();
-  const QList<double> previousCommittedValues = committedHandles_;
-  const QList<double> previousVisualValues = handles_;
-  const int previousActiveIndex = activeHandleIndex();
-  const int previousCurrentIndex = currentHandle();
-  const double previousSliderPosition = sliderPosition();
   QList<HandleEntry> normalized;
   normalized.reserve(handles.size() > 2 ? static_cast<int>(handles.size()) : 2);
   for (int i = 0; i < handles.size(); ++i) {
@@ -1620,35 +1608,23 @@ void AdMultiSlider::setHandlesInternal(const QList<double>& handles, bool emitVa
     handles_ = normalizedValuesList;
     handleIds_ = normalizedIds;
     syncTrackedHandleIndexes();
-    emitActiveHandleIndexChangedIfNeeded(previousActiveIndex);
-    if (previousCurrentIndex != currentHandle()) {
-      emit currentHandleChanged(currentHandle());
-    }
   }
 
   if (commitResult) {
     committedHandles_ = normalizedValuesList;
+    if (emitValueChangedSignal) {
+      committedValueNotificationsPending_ = true;
+    }
   }
-
-  emitSliderPositionChangedIfNeeded(previousSliderPosition);
 
   const bool primaryValueChanged =
       !fuzzyEq(previousCommittedValue,
                committedHandles_.isEmpty() ? minimum_ : committedHandles_.constFirst());
-  if (emitValueChangedSignal && commitResult) {
-    if (primaryValueChanged) {
-      emit valueChanged(value());
-    }
-    if (committedValuesChanged) {
-      emit handleValuesChanged(committedHandles_);
-    }
-  }
-
   if (fromUserAction && visualValuesChanged) {
     dragChanged_ = true;
     const int movedIndex = sliderHandleIndex();
     if (movedIndex >= 0 && movedIndex < handles_.size()) {
-      emit handleMoved(movedIndex, handles_.at(movedIndex));
+      pendingHandleMove_ = PendingHandleMove{handleIds_.at(movedIndex), handles_.at(movedIndex)};
     }
   }
 
@@ -1674,23 +1650,103 @@ void AdMultiSlider::setHandlesInternal(const QList<double>& handles, bool emitVa
   }
   requestTooltipSync();
   update();
+
+  publishStateChanges();
 }
 
-void AdMultiSlider::emitChangedSignalsForCurrentMode() {
-  if (pendingPrimaryValueChange_) {
-    emit valueChanged(value());
+void AdMultiSlider::publishStateChanges() {
+  if (publishingState_) {
+    return;
   }
-  if (pendingValuesChange_) {
-    emit handleValuesChanged(committedHandles_);
+  const QPointer<AdMultiSlider> guard(this);
+  publishingState_ = true;
+  const auto restorePublishing = qScopeGuard([guard] {
+    if (guard) {
+      guard->publishingState_ = false;
+    }
+  });
+
+  // Compare each property with delivered state. Nested handle and bound edits
+  // share this drain, and combined ranges follow their settled handle and bound
+  // notifications. Visual-only edits do not request committed notifications.
+  while (true) {
+    const int nextActiveIndex = activeHandleIndex();
+    const int nextCurrentIndex = currentHandle();
+    const double nextPosition = sliderPosition();
+    if (lastNotifiedActiveHandleIndex_ != nextActiveIndex) {
+      lastNotifiedActiveHandleIndex_ = nextActiveIndex;
+      notifyAccessibleValueChange();
+      if (!guard) return;
+      notifyAccessibleDescriptionChange();
+      if (!guard) return;
+      if (hasFocus()) {
+        notifyAccessibleFocusChange();
+        if (!guard) return;
+      }
+      emit activeHandleIndexChanged(nextActiveIndex);
+    } else if (lastNotifiedCurrentHandle_ != nextCurrentIndex) {
+      lastNotifiedCurrentHandle_ = nextCurrentIndex;
+      emit currentHandleChanged(nextCurrentIndex);
+    } else if (!fuzzyEq(lastNotifiedSliderPosition_, nextPosition)) {
+      lastNotifiedSliderPosition_ = nextPosition;
+      emit sliderPositionChanged(nextPosition);
+    } else if (committedValueNotificationsPending_) {
+      const double nextValue = value();
+      if (!fuzzyEq(lastNotifiedValue_, nextValue)) {
+        lastNotifiedValue_ = nextValue;
+        emit valueChanged(nextValue);
+      } else if (!listFuzzyEquals(lastNotifiedHandleValues_, committedHandles_)) {
+        const QList<double> nextValues = committedHandles_;
+        lastNotifiedHandleValues_ = nextValues;
+        emit handleValuesChanged(nextValues);
+      } else {
+        committedValueNotificationsPending_ = false;
+      }
+    } else if (pendingHandleMove_) {
+      const PendingHandleMove moved = *pendingHandleMove_;
+      pendingHandleMove_.reset();
+      const int movedIndex = indexForHandleId(moved.id);
+      // An unrelated handle edit does not retire the movement. Replacing the
+      // moved handle or its value does, so a stale user event cannot describe a
+      // newer programmatic value.
+      if (movedIndex >= 0 && fuzzyEq(handles_.at(movedIndex), moved.value)) {
+        emit handleMoved(movedIndex, moved.value);
+      }
+    } else if (!boundValueEquals(lastNotifiedMinimum_, minimum_) ||
+               !boundValueEquals(lastNotifiedMaximum_, maximum_)) {
+      const bool minimumPending = !boundValueEquals(lastNotifiedMinimum_, minimum_);
+      const bool maximumPending = !boundValueEquals(lastNotifiedMaximum_, maximum_);
+      if (minimumPending &&
+          (!maximumPending || boundNotificationOrder_ == BoundNotificationOrder::MinimumFirst)) {
+        const double minimum = minimum_;
+        lastNotifiedMinimum_ = minimum;
+        emit minimumChanged(minimum);
+      } else {
+        const double maximum = maximum_;
+        lastNotifiedMaximum_ = maximum;
+        emit maximumChanged(maximum);
+      }
+    } else if (!boundValueEquals(lastNotifiedRangeMinimum_, minimum_) ||
+               !boundValueEquals(lastNotifiedRangeMaximum_, maximum_)) {
+      const double minimum = minimum_;
+      const double maximum = maximum_;
+      lastNotifiedRangeMinimum_ = minimum;
+      lastNotifiedRangeMaximum_ = maximum;
+      emit rangeChanged(minimum, maximum);
+    } else {
+      return;
+    }
+    if (!guard) return;
   }
 }
 
 void AdMultiSlider::emitCompletedSignalsForCurrentMode() {
-  if (dragChanged_ || pendingPrimaryValueChange_ || pendingValuesChange_) {
-    emit editingFinished();
-  }
+  const bool completed = dragChanged_ || pendingPrimaryValueChange_ || pendingValuesChange_;
   pendingPrimaryValueChange_ = false;
   pendingValuesChange_ = false;
+  if (completed) {
+    emit editingFinished();
+  }
 }
 
 void AdMultiSlider::refreshAfterPropertyChange(bool updateGeometryHint) {
@@ -2056,16 +2112,21 @@ bool AdMultiSlider::isMarkActive(double markValue) const {
 
 int AdMultiSlider::handleRailAction(const QPoint& pos, const LayoutInfo& layout,
                                     bool emitLiveSignals) {
+  const QPointer<AdMultiSlider> guard(this);
   const double nextValue = valueFromHandlePosition(pos, layout);
   if (mode_ == Mode::Single) {
     setHandlesInternal({nextValue}, emitLiveSignals, true, emitLiveSignals);
+    if (!guard) return -1;
     setFocusHandleIndex(0);
+    if (!guard) return -1;
     return handles_.isEmpty() ? -1 : 0;
   }
 
   if (editableHandles_) {
     int insertedIndex = -1;
-    if (addHandleAt(nextValue, &insertedIndex, emitLiveSignals)) {
+    const bool added = addHandleAt(nextValue, &insertedIndex, emitLiveSignals);
+    if (!guard) return -1;
+    if (added) {
       setFocusHandleIndex(insertedIndex);
       return insertedIndex;
     }
@@ -2080,13 +2141,16 @@ int AdMultiSlider::handleRailAction(const QPoint& pos, const LayoutInfo& layout,
   const qint64 targetHandleId = index < handleIds_.size() ? handleIds_.at(index) : -1;
   nextValues[index] = nextValue;
   setHandlesInternal(nextValues, emitLiveSignals, true, emitLiveSignals);
+  if (!guard) return -1;
   const int activeIndex =
       targetHandleId >= 0 ? indexForHandleId(targetHandleId) : nearestHandleIndex(nextValue);
   setFocusHandleIndex(activeIndex >= 0 ? activeIndex : index);
+  if (!guard) return -1;
   return activeHandleIndex();
 }
 
 bool AdMultiSlider::deleteHandleAt(int index, bool emitLiveSignals) {
+  const QPointer<AdMultiSlider> guard(this);
   if (mode_ != Mode::Range || index < 0 || index >= handles_.size()) {
     return false;
   }
@@ -2099,6 +2163,7 @@ bool AdMultiSlider::deleteHandleAt(int index, bool emitLiveSignals) {
   next.removeAt(index);
   const QList<double> before = handles_;
   setHandlesInternal(next, emitLiveSignals, true, emitLiveSignals);
+  if (!guard) return false;
   if (listFuzzyEquals(before, handles_)) {
     return false;
   }
@@ -2109,6 +2174,7 @@ bool AdMultiSlider::deleteHandleAt(int index, bool emitLiveSignals) {
 }
 
 bool AdMultiSlider::addHandleAt(double value, int* insertedIndex, bool emitLiveSignals) {
+  const QPointer<AdMultiSlider> guard(this);
   if (mode_ != Mode::Range) {
     return false;
   }
@@ -2122,6 +2188,7 @@ bool AdMultiSlider::addHandleAt(double value, int* insertedIndex, bool emitLiveS
 
   const QList<double> before = handles_;
   setHandlesInternal(next, emitLiveSignals, true, emitLiveSignals);
+  if (!guard) return false;
   if (listFuzzyEquals(before, handles_)) {
     return false;
   }
@@ -2475,8 +2542,10 @@ void AdMultiSlider::enterEvent(QEnterEvent* event) {
 }
 
 void AdMultiSlider::leaveEvent(QEvent* event) {
+  const QPointer<AdMultiSlider> guard(this);
   if (dragMode_ == DragMode::None) {
     setHoverHandleIndex(-1);
+    if (!guard) return;
   }
   invalidateLayoutCache();
   requestTooltipSync();
@@ -2485,12 +2554,17 @@ void AdMultiSlider::leaveEvent(QEvent* event) {
 }
 
 void AdMultiSlider::mousePressEvent(QMouseEvent* event) {
+  const QPointer<AdMultiSlider> guard(this);
   QWidget::mousePressEvent(event);
   if (!event || event->button() != Qt::LeftButton || disabled()) {
     return;
   }
 
+  // Qt may propagate an ignored input event after this handler returns. Claim
+  // the interaction before any observer can destroy its receiver.
+  event->accept();
   setFocus(Qt::MouseFocusReason);
+  if (!guard) return;
   // An already-focused widget receives no FocusIn when input switches to the mouse.
   setFocusVisible(false);
   dragChanged_ = false;
@@ -2503,14 +2577,19 @@ void AdMultiSlider::mousePressEvent(QMouseEvent* event) {
   if (hitIndex >= 0) {
     dragMode_ = DragMode::Handle;
     setDragHandleIndex(hitIndex);
+    if (!guard) return;
     setHoverHandleIndex(hitIndex);
+    if (!guard) return;
     setFocusHandleIndex(hitIndex);
+    if (!guard) return;
     dragStartPos_ = event->position().toPoint();
     dragStartValues_ = handles_;
     dragging_ = true;
     pressedHandleIndex_ = hitIndex;
     setSliderDownInternal(true);
+    if (!guard) return;
     emit handlePressed(hitIndex);
+    if (!guard) return;
     invalidateLayoutCache();
     requestTooltipSync();
     update();
@@ -2532,12 +2611,15 @@ void AdMultiSlider::mousePressEvent(QMouseEvent* event) {
     if (trackRect.adjusted(-2, -2, 2, 2).contains(event->position())) {
       dragMode_ = DragMode::Track;
       setDragHandleIndex(-1);
+      if (!guard) return;
       dragStartPos_ = event->position().toPoint();
       dragStartValues_ = handles_;
       dragging_ = true;
       pressedHandleIndex_ = sliderHandleIndex();
       setSliderDownInternal(true);
+      if (!guard) return;
       emit handlePressed(pressedHandleIndex_);
+      if (!guard) return;
       invalidateLayoutCache();
       requestTooltipSync();
       update();
@@ -2546,17 +2628,23 @@ void AdMultiSlider::mousePressEvent(QMouseEvent* event) {
   }
 
   const int railHandleIndex = handleRailAction(event->position().toPoint(), layout, tracking_);
+  if (!guard) return;
   if (railHandleIndex >= 0) {
     dragMode_ = DragMode::Handle;
     setDragHandleIndex(railHandleIndex);
+    if (!guard) return;
     setHoverHandleIndex(railHandleIndex);
+    if (!guard) return;
     setFocusHandleIndex(railHandleIndex);
+    if (!guard) return;
     dragStartPos_ = event->position().toPoint();
     dragStartValues_ = handles_;
     dragging_ = true;
     pressedHandleIndex_ = railHandleIndex;
     setSliderDownInternal(true);
+    if (!guard) return;
     emit handlePressed(railHandleIndex);
+    if (!guard) return;
     invalidateLayoutCache();
     requestTooltipSync();
     update();
@@ -2564,6 +2652,7 @@ void AdMultiSlider::mousePressEvent(QMouseEvent* event) {
 }
 
 void AdMultiSlider::mouseMoveEvent(QMouseEvent* event) {
+  const QPointer<AdMultiSlider> guard(this);
   QWidget::mouseMoveEvent(event);
   if (!event || disabled()) {
     return;
@@ -2573,12 +2662,14 @@ void AdMultiSlider::mouseMoveEvent(QMouseEvent* event) {
   const int hitIndex = hitTestHandle(event->position().toPoint(), layout);
   if (hoverHandleIndex_ != hitIndex && dragMode_ == DragMode::None) {
     setHoverHandleIndex(hitIndex);
+    if (!guard) return;
     update();
   }
 
   if (dragMode_ == DragMode::None) {
     return;
   }
+  event->accept();
 
   if (dragMode_ == DragMode::Handle && dragHandleIndex_ >= 0 &&
       dragHandleIndex_ < handles_.size()) {
@@ -2590,11 +2681,16 @@ void AdMultiSlider::mouseMoveEvent(QMouseEvent* event) {
                                    mainAxisCoord > (axisMax + kEditableHandleDeleteThresholdPx);
       if (outOfAxisBounds) {
         const int requiredMinCount = std::max(1, minHandleCount_);
-        if (handles_.size() > requiredMinCount && deleteHandleAt(dragHandleIndex_, tracking_)) {
+        const bool deleted =
+            handles_.size() > requiredMinCount && deleteHandleAt(dragHandleIndex_, tracking_);
+        if (!guard) return;
+        if (deleted) {
           // Keep drag session alive until mouse up so completion signal timing
           // stays aligned with regular drag flows.
           setDragHandleIndex(-1);
+          if (!guard) return;
           setHoverHandleIndex(-1);
+          if (!guard) return;
           update();
           return;
         }
@@ -2608,10 +2704,13 @@ void AdMultiSlider::mouseMoveEvent(QMouseEvent* event) {
     const double nextValue = valueFromHandlePosition(event->position().toPoint(), layout);
     next[dragHandleIndex_] = nextValue;
     setHandlesInternal(next, tracking_, true, tracking_, true);
+    if (!guard) return;
     const int activeIndex = dragHandleIndex_;
     if (activeIndex >= 0) {
       setDragHandleIndex(activeIndex);
+      if (!guard) return;
       setHoverHandleIndex(activeIndex);
+      if (!guard) return;
       setFocusHandleIndex(activeIndex);
     }
     return;
@@ -2631,10 +2730,12 @@ void AdMultiSlider::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void AdMultiSlider::mouseReleaseEvent(QMouseEvent* event) {
+  const QPointer<AdMultiSlider> guard(this);
   QWidget::mouseReleaseEvent(event);
   if (!event || event->button() != Qt::LeftButton) {
     return;
   }
+  event->accept();
 
   const bool hadDrag = dragMode_ != DragMode::None;
   const int releasedHandleIndex = pressedHandleIndex_;
@@ -2642,22 +2743,28 @@ void AdMultiSlider::mouseReleaseEvent(QMouseEvent* event) {
   dragging_ = false;
   dragStartValues_.clear();
   setDragHandleIndex(-1);
+  if (!guard) return;
   setSliderDownInternal(false);
+  if (!guard) return;
 
   if (hadDrag && dragChanged_) {
     if (!tracking_) {
       commitPendingChanges();
+      if (!guard) return;
     }
     emitCompletedSignalsForCurrentMode();
+    if (!guard) return;
   }
   if (hadDrag && releasedHandleIndex >= 0) {
     emit handleReleased(releasedHandleIndex);
+    if (!guard) return;
   }
 
   dragChanged_ = false;
   pressedHandleIndex_ = -1;
   if (!rect().contains(event->position().toPoint())) {
     setHoverHandleIndex(-1);
+    if (!guard) return;
   }
   invalidateLayoutCache();
   requestTooltipSync();
@@ -2665,6 +2772,7 @@ void AdMultiSlider::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void AdMultiSlider::wheelEvent(QWheelEvent* event) {
+  const QPointer<AdMultiSlider> guard(this);
   if (!event) {
     return;
   }
@@ -2678,6 +2786,7 @@ void AdMultiSlider::wheelEvent(QWheelEvent* event) {
     event->ignore();
     return;
   }
+  event->accept();
 
   pendingPrimaryValueChange_ = false;
   pendingValuesChange_ = false;
@@ -2694,17 +2803,23 @@ void AdMultiSlider::wheelEvent(QWheelEvent* event) {
   emitHandleActionTriggered(
       angleDelta > 0 ? QAbstractSlider::SliderSingleStepAdd : QAbstractSlider::SliderSingleStepSub,
       index);
+  if (!guard) return;
   setHandlesInternal(next, tracking_, true, tracking_);
+  if (!guard) return;
   setFocusHandleIndex(index);
+  if (!guard) return;
   if (!tracking_) {
     commitPendingChanges();
+    if (!guard) return;
   }
   emitCompletedSignalsForCurrentMode();
+  if (!guard) return;
   dragChanged_ = false;
   event->accept();
 }
 
 void AdMultiSlider::keyPressEvent(QKeyEvent* event) {
+  const QPointer<AdMultiSlider> guard(this);
   if (!event) {
     QWidget::keyPressEvent(event);
     return;
@@ -2718,6 +2833,7 @@ void AdMultiSlider::keyPressEvent(QKeyEvent* event) {
   const int key = event->key();
   const int handleCount = static_cast<int>(handles_.size());
   if ((key == Qt::Key_Tab || key == Qt::Key_Backtab) && handleCount > 1) {
+    event->accept();
     setFocusVisible(true);
     int index = focusHandleIndex_;
     if (index < 0 || index >= handleCount) {
@@ -2734,15 +2850,20 @@ void AdMultiSlider::keyPressEvent(QKeyEvent* event) {
 
   if (mode_ == Mode::Range && editableHandles_ &&
       (key == Qt::Key_Delete || key == Qt::Key_Backspace)) {
+    event->accept();
     setFocusVisible(true);
     pendingPrimaryValueChange_ = false;
     pendingValuesChange_ = false;
     dragChanged_ = false;
     if (focusHandleIndex_ < 0 || focusHandleIndex_ >= handleCount) {
       setFocusHandleIndex(handleCount - 1);
+      if (!guard) return;
     }
-    if (deleteHandleAt(focusHandleIndex_, true)) {
+    const bool deleted = deleteHandleAt(focusHandleIndex_, true);
+    if (!guard) return;
+    if (deleted) {
       emitCompletedSignalsForCurrentMode();
+      if (!guard) return;
       dragChanged_ = false;
       event->accept();
       return;
@@ -2788,6 +2909,7 @@ void AdMultiSlider::keyPressEvent(QKeyEvent* event) {
     return;
   }
 
+  event->accept();
   setFocusVisible(true);
   nextValue = normalizeValue(nextValue);
   QList<double> next = handles_;
@@ -2799,12 +2921,15 @@ void AdMultiSlider::keyPressEvent(QKeyEvent* event) {
   }
   keyboardInteractionActive_ = true;
   emitHandleActionTriggered(sliderActionForKey(this, key), index);
+  if (!guard) return;
   const qint64 focusedHandleId = index < handleIds_.size() ? handleIds_.at(index) : -1;
   const QList<double> before = handles_;
   setHandlesInternal(next, tracking_, true, tracking_);
+  if (!guard) return;
   const int activeIndex =
       focusedHandleId >= 0 ? indexForHandleId(focusedHandleId) : nearestHandleIndex(nextValue);
   setFocusHandleIndex(activeIndex);
+  if (!guard) return;
   if (!listFuzzyEquals(before, handles_)) {
     dragChanged_ = true;
   }
@@ -2812,6 +2937,7 @@ void AdMultiSlider::keyPressEvent(QKeyEvent* event) {
 }
 
 void AdMultiSlider::keyReleaseEvent(QKeyEvent* event) {
+  const QPointer<AdMultiSlider> guard(this);
   QWidget::keyReleaseEvent(event);
   if (!event || disabled() || !keyboardEnabled_) {
     return;
@@ -2824,21 +2950,26 @@ void AdMultiSlider::keyReleaseEvent(QKeyEvent* event) {
   if (!isKeyAdjustAction(event->key())) {
     return;
   }
+  event->accept();
 
   keyboardInteractionActive_ = false;
   if (dragChanged_) {
     if (!tracking_) {
       commitPendingChanges();
+      if (!guard) return;
     }
     emitCompletedSignalsForCurrentMode();
+    if (!guard) return;
     dragChanged_ = false;
   }
 }
 
 void AdMultiSlider::focusInEvent(QFocusEvent* event) {
+  const QPointer<AdMultiSlider> guard(this);
   focusVisible_ = event && detail::isKeyboardFocusReason(event->reason());
   if (focusHandleIndex_ < 0 && !handles_.isEmpty()) {
     setFocusHandleIndex(0);
+    if (!guard) return;
   }
   QWidget::focusInEvent(event);
   notifyAccessibleFocusChange();
@@ -2848,12 +2979,15 @@ void AdMultiSlider::focusInEvent(QFocusEvent* event) {
 }
 
 void AdMultiSlider::focusOutEvent(QFocusEvent* event) {
+  const QPointer<AdMultiSlider> guard(this);
   focusVisible_ = false;
   if (keyboardInteractionActive_ && dragChanged_) {
     if (!tracking_) {
       commitPendingChanges();
+      if (!guard) return;
     }
     emitCompletedSignalsForCurrentMode();
+    if (!guard) return;
     dragChanged_ = false;
   }
   keyboardInteractionActive_ = false;
@@ -2864,6 +2998,7 @@ void AdMultiSlider::focusOutEvent(QFocusEvent* event) {
 }
 
 void AdMultiSlider::changeEvent(QEvent* event) {
+  const QPointer<AdMultiSlider> guard(this);
   QWidget::changeEvent(event);
   if (!event) {
     return;
@@ -2873,21 +3008,25 @@ void AdMultiSlider::changeEvent(QEvent* event) {
     const bool disabledNow = disabled();
 
     setHoverHandleIndex(-1);
+    if (!guard) return;
     dragMode_ = DragMode::None;
     dragging_ = false;
     setSliderDownInternal(false);
+    if (!guard) return;
     dragChanged_ = false;
     pendingPrimaryValueChange_ = false;
     pendingValuesChange_ = false;
     keyboardInteractionActive_ = false;
     pressedHandleIndex_ = -1;
     setDragHandleIndex(-1);
+    if (!guard) return;
     syncInteractionCursor();
     invalidateLayoutCache();
     requestTooltipSync();
     if (lastDisabledState_ != disabledNow) {
       lastDisabledState_ = disabledNow;
       emit disabledChanged(disabledNow);
+      if (!guard) return;
       QAccessible::State changedState;
       changedState.disabled = true;
       QAccessibleStateChangeEvent accessibilityEvent(this, changedState);
@@ -2909,7 +3048,9 @@ void AdMultiSlider::changeEvent(QEvent* event) {
 }
 
 void AdMultiSlider::resizeEvent(QResizeEvent* event) {
+  const QPointer<AdMultiSlider> guard(this);
   if (dragMode_ == DragMode::None) setHoverHandleIndex(-1);
+  if (!guard) return;
   QWidget::resizeEvent(event);
   invalidateLayoutCache();
   requestTooltipSync();
@@ -2923,7 +3064,9 @@ void AdMultiSlider::showEvent(QShowEvent* event) {
 }
 
 void AdMultiSlider::hideEvent(QHideEvent* event) {
+  const QPointer<AdMultiSlider> guard(this);
   setHoverHandleIndex(-1);
+  if (!guard) return;
   invalidateLayoutCache();
   requestTooltipSync();
   QWidget::hideEvent(event);
@@ -2965,26 +3108,13 @@ AdRangeSlider::AdRangeSlider(QWidget* parent) : AdMultiSlider(parent) {
   setMode(Mode::Range);
   setHandleEditingEnabled(false);
   setHandleValues({minimum(), minimum()});
-  lastLowerValue_ = lowerValue();
-  lastUpperValue_ = upperValue();
+  lastNotifiedLowerValue_ = lowerValue();
+  lastNotifiedUpperValue_ = upperValue();
+  lastNotifiedCombinedLowerValue_ = lastNotifiedLowerValue_;
+  lastNotifiedCombinedUpperValue_ = lastNotifiedUpperValue_;
 
-  connect(this, &AdMultiSlider::handleValuesChanged, this, [this](const QList<double>& values) {
-    const double lower = values.isEmpty() ? minimum() : values.constFirst();
-    const double upper = values.size() < 2 ? lower : values.at(1);
-    const bool lowerChanged = !fuzzyEq(lastLowerValue_, lower);
-    const bool upperChanged = !fuzzyEq(lastUpperValue_, upper);
-    if (lowerChanged) {
-      lastLowerValue_ = lower;
-      emit lowerValueChanged(lower);
-    }
-    if (upperChanged) {
-      lastUpperValue_ = upper;
-      emit upperValueChanged(upper);
-    }
-    if (lowerChanged || upperChanged) {
-      emit valuesChanged(lower, upper);
-    }
-  });
+  connect(this, &AdMultiSlider::handleValuesChanged, this,
+          &AdRangeSlider::publishRangeValueChanges);
   connect(this, &AdMultiSlider::handlePressed, this,
           [this](int index) { emit sliderPressed(index); });
   connect(this, &AdMultiSlider::handleMoved, this,
@@ -2995,6 +3125,44 @@ AdRangeSlider::AdRangeSlider(QWidget* parent) : AdMultiSlider(parent) {
           [this](QAbstractSlider::SliderAction action, int index) {
             emit actionTriggered(action, index);
           });
+}
+
+void AdRangeSlider::publishRangeValueChanges() {
+  if (publishingRangeValues_) return;
+
+  const QPointer<AdRangeSlider> guard(this);
+  publishingRangeValues_ = true;
+  const auto restorePublishing = qScopeGuard([guard] {
+    if (guard) guard->publishingRangeValues_ = false;
+  });
+  // These caches describe delivered signals, independently of the committed
+  // handles. Nested edits stay in this drain so an unreported endpoint survives,
+  // and only the latest stable pair reaches the combined notification.
+  while (true) {
+    const double lower = lowerValue();
+    const double upper = upperValue();
+    if (!fuzzyEq(lastNotifiedLowerValue_, lower)) {
+      lastNotifiedLowerValue_ = lower;
+      emit lowerValueChanged(lower);
+      if (!guard) return;
+      continue;
+    }
+    if (!fuzzyEq(lastNotifiedUpperValue_, upper)) {
+      lastNotifiedUpperValue_ = upper;
+      emit upperValueChanged(upper);
+      if (!guard) return;
+      continue;
+    }
+    if (!fuzzyEq(lastNotifiedCombinedLowerValue_, lower) ||
+        !fuzzyEq(lastNotifiedCombinedUpperValue_, upper)) {
+      lastNotifiedCombinedLowerValue_ = lower;
+      lastNotifiedCombinedUpperValue_ = upper;
+      emit valuesChanged(lower, upper);
+      if (!guard) return;
+      continue;
+    }
+    return;
+  }
 }
 
 double AdRangeSlider::lowerValue() const {

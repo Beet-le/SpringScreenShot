@@ -1,46 +1,74 @@
 #ifndef SNOW_SHOT_PRESENTATION_CANVASSTATUSREADOUT_H
 #define SNOW_SHOT_PRESENTATION_CANVASSTATUSREADOUT_H
 
-#include <QEvent>
+#include <QDeadlineTimer>
 #include <QLabel>
+#include <QRectF>
 
-// Shared by pinned zoom/opacity and the recording canvas. Lifetime/timeout belongs to the owner.
+class QPainter;
+class QTimer;
+
 class CanvasStatusReadout final : public QLabel {
+    Q_OBJECT
+
   public:
-    explicit CanvasStatusReadout(QWidget* parent) : QLabel(parent) {
-        setAttribute(Qt::WA_NativeWindow, false);
-        setAttribute(Qt::WA_TransparentForMouseEvents, true);
-        setFocusPolicy(Qt::NoFocus);
-        setAlignment(Qt::AlignCenter);
-        setTextFormat(Qt::PlainText);
-        setStyleSheet(QStringLiteral("QLabel { color: white; background-color: rgba(0, 0, 0, 150); "
-                                     "padding: 3px 6px; border-radius: 4px; }"));
-        hide();
-    }
+    enum class Message { Scale, Opacity, Locked, MotionPreview, ResultPreview, RenderingPreview };
+    enum class Corner { BottomLeft, TopLeft };
+    enum class DisplayMode { Hidden, Transient, Persistent };
 
-    void setText(const QString& text) {
-        m_fullText = text;
-        setToolTip(text);
-        setAccessibleName(text);
-        layoutIn(m_anchor.isValid() ? m_anchor : parentWidget()->rect());
-    }
+    struct State {
+        Message message = Message::Scale;
+        qreal value = 0;
+        int decimals = 0;
+        QRectF anchor;
+        Corner corner = Corner::BottomLeft;
+        bool visible = false;
+        DisplayMode mode = DisplayMode::Hidden;
+        QDeadlineTimer deadline{0, Qt::PreciseTimer};
+        bool customText = false;
+        QString fullText;
+    };
 
-    void layoutIn(const QRect& anchor) {
-        m_anchor = anchor;
-        const int insetX = qMin(8, qMax(0, anchor.width() / 2));
-        const int insetY = qMin(8, qMax(0, anchor.height() / 2));
-        const int availableWidth = qMax(0, anchor.width() - insetX * 2);
-        QLabel::setText(
-            fontMetrics().elidedText(m_fullText, Qt::ElideRight, qMax(0, availableWidth - 12)));
-        const QSize desired = sizeHint().boundedTo(QSize(availableWidth, anchor.height()));
-        resize(desired);
-        move(anchor.left() + insetX, anchor.top() + qMax(0, anchor.height() - height() - insetY));
-        raise();
-    }
+    explicit CanvasStatusReadout(QWidget* parent);
+
+    // Scale and opacity values are percentages; decimals controls their display precision.
+    void setMessage(Message message, qreal value = 0, int decimals = 0);
+    [[nodiscard]] Message message() const;
+    void setText(const QString& text);
+    void layoutIn(const QRectF& anchor, Corner corner = Corner::BottomLeft);
+    void showTransient();
+    void showPersistent();
+    void dismiss();
+    [[nodiscard]] QTimer* dismissalTimer() const;
+    [[nodiscard]] State captureState() const;
+    void restoreState(const State& state);
+    void paintOverlay(QPainter& painter);
+
+  signals:
+    void presentationChanged();
+
+  protected:
+    void changeEvent(QEvent* event) override;
 
   private:
+    [[nodiscard]] QString formattedMessage() const;
+    void refreshPresentation();
+    void updateLayout();
+
+    QTimer* m_timer = nullptr;
+    Message m_message = Message::Scale;
+    qreal m_value = 0;
+    int m_decimals = 0;
     QString m_fullText;
-    QRect m_anchor;
+    QRectF m_anchor;
+    Corner m_corner = Corner::BottomLeft;
+    DisplayMode m_mode = DisplayMode::Hidden;
+    QDeadlineTimer m_deadline{0, Qt::PreciseTimer};
+    bool m_customText = false;
+    bool m_hasAnchor = false;
+    bool m_validLayout = false;
+    bool m_initializing = true;
+    bool m_refreshing = false;
 };
 
 #endif // SNOW_SHOT_PRESENTATION_CANVASSTATUSREADOUT_H

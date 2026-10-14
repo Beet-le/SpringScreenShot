@@ -217,22 +217,17 @@ pub(crate) fn resized_selection_rect(
     scale_x: f64,
     scale_y: f64,
 ) -> RectangleData {
-    let center_local = canvas_to_rect_local(
-        original_bounds.center,
-        original_bounds.rotation,
-        original_rect.center,
-    );
-    let next_center_local = scaled_point_from_anchor(center_local, anchor_local, scale_x, scale_y);
+    let transform = SelectionTransform::Resize {
+        anchor_local,
+        scale_x,
+        scale_y,
+    };
     let (width, height) =
         resized_dimensions(original_rect.width, original_rect.height, scale_x, scale_y);
     RectangleData {
         rectangle_kind: original_rect.rectangle_kind,
         highlight_shape: original_rect.highlight_shape,
-        center: rect_local_to_canvas(
-            original_bounds.center,
-            original_bounds.rotation,
-            next_center_local,
-        ),
+        center: transform.map_point(original_bounds, original_rect.center),
         width,
         height,
         rotation: original_rect.rotation,
@@ -241,10 +236,12 @@ pub(crate) fn resized_selection_rect(
         stroke: original_rect.stroke,
         stroke_width: original_rect.stroke_width,
         stroke_style: original_rect.stroke_style,
-        corner_radii: normalize_corner_radii(
+        corner_radii: snow_draw_engine_document::normalize_shape_corner_radii(
+            original_rect.highlight_shape,
             width,
             height,
             flipped_corner_radii(
+                original_rect.highlight_shape,
                 original_rect.corner_radii,
                 scale_x < -f64::EPSILON,
                 scale_y < -f64::EPSILON,
@@ -254,8 +251,22 @@ pub(crate) fn resized_selection_rect(
     }
 }
 
-fn flipped_corner_radii(radii: CornerRadii, flip_x: bool, flip_y: bool) -> CornerRadii {
+pub(crate) fn flipped_corner_radii(
+    shape: snow_draw_engine_document::HighlightShape,
+    radii: CornerRadii,
+    flip_x: bool,
+    flip_y: bool,
+) -> CornerRadii {
     let mut flipped = radii;
+    if shape == snow_draw_engine_document::HighlightShape::Diamond {
+        if flip_x {
+            std::mem::swap(&mut flipped.top_right, &mut flipped.bottom_left);
+        }
+        if flip_y {
+            std::mem::swap(&mut flipped.top_left, &mut flipped.bottom_right);
+        }
+        return flipped;
+    }
     if flip_x {
         flipped = CornerRadii {
             top_left: flipped.top_right,
@@ -482,7 +493,12 @@ pub(crate) fn resized_text_rect_from_size(
         stroke: original_rect.stroke,
         stroke_width: original_rect.stroke_width,
         stroke_style: original_rect.stroke_style,
-        corner_radii: normalize_corner_radii(next_width, next_height, original_rect.corner_radii),
+        corner_radii: snow_draw_engine_document::normalize_shape_corner_radii(
+            original_rect.highlight_shape,
+            next_width,
+            next_height,
+            original_rect.corner_radii,
+        ),
         opacity: original_rect.opacity,
     }
 }
@@ -649,6 +665,42 @@ pub(crate) fn resized_selection_bounds_from_drag_geometry(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rounded_diamond_flips_swap_only_the_tips_on_the_flipped_axis() {
+        let radii = CornerRadii {
+            top_left: 1.0,
+            top_right: 2.0,
+            bottom_right: 3.0,
+            bottom_left: 4.0,
+        };
+        let shape = snow_draw_engine_document::HighlightShape::Diamond;
+        assert_eq!(
+            flipped_corner_radii(shape, radii, true, false),
+            CornerRadii {
+                top_right: 4.0,
+                bottom_left: 2.0,
+                ..radii
+            }
+        );
+        assert_eq!(
+            flipped_corner_radii(shape, radii, false, true),
+            CornerRadii {
+                top_left: 3.0,
+                bottom_right: 1.0,
+                ..radii
+            }
+        );
+        assert_eq!(
+            flipped_corner_radii(shape, radii, true, true),
+            CornerRadii {
+                top_left: 3.0,
+                top_right: 4.0,
+                bottom_right: 1.0,
+                bottom_left: 2.0
+            }
+        );
+    }
 
     fn assert_close(left: f64, right: f64) {
         assert!(

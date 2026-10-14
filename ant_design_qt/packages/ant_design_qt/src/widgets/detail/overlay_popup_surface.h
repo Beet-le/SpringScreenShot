@@ -44,10 +44,13 @@ struct OverlayPopupSurfaceStyle {
 };
 
 class OverlayPopupSurface final : public QWidget, public TopLevelToolResourceReleaser {
+  Q_OBJECT
+
   friend class OverlayPopupSurfaceTestAccess;
 
  public:
   explicit OverlayPopupSurface(QWidget* parent = nullptr);
+  ~OverlayPopupSurface() override;
 
   // Read when deferred releases execute, including tasks posted before retention changed.
   void releaseTopLevelToolResources() override {
@@ -76,6 +79,11 @@ class OverlayPopupSurface final : public QWidget, public TopLevelToolResourceRel
   bool containsInteractiveGlobalPos(const QPoint& pos) const;
 
   QSize sizeHint() const override;
+
+ signals:
+  // Owners must release aliases and detach retained content before QWidget
+  // destroys the child tree and its derived view state is no longer available.
+  void aboutToDestroy();
 
  protected:
   bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;

@@ -1,10 +1,13 @@
 #include <QAbstractItemModel>
 #include <QColor>
 #include <QCoreApplication>
+#include <QEvent>
 #include <QListView>
 #include <QLineEdit>
 #include <QLayout>
 #include <QMouseEvent>
+#include <QPointer>
+#include <QSignalSpy>
 #include <QStandardItemModel>
 #include <QToolButton>
 #include <QStringList>
@@ -71,6 +74,182 @@ class SelectTest final : public QObject {
   Q_OBJECT
 
  private slots:
+  void optionReplacementReleasesOwnedModels() {
+    for (const auto mode :
+         {AdSelect::Mode::Single, AdSelect::Mode::Multiple, AdSelect::Mode::Tags}) {
+      AdSelect select;
+      select.setMode(mode);
+      select.setOptions({makeOption(QStringLiteral("a"), QStringLiteral("Alpha"))});
+      select.setCurrentValues({QStringLiteral("a")});
+      for (int replacement = 0; replacement < 20; ++replacement) {
+        QPointer<QAbstractItemModel> previousModel(select.model());
+        select.setModel(select.model());
+        const QString label = QStringLiteral("Alpha %1").arg(replacement);
+        select.setOptions({makeOption(QStringLiteral("a"), label)});
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QVERIFY(previousModel.isNull());
+        QVERIFY(select.model());
+        QCOMPARE(select.currentValues(), QVariantList({QStringLiteral("a")}));
+        QCOMPARE(popupLabels(select), QStringList({label}));
+      }
+      QPointer<QAbstractItemModel> previousModel(select.model());
+      select.appendOption(makeOption(QStringLiteral("b"), QStringLiteral("Beta")));
+      QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+      QVERIFY(previousModel.isNull());
+      QCOMPARE(select.options().size(), 2);
+      QCOMPARE(select.currentValues(), QVariantList({QStringLiteral("a")}));
+    }
+  }
+
+  void clearingOptionsReleasesOwnedModel() {
+    AdSelect select;
+    select.setOptions({makeOption(QStringLiteral("a"), QStringLiteral("Alpha"))});
+    QPointer<QAbstractItemModel> ownedModel(select.model());
+    select.clearOptions();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    QVERIFY(ownedModel.isNull());
+    QVERIFY(!select.model());
+    QVERIFY(select.options().isEmpty());
+    select.clearOptions();
+    QVERIFY(!select.model());
+  }
+
+  void modelTransitionsPreserveExternalOwnership() {
+    QObject owner;
+    auto* externalModel = new QStandardItemModel(&owner);
+    QPointer<QAbstractItemModel> externalGuard(externalModel);
+    auto* row = new QStandardItem(QStringLiteral("External"));
+    row->setData(QStringLiteral("external"), AdSelect::DefaultValueRole);
+    externalModel->appendRow(row);
+    {
+      AdSelect select;
+      select.setOptions({makeOption(QStringLiteral("a"), QStringLiteral("Alpha"))});
+      QPointer<QAbstractItemModel> ownedModel(select.model());
+      select.setModel(externalModel);
+      QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+      QVERIFY(ownedModel.isNull());
+      QCOMPARE(select.model(), externalGuard.data());
+
+      select.setOptions({makeOption(QStringLiteral("b"), QStringLiteral("Beta"))});
+      QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+      QVERIFY(externalGuard);
+      ownedModel = select.model();
+      select.clearOptions();
+      QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+      QVERIFY(ownedModel.isNull());
+      QVERIFY(externalGuard);
+
+      select.setModel(externalModel);
+      select.clearOptions();
+      QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+      QVERIFY(externalGuard);
+      QCOMPARE(externalGuard->rowCount(), 1);
+      select.setModel(externalModel);
+    }
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    QVERIFY(externalGuard);
+    QCOMPARE(externalGuard->parent(), &owner);
+  }
+
+  void reentrantOptionReplacementKeepsFinalModelOwned() {
+    AdSelect select;
+    QPointer<QAbstractItemModel> intermediateModel;
+    connect(&select, &AdSelect::modelChanged, &select, [&](QAbstractItemModel* model) {
+      if (model && model->index(0, 0).data().toString() == QStringLiteral("First")) {
+        intermediateModel = model;
+        select.setOptions({makeOption(QStringLiteral("second"), QStringLiteral("Second"))});
+      }
+    });
+    select.setOptions({makeOption(QStringLiteral("first"), QStringLiteral("First"))});
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    QVERIFY(intermediateModel.isNull());
+    QCOMPARE(popupLabels(select), QStringList({QStringLiteral("Second")}));
+    QPointer<QAbstractItemModel> finalModel(select.model());
+    select.clearOptions();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    QVERIFY(finalModel.isNull());
+  }
+
+  void selectedDisabledOptionRetainsValueAndLabel() {
+    for (const auto mode :
+         {AdSelect::Mode::Single, AdSelect::Mode::Multiple, AdSelect::Mode::Tags}) {
+      for (const bool externalModel : {false, true}) {
+        QStandardItemModel model;
+        AdSelect select;
+        select.setMode(mode);
+        auto option = makeOption(QStringLiteral("ratio"), QStringLiteral("16:9"));
+        if (externalModel) {
+          auto* item = new QStandardItem(option.label);
+          item->setData(option.value, AdSelect::DefaultValueRole);
+          model.appendRow(item);
+          select.setModel(&model);
+        } else {
+          select.setOptions({option});
+        }
+        select.setCurrentValues({option.value});
+        option.disabled = true;
+        if (externalModel) {
+          model.item(0)->setEnabled(false);
+        } else {
+          select.setOptions({option});
+        }
+        QCOMPARE(select.currentValues(), QVariantList({option.value}));
+        QCOMPARE(select.currentItems().constFirst().label, option.label);
+        QCOMPARE(select.selectedModelIndexes().size(), 1);
+        if (mode == AdSelect::Mode::Single) {
+          QCOMPARE(select.lineEdit()->text(), option.label);
+        }
+        select.setCurrentValues({});
+        select.setCurrentValues({option.value});
+        QCOMPARE(select.currentValues(), QVariantList({option.value}));
+        QSignalSpy selectedSpy(&select, &AdSelect::selected);
+        select.showPopup();
+        auto* view = select.view();
+        view->selectionModel()->setCurrentIndex(view->model()->index(0, 0),
+                                                QItemSelectionModel::NoUpdate);
+        QTest::keyClick(view, Qt::Key_Return);
+        QCOMPARE(selectedSpy.count(), 0);
+        QCOMPARE(select.currentValues(), QVariantList({option.value}));
+        select.hidePopup();
+        option.disabled = false;
+        if (externalModel) {
+          model.item(0)->setEnabled(true);
+        } else {
+          select.setOptions({option});
+        }
+        QCOMPARE(select.currentValues(), QVariantList({option.value}));
+        select.setCurrentValues({});
+        QVERIFY(select.currentValues().isEmpty());
+      }
+    }
+  }
+
+  void disabledSelectionStillRequiresACompleteModelRow() {
+    QStandardItemModel model(1, 2);
+    QItemSelectionModel externalSelection(&model);
+    for (int column = 0; column < 2; ++column) {
+      auto* item = new QStandardItem(QStringLiteral("Disabled"));
+      item->setData(QStringLiteral("disabled"), AdSelect::DefaultValueRole);
+      item->setEnabled(false);
+      model.setItem(0, column, item);
+    }
+    AdSelect select;
+    select.setModel(&model);
+    select.setModelColumn(1);
+    auto* selection = select.selectionModel();
+    selection->select(model.index(0, 1), QItemSelectionModel::Select);
+    QVERIFY(select.currentValues().isEmpty());
+    selection->select(model.index(0, 0), QItemSelectionModel::Select);
+    QCOMPARE(select.currentValues(), QVariantList({QStringLiteral("disabled")}));
+    QCOMPARE(select.selectedModelIndexes(), QModelIndexList({model.index(0, 1)}));
+    selection->clearSelection();
+    QVERIFY(select.currentValues().isEmpty());
+    externalSelection.select(model.index(0, 1),
+                             QItemSelectionModel::Select | QItemSelectionModel::Rows);
+    select.setSelectionModel(&externalSelection);
+    QCOMPARE(select.currentValues(), QVariantList({QStringLiteral("disabled")}));
+  }
+
   void disabledTextTokenPreservesSelectorAndSuffixColors() {
     AdSelect select;
     select.setOptions({makeOption(QStringLiteral("ratio"), QStringLiteral("16:9"))});

@@ -669,6 +669,101 @@ void statusPresentationUsesSemanticTokens() {
             "unset global shortcuts must show Not set with neutral styling");
 }
 
+void disabledStatusPreservesKeysAndRetranslates() {
+    const auto scheme = styles::ThemeManager::instance().themeColorScheme();
+    const shortcuts::GlobalShortcutBindingResult released{
+        QStringLiteral("Ctrl+Shift+1"),
+        false,
+        shortcuts::GlobalShortcutFailureReason::None,
+        0,
+        binding(QStringLiteral("Ctrl+Shift+1")),
+    };
+    ShortcutKeyRowConfig config;
+    config.title = QStringLiteral("Screenshot");
+    config.registrationState = stateFor(shortcuts::GlobalShortcutStatus::Disabled, {released});
+    ShortcutKeyRow row(config, scheme.metricAlias,
+                       styles::buildMainWindowComponentMetricToken(scheme));
+    row.resize(720, row.height());
+    row.show();
+    QApplication::processEvents();
+
+    auto* const shortcutButton =
+        row.findChild<adqt::widgets::AdButton*>(QStringLiteral("shortcutKeyButton"));
+    auto* const statusTrigger =
+        row.findChild<InfoTooltipIcon*>(QStringLiteral("shortcutRegistrationStatusTooltipTrigger"));
+    require(shortcutButton != nullptr && statusTrigger != nullptr,
+            "disabled shortcuts must retain their settings control and status trigger");
+    require(
+        shortcutButton->text() == displayText(released.shortcut) && shortcutButton->isEnabled() &&
+            shortcutButton->accentRole() == adqt::widgets::AdButton::AccentRole::Neutral &&
+            shortcutButton->property("registrationStatus").toInt() ==
+                static_cast<int>(shortcuts::GlobalShortcutStatus::Disabled) &&
+            statusTrigger->property("statusColor").value<QColor>() == scheme.map.colorTextTertiary,
+        "disabled shortcuts must preserve editable configured keys with neutral styling");
+    require(
+        statusTrigger->isVisible() &&
+            statusTrigger->accessibleName() ==
+                QStringLiteral("Global shortcut status: Temporarily disabled") &&
+            statusTrigger->tooltipText().contains(QStringLiteral("released for use")) &&
+            statusTrigger->tooltipText().contains(QStringLiteral("will be restored")) &&
+            !statusTrigger->tooltipText().contains(QStringLiteral("registration did not")) &&
+            statusTrigger->accessibleDescription() == statusTrigger->tooltipText() &&
+            shortcutButton->accessibleDescription() == statusTrigger->tooltipText(),
+        "disabled status must explain released registrations through tooltip and accessibility");
+    const QString sourceTooltip = statusTrigger->tooltipText();
+
+    class DisabledTranslator final : public QTranslator {
+      public:
+        bool isEmpty() const override {
+            return false;
+        }
+
+        QString translate(const char* context, const char* source, const char*,
+                          int) const override {
+            if (QByteArray(context) != QByteArrayLiteral("ShortcutKeyRow")) {
+                return {};
+            }
+            if (QByteArray(source) == QByteArrayLiteral("Temporarily disabled")) {
+                return QStringLiteral("Localized disabled status");
+            }
+            if (QByteArray(source) ==
+                QByteArrayLiteral("This shortcut is temporarily disabled and released for use by "
+                                  "other applications. It will be restored when global hotkeys are "
+                                  "enabled and the focused window allows them.")) {
+                return QStringLiteral("Localized disabled explanation");
+            }
+            return {};
+        }
+    } translator;
+    QCoreApplication::installTranslator(&translator);
+    QApplication::processEvents();
+    require(statusTrigger->accessibleName() ==
+                    QStringLiteral("Global shortcut status: Localized disabled status") &&
+                statusTrigger->tooltipText() == QStringLiteral("Localized disabled explanation") &&
+                statusTrigger->accessibleDescription() == statusTrigger->tooltipText() &&
+                shortcutButton->accessibleDescription() == statusTrigger->tooltipText() &&
+                shortcutButton->text() == displayText(released.shortcut),
+            "disabled status and explanation must retranslate without changing configured keys");
+    QCoreApplication::removeTranslator(&translator);
+    QApplication::processEvents();
+    require(statusTrigger->accessibleName() ==
+                    QStringLiteral("Global shortcut status: Temporarily disabled") &&
+                statusTrigger->tooltipText() == sourceTooltip &&
+                shortcutButton->accessibleDescription() == sourceTooltip,
+            "disabled shortcut status must restore the source language after translator removal");
+
+    auto registered = released;
+    registered.registered = true;
+    row.setRegistrationState(stateFor(shortcuts::GlobalShortcutStatus::Registered, {registered}));
+    QApplication::processEvents();
+    require(
+        shortcutButton->accentRole() == adqt::widgets::AdButton::AccentRole::Green &&
+            !statusTrigger->isVisible() && statusTrigger->tooltipText().isEmpty() &&
+            statusTrigger->accessibleDescription().isEmpty() &&
+            shortcutButton->accessibleDescription().isEmpty(),
+        "restored shortcuts must clear their disabled explanation and restore registered styling");
+}
+
 void recorderAcceptsOnlyBackendSupportedShortcuts() {
     const styles::ThemeColorScheme scheme = styles::ThemeManager::instance().themeColorScheme();
     const auto mainWindowMetric = styles::buildMainWindowComponentMetricToken(scheme);
@@ -1357,6 +1452,101 @@ void recordingShortcutRecorderAcceptsControlKeysAndEscape() {
     }
 }
 
+void shortcutRecordersOwnFocusNavigationKeysWhileRecording() {
+    using Scope = ShortcutKeyRowConfig::ValidationScope;
+    enum class Entry { Empty, Existing, Added };
+    struct KeyCase {
+        Qt::Key key;
+        Qt::KeyboardModifiers modifiers;
+        QString expected;
+    };
+    const std::array cases{
+        KeyCase{Qt::Key_Tab, Qt::NoModifier, QStringLiteral("Tab")},
+        KeyCase{Qt::Key_Tab, Qt::ShiftModifier, QStringLiteral("Shift+Tab")},
+        KeyCase{Qt::Key_Tab, Qt::ControlModifier, QStringLiteral("Ctrl+Tab")},
+        KeyCase{Qt::Key_Backtab, Qt::ShiftModifier, QStringLiteral("Shift+Backtab")},
+    };
+    for (const Scope scope :
+         {Scope::GlobalShortcut, Scope::ScreenshotShortcut, Scope::DrawingShortcut,
+          Scope::PinnedWindowShortcut, Scope::RecordingShortcut}) {
+        for (const Entry entry : {Entry::Empty, Entry::Existing, Entry::Added}) {
+            PrintScreenRecordingSession session(
+                scope, entry == Entry::Empty ? QStringList() : QStringList{QStringLiteral("F3")});
+            if (entry != Entry::Empty) {
+                const QString control = entry == Entry::Existing
+                                            ? QStringLiteral("shortcutConfigKeyButton")
+                                            : QStringLiteral("shortcutConfigAddButton");
+                session.content->findChild<adqt::widgets::AdButton*>(control)->click();
+                session.flush();
+            }
+            session.content->window()->activateWindow();
+            session.content->setFocus(Qt::OtherFocusReason);
+            session.flush();
+            require(session.content->hasFocus() && QWidget::keyboardGrabber() == session.content,
+                    "each recording entry point must own keyboard input and focus");
+
+            session.supported = false;
+            session.key(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+            session.key(QEvent::KeyRelease, Qt::Key_Tab, Qt::NoModifier);
+            session.flush();
+            require(session.validated == QStringList{QStringLiteral("Tab")} &&
+                        !session.modal->acceptButton()->isEnabled() && session.content->hasFocus(),
+                    "a rejected Tab must reach validation and keep recording without moving focus");
+            session.supported = true;
+
+            for (const auto& test : cases) {
+                PhysicalKeyEvent overrideEvent(QEvent::ShortcutOverride, test.key, test.modifiers);
+                overrideEvent.ignore();
+                QCoreApplication::sendEvent(session.content, &overrideEvent);
+                require(overrideEvent.isAccepted(),
+                        "recording must claim focus navigation shortcut overrides");
+                const auto validationsBeforePress = session.validated.size();
+                session.key(QEvent::KeyPress, test.key, test.modifiers);
+                session.key(QEvent::KeyRelease, test.key, test.modifiers);
+                session.flush();
+                require(session.validated.size() == validationsBeforePress + 1 &&
+                            session.validated.last() == test.expected &&
+                            session.modal->acceptButton()->isEnabled() &&
+                            session.content->hasFocus() &&
+                            QWidget::keyboardGrabber() == session.content,
+                        "Tab and Backtab must record once with their modifiers and retain focus");
+            }
+
+            const auto actions = session.content->findChildren<adqt::widgets::AdButton*>(
+                QStringLiteral("shortcutConfigActionButton"));
+            const auto commit =
+                std::find_if(actions.cbegin(), actions.cend(), [](const auto* action) {
+                    return action->accentRole() == adqt::widgets::AdButton::AccentRole::Green;
+                });
+            require(commit != actions.cend() && (*commit)->isEnabled(),
+                    "the captured navigation key must be confirmable");
+            (*commit)->click();
+            session.flush();
+            require(QWidget::keyboardGrabber() == nullptr && session.saved.isEmpty(),
+                    "confirming a row must release keyboard input and retain the dialog draft");
+
+            const auto validationsAfterRecording = session.validated.size();
+            for (const auto key : {Qt::Key_Tab, Qt::Key_Backtab}) {
+                session.content->setFocus(Qt::OtherFocusReason);
+                const auto modifiers = key == Qt::Key_Tab ? Qt::NoModifier : Qt::ShiftModifier;
+                session.key(QEvent::KeyPress, key, modifiers);
+                session.key(QEvent::KeyRelease, key, modifiers);
+                session.flush();
+                require(!session.content->hasFocus() &&
+                            session.validated.size() == validationsAfterRecording,
+                        "Tab and Backtab must resume normal focus traversal after recording");
+            }
+            session.modal->acceptButton()->click();
+            session.flush();
+            const QStringList expected =
+                entry == Entry::Added ? QStringList{QStringLiteral("F3"), cases.back().expected}
+                                      : QStringList{cases.back().expected};
+            require(portableText(session.saved) == expected,
+                    "captured navigation keys must save through the normal dialog transaction");
+        }
+    }
+}
+
 void nativePrintScreenRecordingPreservesModifiers() {
 #ifdef Q_OS_WIN
     PrintScreenRecordingSession session;
@@ -1906,6 +2096,7 @@ int main(int argc, char** argv) {
     displayRefreshUpdatesTheSettingsRowAndOpenEditor();
     actionRowBordersRetainEqualThicknessAtFractionalScale();
     statusPresentationUsesSemanticTokens();
+    disabledStatusPreservesKeysAndRetranslates();
     recorderAcceptsOnlyBackendSupportedShortcuts();
     guideShortcutRecorderAcceptsStandaloneAlt();
     recorderCapturesMacPhysicalKeysAndRejectsPhysicalDuplicates();
@@ -1915,6 +2106,7 @@ int main(int argc, char** argv) {
     printScreenRecordingPreservesEventOrderAndLifecycle();
     localShortcutRecordersUseOnlyNormalKeyEvents();
     recordingShortcutRecorderAcceptsControlKeysAndEscape();
+    shortcutRecordersOwnFocusNavigationKeysWhileRecording();
     nativePrintScreenRecordingPreservesModifiers();
     drawingRecorderUsesLocalValidationLanguage();
     cancellingDuplicateScreenshotShortcutReleasesKeyboard();

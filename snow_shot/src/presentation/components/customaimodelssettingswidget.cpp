@@ -3,6 +3,7 @@
 #include "snow_shot/presentation/settings/settingsruntimesession.h"
 #include "snow_shot/presentation/styles/mainwindowcomponenttoken.h"
 #include "snow_shot/presentation/styles/thememanager.h"
+#include "boundednetworkresponse.h"
 #include "theme/theme_manager.h"
 #include "widgets/alert.h"
 #include "widgets/button.h"
@@ -146,7 +147,13 @@ void CustomAiModelsSettingsWidget::applyTheme(
     update();
 }
 
-void CustomAiModelsSettingsWidget::rebuild() {
+void CustomAiModelsSettingsWidget::rebuild(bool force) {
+    const auto models = m_session.customAiModels();
+    // fieldChanged also reports persistence state without changing the model list.
+    if (!force && m_renderedModels == models) {
+        return;
+    }
+    m_renderedModels = models;
     const QString focusedName =
         QApplication::focusWidget() != nullptr && isAncestorOf(QApplication::focusWidget())
             ? QApplication::focusWidget()->objectName()
@@ -155,7 +162,6 @@ void CustomAiModelsSettingsWidget::rebuild() {
         delete item->widget();
         delete item;
     }
-    const auto models = m_session.customAiModels();
     if (models.isEmpty()) {
         auto* empty = new QLabel(tr("No custom models configured"), this);
         empty->setObjectName(QStringLiteral("customAiModelsEmpty"));
@@ -397,41 +403,49 @@ void CustomAiModelsSettingsWidget::openEditor(const QString& id) {
     connect(m_inputs[1], &AdLineEdit::textChanged, body, invalidate);
     connect(m_inputs[2], &AdLineEdit::textChanged, body, invalidate);
     connect(modal, &AdModal::finished, body, invalidate);
-    connect(m_modelSelect, &AdComboBox::popupVisibleChanged, body,
-            [this, network, pending, fetched, body](bool visible) {
-                if (!visible || *pending || *fetched) {
-                    return;
-                }
-                const auto connection = normalizeCustomAiModel(
-                    {{}, {}, m_inputs[1]->text(), m_inputs[2]->text(), {}, false});
-                if (customAiModelUrlError(connection.baseUrl) != CustomAiModelUrlError::None ||
-                    connection.apiKey.contains(u'\r') || connection.apiKey.contains(u'\n')) {
-                    return;
-                }
-                QNetworkRequest request(QUrl(connection.baseUrl + QStringLiteral("/models")));
-                request.setTransferTimeout(15000);
-                request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
-                                     QNetworkRequest::SameOriginRedirectPolicy);
-                request.setRawHeader("Accept", "application/json");
-                if (!connection.apiKey.isEmpty()) {
-                    request.setRawHeader("Authorization", "Bearer " + connection.apiKey.toUtf8());
-                }
-                m_modelFetchStatus->setProperty("fetchFailed", false);
-                m_modelFetchStatus->clear();
-                m_modelSelect->setPopupFooterWidget(nullptr);
-                m_formFields[3]->synchronize([this] { m_modelSelect->clearOptions(); });
-                m_modelSelect->setLoading(true);
-                auto* reply = network->get(request);
-                *pending = reply;
-                connect(reply, &QNetworkReply::finished, body, [this, reply, pending, fetched]() {
+    connect(
+        m_modelSelect, &AdComboBox::popupVisibleChanged, body,
+        [this, network, pending, fetched, body](bool visible) {
+            if (!visible || *pending || *fetched) {
+                return;
+            }
+            const auto connection = normalizeCustomAiModel(
+                {{}, {}, m_inputs[1]->text(), m_inputs[2]->text(), {}, false});
+            if (customAiModelUrlError(connection.baseUrl) != CustomAiModelUrlError::None ||
+                connection.apiKey.contains(u'\r') || connection.apiKey.contains(u'\n')) {
+                return;
+            }
+            QNetworkRequest request(QUrl(connection.baseUrl + QStringLiteral("/models")));
+            request.setTransferTimeout(15000);
+            request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                                 QNetworkRequest::SameOriginRedirectPolicy);
+            request.setRawHeader("Accept", "application/json");
+            if (!connection.apiKey.isEmpty()) {
+                request.setRawHeader("Authorization", "Bearer " + connection.apiKey.toUtf8());
+            }
+            m_modelFetchStatus->setProperty("fetchFailed", false);
+            m_modelFetchStatus->clear();
+            m_modelSelect->setPopupFooterWidget(nullptr);
+            m_formFields[3]->synchronize([this] { m_modelSelect->clearOptions(); });
+            m_modelSelect->setLoading(true);
+            auto* reply = network->get(request);
+            *pending = reply;
+            auto* response = new snow_shot::network::BoundedNetworkResponse(
+                reply, snow_shot::network::kMaximumJsonResponseBytes);
+            connect(
+                reply, &QNetworkReply::finished, body, [this, reply, response, pending, fetched]() {
                     reply->deleteLater();
                     if (pending->data() != reply) {
                         return;
                     }
                     *pending = nullptr;
-                    const auto document = QJsonDocument::fromJson(reply->readAll());
+                    const bool transportFailed =
+                        response->tooLarge() || reply->error() != QNetworkReply::NoError;
+                    const auto document = transportFailed
+                                              ? QJsonDocument{}
+                                              : QJsonDocument::fromJson(response->body());
                     const auto data = document.object().value(QStringLiteral("data"));
-                    const bool failed = reply->error() != QNetworkReply::NoError || !data.isArray();
+                    const bool failed = transportFailed || !data.isArray();
                     *fetched = !failed;
                     QVector<AdComboBox::Option> options;
                     QSet<QString> seen;
@@ -455,7 +469,7 @@ void CustomAiModelsSettingsWidget::openEditor(const QString& id) {
                     m_modelFetchStatus->setProperty("fetchFailed", failed);
                     translateModal();
                 });
-            });
+        });
     fields::Options options;
     options.parent = form;
     options.form = form;
@@ -660,7 +674,7 @@ void CustomAiModelsSettingsWidget::retranslateUi() {
         tr("Unable to save models. Check that configuration storage is writable and try again."));
     m_add->setText(tr("Add Model"));
     m_title->setText(QCoreApplication::translate("SettingsCatalog", "Custom Models"));
-    rebuild();
+    rebuild(true);
     translateModal();
     if (m_modal != nullptr &&
         std::any_of(m_fields.cbegin(), m_fields.cend(),

@@ -21,13 +21,6 @@
         </message>
     </context>
     <context>
-        <name>RecordingEffectPreview</name>
-        <message>
-            <source>Motion Preview in Progress</source>
-            <translation>動效預覽中</translation>
-        </message>
-    </context>
-    <context>
         <name>RecordingKeyboardLabels</name>
         <message>
             <source>Left click</source>
@@ -144,8 +137,20 @@
     <context>
         <name>RecordingTrimToolbar</name>
         <message>
+            <source>%1x</source>
+            <translation>%1x</translation>
+        </message>
+        <message>
+            <source>Playback and export speed</source>
+            <translation>播放與匯出速度</translation>
+        </message>
+        <message>
             <source>Replay</source>
             <translation>重播</translation>
+        </message>
+        <message>
+            <source>Speed</source>
+            <translation>速度</translation>
         </message>
         <message>
             <source>Trim end</source>

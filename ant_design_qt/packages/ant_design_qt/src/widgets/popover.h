@@ -227,6 +227,8 @@ class AdPopover final : public QObject, private detail::OverlayPopupControllerDe
  signals:
   void placementChanged(Placement value);
   void triggersChanged(Triggers value);
+  // Emitted once per open transition, before content preparation or focus transfer.
+  void popupOpening();
   void visibleChanged(bool value);
   void visibilityRequested(bool value);
   void visibilityPolicyChanged(VisibilityPolicy value);
@@ -283,17 +285,25 @@ class AdPopover final : public QObject, private detail::OverlayPopupControllerDe
                                 QMetaObject::Connection& destroyedConnection,
                                 const std::function<void()>& onDestroyed);
   void ensurePopupSurface();
-  void releasePopupSurface();
+  void releasePopupSurface(bool surfaceBeingDestroyed = false);
   void syncPopupContent();
   void syncAccessibleState();
   void updateStyle();
   void refreshVisiblePopup();
-  void syncControllerConfiguration();
+  bool syncControllerConfiguration();
   void refreshObservedWidgets();
   void clearObservedWidgets();
   void handleObservedWidgetDestroyed(QObject* object);
   void handleControllerPopupVisibleChanged(bool value);
-  void ensureFactoryContent();
+  bool ensureFactoryContent();
+  template <typename Signal, typename... Arguments>
+  bool notifyPropertyChange(Signal signal, Arguments... arguments) {
+    // Observers may replace their toolbar and delete this popover. Keep signal
+    // values on the stack and report whether member work may safely continue.
+    const QPointer<AdPopover> lifetime(this);
+    (this->*signal)(arguments...);
+    return !lifetime.isNull();
+  }
   void releaseFactoryContent();
   void applyDefaultVisibleIfNeeded();
   void emitVisibleSignals(bool value);

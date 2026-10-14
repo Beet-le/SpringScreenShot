@@ -18,6 +18,8 @@ ScreenshotToolPaletteStyleState::ScreenshotToolPaletteStyleState(
 void ScreenshotToolPaletteStyleState::reset(const SnowCanvasStyleDefaults& defaults) {
     m_creationRectangleStyle.setRectangleStyle(defaults.rectangle);
     m_rectangleStyle = m_creationRectangleStyle;
+    m_creationSpeechBubbleStyle.setRectangleStyle(defaults.speechBubble);
+    m_speechBubbleStyle = m_creationSpeechBubbleStyle;
     SnowCanvasShapeStyle lineStyle = defaults.line;
     if (lineStyle.arrowType != SnowCanvasArrowType::Straight &&
         lineStyle.arrowType != SnowCanvasArrowType::Curve) {
@@ -42,6 +44,15 @@ void ScreenshotToolPaletteStyleState::reset(const SnowCanvasStyleDefaults& defau
     distanceStyleMixed = 0;
     distanceMeasuredLength = 0.0;
     showingSelectedDistance = false;
+    creationAngleStyle = defaults.angle;
+    angleStyle = defaults.angle;
+    angleStyleMixed = 0;
+    showingSelectedAngle = false;
+    creationMagnifierStyle = defaults.magnifier;
+    magnifierStyle = defaults.magnifier;
+    magnifierStyleMixed = 0;
+    showingSelectedMagnifier = false;
+    angleControlsActive = false;
     m_creationTextStyle.setTextStyle(defaults.text);
     m_textStyle.setTextStyle(defaults.text);
     m_creationSerialNumberStyle = defaults.serialNumber;
@@ -58,6 +69,8 @@ void ScreenshotToolPaletteStyleState::reset(const SnowCanvasStyleDefaults& defau
     spotlightConfig = defaults.spotlight;
     creationSpotlightShape = defaults.spotlightShape;
     spotlightShape = defaults.spotlightShape;
+    creationSpotlightCornerRadii = defaults.spotlightCornerRadii;
+    spotlightCornerRadii = defaults.spotlightCornerRadii;
     showingSelectedSpotlight = false;
     spotlightShapeMixed = 0;
     m_showingSelectedStyle = false;
@@ -433,6 +446,20 @@ bool ScreenshotToolPaletteTextStyleModel::setFontFamily(const QString& fontFamil
         return false;
     }
     m_style.fontFamily = trimmed;
+    return true;
+}
+
+bool ScreenshotToolPaletteTextStyleModel::setBold(bool bold) {
+    if (m_style.bold == bold)
+        return false;
+    m_style.bold = bold;
+    return true;
+}
+
+bool ScreenshotToolPaletteTextStyleModel::setItalic(bool italic) {
+    if (m_style.italic == italic)
+        return false;
+    m_style.italic = italic;
     return true;
 }
 

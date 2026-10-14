@@ -8,6 +8,7 @@
 #include <optional>
 
 #include <functional>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -26,21 +27,40 @@ class WindowCaptureExclusion final {
 
     // Exclusion is best effort and must never change a window's visibility.
     bool exclude(QWidget* window) {
+        if (window == nullptr || !m_setter)
+            return false;
+        window = window->window();
         for (const auto& existing : m_windows) {
-            if (window != nullptr && existing == window)
+            if (existing->window == window)
                 return true;
         }
-        if (window != nullptr && m_setter && m_setter(window, true)) {
-            m_windows.emplace_back(window);
-            return true;
+        // Revalidate every new owner: the QWidget can survive replacement of its
+        // native surface, which then needs its own native exclusion state.
+        if (!m_setter(window, true))
+            return false;
+        auto& shared = sharedWindows();
+        for (auto it = shared.begin(); it != shared.end();) {
+            if (auto existing = it->lock()) {
+                if (existing->window == window) {
+                    m_windows.push_back(std::move(existing));
+                    return true;
+                }
+                ++it;
+            } else {
+                it = shared.erase(it);
+            }
         }
-        return false;
+        auto lease = std::make_shared<WindowLease>(window);
+        shared.push_back(lease);
+        m_windows.push_back(std::move(lease));
+        return true;
     }
 
     using IdResolver = std::function<std::optional<std::uint32_t>(QWidget*)>;
     QVector<std::uint32_t> windowIds(const IdResolver& resolve) const {
         QVector<std::uint32_t> ids;
-        for (const auto& window : m_windows) {
+        for (const auto& lease : m_windows) {
+            const auto& window = lease->window;
             if (!window)
                 continue;
             if (auto id = resolve(window.data()); id && !ids.contains(*id))
@@ -50,17 +70,31 @@ class WindowCaptureExclusion final {
     }
 
     void restore() {
-        for (auto window = m_windows.rbegin(); window != m_windows.rend(); ++window) {
-            if (!window->isNull()) {
-                static_cast<void>(m_setter(window->data(), false));
-            }
+        for (auto lease = m_windows.rbegin(); lease != m_windows.rend(); ++lease) {
+            // A retired capture can finish after a new capture starts on the
+            // same window. Only the final owner may restore native sharing.
+            // Use that owner's setter, never a callback borrowed from an owner
+            // whose controller may already have been destroyed.
+            if (lease->use_count() == 1 && !(*lease)->window.isNull())
+                static_cast<void>(m_setter((*lease)->window.data(), false));
+            lease->reset();
         }
         m_windows.clear();
     }
 
   private:
+    struct WindowLease {
+        explicit WindowLease(QWidget* value) : window(value) {}
+        QPointer<QWidget> window;
+    };
+    // QWidget/native mutation and every lease operation run on the GUI thread.
+    // Weak entries neither extend window lifetime nor retain controller callbacks.
+    static std::vector<std::weak_ptr<WindowLease>>& sharedWindows() {
+        static std::vector<std::weak_ptr<WindowLease>> windows;
+        return windows;
+    }
     Setter m_setter;
-    std::vector<QPointer<QWidget>> m_windows;
+    std::vector<std::shared_ptr<WindowLease>> m_windows;
 };
 
 } // namespace snow_shot::presentation

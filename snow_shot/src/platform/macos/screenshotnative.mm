@@ -509,7 +509,8 @@ class ControlledWindowDragging final : public QObject {
     bool m_controlResizing = false;
 };
 
-// AppKit controls whole-window input routing independently of the visual mask.
+// Qt and AppKit must agree on input ownership. Qt can reapply native window
+// flags during tracking and presentation, including after native surface reuse.
 class ScreenshotInputTransparency final : public QObject {
   public:
     explicit ScreenshotInputTransparency(QWidget* widget) : QObject(widget), m_widget(widget) {
@@ -542,36 +543,55 @@ class ScreenshotInputTransparency final : public QObject {
 
   private:
     NSWindow* nativeWindow() const {
-        if (!m_widget || !m_widget->internalWinId())
+        if (!m_widget || !m_widget->internalWinId() ||
+            QGuiApplication::platformName() != QStringLiteral("cocoa"))
             return nil;
         return reinterpret_cast<NSView*>(m_widget->internalWinId()).window;
     }
 
     void synchronize() {
+        if (m_synchronizing)
+            return;
+        QScopedValueRollback synchronizing(m_synchronizing, true);
         if (!m_transparent || !m_widget->isVisible()) {
             restore();
             return;
         }
         NSWindow* window = nativeWindow();
-        if (m_native != window) {
+        QWindow* qtWindow = m_widget->windowHandle();
+        if (m_native != window || m_qtWindow != qtWindow) {
             restore();
-            m_native = window;
-            m_originalIgnoresMouse = window.ignoresMouseEvents;
+            // Restoring Qt ownership can update the replacement native surface.
+            // Sample its defaults only after that previous ownership is released.
+            m_native = nativeWindow();
+            m_qtWindow = m_widget->windowHandle();
+            m_originalIgnoresMouse = m_native.ignoresMouseEvents;
+            m_originalTransparentForInput =
+                m_qtWindow && m_qtWindow->flags().testFlag(Qt::WindowTransparentForInput);
         }
-        if (window)
-            window.ignoresMouseEvents = YES;
+        if (m_qtWindow)
+            m_qtWindow->setFlag(Qt::WindowTransparentForInput, true);
+        if (m_native)
+            m_native.ignoresMouseEvents = YES;
     }
 
     void restore() {
+        QScopedValueRollback restoring(m_synchronizing, true);
+        if (m_qtWindow && m_widget && m_qtWindow == m_widget->windowHandle())
+            m_qtWindow->setFlag(Qt::WindowTransparentForInput, m_originalTransparentForInput);
         if (m_native && m_native == nativeWindow())
             m_native.ignoresMouseEvents = m_originalIgnoresMouse;
         m_native = nil;
+        m_qtWindow = nullptr;
     }
 
     QPointer<QWidget> m_widget;
     bool m_transparent = false;
+    bool m_synchronizing = false;
     NSWindow* m_native = nil;
+    QPointer<QWindow> m_qtWindow;
     BOOL m_originalIgnoresMouse = NO;
+    bool m_originalTransparentForInput = false;
 };
 
 detail::WindowTarget windowTarget(pid_t owner, const QPoint* point) {
@@ -683,7 +703,7 @@ bool stackScreenshotWindowBelow(QWidget* widget, QWidget* sibling) {
 }
 
 void setScreenshotInputTransparent(QWidget* widget, bool transparent) {
-    if (!widget || QGuiApplication::platformName() != QStringLiteral("cocoa"))
+    if (!widget)
         return;
     ScreenshotInputTransparency* policy = nullptr;
     for (QObject* child : widget->children()) {

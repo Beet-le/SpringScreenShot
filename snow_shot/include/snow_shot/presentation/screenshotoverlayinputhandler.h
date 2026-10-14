@@ -1,7 +1,6 @@
 #ifndef SNOW_SHOT_PRESENTATION_SCREENSHOTOVERLAYINPUTHANDLER_H
 #define SNOW_SHOT_PRESENTATION_SCREENSHOTOVERLAYINPUTHANDLER_H
 
-#include "snow_shot/platform/physicalcursor.h"
 #include "snow_shot/presentation/screenshotoverlayeventsink.h"
 #include "snow_shot/presentation/screenshotselectionaspectratio.h"
 #include "snow_shot/presentation/screenshotselectiongeometry.h"
@@ -75,8 +74,9 @@ struct ScreenshotOverlayInputActions {
     std::function<bool()> copyColorPickerColorToClipboard = []() { return false; };
     std::function<bool()> cycleColorPickerFormat = []() { return false; };
     std::function<bool()> toggleColorPickerCoordinateMode = []() { return false; };
-    std::function<bool(snow_shot::platform::PhysicalCursorDirection direction)> moveCursorOnePixel =
-        [](snow_shot::platform::PhysicalCursorDirection) { return false; };
+    std::function<bool(const QPoint& direction)> moveCursorOnePixel = [](const QPoint&) {
+        return false;
+    };
 
     // Called after a valid selection transitions the interaction into editing.
     // This is intentionally separate from showToolbar so callers can schedule
@@ -137,6 +137,10 @@ struct ScreenshotOverlayInputActions {
     std::function<void(ScreenshotSelectionAspectRatioPreset, bool)>
         persistSelectionAspectRatioPreference = [](ScreenshotSelectionAspectRatioPreset, bool) {};
     std::function<QPoint()> currentLogicalCursorPosition = [] { return QCursor::pos(); };
+    // Only continuous drag geometry uses this request; gesture boundaries and commands stay direct.
+    std::function<void()> requestSelectionDragPresentation = {};
+    std::function<void(int minDx, int minDy, int maxDx, int maxDy)> adjustSelectionFromToolbar =
+        [](int, int, int, int) {};
 };
 
 struct ScreenshotOverlayInputHandlerContext {
@@ -172,6 +176,7 @@ class ScreenshotOverlayInputHandler final {
     }
     [[nodiscard]] bool acceptInput(bool genuine = true);
     void beginExternalSelectionDrag(const QPointF& canvasPosition);
+    void beginExternalSelectionDrag(const QPointF& start, const QPointF& latestEnd);
     void updateExternalSelectionDrag(const QPointF& canvasPosition);
 
     void handleMousePress(ScreenshotOverlayWindow* overlay, const QPointF& localPosition);
@@ -224,7 +229,8 @@ class ScreenshotOverlayInputHandler final {
     bool m_consumeEffectRelease = false;
     void executeConfiguredCompletionAction(const QString& action);
     void beginSelectionDrag(ScreenshotOverlayWindow* overlay, const QPointF& virtualPosition,
-                            ScreenshotSelectionDragMode dragMode);
+                            ScreenshotSelectionDragMode dragMode,
+                            const std::optional<QPointF>& latestEnd = std::nullopt);
     void handleIntelligentSelectionPress(const QPointF& virtualPosition);
     void handleIntelligentSelectionMove(ScreenshotOverlayWindow* overlay,
                                         const QPointF& localPosition,
@@ -232,6 +238,7 @@ class ScreenshotOverlayInputHandler final {
     void handleHoverMove(ScreenshotOverlayWindow* overlay, const QPointF& localPosition);
     void updateGuideLines(ScreenshotOverlayWindow* overlay, const QPointF& localPosition) const;
     void updateSelectionDrag(const QPointF& virtualPosition);
+    void updateSelectionDragState(const QPointF& virtualPosition);
     void handleIntelligentSelectionRelease(const QPointF& virtualPosition);
     void finishSelectionDrag(ScreenshotOverlayWindow* overlay, const QPointF& localPosition,
                              const QPointF& virtualPosition);
@@ -255,6 +262,8 @@ class ScreenshotOverlayInputHandler final {
     [[nodiscard]] bool regionOperationActive() const;
 
   private:
+    enum class AspectRatioSnapShortcutState { Released, Snapping, Unlocking };
+
     void confirmSelection(const std::function<void()>& beforePresentation);
     [[nodiscard]] QPointF virtualPositionForOverlay(const ScreenshotOverlayWindow* overlay,
                                                     const QPointF& localPosition) const;
@@ -284,12 +293,17 @@ class ScreenshotOverlayInputHandler final {
     bool m_consumeRegionRelease = false;
     ScreenshotOverlayInputHandlerContext m_context;
     snow_shot::presentation::WheelStepAccumulator m_selectionWheelSteps;
+    snow_shot::presentation::WheelStepAccumulator m_selectionResizeWheelSteps;
+    snow_shot::presentation::WheelStepAccumulator m_angleWheelSteps;
+    QPointer<SnowCanvasWidget> m_angleWheelCanvas;
+    QMetaObject::Connection m_angleTargetConnection;
     bool m_externalDragActive = false;
     std::optional<ScreenshotActiveTool> m_toolBeforeSelectionResize;
     bool m_scrollingCaptureSelectionResize = false;
     bool m_moveEntireSelectionShortcut = false;
     bool m_keepSelectionAspectRatioShortcut = false;
-    bool m_selectionAspectRatioSnapShortcut = false;
+    AspectRatioSnapShortcutState m_selectionAspectRatioSnapShortcut =
+        AspectRatioSnapShortcutState::Released;
     bool m_snappedDuringSelectionDrag = false;
     bool m_aspectShortcutUsedForSelectionDrag = false;
     bool m_cycleColorFormatIfAspectShortcutUnused = false;

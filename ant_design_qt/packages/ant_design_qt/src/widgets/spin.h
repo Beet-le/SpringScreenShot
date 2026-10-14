@@ -160,6 +160,7 @@ class AdSpin final : public QWidget {
   struct Private;
 
   void setActive(bool value);
+  bool publishStateChanges();
   void scheduleActivation();
   void refreshAppearance();
   void refreshSurfaces();

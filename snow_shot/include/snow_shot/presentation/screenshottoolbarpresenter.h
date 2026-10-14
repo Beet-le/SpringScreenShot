@@ -6,6 +6,7 @@
 #include "snow_shot/image/screenshotregiongeometry.h"
 
 #include <QColor>
+#include <QObject>
 #include <QPoint>
 #include <QPointF>
 #include <QRect>
@@ -26,6 +27,7 @@ struct ScreenshotToolbarPresentationState {
     bool selectionDragging = false;
     bool editing = false;
     bool ocrAvailable = true;
+    bool selectionEditable = true;
     bool selectionResizable = true;
     bool cornerRadiusApplicable = true;
     bool aspectRatioLocked = false;
@@ -35,9 +37,10 @@ struct ScreenshotToolbarPresentationState {
     int shadowWidth = 0;
     QColor shadowColor = QColor(0x33, 0x33, 0x33);
     ScreenshotRegionType regionType = ScreenshotRegionType::Rectangle;
+    [[nodiscard]] bool operator==(const ScreenshotToolbarPresentationState&) const = default;
 };
 
-class ScreenshotToolbarPresenter final {
+class ScreenshotToolbarPresenter final : public QObject {
   public:
     ScreenshotToolbarPresenter(ScreenshotOverlayCoordinator& overlayCoordinator,
                                const ScreenshotGeometryMapper& geometry,

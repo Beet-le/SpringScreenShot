@@ -506,6 +506,7 @@ void UpdateService::applyAtStartup() {
     emit operationFinished(QStringLiteral("apply"), QStringLiteral("success"));
 }
 void UpdateService::setRelaunchArguments(const QStringList&) {}
+void UpdateService::clearRelaunchArguments() {}
 bool UpdateService::handoffPending() const {
     return false;
 }

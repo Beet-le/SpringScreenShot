@@ -17,6 +17,7 @@
 #include "snow_shot/presentation/languagemanager.h"
 #include "snow_shot/presentation/styles/thememanager.h"
 #include "snow_shot/storage/applicationstorage.h"
+#include "snow_shot/runtime/runtimeactivitytracker.h"
 #include "widgets/button.h"
 #include "widgets/modal.h"
 #include "widgets/input_line_edit.h"
@@ -207,41 +208,60 @@ void preparedSourcesAndCancellation() {
                 recognition.filteredImage.pixelColor(2, 2),
             "upload applicable recognition overlay pixels");
 
-    // Hold a file encoder after its temporary directory has been created.
-    // Cancellation must keep that directory alive until the worker unwinds.
-    auto entered = std::make_shared<QSemaphore>();
-    auto release = std::make_shared<QSemaphore>();
-    const auto unblock = qScopeGuard([&] { release->release(); });
-    ScreenshotImageRowSource rows;
-    rows.size = background.size();
-    rows.readRows = [background, entered, release](int first, int count, qsizetype stride,
-                                                   uchar* target, qsizetype) {
-        entered->release();
-        release->acquire();
-        for (int i = 0; i < count; ++i)
-            std::memcpy(target + stride * i, background.constScanLine(first + i),
-                        static_cast<size_t>(background.width()) * 4);
-        return true;
-    };
-    auto artifact = std::make_shared<ScreenshotExportArtifact>(
-        ScreenshotExportSource::fromProducer({}, [rows](std::function<bool()> cancel) mutable {
-            rows.cancellationRequested = std::move(cancel);
-            return rows;
-        }));
-    ScreenshotCloudUploadOptions options;
-    options.format = ScreenshotImageFileFormat::Bmp;
-    QPointer<ScreenshotCloudUploadJob> pending =
-        ScreenshotCloudUploadService::upload(artifact, configuration(), options, &receiver);
-    waitUntil([&] { return entered->available() > 0; }, "start background file encoding");
-    const QString directory = QFileInfo(pending->preparedPath()).absolutePath();
-    pending->cancel();
-    artifact.reset();
-    flushEvents();
-    require(!pending && QDir(directory).exists(),
-            "cancelled encoder retains temporary directory while running");
-    release->release(100);
-    waitUntil([&] { return !QDir(directory).exists(); },
-              "clean temporary directory after cancelled encoder unwinds");
+    // File writers hash while encoding. Keep that shared worker blocked after its
+    // temporary directory exists, including when cancellation destroys its upload owner.
+    for (const bool destroyReceiver : {false, true}) {
+        waitUntil(
+            [] { return runtime::RuntimeActivityTracker::shared().snapshot().activeCount == 0; },
+            "settle earlier upload work before hash lifetime fixture");
+        auto entered = std::make_shared<QSemaphore>();
+        auto release = std::make_shared<QSemaphore>();
+        const auto unblock = qScopeGuard([&] { release->release(); });
+        ScreenshotImageRowSource rows;
+        rows.size = background.size();
+        rows.readRows = [background, entered, release](int first, int count, qsizetype stride,
+                                                       uchar* target, qsizetype) {
+            entered->release();
+            release->acquire();
+            for (int i = 0; i < count; ++i)
+                std::memcpy(target + stride * i, background.constScanLine(first + i),
+                            static_cast<size_t>(background.width()) * 4);
+            return true;
+        };
+        ScreenshotExportArtifact::PngCachePolicy streaming;
+        streaming.maximumBytes = 1;
+        auto artifact = std::make_shared<ScreenshotExportArtifact>(
+            ScreenshotExportSource::fromProducer({},
+                                                 [rows](std::function<bool()> cancel) mutable {
+                                                     rows.cancellationRequested = std::move(cancel);
+                                                     return rows;
+                                                 }),
+            ScreenshotCompressionLevel::Medium, std::move(streaming));
+        auto encodingReceiver = std::make_unique<QObject>();
+        ScreenshotCloudUploadOptions options;
+        options.format = ScreenshotImageFileFormat::Bmp;
+        QPointer<ScreenshotCloudUploadJob> pending = ScreenshotCloudUploadService::upload(
+            artifact, configuration(), options, encodingReceiver.get());
+        waitUntil([&] { return entered->available() > 0; },
+                  "start background encoding and hashing");
+        const QString directory = QFileInfo(pending->preparedPath()).absolutePath();
+        if (destroyReceiver)
+            encodingReceiver.reset();
+        else
+            pending->cancel();
+        artifact.reset();
+        flushEvents();
+        require(!pending && QDir(directory).exists(),
+                "cancelled encoder retains temporary directory while running");
+        require(runtime::RuntimeActivityTracker::shared().snapshot().activeCount > 0,
+                "upload hashing blocks trimming after cancellation or receiver destruction");
+        release->release(100);
+        waitUntil([&] { return !QDir(directory).exists(); },
+                  "clean temporary directory after cancelled encoder unwinds");
+        waitUntil(
+            [] { return runtime::RuntimeActivityTracker::shared().snapshot().activeCount == 0; },
+            "finished upload hashing releases its activity lease");
+    }
 
     auto* destroyedReceiver = new QObject;
     S3Server held;
@@ -639,6 +659,31 @@ void widgetContracts(QApplication& app) {
     flushEvents();
     auto* copy = widget.findChild<adqt::widgets::AdButton*>(QStringLiteral("copy:") + original.id);
     require(copy, "copy cloud configuration action");
+    QPointer<adqt::widgets::AdButton> originalCopy(copy);
+    widget.activateWindow();
+    flushEvents();
+    copy->setFocus();
+    require(QApplication::focusWidget() == copy, "focus the cloud action before synchronization");
+    for (const auto phase : {presentation::settings::SettingsWritePhase::Pending,
+                             presentation::settings::SettingsWritePhase::Clean}) {
+        auto state = session.state(QStringLiteral("screenshot-output.cloud-upload"));
+        state.phase = phase;
+        state.busy = phase == presentation::settings::SettingsWritePhase::Pending;
+        state.dirty = state.busy;
+        emit session.fieldChanged(QStringLiteral("screenshot-output.cloud-upload"), state);
+        flushEvents();
+        require(originalCopy && QApplication::focusWidget() == originalCopy,
+                "unchanged cloud persistence notifications preserve actions and focus");
+    }
+    for (const auto& defaultId : {QString(), original.id}) {
+        auto selection = session.cloudUploadSettings();
+        selection.defaultId = defaultId;
+        require(session.applyCloudUploadSettings(selection), "change cloud default destination");
+        flushEvents();
+        require(originalCopy && QApplication::focusWidget() == originalCopy &&
+                    destination->currentValue().toString() == defaultId,
+                "changing cloud destination synchronizes selection without recreating rows");
+    }
     copy->click();
     waitUntil([&] { return session.cloudUploadSettings().configurations.size() == 2; },
               "copy saves distinct identity");
@@ -646,6 +691,9 @@ void widgetContracts(QApplication& app) {
                 session.cloudUploadSettings().defaultId == original.id,
             "copy preserves selected destination");
     flushEvents();
+    require(widget.findChild<QWidget*>(QStringLiteral("cloudUploadRow:") +
+                                       session.cloudUploadSettings().configurations.last().id),
+            "a changed cloud list renders its new configuration");
     auto* edit = widget.findChild<adqt::widgets::AdButton*>(QStringLiteral("edit:") + original.id);
     edit->click();
     flushEvents();

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use snow_draw_engine_core::ErrorCode;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use snow_draw_engine_document::{
@@ -26,7 +27,7 @@ pub struct HistoryApplyResult {
     pub snapshot: DocumentSyncSnapshot,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HistoryStore {
     undo_stack: Vec<HistoryEntry>,
@@ -37,9 +38,68 @@ pub struct HistoryStore {
     last_spotlight_commit: Option<Instant>,
     #[serde(skip)]
     last_filter_commit: Option<(FilterCoalesceKey, Instant)>,
+    #[serde(skip)]
+    last_angle_commit: Option<(Vec<ElementId>, Instant)>,
+    #[serde(skip)]
+    mutation_generation: u64,
+}
+
+impl PartialEq for HistoryStore {
+    fn eq(&self, other: &Self) -> bool {
+        self.undo_stack == other.undo_stack
+            && self.redo_stack == other.redo_stack
+            && self.last_watermark_text_commit == other.last_watermark_text_commit
+            && self.last_spotlight_commit == other.last_spotlight_commit
+            && self.last_filter_commit == other.last_filter_commit
+            && self.last_angle_commit == other.last_angle_commit
+        // The amendment token identifies a runtime history state, not persisted content.
+    }
 }
 
 impl HistoryStore {
+    pub(crate) fn mutation_generation(&self) -> u64 {
+        self.mutation_generation
+    }
+
+    pub(crate) fn can_amend_latest(&self, generation: u64) -> bool {
+        self.mutation_generation == generation
+            && self.redo_stack.is_empty()
+            && !self.undo_stack.is_empty()
+    }
+
+    /// Attach host-measured geometry to its originating edit, preserving its undo boundary.
+    pub(crate) fn amend_latest(
+        &mut self,
+        generation: u64,
+        redo: &Transaction,
+        undo: &Transaction,
+        redo_snapshot: DocumentSyncSnapshot,
+    ) -> bool {
+        if !self.can_amend_latest(generation) {
+            return false;
+        }
+        let entry = self.undo_stack.last_mut().expect("checked history entry");
+        for operation in redo.operations() {
+            entry.redo.push(operation.clone());
+        }
+        let mut amended_undo = Transaction::new(entry.undo.label());
+        for operation in undo.operations().iter().chain(entry.undo.operations()) {
+            amended_undo.push(operation.clone());
+        }
+        entry.undo = amended_undo;
+        entry.redo_snapshot = redo_snapshot;
+        self.mutation_generation = self.mutation_generation.wrapping_add(1);
+        true
+    }
+
+    pub(crate) fn normalize_angle_invariants(&mut self) -> Result<(), ErrorCode> {
+        for entry in self.undo_stack.iter_mut().chain(self.redo_stack.iter_mut()) {
+            entry.undo.normalize_angle_invariants()?;
+            entry.redo.normalize_angle_invariants()?;
+        }
+        Ok(())
+    }
+
     pub fn validate_session(&self, document: &DocumentModel) -> Result<(), ErrorCode> {
         const MAX_HISTORY_ENTRIES: usize = 100_000;
         if self.undo_stack.len().saturating_add(self.redo_stack.len()) > MAX_HISTORY_ENTRIES {
@@ -87,6 +147,93 @@ impl HistoryStore {
 }
 
 impl HistoryStore {
+    pub(crate) fn break_angle_wheel_coalescing(&mut self) {
+        self.last_angle_commit = None;
+    }
+
+    pub(crate) fn canonicalize_angle_wheel_transaction(
+        &self,
+        transaction: &mut Transaction,
+    ) -> HashSet<ElementId> {
+        if transaction.label() != "adjust angle" {
+            return HashSet::new();
+        }
+        let Some((_, at)) = &self.last_angle_commit else {
+            return HashSet::new();
+        };
+        if at.elapsed() > Duration::from_millis(220) {
+            return HashSet::new();
+        }
+        let Some(last) = self
+            .undo_stack
+            .last()
+            .filter(|entry| entry.label == "adjust angle")
+        else {
+            return HashSet::new();
+        };
+        let (Some(original), Some(next)) = (angle_updates(&last.undo), angle_updates(transaction))
+        else {
+            return HashSet::new();
+        };
+        if original.len() != next.len() {
+            return HashSet::new();
+        }
+        let original_ids: Vec<_> = original.iter().map(|(id, _)| *id).collect();
+        if original_ids != next.iter().map(|(id, _)| *id).collect::<Vec<_>>() {
+            return HashSet::new();
+        }
+        let replacements: HashMap<_, _> = original
+            .iter()
+            .zip(next)
+            .filter_map(|((id, original), (_, next))| {
+                let mut comparison = next.clone();
+                comparison.x = original.x;
+                comparison.y = original.y;
+                comparison.width = original.width;
+                comparison.height = original.height;
+                comparison.points = original.points.clone();
+                let close = original
+                    .global_points()
+                    .iter()
+                    .zip(next.global_points())
+                    .all(|(a, b)| (a.x - b.x).hypot(a.y - b.y) <= 1e-8);
+                (close && comparison == **original).then_some((*id, (*original).clone()))
+            })
+            .collect();
+        if replacements.is_empty() {
+            return HashSet::new();
+        }
+        let mut normalized = Transaction::new(transaction.label());
+        for operation in transaction.operations() {
+            if let Operation::UpdateElementData {
+                id,
+                data: ElementData::Arrow(_),
+            } = operation
+                && let Some(arrow) = replacements.get(id)
+            {
+                normalized.update_arrow(*id, arrow.clone());
+            } else {
+                normalized.push(operation.clone());
+            }
+        }
+        let label_ids: HashSet<_> = replacements
+            .values()
+            .filter_map(|arrow| arrow.text_element_id)
+            .collect();
+        for operation in last.undo.operations() {
+            if let Operation::UpdateElementData {
+                id,
+                data: ElementData::Text(_),
+            } = operation
+                && label_ids.contains(id)
+            {
+                normalized.push(operation.clone());
+            }
+        }
+        *transaction = normalized;
+        label_ids
+    }
+
     pub fn push_committed(
         &mut self,
         label: impl Into<String>,
@@ -95,8 +242,42 @@ impl HistoryStore {
         undo_snapshot: DocumentSyncSnapshot,
         redo_snapshot: DocumentSyncSnapshot,
     ) {
+        self.mutation_generation = self.mutation_generation.wrapping_add(1);
         let label = label.into();
         let now = Instant::now();
+        if label == "adjust angle"
+            && let Some(key) = angle_wheel_key(&undo, &redo)
+        {
+            let coalesce = self
+                .last_angle_commit
+                .as_ref()
+                .is_some_and(|(previous, at)| {
+                    *previous == key && now.duration_since(*at) <= Duration::from_millis(220)
+                })
+                && self.undo_stack.last().is_some_and(|last| {
+                    last.label == "adjust angle"
+                        && angle_wheel_key(&last.undo, &last.redo).as_ref() == Some(&key)
+                });
+            if coalesce {
+                if self
+                    .undo_stack
+                    .last()
+                    .is_some_and(|last| angle_updates_equal(&last.undo, &redo))
+                {
+                    self.undo_stack.pop();
+                    self.last_angle_commit = None;
+                } else if let Some(last) = self.undo_stack.last_mut() {
+                    last.redo = redo;
+                    last.redo_snapshot = redo_snapshot;
+                    self.last_angle_commit = Some((key, now));
+                }
+                self.redo_stack.clear();
+                return;
+            }
+            self.last_angle_commit = Some((key, now));
+        } else {
+            self.last_angle_commit = None;
+        }
         if watermark_text_only_change(&undo, &redo) {
             let can_coalesce = self
                 .last_watermark_text_commit
@@ -230,6 +411,7 @@ impl HistoryStore {
         self.last_watermark_text_commit = None;
         self.last_spotlight_commit = None;
         self.last_filter_commit = None;
+        self.last_angle_commit = None;
 
         let apply_result = match model.apply_history_transaction(&entry.undo) {
             Ok(result) => result,
@@ -242,6 +424,7 @@ impl HistoryStore {
         let restore_selection = entry.label == "duplicate selection";
         let snapshot = entry.undo_snapshot.clone();
         self.redo_stack.push(entry);
+        self.mutation_generation = self.mutation_generation.wrapping_add(1);
         Ok(Some(HistoryApplyResult {
             restore_selection,
             apply_result,
@@ -259,6 +442,7 @@ impl HistoryStore {
         self.last_watermark_text_commit = None;
         self.last_spotlight_commit = None;
         self.last_filter_commit = None;
+        self.last_angle_commit = None;
 
         let apply_result = match model.apply_history_transaction(&entry.redo) {
             Ok(result) => result,
@@ -271,12 +455,66 @@ impl HistoryStore {
         let restore_selection = entry.label == "duplicate selection";
         let snapshot = entry.redo_snapshot.clone();
         self.undo_stack.push(entry);
+        self.mutation_generation = self.mutation_generation.wrapping_add(1);
         Ok(Some(HistoryApplyResult {
             restore_selection,
             apply_result,
             snapshot,
         }))
     }
+}
+
+fn angle_updates(
+    transaction: &Transaction,
+) -> Option<Vec<(ElementId, &snow_draw_engine_document::ArrowData)>> {
+    let mut arrows = Vec::new();
+    let mut texts = Vec::new();
+    for operation in transaction.operations() {
+        match operation {
+            Operation::UpdateElementData {
+                id,
+                data: ElementData::Arrow(arrow),
+            } if arrow.is_angle() => arrows.push((*id, arrow)),
+            Operation::UpdateElementData {
+                id,
+                data: ElementData::Text(_),
+            } => texts.push(*id),
+            _ => return None,
+        }
+    }
+    let label_ids: HashSet<_> = arrows
+        .iter()
+        .filter_map(|(_, arrow)| arrow.text_element_id)
+        .collect();
+    if arrows.is_empty() || texts.iter().any(|id| !label_ids.contains(id)) {
+        return None;
+    }
+    arrows.sort_by_key(|(id, _)| (id.index, id.generation));
+    Some(arrows)
+}
+fn angle_wheel_key(undo: &Transaction, redo: &Transaction) -> Option<Vec<ElementId>> {
+    let undo = angle_updates(undo)?;
+    let redo = angle_updates(redo)?;
+    let ids: Vec<_> = undo.iter().map(|(id, _)| *id).collect();
+    (ids == redo.iter().map(|(id, _)| *id).collect::<Vec<_>>()).then_some(ids)
+}
+fn angle_updates_equal(left: &Transaction, right: &Transaction) -> bool {
+    let (Some(left), Some(right)) = (angle_updates(left), angle_updates(right)) else {
+        return false;
+    };
+    left.len() == right.len()
+        && left.iter().zip(right).all(|((id, a), (other, b))| {
+            id == &other
+                && a.angle == b.angle
+                && a.stroke == b.stroke
+                && a.stroke_width == b.stroke_width
+                && a.opacity == b.opacity
+                && a.rotation == b.rotation
+                && a.global_points()
+                    .iter()
+                    .zip(b.global_points())
+                    .all(|(a, b)| (a.x - b.x).hypot(a.y - b.y) <= 1e-8)
+        })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

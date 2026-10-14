@@ -1,6 +1,8 @@
 #![allow(clippy::missing_safety_doc)]
 
 mod abi {
+    #[cfg(test)]
+    mod angle_tests;
     pub(crate) mod annotation_exports;
     pub(crate) mod auto_filter_exports;
     pub(crate) mod convert;
@@ -11,10 +13,14 @@ mod abi {
     pub(crate) mod handles;
     pub(crate) mod history_exports;
     pub(crate) mod input_exports;
+    pub(crate) mod magnifier_exports;
+    #[cfg(test)]
+    mod magnifier_tests;
     pub(crate) mod patch;
     pub(crate) mod patch_exports;
     pub(crate) mod path_exports;
     pub(crate) mod raw_enum;
+    pub(crate) mod speech_bubble_exports;
     pub(crate) mod stroke_exports;
     pub(crate) mod style_exports;
     pub(crate) mod text;
@@ -31,6 +37,7 @@ pub use abi::handles::{
 };
 pub use abi::history_exports::*;
 pub use abi::input_exports::*;
+pub use abi::magnifier_exports::*;
 pub use abi::patch_exports::*;
 pub use abi::path_exports::*;
 pub use abi::stroke_exports::*;

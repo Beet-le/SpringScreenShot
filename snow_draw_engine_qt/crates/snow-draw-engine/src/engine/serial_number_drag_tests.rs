@@ -104,6 +104,303 @@ fn serial_number_selected_appearance_edits_preserve_creation_sequence() {
                 );
                 let next = click_serial_number(&mut engine, viewport, 500.0);
                 assert_eq!(engine.model.serial_number(next).unwrap().number, start + 2);
+                assert_eq!(engine.model.serial_number(next).unwrap().font_size, 32.0);
+            }
+        }
+    }
+}
+
+#[test]
+fn serial_number_selected_value_edits_continue_from_edited_value() {
+    use snow_draw_engine_editor::SERIAL_NUMBER_STYLE_MIXED_NUMBER;
+
+    for numeric_type in [
+        SerialNumberNumericType::Arabic,
+        SerialNumberNumericType::Roman,
+        SerialNumberNumericType::LowercaseLetters,
+        SerialNumberNumericType::UppercaseLetters,
+        SerialNumberNumericType::Chinese,
+    ] {
+        for edit_path in 0..3 {
+            let (mut engine, viewport) = setup(1.0);
+            set_numeric_type(&mut engine, viewport, numeric_type);
+            let first = click_serial_number(&mut engine, viewport, 100.0);
+            let mut defaults = engine.editor.serial_number_style(&engine.model);
+            engine
+                .select_element_with_viewport_changes(viewport, first)
+                .unwrap();
+            let mut selected = engine.editor.serial_number_style(&engine.model);
+            selected.number = 55;
+            match edit_path {
+                0 => engine
+                    .set_viewport_serial_number_style_patch(
+                        viewport,
+                        selected,
+                        SERIAL_NUMBER_STYLE_MIXED_NUMBER,
+                    )
+                    .unwrap(),
+                1 => engine
+                    .set_viewport_serial_number_style(viewport, selected)
+                    .unwrap(),
+                _ => engine
+                    .adjust_selected_serial_numbers_with_viewport_changes(viewport, 54)
+                    .unwrap(),
+            };
+            assert_eq!(engine.model.serial_number(first).unwrap().number, 55);
+            defaults.number = 56;
+            engine
+                .reset_editing_state_with_viewport_changes(viewport)
+                .unwrap();
+            assert_eq!(engine.editor.serial_number_style(&engine.model), defaults);
+            assert!(engine.undo().unwrap());
+            assert_eq!(engine.model.serial_number(first).unwrap().number, 1);
+            assert_eq!(engine.editor.serial_number_style(&engine.model), defaults);
+            assert!(engine.redo().unwrap());
+            assert_eq!(engine.editor.serial_number_style(&engine.model), defaults);
+            let mut restored = Engine::from_serialized_document_session_with_config(
+                &engine.serialize_document_session().unwrap(),
+                Default::default(),
+            )
+            .unwrap();
+            let restored_viewport = restored.create_viewport(Default::default()).unwrap();
+            restored
+                .set_viewport_surface_size(restored_viewport, 800, 600)
+                .unwrap();
+            for (current, view) in [(&mut engine, viewport), (&mut restored, restored_viewport)] {
+                current
+                    .set_viewport_active_tool(view, ActiveTool::SerialNumber)
+                    .unwrap();
+                let next = click_serial_number(current, view, 500.0);
+                assert_eq!(
+                    current.model.serial_number(next).unwrap().number,
+                    defaults.number
+                );
+                assert_eq!(current.model.serial_number(first).unwrap().number, 55);
+                assert_eq!(
+                    current.editor.serial_number_style(&current.model).number,
+                    57
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn serial_number_selected_format_edits_preserve_destination_creation_counter() {
+    let (mut engine, viewport) = setup(1.0);
+    let first = click_serial_number(&mut engine, viewport, 100.0);
+    engine
+        .select_element_with_viewport_changes(viewport, first)
+        .unwrap();
+    set_numeric_type(&mut engine, viewport, SerialNumberNumericType::Roman);
+    engine
+        .reset_editing_state_with_viewport_changes(viewport)
+        .unwrap();
+    set_numeric_type(&mut engine, viewport, SerialNumberNumericType::Roman);
+    assert_eq!(engine.editor.serial_number_style(&engine.model).number, 1);
+    engine
+        .set_viewport_active_tool(viewport, ActiveTool::SerialNumber)
+        .unwrap();
+    let next = click_serial_number(&mut engine, viewport, 500.0);
+    assert_eq!(engine.model.serial_number(next).unwrap().number, 1);
+}
+
+#[test]
+fn serial_number_selected_style_edits_update_creation_appearance_and_continue_sequences() {
+    use snow_draw_engine_editor::{
+        SERIAL_NUMBER_STYLE_MIXED_COLOR, SERIAL_NUMBER_STYLE_MIXED_FILL,
+        SERIAL_NUMBER_STYLE_MIXED_FILL_STYLE, SERIAL_NUMBER_STYLE_MIXED_FONT_FAMILY,
+        SERIAL_NUMBER_STYLE_MIXED_FONT_SIZE, SERIAL_NUMBER_STYLE_MIXED_NUMBER,
+        SERIAL_NUMBER_STYLE_MIXED_NUMERIC_TYPE, SERIAL_NUMBER_STYLE_MIXED_OPACITY,
+        SERIAL_NUMBER_STYLE_MIXED_STROKE_STYLE, SERIAL_NUMBER_STYLE_MIXED_STROKE_WIDTH,
+        SERIAL_NUMBER_STYLE_MIXED_TYPE,
+    };
+    let properties = SERIAL_NUMBER_STYLE_MIXED_NUMBER
+        | SERIAL_NUMBER_STYLE_MIXED_COLOR
+        | SERIAL_NUMBER_STYLE_MIXED_FILL
+        | SERIAL_NUMBER_STYLE_MIXED_FILL_STYLE
+        | SERIAL_NUMBER_STYLE_MIXED_FONT_SIZE
+        | SERIAL_NUMBER_STYLE_MIXED_FONT_FAMILY
+        | SERIAL_NUMBER_STYLE_MIXED_STROKE_WIDTH
+        | SERIAL_NUMBER_STYLE_MIXED_STROKE_STYLE
+        | SERIAL_NUMBER_STYLE_MIXED_OPACITY
+        | SERIAL_NUMBER_STYLE_MIXED_TYPE
+        | SERIAL_NUMBER_STYLE_MIXED_NUMERIC_TYPE;
+
+    for numeric_type in [
+        SerialNumberNumericType::Arabic,
+        SerialNumberNumericType::Roman,
+        SerialNumberNumericType::LowercaseLetters,
+        SerialNumberNumericType::UppercaseLetters,
+        SerialNumberNumericType::Chinese,
+    ] {
+        for explicit_start in [false, true] {
+            for use_patch in [false, true] {
+                let (mut engine, viewport) = setup(1.0);
+                set_numeric_type(&mut engine, viewport, numeric_type);
+                if explicit_start {
+                    let mut style = engine.editor.serial_number_style(&engine.model);
+                    style.number = 10;
+                    engine
+                        .set_viewport_serial_number_style_patch(
+                            viewport,
+                            style,
+                            SERIAL_NUMBER_STYLE_MIXED_NUMBER,
+                        )
+                        .unwrap();
+                }
+                let first = click_serial_number(&mut engine, viewport, 100.0);
+                let defaults = engine.editor.serial_number_style(&engine.model);
+                let original = engine.model.serial_number(first).unwrap().clone();
+                engine
+                    .select_element_with_viewport_changes(viewport, first)
+                    .unwrap();
+                let mut selected = engine.editor.serial_number_style(&engine.model);
+                selected.number = 55;
+                selected.numeric_type = if numeric_type == SerialNumberNumericType::Roman {
+                    SerialNumberNumericType::Chinese
+                } else {
+                    SerialNumberNumericType::Roman
+                };
+                selected.serial_number_type = SerialNumberType::OutlinedSquare;
+                selected.font_size = 40.0;
+                selected.font_family = Some("Selected font".to_owned());
+                selected.color.r = 17;
+                selected.fill.a = 128;
+                selected.fill_style = snow_draw_engine_document::FillStyle::CrossLine;
+                selected.opacity = 0.5;
+                selected.stroke_width = 3.0;
+                selected.stroke_style = snow_draw_engine_core::arrow::StrokeStyle::Dashed;
+                if use_patch {
+                    engine
+                        .set_viewport_serial_number_style_patch(
+                            viewport,
+                            selected.clone(),
+                            properties,
+                        )
+                        .unwrap();
+                } else {
+                    engine
+                        .set_viewport_serial_number_style(viewport, selected.clone())
+                        .unwrap();
+                }
+                assert_eq!(engine.editor.serial_number_style(&engine.model), selected);
+                let mut creation_defaults = selected.clone();
+                creation_defaults.number = 56;
+                engine
+                    .reset_editing_state_with_viewport_changes(viewport)
+                    .unwrap();
+                assert_eq!(
+                    engine.editor.serial_number_style(&engine.model),
+                    creation_defaults
+                );
+                assert!(engine.undo().unwrap());
+                assert_eq!(engine.model.serial_number(first).unwrap(), &original);
+                assert_eq!(
+                    engine.editor.serial_number_style(&engine.model),
+                    creation_defaults
+                );
+                assert!(engine.redo().unwrap());
+                assert_eq!(
+                    engine.editor.serial_number_style(&engine.model),
+                    creation_defaults
+                );
+                let mut restored = Engine::from_serialized_document_session_with_config(
+                    &engine.serialize_document_session().unwrap(),
+                    Default::default(),
+                )
+                .unwrap();
+                assert_eq!(
+                    restored.editor.serial_number_style(&restored.model),
+                    creation_defaults
+                );
+                let restored_viewport = restored.create_viewport(Default::default()).unwrap();
+                engine
+                    .set_viewport_active_tool(viewport, ActiveTool::SerialNumber)
+                    .unwrap();
+                let next = click_serial_number(&mut engine, viewport, 500.0);
+                let mut expected = engine.model.serial_number(first).unwrap().clone();
+                expected.center = engine.model.serial_number(next).unwrap().center;
+                expected.number = creation_defaults.number;
+                assert_eq!(engine.model.serial_number(next).unwrap(), &expected);
+                engine
+                    .reset_editing_state_with_viewport_changes(viewport)
+                    .unwrap();
+                restored.editor.reset_editing_state();
+                for other_type in [
+                    SerialNumberNumericType::Arabic,
+                    SerialNumberNumericType::Roman,
+                    SerialNumberNumericType::LowercaseLetters,
+                    SerialNumberNumericType::UppercaseLetters,
+                    SerialNumberNumericType::Chinese,
+                ] {
+                    set_numeric_type(&mut restored, restored_viewport, other_type);
+                    let expected_number = if other_type == selected.numeric_type {
+                        56
+                    } else if other_type == numeric_type {
+                        defaults.number
+                    } else {
+                        1
+                    };
+                    assert_eq!(
+                        restored.editor.serial_number_style(&restored.model).number,
+                        expected_number
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn serial_number_selected_value_edits_restart_below_canvas_maximum_and_saturate() {
+    use snow_draw_engine_editor::SERIAL_NUMBER_STYLE_MIXED_NUMBER;
+
+    for edit_path in 0..3 {
+        for number in [0, 3, 52, i64::MAX] {
+            let (mut engine, viewport) = setup(1.0);
+            let mut style = engine.editor.serial_number_style(&engine.model);
+            style.number = 50;
+            engine
+                .set_viewport_serial_number_style(viewport, style)
+                .unwrap();
+            let first = click_serial_number(&mut engine, viewport, 100.0);
+            let second = click_serial_number(&mut engine, viewport, 250.0);
+            engine
+                .select_element_with_viewport_changes(viewport, first)
+                .unwrap();
+            let mut style = engine.editor.serial_number_style(&engine.model);
+            style.number = number;
+            match edit_path {
+                0 => engine
+                    .set_viewport_serial_number_style_patch(
+                        viewport,
+                        style,
+                        SERIAL_NUMBER_STYLE_MIXED_NUMBER,
+                    )
+                    .unwrap(),
+                1 => engine
+                    .set_viewport_serial_number_style(viewport, style)
+                    .unwrap(),
+                _ => engine
+                    .adjust_selected_serial_numbers_with_viewport_changes(viewport, number - 50)
+                    .unwrap(),
+            };
+            assert_eq!(engine.model.serial_number(first).unwrap().number, number);
+            assert_eq!(engine.model.serial_number(second).unwrap().number, 51);
+            engine
+                .reset_editing_state_with_viewport_changes(viewport)
+                .unwrap();
+            engine
+                .set_viewport_active_tool(viewport, ActiveTool::SerialNumber)
+                .unwrap();
+            for offset in 1..=2 {
+                let next =
+                    click_serial_number(&mut engine, viewport, 250.0 + offset as f64 * 150.0);
+                assert_eq!(
+                    engine.model.serial_number(next).unwrap().number,
+                    number.saturating_add(offset)
+                );
             }
         }
     }
@@ -749,6 +1046,52 @@ fn serial_number_creation_follows_imported_numbers_without_explicit_start() {
             },
         )
         .unwrap();
+    assert_eq!(engine.editor.serial_number_style(&engine.model).number, 51);
+    let session = engine.serialize_document_session().unwrap();
+    let history = engine.serialize_document_history().unwrap();
+    let mut legacy: serde_json::Value = serde_json::from_slice(&session).unwrap();
+    legacy["editor"]
+        .as_object_mut()
+        .unwrap()
+        .remove("serialNumberValues");
+    // Exercise migration from a session whose active counter predates import synchronization.
+    legacy["editor"]["serialNumber"]["number"] = serde_json::json!(1);
+    let mut legacy_cached = legacy.clone();
+    legacy_cached["schemaVersion"] = serde_json::json!(8);
+    legacy_cached["editor"]["serialNumberValues"] = serde_json::json!([1, 1, 1, 1, 1]);
+    for (bytes, history_only) in [
+        (session, false),
+        (serde_json::to_vec(&legacy).unwrap(), false),
+        (serde_json::to_vec(&legacy_cached).unwrap(), false),
+        (history.clone(), true),
+    ] {
+        let mut restored = if history_only {
+            Engine::from_serialized_document_history_with_config(&bytes, Default::default())
+        } else {
+            Engine::from_serialized_document_session_with_config(&bytes, Default::default())
+        }
+        .unwrap();
+        let view = restored.create_viewport(Default::default()).unwrap();
+        restored.set_viewport_surface_size(view, 800, 600).unwrap();
+        assert_eq!(
+            restored.editor.serial_number_style(&restored.model).number,
+            51
+        );
+        restored
+            .set_viewport_active_tool(view, ActiveTool::SerialNumber)
+            .unwrap();
+        let next = click_serial_number(&mut restored, view, 400.0);
+        assert_eq!(restored.model.serial_number(next).unwrap().number, 51);
+    }
+    let (mut restored, view) = setup(1.0);
+    restored
+        .restore_document_history_preserving_editor_styles(&history)
+        .unwrap();
+    restored
+        .set_viewport_active_tool(view, ActiveTool::SerialNumber)
+        .unwrap();
+    let next = click_serial_number(&mut restored, view, 400.0);
+    assert_eq!(restored.model.serial_number(next).unwrap().number, 51);
     let mut style = engine.editor.serial_number_style(&engine.model);
     style.font_size += 1.0;
     engine
@@ -757,6 +1100,69 @@ fn serial_number_creation_follows_imported_numbers_without_explicit_start() {
     let id = click_serial_number(&mut engine, viewport, 400.0);
     assert_eq!(engine.model.serial_number(id).unwrap().number, 51);
     assert_eq!(engine.editor.serial_number_style(&engine.model).number, 52);
+}
+
+#[test]
+fn serial_number_import_preserves_explicit_creation_counters() {
+    use snow_draw_engine_document::{ElementMeta, SerialNumberData, Transaction};
+    use snow_draw_engine_editor::SERIAL_NUMBER_STYLE_MIXED_NUMBER;
+
+    for start in [0, 2, 70, i64::MAX] {
+        let (mut engine, viewport) = setup(1.0);
+        let mut style = engine.editor.serial_number_style(&engine.model);
+        style.number = start;
+        engine
+            .set_viewport_serial_number_style_patch(
+                viewport,
+                style,
+                SERIAL_NUMBER_STYLE_MIXED_NUMBER,
+            )
+            .unwrap();
+        let mut transaction = Transaction::new("import serial number");
+        transaction.insert_serial_number(
+            engine.model.peek_next_element_id(),
+            ElementMeta::default(),
+            SerialNumberData {
+                center: Point::new(-300.0, 0.0),
+                number: 50,
+                ..Default::default()
+            },
+        );
+        engine
+            .commit_transaction(
+                viewport,
+                ApplyTransactionCommand {
+                    transaction,
+                    history_undo_snapshot: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            engine.editor.serial_number_style(&engine.model).number,
+            start
+        );
+        let mut legacy: serde_json::Value =
+            serde_json::from_slice(&engine.serialize_document_session().unwrap()).unwrap();
+        legacy["schemaVersion"] = serde_json::json!(8);
+        let restored = Engine::from_serialized_document_session_with_config(
+            &serde_json::to_vec(&legacy).unwrap(),
+            Default::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            restored.editor.serial_number_style(&restored.model).number,
+            start
+        );
+        let history = engine.serialize_document_history().unwrap();
+        engine
+            .restore_document_history_preserving_editor_styles(&history)
+            .unwrap();
+        engine
+            .set_viewport_active_tool(viewport, ActiveTool::SerialNumber)
+            .unwrap();
+        let next = click_serial_number(&mut engine, viewport, 400.0);
+        assert_eq!(engine.model.serial_number(next).unwrap().number, start);
+    }
 }
 
 #[test]
@@ -1164,6 +1570,7 @@ fn serial_connector_tracks_ink_committed_with_edited_label() {
         .expect("committed serial label must render a connector");
 
     let measured_paint = TextPaintGeometry {
+        text_ink_reserve: 0.0,
         center,
         width: 220.0,
         height: 60.0,

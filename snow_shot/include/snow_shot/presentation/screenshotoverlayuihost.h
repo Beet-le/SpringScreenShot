@@ -42,6 +42,9 @@ class ScreenshotOverlayUiHost final : public QObject {
     void prepareColorPickerSurface(ScreenshotOverlayWindow* overlay);
     void releaseColorPicker();
     ScreenshotColorPickerWindow* colorPicker() const;
+    void sampleColorPicker(const QImage& image, const QRect& physicalRect,
+                           const QPoint& physicalPoint, const QImage& cursorPatch = {},
+                           const QRect& cursorPixelRect = {});
     void updateColorPicker(ScreenshotOverlayWindow* overlay, const QImage& image,
                            const QRect& physicalRect, const QPoint& physicalPoint,
                            const QPointF& localPosition, qreal opacity,
@@ -56,6 +59,7 @@ class ScreenshotOverlayUiHost final : public QObject {
     void updateShortcutHints(ScreenshotOverlayWindow* overlay,
                              const ScreenshotShortcutHintContext& context, qreal opacity,
                              const QRectF& selectionGlobal, const QPoint& cursorPosition);
+    void updateShortcutHintPointer(ScreenshotOverlayWindow* overlay, const QPoint& cursorPosition);
     void hideShortcutHints();
     [[nodiscard]] bool stepToolbarStrokeWidth(int direction);
     [[nodiscard]] bool stepToolbarSelectionOpacity(int direction);
@@ -69,6 +73,9 @@ class ScreenshotOverlayUiHost final : public QObject {
     void showToolbar();
     void hideSelectionToolbar();
     void setSelectionToolbarHidden(bool hidden);
+    [[nodiscard]] bool selectionToolbarHidden() const {
+        return m_selectionToolbarHidden;
+    }
     void showSelectionToolbar();
     void raiseSelectionToolbar();
     void detachOverlayTransientUi(ScreenshotOverlayWindow* overlay);

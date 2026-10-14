@@ -19,6 +19,7 @@
 #include <QMoveEvent>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPointer>
 #include <QResizeEvent>
 #include <QShowEvent>
 #include <QToolButton>
@@ -478,11 +479,17 @@ void AdLineEdit::setPlaceholderText(const QString& value) {
 }
 
 void AdLineEdit::setText(const QString& value) {
+  const QPointer<AdLineEdit> guard(this);
+  const quint64 generation = ++textGeneration_;
+  const quint64 policyGeneration = textPolicyGeneration_;
   QString next = value;
   if (maxLength_ > 0 && next.size() > maxLength_) {
     next = next.left(maxLength_);
   }
   next = normalizedText(next);
+  if (!guard || textGeneration_ != generation || textPolicyGeneration_ != policyGeneration) {
+    return;
+  }
 
   if (text() == next) {
     return;
@@ -649,14 +656,23 @@ void AdLineEdit::setTextPolicy(AdInputTextPolicy* value) {
   }
 
   textPolicy_ = value;
-  emit textPolicyChanged(textPolicy_);
-
+  const quint64 generation = ++textPolicyGeneration_;
+  const QPointer<AdLineEdit> guard(this);
+  const quint64 textGeneration = textGeneration_;
   const QString current = text();
-  if (normalizedText(current) != current) {
-    setText(current);
+  const QString normalized = normalizedText(current);
+  if (!guard || textPolicyGeneration_ != generation) {
     return;
   }
-  refreshVisualState(true);
+  if (textGeneration_ == textGeneration && normalized != current) {
+    setText(current);
+    if (!guard || textPolicyGeneration_ != generation) {
+      return;
+    }
+  } else {
+    refreshVisualState(true);
+  }
+  emit textPolicyChanged(textPolicy_.data());
 }
 
 QSize AdLineEdit::sizeHint() const {
@@ -696,7 +712,11 @@ void AdLineEdit::focusEditor(FocusSelection selection, bool preventScroll) {
   }
 
   if (!preserved.isEmpty()) {
+    const QPointer<AdLineEdit> guard(this);
     detail::input_internal::restoreAncestorScrollPositions(preserved);
+    if (!guard) {
+      return;
+    }
     detail::input_internal::restoreAncestorScrollPositionsDeferred(this, preserved);
   }
 

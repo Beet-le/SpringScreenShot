@@ -221,6 +221,16 @@ ScreenshotPinnedHideToTopController::ScreenshotPinnedHideToTopController(QWidget
     });
     connect(&adqt::theme::ThemeManager::instance(), &adqt::theme::ThemeManager::themeChanged,
             m_handle.get(), qOverload<>(&QWidget::update));
+    // Cocoa's NSScreen can already expose the final resolution while Qt is still
+    // delivering older geometry snapshots. Place the handle after those snapshots
+    // have drained so Qt and the native display agree on the screen geometry.
+    m_screenReconciliationTimer.setSingleShot(true);
+    m_screenReconciliationTimer.setInterval(0);
+    connect(&m_screenReconciliationTimer, &QTimer::timeout, this, [this] {
+        if (active() && !m_shutdown && !m_suppressed && m_screen.screen != nullptr) {
+            reconcileScreen(geometry::screenGeometry(m_screen.screen));
+        }
+    });
     connect(qApp, &QGuiApplication::screenRemoved, this, [this](QScreen* removed) {
         if (active() && !m_shutdown && m_screen.screen == removed) {
             QScreen* target = m_owner ? m_owner->screen() : QGuiApplication::primaryScreen();
@@ -286,6 +296,7 @@ bool ScreenshotPinnedHideToTopController::reserve(const geometry::Screen& screen
 }
 
 void ScreenshotPinnedHideToTopController::release() {
+    m_screenReconciliationTimer.stop();
     reservations().removeAll(this);
     for (const auto& connection : m_screenConnections) {
         disconnect(connection);
@@ -299,7 +310,7 @@ void ScreenshotPinnedHideToTopController::watchScreen() {
     }
     const auto reconcile = [this] {
         if (active()) {
-            reconcileScreen(geometry::screenGeometry(m_screen.screen));
+            m_screenReconciliationTimer.start();
         }
     };
     m_screenConnections.push_back(
@@ -402,7 +413,9 @@ void ScreenshotPinnedHideToTopController::setSuppressed(bool suppressed) {
         hideWindow();
         m_handle->hide();
         release();
-    } else if (reserve(m_screen, m_handleGeometry.left())) {
+    } else if (reserve(m_screen.screen != nullptr ? geometry::screenGeometry(m_screen.screen)
+                                                  : m_screen,
+                       m_handleGeometry.left())) {
         showHandle();
     } else {
         exit();

@@ -445,6 +445,7 @@ class AdSelect final : public QWidget,
   SelectionSnapshot captureSelectionSnapshot() const;
   void emitSelectionSignalsFromSnapshot(const SelectionSnapshot& previous);
   QVariantList normalizedSelectionValues(const QVariantList& values) const;
+  void setModelInternal(QAbstractItemModel* model, bool ownsModel);
   void applySelectedValues(const QVariantList& values, bool ensureTagOptions = true);
   void syncSelectionKeysFromState();
   void syncSelectionStateFromSelectionModel();

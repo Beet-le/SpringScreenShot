@@ -440,8 +440,9 @@ impl DesktopSession {
             required_excluded_windows: Vec::new(),
         })
     }
-    /// Replace the cancellation token between one-shot operations. Streams must be stopped.
-    pub fn set_snapshot_cancellation(&mut self, token: crate::CancellationToken) {
+    /// Assign cancellation before starting streams or between one-shot operations.
+    /// Existing streams must be stopped before replacing their token.
+    pub fn set_cancellation(&mut self, token: crate::CancellationToken) {
         debug_assert!(self.streams.is_empty());
         self.config.cancellation = token;
         // A new user request may follow a permission grant. Do not retry within
@@ -584,6 +585,19 @@ impl DesktopSession {
             self.config.cursor = mode;
             self.previous = None;
             self.latest.fill(None);
+        }
+        Ok(())
+    }
+    /// Update the native producers as well as the configuration used on restart.
+    pub fn set_fps(&mut self, fps: u32) -> MacResult<()> {
+        if !(1..=240).contains(&fps) {
+            return Err(geometry("frame rate must be 1..=240"));
+        }
+        if fps != self.config.fps {
+            for stream in &mut self.streams {
+                stream.set_fps(fps)?;
+            }
+            self.config.fps = fps;
         }
         Ok(())
     }
@@ -909,6 +923,65 @@ mod tests {
             pixels: bounds.pixels_at_scale(scale).unwrap(),
             primary: id == 1,
         }
+    }
+    #[test]
+    fn stream_rate_is_retained_for_initial_start_and_restart() {
+        let display = display(1, 0.0, 100.0, 1.0);
+        let plan = region_plan(display.bounds, &[display], None).unwrap();
+        let mut session = DesktopSession {
+            config: DesktopConfig::new(DesktopTarget::PrimaryDisplay),
+            latest: vec![None; plan.sources.len()],
+            plan,
+            streams: Vec::new(),
+            compositor: None,
+            previous: None,
+            topology: 1,
+            generation: 1,
+            configuration_pending: true,
+            failure: None,
+            inspected_at: Instant::now(),
+            window_probe: None,
+            pending_content: None,
+            exclusion_control: None,
+            exclusion_flight: None,
+            required_excluded_windows: Vec::new(),
+        };
+        session.set_fps(30).unwrap();
+        assert_eq!(
+            session
+                .plan
+                .capture_config(&session.config, 0)
+                .frames_per_second,
+            30
+        );
+        session.release_capture_access();
+        session.set_fps(1).unwrap();
+        assert_eq!(
+            session
+                .plan
+                .capture_config(&session.config, 0)
+                .frames_per_second,
+            1
+        );
+        assert!(session.set_fps(0).is_err());
+        assert!(session.set_fps(241).is_err());
+        assert_eq!(
+            session
+                .plan
+                .capture_config(&session.config, 0)
+                .frames_per_second,
+            1
+        );
+        let cancellation = crate::CancellationToken::default();
+        session.set_cancellation(cancellation.clone());
+        cancellation.cancel();
+        assert!(
+            session
+                .plan
+                .capture_config(&session.config, 0)
+                .cancellation
+                .is_canceled()
+        );
     }
     #[test]
     fn capability_validation_rejects_requests_before_target_enumeration() {

@@ -48,7 +48,6 @@ void ScreenshotOverlayCoordinator::prewarmDisplayPool(ScreenshotDisplaySession& 
 void ScreenshotOverlayCoordinator::clearOverlayCanvas(ScreenshotOverlayWindow* overlay) const {
     if (overlay != nullptr) {
         overlay->setScrollingCaptureMode(false);
-        overlay->clearScrollingVisualHole();
     }
     m_canvasPresenter.clearOverlayCanvas(overlay);
     m_uiHost.hideColorPickerForOverlay(overlay);
@@ -85,8 +84,23 @@ void ScreenshotOverlayCoordinator::prepareDisplayModels(ScreenshotDisplaySession
     m_canvasPresenter.prepareDisplayModels(displaySession);
 }
 
+void ScreenshotOverlayCoordinator::prepareOverlayBackingStores(
+    const ScreenshotDisplaySession& displaySession) {
+    displaySession.forEachActiveOverlay(
+        [](qsizetype, const CapturedDisplayModel&, ScreenshotOverlayWindow* overlay) {
+            overlay->prepareBackingStore();
+        });
+}
+
 void ScreenshotOverlayCoordinator::applyDisplayModels(ScreenshotDisplaySession& displaySession) {
+    // Acquisition has finished. Let image attachment and the first complete frame
+    // take priority over any queued page preparation, even if selection is pending.
+    displaySession.forEachOverlay([](qsizetype, ScreenshotOverlayWindow* overlay) {
+        if (overlay != nullptr)
+            overlay->cancelBackingStorePreparation();
+    });
     m_canvasPresenter.applyDisplayModels(displaySession);
+    ++m_presentationRevision;
 }
 
 bool ScreenshotOverlayCoordinator::preparePreCaptureOverlayWindows(
@@ -152,7 +166,6 @@ void ScreenshotOverlayCoordinator::hideOverlayWindowsImmediately(
         if (overlay == nullptr) {
             return;
         }
-        overlay->clearScrollingVisualHole();
         if (overlay->canvas() != nullptr) {
             overlay->canvas()->setInteractionEnabled(false);
         }
@@ -180,7 +193,6 @@ void ScreenshotOverlayCoordinator::hideOverlayWindows(
             return;
         }
         overlay->setCanvasClearBackgroundEnabled(false);
-        overlay->clearScrollingVisualHole();
         m_canvasPresenter.clearOverlayCanvas(overlay);
         overlay->releaseNativeSurface();
     });
@@ -205,48 +217,29 @@ void ScreenshotOverlayCoordinator::flushDeferredOverlayMaintenance(
 void ScreenshotOverlayCoordinator::updateOverlayState(
     const ScreenshotDisplaySession& displaySession,
     const ScreenshotSelectionVisualState& selectionState, bool intelligentSelecting,
-    bool manualSelecting, bool dragging) {
+    bool manualSelecting, bool dragging, bool updateCursors) {
     m_canvasPresenter.updateOverlayState(displaySession, selectionState, intelligentSelecting,
-                                         manualSelecting, dragging);
+                                         manualSelecting, dragging, updateCursors);
 }
-
-namespace {
-QRect scrollingHoleForDisplay(const CapturedDisplayModel& display, const QRectF& selection) {
-    const QRectF canvasRect = ScreenshotGeometryMapper::displayCanvasRect(display);
-    const QRectF intersection = selection.intersected(canvasRect);
-    if (intersection.isEmpty() || canvasRect.isEmpty() || display.logicalRect.isEmpty()) {
-        return {};
-    }
-
-    const ScreenshotGeometryMapper mapper;
-    const QPointF origin(display.logicalRect.topLeft());
-    const QRectF localRect(
-        mapper.logicalPositionForCanvasPoint(display, intersection.topLeft()) - origin,
-        mapper.logicalPositionForCanvasPoint(display, intersection.bottomRight()) - origin);
-    return localRect.toAlignedRect().intersected(QRect(QPoint(0, 0), display.logicalRect.size()));
-}
-} // namespace
 
 void ScreenshotOverlayCoordinator::setScrollingCaptureMode(
-    const ScreenshotDisplaySession& displaySession, const QRectF& selection, bool enabled) {
-    displaySession.forEachActiveOverlay([enabled, &selection](qsizetype,
-                                                              const CapturedDisplayModel& display,
-                                                              ScreenshotOverlayWindow* overlay) {
-        if (overlay == nullptr) {
-            return;
-        }
-        SnowCanvasWidget* canvas = overlay->canvas();
-        if (enabled) {
-            if (canvas != nullptr) {
-                canvas->clearCursorForLayer(SnowCanvasCursorLayer::Host);
+    const ScreenshotDisplaySession& displaySession, bool enabled) {
+    displaySession.forEachActiveOverlay(
+        [enabled](qsizetype, const CapturedDisplayModel&, ScreenshotOverlayWindow* overlay) {
+            if (overlay == nullptr) {
+                return;
             }
-            overlay->setScrollingVisualHole(scrollingHoleForDisplay(display, selection));
-            overlay->setScrollingCaptureMode(true);
-            return;
-        }
+            SnowCanvasWidget* canvas = overlay->canvas();
+            if (enabled) {
+                if (canvas != nullptr) {
+                    canvas->clearCursorForLayer(SnowCanvasCursorLayer::Host);
+                }
+                overlay->setScrollingCaptureMode(true);
+                return;
+            }
 
-        overlay->setScrollingCaptureMode(false);
-    });
+            overlay->setScrollingCaptureMode(false);
+        });
 }
 
 void ScreenshotOverlayCoordinator::setScrollingResultPreview(
@@ -506,6 +499,13 @@ ScreenshotColorPickerWindow* ScreenshotOverlayCoordinator::colorPicker() const {
     return m_uiHost.colorPicker();
 }
 
+void ScreenshotOverlayCoordinator::sampleColorPicker(const QImage& image, const QRect& physicalRect,
+                                                     const QPoint& physicalPoint,
+                                                     const QImage& cursorPatch,
+                                                     const QRect& cursorPixelRect) {
+    m_uiHost.sampleColorPicker(image, physicalRect, physicalPoint, cursorPatch, cursorPixelRect);
+}
+
 void ScreenshotOverlayCoordinator::updateColorPicker(
     ScreenshotOverlayWindow* overlay, const QImage& image, const QRect& physicalRect,
     const QPoint& physicalPoint, const QPointF& localPosition, qreal opacity,
@@ -528,6 +528,11 @@ void ScreenshotOverlayCoordinator::updateShortcutHints(ScreenshotOverlayWindow* 
                                                        qreal opacity, const QRectF& selectionGlobal,
                                                        const QPoint& cursorPosition) {
     m_uiHost.updateShortcutHints(overlay, context, opacity, selectionGlobal, cursorPosition);
+}
+
+void ScreenshotOverlayCoordinator::updateShortcutHintPointer(ScreenshotOverlayWindow* overlay,
+                                                             const QPoint& cursorPosition) {
+    m_uiHost.updateShortcutHintPointer(overlay, cursorPosition);
 }
 
 bool ScreenshotOverlayCoordinator::screenshotUiContainsGlobalPoint(const QPoint& position) const {

@@ -140,10 +140,6 @@ struct ScreenshotScrollingCaptureController::Impl {
         previewWatchdog.start(5000);
     }
 
-    ~Impl() {
-        stop(false);
-    }
-
     bool start(QRect selection, ScreenshotScrollingRecognitionMode requestedMode) {
         if (selection.width() < 1 || selection.height() < 1) {
             logScrollingEvent("scrolling.start_rejected", generation,
@@ -224,8 +220,7 @@ struct ScreenshotScrollingCaptureController::Impl {
         capturePaused = false;
         pipelineInitialized = false;
 
-        context.overlayCoordinator.setScrollingCaptureMode(context.displaySession,
-                                                           QRectF(canvasSelection), true);
+        context.overlayCoordinator.setScrollingCaptureMode(context.displaySession, true);
 
         logPreparation();
         logScrollingEvent("scrolling.prepared", generation);
@@ -329,8 +324,7 @@ struct ScreenshotScrollingCaptureController::Impl {
         canvasSelection = {};
 
         if (wasActive) {
-            context.overlayCoordinator.setScrollingCaptureMode(context.displaySession, QRectF(),
-                                                               false);
+            context.overlayCoordinator.setScrollingCaptureMode(context.displaySession, false);
             if (restoreScreenshotPresentation) {
                 context.overlayCoordinator.applyDisplayModels(context.displaySession);
             }
@@ -339,11 +333,9 @@ struct ScreenshotScrollingCaptureController::Impl {
         }
         thumbnailHost = nullptr;
 
-        // Scrolling workers are session-scoped.  Tear them down after invalidating all
-        // in-flight work so the stitch session and its native resources are released between
-        // captures; the next start() recreates them on demand.
+        // Retire the session after invalidating UI delivery. Native shutdown and accepted
+        // exports drain asynchronously; their window exclusion leases survive until then.
         shutdownWorker();
-        restoreScrollingWindowsCaptureVisibility();
     }
 
     void detachPendingResultRequest() {
@@ -360,19 +352,35 @@ struct ScreenshotScrollingCaptureController::Impl {
         if (overlay == nullptr || toolbar == nullptr) {
             return false;
         }
-        captureExclusion.exclude(overlay);
-        captureExclusion.exclude(overlay->scrollingThumbnailWindow());
-        captureExclusion.exclude(toolbar);
-        exclusionWindowIds = captureExclusion.windowIds(snow_shot::platform::captureWindowId);
+        captureExclusion = std::make_shared<snow_shot::presentation::WindowCaptureExclusion>(
+            [operation = exclusionGeneration](QWidget* window, bool excluded) {
+#if defined(Q_OS_WIN) || defined(_WIN32)
+                SetLastError(ERROR_SUCCESS);
+                const bool succeeded =
+                    snow_shot::platform::setWindowExcludedFromCapture(window, excluded);
+                const DWORD error = succeeded ? ERROR_SUCCESS : GetLastError();
+#else
+                const bool succeeded =
+                    snow_shot::platform::setWindowExcludedFromCapture(window, excluded);
+                const qint64 error = 0;
+#endif
+                logScrollingEvent(
+                    "scrolling.window_exclusion", operation,
+                    {{QStringLiteral("status"), excluded},
+                     {QStringLiteral("outcome"),
+                      succeeded ? QStringLiteral("succeeded") : QStringLiteral("failed")},
+                     {QStringLiteral("code"), static_cast<qint64>(error)}},
+                    succeeded ? QtInfoMsg : QtWarningMsg);
+                return succeeded;
+            });
+        captureExclusion->exclude(overlay);
+        captureExclusion->exclude(overlay->scrollingThumbnailWindow());
+        captureExclusion->exclude(toolbar);
+        exclusionWindowIds = captureExclusion->windowIds(snow_shot::platform::captureWindowId);
 #else
         Q_UNUSED(overlay);
 #endif
         return true;
-    }
-
-    void restoreScrollingWindowsCaptureVisibility() {
-        captureExclusion.restore();
-        exclusionWindowIds.clear();
     }
 
     void ensureWorker() {
@@ -384,6 +392,16 @@ struct ScreenshotScrollingCaptureController::Impl {
     }
 
     void shutdownWorker() {
+        auto exclusion = std::exchange(captureExclusion, {});
+        exclusionWindowIds.clear();
+        if (pipeline) {
+            pipeline->shutdown(QCoreApplication::instance(), [exclusion = std::move(exclusion)] {
+                if (exclusion)
+                    exclusion->restore();
+            });
+        } else if (exclusion) {
+            exclusion->restore();
+        }
         pipeline.reset();
     }
 
@@ -400,8 +418,8 @@ struct ScreenshotScrollingCaptureController::Impl {
         ++generation;
         snapshotRequest.cancel();
         pipeline->reset(generation);
-        // Leave the pipeline's error callback before destroying it. stop() joins
-        // capture before restoring native sharing policies, including failed starts.
+        // Leave the pipeline's error callback before retiring it. Native cleanup retains
+        // sharing policies until the source has stopped, including failed starts.
         QMetaObject::invokeMethod(
             &owner,
             [this, failedGeneration = generation]() {
@@ -539,8 +557,7 @@ struct ScreenshotScrollingCaptureController::Impl {
         if (!active || !movement.active())
             return;
         canvasSelection = movement.update(pointer, context.geometry.canvasBounds().toAlignedRect());
-        context.overlayCoordinator.setScrollingCaptureMode(context.displaySession, canvasSelection,
-                                                           true);
+        context.overlayCoordinator.setScrollingCaptureMode(context.displaySession, true);
         autoScroller.setSelection(canvasSelection.translated(context.geometry.canvasOrigin()));
         context.displaySession.forEachActiveOverlay([this](qsizetype,
                                                            const CapturedDisplayModel& display,
@@ -723,29 +740,7 @@ struct ScreenshotScrollingCaptureController::Impl {
     std::unique_ptr<ScreenshotScrollingPipeline> pipeline;
     QPointer<ScreenshotOverlayWindow> thumbnailHost;
     QVector<std::uint32_t> exclusionWindowIds;
-    snow_shot::presentation::WindowCaptureExclusion captureExclusion{
-#if defined(Q_OS_WIN) || defined(_WIN32) || defined(Q_OS_MACOS)
-        [this](QWidget* window, bool excluded) {
-#if defined(Q_OS_WIN) || defined(_WIN32)
-            SetLastError(ERROR_SUCCESS);
-            const bool succeeded =
-                snow_shot::platform::setWindowExcludedFromCapture(window, excluded);
-            const DWORD error = succeeded ? ERROR_SUCCESS : GetLastError();
-#else
-            const bool succeeded =
-                snow_shot::platform::setWindowExcludedFromCapture(window, excluded);
-            const qint64 error = 0;
-#endif
-            logScrollingEvent("scrolling.window_exclusion", exclusionGeneration,
-                              {{QStringLiteral("status"), excluded},
-                               {QStringLiteral("outcome"),
-                                succeeded ? QStringLiteral("succeeded") : QStringLiteral("failed")},
-                               {QStringLiteral("code"), static_cast<qint64>(error)}},
-                              succeeded ? QtInfoMsg : QtWarningMsg);
-            return succeeded;
-        }
-#endif
-    };
+    std::shared_ptr<snow_shot::presentation::WindowCaptureExclusion> captureExclusion;
     quint64 exclusionGeneration = 0;
     QSize latestOutputSize;
     ScreenshotScrollingSnapshot cachedSnapshot;
@@ -766,7 +761,10 @@ ScreenshotScrollingCaptureController::ScreenshotScrollingCaptureController(
     ScreenshotScrollingCaptureControllerContext context, QObject* parent)
     : QObject(parent), m_impl(std::make_unique<Impl>(*this, context)) {}
 
-ScreenshotScrollingCaptureController::~ScreenshotScrollingCaptureController() = default;
+ScreenshotScrollingCaptureController::~ScreenshotScrollingCaptureController() {
+    // stop() publishes stateChanged; observers can query this controller while it retires.
+    m_impl->stop(false);
+}
 
 bool ScreenshotScrollingCaptureController::start(const QRect& canvasSelection,
                                                  ScreenshotScrollingRecognitionMode mode) {

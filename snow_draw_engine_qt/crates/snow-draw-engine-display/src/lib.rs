@@ -81,6 +81,7 @@ pub struct DisplaySpotlightCutout {
     pub height: f64,
     pub rotation: f64,
     pub shape: DisplayRectangleShape,
+    pub corner_radii: snow_draw_engine_core::CornerRadii,
 }
 
 impl Default for DisplaySpotlightConfig {
@@ -370,6 +371,7 @@ pub struct ArrowDisplayItem {
     pub id: DisplayItemId,
     pub bound_text_id: Option<DisplayItemId>,
     pub label_bounds: Option<snow_draw_engine_core::DrawRect>,
+    pub bound_text_overlay: bool,
     pub points: Vec<[f64; 2]>,
     pub path_commands: Vec<ArrowPathCommand>,
     pub geometry: Arc<PathGeometry>,
@@ -415,6 +417,7 @@ pub enum DisplayFillStyle {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TextDisplayItem {
+    pub text_ink_reserve: f64,
     pub id: DisplayItemId,
     pub center_x: f64,
     pub center_y: f64,
@@ -429,6 +432,8 @@ pub struct TextDisplayItem {
     pub text: String,
     pub color: ColorRgba8,
     pub font_size: f64,
+    pub bold: bool,
+    pub italic: bool,
     pub font_family: Option<String>,
     pub fill: ColorRgba8,
     pub fill_style: DisplayFillStyle,
@@ -494,6 +499,7 @@ impl Default for ArrowDisplayItem {
         Self {
             bound_text_id: None,
             label_bounds: None,
+            bound_text_overlay: false,
             id: DisplayItemId::default(),
             points: Vec::new(),
             path_commands: Vec::new(),
@@ -541,6 +547,7 @@ impl Default for RectangleDisplayItem {
 impl Default for TextDisplayItem {
     fn default() -> Self {
         Self {
+            text_ink_reserve: 0.0,
             id: DisplayItemId::default(),
             center_x: 0.0,
             center_y: 0.0,
@@ -553,6 +560,8 @@ impl Default for TextDisplayItem {
             color: ColorRgba8::default(),
             font_size: 0.0,
             font_family: None,
+            bold: false,
+            italic: false,
             fill: ColorRgba8::default(),
             fill_style: DisplayFillStyle::Solid,
             stroke: ColorRgba8::default(),
@@ -626,6 +635,11 @@ pub enum UiShapeKind {
     ArrowSegmentHandle,
     EraserCursor,
     BindingHighlight,
+    MagnifierMoveHandle,
+    MagnifierSelectionFrame,
+    SpeechBubbleAddTailHandle,
+    SpeechBubbleTailBaseHandle,
+    SpeechBubbleTailTipHandle,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -730,7 +744,45 @@ impl Default for SnapGuideDisplayItem {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct MagnifierDisplayItem {
+    pub lens: RectangleDisplayItem,
+    pub source_center: Point<f64>,
+    pub source_width: f64,
+    pub source_height: f64,
+    pub factor: f64,
+    pub connection_type: snow_draw_engine_core::MagnifierConnectionType,
+    pub source_outline: bool,
+    pub leader: Option<ArrowDisplayItem>,
+}
+
+impl MagnifierDisplayItem {
+    pub fn paint_geometry(&self) -> snow_draw_engine_core::MagnifierPaintGeometry {
+        snow_draw_engine_core::MagnifierPaintGeometry {
+            lens_center: Point::new(self.lens.center_x, self.lens.center_y),
+            lens_width: self.lens.width,
+            lens_height: self.lens.height,
+            source_center: self.source_center,
+            source_width: self.source_width,
+            source_height: self.source_height,
+            rotation: self.lens.rotation,
+            stroke_width: self.lens.stroke_width,
+            stroke_visible: self.lens.stroke.a != 0,
+            source_outline: self.source_outline,
+            connection_type: self.connection_type,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpeechBubbleDisplayItem {
+    pub body: RectangleDisplayItem,
+    pub path: ArrowDisplayItem,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum SceneDisplayItem {
+    SpeechBubble(SpeechBubbleDisplayItem),
+    Magnifier(MagnifierDisplayItem),
     Rectangle(RectangleDisplayItem),
     Filter(FilterDisplayItem),
     Arrow(ArrowDisplayItem),

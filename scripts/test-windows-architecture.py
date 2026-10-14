@@ -284,6 +284,30 @@ message(STATUS "ENCODERS=${{SNOW_SHOT_ENCODERS}}")
             for encoder in ('h264_nvenc', 'h264_amf', 'h264_qsv'):
                 self.assertEqual(encoder in output, arch == 'x64')
 
+    def test_minimal_recording_profiles_enable_only_required_tempo_filters(self):
+        port = ROOT / 'cmake/vcpkg-overlay-ports/ffmpeg'
+        manifest = json.loads((port / 'vcpkg.json').read_text(encoding='utf-8'))
+        text = (port / 'portfile.cmake').read_text(encoding='utf-8')
+        start = text.index('if("snow-shot-minimal" IN_LIST FEATURES)',
+                           text.index('if("rubberband" IN_LIST FEATURES)'))
+        fragment = text[start:text.index('set(OPTIONS_CROSS', start)]
+        for profile, platform in [('snow-shot-minimal', 'WINDOWS'),
+                                  ('snow-macos-media', 'OSX')]:
+            with self.subTest(profile=profile):
+                dependencies = manifest['features'][profile]['dependencies']
+                common = next(dependency['features'] for dependency in dependencies
+                              if dependency['name'] == 'ffmpeg' and
+                              'platform' not in dependency)
+                self.assertIn('avfilter', common)
+                output = self.run_cmake(f'''
+set(VCPKG_TARGET_IS_{platform} TRUE)
+set(FEATURES {profile})
+{fragment}
+message(STATUS "OPTIONS=${{OPTIONS}}")
+''')
+                filters = re.findall(r'--enable-filter=([^\s]+)', output)
+                self.assertEqual(filters, ['abuffer,abuffersink,atempo'])
+
     def test_crashpad_uses_runnable_host_compilers_and_pinned_toolset(self):
         overlay = (ROOT / 'cmake/vcpkg-overlay-ports/crashpad/portfile.cmake').read_text(
             encoding='utf-8')

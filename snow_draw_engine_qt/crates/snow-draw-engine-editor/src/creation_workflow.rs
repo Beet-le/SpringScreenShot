@@ -128,7 +128,7 @@ impl Editor {
             committed_points: vec![start_canvas_position],
             press_view_position: start_view_position,
             phase: ArrowCreationPhase::InitialPress,
-            distance_pixel_scale: self.view.distance_pixel_scale,
+            distance_pixel_scale: self.view.get().distance_pixel_scale,
             ..Default::default()
         });
         self.clear_transient_visuals();
@@ -194,14 +194,16 @@ impl Editor {
         mut arrow: ArrowData,
     ) -> Result<(), ErrorCode> {
         validate_arrow(&arrow)?;
-        let label = if arrow.is_distance() {
-            let text = snow_draw_engine_document::distance_label(&arrow, None)
+        let label = if arrow.is_generated_annotation() {
+            let text = snow_draw_engine_document::generated_annotation_label(&arrow, None)
                 .ok_or(ErrorCode::InvalidArgument)?;
             Some(self.measured_distance_label(document.peek_next_element_id(), &arrow, &text))
         } else {
             None
         };
-        let mut transaction = Transaction::new(if arrow.is_distance() {
+        let mut transaction = Transaction::new(if arrow.is_angle() {
+            "create angle"
+        } else if arrow.is_distance() {
             "create distance"
         } else if arrow.is_line() {
             "create line"
@@ -271,25 +273,13 @@ impl Editor {
 
     pub(crate) fn serial_number_creation_preview(
         &self,
-        document: &DocumentModel,
         center: Point<f64>,
     ) -> Result<SerialNumberData, ErrorCode> {
-        let number = if self
-            .state
-            .default_serial_number
-            .serial_number_type
-            .supports_number()
-            && !self.state.serial_number_sequence_overridden
-                [self.state.default_serial_number.numeric_type as usize]
-        {
-            next_serial_number(document, self.state.default_serial_number.numeric_type)
-                .max(self.state.default_serial_number.number)
-        } else {
-            self.state.default_serial_number.number
-        };
+        // Creation uses the same session counter as the toolbar. Document
+        // insertions advance automatic counters at the mutation boundary;
+        // edits to existing badges cannot become implicit sequence starts.
         let mut serial = SerialNumberData {
             center,
-            number,
             ..self.state.default_serial_number.clone()
         };
         serial.text_element_id = None;
@@ -517,6 +507,16 @@ impl Editor {
                 filter.rotation = rect.rotation;
                 ElementCreationPreview::Filter(filter)
             })
+        } else if self.active_tool() == ActiveTool::SpeechBubble {
+            preview.map(|mut body| {
+                body.corner_radii = self.state.default_speech_bubble_style.corner_radii;
+                ElementCreationPreview::SpeechBubble(
+                    snow_draw_engine_document::SpeechBubbleData::new(body),
+                )
+            })
+        } else if self.active_tool() == ActiveTool::Magnifier {
+            preview
+                .map(|rect| ElementCreationPreview::Magnifier(self.magnifier_creation_data(rect)))
         } else {
             preview.map(ElementCreationPreview::Rectangle)
         };
@@ -552,6 +552,43 @@ impl Editor {
         self.cancel_interaction();
 
         if let Some(rect) = preview {
+            if self.active_tool() == ActiveTool::SpeechBubble {
+                let id = document.peek_next_element_id();
+                let mut body = rect;
+                body.corner_radii = self.state.default_speech_bubble_style.corner_radii;
+                let bubble = snow_draw_engine_document::SpeechBubbleData::new(body);
+                let mut transaction = Transaction::new("create speech bubble");
+                transaction.insert_speech_bubble(id, ElementMeta::default(), bubble);
+                let undo = self.capture_document_sync_snapshot(document);
+                self.set_selection_state(vec![id], Some(id));
+                self.state.pending_speech_bubble_text_edit = Some(id);
+                self.queue_command(EditorCommand::ApplyTransaction(
+                    ApplyTransactionCommand::with_history_undo_snapshot(transaction, undo),
+                ));
+                return Ok(InteractionOutput {
+                    consumed: true,
+                    capture: self.release_capture_command(),
+                    cursor: CursorCommand::Set(self.tool_policy().default_cursor),
+                });
+            }
+            if self.active_tool() == ActiveTool::Magnifier {
+                let value = self.magnifier_creation_data(rect);
+                snow_draw_engine_document::validate_magnifier(&value)?;
+                let mut transaction = Transaction::new("create magnifier");
+                transaction.insert_magnifier(
+                    document.peek_next_element_id(),
+                    ElementMeta::default(),
+                    value,
+                );
+                self.queue_command(EditorCommand::ApplyTransaction(
+                    ApplyTransactionCommand::new(transaction),
+                ));
+                return Ok(InteractionOutput {
+                    consumed: true,
+                    capture: self.release_capture_command(),
+                    cursor: CursorCommand::Set(self.tool_policy().default_cursor),
+                });
+            }
             if matches!(
                 self.active_tool(),
                 ActiveTool::RectangleFilter | ActiveTool::RectangleEraser
@@ -642,6 +679,9 @@ impl Editor {
         document: &DocumentModel,
         event: PointerEvent,
     ) -> Result<InteractionOutput, ErrorCode> {
+        if self.state.active_tool == ActiveTool::Angle {
+            return self.process_angle_creation_pointer_event(document, event);
+        }
         if self.state.active_tool == ActiveTool::Distance {
             return self.process_distance_creation_pointer_event(document, event);
         }
@@ -763,19 +803,18 @@ impl Editor {
                 })
             }
             Some(PointerButton::Secondary) => {
-                if self.finalize_arrow_creation_from_points(
+                if !self.finalize_arrow_creation_from_points(
                     document,
                     &state.committed_points,
                     event.modifiers,
                 )? {
-                    Ok(InteractionOutput {
-                        consumed: true,
-                        capture: PointerCaptureCommand::NoChange,
-                        cursor: CursorCommand::Set(CursorStyle::Crosshair),
-                    })
-                } else {
-                    Ok(InteractionOutput::default())
+                    self.cancel_interaction();
                 }
+                Ok(InteractionOutput {
+                    consumed: true,
+                    capture: self.release_capture_command(),
+                    cursor: CursorCommand::Set(CursorStyle::Crosshair),
+                })
             }
             _ => Ok(InteractionOutput::default()),
         }
@@ -1572,6 +1611,86 @@ mod line_creation_tests {
             (segment[0].x - segment[1].x).abs() <= 1e-6
                 || (segment[0].y - segment[1].y).abs() <= 1e-6
         }));
+    }
+
+    #[test]
+    fn secondary_click_finishes_single_node_linear_creation_without_a_transaction() {
+        for (tool, arrow_type) in [
+            (ActiveTool::Arrow, ArrowType::Straight),
+            (ActiveTool::Arrow, ArrowType::Curve),
+            (ActiveTool::Arrow, ArrowType::Elbow),
+            (ActiveTool::Line, ArrowType::Straight),
+            (ActiveTool::Line, ArrowType::Curve),
+        ] {
+            let document = DocumentModel::new();
+            let mut editor = Editor::new(EngineConfig::default()).unwrap();
+            editor.set_surface_size(400, 300).unwrap();
+            editor.set_active_tool(tool).unwrap();
+            editor.state.default_arrow_style.arrow_type = arrow_type;
+            editor.state.default_line_style.arrow_type = arrow_type;
+            let pointer = |event_type, position, button, buttons| {
+                InputEvent::Pointer(PointerEvent {
+                    pointer_id: 4,
+                    event_type,
+                    device: PointerDevice::Mouse,
+                    position,
+                    button,
+                    buttons: PointerButtons(buttons),
+                    modifiers: Modifiers::default(),
+                })
+            };
+            for (event_type, buttons) in [
+                (PointerEventType::Down, PointerButtons::PRIMARY),
+                (PointerEventType::Up, 0),
+            ] {
+                let update = editor
+                    .process_input(
+                        &document,
+                        pointer(
+                            event_type,
+                            Point::new(60.0, 80.0),
+                            Some(PointerButton::Primary),
+                            buttons,
+                        ),
+                    )
+                    .unwrap();
+                assert!(update.interaction.consumed);
+                assert!(update.command.is_none());
+            }
+            assert!(matches!(
+                &editor.state.interaction,
+                InteractionState::CreatingArrow(state)
+                    if state.committed_points.len() == 1
+                        && state.phase == ArrowCreationPhase::AwaitingEndpoint
+            ));
+            editor
+                .process_input(
+                    &document,
+                    pointer(PointerEventType::Move, Point::new(180.0, 120.0), None, 0),
+                )
+                .unwrap();
+            assert!(editor.state.creation_preview.is_some());
+
+            let update = editor
+                .process_input(
+                    &document,
+                    pointer(
+                        PointerEventType::Down,
+                        Point::new(25.0, 180.0),
+                        Some(PointerButton::Secondary),
+                        PointerButtons::SECONDARY,
+                    ),
+                )
+                .unwrap();
+
+            assert!(update.interaction.consumed);
+            assert!(update.command.is_none());
+            assert!(matches!(editor.state.interaction, InteractionState::Idle));
+            assert!(editor.state.creation_preview.is_none());
+            assert!(editor.state.ui.snap_guides.is_empty());
+            assert!(editor.captured_pointer.is_none());
+            assert_eq!(editor.active_tool(), tool);
+        }
     }
 
     #[test]

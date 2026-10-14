@@ -50,6 +50,22 @@ pub struct Transaction {
 }
 
 impl Transaction {
+    pub fn normalize_angle_invariants(&mut self) -> Result<(), snow_draw_engine_core::ErrorCode> {
+        for operation in &mut self.operations {
+            match operation {
+                Operation::InsertElement { data, .. }
+                | Operation::UpdateElementData { data, .. } => {
+                    data.normalize_angle_invariant()?;
+                }
+                Operation::RestoreElement { element, .. } => {
+                    element.data.normalize_angle_invariant()?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     pub fn new(label: impl Into<String>) -> Self {
         Self {
             label: label.into(),
@@ -84,6 +100,50 @@ impl Transaction {
             id,
             meta,
             data: ElementData::Rectangle(rect),
+        })
+    }
+
+    pub fn insert_speech_bubble(
+        &mut self,
+        id: ElementId,
+        meta: ElementMeta,
+        value: crate::SpeechBubbleData,
+    ) -> &mut Self {
+        self.push(Operation::InsertElement {
+            id,
+            meta,
+            data: ElementData::SpeechBubble(value),
+        })
+    }
+
+    pub fn update_speech_bubble(
+        &mut self,
+        id: ElementId,
+        value: crate::SpeechBubbleData,
+    ) -> &mut Self {
+        self.push(Operation::UpdateElementData {
+            id,
+            data: ElementData::SpeechBubble(value),
+        })
+    }
+
+    pub fn insert_magnifier(
+        &mut self,
+        id: ElementId,
+        meta: ElementMeta,
+        value: crate::MagnifierData,
+    ) -> &mut Self {
+        self.push(Operation::InsertElement {
+            id,
+            meta,
+            data: ElementData::Magnifier(value),
+        })
+    }
+
+    pub fn update_magnifier(&mut self, id: ElementId, value: crate::MagnifierData) -> &mut Self {
+        self.push(Operation::UpdateElementData {
+            id,
+            data: ElementData::Magnifier(value),
         })
     }
 

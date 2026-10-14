@@ -214,8 +214,7 @@ int main(int argc, char** argv) {
             QSize(qRound(selection.width() * scale), qRound(selection.height() * scale)),
             {},
             runtime.smartEraseSnapshot(),
-            1,
-            {}};
+            1};
         return std::make_shared<ScreenshotExportArtifact>(
             ScreenshotExportSource::fromPinnedViewport(std::move(source)));
     };

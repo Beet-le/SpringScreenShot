@@ -1,5 +1,6 @@
 #include "snow_shot/presentation/screenshotexportartifact.h"
 #include "snow_shot/presentation/screenshotencodingsettings.h"
+#include "snow_shot/runtime/runtimeactivitytracker.h"
 
 #include "snowimageqtcodec.h"
 #include "snow_shot/storage/settingsadapters.h"
@@ -49,11 +50,12 @@ void dispatchResult(QObject* receiver, Callback callback, Result result) {
     }
     static_cast<void>(QMetaObject::invokeMethod(
         receiver,
-        [guardedReceiver, callback = std::move(callback), result = std::move(result)]() mutable {
+        snow_shot::runtime::trackRuntimeWork([guardedReceiver, callback = std::move(callback),
+                                              result = std::move(result)]() mutable {
             if (!guardedReceiver.isNull()) {
                 callback(std::move(result));
             }
-        },
+        }),
         Qt::QueuedConnection));
 }
 
@@ -103,11 +105,12 @@ void dispatchRowSource(QObject* receiver, ScreenshotExportArtifact::RowSourceCal
     }
     static_cast<void>(QMetaObject::invokeMethod(
         receiver,
-        [guardedReceiver, callback = std::move(callback), source = std::move(source),
-         error = std::move(error)]() mutable {
+        snow_shot::runtime::trackRuntimeWork([guardedReceiver, callback = std::move(callback),
+                                              source = std::move(source),
+                                              error = std::move(error)]() mutable {
             if (!guardedReceiver.isNull())
                 callback(std::move(source), std::move(error));
-        },
+        }),
         Qt::QueuedConnection));
 }
 
@@ -989,14 +992,15 @@ bool ScreenshotExportArtifact::requestQuickSave(QObject* receiver,
         const QPointer<ScreenshotExportArtifact> guarded(this);
         return QMetaObject::invokeMethod(
             receiver,
-            [guarded, callback = std::move(callback)]() mutable {
+            snow_shot::runtime::trackRuntimeWork([guarded,
+                                                  callback = std::move(callback)]() mutable {
                 if (guarded && !guarded->isCancelled()) {
                     callback(ScreenshotExportTaskResult::failure(
                         ScreenshotExportFailureStage::File,
                         QCoreApplication::translate("ScreenshotExportArtifact",
                                                     "The image save directory is not configured")));
                 }
-            },
+            }),
             Qt::QueuedConnection);
     }
     return requestAutomaticSave(
@@ -1311,7 +1315,7 @@ bool ScreenshotExportArtifact::requestClipboardFile(
     }
     const QString path = directory->path();
     return requestFileSave(
-        receiver, {path}, format, std::move(filenameFormat), encoding,
+        receiver, QStringList{path}, format, std::move(filenameFormat), encoding,
         [this, directory = std::move(directory),
          callback = std::move(callback)](ScreenshotExportTaskResult result) mutable {
             if (!result.succeeded()) {
@@ -1336,7 +1340,17 @@ bool ScreenshotExportArtifact::requestAutomaticSave(
                            ScreenshotExportCoordinator::Priority::Background);
 }
 
-bool ScreenshotExportArtifact::requestFileSave(QObject* receiver, QStringList directories,
+bool ScreenshotExportArtifact::requestAutomaticSaveToConfiguredDirectory(
+    QObject* receiver, QString configuredDirectory, ScreenshotImageFileFormat format,
+    QString filenameFormat, ScreenshotImageEncodingOptions encoding,
+    ScreenshotExportCoordinator::Completion callback, ScreenshotPdfOptions pdf,
+    QDateTime requestedAt) {
+    return requestFileSave(receiver, std::move(configuredDirectory), format,
+                           std::move(filenameFormat), encoding, std::move(callback), pdf,
+                           requestedAt, ScreenshotExportCoordinator::Priority::Background);
+}
+
+bool ScreenshotExportArtifact::requestFileSave(QObject* receiver, FileSaveDestination destination,
                                                ScreenshotImageFileFormat format,
                                                QString filenameFormat,
                                                ScreenshotImageEncodingOptions encoding,
@@ -1349,7 +1363,7 @@ bool ScreenshotExportArtifact::requestFileSave(QObject* receiver, QStringList di
     const QPointer<QObject> target(receiver);
     if (!requestedAt.isValid())
         requestedAt = QDateTime::currentDateTime();
-    auto schedule = [guarded, target, directories = std::move(directories), format, pdf, priority,
+    auto schedule = [guarded, target, destination = std::move(destination), format, pdf, priority,
                      requestedAt, filenameFormat = std::move(filenameFormat),
                      callback = std::move(callback)](std::shared_ptr<FileSource> source,
                                                      QString error) mutable {
@@ -1365,13 +1379,18 @@ bool ScreenshotExportArtifact::requestFileSave(QObject* receiver, QStringList di
             std::make_shared<ScreenshotExportCoordinator::Completion>(std::move(callback));
         auto job = ScreenshotExportCoordinator::shared().submit(
             target, priority,
-            [directories, format, pdf, requestedAt, filenameFormat,
+            [destination, format, pdf, requestedAt, filenameFormat,
              source = std::move(source)](const ScreenshotExportCancellation& cancellation) mutable {
                 if (cancellation.isCancellationRequested()) {
                     return ScreenshotExportTaskResult::failure(
                         ScreenshotExportFailureStage::Cancelled,
                         QStringLiteral("The screenshot save was cancelled"));
                 }
+                const auto* configuredDirectory = std::get_if<QString>(&destination);
+                const QStringList directories =
+                    configuredDirectory != nullptr
+                        ? ScreenshotImageFileService::automaticDirectories(*configuredDirectory)
+                        : std::get<QStringList>(destination);
                 ScreenshotImageFileSaveResult saved;
                 const auto cancelled = [&cancellation] {
                     return cancellation.isCancellationRequested();

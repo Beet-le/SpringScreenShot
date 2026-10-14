@@ -53,6 +53,8 @@ using ScreenshotToolPaletteWidthColorEditor =
     snow_shot::presentation::ScreenshotToolPaletteWidthColorEditor;
 using ScreenshotToolPaletteNumericPresetEditor =
     snow_shot::presentation::ScreenshotToolPaletteNumericPresetEditor;
+using ScreenshotToolPaletteTextEmphasisEditor =
+    snow_shot::presentation::ScreenshotToolPaletteTextEmphasisEditor;
 using ScreenshotToolPaletteFontEditor = snow_shot::presentation::ScreenshotToolPaletteFontEditor;
 using ScreenshotToolPaletteIconOptionEditor =
     snow_shot::presentation::ScreenshotToolPaletteIconOptionEditor;
@@ -77,6 +79,7 @@ struct ScreenshotToolPaletteStyleControlCallbacks {
         shapeStyleChanged;
     std::function<void(const SnowCanvasDistanceStyle& style, quint32 properties)>
         distanceStyleChanged;
+    std::function<void(const SnowCanvasAngleStyle& style, quint32 properties)> angleStyleChanged;
     std::function<void(const SnowCanvasTextStyle& style, quint32 properties)> textStyleChanged;
     std::function<void()> textStylePopupInteractionBegan;
     std::function<void()> textStylePopupInteractionEnded;
@@ -91,6 +94,8 @@ struct ScreenshotToolPaletteStyleControlCallbacks {
     std::function<void()> visibleContentChanged;
     std::function<void(adqt::widgets::AdColorPicker* picker)> canvasColorSamplingRequested;
     std::function<QWidget*()> watermarkTemplateModalOwnerWindow;
+    std::function<void(const SnowCanvasMagnifierStyle& style, quint32 properties)>
+        magnifierStyleChanged;
 };
 
 // Palette-owned row services used by the family builders. The palette supplies
@@ -183,6 +188,7 @@ class ScreenshotToolPaletteStyleControls final {
     explicit ScreenshotToolPaletteStyleControls(
         ScreenshotToolPaletteStyleControlCallbacks callbacks,
         const SnowCanvasStyleDefaults& defaults, std::function<QDateTime()> watermarkTemplateClock);
+    ~ScreenshotToolPaletteStyleControls();
 
     [[nodiscard]] ScreenshotToolPaletteStyleState& styleState();
     [[nodiscard]] const ScreenshotToolPaletteStyleState& styleState() const;
@@ -215,6 +221,12 @@ class ScreenshotToolPaletteStyleControls final {
     [[nodiscard]] QWidget* buildDistanceFamily(QWidget* panel,
                                                const ScreenshotToolPaletteStyleFamilyHost& host,
                                                const ScreenshotToolPaletteButtonMetrics& metrics);
+    [[nodiscard]] QWidget* buildMagnifierFamily(QWidget* panel,
+                                                const ScreenshotToolPaletteStyleFamilyHost& host,
+                                                const ScreenshotToolPaletteButtonMetrics& metrics);
+    [[nodiscard]] QWidget* buildAngleFamily(QWidget* panel,
+                                            const ScreenshotToolPaletteStyleFamilyHost& host,
+                                            const ScreenshotToolPaletteButtonMetrics& metrics);
     [[nodiscard]] ScreenshotToolPaletteHighlightFamilyResult
     buildHighlightFamily(int tool, QWidget* panel, const ScreenshotToolPaletteStyleFamilyHost& host,
                          const ScreenshotToolPaletteButtonMetrics& metrics);
@@ -249,12 +261,16 @@ class ScreenshotToolPaletteStyleControls final {
     void releaseControlBindings();
     [[nodiscard]] bool stepStrokeWidth(int direction);
     void setLineControlsActive(bool active);
+    void setSpeechBubbleControlsActive(bool active);
     void setFreeDrawControlsActive(bool active);
     void setHighlightControlsActive(bool active);
     void setPenHighlightControlsActive(bool active);
     void setArrowControlsActive(bool active);
     void setDistanceControlsActive(bool active);
+    void setAngleControlsActive(bool active);
     [[nodiscard]] bool handleDistanceWheel(const QPoint& globalPosition, int direction);
+    [[nodiscard]] bool handleMagnifierWheel(const QPoint& globalPosition, int direction);
+    [[nodiscard]] bool stepMagnifierFactor(int direction);
     void setTextControlsActive(bool active);
     void clearTextStylePopupInteractions();
     [[nodiscard]] bool stepTextFontSize(int direction);
@@ -270,7 +286,9 @@ class ScreenshotToolPaletteStyleControls final {
     void rememberStyleEdit(const SnowCanvasStyleEdit& edit);
     void setCreationStyleDefaults(const SnowCanvasStyleDefaults& defaults);
     void setRectangleStyle(const SnowCanvasShapeStyle& style);
-    void setWatermarkConfig(const SnowCanvasWatermarkConfig& config);
+    void setWatermarkConfig(const SnowCanvasWatermarkConfig& config, bool refreshEditors = false);
+    [[nodiscard]] std::optional<SnowCanvasWatermarkTemplateApplicationTime>
+    watermarkTemplateApplicationTime() const;
     void setStyleToolbarState(const SnowCanvasStyleToolbarState& state);
     void setSpotlightConfig(const SnowCanvasSpotlightConfig& config);
     void updateSpotlightColorControls(const QColor& color);
@@ -284,6 +302,8 @@ class ScreenshotToolPaletteStyleControls final {
     void refreshToolbarMetrics(const ScreenshotToolPaletteButtonMetrics& metrics);
     void refreshThemeIcons(const ScreenshotToolPaletteButtonMetrics& metrics);
     void retranslateWatermarkTemplateUi();
+    void retranslateTextEmphasisUi();
+    void retranslateMagnifierUi();
 
 #if defined(SNOW_SHOT_TEST_HOOKS)
     [[nodiscard]] quint64 styleStateNoopCount() const;
@@ -311,7 +331,8 @@ class ScreenshotToolPaletteStyleControls final {
         TextFillRefresh = 1u << 4,
         TextCornerRefresh = 1u << 5,
         TextAlignmentRefresh = 1u << 6,
-        AllTextRefreshes = (1u << 7) - 1,
+        TextEmphasisRefresh = 1u << 7,
+        AllTextRefreshes = (1u << 8) - 1,
     };
     enum SerialNumberRefreshGroup : quint32 {
         SerialNumberValueRefresh = 1u << 0,
@@ -347,6 +368,14 @@ class ScreenshotToolPaletteStyleControls final {
     void registerArrowEntries();
     void registerDistanceEntries();
     void updateDistanceStyleControls();
+    template <typename Apply> void commitMagnifierProperty(quint32 property, Apply apply);
+    void updateMagnifierStyleControls();
+    void setMagnifierFactor(double factor);
+    void setMagnifierArrowRatio(double ratio);
+    void setMagnifierStrokeWidth(double width);
+    void setMagnifierCornerRadius(int radius);
+    void registerAngleEntries();
+    void updateAngleStyleControls(quint32 properties = 0xffffffffu);
     void registerTextEntries();
     void registerSerialNumberEntries();
     void registerWatermarkEntries();
@@ -356,6 +385,8 @@ class ScreenshotToolPaletteStyleControls final {
     template <typename Apply> void commitShapeProperty(quint32 property, Apply apply);
     template <typename Apply> void commitArrowProperty(quint32 property, Apply apply);
     template <typename Apply> void commitDistanceProperty(quint32 property, Apply apply);
+    template <typename Apply> void commitAngleProperty(quint32 property, Apply apply);
+    void setAngleStrokeWidth(double width);
     void setDistanceValue(double value);
     void setDistanceStrokeWidth(double width);
     void setDistanceEndpointScale(double scale);
@@ -387,6 +418,7 @@ class ScreenshotToolPaletteStyleControls final {
     void setTextFontSize(double fontSize);
     void cycleTextFontSize();
     void setTextFontFamily(const QString& fontFamily);
+    void setTextEmphasis(quint32 property, bool enabled);
     void setTextStrokeColor(const QColor& color);
     void setTextStrokeWidth(double strokeWidth);
     void setTextFillColor(const QColor& color);
@@ -399,8 +431,6 @@ class ScreenshotToolPaletteStyleControls final {
     void setWatermarkFontFamily(const QString& fontFamily);
     void syncWatermarkTemplateEditorValue(const QString& templateValue);
     void setWatermarkTemplateValue(const QString& templateValue);
-    [[nodiscard]] std::optional<SnowCanvasWatermarkTemplateApplicationTime>
-    watermarkTemplateApplicationTime() const;
     void refreshWatermarkTemplateOptions();
     void openCreateWatermarkTemplateModal();
     void openDeleteWatermarkTemplateModal(const QString& templateKey);
@@ -439,6 +469,9 @@ class ScreenshotToolPaletteStyleControls final {
                        const ScreenshotToolPaletteButtonMetrics& metrics, bool spotlight);
     void updateSpotlightShapeControls();
     void setSpotlightShape(SnowCanvasRectangleShape shape);
+    void buildCornerRadiusEditor(QWidget* controls, int radius,
+                                 const ScreenshotToolPaletteStyleFamilyHost& host,
+                                 const ScreenshotToolPaletteButtonMetrics& metrics);
     void refreshWatermarkOpacityMetrics(const ScreenshotToolPaletteButtonMetrics& metrics);
     void refreshSpotlightOpacityMetrics(const ScreenshotToolPaletteButtonMetrics& metrics);
     void notifyWatermarkConfigChanged(quint32 properties) const;
@@ -463,12 +496,16 @@ class ScreenshotToolPaletteStyleControls final {
     [[nodiscard]] bool reusableRoleStaged(const char* role) const;
     [[nodiscard]] QWidget* editorRootForRole(QWidget* controls, const char* role) const;
     void rebuildRegisteredComponents();
+    void releaseWatermarkTemplateBindings();
+    [[nodiscard]] QObject* controlCallbackContext(QWidget* owner);
+    void releaseControlCallbacksExcept(QWidget* retainedControls);
 
     ScreenshotToolPaletteStyleState m_state;
     ScreenshotToolPaletteStyleControlCallbacks m_callbacks;
     const SnowCanvasStyleDefaults m_defaults;
     std::function<QDateTime()> m_watermarkTemplateClock;
     QSet<QObject*> m_openTextStylePopups;
+    QVector<QPointer<QObject>> m_controlCallbackContexts;
 
     struct ReusableEditor {
         QByteArray role;
@@ -508,6 +545,20 @@ class ScreenshotToolPaletteStyleControls final {
     std::unique_ptr<ScreenshotToolPaletteNumericPresetEditor> m_penFilterStrokeWidthEditor;
     std::unique_ptr<ScreenshotToolPaletteNumericPresetEditor> m_brushEraserStrokeWidthEditor;
     std::unique_ptr<ScreenshotToolPaletteColorEditor> m_distanceColorEditor;
+    std::unique_ptr<ScreenshotToolPaletteColorEditor> m_magnifierColorEditor;
+    std::unique_ptr<ScreenshotToolPaletteNumericPresetEditor> m_magnifierWidthEditor;
+    std::unique_ptr<ScreenshotToolPaletteIconOptionEditor> m_magnifierLeaderEditor;
+    QPointer<adqt::widgets::AdRadioButtonGroup> m_magnifierShapeGroup;
+    QPointer<IconNumericValuePreviewButton> m_magnifierFactorEditor;
+    QPointer<IconNumericValuePreviewButton> m_magnifierArrowRatioEditor;
+    QPointer<CornerRadiusEditorButton> m_magnifierCornerRadiusEditor;
+    QPointer<adqt::widgets::AdRadioButtonGroup> m_magnifierConnectionGroup;
+    QPointer<adqt::widgets::AdButton> m_magnifierSourceOutlineToggle;
+    std::unique_ptr<ScreenshotToolPaletteColorEditor> m_angleColorEditor;
+    std::unique_ptr<ScreenshotToolPaletteNumericPresetEditor> m_angleWidthEditor;
+    QPointer<adqt::widgets::AdRadioButtonGroup> m_angleTypeGroup;
+    QPointer<adqt::widgets::AdRadioButtonGroup> m_angleUnitGroup;
+    ScreenshotToolPaletteSelectEditor m_angleDecimalsEditor;
     std::unique_ptr<ScreenshotToolPaletteNumericPresetEditor> m_distanceWidthEditor;
     std::unique_ptr<ScreenshotToolPaletteIconOptionEditor> m_distanceEndpointEditor;
     QPointer<adqt::widgets::AdInputNumber> m_distanceValueInput;
@@ -523,6 +574,7 @@ class ScreenshotToolPaletteStyleControls final {
     std::unique_ptr<ScreenshotToolPaletteIconOptionEditor> m_endArrowheadEditor;
     std::unique_ptr<ScreenshotToolPaletteColorEditor> m_textColorEditor;
     std::unique_ptr<ScreenshotToolPaletteFontEditor> m_textFontEditor;
+    std::unique_ptr<ScreenshotToolPaletteTextEmphasisEditor> m_textEmphasisEditor;
     std::unique_ptr<ScreenshotToolPaletteWidthColorEditor> m_textStrokeEditor;
     std::unique_ptr<ScreenshotToolPaletteFillEditor> m_textFillEditor;
     CornerRadiusEditorButton* m_textCornerRadiusEditor = nullptr;
@@ -540,14 +592,15 @@ class ScreenshotToolPaletteStyleControls final {
     adqt::widgets::AdLineEdit* m_watermarkTextEdit = nullptr;
     std::unique_ptr<ScreenshotToolPaletteFontEditor> m_watermarkFontEditor;
     adqt::widgets::AdSelect* m_watermarkTemplateSelect = nullptr;
+    QPointer<QObject> m_watermarkTemplateCallbackContext;
     QPointer<QListView> m_watermarkTemplateView;
     QLabel* m_watermarkTemplateEmptyLabel = nullptr;
     adqt::widgets::AdButton* m_watermarkTemplateAddButton = nullptr;
-    adqt::widgets::AdModal* m_createWatermarkTemplateModal = nullptr;
-    adqt::widgets::AdFormItem* m_createWatermarkTemplateNameItem = nullptr;
-    adqt::widgets::AdFormItem* m_createWatermarkTemplateValueItem = nullptr;
-    adqt::widgets::AdAlert* m_createWatermarkTemplateAlert = nullptr;
-    adqt::widgets::AdModal* m_deleteWatermarkTemplateModal = nullptr;
+    QPointer<adqt::widgets::AdModal> m_createWatermarkTemplateModal;
+    QPointer<adqt::widgets::AdFormItem> m_createWatermarkTemplateNameItem;
+    QPointer<adqt::widgets::AdFormItem> m_createWatermarkTemplateValueItem;
+    QPointer<adqt::widgets::AdAlert> m_createWatermarkTemplateAlert;
+    QPointer<adqt::widgets::AdModal> m_deleteWatermarkTemplateModal;
     QString m_deleteWatermarkTemplateName;
     QVector<snow_shot::storage::WatermarkTemplate> m_watermarkTemplates;
     IconNumericValuePreviewButton* m_watermarkAngleEditor = nullptr;
@@ -561,6 +614,7 @@ class ScreenshotToolPaletteStyleControls final {
     QVector<StyleEditorEntry> m_penHighlightEntries;
     QVector<StyleEditorEntry> m_arrowEntries;
     QVector<StyleEditorEntry> m_distanceEntries;
+    QVector<StyleEditorEntry> m_angleEntries;
     QVector<StyleEditorEntry> m_textEntries;
     QVector<StyleEditorEntry> m_serialNumberEntries;
     QVector<StyleEditorEntry> m_watermarkEntries;

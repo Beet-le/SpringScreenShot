@@ -4,6 +4,7 @@
 #include "pinnedwindowplacement.h"
 #include "pinnedsourceidentity.h"
 #include "capturehistorytypes.h"
+#include "snow_shot/image/screenshotanimationsource.h"
 #include <QByteArray>
 #include <QDateTime>
 #include <QImage>
@@ -19,8 +20,8 @@ namespace snow_shot::storage {
 
 // Outline in a reference screenshot raster of sourceSize pixels. The displayed
 // image may have a higher backing resolution (for example, a Retina capture).
-// Effects are baked into the source image. This outline also clips subsequent edits,
-// preserving the baked exterior without composing those effects a second time.
+// Effects are baked into the source image. Retain the outline for window decoration
+// and the source's transparency policy independently of subsequent canvas edits.
 struct PinnedBorderAppearance final {
     QSize sourceSize;
     QRectF contentRect;
@@ -50,7 +51,7 @@ enum class PinnedWindowCreationSource {
     Clipboard,
     SelectedFiles
 };
-enum class PinnedWindowCloseIntent { Preserve, Close, Destroy };
+enum class PinnedWindowCloseIntent { Preserve, Hide, Close, Destroy };
 
 // These limits govern ignored records only.
 using PinnedWindowPolicy = CaptureHistoryPolicy;
@@ -61,11 +62,15 @@ struct PinnedWindowRecord final {
     QDateTime createdUtc;
     QDateTime lastClosedUtc;
     bool ignored = false;
+    bool hidden = false;
     quint64 activitySequence = 0;
     QString id;
     QString groupId = QStringLiteral("default");
     PinnedWindowSourceKind sourceKind = PinnedWindowSourceKind::ImageData;
     QImage image;
+    std::shared_ptr<const ScreenshotAnimationSource> animationSource;
+    int animationSpeedPercent = 100;
+    bool animationPlaying = true;
     QString originalFilePath;
     QString originalFileName;
     QString originalHtml;
@@ -102,6 +107,7 @@ struct PinnedWindowRecord final {
     bool lockedMode = false;
     bool alwaysOnTop = true;
     bool showBorder = true;
+    bool showShadow = false;
     std::optional<PinnedBorderAppearance> borderAppearance;
     std::optional<bool> checkerboardEnabled;
     QRect preThumbnailNativeGeometry;

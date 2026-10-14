@@ -12,6 +12,15 @@ pub(crate) fn corner_radius_handle_local_point(
     zoom: f64,
     corner: RectCorner,
 ) -> Point<f64> {
+    if rect.highlight_shape == snow_draw_engine_document::HighlightShape::Diamond {
+        return snow_draw_engine_document::diamond_corner_handle_local_point(
+            rect.width,
+            rect.height,
+            rect.corner_radii,
+            zoom,
+            diamond_corner_index(corner),
+        );
+    }
     let radius = corner_radius(rect.corner_radii, corner);
     let max_radius = max_corner_radius_for(rect, corner);
     let inset = corner_radius_handle_inset(rect, zoom, radius, max_radius);
@@ -84,6 +93,14 @@ pub(crate) fn set_corner_radius(radii: CornerRadii, corner: RectCorner, value: f
 }
 
 pub(crate) fn max_corner_radius_for(rect: &RectangleData, corner: RectCorner) -> f64 {
+    if rect.highlight_shape == snow_draw_engine_document::HighlightShape::Diamond {
+        return snow_draw_engine_document::diamond_corner_radius_limit(
+            rect.width,
+            rect.height,
+            rect.corner_radii,
+            diamond_corner_index(corner),
+        );
+    }
     match corner {
         RectCorner::TopLeft => (rect.width - rect.corner_radii.top_right)
             .min(rect.height - rect.corner_radii.bottom_left),
@@ -98,5 +115,20 @@ pub(crate) fn max_corner_radius_for(rect: &RectangleData, corner: RectCorner) ->
 }
 
 pub(crate) fn uniform_corner_radius_limit(rect: &RectangleData) -> f64 {
+    if rect.highlight_shape == snow_draw_engine_document::HighlightShape::Diamond {
+        return snow_draw_engine_document::diamond_uniform_corner_radius_limit(
+            rect.width,
+            rect.height,
+        );
+    }
     (rect.width / 2.0).min(rect.height / 2.0).max(0.0)
+}
+
+pub(crate) fn diamond_corner_index(corner: RectCorner) -> usize {
+    match corner {
+        RectCorner::TopLeft => 0,
+        RectCorner::TopRight => 1,
+        RectCorner::BottomRight => 2,
+        RectCorner::BottomLeft => 3,
+    }
 }

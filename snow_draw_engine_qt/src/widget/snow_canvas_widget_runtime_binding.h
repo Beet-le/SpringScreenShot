@@ -21,6 +21,7 @@ class SnowCanvasWidgetRuntimeBinding final {
     SnowCanvasWidgetRuntimeBinding& operator=(const SnowCanvasWidgetRuntimeBinding&) = delete;
 
     SnowRuntime engine() const;
+    snow_canvas_runtime::RuntimeLease retainEngine() const;
     SnowCanvasRuntime* runtimeOwner() const {
         return m_runtimeOwner;
     }

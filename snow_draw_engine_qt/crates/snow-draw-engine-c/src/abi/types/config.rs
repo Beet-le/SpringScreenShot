@@ -28,6 +28,9 @@ pub enum SnowActiveTool {
     RectangleEraser = 15,
     BrushEraser = 16,
     Distance = 17,
+    Angle = 18,
+    Magnifier = 19,
+    SpeechBubble = 20,
 }
 
 impl SnowActiveTool {
@@ -66,6 +69,12 @@ pub enum SnowStyleToolbarSource {
     DefaultBrushEraser = 25,
     DefaultDistance = 26,
     SelectedDistance = 27,
+    DefaultAngle = 28,
+    SelectedAngle = 29,
+    DefaultMagnifier = 30,
+    SelectedMagnifier = 31,
+    DefaultSpeechBubble = 32,
+    SelectedSpeechBubble = 33,
 }
 
 impl SnowStyleToolbarSource {
@@ -152,6 +161,43 @@ snow_c_enum! {
         Mm = 4,
     }
 }
+
+snow_c_enum! {
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub enum SnowAngleUnit {
+        #[default]
+        Degrees = 0,
+        Radians = 1,
+    }
+}
+snow_c_enum! {
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub enum SnowAngleType {
+        #[default]
+        Directed = 0,
+        Interior = 1,
+    }
+}
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SnowAngleStyle {
+    pub stroke: SnowColorRgba8,
+    pub stroke_width: f64,
+    pub unit: SnowAngleUnit,
+    pub decimal_places: u32,
+    pub angle_type: SnowAngleType,
+}
+pub const SNOW_ANGLE_STYLE_PROPERTY_STROKE: u32 = 1;
+pub const SNOW_ANGLE_STYLE_PROPERTY_STROKE_WIDTH: u32 = 2;
+pub const SNOW_ANGLE_STYLE_PROPERTY_UNIT: u32 = 4;
+pub const SNOW_ANGLE_STYLE_PROPERTY_DECIMAL_PLACES: u32 = 8;
+pub const SNOW_ANGLE_STYLE_PROPERTY_TYPE: u32 = 16;
+pub const SNOW_ANGLE_STYLE_MIXED_TYPE: u32 = 16;
+pub const SNOW_ANGLE_STYLE_PROPERTY_ALL: u32 = 31;
+pub const SNOW_ANGLE_STYLE_MIXED_STROKE: u32 = 1;
+pub const SNOW_ANGLE_STYLE_MIXED_STROKE_WIDTH: u32 = 2;
+pub const SNOW_ANGLE_STYLE_MIXED_UNIT: u32 = 4;
+pub const SNOW_ANGLE_STYLE_MIXED_DECIMAL_PLACES: u32 = 8;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -303,6 +349,7 @@ pub enum SnowShapeKind {
     RectangleHighlight = 4,
     PenHighlight = 5,
     Spotlight = 6,
+    SpeechBubble = 7,
 }
 
 #[repr(C)]
@@ -335,7 +382,9 @@ pub struct SnowTextStyle {
     pub reserved0: [u8; 4],
     pub font_family_utf8_len: u32,
     pub font_family_truncated: u8,
-    pub reserved1: [u8; 3],
+    pub bold: u8,
+    pub italic: u8,
+    pub reserved1: [u8; 1],
     pub font_family_utf8: [std::ffi::c_char; SNOW_FONT_FAMILY_UTF8_CAPACITY],
 }
 
@@ -355,7 +404,8 @@ mod spotlight_abi_tests {
         assert_eq!(std::mem::size_of::<SnowSpotlightConfig>(), 16);
         assert_eq!(std::mem::offset_of!(SnowSpotlightConfig, color), 0);
         assert_eq!(std::mem::offset_of!(SnowSpotlightConfig, opacity), 8);
-        assert_eq!(std::mem::size_of::<SnowSpotlightCutout>(), 48);
+        assert_eq!(std::mem::size_of::<SnowSpotlightCutout>(), 80);
+        assert_eq!(std::mem::offset_of!(SnowSpotlightCutout, corner_radii), 48);
         assert_eq!(std::mem::offset_of!(SnowSpotlightCutout, rotation), 32);
         assert_eq!(std::mem::offset_of!(SnowSpotlightCutout, shape), 40);
         assert_eq!(SnowSerialNumberType::OutlinedCircle as i32, 0);
@@ -397,6 +447,46 @@ pub struct SnowSerialNumberStyle {
     pub numeric_type: SnowSerialNumberNumericType,
 }
 
+snow_c_enum! {
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub enum SnowMagnifierConnectionType {
+        None = 0,
+        LeaderLine = 1,
+        #[default]
+        Gradient = 2,
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SnowMagnifierStyle {
+    pub shape: SnowRectangleShape,
+    pub stroke: SnowColorRgba8,
+    pub stroke_width: f64,
+    pub factor: f64,
+    pub connection_type: SnowMagnifierConnectionType,
+    pub source_outline: u8,
+    pub reserved: [u8; 3],
+    pub leader_arrowhead: SnowArrowhead,
+    pub corner_radii: SnowCornerRadii,
+    pub arrow_ratio: f64,
+}
+impl Default for SnowMagnifierStyle {
+    fn default() -> Self {
+        snow_draw_engine::MagnifierStyle::default().into()
+    }
+}
+pub const SNOW_MAGNIFIER_STYLE_PROPERTY_SHAPE: u32 = 1;
+pub const SNOW_MAGNIFIER_STYLE_PROPERTY_STROKE: u32 = 2;
+pub const SNOW_MAGNIFIER_STYLE_PROPERTY_STROKE_WIDTH: u32 = 4;
+pub const SNOW_MAGNIFIER_STYLE_PROPERTY_FACTOR: u32 = 8;
+pub const SNOW_MAGNIFIER_STYLE_PROPERTY_CONNECTION_TYPE: u32 = 16;
+pub const SNOW_MAGNIFIER_STYLE_PROPERTY_LEADER_ARROWHEAD: u32 = 32;
+pub const SNOW_MAGNIFIER_STYLE_PROPERTY_CORNER_RADII: u32 = 64;
+pub const SNOW_MAGNIFIER_STYLE_PROPERTY_ARROW_RATIO: u32 = 128;
+pub const SNOW_MAGNIFIER_STYLE_PROPERTY_SOURCE_OUTLINE: u32 = 256;
+pub const SNOW_MAGNIFIER_STYLE_PROPERTY_ALL: u32 = 511;
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SnowStyleToolbarState {
@@ -413,7 +503,11 @@ pub struct SnowStyleToolbarState {
     pub brush_eraser_style: SnowBrushEraserStyle,
     pub distance_style: SnowDistanceStyle,
     pub distance_style_mixed: u32,
+    pub angle_style: SnowAngleStyle,
+    pub angle_style_mixed: u32,
     pub distance_measured_length: f64,
+    pub magnifier_style: SnowMagnifierStyle,
+    pub magnifier_style_mixed: u32,
 }
 
 #[repr(C)]
@@ -434,6 +528,10 @@ pub struct SnowStyleDefaults {
     pub brush_eraser: SnowBrushEraserStyle,
     pub spotlight_shape: SnowRectangleShape,
     pub distance: SnowDistanceStyle,
+    pub angle: SnowAngleStyle,
+    pub spotlight_corner_radii: SnowCornerRadii,
+    pub magnifier: SnowMagnifierStyle,
+    pub speech_bubble: SnowShapeStyle,
 }
 
 #[repr(C)]
@@ -594,6 +692,35 @@ impl Default for SnowArrowStyle {
     }
 }
 
+#[cfg(test)]
+mod text_emphasis_abi_tests {
+    use crate::abi::types::{SnowSceneDisplayItem, SnowTextElementInfo, SnowTextStyle};
+
+    #[test]
+    fn text_emphasis_uses_reserved_bytes_without_changing_abi_layout() {
+        assert_eq!(std::mem::size_of::<SnowTextStyle>(), 232);
+        assert_eq!(std::mem::offset_of!(SnowTextStyle, font_family_utf8), 100);
+        assert_eq!(std::mem::offset_of!(SnowTextStyle, bold), 97);
+        assert_eq!(std::mem::offset_of!(SnowTextStyle, italic), 98);
+        assert_eq!(std::mem::size_of::<SnowTextElementInfo>(), 1264);
+        assert_eq!(std::mem::offset_of!(SnowTextElementInfo, text_utf8), 104);
+        assert_eq!(
+            std::mem::offset_of!(SnowTextElementInfo, font_family_utf8),
+            1136
+        );
+        if std::mem::size_of::<usize>() == 8 {
+            assert_eq!(std::mem::size_of::<SnowSceneDisplayItem>(), 408);
+            assert_eq!(std::mem::offset_of!(SnowSceneDisplayItem, text_bold), 137);
+            assert_eq!(
+                std::mem::offset_of!(SnowSceneDisplayItem, arrow_start_head),
+                140
+            );
+            assert_eq!(std::mem::offset_of!(SnowSceneDisplayItem, font_size), 192);
+            assert_eq!(std::mem::offset_of!(SnowSceneDisplayItem, text_utf8), 336);
+        }
+    }
+}
+
 impl Default for SnowTextStyle {
     fn default() -> Self {
         Self {
@@ -610,7 +737,9 @@ impl Default for SnowTextStyle {
             reserved0: [0; 4],
             font_family_utf8_len: 0,
             font_family_truncated: 0,
-            reserved1: [0; 3],
+            bold: 0,
+            italic: 0,
+            reserved1: [0; 1],
             font_family_utf8: [0; SNOW_FONT_FAMILY_UTF8_CAPACITY],
         }
     }

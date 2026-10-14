@@ -208,6 +208,10 @@
             <translation>Could not stage the verified update package</translation>
         </message>
         <message>
+            <source>Could not update Snow Shot context menu registration</source>
+            <translation>Could not update Snow Shot context menu registration</translation>
+        </message>
+        <message>
             <source>Could not update the registered application version</source>
             <translation>Could not update the registered application version</translation>
         </message>

@@ -9,6 +9,7 @@
 #include "snow_shot/presentation/screenshotexportartifact.h"
 #include "snow_shot/presentation/screenshotimagesource.h"
 #include "snow_shot/presentation/screenshotselectionexportworkflowports.h"
+#include "snow_shot/presentation/screenshotpinnedwindow.h"
 
 #include <atomic>
 #include <QSet>
@@ -27,6 +28,17 @@ class ScreenshotPendingPinCoordinator;
 class QTextDocument;
 struct ScreenshotPinnedRecognitionProviders;
 struct ScreenshotHistoryEntry;
+
+struct ScreenshotAutomaticSaveRequest final {
+    QPointer<QObject> receiver;
+    QString configuredSaveDirectory;
+    ScreenshotImageFileFormat format = ScreenshotImageFileFormat::Png;
+    QString filenameFormat;
+    ScreenshotImageEncodingOptions encoding;
+    ScreenshotPdfOptions pdf;
+    QDateTime requestedAt;
+    ScreenshotExportCoordinator::Completion completion;
+};
 
 namespace snow_shot::presentation {
 class PinnedWindowGroupManager;
@@ -71,7 +83,9 @@ class ScreenshotSelectionExportUiServices final : public ScreenshotSelectionExpo
         snow_shot::storage::PinnedWindowCreationSource source =
             snow_shot::storage::PinnedWindowCreationSource::Other,
         snow_shot::storage::PinnedSourceIdentity sourceIdentity = {},
-        std::optional<bool> initialBorderVisible = {});
+        std::optional<bool> initialBorderVisible = {},
+        std::optional<bool> initialShadowVisible = {},
+        std::shared_ptr<const ScreenshotAnimationSource> animationSource = {});
     // An already composited selection bitmap placed by screenshotSelectionPinRequest.
     [[nodiscard]] bool
     presentCompositedSelectionImage(const QImage& image,
@@ -84,17 +98,26 @@ class ScreenshotSelectionExportUiServices final : public ScreenshotSelectionExpo
                                              const QRect& nativeGeometry,
                                              const ScreenshotHistoryEntry& entry,
                                              PinnedCompletion completion);
-    [[nodiscard]] bool presentPinnedArtifact(const ScreenshotPinnedSelectionRequest& request,
-                                             std::shared_ptr<ScreenshotExportArtifact> artifact,
-                                             PinnedCompletion completion = {});
+    [[nodiscard]] bool
+    presentPinnedArtifact(const ScreenshotPinnedSelectionRequest& request,
+                          std::shared_ptr<ScreenshotExportArtifact> artifact,
+                          PinnedCompletion completion = {},
+                          std::optional<ScreenshotAutomaticSaveRequest> automaticSave = {});
     [[nodiscard]] bool
     presentPinnedImageArtifact(std::shared_ptr<ScreenshotExportArtifact> artifact, QScreen* screen,
                                const QRect& nativeGeometry, const QSize& initialWindowSize,
-                               PinnedCompletion completion = {});
+                               PinnedCompletion completion = {},
+                               std::optional<ScreenshotAutomaticSaveRequest> automaticSave = {});
     void restorePersistedWindows();
     // Returns whether restoration was queued; completion and failures are asynchronous.
     bool restoreRecord(const QString& id, bool activateGroup = true);
     void restoreLastClosedWindow();
+    void showAllWindows();
+    bool hideOtherWindows(const QString& exceptId);
+    bool toggleAllWindowsVisibility();
+    void setVisibilityFailureHandler(std::function<void()> handler) {
+        m_visibilityFailure = std::move(handler);
+    }
     [[nodiscard]] ScreenshotPinnedWindow*
     findDuplicatePin(const snow_shot::storage::PinnedSourceIdentity& identity) const;
     [[nodiscard]] QSet<QString> duplicateSourceKeys() const;
@@ -109,9 +132,18 @@ class ScreenshotSelectionExportUiServices final : public ScreenshotSelectionExpo
     [[nodiscard]] snow_shot::storage::StorageResult tryDestroyRecords(const QVector<QString>& ids);
 
   private:
+    void configureVisibility(ScreenshotPinnedWindow::Config* config);
+    bool persistHiddenWindow(const snow_shot::storage::PinnedWindowRecord& record);
+    bool hideRecords(const QVector<QString>& ids);
+    void cancelRestore(const QString& id);
+    [[nodiscard]] ScreenshotPinnedWindow* liveWindow(const QString& id) const;
+    [[nodiscard]] QString
+    hiddenDuplicateId(const snow_shot::storage::PinnedSourceIdentity& identity) const;
     void trackSourceWindow(ScreenshotPinnedWindow* window,
                            const snow_shot::storage::PinnedSourceIdentity& identity);
-    [[nodiscard]] bool presentRestoredRecord(snow_shot::storage::PinnedWindowRecord record);
+    [[nodiscard]] bool presentRestoredRecord(snow_shot::storage::PinnedWindowRecord record,
+                                             QImage initialPreparedAnimationFrame = {},
+                                             QTransform initialPreparedAnimationTransform = {});
     [[nodiscard]] bool presentPinnedImageOnCanvas(
         const QImage& image, QScreen* screen, const QRect& nativeGeometry,
         const QSize& initialWindowSize, const QRectF& canvasRect,
@@ -124,17 +156,24 @@ class ScreenshotSelectionExportUiServices final : public ScreenshotSelectionExpo
             snow_shot::storage::PinnedWindowCreationSource::Other,
         const ScreenshotHistoryEntry* document = nullptr,
         snow_shot::storage::PinnedSourceIdentity sourceIdentity = {},
-        std::optional<bool> initialBorderVisible = {});
+        std::optional<bool> initialBorderVisible = {},
+        std::optional<bool> initialShadowVisible = {},
+        std::shared_ptr<const ScreenshotAnimationSource> animationSource = {});
 
     QHash<QString, QList<QPointer<ScreenshotPinnedWindow>>> m_sourceWindows;
     std::function<void()> m_restoreFailure;
+    std::function<void()> m_visibilityFailure;
     struct RestoringPin {
         snow_shot::storage::PinnedSourceIdentity sourceIdentity;
         QString groupId;
         QDateTime createdUtc;
         bool attentionPending = false;
+        quint64 generation = 0;
+        QPointer<ScreenshotPinnedWindow> window;
     };
     QHash<QString, RestoringPin> m_restoringIds;
+    quint64 m_nextRestoreGeneration = 0;
+    QSet<QString> m_pendingAttention;
     std::shared_ptr<std::atomic_bool> m_restoreAlive = std::make_shared<std::atomic_bool>(true);
     ScreenshotOcrRecognitionPort* m_recognition = nullptr;
     ScreenshotQrRecognitionPort* m_qrRecognition = nullptr;

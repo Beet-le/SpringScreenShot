@@ -546,7 +546,378 @@ bool supports(const Service& service, Format format, snow::image::CodecCapabilit
         });
 }
 
+class PngCollectingSink final : public PixelSink {
+  public:
+    enum class Storage { rows, complete, incomplete };
+
+    explicit PngCollectingSink(Storage storage) : storage_(storage) {}
+
+    Result<void> begin(const snow::image::DocumentInfo&) override {
+        return {};
+    }
+    Result<void> begin_frame(std::uint32_t frame_index,
+                             const snow::image::FrameInfo& info) override {
+        require(frame_index == 0, "PNG starts one frame");
+        height_ = info.height;
+        stride_ = static_cast<std::size_t>(info.width) *
+                  take(info.native_format.bytes_per_pixel(), "measure PNG sink pixels");
+        pixels.assign(stride_ * height_, std::byte{0xA5});
+        return {};
+    }
+    std::span<std::byte> frame_storage(std::uint32_t frame_index, std::size_t row_stride,
+                                       std::size_t byte_size) override {
+        require(frame_index == 0 && row_stride == stride_ && byte_size == pixels.size(),
+                "PNG requests the exact packed sink frame layout");
+        ++storage_requests;
+        if (decode_started)
+            *decode_started = true;
+        if (storage_ == Storage::rows)
+            return {};
+        return std::span(pixels).first(byte_size - (storage_ == Storage::incomplete ? 1U : 0U));
+    }
+    Result<void> write_rows(std::uint32_t first_row, std::uint32_t row_count,
+                            std::size_t source_stride, std::span<const std::byte> source) override {
+        require(first_row == rows_written && source_stride == stride_ &&
+                    row_count <= height_ - first_row && source.size() == stride_ * row_count,
+                "PNG fallback emits complete sequential rows");
+        if (reject_rows)
+            return Status::error(ErrorCode::io_error, "reject PNG rows");
+        std::memcpy(pixels.data() + static_cast<std::size_t>(first_row) * stride_, source.data(),
+                    source.size());
+        rows_written += row_count;
+        if (cancellation)
+            cancellation->request_stop();
+        return {};
+    }
+    Result<void> end_frame(std::uint32_t frame_index) override {
+        require(frame_index == 0 &&
+                    (storage_ == Storage::complete ? rows_written == 0 : rows_written == height_),
+                "PNG completes storage-backed or sequentially written frames");
+        ++completed_frames;
+        return {};
+    }
+    Result<void> end() override {
+        ended = true;
+        return {};
+    }
+
+    std::vector<std::byte> pixels;
+    std::uint32_t rows_written = 0;
+    int storage_requests = 0;
+    int completed_frames = 0;
+    bool ended = false;
+    bool reject_rows = false;
+    bool* decode_started = nullptr;
+    std::stop_source* cancellation = nullptr;
+
+  private:
+    Storage storage_;
+    std::size_t stride_ = 0;
+    std::uint32_t height_ = 0;
+};
+
+class PngCancellingSource final : public snow::image::ByteSource {
+  public:
+    PngCancellingSource(std::shared_ptr<const snow::image::ByteSource> source,
+                        std::stop_source* cancellation, const bool* decode_started)
+        : source_(std::move(source)), cancellation_(cancellation), decode_started_(decode_started) {
+    }
+
+    Result<std::uint64_t> size() const override {
+        return source_->size();
+    }
+    Result<std::size_t> read_at(std::uint64_t offset,
+                                std::span<std::byte> destination) const override {
+        auto read = source_->read_at(offset, destination);
+        if (read && *decode_started_) {
+            ++pixel_reads;
+            cancellation_->request_stop();
+        }
+        return read;
+    }
+
+    mutable int pixel_reads = 0;
+
+  private:
+    std::shared_ptr<const snow::image::ByteSource> source_;
+    std::stop_source* cancellation_;
+    const bool* decode_started_;
+};
+
+class PngFaultSource final : public snow::image::ByteSource {
+  public:
+    enum class Failure : std::uint8_t { empty, partial, io };
+    PngFaultSource(std::shared_ptr<const snow::image::ByteSource> source, std::uint64_t offset,
+                   Failure failure)
+        : source_(std::move(source)), offset_(offset), failure_(failure) {}
+    Result<std::uint64_t> size() const override {
+        return source_->size();
+    }
+    Result<std::size_t> read_at(std::uint64_t offset,
+                                std::span<std::byte> destination) const override {
+        if (offset < offset_)
+            return source_->read_at(offset, destination);
+        ++failures;
+        if (failure_ == Failure::io)
+            return Status::error(ErrorCode::io_error,
+                                 "forced PNG source failure with a heap-owned diagnostic string");
+        if (failure_ == Failure::partial && failures == 1)
+            return source_->read_at(offset, destination.first(1));
+        return std::size_t{0};
+    }
+    mutable int failures = 0;
+
+  private:
+    std::shared_ptr<const snow::image::ByteSource> source_;
+    std::uint64_t offset_;
+    Failure failure_;
+};
+
+class PngRowsSource final : public snow::image::RasterSource {
+  public:
+    PngRowsSource(const Document& document, bool reject)
+        : source_(document.frames.front().image), descriptor_(source_.descriptor()),
+          reject_(reject) {
+        descriptor_.format = Format::png;
+        descriptor_.metadata = document.metadata;
+        descriptor_.color = document.color;
+    }
+    const snow::image::DocumentDescriptor& descriptor() const noexcept override {
+        return descriptor_;
+    }
+    snow::image::RasterAccess access() const noexcept override {
+        return snow::image::RasterAccess::random_rows;
+    }
+    Result<void> read_rows(std::uint32_t frame, std::uint32_t plane, std::uint32_t first,
+                           std::uint32_t count, std::size_t stride,
+                           std::span<std::byte> destination, std::stop_token stop) const override {
+        if (reject_)
+            return Status::error(ErrorCode::io_error,
+                                 "forced PNG row-source failure with an owned diagnostic string");
+        return source_.read_rows(frame, plane, first, count, stride, destination, stop);
+    }
+
+  private:
+    ScratchLifetimeSource source_;
+    snow::image::DocumentDescriptor descriptor_;
+    bool reject_;
+};
+
+void test_png_error_recovery(Service& service) {
+    if (!supports(service, Format::png, snow::image::CodecCapability::encode))
+        return;
+    snow::image::EncodeOptions encode;
+    encode.format = Format::png;
+    auto document = sample_document();
+    auto encoded = std::make_shared<std::vector<std::byte>>();
+    require(service.encode(document, snow::image::memory_output(encoded), encode).has_value(),
+            "encode PNG error-boundary fixture");
+    const auto input = snow::image::memory_input(encoded);
+    std::size_t image_data = 0;
+    for (std::size_t position = 8; position + 12 <= encoded->size();) {
+        std::uint32_t length = 0;
+        for (std::size_t byte = 0; byte < 4; ++byte)
+            length = (length << 8U) | std::to_integer<std::uint32_t>((*encoded)[position + byte]);
+        if (std::memcmp(encoded->data() + position + 4, "IDAT", 4) == 0) {
+            image_data = position + 8;
+            break;
+        }
+        position += static_cast<std::size_t>(length) + 12;
+    }
+    require(image_data != 0, "PNG fixture has an image-data chunk");
+    for (const auto mode : {PngFaultSource::Failure::empty, PngFaultSource::Failure::partial,
+                            PngFaultSource::Failure::io}) {
+        const auto expected =
+            mode == PngFaultSource::Failure::io ? ErrorCode::io_error : ErrorCode::truncated_data;
+        for (const std::size_t offset : {std::size_t{8}, image_data, encoded->size() - 12}) {
+            const auto faultInput = [&] {
+                return snow::image::Input{
+                    std::make_shared<PngFaultSource>(input.source, offset, mode), "fault.png"};
+            };
+            for (int attempt = 0; attempt < 2; ++attempt) {
+                if (offset == 8) {
+                    const auto inspected = service.inspect(faultInput());
+                    require(!inspected && inspected.error().code == expected,
+                            "PNG header recovery preserves source errors and Result lifetimes");
+                }
+                const auto decoded = service.decode(faultInput());
+                require(!decoded && decoded.error().code == expected,
+                        "PNG header, pixel and final-chunk failures safely reject owned decode");
+                for (const auto storage :
+                     {PngCollectingSink::Storage::rows, PngCollectingSink::Storage::complete}) {
+                    PngCollectingSink sink(storage);
+                    const auto status = service.decode_to_sink(faultInput(), sink);
+                    require(!status && status.error().code == expected && !sink.ended &&
+                                sink.completed_frames == 0,
+                            "PNG error recovery never completes partially decoded sink frames");
+                }
+            }
+        }
+    }
+    auto bad_pixels = *encoded;
+    bad_pixels[image_data] ^= std::byte{0xFF};
+    require(!service.decode(snow::image::memory_input(bad_pixels)),
+            "libpng internal inflate and CRC errors return safely");
+
+    auto output_bytes = std::make_shared<std::vector<std::byte>>();
+    for (const bool interlaced : {false, true}) {
+        encode.interlaced = interlaced;
+        PngRowsSource rejected(document, true);
+        const auto source_failed =
+            service.encode(rejected, snow::image::memory_output(output_bytes), encode);
+        require(!source_failed && source_failed.error().code == ErrorCode::io_error,
+                "PNG streamed row-source errors preserve owned diagnostics");
+        PngRowsSource rows(document, false);
+        auto failing = std::make_shared<FailingByteSink>();
+        const auto sink_failed = service.encode(rows, {failing, "fault.png"}, encode);
+        require(!sink_failed && sink_failed.error().code == ErrorCode::io_error &&
+                    failing->writes == 1,
+                "PNG streamed write recovery destroys callback Results before jumping");
+        document.color.icc_profile = {std::byte{1}, std::byte{2}, std::byte{3}};
+        const auto bad_metadata =
+            service.encode(document, snow::image::memory_output(output_bytes), encode);
+        require(!bad_metadata && bad_metadata.error().code == ErrorCode::encode_failed,
+                "PNG metadata setters recover without crossing C++ document lifetimes");
+        PngRowsSource invalid_metadata(document, false);
+        const auto bad_stream_metadata =
+            service.encode(invalid_metadata, snow::image::memory_output(output_bytes), encode);
+        require(!bad_stream_metadata &&
+                    bad_stream_metadata.error().code == ErrorCode::encode_failed,
+                "PNG streamed metadata setters recover without crossing C++ document lifetimes");
+        document.color.icc_profile.clear();
+    }
+    require(service.decode(input).has_value(),
+            "valid PNG decoding survives repeated failed sessions");
+}
+
+void test_png_sink_storage(Service& service) {
+    if (!supports(service, Format::png, snow::image::CodecCapability::encode))
+        return;
+    for (const auto format : {snow::image::kRgba8, snow::image::kRgba16}) {
+        auto pixels = take(snow::image::MutableImage::allocate(19, 13, format),
+                           "allocate all-pass Adam7 PNG fixture");
+        for (std::size_t index = 0; index < pixels.pixels().size(); ++index)
+            pixels.pixels()[index] = static_cast<std::byte>((index * 73U + index / 31U) & 0xFFU);
+        Document document;
+        document.canvas_width = pixels.width();
+        document.canvas_height = pixels.height();
+        Frame frame;
+        frame.image = std::move(pixels).freeze();
+        document.frames.push_back(std::move(frame));
+        const auto expected = document.frames.front().image.pixels();
+        for (const bool interlaced : {false, true}) {
+            snow::image::EncodeOptions encode;
+            encode.format = Format::png;
+            encode.interlaced = interlaced;
+            auto encoded = std::make_shared<std::vector<std::byte>>();
+            require(
+                service.encode(document, snow::image::memory_output(encoded), encode).has_value(),
+                "encode PNG storage fixture");
+            const auto input = snow::image::memory_input(encoded);
+            snow::image::DecodeOptions decode;
+            decode.output_format = format;
+            for (const auto mode :
+                 {PngCollectingSink::Storage::complete, PngCollectingSink::Storage::rows,
+                  PngCollectingSink::Storage::incomplete}) {
+                PngCollectingSink sink(mode);
+                const auto status = service.decode_to_sink(input, sink, decode);
+                require(status.has_value() && sink.storage_requests == 1 && sink.ended &&
+                            sink.completed_frames == 1 && sink.pixels.size() == expected.size() &&
+                            std::equal(sink.pixels.begin(), sink.pixels.end(), expected.begin()),
+                        "PNG direct storage and fallback preserve every 8-bit and 16-bit sample");
+                require(mode != PngCollectingSink::Storage::complete || sink.rows_written == 0,
+                        "PNG direct storage requires no raster-copy callbacks");
+            }
+            decode.limits.maximum_owned_output_bytes = 1;
+            decode.limits.maximum_working_bytes = 1;
+            PngCollectingSink bounded_direct(PngCollectingSink::Storage::complete);
+            require(service.decode_to_sink(input, bounded_direct, decode).has_value() &&
+                        bounded_direct.ended,
+                    "PNG sink-owned storage avoids owned-output and full-raster scratch limits");
+            if (interlaced) {
+                PngCollectingSink bounded_rows(PngCollectingSink::Storage::rows);
+                const auto status = service.decode_to_sink(input, bounded_rows, decode);
+                require(!status && status.error().code == ErrorCode::limit_exceeded &&
+                            !bounded_rows.ended && bounded_rows.completed_frames == 0,
+                        "Adam7 row fallback retains its full-raster working-memory limit");
+            }
+            decode.limits.maximum_working_bytes = expected.size();
+            PngCollectingSink failing_rows(PngCollectingSink::Storage::rows);
+            failing_rows.reject_rows = true;
+            const auto failed = service.decode_to_sink(input, failing_rows, decode);
+            require(!failed && failed.error().code == ErrorCode::io_error && !failing_rows.ended,
+                    "PNG fallback preserves sink errors without completing the frame");
+
+            std::stop_source row_cancellation;
+            PngCollectingSink cancelling_rows(PngCollectingSink::Storage::rows);
+            cancelling_rows.cancellation = &row_cancellation;
+            const auto cancelled_rows = service.decode_to_sink(input, cancelling_rows, decode,
+                                                               row_cancellation.get_token());
+            require(!cancelled_rows && cancelled_rows.error().code == ErrorCode::cancelled &&
+                        !cancelling_rows.ended && cancelling_rows.completed_frames == 0,
+                    "PNG cancellation from a row callback cannot complete the frame");
+
+            bool decode_started = false;
+            std::stop_source cancellation;
+            auto source =
+                std::make_shared<PngCancellingSource>(input.source, &cancellation, &decode_started);
+            PngCollectingSink cancelling_direct(PngCollectingSink::Storage::complete);
+            cancelling_direct.decode_started = &decode_started;
+            const auto cancelled = service.decode_to_sink({source, {}}, cancelling_direct, decode,
+                                                          cancellation.get_token());
+            require(!cancelled && cancelled.error().code == ErrorCode::cancelled &&
+                        source->pixel_reads > 0 && !cancelling_direct.ended &&
+                        cancelling_direct.completed_frames == 0 &&
+                        cancelling_direct.rows_written == 0,
+                    "PNG direct-storage cancellation during pixel reads prevents frame completion");
+
+            auto truncated = *encoded;
+            truncated.resize(truncated.size() - 12U);
+            PngCollectingSink incomplete(PngCollectingSink::Storage::complete);
+            const auto missing_end =
+                service.decode_to_sink(snow::image::memory_input(truncated), incomplete, decode);
+            require(!missing_end && !incomplete.ended && incomplete.completed_frames == 0,
+                    "PNG direct storage does not complete a stream missing its IEND chunk");
+        }
+    }
+    auto large_pixels = take(snow::image::MutableImage::allocate(1025, 513, snow::image::kRgba8),
+                             "allocate managed PNG frame fixture");
+    std::fill(large_pixels.pixels().begin(), large_pixels.pixels().end(), std::byte{0x7B});
+    Document large_document;
+    large_document.canvas_width = large_pixels.width();
+    large_document.canvas_height = large_pixels.height();
+    Frame large_frame;
+    large_frame.image = std::move(large_pixels).freeze();
+    large_document.frames.push_back(std::move(large_frame));
+    snow::image::EncodeOptions large_encode;
+    large_encode.format = Format::png;
+    large_encode.interlaced = true;
+    auto large_encoded = std::make_shared<std::vector<std::byte>>();
+    require(service.encode(large_document, snow::image::memory_output(large_encoded), large_encode)
+                .has_value(),
+            "encode managed Adam7 PNG frame");
+    const std::byte* midpoint = nullptr;
+    {
+        snow::image::DecodeOptions direct_owned;
+        direct_owned.limits.maximum_working_bytes = 1;
+        auto decoded = take(service.decode(snow::image::memory_input(large_encoded), direct_owned),
+                            "decode Adam7 PNG directly into its owned frame");
+        const auto actual = decoded.frames.front().image.pixels();
+        const auto expected = large_document.frames.front().image.pixels();
+        require(actual.size() == expected.size() &&
+                    std::equal(actual.begin(), actual.end(), expected.begin()),
+                "owned Adam7 storage preserves every large-frame pixel without scratch");
+        midpoint = actual.data() + actual.size() / 2;
+        require(snow::test_support::virtualMemoryMapped(midpoint),
+                "owned PNG pixels remain mapped while the decoded frame lives");
+    }
+    require(!snow::test_support::virtualMemoryMapped(midpoint),
+            "releasing the last owned PNG frame unmaps its large pixels");
+}
+
 void test_png_round_trip(Service& service) {
+    test_png_error_recovery(service);
+    test_png_sink_storage(service);
     if (!supports(service, Format::png, snow::image::CodecCapability::encode))
         return;
     require(snow::image::compression_backend_version(Format::png).find("zlib-ng") !=
@@ -2375,10 +2746,272 @@ void test_animation_region_disposal() {
             "composition preserves padded immutable source storage");
 }
 
+std::shared_ptr<std::vector<std::byte>>
+webp_offset_animation(std::span<const std::byte> still, std::uint32_t width = 8,
+                      std::uint32_t height = 6, std::uint32_t x = 2, std::uint32_t y = 2,
+                      std::uint32_t frame_width = 4, std::uint32_t frame_height = 2) {
+    const auto append_number = [](std::vector<std::byte>& output, std::uint32_t value,
+                                  unsigned count) {
+        for (unsigned index = 0; index < count; ++index)
+            output.push_back(static_cast<std::byte>((value >> (index * 8U)) & 0xffU));
+    };
+    const auto append_chunk = [&append_number](std::vector<std::byte>& output, const char* name,
+                                               std::span<const std::byte> payload) {
+        for (unsigned index = 0; index < 4; ++index)
+            output.push_back(static_cast<std::byte>(name[index]));
+        append_number(output, static_cast<std::uint32_t>(payload.size()), 4);
+        output.insert(output.end(), payload.begin(), payload.end());
+        if ((payload.size() & 1U) != 0)
+            output.push_back(std::byte{0});
+    };
+    std::vector<std::byte> fragment;
+    std::vector<std::byte> metadata;
+    for (std::size_t offset = 12; offset + 8 <= still.size();) {
+        std::uint32_t length = 0;
+        for (unsigned index = 0; index < 4; ++index)
+            length |= std::to_integer<std::uint32_t>(still[offset + 4 + index]) << (index * 8U);
+        const std::size_t end = offset + 8 + length + (length & 1U);
+        require(end <= still.size(), "offset WebP fixture has valid source chunks");
+        if (std::memcmp(still.data() + offset, "VP8L", 4) == 0 ||
+            std::memcmp(still.data() + offset, "VP8 ", 4) == 0 ||
+            std::memcmp(still.data() + offset, "ALPH", 4) == 0) {
+            fragment.insert(fragment.end(), still.begin() + static_cast<std::ptrdiff_t>(offset),
+                            still.begin() + static_cast<std::ptrdiff_t>(end));
+        } else if (std::memcmp(still.data() + offset, "ICCP", 4) == 0 ||
+                   std::memcmp(still.data() + offset, "EXIF", 4) == 0 ||
+                   std::memcmp(still.data() + offset, "XMP ", 4) == 0) {
+            metadata.insert(metadata.end(), still.begin() + static_cast<std::ptrdiff_t>(offset),
+                            still.begin() + static_cast<std::ptrdiff_t>(end));
+        }
+        offset = end;
+    }
+    require(!fragment.empty(), "offset WebP fixture contains an encoded fragment");
+    auto output = std::make_shared<std::vector<std::byte>>();
+    for (const char value : std::string_view("RIFF\0\0\0\0WEBP", 12))
+        output->push_back(static_cast<std::byte>(value));
+    std::vector<std::byte> extended{std::byte{0x3e}, std::byte{0}, std::byte{0}, std::byte{0}};
+    append_number(extended, width - 1U, 3);
+    append_number(extended, height - 1U, 3);
+    append_chunk(*output, "VP8X", extended);
+    // A nontransparent animation background must not fill the first canvas.
+    std::vector<std::byte> animation{std::byte{0xff}, std::byte{0xff}, std::byte{0xff},
+                                     std::byte{0xff}, std::byte{3},    std::byte{0}};
+    append_chunk(*output, "ANIM", animation);
+    for (unsigned index = 0; index < 2; ++index) {
+        std::vector<std::byte> frame;
+        append_number(frame, index == 0 ? x / 2U : 0, 3);
+        append_number(frame, index == 0 ? y / 2U : 0, 3);
+        append_number(frame, frame_width - 1U, 3);
+        append_number(frame, frame_height - 1U, 3);
+        append_number(frame, index == 0 ? 37U : 51U, 3);
+        frame.push_back(index == 0 ? std::byte{1} : std::byte{2});
+        frame.insert(frame.end(), fragment.begin(), fragment.end());
+        append_chunk(*output, "ANMF", frame);
+    }
+    output->insert(output->end(), metadata.begin(), metadata.end());
+    const auto riff_size = static_cast<std::uint32_t>(output->size() - 8U);
+    for (unsigned index = 0; index < 4; ++index)
+        (*output)[4 + index] = static_cast<std::byte>((riff_size >> (index * 8U)) & 0xffU);
+    return output;
+}
+
+void test_webp_first_frame_preview(Service& service) {
+    if (!service.encoder_info(Format::webp))
+        return;
+    Document source;
+    source.format = Format::webp;
+    source.canvas_width = 4;
+    source.canvas_height = 2;
+    auto pixels = take(snow::image::MutableImage::allocate(4, 2, snow::image::kRgba8),
+                       "allocate offset WebP fragment");
+    const std::array color{std::byte{80}, std::byte{120}, std::byte{160}, std::byte{128}};
+    for (std::size_t offset = 0; offset < pixels.pixels().size(); offset += 4)
+        std::copy(color.begin(), color.end(), pixels.pixels().begin() + offset);
+    Frame frame;
+    frame.image = std::move(pixels).freeze();
+    source.frames.push_back(std::move(frame));
+    source.color.icc_profile = {std::byte{'i'}, std::byte{'c'}, std::byte{'c'}};
+    source.metadata.xmp = {std::byte{'<'}, std::byte{'x'}, std::byte{'/'}, std::byte{'>'}};
+    source.metadata.exif = {
+        std::byte{'I'}, std::byte{'I'}, std::byte{42}, std::byte{0}, std::byte{8},    std::byte{0},
+        std::byte{0},   std::byte{0},   std::byte{1},  std::byte{0}, std::byte{0x12}, std::byte{1},
+        std::byte{3},   std::byte{0},   std::byte{1},  std::byte{0}, std::byte{0},    std::byte{0},
+        std::byte{6},   std::byte{0},   std::byte{0},  std::byte{0}, std::byte{0},    std::byte{0},
+        std::byte{0},   std::byte{0}};
+    auto still = std::make_shared<std::vector<std::byte>>();
+    snow::image::EncodeOptions encode;
+    encode.format = Format::webp;
+    encode.lossless = true;
+    require(service.encode(source, snow::image::memory_output(still), encode).has_value(),
+            "encode offset WebP fragment");
+    const auto encoded = webp_offset_animation(*still);
+    snow::image::DecodeOptions inspect_options;
+    inspect_options.limits.maximum_working_bytes = 0;
+    inspect_options.limits.maximum_owned_output_bytes = 0;
+    const auto info = take(service.inspect(snow::image::memory_input(encoded), inspect_options),
+                           "inspect animation without raster memory");
+    require(info.canvas_width == 8 && info.canvas_height == 6 && info.frames.size() == 2 &&
+                info.loop_count == 3 && info.metadata.exif == source.metadata.exif &&
+                info.color.icc_profile == source.color.icc_profile,
+            "animation inspection publishes metadata without allocating canvases");
+    const Document reference = take(service.decode(snow::image::memory_input(encoded)),
+                                    "decode reference offset animation");
+    snow::image::DecodeOptions first = inspect_options;
+    first.frame_index = 0;
+    StorageSink unscaled;
+    require(
+        service.decode_to_sink(snow::image::memory_input(encoded), unscaled, first).has_value() &&
+            unscaled.ended && unscaled.storage_requests == 1 && unscaled.callback_rows == 0 &&
+            std::equal(unscaled.pixels.begin(), unscaled.pixels.end(),
+                       reference.frames.front().image.pixels().begin()),
+        "frame-zero external storage preserves exact composited pixels without history");
+    require(unscaled.info.frames.size() == 1 &&
+                unscaled.info.frames.front().duration == std::chrono::milliseconds(37) &&
+                unscaled.info.loop_count == 3 &&
+                unscaled.info.metadata.orientation == snow::image::Orientation::rotate_90 &&
+                unscaled.info.metadata.xmp == source.metadata.xmp,
+            "frame-zero preview retains duration, loop, alpha, orientation and metadata");
+    Document transparent_source = source;
+    auto transparent_pixels = take(snow::image::MutableImage::allocate(4, 2, snow::image::kRgba8),
+                                   "allocate exact transparent offset fragment");
+    std::copy(source.frames.front().image.pixels().begin(),
+              source.frames.front().image.pixels().end(), transparent_pixels.pixels().begin());
+    transparent_pixels.pixels()[3] = std::byte{0};
+    transparent_source.frames.front().image = std::move(transparent_pixels).freeze();
+    auto transparent_still = std::make_shared<std::vector<std::byte>>();
+    require(
+        service.encode(transparent_source, snow::image::memory_output(transparent_still), encode)
+            .has_value(),
+        "encode exact transparent offset fragment");
+    const auto transparent_encoded = webp_offset_animation(*transparent_still);
+    const Document transparent_reference =
+        take(service.decode(snow::image::memory_input(transparent_encoded)),
+             "decode exact transparent offset reference");
+    StorageSink transparent_preview;
+    require(service.decode_to_sink(snow::image::memory_input(transparent_encoded),
+                                   transparent_preview, first)
+                    .has_value() &&
+                std::equal(transparent_preview.pixels.begin(), transparent_preview.pixels.end(),
+                           transparent_reference.frames.front().image.pixels().begin()) &&
+                transparent_preview.pixels[(2U * 8U + 2U) * 4U] == color[0] &&
+                transparent_preview.pixels[(2U * 8U + 2U) * 4U + 3U] == std::byte{0},
+            "unscaled first-frame decoding retains color underneath transparent alpha");
+    first.maximum_extent = 4;
+    const auto preview_info = take(service.inspect(snow::image::memory_input(encoded), first),
+                                   "inspect frame-zero preview with an extent hint");
+    StorageSink hinted;
+    require(
+        service.decode_to_sink(snow::image::memory_input(encoded), hinted, first).has_value() &&
+            hinted.pixels == unscaled.pixels && hinted.callback_rows == 0 &&
+            preview_info.canvas_width == 8 && preview_info.canvas_height == 6 &&
+            preview_info.frames.size() == 1 && hinted.info.canvas_width == 8 &&
+            hinted.info.canvas_height == 6,
+        "animated frame-zero decoding preserves the canvas and leaves caller scaling unchanged");
+    for (std::uint32_t y = 0; y < 6; ++y) {
+        for (std::uint32_t x = 0; x < 8; ++x) {
+            const auto offset = static_cast<std::size_t>(y * 8U + x) * 4U;
+            const std::array transparent{std::byte{0}, std::byte{0}, std::byte{0}, std::byte{0}};
+            const auto& expected = (y == 2 || y == 3) && x >= 2 && x < 6 ? color : transparent;
+            require(std::equal(expected.begin(), expected.end(), hinted.pixels.begin() + offset),
+                    "exact frame offsets retain transparent canvas and straight alpha");
+        }
+    }
+    first.limits.maximum_owned_output_bytes = hinted.pixels.size();
+    first.limits.maximum_working_bytes = hinted.pixels.size();
+    const Document owned = take(service.decode(snow::image::memory_input(encoded), first),
+                                "decode owned frame-zero preview");
+    require(owned.frames.size() == 1 && std::equal(hinted.pixels.begin(), hinted.pixels.end(),
+                                                   owned.frames.front().image.pixels().begin()),
+            "owned frame-zero decode allocates only its complete output canvas");
+    first.orientation = snow::image::OrientationPolicy::apply;
+    const Document oriented = take(service.decode(snow::image::memory_input(encoded), first),
+                                   "apply first-frame WebP orientation");
+    require(oriented.frames.size() == 1 && oriented.canvas_width == 6 &&
+                oriented.canvas_height == 8 &&
+                oriented.metadata.orientation == snow::image::Orientation::identity,
+            "first-frame orientation rotates one exact canvas without materializing later frames");
+    first.orientation = snow::image::OrientationPolicy::preserve;
+    first.limits.maximum_working_bytes = hinted.pixels.size() - 1;
+    AnimationStreamingSink row_limited;
+    const auto row_failure =
+        service.decode_to_sink(snow::image::memory_input(encoded), row_limited, first);
+    require(!row_failure && row_failure.error().code == ErrorCode::limit_exceeded &&
+                !row_limited.ended,
+            "row-only first-frame sinks enforce the canvas working allocation limit");
+    first.limits.maximum_working_bytes = hinted.pixels.size();
+    AnimationStreamingSink rows;
+    require(service.decode_to_sink(snow::image::memory_input(encoded), rows, first).has_value() &&
+                rows.ended && rows.frames_started == 1 && rows.frames_ended == 1 && rows.rows == 6,
+            "row-only first-frame sinks publish one complete canvas");
+    class CancellingPreviewSink final : public PixelSink {
+      public:
+        explicit CancellingPreviewSink(std::stop_source& stop) : stop_(stop) {}
+        Result<void> begin(const snow::image::DocumentInfo&) override {
+            return {};
+        }
+        Result<void> begin_frame(std::uint32_t, const snow::image::FrameInfo&) override {
+            return {};
+        }
+        Result<void> write_rows(std::uint32_t, std::uint32_t, std::size_t,
+                                std::span<const std::byte>) override {
+            stop_.request_stop();
+            return {};
+        }
+        Result<void> end_frame(std::uint32_t) override {
+            completed = true;
+            return {};
+        }
+        Result<void> end() override {
+            ended = true;
+            return {};
+        }
+        bool completed = false;
+        bool ended = false;
+
+      private:
+        std::stop_source& stop_;
+    };
+    std::stop_source cancellation;
+    CancellingPreviewSink cancelling(cancellation);
+    const auto cancelled = service.decode_to_sink(snow::image::memory_input(encoded), cancelling,
+                                                  first, cancellation.get_token());
+    require(!cancelled && cancelled.error().code == ErrorCode::cancelled && !cancelling.completed &&
+                !cancelling.ended,
+            "row callback cancellation prevents first-frame completion publication");
+    for (unsigned limit = 0; limit < 3; ++limit) {
+        snow::image::DecodeOptions limited = inspect_options;
+        if (limit == 0)
+            limited.limits.maximum_width = 7;
+        else if (limit == 1)
+            limited.limits.maximum_pixels = 47;
+        else
+            limited.limits.maximum_frames = 1;
+        const auto inspected = service.inspect(snow::image::memory_input(encoded), limited);
+        limited.frame_index = 0;
+        StorageSink rejected;
+        const auto decoded =
+            service.decode_to_sink(snow::image::memory_input(encoded), rejected, limited);
+        require(!inspected && inspected.error().code == ErrorCode::limit_exceeded && !decoded &&
+                    decoded.error().code == ErrorCode::limit_exceeded &&
+                    rejected.storage_requests == 0,
+                "animation header limits reject before allocating sink pixels");
+    }
+    const auto large_canvas = webp_offset_animation(*still, 1024, 768, 1020, 766);
+    first.limits.maximum_working_bytes = 0;
+    first.limits.maximum_owned_output_bytes = 0;
+    StorageSink edge;
+    require(
+        service.decode_to_sink(snow::image::memory_input(large_canvas), edge, first).has_value() &&
+            edge.pixels.size() == 1024U * 768U * 4U &&
+            std::equal(color.begin(), color.end(), edge.pixels.end() - 4),
+        "edge fragments decode into one exact external canvas without history allocations");
+}
+
 void test_webp(Service& service) {
     const snow::image::EncoderInfo* info = service.encoder_info(Format::webp);
     if (!info)
         return;
+    test_webp_first_frame_preview(service);
     require(snow::image::has_feature(info->features, snow::image::EncoderFeature::animation) &&
                 snow::image::has_feature(info->features, snow::image::EncoderFeature::alpha) &&
                 snow::image::has_feature(info->features, snow::image::EncoderFeature::metadata) &&
@@ -4156,6 +4789,11 @@ void test_jxl_opaque_progressive_preview(Service& service) {
 } // namespace
 
 int main(int argc, char* argv[]) {
+    if (argc == 2 && std::string_view(argv[1]) == "--webp-only") {
+        Service service;
+        test_webp(service);
+        return 0;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--export-codecs-only") {
         Service service;
         test_bmp_round_trip(service);
@@ -4201,6 +4839,13 @@ int main(int argc, char* argv[]) {
     if (argc == 2 && std::string_view(argv[1]) == "--ownership-only") {
         test_shared_image_ownership();
         test_transform_storage_and_precision();
+        return 0;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--png-only") {
+        Service service;
+        test_png_round_trip(service);
+        test_png_palette_behavior(service);
+        std::cout << "snow_image PNG tests passed\n";
         return 0;
     }
     if (argc == 2 && std::string_view(argv[1]) == "--jpeg-only") {

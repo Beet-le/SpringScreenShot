@@ -5,6 +5,7 @@
 #include "snow_shot/platform/physicalcursor.h"
 #include "snow_shot/presentation/screenshotfloatingtoolpalettewindow.h"
 #include "snow_shot/presentation/screenshotcanvastoolstyles.h"
+#include "snow_shot/presentation/screenshotdefaultstyles.h"
 #include "snow_shot/presentation/screenshotstylebinding.h"
 #include "snow_shot/presentation/screenshotcanvascolorsampler.h"
 #include "snow_shot/presentation/screenshotcanvascolorsamplerwindow.h"
@@ -12,6 +13,7 @@
 #include "snow_shot/presentation/screenshotwheelinput.h"
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/configurationstore.h"
+#include "snow_shot/storage/settingsadapters.h"
 #include "snow_draw_engine_qt/snow_canvas_widget.h"
 #include "snow_draw_engine_qt/snow_canvas_runtime.h"
 #include "snow_draw_engine_qt/snow_canvas_custom_renderer.h"
@@ -40,12 +42,16 @@ ScreenshotToolPalette::Options canvasOptions() {
     options.showHistoryActions = true;
     options.showSelectTool = true;
     options.showShapeTool = true;
+    options.showSpeechBubbleTool = true;
     options.showArrowTool = true;
     options.showLineTool = true;
     options.showDistanceTool = true;
+    options.showAngleTool = true;
     options.showFreeDrawTool = true;
     options.showHighlightTool = true;
     options.showSpotlightTool = true;
+    // Magnifiers sample captured images; this live annotation surface has none.
+    options.showMagnifierTool = false;
     options.showEraserTool = true;
     options.showFilterTool = true;
     options.showWatermarkTool = true;
@@ -134,9 +140,19 @@ class GlobalCanvasController::Session final : public QWidget, public SnowCanvasC
         });
         auto& storage = storage::ApplicationStorage::instance();
         if (storage.isInitialized()) {
+            const auto applyDrawingPreferences = [this]() {
+                const auto disabledTools = screenshotQuickSelectionDisabledTools(
+                    storage::DrawingSettings().quickSelectionDisabledTools());
+                if (!runtime.setQuickSelectionDisabledTools(disabledTools)) {
+                    qWarning("Failed to apply full-screen canvas quick-selection preferences");
+                }
+            };
+            applyDrawingPreferences();
             connect(&storage.configuration(), &storage::ConfigurationStore::valueChanged, this,
-                    [this](const QString& key, const QJsonValue&) {
-                        if (key.startsWith(QStringLiteral("drawing_shortcuts/"))) {
+                    [this, applyDrawingPreferences](const QString& key, const QJsonValue&) {
+                        if (key == QStringLiteral("drawing/quick_selection_disabled_tools")) {
+                            applyDrawingPreferences();
+                        } else if (key.startsWith(QStringLiteral("drawing_shortcuts/"))) {
                             reloadShortcuts();
                         } else if (key == QStringLiteral("screenshot_toolbar/layout")) {
                             palette->setToolbarLayout(storage::ScreenshotToolbarSettings().layout(
@@ -281,10 +297,22 @@ class GlobalCanvasController::Session final : public QWidget, public SnowCanvasC
             return true;
         }
         if (watched == drawing.get()) {
+            if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::KeyPress)
+                angleWheelSteps.reset();
             if (event->type() == QEvent::UngrabMouse || event->type() == QEvent::Hide ||
                 event->type() == QEvent::FocusOut)
                 finishPan();
             if (!transparent && !sampleTarget) {
+                if (event->type() == QEvent::Wheel && angleWheelTarget(*drawing)) {
+                    auto* wheel = static_cast<QWheelEvent*>(event);
+                    if (handleScreenshotStyleWheel(*tools->palette(), *drawing, *wheel,
+                                                   angleWheelSteps)) {
+                        wheel->accept();
+                        return true;
+                    }
+                } else if (event->type() == QEvent::Wheel) {
+                    angleWheelSteps.reset();
+                }
                 if (handleNavigation(event))
                     return true;
                 if (event->type() == QEvent::Wheel &&
@@ -500,9 +528,10 @@ class GlobalCanvasController::Session final : public QWidget, public SnowCanvasC
             binding.id = QStringLiteral("global-canvas.drawing.") + it.key();
             binding.shortcutBindings = it.value();
             binding.priority = WindowShortcutManager::StandardPriority::DrawingShortcut;
-            binding.canActivate = [this](const auto& context) {
+            binding.canActivate = [this, id = it.key()](const auto& context) {
                 return !transparent && !sampleTarget && !drawing->hasActiveTextEditing() &&
-                       !WindowShortcutManager::focusAcceptsTextInput(context.focusWidget);
+                       !WindowShortcutManager::focusAcceptsTextInput(context.focusWidget) &&
+                       palette->canActivateDrawingShortcut(id);
             };
             binding.activate = [this, id = it.key()](const auto&) {
                 return palette->activateDrawingShortcut(id);
@@ -520,6 +549,9 @@ class GlobalCanvasController::Session final : public QWidget, public SnowCanvasC
         case SnowCanvasTool::Select:
             palette->setActiveTool(ScreenshotToolPalette::Tool::Select);
             break;
+        case SnowCanvasTool::SpeechBubble:
+            palette->setActiveTool(ScreenshotToolPalette::Tool::SpeechBubble);
+            break;
         case SnowCanvasTool::Shape:
             palette->setActiveTool(ScreenshotToolPalette::Tool::Shape);
             break;
@@ -528,6 +560,9 @@ class GlobalCanvasController::Session final : public QWidget, public SnowCanvasC
             break;
         case SnowCanvasTool::Distance:
             palette->setActiveTool(ScreenshotToolPalette::Tool::Distance);
+            break;
+        case SnowCanvasTool::Angle:
+            palette->setActiveTool(ScreenshotToolPalette::Tool::Angle);
             break;
         case SnowCanvasTool::Line:
             palette->setActiveTool(ScreenshotToolPalette::Tool::Line);
@@ -569,17 +604,26 @@ class GlobalCanvasController::Session final : public QWidget, public SnowCanvasC
             palette->setActiveTool(ScreenshotToolPalette::Tool::SerialNumber);
             break;
         case SnowCanvasTool::AutoFilter:
+        case SnowCanvasTool::Magnifier:
             break;
         }
     }
     void wireTools() {
+        connect(drawing.get(), &SnowCanvasWidget::angleAdjustmentTargetChanged, this,
+                [this]() { angleWheelSteps.reset(); });
         connect(drawing.get(), &SnowCanvasWidget::activeToolChanged, this, [this]() {
+            angleWheelSteps.reset();
             cancelColorSampling();
             synchronizeTool();
         });
         connect(palette, &ScreenshotToolPalette::selectRequested, this, [this]() {
             drawing->setCanvasTool(SnowCanvasTool::Select);
             palette->setActiveTool(ScreenshotToolPalette::Tool::Select);
+            activateDrawing();
+        });
+        connect(palette, &ScreenshotToolPalette::speechBubbleRequested, this, [this]() {
+            drawing->setCanvasTool(SnowCanvasTool::SpeechBubble);
+            palette->setActiveTool(ScreenshotToolPalette::Tool::SpeechBubble);
             activateDrawing();
         });
         connect(palette, &ScreenshotToolPalette::shapeRequested, this, [this]() {
@@ -590,6 +634,11 @@ class GlobalCanvasController::Session final : public QWidget, public SnowCanvasC
         connect(palette, &ScreenshotToolPalette::distanceToolRequested, this, [this]() {
             drawing->setCanvasTool(SnowCanvasTool::Distance);
             palette->setActiveTool(ScreenshotToolPalette::Tool::Distance);
+            activateDrawing();
+        });
+        connect(palette, &ScreenshotToolPalette::angleToolRequested, this, [this]() {
+            drawing->setCanvasTool(SnowCanvasTool::Angle);
+            palette->setActiveTool(ScreenshotToolPalette::Tool::Angle);
             activateDrawing();
         });
         connect(palette, &ScreenshotToolPalette::arrowRequested, this, [this]() {
@@ -750,6 +799,7 @@ class GlobalCanvasController::Session final : public QWidget, public SnowCanvasC
     GlobalCanvasController& owner;
     SnowCanvasRuntime runtime;
     std::unique_ptr<SnowCanvasWidget> drawing;
+    WheelStepAccumulator angleWheelSteps;
     std::unique_ptr<ScreenshotFloatingToolPaletteWindow> tools;
     WindowShortcutManager shortcuts;
     QHash<QString, WindowShortcutManager::BindingHandle> drawingBindings;

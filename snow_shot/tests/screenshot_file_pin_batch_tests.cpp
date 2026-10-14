@@ -1,12 +1,14 @@
 #include "snow_shot/presentation/screenshotfilepinbatch.h"
 
 #include "snow_shot/platform/selectedfiles.h"
+#include "pinned_animation_fixtures.h"
 
 #include <QApplication>
 #include <QClipboard>
 #include <QColorSpace>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QFileInfo>
 #include <QMimeData>
 #include <QSemaphore>
 #include <QTemporaryDir>
@@ -33,6 +35,17 @@ void finish(ScreenshotFilePinBatch& batch) {
         QThread::msleep(1);
     }
     require(!batch.active(), "batch must finish without filling the export queue");
+    QCoreApplication::processEvents();
+}
+
+void finish(ScreenshotFilePinQueue& queue) {
+    QElapsedTimer timer;
+    timer.start();
+    while (queue.active() && timer.elapsed() < 10000) {
+        QCoreApplication::processEvents();
+        QThread::msleep(1);
+    }
+    require(!queue.active(), "queued shell requests must all finish");
 }
 
 QString imageFile(QTemporaryDir& directory, const QString& name, QColor color = Qt::green) {
@@ -370,6 +383,216 @@ void clipboardFiles() {
     require(ScreenshotClipboardContentReader::localFilePaths(&text).isEmpty(),
             "non-file clipboard content must retain the single-content flow");
 }
+
+void completionReportsResults() {
+    QTemporaryDir directory;
+    const QString image = imageFile(directory, QStringLiteral("image.png"));
+    const QString corrupt = directory.filePath(QStringLiteral("corrupt.png"));
+    QFile invalid(corrupt);
+    require(invalid.open(QIODevice::WriteOnly) && invalid.write("invalid") == 7,
+            "write failed-decode fixture");
+    invalid.close();
+    ScreenshotFilePinBatch batch;
+    int completions = 0;
+    bool succeeded = false;
+    const auto completed = [&](bool success) {
+        require(!batch.active() && QThread::currentThread() == qApp->thread(),
+                "completion runs on the GUI thread after the batch stops");
+        ++completions;
+        succeeded = success;
+    };
+    const auto present = [](ScreenshotClipboardContent) { return true; };
+    batch.start({image}, present, {}, completed);
+    finish(batch);
+    require(completions == 1 && succeeded, "successful image reports one completion");
+    batch.start({corrupt}, present, {}, completed);
+    finish(batch);
+    require(completions == 2 && !succeeded, "failed decode reports unsuccessful completion");
+    batch.start({directory.filePath(QStringLiteral("missing.png"))}, present, {}, completed);
+    finish(batch);
+    require(completions == 3 && !succeeded, "rejected file reports unsuccessful completion");
+    batch.start({image}, [](ScreenshotClipboardContent) { return false; }, {}, completed);
+    finish(batch);
+    require(completions == 4 && !succeeded, "presentation failure reports failure");
+    batch.start({image}, present, {}, completed);
+    batch.cancel();
+    batch.start({}, present);
+    finish(batch);
+    require(completions == 4, "explicit cancellation discards its completion");
+
+    const auto identity =
+        ScreenshotClipboardContentReader::snapshotLocalFiles({image}).first().sourceIdentity;
+    ScreenshotFilePinBatch::DuplicateFilter filter;
+    filter.identities.insert(identity.key);
+    filter.consume = [](const auto&) { return true; };
+    batch.start(
+        {image},
+        [](ScreenshotClipboardContent) {
+            require(false, "consumed duplicate must not decode or present again");
+            return false;
+        },
+        filter, completed);
+    finish(batch);
+    require(completions == 5 && succeeded, "existing-pin action is a successful completion");
+}
+
+void queuedShellRequestsContinueAndRemainIndependent() {
+    QTemporaryDir directory;
+    const QString first = imageFile(directory, QStringLiteral("图片 first.PNG"));
+    const QString second = imageFile(directory, QStringLiteral("second.png"));
+    const QString missing = directory.filePath(QStringLiteral("missing.png"));
+    const QString corrupt = directory.filePath(QStringLiteral("corrupt.png"));
+    QFile invalid(corrupt);
+    require(invalid.open(QIODevice::WriteOnly) && invalid.write("invalid") == 7,
+            "write queued failed-decode fixture");
+    invalid.close();
+    QStringList presented;
+    QStringList failed;
+    ScreenshotFilePinQueue queue;
+    const auto prepare = [&] {
+        require(QThread::currentThread() == qApp->thread(), "prepare stays on the GUI thread");
+        return ScreenshotFilePinQueue::Options{[&](ScreenshotClipboardContent content) {
+                                                   presented.append(
+                                                       content.originalContent.localFilePath);
+                                                   return true;
+                                               },
+                                               {}};
+    };
+    const auto failure = [&](const QString& path) { failed.append(path); };
+    queue.enqueue({first, corrupt}, prepare, failure);
+    queue.enqueue({missing, second}, prepare, failure);
+    require(queue.active(), "new shell launches append while the first decode is pending");
+    ScreenshotFilePinBatch ordinaryBatch;
+    ordinaryBatch.start({second}, [](ScreenshotClipboardContent) {
+        require(false, "cancelled clipboard batch must not present");
+        return true;
+    });
+    ordinaryBatch.cancel();
+    finish(queue);
+    require(presented == QStringList{first, second} && failed == QStringList{corrupt, missing},
+            "rapid requests pin every valid image and continue after each failure");
+
+    queue.enqueue({first, second}, prepare, failure);
+    queue.cancel();
+    queue.enqueue({second}, prepare, failure);
+    finish(queue);
+    require(presented == QStringList{first, second, second} && failed.size() == 2,
+            "cancellation discards pending requests and allows a later request");
+}
+
+void queuedDuplicatePolicyUsesEarlierPins() {
+    QTemporaryDir directory;
+    const QString first = imageFile(directory, QStringLiteral("first.png"));
+    const QString second = imageFile(directory, QStringLiteral("second.png"));
+    QSet<QString> pinned;
+    QStringList presented;
+    int duplicateActions = 0;
+    ScreenshotFilePinQueue queue;
+    const auto prepare = [&] {
+        ScreenshotFilePinQueue::Options options;
+        options.duplicateFilter.identities = pinned;
+        options.duplicateFilter.consume = [&](const auto& identity) {
+            require(pinned.contains(identity.key), "duplicate refers to an earlier queued pin");
+            ++duplicateActions;
+            return true;
+        };
+        options.present = [&](ScreenshotClipboardContent content) {
+            pinned.insert(content.sourceIdentity.key);
+            presented.append(content.originalContent.localFilePath);
+            if (content.originalContent.localFilePath == first) {
+                QFile rewritten(first);
+                require(rewritten.open(QIODevice::WriteOnly | QIODevice::Truncate),
+                        "change duplicate bytes after its first pin");
+                rewritten.write("invalid");
+            }
+            return true;
+        };
+        return options;
+    };
+    queue.enqueue({first, first, second}, prepare, [](const QString&) {
+        require(false, "consumed duplicates must not warn or decode changed bytes");
+    });
+    finish(queue);
+    require(presented == QStringList{first, second} && duplicateActions == 1,
+            "duplicate policy is prepared after each earlier pin finishes");
+}
+
+void animatedFileBatchesRetainSources() {
+    QTemporaryDir directory;
+    const auto fixtures = pinned_animation_fixtures::images();
+    QStringList paths;
+    for (const auto& fixture : fixtures) {
+        const auto path = directory.filePath(QStringLiteral("source.") + fixture.suffix);
+        QFile file(path);
+        require(file.open(QIODevice::WriteOnly) &&
+                    file.write(fixture.bytes) == fixture.bytes.size(),
+                "animated batch fixtures must be written");
+        paths.append(path);
+    }
+    ScreenshotFilePinBatch batch;
+    QList<ScreenshotClipboardContent> retained;
+    batch.start(paths, [&](ScreenshotClipboardContent content) {
+        const auto index = retained.size();
+        require(content.animationSource && content.animationSource->isAnimated() &&
+                    content.animationSource->encoded == fixtures.at(index).bytes &&
+                    content.originalContent.localFilePath == paths.at(index),
+                "batched animated files must retain source bytes and selection order");
+        retained.append(std::move(content));
+        return true;
+    });
+    finish(batch);
+    require(retained.size() == fixtures.size(), "every animated file must be presented");
+    for (qsizetype index = 0; index < paths.size(); ++index) {
+        require(QFile::remove(paths.at(index)) &&
+                    retained.at(index).animationSource->encoded == fixtures.at(index).bytes,
+                "completed batches must transfer immutable source ownership to their pins");
+    }
+}
+
+void queuedAnimatedShellRequestsRetainSources() {
+    QTemporaryDir directory;
+    const auto fixtures = pinned_animation_fixtures::images();
+    QStringList paths;
+    for (const auto& fixture : fixtures) {
+        const auto path = directory.filePath(QStringLiteral("queued.") + fixture.suffix.toUpper());
+        QFile file(path);
+        require(file.open(QIODevice::WriteOnly) &&
+                    file.write(fixture.bytes) == fixture.bytes.size(),
+                "animated shell request fixtures must be written");
+        paths.append(path);
+    }
+    ScreenshotFilePinQueue queue;
+    QList<ScreenshotClipboardContent> retained;
+    const auto prepare = [&] {
+        ScreenshotFilePinQueue::Options options;
+        options.present = [&](ScreenshotClipboardContent content) {
+            const auto index = retained.size();
+            require(content.animationSource && content.animationSource->isAnimated() &&
+                        content.animationSource->encoded == fixtures.at(index).bytes &&
+                        content.originalContent.localFilePath == paths.at(index),
+                    "queued animated shell requests retain source bytes and arrival order");
+            retained.append(std::move(content));
+            return true;
+        };
+        return options;
+    };
+    const auto failure = [](const QString&) {
+        require(false, "supported animated shell requests must not fail");
+    };
+    for (const auto& path : paths) {
+        require(ScreenshotClipboardContentReader::supportedImageFileExtensions().contains(
+                    QFileInfo(path).suffix().toLower()),
+                "animated shell requests are admitted by the shared image suffix list");
+        queue.enqueue({path}, prepare, failure);
+    }
+    finish(queue);
+    require(retained.size() == fixtures.size(), "every queued animated shell request is presented");
+    for (qsizetype index = 0; index < paths.size(); ++index) {
+        require(QFile::remove(paths.at(index)) &&
+                    retained.at(index).animationSource->encoded == fixtures.at(index).bytes,
+                "queued pins own their animation bytes after their source files are removed");
+    }
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -382,6 +605,11 @@ int main(int argc, char** argv) {
     stoppingDiscardsPrefetchedDecodes();
     selectionAndCancellation();
     clipboardFiles();
+    completionReportsResults();
+    queuedShellRequestsContinueAndRemainIndependent();
+    queuedDuplicatePolicyUsesEarlierPins();
+    animatedFileBatchesRetainSources();
+    queuedAnimatedShellRequestsRetainSources();
     selectionFailures();
     ScreenshotExportCoordinator::shared().shutdown();
     return 0;

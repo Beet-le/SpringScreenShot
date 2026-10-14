@@ -50,7 +50,12 @@ class ScreenshotOverlayCoordinator final : public ScreenshotOverlayExclusionPort
     void destroyDisplayPool(ScreenshotDisplaySession& displaySession);
     void resetForNewCapture(ScreenshotDisplaySession& displaySession);
     void prepareDisplayModels(ScreenshotDisplaySession& displaySession);
+    void prepareOverlayBackingStores(const ScreenshotDisplaySession& displaySession);
     void applyDisplayModels(ScreenshotDisplaySession& displaySession);
+    // Applying capture sources can replace retained renderer state without changing selection.
+    [[nodiscard]] quint64 presentationRevision() const {
+        return m_presentationRevision;
+    }
     [[nodiscard]] bool preparePreCaptureOverlayWindows(ScreenshotDisplaySession& displaySession);
     void showOverlayWindows(const ScreenshotDisplaySession& displaySession,
                             ScreenshotOverlayShowMode mode);
@@ -58,9 +63,9 @@ class ScreenshotOverlayCoordinator final : public ScreenshotOverlayExclusionPort
     void hideOverlayWindows(const ScreenshotDisplaySession& displaySession);
     void updateOverlayState(const ScreenshotDisplaySession& displaySession,
                             const ScreenshotSelectionVisualState& selectionState,
-                            bool intelligentSelecting, bool manualSelecting, bool dragging);
-    void setScrollingCaptureMode(const ScreenshotDisplaySession& displaySession,
-                                 const QRectF& selection, bool enabled);
+                            bool intelligentSelecting, bool manualSelecting, bool dragging,
+                            bool updateCursors = true);
+    void setScrollingCaptureMode(const ScreenshotDisplaySession& displaySession, bool enabled);
     void setScrollingResultPreview(const ScreenshotDisplaySession& displaySession,
                                    const QImage& image, const QRectF& canvasRect,
                                    std::optional<Qt::Orientation> cropGuide = std::nullopt);
@@ -135,6 +140,9 @@ class ScreenshotOverlayCoordinator final : public ScreenshotOverlayExclusionPort
     void prepareColorPickerSurface(const ScreenshotDisplaySession& displaySession);
     void releaseColorPicker();
     ScreenshotColorPickerWindow* colorPicker() const;
+    void sampleColorPicker(const QImage& image, const QRect& physicalRect,
+                           const QPoint& physicalPoint, const QImage& cursorPatch = {},
+                           const QRect& cursorPixelRect = {});
     void updateColorPicker(ScreenshotOverlayWindow* overlay, const QImage& image,
                            const QRect& physicalRect, const QPoint& physicalPoint,
                            const QPointF& localPosition, qreal opacity,
@@ -145,6 +153,7 @@ class ScreenshotOverlayCoordinator final : public ScreenshotOverlayExclusionPort
     void updateShortcutHints(ScreenshotOverlayWindow* overlay,
                              const ScreenshotShortcutHintContext& context, qreal opacity,
                              const QRectF& selectionGlobal, const QPoint& cursorPosition);
+    void updateShortcutHintPointer(ScreenshotOverlayWindow* overlay, const QPoint& cursorPosition);
     [[nodiscard]] bool screenshotUiContainsGlobalPoint(const QPoint& position) const;
     [[nodiscard]] bool stepToolbarStrokeWidth(int direction);
     [[nodiscard]] bool stepToolbarSelectionOpacity(int direction);
@@ -157,6 +166,9 @@ class ScreenshotOverlayCoordinator final : public ScreenshotOverlayExclusionPort
     void showToolbar();
     void hideSelectionToolbar();
     void setSelectionToolbarHidden(bool hidden);
+    [[nodiscard]] bool selectionToolbarHidden() const {
+        return m_uiHost.selectionToolbarHidden();
+    }
     void showSelectionToolbar();
     void raiseSelectionToolbar();
     void destroyUiResources();
@@ -177,6 +189,7 @@ class ScreenshotOverlayCoordinator final : public ScreenshotOverlayExclusionPort
     ScreenshotOverlayPool m_overlayPool;
     ScreenshotOverlayCanvasPresenter m_canvasPresenter;
     bool m_overlayMaintenancePending = false;
+    quint64 m_presentationRevision = 0;
 };
 
 #endif // SNOW_SHOT_PRESENTATION_SCREENSHOTOVERLAYCOORDINATOR_H

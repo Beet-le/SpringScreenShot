@@ -5,9 +5,9 @@ use snow_draw_engine_core::{
 use snow_draw_engine_document::{
     ArrowData, FillStyle, FilterData, MIN_SERIAL_NUMBER_FONT_SIZE, MIN_TEXT_FONT_SIZE,
     RectangleData, SerialNumberData, SpotlightConfig, TextData, Transaction, WatermarkConfig,
-    normalize_corner_radii, normalize_font_family, resolve_serial_number_data_diameter,
-    serial_number_rect_proxy, serial_number_with_label_style, text_with_auto_resize_layout,
-    text_with_wrapped_layout, validate_serial_number, validate_text,
+    normalize_font_family, resolve_serial_number_data_diameter, serial_number_rect_proxy,
+    serial_number_with_label_style, text_with_auto_resize_layout, text_with_wrapped_layout,
+    validate_serial_number, validate_text,
 };
 use snow_draw_engine_interaction::Modifiers;
 use snow_draw_engine_model::DocumentModel;
@@ -32,12 +32,12 @@ use crate::{
     SHAPE_STYLE_PROPERTY_START_ARROWHEAD, SHAPE_STYLE_PROPERTY_STROKE,
     SHAPE_STYLE_PROPERTY_STROKE_STYLE, SHAPE_STYLE_PROPERTY_STROKE_WIDTH, SelectionArrowState,
     SelectionRectState, SerialNumberStyle, ShapeKind, ShapeStyle, ShapeStylePatch,
-    StyleToolbarSource, TEXT_STYLE_ALL_PROPERTIES, TEXT_STYLE_MIXED_COLOR,
+    StyleToolbarSource, TEXT_STYLE_ALL_PROPERTIES, TEXT_STYLE_MIXED_BOLD, TEXT_STYLE_MIXED_COLOR,
     TEXT_STYLE_MIXED_CORNER_RADII, TEXT_STYLE_MIXED_FILL, TEXT_STYLE_MIXED_FILL_STYLE,
     TEXT_STYLE_MIXED_FONT_FAMILY, TEXT_STYLE_MIXED_FONT_SIZE, TEXT_STYLE_MIXED_HORIZONTAL_ALIGN,
-    TEXT_STYLE_MIXED_OPACITY, TEXT_STYLE_MIXED_STROKE, TEXT_STYLE_MIXED_STROKE_WIDTH,
-    TEXT_STYLE_MIXED_VERTICAL_ALIGN, TextLayoutOverride, TextStyle, arrow_with_style,
-    selection_bounds_from_selection,
+    TEXT_STYLE_MIXED_ITALIC, TEXT_STYLE_MIXED_OPACITY, TEXT_STYLE_MIXED_STROKE,
+    TEXT_STYLE_MIXED_STROKE_WIDTH, TEXT_STYLE_MIXED_VERTICAL_ALIGN, TextLayoutOverride, TextStyle,
+    arrow_with_style, selection_bounds_from_selection,
     text::{text_layout_override_size, text_with_style_attributes},
 };
 
@@ -132,7 +132,7 @@ impl ShapeStyle {
         style
     }
 
-    pub(crate) fn from_rectangle_shape_style(style: RectangleShapeStyle) -> Self {
+    pub fn from_rectangle_shape_style(style: RectangleShapeStyle) -> Self {
         Self {
             fill: style.fill,
             fill_style: style.fill_style,
@@ -451,13 +451,15 @@ fn validate_shape_style_patch(patch: ShapeStylePatch) -> Result<(), ErrorCode> {
     }
 
     match patch.kind {
-        ShapeKind::Rectangle => validate_rectangle_shape_style(patch.style.rectangle_shape_style()),
+        ShapeKind::Rectangle | ShapeKind::SpeechBubble => {
+            validate_rectangle_shape_style(patch.style.rectangle_shape_style())
+        }
         ShapeKind::Arrow => validate_arrow_style(patch.style.arrow_style()),
         ShapeKind::Line
         | ShapeKind::FreeDraw
         | ShapeKind::RectangleHighlight
         | ShapeKind::PenHighlight => validate_line_style(patch.style),
-        ShapeKind::Spotlight => Ok(()),
+        ShapeKind::Spotlight => validate_rectangle_shape_style(patch.style.rectangle_shape_style()),
     }
 }
 
@@ -547,9 +549,23 @@ pub(crate) fn rectangle_with_style(
         stroke: style.stroke,
         stroke_width: style.stroke_width,
         stroke_style: style.stroke_style,
-        corner_radii: normalize_corner_radii(rect.width, rect.height, style.corner_radii),
+        corner_radii: snow_draw_engine_document::normalize_shape_corner_radii(
+            style.shape,
+            rect.width,
+            rect.height,
+            style.corner_radii,
+        ),
         opacity: rect.opacity,
     }
+}
+
+fn speech_bubble_body_with_style(
+    rect: &RectangleData,
+    style: RectangleShapeStyle,
+) -> RectangleData {
+    let mut body = rectangle_with_style(rect, style);
+    body.corner_radii = style.corner_radii;
+    body
 }
 
 fn text_with_style(
@@ -567,6 +583,8 @@ fn text_with_style(
         && layouts.iter().any(|layout| layout.id == id);
     if updated.font_size == text.font_size
         && updated.font_family == text.font_family
+        && updated.bold == text.bold
+        && updated.italic == text.italic
         && !alignment_layout_changed
     {
         return Ok(updated);
@@ -590,6 +608,12 @@ fn patched_text_style(text: &TextData, style: &TextStyle, properties: u32) -> Te
     let mut patched = TextStyle::from_text(text);
     if properties & TEXT_STYLE_MIXED_COLOR != 0 {
         patched.color = style.color;
+    }
+    if properties & TEXT_STYLE_MIXED_BOLD != 0 {
+        patched.bold = style.bold;
+    }
+    if properties & TEXT_STYLE_MIXED_ITALIC != 0 {
+        patched.italic = style.italic;
     }
     if properties & TEXT_STYLE_MIXED_FONT_SIZE != 0 {
         patched.font_size = style.font_size;
@@ -793,6 +817,18 @@ impl Editor {
             return StyleToolbarSource::Eraser;
         }
         let primary = self.state.selection.primary;
+        if self
+            .state
+            .selection
+            .ids
+            .iter()
+            .any(|id| document.speech_bubble(*id).is_ok())
+        {
+            return StyleToolbarSource::SelectedSpeechBubble;
+        }
+        if self.state.active_tool == ActiveTool::SpeechBubble {
+            return StyleToolbarSource::DefaultSpeechBubble;
+        }
         if primary.is_some_and(|id| document.pen_filter(id).is_ok()) {
             StyleToolbarSource::SelectedPenFilter
         } else if primary.is_some_and(|id| document.filter(id).is_ok()) {
@@ -857,6 +893,8 @@ impl Editor {
             .any(|id| document.arrow(*id).is_ok_and(ArrowData::is_distance))
         {
             StyleToolbarSource::SelectedDistance
+        } else if self.has_homogeneous_angle_selection(document) {
+            StyleToolbarSource::SelectedAngle
         } else if self.selected_arrow_style(document).is_some() {
             StyleToolbarSource::SelectedArrow
         } else if self.state.active_tool == ActiveTool::Line {
@@ -876,6 +914,12 @@ impl Editor {
             ActiveTool::RectangleFilter | ActiveTool::AutoFilter
         ) {
             StyleToolbarSource::DefaultRectangleFilter
+        } else if self.has_homogeneous_magnifier_selection(document) {
+            StyleToolbarSource::SelectedMagnifier
+        } else if self.state.active_tool == ActiveTool::Magnifier {
+            StyleToolbarSource::DefaultMagnifier
+        } else if self.state.active_tool == ActiveTool::Angle {
+            StyleToolbarSource::DefaultAngle
         } else if self.state.active_tool == ActiveTool::Distance {
             StyleToolbarSource::DefaultDistance
         } else if self.state.active_tool == ActiveTool::Arrow {
@@ -911,22 +955,37 @@ impl Editor {
     }
 
     pub fn filter_style(&self, document: &DocumentModel) -> FilterStyle {
-        let selected = self.state.selection.ids.iter().find_map(|id| {
-            if let Ok(filter) = document.pen_filter(*id) {
-                return Some(FilterStyle {
-                    filter_type: filter.filter_type,
-                    strength: filter.strength,
-                    opacity: filter.opacity,
-                    stroke_width: filter.stroke_width,
-                });
-            }
-            document.filter(*id).ok().map(|filter| FilterStyle {
+        let pen_style = |id| {
+            document.pen_filter(id).ok().map(|filter| FilterStyle {
+                filter_type: filter.filter_type,
+                strength: filter.strength,
+                opacity: filter.opacity,
+                stroke_width: filter.stroke_width,
+            })
+        };
+        let rectangle_style = |id| {
+            document.filter(id).ok().map(|filter| FilterStyle {
                 filter_type: filter.filter_type,
                 strength: filter.strength,
                 opacity: filter.opacity,
                 stroke_width: 2.0,
             })
-        });
+        };
+        // Match the family and primary element chosen by the toolbar source.
+        let selected = self
+            .state
+            .selection
+            .primary
+            .and_then(|id| pen_style(id).or_else(|| rectangle_style(id)))
+            .or_else(|| self.state.selection.ids.iter().copied().find_map(pen_style))
+            .or_else(|| {
+                self.state
+                    .selection
+                    .ids
+                    .iter()
+                    .copied()
+                    .find_map(rectangle_style)
+            });
         selected.unwrap_or_else(|| {
             if self.state.active_tool == ActiveTool::PenFilter {
                 let filter = &self.state.default_pen_filter;
@@ -984,7 +1043,25 @@ impl Editor {
         let Some(first) = selected.first() else {
             return 0;
         };
-        // Capability bit accompanies the mixed-property bits for heterogeneous selections.
+        // Capability bits identify affected families as well as Smart Erase,
+        // independently of which filter is the primary selection.
+        let contains_both_filters = if self
+            .state
+            .selection
+            .ids
+            .iter()
+            .any(|id| document.filter(*id).is_ok())
+            && self
+                .state
+                .selection
+                .ids
+                .iter()
+                .any(|id| document.pen_filter(*id).is_ok())
+        {
+            crate::FILTER_STYLE_MIXED_CONTAINS_BOTH_FILTERS
+        } else {
+            0
+        };
         let contains_smart_erase = if selected
             .iter()
             .any(|f| f.filter_type == snow_draw_engine_document::CanvasFilterType::SmartErase)
@@ -993,10 +1070,9 @@ impl Editor {
         } else {
             0
         };
-        selected
-            .iter()
-            .skip(1)
-            .fold(contains_smart_erase, |mixed, filter| {
+        selected.iter().skip(1).fold(
+            contains_both_filters | contains_smart_erase,
+            |mixed, filter| {
                 mixed
                     | if filter.filter_type != first.filter_type {
                         FILTER_STYLE_PROPERTY_TYPE
@@ -1018,7 +1094,8 @@ impl Editor {
                     } else {
                         0
                     }
-            })
+            },
+        )
     }
 
     fn validate_filter_style_patch(style: FilterStyle, properties: u32) -> Result<(), ErrorCode> {
@@ -1136,10 +1213,22 @@ impl Editor {
             self.set_filter_creation_style(style, properties, tool)?;
             return Ok(None);
         }
-        let strength = FilterData::normalized_strength(style.strength);
-        if properties & FILTER_STYLE_PROPERTY_STRENGTH != 0 {
-            self.update_shared_filter_strength(strength);
+        // The property mask updates each affected family's creation style as
+        // well as its selected elements, without adopting untouched properties.
+        if selected_ids
+            .iter()
+            .any(|id| document.pen_filter(*id).is_ok())
+        {
+            self.set_filter_creation_style(style, properties, ActiveTool::PenFilter)?;
         }
+        if selected_ids.iter().any(|id| document.filter(*id).is_ok()) {
+            self.set_filter_creation_style(
+                style,
+                properties & !FILTER_STYLE_PROPERTY_STROKE_WIDTH,
+                ActiveTool::RectangleFilter,
+            )?;
+        }
+        let strength = FilterData::normalized_strength(style.strength);
         let mut transaction = Transaction::new("update filter style");
         for id in selected_ids {
             if let Ok(current) = document.pen_filter(id) {
@@ -1190,19 +1279,40 @@ impl Editor {
     }
 
     pub fn shape_style(&self, document: &DocumentModel) -> ShapeStyle {
-        if self.style_toolbar_source(document) == StyleToolbarSource::SelectedDistance {
-            let arrow =
-                self.state
-                    .selection
-                    .primary
-                    .and_then(|id| document.arrow(id).ok())
-                    .filter(|arrow| arrow.is_distance())
-                    .or_else(|| {
-                        self.state.selection.ids.iter().find_map(|id| {
-                            document.arrow(*id).ok().filter(|arrow| arrow.is_distance())
-                        })
+        if let Some(value) = self
+            .state
+            .selection
+            .ids
+            .iter()
+            .find_map(|id| document.speech_bubble(*id).ok())
+        {
+            return ShapeStyle::from_rectangle_shape_style(RectangleShapeStyle::from_rectangle(
+                &value.body,
+            ))
+            .with_opacity(value.body.opacity);
+        }
+        if self.active_tool() == ActiveTool::SpeechBubble {
+            return ShapeStyle::from_rectangle_shape_style(self.state.default_speech_bubble_style);
+        }
+        if matches!(
+            self.style_toolbar_source(document),
+            StyleToolbarSource::SelectedDistance | StyleToolbarSource::SelectedAngle
+        ) {
+            let arrow = self
+                .state
+                .selection
+                .primary
+                .and_then(|id| document.arrow(id).ok())
+                .filter(|arrow| arrow.is_generated_annotation())
+                .or_else(|| {
+                    self.state.selection.ids.iter().find_map(|id| {
+                        document
+                            .arrow(*id)
+                            .ok()
+                            .filter(|arrow| arrow.is_generated_annotation())
                     })
-                    .expect("the distance style source has a selected distance");
+                })
+                .expect("the distance style source has a selected distance");
             return ShapeStyle::from_rectangle_shape_style(
                 self.state.default_rectangle_shape_style,
             )
@@ -1225,6 +1335,7 @@ impl Editor {
             .or_else(|| {
                 (self.state.active_tool == ActiveTool::Spotlight).then(|| ShapeStyle {
                     shape: self.state.default_spotlight_shape,
+                    corner_radii: self.state.default_spotlight_corner_radii,
                     ..ShapeStyle::from_rectangle_shape_style(
                         self.state.default_rectangle_shape_style,
                     )
@@ -1258,6 +1369,9 @@ impl Editor {
     }
 
     pub fn rectangle_shape_style(&self, document: &DocumentModel) -> RectangleShapeStyle {
+        if self.active_tool() == ActiveTool::SpeechBubble {
+            return self.state.default_speech_bubble_style;
+        }
         self.selected_rectangle_style(document)
             .map(|style| style.rectangle_shape_style())
             .unwrap_or(self.state.default_rectangle_shape_style)
@@ -1270,12 +1384,15 @@ impl Editor {
 
     pub fn shape_style_mixed(&self, document: &DocumentModel) -> u32 {
         let source = self.style_toolbar_source(document);
-        if source == StyleToolbarSource::SelectedDistance {
+        if matches!(
+            source,
+            StyleToolbarSource::SelectedDistance | StyleToolbarSource::SelectedAngle
+        ) {
             let mut opacity = self.state.selection.ids.iter().filter_map(|id| {
                 document
                     .arrow(*id)
                     .ok()
-                    .filter(|arrow| arrow.is_distance())
+                    .filter(|arrow| arrow.is_generated_annotation())
                     .map(|arrow| arrow.opacity)
             });
             let Some(first) = opacity.next() else {
@@ -1293,6 +1410,10 @@ impl Editor {
             .ids
             .iter()
             .filter_map(|id| match source {
+                StyleToolbarSource::SelectedSpeechBubble => document
+                    .speech_bubble(*id)
+                    .ok()
+                    .map(|bubble| ShapeStyleSample::from_rectangle(&bubble.body)),
                 StyleToolbarSource::SelectedRectangle => document
                     .rectangle(*id)
                     .ok()
@@ -1547,6 +1668,12 @@ impl Editor {
             if style.color != first.color {
                 mixed |= TEXT_STYLE_MIXED_COLOR;
             }
+            if style.bold != first.bold {
+                mixed |= TEXT_STYLE_MIXED_BOLD;
+            }
+            if style.italic != first.italic {
+                mixed |= TEXT_STYLE_MIXED_ITALIC;
+            }
             if style.font_size != first.font_size {
                 mixed |= TEXT_STYLE_MIXED_FONT_SIZE;
             }
@@ -1751,6 +1878,19 @@ impl Editor {
         }
 
         match patch.kind {
+            ShapeKind::SpeechBubble => {
+                self.state.default_speech_bubble_style =
+                    patch.apply_to_rectangle_shape(self.state.default_speech_bubble_style);
+                if let Some(ElementCreationPreview::SpeechBubble(bubble)) =
+                    self.state.creation_preview.as_mut()
+                {
+                    bubble.body = speech_bubble_body_with_style(
+                        &bubble.body,
+                        self.state.default_speech_bubble_style,
+                    );
+                    self.bump_scene_state_revision();
+                }
+            }
             ShapeKind::Rectangle => self.update_default_shape_styles(
                 document,
                 patch.apply_to_rectangle_shape(self.state.default_rectangle_shape_style),
@@ -1777,14 +1917,25 @@ impl Editor {
                     patch.apply_to_line(self.state.default_pen_highlight_style);
             }
             ShapeKind::Spotlight => {
-                self.state.default_spotlight_shape = patch.style.shape;
+                if patch.active_properties() & SHAPE_STYLE_PROPERTY_SHAPE != 0 {
+                    self.state.default_spotlight_shape = patch.style.shape;
+                }
+                if patch.active_properties() & SHAPE_STYLE_PROPERTY_CORNER_RADII != 0 {
+                    self.state.default_spotlight_corner_radii = patch.style.corner_radii;
+                }
                 if let Some(ElementCreationPreview::Rectangle(preview)) =
                     self.state.creation_preview.as_mut()
                     && preview.is_spotlight()
-                    && preview.highlight_shape != patch.style.shape
                 {
-                    preview.highlight_shape = patch.style.shape;
-                    self.bump_scene_state_revision();
+                    let updated = rectangle_with_style(
+                        preview,
+                        patch
+                            .apply_to_rectangle_shape(RectangleShapeStyle::from_rectangle(preview)),
+                    );
+                    if *preview != updated {
+                        *preview = updated;
+                        self.bump_scene_state_revision();
+                    }
                 }
             }
         }
@@ -1797,6 +1948,26 @@ impl Editor {
             let mut next_selection_elements = Vec::new();
             let mut next_selection_arrows = Vec::new();
             for id in self.state.selection.ids.iter().copied() {
+                if let Ok(current) = document.speech_bubble(id) {
+                    let mut bubble = current.clone();
+                    if patch.kind == ShapeKind::SpeechBubble {
+                        bubble.body = speech_bubble_body_with_style(
+                            &bubble.body,
+                            patch.apply_to_rectangle_shape(RectangleShapeStyle::from_rectangle(
+                                &bubble.body,
+                            )),
+                        );
+                    }
+                    snow_draw_engine_document::speech_bubble_remove_swallowed_tails(&mut bubble);
+                    next_selection_elements.push(SelectionRectState {
+                        id,
+                        rect: snow_draw_engine_document::speech_bubble_body_proxy(&bubble),
+                    });
+                    if bubble != *current {
+                        transaction.update_speech_bubble(id, bubble);
+                    }
+                    continue;
+                }
                 if let Ok(current_rect) = document.rectangle(id) {
                     let matches_kind = (patch.kind == ShapeKind::Rectangle
                         && !current_rect.is_highlight()
@@ -1953,6 +2124,19 @@ impl Editor {
             let mut next_selection_arrows = Vec::new();
 
             for id in self.state.selection.ids.iter().copied() {
+                if let Ok(current) = document.speech_bubble(id) {
+                    let mut bubble = current.clone();
+                    bubble.body = rectangle_with_style(&bubble.body, style);
+                    snow_draw_engine_document::speech_bubble_remove_swallowed_tails(&mut bubble);
+                    next_selection_elements.push(SelectionRectState {
+                        id,
+                        rect: snow_draw_engine_document::speech_bubble_body_proxy(&bubble),
+                    });
+                    if bubble != *current {
+                        transaction.update_speech_bubble(id, bubble);
+                    }
+                    continue;
+                }
                 if let Ok(current_rect) = document.rectangle(id) {
                     let updated_rect = if current_rect.is_spotlight() {
                         *current_rect
@@ -2149,6 +2333,7 @@ impl Editor {
             style,
             properties,
             changed_properties & SERIAL_NUMBER_STYLE_MIXED_NUMBER != 0,
+            changed_properties | (properties & mixed),
         )
     }
 
@@ -2163,6 +2348,7 @@ impl Editor {
             style,
             properties,
             properties & SERIAL_NUMBER_STYLE_MIXED_NUMBER != 0,
+            properties,
         )
     }
 
@@ -2172,6 +2358,7 @@ impl Editor {
         style: SerialNumberStyle,
         properties: u32,
         explicit_number: bool,
+        creation_properties: u32,
     ) -> Result<Option<EditorCommand>, ErrorCode> {
         validate_serial_number_style(&style)?;
         if properties == 0 || properties & !SERIAL_NUMBER_STYLE_ALL_PROPERTIES != 0 {
@@ -2180,9 +2367,9 @@ impl Editor {
         // Full element styles carry a number during appearance edits. Only an
         // explicit number edit may replace a creation counter or restart it.
         let creation_properties = if explicit_number {
-            properties
+            creation_properties
         } else {
-            properties & !SERIAL_NUMBER_STYLE_MIXED_NUMBER
+            creation_properties & !SERIAL_NUMBER_STYLE_MIXED_NUMBER
         };
         let has_selected_serial_number = self
             .state
@@ -2195,16 +2382,12 @@ impl Editor {
             let mut transaction = Transaction::new("update serial number style");
             let mut next_selection_elements = Vec::new();
             let mut next_selection_arrows = Vec::new();
-            let mut number_updates = Vec::new();
 
             for id in self.state.selection.ids.iter().copied() {
                 if let Ok(current_serial) = document.serial_number(id) {
                     let updated_serial =
                         serial_number_with_style_properties(current_serial, &style, properties);
                     validate_serial_number(&updated_serial)?;
-                    if explicit_number && updated_serial.serial_number_type.supports_number() {
-                        number_updates.push((updated_serial.numeric_type, updated_serial.number));
-                    }
                     next_selection_elements.push(SelectionRectState {
                         id,
                         rect: serial_number_rect_proxy(&updated_serial),
@@ -2232,12 +2415,13 @@ impl Editor {
                 &style,
                 creation_properties & !SERIAL_NUMBER_STYLE_MIXED_NUMBER,
             );
-            for (numeric_type, number) in number_updates {
-                self.state.set_serial_number_value(numeric_type, number);
-                self.state.serial_number_sequence_overridden[numeric_type as usize] = true;
-            }
             if transaction.is_empty() {
                 return Ok(None);
+            }
+            // Value edits continue their numeric sequence instead of treating
+            // the selected number as a fresh creation start.
+            if explicit_number {
+                self.continue_serial_number_sequences_after_value_edits(document, &transaction);
             }
             self.state.selection.elements = next_selection_elements;
             self.state.selection.arrows = next_selection_arrows;
@@ -2353,11 +2537,13 @@ mod tests {
         );
         assert_eq!(
             ShapeKind::Spotlight.supported_properties(),
-            SHAPE_STYLE_PROPERTY_SHAPE
+            SHAPE_STYLE_PROPERTY_SHAPE | SHAPE_STYLE_PROPERTY_CORNER_RADII
         );
         for bit in 0..14 {
             let properties = 1 << bit;
-            if properties != SHAPE_STYLE_PROPERTY_SHAPE {
+            if properties != SHAPE_STYLE_PROPERTY_SHAPE
+                && properties != SHAPE_STYLE_PROPERTY_CORNER_RADII
+            {
                 assert_eq!(
                     editor.set_shape_style_patch(
                         &document,
@@ -3393,6 +3579,214 @@ mod tests {
     }
 
     #[test]
+    fn selected_serial_size_edits_remember_only_size_and_preserve_creation_counter() {
+        for use_patch in [false, true] {
+            let mut document = DocumentModel::new();
+            let id = document.allocate_element_id();
+            let selected = SerialNumberData {
+                number: 99,
+                font_size: 52.0,
+                color: ColorRgba8 {
+                    r: 7,
+                    g: 8,
+                    b: 9,
+                    a: 255,
+                },
+                font_family: Some("Selected font".to_owned()),
+                ..Default::default()
+            };
+            let mut insert = Transaction::new("import differently styled serial");
+            insert.insert_serial_number(id, ElementMeta::default(), selected);
+            document.apply_transaction(insert).unwrap();
+            let mut editor = Editor::new(Default::default()).unwrap();
+            editor.state.default_serial_number.number = 7;
+            let mut expected = editor.state.default_serial_number.clone();
+            expected.font_size = 32.0;
+            expected.diameter = resolve_serial_number_style_diameter(expected.number, 32.0);
+            editor.set_selection_state(vec![id], Some(id));
+            let mut style = editor.serial_number_style(&document);
+            style.font_size = 32.0;
+            let command = if use_patch {
+                editor.set_serial_number_style_patch(
+                    &document,
+                    style,
+                    SERIAL_NUMBER_STYLE_MIXED_FONT_SIZE,
+                )
+            } else {
+                editor.set_serial_number_style(&document, style)
+            }
+            .unwrap();
+            let Some(EditorCommand::ApplyTransaction(command)) = command else {
+                panic!("a selected size change must edit the document")
+            };
+            document.apply_transaction(command.transaction).unwrap();
+            assert_eq!(editor.state.default_serial_number, expected);
+            assert_eq!(document.serial_number(id).unwrap().number, 99);
+            // A named property still becomes the preference if the selected
+            // element already has that value and needs no history operation.
+            editor.state.default_serial_number.font_size = 24.0;
+            let style = editor.serial_number_style(&document);
+            assert!(
+                editor
+                    .set_serial_number_style_patch(
+                        &document,
+                        style,
+                        SERIAL_NUMBER_STYLE_MIXED_FONT_SIZE,
+                    )
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(editor.state.default_serial_number, expected);
+        }
+    }
+
+    #[test]
+    fn selected_filter_patches_remember_only_properties_of_affected_families() {
+        use snow_draw_engine_document::{CanvasFilterType, PenFilterData};
+        for (rectangle, pen) in [(true, false), (false, true), (true, true)] {
+            let mut document = DocumentModel::new();
+            let mut insert = Transaction::new("import filters");
+            let mut ids = Vec::new();
+            if rectangle {
+                let id = document.allocate_element_id();
+                insert.insert_filter(
+                    id,
+                    ElementMeta::default(),
+                    FilterData {
+                        filter_type: CanvasFilterType::GaussianBlur,
+                        opacity: 0.2,
+                        ..Default::default()
+                    },
+                );
+                ids.push(id);
+            }
+            if pen {
+                let id = document.allocate_element_id();
+                insert.insert_pen_filter(
+                    id,
+                    ElementMeta::default(),
+                    PenFilterData {
+                        filter_type: CanvasFilterType::Brightness,
+                        opacity: 0.3,
+                        stroke_width: 12.0,
+                        width: 10.0,
+                        height: 10.0,
+                        ..Default::default()
+                    },
+                );
+                ids.push(id);
+            }
+            document.apply_transaction(insert).unwrap();
+            let mut editor = Editor::new(Default::default()).unwrap();
+            let original_rectangle = editor.state.default_filter;
+            let original_pen = editor.state.default_pen_filter.clone();
+            let original_rectangle_stroke = editor.state.default_filter_stroke_width;
+            editor.set_active_tool(ActiveTool::Select).unwrap();
+            editor.set_selection_state(ids.clone(), ids.first().copied());
+            assert_eq!(
+                editor.filter_style_mixed(&document)
+                    & crate::FILTER_STYLE_MIXED_CONTAINS_BOTH_FILTERS,
+                if rectangle && pen {
+                    crate::FILTER_STYLE_MIXED_CONTAINS_BOTH_FILTERS
+                } else {
+                    0
+                }
+            );
+            if rectangle && pen {
+                editor.set_selection_state(ids.clone(), ids.last().copied());
+                assert_eq!(
+                    editor.style_toolbar_source(&document),
+                    StyleToolbarSource::SelectedPenFilter
+                );
+                assert_eq!(editor.filter_style(&document).stroke_width, 12.0);
+                assert_eq!(
+                    editor.filter_style(&document).filter_type,
+                    CanvasFilterType::Brightness
+                );
+                editor.set_selection_state(ids.clone(), ids.first().copied());
+                assert_eq!(
+                    editor.style_toolbar_source(&document),
+                    StyleToolbarSource::SelectedRectangleFilter
+                );
+                assert_eq!(
+                    editor.filter_style(&document).filter_type,
+                    CanvasFilterType::GaussianBlur
+                );
+            }
+            let mut style = editor.filter_style(&document);
+            style.opacity = 0.7;
+            style.stroke_width = 19.0;
+            let Some(EditorCommand::ApplyTransaction(command)) = editor
+                .set_filter_style(
+                    &document,
+                    style,
+                    FILTER_STYLE_PROPERTY_OPACITY | FILTER_STYLE_PROPERTY_STROKE_WIDTH,
+                )
+                .unwrap()
+            else {
+                panic!("selected filters must change")
+            };
+            document.apply_transaction(command.transaction).unwrap();
+            assert_eq!(
+                editor.state.default_filter.opacity,
+                if rectangle {
+                    0.7
+                } else {
+                    original_rectangle.opacity
+                }
+            );
+            assert_eq!(
+                editor.state.default_pen_filter.opacity,
+                if pen { 0.7 } else { original_pen.opacity }
+            );
+            assert_eq!(
+                editor.state.default_pen_filter.stroke_width,
+                if pen { 19.0 } else { original_pen.stroke_width }
+            );
+            assert_eq!(
+                editor.state.default_filter_stroke_width,
+                original_rectangle_stroke
+            );
+            assert_eq!(
+                editor.state.default_filter.filter_type,
+                original_rectangle.filter_type
+            );
+            assert_eq!(
+                editor.state.default_pen_filter.filter_type,
+                original_pen.filter_type
+            );
+            style.filter_type = CanvasFilterType::Inversion;
+            let Some(EditorCommand::ApplyTransaction(command)) = editor
+                .set_filter_style(&document, style, FILTER_STYLE_PROPERTY_TYPE)
+                .unwrap()
+            else {
+                panic!("selected filter types must change")
+            };
+            document.apply_transaction(command.transaction).unwrap();
+            assert_eq!(
+                editor.state.default_filter.filter_type,
+                if rectangle {
+                    CanvasFilterType::Inversion
+                } else {
+                    original_rectangle.filter_type
+                }
+            );
+            assert_eq!(
+                editor.state.default_pen_filter.filter_type,
+                if pen {
+                    CanvasFilterType::Inversion
+                } else {
+                    original_pen.filter_type
+                }
+            );
+            assert_eq!(editor.active_tool(), ActiveTool::Select);
+            assert_eq!(editor.selected_ids(), ids);
+            editor.set_selection_state(Vec::new(), None);
+            assert_eq!(editor.filter_style_mixed(&document), 0);
+        }
+    }
+
+    #[test]
     fn mixed_circle_selection_edits_only_supported_label_properties() {
         let mut document = DocumentModel::new();
         let numbered_id = document.allocate_element_id();
@@ -3544,6 +3938,103 @@ mod tests {
             validate_serial_number_style(&style),
             Err(ErrorCode::InvalidArgument)
         );
+    }
+
+    #[test]
+    fn text_emphasis_patches_preserve_other_properties_and_remeasure_each_sizing_mode() {
+        let id = ElementId {
+            index: 1,
+            generation: 1,
+        };
+        for automatic in [false, true] {
+            let text = TextData {
+                auto_resize: automatic,
+                layout: TextLayoutSize::with_content(120.0, 40.0, 100.0, 40.0),
+                ..TextData::default()
+            };
+            let mut style = TextStyle::from_text(&text);
+            style.bold = true;
+            style.italic = true;
+            style.font_size = 80.0;
+            let layouts = [TextLayoutOverride {
+                id,
+                size: TextLayoutSize::with_content(
+                    if automatic { 180.0 } else { 120.0 },
+                    80.0,
+                    110.0,
+                    80.0,
+                ),
+            }];
+            let updated =
+                text_with_style(id, &text, &style, TEXT_STYLE_MIXED_BOLD, &layouts).unwrap();
+            assert!(updated.bold);
+            assert!(!updated.italic);
+            assert_eq!(updated.font_size, text.font_size);
+            assert_eq!(updated.height(), 80.0);
+            assert_eq!(updated.width(), layouts[0].size.width());
+            let updated =
+                text_with_style(id, &updated, &style, TEXT_STYLE_MIXED_ITALIC, &layouts).unwrap();
+            assert!(updated.bold && updated.italic);
+            let mut disabled = style;
+            disabled.bold = false;
+            let updated =
+                text_with_style(id, &updated, &disabled, TEXT_STYLE_MIXED_BOLD, &layouts).unwrap();
+            assert!(!updated.bold && updated.italic);
+        }
+    }
+
+    #[test]
+    fn text_emphasis_selection_reports_independent_mixed_flags() {
+        let mut document = DocumentModel::new();
+        let mut tx = Transaction::new("create mixed emphasis text");
+        let ids = vec![
+            document.allocate_element_id(),
+            document.allocate_element_id(),
+        ];
+        tx.insert_text(
+            ids[0],
+            ElementMeta::default(),
+            TextData {
+                bold: true,
+                ..TextData::default()
+            },
+        );
+        tx.insert_text(
+            ids[1],
+            ElementMeta::default(),
+            TextData {
+                italic: true,
+                ..TextData::default()
+            },
+        );
+        document.apply_transaction(tx).unwrap();
+        let mut editor = Editor::new(snow_draw_engine_core::EngineConfig::default()).unwrap();
+        editor.set_selection_state(ids.clone(), Some(ids[0]));
+        assert_eq!(
+            editor.text_style_mixed(&document),
+            TEXT_STYLE_MIXED_BOLD | TEXT_STYLE_MIXED_ITALIC
+        );
+        let mut style = editor.text_style(&document);
+        style.bold = true;
+        let layouts = ids
+            .iter()
+            .map(|id| TextLayoutOverride {
+                id: *id,
+                size: TextLayoutSize::with_content(120.0, 40.0, 110.0, 40.0),
+            })
+            .collect::<Vec<_>>();
+        let command = editor
+            .set_text_style(&document, style, TEXT_STYLE_MIXED_BOLD, &layouts)
+            .unwrap()
+            .unwrap();
+        let EditorCommand::ApplyTransaction(command) = command else {
+            panic!("emphasis edits must produce a document transaction")
+        };
+        document.apply_transaction(command.transaction).unwrap();
+        assert!(ids.iter().all(|id| document.text(*id).unwrap().bold));
+        assert!(!document.text(ids[0]).unwrap().italic);
+        assert!(document.text(ids[1]).unwrap().italic);
+        assert_eq!(editor.text_style_mixed(&document), TEXT_STYLE_MIXED_ITALIC);
     }
 
     #[test]
@@ -3760,7 +4251,7 @@ mod tests {
         assert_eq!(*document.rectangle(rectangle_id).unwrap(), rectangle);
     }
     #[test]
-    fn serial_number_selected_value_edits_update_only_the_selected_numeric_types() {
+    fn serial_number_selected_value_edits_continue_only_edited_numeric_sequences() {
         use snow_draw_engine_document::SerialNumberNumericType;
         let mut document = DocumentModel::new();
         let mut insert = Transaction::new("insert mixed numeric types");
@@ -3784,8 +4275,22 @@ mod tests {
         document.apply_transaction(insert).unwrap();
         let mut editor = Editor::new(Default::default()).unwrap();
         editor.state.default_serial_number.number = 7;
+        let mut values = editor.state.serial_number_values();
+        let mut overrides = editor.state.serial_number_sequence_overridden;
         editor.set_selection_state(ids.clone(), Some(ids[0]));
         let mut style = editor.serial_number_style(&document);
+        assert!(
+            editor
+                .set_serial_number_style_patch(
+                    &document,
+                    style.clone(),
+                    SERIAL_NUMBER_STYLE_MIXED_NUMBER
+                )
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(editor.state.serial_number_values(), values);
+        assert_eq!(editor.state.serial_number_sequence_overridden, overrides);
         style.number = 55;
         let Some(EditorCommand::ApplyTransaction(command)) = editor
             .set_serial_number_style_patch(&document, style, SERIAL_NUMBER_STYLE_MIXED_NUMBER)
@@ -3797,6 +4302,15 @@ mod tests {
         for id in ids {
             assert_eq!(document.serial_number(id).unwrap().number, 55);
         }
+        for numeric_type in [
+            SerialNumberNumericType::Roman,
+            SerialNumberNumericType::Chinese,
+        ] {
+            values[numeric_type as usize] = 56;
+            overrides[numeric_type as usize] = true;
+        }
+        assert_eq!(editor.state.serial_number_values(), values);
+        assert_eq!(editor.state.serial_number_sequence_overridden, overrides);
         editor.set_selection_state(Vec::new(), None);
         assert_eq!(editor.serial_number_style(&document).number, 7);
         for numeric_type in [
@@ -3812,7 +4326,7 @@ mod tests {
                     SERIAL_NUMBER_STYLE_MIXED_NUMERIC_TYPE,
                 )
                 .unwrap();
-            assert_eq!(editor.serial_number_style(&document).number, 55);
+            assert_eq!(editor.serial_number_style(&document).number, 56);
         }
     }
 

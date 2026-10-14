@@ -259,6 +259,10 @@
             <translation>100%</translation>
         </message>
         <message>
+            <source>A file with this name already exists</source>
+            <translation>A file with this name already exists</translation>
+        </message>
+        <message>
             <source>A save path with this name already exists</source>
             <translation>A save path with this name already exists</translation>
         </message>
@@ -482,20 +486,8 @@
     <context>
         <name>ScreenshotSavePreviewCanvas</name>
         <message>
-            <source>Current zoom</source>
-            <translation>Current zoom</translation>
-        </message>
-        <message>
             <source>Export comparison preview</source>
             <translation>Export comparison preview</translation>
-        </message>
-        <message>
-            <source>Rendering preview</source>
-            <translation>Rendering preview</translation>
-        </message>
-        <message>
-            <source>Scale: %1%</source>
-            <translation>Scale: %1%</translation>
         </message>
     </context>
 </TS>

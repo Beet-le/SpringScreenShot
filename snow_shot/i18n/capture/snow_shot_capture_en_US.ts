@@ -46,6 +46,10 @@
             <translation>Could not insert the annotation template</translation>
         </message>
         <message>
+            <source>Could not open the selected image file: %1</source>
+            <translation>Could not open the selected image file: %1</translation>
+        </message>
+        <message>
             <source>Could not read the selected files from Finder. Please try again.</source>
             <translation>Could not read the selected files from Finder. Please try again.</translation>
         </message>
@@ -130,6 +134,10 @@
             <translation>The pinned window could not be restored</translation>
         </message>
         <message>
+            <source>The pinned windows could not be hidden</source>
+            <translation>The pinned windows could not be hidden</translation>
+        </message>
+        <message>
             <source>The recognition text could not be saved: %1</source>
             <translation>The recognition text could not be saved: %1</translation>
         </message>
@@ -198,10 +206,6 @@
         <message>
             <source>Loading screenshot history</source>
             <translation>Loading screenshot history</translation>
-        </message>
-        <message>
-            <source>Result Preview in Progress</source>
-            <translation>Result Preview in Progress</translation>
         </message>
     </context>
     <context>
@@ -403,6 +407,10 @@
             <translation>9:16</translation>
         </message>
         <message>
+            <source>Aspect ratio presets</source>
+            <translation>Aspect ratio presets</translation>
+        </message>
+        <message>
             <source>Corner radius</source>
             <translation>Corner radius</translation>
         </message>
@@ -431,8 +439,16 @@
             <translation>Pixels</translation>
         </message>
         <message>
+            <source>Previous selection</source>
+            <translation>Previous selection</translation>
+        </message>
+        <message>
             <source>Selection aspect ratio</source>
             <translation>Selection aspect ratio</translation>
+        </message>
+        <message>
+            <source>Selection presets</source>
+            <translation>Selection presets</translation>
         </message>
         <message>
             <source>Shadow width</source>
@@ -516,6 +532,13 @@
         <message>
             <source>mouse wheel</source>
             <translation>mouse wheel</translation>
+        </message>
+    </context>
+    <context>
+        <name>SnowImageQtCodec</name>
+        <message>
+            <source>Could not decode animated image.</source>
+            <translation>Could not decode animated image.</translation>
         </message>
     </context>
     <context>

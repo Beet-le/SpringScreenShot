@@ -8,6 +8,7 @@
 #include <QRect>
 
 class QObject;
+class QColor;
 class QWidget;
 class ScreenshotDisplaySession;
 class ScreenshotGeometryMapper;
@@ -24,8 +25,8 @@ struct ScreenshotSelectionEditWorkflowContext {
     ScreenshotInteractionState& interaction;
     ScreenshotSelectionModel& selection;
     ScreenshotSelectionEditUiActions ui;
-    std::function<void(int cornerRadius, int shadowWidth)> persistSelectionEffects = [](int, int) {
-    };
+    std::function<void(int cornerRadius, int shadowWidth, const QColor& shadowColor)>
+        persistSelectionEffects = [](int, int, const QColor&) {};
     std::function<void(ScreenshotSelectionAspectRatioPreset preset, bool locked)>
         persistSelectionAspectRatioPreference = [](ScreenshotSelectionAspectRatioPreset, bool) {};
 };
@@ -41,6 +42,7 @@ class ScreenshotSelectionEditWorkflow final {
     void commitSelectionEffects();
     void toggleSelectionAspectRatioLockFromToolbar();
     void setSelectionAspectRatioPresetFromToolbar(ScreenshotSelectionAspectRatioPreset preset);
+    void applySelectionParamsFromToolbar(const ScreenshotSelectionParams& params);
     void openSelectionResizeModalFromToolbar();
     void repositionToolbarForContentChange();
     void hideColorPickersForScreenshotUi() const;

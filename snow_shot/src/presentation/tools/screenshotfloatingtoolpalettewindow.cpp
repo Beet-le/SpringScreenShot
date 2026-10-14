@@ -242,8 +242,15 @@ void ScreenshotFloatingToolPaletteWindow::setStyleToolbarAboveMain(bool above) {
     }
 
     m_styleToolbarAboveMain = above;
+    const QPointer<ScreenshotFloatingToolPaletteWindow> guard(this);
     m_paletteHost->setFrameSize(fixedWindowSizeHint(), above);
+    if (guard == nullptr) {
+        return;
+    }
     m_paletteHost->setStyleToolbarAboveMain(above);
+    if (guard == nullptr) {
+        return;
+    }
     refreshGeometryForVisibleContent(m_lastRequestedContentPositionValid || isVisible());
     if (m_draggingPalette) {
         m_dragContentPosition = QPointF(contentPosition());

@@ -52,13 +52,25 @@ class ScreenshotImageConversionController final : public QObject {
     void resultsChanged();
 
   private:
+    void bindProviderSignals();
     void start(bool refreshModels);
     void startWithModels(const QVector<SnowShotChatModel>& models);
     void fail(const QString& message);
     void cancelRequests();
+    void reset(bool discardCache);
+    bool notifyChanged();
+    bool notifyResultsChanged();
+    [[nodiscard]] bool entryMatchesProvider(const ScreenshotImageConversionEntry& entry) const;
+    bool restoreCachedResult(const QString& model);
+    void cacheResult(const QString& key, ScreenshotImageConversionEntry entry);
+    void trimCache();
+    struct CacheEntry {
+        QString key;
+        ScreenshotImageConversionEntry result;
+    };
     QPointer<SnowShotApiClient> m_api;
     QPointer<adqt::widgets::AdModal> m_modal;
-    QHash<QString, QVector<ScreenshotImageConversionEntry>> m_cache;
+    QVector<CacheEntry> m_cache;
     QTimer m_previewTimer;
     QString m_key;
     QString m_requestModel;
@@ -68,6 +80,9 @@ class ScreenshotImageConversionController final : public QObject {
     SnowShotImageConversionFormat m_format = SnowShotImageConversionFormat::Markdown;
     State m_state = State::Idle;
     bool m_active = false;
+    bool m_refreshConversion = false;
+    bool m_destroying = false;
+    quint64 m_providerGeneration = 0;
     quint64 m_generation = 0;
     SnowShotApiClient::RequestToken m_modelsToken = 0;
     SnowShotApiClient::RequestToken m_conversionToken = 0;

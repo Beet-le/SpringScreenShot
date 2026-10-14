@@ -1500,6 +1500,7 @@ name = "snow-stitch-images-c"
 version = "0.1.0"
 dependencies = [
  "png",
+ "rayon",
  "snow-core",
  "snow-memory",
  "snow-stitch-images",

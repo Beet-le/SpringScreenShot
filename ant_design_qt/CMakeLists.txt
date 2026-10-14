@@ -312,6 +312,20 @@ if(ADQT_BUILD_TESTS)
     set_tests_properties(adqt-focus-interaction-tests PROPERTIES
         LABELS "unit" ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 
+    add_executable(adqt-text-edit-accessibility-tests tests/text_edit_accessibility_tests.cpp)
+    target_link_libraries(adqt-text-edit-accessibility-tests PRIVATE adqt::widgets Qt6::Widgets)
+    get_target_property(_adqt_text_edit_qt_core_type Qt6::Core TYPE)
+    if(_adqt_text_edit_qt_core_type STREQUAL "STATIC_LIBRARY" AND TARGET Qt6::QOffscreenIntegrationPlugin)
+        target_link_libraries(adqt-text-edit-accessibility-tests PRIVATE Qt6::QOffscreenIntegrationPlugin)
+        qt_import_plugins(adqt-text-edit-accessibility-tests INCLUDE Qt6::QOffscreenIntegrationPlugin)
+    endif()
+    add_test(NAME adqt-text-edit-accessibility-tests COMMAND adqt-text-edit-accessibility-tests)
+    set_tests_properties(adqt-text-edit-accessibility-tests PROPERTIES
+        LABELS "unit"
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
+        TIMEOUT 30)
+
     add_executable(adqt-button-lifetime-tests tests/button_lifetime_tests.cpp)
     target_link_libraries(adqt-button-lifetime-tests PRIVATE adqt::widgets Qt6::Widgets)
     get_target_property(_adqt_button_qt_core_type Qt6::Core TYPE)
@@ -324,6 +338,27 @@ if(ADQT_BUILD_TESTS)
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>"
     )
+
+    add_executable(adqt-value-widget-lifetime-tests tests/value_widget_lifetime_tests.cpp)
+    target_link_libraries(adqt-value-widget-lifetime-tests PRIVATE adqt::widgets Qt6::Widgets)
+    if(TARGET Qt6::QOffscreenIntegrationPlugin)
+        qt_import_plugins(adqt-value-widget-lifetime-tests INCLUDE Qt6::QOffscreenIntegrationPlugin)
+    endif()
+    add_test(NAME adqt-value-widget-lifetime-tests COMMAND adqt-value-widget-lifetime-tests)
+    set_tests_properties(adqt-value-widget-lifetime-tests PROPERTIES
+        LABELS "unit" ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+
+    add_executable(adqt-button-signal-lifetime-tests packages/ant_design_qt/tests/button_signal_lifetime_tests.cpp)
+    set_target_properties(adqt-button-signal-lifetime-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(adqt-button-signal-lifetime-tests PRIVATE adqt::widgets Qt6::Test)
+    if(TARGET Qt6::QOffscreenIntegrationPlugin)
+        qt_import_plugins(adqt-button-signal-lifetime-tests INCLUDE Qt6::QOffscreenIntegrationPlugin)
+    endif()
+    add_test(NAME adqt-button-signal-lifetime-tests COMMAND adqt-button-signal-lifetime-tests -o -,txt)
+    set_tests_properties(adqt-button-signal-lifetime-tests PROPERTIES
+        LABELS "unit" ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
     add_executable(adqt-icon-cache-tests tests/icon_cache_tests.cpp)
     target_link_libraries(adqt-icon-cache-tests PRIVATE adqt::icon_core Qt6::Widgets)
@@ -450,6 +485,16 @@ if(ADQT_BUILD_TESTS)
     add_test(NAME adqt-tabs-tests COMMAND adqt-tabs-tests)
     set_tests_properties(adqt-tabs-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+    add_executable(adqt-slider-tests packages/ant_design_qt/tests/slider_tests.cpp)
+    set_target_properties(adqt-slider-tests PROPERTIES AUTOMOC ON)
+    target_link_libraries(adqt-slider-tests PRIVATE adqt::widgets Qt6::Test)
+    if(TARGET Qt6::QOffscreenIntegrationPlugin)
+        qt_import_plugins(adqt-slider-tests INCLUDE Qt6::QOffscreenIntegrationPlugin)
+    endif()
+    add_test(NAME adqt-slider-tests COMMAND adqt-slider-tests)
+    set_tests_properties(adqt-slider-tests PROPERTIES
+        LABELS "unit" ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
     add_executable(adqt-modal-window-tests packages/ant_design_qt/tests/tst_modal_window.cpp)
     if(APPLE)
         set_source_files_properties(packages/ant_design_qt/tests/tst_modal_window.cpp
@@ -498,6 +543,10 @@ if(ADQT_BUILD_TESTS)
     endif()
     add_test(NAME adqt-segmented-tests COMMAND adqt-segmented-tests)
     set_tests_properties(adqt-segmented-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    add_test(NAME adqt-segmented-lifetime-tests COMMAND adqt-segmented-tests
+        activationSurvivesOptionMutation activationSurvivesOwnerDeletion
+        optionMutationSurvivesOwnerDeletion -platform offscreen)
+    set_tests_properties(adqt-segmented-lifetime-tests PROPERTIES LABELS "unit" TIMEOUT 60)
 
     add_executable(adqt-scroll-area-tests packages/ant_design_qt/tests/tst_scroll_area.cpp)
     set_target_properties(adqt-scroll-area-tests PROPERTIES AUTOMOC ON)
@@ -538,6 +587,9 @@ if(ADQT_BUILD_TESTS)
     add_test(NAME adqt-select-popup-lifetime-tests
         COMMAND adqt-qt-tool-popup-tests selectSurvivesPopupContainerDestructionOrder
                 -platform offscreen)
+    add_test(NAME adqt-date-picker-popup-lifetime-tests
+        COMMAND adqt-qt-tool-popup-tests --date-picker-popup-lifetime-only -platform offscreen)
+    set_tests_properties(adqt-date-picker-popup-lifetime-tests PROPERTIES LABELS "unit" TIMEOUT 60)
     add_test(NAME adqt-tooltip-hover-lifecycle-tests
         COMMAND adqt-qt-tool-popup-tests unrelatedLeaveDoesNotDismissTooltip
                 popupOptionTooltipsRemainVisible warmTooltipSurvivesGroupPopoverOpening
@@ -550,10 +602,25 @@ if(ADQT_BUILD_TESTS)
     set_tests_properties(adqt-popup-hover-recovery-tests PROPERTIES LABELS "unit")
     add_test(NAME adqt-popover-content-lifecycle-tests
         COMMAND adqt-qt-tool-popup-tests retainedFactoryContentIsLazyAndOwnerBound
+                popoverSurvivesExternalSurfaceDestruction
+                popoverFactoryAllowsOwnerDeletion popoverShowGuardAllowsOwnerDeletion
+                popoverVisibilityObserverAllowsOwnerDeletion
+                popoverShowEventAllowsOwnerDeletion
+                popoverPropertyObserversAllowOwnerDeletion
                 recreateFactoryContentIsReleasedAfterHide
                 directContentRemainsCompatibleWithFactoryApi
                 colorPickerPrewarmCanBeDisabled -platform offscreen)
     set_tests_properties(adqt-popover-content-lifecycle-tests PROPERTIES LABELS "unit")
+    add_test(NAME adqt-popover-opening-lifecycle-tests
+        COMMAND adqt-qt-tool-popup-tests popoverOpeningPrecedesSurfaceVisibility
+                popoverOpeningObserverAllowsOwnerDeletion -platform offscreen)
+    set_tests_properties(adqt-popover-opening-lifecycle-tests PROPERTIES LABELS "unit")
+    add_test(NAME adqt-popup-delegate-destruction-tests
+        COMMAND adqt-qt-tool-popup-tests popoverDestructionAllowsUiEvents
+                datePickerDestructionAllowsUiEvents
+                datePickerPopupReplacementAllowsOwnerDeletion
+                tooltipDestructionAllowsUiEvents -platform offscreen)
+    set_tests_properties(adqt-popup-delegate-destruction-tests PROPERTIES LABELS "unit" TIMEOUT 30)
     foreach(_adqt_audio_ui_test IN ITEMS slider-meter popover-surface-guard)
         string(REPLACE "-" "_" _adqt_audio_ui_source "${_adqt_audio_ui_test}")
         add_executable(adqt-${_adqt_audio_ui_test}-tests tests/${_adqt_audio_ui_source}_tests.cpp)

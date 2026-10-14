@@ -10,6 +10,7 @@
 #include "snow_shot/presentation/screenshottoolbarwindow.h"
 
 #include <QTimer>
+#include <QPointer>
 
 namespace {
 constexpr int kSelectionToolbarGap = 4;
@@ -87,6 +88,9 @@ void ScreenshotToolbarPresenter::updateSelectionToolbarState(
         toolbar->setSelectionDisplayUnit(state.selectionDisplayUnit);
     }
     updateOcrAvailability(m_overlayCoordinator, state.ocrAvailable);
+    if (m_overlayCoordinator.selectionToolbarHidden()) {
+        return;
+    }
     if (!state.selectionToolbarMode || !hasValidSelection(state.selectionPixels)) {
         m_overlayCoordinator.hideSelectionToolbar();
         return;
@@ -102,7 +106,8 @@ void ScreenshotToolbarPresenter::updateSelectionToolbarState(
         const auto conversion = screenshotSelectionDisplayConversion(
             m_geometry, m_displaySession, state.selectionPixels, state.selectionDisplayUnit);
         toolbarWidget->setPointerInteractionEnabled(!state.selectionDragging);
-        toolbarWidget->setSelectionResizable(state.selectionResizable);
+        toolbarWidget->setSelectionEditCapabilities(state.selectionEditable,
+                                                    state.selectionResizable);
         toolbarWidget->setCornerRadiusApplicable(state.cornerRadiusApplicable);
         toolbarWidget->setSelectionState(
             state.selectionPixels, state.aspectRatioLocked, state.cornerRadius, state.shadowWidth,
@@ -128,12 +133,20 @@ void ScreenshotToolbarPresenter::raiseToolbarForCanvasInteraction(
         return;
     }
 
+    const QPointer<ScreenshotToolbarPresenter> lifetime(this);
     toolbar->raise();
+    if (!lifetime)
+        return;
     m_overlayCoordinator.raiseSelectionToolbar();
-    QTimer::singleShot(0, toolbar, [this]() {
+    if (!lifetime)
+        return;
+    QTimer::singleShot(0, this, [this]() {
+        const QPointer<ScreenshotToolbarPresenter> lifetime(this);
         ScreenshotToolbarWindow* delayedToolbar = m_overlayCoordinator.toolbar();
         if (delayedToolbar != nullptr && delayedToolbar->isVisible()) {
             delayedToolbar->raise();
+            if (!lifetime)
+                return;
             m_overlayCoordinator.raiseSelectionToolbar();
         }
     });
@@ -180,6 +193,9 @@ void ScreenshotToolbarPresenter::moveToolbar(const ScreenshotToolbarPresentation
 
 void ScreenshotToolbarPresenter::moveSelectionToolbar(
     const ScreenshotToolbarPresentationState& state) {
+    if (m_overlayCoordinator.selectionToolbarHidden()) {
+        return;
+    }
     ScreenshotSelectionToolbarWidget* toolbarWidget = m_overlayCoordinator.selectionToolbar();
     if (toolbarWidget == nullptr) {
         return;

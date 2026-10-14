@@ -1,4 +1,7 @@
-//! Shared nearest-neighbor pixel selection for live recording and export.
+//! Recording-area filtering and explicit nearest-neighbor pixel selection.
+mod recording;
+pub use recording::RecordingResizePlan;
+
 use rayon::prelude::*;
 use std::ptr;
 

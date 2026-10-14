@@ -2,6 +2,7 @@
 
 #include "snow_canvas_render_geometry.h"
 
+#include <QPainterPathStroker>
 #include <QtGlobal>
 
 #include <algorithm>
@@ -115,12 +116,16 @@ SnowCanvasSceneItem::SnowCanvasSceneItem() : SnowSceneDisplayItem{} {
     rebuildLocalRectangleGeometry();
 }
 
+SnowCanvasSceneItem::~SnowCanvasSceneItem() = default;
+
 SnowCanvasSceneItem::SnowCanvasSceneItem(const SnowSceneDisplayItem& item) : SnowCanvasSceneItem() {
     assign(item);
 }
 
 SnowCanvasSceneItem::SnowCanvasSceneItem(const SnowCanvasSceneItem& other) : SnowCanvasSceneItem() {
     assign(other);
+    if (other.m_magnifierGeometry)
+        m_magnifierGeometry = std::make_unique<MagnifierGeometryCache>(*other.m_magnifierGeometry);
     viewBounds = other.viewBounds;
     m_penGeometryRevision = other.m_penGeometryRevision;
     m_pathChunks = other.m_pathChunks;
@@ -146,6 +151,7 @@ SnowCanvasSceneItem::SnowCanvasSceneItem(SnowCanvasSceneItem&& other) noexcept
       m_pathSpatialCells(std::move(other.m_pathSpatialCells)),
       m_aggregateClosedPath(std::move(other.m_aggregateClosedPath)),
       m_pathGeometryRevision(other.m_pathGeometryRevision), m_pathClosed(other.m_pathClosed),
+      m_magnifierGeometry(std::move(other.m_magnifierGeometry)),
       m_pendingPenGeometryChunkBuildCount(other.m_pendingPenGeometryChunkBuildCount),
       m_pendingPenGeometryChunkReuseCount(other.m_pendingPenGeometryChunkReuseCount) {
     refreshPointers();
@@ -157,6 +163,10 @@ SnowCanvasSceneItem::SnowCanvasSceneItem(SnowCanvasSceneItem&& other) noexcept
 SnowCanvasSceneItem& SnowCanvasSceneItem::operator=(const SnowCanvasSceneItem& other) {
     if (this != &other) {
         assign(other);
+        m_magnifierGeometry =
+            other.m_magnifierGeometry
+                ? std::make_unique<MagnifierGeometryCache>(*other.m_magnifierGeometry)
+                : nullptr;
         viewBounds = other.viewBounds;
         m_penGeometryRevision = other.m_penGeometryRevision;
         m_pathChunks = other.m_pathChunks;
@@ -191,6 +201,8 @@ SnowCanvasSceneItem& SnowCanvasSceneItem::operator=(SnowCanvasSceneItem&& other)
     m_aggregateClosedPath = std::move(other.m_aggregateClosedPath);
     m_pathGeometryRevision = other.m_pathGeometryRevision;
     m_pathClosed = other.m_pathClosed;
+    m_arrowTextClipCacheValid = false;
+    m_magnifierGeometry = std::move(other.m_magnifierGeometry);
     m_pendingPenGeometryChunkBuildCount = other.m_pendingPenGeometryChunkBuildCount;
     m_pendingPenGeometryChunkReuseCount = other.m_pendingPenGeometryChunkReuseCount;
     refreshPointers();
@@ -206,6 +218,9 @@ SnowCanvasSceneItem& SnowCanvasSceneItem::operator=(const SnowSceneDisplayItem& 
 }
 
 void SnowCanvasSceneItem::assign(const SnowSceneDisplayItem& item) {
+    m_arrowTextClipCacheValid = false;
+    if (item.kind != SNOW_SCENE_DISPLAY_ITEM_MAGNIFIER)
+        m_magnifierGeometry.reset();
     const bool preservePenGeometry = kind == SNOW_SCENE_DISPLAY_ITEM_FILTER && is_free_draw != 0 &&
                                      item.kind == SNOW_SCENE_DISPLAY_ITEM_FILTER &&
                                      item.is_free_draw != 0 &&
@@ -215,10 +230,10 @@ void SnowCanvasSceneItem::assign(const SnowSceneDisplayItem& item) {
     const bool geometryStyleChanged =
         preservePenGeometry &&
         (!fuzzyEqual(stroke_width, item.stroke_width) || !fuzzyEqual(rotation, item.rotation));
-    const bool preservePathGeometry = kind == SNOW_SCENE_DISPLAY_ITEM_ARROW &&
-                                      item.kind == SNOW_SCENE_DISPLAY_ITEM_ARROW &&
-                                      element_id.index == item.element_id.index &&
-                                      element_id.generation == item.element_id.generation;
+    const bool preservePathGeometry =
+        (kind == SNOW_SCENE_DISPLAY_ITEM_ARROW || kind == SNOW_SCENE_DISPLAY_ITEM_SPEECH_BUBBLE) &&
+        item.kind == kind && element_id.index == item.element_id.index &&
+        element_id.generation == item.element_id.generation;
     static_cast<SnowSceneDisplayItem&>(*this) = item;
     if (!preservePenGeometry) {
         assignBorrowed(m_arrowPoints, item.arrow_points, item.arrow_point_count);
@@ -241,6 +256,12 @@ void SnowCanvasSceneItem::assign(const SnowSceneDisplayItem& item) {
     if (!preservePenGeometry || geometryStyleChanged) {
         rebuildPenFilterGeometry(0);
     }
+}
+
+SnowCanvasSceneItem::MagnifierGeometryCache& SnowCanvasSceneItem::magnifierGeometryCache() const {
+    if (!m_magnifierGeometry)
+        m_magnifierGeometry = std::make_unique<MagnifierGeometryCache>();
+    return *m_magnifierGeometry;
 }
 
 void SnowCanvasSceneItem::rebuildPenFilterGeometry(std::size_t firstChangedPoint) {
@@ -441,11 +462,12 @@ bool SnowCanvasSceneItem::applyPathGeometryPatch(
     std::uint64_t expectedRevision, std::uint64_t revision, const SnowPathChunkRange* ranges,
     std::uint32_t rangeCount, const SnowPathChunk* chunks, std::uint32_t chunkCount,
     const SnowArrowPathCommand* commands, std::uint32_t commandCount, bool closed, bool fullReset) {
-    if (kind != SNOW_SCENE_DISPLAY_ITEM_ARROW ||
+    if ((kind != SNOW_SCENE_DISPLAY_ITEM_ARROW && kind != SNOW_SCENE_DISPLAY_ITEM_SPEECH_BUBBLE) ||
         (!fullReset && m_pathGeometryRevision != expectedRevision) ||
         (rangeCount != 0 && ranges == nullptr)) {
         return false;
     }
+    m_arrowTextClipCacheValid = false;
     if (fullReset) {
         m_pathChunks.clear();
     }
@@ -538,12 +560,63 @@ std::uint64_t SnowCanvasSceneItem::pathGeometryRevision() const {
     return m_pathGeometryRevision;
 }
 
+bool SnowCanvasSceneItem::needsArrowTextClip(double canvasAntialiasGuard) const {
+    if (m_pathChunks.empty() || arrow_shaft_type == SNOW_ARROW_SHAFT_TYPE_TAPERED ||
+        arrowhead_primitive_count != 0 || arrow_start_head != SNOW_ARROWHEAD_NONE ||
+        arrow_end_head != SNOW_ARROWHEAD_NONE || (m_pathClosed && fill.a != 0) ||
+        !std::isfinite(canvasAntialiasGuard) || canvasAntialiasGuard < 0.0 ||
+        !std::isfinite(stroke_width) || stroke_width <= 0.0) {
+        return true;
+    }
+    const double margin = 5.0 + canvasAntialiasGuard;
+    const QRectF bounds = QRectF(QPointF(arrow_text_bounds[0], arrow_text_bounds[1]),
+                                 QPointF(arrow_text_bounds[2], arrow_text_bounds[3]))
+                              .normalized()
+                              .adjusted(-margin, -margin, margin, margin);
+    if (m_arrowTextClipCacheValid && m_arrowTextClipGeometryRevision == m_pathGeometryRevision &&
+        m_arrowTextClipStrokeWidth == stroke_width && m_arrowTextClipBounds == bounds) {
+        return m_arrowTextClipNeeded;
+    }
+    QPainterPathStroker stroker;
+    stroker.setWidth(stroke_width);
+    stroker.setCapStyle(Qt::RoundCap);
+    stroker.setJoinStyle(Qt::RoundJoin);
+    bool intersects = false;
+    const double halfStroke = stroke_width / 2.0;
+    for (const PathChunk& chunk : m_pathChunks) {
+        if (rectsOverlapInclusive(
+                chunk.canvasBounds.adjusted(-halfStroke, -halfStroke, halfStroke, halfStroke),
+                bounds) &&
+            stroker.createStroke(chunk.canvasPath).intersects(bounds)) {
+            intersects = true;
+            break;
+        }
+    }
+    // Cache only the decision; transient stroke outlines do not grow the path cache.
+    m_arrowTextClipGeometryRevision = m_pathGeometryRevision;
+    m_arrowTextClipStrokeWidth = stroke_width;
+    m_arrowTextClipBounds = bounds;
+    m_arrowTextClipNeeded = intersects;
+    m_arrowTextClipCacheValid = true;
+    return intersects;
+}
+
 void SnowCanvasSceneItem::queryPathChunks(const QRectF& canvasBounds,
                                           std::vector<std::uint32_t>* outChunkIndices) const {
     if (outChunkIndices == nullptr) {
         return;
     }
     outChunkIndices->clear();
+    // Short annotation paths cost less to cull directly than to probe every
+    // spatial cell covered by the viewport.
+    if (m_pathChunks.size() <= 16) {
+        for (std::uint32_t index = 0; index < m_pathChunks.size(); ++index) {
+            if (rectsOverlapInclusive(m_pathChunks[index].canvasBounds, canvasBounds)) {
+                outChunkIndices->push_back(index);
+            }
+        }
+        return;
+    }
     std::unordered_set<std::uint32_t> seen;
     const int firstCellX = penSpatialCell(canvasBounds.left());
     const int lastCellX = penSpatialCell(canvasBounds.right());

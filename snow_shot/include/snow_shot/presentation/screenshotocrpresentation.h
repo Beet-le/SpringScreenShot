@@ -44,6 +44,8 @@ struct ScreenshotOcrTextRange {
     }
 };
 
+enum class ScreenshotOcrLineSelectionPreview { None, Select, Deselect };
+
 class ScreenshotOcrPresentation final {
   public:
     QRect selection;
@@ -60,11 +62,17 @@ class ScreenshotOcrPresentation final {
     [[nodiscard]] bool hasTextSelection() const;
     [[nodiscard]] bool textSelectionActive() const;
     [[nodiscard]] quint64 selectionRevision() const;
+    [[nodiscard]] quint64 lineSelectionRevision(int lineIndex) const;
+    // Null means the reader skipped a revision and must check individual line revisions.
+    [[nodiscard]] const QVector<int>* selectionChangesSince(quint64 revision) const;
     [[nodiscard]] ScreenshotOcrTextPosition selectionAnchor() const;
     [[nodiscard]] ScreenshotOcrTextPosition selectionFocus() const;
     [[nodiscard]] QString selectedText() const;
     [[nodiscard]] bool lineSelected(int lineIndex) const;
     [[nodiscard]] ScreenshotOcrTextRange textSelectionForLine(int lineIndex) const;
+    [[nodiscard]] bool lineBoxSelectionActive() const;
+    [[nodiscard]] QRectF lineBoxSelectionRect() const;
+    [[nodiscard]] ScreenshotOcrLineSelectionPreview lineSelectionPreview(int lineIndex) const;
 
     void clearTextSelection();
     void selectAll();
@@ -73,6 +81,11 @@ class ScreenshotOcrPresentation final {
     void updateTextSelection(const QPointF& canvasPosition);
     void updateTextSelection(const ScreenshotOcrTextPosition& position);
     void finishTextSelection();
+    void beginLineBoxSelection(const QPointF& origin);
+    void updateLineBoxSelection(const QRectF& rectangle);
+    void finishLineBoxSelection();
+    void cancelLineBoxSelection();
+    void copyCommittedSelectionFrom(const ScreenshotOcrPresentation& source);
 
   private:
     struct CachedLineGeometry {
@@ -80,19 +93,49 @@ class ScreenshotOcrPresentation final {
         QTransform canvasToNormalized;
         QVector<int> graphemeBoundaries;
         bool hasNormalizedTransform = false;
+        bool hasPositiveQuadArea = false;
+        bool axisAlignedQuad = false;
+    };
+
+    struct LineSelection {
+        ScreenshotOcrTextRange range;
+        bool fullLine = false;
     };
 
     [[nodiscard]] int closestLine(const QPointF& canvasPosition) const;
     [[nodiscard]] ScreenshotOcrTextPosition
     normalizedTextPosition(const ScreenshotOcrTextPosition& position) const;
+    void beginSelectionChange();
+    void markSelectionLineChanged(int lineIndex);
+    void markCommittedSelectionChanged();
+    void clearLineBoxPreview();
+    void materializeSparseSelection();
+    [[nodiscard]] bool lineFullySelected(int lineIndex) const;
+    void findLinesIntersectingRectangle(const QRectF& rectangle);
 
     ScreenshotOcrTextPosition m_selectionAnchor;
     ScreenshotOcrTextPosition m_selectionFocus;
     QVector<CachedLineGeometry> m_cachedLineGeometry;
     QHash<quint64, QVector<int>> m_linesByCell;
     QVector<int> m_unindexedLines;
+    QVector<int> m_wholeGeometryBoxCandidates;
+    QHash<int, LineSelection> m_sparseSelection;
+    QVector<quint8> m_boxDeselectAtPress;
+    QVector<ScreenshotOcrLineSelectionPreview> m_boxPreviewActions;
+    QVector<int> m_boxCandidates;
+    QVector<int> m_boxCandidateScratch;
+    QVector<quint64> m_lineSelectionRevisions;
+    QVector<quint64> m_hitTestVisitRevisions;
+    QVector<int> m_changedSelectionLines;
+    QRectF m_lineBoxRectangle;
+    QRectF m_lineGeometryBounds;
     quint64 m_selectionRevision = 0;
+    quint64 m_previousSelectionRevision = 0;
+    quint64 m_hitTestVisitRevision = 0;
     bool m_dragging = false;
+    bool m_lineBoxDragging = false;
+    bool m_sparseSelectionActive = false;
+    bool m_allTextSelected = false;
     bool m_geometryPrepared = false;
 };
 

@@ -1,19 +1,21 @@
+#include "snow_shot/runtime/runtimeactivitytracker.h"
 #include "recordingtrimsession.h"
 #include "recordingrenderdialog.h"
 #include "recordingtrimtoolbar.h"
+#include "snow_shot/presentation/screenrecordingfolder.h"
+#include "snow_shot/presentation/screenshotimagefileservice.h"
 #include "snow_shot/presentation/screenrecordingareawindow.h"
 #include "snow_shot/presentation/screenrecordingtoolbarwindow.h"
 #include "snow_shot/platform/applicationqos.h"
+#include "snow_shot/storage/settingsadapters.h"
 #include <QApplication>
 #include <QClipboard>
 #include <QCoreApplication>
-#include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QMimeData>
 #include <QSaveFile>
 #include <QUrl>
-#include <QUuid>
 #include <climits>
 #include <thread>
 
@@ -39,9 +41,10 @@ void copyRecording(const QString& path) {
 }
 QString nextOutput(const QString& original) {
     const QFileInfo file(original);
-    const QString stem = file.completeBaseName() + QStringLiteral("-trim-") +
-                         QUuid::createUuid().toString(QUuid::Id128).left(8);
-    return file.dir().filePath(stem + QStringLiteral(".") + file.suffix());
+    const QString baseName = ScreenshotImageFileService::suggestedBaseName(
+        snow_shot::storage::RecordingSettings().videoFilenameFormat());
+    return snow_shot::presentation::recording::screenRecordingOutputPath({file.absolutePath()},
+                                                                         baseName, file.suffix());
 }
 } // namespace
 
@@ -59,6 +62,7 @@ RecordingTrimSession::RecordingTrimSession(ScreenRecordingAreaWindow* area,
         m_end = static_cast<quint64>(end);
         seek(preview, false);
     };
+    m_panel->speedChanged = [this](quint32 percent) { setSpeed(percent); };
     m_timer.setInterval(16);
     connect(&m_timer, &QTimer::timeout, this, [this] { poll(); });
 }
@@ -70,8 +74,10 @@ RecordingTrimSession::~RecordingTrimSession() {
     // complete dependency chain before releasing any native resource.
     auto clip = m_clip;
     auto task = m_export;
-    std::thread([open = std::move(m_openFuture), publish = std::move(m_publishFuture),
-                 cancellation = std::move(m_cancelFuture), clip, task]() mutable {
+    std::thread(snow_shot::runtime::trackRuntimeWork([open = std::move(m_openFuture),
+                                                      publish = std::move(m_publishFuture),
+                                                      cancellation = std::move(m_cancelFuture),
+                                                      clip, task]() mutable {
         snow_shot::platform::applyApplicationQoSToCurrentThread();
         if (open.valid())
             clip = open.get().clip;
@@ -83,25 +89,27 @@ RecordingTrimSession::~RecordingTrimSession() {
             snow_recording_clip_export_destroy(task);
         if (clip)
             snow_recording_clip_destroy(clip);
-    }).detach();
+    })).detach();
 }
 
 void RecordingTrimSession::open(const QString& sourcePath, const QString& outputPath,
                                 const SnowRecordingClipOptions& options, bool deferred,
                                 bool saveWhenReady) {
+    m_mediaActivity = snow_shot::runtime::RuntimeActivityTracker::shared().acquire();
     m_sourcePath = sourcePath;
     m_outputPath = outputPath;
     m_saveWhenReady = saveWhenReady;
     m_deferred = deferred;
-    m_openFuture = std::async(std::launch::async, [sourcePath, options, deferred] {
-        snow_shot::platform::applyApplicationQoSToCurrentThread();
-        OpenResult result;
-        result.clip = snow_recording_clip_open(sourcePath.toUtf8().constData(),
-                                               deferred ? nullptr : &options);
-        if (!result.clip)
-            result.error = nativeError();
-        return result;
-    });
+    m_openFuture = std::async(
+        std::launch::async, snow_shot::runtime::trackRuntimeWork([sourcePath, options, deferred] {
+            snow_shot::platform::applyApplicationQoSToCurrentThread();
+            OpenResult result;
+            result.clip = snow_recording_clip_open(sourcePath.toUtf8().constData(),
+                                                   deferred ? nullptr : &options);
+            if (!result.clip)
+                result.error = nativeError();
+            return result;
+        }));
     m_timer.start();
 }
 
@@ -129,6 +137,23 @@ void RecordingTrimSession::seek(int frame, bool play) {
         return;
     m_timer.setInterval(16);
     m_revision = snow_recording_clip_seek(m_clip, static_cast<quint64>(frame), m_end, play ? 1 : 0);
+}
+void RecordingTrimSession::setSpeed(quint32 percent) {
+    if (!ready() || m_detached || percent == m_speedPercent)
+        return;
+    const auto revision = snow_recording_clip_set_speed(m_clip, percent);
+    if (!revision) {
+        if (m_panel)
+            m_panel->setSpeedPercent(m_speedPercent);
+        if (reportError)
+            reportError(trimText(QT_TRANSLATE_NOOP("RecordingTrimSession",
+                                                   "Unable to preview recording: %1"))
+                            .arg(nativeError()));
+        return;
+    }
+    m_speedPercent = percent;
+    m_revision = revision;
+    m_timer.setInterval(16);
 }
 
 void RecordingTrimSession::poll() {
@@ -175,11 +200,12 @@ void RecordingTrimSession::poll() {
             });
             auto* completed = m_export;
             m_export = nullptr;
-            std::thread([completed] { snow_recording_clip_export_destroy(completed); }).detach();
+            std::thread(snow_shot::runtime::trackRuntimeWork([completed] {
+                snow_recording_clip_export_destroy(completed);
+            })).detach();
             if (state == SNOW_RECORDING_RENDER_STATE_SUCCEEDED) {
                 m_cachePath = m_pendingPath;
-                m_cachedFirst = m_first;
-                m_cachedEnd = m_end;
+                m_cachedSelection = m_pendingSelection;
                 publish();
             } else
                 finishExport(false, error);
@@ -257,19 +283,21 @@ void RecordingTrimSession::exportClip(bool save) {
     }
     m_percent = 0;
     m_phase = Phase::Exporting;
+    m_pendingSelection = {m_first, m_end, m_speedPercent};
     setBusy(true);
-    if (!m_deferred && m_first == 0 && m_end == m_info.frame_count) {
+    if (!m_deferred && m_pendingSelection.first == 0 &&
+        m_pendingSelection.end == m_info.frame_count && m_pendingSelection.speedPercent == 100) {
         m_cachePath = m_sourcePath;
-        m_cachedFirst = m_first;
-        m_cachedEnd = m_end;
+        m_cachedSelection = m_pendingSelection;
     }
-    if (m_cachedFirst == m_first && m_cachedEnd == m_end && QFileInfo::exists(m_cachePath)) {
+    if (m_cachedSelection == m_pendingSelection && QFileInfo::exists(m_cachePath)) {
         publish();
         return;
     }
     m_pendingPath = nextOutput(m_outputPath);
-    m_export = snow_recording_clip_export_start(m_clip, m_first, m_end,
-                                                m_pendingPath.toUtf8().constData());
+    m_export = snow_recording_clip_export_start_with_speed(
+        m_clip, m_pendingSelection.first, m_pendingSelection.end,
+        m_pendingPath.toUtf8().constData(), m_pendingSelection.speedPercent);
     if (!m_export) {
         finishExport(false, nativeError());
         return;
@@ -288,40 +316,41 @@ void RecordingTrimSession::publish() {
     }
     const QString from = m_cachePath, to = m_destination;
     m_publication = std::make_shared<Publication>();
-    m_publishFuture = std::async(std::launch::async, [from, to, state = m_publication] {
-        snow_shot::platform::applyApplicationQoSToCurrentThread();
-        PublishResult result;
-        QFile source(from);
-        QSaveFile destination(to);
-        if (!source.open(QIODevice::ReadOnly) || !destination.open(QIODevice::WriteOnly)) {
-            result.error = source.isOpen() ? destination.errorString() : source.errorString();
-            return result;
-        }
-        QByteArray buffer(256 * 1024, Qt::Uninitialized);
-        qint64 copied = 0;
-        while (true) {
-            if (state->state.load() == Publication::Canceled)
-                return result;
-            const qint64 size = source.read(buffer.data(), buffer.size());
-            if (size == 0)
-                break;
-            if (size < 0 || destination.write(buffer.constData(), size) != size) {
-                result.error = size < 0 ? source.errorString() : destination.errorString();
+    m_publishFuture = std::async(
+        std::launch::async, snow_shot::runtime::trackRuntimeWork([from, to, state = m_publication] {
+            snow_shot::platform::applyApplicationQoSToCurrentThread();
+            PublishResult result;
+            QFile source(from);
+            QSaveFile destination(to);
+            if (!source.open(QIODevice::ReadOnly) || !destination.open(QIODevice::WriteOnly)) {
+                result.error = source.isOpen() ? destination.errorString() : source.errorString();
                 return result;
             }
-            copied += size;
-            state->percent.store(
-                static_cast<int>(100.0 * static_cast<double>(copied) /
-                                 static_cast<double>(qMax<qint64>(1, source.size()))));
-        }
-        int copying = Publication::Copying;
-        if (!state->state.compare_exchange_strong(copying, Publication::Committing))
+            QByteArray buffer(256 * 1024, Qt::Uninitialized);
+            qint64 copied = 0;
+            while (true) {
+                if (state->state.load() == Publication::Canceled)
+                    return result;
+                const qint64 size = source.read(buffer.data(), buffer.size());
+                if (size == 0)
+                    break;
+                if (size < 0 || destination.write(buffer.constData(), size) != size) {
+                    result.error = size < 0 ? source.errorString() : destination.errorString();
+                    return result;
+                }
+                copied += size;
+                state->percent.store(
+                    static_cast<int>(100.0 * static_cast<double>(copied) /
+                                     static_cast<double>(qMax<qint64>(1, source.size()))));
+            }
+            int copying = Publication::Copying;
+            if (!state->state.compare_exchange_strong(copying, Publication::Committing))
+                return result;
+            result.ok = destination.commit();
+            if (!result.ok)
+                result.error = destination.errorString();
             return result;
-        result.ok = destination.commit();
-        if (!result.ok)
-            result.error = destination.errorString();
-        return result;
-    });
+        }));
     QTimer::singleShot(300, this, [this] {
         if (m_publishFuture.valid())
             showProgress();
@@ -365,8 +394,10 @@ void RecordingTrimSession::showProgress() {
             m_publication->state.compare_exchange_strong(copying, Publication::Canceled);
         }
         if (m_export && !m_cancelFuture.valid())
-            m_cancelFuture = std::async(
-                std::launch::async, [task = m_export] { snow_recording_clip_export_cancel(task); });
+            m_cancelFuture = std::async(std::launch::async,
+                                        snow_shot::runtime::trackRuntimeWork([task = m_export] {
+                                            snow_recording_clip_export_cancel(task);
+                                        }));
     };
     m_dialog->refresh();
     m_dialog->modal->open();

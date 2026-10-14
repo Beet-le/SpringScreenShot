@@ -5,12 +5,21 @@
 #include "snow_shot/presentation/screenshotcanvastoolstyles.h"
 #include <QDebug>
 #include <QPointer>
+#include <numbers>
 
 namespace snow_shot::presentation {
 ScreenshotStyleBinding::ScreenshotStyleBinding(ScreenshotToolPalette& palette,
                                                SnowCanvasWidget& canvas, QObject* parent,
                                                Replicate replicate, Save save)
     : QObject(parent) {
+    connect(&canvas, &SnowCanvasWidget::angleAdjustmentTargetChanged, &palette,
+            &ScreenshotToolPalette::resetAngleWheelInput);
+    connect(&palette, &ScreenshotToolPalette::angleValueAdjustmentRequested, this,
+            [target = QPointer<SnowCanvasWidget>(&canvas)](int steps, bool fine) {
+                if (target != nullptr)
+                    static_cast<void>(target->adjustAngleValue(steps * (fine ? 0.1 : 1.0) *
+                                                               std::numbers::pi / 180.0));
+            });
     palette.setStyleEditHandler(
         [guard = QPointer<QObject>(this), target = QPointer<SnowCanvasWidget>(&canvas),
          source = QPointer<ScreenshotToolPalette>(&palette)](const SnowCanvasStyleEdit& edit) {
@@ -26,10 +35,19 @@ ScreenshotStyleBinding::ScreenshotStyleBinding(ScreenshotToolPalette& palette,
             qWarning() << "Unable to apply canvas style edit";
             return false;
         });
+    // Restore after tool handlers have synchronized the canvas and materialized its editors.
+    connect(&palette, &ScreenshotToolPalette::watermarkActivated, this,
+            [source = QPointer<ScreenshotToolPalette>(&palette),
+             target = QPointer<SnowCanvasWidget>(&canvas)] {
+                if (source != nullptr && target != nullptr)
+                    source->restoreWatermarkContentForActivation(target->canvasWatermarkConfig());
+            });
     connect(&canvas, &SnowCanvasWidget::styleEditCommitted, this,
             [this, source = QPointer<ScreenshotToolPalette>(&palette), replicate,
              save](const SnowCanvasStyleEdit& edit) {
                 if (source == nullptr)
+                    return;
+                if (snowCanvasCreationStyleProperties(edit) == 0)
                     return;
                 source->rememberStyleEdit(edit);
                 if (replicate)
@@ -50,10 +68,16 @@ void replicateScreenshotStyleEdit(SnowCanvasWidget& peer, const SnowCanvasStyleE
     }
 }
 
-bool stepScreenshotStyle(ScreenshotToolPalette& palette, SnowCanvasWidget& canvas, int direction) {
+bool stepScreenshotStyle(ScreenshotToolPalette& palette, SnowCanvasWidget& canvas, int direction,
+                         bool fine) {
     if (direction == 0 || !canvas.interactionEnabled() || canvas.hasActiveTextEditing())
         return false;
+    if (canvas.canvasTool() == SnowCanvasTool::Angle ||
+        canvas.canvasStyleToolbarState().source == SnowCanvasStyleToolbarSource::SelectedAngle) {
+        return canvas.adjustAngleValue(direction * (fine ? 0.1 : 1.0) * std::numbers::pi / 180.0);
+    }
     switch (canvas.canvasTool()) {
+    case SnowCanvasTool::SpeechBubble:
     case SnowCanvasTool::Shape:
     case SnowCanvasTool::Distance:
     case SnowCanvasTool::Arrow:
@@ -64,6 +88,8 @@ bool stepScreenshotStyle(ScreenshotToolPalette& palette, SnowCanvasWidget& canva
         return palette.stepStrokeWidth(direction);
     case SnowCanvasTool::Select:
         return palette.stepSelectionOpacity(direction);
+    case SnowCanvasTool::Magnifier:
+        return palette.stepMagnifierFactor(direction);
     case SnowCanvasTool::Spotlight:
         return palette.stepSpotlightOpacity(direction);
     case SnowCanvasTool::RectangleFilter:
@@ -78,5 +104,28 @@ bool stepScreenshotStyle(ScreenshotToolPalette& palette, SnowCanvasWidget& canva
     default:
         return false;
     }
+}
+
+bool handleScreenshotStyleWheel(ScreenshotToolPalette& palette, SnowCanvasWidget& canvas,
+                                const QWheelEvent& event, WheelStepAccumulator& accumulator) {
+    if (angleWheelTarget(canvas)) {
+        if ((event.modifiers() & ~Qt::ShiftModifier) != Qt::NoModifier) {
+            accumulator.reset();
+            return false;
+        }
+        const int steps = accumulator.consume(event);
+        if (steps != 0)
+            static_cast<void>(stepScreenshotStyle(palette, canvas, steps,
+                                                  event.modifiers().testFlag(Qt::ShiftModifier)));
+        return true;
+    }
+    accumulator.reset();
+    if (canvas.hasMagnifierAdjustmentTarget())
+        return canvas.adjustMagnifierFromWheel(event);
+    if (event.modifiers() != Qt::NoModifier)
+        return false;
+    const int delta =
+        usesPreciseWheelDelta(event) ? event.pixelDelta().y() : event.angleDelta().y();
+    return delta != 0 && stepScreenshotStyle(palette, canvas, delta > 0 ? 1 : -1);
 }
 } // namespace snow_shot::presentation

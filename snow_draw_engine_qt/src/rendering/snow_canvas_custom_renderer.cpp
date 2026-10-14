@@ -8,11 +8,20 @@ std::uint64_t SnowCanvasCustomRenderer::originalBackgroundRevision() const {
     return contentRevision();
 }
 
+QList<SnowCanvasBaseImageSource> SnowCanvasCustomRenderer::baseImageSources() const {
+    return {};
+}
+
 void SnowCanvasCustomRenderer::clearRenderState() {}
 
 std::optional<SnowCanvasFilterRenderReference>
 SnowCanvasCustomRenderer::filterRenderReference() const {
     return std::nullopt;
+}
+
+bool SnowCanvasCustomRenderer::coversWidgetRect(const QRect& widgetRect) const {
+    Q_UNUSED(widgetRect);
+    return false;
 }
 
 void SnowCanvasCustomRenderer::renderBeforeCanvas(QPainter& painter,

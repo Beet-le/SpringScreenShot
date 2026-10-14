@@ -33,6 +33,7 @@
 #include <QPaintEvent>
 #include <QRegularExpression>
 #include <QScopedValueRollback>
+#include <QScopeGuard>
 #include <QScreen>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -7212,7 +7213,11 @@ AdDatePicker::AdDatePicker(QWidget* parent) : QWidget(parent) {
 
 AdDatePicker::~AdDatePicker() {
   if (popupController_) {
-    popupController_->setPopupVisible(false);
+    // Application event observation must end before QWidget destroys children,
+    // whose destruction observers can synchronously dispatch new UI events.
+    auto* controller = popupController_;
+    popupController_ = nullptr;
+    delete controller;
   }
   destroyPopup();
 }
@@ -8209,14 +8214,24 @@ void AdDatePicker::setPopupLayerMode(PopupLayerMode value) {
   if (popupLayerMode_ == value) {
     return;
   }
+  const QPointer<AdDatePicker> lifetime(this);
   const bool wasVisible = popupVisible_;
   if (wasVisible) {
     setPopupVisibleInternal(false, true);
+    if (!lifetime) {
+      return;
+    }
   }
   popupLayerMode_ = value;
   applyPopupLayerMode();
+  if (!lifetime) {
+    return;
+  }
   if (wasVisible) {
     setPopupVisibleInternal(true, true);
+    if (!lifetime) {
+      return;
+    }
   }
   emit popupLayerModeChanged(popupLayerMode_);
 }
@@ -8405,14 +8420,24 @@ AdDatePicker::PopupContentWrapperFactory AdDatePicker::popupContentWrapperFactor
 
 void AdDatePicker::setPopupContentWrapperFactory(PopupContentWrapperFactory factory) {
   popupContentWrapperFactory_ = std::move(factory);
+  const QPointer<AdDatePicker> lifetime(this);
   const bool wasVisible = popupVisible_;
   if (popup_) {
     if (wasVisible) {
       setPopupVisibleInternal(false, true);
+      if (!lifetime) {
+        return;
+      }
     }
     destroyPopup();
+    if (!lifetime) {
+      return;
+    }
     if (wasVisible) {
       setPopupVisibleInternal(true, true);
+      if (!lifetime) {
+        return;
+      }
     }
   }
   emit popupContentWrapperFactoryChanged();
@@ -8428,14 +8453,24 @@ AdDatePicker::PanelComponentFactory AdDatePicker::panelComponentFactory() const 
 
 void AdDatePicker::setPanelComponentFactory(PanelComponentFactory factory) {
   panelComponentFactory_ = std::move(factory);
+  const QPointer<AdDatePicker> lifetime(this);
   const bool wasVisible = popupVisible_;
   if (popup_) {
     if (wasVisible) {
       setPopupVisibleInternal(false, true);
+      if (!lifetime) {
+        return;
+      }
     }
     destroyPopup();
+    if (!lifetime) {
+      return;
+    }
     if (wasVisible) {
       setPopupVisibleInternal(true, true);
+      if (!lifetime) {
+        return;
+      }
     }
   }
   emit panelComponentFactoryChanged();
@@ -8632,6 +8667,15 @@ void AdDatePicker::ensurePopup() {
     surface->setAttribute(Qt::WA_QuitOnClose, false);
   }
   popup_ = surface;
+  // In-window surfaces are siblings of their picker. Their container can destroy
+  // them first, or the picker can move to another window and survive the container.
+  connect(surface, &detail::OverlayPopupSurface::aboutToDestroy, this, [this] {
+    resetPopupReferences();
+    if (popupController_) {
+      popupController_->popupSurfaceChanged();
+      popupController_->setPopupVisible(false);
+    }
+  });
   popup_->setObjectName(QStringLiteral("addatepicker-popup"));
   setSemanticSlot(popup_, "popup.root", QStringLiteral("addatepicker-popup"));
   popup_->setProperty("adqt.interaction.surface", true);
@@ -8647,11 +8691,11 @@ void AdDatePicker::ensurePopup() {
     popupBodyHost_->setAutoFillBackground(false);
   }
 
-  popupLayout_ = new QVBoxLayout(popupBodyHost_ ? popupBodyHost_ : popup_);
+  popupLayout_ = new QVBoxLayout(popupBodyHost_ ? popupBodyHost_ : popup_.data());
   popupLayout_->setContentsMargins(0, 0, 0, 0);
   popupLayout_->setSpacing(0);
 
-  popupPanel_ = new AdDatePickerPanel(popupBodyHost_ ? popupBodyHost_ : popup_);
+  popupPanel_ = new AdDatePickerPanel(popupBodyHost_ ? popupBodyHost_ : popup_.data());
   connect(popupPanel_, &AdDatePickerPanel::accepted, this, [this](const QDate& value) {
     const QTime selectedTime = popupPanel_ ? popupPanel_->selectedTime() : time_;
     setDateTime(dateTimeFromParts(value, selectedTime));
@@ -8694,7 +8738,7 @@ void AdDatePicker::ensurePopup() {
     emit panelChanged(popupPanel_ ? popupPanel_->viewDate() : QDate(), panelMode_);
   });
   syncPanelState();
-  QWidget* popupContentParent = popupBodyHost_ ? popupBodyHost_ : popup_;
+  QWidget* popupContentParent = popupBodyHost_ ? popupBodyHost_ : popup_.data();
   QWidget* componentContent =
       createPanelComponentWidget(popupContentParent, popupPanel_, PanelComponentRole::Single);
   popupContentWidget_ =
@@ -8710,9 +8754,30 @@ void AdDatePicker::destroyPopup() {
     return;
   }
 
-  QScopedValueRollback<bool> guard(suppressPopupHideClose_, true);
-  popup_->hide();
-  popup_->deleteLater();
+  const QPointer<AdDatePicker> lifetime(this);
+  const QPointer<QWidget> surface = popup_;
+  // Deferred retirement must not clear a replacement surface, and the callback
+  // must not run during QWidget teardown after our member storage is gone.
+  disconnect(surface.data(), nullptr, this, nullptr);
+  resetPopupReferences();
+  const bool wasSuppressing = suppressPopupHideClose_;
+  suppressPopupHideClose_ = true;
+  const auto restoreSuppression = qScopeGuard([lifetime, wasSuppressing]() {
+    if (lifetime) {
+      lifetime->suppressPopupHideClose_ = wasSuppressing;
+    }
+  });
+  surface->hide();
+  if (surface) {
+    surface->deleteLater();
+  }
+  if (lifetime && popupController_) {
+    popupController_->popupSurfaceChanged();
+    popupController_->invalidatePopupGeometry();
+  }
+}
+
+void AdDatePicker::resetPopupReferences() {
   popup_ = nullptr;
   popupBodyHost_ = nullptr;
   popupLayout_ = nullptr;
@@ -8722,10 +8787,6 @@ void AdDatePicker::destroyPopup() {
   panelDisabledDateContextPredicateDirty_ = true;
   panelDisabledTimePredicateDirty_ = true;
   panelCellRenderCallbackDirty_ = true;
-  if (popupController_) {
-    popupController_->popupSurfaceChanged();
-    popupController_->invalidatePopupGeometry();
-  }
 }
 
 void AdDatePicker::applyPopupLayerMode() {
@@ -8767,7 +8828,7 @@ void AdDatePicker::popupPrepareToShow() {
     syncPanelState();
   }
 
-  auto* surface = static_cast<detail::OverlayPopupSurface*>(popup_);
+  auto* surface = static_cast<detail::OverlayPopupSurface*>(popup_.data());
   detail::DatePickerStyleInput input;
   input.size = size_;
   input.variant = variant_;
@@ -8810,7 +8871,11 @@ void AdDatePicker::setPopupVisibleInternal(bool value, bool emitSignal) {
     return;
   }
 
+  const QPointer<AdDatePicker> lifetime(this);
   popupController_->setDisabled(!isEnabled());
+  if (!lifetime) {
+    return;
+  }
   popupController_->setPopupVisible(value);
 }
 
@@ -9525,7 +9590,7 @@ int AdDatePicker::popupArrowOffsetVertical() const { return 0; }
 void AdDatePicker::popupApplyResolvedPlacement(detail::OverlayPopupPlacement placement,
                                                qreal arrowCenterCoord) {
   Q_UNUSED(arrowCenterCoord)
-  if (auto* surface = dynamic_cast<detail::OverlayPopupSurface*>(popup_)) {
+  if (auto* surface = dynamic_cast<detail::OverlayPopupSurface*>(popup_.data())) {
     surface->setPlacement(placement);
   }
 }
@@ -9549,7 +9614,9 @@ AdDateRangePicker::AdDateRangePicker(QWidget* parent) : QWidget(parent) {
 
 AdDateRangePicker::~AdDateRangePicker() {
   if (popupController_) {
-    popupController_->setPopupVisible(false);
+    auto* controller = popupController_;
+    popupController_ = nullptr;
+    delete controller;
   }
   destroyPopup();
 }
@@ -10716,14 +10783,24 @@ void AdDateRangePicker::setPopupLayerMode(PopupLayerMode value) {
   if (popupLayerMode_ == value) {
     return;
   }
+  const QPointer<AdDateRangePicker> lifetime(this);
   const bool wasVisible = popupVisible_;
   if (wasVisible) {
     setPopupVisibleInternal(false, true);
+    if (!lifetime) {
+      return;
+    }
   }
   popupLayerMode_ = value;
   applyPopupLayerMode();
+  if (!lifetime) {
+    return;
+  }
   if (wasVisible) {
     setPopupVisibleInternal(true, true);
+    if (!lifetime) {
+      return;
+    }
   }
   emit popupLayerModeChanged(popupLayerMode_);
 }
@@ -10942,14 +11019,24 @@ AdDateRangePicker::PopupContentWrapperFactory AdDateRangePicker::popupContentWra
 
 void AdDateRangePicker::setPopupContentWrapperFactory(PopupContentWrapperFactory factory) {
   popupContentWrapperFactory_ = std::move(factory);
+  const QPointer<AdDateRangePicker> lifetime(this);
   const bool wasVisible = popupVisible_;
   if (popup_) {
     if (wasVisible) {
       setPopupVisibleInternal(false, true);
+      if (!lifetime) {
+        return;
+      }
     }
     destroyPopup();
+    if (!lifetime) {
+      return;
+    }
     if (wasVisible) {
       setPopupVisibleInternal(true, true);
+      if (!lifetime) {
+        return;
+      }
     }
   }
   emit popupContentWrapperFactoryChanged();
@@ -10965,14 +11052,24 @@ AdDateRangePicker::PanelComponentFactory AdDateRangePicker::panelComponentFactor
 
 void AdDateRangePicker::setPanelComponentFactory(PanelComponentFactory factory) {
   panelComponentFactory_ = std::move(factory);
+  const QPointer<AdDateRangePicker> lifetime(this);
   const bool wasVisible = popupVisible_;
   if (popup_) {
     if (wasVisible) {
       setPopupVisibleInternal(false, true);
+      if (!lifetime) {
+        return;
+      }
     }
     destroyPopup();
+    if (!lifetime) {
+      return;
+    }
     if (wasVisible) {
       setPopupVisibleInternal(true, true);
+      if (!lifetime) {
+        return;
+      }
     }
   }
   emit panelComponentFactoryChanged();
@@ -11230,6 +11327,22 @@ void AdDateRangePicker::ensurePopup() {
     surface->setAttribute(Qt::WA_QuitOnClose, false);
   }
   popup_ = surface;
+  connect(surface, &detail::OverlayPopupSurface::aboutToDestroy, this, [this] {
+    resetPopupReferences();
+    if (popupController_) {
+      popupController_->popupSurfaceChanged();
+      // Losing the container cancels its unsubmitted calendar draft.
+      const QPointer<AdDateRangePicker> lifetime(this);
+      const bool wasSuppressing = suppressPopupCloseSubmit_;
+      suppressPopupCloseSubmit_ = true;
+      const auto restoreSuppression = qScopeGuard([lifetime, wasSuppressing]() {
+        if (lifetime) {
+          lifetime->suppressPopupCloseSubmit_ = wasSuppressing;
+        }
+      });
+      popupController_->setPopupVisible(false);
+    }
+  });
   popup_->setObjectName(QStringLiteral("addaterangepicker-popup"));
   setSemanticSlot(popup_, "popup.root", QStringLiteral("addaterangepicker-popup"));
   popup_->setProperty("adqt.interaction.surface", true);
@@ -11246,11 +11359,11 @@ void AdDateRangePicker::ensurePopup() {
     popupBodyHost_->setAutoFillBackground(false);
   }
 
-  popupLayout_ = new QVBoxLayout(popupBodyHost_ ? popupBodyHost_ : popup_);
+  popupLayout_ = new QVBoxLayout(popupBodyHost_ ? popupBodyHost_ : popup_.data());
   popupLayout_->setContentsMargins(0, 0, 0, 0);
   popupLayout_->setSpacing(0);
 
-  QWidget* popupContentParent = popupBodyHost_ ? popupBodyHost_ : popup_;
+  QWidget* popupContentParent = popupBodyHost_ ? popupBodyHost_ : popup_.data();
   popupPanelsWidget_ = new QWidget(popupContentParent);
   setSemanticSlot(popupPanelsWidget_, "popup.container",
                   QStringLiteral("addaterangepicker-popup-container"));
@@ -11421,9 +11534,28 @@ void AdDateRangePicker::destroyPopup() {
     return;
   }
 
-  QScopedValueRollback<bool> guard(suppressPopupHideClose_, true);
-  popup_->hide();
-  popup_->deleteLater();
+  const QPointer<AdDateRangePicker> lifetime(this);
+  const QPointer<QWidget> surface = popup_;
+  disconnect(surface.data(), nullptr, this, nullptr);
+  resetPopupReferences();
+  const bool wasSuppressing = suppressPopupHideClose_;
+  suppressPopupHideClose_ = true;
+  const auto restoreSuppression = qScopeGuard([lifetime, wasSuppressing]() {
+    if (lifetime) {
+      lifetime->suppressPopupHideClose_ = wasSuppressing;
+    }
+  });
+  surface->hide();
+  if (surface) {
+    surface->deleteLater();
+  }
+  if (lifetime && popupController_) {
+    popupController_->popupSurfaceChanged();
+    popupController_->invalidatePopupGeometry();
+  }
+}
+
+void AdDateRangePicker::resetPopupReferences() {
   popup_ = nullptr;
   popupBodyHost_ = nullptr;
   popupLayout_ = nullptr;
@@ -11453,10 +11585,6 @@ void AdDateRangePicker::destroyPopup() {
   panelDisabledDateContextPredicateDirty_ = true;
   panelDisabledTimePredicateDirty_ = true;
   panelCellRenderCallbackDirty_ = true;
-  if (popupController_) {
-    popupController_->popupSurfaceChanged();
-    popupController_->invalidatePopupGeometry();
-  }
 }
 
 void AdDateRangePicker::applyPopupLayerMode() {
@@ -11501,7 +11629,7 @@ void AdDateRangePicker::syncPopupActiveAlignment() {
 
 int AdDateRangePicker::popupPanelContainerWidth() const {
   int containerWidth = 0;
-  if (const auto* surface = dynamic_cast<const detail::OverlayPopupSurface*>(popup_)) {
+  if (const auto* surface = dynamic_cast<const detail::OverlayPopupSurface*>(popup_.data())) {
     containerWidth = std::max(containerWidth, surface->visualSizeHint().width());
   }
 
@@ -11566,7 +11694,7 @@ void AdDateRangePicker::syncPopupArrowPosition() {
     return;
   }
 
-  auto* surface = dynamic_cast<detail::OverlayPopupSurface*>(popup_);
+  auto* surface = dynamic_cast<detail::OverlayPopupSurface*>(popup_.data());
   if (!surface || !surface->arrowVisible()) {
     return;
   }
@@ -11604,7 +11732,7 @@ void AdDateRangePicker::popupPrepareToShow() {
     syncPanelState();
   }
 
-  auto* surface = static_cast<detail::OverlayPopupSurface*>(popup_);
+  auto* surface = static_cast<detail::OverlayPopupSurface*>(popup_.data());
   detail::DatePickerStyleInput input;
   input.size = size_;
   input.variant = variant_;
@@ -11648,7 +11776,11 @@ void AdDateRangePicker::setPopupVisibleInternal(bool value, bool emitSignal) {
     return;
   }
 
+  const QPointer<AdDateRangePicker> lifetime(this);
   popupController_->setDisabled(effectiveInputDisabled());
+  if (!lifetime) {
+    return;
+  }
   if (value) {
     syncPopupCalendarFromCommitted();
   }
@@ -13702,7 +13834,7 @@ int AdDateRangePicker::popupArrowOffsetVertical() const { return 0; }
 
 void AdDateRangePicker::popupApplyResolvedPlacement(detail::OverlayPopupPlacement placement,
                                                     qreal arrowCenterCoord) {
-  if (auto* surface = dynamic_cast<detail::OverlayPopupSurface*>(popup_)) {
+  if (auto* surface = dynamic_cast<detail::OverlayPopupSurface*>(popup_.data())) {
     surface->setPlacement(placement);
     surface->setArrowCenter(arrowCenterCoord);
     const int alignmentOffset = popupPanelAlignmentOffset(placement);

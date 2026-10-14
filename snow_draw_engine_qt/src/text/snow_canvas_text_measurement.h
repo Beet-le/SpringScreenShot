@@ -29,6 +29,24 @@ class NaturalTextLayoutCache {
     std::uint64_t m_measurementCount = 0;
 };
 
+class BubbleTextLayoutCache {
+  public:
+    explicit BubbleTextLayoutCache(int maximumBytes = 1024 * 1024);
+    snow_canvas_text_layout::GraphemeMetrics graphemes(const QString& text, const QFont& baseFont,
+                                                       const SnowSceneDisplayItem& item);
+    snow_canvas_text_layout::TextMeasuredLayout wrapped(const QString& text, const QFont& baseFont,
+                                                        const SnowSceneDisplayItem& item,
+                                                        double width);
+    void clear();
+    qsizetype retainedBytes() const;
+    std::uint64_t measurementCount() const;
+
+  private:
+    QCache<QByteArray, snow_canvas_text_layout::GraphemeMetrics> m_graphemes;
+    QCache<QByteArray, snow_canvas_text_layout::TextMeasuredLayout> m_wrapped;
+    std::uint64_t m_measurementCount = 0;
+};
+
 struct TextLayoutOverrideMeasurement {
     bool success = true;
     std::vector<SnowTextLayoutOverride> layouts;

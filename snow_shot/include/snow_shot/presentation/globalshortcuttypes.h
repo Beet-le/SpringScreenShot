@@ -34,6 +34,7 @@ enum class GlobalShortcutAction {
     SwitchWindowGroup,
     ScreenshotSave,
     ScreenshotQuickSave,
+    HideShowAllWindows,
 };
 
 [[nodiscard]] constexpr bool controlsGlobalHotkeyGates(GlobalShortcutAction action) {
@@ -46,6 +47,7 @@ enum class GlobalShortcutStatus {
     Registered,
     PartiallyRegistered,
     Failed,
+    Disabled,
 };
 
 enum class GlobalShortcutFailureReason {

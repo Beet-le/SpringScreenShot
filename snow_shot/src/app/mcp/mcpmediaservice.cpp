@@ -9,6 +9,7 @@
 #include "snow_shot/presentation/screenshotexportartifact.h"
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/pinnedwindowrepository.h"
+#include "mcppinnedstate_p.h"
 #include <QApplication>
 #include <QClipboard>
 #include <QCryptographicHash>
@@ -224,23 +225,9 @@ class McpMediaService::Impl {
              {QStringLiteral("active_group_id"), groups.activeGroupId()}});
     }
     QJsonObject pinState(const QString& id) {
-        if (auto* window = groups.liveWindow(id))
-            return versioned(QStringLiteral("pin:") + id, window->automationState());
-        for (const auto& summary :
-             storage::ApplicationStorage::instance().pinnedWindows().summaries())
-            if (summary.id == id)
-                return versioned(
-                    QStringLiteral("pin:") + id,
-                    {{QStringLiteral("id"), id},
-                     {QStringLiteral("revision"),
-                      static_cast<qint64>(
-                          storage::ApplicationStorage::instance().pinnedWindows().revision())},
-                     {QStringLiteral("group_id"), summary.groupId},
-                     {QStringLiteral("visible"), false},
-                     {QStringLiteral("open"), false},
-                     {QStringLiteral("updated_at"), summary.updatedUtc.toString(Qt::ISODateWithMs)},
-                     {QStringLiteral("closed"), summary.ignored}});
-        return {};
+        auto state =
+            pinnedWindowState(storage::ApplicationStorage::instance().pinnedWindows(), groups, id);
+        return state.isEmpty() ? state : versioned(QStringLiteral("pin:") + id, state);
     }
     using Reply = std::function<void(QJsonObject, QString)>;
     void decode(const ScreenshotMcpRequest& r, Reply reply) {
@@ -283,6 +270,18 @@ class McpMediaService::Impl {
         const QString token = uuid();
         const auto id = r.params.value(QStringLiteral("id")).toString();
         const bool replace = r.method == QStringLiteral("snow_shot_pinned_replace");
+        const QPointer<ScreenshotPinnedWindow> replacementWindow =
+            replace ? groups.liveWindow(id) : nullptr;
+        if (replace && !replacementWindow) {
+            reply({}, QStringLiteral("window_closed"));
+            return;
+        }
+        if (replacementWindow && replacementWindow->animationTransformPending()) {
+            reply(pinState(id), QStringLiteral("busy"));
+            return;
+        }
+        const QTransform replacementTransform =
+            replacementWindow ? replacementWindow->contentReplacementTransform() : QTransform();
         const auto group = r.params.value(QStringLiteral("group_id")).toString();
         if (!group.isEmpty() && !groups.contains(group)) {
             reply({}, QStringLiteral("group_not_found"));
@@ -291,8 +290,8 @@ class McpMediaService::Impl {
         const QPointer<McpMediaService> guard(&q);
         auto job = ScreenshotExportCoordinator::shared().submit(
             &q, ScreenshotExportCoordinator::Priority::Foreground,
-            [snapshot = std::move(snapshot), path, kind, content,
-             dpr](const ScreenshotExportCancellation& cancel) mutable {
+            [snapshot = std::move(snapshot), path, kind, content, dpr, replace,
+             replacementTransform](const ScreenshotExportCancellation& cancel) mutable {
                 if (kind == QStringLiteral("file")) {
                     const auto files = ScreenshotClipboardContentReader::snapshotLocalFiles({path});
                     if (files.size() != 1)
@@ -306,13 +305,19 @@ class McpMediaService::Impl {
                 }
                 *content = ScreenshotClipboardContentReader::decode(
                     std::move(*snapshot), [&cancel] { return cancel.isCancellationRequested(); });
-                return *content ? ScreenshotExportTaskResult{}
-                                : ScreenshotExportTaskResult::failure(
-                                      ScreenshotExportFailureStage::Source,
-                                      QStringLiteral("decode_failed"));
+                if (!*content)
+                    return ScreenshotExportTaskResult::failure(ScreenshotExportFailureStage::Source,
+                                                               QStringLiteral("decode_failed"));
+                if (replace && !ScreenshotClipboardContentReader::prepareAnimationDisplay(
+                                   **content, replacementTransform,
+                                   [&cancel] { return cancel.isCancellationRequested(); }))
+                    return ScreenshotExportTaskResult::failure(ScreenshotExportFailureStage::Source,
+                                                               QStringLiteral("decode_failed"));
+                return ScreenshotExportTaskResult{};
             },
-            [this, guard, content, token, id, replace, group, expected = r.expectedRevision,
-             reply](ScreenshotExportTaskResult result) {
+            [this, guard, content, token, id, replace, replacementWindow, replacementTransform,
+             group, expected = r.expectedRevision,
+             reply](const ScreenshotExportTaskResult& result) {
                 if (!guard || !pending.contains(token))
                     return;
                 if (!result.succeeded() || !*content) {
@@ -330,7 +335,16 @@ class McpMediaService::Impl {
                         return;
                     }
                     auto* window = groups.liveWindow(id);
-                    if (!window || !window->automationReplaceContent(std::move(**content)))
+                    if (!window || window != replacementWindow) {
+                        reply(state, QStringLiteral("window_closed"));
+                        return;
+                    }
+                    if (window->animationTransformPending() ||
+                        window->contentReplacementTransform() != replacementTransform) {
+                        reply(state, QStringLiteral("stale_revision"));
+                        return;
+                    }
+                    if (!window->automationReplaceContent(std::move(**content)))
                         reply({}, QStringLiteral("replacement_failed"));
                     else
                         reply(pinState(id), {});
@@ -611,23 +625,8 @@ void McpMediaService::request(const ScreenshotMcpRequest& r,
             reply({}, QStringLiteral("invalid_parameters"));
             return;
         }
-        QJsonArray list;
-        QSet<QString> found;
-        for (const auto& summary :
-             storage::ApplicationStorage::instance().pinnedWindows().summaries()) {
-            found.insert(summary.id);
-            list.append(QJsonObject{
-                {QStringLiteral("id"), summary.id},
-                {QStringLiteral("group_id"), summary.groupId},
-                {QStringLiteral("open"), s.groups.hasWindow(summary.id)},
-                {QStringLiteral("closed"), summary.ignored},
-                {QStringLiteral("updated_at"), summary.updatedUtc.toString(Qt::ISODateWithMs)}});
-        }
-        for (auto* window : s.groups.liveWindows())
-            if (!found.contains(window->persistenceId()))
-                list.append(QJsonObject{{QStringLiteral("id"), window->persistenceId()},
-                                        {QStringLiteral("group_id"), window->groupId()},
-                                        {QStringLiteral("open"), true}});
+        const auto list =
+            pinnedWindowList(storage::ApplicationStorage::instance().pinnedWindows(), s.groups);
         const auto revision = s.observe(
             QStringLiteral("pins"),
             {{QStringLiteral("revision"), static_cast<qint64>(s.groups.automationRevision())},

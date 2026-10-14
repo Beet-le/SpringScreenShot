@@ -15,7 +15,7 @@
 
 struct SnowCanvasRuntime::Impl {
     Impl(SnowCanvasRuntime& owner, const SnowCanvasRuntimeConfig& config);
-    ~Impl();
+    void shutdown();
 
     bool isOwnerThread() const;
     bool isValid() const;
@@ -38,6 +38,10 @@ struct SnowCanvasRuntime::Impl {
         return session.smartErase();
     }
     SnowRuntime handle() const;
+    snow_canvas_runtime::RuntimeLease retainHandle() const;
+    std::weak_ptr<const int> observeLifetime() const {
+        return lifetime;
+    }
     void registerClient(snow_canvas_runtime::Client* client);
     void unregisterClient(snow_canvas_runtime::Client* client);
     void syncChangedViewports(SnowChangedViewportList changedViewports);
@@ -45,12 +49,13 @@ struct SnowCanvasRuntime::Impl {
     std::function<void()> documentChanged;
     quint64 observedRevision = 0;
     void observeDocument() {
-        if (!documentChanged)
+        const auto callback = documentChanged;
+        if (!callback)
             return;
         const auto revision = snow_runtime_document_revision(handle());
         if (revision != observedRevision) {
             observedRevision = revision;
-            documentChanged();
+            callback();
         }
     }
 
@@ -60,12 +65,14 @@ struct SnowCanvasRuntime::Impl {
     SnowCanvasRuntime& owner;
     snow_canvas_runtime::ThreadAffinity threadAffinity;
     snow_canvas_runtime::RuntimeSession session;
+    std::shared_ptr<const int> lifetime = std::make_shared<const int>(0);
 };
 
 SnowCanvasRuntime::Impl::Impl(SnowCanvasRuntime& owner, const SnowCanvasRuntimeConfig& config)
     : owner(owner), session(config) {}
 
-SnowCanvasRuntime::Impl::~Impl() {
+void SnowCanvasRuntime::Impl::shutdown() {
+    lifetime.reset();
     session.destroyForOwnerDestruction(
         owner, threadAffinity.hasDestructionAccess("~SnowCanvasRuntime")
                    ? snow_canvas_runtime::OwnerDestructionPolicy::DetachClients
@@ -161,6 +168,11 @@ SnowRuntime SnowCanvasRuntime::Impl::handle() const {
     return session.handle();
 }
 
+snow_canvas_runtime::RuntimeLease SnowCanvasRuntime::Impl::retainHandle() const {
+    return hasThreadAccess("retainHandle") ? session.retainHandle()
+                                           : snow_canvas_runtime::RuntimeLease{};
+}
+
 bool SnowCanvasRuntime::Impl::hasThreadAccess(const char* operation) const {
     return threadAffinity.hasAccess(operation);
 }
@@ -183,8 +195,12 @@ void SnowCanvasRuntime::Impl::syncChangedViewports(SnowChangedViewportList chang
     if (!hasThreadAccess("syncChangedViewports")) {
         return;
     }
+    const std::weak_ptr<const int> publicationLifetime = lifetime;
+    const auto publishedEngine = session.retainHandle();
     session.syncChangedViewports(changedViewports);
-    observeDocument();
+    if (!publicationLifetime.expired() && session.handle() == publishedEngine.get()) {
+        observeDocument();
+    }
 }
 
 void SnowCanvasRuntime::Impl::syncChangedViewportIds(
@@ -192,8 +208,12 @@ void SnowCanvasRuntime::Impl::syncChangedViewportIds(
     if (!hasThreadAccess("syncChangedViewportIds")) {
         return;
     }
+    const std::weak_ptr<const int> publicationLifetime = lifetime;
+    const auto publishedEngine = session.retainHandle();
     session.syncChangedViewportIds(changedViewportIds);
-    observeDocument();
+    if (!publicationLifetime.expired() && session.handle() == publishedEngine.get()) {
+        observeDocument();
+    }
 }
 
 QImage SnowCanvasRuntime::Impl::renderToImage(const QRectF& virtualSelectionRect,
@@ -211,7 +231,11 @@ SnowCanvasRuntime::SnowCanvasRuntime() : SnowCanvasRuntime(SnowCanvasRuntimeConf
 SnowCanvasRuntime::SnowCanvasRuntime(const SnowCanvasRuntimeConfig& config)
     : m_impl(std::make_unique<Impl>(*this, config)) {}
 
-SnowCanvasRuntime::~SnowCanvasRuntime() = default;
+SnowCanvasRuntime::~SnowCanvasRuntime() {
+    // Detachment callbacks can use the owner to retain its engine or retire other clients.
+    // Run them before unique_ptr clears m_impl and destroys the implementation.
+    m_impl->shutdown();
+}
 
 bool SnowCanvasRuntime::isOwnerThread() const {
     return m_impl->isOwnerThread();
@@ -368,6 +392,11 @@ SnowRuntime snow_canvas_runtime::Access::handle(const SnowCanvasRuntime& runtime
     return runtime.m_impl->handle();
 }
 
+snow_canvas_runtime::RuntimeLease
+snow_canvas_runtime::Access::retainHandle(const SnowCanvasRuntime& runtime) {
+    return runtime.m_impl->retainHandle();
+}
+
 void snow_canvas_runtime::Access::unregisterClient(SnowCanvasRuntime& runtime, Client& client) {
     runtime.m_impl->unregisterClient(&client);
 }
@@ -389,8 +418,11 @@ snow_canvas_runtime::Access::smartErase(SnowCanvasRuntime& runtime) {
 void SnowCanvasRuntime::setBaseImageSources(const QList<SnowCanvasBaseImageSource>& sources) {
     if (!isOwnerThread())
         return;
+    const auto lifetime = m_impl->observeLifetime();
     m_impl->smartErase().setSources(this, sources);
-    m_impl->smartErase().sync(m_impl->handle());
+    if (!lifetime.expired()) {
+        m_impl->smartErase().sync(m_impl->handle());
+    }
 }
 SnowCanvasSmartEraseSnapshot SnowCanvasRuntime::smartEraseSnapshot() const {
     return isOwnerThread() ? m_impl->smartErase().snapshot() : SnowCanvasSmartEraseSnapshot{};
@@ -473,6 +505,36 @@ bool SnowCanvasRuntimeEditor::setDistanceStyleFromToolbar(const SnowCanvasDistan
         return snow_viewport_set_distance_style_patch_ex(r, v, &value, properties, changed);
     });
 }
+bool SnowCanvasRuntimeEditor::setAngleStyleFromToolbar(const SnowCanvasAngleStyle& style,
+                                                       quint32 properties) {
+    if (!snow_canvas_types::validAngleStyle(style))
+        return false;
+    const auto value = snow_canvas_types::toEngineAngleStyle(style);
+    return m_impl->mutate([&](auto r, auto v, auto changed) {
+        return snow_viewport_set_angle_style_patch_ex(r, v, &value, properties, changed);
+    });
+}
+
+bool SnowCanvasRuntimeEditor::adjustAngleValue(double deltaRadians) {
+    if (!std::isfinite(deltaRadians))
+        return false;
+    return m_impl->mutate([&](auto r, auto v, auto changed) {
+        return snow_viewport_adjust_angle_value_ex(r, v, deltaRadians, changed);
+    });
+}
+
+bool SnowCanvasRuntimeEditor::setMagnifierStyleFromToolbar(const SnowCanvasMagnifierStyle& style,
+                                                           quint32 properties,
+                                                           bool creationDefaults) {
+    if (!snow_canvas_types::validMagnifierStyle(style))
+        return false;
+    const auto value = snow_canvas_types::toEngineMagnifierStyle(style);
+    return m_impl->mutate([&](auto r, auto v, auto changed) {
+        return snow_viewport_set_magnifier_style_patch_ex(r, v, &value, properties,
+                                                          creationDefaults ? 1 : 0, changed);
+    });
+}
+
 bool SnowCanvasRuntimeEditor::setDistanceCreationPixelScale(const QSizeF& scale) {
     return m_impl->mutate([&](auto r, auto v, auto changed) {
         return snow_viewport_set_distance_pixel_scale_ex(r, v, scale.width(), scale.height(),

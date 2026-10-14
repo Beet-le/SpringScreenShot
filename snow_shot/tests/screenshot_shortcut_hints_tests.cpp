@@ -81,6 +81,8 @@ void toolMatrixMatchesRequestedVisibility() {
             "arrow tool hint matrix changed");
     require(hintLines(ScreenshotActiveTool::Line) == transformHints,
             "line tool hint matrix changed");
+    require(hintLines(ScreenshotActiveTool::Angle) == transformHints,
+            "angle hints should show only shared transform shortcuts");
     require(hintLines(ScreenshotActiveTool::RectangleHighlight) == transformHints,
             "rectangle-highlighter hint matrix changed");
     require(hintLines(ScreenshotActiveTool::RectangleFilter) == transformHints,

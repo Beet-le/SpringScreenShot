@@ -12,6 +12,7 @@
 #include "snow_shot/presentation/screenshotdefaultstyles.h"
 #include "snow_shot/presentation/screenshotgeometry.h"
 #include "snow_shot/presentation/screenshotpinnedwindow.h"
+#include "snow_shot/presentation/screenshotrecognitionsessioncontroller.h"
 #include "snow_shot/presentation/screenshottoolpalette.h"
 #include "snow_shot/presentation/screenshottoolpalettehost.h"
 #include "snow_shot/presentation/windowshortcutmanager.h"
@@ -31,6 +32,7 @@
 #include <QMouseEvent>
 #include <QPointer>
 #include <QScreen>
+#include <QScopeGuard>
 #include <QTimer>
 #include <QWheelEvent>
 #include <QWindow>
@@ -45,12 +47,15 @@ ScreenshotToolPalette::Options pinnedEditToolbarOptions() {
     options.moveToolPresentation = ScreenshotToolPalette::MoveToolPresentation::ResizeWindow;
     options.showSelectTool = true;
     options.showShapeTool = true;
+    options.showSpeechBubbleTool = true;
     options.showArrowTool = true;
     options.showLineTool = true;
     options.showDistanceTool = true;
+    options.showAngleTool = true;
     options.showFreeDrawTool = true;
     options.showHighlightTool = true;
     options.showSpotlightTool = true;
+    options.showMagnifierTool = true;
     options.showEraserTool = true;
     options.showFilterTool = true;
     options.showWatermarkTool = true;
@@ -120,8 +125,12 @@ ScreenshotPinnedEditController::ScreenshotPinnedEditController(
                 }
             });
     m_canvas.installEventFilter(this);
-    connect(&m_canvas, &SnowCanvasWidget::activeToolChanged, this,
-            &ScreenshotPinnedEditController::syncPaletteFromCanvasTool);
+    connect(&m_canvas, &SnowCanvasWidget::angleAdjustmentTargetChanged, this,
+            [this]() { m_angleWheelSteps.reset(); });
+    connect(&m_canvas, &SnowCanvasWidget::activeToolChanged, this, [this]() {
+        m_angleWheelSteps.reset();
+        syncPaletteFromCanvasTool();
+    });
     connect(&m_canvas, &SnowCanvasWidget::styleToolbarStateChanged, this,
             &ScreenshotPinnedEditController::syncPaletteFromCanvasStyle);
     connect(&m_canvas, &SnowCanvasWidget::historyStateChanged, this, [this]() {
@@ -194,7 +203,7 @@ void ScreenshotPinnedEditController::updateCanvasColorSamplingAfterCursorMove(
     if (!canvasColorSamplingActive()) {
         return;
     }
-    if (m_pinnedWindow.currentNativeGeometry().contains(physicalPosition)) {
+    if (m_pinnedWindow.currentContentNativeGeometry().contains(physicalPosition)) {
         updateCanvasColorSamplingPreviewAtPhysicalPoint(
             physicalPosition, canvasColorGlobalPositionAt(physicalPosition));
     }
@@ -203,6 +212,20 @@ void ScreenshotPinnedEditController::updateCanvasColorSamplingAfterCursorMove(
 bool ScreenshotPinnedEditController::eventFilter(QObject* watched, QEvent* event) {
     if (watched != &m_canvas || event == nullptr || !m_editMode) {
         return QObject::eventFilter(watched, event);
+    }
+
+    if (event->type() == QEvent::MouseMove || event->type() == QEvent::MouseButtonPress ||
+        event->type() == QEvent::MouseButtonDblClick || event->type() == QEvent::Wheel) {
+        const QPointF local = event->type() == QEvent::Wheel
+                                  ? static_cast<QWheelEvent*>(event)->position()
+                                  : static_cast<QMouseEvent*>(event)->position();
+        if (!m_pinnedWindow.contentViewRect().contains(
+                m_pinnedWindow.windowPositionForEvent(watched, local))) {
+            // The host owns the reserved frame, including while a color picker
+            // or an annotation tool is active. Starting its resize transaction
+            // also cancels sampling through beginNativeWindowInteraction().
+            return false;
+        }
     }
 
     if (!m_canvasColorSamplingTarget.isNull()) {
@@ -245,15 +268,15 @@ bool ScreenshotPinnedEditController::eventFilter(QObject* watched, QEvent* event
         }
     }
 
+    if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::KeyPress)
+        m_angleWheelSteps.reset();
     if (event->type() == QEvent::Wheel && !m_canvas.hasActiveTextEditing()) {
         auto* wheelEvent = static_cast<QWheelEvent*>(event);
-        const int deltaY = !wheelEvent->pixelDelta().isNull() ? wheelEvent->pixelDelta().y()
-                                                              : wheelEvent->angleDelta().y();
         ScreenshotToolPalette* palette =
             m_toolbarWindow != nullptr ? m_toolbarWindow->palette() : nullptr;
         const bool handled =
-            deltaY != 0 && palette != nullptr &&
-            snow_shot::presentation::stepScreenshotStyle(*palette, m_canvas, deltaY > 0 ? 1 : -1);
+            palette != nullptr && snow_shot::presentation::handleScreenshotStyleWheel(
+                                      *palette, m_canvas, *wheelEvent, m_angleWheelSteps);
         if (handled) {
             wheelEvent->accept();
             return true;
@@ -358,18 +381,36 @@ void ScreenshotPinnedEditController::ensureToolbar() {
                                                          QRectF(m_canvas.rect()).center()));
             });
         toolbar->setHistoryState(m_canvas.canvasHistoryState());
-        connect(toolbar, &ScreenshotToolPalette::undoRequested, this,
-                [this]() { static_cast<void>(m_canvas.undo()); });
-        connect(toolbar, &ScreenshotToolPalette::redoRequested, this,
-                [this]() { static_cast<void>(m_canvas.redo()); });
+        connect(toolbar, &ScreenshotToolPalette::undoRequested, this, [this]() {
+            auto* session = m_pinnedWindow.m_recognitionSession.get();
+            if (session && session->active() &&
+                session->mode() == ScreenshotRecognitionSessionController::Mode::Latex) {
+                session->undoTextEdit();
+                return;
+            }
+            static_cast<void>(m_canvas.undo());
+        });
+        connect(toolbar, &ScreenshotToolPalette::redoRequested, this, [this]() {
+            auto* session = m_pinnedWindow.m_recognitionSession.get();
+            if (session && session->active() &&
+                session->mode() == ScreenshotRecognitionSessionController::Mode::Latex) {
+                session->redoTextEdit();
+                return;
+            }
+            static_cast<void>(m_canvas.redo());
+        });
         connect(toolbar, &ScreenshotToolPalette::moveRequested, this,
                 &ScreenshotPinnedEditController::activateResizeWindowTool);
         connect(toolbar, &ScreenshotToolPalette::selectRequested, this,
                 [this]() { activateCanvasTool(SnowCanvasTool::Select); });
+        connect(toolbar, &ScreenshotToolPalette::speechBubbleRequested, this,
+                [this]() { activateCanvasTool(SnowCanvasTool::SpeechBubble); });
         connect(toolbar, &ScreenshotToolPalette::shapeRequested, this,
                 [this]() { activateCanvasTool(SnowCanvasTool::Shape); });
         connect(toolbar, &ScreenshotToolPalette::distanceToolRequested, this,
                 [this]() { activateCanvasTool(SnowCanvasTool::Distance); });
+        connect(toolbar, &ScreenshotToolPalette::angleToolRequested, this,
+                [this]() { activateCanvasTool(SnowCanvasTool::Angle); });
         connect(toolbar, &ScreenshotToolPalette::arrowRequested, this,
                 [this]() { activateCanvasTool(SnowCanvasTool::Arrow); });
         connect(toolbar, &ScreenshotToolPalette::lineRequested, this,
@@ -380,6 +421,8 @@ void ScreenshotPinnedEditController::ensureToolbar() {
                 [this]() { activateCanvasTool(SnowCanvasTool::RectangleHighlight); });
         connect(toolbar, &ScreenshotToolPalette::penHighlightRequested, this,
                 [this]() { activateCanvasTool(SnowCanvasTool::PenHighlight); });
+        connect(toolbar, &ScreenshotToolPalette::magnifierRequested, this,
+                [this]() { activateCanvasTool(SnowCanvasTool::Magnifier); });
         connect(toolbar, &ScreenshotToolPalette::spotlightRequested, this,
                 [this]() { activateCanvasTool(SnowCanvasTool::Spotlight); });
         connect(toolbar, &ScreenshotToolPalette::rectangleEraserRequested, this,
@@ -497,6 +540,13 @@ void ScreenshotPinnedEditController::ensureToolbar() {
     connect(m_toolbarWindow, &ScreenshotFloatingToolPaletteWindow::dragFinished, this,
             &ScreenshotPinnedEditController::markToolbarManuallyPlaced);
     if (ScreenshotToolPaletteHost* host = m_toolbarWindow->paletteHost()) {
+        // Secondary rows can change their occupied extent inside the fixed window frame.
+        // Observe the committed host layout even when the main row does not move.
+        connect(host, &ScreenshotToolPaletteHost::visibleContentChanged, this, [this]() {
+            if (m_editMode && !m_manuallyPlaced) {
+                updatePlacement();
+            }
+        });
         connect(host, &ScreenshotToolPaletteHost::dragStarted, this,
                 [this](const QPoint&) { markToolbarManuallyPlaced(); });
     }
@@ -510,8 +560,13 @@ void ScreenshotPinnedEditController::setEditMode(bool enabled) {
     }
 
     m_editMode = enabled;
+    m_angleWheelSteps.reset();
     if (enabled) {
+        const QPointer<ScreenshotPinnedEditController> guard(this);
         ensureToolbar();
+        if (guard == nullptr || !m_editMode || m_toolbarWindow == nullptr) {
+            return;
+        }
         const SnowCanvasStyleDefaults defaults =
             snow_shot::presentation::screenshotCanvasToolStyleDefaults();
         snow_shot::presentation::applyScreenshotCanvasToolStyles(m_canvas, defaults);
@@ -535,7 +590,13 @@ void ScreenshotPinnedEditController::setEditMode(bool enabled) {
                 applyResizeWindowTool();
             }
             updatePlacement();
+            if (guard == nullptr || !m_editMode || m_toolbarWindow == nullptr) {
+                return;
+            }
             m_toolbarWindow->prepareForDisplay();
+            if (guard == nullptr || !m_editMode || m_toolbarWindow == nullptr) {
+                return;
+            }
             m_toolbarWindow->show();
             raiseToolbar();
         }
@@ -650,8 +711,15 @@ void ScreenshotPinnedEditController::endNativeWindowInteraction() {
         return;
     }
     m_manuallyPlaced = false;
+    const QPointer<ScreenshotPinnedEditController> guard(this);
     updatePlacement();
+    if (guard == nullptr || !m_editMode || m_toolbarWindow == nullptr) {
+        return;
+    }
     m_toolbarWindow->prepareForDisplay();
+    if (guard == nullptr || !m_editMode || m_toolbarWindow == nullptr) {
+        return;
+    }
     m_toolbarWindow->show();
     raiseToolbar();
 }
@@ -668,10 +736,26 @@ void ScreenshotPinnedEditController::updatePlacement() {
         return;
     }
 
+    // Layout preparation and row arrangement can emit content changes synchronously.
+    const QPointer<ScreenshotPinnedEditController> guard(this);
+    const QPointer<ScreenshotFloatingToolPaletteWindow> toolbar(m_toolbarWindow);
+    m_updatingPlacement = true;
+    // The callback may delete this controller, so cleanup must not retain a member reference.
+    const auto updatingPlacement = qScopeGuard([guard] {
+        if (guard != nullptr) {
+            guard->m_updatingPlacement = false;
+        }
+    });
     const QRect logicalBounds = placementLogicalBounds();
     const QRect physicalBounds = placementPhysicalBounds();
-    m_toolbarWindow->setPlacementContext(placementScreen(), logicalBounds, physicalBounds);
-    m_toolbarWindow->prepareForDisplay();
+    toolbar->setPlacementContext(placementScreen(), logicalBounds, physicalBounds);
+    if (guard == nullptr || toolbar == nullptr || toolbar != m_toolbarWindow) {
+        return;
+    }
+    toolbar->prepareForDisplay();
+    if (guard == nullptr || toolbar == nullptr || toolbar != m_toolbarWindow) {
+        return;
+    }
 
     if (!m_manuallyPlaced) {
         const ScreenshotToolbarPlacementSnapshot toolbarGeometry =
@@ -679,31 +763,36 @@ void ScreenshotPinnedEditController::updatePlacement() {
         if (!toolbarGeometry.bottom.isValid()) {
             return;
         }
-        const QRect pinnedGeometry =
-            m_pinnedWindow.frameGeometry().isValid() && !m_pinnedWindow.frameGeometry().isEmpty()
-                ? m_pinnedWindow.frameGeometry()
-                : m_pinnedWindow.geometry();
+        // The outer window reserves shadow padding even when shadows are hidden.
+        // Anchor the toolbar to the visible content in the screen's logical coordinates.
+        const QRect pinnedContentGeometry = snow_shot::presentation::pinnedLogicalRect(
+            m_pinnedWindow.currentContentNativeGeometry(), placementScreen());
         QRect placementBounds;
         if (const QScreen* screen = placementScreen()) {
             placementBounds = screen->geometry();
         }
         if (!placementBounds.isValid() || placementBounds.isEmpty()) {
-            placementBounds = pinnedGeometry;
+            placementBounds = pinnedContentGeometry;
         }
         const ScreenshotAnchoredToolbarPlacement placement =
             ScreenshotGeometryMapper::anchoredToolbarPlacement(
-                QPoint(pinnedGeometry.left() + pinnedGeometry.width(),
-                       pinnedGeometry.top() + pinnedGeometry.height()),
-                QPoint(pinnedGeometry.left() + pinnedGeometry.width(), pinnedGeometry.top()),
+                QPoint(pinnedContentGeometry.left() + pinnedContentGeometry.width(),
+                       pinnedContentGeometry.top() + pinnedContentGeometry.height()),
+                QPoint(pinnedContentGeometry.left() + pinnedContentGeometry.width(),
+                       pinnedContentGeometry.top()),
                 toolbarGeometry.bottom, toolbarGeometry.top, placementBounds, kToolbarGap);
-        m_toolbarWindow->setStyleToolbarAboveMain(placement.usesTopRightPlacement);
+        toolbar->setStyleToolbarAboveMain(placement.usesTopRightPlacement);
+        if (guard == nullptr || toolbar == nullptr || toolbar != m_toolbarWindow) {
+            return;
+        }
         m_globalContentPosition = placement.contentPosition;
         m_toolbarWindow->resetPhysicalSizeInvariant();
     }
 
-    m_updatingPlacement = true;
     m_toolbarWindow->moveContentTo(m_globalContentPosition);
-    m_updatingPlacement = false;
+    if (guard == nullptr || toolbar == nullptr || toolbar != m_toolbarWindow) {
+        return;
+    }
     if (m_toolbarWindow->isVisible()) {
         raiseToolbar();
     }
@@ -833,6 +922,9 @@ void ScreenshotPinnedEditController::syncPaletteFromCanvasTool() {
     case SnowCanvasTool::Select:
         host->setActiveTool(ScreenshotToolPalette::Tool::Select);
         break;
+    case SnowCanvasTool::SpeechBubble:
+        host->setActiveTool(ScreenshotToolPalette::Tool::SpeechBubble);
+        break;
     case SnowCanvasTool::Shape:
         host->setActiveTool(ScreenshotToolPalette::Tool::Shape);
         break;
@@ -841,6 +933,9 @@ void ScreenshotPinnedEditController::syncPaletteFromCanvasTool() {
         break;
     case SnowCanvasTool::Distance:
         host->setActiveTool(ScreenshotToolPalette::Tool::Distance);
+        break;
+    case SnowCanvasTool::Angle:
+        host->setActiveTool(ScreenshotToolPalette::Tool::Angle);
         break;
     case SnowCanvasTool::Line:
         host->setActiveTool(ScreenshotToolPalette::Tool::Line);
@@ -853,6 +948,9 @@ void ScreenshotPinnedEditController::syncPaletteFromCanvasTool() {
         break;
     case SnowCanvasTool::PenHighlight:
         host->setActiveTool(ScreenshotToolPalette::Tool::PenHighlight);
+        break;
+    case SnowCanvasTool::Magnifier:
+        host->setActiveTool(ScreenshotToolPalette::Tool::Magnifier);
         break;
     case SnowCanvasTool::Spotlight:
         host->setActiveTool(ScreenshotToolPalette::Tool::Spotlight);
@@ -935,13 +1033,13 @@ void ScreenshotPinnedEditController::beginCanvasColorSampling(
 
     const std::optional<QPoint> physicalPosition = m_pinnedWindow.physicalCursorPosition();
     if (physicalPosition.has_value() &&
-        m_pinnedWindow.currentNativeGeometry().contains(*physicalPosition)) {
+        m_pinnedWindow.currentContentNativeGeometry().contains(*physicalPosition)) {
         updateCanvasColorSamplingPreviewAtPhysicalPoint(
             *physicalPosition, canvasColorGlobalPositionAt(*physicalPosition));
         return;
     }
     const QPointF localPosition = m_canvas.mapFromGlobal(QCursor::pos());
-    if (m_canvas.rect().contains(localPosition.toPoint())) {
+    if (m_pinnedWindow.contentViewRect().contains(localPosition)) {
         updateCanvasColorSamplingPreviewAtPhysicalPoint(
             canvasColorPhysicalPositionAt(localPosition), QCursor::pos());
     }
@@ -984,7 +1082,7 @@ ScreenshotPinnedEditController::canvasColorGlobalPositionAt(const QPoint& physic
 QImage
 ScreenshotPinnedEditController::canvasColorPreviewAtPhysicalPoint(const QPoint& physicalPosition) {
     const QRect physicalBounds = m_pinnedWindow.currentNativeGeometry();
-    if (!physicalBounds.contains(physicalPosition) ||
+    if (!m_pinnedWindow.currentContentNativeGeometry().contains(physicalPosition) ||
         !m_canvasColorSampler.ensureSnapshot(m_canvas, physicalBounds)) {
         return {};
     }

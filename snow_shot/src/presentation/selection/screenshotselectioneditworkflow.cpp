@@ -91,7 +91,8 @@ void ScreenshotSelectionEditWorkflow::previewSelectionEffect(ScreenshotSelection
 
 void ScreenshotSelectionEditWorkflow::commitSelectionEffects() {
     m_context.persistSelectionEffects(m_context.selection.cornerRadius(),
-                                      m_context.selection.shadowWidth());
+                                      m_context.selection.shadowWidth(),
+                                      m_context.selection.shadowColor());
 }
 
 void ScreenshotSelectionEditWorkflow::setSelectionAspectRatioPresetFromToolbar(
@@ -155,6 +156,15 @@ void ScreenshotSelectionEditWorkflow::openSelectionResizeModalFromToolbar() {
     }
 }
 
+void ScreenshotSelectionEditWorkflow::applySelectionParamsFromToolbar(
+    const ScreenshotSelectionParams& params) {
+    if (selectionBounds().isEmpty() || !m_context.selection.hasPixelSelection() ||
+        !m_context.interaction.canResizeSelection()) {
+        return;
+    }
+    applySelectionParams(params);
+}
+
 void ScreenshotSelectionEditWorkflow::repositionToolbarForContentChange() {
     if (!m_context.interaction.canResizeSelection()) {
         return;
@@ -180,19 +190,17 @@ void ScreenshotSelectionEditWorkflow::setColorPickerSuppressedForScreenshotUi(
 
 void ScreenshotSelectionEditWorkflow::applySelectionParams(
     const ScreenshotSelectionParams& params) {
-    static_cast<void>(m_context.interaction.cancelEffectDrag());
     const QRect bounds = selectionBounds();
-    if (!m_context.selection.applyParams(params, bounds)) {
-        if (!m_context.selection.hasPixelSelection()) {
-            m_context.interaction.returnToSelectionMode(false);
-            if (m_context.ui.updateOverlayState)
-                m_context.ui.updateOverlayState();
-        }
+    const auto restored = clampScreenshotSelectionParamsForRestore(params, bounds);
+    if (!restored) {
+        return;
+    }
+    static_cast<void>(m_context.interaction.cancelEffectDrag());
+    if (!m_context.selection.applyParams(*restored, bounds)) {
         return;
     }
 
-    m_context.persistSelectionEffects(m_context.selection.cornerRadius(),
-                                      m_context.selection.shadowWidth());
+    commitSelectionEffects();
 
     m_context.interaction.applySelectionParams();
     m_context.captureState.sessionState = ScreenshotSessionState::Editing;

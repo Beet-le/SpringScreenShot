@@ -15,6 +15,8 @@ use snow_draw_engine_interaction::{InputEvent, InteractionOutput};
 use snow_draw_engine_model::DocumentModel;
 use snow_draw_engine_scene::{DocumentSceneCache, ViewportComposer};
 
+#[cfg(test)]
+mod angle_tests;
 mod annotations;
 #[cfg(test)]
 mod auto_filter_tests;
@@ -30,9 +32,23 @@ mod filter_snap_tests;
 #[cfg(test)]
 mod free_draw_continuation_tests;
 mod input;
+#[cfg(test)]
+mod magnifier_binding_tests;
+#[cfg(test)]
+mod magnifier_drag_style_tests;
+#[cfg(test)]
+mod magnifier_group_move_tests;
+#[cfg(test)]
+mod magnifier_lifecycle_tests;
+#[cfg(test)]
+mod magnifier_tests;
 mod mutations;
 #[cfg(test)]
 mod pen_highlight_angle_tests;
+#[cfg(test)]
+mod rounded_diamond_tests;
+#[cfg(test)]
+mod speech_bubble_tests;
 #[cfg(test)]
 mod spotlight_shape_tests;
 mod text_commands;
@@ -78,6 +94,14 @@ struct ViewportSlot {
 }
 
 #[derive(Debug)]
+pub(crate) struct SpeechBubbleLayoutOrigin {
+    revision: snow_draw_engine_document::DocumentRevision,
+    history_generation: u64,
+    owners:
+        HashMap<snow_draw_engine_document::ElementId, (snow_draw_engine_document::ElementId, u64)>,
+}
+
+#[derive(Debug)]
 pub struct Engine {
     pub(crate) config: EngineConfig,
     pub(crate) model: DocumentModel,
@@ -89,6 +113,7 @@ pub struct Engine {
     next_viewport_id: u64,
     presentation_update_depth: u32,
     pending_viewports: BTreeSet<ViewportId>,
+    pub(crate) speech_bubble_layout_origin: Option<SpeechBubbleLayoutOrigin>,
 }
 
 impl Default for Engine {
@@ -98,6 +123,10 @@ impl Default for Engine {
 }
 
 impl Engine {
+    pub fn has_pointer_capture(&self) -> bool {
+        self.editor.has_pointer_capture()
+    }
+
     pub fn new(config: EngineConfig) -> Self {
         Self::try_new(config).expect("runtime config should be valid")
     }
@@ -128,6 +157,7 @@ impl Engine {
             next_viewport_id: 0,
             presentation_update_depth: 0,
             pending_viewports: BTreeSet::new(),
+            speech_bubble_layout_origin: None,
         };
         engine.scene_cache.sync(&engine.model, None);
         Ok(engine)
@@ -156,6 +186,7 @@ impl Engine {
         replacement.model.apply_transaction(retained_styles)?;
         self.model = replacement.model;
         self.history = HistoryStore::default();
+        self.speech_bubble_layout_origin = None;
         self.editor
             .reset_document_retained_state(&self.config.style_defaults.editor.serial_number);
         self.session_config_seeded = false;
@@ -191,7 +222,10 @@ impl Engine {
             next_viewport_id: self.next_viewport_id,
             presentation_update_depth: 0,
             pending_viewports: BTreeSet::new(),
+            speech_bubble_layout_origin: None,
         };
+        engine.editor.reset_magnifier_wheel_input();
+        engine.editor.reset_pointer_capture_state();
         engine.scene_cache.sync(&engine.model, None);
         let _ = engine.refresh_all_viewports();
         engine
@@ -220,6 +254,7 @@ impl Engine {
         self.ensure_viewport(id)?;
         let before = self.editor.snapshot();
         self.editor.set_active_tool(tool)?;
+        self.history.break_angle_wheel_coalescing();
         self.refresh_after_session_mutation(before)
     }
 
@@ -289,6 +324,10 @@ impl Engine {
             brush_eraser_style: self.editor.brush_eraser_style(),
             distance_style: self.editor.distance_style(&self.model),
             distance_style_mixed: self.editor.distance_style_mixed(&self.model),
+            angle_style: self.editor.angle_style(&self.model),
+            angle_style_mixed: self.editor.angle_style_mixed(&self.model),
+            magnifier_style: self.editor.magnifier_style(&self.model),
+            magnifier_style_mixed: self.editor.magnifier_style_mixed(&self.model),
             distance_measured_length: self.editor.distance_measured_length(&self.model),
         })
     }
@@ -309,6 +348,64 @@ impl Engine {
     ) -> Result<RectangleShapeStyle, ErrorCode> {
         self.ensure_viewport(id)?;
         Ok(self.editor.rectangle_shape_style(&self.model))
+    }
+
+    pub fn set_viewport_magnifier_style_patch(
+        &mut self,
+        id: ViewportId,
+        style: snow_draw_engine_editor::MagnifierStyle,
+        properties: u32,
+        creation_defaults: bool,
+    ) -> Result<MutationResult, ErrorCode> {
+        self.ensure_viewport(id)?;
+        let before = self.editor.snapshot();
+        if let Some(command) = self.editor.set_magnifier_style_patch(
+            &self.model,
+            style,
+            properties,
+            creation_defaults,
+        )? {
+            self.apply_editor_command(id, command)
+        } else {
+            self.refresh_after_session_mutation(before)
+        }
+    }
+
+    pub fn set_viewport_angle_style_patch(
+        &mut self,
+        id: ViewportId,
+        style: snow_draw_engine_editor::AngleStyle,
+        properties: u32,
+    ) -> Result<MutationResult, ErrorCode> {
+        self.ensure_viewport(id)?;
+        let before = self.editor.snapshot();
+        if let Some(command) = self
+            .editor
+            .set_angle_style_patch(&self.model, style, properties)?
+        {
+            self.apply_editor_command(id, command)
+        } else {
+            self.refresh_after_session_mutation(before)
+        }
+    }
+
+    pub fn adjust_viewport_angle_value(
+        &mut self,
+        id: ViewportId,
+        delta_radians: f64,
+    ) -> Result<MutationResult, ErrorCode> {
+        self.ensure_viewport(id)?;
+        let before_scene = self.editor.scene_input_revision();
+        let before_overlay = self.editor.overlay_input_revision();
+        if let Some(command) = self.editor.adjust_angle_value(&self.model, delta_radians)? {
+            self.apply_editor_command(id, command)
+        } else if self.editor.scene_input_revision() != before_scene
+            || self.editor.overlay_input_revision() != before_overlay
+        {
+            self.refresh_all_viewports()
+        } else {
+            Ok(MutationResult::default())
+        }
     }
 
     pub fn set_viewport_distance_style_patch(
@@ -910,10 +1007,13 @@ mod arrow_text_tests;
 
 impl Engine {
     pub fn smart_erase_items(&mut self) -> Vec<snow_draw_engine_display::SceneDisplayItem> {
-        let presentation = self
-            .editor
-            .presentation_state_for_refresh(&self.model, &EditorViewportState::default());
-        snow_draw_engine_scene::smart_erase_items(&self.model, &presentation)
+        self.scene_cache.sync(&self.model, None);
+        let presentation = self.editor.smart_erase_presentation(&self.model);
+        snow_draw_engine_scene::cached_smart_erase_items(
+            &self.model,
+            &self.scene_cache,
+            &presentation,
+        )
     }
 }
 

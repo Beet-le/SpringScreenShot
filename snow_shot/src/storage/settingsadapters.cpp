@@ -58,11 +58,15 @@ bool setShortcutValue(const QString& key, const shortcuts::ShortcutBindingList& 
 
 const QStringList& drawingShortcutToolIds() {
     static const QStringList ids = {
-        QStringLiteral("select"),        QStringLiteral("shape"),     QStringLiteral("arrow"),
-        QStringLiteral("brush"),         QStringLiteral("highlight"), QStringLiteral("text"),
-        QStringLiteral("serial_number"), QStringLiteral("filter"),    QStringLiteral("eraser"),
-        QStringLiteral("watermark"),     QStringLiteral("line"),      QStringLiteral("spotlight"),
-        QStringLiteral("distance"),
+        QStringLiteral("select"),        QStringLiteral("shape"),
+        QStringLiteral("arrow"),         QStringLiteral("brush"),
+        QStringLiteral("highlight"),     QStringLiteral("text"),
+        QStringLiteral("serial_number"), QStringLiteral("filter"),
+        QStringLiteral("eraser"),        QStringLiteral("watermark"),
+        QStringLiteral("line"),          QStringLiteral("spotlight"),
+        QStringLiteral("distance"),      QStringLiteral("angle"),
+        QStringLiteral("magnifier"),     QStringLiteral("reset_canvas"),
+        QStringLiteral("speech_bubble"),
     };
     return ids;
 }
@@ -79,6 +83,8 @@ const QStringList& screenshotShortcutActionIds() {
             QStringLiteral("keep_selection_width_and_height_consistent"),
             QStringLiteral("selection_aspect_ratio_snap"),
             QStringLiteral("switch_selection_between_window_and_window_sub_element"),
+            QStringLiteral("next_selection_type"),
+            QStringLiteral("previous_selection_type"),
             QStringLiteral("previous_screenshot_history"),
             QStringLiteral("next_screenshot_history"),
             QStringLiteral("select_previously_selected_area"),
@@ -122,12 +128,19 @@ const QStringList& pinToScreenShortcutActionIds() {
         QStringLiteral("show_text_recognition_results"),
         QStringLiteral("drawing_mode"),
         QStringLiteral("resize_window"),
+        QStringLiteral("toggle_playback"),
+        QStringLiteral("next_frame"),
+        QStringLiteral("previous_frame"),
+        QStringLiteral("decrease_playback_speed"),
+        QStringLiteral("increase_playback_speed"),
+        QStringLiteral("reset_playback_speed"),
         QStringLiteral("thumbnail_mode"),
         QStringLiteral("hide_to_top"),
         QStringLiteral("toggle_click_through"),
         QStringLiteral("toggle_lock"),
         QStringLiteral("always_on_top"),
         QStringLiteral("show_border"),
+        QStringLiteral("show_shadow"),
         QStringLiteral("close_window"),
         QStringLiteral("destroy_window"),
         QStringLiteral("move_cursor_up"),
@@ -360,6 +373,14 @@ bool TextRecognitionSettings::showOriginalImagePreview() const {
 bool TextRecognitionSettings::setShowOriginalImagePreview(bool enabled) const {
     return cache().setValue(QStringLiteral("text_recognition/show_original_image_preview"),
                             enabled);
+}
+
+bool TextRecognitionSettings::showTextHighlighting() const {
+    return cache().value(QStringLiteral("text_recognition/show_text_highlighting")).toBool();
+}
+
+bool TextRecognitionSettings::setShowTextHighlighting(bool enabled) const {
+    return cache().setValue(QStringLiteral("text_recognition/show_text_highlighting"), enabled);
 }
 
 QString TextRecognitionSettings::defaultFormatting() const {
@@ -848,6 +869,14 @@ bool ShortcutSettings::setRestoreLastClosedWindows(
                             bindings);
 }
 
+shortcuts::ShortcutBindingList ShortcutSettings::hideShowAllWindows() const {
+    return shortcutValue(QStringLiteral("global_shortcuts/hide_show_all_windows"));
+}
+
+bool ShortcutSettings::setHideShowAllWindows(const shortcuts::ShortcutBindingList& bindings) const {
+    return setShortcutValue(QStringLiteral("global_shortcuts/hide_show_all_windows"), bindings);
+}
+
 bool ShortcutSettings::setPinClipboardContent(
     const shortcuts::ShortcutBindingList& bindings) const {
     return setShortcutValue(QStringLiteral("global_shortcuts/pin_clipboard_content"), bindings);
@@ -984,12 +1013,18 @@ bool ScreenshotSettings::setSelectionResizeMode(const QString& mode) const {
     return cache().setValue(QStringLiteral("screenshot/selection_resize_mode"), mode);
 }
 
-bool ScreenshotSettings::autoSaveAfterCopy() const {
-    return cache().value(QStringLiteral("screenshot/auto_save_after_copy")).toBool();
+QStringList ScreenshotSettings::autoSaveAfterExecutionActions() const {
+    return stringList(
+        cache().value(QStringLiteral("screenshot/auto_save_after_execution_actions")));
 }
 
-bool ScreenshotSettings::setAutoSaveAfterCopy(bool enabled) const {
-    return cache().setValue(QStringLiteral("screenshot/auto_save_after_copy"), enabled);
+bool ScreenshotSettings::setAutoSaveAfterExecutionActions(const QStringList& actions) const {
+    return cache().setValue(QStringLiteral("screenshot/auto_save_after_execution_actions"),
+                            stringArray(actions));
+}
+
+bool ScreenshotSettings::autoSaveAfterExecution(const QString& action) const {
+    return autoSaveAfterExecutionActions().contains(action);
 }
 
 bool ScreenshotSettings::copyImageFileToClipboard() const {
@@ -1309,7 +1344,7 @@ bool setLocalShortcutValuesAtomic(const QMap<QString, QJsonValue>& values) {
             if (!affectedGroups.contains(group.prefix)) {
                 continue;
             }
-            shortcuts::ShortcutBindingList seen;
+            QList<std::pair<QString, shortcuts::ShortcutBinding>> seen;
             for (const QString& id : group.ids) {
                 const QString key = group.prefix + id;
                 const auto value = normalizedValues.contains(key) ? normalizedValues.value(key)
@@ -1319,7 +1354,8 @@ bool setLocalShortcutValuesAtomic(const QMap<QString, QJsonValue>& values) {
                     key == QStringLiteral("screenshot_shortcuts/toggle_guides"));
                 for (const auto& binding : bindings) {
                     if (group.policy == LocalShortcutPolicy::Drawing &&
-                        DrawingShortcutSettings::isReservedShortcut(binding)) {
+                        DrawingShortcutSettings::isReservedShortcut(binding) &&
+                        !DrawingShortcutSettings::isReservedShortcutAllowed(id, binding)) {
                         return false;
                     }
                     if (group.policy == LocalShortcutPolicy::Screenshot &&
@@ -1327,12 +1363,18 @@ bool setLocalShortcutValuesAtomic(const QMap<QString, QJsonValue>& values) {
                         !ScreenshotShortcutSettings::isReservedShortcutAllowed(id, binding)) {
                         return false;
                     }
-                    if (std::any_of(seen.cbegin(), seen.cend(), [&binding](const auto& existing) {
-                            return shortcuts::bindingsConflict(existing, binding);
-                        })) {
+                    if (std::any_of(seen.cbegin(), seen.cend(),
+                                    [&binding, &id, &group](const auto& existing) {
+                                        return (group.prefix !=
+                                                    QStringLiteral("pin_to_screen_shortcuts/") ||
+                                                PinToScreenShortcutSettings::actionsMayConflict(
+                                                    existing.first, id)) &&
+                                               shortcuts::bindingsConflict(existing.second,
+                                                                           binding);
+                                    })) {
                         return false;
                     }
-                    seen.push_back(binding);
+                    seen.push_back({id, binding});
                 }
             }
         }
@@ -1403,6 +1445,13 @@ bool DrawingShortcutSettings::isReservedShortcut(const shortcuts::ShortcutBindin
     return isReservedLocalShortcut(shortcut);
 }
 
+bool DrawingShortcutSettings::isReservedShortcutAllowed(
+    const QString& toolId, const shortcuts::ShortcutBinding& shortcut) {
+    return toolId == QStringLiteral("reset_canvas") && shortcutUsesKey(shortcut, Qt::Key_Z) &&
+           shortcuts::effectiveIdentity(shortcut).modifiers ==
+               (Qt::ControlModifier | Qt::ShiftModifier);
+}
+
 shortcuts::ShortcutBindingList DrawingShortcutSettings::shortcuts(const QString& toolId) const {
     const QString key = drawingShortcutKey(toolId);
     return key.isEmpty() ? shortcuts::ShortcutBindingList{} : shortcutValue(key);
@@ -1433,6 +1482,20 @@ shortcuts::ShortcutBindingList
 PinToScreenShortcutSettings::shortcuts(const QString& actionId) const {
     const QString key = pinToScreenShortcutKey(actionId);
     return key.isEmpty() ? shortcuts::ShortcutBindingList{} : shortcutValue(key);
+}
+
+bool PinToScreenShortcutSettings::actionsMayConflict(const QString& first, const QString& second) {
+    const auto animation = [](const QString& id) {
+        return id == QStringLiteral("toggle_playback") || id == QStringLiteral("next_frame") ||
+               id == QStringLiteral("previous_frame") ||
+               id.endsWith(QStringLiteral("playback_speed"));
+    };
+    const auto staticContent = [](const QString& id) {
+        return id == QStringLiteral("drawing_mode") || id == QStringLiteral("resize_window") ||
+               id == QStringLiteral("show_text_recognition_results");
+    };
+    return !((animation(first) && staticContent(second)) ||
+             (animation(second) && staticContent(first)));
 }
 
 bool PinToScreenShortcutSettings::setShortcuts(
@@ -1881,6 +1944,17 @@ bool RecordingSettings::setNotifyAfterExportCompletes(bool enabled) const {
                             enabled);
 }
 
+bool RecordingSettings::deleteFilesOnRecordingClose() const {
+    return cache()
+        .value(QStringLiteral("screen_recording/delete_files_on_recording_close"))
+        .toBool();
+}
+
+bool RecordingSettings::setDeleteFilesOnRecordingClose(bool enabled) const {
+    return cache().setValue(QStringLiteral("screen_recording/delete_files_on_recording_close"),
+                            enabled);
+}
+
 QString RecordingSettings::videoSaveDirectory() const {
     return cache().value(QStringLiteral("screen_recording/video_save_directory")).toString();
 }
@@ -2010,6 +2084,26 @@ ScreenshotToolbarLayout ScreenshotToolbarSettings::layout(ScreenshotToolbarLayou
             stringList(object.value(QStringLiteral("hidden")))};
 }
 
+#if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
+QString ScreenshotRecognitionModelSettings::tableModel() const {
+    return cache().value(QStringLiteral("screenshot_table/model")).toString();
+}
+
+bool ScreenshotRecognitionModelSettings::setTableModel(const QString& model) const {
+    return cache().setValue(QStringLiteral("screenshot_table/model"), model);
+}
+#endif
+
+#if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
+QString ScreenshotRecognitionModelSettings::latexModel() const {
+    return cache().value(QStringLiteral("screenshot_latex/model")).toString();
+}
+
+bool ScreenshotRecognitionModelSettings::setLatexModel(const QString& model) const {
+    return cache().setValue(QStringLiteral("screenshot_latex/model"), model);
+}
+#endif
+
 #if SNOW_SHOT_ENABLE_IMAGE_CONVERSION
 QString ScreenshotImageConversionSettings::visionModel() const {
     return cache().value(QStringLiteral("screenshot_conversion/vision_model")).toString();
@@ -2084,6 +2178,19 @@ bool ScreenshotToolbarSettings::setLayout(ScreenshotToolbarLayoutKind kind,
                     {QStringLiteral("hidden"), stringArray(layout.hidden)}});
 }
 
+WatermarkContent WatermarkContentSettings::content() const {
+    const QJsonObject object =
+        cache().value(QStringLiteral("drawing/watermark_content")).toObject();
+    return {object.value(QStringLiteral("text")).toString(),
+            object.value(QStringLiteral("template_value")).toString()};
+}
+
+bool WatermarkContentSettings::setContent(const WatermarkContent& content) const {
+    return cache().setValue(QStringLiteral("drawing/watermark_content"),
+                            QJsonObject{{QStringLiteral("text"), content.text},
+                                        {QStringLiteral("template_value"), content.templateValue}});
+}
+
 QVector<WatermarkTemplate> WatermarkTemplateSettings::templates() const {
     QVector<WatermarkTemplate> result;
     const QJsonArray array = cache().value(QStringLiteral("drawing/watermark_templates")).toArray();
@@ -2142,6 +2249,22 @@ bool DrawTemplateSettings::setTemplates(const QVector<DrawTemplate>& templates) 
             {QStringLiteral("payload"), QString::fromLatin1(drawTemplate.payload.toBase64())}});
     }
     return cache().setValue(QStringLiteral("drawing/draw_templates"), array);
+}
+
+bool PinToScreenSettings::showBorderByDefault() const {
+    return cache().value(QStringLiteral("pin_to_screen/show_border_by_default")).toBool(true);
+}
+
+bool PinToScreenSettings::setShowBorderByDefault(bool enabled) const {
+    return cache().setValue(QStringLiteral("pin_to_screen/show_border_by_default"), enabled);
+}
+
+bool PinToScreenSettings::showShadowByDefault() const {
+    return cache().value(QStringLiteral("pin_to_screen/show_shadow_by_default")).toBool(false);
+}
+
+bool PinToScreenSettings::setShowShadowByDefault(bool enabled) const {
+    return cache().setValue(QStringLiteral("pin_to_screen/show_shadow_by_default"), enabled);
 }
 
 bool PinToScreenSettings::showWindowButtons() const {
@@ -2207,6 +2330,30 @@ QColor PinToScreenSettings::lockedBorderColor() const {
 
 bool PinToScreenSettings::setLockedBorderColor(const QColor& color) const {
     return setColorValue(QStringLiteral("pin_to_screen/locked_border_color"), color);
+}
+
+QColor PinToScreenSettings::shadowColor() const {
+    return colorValue(QStringLiteral("pin_to_screen/shadow_color"));
+}
+
+bool PinToScreenSettings::setShadowColor(const QColor& color) const {
+    return setColorValue(QStringLiteral("pin_to_screen/shadow_color"), color);
+}
+
+QColor PinToScreenSettings::shadowActiveColor() const {
+    return colorValue(QStringLiteral("pin_to_screen/shadow_active_color"));
+}
+
+bool PinToScreenSettings::setShadowActiveColor(const QColor& color) const {
+    return setColorValue(QStringLiteral("pin_to_screen/shadow_active_color"), color);
+}
+
+QColor PinToScreenSettings::lockedShadowColor() const {
+    return colorValue(QStringLiteral("pin_to_screen/locked_shadow_color"));
+}
+
+bool PinToScreenSettings::setLockedShadowColor(const QColor& color) const {
+    return setColorValue(QStringLiteral("pin_to_screen/locked_shadow_color"), color);
 }
 
 QString PinToScreenSettings::mouseWheelZoomMode() const {

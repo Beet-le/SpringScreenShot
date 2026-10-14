@@ -1,6 +1,26 @@
 use super::*;
 use snow_draw_engine_core::arrow::{BindMode, EngineContext};
 
+/// Actual binding-target geometry, independent of compound selection/layout bounds.
+pub(crate) struct BindableElementOverride {
+    pub(crate) id: ElementId,
+    pub(crate) rect: RectangleData,
+}
+
+impl EditSelectionState {
+    pub(crate) fn binding_overrides(&self) -> Vec<BindableElementOverride> {
+        self.preview_elements
+            .iter()
+            .map(|preview| BindableElementOverride {
+                id: preview.id,
+                rect: self
+                    .magnifier_preview(preview.id)
+                    .map_or(preview.rect, |value| value.source_rect()),
+            })
+            .collect()
+    }
+}
+
 impl Editor {
     pub(crate) fn snap_point_to_external_guides(
         &self,
@@ -8,15 +28,12 @@ impl Editor {
         mut snapped: Point<f64>,
         mut guides: Vec<SnapGuide>,
     ) -> (Point<f64>, Vec<SnapGuide>) {
+        let targets = self.view.get().snap_guide_targets;
         for (axis, lines, coordinate) in [
-            (
-                SnapGuideAxis::Vertical,
-                &self.view.snap_guide_targets.vertical_xs[..],
-                source.x,
-            ),
+            (SnapGuideAxis::Vertical, &targets.vertical_xs[..], source.x),
             (
                 SnapGuideAxis::Horizontal,
-                &self.view.snap_guide_targets.horizontal_ys[..],
+                &targets.horizontal_ys[..],
                 source.y,
             ),
         ] {
@@ -49,7 +66,7 @@ impl Editor {
     pub(crate) fn bindable_elements(
         &self,
         document: &DocumentModel,
-        overrides: &[SelectionRectState],
+        overrides: &[BindableElementOverride],
     ) -> Vec<BindableElementState> {
         let mut overrides = overrides
             .iter()
@@ -124,9 +141,9 @@ impl Editor {
     pub(crate) fn recompute_bound_arrows(
         &self,
         document: &DocumentModel,
-        preview_elements: &[SelectionRectState],
+        overrides: &[BindableElementOverride],
     ) -> Vec<(ElementId, ArrowData, Vec<ElementId>)> {
-        let changed_bindable_ids = preview_elements
+        let changed_bindable_ids = overrides
             .iter()
             .map(|element| element.id)
             .collect::<Vec<_>>();
@@ -146,7 +163,7 @@ impl Editor {
             return Vec::new();
         }
 
-        let bindables = self.bindable_elements(document, preview_elements);
+        let bindables = self.bindable_elements(document, overrides);
 
         affected_arrow_ids
             .into_iter()
@@ -174,7 +191,7 @@ impl Editor {
 
     pub(crate) fn effective_snapping_mode(&self, modifiers: Modifiers) -> SnappingMode {
         let mode = self.element_snapping_mode(modifiers);
-        let guides = self.view.snap_guide_targets;
+        let guides = self.view.get().snap_guide_targets;
         let has_guide_targets = guides
             .vertical_xs
             .iter()
@@ -256,7 +273,9 @@ impl Editor {
         };
         let highlight = self.state.active_tool == ActiveTool::RectangleHighlight;
         let spotlight = self.state.active_tool == ActiveTool::Spotlight;
-        let style = if highlight {
+        let style = if self.state.active_tool == ActiveTool::SpeechBubble {
+            self.state.default_speech_bubble_style
+        } else if highlight {
             self.state
                 .default_rectangle_highlight_style
                 .rectangle_shape_style()
@@ -279,6 +298,12 @@ impl Editor {
         if spotlight {
             preview = preview.map(|mut rect| {
                 rect.highlight_shape = self.state.default_spotlight_shape;
+                rect.corner_radii = snow_draw_engine_document::normalize_shape_corner_radii(
+                    rect.highlight_shape,
+                    rect.width,
+                    rect.height,
+                    self.state.default_spotlight_corner_radii,
+                );
                 rect.into_spotlight()
             });
         }
@@ -368,8 +393,12 @@ impl Editor {
                 next.center = snapped.center;
                 next.width = snapped.width;
                 next.height = snapped.height;
-                next.corner_radii =
-                    normalize_corner_radii(next.width, next.height, next.corner_radii);
+                next.corner_radii = snow_draw_engine_document::normalize_shape_corner_radii(
+                    next.highlight_shape,
+                    next.width,
+                    next.height,
+                    next.corner_radii,
+                );
 
                 if modifiers.shift {
                     let snapped_move_min_x = snapped_current.x < start.x;
@@ -507,7 +536,7 @@ impl Editor {
             return None;
         }
         let element_snapping = self.element_snapping_mode(modifiers) == SnappingMode::Object;
-        let targets = self.view.snap_guide_targets;
+        let targets = self.view.get().snap_guide_targets;
         let has_targets = targets
             .vertical_xs
             .iter()
@@ -827,7 +856,12 @@ fn preview_rectangle(
         stroke: style.stroke,
         stroke_width: style.stroke_width,
         stroke_style: style.stroke_style,
-        corner_radii: normalize_corner_radii(width, height, style.corner_radii),
+        corner_radii: snow_draw_engine_document::normalize_shape_corner_radii(
+            style.shape,
+            width,
+            height,
+            style.corner_radii,
+        ),
         opacity: 1.0,
     })
 }
@@ -841,8 +875,8 @@ mod external_guide_tests {
         let mut editor = Editor::new(EngineConfig::default()).unwrap();
         if with_guides {
             // Keep guides away from the element so they cannot mask its snap.
-            editor.view.snap_guide_targets.vertical_xs[0] = Some(400.0);
-            editor.view.snap_guide_targets.horizontal_ys[0] = Some(400.0);
+            editor.view.get_mut().snap_guide_targets.vertical_xs[0] = Some(400.0);
+            editor.view.get_mut().snap_guide_targets.horizontal_ys[0] = Some(400.0);
         }
         let mut document = DocumentModel::new();
         let rectangle = preview_rectangle(
@@ -1091,7 +1125,7 @@ mod external_guide_tests {
     #[test]
     fn visible_guides_do_not_change_the_persistent_snapping_toggle() {
         let mut editor = Editor::new(EngineConfig::default()).unwrap();
-        editor.view.snap_guide_targets.vertical_xs[0] = Some(100.0);
+        editor.view.get_mut().snap_guide_targets.vertical_xs[0] = Some(100.0);
         assert_eq!(
             editor.effective_snapping_mode(Modifiers::default()),
             SnappingMode::Object

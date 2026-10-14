@@ -12,7 +12,7 @@ class QPainter;
 // Owns text-shaping data on the calling thread; independent of widgets and theme state.
 class ScreenshotOcrTextLayout final {
   public:
-    enum class PaintMode { TextAndSelection, SelectionOnly };
+    enum class PaintMode { TextAndSelection, SelectionOnly, TextOnly };
 
     void configure(const QString& text, const QFont& font, const QColor& textColor,
                    const ScreenshotOcrTextRange& selection, ScreenshotOcrTextDirection direction,
@@ -24,7 +24,14 @@ class ScreenshotOcrTextLayout final {
         return !m_fittedRows.empty();
     }
 
+    [[nodiscard]] bool glyphRasterCacheable() const {
+        return m_glyphRasterCacheable;
+    }
+
     [[nodiscard]] QRectF boundingRect() const;
+    [[nodiscard]] QRectF glyphRasterBounds() const {
+        return m_glyphRasterBounds;
+    }
     void paint(QPainter* painter, const QColor& selectionBackground = {},
                const QColor& selectionForeground = {},
                PaintMode mode = PaintMode::TextAndSelection) const;
@@ -38,6 +45,7 @@ class ScreenshotOcrTextLayout final {
         QRectF bounds;
     };
     bool fitSourceRows(qreal aspectRatio);
+    void updateGlyphRasterCacheability();
 
     struct VerticalGlyph {
         int textStart = 0;
@@ -61,8 +69,10 @@ class ScreenshotOcrTextLayout final {
     qreal m_verticalCellAdvance = 0.0;
     qreal m_targetAspectRatio = 0.0;
     bool m_paragraph = false;
+    bool m_glyphRasterCacheable = true;
     QPointF m_layoutOrigin;
     QRectF m_bounds;
+    QRectF m_glyphRasterBounds;
 };
 
 [[nodiscard]] bool configureScreenshotOcrTextLayout(ScreenshotOcrTextLayout& layout,

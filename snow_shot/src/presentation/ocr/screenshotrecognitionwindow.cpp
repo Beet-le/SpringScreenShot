@@ -25,6 +25,8 @@
 #include "widgets/input_text_edit.h"
 #include "widgets/scroll_area.h"
 #include "widgets/spin.h"
+#include "widgets/alert.h"
+#include "widgets/button.h"
 
 #include <QApplication>
 #include <QChildEvent>
@@ -39,11 +41,13 @@
 #include <QKeyEvent>
 #include <QLayout>
 #include <QMouseEvent>
+#include <QMimeData>
 #include <QPainter>
 #include <QPalette>
 #include <QResizeEvent>
 #include <QScreen>
 #include <QSignalBlocker>
+#include <QScopeGuard>
 #include <QSizePolicy>
 #include <QStackedLayout>
 #include <QStyleOptionGraphicsItem>
@@ -52,6 +56,9 @@
 #include <QTextBrowser>
 #endif
 #include <QTextCharFormat>
+#include <QTextBlock>
+#include <QTextLayout>
+#include <QTextBoundaryFinder>
 #include <QTextCursor>
 #include <QTextDocument>
 #include <QTextDocumentFragment>
@@ -59,6 +66,10 @@
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWindow>
+#include <QtMath>
+#if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
+#include "snow_shot/presentation/screenshotlatexrenderer.h"
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -118,14 +129,72 @@ bool focusInside(const QWidget* container, const QWidget* focus) {
     return container != nullptr && focus != nullptr &&
            (container == focus || container->isAncestorOf(focus));
 }
+
+bool compatibleOcrSelection(const ScreenshotOcrPresentation& source,
+                            const ScreenshotOcrPresentation& replacement) {
+    return source.selection == replacement.selection &&
+           source.lines.size() == replacement.lines.size() &&
+           std::equal(source.lines.cbegin(), source.lines.cend(), replacement.lines.cbegin(),
+                      [](const ScreenshotOcrLine& oldLine, const ScreenshotOcrLine& newLine) {
+                          return oldLine.text == newLine.text && oldLine.quad == newLine.quad &&
+                                 oldLine.sourceLineQuads == newLine.sourceLineQuads &&
+                                 oldLine.direction == newLine.direction &&
+                                 oldLine.paragraph == newLine.paragraph;
+                      });
+}
 } // namespace
 
 class ScreenshotFormattedTextItem final : public QGraphicsTextItem {
   public:
     using QGraphicsTextItem::QGraphicsTextItem;
+    bool selectionOnly = false;
 
     void paint(QPainter* painter, const QStyleOptionGraphicsItem* option,
                QWidget* widget = nullptr) override {
+        if (selectionOnly) {
+            const QTextCursor cursor = textCursor();
+            if (!cursor.hasSelection())
+                return;
+            painter->save();
+            painter->setClipRect(boundingRect(), Qt::IntersectClip);
+            // Use the native layout's grapheme edges for highlight geometry. Drawing the
+            // layout itself would also paint inline HTML objects, even with transparent text.
+            QPainterPath highlights;
+            highlights.setFillRule(Qt::WindingFill);
+            for (QTextBlock block = document()->findBlock(cursor.selectionStart());
+                 block.isValid() && block.position() < cursor.selectionEnd();
+                 block = block.next()) {
+                auto* layout = block.layout();
+                if (!layout)
+                    continue;
+                const QPointF origin =
+                    document()->documentLayout()->blockBoundingRect(block).topLeft();
+                const int end =
+                    std::min(block.length() - 1, cursor.selectionEnd() - block.position());
+                QTextBoundaryFinder boundaries(QTextBoundaryFinder::Grapheme, block.text());
+                int start = std::max(0, cursor.selectionStart() - block.position());
+                boundaries.setPosition(start);
+                while (start < end) {
+                    const QTextLine line = layout->lineForTextPosition(start);
+                    if (line.isValid()) {
+                        const qreal leading = line.cursorToX(start, QTextLine::Leading);
+                        const qreal trailing = line.cursorToX(start, QTextLine::Trailing);
+                        highlights.addRect(
+                            QRectF(origin + QPointF(std::min(leading, trailing), line.y()),
+                                   QSizeF(std::abs(trailing - leading), line.height())));
+                    }
+                    const qsizetype next = boundaries.toNextBoundary();
+                    if (next <= start || next >= end)
+                        break;
+                    start = static_cast<int>(next);
+                }
+            }
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(QColor(64, 150, 255, 102));
+            painter->drawPath(highlights);
+            painter->restore();
+            return;
+        }
         QStyleOptionGraphicsItem textOption(*option);
         // Qt's graphics-text focus indicator is a dashed item outline. The pinned surface
         // still needs focus for keyboard selection, but that outline is not part of the HTML.
@@ -157,6 +226,7 @@ class ScreenshotFormattedTextLayer final : public QGraphicsView {
         setBackgroundBrush(background);
         setFocusPolicy(Qt::StrongFocus);
         setInteractive(true);
+        setMouseTracking(true);
         setOptimizationFlag(QGraphicsView::DontSavePainterState, true);
         setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing |
                        QPainter::SmoothPixmapTransform);
@@ -177,18 +247,63 @@ class ScreenshotFormattedTextLayer final : public QGraphicsView {
     }
 
     void setDocument(std::shared_ptr<QTextDocument> document, const QRectF& canvasRect,
-                     qreal devicePixelRatio) {
-        clearDocument();
+                     qreal devicePixelRatio, ScreenshotOcrTextLayer::RenderingMode mode,
+                     const std::optional<QTransform>& documentToCanvas) {
         if (document == nullptr || !canvasRect.isValid() || canvasRect.isEmpty() ||
             !std::isfinite(devicePixelRatio) || devicePixelRatio <= 0.0) {
+            clearDocument();
             return;
         }
-        m_document = std::move(document);
+        if (m_document != document) {
+            clearDocument();
+            m_document = std::move(document);
+            m_textItem->setDocument(m_document.get());
+        }
         m_canvasRect = canvasRect.normalized();
-        m_textItem->setDocument(m_document.get());
-        m_textItem->setPos(m_canvasRect.topLeft());
-        m_textItem->setScale(devicePixelRatio);
+        m_textItem->setPos(QPointF());
+        m_textItem->setScale(1.0);
+        // Preserve the public item's scale in the ordinary formatted-text presentation.
+        if (documentToCanvas) {
+            m_textItem->setTransform(*documentToCanvas);
+        } else {
+            m_textItem->setTransform(QTransform());
+            m_textItem->setPos(m_canvasRect.topLeft());
+            m_textItem->setScale(devicePixelRatio);
+        }
+        const bool selectionOnly = mode == ScreenshotOcrTextLayer::RenderingMode::SelectionOnly;
+        m_textItem->selectionOnly = selectionOnly;
+        setAutoFillBackground(!selectionOnly);
+        viewport()->setAutoFillBackground(!selectionOnly);
+        setAttribute(Qt::WA_NoSystemBackground, selectionOnly);
+        viewport()->setAttribute(Qt::WA_NoSystemBackground, selectionOnly);
+        setBackgroundBrush(selectionOnly ? QBrush(Qt::NoBrush)
+                                         : QBrush(palette().color(QPalette::Base)));
+        setStyleSheet(
+            selectionOnly
+                ? QStringLiteral("QGraphicsView#screenshotClipboardText {"
+                                 " background: transparent; border: none; }")
+                : QStringLiteral("QGraphicsView#screenshotClipboardText { border: none; }"));
         m_textItem->show();
+        m_textItem->update();
+    }
+
+    [[nodiscard]] QTextCursor textCursor() const {
+        return m_textItem->textCursor();
+    }
+
+    void clearSelection() {
+        auto cursor = textCursor();
+        cursor.clearSelection();
+        m_textItem->setTextCursor(cursor);
+    }
+
+    [[nodiscard]] bool selectionActive() const {
+        return m_scene->mouseGrabberItem() == m_textItem;
+    }
+
+    [[nodiscard]] bool textAt(const QPointF& canvasPosition) const {
+        return m_document && m_document->documentLayout()->hitTest(
+                                 m_textItem->mapFromScene(canvasPosition), Qt::ExactHit) >= 0;
     }
 
     void paintPrintViewport(QPainter& painter) const {
@@ -222,7 +337,10 @@ class ScreenshotFormattedTextLayer final : public QGraphicsView {
         if (geometry() != viewportRect) {
             setGeometry(viewportRect);
         }
-        setSceneRect(m_canvasRect);
+        // Match the scene extent to the host camera, including zoomed or rotated pins.
+        // QGraphicsView otherwise recenters a stale document rectangle via its scrollbars.
+        setSceneRect(canvasToViewTransform.inverted().mapRect(
+            QRectF(QPointF(), QSizeF(viewportRect.size()))));
         setTransform(canvasToViewTransform, false);
         show();
         raise();
@@ -236,7 +354,7 @@ class ScreenshotFormattedTextLayer final : public QGraphicsView {
 
   private:
     QGraphicsScene* m_scene = nullptr;
-    QGraphicsTextItem* m_textItem = nullptr;
+    ScreenshotFormattedTextItem* m_textItem = nullptr;
     std::shared_ptr<QTextDocument> m_document;
     QRectF m_canvasRect;
 };
@@ -301,9 +419,15 @@ ScreenshotRecognitionWindow::ScreenshotRecognitionWindow(
         m_originalImagePreviewHostHandle = nullptr;
         refreshOriginalImagePreview();
     });
+#if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
+    connect(&adqt::theme::ThemeManager::instance(), &adqt::theme::ThemeManager::themeChanged, this,
+            [this] { refreshOriginalImagePreview(); });
+#endif
 }
 
 ScreenshotRecognitionWindow::~ScreenshotRecognitionWindow() {
+    cancelLineBoxSelection();
+    clearLatexPreview();
     delete m_originalImagePreview.data();
     clearFormattedText();
     if (m_textEditor != nullptr) {
@@ -340,6 +464,7 @@ bool ScreenshotRecognitionWindow::present(const Config& config) {
         return false;
     }
 
+    cancelLineBoxSelection();
     m_canvasSelection = config.canvasSelection.normalized();
     m_originalImagePreviewTransientOwner = config.transientOwner;
     m_formattedTextDevicePixelRatio = config.formattedTextDevicePixelRatio;
@@ -375,6 +500,9 @@ bool ScreenshotRecognitionWindow::present(const Config& config) {
     }
     synchronizeTextLayer();
     installSelectionResizeEventFilters(this);
+    if (window() != this) {
+        window()->installEventFilter(this);
+    }
     refreshOriginalImagePreview();
     return true;
 }
@@ -384,6 +512,9 @@ bool ScreenshotRecognitionWindow::updateSelectionGeometry(const QRect& geometry,
     if (!geometry.isValid() || geometry.isEmpty() || !canvasSelection.isValid() ||
         canvasSelection.isEmpty()) {
         return false;
+    }
+    if (geometry != this->geometry() || canvasSelection.normalized() != m_canvasSelection) {
+        cancelLineBoxSelection();
     }
     m_canvasSelection = canvasSelection.normalized();
     if (m_presentationMode == PresentationMode::TopLevelWindow) {
@@ -457,8 +588,8 @@ void ScreenshotRecognitionWindow::syncOriginalImagePreviewStacking(bool staysOnT
 }
 
 void ScreenshotRecognitionWindow::refreshOriginalImagePreview() {
-    if (!m_originalImagePreviewEnabled || m_originalImagePreviewSuppressed || m_showOriginalImage ||
-        !isVisible() || !m_originalImagePreviewHost || !m_originalImagePreviewHost->isVisible() ||
+    if (!companionPreviewEnabled() || m_originalImagePreviewSuppressed || !isVisible() ||
+        !m_originalImagePreviewHost || !m_originalImagePreviewHost->isVisible() ||
         m_originalImagePreviewHost->isMinimized()) {
         destroyOriginalImagePreview();
         return;
@@ -474,6 +605,17 @@ void ScreenshotRecognitionWindow::refreshOriginalImagePreview() {
 }
 
 void ScreenshotRecognitionWindow::destroyOriginalImagePreview() {
+#if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
+    if (m_latexRenderer && m_latexRenderPending) {
+        m_latexRenderer->cancel();
+        m_latexRequestToken = 0;
+        m_latexRenderPending = false;
+        m_latexFallbackPending = false;
+        m_latexPendingKey = {};
+        m_latexFallbackAttemptKey = {};
+        m_latexRequestedSize = {};
+    }
+#endif
     if (!m_originalImagePreview) {
         return;
     }
@@ -517,8 +659,8 @@ void ScreenshotRecognitionWindow::observeOriginalImagePreviewHost() {
 }
 
 void ScreenshotRecognitionWindow::updateOriginalImagePreview() {
-    if (!m_originalImagePreviewEnabled || m_originalImagePreviewSuppressed || m_showOriginalImage ||
-        !isVisible() || !m_originalImagePreviewHost || !m_originalImagePreviewHost->isVisible() ||
+    if (!companionPreviewEnabled() || m_originalImagePreviewSuppressed || !isVisible() ||
+        !m_originalImagePreviewHost || !m_originalImagePreviewHost->isVisible() ||
         m_originalImagePreviewHost->isMinimized()) {
         destroyOriginalImagePreview();
         return;
@@ -527,9 +669,9 @@ void ScreenshotRecognitionWindow::updateOriginalImagePreview() {
     std::optional<ScreenshotOriginalImagePreviewState> state;
     if (m_originalImagePreviewProvider) {
         state = m_originalImagePreviewProvider();
-    } else if (!m_originalImagePreviewSource.isNull() &&
-               m_originalImagePreviewCanvasRect.isValid()) {
+    } else {
         state.emplace();
+        state->mouseWheelZoomMode = snow_shot::storage::PinToScreenSettings().mouseWheelZoomMode();
         state->image = m_originalImagePreviewSource;
         state->imageRectInViewport =
             canvasToLocalTransform().mapRect(m_originalImagePreviewCanvasRect);
@@ -543,7 +685,11 @@ void ScreenshotRecognitionWindow::updateOriginalImagePreview() {
                                     ? m_originalImagePreviewTransientOwner.data()
                                     : this;
     }
-    if (!state || state->image.isNull() || state->resultRect.isEmpty() ||
+#if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
+    if (state && m_latexPreviewEnabled)
+        prepareLatexPreview(*state);
+#endif
+    if (!state || (!state->formula && state->image.isNull()) || state->resultRect.isEmpty() ||
         !state->imageRectInViewport.isValid()) {
         destroyOriginalImagePreview();
         return;
@@ -561,6 +707,10 @@ void ScreenshotRecognitionWindow::updateOriginalImagePreview() {
             }
         });
     }
+#if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
+    m_originalImagePreview->setAccessibleName(m_latexPreviewEnabled ? tr("LaTeX formula preview")
+                                                                    : tr("Original image preview"));
+#endif
     if (!m_originalImagePreview->present(*state)) {
         destroyOriginalImagePreview();
     }
@@ -701,6 +851,9 @@ QImage ScreenshotRecognitionWindow::printViewportSnapshot(QImage background,
 }
 
 void ScreenshotRecognitionWindow::setShowOriginalImage(bool show) {
+    if (show) {
+        cancelLineBoxSelection();
+    }
     m_showOriginalImage = show;
     m_contentContainer->setVisible(!show);
     if (show) {
@@ -713,15 +866,35 @@ void ScreenshotRecognitionWindow::setOcrCopyDefaultsEnabled(bool enabled) {
     m_ocrCopyDefaultsEnabled = enabled;
 }
 
+void ScreenshotRecognitionWindow::setTextHighlighting(bool enabled, const QColor& maskColor) {
+    m_textLayer->setTextHighlighting(enabled, maskColor);
+}
+
 void ScreenshotRecognitionWindow::setOcrPresentation(
     std::shared_ptr<ScreenshotOcrPresentation> presentation,
     ScreenshotOcrTextLayer::RenderingMode mode, bool takeFocus) {
+    cancelLineBoxSelection();
+    if (m_ocrPresentation != nullptr) {
+        m_ocrPresentation->finishTextSelection();
+    }
+    if (presentation != nullptr) {
+        presentation->cancelLineBoxSelection();
+        presentation->finishTextSelection();
+        presentation->prepareForRendering();
+    }
+    const bool selectionOnly = mode == ScreenshotOcrTextLayer::RenderingMode::SelectionOnly;
+    if (m_ocrPresentation != nullptr && presentation != nullptr &&
+        m_ocrPresentation != presentation && m_selectionOnly == selectionOnly &&
+        m_ocrPresentation->hasTextSelection() && !presentation->hasTextSelection() &&
+        compatibleOcrSelection(*m_ocrPresentation, *presentation)) {
+        presentation->copyCommittedSelectionFrom(*m_ocrPresentation);
+    }
     clearImageConversion();
     hideTextEditor();
     clearFormattedText();
     clearTableSession();
     clearQrContents();
-    m_selectionOnly = mode == ScreenshotOcrTextLayer::RenderingMode::SelectionOnly;
+    m_selectionOnly = selectionOnly;
     m_ocrPresentation = std::move(presentation);
     m_textLayer->setPresentation(m_ocrPresentation, mode);
     m_stack->setCurrentWidget(m_textLayer);
@@ -736,11 +909,45 @@ void ScreenshotRecognitionWindow::updateOcrSelection() {
 }
 
 void ScreenshotRecognitionWindow::clearOcrSelection() {
+    cancelLineBoxSelection();
     if (m_ocrPresentation != nullptr) {
         m_ocrPresentation->clearTextSelection();
         m_textLayer->updateSelection();
     }
     unsetCursor();
+}
+
+void ScreenshotRecognitionWindow::clearTextSelection() {
+    clearOcrSelection();
+    if (m_formattedTextLayer)
+        m_formattedTextLayer->clearSelection();
+}
+
+bool ScreenshotRecognitionWindow::textSelectionActive() const {
+    return (m_ocrPresentation && m_ocrPresentation->textSelectionActive()) ||
+           (m_formattedTextLayer && m_formattedTextLayer->selectionActive());
+}
+
+std::unique_ptr<QMimeData> ScreenshotRecognitionWindow::textSelectionClipboardMimeData() const {
+    if (m_formattedTextLayer && m_stack->currentWidget() == m_formattedTextLayer) {
+        const auto cursor = m_formattedTextLayer->textCursor();
+        if (!cursor.hasSelection())
+            return {};
+        const QTextDocumentFragment fragment(cursor);
+        auto mime = std::make_unique<QMimeData>();
+        mime->setText(fragment.toPlainText());
+        mime->setHtml(fragment.toHtml());
+        return mime;
+    }
+    if (!m_ocrPresentation || !m_ocrPresentation->hasTextSelection())
+        return {};
+    auto mime = std::make_unique<QMimeData>();
+    const snow_shot::storage::TextRecognitionSettings settings;
+    mime->setText(m_ocrCopyDefaultsEnabled ? snow_shot::presentation::applyOcrTextTransforms(
+                                                 *m_ocrPresentation, settings.defaultFormatting(),
+                                                 settings.defaultPunctuation())
+                                           : m_ocrPresentation->selectedText());
+    return mime;
 }
 
 void ScreenshotRecognitionWindow::updateOcrText(int lineIndex, const QString& text) {
@@ -751,13 +958,20 @@ void ScreenshotRecognitionWindow::updateOcrText(int lineIndex, const QString& te
 }
 
 void ScreenshotRecognitionWindow::clearOcrPresentation() {
+    cancelLineBoxSelection();
+    if (m_ocrPresentation != nullptr) {
+        m_ocrPresentation->finishTextSelection();
+    }
     m_selectionOnly = false;
     m_ocrPresentation.reset();
     m_textLayer->clearPresentation();
     unsetCursor();
 }
 
-void ScreenshotRecognitionWindow::showFormattedText(std::shared_ptr<QTextDocument> document) {
+void ScreenshotRecognitionWindow::showFormattedText(std::shared_ptr<QTextDocument> document,
+                                                    ScreenshotOcrTextLayer::RenderingMode mode,
+                                                    bool takeFocus,
+                                                    std::optional<QTransform> documentToCanvas) {
     if (document == nullptr) {
         return;
     }
@@ -766,16 +980,17 @@ void ScreenshotRecognitionWindow::showFormattedText(std::shared_ptr<QTextDocumen
     clearOcrPresentation();
     clearTableSession();
     clearQrContents();
+    m_selectionOnly = mode == ScreenshotOcrTextLayer::RenderingMode::SelectionOnly;
     if (m_formattedTextLayer == nullptr) {
         m_formattedTextLayer = new ScreenshotFormattedTextLayer(this);
         m_stack->addWidget(m_formattedTextLayer);
         installSelectionResizeEventFilters(m_formattedTextLayer);
     }
     m_formattedTextLayer->setDocument(std::move(document), m_canvasSelection,
-                                      m_formattedTextDevicePixelRatio);
+                                      m_formattedTextDevicePixelRatio, mode, documentToCanvas);
     m_stack->setCurrentWidget(m_formattedTextLayer);
     synchronizeTextLayer();
-    if (!m_showOriginalImage) {
+    if (takeFocus && !m_showOriginalImage) {
         m_formattedTextLayer->focusText();
     }
 }
@@ -805,41 +1020,55 @@ void ScreenshotRecognitionWindow::setTableSession(
         installSelectionResizeEventFilters(m_tableEditor);
         connect(m_tableEditor, &ScreenshotTableEditor::commandStateChanged, this,
                 [this](const ScreenshotTableCommandState& state) {
-                    if (m_actions.handleTableCommandStateChanged) {
-                        m_actions.handleTableCommandStateChanged(state);
+                    const auto callback = m_actions.handleTableCommandStateChanged;
+                    const auto payload = state;
+                    if (callback) {
+                        callback(payload);
                     }
                 });
-        connect(
-            m_tableEditor, &ScreenshotTableEditor::operationRejected, this,
-            [this](const QString& message) { m_actions.handleTableOperationRejected(message); });
+        connect(m_tableEditor, &ScreenshotTableEditor::operationRejected, this,
+                [this](const QString& message) {
+                    const auto callback = m_actions.handleTableOperationRejected;
+                    const QString payload = message;
+                    callback(payload);
+                });
         connect(m_tableEditor, &ScreenshotTableEditor::copyCompleted, this, [this]() {
             // Context-menu copies originate inside the table editor's
             // copy method. Defer capture teardown until that call has
             // returned, otherwise the editor can be destroyed
             // re-entrantly while it is still unwinding.
-            QTimer::singleShot(0, this, [this]() { m_actions.handleCopy(); });
+            QTimer::singleShot(0, this, [this]() {
+                const auto callback = m_actions.handleCopy;
+                callback();
+            });
         });
     }
-    m_tableEditor->setSession(std::move(session));
+    // Showing and focusing a table scrolls its current cell into view. Do that while unbound,
+    // then let session restoration apply the model's independent selection and scroll position.
     m_stack->setCurrentWidget(m_tableEditor);
     if (!m_showOriginalImage) {
         m_tableEditor->setFocus(Qt::OtherFocusReason);
     }
+    m_tableEditor->setSession(std::move(session));
 #else
     Q_UNUSED(session)
 #endif
 }
 
-void ScreenshotRecognitionWindow::clearTableSession() {
+void ScreenshotRecognitionWindow::clearTableSession(bool retainEditor) {
 #if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
     if (m_tableEditor == nullptr) {
         return;
     }
     m_tableEditor->clearSession();
-    m_stack->removeWidget(m_tableEditor);
-    delete m_tableEditor;
-    m_tableEditor = nullptr;
+    if (!retainEditor) {
+        m_stack->removeWidget(m_tableEditor);
+        delete m_tableEditor;
+        m_tableEditor = nullptr;
+    }
     m_stack->setCurrentWidget(m_textLayer);
+#else
+    Q_UNUSED(retainEditor)
 #endif
 }
 
@@ -899,12 +1128,294 @@ void ScreenshotRecognitionWindow::commitActiveTableEdit() {
 #endif
 }
 
+bool ScreenshotRecognitionWindow::companionPreviewEnabled() const {
+#if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
+    // Formula previews remain available while the selection displays the original image.
+    if (m_latexPreviewEnabled)
+        return true;
+#endif
+    return m_originalImagePreviewEnabled && !m_showOriginalImage;
+}
+
+void ScreenshotRecognitionWindow::setLatexPreviewEnabled(bool enabled) {
+#if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
+    if (m_latexPreviewEnabled == enabled)
+        return;
+    m_latexPreviewEnabled = enabled;
+    if (!enabled && m_latexRenderer) {
+        m_latexRenderer->cancel();
+        m_latexRequestToken = 0;
+        m_latexRenderPending = false;
+        m_latexFallbackPending = false;
+        m_latexPendingKey = {};
+        m_latexFallbackAttemptKey = {};
+        m_latexRequestedSize = {};
+    }
+    refreshOriginalImagePreview();
+#else
+    Q_UNUSED(enabled)
+#endif
+}
+
+void ScreenshotRecognitionWindow::clearLatexPreview() {
+#if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
+    const bool enabled = std::exchange(m_latexPreviewEnabled, false);
+    if (enabled && m_textEditor)
+        m_textEditor->setAccessibleName({});
+    disconnect(m_latexDocumentConnection);
+    m_latexDocument = nullptr;
+    m_latexSource = {};
+    if (m_latexRenderer)
+        m_latexRenderer->clearCache();
+    if (m_latexPreviewTimer)
+        m_latexPreviewTimer->stop();
+    m_latexRequestToken = 0;
+    m_latexPreviewImage = {};
+    m_latexValidKey = {};
+    m_latexPendingKey = {};
+    m_latexFallbackAttemptKey = {};
+    m_latexRequestedSource.clear();
+    m_latexRequestedSize = {};
+    m_latexPreviewError = 0;
+    m_latexRenderPending = false;
+    m_latexFallbackPending = false;
+    if (enabled)
+        refreshOriginalImagePreview();
+#endif
+}
+
+void ScreenshotRecognitionWindow::showLatexEditor(QTextDocument* document,
+                                                  std::function<QString()> source) {
+    showLatexEditorWithOwner(document, {}, std::move(source));
+}
+
+void ScreenshotRecognitionWindow::showLatexEditor(std::shared_ptr<QTextDocument> document,
+                                                  std::function<QString()> source) {
+    auto* borrowedDocument = document.get();
+    showLatexEditorWithOwner(borrowedDocument, std::move(document), std::move(source));
+}
+
+void ScreenshotRecognitionWindow::showLatexEditorWithOwner(
+    QTextDocument* document, std::shared_ptr<QTextDocument> documentOwner,
+    std::function<QString()> source) {
+#if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
+    const QPointer<ScreenshotRecognitionWindow> lifetime(this);
+    showTextEditorWithOwner(document, std::move(documentOwner), false, false);
+    if (!lifetime)
+        return;
+    if (!document || !m_textEditor)
+        return;
+    m_textEditor->setAccessibleName(tr("LaTeX formula source"));
+    m_latexDocument = document;
+    m_latexSource = std::move(source);
+    if (!m_latexPreviewTimer) {
+        m_latexPreviewTimer = new QTimer(this);
+        m_latexPreviewTimer->setSingleShot(true);
+        m_latexPreviewTimer->setInterval(150);
+        connect(m_latexPreviewTimer, &QTimer::timeout, this,
+                &ScreenshotRecognitionWindow::refreshOriginalImagePreview);
+    }
+    m_latexDocumentConnection = connect(document, &QTextDocument::contentsChanged, this,
+                                        &ScreenshotRecognitionWindow::scheduleLatexPreview);
+    setLatexPreviewEnabled(true);
+#else
+    Q_UNUSED(document)
+    Q_UNUSED(documentOwner)
+    Q_UNUSED(source)
+#endif
+}
+
+#if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
+QString ScreenshotRecognitionWindow::currentLatexSource() const {
+    if (!m_latexDocument)
+        return {};
+    return m_latexSource ? m_latexSource() : m_latexDocument->toPlainText();
+}
+
+QString ScreenshotRecognitionWindow::currentLatexSource(int selectionStart,
+                                                        int selectionEnd) const {
+    const QString source = currentLatexSource();
+    qsizetype sourceStart = source.size();
+    qsizetype sourceEnd = source.size();
+    qsizetype documentPosition = 0;
+    for (qsizetype index = 0; index < source.size(); ++index) {
+        if (documentPosition == selectionStart)
+            sourceStart = index;
+        if (documentPosition == selectionEnd) {
+            sourceEnd = index;
+            break;
+        }
+        // QTextDocument stores a CRLF pair as one paragraph position. Other source
+        // characters, including NBSP and Unicode separators, each retain their position.
+        if (source.at(index) == QLatin1Char('\r') && index + 1 < source.size() &&
+            source.at(index + 1) == QLatin1Char('\n')) {
+            ++index;
+        }
+        ++documentPosition;
+    }
+    return source.mid(sourceStart, sourceEnd - sourceStart);
+}
+
+void ScreenshotRecognitionWindow::scheduleLatexPreview() {
+    if (m_latexRenderPending && m_latexRenderer) {
+        m_latexRenderer->cancel();
+        m_latexRequestedSize = {};
+    }
+    m_latexRequestToken = 0;
+    m_latexRenderPending = false;
+    m_latexFallbackPending = false;
+    m_latexPendingKey = {};
+    m_latexFallbackAttemptKey = {};
+    if (currentLatexSource().trimmed().isEmpty()) {
+        m_latexPreviewTimer->stop();
+        m_latexPreviewImage = {};
+        m_latexValidKey = {};
+        m_latexRequestedSource.clear();
+        m_latexRequestedSize = {};
+        m_latexPreviewError = 0;
+        refreshOriginalImagePreview();
+    } else {
+        m_latexPreviewTimer->start();
+    }
+}
+
+QString ScreenshotRecognitionWindow::latexPreviewStatus() const {
+    using Error = ScreenshotLatexRenderer::Error;
+    switch (static_cast<Error>(m_latexPreviewError)) {
+    case Error::InvalidFormula:
+        return tr("Unable to preview this formula. Check the LaTeX source.");
+    case Error::LimitExceeded:
+        return tr("Formula preview limit exceeded.");
+    case Error::InitializationFailed:
+        return tr("Formula renderer is unavailable.");
+    case Error::None:
+        break;
+    }
+    if (m_latexRenderPending)
+        return tr("Rendering formula...");
+    if (currentLatexSource().trimmed().isEmpty())
+        return tr("No formula to preview");
+    return {};
+}
+
+void ScreenshotRecognitionWindow::prepareLatexPreview(ScreenshotOriginalImagePreviewState& state) {
+    state.formula = true;
+    const auto theme = adqt::theme::ThemeManager::instance().resolveTheme(this);
+    state.background = theme.colorBgContainer;
+    state.statusColor = theme.colorText;
+    const qreal dpr = devicePixelRatioF();
+    const qreal geometryScale =
+        ScreenshotOriginalImagePreviewWindow::usesPhysicalGeometry() ? 1.0 / dpr : 1.0;
+    const QSizeF logicalViewport = QSizeF(state.resultRect.size()) * geometryScale;
+    const qreal padding =
+        std::min({12.0, logicalViewport.width() / 8.0, logicalViewport.height() / 8.0});
+    const QSize renderSize(std::max(1, qFloor(logicalViewport.width() - padding * 2)),
+                           std::max(1, qFloor(logicalViewport.height() - padding * 2)));
+    if (m_latexDocument) {
+        const QString source = currentLatexSource();
+        if (!source.trimmed().isEmpty() && !m_latexPreviewTimer->isActive() &&
+            (source != m_latexRequestedSource || renderSize != m_latexRequestedSize ||
+             !qFuzzyCompare(dpr, m_latexRequestedDpr) ||
+             theme.colorText != m_latexRequestedForeground)) {
+            if (!m_latexRenderer) {
+                m_latexRenderer = new ScreenshotLatexRenderer(this);
+                connect(m_latexRenderer, &ScreenshotLatexRenderer::rendered, this,
+                        [this](quint64 token, const QImage& image,
+                               ScreenshotLatexRenderer::Error error) {
+                            if (token != m_latexRequestToken || !m_latexPreviewEnabled ||
+                                !m_latexDocument)
+                                return;
+                            m_latexRenderPending = false;
+                            if (!m_latexFallbackPending)
+                                m_latexPreviewError = static_cast<int>(error);
+                            if (error == ScreenshotLatexRenderer::Error::None) {
+                                m_latexPreviewImage = image;
+                                m_latexValidKey = m_latexPendingKey;
+                                if (!m_latexFallbackPending)
+                                    m_latexFallbackAttemptKey = {};
+                            }
+                            m_latexFallbackPending = false;
+                            refreshOriginalImagePreview();
+                        });
+            }
+            m_latexRequestedSource = source;
+            m_latexRequestedSize = renderSize;
+            m_latexRequestedDpr = dpr;
+            m_latexRequestedForeground = theme.colorText;
+            m_latexRenderPending = true;
+            if (m_latexFallbackPending)
+                m_latexFallbackAttemptKey = {};
+            m_latexFallbackPending = false;
+            m_latexPendingKey = {source, renderSize, dpr, theme.colorText};
+            m_latexRequestToken =
+                m_latexRenderer->request(source, renderSize, dpr, theme.colorText);
+        } else if (!m_latexRenderPending && !m_latexPreviewTimer->isActive() &&
+                   m_latexPreviewError != 0 && !m_latexPreviewImage.isNull() &&
+                   !m_latexValidKey.source.isEmpty()) {
+            const LatexRenderKey fallback{m_latexValidKey.source, renderSize, dpr, theme.colorText};
+            if (!(fallback == m_latexValidKey) && !(fallback == m_latexFallbackAttemptKey)) {
+                // Keep the invalid draft's request key and error intact. The retained formula
+                // needs its own raster for a new theme or viewport, not another draft retry.
+                m_latexFallbackAttemptKey = fallback;
+                m_latexPendingKey = fallback;
+                m_latexRenderPending = true;
+                m_latexFallbackPending = true;
+                m_latexRequestToken = m_latexRenderer->request(fallback.source, fallback.size,
+                                                               fallback.dpr, fallback.foreground);
+            }
+        }
+    }
+    state.image = m_latexPreviewImage;
+    state.dimmed = m_latexPreviewError != 0;
+    state.status = latexPreviewStatus();
+    const qreal viewScale = 1.0 / geometryScale;
+    const QRectF logicalRect(QPointF(), logicalViewport);
+    QRectF formulaRect = logicalRect;
+    if (!state.image.isNull()) {
+        QSizeF formulaSize = QSizeF(state.image.size()) / state.image.devicePixelRatio();
+        if (formulaSize.width() > renderSize.width() || formulaSize.height() > renderSize.height())
+            formulaSize.scale(QSizeF(renderSize), Qt::KeepAspectRatio);
+        formulaRect = QRectF(logicalRect.center() -
+                                 QPointF(formulaSize.width() / 2, formulaSize.height() / 2),
+                             formulaSize);
+    }
+    state.imageRectInViewport =
+        QRectF(formulaRect.topLeft() * viewScale, formulaRect.size() * viewScale);
+}
+#endif
+
 void ScreenshotRecognitionWindow::showTextEditor(QTextDocument* document, bool readOnly,
                                                  bool streaming) {
+    showTextEditorWithOwner(document, {}, readOnly, streaming);
+}
+
+void ScreenshotRecognitionWindow::showTextEditor(std::shared_ptr<QTextDocument> document,
+                                                 bool readOnly, bool streaming) {
+    auto* borrowedDocument = document.get();
+    showTextEditorWithOwner(borrowedDocument, std::move(document), readOnly, streaming);
+}
+
+void ScreenshotRecognitionWindow::showTextEditorWithOwner(
+    QTextDocument* document, std::shared_ptr<QTextDocument> documentOwner, bool readOnly,
+    bool streaming) {
     if (document == nullptr) {
+        clearLatexPreview();
         return;
     }
+    if (!documentOwner && m_textEditorDocumentOwner.get() == document)
+        documentOwner = m_textEditorDocumentOwner;
+    [[maybe_unused]] const auto activeOwner = documentOwner;
+    const QPointer<ScreenshotRecognitionWindow> lifetime(this);
+    // QTextEdit borrows its document. Retain the old owner until Qt has detached it,
+    // and the replacement owner for as long as the editor displays that document.
+    [[maybe_unused]] const auto previousOwner =
+        std::exchange(m_textEditorDocumentOwner, std::move(documentOwner));
+    clearLatexPreview();
+    if (!lifetime)
+        return;
     clearImageConversion();
+    if (!lifetime)
+        return;
     clearOcrPresentation();
     clearFormattedText();
     clearTableSession();
@@ -936,24 +1447,52 @@ void ScreenshotRecognitionWindow::showTextEditor(QTextDocument* document, bool r
                 });
         m_stack->addWidget(m_textEditorContainer);
         installSelectionResizeEventFilters(m_textEditorContainer);
-        connect(editor, &adqt::widgets::AdTextEdit::textEdited, this,
-                [this](const QString& text) { m_actions.handleTextEdited(text); });
+        connect(editor, &adqt::widgets::AdTextEdit::textEdited, this, [this](const QString& text) {
+#if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
+            // The formula session observes the document directly and preserves source
+            // whitespace. AdTextEdit's plain-text notification normalizes that source.
+            if (m_latexDocument)
+                return;
+#endif
+            const auto callback = m_actions.handleTextEdited;
+            const QString payload = text;
+            callback(payload);
+        });
         connect(m_textEditor, &QWidget::customContextMenuRequested, this,
                 [this](const QPoint& position) {
                     showTextEditorContextMenu(m_textEditor->viewport()->mapToGlobal(position));
                 });
     }
-    const QSignalBlocker blocker(m_textEditor);
-    m_textEditor->setDocument(document);
-    m_textEditor->setReadOnly(readOnly);
-    const adqt::theme::ThemeMapToken theme =
-        adqt::theme::ThemeManager::instance().resolveTheme(m_textEditor);
-    QFont editorFont = theme.appFont.family().isEmpty() ? m_textEditor->font() : theme.appFont;
-    editorFont.setPixelSize(qRound(theme.fontSize));
-    m_textEditor->setFont(editorFont);
-    document->setDefaultFont(editorFont);
+    const QPointer<QTextEdit> editor(m_textEditor);
+    {
+        const bool previouslyBlocked = editor->blockSignals(true);
+        const auto restoreSignals = qScopeGuard([editor, previouslyBlocked] {
+            if (editor)
+                editor->blockSignals(previouslyBlocked);
+        });
+        editor->setDocument(document);
+        if (!lifetime || !editor)
+            return;
+        editor->setReadOnly(readOnly);
+        if (!lifetime || !editor)
+            return;
+        const adqt::theme::ThemeMapToken theme =
+            adqt::theme::ThemeManager::instance().resolveTheme(editor);
+        QFont editorFont = theme.appFont.family().isEmpty() ? editor->font() : theme.appFont;
+        editorFont.setPixelSize(qRound(theme.fontSize));
+        editor->setFont(editorFont);
+        if (!lifetime || !editor)
+            return;
+        document->setDefaultFont(editorFont);
+        if (!lifetime || !editor)
+            return;
+    }
     m_stack->setCurrentWidget(m_textEditorContainer);
+    if (!lifetime)
+        return;
     setTextEditorStreaming(streaming);
+    if (!lifetime)
+        return;
     if (!readOnly && !m_showOriginalImage) {
         static_cast<adqt::widgets::AdTextEdit*>(m_textEditor)->focusEditor();
     }
@@ -961,6 +1500,23 @@ void ScreenshotRecognitionWindow::showTextEditor(QTextDocument* document, bool r
 
 void ScreenshotRecognitionWindow::registerWindowShortcuts() {
     using ShortcutManager = snow_shot::presentation::WindowShortcutManager;
+
+    ShortcutManager::Binding cancelBox;
+    cancelBox.id = QStringLiteral("recognition.cancel_box_selection");
+    cancelBox.keyCombinations = {QKeyCombination(Qt::NoModifier, Qt::Key_Escape)};
+    cancelBox.allowedAdditionalModifiers =
+        Qt::ShiftModifier | Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier;
+    cancelBox.priority = ShortcutManager::StandardPriority::WindowCommand + 2;
+    cancelBox.canActivate = [this](const ShortcutManager::ActivationContext& context) {
+        return context.scopeWindow == window() && isVisible() && lineBoxSelectionActive();
+    };
+    cancelBox.activate = [this](const auto&) {
+        cancelLineBoxSelection();
+        return true;
+    };
+    cancelBox.release = [](const auto&) { return true; };
+    cancelBox.cancel = [this]() { cancelLineBoxSelection(); };
+    static_cast<void>(m_shortcutManager->addBinding(this, std::move(cancelBox)));
 
     ShortcutManager::Binding cancel;
     cancel.id = QStringLiteral("recognition.cancel");
@@ -976,7 +1532,10 @@ void ScreenshotRecognitionWindow::registerWindowShortcuts() {
 #endif
     };
     cancel.activate = [this](const auto&) {
-        m_actions.handleCancel();
+        // Cancel and Copy can synchronously destroy this window and its action storage.
+        // The executing handler must retain its captures until it returns.
+        const auto callback = m_actions.handleCancel;
+        callback();
         return true;
     };
     static_cast<void>(m_shortcutManager->addBinding(this, std::move(cancel)));
@@ -1066,6 +1625,7 @@ void ScreenshotRecognitionWindow::registerWindowShortcuts() {
         if (m_ocrPresentation == nullptr) {
             return false;
         }
+        cancelLineBoxSelection();
         const quint64 previousRevision = m_ocrPresentation->selectionRevision();
         m_ocrPresentation->selectAll();
         if (m_ocrPresentation->selectionRevision() != previousRevision) {
@@ -1082,8 +1642,17 @@ void ScreenshotRecognitionWindow::registerWindowShortcuts() {
     copy.priority = ShortcutManager::StandardPriority::WindowCommand;
     copy.canActivate = copyCommandsAllowed;
     copy.activate = [this](const auto&) {
-        if (copyVisibleContentToClipboard() && m_conversionView == nullptr) {
-            m_actions.handleCopy();
+        const QPointer<ScreenshotRecognitionWindow> lifetime(this);
+        const auto callback = m_actions.handleCopy;
+        const bool copied = copyVisibleContentToClipboard();
+        if (!lifetime)
+            return true;
+#if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
+        if (m_latexDocument)
+            return true;
+#endif
+        if (copied && m_conversionView == nullptr) {
+            callback();
         }
         return true;
     };
@@ -1098,7 +1667,8 @@ void ScreenshotRecognitionWindow::registerWindowShortcuts() {
     undo.priority = ShortcutManager::StandardPriority::WindowCommand;
     undo.canActivate = textEditorActive;
     undo.activate = [this](const auto&) {
-        m_actions.handleUndoTextEdit();
+        const auto callback = m_actions.handleUndoTextEdit;
+        callback();
         return true;
     };
     static_cast<void>(m_shortcutManager->addBinding(this, std::move(undo)));
@@ -1109,7 +1679,8 @@ void ScreenshotRecognitionWindow::registerWindowShortcuts() {
     redo.priority = ShortcutManager::StandardPriority::WindowCommand;
     redo.canActivate = textEditorActive;
     redo.activate = [this](const auto&) {
-        m_actions.handleRedoTextEdit();
+        const auto callback = m_actions.handleRedoTextEdit;
+        callback();
         return true;
     };
     static_cast<void>(m_shortcutManager->addBinding(this, std::move(redo)));
@@ -1130,6 +1701,8 @@ void ScreenshotRecognitionWindow::setTextEditorStreaming(bool streaming) {
 }
 
 void ScreenshotRecognitionWindow::hideTextEditor() {
+    [[maybe_unused]] const auto previousOwner = std::exchange(m_textEditorDocumentOwner, {});
+    clearLatexPreview();
     if (m_textEditor == nullptr) {
         return;
     }
@@ -1173,8 +1746,11 @@ void ScreenshotRecognitionWindow::showQrContents(const QStringList& contents, bo
         m_qrBrowser->setContextMenuPolicy(Qt::CustomContextMenu);
         m_stack->addWidget(m_qrBrowser);
         installSelectionResizeEventFilters(m_qrBrowser);
-        connect(m_qrBrowser, &QTextBrowser::anchorClicked, this,
-                [this](const QUrl& url) { m_actions.handleLinkActivated(url); });
+        connect(m_qrBrowser, &QTextBrowser::anchorClicked, this, [this](const QUrl& url) {
+            const auto callback = m_actions.handleLinkActivated;
+            const QUrl payload = url;
+            callback(payload);
+        });
         connect(m_qrBrowser, &QWidget::customContextMenuRequested, this,
                 [this](const QPoint& position) {
                     showQrContextMenu(m_qrBrowser->viewport()->mapToGlobal(position));
@@ -1269,7 +1845,11 @@ void ScreenshotRecognitionWindow::showImageConversion(SnowShotImageConversionFor
         connect(m_conversionView, &ScreenshotImageConversionView::retryRequested, this,
                 &ScreenshotRecognitionWindow::imageConversionRetryRequested);
         connect(m_conversionView, &ScreenshotImageConversionView::linkActivated, this,
-                [this](const QUrl& url) { m_actions.handleLinkActivated(url); });
+                [this](const QUrl& url) {
+                    const auto callback = m_actions.handleLinkActivated;
+                    const QUrl payload = url;
+                    callback(payload);
+                });
         if (!m_showOriginalImage) {
             m_conversionView->setFocus(Qt::OtherFocusReason);
         }
@@ -1295,7 +1875,44 @@ void ScreenshotRecognitionWindow::clearImageConversion() {
 #endif
 }
 
+void ScreenshotRecognitionWindow::showRecognitionError(const QString& error) {
+    clearRecognitionError();
+    m_recognitionErrorPage = new QWidget(m_contentContainer);
+    m_recognitionErrorPage->setObjectName(QStringLiteral("screenshotRecognitionError"));
+    auto* layout = new QVBoxLayout(m_recognitionErrorPage);
+    layout->setContentsMargins(8, 8, 8, 8);
+    layout->addStretch();
+    auto* alert = new adqt::widgets::AdAlert(m_recognitionErrorPage);
+    alert->setSeverity(adqt::widgets::AdAlert::Severity::Error);
+    alert->setText(error);
+    m_recognitionRetry = new adqt::widgets::AdButton(alert);
+    m_recognitionRetry->setObjectName(QStringLiteral("screenshotRecognitionRetry"));
+    m_recognitionRetry->setText(tr("Retry"));
+    m_recognitionRetry->setAccessibleName(tr("Retry recognition"));
+    alert->setActionsWidget(m_recognitionRetry);
+    connect(m_recognitionRetry, &adqt::widgets::AdButton::clicked, this,
+            &ScreenshotRecognitionWindow::recognitionRetryRequested);
+    layout->addWidget(alert);
+    layout->addStretch();
+    m_stack->addWidget(m_recognitionErrorPage);
+    m_stack->setCurrentWidget(m_recognitionErrorPage);
+}
+
+void ScreenshotRecognitionWindow::clearRecognitionError() {
+    if (!m_recognitionErrorPage)
+        return;
+    m_stack->removeWidget(m_recognitionErrorPage);
+    // Retry may synchronously replace this page from its own clicked handler.
+    m_recognitionErrorPage->hide();
+    m_recognitionErrorPage->deleteLater();
+    m_recognitionErrorPage = nullptr;
+    m_recognitionRetry = nullptr;
+    m_stack->setCurrentWidget(m_textLayer);
+}
+
 bool ScreenshotRecognitionWindow::copyVisibleContentToClipboard() {
+    if (m_recognitionErrorPage)
+        return false;
 #if SNOW_SHOT_ENABLE_IMAGE_CONVERSION
     if (m_conversionView != nullptr) {
         return m_conversionView->copyToClipboard();
@@ -1317,6 +1934,14 @@ bool ScreenshotRecognitionWindow::copyVisibleContentToClipboard() {
     if (m_textEditor != nullptr) {
         contentAvailable = true;
         const QTextCursor cursor = m_textEditor->textCursor();
+#if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
+        if (m_latexDocument) {
+            clipboard->setText(cursor.hasSelection() ? currentLatexSource(cursor.selectionStart(),
+                                                                          cursor.selectionEnd())
+                                                     : currentLatexSource());
+            return true;
+        }
+#endif
         text = cursor.hasSelection() ? QTextDocumentFragment(cursor).toPlainText()
                                      : m_textEditor->toPlainText();
     }
@@ -1425,7 +2050,15 @@ void ScreenshotRecognitionWindow::showTextEditorContextMenu(const QPoint& global
     remove->setEnabled(writable && hasSelection);
     selectAll->setEnabled(!m_textEditor->document()->isEmpty());
 
-    connect(copy, &QAction::triggered, m_textEditor, &QTextEdit::copy);
+    connect(copy, &QAction::triggered, m_textEditor, [this]() {
+#if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
+        if (m_latexDocument) {
+            static_cast<void>(copyVisibleContentToClipboard());
+            return;
+        }
+#endif
+        m_textEditor->copy();
+    });
     connect(cut, &QAction::triggered, m_textEditor, &QTextEdit::cut);
     connect(paste, &QAction::triggered, m_textEditor, &QTextEdit::paste);
     connect(remove, &QAction::triggered, this, [this]() {
@@ -1443,6 +2076,7 @@ void ScreenshotRecognitionWindow::showTextEditorContextMenu(const QPoint& global
 }
 
 void ScreenshotRecognitionWindow::focusOutEvent(QFocusEvent* event) {
+    cancelLineBoxSelection();
     if (m_ocrPresentation != nullptr && event->reason() != Qt::PopupFocusReason) {
         const quint64 previousRevision = m_ocrPresentation->selectionRevision();
         m_ocrPresentation->clearTextSelection();
@@ -1455,7 +2089,9 @@ void ScreenshotRecognitionWindow::focusOutEvent(QFocusEvent* event) {
 
 ScreenshotSelectionDragMode ScreenshotRecognitionWindow::selectionResizeDragModeAtLocalPoint(
     const QPointF& localPosition) const {
-    return m_actions.selectionResizeDragMode(canvasPositionForLocalPoint(localPosition));
+    const auto callback = m_actions.selectionResizeDragMode;
+    const QPointF canvasPosition = canvasPositionForLocalPoint(localPosition);
+    return callback(canvasPosition);
 }
 
 Qt::CursorShape
@@ -1483,7 +2119,10 @@ ScreenshotRecognitionWindow::cursorForSelectionResize(ScreenshotSelectionDragMod
 }
 
 void ScreenshotRecognitionWindow::updateSelectionResizeCursor(const QPointF& localPosition) {
+    const QPointer<ScreenshotRecognitionWindow> lifetime(this);
     const ScreenshotSelectionDragMode dragMode = selectionResizeDragModeAtLocalPoint(localPosition);
+    if (!lifetime)
+        return;
     if (dragMode != ScreenshotSelectionDragMode::None) {
         setCursor(cursorForSelectionResize(dragMode));
         return;
@@ -1494,10 +2133,21 @@ void ScreenshotRecognitionWindow::updateSelectionResizeCursor(const QPointF& loc
         setCursor(position.valid() ? Qt::IBeamCursor : Qt::ArrowCursor);
         return;
     }
+    if (m_formattedTextLayer != nullptr) {
+        // QGraphicsTextItem enables selection but does not provide a hover cursor.
+        // Use the same document hit test that reserves text presses for selection.
+        setCursor(m_formattedTextLayer->textAt(canvasPositionForLocalPoint(localPosition))
+                      ? Qt::IBeamCursor
+                      : Qt::ArrowCursor);
+        return;
+    }
     unsetCursor();
 }
 
 bool ScreenshotRecognitionWindow::handleSelectionResizeEvent(QObject* watched, QEvent* event) {
+    if (lineBoxSelectionActive()) {
+        return false;
+    }
     if (event == nullptr ||
         (event->type() != QEvent::MouseButtonPress && event->type() != QEvent::MouseMove &&
          event->type() != QEvent::MouseButtonRelease)) {
@@ -1511,18 +2161,35 @@ bool ScreenshotRecognitionWindow::handleSelectionResizeEvent(QObject* watched, Q
         localPosition = QPointF(watchedWidget->mapTo(this, mouseEvent->position().toPoint()));
     }
     const QPointF canvasPosition = canvasPositionForLocalPoint(localPosition);
+    const QPointer<ScreenshotRecognitionWindow> lifetime(this);
+    const QPointer<QObject> watchedLifetime(watched);
+    const bool wasAccepted = mouseEvent->isAccepted();
+    // Action callbacks can retire either the recognition window or the editor receiving this
+    // event. Stop Qt from propagating through that receiver before entering client code.
+    mouseEvent->accept();
+    const auto survived = [&] { return lifetime && (watched == nullptr || watchedLifetime); };
 
     if (event->type() == QEvent::MouseButtonPress && mouseEvent->button() == Qt::LeftButton) {
         const ScreenshotSelectionDragMode dragMode =
             selectionResizeDragModeAtLocalPoint(localPosition);
+        if (!survived())
+            return true;
         if (dragMode == ScreenshotSelectionDragMode::None) {
+            mouseEvent->setAccepted(wasAccepted);
             return false;
         }
+        const auto callback = m_actions.beginSelectionResize;
         // Beginning a resize clears recognition content and can delete the pressed viewport.
         // Keep the entire mouse gesture on the surviving window before invoking that callback.
         grabMouse();
-        if (!m_actions.beginSelectionResize(canvasPosition)) {
+        const bool started = callback(canvasPosition);
+        if (!lifetime)
+            return true;
+        if (!started) {
             releaseMouse();
+            if (!survived())
+                return true;
+            mouseEvent->setAccepted(wasAccepted);
             return false;
         }
         m_selectionResizeActive = true;
@@ -1533,16 +2200,20 @@ bool ScreenshotRecognitionWindow::handleSelectionResizeEvent(QObject* watched, Q
 
     if (event->type() == QEvent::MouseMove) {
         if (m_selectionResizeActive) {
-            m_actions.updateSelectionResize(canvasPosition);
-            mouseEvent->accept();
+            const auto callback = m_actions.updateSelectionResize;
+            callback(canvasPosition);
             return true;
         }
         updateSelectionResizeCursor(localPosition);
-        if (selectionResizeDragModeAtLocalPoint(localPosition) !=
-            ScreenshotSelectionDragMode::None) {
-            mouseEvent->accept();
+        if (!survived())
+            return true;
+        const auto dragMode = selectionResizeDragModeAtLocalPoint(localPosition);
+        if (!survived())
+            return true;
+        if (dragMode != ScreenshotSelectionDragMode::None) {
             return true;
         }
+        mouseEvent->setAccepted(wasAccepted);
         return false;
     }
 
@@ -1560,10 +2231,66 @@ bool ScreenshotRecognitionWindow::handleSelectionResizeEvent(QObject* watched, Q
         selectionResizeFinished();
         return true;
     }
+    mouseEvent->setAccepted(wasAccepted);
     return false;
 }
 
+bool ScreenshotRecognitionWindow::forwardFormattedTextPointerEvent(QObject* watched,
+                                                                   QEvent* event) {
+    if (!event || !m_selectionOnly || !m_formattedTextLayer ||
+        watched != m_formattedTextLayer->viewport() || textSelectionActive()) {
+        return false;
+    }
+    switch (event->type()) {
+    case QEvent::MouseButtonPress:
+    case QEvent::MouseButtonDblClick:
+    case QEvent::MouseMove:
+    case QEvent::MouseButtonRelease:
+        break;
+    default:
+        return false;
+    }
+    auto* mouse = static_cast<QMouseEvent*>(event);
+    const QPointF local = m_formattedTextLayer->viewport()->mapTo(this, mouse->position());
+    if (!isOcrBackgroundAt(local) &&
+        !mouse->modifiers().testAnyFlags(Qt::ControlModifier | Qt::AltModifier)) {
+        return false;
+    }
+    // Blank document space belongs to the host's pin gestures, including double-clicks.
+    // An active native text selection retains every phase of its mouse gesture.
+    QMouseEvent forwarded(mouse->type(), local, mapTo(window(), local), mouse->globalPosition(),
+                          mouse->button(), mouse->buttons(), mouse->modifiers(), mouse->source(),
+                          mouse->pointingDevice());
+    forwarded.setTimestamp(mouse->timestamp());
+    forwarded.ignore();
+    const bool handled = QCoreApplication::sendEvent(this, &forwarded);
+    // The host action can delete the formatted viewport (for example, entering thumbnail mode).
+    // Consume accepted events without accessing the viewport again.
+    // Host event filters can handle a controlled move without setting the accepted flag.
+    if (!handled && !forwarded.isAccepted()) {
+        return false;
+    }
+    event->accept();
+    return true;
+}
+
 bool ScreenshotRecognitionWindow::eventFilter(QObject* watched, QEvent* event) {
+    if (event != nullptr &&
+        (watched == this || watched == window() || watched == m_originalImagePreviewHost ||
+         watched == m_originalImagePreviewHostHandle)) {
+        switch (event->type()) {
+        case QEvent::Hide:
+        case QEvent::Close:
+        case QEvent::WindowDeactivate:
+        case QEvent::UngrabMouse:
+        case QEvent::ScreenChangeInternal:
+        case QEvent::DevicePixelRatioChange:
+            cancelLineBoxSelection();
+            break;
+        default:
+            break;
+        }
+    }
     if (watched == m_originalImagePreview) {
         return QWidget::eventFilter(watched, event);
     }
@@ -1600,11 +2327,15 @@ bool ScreenshotRecognitionWindow::eventFilter(QObject* watched, QEvent* event) {
         m_presentationMode == PresentationMode::EmbeddedChild &&
         !activeContentOwnsContextMenu(watched)) {
         auto* contextMenuEvent = static_cast<QContextMenuEvent*>(event);
+        cancelLineBoxSelection();
         emit embeddedContextMenuRequested(contextMenuEvent->globalPos());
         contextMenuEvent->accept();
         return true;
     }
     if (handleSelectionResizeEvent(watched, event)) {
+        return true;
+    }
+    if (forwardFormattedTextPointerEvent(watched, event)) {
         return true;
     }
     return QWidget::eventFilter(watched, event);
@@ -1614,6 +2345,7 @@ void ScreenshotRecognitionWindow::contextMenuEvent(QContextMenuEvent* event) {
     if (event == nullptr) {
         return;
     }
+    cancelLineBoxSelection();
     if (!m_showOriginalImage && m_ocrPresentation != nullptr) {
         showOcrContextMenu(event->globalPos());
         event->accept();
@@ -1634,9 +2366,21 @@ void ScreenshotRecognitionWindow::mousePressEvent(QMouseEvent* event) {
     if (event != nullptr && event->button() == Qt::LeftButton && !m_showOriginalImage &&
         m_ocrPresentation != nullptr) {
         setFocus(Qt::MouseFocusReason);
+        const QPointF canvasPosition = canvasPositionForLocalPoint(event->position());
+        const ScreenshotOcrTextPosition textPosition =
+            m_textLayer->textPositionAt(canvasPosition, false);
+        if (boxSelectionEnabled() && event->modifiers() == Qt::NoModifier &&
+            !textPosition.valid()) {
+            cancelLineBoxSelection();
+            m_lineBoxPressPosition = event->position();
+            m_lineBoxThresholdReached = false;
+            m_ocrPresentation->beginLineBoxSelection(canvasPosition);
+            grabMouse();
+            event->accept();
+            return;
+        }
         const quint64 previousRevision = m_ocrPresentation->selectionRevision();
-        m_ocrPresentation->beginTextSelection(
-            m_textLayer->textPositionAt(canvasPositionForLocalPoint(event->position()), false));
+        m_ocrPresentation->beginTextSelection(textPosition);
         if (m_ocrPresentation->selectionRevision() != previousRevision) {
             m_textLayer->updateSelection();
         }
@@ -1650,11 +2394,16 @@ void ScreenshotRecognitionWindow::mouseDoubleClickEvent(QMouseEvent* event) {
     if (event == nullptr) {
         return;
     }
-    if (event->button() == Qt::LeftButton &&
-        (m_selectionResizeActive || selectionResizeDragModeAtLocalPoint(event->position()) !=
-                                        ScreenshotSelectionDragMode::None)) {
+    if (event->button() == Qt::LeftButton) {
+        const QPointer<ScreenshotRecognitionWindow> lifetime(this);
+        const bool wasAccepted = event->isAccepted();
         event->accept();
-        return;
+        if (m_selectionResizeActive)
+            return;
+        const auto dragMode = selectionResizeDragModeAtLocalPoint(event->position());
+        if (!lifetime || dragMode != ScreenshotSelectionDragMode::None)
+            return;
+        event->setAccepted(wasAccepted);
     }
     if (event->button() != Qt::LeftButton || m_showOriginalImage || m_ocrPresentation == nullptr ||
         m_stack->currentWidget() != m_textLayer) {
@@ -1677,18 +2426,77 @@ void ScreenshotRecognitionWindow::mouseDoubleClickEvent(QMouseEvent* event) {
     });
     m_ocrPresentation->finishTextSelection();
     m_textLayer->updateSelection();
-    static_cast<void>(copyVisibleContentToClipboard());
     event->accept();
+    static_cast<void>(copyVisibleContentToClipboard());
 }
 
 bool ScreenshotRecognitionWindow::isOcrBackgroundAt(const QPointF& localPosition) const {
+    if (m_formattedTextLayer && m_stack->currentWidget() == m_formattedTextLayer) {
+        return !m_showOriginalImage && !textSelectionActive() &&
+               rect().contains(localPosition.toPoint()) &&
+               !m_formattedTextLayer->textAt(canvasPositionForLocalPoint(localPosition));
+    }
     return !m_showOriginalImage && m_ocrPresentation != nullptr &&
            m_stack->currentWidget() == m_textLayer && !m_ocrPresentation->textSelectionActive() &&
            rect().contains(localPosition.toPoint()) &&
            !m_textLayer->textPositionAt(canvasPositionForLocalPoint(localPosition), false).valid();
 }
 
+bool ScreenshotRecognitionWindow::boxSelectionEnabled() const {
+    return isVisible() && !m_showOriginalImage && !m_selectionOnly &&
+           m_ocrPresentation != nullptr && m_stack->currentWidget() == m_textLayer;
+}
+
+bool ScreenshotRecognitionWindow::lineBoxSelectionActive() const {
+    return m_lineBoxPressPosition.has_value() ||
+           (m_ocrPresentation != nullptr && m_ocrPresentation->lineBoxSelectionActive());
+}
+
+void ScreenshotRecognitionWindow::cancelLineBoxSelection() {
+    const bool active = lineBoxSelectionActive();
+    m_lineBoxPressPosition.reset();
+    m_lineBoxThresholdReached = false;
+    if (m_ocrPresentation != nullptr) {
+        m_ocrPresentation->cancelLineBoxSelection();
+        if (active) {
+            m_textLayer->updateSelection();
+        }
+    }
+    // Clear ownership before releaseMouse sends UngrabMouse back through the event filter.
+    if (active && QWidget::mouseGrabber() == this && !m_selectionResizeActive) {
+        releaseMouse();
+    }
+    if (active) {
+        unsetCursor();
+    }
+}
+
+void ScreenshotRecognitionWindow::updateLineBoxSelection(const QPointF& localPosition) {
+    if (!m_lineBoxPressPosition || m_ocrPresentation == nullptr) {
+        return;
+    }
+    const QPointF delta = localPosition - *m_lineBoxPressPosition;
+    if (!m_lineBoxThresholdReached && delta.x() * delta.x() + delta.y() * delta.y() < 16.0) {
+        return;
+    }
+    m_lineBoxThresholdReached = true;
+    const QRectF rectangle(canvasPositionForLocalPoint(*m_lineBoxPressPosition),
+                           canvasPositionForLocalPoint(localPosition));
+    m_ocrPresentation->updateLineBoxSelection(rectangle.normalized());
+    m_textLayer->updateSelection();
+}
+
 void ScreenshotRecognitionWindow::mouseMoveEvent(QMouseEvent* event) {
+    if (event != nullptr && m_lineBoxPressPosition) {
+        if (!event->buttons().testFlag(Qt::LeftButton)) {
+            cancelLineBoxSelection();
+        } else {
+            updateLineBoxSelection(event->position());
+            setCursor(Qt::CrossCursor);
+            event->accept();
+            return;
+        }
+    }
     if (handleSelectionResizeEvent(this, event)) {
         return;
     }
@@ -1713,6 +2521,24 @@ void ScreenshotRecognitionWindow::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void ScreenshotRecognitionWindow::mouseReleaseEvent(QMouseEvent* event) {
+    if (event != nullptr && event->button() == Qt::LeftButton && m_lineBoxPressPosition) {
+        updateLineBoxSelection(event->position());
+        const bool boxDragged = m_lineBoxThresholdReached;
+        m_lineBoxPressPosition.reset();
+        m_lineBoxThresholdReached = false;
+        if (boxDragged) {
+            m_ocrPresentation->finishLineBoxSelection();
+        } else {
+            m_ocrPresentation->clearTextSelection();
+        }
+        m_textLayer->updateSelection();
+        if (QWidget::mouseGrabber() == this) {
+            releaseMouse();
+        }
+        updateSelectionResizeCursor(event->position());
+        event->accept();
+        return;
+    }
     if (handleSelectionResizeEvent(this, event)) {
         return;
     }
@@ -1743,6 +2569,7 @@ void ScreenshotRecognitionWindow::paintEvent(QPaintEvent* event) {
 }
 
 void ScreenshotRecognitionWindow::resizeEvent(QResizeEvent* event) {
+    cancelLineBoxSelection();
     QWidget::resizeEvent(event);
     synchronizeTextLayer();
     updateTextEditorSpinGeometry();
@@ -1798,10 +2625,21 @@ void ScreenshotRecognitionWindow::updateTextEditorSpinGeometry() {
 
 void ScreenshotRecognitionWindow::changeEvent(QEvent* event) {
     QWidget::changeEvent(event);
+    if (event->type() == QEvent::LanguageChange && m_recognitionRetry) {
+        m_recognitionRetry->setText(tr("Retry"));
+        m_recognitionRetry->setAccessibleName(tr("Retry recognition"));
+    }
 #if SNOW_SHOT_ENABLE_QR_RECOGNITION || SNOW_SHOT_ENABLE_LATEX_RECOGNITION
     if (event->type() == QEvent::LanguageChange && m_qrBrowser) {
         m_qrBrowser->setAccessibleName(m_qrDetectLinks ? tr("Barcode recognition result")
                                                        : tr("LaTeX formula source"));
     }
 #endif
+#if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
+    if (event->type() == QEvent::LanguageChange && m_latexPreviewEnabled && m_latexDocument &&
+        m_textEditor)
+        m_textEditor->setAccessibleName(tr("LaTeX formula source"));
+#endif
+    if (event->type() == QEvent::LanguageChange && companionPreviewEnabled())
+        refreshOriginalImagePreview();
 }

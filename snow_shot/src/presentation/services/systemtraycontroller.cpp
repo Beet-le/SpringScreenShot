@@ -247,14 +247,17 @@ class TrayMenuSkinBinding final : public QObject {
   public:
     explicit TrayMenuSkinBinding(adqt::widgets::AdContextMenu* menu) : QObject(menu), menu_(menu) {
         menu_->installEventFilter(this);
+        // Qt deletes children after the menu's derived state has been released.
+        // End this binding while its event filter and settings callbacks can still use menu APIs.
+        QObject::connect(menu_, &adqt::widgets::AdContextMenu::aboutToDestroy, this,
+                         [this] { delete this; });
         connectConfiguration();
     }
 
     ~TrayMenuSkinBinding() override {
-        if (controller_ && attached_) {
-            attached_ = false;
-            controller_->detach(menu_);
-        }
+        QObject::disconnect(configurationConnection_);
+        menu_->removeEventFilter(this);
+        releaseFrame();
     }
 
   protected:
@@ -370,9 +373,9 @@ class TrayMenuSkinBinding final : public QObject {
             menu_->resetBackgroundFrame();
             return;
         }
-        const auto frame = controller_->frame(menu_);
-        menu_->setBackgroundFrame({controller_->pixmap(menu_), frame.normalizedPlacement,
-                                   controller_->opacity(), controller_->maskOpacity()});
+        menu_->setBackgroundFrame({controller_->pixmap(menu_),
+                                   controller_->normalizedPlacement(menu_), controller_->opacity(),
+                                   controller_->maskOpacity()});
     }
 
     adqt::widgets::AdContextMenu* menu_;
@@ -815,7 +818,7 @@ class SystemTrayController::Impl {
             resolvedSource = QCoreApplication::applicationFilePath();
             icon = QIcon(QCoreApplication::applicationFilePath());
         }
-        if (globalShortcutsDisabled) {
+        if (globalShortcutsDisabled || focusedFullscreenSuppressionActive) {
             icon = withShortcutsDisabledBadge(icon);
         }
 #ifdef Q_OS_MACOS
@@ -864,6 +867,7 @@ class SystemTrayController::Impl {
     QString lastBalloonFilePath;
     bool enabled = true;
     bool globalShortcutsDisabled = false;
+    bool focusedFullscreenSuppressionActive = false;
 };
 
 SystemTrayController::SystemTrayController(QObject* parent)
@@ -1045,5 +1049,13 @@ void SystemTrayController::setQuickActionChecked(GlobalShortcutAction action, bo
     if (QAction* trayAction = m_impl->checkableQuickActions.value(action)) {
         trayAction->setChecked(checked);
     }
+}
+
+void SystemTrayController::setFocusedFullscreenSuppressionActive(bool active) {
+    if (m_impl->focusedFullscreenSuppressionActive == active) {
+        return;
+    }
+    m_impl->focusedFullscreenSuppressionActive = active;
+    m_impl->updateIcon();
 }
 } // namespace snow_shot::presentation

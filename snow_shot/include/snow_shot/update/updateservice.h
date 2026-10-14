@@ -72,6 +72,7 @@ class UpdateService final : public QObject {
     // Does not start network checks, downloads, or the background schedule.
     void applyAtStartup();
     void setRelaunchArguments(const QStringList& arguments);
+    void clearRelaunchArguments();
     void reportBlocked(const QString& reason);
 
   signals:

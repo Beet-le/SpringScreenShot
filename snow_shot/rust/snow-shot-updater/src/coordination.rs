@@ -1623,6 +1623,25 @@ mod tests {
             parse_decision(&decision_line(true, Some(Vec::new())).unwrap(), true).unwrap(),
             Some(Vec::new())
         );
+        let temporary = tempfile::tempdir().unwrap();
+        let image_arguments = vec![
+            "--skip-startup-update".to_owned(),
+            "--edit-with-snow-shot".to_owned(),
+            temporary
+                .path()
+                .join("first image 安.png")
+                .display()
+                .to_string(),
+            "--edit-with-snow-shot".to_owned(),
+            temporary
+                .path()
+                .join("second image.png")
+                .display()
+                .to_string(),
+        ];
+        let line = decision_line(true, Some(image_arguments.clone())).unwrap();
+        assert_eq!(parse_decision(&line, true).unwrap(), Some(image_arguments));
+        assert!(parse_decision(&line, false).is_err());
     }
 
     #[test]

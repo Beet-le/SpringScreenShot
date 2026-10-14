@@ -8,6 +8,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QStringList>
@@ -103,6 +104,121 @@ void roundTripPreservesValuesAndSchemaVersion(const QTemporaryDir& temporary) {
         require(read.values.value(it.key()) == it.value(),
                 "exported values must survive the round trip");
     }
+}
+
+void autoSaveAfterExecutionArchivesMigrateAndRoundTrip(const QTemporaryDir& temporary) {
+    const QString key = QStringLiteral("screenshot/auto_save_after_execution_actions");
+    const QString legacyKey = QStringLiteral("screenshot/auto_save_after_copy");
+    const QJsonArray legacyActions{
+        QStringLiteral("copy_screenshot"), QStringLiteral("copy_scrolling_screenshot"),
+        QStringLiteral("copy_pinned_image"), QStringLiteral("capture_focused_window"),
+        QStringLiteral("capture_current_monitor")};
+    struct Case {
+        QJsonValue legacy;
+        QJsonValue current;
+        QJsonArray expected;
+    };
+    const QVector<Case> cases{
+        {true, QJsonValue(QJsonValue::Undefined), legacyActions},
+        {false, QJsonValue(QJsonValue::Undefined), {}},
+        {QStringLiteral("invalid"), QJsonValue(QJsonValue::Undefined), {}},
+        {QJsonValue(QJsonValue::Undefined), QJsonValue(QJsonValue::Undefined), {}},
+        {true, QJsonArray{}, {}},
+        {true, QJsonArray{QStringLiteral("pin_to_screen")},
+         QJsonArray{QStringLiteral("pin_to_screen")}},
+        {true, true, {}},
+    };
+    for (qsizetype index = 0; index < cases.size(); ++index) {
+        const Case& testCase = cases.at(index);
+        QJsonObject configuration{
+            {QStringLiteral("screenshot/copy_image_file_to_clipboard"), true}};
+        if (!testCase.legacy.isUndefined()) {
+            configuration.insert(legacyKey, testCase.legacy);
+        }
+        if (!testCase.current.isUndefined()) {
+            configuration.insert(key, testCase.current);
+        }
+        const QString archive =
+            temporary.filePath(QStringLiteral("legacy-auto-save-%1.zip").arg(index));
+        writeZip(archive, {{QStringLiteral("manifest.json"), manifestBytes(3)},
+                           {QStringLiteral("config.json"), configurationBytes(configuration)}});
+        const auto imported = storage::ConfigurationArchive::read(archive);
+        require(imported.isValid() && !imported.values.contains(legacyKey),
+                "legacy archives must migrate before unknown schema keys are discarded");
+        const QString path = temporary.filePath(QStringLiteral("auto-save-%1.json").arg(index));
+        storage::ConfigurationStore store(path, true, true, 60000);
+        require(
+            store.applySnapshot(imported.values, imported.schemaVersion) &&
+                store.value(key) == testCase.expected &&
+                store.value(QStringLiteral("screenshot/copy_image_file_to_clipboard")).toBool() &&
+                store.flushNow().success,
+            "archive import must preserve old scenarios and honor present new preferences");
+        storage::ConfigurationStore restored(path, true, true, 60000);
+        require(restored.value(key) == testCase.expected &&
+                    !restored.snapshot().contains(legacyKey),
+                "migrated archive preferences must persist with only the new key");
+    }
+
+    const QString snapshotPath = temporary.filePath(QStringLiteral("auto-save-snapshot.json"));
+    storage::ConfigurationStore snapshot(snapshotPath, true, true, 60000);
+    require(
+        snapshot.applySnapshot({{legacyKey, true}}, 3) && snapshot.value(key) == legacyActions &&
+            snapshot.applySnapshot({{legacyKey, true}, {key, QJsonArray{}}}, 3) &&
+            snapshot.value(key) == QJsonArray{} &&
+            snapshot.applySnapshot({{legacyKey, false}}, 3) && snapshot.value(key) == QJsonArray{},
+        "snapshot replacement must migrate legacy booleans and preserve explicit emptiness");
+    QJsonArray allActions = legacyActions;
+    allActions.push_back(QStringLiteral("pin_to_screen"));
+    require(snapshot.setValue(key, allActions),
+            "all six scenarios must be stored for archive export");
+    const QString exported = temporary.filePath(QStringLiteral("auto-save-round-trip.zip"));
+    require(storage::ConfigurationArchive::write(exported, snapshot.snapshot(),
+                                                 storage::ConfigurationSchema::currentVersion())
+                .isEmpty(),
+            "selected execution scenarios must export successfully");
+    const auto imported = storage::ConfigurationArchive::read(exported);
+    require(imported.isValid() && imported.values.value(key) == allActions &&
+                !imported.values.contains(legacyKey),
+            "all six independent scenarios must survive archive round trip");
+}
+
+void recognitionModelPreferencesSurviveRestart(const QTemporaryDir& temporary) {
+    const QString tableKey = QStringLiteral("screenshot_table/model");
+    const QString latexKey = QStringLiteral("screenshot_latex/model");
+    const QString path = temporary.filePath(QStringLiteral("recognition-models.json"));
+    const QString custom = QStringLiteral("custom:11111111-1111-4111-8111-111111111111");
+    {
+        storage::ConfigurationStore store(path, true, true);
+        require(store.value(tableKey).toString() == QStringLiteral("dedicated") &&
+                    store.value(latexKey).toString() == QStringLiteral("dedicated"),
+                "Table and LaTeX both default to dedicated recognition models");
+        require(store.setValue(tableKey, custom) &&
+                    store.value(latexKey).toString() == QStringLiteral("dedicated"),
+                "saving a table model must preserve the LaTeX model preference");
+        require(store.setValue(latexKey, QStringLiteral("snow-shot:vision")),
+                "LaTeX supports an independently saved vision model");
+        for (const QString& invalid :
+             {QString(), QStringLiteral("bad\nmodel"), QStringLiteral("model with spaces"),
+              QString(257, u'x'), QString(QChar(0))}) {
+            require(!store.setValue(tableKey, invalid) &&
+                        store.value(tableKey).toString() == custom,
+                    "invalid recognition identities must not overwrite a saved selection");
+        }
+        require(store.flushNow().success, "recognition preferences flush to storage");
+    }
+    storage::ConfigurationStore restored(path, true, true);
+    require(restored.value(tableKey).toString() == custom &&
+                restored.value(latexKey).toString() == QStringLiteral("snow-shot:vision"),
+            "both recognition preferences survive a fresh configuration store");
+    const QString archive = temporary.filePath(QStringLiteral("recognition-models.zip"));
+    require(storage::ConfigurationArchive::write(
+                archive, restored.snapshot(), storage::ConfigurationStore::currentSchemaVersion())
+                .isEmpty(),
+            "recognition preferences export through configuration archives");
+    const auto imported = storage::ConfigurationArchive::read(archive);
+    require(imported.isValid() && imported.values.value(tableKey).toString() == custom &&
+                imported.values.value(latexKey).toString() == QStringLiteral("snow-shot:vision"),
+            "configuration archives retain both model identities");
 }
 
 void readRejectsInvalidArchives(const QTemporaryDir& temporary) {
@@ -462,16 +578,26 @@ int main(int argc, char** argv) {
 
     QTemporaryDir temporary;
     require(temporary.isValid(), "temporary directory unavailable");
+    if (application.arguments().contains(QStringLiteral("--auto-save-after-execution-only"))) {
+        autoSaveAfterExecutionArchivesMigrateAndRoundTrip(temporary);
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--selection-aspect-ratio-only"))) {
         selectionAspectRatioArchivesPreservePreferences(temporary);
         return 0;
     }
+    if (application.arguments().contains(QStringLiteral("--recognition-models-only"))) {
+        recognitionModelPreferencesSurviveRestart(temporary);
+        return 0;
+    }
     roundTripPreservesValuesAndSchemaVersion(temporary);
+    autoSaveAfterExecutionArchivesMigrateAndRoundTrip(temporary);
     readRejectsInvalidArchives(temporary);
     writeRejectsUnwritableTargets(temporary);
     unicodePathsRoundTrip();
     applySnapshotReplacesConfiguration(temporary);
     selectionAspectRatioArchivesPreservePreferences(temporary);
+    recognitionModelPreferencesSurviveRestart(temporary);
     mcpCredentialRedactionAndRevision(temporary);
     return 0;
 }

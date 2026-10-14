@@ -1,7 +1,9 @@
 #include "physical_key_test_support.h"
+#include "snow_shot/presentation/canvasstatusreadout.h"
 #include "snow_shot/presentation/screenshotgeometry.h"
 #include "snow_shot/presentation/screenshotocrpresentation.h"
 #include "snow_shot/presentation/screenshotrecognitionwindow.h"
+#include "snow_shot/presentation/screenshotlatexrenderer.h"
 #include "snow_shot/presentation/screenshottableeditor.h"
 #include "snow_shot/presentation/windowshortcutmanager.h"
 #include "snow_shot/storage/settingsadapters.h"
@@ -16,9 +18,12 @@
 
 #include <QApplication>
 #include <QClipboard>
+#include <QColorSpace>
 #include <QContextMenuEvent>
 #include <QDir>
+#include <QFileInfo>
 #include <QEventLoop>
+#include <QElapsedTimer>
 #include <QFrame>
 #include <QFontDatabase>
 #include <QFocusEvent>
@@ -35,20 +40,24 @@
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QPainter>
+#include <QPainterPath>
 #include <QScrollBar>
 #include <QScreen>
 #include <QScopeGuard>
 #include <QStyleOptionGraphicsItem>
 #include <QTextBlock>
+#include <QTextLayout>
 #include <QTextBrowser>
 #include <QTextDocument>
 #include <QTextEdit>
 #include <QTextFragment>
 #include <QTimer>
 #include <QThread>
+#include <QTranslator>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWindow>
+#include <QWheelEvent>
 
 #include <cstdlib>
 #include <algorithm>
@@ -67,11 +76,60 @@
 #endif
 
 namespace {
+class LatexPreviewTranslator final : public QTranslator {
+  public:
+    bool isEmpty() const override {
+        return false;
+    }
+
+    QString translate(const char* context, const char* source, const char*, int) const override {
+        if (qstrcmp(context, "ScreenshotRecognitionWindow") == 0 ||
+            (qstrcmp(context, "adqt::widgets::AdTextEdit") == 0 &&
+             qstrcmp(source, "Multiline input") == 0))
+            return QStringLiteral("Translated ") + QString::fromUtf8(source);
+        return {};
+    }
+};
+
 void require(bool condition, const char* message) {
     if (!condition) {
         std::cerr << message << '\n';
         std::exit(EXIT_FAILURE);
     }
+}
+
+void companionWheelZoomPreservesRecognition(ScreenshotOriginalImagePreviewWindow& preview,
+                                            QWidget& owner, QTextDocument& document,
+                                            bool bottomRight = false) {
+    const QRect originalGeometry = preview.geometry();
+    const QRect ownerGeometry = owner.geometry();
+    const QString originalText = document.toPlainText();
+    QWidget* const focus = QApplication::focusWidget();
+    const auto wheel = [&](int angle) {
+        const QPointF localPosition;
+        QWheelEvent event(localPosition, QPointF(preview.mapToGlobal(QPoint())), QPoint(),
+                          QPoint(0, angle), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        event.ignore();
+        QApplication::sendEvent(&preview, &event);
+        require(event.isAccepted(), "wheel input over the companion must be consumed");
+    };
+    wheel(120);
+    require(preview.size() == QSize(qRound(originalGeometry.width() * 1.1),
+                                    qRound(originalGeometry.height() * 1.1)) &&
+                (bottomRight ? preview.geometry().bottomRight() == originalGeometry.bottomRight()
+                             : preview.geometry().topLeft() == originalGeometry.topLeft()) &&
+                owner.geometry() == ownerGeometry && document.toPlainText() == originalText &&
+                QApplication::focusWidget() == focus && !preview.hasFocus(),
+            "companion wheel zoom must preserve recognition geometry, text and focus");
+    wheel(-120);
+    require(preview.geometry() == originalGeometry,
+            "reversing companion wheel zoom must return to the initial selection-sized preview");
+    auto* readout = preview.findChild<CanvasStatusReadout*>();
+    require(readout != nullptr, "the companion must use the shared zoom hint");
+    auto* timer = readout->dismissalTimer();
+    timer->stop();
+    require(QMetaObject::invokeMethod(timer, "timeout", Qt::DirectConnection),
+            "hiding the integration fixture zoom hint failed");
 }
 
 void clickCell(ScreenshotTableEditor& editor, int row, int column) {
@@ -89,6 +147,18 @@ void clickCell(ScreenshotTableEditor& editor, int row, int column) {
 
 QPolygonF ocrQuad(const QRectF& rect) {
     return {rect.topLeft(), rect.topRight(), rect.bottomRight(), rect.bottomLeft()};
+}
+
+QList<QGraphicsItem*> ocrGlyphItems(QGraphicsView* layer) {
+    QList<QGraphicsItem*> items;
+    if (layer != nullptr && layer->scene() != nullptr) {
+        for (auto* item : layer->scene()->items()) {
+            if (item->zValue() == 0) {
+                items.push_back(item);
+            }
+        }
+    }
+    return items;
 }
 
 bool doubleClickWidget(QWidget& receiver, const QPoint& point,
@@ -196,6 +266,519 @@ double averageLightness(const QImage& image) {
         }
     }
     return static_cast<double>(total) / static_cast<double>(image.width() * image.height());
+}
+
+QImage renderOcrHighlightingScene(ScreenshotOcrTextLayer& layer, qreal devicePixelRatio,
+                                  const QColor& referenceMask = {},
+                                  const QTransform& outputTransform = {}) {
+    const QRectF sceneRect = layer.sceneRect();
+    QImage image(QSize(qCeil(sceneRect.width() * devicePixelRatio),
+                       qCeil(sceneRect.height() * devicePixelRatio)),
+                 QImage::Format_ARGB32_Premultiplied);
+    image.setDevicePixelRatio(devicePixelRatio);
+    image.fill(QColor(214, 227, 239));
+    QPainter painter(&image);
+    painter.setTransform(outputTransform);
+    painter.setClipRect(sceneRect, Qt::IntersectClip);
+    if (referenceMask.isValid()) {
+        QPainterPath complement;
+        complement.addRect(sceneRect);
+        for (const auto* item : ocrGlyphItems(&layer)) {
+            if (!item->isVisible())
+                continue;
+            QPainterPath hole;
+            hole.addPolygon(item->mapToScene(item->boundingRect()));
+            hole.closeSubpath();
+            // Sequential subtraction independently checks the union of overlapping holes,
+            // including labels whose projected polygons have opposite winding.
+            complement = complement.subtracted(hole);
+        }
+        painter.save();
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.fillPath(complement, referenceMask);
+        painter.restore();
+    }
+    layer.scene()->render(&painter, sceneRect, sceneRect);
+    return image;
+}
+
+QPainterPath ocrLabelScenePath(const QGraphicsItem& item) {
+    QPainterPath path;
+    path.addPolygon(item.mapToScene(item.boundingRect()));
+    path.closeSubpath();
+    return path;
+}
+
+std::optional<QPoint> blankOcrPixelInPath(const QImage& image, const QPainterPath& path) {
+    const qreal dpr = image.devicePixelRatio();
+    const QRectF bounds = path.boundingRect();
+    const QRect pixels = QRectF(bounds.topLeft() * dpr, bounds.size() * dpr)
+                             .toAlignedRect()
+                             .intersected(image.rect());
+    for (int y = pixels.top(); y <= pixels.bottom(); ++y) {
+        for (int x = pixels.left(); x <= pixels.right(); ++x) {
+            const QPointF center((x + 0.5) / dpr, (y + 0.5) / dpr);
+            if (image.pixelColor(x, y) == QColor(214, 227, 239) &&
+                path.contains(QRectF(center - QPointF(1, 1), QSizeF(2, 2)))) {
+                return QPoint(x, y);
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+QColor singleOcrMaskBlend(const QColor& mask) {
+    QImage pixel(1, 1, QImage::Format_ARGB32_Premultiplied);
+    pixel.fill(QColor(214, 227, 239));
+    {
+        QPainter painter(&pixel);
+        painter.fillRect(pixel.rect(), mask);
+    }
+    return pixel.pixelColor(0, 0);
+}
+
+std::shared_ptr<ScreenshotOcrPresentation> ocrHighlightingPresentation() {
+    auto presentation = std::make_shared<ScreenshotOcrPresentation>();
+    presentation->selection = QRect(0, 0, 420, 440);
+    presentation->lines = {
+        ScreenshotOcrLine{QStringLiteral("A"), 1.0, ocrQuad(QRectF(20, 15, 220, 40))},
+        ScreenshotOcrLine{
+            QStringLiteral("Rotated"), 1.0, {{40, 85}, {260, 125}, {254, 160}, {34, 120}}},
+        ScreenshotOcrLine{
+            QStringLiteral("Perspective"), 1.0, {{40, 180}, {255, 165}, {245, 220}, {50, 235}}},
+        ScreenshotOcrLine{QStringLiteral("ABCDE"), 1.0, ocrQuad(QRectF(320, 30, 35, 220)),
+                          ScreenshotOcrTextDirection::Vertical},
+        ScreenshotOcrLine{QStringLiteral("Top row\nBottom row"), 1.0,
+                          ocrQuad(QRectF(40, 270, 280, 130))},
+        ScreenshotOcrLine{QString{}, 1.0, ocrQuad(QRectF(350, 300, 30, 30))},
+        ScreenshotOcrLine{QStringLiteral("Invalid"), 1.0, {{360, 360}, {390, 360}, {375, 390}}},
+        ScreenshotOcrLine{QStringLiteral("Offscreen"), 1.0, ocrQuad(QRectF(900, 900, 50, 20))},
+    };
+    auto& paragraph = presentation->lines[4];
+    paragraph.paragraph = true;
+    paragraph.sourceLineQuads = {ocrQuad(QRectF(40, 270, 280, 30)),
+                                 ocrQuad(QRectF(40, 365, 280, 35))};
+    return presentation;
+}
+
+void ocrTextHighlightingMasksNonTextAroundFittedLabels() {
+    ScreenshotOcrTextLayer layer;
+    const auto presentation = ocrHighlightingPresentation();
+    layer.setPresentation(presentation);
+    layer.synchronize(QTransform(), presentation->selection);
+    const auto sceneItems = layer.scene()->items();
+    const auto items = ocrGlyphItems(&layer);
+    require(items.size() == presentation->lines.size() &&
+                std::count_if(items.cbegin(), items.cend(),
+                              [](const auto* item) { return item->isVisible(); }) == 5,
+            "highlighting uses only the existing valid nonempty text labels");
+    require(std::any_of(items.cbegin(), items.cend(),
+                        [](const auto* item) {
+                            return item->isVisible() && item->sceneBoundingRect().top() < 60 &&
+                                   item->sceneBoundingRect().left() < 300 &&
+                                   item->sceneBoundingRect().width() < 110;
+                        }),
+            "highlighting fixture includes a label narrower than its recognized quad");
+#if defined(SNOW_SHOT_BENCH_INTERNALS)
+    const quint64 initialSynchronizations = layer.geometrySynchronizationCount();
+#endif
+    for (const qreal dpr : {1.0, 1.25, 2.0}) {
+        layer.setTextHighlighting(false, QColor(0, 0, 0, 128));
+        const QImage disabled = renderOcrHighlightingScene(layer, dpr);
+        const auto fittedItem = std::find_if(items.cbegin(), items.cend(), [](const auto* item) {
+            return item->isVisible() && item->sceneBoundingRect().top() < 60 &&
+                   item->sceneBoundingRect().left() < 300;
+        });
+        require(fittedItem != items.cend(), "the clear-text fixture contains a fitted label");
+        const auto labelWhitespace = blankOcrPixelInPath(disabled, ocrLabelScenePath(**fittedItem));
+        require(labelWhitespace.has_value(), "the label fixture has whitespace inside its bounds");
+        layer.setTextHighlighting(true, QColor(32, 96, 192, 0));
+        require(renderOcrHighlightingScene(layer, dpr) == disabled,
+                "a transparent mask preserves every text and background pixel");
+        for (const QColor& mask :
+             {QColor(30, 120, 210, 91), QColor(180, 45, 80, 255), QColor(0, 0, 0, 128), QColor()}) {
+            const QColor normalized = mask.isValid() ? mask : QColor(0, 0, 0, 128);
+            layer.setTextHighlighting(false, mask);
+            const QImage expected = renderOcrHighlightingScene(layer, dpr, normalized);
+            layer.setTextHighlighting(true, mask);
+            const QImage actual = renderOcrHighlightingScene(layer, dpr);
+            if (actual != expected)
+                std::cerr << "OCR mask mismatch at DPR " << dpr << " for "
+                          << normalized.name(QColor::HexArgb).toStdString() << '\n';
+            require(actual == expected && actual != disabled,
+                    "the configured RGBA mask covers non-text areas and leaves fitted labels "
+                    "and glyphs clear");
+            require(actual.pixelColor(*labelWhitespace) == QColor(214, 227, 239),
+                    "whitespace inside a text label remains clear instead of receiving a mask");
+            for (const QPoint& blank : {QPoint(5, 5), QPoint(365, 315), QPoint(375, 375)}) {
+                require(actual.pixelColor(qFloor(blank.x() * dpr), qFloor(blank.y() * dpr)) ==
+                            singleOcrMaskBlend(normalized),
+                        "non-text background, empty and invalid labels receive exactly one RGBA "
+                        "mask blend");
+            }
+            require(layer.scene()->items() == sceneItems,
+                    "mask toggles and color changes preserve graphics item identities");
+            layer.synchronize(QTransform(), presentation->selection);
+        }
+        layer.setTextHighlighting(false, QColor(0, 0, 0, 128));
+        require(renderOcrHighlightingScene(layer, dpr) == disabled,
+                "disabling highlighting restores the original label rendering exactly");
+    }
+#if defined(SNOW_SHOT_BENCH_INTERNALS)
+    require(layer.geometrySynchronizationCount() == initialSynchronizations,
+            "paint-only style changes must not synchronize or reshape text geometry");
+#endif
+    layer.setTextHighlighting(true, QColor(30, 120, 210, 91));
+    const QImage highlighted = renderOcrHighlightingScene(layer, 1.25);
+    layer.clearPresentation();
+    require(layer.scene()->items().isEmpty(), "clearing OCR removes label items");
+    layer.setPresentation(presentation);
+    layer.synchronize(QTransform(), presentation->selection);
+    require(renderOcrHighlightingScene(layer, 1.25) == highlighted,
+            "the configured mask style survives clearing and replacing the presentation");
+}
+
+void ocrTextHighlightingUnionsOverlappingLabels() {
+    ScreenshotOcrTextLayer layer;
+    auto presentation = std::make_shared<ScreenshotOcrPresentation>();
+    presentation->selection = QRect(0, 0, 320, 200);
+    const QRectF bounds(60, 50, 200, 80);
+    presentation->lines = {
+        ScreenshotOcrLine{QStringLiteral("Overlap"), 1.0, ocrQuad(bounds)},
+        ScreenshotOcrLine{
+            QStringLiteral("Overlap"),
+            1.0,
+            {bounds.topLeft(), bounds.bottomLeft(), bounds.bottomRight(), bounds.topRight()}},
+    };
+    layer.setPresentation(presentation);
+    layer.synchronize(QTransform(), presentation->selection);
+    const auto sceneItems = layer.scene()->items();
+    const auto items = ocrGlyphItems(&layer);
+    require(items.size() == 2 && items[0]->isVisible() && items[1]->isVisible(),
+            "overlapping text uses exactly two existing label items");
+    const auto signedArea = [](const QPolygonF& polygon) {
+        qreal area = 0;
+        for (qsizetype index = 0; index < polygon.size(); ++index) {
+            const QPointF& first = polygon[index];
+            const QPointF& second = polygon[(index + 1) % polygon.size()];
+            area += first.x() * second.y() - second.x() * first.y();
+        }
+        return area;
+    };
+    require(signedArea(items[0]->mapToScene(items[0]->boundingRect())) *
+                    signedArea(items[1]->mapToScene(items[1]->boundingRect())) <
+                0,
+            "the overlap fixture projects text rectangles with opposite winding");
+    const QPainterPath overlap =
+        ocrLabelScenePath(*items[0]).intersected(ocrLabelScenePath(*items[1]));
+    const QColor mask(30, 120, 210, 91);
+    for (const qreal dpr : {1.0, 1.25, 2.0}) {
+        layer.setTextHighlighting(false, mask);
+        const QImage disabled = renderOcrHighlightingScene(layer, dpr);
+        const auto overlapWhitespace = blankOcrPixelInPath(disabled, overlap);
+        require(overlapWhitespace.has_value(), "overlapping labels have a blank interior sample");
+        const QImage expected = renderOcrHighlightingScene(layer, dpr, mask);
+        layer.setTextHighlighting(true, mask);
+        const QImage actual = renderOcrHighlightingScene(layer, dpr);
+        require(actual == expected &&
+                    actual.pixelColor(*overlapWhitespace) == QColor(214, 227, 239),
+                "overlapping labels form a union of clear holes regardless of winding");
+        require(actual.pixelColor(qFloor(5 * dpr), qFloor(5 * dpr)) == singleOcrMaskBlend(mask) &&
+                    layer.scene()->items() == sceneItems,
+                "overlapping labels never multiply background opacity or create overlay items");
+    }
+}
+
+void ocrTextHighlightingTracksFractionalDevicePhase() {
+    const auto presentation = ocrHighlightingPresentation();
+    presentation->selection = QRect(0, 0, 640, 640);
+    // Dense contours exercise raster reuse; simple masks use the direct vector fill.
+    for (int index = 0; index < 48; ++index) {
+        presentation->lines.push_back(ScreenshotOcrLine{
+            QStringLiteral("Z"), 1.0,
+            ocrQuad(QRectF(30 + (index % 8) * 70, 460 + (index / 8) * 28, 50, 20))});
+    }
+    ScreenshotOcrTextLayer layer;
+    ScreenshotOcrTextLayer reference;
+    layer.setPresentation(presentation);
+    reference.setPresentation(presentation);
+    layer.synchronize(QTransform(), presentation->selection);
+    reference.synchronize(QTransform(), presentation->selection);
+    const auto sceneItems = layer.scene()->items();
+    const auto items = ocrGlyphItems(&layer);
+    const QColor mask(30, 120, 210, 91);
+    layer.setTextHighlighting(true, mask);
+    constexpr qreal dpr = 1.25;
+    const QImage identityExpected = renderOcrHighlightingScene(reference, dpr, mask);
+    const QImage identityActual = renderOcrHighlightingScene(layer, dpr);
+    const QTransform initialPhase = QTransform::fromTranslate(0.25, 0.4);
+    const QImage initial = renderOcrHighlightingScene(layer, dpr, {}, initialPhase);
+    for (const QTransform& transform :
+         {initialPhase, QTransform::fromTranslate(0.6, 0.1), initialPhase,
+          QTransform(1.1, 0, 0, 0.9, 0.3, 0.2), initialPhase}) {
+        const QImage expected = renderOcrHighlightingScene(reference, dpr, mask, transform);
+        const QImage actual = renderOcrHighlightingScene(layer, dpr, {}, transform);
+        const bool metadataEqual = actual.format() == expected.format() &&
+                                   actual.devicePixelRatio() == expected.devicePixelRatio() &&
+                                   actual.colorSpace() == expected.colorSpace();
+        require(metadataEqual, "cached and reference masks have identical image metadata");
+        require(actual == expected,
+                "mask cache follows fractional device phase and nonuniform transforms exactly");
+        if (transform == initialPhase) {
+            require(actual == initial,
+                    "returning to the initial device phase restores its exact mask pixels");
+        }
+        require(layer.scene()->items() == sceneItems,
+                "device-phase mask updates preserve the existing text-label items");
+    }
+    require(identityActual == identityExpected,
+            "cached and reference masks agree at the identity device phase");
+}
+
+void ocrTextHighlightingPreservesHiddenTextSelection() {
+    ScreenshotOcrTextLayer layer;
+    const auto presentation = ocrHighlightingPresentation();
+    layer.setTextHighlighting(true, QColor(180, 45, 80, 255));
+    layer.setPresentation(presentation, ScreenshotOcrTextLayer::RenderingMode::SelectionOnly);
+    layer.synchronize(QTransform(), presentation->selection);
+    const auto sceneItems = layer.scene()->items();
+    const auto items = ocrGlyphItems(&layer);
+    for (const qreal dpr : {1.0, 1.25, 2.0}) {
+        presentation->clearTextSelection();
+        layer.updateSelection();
+        layer.setTextHighlighting(false, QColor(180, 45, 80, 255));
+        const QImage hidden = renderOcrHighlightingScene(layer, dpr);
+        layer.setTextHighlighting(true, QColor(180, 45, 80, 255));
+        require(renderOcrHighlightingScene(layer, dpr) == hidden,
+                "hidden selectable OCR must never paint text highlighting");
+        presentation->selectAll();
+        layer.updateSelection();
+        const QImage selected = renderOcrHighlightingScene(layer, dpr);
+        layer.setTextHighlighting(false, QColor(180, 45, 80, 255));
+        require(renderOcrHighlightingScene(layer, dpr) == selected && selected != hidden,
+                "SelectionOnly preserves character selection while suppressing label masks");
+        require(layer.scene()->items() == sceneItems,
+                "hidden label style changes preserve the existing scene items");
+    }
+}
+
+void ocrTextHighlightingPreservesInteractionAndExports() {
+    QWidget host;
+    host.resize(320, 180);
+    QPalette hostPalette = host.palette();
+    hostPalette.setColor(QPalette::Window, QColor(214, 227, 239));
+    host.setPalette(hostPalette);
+    host.setAutoFillBackground(true);
+    host.show();
+    ScreenshotRecognitionWindow window(
+        {}, &host, ScreenshotRecognitionWindow::PresentationMode::EmbeddedChild);
+    require(window.present({QGuiApplication::primaryScreen(), &host, host.rect(), host.rect(),
+                            ScreenshotRecognitionWindow::PresentationMode::EmbeddedChild}),
+            "the highlighting recognition surface presents");
+    auto presentation = std::make_shared<ScreenshotOcrPresentation>();
+    presentation->selection = host.rect();
+    presentation->lines = {
+        ScreenshotOcrLine{QStringLiteral("Mask sample"), 1.0, ocrQuad(QRectF(35, 40, 220, 35))},
+        ScreenshotOcrLine{QStringLiteral("Second line"), 1.0, ocrQuad(QRectF(35, 105, 220, 35))},
+    };
+    window.setOcrPresentation(presentation);
+    window.setOcrCopyDefaultsEnabled(false);
+    QApplication::processEvents();
+    auto* layer = static_cast<ScreenshotOcrTextLayer*>(
+        window.findChild<QGraphicsView*>(QStringLiteral("snowShotOcrTextLayer")));
+    require(layer != nullptr, "the window owns the OCR label layer");
+    const auto sceneItems = layer->scene()->items();
+    const auto items = ocrGlyphItems(layer);
+    const QPointF hitPoint(80, 55);
+    const auto position = layer->textPositionAt(hitPoint, false);
+    require(position.valid() && !window.isOcrBackgroundAt(hitPoint) &&
+                window.isOcrBackgroundAt(QPointF(10, 10)),
+            "the highlighting fixture has distinct text and background hit regions");
+    QImage source(host.size(), QImage::Format_ARGB32_Premultiplied);
+    source.fill(QColor(22, 90, 130));
+    const auto originalSnapshot = window.imageSnapshot(source, host.rect(), {}, {}, {});
+    require(originalSnapshot.has_value(), "OCR exports produce an image snapshot");
+    const QImage originalExport = renderScreenshotRecognitionImage(*originalSnapshot);
+    const QImage originalPrint = window.printViewportSnapshot(source, host.rect());
+    require(!originalExport.isNull() && !originalPrint.isNull(),
+            "highlighting export references contain rendered text");
+    const QImage defaultPixels = renderOcrHighlightingScene(*layer, 1.0);
+    window.setTextHighlighting(false, QColor(0, 0, 0, 128));
+    require(renderOcrHighlightingScene(*layer, 1.0) == defaultPixels,
+            "text highlighting is disabled on a newly created recognition window");
+    const QColor mask(30, 120, 210, 91);
+    QApplication::processEvents();
+    const QImage originalHost = host.grab().toImage();
+    window.setTextHighlighting(true, mask);
+    QApplication::processEvents();
+    require(host.grab().toImage() != originalHost,
+            "enabling highlighting repaints the composed parent surface");
+    window.setTextHighlighting(false, mask);
+    QApplication::processEvents();
+    require(host.grab().toImage() == originalHost,
+            "disabling highlighting clears its backing pixels and restores the parent surface");
+    presentation->beginTextSelection(ScreenshotOcrTextPosition{0, 0});
+    presentation->updateTextSelection(ScreenshotOcrTextPosition{0, 2});
+    presentation->finishTextSelection();
+    window.updateOcrSelection();
+    const auto originalCopy = window.textSelectionClipboardMimeData();
+    require(originalCopy && originalCopy->text() == QStringLiteral("Ma"),
+            "highlighting selection fixture copies its exact selected text");
+    const QImage expectedSelection = renderOcrHighlightingScene(*layer, 1.25, mask);
+    window.setTextHighlighting(true, mask);
+    require(renderOcrHighlightingScene(*layer, 1.25) == expectedSelection,
+            "character selection and glyphs remain unchanged inside clear label regions");
+    const auto highlightedPosition = layer->textPositionAt(hitPoint, false);
+    const auto highlightedCopy = window.textSelectionClipboardMimeData();
+    require(highlightedPosition.lineIndex == position.lineIndex &&
+                highlightedPosition.characterIndex == position.characterIndex &&
+                !window.isOcrBackgroundAt(hitPoint) && window.isOcrBackgroundAt(QPointF(10, 10)) &&
+                highlightedCopy && highlightedCopy->text() == originalCopy->text() &&
+                layer->scene()->items() == sceneItems,
+            "highlighting preserves text hit tests, clipboard data and graphics item identities");
+    const auto highlightedSnapshot = window.imageSnapshot(source, host.rect(), {}, {}, {});
+    require(highlightedSnapshot &&
+                renderScreenshotRecognitionImage(*highlightedSnapshot) == originalExport &&
+                window.printViewportSnapshot(source, host.rect()) == originalPrint,
+            "screen highlighting never changes recognized image exports or printed pixels");
+    const auto changedItem = std::find_if(items.cbegin(), items.cend(), [](const auto* item) {
+        return item->sceneBoundingRect().center().y() > 100;
+    });
+    require(changedItem != items.cend(), "the incremental fixture has a second text label");
+    const QRectF originalLabelBounds = (*changedItem)->sceneBoundingRect();
+    const QPainterPath originalHole = ocrLabelScenePath(**changedItem);
+    const QImage beforeUpdate = renderOcrHighlightingScene(*layer, 1.25);
+    window.updateOcrText(1, QStringLiteral("B"));
+    const QImage updated = renderOcrHighlightingScene(*layer, 1.25);
+    const QPainterPath vacatedHole = originalHole.subtracted(ocrLabelScenePath(**changedItem));
+    const auto vacatedWhitespace = blankOcrPixelInPath(beforeUpdate, vacatedHole);
+    require(vacatedWhitespace.has_value() &&
+                updated.pixelColor(*vacatedWhitespace) == singleOcrMaskBlend(mask),
+            "shrinking a text label remasks its former clear area exactly once");
+    require(layer->scene()->items() == sceneItems &&
+                (*changedItem)->sceneBoundingRect().width() < originalLabelBounds.width() / 2 &&
+                presentation->selectedText() == QStringLiteral("Ma"),
+            "incremental OCR text changes resize the highlighted label without replacing items "
+            "or disturbing another line's selection");
+    const QRect unchangedPixels(0, 0, updated.width(), qRound(90 * 1.25));
+    require(updated.copy(unchangedPixels) == beforeUpdate.copy(unchangedPixels),
+            "incremental highlighted text updates preserve every pixel of the other label");
+    window.setTextHighlighting(false, mask);
+    const QImage expectedUpdate = renderOcrHighlightingScene(*layer, 1.25, mask);
+    window.setTextHighlighting(true, mask);
+    require(updated == expectedUpdate && renderOcrHighlightingScene(*layer, 1.25) == expectedUpdate,
+            "the clear hole follows updated fitted bounds without retaining the old rectangle");
+    const QImage highlighted = renderOcrHighlightingScene(*layer, 1.25);
+    window.clearOcrPresentation();
+    window.setOcrPresentation(presentation);
+    require(renderOcrHighlightingScene(*layer, 1.25) == highlighted,
+            "window presentation replacement preserves its configured highlighting style");
+}
+
+void ocrTextHighlightingPreservesBoxSelection() {
+    auto presentation = std::make_shared<ScreenshotOcrPresentation>();
+    presentation->selection = QRect(0, 0, 320, 220);
+    for (int index = 0; index < 3; ++index) {
+        presentation->lines.push_back(
+            ScreenshotOcrLine{QStringLiteral("block %1").arg(index), 1.0,
+                              ocrQuad(QRectF(40, 30 + index * 60, 220, 35))});
+    }
+    ScreenshotOcrTextLayer layer;
+    ScreenshotOcrTextLayer reference;
+    layer.setPresentation(presentation);
+    reference.setPresentation(presentation);
+    layer.synchronize(QTransform(), presentation->selection);
+    reference.synchronize(QTransform(), presentation->selection);
+    const auto sceneItems = layer.scene()->items();
+    const QColor mask(30, 120, 210, 91);
+    layer.setTextHighlighting(true, mask);
+    const auto verifyPixels = [&] {
+        layer.updateSelection();
+        reference.updateSelection();
+        for (const qreal dpr : {1.0, 1.25, 2.0}) {
+            require(renderOcrHighlightingScene(layer, dpr) ==
+                        renderOcrHighlightingScene(reference, dpr, mask),
+                    "highlighting masks only non-text areas through box preview transitions");
+        }
+        require(layer.scene()->items() == sceneItems,
+                "box selection and highlighting retain every glyph and overlay item");
+    };
+    presentation->beginTextSelection(ScreenshotOcrTextPosition{0, 0});
+    presentation->updateTextSelection(
+        ScreenshotOcrTextPosition{0, static_cast<int>(presentation->lines[0].text.size())});
+    presentation->finishTextSelection();
+    presentation->beginLineBoxSelection(QPointF(10, 10));
+    presentation->updateLineBoxSelection(QRectF(10, 10, 280, 120));
+    require(presentation->lineSelectionPreview(0) == ScreenshotOcrLineSelectionPreview::Deselect &&
+                presentation->lineSelectionPreview(1) == ScreenshotOcrLineSelectionPreview::Select,
+            "highlighting fixture exercises simultaneous selection and deselection previews");
+    verifyPixels();
+    layer.setTextHighlighting(false, mask);
+    require(presentation->lineBoxSelectionActive() &&
+                presentation->selectedText() == QStringLiteral("block 0"),
+            "a highlighting toggle preserves the active gesture and committed selection");
+    layer.setTextHighlighting(true, mask);
+    presentation->updateLineBoxSelection(QRectF(10, 10, 280, 60));
+    verifyPixels();
+    presentation->cancelLineBoxSelection();
+    verifyPixels();
+    require(presentation->selectedText() == QStringLiteral("block 0"),
+            "canceling a highlighted box gesture preserves its committed selection");
+    presentation->beginLineBoxSelection(QPointF(10, 10));
+    presentation->updateLineBoxSelection(QRectF(10, 10, 280, 120));
+    presentation->finishLineBoxSelection();
+    verifyPixels();
+    require(presentation->selectedText() == QStringLiteral("block 1"),
+            "committing a highlighted box gesture toggles only its candidate blocks");
+}
+
+void ocrTextHighlightingTracksFontChanges() {
+    const QFont originalFont = QApplication::font();
+    const auto restoreFont = qScopeGuard([&] { QApplication::setFont(originalFont); });
+    ScreenshotOcrTextLayer layer;
+    const auto presentation = ocrHighlightingPresentation();
+    layer.setPresentation(presentation);
+    layer.synchronize(QTransform(), presentation->selection);
+    const auto sceneItems = layer.scene()->items();
+    const auto items = ocrGlyphItems(&layer);
+    QList<QRectF> initialBounds;
+    for (const auto* item : items)
+        initialBounds.push_back(item->sceneBoundingRect());
+    const QColor mask(30, 120, 210, 91);
+    layer.setTextHighlighting(true, mask);
+    QFont replacement = originalFont;
+    replacement.setStretch(QFont::Expanded);
+    QApplication::setFont(replacement);
+    QApplication::processEvents();
+    bool geometryChanged = false;
+    for (qsizetype index = 0; index < items.size(); ++index)
+        geometryChanged |= items[index]->sceneBoundingRect() != initialBounds[index];
+    require(geometryChanged && layer.scene()->items() == sceneItems,
+            "application font changes reshape existing fitted OCR labels");
+    const QImage highlighted = renderOcrHighlightingScene(layer, 1.25);
+    layer.setTextHighlighting(false, mask);
+    require(highlighted == renderOcrHighlightingScene(layer, 1.25, mask),
+            "font changes refresh the mask holes together with the glyph cache");
+}
+
+void ocrTextHighlightingTests() {
+    const QFont originalFont = QApplication::font();
+    const auto restoreFont = qScopeGuard([&]() { QApplication::setFont(originalFont); });
+#ifdef Q_OS_WIN
+    if (QGuiApplication::platformName() == QStringLiteral("offscreen")) {
+        require(QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/segoeui.ttf")) >=
+                    0,
+                "load offscreen text highlighting font");
+        QApplication::setFont(QFont(QStringLiteral("Segoe UI")));
+    }
+#endif
+    ocrTextHighlightingMasksNonTextAroundFittedLabels();
+    ocrTextHighlightingUnionsOverlappingLabels();
+    ocrTextHighlightingTracksFractionalDevicePhase();
+    ocrTextHighlightingPreservesHiddenTextSelection();
+    ocrTextHighlightingPreservesInteractionAndExports();
+    ocrTextHighlightingPreservesBoxSelection();
+    ocrTextHighlightingTracksFontChanges();
 }
 
 void selectionOnlyTextLayerPaintsOnlyHighlights() {
@@ -417,6 +1000,185 @@ void ocrHoverUpdatesCursorWithoutClicking() {
     }
 }
 
+void ocrBoxSelectionUsesCurrentRectangleAndCommitsOnRelease() {
+    using Mode = ScreenshotRecognitionWindow::PresentationMode;
+    for (const auto mode : {Mode::TopLevelWindow, Mode::EmbeddedChild}) {
+        QWidget host;
+        host.resize(320, 200);
+        host.show();
+        ScreenshotRecognitionWindow recognition({}, &host, mode);
+        const QRectF canvas(100, 80, 640, 400);
+        require(recognition.present(
+                    {QGuiApplication::primaryScreen(), &host, host.rect(), canvas, mode}),
+                "box selection fixture presents in both window modes");
+        auto presentation = std::make_shared<ScreenshotOcrPresentation>();
+        presentation->selection = canvas.toRect();
+        for (int index = 0; index < 3; ++index) {
+            ScreenshotOcrLine line;
+            line.text = QStringLiteral("block %1").arg(index);
+            line.quad = ocrQuad(QRectF(180, 140 + index * 100, 360, 60));
+            presentation->lines.push_back(line);
+        }
+        recognition.setOcrPresentation(presentation);
+        recognition.setOcrCopyDefaultsEnabled(false);
+        recognition.setTextHighlighting(true, QColor(30, 120, 210, 91));
+        QApplication::processEvents();
+        const auto send = [&](QEvent::Type type, const QPointF& local,
+                              Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+            QWidget* receiver = type == QEvent::MouseButtonPress
+                                    ? recognition.childAt(local.toPoint())
+                                    : &recognition;
+            require(receiver != nullptr, "blank OCR press has a real child event receiver");
+            const QPointF receiverPosition =
+                receiver == &recognition ? local
+                                         : local - QPointF(receiver->mapTo(&recognition, QPoint()));
+            QMouseEvent event(
+                type, receiverPosition, QPointF(recognition.mapToGlobal(local.toPoint())),
+                type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton,
+                type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::LeftButton, modifiers);
+            QApplication::sendEvent(receiver, &event);
+        };
+        const auto selectBlock = [&](int index) {
+            const QPointF start(10, 15 + index * 50);
+            const QPointF end(240, 65 + index * 50);
+            send(QEvent::MouseButtonPress, start);
+            send(QEvent::MouseMove, end);
+            send(QEvent::MouseButtonRelease, end);
+        };
+        selectBlock(0);
+        selectBlock(2);
+        require(presentation->selectedText() == QStringLiteral("block 0\nblock 2"),
+                "separate rectangles retain independent blocks in reading order");
+        send(QEvent::MouseButtonPress, QPointF(10, 10));
+        require(recognition.lineBoxSelectionActive() &&
+                    presentation->selectedText() == QStringLiteral("block 0\nblock 2"),
+                "blank press preserves committed selections until release");
+        send(QEvent::MouseMove, QPointF(12, 12));
+        require(presentation->lineBoxSelectionRect().isEmpty(),
+                "sub-threshold motion does not paint a box");
+        send(QEvent::MouseMove, QPointF(240, 180));
+        require(presentation->lineSelectionPreview(0) ==
+                        ScreenshotOcrLineSelectionPreview::Deselect &&
+                    presentation->lineSelectionPreview(1) ==
+                        ScreenshotOcrLineSelectionPreview::Select &&
+                    presentation->lineSelectionPreview(2) ==
+                        ScreenshotOcrLineSelectionPreview::Deselect &&
+                    presentation->selectedText() == QStringLiteral("block 0\nblock 2"),
+                "mixed green/red previews retain committed clipboard contents");
+        send(QEvent::MouseMove, QPointF(240, 70), Qt::AltModifier);
+        require(
+            presentation->lineSelectionPreview(1) == ScreenshotOcrLineSelectionPreview::None &&
+                presentation->lineSelectionPreview(2) == ScreenshotOcrLineSelectionPreview::None,
+            "shrinking the current rectangle removes excluded previews despite modifier changes");
+        send(QEvent::MouseButtonRelease, QPointF(240, 70), Qt::AltModifier);
+        require(!recognition.lineBoxSelectionActive() &&
+                    presentation->selectedText() == QStringLiteral("block 2") &&
+                    QWidget::mouseGrabber() != &recognition,
+                "release applies only the final candidates and relinquishes capture");
+        require(recognition.copyVisibleContentToClipboard() &&
+                    QApplication::clipboard()->text() == QStringLiteral("block 2"),
+                "clipboard uses committed separate-block selection");
+        send(QEvent::MouseButtonPress, QPointF(10, 10));
+        send(QEvent::MouseButtonRelease, QPointF(10, 10));
+        require(!presentation->hasTextSelection(), "a plain blank click still clears selection");
+    }
+}
+
+void ocrBoxSelectionCancelsWithoutTriggeringWindowCommands() {
+    using Mode = ScreenshotRecognitionWindow::PresentationMode;
+    for (const auto mode : {Mode::TopLevelWindow, Mode::EmbeddedChild}) {
+        QWidget host;
+        host.resize(240, 120);
+        host.show();
+        int cancelCommands = 0;
+        ScreenshotRecognitionWindowActions actions;
+        actions.handleCancel = [&]() { ++cancelCommands; };
+        snow_shot::presentation::WindowShortcutManager shortcuts;
+        ScreenshotRecognitionWindow recognition(actions, &host, mode, &shortcuts);
+        require(recognition.present({QGuiApplication::primaryScreen(), &host, host.rect(),
+                                     QRectF(host.rect()), mode}),
+                "cancellation fixture presents");
+        auto presentation = std::make_shared<ScreenshotOcrPresentation>();
+        ScreenshotOcrLine line;
+        line.text = QStringLiteral("baseline");
+        line.quad = ocrQuad(QRectF(40, 30, 150, 40));
+        presentation->lines.push_back(line);
+        recognition.setOcrPresentation(presentation);
+        QApplication::processEvents();
+        const auto begin = [&]() {
+            presentation->selectAll();
+            recognition.updateOcrSelection();
+            QMouseEvent press(QEvent::MouseButtonPress, QPointF(10, 10), QPointF(10, 10),
+                              Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(&recognition, &press);
+            QMouseEvent move(QEvent::MouseMove, QPointF(210, 80), QPointF(210, 80), Qt::NoButton,
+                             Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(&recognition, &move);
+            require(recognition.lineBoxSelectionActive(), "cancel fixture starts a box gesture");
+        };
+        for (const Qt::KeyboardModifiers modifiers :
+             {Qt::KeyboardModifiers(Qt::NoModifier), Qt::KeyboardModifiers(Qt::AltModifier),
+              Qt::KeyboardModifiers(Qt::ControlModifier | Qt::AltModifier | Qt::ShiftModifier |
+                                    Qt::MetaModifier)}) {
+            begin();
+            PhysicalKeyEvent escapePress(QEvent::KeyPress, Qt::Key_Escape, modifiers);
+            PhysicalKeyEvent escapeRepeat(QEvent::KeyPress, Qt::Key_Escape, modifiers, QString(),
+                                          true);
+            PhysicalKeyEvent escapeRelease(QEvent::KeyRelease, Qt::Key_Escape, Qt::NoModifier);
+            QApplication::sendEvent(&recognition, &escapePress);
+            QApplication::sendEvent(&recognition, &escapeRepeat);
+            QApplication::sendEvent(&recognition, &escapeRelease);
+            require(!recognition.lineBoxSelectionActive() && cancelCommands == 0 &&
+                        presentation->selectedText() == QStringLiteral("baseline"),
+                    "Escape cancels and consumes repeats and release despite changed modifiers");
+        }
+        for (const auto eventType : {QEvent::UngrabMouse, QEvent::WindowDeactivate}) {
+            begin();
+            QEvent event(eventType);
+            QApplication::sendEvent(&recognition, &event);
+            require(!recognition.lineBoxSelectionActive() &&
+                        presentation->selectedText() == QStringLiteral("baseline"),
+                    "capture loss and owner deactivation cancel only the uncommitted preview");
+        }
+        begin();
+        QMouseEvent lostButton(QEvent::MouseMove, QPointF(200, 70), QPointF(200, 70), Qt::NoButton,
+                               Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(&recognition, &lostButton);
+        require(!recognition.lineBoxSelectionActive(), "lost left-button state ends the gesture");
+        begin();
+        QMouseEvent outsideRelease(QEvent::MouseButtonRelease, QPointF(280, 160), QPointF(280, 160),
+                                   Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(&recognition, &outsideRelease);
+        require(!recognition.lineBoxSelectionActive() && !presentation->hasTextSelection() &&
+                    QWidget::mouseGrabber() != &recognition,
+                "release beyond the viewport commits final candidates and releases capture");
+        begin();
+        QFocusEvent focusOut(QEvent::FocusOut, Qt::OtherFocusReason);
+        QApplication::sendEvent(&recognition, &focusOut);
+        require(!recognition.lineBoxSelectionActive() && !presentation->hasTextSelection(),
+                "focus loss cancels preview before applying ordinary selection clearing");
+        begin();
+        recognition.hide();
+        require(!recognition.lineBoxSelectionActive(),
+                "hiding recognition cancels pending capture");
+        recognition.show();
+        begin();
+        recognition.setShowOriginalImage(true);
+        require(!recognition.lineBoxSelectionActive() && !recognition.boxSelectionEnabled(),
+                "showing the original image removes gesture state immediately");
+        recognition.setShowOriginalImage(false);
+        begin();
+        require(
+            recognition.updateSelectionGeometry(recognition.geometry(), QRectF(0, 0, 480, 240)) &&
+                !recognition.lineBoxSelectionActive(),
+            "a changed view transform cancels the old canvas-space rectangle");
+        begin();
+        recognition.setOcrPresentation(std::make_shared<ScreenshotOcrPresentation>());
+        require(!recognition.lineBoxSelectionActive() && !presentation->lineBoxSelectionActive(),
+                "replacing content cancels the retired presentation's preview");
+    }
+}
+
 void ocrDoubleClickCopiesOnlyTheClickedBlock() {
 #ifdef Q_OS_WIN
     if (QGuiApplication::platformName() == QStringLiteral("offscreen")) {
@@ -468,7 +1230,7 @@ void ocrDoubleClickCopiesOnlyTheClickedBlock() {
             QApplication::processEvents();
             auto* layer = window.findChild<QGraphicsView*>(QStringLiteral("snowShotOcrTextLayer"));
             require(layer != nullptr, "double-click fixture has a text layer");
-            const auto items = layer->scene()->items();
+            const auto items = ocrGlyphItems(layer);
             require(std::count_if(items.cbegin(), items.cend(),
                                   [](const auto* item) { return item->isVisible(); }) == 2,
                     "double-click fixtures render both nonempty text blocks");
@@ -851,7 +1613,7 @@ void recognitionWindowUsesOrdinaryQtWindowBehavior() {
     QApplication::processEvents();
     auto* textLayer = window.findChild<QGraphicsView*>(QStringLiteral("snowShotOcrTextLayer"));
     require(textLayer != nullptr && textLayer->isVisible() && textLayer->scene() != nullptr &&
-                textLayer->scene()->items().size() == 1,
+                ocrGlyphItems(textLayer).size() == 1,
             "selectable OCR text should be hosted directly by the transparent window");
     require(textLayer->testAttribute(Qt::WA_TransparentForMouseEvents) &&
                 textLayer->viewport()->testAttribute(Qt::WA_TransparentForMouseEvents),
@@ -1221,6 +1983,57 @@ QGraphicsTextItem* formattedTextItem(QGraphicsView* layer) {
     return nullptr;
 }
 
+void formattedTextHoverUpdatesCursorWithoutClicking() {
+#ifdef Q_OS_WIN
+    if (QGuiApplication::platformName() == QStringLiteral("offscreen")) {
+        require(QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/segoeui.ttf")) >=
+                    0,
+                "load the formatted hover test font");
+    }
+#endif
+    using Mode = ScreenshotRecognitionWindow::PresentationMode;
+    using Rendering = ScreenshotOcrTextLayer::RenderingMode;
+    for (const auto mode : {Mode::TopLevelWindow, Mode::EmbeddedChild}) {
+        for (const auto rendering : {Rendering::Normal, Rendering::SelectionOnly}) {
+            QWidget host;
+            host.resize(300, 180);
+            host.show();
+            ScreenshotRecognitionWindow recognition({}, &host, mode);
+            require(recognition.present({QGuiApplication::primaryScreen(), &host, host.rect(),
+                                         QRectF(QPointF(), QSizeF(host.size()) * 2.0), mode, 2.0}),
+                    "present formatted text hover at a scaled canvas");
+            auto document = std::make_shared<QTextDocument>();
+            document->setHtml(QStringLiteral("<p><b>Hover</b> text</p>"));
+            document->setTextWidth(140);
+            recognition.showFormattedText(document, rendering, false);
+            QApplication::processEvents();
+            auto* layer =
+                recognition.findChild<QGraphicsView*>(QStringLiteral("screenshotClipboardText"));
+            auto* item = formattedTextItem(layer);
+            require(item != nullptr, "formatted hover requires a selectable document");
+            const auto block = document->firstBlock();
+            const auto line = block.layout()->lineAt(0);
+            const QPoint text = layer->mapFromScene(
+                item->mapToScene(block.layout()->position() +
+                                 QPointF(line.cursorToX(2), line.y() + line.height() / 2)));
+            const QPoint blank = layer->viewport()->rect().bottomRight() - QPoint(20, 20);
+            const auto hover = [&](QPoint point, Qt::CursorShape cursor) {
+                QMouseEvent move(QEvent::MouseMove, QPointF(point),
+                                 layer->viewport()->mapToGlobal(point), Qt::NoButton, Qt::NoButton,
+                                 Qt::NoModifier);
+                QApplication::sendEvent(layer->viewport(), &move);
+                require(layer->viewport()->cursor().shape() == cursor,
+                        "formatted hover must distinguish text from background without clicking");
+                require(!item->textCursor().hasSelection() && !recognition.textSelectionActive(),
+                        "formatted hover must not begin a selection");
+            };
+            hover(text, Qt::IBeamCursor);
+            hover(blank, Qt::ArrowCursor);
+            hover(text, Qt::IBeamCursor);
+        }
+    }
+}
+
 QImage renderFormattedTextItem(QGraphicsTextItem* item, bool focused) {
     const QRectF bounds = item->boundingRect();
     QImage image(bounds.size().toSize(), QImage::Format_ARGB32_Premultiplied);
@@ -1290,7 +2103,7 @@ void shortRecognitionWindowPreservesExactSelectionGeometryAcrossModes() {
     require(window.geometry() == selectionGeometry && textLayer != nullptr &&
                 textLayer->geometry() == window.rect(),
             "OCR display mode must not enlarge a short screenshot selection");
-    const QList<QGraphicsItem*> textItems = textLayer->scene()->items();
+    const QList<QGraphicsItem*> textItems = ocrGlyphItems(textLayer);
     require(textItems.size() == 1 &&
                 std::abs(textItems.constFirst()->sceneBoundingRect().center().y() -
                          selectionHeight / 2.0) < 0.5,
@@ -1309,6 +2122,99 @@ void shortRecognitionWindowPreservesExactSelectionGeometryAcrossModes() {
                 editor->geometry() == editorContainer->rect(),
             "edit mode must remain exactly within a short screenshot selection");
     window.hideTextEditor();
+}
+
+void textRecognitionEditorsCollapseMarginsInSmallAreas() {
+    auto& themes = adqt::theme::ThemeManager::instance();
+    const auto originalTheme = themes.theme();
+    const auto restoreTheme = qScopeGuard([&] { themes.setTheme(originalTheme); });
+    themes.setPreset(adqt::theme::ThemeScheme::Light, adqt::theme::ThemeDensity::Compact);
+    for (const auto mode : {ScreenshotRecognitionWindow::PresentationMode::TopLevelWindow,
+                            ScreenshotRecognitionWindow::PresentationMode::EmbeddedChild}) {
+        QWidget parent;
+        parent.resize(400, 240);
+        parent.show();
+        QTextDocument document;
+        document.setPlainText(QStringLiteral("Editable recognition text"));
+        ScreenshotRecognitionWindow window({}, &parent, mode);
+        window.resize(320, 24);
+        window.showTextEditor(&document);
+        window.show();
+        QApplication::processEvents();
+        auto* editor = window.findChild<QTextEdit*>(QStringLiteral("screenshotOcrEditor"));
+        require(editor != nullptr && editor->geometry() == window.rect() &&
+                    editor->viewport()->geometry() == editor->rect(),
+                "a short recognition editor must give its entire area to text");
+
+        window.resize(320, 200);
+        QApplication::processEvents();
+        const QRect paddedViewport = editor->viewport()->geometry();
+        require(paddedViewport.left() > 0 && paddedViewport.top() > 0 &&
+                    paddedViewport.width() < editor->width() &&
+                    paddedViewport.height() < editor->height(),
+                "a roomy recognition editor must retain its themed padding");
+
+        QTextCursor selection(&document);
+        selection.setPosition(0);
+        selection.setPosition(8, QTextCursor::KeepAnchor);
+        editor->setTextCursor(selection);
+        for (const QSize& size : {QSize(320, 24), QSize(80, 200), QSize(80, 24)}) {
+            window.resize(size);
+            QApplication::processEvents();
+            require(editor->geometry() == window.rect() &&
+                        editor->viewport()->geometry() == editor->rect() &&
+                        editor->textCursor().selectedText() == QStringLiteral("Editable"),
+                    "resizing a short or narrow editor must remove margins and preserve selection");
+
+            window.showTextEditor(&document, true, true);
+            document.setPlainText(QStringLiteral("Streaming translation result"));
+            QApplication::processEvents();
+            require(editor->isReadOnly() && editor->viewport()->geometry() == editor->rect(),
+                    "streaming translation must retain the compact text area after updates");
+            window.setTextEditorStreaming(false);
+            QApplication::processEvents();
+            require(!editor->isReadOnly() && editor->viewport()->geometry() == editor->rect(),
+                    "completed translation must retain the compact text area");
+
+#if SNOW_SHOT_ENABLE_LATEX_RECOGNITION
+            window.showLatexEditor(&document);
+            QApplication::processEvents();
+            require(editor->viewport()->geometry() == editor->rect(),
+                    "LaTeX source editing must share the compact text area");
+#endif
+            for (const auto scheme :
+                 {adqt::theme::ThemeScheme::Dark, adqt::theme::ThemeScheme::Light}) {
+                themes.setPreset(scheme, adqt::theme::ThemeDensity::Compact);
+                QApplication::processEvents();
+                require(editor->viewport()->geometry() == editor->rect(),
+                        "theme refreshes must not restore padding in a small text area");
+            }
+            window.resize(320, 200);
+            QApplication::processEvents();
+            require(editor->viewport()->geometry() == paddedViewport,
+                    "growing the recognition editor must restore its original themed padding");
+            window.showTextEditor(&document);
+            document.setPlainText(QStringLiteral("Editable recognition text"));
+            selection = QTextCursor(&document);
+            selection.setPosition(0);
+            selection.setPosition(8, QTextCursor::KeepAnchor);
+            editor->setTextCursor(selection);
+        }
+        window.hideTextEditor();
+    }
+
+    adqt::widgets::AdTextEdit formEditor;
+    formEditor.setHeightMode(adqt::widgets::AdTextEdit::HeightMode::FixedGeometry);
+    formEditor.resize(80, 24);
+    formEditor.show();
+    QApplication::processEvents();
+    require(formEditor.viewport()->geometry().left() > 0,
+            "an outlined form editor must retain its padding in a small area");
+    formEditor.setVariant(adqt::widgets::AdTextEdit::Variant::Borderless);
+    formEditor.setHeightMode(adqt::widgets::AdTextEdit::HeightMode::FixedRows);
+    QApplication::processEvents();
+    require(formEditor.viewport()->geometry().left() > 0,
+            "a borderless form editor sized by rows must retain its padding");
 }
 
 void formattedClipboardTextUsesASelectableQtDocument() {
@@ -1422,6 +2328,77 @@ void formattedClipboardTextUsesASelectableQtDocument() {
     window.clearFormattedText();
     require(window.findChild<QGraphicsView*>(QStringLiteral("screenshotClipboardText")) == nullptr,
             "leaving formatted-text mode should remove its selectable surface");
+}
+
+void selectionOnlyFormattedTextPaintsOnlyHighlights() {
+    QScreen* screen = QGuiApplication::primaryScreen();
+    require(screen != nullptr, "formatted selection rendering requires a screen");
+    for (const qreal dpr : {1.0, 2.0}) {
+        QWidget host;
+        host.resize(360, 150);
+        QPalette palette = host.palette();
+        palette.setColor(QPalette::Window, QColor(24, 72, 120));
+        host.setPalette(palette);
+        host.setAutoFillBackground(true);
+        host.show();
+        ScreenshotRecognitionWindow window(
+            {}, &host, ScreenshotRecognitionWindow::PresentationMode::EmbeddedChild);
+        require(window.present({screen, &host, host.rect(),
+                                QRectF(QPointF(), QSizeF(host.size()) * dpr),
+                                ScreenshotRecognitionWindow::PresentationMode::EmbeddedChild, dpr}),
+                "present the formatted selection-only overlay");
+        QApplication::processEvents();
+        const auto original = host.grab().toImage();
+        auto document = std::make_shared<QTextDocument>();
+        QImage inlineImage(20, 20, QImage::Format_ARGB32_Premultiplied);
+        inlineImage.fill(Qt::red);
+        document->addResource(QTextDocument::ImageResource, QUrl(QStringLiteral("inline-image")),
+                              inlineImage);
+        document->setHtml(
+            QStringLiteral("<p style=\"color: red; background-color: yellow\"><b>Rich</b> "
+                           "<u>wrapped</u> selection text <img src=\"inline-image\"></p>"
+                           "<table border=\"1\"><tr><td>Cell</td></tr></table>"));
+        document->setTextWidth(160);
+        const QString originalHtml = document->toHtml();
+        window.showFormattedText(document, ScreenshotOcrTextLayer::RenderingMode::SelectionOnly,
+                                 false);
+        QApplication::processEvents();
+        require(host.grab().toImage() == original,
+                "hidden formatted text must not repaint text, HTML backgrounds, or table borders");
+        auto* layer = window.findChild<QGraphicsView*>(QStringLiteral("screenshotClipboardText"));
+        auto* item = formattedTextItem(layer);
+        require(item && item->document() == document.get(),
+                "selection-only rendering must use the original document layout");
+        QTextCursor cursor(document.get());
+        cursor.select(QTextCursor::Document);
+        item->setTextCursor(cursor);
+        QApplication::processEvents();
+        const auto selected = host.grab().toImage();
+        require(selected != original, "formatted selection must paint visible highlights");
+        QImage overlay(host.size(), QImage::Format_ARGB32_Premultiplied);
+        overlay.fill(Qt::transparent);
+        QPainter painter(&overlay);
+        layer->render(&painter);
+        painter.end();
+        int maximumAlpha = 0;
+        for (int y = 0; y < overlay.height(); ++y)
+            for (int x = 0; x < overlay.width(); ++x)
+                maximumAlpha = std::max(maximumAlpha, qAlpha(overlay.pixel(x, y)));
+        require(maximumAlpha == 102,
+                "formatted selection paints only translucent highlights, without rich text glyphs");
+        require(document->toHtml() == originalHtml, "paint policy must not modify the source HTML");
+        window.showFormattedText(document, ScreenshotOcrTextLayer::RenderingMode::SelectionOnly,
+                                 false);
+        require(item->textCursor().hasSelection(), "synchronization preserves native selection");
+        window.clearTextSelection();
+        QApplication::processEvents();
+        require(host.grab().toImage() == original,
+                "clearing formatted selection must restore the original pixels");
+        window.showFormattedText(document);
+        QApplication::processEvents();
+        require(host.grab().toImage() != original,
+                "displayed formatted text retains normal painting");
+    }
 }
 
 void qrContentsUseStrictRichTextLinksAndPreserveOrder() {
@@ -1834,6 +2811,7 @@ void recognitionContextMenusUseAntDesignAndCopyLocally() {
     ScreenshotRecognitionWindowActions actions;
     actions.handleCopy = [&copyCommandCalls]() { ++copyCommandCalls; };
     ScreenshotRecognitionWindow window(std::move(actions));
+    window.setOcrCopyDefaultsEnabled(false);
     require(window.present(
                 {screen, nullptr,
                  QRect(screen->availableGeometry().center() - QPoint(180, 120), QSize(360, 240)),
@@ -2355,6 +3333,12 @@ void tableCommandsUsePhysicalKeys() {
 }
 
 void originalImagePreviewPreservesSelectionAndOwnerLifecycle() {
+    const snow_shot::storage::PinToScreenSettings settings;
+    const QString previousAnchor = settings.mouseWheelZoomMode();
+    const auto restoreAnchor =
+        qScopeGuard([&] { static_cast<void>(settings.setMouseWheelZoomMode(previousAnchor)); });
+    require(settings.setMouseWheelZoomMode(QStringLiteral("bottom_right")),
+            "configure the ordinary companion wheel anchor");
     QScreen* screen = QGuiApplication::primaryScreen();
     require(screen != nullptr, "preview fixture requires a screen");
     auto* window = new ScreenshotRecognitionWindow(ScreenshotRecognitionWindowActions{});
@@ -2410,6 +3394,11 @@ void originalImagePreviewPreservesSelectionAndOwnerLifecycle() {
     window->showTextEditor(&document);
     flush();
     require(preview->isVisible(), "text editing preserves the separate preview");
+    companionWheelZoomPreservesRecognition(*preview, *window, document, true);
+    window->refreshOriginalImagePreview();
+    flush();
+    require(preview->size() == geometry.size(),
+            "ordinary recognition refresh must preserve the manually selected preview zoom");
     window->setShowOriginalImage(true);
     require(preview->isHidden(), "original-image mode must hide the preview immediately");
     requirePreviewDestroyed("showing the original image destroys its separate preview");
@@ -2489,9 +3478,295 @@ void originalImagePreviewPreservesSelectionAndOwnerLifecycle() {
     flush();
 }
 
+void latexPreviewUsesPassiveCompanionAndSurvivesEditing() {
+#ifdef Q_OS_WIN
+    if (QGuiApplication::platformName() == QStringLiteral("offscreen")) {
+        require(QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/segoeui.ttf")) >=
+                    0,
+                "load offscreen recognition font");
+        QApplication::setFont(QFont(QStringLiteral("Segoe UI")));
+    }
+#endif
+    auto& themes = adqt::theme::ThemeManager::instance();
+    const auto originalTheme = themes.theme();
+    const auto restoreTheme = qScopeGuard([&] { themes.setTheme(originalTheme); });
+    themes.setPreset(adqt::theme::ThemeScheme::Light, adqt::theme::ThemeDensity::Compact);
+    QScreen* screen = QGuiApplication::primaryScreen();
+    require(screen != nullptr, "LaTeX preview fixture has a screen");
+    // An externally owned Qt document must outlive the editor using it.
+    QTextDocument document;
+    LatexPreviewTranslator translator;
+    ScreenshotRecognitionWindow window(ScreenshotRecognitionWindowActions{});
+    const QRect geometry(screen->availableGeometry().topLeft() + QPoint(320, 120), QSize(200, 100));
+    require(window.present({screen, nullptr, geometry, QRectF(0, 0, 200, 100)}),
+            "LaTeX editor selection presents");
+    QImage original(200, 100, QImage::Format_ARGB32_Premultiplied);
+    original.fill(Qt::blue);
+    window.setOriginalImagePreviewProvider(
+        [&]() -> std::optional<ScreenshotOriginalImagePreviewState> {
+            ScreenshotOriginalImagePreviewState state;
+            state.image = original;
+            state.imageRectInViewport = QRectF(0, 0, 200, 100);
+            state.resultRect = geometry;
+            state.transientOwner = &window;
+            state.mouseWheelZoomMode = QStringLiteral("top_left");
+            return state;
+        },
+        &window);
+    window.setOriginalImagePreviewEnabled(false);
+    document.setPlainText(QStringLiteral("\\frac{a}{b}+\\sqrt{x}"));
+    window.showLatexEditor(&document);
+    const auto waitFor = [](const std::function<bool()>& predicate) {
+        QElapsedTimer timer;
+        timer.start();
+        do {
+            QApplication::processEvents();
+            QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            if (predicate())
+                return true;
+            QThread::msleep(1);
+        } while (timer.elapsed() < 10000);
+        return false;
+    };
+    const auto preview = [&]() {
+        return window.findChild<ScreenshotOriginalImagePreviewWindow*>();
+    };
+    require(waitFor([&] {
+                return preview() && preview()->isVisible() &&
+                       preview()->accessibleDescription().isEmpty();
+            }),
+            "real MicroTeX preview renders even when text preview is disabled");
+    auto* editor = window.findChild<QTextEdit*>(QStringLiteral("screenshotOcrEditor"));
+    require(editor && !editor->isReadOnly() && editor->document() == &document,
+            "LaTeX uses the shared writable input component");
+    require(preview()->windowFlags().testFlag(Qt::WindowDoesNotAcceptFocus) &&
+                preview()->testAttribute(Qt::WA_ShowWithoutActivating) &&
+                preview()->focusPolicy() == Qt::NoFocus,
+            "the formula companion declares passive activation and focus on every backend");
+    // Offscreen does not implement passive tool-window activation. The Windows backend
+    // can verify that showing the companion preserves the real editor's native focus.
+    if (QGuiApplication::platformName() == QStringLiteral("windows")) {
+        require(
+            waitFor([&] { return editor->hasFocus() && QApplication::activeWindow() == &window; }),
+            "showing the native formula companion must preserve editor focus");
+    }
+    require(window.geometry() == geometry && preview()->size() == geometry.size() &&
+                preview()->geometry().right() < window.geometry().left() && !preview()->hasFocus(),
+            "formula companion preserves selection size, left placement and passive focus");
+    companionWheelZoomPreservesRecognition(*preview(), window, document);
+    const QImage valid = preview()->grab().toImage();
+    require(valid.pixelColor(0, 0) != QColor(Qt::blue),
+            "host preview provider contributes geometry rather than original image pixels");
+    const QString capturePath = qEnvironmentVariable("SNOW_TEST_LATEX_PREVIEW_OUTPUT");
+    const auto saveVisualFixture = [&](const QImage& formulaImage, const QString& path) {
+        const QImage editorImage = window.grab().toImage();
+        QImage capture(QSize(formulaImage.width() + 16 + editorImage.width(),
+                             std::max(formulaImage.height(), editorImage.height())),
+                       QImage::Format_ARGB32_Premultiplied);
+        capture.fill(Qt::transparent);
+        {
+            QPainter painter(&capture);
+            painter.drawImage(QRect(QPoint(), formulaImage.size()), formulaImage);
+            painter.drawImage(QRect(QPoint(formulaImage.width() + 16, 0), editorImage.size()),
+                              editorImage);
+        }
+        require(capture.save(path), "save the optional formula/editor visual fixture");
+    };
+    if (!capturePath.isEmpty())
+        saveVisualFixture(valid, capturePath);
+    const QPointer<ScreenshotOriginalImagePreviewWindow> originalImagePreview = preview();
+    window.refreshOriginalImagePreview();
+    window.setShowOriginalImage(true);
+    require(!editor->isVisible(), "original-image mode hides the formula source editor");
+    require(waitFor([&] {
+                return originalImagePreview && originalImagePreview == preview() &&
+                       preview()->isVisible() && preview()->accessibleDescription().isEmpty();
+            }),
+            "showing the original image preserves the rendered formula companion");
+    document.setPlainText(QStringLiteral("x^2"));
+    require(waitFor([&] {
+                return originalImagePreview && originalImagePreview == preview() &&
+                       preview()->isVisible() && preview()->accessibleDescription().isEmpty() &&
+                       preview()->grab().toImage() != valid;
+            }),
+            "source updates rerender the formula while the original image is shown");
+    window.setShowOriginalImage(false);
+    require(editor->isVisible() && editor->document() == &document &&
+                editor->toPlainText() == QStringLiteral("x^2"),
+            "returning from the original image preserves the formula draft and editor");
+    window.setShowOriginalImage(true);
+    document.setPlainText(QStringLiteral("\\frac{a}{b}+\\sqrt{x}"));
+    window.showLatexEditor(&document);
+    require(waitFor([&] {
+                return preview() && preview()->isVisible() &&
+                       preview()->accessibleDescription().isEmpty() &&
+                       preview()->grab().toImage() == valid;
+            }),
+            "a formula session renders when original-image mode is already enabled");
+    require(!editor->isVisible(), "starting a formula session preserves original-image mode");
+    window.setShowOriginalImage(false);
+    const QPointer<ScreenshotOriginalImagePreviewWindow> initialPreview = preview();
+    editor->moveCursor(QTextCursor::End);
+    QKeyEvent type(QEvent::KeyPress, Qt::Key_C, Qt::NoModifier, QStringLiteral("c"));
+    QApplication::sendEvent(editor, &type);
+    require(document.toPlainText().endsWith(QLatin1Char('c')) &&
+                editor->accessibleName() == QStringLiteral("LaTeX formula source"),
+            "typing preserves the formula source's accessible name");
+    QFocusEvent blur(QEvent::FocusOut, Qt::OtherFocusReason);
+    QFocusEvent focus(QEvent::FocusIn, Qt::OtherFocusReason);
+    QApplication::sendEvent(editor, &blur);
+    require(editor->accessibleName() == QStringLiteral("LaTeX formula source"),
+            "losing focus preserves the formula source's accessible name");
+    QApplication::sendEvent(editor, &focus);
+    require(editor->accessibleName() == QStringLiteral("LaTeX formula source"),
+            "gaining focus preserves the formula source's accessible name");
+    document.setPlainText(QStringLiteral("\\unknownSnowShotCommand"));
+    require(waitFor([&] {
+                return preview() && preview()->accessibleDescription().contains(
+                                        QStringLiteral("Check the LaTeX source"));
+            }),
+            "invalid source produces an inline preview error");
+    require(initialPreview == preview() && preview()->grab().toImage() != valid,
+            "invalid source dims the retained formula in the same companion");
+    if (!capturePath.isEmpty()) {
+        const QFileInfo output(capturePath);
+        saveVisualFixture(
+            preview()->grab().toImage(),
+            output.dir().filePath(output.completeBaseName() + QStringLiteral("-invalid.png")));
+    }
+    themes.setPreset(adqt::theme::ThemeScheme::Dark, adqt::theme::ThemeDensity::Compact);
+    require(editor->accessibleName() == QStringLiteral("LaTeX formula source"),
+            "theme changes preserve the formula source's accessible name");
+    const QColor darkBackground = themes.resolveTheme(&window).colorBgContainer;
+    const auto retainedFormulaVisible = [&](const QImage& image) {
+        int lightPixels = 0;
+        // The status occupies the lower footer. Inspect the upper formula area so that
+        // the new error text cannot make an old, dark foreground pass this regression.
+        for (int y = image.height() / 8; y < image.height() / 2; ++y) {
+            for (int x = image.width() / 8; x < image.width() * 7 / 8; ++x) {
+                if (qGray(image.pixel(x, y)) > qGray(darkBackground.rgb()) + 40)
+                    ++lightPixels;
+            }
+        }
+        return lightPixels > 10;
+    };
+    require(waitFor([&] {
+                if (!preview() || !preview()->accessibleDescription().contains(
+                                      QStringLiteral("Check the LaTeX source")))
+                    return false;
+                const QImage image = preview()->grab().toImage();
+                return image.pixelColor(0, 0) == darkBackground && retainedFormulaVisible(image);
+            }),
+            "a theme change rerenders the retained valid formula while preserving the draft error");
+    require(initialPreview == preview() &&
+                editor->toPlainText() == QStringLiteral("\\unknownSnowShotCommand"),
+            "fallback rendering preserves the companion and editable invalid source");
+    document.setPlainText(QStringLiteral("x^2"));
+    document.setPlainText(QStringLiteral("\\int_0^1 x\\,dx"));
+    require(waitFor([&] { return preview() && preview()->accessibleDescription().isEmpty(); }),
+            "latest valid edit clears the error");
+    document.setPlainText(QString());
+    require(waitFor([&] {
+                return preview() && preview()->accessibleDescription() ==
+                                        QStringLiteral("No formula to preview");
+            }),
+            "an empty draft clears the formula without losing the companion");
+    require(editor->toPlainText().isEmpty(), "preview failure must not alter the editable source");
+    window.setOriginalImagePreviewSuppressed(true);
+    require(waitFor([&] { return preview() == nullptr; }),
+            "host interaction suppression tears down a formula companion");
+    window.setOriginalImagePreviewSuppressed(false);
+    require(waitFor([&] { return preview() && preview()->isVisible(); }),
+            "ending suppression restores the formula companion");
+    document.setPlainText(QStringLiteral("\\sum_{n=0}^{100} n"));
+    window.hide();
+    require(waitFor([&] { return preview() == nullptr; }),
+            "hiding the host discards pending rendering and the companion");
+    window.show();
+    require(waitFor([&] { return preview() && preview()->accessibleDescription().isEmpty(); }),
+            "restoring the host renders its current draft");
+    window.showTextEditor(&document);
+    require(waitFor([&] { return preview() == nullptr; }),
+            "switching back to text editing disables the formula companion");
+    window.setOriginalImagePreviewProvider({}, &window);
+    window.setOriginalImagePreviewEnabled(true);
+    window.showLatexEditor(&document);
+    require(waitFor([&] {
+                return preview() && preview()->isVisible() &&
+                       preview()->accessibleDescription().isEmpty();
+            }),
+            "formula placement does not require original pixels when text preview is enabled");
+    document.setPlainText(QStringLiteral("\\unknownSnowShotCommand"));
+    require(waitFor([&] {
+                return preview() && preview()->accessibleDescription() ==
+                                        QStringLiteral("Unable to preview this formula. Check the "
+                                                       "LaTeX source.");
+            }),
+            "language-change fixture starts with an invalid formula draft");
+    QPointer<ScreenshotOriginalImagePreviewWindow> textPreview;
+    {
+        require(QCoreApplication::installTranslator(&translator),
+                "install the focused preview translator");
+        const auto uninstallTranslator =
+            qScopeGuard([&] { QCoreApplication::removeTranslator(&translator); });
+        require(waitFor([&] {
+                    return preview() &&
+                           editor->accessibleName() ==
+                               QStringLiteral("Translated LaTeX formula source") &&
+                           preview()->accessibleName() ==
+                               QStringLiteral("Translated LaTeX formula preview") &&
+                           preview()->accessibleDescription() ==
+                               QStringLiteral("Translated Unable to preview this formula. Check "
+                                              "the LaTeX source.");
+                }),
+                "live language changes retranslate formula source, preview name and cached error");
+        window.showTextEditor(&document);
+        require(editor->accessibleName() == QStringLiteral("Translated Multiline input"),
+                "text reuse restores the input component's translated generic source label");
+        window.setOriginalImagePreviewSource(original, QRectF(0, 0, 200, 100));
+        require(waitFor([&] {
+                    return preview() && preview()->isVisible() &&
+                           preview()->accessibleName() ==
+                               QStringLiteral("Translated Original image preview");
+                }),
+                "text mode retains its translated original-image companion name");
+        textPreview = preview();
+    }
+    require(waitFor([&] {
+                return textPreview && textPreview == preview() &&
+                       preview()->accessibleName() == QStringLiteral("Original image preview");
+            }),
+            "a live text companion refreshes its cached name when the language changes");
+    require(document.toPlainText() == QStringLiteral("\\unknownSnowShotCommand"),
+            "retranslation and text reuse preserve the editable draft");
+}
+
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     QApplication::setQuitOnLastWindowClosed(false);
+    if (application.arguments().contains(QStringLiteral("--ocr-box-selection-only"))) {
+#ifdef Q_OS_WIN
+        require(QFontDatabase::addApplicationFont(QStringLiteral("C:/Windows/Fonts/segoeui.ttf")) >=
+                    0,
+                "load offscreen box-selection font");
+        QApplication::setFont(QFont(QStringLiteral("Segoe UI")));
+#endif
+        ocrBoxSelectionUsesCurrentRectangleAndCommitsOnRelease();
+        ocrBoxSelectionCancelsWithoutTriggeringWindowCommands();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--ocr-highlighting-only"))) {
+        ocrTextHighlightingTests();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--text-editor-layout-only"))) {
+        textRecognitionEditorsCollapseMarginsInSmallAreas();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--latex-preview-only"))) {
+        latexPreviewUsesPassiveCompanionAndSurvivesEditing();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--preview-window-only"))) {
         originalImagePreviewPreservesSelectionAndOwnerLifecycle();
         return 0;
@@ -2523,6 +3798,8 @@ int main(int argc, char** argv) {
     }
     if (application.arguments().contains(QStringLiteral("--selection-only-rendering"))) {
         selectionOnlyTextLayerPaintsOnlyHighlights();
+        selectionOnlyFormattedTextPaintsOnlyHighlights();
+        formattedClipboardTextUsesASelectableQtDocument();
         return 0;
     }
     if (application.arguments().contains(QStringLiteral("--image-snapshot-only"))) {
@@ -2535,6 +3812,7 @@ int main(int argc, char** argv) {
     }
 
     ocrHoverUpdatesCursorWithoutClicking();
+    formattedTextHoverUpdatesCursorWithoutClicking();
     if (application.arguments().contains(QStringLiteral("--ocr-hover-only"))) {
         return 0;
     }
@@ -2545,6 +3823,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     selectionOnlyTextLayerPaintsOnlyHighlights();
+    ocrTextHighlightingTests();
     embeddedRecognitionWindowPreservesParentSurfaceWithVisibleTextLayer();
     ocrDoubleClickCopiesOnlyTheClickedBlock();
     ocrDoubleClickPreservesEditorsAndResizeHandles();
@@ -2552,7 +3831,9 @@ int main(int argc, char** argv) {
     recognitionMessageUsesOnlyItsPaintedShadow();
     recognitionWindowUsesOrdinaryQtWindowBehavior();
     shortRecognitionWindowPreservesExactSelectionGeometryAcrossModes();
+    textRecognitionEditorsCollapseMarginsInSmallAreas();
     formattedClipboardTextUsesASelectableQtDocument();
+    selectionOnlyFormattedTextPaintsOnlyHighlights();
     qrContentsUseStrictRichTextLinksAndPreserveOrder();
     emptyOcrResultCopiesEmptyText();
     tableClipboardPreservesLargeValuesForWholeTableAndSelection();

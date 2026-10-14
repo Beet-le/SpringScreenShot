@@ -1171,6 +1171,7 @@ class AdDatePicker final : public QWidget, private detail::OverlayPopupControlle
   void buildUi();
   void ensurePopup();
   void destroyPopup();
+  void resetPopupReferences();
   void applyPopupLayerMode();
   void syncPopupGeometry();
   void schedulePopupFocusOutClose();
@@ -1322,7 +1323,7 @@ class AdDatePicker final : public QWidget, private detail::OverlayPopupControlle
   QHBoxLayout* rootLayout_ = nullptr;
   detail::DatePickerLineEdit* lineEdit_ = nullptr;
   detail::OverlayPopupController* popupController_ = nullptr;
-  QWidget* popup_ = nullptr;
+  QPointer<QWidget> popup_;
   QWidget* popupBodyHost_ = nullptr;
   QVBoxLayout* popupLayout_ = nullptr;
   QWidget* popupContentWidget_ = nullptr;
@@ -1840,6 +1841,7 @@ class AdDateRangePicker final : public QWidget, private detail::OverlayPopupCont
   void buildUi();
   void ensurePopup();
   void destroyPopup();
+  void resetPopupReferences();
   void applyPopupLayerMode();
   void syncPopupGeometry();
   void syncPopupActiveAlignment();
@@ -2052,7 +2054,7 @@ class AdDateRangePicker final : public QWidget, private detail::OverlayPopupCont
   QHBoxLayout* rootLayout_ = nullptr;
   detail::DatePickerLineEdit* lineEdit_ = nullptr;
   detail::OverlayPopupController* popupController_ = nullptr;
-  QWidget* popup_ = nullptr;
+  QPointer<QWidget> popup_;
   QWidget* popupBodyHost_ = nullptr;
   QVBoxLayout* popupLayout_ = nullptr;
   QWidget* popupContentWidget_ = nullptr;

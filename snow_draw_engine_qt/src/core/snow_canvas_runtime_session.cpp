@@ -134,6 +134,19 @@ void destroyNow(SnowRuntime runtime) noexcept {
     }
 }
 
+RuntimeLease leaseRuntime(ScopedRuntimeHandle runtime) {
+    if (!runtime.get()) {
+        return {};
+    }
+    return RuntimeLease(runtime.release(), [](SnowRuntime retired) noexcept {
+        try {
+            enqueueRuntimeCleanup([retired]() noexcept { destroyNow(retired); });
+        } catch (...) {
+            destroyNow(retired);
+        }
+    });
+}
+
 class RuntimeCleanupQueue final {
   public:
     RuntimeCleanupQueue() : m_worker([this] { run(); }) {}
@@ -215,7 +228,7 @@ void waitForRuntimeCleanup() {
 RuntimeSession::RuntimeSession() : RuntimeSession(SnowCanvasRuntimeConfig{}) {}
 
 RuntimeSession::RuntimeSession(const SnowCanvasRuntimeConfig& config)
-    : m_config(config), m_runtime(createRuntime(m_config)),
+    : m_config(config), m_runtime(leaseRuntime(createRuntime(m_config))),
       m_smartErase([this] { m_clients.smartEraseChanged(); }) {
     // Register process cleanup before any runtime owner can register its static destructor.
     // The worker then drains detached handles after every runtime owner has been destroyed.
@@ -223,6 +236,7 @@ RuntimeSession::RuntimeSession(const SnowCanvasRuntimeConfig& config)
 }
 
 RuntimeSession::~RuntimeSession() {
+    m_lifetime.reset();
     destroyRuntimeAsync();
 }
 
@@ -330,7 +344,11 @@ bool RuntimeSession::restoreDocumentHistoryPreservingEditorStyles(const QByteArr
 }
 
 bool RuntimeSession::clearDocumentPreservingViewports() {
+    const std::weak_ptr<const int> lifetime = m_lifetime;
     if (m_runtime.get() == nullptr || !m_clients.resetEditingState()) {
+        return false;
+    }
+    if (lifetime.expired()) {
         return false;
     }
 
@@ -341,7 +359,13 @@ bool RuntimeSession::clearDocumentPreservingViewports() {
     }
 
     m_smartErase.reset();
+    if (lifetime.expired()) {
+        return false;
+    }
     m_clients.resetDocumentRetainedState();
+    if (lifetime.expired()) {
+        return false;
+    }
     syncChangedViewports(changedViewports.get());
     clearDrawingCachesForCurrentThread();
     return true;
@@ -372,7 +396,14 @@ bool RuntimeSession::setQuickSelectionDisabledTools(const QSet<SnowCanvasTool>& 
 }
 
 void RuntimeSession::destroyAsync(SnowCanvasRuntime& owner) {
+    const std::weak_ptr<const int> lifetime = m_lifetime;
+    // A replacement observer may retire the owner instead. That replacement must not
+    // resume after detachment and publish a fresh engine into this retired session.
+    ++m_replacementGeneration;
     m_clients.detachAndReleaseClients(owner);
+    if (lifetime.expired()) {
+        return;
+    }
     destroyRuntimeAsync();
 }
 
@@ -396,8 +427,12 @@ void RuntimeSession::registerClient(Client* client) {
 }
 
 void RuntimeSession::unregisterClient(Client* client) {
+    const std::weak_ptr<const int> lifetime = m_lifetime;
     m_clients.unregisterClient(client);
     m_smartErase.removeSources(client);
+    if (lifetime.expired()) {
+        return;
+    }
     m_smartErase.sync(m_runtime.get());
 }
 
@@ -410,8 +445,13 @@ void RuntimeSession::syncChangedViewports(SnowChangedViewportList changedViewpor
 }
 
 void RuntimeSession::syncChangedViewportIds(const std::vector<std::uint64_t>& changedViewportIds) {
+    const std::weak_ptr<const int> lifetime = m_lifetime;
+    auto publishedViewportIds = changedViewportIds;
     m_smartErase.sync(m_runtime.get());
-    m_clients.syncChangedViewports(changedViewportIds);
+    if (lifetime.expired()) {
+        return;
+    }
+    m_clients.syncChangedViewports(std::move(publishedViewportIds));
 }
 
 bool RuntimeSession::replaceRuntime(ScopedRuntimeHandle replacement) {
@@ -419,25 +459,37 @@ bool RuntimeSession::replaceRuntime(ScopedRuntimeHandle replacement) {
         return false;
     }
 
+    const std::weak_ptr<const int> lifetime = m_lifetime;
+    const auto replacementGeneration = ++m_replacementGeneration;
+    const auto isCurrent = [this, lifetime, replacementGeneration] {
+        return !lifetime.expired() && m_replacementGeneration == replacementGeneration;
+    };
     m_smartErase.reset();
+    if (lifetime.expired()) {
+        return false;
+    }
     const SnowRuntime runtime = replacement.get();
-    const ClientRegistry::DetachedClients detachedClients = m_clients.detachForRuntimeReplacement();
-    m_runtime.reset(replacement.release());
-    m_clients.attachAfterRuntimeReplacement(detachedClients, runtime);
+    const ClientRegistry::DetachedClients detachedClients =
+        m_clients.detachForRuntimeReplacement(isCurrent);
+    if (!isCurrent()) {
+        return false;
+    }
+    m_runtime = leaseRuntime(std::move(replacement));
+    const auto replacementLease = m_runtime;
+    m_clients.attachAfterRuntimeReplacement(detachedClients, runtime, isCurrent);
+    if (!isCurrent()) {
+        return false;
+    }
+    if (m_runtime.get() != runtime) {
+        return false;
+    }
     m_smartErase.sync(runtime);
     return true;
 }
 
 void RuntimeSession::destroyRuntimeAsync() {
-    const SnowRuntime runtime = m_runtime.release();
-    if (runtime != nullptr) {
-        try {
-            enqueueRuntimeCleanup([runtime]() noexcept { destroyNow(runtime); });
-        } catch (...) {
-            // Allocation or worker creation failure must still release the detached handle.
-            destroyNow(runtime);
-        }
-    }
+    // Active presentation scopes keep the retired engine alive until they unwind.
+    m_runtime.reset();
     clearDrawingCachesForCurrentThread();
 }
 

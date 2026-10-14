@@ -431,8 +431,18 @@ pub fn remove_installation_startup(_root: &Path) -> Result<()> {
     super::windows_startup::remove_installation_startup(_root)
 }
 
+pub fn remove_installation_shell_verbs(root: &Path) -> Result<()> {
+    super::windows_shell::remove_installation_shell_verbs(root)
+}
+
+pub fn migrate_installation_shell_verbs(previous: &Path, root: &Path) -> Result<()> {
+    super::windows_shell::migrate_installation_shell_verbs(previous, root)
+}
+
 pub fn migrate_installation_startup(previous: &Path, root: &Path) -> Result<()> {
-    super::windows_startup::migrate_installation_startup(previous, root)
+    let startup = super::windows_startup::migrate_installation_startup(previous, root);
+    let shell = migrate_installation_shell_verbs(previous, root);
+    startup.and(shell)
 }
 
 pub fn launch_on_interactive_desktop(executable: &Path) -> Result<bool> {

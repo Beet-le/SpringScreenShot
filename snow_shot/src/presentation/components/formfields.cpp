@@ -11,6 +11,7 @@
 #include <QGridLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QScopeGuard>
 #include <QScopedValueRollback>
 #include <QVBoxLayout>
 
@@ -59,8 +60,8 @@ void configureLineEdit(AdLineEdit* editor, const Options& options) {
 }
 
 auto commitOnFinish(FormField* field, CommitPolicy policy) {
-    return [field, policy] {
-        if (policy == CommitPolicy::OnFinish) {
+    return [field = QPointer<FormField>(field), policy] {
+        if (field != nullptr && policy == CommitPolicy::OnFinish) {
             field->notifyCommitted();
         }
     };
@@ -253,8 +254,8 @@ FormField::FormField(const Metadata& metadata, const Options& options, CustomBin
     if (state.binding.writeValue) {
         state.item->setValueWriter(
             [this, writer = state.binding.writeValue](QWidget*, const QVariant& value) {
-                synchronize([&writer, &value] { writer(value); });
                 m_impl->pendingCommit = false;
+                synchronize([writer, value] { writer(value); });
             });
     }
     state.item->setControlWidget(state.control);
@@ -356,8 +357,8 @@ adqt::widgets::AdFormItem* FormField::item() const {
     return m_impl->item;
 }
 QVariant FormField::value() const {
-    return m_impl->binding.readValue ? m_impl->binding.readValue()
-                                     : (m_impl->item ? m_impl->item->value() : QVariant());
+    const auto reader = m_impl->binding.readValue;
+    return reader ? reader() : (m_impl->item ? m_impl->item->value() : QVariant());
 }
 const Metadata& FormField::metadata() const {
     return m_impl->metadata;
@@ -367,19 +368,30 @@ bool FormField::isSynchronizing() const {
 }
 
 void FormField::synchronize(const std::function<void()>& update) {
-    const QScopedValueRollback<bool> guard(m_impl->synchronizing, true);
-    if (update) {
-        update();
+    const QPointer<FormField> guard(this);
+    const bool previous = m_impl->synchronizing;
+    m_impl->synchronizing = true;
+    const auto restore = qScopeGuard([guard, previous] {
+        if (guard != nullptr) {
+            guard->m_impl->synchronizing = previous;
+        }
+    });
+    const auto callback = update;
+    if (callback) {
+        callback();
     }
-    m_impl->restoreFeedbackSpace();
+    if (guard != nullptr) {
+        m_impl->restoreFeedbackSpace();
+    }
 }
 
 void FormField::syncValue(const QVariant& next) {
-    synchronize([this, &next] {
-        if (m_impl->binding.writeValue) {
-            m_impl->binding.writeValue(next);
+    const auto writer = m_impl->binding.writeValue;
+    m_impl->pendingCommit = false;
+    synchronize([writer, next] {
+        if (writer) {
+            writer(next);
         }
-        m_impl->pendingCommit = false;
     });
 }
 
@@ -399,9 +411,10 @@ void FormField::setDescriptionOverride(const QString& description, bool error) {
 void FormField::setChoices(const QVector<Choice>& choices) {
     m_impl->choices = choices;
     m_impl->managesChoices = true;
-    synchronize([this] {
-        if (m_impl->choiceUpdater) {
-            m_impl->choiceUpdater(m_impl->choices);
+    const auto updater = m_impl->choiceUpdater;
+    synchronize([updater, choices] {
+        if (updater) {
+            updater(choices);
         }
     });
 }
@@ -451,7 +464,7 @@ void FormField::reserveFeedbackHeight(int pixels) {
 }
 
 void FormField::retranslateUi() {
-    synchronize([this] {
+    synchronize([this, guard = QPointer<FormField>(this)] {
         auto& state = *m_impl;
         const auto& copy = state.metadata;
         if (copy.label.isValid()) {
@@ -509,11 +522,14 @@ void FormField::retranslateUi() {
                 editor->setSuffixText(suffix);
             }
         }
-        if (state.managesChoices && state.choiceUpdater) {
-            state.choiceUpdater(state.choices);
+        const auto updater = state.choiceUpdater;
+        const auto choices = state.choices;
+        const auto retranslate = state.binding.retranslate;
+        if (state.managesChoices && updater) {
+            updater(choices);
         }
-        if (state.binding.retranslate) {
-            state.binding.retranslate();
+        if (guard != nullptr && retranslate) {
+            retranslate();
         }
     });
 }
@@ -538,16 +554,30 @@ void FormField::applyTheme(const styles::ThemeColorScheme& scheme) {
 }
 
 void FormField::notifyEdited() {
+    const QPointer<FormField> guard(this);
     auto& state = *m_impl;
     if (state.synchronizing) {
         return;
     }
     if (state.bridgeControlChanges) {
-        synchronize([this] { m_impl->item->setValue(value()); });
+        const QVariant draft = value();
+        if (guard == nullptr) {
+            return;
+        }
+        synchronize([this, draft] { m_impl->item->setValue(draft); });
+    }
+    if (guard == nullptr) {
+        return;
     }
     state.pendingCommit = true;
     const QVariant next = value();
+    if (guard == nullptr) {
+        return;
+    }
     emit valueEdited(next);
+    if (guard == nullptr) {
+        return;
+    }
     if (state.options.commitPolicy == CommitPolicy::Immediate) {
         state.pendingCommit = false;
         emit valueCommitted(next);
@@ -555,20 +585,28 @@ void FormField::notifyEdited() {
 }
 
 void FormField::notifyCommitted() {
+    const QPointer<FormField> guard(this);
     auto& state = *m_impl;
     if (!state.synchronizing && state.pendingCommit &&
         state.options.commitPolicy != CommitPolicy::Immediate) {
         state.pendingCommit = false;
-        emit valueCommitted(value());
+        const QVariant next = value();
+        if (guard != nullptr) {
+            emit valueCommitted(next);
+        }
     }
 }
 
 bool FormField::eventFilter(QObject* watched, QEvent* event) {
+    const QPointer<FormField> guard(this);
     if (m_impl->awaitingOwner && watched == m_impl->item &&
         ((event->type() == QEvent::ParentChange && m_impl->item->parentWidget()) ||
          event->type() == QEvent::Show)) {
         m_impl->awaitingOwner = false;
         m_impl->item->setItemHidden(false);
+        if (guard == nullptr) {
+            return true;
+        }
     }
     if (event->type() == QEvent::LanguageChange && watched == m_impl->view) {
         retranslateUi();
@@ -579,7 +617,7 @@ bool FormField::eventFilter(QObject* watched, QEvent* event) {
                qobject_cast<AdTextEdit*>(m_impl->control)) {
         notifyCommitted();
     }
-    return QObject::eventFilter(watched, event);
+    return guard == nullptr || QObject::eventFilter(watched, event);
 }
 
 void configureForm(AdForm* form) {
@@ -887,14 +925,17 @@ Handle<AdSlider> slider(const Metadata& metadata, const NumberOptions& numberOpt
             QStringLiteral("%1%2").arg(QString::number(editor->value(), 'f', std::max(0, decimals)),
                                        host->property("formFieldSuffix").toString()));
     };
-    auto* field = new FormField(metadata, options,
-                                {host, editor, [editor] { return QVariant(editor->value()); },
-                                 [editor, refreshValue](const QVariant& value) {
-                                     editor->setValue(value.toDouble());
-                                     refreshValue();
-                                 },
-                                 refreshValue},
-                                true);
+    auto* field = new FormField(
+        metadata, options,
+        {host, editor, [editor] { return QVariant(editor->value()); },
+         [editor, refreshValue, guard = QPointer<QWidget>(host)](const QVariant& value) {
+             editor->setValue(value.toDouble());
+             if (guard != nullptr) {
+                 refreshValue();
+             }
+         },
+         refreshValue},
+        true);
     QObject::connect(editor, &AdSlider::valueChanged, field, [field, refreshValue] {
         refreshValue();
         field->notifyEdited();
@@ -1002,6 +1043,7 @@ Handle<AdRadioButtonGroup> radio(const Metadata& metadata, const QVector<Choice>
     };
     auto* field = new FormField(metadata, options, {host, host, read, write, {}}, true);
     field->setChoiceUpdater([editor, host, layout, values, read, write, refreshFocus,
+                             guard = QPointer<QWidget>(host),
                              presentation = options.presentation](const QVector<Choice>& next) {
         bool sameValues = values->size() == next.size();
         for (int index = 0; sameValues && index < next.size(); ++index) {
@@ -1009,9 +1051,18 @@ Handle<AdRadioButtonGroup> radio(const Metadata& metadata, const QVector<Choice>
         }
         if (sameValues) {
             for (int index = 0; index < next.size(); ++index) {
-                if (auto* button = editor->button(index)) {
+                if (QPointer<QAbstractButton> button = editor->button(index)) {
                     button->setText(choiceText(next.at(index)));
+                    if (guard == nullptr) {
+                        return;
+                    }
+                    if (button == nullptr) {
+                        continue;
+                    }
                     button->setEnabled(next.at(index).enabled);
+                    if (guard == nullptr) {
+                        return;
+                    }
                 }
             }
             refreshFocus();
@@ -1019,27 +1070,42 @@ Handle<AdRadioButtonGroup> radio(const Metadata& metadata, const QVector<Choice>
         }
         const QVariant previous = read();
         while (QLayoutItem* layoutItem = layout->takeAt(0)) {
-            QWidget* widget = layoutItem->widget();
+            QPointer<QWidget> widget = layoutItem->widget();
+            delete layoutItem;
             if (auto* button = qobject_cast<QAbstractButton*>(widget)) {
                 editor->removeButton(button);
+                if (guard == nullptr) {
+                    return;
+                }
             }
-            delete widget;
-            delete layoutItem;
+            delete widget.data();
+            if (guard == nullptr) {
+                return;
+            }
         }
         values->clear();
         for (int index = 0; index < next.size(); ++index) {
             const auto& choice = next.at(index);
-            auto* button = new AdRadio(host);
+            QPointer<AdRadio> button = new AdRadio(host);
             button->setText(choiceText(choice));
             button->setEnabled(choice.enabled);
             editor->addButton(button, index);
+            if (guard == nullptr) {
+                return;
+            }
+            if (button == nullptr) {
+                values->append(choice.value);
+                continue;
+            }
             layout->addWidget(button, 0,
                               presentation == Presentation::SettingsRow ? Qt::AlignRight
                                                                         : Qt::AlignLeft);
             values->append(choice.value);
         }
         write(previous);
-        refreshFocus();
+        if (guard != nullptr) {
+            refreshFocus();
+        }
     });
     if (!choices.isEmpty()) {
         field->setChoices(choices);

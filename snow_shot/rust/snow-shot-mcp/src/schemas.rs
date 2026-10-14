@@ -89,7 +89,10 @@ struct Selection {
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 enum CanvasTool {
+    SpeechBubble,
+    Magnifier,
     Distance,
+    Angle,
     Move,
     Select,
     Rectangle,
@@ -293,6 +296,16 @@ enum Annotation {
         points: [[f64; 2]; 2],
         #[serde(default)]
         style: DistanceAnnotationStyle,
+    },
+    Angle {
+        /// First endpoint, vertex, and a point defining the second side direction.
+        /// Both sides use the first side length; the third point distance is ignored.
+        points: [[f64; 2]; 3],
+        #[serde(default)]
+        style: AngleAnnotationStyle,
+        /// Distinguishes a full revolution from zero for coincident rays.
+        #[serde(default)]
+        full_turn: bool,
     },
     Arrow {
         points: Vec<[f64; 2]>,
@@ -650,6 +663,7 @@ struct AutoFilter {
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 enum StyleTarget {
+    SpeechBubble,
     Distance,
     Rectangle,
     Arrow,
@@ -714,6 +728,10 @@ macro_rules! bounded_style_number {
 bounded_style_number!(DistanceFactor, f64, "number", 0.01, 1000.0);
 bounded_style_number!(DistanceDecimals, u8, "integer", 0, 3);
 bounded_style_number!(DistanceStrokeWidth, f64, "number", 1.0, 72.0);
+bounded_style_number!(AngleDecimals, u8, "integer", 0, 3);
+bounded_style_number!(AngleStrokeWidth, f64, "number", 1.0, 72.0);
+bounded_style_number!(MagnifierFactor, f64, "number", 1.0, 10.0);
+bounded_style_number!(MagnifierStrokeWidth, f64, "number", 0.0, 72.0);
 bounded_style_number!(ArrowRatio, f64, "number", 0.5, 3.0);
 bounded_style_number!(CornerRadius, f64, "number", 0.0, 8192.0);
 bounded_style_number!(SerialNumber, u64, "integer", 0_u64, 9007199254740991_u64);
@@ -756,6 +774,55 @@ struct DistanceAnnotationStyle {
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+enum AngleUnit {
+    Degrees,
+    Radians,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum AngleType {
+    Directed,
+    Interior,
+}
+
+#[derive(Default, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+struct AngleAnnotationStyle {
+    angle_type: Option<AngleType>,
+    stroke: Option<[u8; 4]>,
+    stroke_width: Option<AngleStrokeWidth>,
+    unit: Option<AngleUnit>,
+    decimal_places: Option<AngleDecimals>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum MagnifierConnectionType {
+    None,
+    LeaderLine,
+    Gradient,
+}
+
+#[derive(Default, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+struct MagnifierStylePatch {
+    shape: Option<ShapeVariant>,
+    stroke: Option<[u8; 4]>,
+    stroke_width: Option<MagnifierStrokeWidth>,
+    factor: Option<MagnifierFactor>,
+    connection_type: Option<MagnifierConnectionType>,
+    source_outline: Option<bool>,
+    leader_arrowhead: Option<Arrowhead>,
+    arrow_ratio: Option<ArrowRatio>,
+    corner_radius: Option<CornerRadius>,
+    /// Per-corner radii in top-left, top-right, bottom-right, bottom-left order.
+    /// Mutually exclusive with corner_radius; enforced by the application.
+    corner_radii: Option<[CornerRadius; 4]>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
 enum Arrowhead {
     None,
     Arrow,
@@ -786,8 +853,10 @@ enum FilterKind {
 #[derive(Deserialize, JsonSchema)]
 #[serde(untagged)]
 enum ToolStyle {
+    Magnifier(MagnifierToolStyle),
     Standard(Box<StandardToolStyle>),
     BrushEraser(BrushEraserToolStyle),
+    Angle(AngleToolStyle),
 }
 // Serde cannot consume a flattened untagged enum under deny_unknown_fields.
 // Keep the union outside each complete mutation so its strict object branch
@@ -796,8 +865,32 @@ enum ToolStyle {
 #[serde(untagged)]
 #[schemars(extend("type" = "object"))]
 enum ScreenshotToolStyleMutation {
+    Magnifier(Mutation<MagnifierToolStyle>),
     Standard(Box<Mutation<StandardToolStyle>>),
     BrushEraser(Mutation<BrushEraserToolStyle>),
+    Angle(Mutation<AngleToolStyle>),
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum AngleTarget {
+    Angle,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct AngleToolStyle {
+    target: AngleTarget,
+    style: AngleAnnotationStyle,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum MagnifierTarget {
+    Magnifier,
+}
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct MagnifierToolStyle {
+    target: MagnifierTarget,
+    style: MagnifierStylePatch,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -1261,6 +1354,362 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn speech_bubble_tools_and_styles_are_exposed_without_a_creation_operation() {
+        for (method, owner) in [
+            ("snow_shot_screenshot_set_tool", "session_id"),
+            ("snow_shot_document_set_tool", "document_id"),
+        ] {
+            let mut input = json!({"expected_revision": 1, "tool": "speech_bubble"});
+            input[owner] = json!("fixture");
+            assert!(schema(method, Some(input)).is_ok());
+        }
+        for (method, owner) in [
+            ("snow_shot_screenshot_set_tool_style", "session_id"),
+            ("snow_shot_document_set_tool_style", "document_id"),
+        ] {
+            let mut input = json!({"expected_revision": 1, "target": "speech_bubble",
+                "style": {"shape": "diamond", "stroke": [245, 34, 45, 255],
+                    "stroke_width": 3, "fill": [255, 255, 255, 255],
+                    "fill_style": "solid", "corner_radius": 6}});
+            input[owner] = json!("fixture");
+            assert!(schema(method, Some(input.clone())).is_ok());
+            input["style"]["shape"] = json!("triangle");
+            assert!(schema(method, Some(input)).is_err());
+        }
+        assert!(
+            schema(
+                "snow_shot_screenshot_edit",
+                Some(json!({"session_id":"s",
+            "expected_revision":1,"operations":[{"type":"speech_bubble",
+                "bounds":[0,0,100,100]}]}))
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn magnifier_schemas_validate_tools_and_independent_style_bounds() {
+        for (name, owner) in [
+            ("snow_shot_screenshot_set_tool", "session_id"),
+            ("snow_shot_document_set_tool", "document_id"),
+        ] {
+            assert!(
+                schema(
+                    name,
+                    Some(json!({owner:"owned", "expected_revision":1,
+                "tool":"magnifier"}))
+                )
+                .is_ok(),
+                "{name}"
+            );
+        }
+        for (name, owner) in [
+            ("snow_shot_screenshot_set_tool_style", "session_id"),
+            ("snow_shot_document_set_tool_style", "document_id"),
+        ] {
+            for shape in ["rectangle", "ellipse", "diamond"] {
+                for factor in [1.0, 2.0, 10.0] {
+                    assert!(
+                        schema(
+                            name,
+                            Some(json!({owner:"owned", "expected_revision":1,
+                        "target":"magnifier", "style":{"shape":shape, "factor":factor,
+                        "stroke_width":0.0, "stroke":[245,34,45,255], "connection_type":"gradient", "source_outline":true,
+                        "leader_arrowhead":"indented_triangle", "arrow_ratio":0.5, "corner_radii":[3,6,9,12]}}))
+                        )
+                        .is_ok(),
+                        "{name}"
+                    );
+                }
+            }
+            for connection in ["none", "leader_line", "gradient"] {
+                for outline in [false, true] {
+                    assert!(
+                        schema(
+                            name,
+                            Some(json!({owner:"owned", "expected_revision":1,
+                        "target":"magnifier", "style":{"connection_type":connection,
+                        "source_outline":outline}}))
+                        )
+                        .is_ok(),
+                        "{name}: {connection}/{outline}"
+                    );
+                }
+            }
+            for style in [
+                json!({"factor":0.9}),
+                json!({"factor":10.1}),
+                json!({"stroke_width":73.0}),
+                json!({"show_leader":true}),
+                json!({"connection_type":"unsupported"}),
+                json!({"connection_type":2}),
+                json!({"source_outline":1}),
+                json!({"fill":[0,0,0,255]}),
+                json!({"leader_arrowhead":"unsupported"}),
+                json!({"arrow_ratio":0.4}),
+                json!({"arrow_ratio":3.1}),
+                json!({"corner_radius":-1.0}),
+                json!({"corner_radii":[1,2,3]}),
+            ] {
+                assert!(
+                    schema(
+                        name,
+                        Some(json!({owner:"owned", "expected_revision":1,
+                    "target":"magnifier", "style":style}))
+                    )
+                    .is_err(),
+                    "{name}: {style}"
+                );
+            }
+        }
+        assert!(
+            schema(
+                "snow_shot_pinned_edit",
+                Some(json!({"id":"pinned",
+            "expected_revision":1, "action":"tool_style", "payload":{
+            "target":"magnifier", "style":{"factor":2.0, "connection_type":"leader_line", "source_outline":true}}}))
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn angle_types_accept_both_ranges_and_reject_unknown_values() {
+        for angle_type in ["directed", "interior", "unknown"] {
+            let result = schema(
+                "snow_shot_screenshot_set_tool_style",
+                Some(json!({
+                    "session_id":"owned", "expected_revision":1, "target":"angle",
+                    "style":{"angle_type":angle_type}
+                })),
+            );
+            assert_eq!(result.is_ok(), angle_type != "unknown");
+        }
+    }
+
+    #[test]
+    fn angle_annotation_schemas_accept_tools_styles_and_three_ordered_points() {
+        for (name, owner) in [
+            ("snow_shot_screenshot_set_tool", "session_id"),
+            ("snow_shot_document_set_tool", "document_id"),
+        ] {
+            let input = json!({owner:"owned","expected_revision":1,"tool":"angle"});
+            assert!(schema(name, Some(input.clone())).is_ok(), "{name}");
+            let mut invalid = input;
+            invalid.as_object_mut().unwrap().remove("expected_revision");
+            assert!(schema(name, Some(invalid)).is_err(), "{name}");
+        }
+        for unit in ["degrees", "radians"] {
+            for decimals in 0..=3 {
+                for width in [1.0, 2.5, 72.0] {
+                    let style = json!({"stroke":[245,34,45,255],"stroke_width":width,
+                        "unit":unit,"decimal_places":decimals});
+                    for (name, owner) in [
+                        ("snow_shot_screenshot_set_tool_style", "session_id"),
+                        ("snow_shot_document_set_tool_style", "document_id"),
+                    ] {
+                        assert!(
+                            schema(
+                                name,
+                                Some(json!({owner:"owned","expected_revision":1,
+                            "target":"angle","style":style}))
+                            )
+                            .is_ok(),
+                            "{name}: {style}"
+                        );
+                    }
+                    for (name, owner) in [
+                        ("snow_shot_screenshot_apply_annotations", "session_id"),
+                        ("snow_shot_document_apply_annotations", "document_id"),
+                    ] {
+                        for full_turn in [false, true] {
+                            let input = json!({owner:"owned","expected_revision":1,"operations":[{
+                                "type":"angle","points":[[100,0],[0,0],[0,100]],
+                                "style":style,"full_turn":full_turn}]});
+                            assert!(schema(name, Some(input)).is_ok(), "{name}: {style}");
+                        }
+                    }
+                    assert!(
+                        schema(
+                            "snow_shot_pinned_edit",
+                            Some(json!({"id":"pinned",
+                        "expected_revision":1,"action":"tool_style","payload":{
+                            "target":"angle","style":style}}))
+                        )
+                        .is_ok()
+                    );
+                }
+            }
+        }
+        assert!(
+            schema(
+                "snow_shot_pinned_edit",
+                Some(json!({"id":"pinned",
+            "expected_revision":1,"action":"tool","payload":{"tool":"angle"}}))
+            )
+            .is_ok()
+        );
+        assert!(
+            schema(
+                "snow_shot_pinned_edit",
+                Some(json!({"id":"pinned",
+            "expected_revision":1,"action":"annotations","payload":{"operations":[{
+                "type":"angle","points":[[100,0],[0,0],[0,100]]}]}}))
+            )
+            .is_ok()
+        );
+        for (name, owner) in [
+            ("snow_shot_screenshot_apply_annotations", "session_id"),
+            ("snow_shot_document_apply_annotations", "document_id"),
+        ] {
+            assert!(
+                schema(
+                    name,
+                    Some(json!({owner:"owned","expected_revision":1,"operations":[{
+                "type":"angle","points":[[100,0],[0,0],[0,100]]}]}))
+                )
+                .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn angle_annotation_schemas_reject_invalid_values_and_unrelated_style_targets() {
+        for style in [
+            json!({"stroke_width":0.99}),
+            json!({"stroke_width":72.01}),
+            json!({"stroke_width":"2"}),
+            json!({"stroke":[0,0,0,256]}),
+            json!({"decimal_places":-1}),
+            json!({"decimal_places":4}),
+            json!({"decimal_places":1.5}),
+            json!({"unit":"px"}),
+            json!({"unit":"degree"}),
+            json!({"factor":1}),
+            json!({"fill":[0,0,0,255]}),
+            json!({"endpoint_style":"bar"}),
+            json!({"full_turn":true}),
+        ] {
+            for (name, owner) in [
+                ("snow_shot_screenshot_set_tool_style", "session_id"),
+                ("snow_shot_document_set_tool_style", "document_id"),
+            ] {
+                assert!(
+                    schema(
+                        name,
+                        Some(json!({owner:"owned","expected_revision":1,
+                    "target":"angle","style":style}))
+                    )
+                    .is_err(),
+                    "{name}: {style}"
+                );
+            }
+            for (name, owner) in [
+                ("snow_shot_screenshot_apply_annotations", "session_id"),
+                ("snow_shot_document_apply_annotations", "document_id"),
+            ] {
+                assert!(
+                    schema(
+                        name,
+                        Some(json!({owner:"owned","expected_revision":1,"operations":[{
+                    "type":"angle","points":[[100,0],[0,0],[0,100]],"style":style}]}))
+                    )
+                    .is_err(),
+                    "{name}: {style}"
+                );
+            }
+            assert!(
+                schema(
+                    "snow_shot_pinned_edit",
+                    Some(json!({"id":"pinned",
+                "expected_revision":1,"action":"tool_style","payload":{
+                    "target":"angle","style":style}}))
+                )
+                .is_err(),
+                "pinned: {style}"
+            );
+        }
+        for target in [
+            "distance",
+            "arrow",
+            "text",
+            "rectangle",
+            "watermark",
+            "brush_eraser",
+        ] {
+            for (name, owner) in [
+                ("snow_shot_screenshot_set_tool_style", "session_id"),
+                ("snow_shot_document_set_tool_style", "document_id"),
+            ] {
+                assert!(
+                    schema(
+                        name,
+                        Some(json!({owner:"owned","expected_revision":1,
+                    "target":target,"style":{"unit":"degrees"}}))
+                    )
+                    .is_err(),
+                    "{name}: {target}"
+                );
+            }
+        }
+        for points in [
+            json!([]),
+            json!([[0, 0]]),
+            json!([[0, 0], [10, 10]]),
+            json!([[0, 0], [10, 10], [20, 0], [30, 30]]),
+            json!([[0, 0], [10, 10], [20]]),
+        ] {
+            for (name, owner) in [
+                ("snow_shot_screenshot_apply_annotations", "session_id"),
+                ("snow_shot_document_apply_annotations", "document_id"),
+            ] {
+                assert!(
+                    schema(
+                        name,
+                        Some(json!({owner:"owned","expected_revision":1,"operations":[{
+                    "type":"angle","points":points}]}))
+                    )
+                    .is_err(),
+                    "{name}: {points}"
+                );
+            }
+        }
+        for value in [json!(0), json!("true")] {
+            assert!(
+                schema(
+                    "snow_shot_screenshot_apply_annotations",
+                    Some(json!({
+                        "session_id":"owned","expected_revision":1,"operations":[{
+                            "type":"angle","points":[[100,0],[0,0],[0,100]],"full_turn":value}]
+                    }))
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn angle_capability_snapshots_include_the_tool_and_style_sources() {
+        for source in [
+            include_str!("../../../mcp-capabilities.json"),
+            include_str!("../../../mcp-capabilities-mini.json"),
+        ] {
+            let snapshot: Value = serde_json::from_str(source).unwrap();
+            let contracts = &snapshot["surface_contracts"];
+            assert_eq!(contracts["canvas_tools"]["members"]["Angle"], "Angle");
+            for source in ["DefaultAngle", "SelectedAngle"] {
+                assert!(
+                    contracts["canvas_style_sources"]["members"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|member| member == source)
+                );
+            }
+        }
     }
 
     #[test]

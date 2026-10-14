@@ -6,17 +6,21 @@
 #include "snow_shot/presentation/globalshortcutmanager.h"
 #include "snow_shot/storage/applicationstorage.h"
 #include "snow_shot/storage/configurationstore.h"
+#include "snow_shot/storage/settingsadapters.h"
 #include "snow_shot/network/snowshotapiclient.h"
 #include "snow_shot/translation/translationservice.h"
 #include "snow_shot/presentation/screenshotocrrecognitionservice.h"
 #include "snow_shot/presentation/screenshotocrpresentation.h"
 #include "snow_shot/presentation/screenshotqrrecognitionservice.h"
+#include "snow_shot/presentation/screenshotrecognitionsessioncontroller.h"
 #include "snow_shot/presentation/screenshotimagefileservice.h"
+#include "snow_shot/runtime/runtimeactivitytracker.h"
 #include "snowimageqtcodec.h"
 #include <QApplication>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QElapsedTimer>
+#include <QEvent>
 #include <QFile>
 #include <QTemporaryDir>
 #include <QThread>
@@ -27,6 +31,8 @@
 #include <QSemaphore>
 #include <QBuffer>
 #include <QMimeData>
+#include <QPointer>
+#include <QScopeGuard>
 #include <QtEndian>
 #include <atomic>
 #include <cstdlib>
@@ -755,6 +761,601 @@ void documentConcurrency() {
             "adding worker lanes does not multiply the global document quota");
     service.shutdown();
 }
+void documentMemoryActivity() {
+    using snow_shot::runtime::RuntimeActivityTracker;
+    auto& activity = RuntimeActivityTracker::shared();
+    const auto wait = [](auto condition) {
+        QElapsedTimer timer;
+        timer.start();
+        while (!condition() && timer.elapsed() < 5000) {
+            QCoreApplication::processEvents();
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            QThread::msleep(1);
+        }
+        require(condition(), "document memory activity did not settle");
+    };
+    wait([&] { return activity.snapshot().activeCount == 0; });
+    const auto baseline = activity.snapshot().activeCount;
+    const auto requireTrimBlocked = [&] {
+        const auto snapshot = activity.snapshot();
+        bool trimmed = false;
+        require(snapshot.activeCount > baseline &&
+                    !activity.tryRunWhenIdle(snapshot.generation, [&] { trimmed = true; }) &&
+                    !trimmed,
+                "pending document work and cleanup must block memory trimming");
+    };
+    const auto waitForIdle = [&] {
+        wait([&] { return activity.snapshot().activeCount == baseline; });
+        const auto snapshot = activity.snapshot();
+        bool trimmed = false;
+        require(activity.tryRunWhenIdle(snapshot.generation, [&] { trimmed = true; }) && trimmed,
+                "completed document work must release memory activity");
+    };
+    for (const bool cancelBeforeSource : {false, true}) {
+        McpDocumentService::Ports::SourceCompletion pendingSource;
+        McpJobRegistry jobs;
+        McpDocumentService::Ports ports;
+        ports.jobs = &jobs;
+        ports.resolveSource = [&](const ScreenshotMcpRequest&, auto completion, auto budget) {
+            require(budget(16 * 16 * 4), "reserve a delayed document source");
+            pendingSource = std::move(completion);
+        };
+        McpDocumentService service(std::move(ports));
+        ScreenshotMcpRequest request;
+        request.connectionId = 1;
+        request.requestId = QStringLiteral("delayed-source");
+        request.idempotencyKey = request.requestId;
+        request.method = QStringLiteral("snow_shot_document_open");
+        request.params = {{QStringLiteral("source"), QStringLiteral("clipboard")}};
+        int completions = 0;
+        std::optional<ScreenshotMcpResponse> opened;
+        service.request(request, [&](auto response) {
+            requireTrimBlocked();
+            ++completions;
+            opened = std::move(response);
+        });
+        require(pendingSource && completions == 0 && !jobs.hasRunningJobs(),
+                "accepted source resolution waits without a worker or registry job");
+        requireTrimBlocked();
+        if (cancelBeforeSource) {
+            require(service.cancelRequest(1, request.requestId) && completions == 1 && opened &&
+                        opened->errorCode == QStringLiteral("canceled"),
+                    "cancel a document request while its external source is pending");
+            waitForIdle();
+            require(bool(pendingSource),
+                    "a retained uninvoked source callback does not pin canceled request activity");
+        }
+        McpDocumentService::Source source;
+        source.image = QImage(16, 16, QImage::Format_ARGB32_Premultiplied);
+        source.image.fill(Qt::white);
+        pendingSource(std::move(source), {});
+        wait([&] { return completions == 1; });
+        waitForIdle();
+        require(
+            pendingSource && opened &&
+                (cancelBeforeSource ? opened->errorCode == QStringLiteral("canceled") : opened->ok),
+            "late or completed source delivery retires activity without another reply");
+        service.shutdown();
+        waitForIdle();
+    }
+    enum class Outcome { Completed, Cancelled, Disconnected };
+    for (const auto outcome : {Outcome::Completed, Outcome::Cancelled, Outcome::Disconnected}) {
+        QSemaphore entered;
+        QSemaphore release;
+        QList<McpDocumentService::Ports::SourceCompletion> retainedSourceCompletions;
+        McpJobRegistry jobs;
+        McpDocumentService::Ports ports;
+        ports.jobs = &jobs;
+        ports.beforeWorkerRequest = [&](const ScreenshotMcpRequest& request) {
+            if (request.method == QStringLiteral("snow_shot_document_render")) {
+                entered.release();
+                release.acquire();
+            }
+        };
+        ports.resolveSource = [&](const ScreenshotMcpRequest&, auto completion, auto budget) {
+            require(budget(16 * 16 * 4), "reserve the memory activity fixture source");
+            McpDocumentService::Source source;
+            source.image = QImage(16, 16, QImage::Format_ARGB32_Premultiplied);
+            source.image.fill(Qt::white);
+            retainedSourceCompletions.append(completion);
+            completion(std::move(source), {});
+        };
+        McpDocumentService service(std::move(ports));
+        quint64 sequence = 0;
+        const auto dispatch = [&](const QString& method, QJsonObject params,
+                                  ScreenshotMcpServer::Completion completion, quint64 owner = 1) {
+            ScreenshotMcpRequest request;
+            request.connectionId = owner;
+            request.requestId = QString::number(++sequence);
+            request.idempotencyKey = request.requestId;
+            request.method = method;
+            request.params = std::move(params);
+            request.expectedRevision = 1;
+            const auto id = request.requestId;
+            service.request(request, std::move(completion));
+            return id;
+        };
+        std::optional<ScreenshotMcpResponse> opened;
+        dispatch(QStringLiteral("snow_shot_document_open"),
+                 {{QStringLiteral("source"), QStringLiteral("clipboard")}},
+                 [&](auto response) { opened = std::move(response); });
+        wait([&] { return opened.has_value(); });
+        require(opened->ok && !retainedSourceCompletions.isEmpty(),
+                "open a document while retaining an already-invoked source callback");
+        waitForIdle();
+        const auto documentId = opened->result.value(QStringLiteral("document_id"));
+        int completions = 0;
+        std::optional<ScreenshotMcpResponse> rendered;
+        const auto renderRequest =
+            dispatch(QStringLiteral("snow_shot_document_render"),
+                     {{QStringLiteral("document_id"), documentId}}, [&](auto response) {
+                         requireTrimBlocked();
+                         ++completions;
+                         rendered = std::move(response);
+                     });
+        wait([&] { return entered.available() > 0; });
+        require(completions == 0 && !jobs.hasRunningJobs(),
+                "blocked document rendering has no registry job or premature completion");
+        requireTrimBlocked();
+        if (outcome == Outcome::Cancelled) {
+            require(service.cancelRequest(1, renderRequest) && completions == 1 && rendered &&
+                        rendered->errorCode == QStringLiteral("canceled"),
+                    "request cancellation acknowledges before the blocked worker returns");
+            requireTrimBlocked();
+        } else if (outcome == Outcome::Disconnected) {
+            service.disconnected(1);
+            require(completions == 0, "disconnect suppresses the pending render completion");
+            requireTrimBlocked();
+        }
+        release.release();
+        if (outcome == Outcome::Completed) {
+            wait([&] { return completions == 1; });
+            require(rendered && rendered->ok && !rendered->attachment.isEmpty(),
+                    "the blocked render publishes its image after actual worker completion");
+        }
+        waitForIdle();
+        require(completions == (outcome == Outcome::Disconnected ? 0 : 1) &&
+                    !retainedSourceCompletions.isEmpty(),
+                "late worker completion does not reply twice or pin retained source callbacks");
+        if (outcome == Outcome::Disconnected) {
+            std::optional<ScreenshotMcpResponse> listed;
+            dispatch(QStringLiteral("snow_shot_document_list"), {},
+                     [&](auto response) { listed = std::move(response); });
+            wait([&] { return listed.has_value(); });
+            require(listed->ok &&
+                        listed->result.value(QStringLiteral("documents")).toArray().isEmpty(),
+                    "reconnecting the same owner finds no documents after worker cleanup");
+            waitForIdle();
+        }
+        service.shutdown();
+        waitForIdle();
+    }
+    {
+        McpDocumentService::Ports::SourceCompletion pendingSource;
+        int sourceResolutions = 0;
+        McpJobRegistry jobs;
+        McpDocumentService::Ports ports;
+        ports.jobs = &jobs;
+        ports.resolveSource = [&](const ScreenshotMcpRequest&, auto completion, auto) {
+            ++sourceResolutions;
+            pendingSource = std::move(completion);
+        };
+        McpDocumentService service(std::move(ports));
+        require(!service.storeArtifact(1, QByteArray("shutdown"), QStringLiteral("text/plain"))
+                     .isEmpty(),
+                "register the shutdown fixture owner");
+        int cancellations = 0;
+        int completions = 0;
+        std::optional<ScreenshotMcpResponse> response;
+        const auto job = jobs.start(1, QStringLiteral("shutdown"), [&] {
+            ++cancellations;
+            requireTrimBlocked();
+            ScreenshotMcpRequest request;
+            request.connectionId = 2;
+            request.requestId = QStringLiteral("during-shutdown");
+            request.idempotencyKey = request.requestId;
+            request.method = QStringLiteral("snow_shot_document_open");
+            request.params = {{QStringLiteral("source"), QStringLiteral("clipboard")}};
+            service.request(request, [&](auto result) {
+                requireTrimBlocked();
+                ++completions;
+                response = std::move(result);
+            });
+            require(completions == 1 && response &&
+                        response->errorCode == QStringLiteral("disabled") &&
+                        sourceResolutions == 0 && !pendingSource,
+                    "shutdown rejects reentrant requests synchronously before source admission");
+        });
+        require(!job.isEmpty(), "admit a job with a reentrant shutdown cancellation callback");
+        service.shutdown();
+        require(cancellations == 1 && completions == 1 && !jobs.hasRunningJobs(),
+                "shutdown cancels the job once and leaves no reentrant request pending");
+        waitForIdle();
+    }
+}
+void recognitionModelDocuments(const QString& directory) {
+#if SNOW_SHOT_ENABLE_TABLE_RECOGNITION && SNOW_SHOT_ENABLE_LATEX_RECOGNITION
+    using Settings = snow_shot::storage::ScreenshotRecognitionModelSettings;
+    const auto savedTableModel = Settings().tableModel();
+    const auto savedLatexModel = Settings().latexModel();
+    const auto restoreSettings = qScopeGuard([&] {
+        Settings().setTableModel(savedTableModel);
+        Settings().setLatexModel(savedLatexModel);
+    });
+    require(Settings().setTableModel(QStringLiteral("dedicated")) &&
+                Settings().setLatexModel(QStringLiteral("snow-shot:vision")),
+            "MCP recognition defaults differ from the saved source choices");
+
+    ScreenshotRecognitionResults saved;
+    saved.key = QStringLiteral("saved-source");
+    saved.tableModelSelection = QStringLiteral("vision-b");
+    saved.latexModelSelection = QStringLiteral("vision-b");
+    ScreenshotTableRecognitionEntry tableA;
+    tableA.model = QStringLiteral("vision-a");
+    tableA.result.html = QStringLiteral("<table><tr><td>A baseline</td></tr></table>");
+    ScreenshotTableRecognitionEntry tableB;
+    tableB.model = QStringLiteral("vision-b");
+    tableB.result.html = QStringLiteral("<table><tr><th rowspan=\"2\">B heading</th>"
+                                        "<td>B baseline top</td></tr><tr><td></td></tr></table>");
+    tableB.draftHtml = QStringLiteral("<table><tr><th rowspan=\"2\">B heading</th>"
+                                      "<td>B saved top</td></tr><tr><td></td></tr></table>");
+    saved.tableEntries = {tableA, tableB};
+    ScreenshotLatexRecognitionEntry latexA;
+    latexA.model = QStringLiteral("vision-a");
+    latexA.result.latex = QStringLiteral("a^2");
+    latexA.draft = QStringLiteral("A saved formula");
+    ScreenshotLatexRecognitionEntry latexB;
+    latexB.model = QStringLiteral("vision-b");
+    latexB.result.latex = QStringLiteral("b^2");
+    latexB.draft = QString{};
+    saved.latexEntries = {latexA, latexB};
+
+    McpJobRegistry registry;
+    auto clipboard = std::make_shared<MemoryClipboard>();
+    McpDocumentService::Ports ports;
+    ports.jobs = &registry;
+    ports.clipboard = clipboard;
+    int sourceResolutions = 0;
+    ports.resolveSource = [&](const ScreenshotMcpRequest&, auto completion, auto budget) {
+        ++sourceResolutions;
+        require(budget(80 * 60 * 4), "MCP saved recognition source reserves image bytes");
+        McpDocumentService::Source source;
+        source.image = QImage(80, 60, QImage::Format_ARGB32_Premultiplied);
+        source.image.fill(Qt::white);
+        source.recognitionResults = saved;
+        completion(std::move(source), {});
+    };
+    QVector<ScreenshotRecognitionResults> handoffs;
+    ports.present = [&](McpDocumentService::Source source, auto completion) {
+        handoffs.append(std::move(source.recognitionResults));
+        completion(true);
+        return true;
+    };
+    ports.pinDocument = [&](McpDocumentService::Source source, QImage image, auto completion) {
+        require(!image.isNull(), "MCP recognition pin retains the document background");
+        handoffs.append(std::move(source.recognitionResults));
+        completion(true);
+        return true;
+    };
+    McpDocumentService service(std::move(ports));
+    quint64 sequence = 0, revision = 1;
+    qint64 recognitionRevision = 1;
+    QString id;
+    const auto wait = [](auto condition) {
+        QElapsedTimer timer;
+        timer.start();
+        while (!condition() && timer.elapsed() < 5000) {
+            QCoreApplication::processEvents();
+            QThread::msleep(1);
+        }
+        require(condition(), "MCP selected recognition operation completes");
+    };
+    const auto call = [&](const QString& method, QJsonObject params = {}) {
+        ScreenshotMcpRequest request;
+        request.connectionId = 17;
+        request.requestId = QString::number(++sequence);
+        request.idempotencyKey = request.requestId;
+        request.expectedRevision = revision;
+        request.method = QStringLiteral("snow_shot_") + method;
+        if (!id.isEmpty())
+            params.insert(QStringLiteral("document_id"), id);
+        request.params = std::move(params);
+        std::optional<ScreenshotMcpResponse> response;
+        service.request(request, [&](auto value) { response = std::move(value); });
+        wait([&] { return response.has_value(); });
+        if (response->ok && response->revision)
+            revision = *response->revision;
+        return *response;
+    };
+    const auto recognize = [&](const QString& kind) {
+        const auto started =
+            call(QStringLiteral("document_recognize"), {{QStringLiteral("kind"), kind}});
+        require(started.ok, "MCP recognizes saved model results without an API provider");
+        const auto job = started.result.value(QStringLiteral("job_id")).toString();
+        wait([&] {
+            const auto value = registry.get(17, job);
+            return value && value->value(QStringLiteral("status")) != QStringLiteral("running");
+        });
+        const auto result = *registry.get(17, job);
+        require(
+            result.value(QStringLiteral("status")) == QStringLiteral("completed") &&
+                result.value(QStringLiteral("result")).toObject().value(QStringLiteral("kind")) ==
+                    kind,
+            "MCP recognition jobs retain the selected Table or LaTeX workflow");
+        recognitionRevision = 1;
+        return call(QStringLiteral("document_recognition_state"));
+    };
+    const auto edit = [&](const QString& action, QJsonObject params = {}) {
+        params.insert(QStringLiteral("action"), action);
+        params.insert(QStringLiteral("expected_recognition_revision"), recognitionRevision);
+        const auto result = call(QStringLiteral("document_edit_recognition"), std::move(params));
+        if (action != QStringLiteral("set_model"))
+            require(result.ok, "MCP selected recognition edit succeeds");
+        if (result.ok)
+            recognitionRevision =
+                result.result.value(QStringLiteral("recognition_revision")).toInteger();
+        return result;
+    };
+    const auto opened = call(QStringLiteral("document_open"),
+                             {{QStringLiteral("source"), QStringLiteral("clipboard")}});
+    require(opened.ok, "MCP opens a source carrying independent recognition model results");
+    id = opened.result.value(QStringLiteral("document_id")).toString();
+    const auto table = recognize(QStringLiteral("table"));
+    const auto cells = table.result.value(QStringLiteral("cells")).toArray();
+    require(table.ok && table.result.value(QStringLiteral("rows")).toInt() == 2 &&
+                table.result.value(QStringLiteral("columns")).toInt() == 2 && cells.size() == 3 &&
+                cells.at(0).toObject().value(QStringLiteral("row_span")).toInt() == 2 &&
+                cells.at(0).toObject().value(QStringLiteral("header")).toBool() &&
+                cells.at(1).toObject().value(QStringLiteral("text")) ==
+                    QStringLiteral("B saved top") &&
+                cells.at(2).toObject().value(QStringLiteral("text")).toString().isEmpty(),
+            "MCP consumes selected vision Table draft with merged headers and empty cells");
+    require(edit(QStringLiteral("set_cell"), {{QStringLiteral("row"), 0},
+                                              {QStringLiteral("column"), 1},
+                                              {QStringLiteral("text"), QStringLiteral("B edited")}})
+                .ok,
+            "MCP edits the selected model's Table draft");
+    const auto tableCopy = call(QStringLiteral("document_export_recognition"),
+                                {{QStringLiteral("output"), QStringLiteral("copy")},
+                                 {QStringLiteral("format"), QStringLiteral("html")}});
+    require(tableCopy.ok && clipboard->mime && clipboard->mime->hasHtml() &&
+                clipboard->mime->html().contains(QStringLiteral("B edited")) &&
+                !clipboard->mime->html().contains(QStringLiteral("A baseline")),
+            "MCP HTML copy publishes only the edited selected Table");
+    const auto tablePath = QDir(directory).filePath(QStringLiteral("selected-table.html"));
+    require(call(QStringLiteral("document_export_recognition"),
+                 {{QStringLiteral("output"), QStringLiteral("save")},
+                  {QStringLiteral("format"), QStringLiteral("html")},
+                  {QStringLiteral("path"), tablePath}})
+                .ok,
+            "MCP saves the selected Table through the existing export workflow");
+    QFile tableFile(tablePath);
+    require(tableFile.open(QIODevice::ReadOnly) &&
+                tableFile.readAll() == clipboard->mime->html().toUtf8(),
+            "MCP Table save and copy retain the identical canonical selected draft");
+
+    const auto latex = recognize(QStringLiteral("latex"));
+    require(latex.ok && latex.result.contains(QStringLiteral("text")) &&
+                latex.result.value(QStringLiteral("text")).toString().isEmpty(),
+            "MCP consumes a valid empty LaTeX draft from the selected model");
+    const auto emptyCopy = call(QStringLiteral("document_export_recognition"),
+                                {{QStringLiteral("output"), QStringLiteral("copy")},
+                                 {QStringLiteral("format"), QStringLiteral("text")}});
+    require(emptyCopy.ok && clipboard->mimePublications == 2 && clipboard->mime &&
+                clipboard->mime->text().isEmpty(),
+            "MCP empty LaTeX copy publishes an empty draft instead of another model's formula");
+    const auto latexPath = QDir(directory).filePath(QStringLiteral("selected-empty-latex.txt"));
+    require(call(QStringLiteral("document_export_recognition"),
+                 {{QStringLiteral("output"), QStringLiteral("save")},
+                  {QStringLiteral("format"), QStringLiteral("text")},
+                  {QStringLiteral("path"), latexPath}})
+                    .ok &&
+                QFileInfo::exists(latexPath) && QFileInfo(latexPath).size() == 0,
+            "MCP saves an empty selected LaTeX draft losslessly");
+    require(edit(QStringLiteral("set_text"),
+                 {{QStringLiteral("text"), QStringLiteral("B edited formula")}})
+                    .ok &&
+                edit(QStringLiteral("undo"))
+                    .result.value(QStringLiteral("text"))
+                    .toString()
+                    .isEmpty() &&
+                edit(QStringLiteral("redo")).result.value(QStringLiteral("text")) ==
+                    QStringLiteral("B edited formula"),
+            "MCP selected LaTeX edits preserve empty drafts in undo and redo");
+    require(
+        edit(QStringLiteral("set_text"), {{QStringLiteral("text"), QString{}}}).ok &&
+            edit(QStringLiteral("reset_text")).result.value(QStringLiteral("text")) ==
+                QStringLiteral("b^2") &&
+            edit(QStringLiteral("undo")).result.value(QStringLiteral("text")).toString().isEmpty(),
+        "MCP LaTeX reset uses the selected baseline and undo restores an empty draft");
+    require(
+        edit(QStringLiteral("set_model"), {{QStringLiteral("model"), QStringLiteral("vision-a")}})
+                    .errorCode == QStringLiteral("action_unavailable") &&
+            !service.handles(QStringLiteral("snow_shot_document_set_recognition_model")),
+        "MCP keeps its existing recognition interface without adding model selection actions");
+    const auto tableAgain = recognize(QStringLiteral("table"));
+    require(tableAgain.ok && tableAgain.result.value(QStringLiteral("html"))
+                                 .toString()
+                                 .contains(QStringLiteral("B edited")),
+            "MCP workflow changes retain the selected Table's edited result");
+    const auto latexAgain = recognize(QStringLiteral("latex"));
+    require(latexAgain.ok && latexAgain.result.value(QStringLiteral("text")).toString().isEmpty() &&
+                call(QStringLiteral("document_export_recognition"),
+                     {{QStringLiteral("output"), QStringLiteral("return")},
+                      {QStringLiteral("format"), QStringLiteral("text")}})
+                    .result.value(QStringLiteral("text"))
+                    .toString()
+                    .isEmpty(),
+            "MCP returns the selected empty LaTeX draft after switching workflows");
+    require(call(QStringLiteral("document_present")).ok &&
+                call(QStringLiteral("document_pin")).ok && handoffs.size() == 2,
+            "MCP present and pin carry selected recognition snapshots");
+    for (const auto& snapshot : handoffs) {
+        require(!snapshot.key.isEmpty() &&
+                    snapshot.tableModelSelection == QStringLiteral("vision-b") &&
+                    snapshot.latexModelSelection == QStringLiteral("vision-b") &&
+                    snapshot.tableEntries.size() == 2 && snapshot.latexEntries.size() == 2,
+                "MCP handoff preserves both selected identities and independent model entries");
+        for (const auto& entry : snapshot.tableEntries)
+            require(entry.model == QStringLiteral("vision-a")
+                        ? entry.result.html == tableA.result.html && !entry.draftHtml
+                        : entry.draftHtml && entry.draftHtml->contains(QStringLiteral("B edited")),
+                    "MCP handoff keeps Table edits isolated to the selected model");
+        for (const auto& entry : snapshot.latexEntries)
+            require(entry.model == QStringLiteral("vision-a")
+                        ? entry.draft == latexA.draft
+                        : entry.draft && entry.draft->isEmpty() &&
+                              entry.result.latex == QStringLiteral("b^2"),
+                    "MCP handoff keeps selected empty LaTeX drafts and their reset baseline");
+    }
+    require(
+        sourceResolutions == 1 && Settings().tableModel() == QStringLiteral("dedicated") &&
+            Settings().latexModel() == QStringLiteral("snow-shot:vision"),
+        "MCP saved choices remain document-local without resolving pixels or changing settings");
+    service.shutdown();
+#else
+    Q_UNUSED(directory)
+#endif
+}
+
+void recognitionServiceTeardown() {
+#if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
+    for (const bool disconnect : {false, true}) {
+        const auto await = [](auto predicate) {
+            QElapsedTimer timer;
+            timer.start();
+            while (!predicate() && timer.elapsed() < 5000) {
+                QCoreApplication::processEvents();
+                QThread::msleep(1);
+            }
+            require(predicate(), "recognition teardown operation completes");
+        };
+        McpJobRegistry registry;
+        McpDocumentService::Ports ports;
+        ports.jobs = &registry;
+        ports.resolveSource = [](const ScreenshotMcpRequest&, auto completion, auto budget) {
+            McpDocumentService::Source source;
+            source.image = QImage(4, 4, QImage::Format_ARGB32_Premultiplied);
+            source.image.fill(Qt::white);
+            require(budget(source.image.sizeInBytes()), "teardown source reserves its pixels");
+            ScreenshotTableRecognitionEntry table;
+            table.model = QStringLiteral("saved-model");
+            table.result.html = QStringLiteral("<table><tr><td>saved</td></tr></table>");
+            source.recognitionResults.tableEntries = {table};
+            source.recognitionResults.tableModelSelection = table.model;
+            completion(std::move(source), {});
+        };
+        auto service = std::make_unique<McpDocumentService>(std::move(ports));
+        ScreenshotMcpRequest request;
+        request.connectionId = 29;
+        request.requestId = QStringLiteral("open");
+        request.method = QStringLiteral("snow_shot_document_open");
+        request.idempotencyKey = QStringLiteral("teardown-open");
+        request.params = {{QStringLiteral("source"), QStringLiteral("clipboard")}};
+        std::optional<ScreenshotMcpResponse> opened;
+        service->request(request, [&](auto response) { opened = std::move(response); });
+        await([&] { return opened.has_value(); });
+        require(opened->ok, "create recognition teardown document");
+        request.requestId = QStringLiteral("recognize");
+        request.method = QStringLiteral("snow_shot_document_recognize");
+        request.idempotencyKey = QStringLiteral("teardown-recognize");
+        request.expectedRevision = opened->revision;
+        request.params = {
+            {QStringLiteral("document_id"), opened->result.value(QStringLiteral("document_id"))},
+            {QStringLiteral("kind"), QStringLiteral("table")}};
+        std::optional<ScreenshotMcpResponse> recognized;
+        service->request(request, [&](auto response) { recognized = std::move(response); });
+        await([&] { return recognized.has_value(); });
+        require(recognized->ok, "cached recognition creates an owned session");
+        const auto child = service->findChild<ScreenshotRecognitionSessionController*>();
+        require(child != nullptr, "recognition session belongs to document service");
+        const QPointer<McpDocumentService> guard(service.get());
+        bool retiredWhileStopping = false;
+        QObject::connect(child, &QObject::destroyed, &registry, [&] {
+            require(guard, "document state outlives recognition destruction callbacks");
+            guard->request(request, [&](auto response) {
+                retiredWhileStopping = response.errorCode == QStringLiteral("disabled");
+            });
+        });
+        if (disconnect)
+            service->disconnected(request.connectionId);
+        service.reset();
+        require(retiredWhileStopping,
+                "retained and deferred recognition sessions retire before private state");
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    }
+#endif
+}
+
+void recognitionModelSourceBudget() {
+    // QString copies share storage: each fixture retains only one 8 MiB allocation, while the
+    // admission charge accounts for every model's independent baseline and draft.
+    const QString sharedText(4 * 1024 * 1024, QLatin1Char('x'));
+    for (const bool latex : {false, true}) {
+        bool largeSource = true;
+        McpDocumentService::Ports ports;
+        ports.resolveSource = [&](const ScreenshotMcpRequest&, auto completion, auto budget) {
+            require(budget(16 * 16 * 4), "MCP recognition quota fixture reserves source pixels");
+            McpDocumentService::Source source;
+            source.image = QImage(16, 16, QImage::Format_ARGB32_Premultiplied);
+            source.image.fill(Qt::white);
+            if (largeSource) {
+                for (int index = 0; index < 33; ++index) {
+                    const auto model = QStringLiteral("vision-%1").arg(index);
+                    if (latex) {
+                        ScreenshotLatexRecognitionEntry entry;
+                        entry.model = model;
+                        entry.result.latex = sharedText;
+                        entry.draft = sharedText;
+                        source.recognitionResults.latexEntries.append(std::move(entry));
+                    } else {
+                        ScreenshotTableRecognitionEntry entry;
+                        entry.model = model;
+                        entry.result.html = sharedText;
+                        entry.draftHtml = sharedText;
+                        source.recognitionResults.tableEntries.append(std::move(entry));
+                    }
+                }
+            }
+            completion(std::move(source), {});
+        };
+        McpDocumentService service(std::move(ports));
+        quint64 sequence = 0;
+        const auto call = [&](const QString& method, QJsonObject params = {}) {
+            ScreenshotMcpRequest request;
+            request.connectionId = 23;
+            request.requestId = QString::number(++sequence);
+            request.idempotencyKey = request.requestId;
+            request.expectedRevision = 1;
+            request.method = QStringLiteral("snow_shot_") + method;
+            request.params = std::move(params);
+            std::optional<ScreenshotMcpResponse> response;
+            service.request(request, [&](auto result) { response = std::move(result); });
+            QElapsedTimer timer;
+            timer.start();
+            while (!response && timer.elapsed() < 5000) {
+                QCoreApplication::processEvents();
+                QThread::msleep(1);
+            }
+            require(response.has_value(), "MCP recognition quota operation completes");
+            return *response;
+        };
+        require(
+            call(QStringLiteral("document_open"),
+                 {{QStringLiteral("source"), QStringLiteral("clipboard")}})
+                    .errorCode == QStringLiteral("resource_limit"),
+            "all per-model Table or LaTeX baselines and drafts count toward source memory limits");
+        largeSource = false;
+        for (int index = 0; index < 4; ++index)
+            require(
+                call(QStringLiteral("document_open"),
+                     {{QStringLiteral("source"), QStringLiteral("clipboard")}})
+                    .ok,
+                "rejected recognition snapshots release source bytes and document admission slots");
+        service.shutdown();
+    }
+}
+
 void documentWorkflows() {
     FixtureOcr ocr;
     FixtureQr qr;
@@ -1280,6 +1881,293 @@ void jobs() {
                 expiredCancellation == 1 && expiredNotifications == 65,
             "expiry cancels pending work exactly once after retiring its record");
 }
+void jobCallbacksAllowRegistryDestruction() {
+    QObject receiver;
+    {
+        qint64 now = 0;
+        auto registry = std::make_unique<McpJobRegistry>(nullptr, [&] { return now; });
+        const auto old = registry->start(1, QStringLiteral("expired"));
+        now = 900000;
+        QObject::connect(registry.get(), &McpJobRegistry::changed, &receiver,
+                         [&](quint64, const QString& id) {
+                             if (id == old)
+                                 registry.reset();
+                         });
+        require(registry->start(2, QStringLiteral("new")).isEmpty() && !registry,
+                "expiry callbacks can retire the registry during admission");
+    }
+    for (const bool shutdown : {false, true}) {
+        auto registry = std::make_unique<McpJobRegistry>();
+        int cancellations = 0;
+        registry->start(1, QStringLiteral("first"), [&] {
+            ++cancellations;
+            registry.reset();
+        });
+        registry->start(1, QStringLiteral("second"), [&] { ++cancellations; });
+        if (shutdown)
+            registry->shutdown();
+        else
+            registry->disconnected(1);
+        require(!registry && cancellations == 2,
+                "all retired jobs cancel even when cancellation destroys the registry");
+    }
+    {
+        auto registry = std::make_unique<McpJobRegistry>();
+        const auto id = registry->start(1, QStringLiteral("artifact"));
+        registry->setArtifactPublisher([&](quint64, QByteArray, QString) {
+            registry.reset();
+            return QJsonObject{{QStringLiteral("artifact_id"), QStringLiteral("result")}};
+        });
+        require(!registry->complete(id, {{QStringLiteral("text"), QString(1048576, u'x')}}) &&
+                    !registry,
+                "artifact publication can destroy the registry before completion");
+    }
+}
+
+void jobCallbacksAllowServiceDestruction() {
+    for (int variant = 0; variant < 3; ++variant) {
+        McpJobRegistry registry;
+        McpDocumentService::Ports ports;
+        ports.jobs = &registry;
+        auto service = std::make_unique<McpDocumentService>(std::move(ports));
+        require(!service->storeArtifact(1, QByteArray("lifetime"), QStringLiteral("text/plain"))
+                     .isEmpty(),
+                "lifetime fixture registers an owner");
+        int cancellations = 0;
+        const auto id = registry.start(1, QStringLiteral("lifetime"), [&] { ++cancellations; });
+        QObject receiver;
+        QObject::connect(&registry, &McpJobRegistry::changed, &receiver,
+                         [&](quint64, const QString& changedId) {
+                             if (changedId == id)
+                                 service.reset();
+                         });
+        int responses = 0;
+        if (variant == 0) {
+            ScreenshotMcpRequest request;
+            request.connectionId = 1;
+            request.requestId = QStringLiteral("cancel-lifetime");
+            request.method = QStringLiteral("snow_shot_job_cancel");
+            request.params = {{QStringLiteral("job_id"), id}};
+            service->request(request, [&](auto) { ++responses; });
+        } else if (variant == 1)
+            service->disconnected(1);
+        else
+            service->shutdown();
+        require(!service && cancellations == 1 && responses == 0,
+                "job callbacks can retire a document service during cancellation and shutdown");
+    }
+    {
+        McpJobRegistry registry;
+        McpDocumentService::Ports ports;
+        ports.jobs = &registry;
+        bool sourceEntered = false;
+        ports.resolveSource = [&](const ScreenshotMcpRequest&, auto, auto) {
+            sourceEntered = true;
+        };
+        std::unique_ptr<McpDocumentService> service;
+        bool cancellationReturned = false;
+        auto cancellationState = std::make_shared<bool>(false);
+        const std::weak_ptr<bool> weakCancellationState = cancellationState;
+        ports.cancelSource = [&, cancellationState](quint64, const QString&) {
+            service.reset();
+            require(!weakCancellationState.expired(),
+                    "source cancellation retains its callable while the service is retired");
+            *cancellationState = true;
+            cancellationReturned = *cancellationState;
+        };
+        service = std::make_unique<McpDocumentService>(std::move(ports));
+        cancellationState.reset();
+        ScreenshotMcpRequest request;
+        request.connectionId = 1;
+        request.requestId = QStringLiteral("source-lifetime");
+        request.idempotencyKey = request.requestId;
+        request.method = QStringLiteral("snow_shot_document_open");
+        request.params = {{QStringLiteral("source"), QStringLiteral("clipboard")}};
+        int responses = 0;
+        service->request(request, [&](auto) { ++responses; });
+        require(sourceEntered && responses == 0,
+                "source cancellation fixture must admit an unresolved request");
+        require(service->cancelRequest(1, request.requestId) && !service && cancellationReturned &&
+                    responses == 0 && weakCancellationState.expired(),
+                "source cancellation can retire its service and callable before returning");
+    }
+}
+
+void shutdownRetiresRemainingOwnersWhenReentered() {
+    for (bool destroy : {false, true}) {
+        McpJobRegistry registry;
+        McpDocumentService::Ports ports;
+        ports.jobs = &registry;
+        auto service = std::make_unique<McpDocumentService>(std::move(ports));
+        for (quint64 owner : {quint64(1), quint64(2)})
+            require(
+                !service->storeArtifact(owner, QByteArray("shutdown"), QStringLiteral("text/plain"))
+                     .isEmpty(),
+                "register each shutdown owner");
+        int cancellations = 0;
+        for (quint64 owner : {quint64(1), quint64(2)})
+            require(!registry.start(owner, QStringLiteral("shutdown"), [&] { ++cancellations; })
+                         .isEmpty(),
+                    "start each owner's cancellation fixture");
+        bool reentered = false;
+        QObject receiver;
+        QObject::connect(&registry, &McpJobRegistry::changed, &receiver,
+                         [&](quint64, const QString&) {
+                             if (reentered)
+                                 return;
+                             reentered = true;
+                             if (destroy)
+                                 service.reset();
+                             else
+                                 service->shutdown();
+                         });
+        service->shutdown();
+        require(reentered && cancellations == 2 && !registry.hasRunningJobs(),
+                "nested shutdown cancels every remaining owner before retiring workers");
+        if (destroy)
+            require(!service, "nested destruction completes worker retirement");
+        else {
+            service->shutdown();
+            require(cancellations == 2, "repeated shutdown does not repeat cancellations");
+            service.reset();
+        }
+    }
+}
+
+void disconnectedRetiresWorkBeforeNestedShutdown() {
+    class ReentrantClipboard final : public McpDocumentService::Clipboard {
+      public:
+        MemoryClipboard memory;
+        std::function<void()> onCancel;
+
+        Cancel publishImage(QObject* receiver, ScreenshotClipboardPayload payload,
+                            Completion completion) override {
+            return observe(
+                memory.publishImage(receiver, std::move(payload), std::move(completion)));
+        }
+        Cancel publishMimeData(QObject* receiver, std::unique_ptr<QMimeData> data,
+                               Completion completion) override {
+            return observe(
+                memory.publishMimeData(receiver, std::move(data), std::move(completion)));
+        }
+
+      private:
+        Cancel observe(Cancel cancel) {
+            return [this, cancel = std::move(cancel)] {
+                cancel();
+                const auto callback = onCancel;
+                if (callback)
+                    callback();
+            };
+        }
+    };
+    for (int variant = 0; variant < 5; ++variant) {
+        const bool destroy = variant >= 2;
+        const bool fromRegistry = variant % 2 == 1;
+        const bool soleClipboardOwner = variant == 4;
+        McpJobRegistry registry;
+        auto clipboard = std::make_shared<ReentrantClipboard>();
+        const std::weak_ptr<ReentrantClipboard> weakClipboard = clipboard;
+        clipboard->memory.automatic = false;
+        McpDocumentService::Ports ports;
+        ports.jobs = &registry;
+        ports.clipboard = clipboard;
+        ports.resolveSource = [](const ScreenshotMcpRequest&, auto completion, auto budget) {
+            QImage image(4, 4, QImage::Format_ARGB32_Premultiplied);
+            image.fill(Qt::red);
+            require(budget(image.sizeInBytes()), "nested shutdown source fits its budget");
+            McpDocumentService::Source source;
+            source.image = image;
+            completion(std::move(source), {});
+        };
+        auto service = std::make_unique<McpDocumentService>(std::move(ports));
+        const auto waitUntil = [](auto ready) {
+            QElapsedTimer timer;
+            timer.start();
+            while (!ready() && timer.elapsed() < 5000) {
+                QCoreApplication::processEvents();
+                QThread::msleep(1);
+            }
+            require(ready(), "nested shutdown fixture reaches its expected state");
+        };
+        int completions = 0;
+        for (quint64 owner : {quint64(1), quint64(2)}) {
+            ScreenshotMcpRequest request;
+            request.connectionId = owner;
+            request.requestId = QStringLiteral("open");
+            request.idempotencyKey = request.requestId;
+            request.method = QStringLiteral("snow_shot_document_open");
+            request.params = {{QStringLiteral("source"), QStringLiteral("clipboard")}};
+            std::optional<ScreenshotMcpResponse> opened;
+            service->request(request, [&](auto response) { opened = std::move(response); });
+            waitUntil([&] { return opened.has_value(); });
+            require(opened->ok, "open each owner's nested shutdown document");
+            request.expectedRevision = opened->revision;
+            request.method = QStringLiteral("snow_shot_document_copy");
+            request.params = {{QStringLiteral("document_id"),
+                               opened->result.value(QStringLiteral("document_id"))}};
+            for (int copy = 0; copy < 2; ++copy) {
+                request.requestId = QStringLiteral("copy-%1").arg(copy);
+                request.idempotencyKey = request.requestId;
+                service->request(request, [&](auto) { ++completions; });
+            }
+        }
+        waitUntil([&] { return clipboard->memory.pending.size() == 4; });
+        const auto publications = clipboard->memory.pending;
+        for (quint64 owner : {quint64(1), quint64(2)})
+            require(!registry.start(owner, QStringLiteral("nested_shutdown"), [] {}).isEmpty(),
+                    "register each owner's nested shutdown job");
+        bool reentered = false;
+        const auto reenter = [&] {
+            if (std::exchange(reentered, true))
+                return;
+            if (destroy)
+                service.reset();
+            else
+                service->shutdown();
+        };
+        int cancellations = 0;
+        clipboard->onCancel = [&] {
+            ++cancellations;
+            require(!weakClipboard.expired(), "cancellation retains its borrowed clipboard port");
+            if (!fromRegistry)
+                reenter();
+            require(!weakClipboard.expired(),
+                    "clipboard cancellation survives synchronous service destruction");
+        };
+        QObject receiver;
+        if (fromRegistry)
+            QObject::connect(&registry, &McpJobRegistry::changed, &receiver,
+                             [&](quint64, const QString&) { reenter(); });
+        if (soleClipboardOwner)
+            clipboard.reset();
+        service->disconnected(1);
+        require(reentered && cancellations == 4 && completions == 0 && registry.list(1).isEmpty() &&
+                    registry.list(2).isEmpty(),
+                "nested shutdown retires every owner's work exactly once before callbacks");
+        for (const auto& publication : publications) {
+            require(publication->canceled, "all extracted publications remain canceled");
+            if (clipboard)
+                clipboard->memory.complete(publication);
+            else
+                require(!publication->receiver,
+                        "service destruction retires the sole clipboard receiver");
+        }
+        require(completions == 0 && (!clipboard || clipboard->memory.imagePublications == 0),
+                "nested shutdown suppresses all late clipboard writes and replies");
+        if (soleClipboardOwner)
+            require(weakClipboard.expired(),
+                    "the sole clipboard port retires only after every cancellation returns");
+        if (destroy)
+            require(!service, "a cancellation may retire its owning document service");
+        else {
+            service->shutdown();
+            require(cancellations == 4,
+                    "repeated nested shutdown preserves cancellation idempotence");
+        }
+    }
+}
+
 void eraserDocuments(const QString& directory) {
     QImage image(100, 80, QImage::Format_ARGB32_Premultiplied);
     image.fill(QColor(20, 40, 70));
@@ -1777,7 +2665,23 @@ int main(int argc, char** argv) {
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
+    if (application.arguments().contains(QStringLiteral("--activity-only"))) {
+        documentMemoryActivity();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--recognition-models-only"))) {
+        recognitionModelDocuments(temporary.path());
+        recognitionServiceTeardown();
+        recognitionModelSourceBudget();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     jobs();
+    jobCallbacksAllowRegistryDestruction();
+    jobCallbacksAllowServiceDestruction();
+    shutdownRetiresRemainingOwnersWhenReentered();
+    disconnectedRetiresWorkBeforeNestedShutdown();
     if (application.arguments().contains(QStringLiteral("--jobs-only"))) {
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
@@ -1786,8 +2690,12 @@ int main(int argc, char** argv) {
     documentReservations(temporary.path());
     documentCacheWork(temporary.path());
     documentConcurrency();
+    documentMemoryActivity();
     documents(temporary.path());
     documentWorkflows();
+    recognitionModelDocuments(temporary.path());
+    recognitionServiceTeardown();
+    recognitionModelSourceBudget();
     documentClipboardTeardown();
     runMcpApplicationTests();
     snow_shot::storage::ApplicationStorage::instance().shutdown();

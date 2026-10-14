@@ -2,6 +2,7 @@
   "core": [
     "AboutPageWidget",
     "ApplicationRestart",
+    "CanvasStatusReadout",
     "ConfirmationSkipButton",
     "DiagnosticsService",
     "EditionMetadata",
@@ -37,6 +38,7 @@
     "SettingsBackend",
     "SettingsCatalog",
     "SettingsPageWidget",
+    "ShellContextMenuRegistration",
     "ShortcutKeyRow",
     "StorageDirectoryChange",
     "StorageStatusSettingsWidget",
@@ -59,6 +61,7 @@
     "ScreenshotSelectionResizeWorkflow",
     "ScreenshotSelectionToolbarWidget",
     "ScreenshotShortcutHintsWidget",
+    "SnowImageQtCodec",
     "snow_shot::app::mcp::ScreenshotMcpServer",
     "snow_shot::app::mcp::ScreenshotMcpSession",
     "snow_shot::presentation::DirectCaptureController"
@@ -94,6 +97,7 @@
     "ScreenshotImageConversionController",
     "ScreenshotImageConversionView",
     "ScreenshotOcrController",
+    "ScreenshotOriginalImagePreviewWindow",
     "ScreenshotRecognitionWindow",
     "ScreenshotRecognitionSessionController",
     "ScreenshotTableEditor"

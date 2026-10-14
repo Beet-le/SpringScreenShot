@@ -552,6 +552,24 @@ impl VideoStream {
         }
     }
     pub fn set_cursor_visible(&mut self, visible: bool) -> MacResult<()> {
+        unsafe { self.config.setShowsCursor(visible) };
+        self.update_configuration()
+    }
+    pub fn set_fps(&mut self, fps: u32) -> MacResult<()> {
+        if !(1..=240).contains(&fps) {
+            return Err(MacError::InvalidConfig("frame rate must be 1..=240".into()));
+        }
+        unsafe {
+            self.config.setMinimumFrameInterval(CMTime {
+                value: 1,
+                timescale: fps as i32,
+                flags: CMTimeFlags::Valid,
+                epoch: 0,
+            });
+        }
+        self.update_configuration()
+    }
+    fn update_configuration(&mut self) -> MacResult<()> {
         let (tx, rx) = crossbeam_channel::bounded(1);
         let completion = RcBlock::new(move |error: *mut NSError| {
             let _ = tx.try_send(unsafe {
@@ -561,12 +579,13 @@ impl VideoStream {
             });
         });
         unsafe {
-            self.config.setShowsCursor(visible);
             self.stream
                 .updateConfiguration_completionHandler(&self.config, Some(&completion));
         }
-        rx.recv_timeout(self.timeout)
-            .map_err(|_| MacError::Timeout)?
+        self.output
+            .ivars()
+            .cancellation
+            .wait_for(&rx, self.timeout)?
     }
     /// Begin a native filter update without waiting on the encoding worker.
     pub(crate) fn update_exclusions(
@@ -734,6 +753,51 @@ fn copy_frames(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "requires macOS screen capture permission and a live display"]
+    fn native_stream_rate_updates_and_cancellation() {
+        let display = crate::content::displays(Duration::from_secs(5))
+            .unwrap()
+            .into_iter()
+            .find(|display| display.primary)
+            .unwrap();
+        let options = CaptureConfig {
+            target: Target::Display(display.id),
+            frames_per_second: 1,
+            cursor: CursorMode::Hidden,
+            ..CaptureConfig::new(Target::Display(display.id))
+        };
+        let mut stream = VideoStream::start(&options).unwrap();
+        let first = stream.next_frame(Duration::from_secs(5)).unwrap();
+        assert!(!first.image.to_cpu().unwrap().bytes.is_empty());
+        stream.set_fps(30).unwrap();
+        let interval = unsafe { stream.config.minimumFrameInterval() };
+        assert_eq!({ interval.value }, 1);
+        assert_eq!(interval.timescale, 30);
+        let frame = stream.next_frame(Duration::from_secs(5)).unwrap();
+        assert!(!frame.image.to_cpu().unwrap().bytes.is_empty());
+        stream.set_fps(5).unwrap();
+        let interval = unsafe { stream.config.minimumFrameInterval() };
+        assert_eq!(interval.timescale, 5);
+        let cancellation = options.cancellation.clone();
+        let (waiting, entered) = crossbeam_channel::bounded(1);
+        let worker = std::thread::spawn(move || {
+            while stream.next_frame(Duration::ZERO).is_ok() {}
+            waiting.send(()).unwrap();
+            let result = loop {
+                match stream.next_frame(Duration::from_secs(60)) {
+                    Ok(_) => continue,
+                    result => break result,
+                }
+            };
+            assert!(matches!(result, Err(MacError::Canceled)));
+            stream.stop().unwrap();
+        });
+        entered.recv_timeout(Duration::from_secs(5)).unwrap();
+        cancellation.cancel();
+        worker.join().unwrap();
+    }
+
     #[test]
     fn combined_application_and_window_filters_never_reinclude_excluded_windows() {
         assert!(!excluded_window_is_exception(false, false));

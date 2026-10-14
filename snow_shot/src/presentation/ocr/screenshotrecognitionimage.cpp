@@ -45,8 +45,6 @@ QImage renderScreenshotRecognitionImage(const ScreenshotRecognitionImageSnapshot
         painter.restore();
     }
     painter.end();
-    ScreenshotResultCompositor::restoreBakedExterior(image, snapshot.image,
-                                                     snapshot.bakedSelectionPath);
     auto style = snapshot.resultStyle;
     if (style.region) {
         const qreal scale = image.width() / rect.width();

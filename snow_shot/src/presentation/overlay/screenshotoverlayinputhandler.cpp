@@ -1,4 +1,7 @@
 #include "snow_shot/presentation/screenshotoverlayinputhandler.h"
+#include "snow_shot/presentation/screenshotstylebinding.h"
+
+#include <numbers>
 
 #include "snow_shot/presentation/screenshotcapturestate.h"
 #include "snow_shot/presentation/screenshotdisplaysession.h"
@@ -18,6 +21,7 @@
 #include "snow_shot/image/screenshotregionpoints.h"
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace {
@@ -26,6 +30,7 @@ constexpr qreal kEqualWidthHeightAspectRatio = 1.0;
 
 bool wheelAdjustsStrokeWidth(ScreenshotActiveTool tool) {
     switch (tool) {
+    case ScreenshotActiveTool::SpeechBubble:
     case ScreenshotActiveTool::Shape:
     case ScreenshotActiveTool::Distance:
     case ScreenshotActiveTool::Arrow:
@@ -428,6 +433,13 @@ void ScreenshotOverlayInputHandler::beginExternalSelectionDrag(const QPointF& ca
     }
 }
 
+void ScreenshotOverlayInputHandler::beginExternalSelectionDrag(const QPointF& start,
+                                                               const QPointF& latestEnd) {
+    if (m_externalDragActive) {
+        beginSelectionDrag(nullptr, start, ScreenshotSelectionDragMode::Marquee, latestEnd);
+    }
+}
+
 void ScreenshotOverlayInputHandler::updateExternalSelectionDrag(const QPointF& canvasPosition) {
     if (m_externalDragActive && m_context.interaction.dragging()) {
         updateSelectionDrag(canvasPosition);
@@ -436,7 +448,8 @@ void ScreenshotOverlayInputHandler::updateExternalSelectionDrag(const QPointF& c
 
 void ScreenshotOverlayInputHandler::beginSelectionDrag(ScreenshotOverlayWindow* overlay,
                                                        const QPointF& virtualPosition,
-                                                       ScreenshotSelectionDragMode dragMode) {
+                                                       ScreenshotSelectionDragMode dragMode,
+                                                       const std::optional<QPointF>& latestEnd) {
     if (dragMode == ScreenshotSelectionDragMode::None) {
         return;
     }
@@ -454,6 +467,8 @@ void ScreenshotOverlayInputHandler::beginSelectionDrag(ScreenshotOverlayWindow* 
         return;
     }
     m_selectionWheelSteps.reset();
+    m_selectionResizeWheelSteps.reset();
+    m_angleWheelSteps.reset();
     m_snappedDuringSelectionDrag = false;
     if (m_keepSelectionAspectRatioShortcut) {
         m_aspectShortcutUsedForSelectionDrag = true;
@@ -483,10 +498,16 @@ void ScreenshotOverlayInputHandler::beginSelectionDrag(ScreenshotOverlayWindow* 
             snow_shot::presentation::kScreenshotSelectionMinimumSize));
     }
     m_context.selection.beginMoveDrag(virtualPosition);
+    // Global capture already has a buffered endpoint when its hidden first frame is ready.
+    // Apply the shared drag transaction before publishing any initial presentation state.
+    if (latestEnd) {
+        updateSelectionDragState(*latestEnd);
+        dragMode = m_context.interaction.dragMode();
+    }
     m_context.actions.hideMainToolbar();
     m_context.actions.updateOverlayState();
     m_context.actions.setOverlayCursor(overlay, dragMode);
-    m_context.actions.updateColorPickerForSelectionDrag(virtualPosition);
+    m_context.actions.updateColorPickerForSelectionDrag(latestEnd.value_or(virtualPosition));
 }
 
 void ScreenshotOverlayInputHandler::handleIntelligentSelectionPress(
@@ -627,6 +648,15 @@ void ScreenshotOverlayInputHandler::handleHoverMove(ScreenshotOverlayWindow* ove
 }
 
 void ScreenshotOverlayInputHandler::updateSelectionDrag(const QPointF& virtualPosition) {
+    updateSelectionDragState(virtualPosition);
+    if (m_context.actions.requestSelectionDragPresentation)
+        m_context.actions.requestSelectionDragPresentation();
+    else
+        m_context.actions.updateOverlayState();
+    m_context.actions.updateColorPickerForSelectionDrag(virtualPosition);
+}
+
+void ScreenshotOverlayInputHandler::updateSelectionDragState(const QPointF& virtualPosition) {
     const QRectF previousSelection = m_context.selection.normalizedSelection();
     m_lastMoveDragPosition = virtualPosition;
     if (m_keepSelectionAspectRatioShortcut && m_context.interaction.dragging()) {
@@ -650,8 +680,6 @@ void ScreenshotOverlayInputHandler::updateSelectionDrag(const QPointF& virtualPo
         static_cast<void>(
             m_context.interaction.enterSelectionDrag(ScreenshotSelectionDragMode::All));
     }
-    m_context.actions.updateOverlayState();
-    m_context.actions.updateColorPickerForSelectionDrag(virtualPosition);
 }
 
 void ScreenshotOverlayInputHandler::handleMouseRelease(ScreenshotOverlayWindow* overlay,
@@ -796,13 +824,30 @@ void ScreenshotOverlayInputHandler::completeRightClickCancellation() {
 
 bool ScreenshotOverlayInputHandler::handleWheel(ScreenshotOverlayWindow* overlay,
                                                 const QWheelEvent& event) {
+    auto* canvas = overlay != nullptr ? overlay->canvas() : nullptr;
+    if (canvas != m_angleWheelCanvas) {
+        QObject::disconnect(m_angleTargetConnection);
+        m_angleWheelSteps.reset();
+        m_angleWheelCanvas = canvas;
+        if (canvas != nullptr)
+            m_angleTargetConnection =
+                QObject::connect(canvas, &SnowCanvasWidget::angleAdjustmentTargetChanged,
+                                 &m_regionPreviewTimer, [this]() { m_angleWheelSteps.reset(); });
+    }
     const bool smartSelection =
         m_context.selection.regionType() == ScreenshotRegionType::Rectangle &&
         m_context.interaction.intelligentSelecting();
+    const bool resizeSelection =
+        m_context.interaction.moveToolActive() && m_context.interaction.canResizeSelection() &&
+        !m_context.interaction.dragging() && m_context.selection.rectangular() &&
+        !m_context.selection.regionOperationActive() && m_context.selection.hasPixelSelection();
     if (!smartSelection || m_externalDragActive)
         m_selectionWheelSteps.reset();
+    if (!resizeSelection || m_externalDragActive)
+        m_selectionResizeWheelSteps.reset();
     if (!acceptInput()) {
         m_selectionWheelSteps.reset();
+        m_selectionResizeWheelSteps.reset();
         return true;
     }
     if (m_externalDragActive)
@@ -813,6 +858,49 @@ bool ScreenshotOverlayInputHandler::handleWheel(ScreenshotOverlayWindow* overlay
     if (recognitionTool(m_context.interaction.activeTool())) {
         return true;
     }
+    if (resizeSelection) {
+        m_angleWheelSteps.reset();
+        const int steps = m_selectionResizeWheelSteps.consume(event);
+        if (steps == 0)
+            return true;
+
+        const QRectF selection = m_context.selection.normalizedSelection();
+        const qreal maximumInset = std::max<qreal>(
+            0, std::floor((std::min(selection.width(), selection.height()) -
+                           snow_shot::presentation::kScreenshotSelectionMinimumSize) /
+                          2.0));
+        qreal delta = std::max<qreal>(steps, -maximumInset);
+        const QRectF bounds = m_context.geometry.canvasBounds();
+        if (delta > 0 && !bounds.isNull()) {
+            const qreal maximumOutset = std::floor(std::min(
+                {selection.left() - bounds.left(), selection.top() - bounds.top(),
+                 bounds.right() - selection.right(), bounds.bottom() - selection.bottom()}));
+            delta = std::min(delta, std::max<qreal>(0, maximumOutset));
+        }
+        const int adjustment = static_cast<int>(delta);
+        if (adjustment != 0) {
+            // Move every edge by whole canvas units, keeping the center fixed without scaling.
+            m_context.actions.adjustSelectionFromToolbar(-adjustment, -adjustment, adjustment,
+                                                         adjustment);
+        }
+        return true;
+    }
+    if (overlay != nullptr && overlay->canvas() != nullptr &&
+        snow_shot::presentation::angleWheelTarget(*overlay->canvas())) {
+        if ((event.modifiers() & ~Qt::ShiftModifier) != Qt::NoModifier) {
+            m_angleWheelSteps.reset();
+            return false;
+        }
+        const int steps = m_angleWheelSteps.consume(event);
+        if (steps != 0)
+            static_cast<void>(overlay->canvas()->adjustAngleValue(
+                steps * (event.modifiers().testFlag(Qt::ShiftModifier) ? 0.1 : 1.0) *
+                std::numbers::pi / 180.0));
+        return true;
+    }
+    m_angleWheelSteps.reset();
+    if (canvas != nullptr && canvas->hasMagnifierAdjustmentTarget())
+        return canvas->adjustMagnifierFromWheel(event);
     const int deltaY =
         !event.pixelDelta().isNull() ? event.pixelDelta().y() : event.angleDelta().y();
     if (deltaY != 0 && wheelAdjustsStrokeWidth(m_context.interaction.activeTool())) {
@@ -921,35 +1009,74 @@ bool ScreenshotOverlayInputHandler::activateKeepSelectionAspectRatioShortcut(
 }
 
 bool ScreenshotOverlayInputHandler::canActivateSelectionAspectRatioSnapShortcut() const {
+    if (effectDragActive() || m_externalDragActive ||
+        m_context.selection.regionType() != ScreenshotRegionType::Rectangle ||
+        m_context.selection.regionOperationActive() ||
+        recognitionTool(m_context.interaction.activeTool()) ||
+        !m_context.actions.localShortcutInputAllowed()) {
+        return false;
+    }
+    if (!m_context.interaction.dragging()) {
+        // Smart framing and manual selection can both precede a marquee. Accept the
+        // held shortcut now so the drag consumes it when usable geometry exists.
+        return m_context.interaction.selecting() ||
+               (m_context.interaction.canResizeSelection() && m_context.selection.rectangular() &&
+                m_context.selection.aspectRatioLocked());
+    }
     const auto dragMode = m_context.interaction.dragMode();
-    return m_context.interaction.dragging() && dragMode != ScreenshotSelectionDragMode::None &&
-           dragMode != ScreenshotSelectionDragMode::All && !effectDragActive() &&
-           !m_externalDragActive &&
-           m_context.selection.regionType() == ScreenshotRegionType::Rectangle &&
-           !m_context.selection.regionOperationActive() &&
-           (dragMode == ScreenshotSelectionDragMode::Marquee ||
-            m_context.selection.rectangular()) &&
-           !recognitionTool(m_context.interaction.activeTool()) &&
-           m_context.actions.localShortcutInputAllowed();
+    return dragMode != ScreenshotSelectionDragMode::None &&
+           dragMode != ScreenshotSelectionDragMode::All &&
+           (dragMode == ScreenshotSelectionDragMode::Marquee || m_context.selection.rectangular());
 }
 
 bool ScreenshotOverlayInputHandler::activateSelectionAspectRatioSnapShortcut() {
     if (!canActivateSelectionAspectRatioSnapShortcut()) {
         return false;
     }
-    if (m_selectionAspectRatioSnapShortcut) {
+    if (m_selectionAspectRatioSnapShortcut != AspectRatioSnapShortcutState::Released) {
         return true;
     }
-    m_selectionAspectRatioSnapShortcut = true;
+    if (m_context.selection.aspectRatioLocked()) {
+        m_selectionAspectRatioSnapShortcut = AspectRatioSnapShortcutState::Unlocking;
+        m_snappedDuringSelectionDrag = false;
+        static_cast<void>(m_context.selection.setAspectRatioLockEnabled(
+            false, snow_shot::presentation::kScreenshotSelectionMinimumSize));
+        m_context.actions.persistSelectionAspectRatioPreference(
+            ScreenshotSelectionAspectRatioPreset::Free, false);
+        if (m_context.interaction.dragging()) {
+            if (m_context.interaction.dragMode() == ScreenshotSelectionDragMode::Marquee &&
+                m_context.selection.hasPixelSelection()) {
+                // Continue from the snapped rectangle rather than recreating the raw marquee.
+                const bool right = m_lastMoveDragPosition.x() >= m_marqueeAnchor.x();
+                const bool bottom = m_lastMoveDragPosition.y() >= m_marqueeAnchor.y();
+                const auto corner = right ? (bottom ? ScreenshotSelectionDragMode::BottomRight
+                                                    : ScreenshotSelectionDragMode::TopRight)
+                                          : (bottom ? ScreenshotSelectionDragMode::BottomLeft
+                                                    : ScreenshotSelectionDragMode::TopLeft);
+                static_cast<void>(m_context.interaction.enterSelectionDrag(corner));
+            }
+            m_context.selection.rebaseMoveDrag(m_lastMoveDragPosition);
+            m_context.actions.updateColorPickerForSelectionDrag(m_lastMoveDragPosition);
+        }
+        m_context.actions.updateOverlayState();
+        return true;
+    }
+    m_selectionAspectRatioSnapShortcut = AspectRatioSnapShortcutState::Snapping;
+    if (!m_context.interaction.dragging()) {
+        return true;
+    }
     updateSelectionDrag(m_lastMoveDragPosition);
+    // Snap is an explicit command; commit its geometry and queued drag sample together.
+    if (m_context.actions.requestSelectionDragPresentation)
+        m_context.actions.updateOverlayState();
     return true;
 }
 
 bool ScreenshotOverlayInputHandler::releaseSelectionAspectRatioSnapShortcut() {
-    if (!m_selectionAspectRatioSnapShortcut) {
+    if (m_selectionAspectRatioSnapShortcut == AspectRatioSnapShortcutState::Released) {
         return false;
     }
-    m_selectionAspectRatioSnapShortcut = false;
+    m_selectionAspectRatioSnapShortcut = AspectRatioSnapShortcutState::Released;
     return true;
 }
 
@@ -1020,6 +1147,7 @@ bool ScreenshotOverlayInputHandler::toggleIntelligentSelectionTargetShortcut() {
 
     m_context.actions.persistSelectionTarget(m_context.intelligentSelection.selectionTarget());
     m_selectionWheelSteps.reset();
+    m_angleWheelSteps.reset();
     m_context.intelligentSelection.clearPress();
     if (m_context.intelligentSelection.hasCurrentSelection()) {
         m_context.selection.setSelectionRect(m_context.intelligentSelection.currentSelection());
@@ -1132,12 +1260,8 @@ bool ScreenshotOverlayInputHandler::restorePreviousSelection(
         return false;
     }
     const QRect bounds = ScreenshotHalfOpenRect::fromRectF(canvasBounds).toAlignedQRect();
-    if (!m_context.selection.applyParams(params, bounds)) {
-        if (!m_context.selection.hasPixelSelection()) {
-            m_context.interaction.returnToSelectionMode(false);
-            m_context.actions.hideMainToolbar();
-            m_context.actions.updateOverlayState();
-        }
+    const auto restored = clampScreenshotSelectionParamsForRestore(params, bounds);
+    if (!restored || !m_context.selection.applyParams(*restored, bounds)) {
         return false;
     }
     m_context.intelligentSelection.clearTransientState();
@@ -1177,8 +1301,10 @@ void ScreenshotOverlayInputHandler::confirmSelection(
     if (m_context.interaction.intelligentSelecting()) {
         m_context.actions.pauseIntelligentSelection();
     }
+    cancelSelectionAspectRatioSnapShortcut();
     m_context.interaction.confirmSelection();
     m_selectionWheelSteps.reset();
+    m_angleWheelSteps.reset();
     m_context.captureState.sessionState = ScreenshotSessionState::Editing;
     m_context.intelligentSelection.clearPress();
     if (beforePresentation) {
@@ -1297,8 +1423,8 @@ QRectF ScreenshotOverlayInputHandler::selectionRectForDrag(ScreenshotSelectionDr
         m_context.selection.regionType() == ScreenshotRegionType::Rectangle &&
         !m_context.selection.regionOperationActive() &&
         (dragMode == ScreenshotSelectionDragMode::Marquee || m_context.selection.rectangular());
-    if (m_selectionAspectRatioSnapShortcut && resizingRectangle &&
-        dragMode != ScreenshotSelectionDragMode::All &&
+    if (m_selectionAspectRatioSnapShortcut == AspectRatioSnapShortcutState::Snapping &&
+        resizingRectangle && dragMode != ScreenshotSelectionDragMode::All &&
         dragMode != ScreenshotSelectionDragMode::None) {
         const QRectF unconstrained =
             m_context.selection.selectionRectForDrag(dragMode, position, bounds, minimumSize, 0.0);
@@ -1336,7 +1462,7 @@ QRectF ScreenshotOverlayInputHandler::selectionRectForDrag(ScreenshotSelectionDr
 }
 
 void ScreenshotOverlayInputHandler::finishTransientDrag() {
-    m_selectionAspectRatioSnapShortcut = false;
+    m_selectionAspectRatioSnapShortcut = AspectRatioSnapShortcutState::Released;
     m_moveDragModeBeforeShortcut = ScreenshotSelectionDragMode::None;
     m_marqueeAnchor = QPointF();
     m_lastMoveDragPosition = QPointF();
@@ -1369,6 +1495,8 @@ void ScreenshotOverlayInputHandler::restoreScrollingCaptureAfterFailedResize() {
 
 void ScreenshotOverlayInputHandler::resetTransientShortcuts() {
     m_selectionWheelSteps.reset();
+    m_selectionResizeWheelSteps.reset();
+    m_angleWheelSteps.reset();
     static_cast<void>(cancelEffectDrag());
     leaveEffectEditors();
     cancelCanvasColorSampling();
@@ -1376,7 +1504,7 @@ void ScreenshotOverlayInputHandler::resetTransientShortcuts() {
     restoreScrollingCaptureAfterFailedResize();
     m_moveEntireSelectionShortcut = false;
     m_keepSelectionAspectRatioShortcut = false;
-    m_selectionAspectRatioSnapShortcut = false;
+    m_selectionAspectRatioSnapShortcut = AspectRatioSnapShortcutState::Released;
     m_aspectShortcutUsedForSelectionDrag = false;
     m_cycleColorFormatIfAspectShortcutUnused = false;
     finishTransientDrag();

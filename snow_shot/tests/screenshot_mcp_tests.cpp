@@ -2,6 +2,7 @@
 #include "snow_shot/app/mcp/screenshotmcpsession.h"
 #include "snow_shot/app/mcp/screenshotmcpselection.h"
 #include "snow_shot/app/mcp/mcpstylepatch.h"
+#include "snow_shot/runtime/runtimeactivitytracker.h"
 #include "snowimageqtcodec.h"
 #include <QApplication>
 #include <QClipboard>
@@ -61,6 +62,8 @@ QJsonObject request(const QString& id, const QString& method, const QJsonObject&
             {QStringLiteral("params"), params}};
 }
 void transport() {
+    const auto baseline =
+        snow_shot::runtime::RuntimeActivityTracker::shared().snapshot().activeCount;
     QTemporaryDir directory;
     require(directory.isValid(), "temporary runtime directory");
     ScreenshotMcpServer server(nullptr, directory.path());
@@ -69,6 +72,8 @@ void transport() {
     int flushed = 0;
     quint64 owner = 0;
     server.setRequestHandler([&](const ScreenshotMcpRequest& r, auto completion) {
+        require(snow_shot::runtime::RuntimeActivityTracker::shared().snapshot().activeCount > 0,
+                "socket request handoff retains activity through GUI dispatch");
         require(QThread::currentThread() == QCoreApplication::instance()->thread(),
                 "GUI thread dispatch");
         ++requests;
@@ -94,6 +99,9 @@ void transport() {
         response.ok = true;
         if (r.method == QStringLiteral("after_send"))
             response.afterSend = [&] {
+                require(
+                    snow_shot::runtime::RuntimeActivityTracker::shared().snapshot().activeCount > 0,
+                    "post-response action retains activity through delivery");
                 require(QThread::currentThread() == QCoreApplication::instance()->thread(),
                         "post-response action runs on application thread");
                 ++flushed;
@@ -111,6 +119,10 @@ void transport() {
     });
     QString error;
     require(server.start(&error), qPrintable(error));
+    await([&] {
+        return snow_shot::runtime::RuntimeActivityTracker::shared().snapshot().activeCount ==
+               baseline;
+    });
     QFile descriptor(server.descriptorPath());
     require(descriptor.open(QIODevice::ReadOnly), "published descriptor");
     auto data = QJsonDocument::fromJson(descriptor.readAll()).object();
@@ -225,6 +237,8 @@ void transport() {
     await([&] { return client.state() == QLocalSocket::UnconnectedState; });
     require(server.start(), "runtime re-enable");
     server.stop();
+    require(snow_shot::runtime::RuntimeActivityTracker::shared().snapshot().activeCount == baseline,
+            "completed socket work and shutdown release activity leases");
 }
 void descriptorOverride() {
     QTemporaryDir directory;
@@ -887,6 +901,25 @@ void completeToolStyleContract() {
             properties = flags;
             ++updates;
         }
+        bool setAngleStyleFromToolbar(const SnowCanvasAngleStyle& value, quint32 flags) {
+            state.angleStyle = value;
+            properties = flags;
+            ++updates;
+            return true;
+        }
+        bool setMagnifierStyleFromToolbar(const SnowCanvasMagnifierStyle& value, quint32 flags,
+                                          bool) {
+            state.magnifierStyle = value;
+            properties = flags;
+            ++updates;
+            return true;
+        }
+        bool setDistanceStyleFromToolbar(const SnowCanvasDistanceStyle& value, quint32 flags) {
+            state.distanceStyle = value;
+            properties = flags;
+            ++updates;
+            return true;
+        }
         void setWatermarkConfigFromToolbar(const SnowCanvasWatermarkConfig&) {
             ++updates;
         }
@@ -941,7 +974,77 @@ void completeToolStyleContract() {
                     (SnowCanvasSerialNumberStyleMixedNumber | SnowCanvasSerialNumberStyleMixedType |
                      SnowCanvasSerialNumberStyleMixedNumericType),
             "serial-number patches must carry exactly the requested property flags");
+    for (int connection = 0; connection < 3; ++connection) {
+        const QString types[] = {QStringLiteral("none"), QStringLiteral("leader_line"),
+                                 QStringLiteral("gradient")};
+        for (bool outline : {false, true}) {
+            require(apply(QStringLiteral("magnifier"),
+                          {{QStringLiteral("connection_type"), types[connection]},
+                           {QStringLiteral("source_outline"), outline}}) &&
+                        styles.state.magnifierStyle.connectionType ==
+                            static_cast<SnowCanvasMagnifierConnectionType>(connection) &&
+                        styles.state.magnifierStyle.sourceOutline == outline &&
+                        styles.properties == (SnowCanvasMagnifierStylePropertyConnectionType |
+                                              SnowCanvasMagnifierStylePropertySourceOutline),
+                    "MCP preserves all six connection/source-outline combinations and exact masks");
+        }
+    }
+    require(apply(QStringLiteral("magnifier"),
+                  {{QStringLiteral("connection_type"), QStringLiteral("leader_line")}}) &&
+                styles.state.magnifierStyle.connectionType ==
+                    SnowCanvasMagnifierConnectionType::LeaderLine &&
+                styles.state.magnifierStyle.sourceOutline &&
+                styles.properties == SnowCanvasMagnifierStylePropertyConnectionType,
+            "MCP connection edits preserve the independent source outline");
+    require(apply(QStringLiteral("magnifier"), {{QStringLiteral("source_outline"), false}}) &&
+                !styles.state.magnifierStyle.sourceOutline &&
+                styles.state.magnifierStyle.connectionType ==
+                    SnowCanvasMagnifierConnectionType::LeaderLine &&
+                styles.properties == SnowCanvasMagnifierStylePropertySourceOutline,
+            "MCP source-outline edits preserve the independent connection type");
     const int previous = styles.updates;
+    require(
+        apply(QStringLiteral("magnifier"),
+              {{QStringLiteral("shape"), QStringLiteral("diamond")},
+               {QStringLiteral("factor"), 10.0},
+               {QStringLiteral("connection_type"), QStringLiteral("none")},
+               {QStringLiteral("source_outline"), false},
+               {QStringLiteral("leader_arrowhead"), QStringLiteral("crowfoot_one_or_many")},
+               {QStringLiteral("arrow_ratio"), 2.3},
+               {QStringLiteral("corner_radii"), QJsonArray{3, 6, 9, 12}}}) &&
+            styles.state.magnifierStyle.shape == SnowCanvasRectangleShape::Diamond &&
+            styles.state.magnifierStyle.factor == 10.0 &&
+            styles.state.magnifierStyle.connectionType == SnowCanvasMagnifierConnectionType::None &&
+            !styles.state.magnifierStyle.sourceOutline &&
+            styles.state.magnifierStyle.leaderArrowhead == SnowCanvasArrowhead::CrowfootOneOrMany &&
+            styles.state.magnifierStyle.arrowRatio == 2.3 &&
+            styles.state.magnifierStyle.cornerRadii == SnowCanvasCornerRadii{3, 6, 9, 12} &&
+            styles.properties ==
+                (SnowCanvasMagnifierStylePropertyShape | SnowCanvasMagnifierStylePropertyFactor |
+                 SnowCanvasMagnifierStylePropertyConnectionType |
+                 SnowCanvasMagnifierStylePropertySourceOutline |
+                 SnowCanvasMagnifierStylePropertyLeaderArrowhead |
+                 SnowCanvasMagnifierStylePropertyArrowRatio |
+                 SnowCanvasMagnifierStylePropertyCornerRadius),
+        "magnifier automation retains complete styles and exact property masks");
+    require(!apply(QStringLiteral("magnifier"), {{QStringLiteral("factor"), 0.9}}) &&
+                !apply(QStringLiteral("magnifier"), {{QStringLiteral("arrow_ratio"), 0.4}}) &&
+                !apply(QStringLiteral("magnifier"), {{QStringLiteral("arrow_ratio"), 3.1}}) &&
+                !apply(QStringLiteral("magnifier"), {{QStringLiteral("factor"), 10.1}}) &&
+                !apply(QStringLiteral("magnifier"), {{QStringLiteral("show_leader"), true}}) &&
+                !apply(QStringLiteral("magnifier"), {{QStringLiteral("source_outline"), 1}}) &&
+                !apply(QStringLiteral("magnifier"), {{QStringLiteral("connection_type"), 2}}) &&
+                !apply(QStringLiteral("magnifier"),
+                       {{QStringLiteral("connection_type"), QStringLiteral("unsupported")}}) &&
+                !apply(QStringLiteral("magnifier"), {{QStringLiteral("stroke_width"), 73}}) &&
+                !apply(QStringLiteral("magnifier"), {{QStringLiteral("corner_radius"), -1}}) &&
+                !apply(QStringLiteral("magnifier"),
+                       {{QStringLiteral("corner_radius"), 2},
+                        {QStringLiteral("corner_radii"), QJsonArray{1, 2, 3, 4}}}) &&
+                !apply(QStringLiteral("magnifier"),
+                       {{QStringLiteral("fill"), QJsonArray{0, 0, 0, 255}}}) &&
+                styles.updates == previous + 1,
+            "invalid magnifier automation patches reject before dispatch");
     require(
         !apply(QStringLiteral("text"),
                {{QStringLiteral("corner_radius"), 2},
@@ -956,12 +1059,21 @@ void completeToolStyleContract() {
             !apply(QStringLiteral("rectangle_highlight"),
                    {{QStringLiteral("shape"), QStringLiteral("ellipse")}}) &&
             !apply(QStringLiteral("pen_highlight"), {{QStringLiteral("corner_radius"), 3}}) &&
-            styles.updates == previous,
+            styles.updates == previous + 1,
         "ambiguous or unsupported styles must reject atomically before command dispatch");
+    require(apply(QStringLiteral("magnifier"), {{QStringLiteral("corner_radius"), 6}}) &&
+                styles.state.magnifierStyle.cornerRadii == SnowCanvasCornerRadii{6, 6, 6, 6} &&
+                styles.properties == SnowCanvasMagnifierStylePropertyCornerRadius &&
+                styles.state.magnifierStyle.factor == 10,
+            "uniform magnifier corner patches preserve unrelated properties");
 }
 } // namespace
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
+    if (app.arguments().contains(QStringLiteral("--magnifier-only"))) {
+        completeToolStyleContract();
+        return 0;
+    }
     serialNumberPatchesPreserveMixedSelectionProperties(false);
     serialNumberPatchesPreserveMixedSelectionProperties(true);
     completeToolStyleContract();

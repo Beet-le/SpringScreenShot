@@ -5,6 +5,7 @@
 #include "snow_shot/presentation/mainwindowskincontroller.h"
 #include "snow_shot/presentation/mainwindowskinwidget.h"
 #include "snow_shot/storage/applicationstorage.h"
+#include "snow_shot/storage/configurationschema.h"
 #include "../src/image/snowimageqtcodec.h"
 #include "../src/presentation/tools/screenshottoolpalettebuttons.h"
 
@@ -12,9 +13,11 @@
 #include "widgets/control_scale.h"
 #include "widgets/color_picker.h"
 #include "widgets/radio.h"
+#include "widgets/radio_button_group.h"
 #include "widgets/select.h"
 #include "widgets/slider.h"
 #include "widgets/tooltip.h"
+#include "widgets/popover.h"
 #include "theme/theme_manager.h"
 #include "antd_icons.h"
 
@@ -28,6 +31,8 @@
 #include <QFile>
 #include <QGraphicsDropShadowEffect>
 #include <QImage>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QHideEvent>
 #include <QLabel>
 #include <QLayout>
@@ -106,6 +111,7 @@ ScreenshotToolPalette::Options recordingOptions() {
     options.showDragHandle = true;
     options.showSelectTool = false;
     options.showShapeTool = false;
+    options.showSpeechBubbleTool = false;
     options.showArrowTool = false;
     options.showRecordingControls = true;
     options.enableStyleToolbar = false;
@@ -443,6 +449,7 @@ void historyButtonsFollowCanvasAvailability() {
     options.showMoveTool = false;
     options.showSelectTool = false;
     options.showShapeTool = false;
+    options.showSpeechBubbleTool = false;
     options.showArrowTool = false;
     options.showWatermarkTool = true;
     options.enableStyleToolbar = false;
@@ -1672,32 +1679,60 @@ void printToolbarRoutingAndLayoutMigration() {
     namespace layout = snow_shot::presentation::toolbar_layout;
     using Kind = snow_shot::storage::ScreenshotToolbarLayoutKind;
     const QString print = QStringLiteral("print");
+    const QString upload = QStringLiteral("upload-to-cloud");
     const QString quick = QStringLiteral("quick-save");
     const QString save = QStringLiteral("save-as-file");
     for (const auto kind : {Kind::ActionTools, Kind::PinnedActionTools}) {
+        const auto verifyStorage = [kind](
+                                       const snow_shot::storage::ScreenshotToolbarLayout& input) {
+            QJsonArray positions;
+            for (const auto& position : input.positions)
+                positions.append(QJsonArray::fromStringList(position));
+            const QString key = kind == Kind::ActionTools
+                                    ? QStringLiteral("screenshot_toolbar/action_tools_layout")
+                                    : QStringLiteral("pin_to_screen/action_tools_layout");
+            const auto stored = snow_shot::storage::ConfigurationSchema::normalize(
+                key,
+                QJsonObject{{QStringLiteral("positions"), positions},
+                            {QStringLiteral("hidden"), QJsonArray::fromStringList(input.hidden)}});
+            const auto expected = layout::normalizedLayout(input, kind);
+            QJsonArray expectedPositions;
+            for (const auto& position : expected.positions)
+                expectedPositions.append(QJsonArray::fromStringList(position));
+            require(stored.valid &&
+                        stored.value.toObject().value(QStringLiteral("positions")) ==
+                            expectedPositions &&
+                        stored.value.toObject().value(QStringLiteral("hidden")) ==
+                            QJsonArray::fromStringList(expected.hidden),
+                    "storage and toolbar models must agree on Print layout migration");
+        };
         auto defaults = layout::defaultPositions(kind);
-        require(defaults.contains(QStringList{print, quick, save}),
+        require(defaults.contains(QStringList{upload, print, quick, save}),
                 "Print must join the default Save as File stack");
         snow_shot::storage::ScreenshotToolbarLayout old;
         old.positions = {{save, QStringLiteral("text-recognition")}};
         const auto upgraded = layout::normalizedLayout(old, kind);
         require(upgraded.positions[0] ==
-                    QStringList{print, quick, save, QStringLiteral("text-recognition")},
+                    QStringList{upload, print, quick, save, QStringLiteral("text-recognition")},
                 "migration must preserve previous item order and placement");
+        verifyStorage(old);
         require(layout::normalizedLayout(upgraded, kind) == upgraded,
                 "migration must be idempotent");
         old.positions = {{print}, {save}};
         require(layout::normalizedLayout(old, kind).positions[0] == QStringList{print},
                 "explicitly positioned Print must remain in its position");
+        verifyStorage(old);
         old.positions = {{save}};
         old.hidden = {print};
         const auto hiddenPrint = layout::normalizedLayout(old, kind);
         require(hiddenPrint.hidden.contains(print) && !hiddenPrint.positions[0].contains(print),
                 "explicitly hidden Print must remain hidden");
+        verifyStorage(old);
         old.positions.clear();
         old.hidden = {save};
         require(layout::normalizedLayout(old, kind).hidden.contains(print),
                 "migrated Print must inherit Save as File's hidden state");
+        verifyStorage(old);
         const auto stack = layout::stackPresentation(QStringList{print, quick, save},
                                                      [](const QString&) { return true; });
         require(stack.entryItemId() == save, "Save as File must remain the initial trigger");
@@ -1724,10 +1759,161 @@ void printToolbarRoutingAndLayoutMigration() {
         require(prints == 2 && saves == 0, "Print source button must route once");
     }
 }
+void speechBubbleSharesSerialNumberToolbarGroup() {
+    namespace layout = snow_shot::presentation::toolbar_layout;
+    const QStringList group{QStringLiteral("speech-bubble"), QStringLiteral("serial-number")};
+    for (bool configured : {false, true}) {
+        auto options = screenshotOptions();
+        options.showSerialNumberTool = true;
+        if (configured)
+            options.toolbarLayout =
+                snow_shot::storage::ScreenshotToolbarLayout{layout::defaultPositions(), {}};
+        ScreenshotToolPalette palette(options);
+        prepare(palette);
+        palette.show();
+        flushEvents();
+        adqt::widgets::AdButton* trigger = nullptr;
+        int triggerCount = 0;
+        for (auto* button : palette.findChildren<adqt::widgets::AdButton*>()) {
+            if (button->property("screenshotToolbarPositionItems").toStringList() == group) {
+                trigger = button;
+                ++triggerCount;
+            }
+        }
+        require(triggerCount == 1 && trigger != nullptr &&
+                    trigger->property("screenshotToolbarItemId") == QStringLiteral("serial-number"),
+                "default and configured toolbars show one group with Serial Number initially");
+        auto* source = palette.findChild<adqt::widgets::AdButton*>(
+            QStringLiteral("screenshotSpeechBubbleButton"));
+        require(source != nullptr && source->isHidden(),
+                "grouped Speech Bubble does not occupy a standalone toolbar position");
+        int serialRequests = 0;
+        int bubbleRequests = 0;
+        QObject::connect(&palette, &ScreenshotToolPalette::serialNumberRequested,
+                         [&] { ++serialRequests; });
+        QObject::connect(&palette, &ScreenshotToolPalette::speechBubbleRequested,
+                         [&] { ++bubbleRequests; });
+        trigger->click();
+        require(serialRequests == 1 && bubbleRequests == 0 &&
+                    palette.activeTool() == ScreenshotToolPalette::Tool::SerialNumber,
+                "clicking the initial group button activates Serial Number once");
+        auto* popover = trigger->findChild<adqt::widgets::AdPopover*>();
+        require(popover != nullptr, "the shared group exposes a tool popup");
+        popover->show();
+        flushEvents();
+        auto* content = popover->contentWidget();
+        auto* serial = content == nullptr
+                           ? nullptr
+                           : content->findChild<adqt::widgets::AdButton*>(
+                                 QStringLiteral("screenshotDrawingToolGroupOption-serial-number"));
+        auto* bubble = content == nullptr
+                           ? nullptr
+                           : content->findChild<adqt::widgets::AdButton*>(
+                                 QStringLiteral("screenshotDrawingToolGroupOption-speech-bubble"));
+        require(serial != nullptr && bubble != nullptr &&
+                    content->layout()->indexOf(serial) < content->layout()->indexOf(bubble),
+                "Serial Number is the first popup option followed by Speech Bubble");
+        bubble->click();
+        require(bubbleRequests == 1 && serialRequests == 1 &&
+                    palette.activeTool() == ScreenshotToolPalette::Tool::SpeechBubble,
+                "the shared popup activates Speech Bubble once");
+    }
+    auto options = screenshotOptions();
+    options.showSerialNumberTool = false;
+    ScreenshotToolPalette palette(options);
+    prepare(palette);
+    auto* bubble =
+        palette.findChild<adqt::widgets::AdButton*>(QStringLiteral("screenshotSpeechBubbleButton"));
+    require(bubble != nullptr && !bubble->isHidden() &&
+                bubble->property("screenshotToolbarItemId") == QStringLiteral("speech-bubble"),
+            "Speech Bubble is the available group entry when Serial Number is unavailable");
+}
+
+void speechBubbleReusesShapeControlsWithIndependentStyles() {
+    using Tool = ScreenshotToolPalette::Tool;
+    auto options = screenshotOptions();
+    options.enableStyleToolbar = true;
+    options.showLineTool = true;
+    options.showTextTool = true;
+    options.styleDefaults.speechBubble.strokeWidth = 4;
+    ScreenshotToolPalette palette(options);
+    prepare(palette);
+    int requests = 0;
+    int edits = 0;
+    SnowCanvasShapeKind editedKind = SnowCanvasShapeKind::Rectangle;
+    QObject::connect(&palette, &ScreenshotToolPalette::speechBubbleRequested, [&] { ++requests; });
+    QObject::connect(&palette, &ScreenshotToolPalette::shapeStyleChanged,
+                     [&](const SnowCanvasShapeStyle&, quint32, SnowCanvasShapeKind kind) {
+                         ++edits;
+                         editedKind = kind;
+                     });
+    require(palette.activateDrawingShortcut(QStringLiteral("speech_bubble")) && requests == 1 &&
+                palette.activeTool() == Tool::SpeechBubble,
+            "Speech Bubble can be activated through configured shortcut routing");
+    auto* button =
+        palette.findChild<adqt::widgets::AdButton*>(QStringLiteral("screenshotSpeechBubbleButton"));
+    require(button != nullptr, "Speech Bubble has its own toolbar source button");
+    auto* row = palette.findChild<QWidget*>(QStringLiteral("screenshotSpeechBubbleStyleControls"));
+    auto* shapeSelector =
+        row != nullptr ? row->findChild<QWidget*>(QStringLiteral("screenshotShapeButtonGroup"))
+                       : nullptr;
+    auto* group = shapeSelector != nullptr
+                      ? shapeSelector->findChild<adqt::widgets::AdRadioButtonGroup*>()
+                      : nullptr;
+    if (group == nullptr)
+        palette.dumpObjectTree();
+    require(group != nullptr, "Speech Bubble exposes a shape selector in its active style row");
+    auto* diamond = group->button(2);
+    require(diamond != nullptr, "Speech Bubble offers the Diamond shape option");
+    diamond->click();
+    require(editedKind == SnowCanvasShapeKind::SpeechBubble && edits == 1 &&
+                palette.creationStyleDefaults().speechBubble.shape ==
+                    SnowCanvasRectangleShape::Diamond &&
+                palette.creationStyleDefaults().rectangle.shape ==
+                    SnowCanvasRectangleShape::Rectangle,
+            "the shared shape selector routes to independent Speech Bubble defaults");
+    const auto shapeBefore = palette.creationStyleDefaults().rectangle;
+    require(palette.stepStrokeWidth(1) &&
+                palette.creationStyleDefaults().speechBubble.strokeWidth != 4 &&
+                palette.creationStyleDefaults().rectangle == shapeBefore,
+            "Speech Bubble stroke controls preserve Shape appearance");
+    const auto bubble = palette.creationStyleDefaults().speechBubble;
+    for (int pass = 0; pass < 8; ++pass) {
+        palette.setActiveTool(Tool::Shape);
+        palette.setActiveTool(Tool::Line);
+        palette.setActiveTool(Tool::SpeechBubble);
+        flushEvents();
+        require(palette.creationStyleDefaults().speechBubble == bubble,
+                "style row transfers retain the independent Speech Bubble style");
+        require(
+            palette.findChildren<QWidget*>(QStringLiteral("screenshotSpeechBubbleStyleControls"))
+                    .size() == 1,
+            "style transfers retain only one live Speech Bubble row");
+    }
+    SnowCanvasStyleToolbarState state;
+    state.source = SnowCanvasStyleToolbarSource::SelectedSpeechBubble;
+    state.selectedElementCount = 1;
+    state.shapeStyle = bubble;
+    palette.setStyleToolbarState(state);
+    const int before = edits;
+    require(palette.stepStrokeWidth(1) && editedKind == SnowCanvasShapeKind::SpeechBubble &&
+                edits == before + 1,
+            "selected Speech Bubble properties route once after repeated style transfers");
+    palette.resetStyleState();
+    require(palette.stepStrokeWidth(1) && editedKind == SnowCanvasShapeKind::SpeechBubble &&
+                palette.creationStyleDefaults().rectangle.strokeWidth ==
+                    options.styleDefaults.rectangle.strokeWidth,
+            "resetting preferences retains the active Speech Bubble editor family");
+}
 } // namespace
 
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
+    if (application.arguments().contains(QStringLiteral("--speech-bubble-only"))) {
+        speechBubbleSharesSerialNumberToolbarGroup();
+        speechBubbleReusesShapeControlsWithIndependentStyles();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--print-only"))) {
         printToolbarRoutingAndLayoutMigration();
         return 0;

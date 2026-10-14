@@ -15,7 +15,7 @@ project(snow_apps VERSION 0.2.0 LANGUAGES CXX)
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/SnowWindowsArchitecture.cmake")
 snow_configure_windows_architecture()
 
-set(SNOW_SHOT_VERSION "1.2.5")
+set(SNOW_SHOT_VERSION "1.2.8")
 if(NOT SNOW_SHOT_VERSION MATCHES "^([0-9]+\\.[0-9]+\\.[0-9]+)(-[0-9A-Za-z.-]+)?$")
     message(FATAL_ERROR "SNOW_SHOT_VERSION must be a semantic version such as 0.8.0-dev")
 endif()
@@ -146,10 +146,9 @@ if(SNOW_IMAGE_PROFILE STREQUAL "full")
         ${_snow_workspace_all_image_codecs}
     )
 elseif(SNOW_APPS_BUILD_SNOW_SHOT)
-    # Snow Shot's Save As workflow supports all five raster formats in every
-    # application profile, so keep the corresponding codecs in the minimal
-    # workspace configuration as well as the full profile.
-    set(_snow_workspace_image_codecs PNG JPEG HEIF JXL WEBP)
+    # Keep Snow Shot's raster export codecs and animated pin decoders in the
+    # minimal workspace configuration as well as the full profile.
+    set(_snow_workspace_image_codecs PNG JPEG GIF HEIF JXL WEBP)
 else()
     set(_snow_workspace_image_codecs)
 endif()

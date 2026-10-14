@@ -8,6 +8,7 @@
 #include <QPainter>
 #include <QPointer>
 #include <QResizeEvent>
+#include <QScopeGuard>
 #include <QSizePolicy>
 #include <QVariant>
 #include <algorithm>
@@ -266,6 +267,13 @@ struct AdSpin::Private {
   qreal percent = 0.0;
   qreal autoPercent = 0.0;
   qint64 paintTimeMs = 0;
+  bool lastNotifiedSpinning = true;
+  bool lastNotifiedActive = true;
+  int lastNotifiedDelayMs = 0;
+  ProgressMode lastNotifiedProgressMode = ProgressMode::None;
+  qreal lastNotifiedDisplayedPercent = 0.0;
+  bool percentNotificationPending = false;
+  bool publishingState = false;
 
   ComponentTokens componentTokens;
   SemanticStyles semanticStyles;
@@ -310,17 +318,19 @@ AdSpin::~AdSpin() {
 bool AdSpin::spinning() const { return d_->spinning; }
 
 void AdSpin::setSpinning(bool value) {
+  const QPointer<AdSpin> guard(this);
   if (d_->spinning == value) {
     return;
   }
   d_->spinning = value;
-  emit spinningChanged(value);
   if (value) {
     scheduleActivation();
   } else {
     detail::cancelTimingTask(this, QString::fromLatin1(kActivationTaskKey));
     setActive(false);
   }
+  if (!guard) return;
+  publishStateChanges();
 }
 
 bool AdSpin::isActive() const { return d_->active; }
@@ -328,6 +338,7 @@ bool AdSpin::isActive() const { return d_->active; }
 int AdSpin::delayMs() const { return d_->delayMs; }
 
 void AdSpin::setDelayMs(int value) {
+  const QPointer<AdSpin> guard(this);
   value = std::max(0, value);
   if (d_->delayMs == value) {
     return;
@@ -336,10 +347,12 @@ void AdSpin::setDelayMs(int value) {
   if (d_->spinning && (!isVisible() || !d_->active)) {
     if (!isVisible()) {
       setActive(false);
+      if (!guard) return;
     }
     scheduleActivation();
+    if (!guard) return;
   }
-  emit delayMsChanged(value);
+  publishStateChanges();
 }
 
 AdSpin::SizeClass AdSpin::sizeClass() const { return d_->sizeClass; }
@@ -385,10 +398,10 @@ void AdSpin::setFullscreen(bool value) {
 AdSpin::ProgressMode AdSpin::progressMode() const { return d_->progressMode; }
 
 void AdSpin::setProgressMode(ProgressMode mode) {
+  const QPointer<AdSpin> guard(this);
   if (d_->progressMode == mode) {
     return;
   }
-  const qreal previousDisplayedPercent = displayedPercent();
   d_->progressMode = mode;
   if (mode == ProgressMode::Automatic) {
     d_->autoPercent = 0.0;
@@ -399,8 +412,9 @@ void AdSpin::setProgressMode(ProgressMode mode) {
     } else {
       d_->indicatorWidget->setProperty("percent", displayedPercent());
     }
+    if (!guard) return;
   }
-  if (mode == ProgressMode::Automatic && d_->active && hasVisibleSurface()) {
+  if (d_->progressMode == ProgressMode::Automatic && d_->active && hasVisibleSurface()) {
     scheduleAutoProgressStep();
   } else {
     cancelAutoProgressStep();
@@ -412,16 +426,15 @@ void AdSpin::setProgressMode(ProgressMode mode) {
   if (d_->fullscreenSurface) {
     d_->fullscreenSurface->update();
   }
-  emit progressModeChanged(mode);
-  if (!qFuzzyCompare(previousDisplayedPercent + 1.0, displayedPercent() + 1.0)) {
-    emit displayedPercentChanged(displayedPercent());
-  }
   notifyAccessibleValueChange();
+  if (!guard) return;
+  publishStateChanges();
 }
 
 qreal AdSpin::percent() const { return d_->percent; }
 
 void AdSpin::setPercent(qreal value) {
+  const QPointer<AdSpin> guard(this);
   if (!std::isfinite(value)) {
     value = 0.0;
   }
@@ -430,28 +443,23 @@ void AdSpin::setPercent(qreal value) {
       d_->progressMode == ProgressMode::Determinate) {
     return;
   }
-  const bool modeChanged = d_->progressMode != ProgressMode::Determinate;
-  const qreal previousDisplayedPercent = displayedPercent();
   d_->percent = value;
   d_->progressMode = ProgressMode::Determinate;
+  d_->percentNotificationPending = true;
   cancelAutoProgressStep();
   if (d_->indicatorWidget) {
     d_->indicatorWidget->setProperty("percent", value);
-  }
-  if (modeChanged) {
-    emit progressModeChanged(d_->progressMode);
-  }
-  emit percentChanged(value);
-  if (!qFuzzyCompare(previousDisplayedPercent + 1.0, displayedPercent() + 1.0)) {
-    emit displayedPercentChanged(displayedPercent());
+    if (!guard) return;
   }
   notifyAccessibleValueChange();
+  if (!guard) return;
   if (d_->localSurface) {
     d_->localSurface->update();
   }
   if (d_->fullscreenSurface) {
     d_->fullscreenSurface->update();
   }
+  publishStateChanges();
 }
 
 qreal AdSpin::displayedPercent() const {
@@ -470,6 +478,7 @@ void AdSpin::clearProgress() { setProgressMode(ProgressMode::None); }
 QWidget* AdSpin::contentWidget() const { return d_->content.data(); }
 
 void AdSpin::setContentWidget(QWidget* widget) {
+  const QPointer<AdSpin> guard(this);
   if (d_->content == widget || !canAdoptWidget(widget) || widget == d_->indicatorWidget) {
     return;
   }
@@ -478,6 +487,7 @@ void AdSpin::setContentWidget(QWidget* widget) {
     d_->content = nullptr;
     disconnect(previous, &QObject::destroyed, this, nullptr);
     delete previous;
+    if (!guard) return;
   }
   d_->content = widget;
   if (widget) {
@@ -516,6 +526,7 @@ QWidget* AdSpin::takeContentWidget() {
 QWidget* AdSpin::indicatorWidget() const { return d_->indicatorWidget.data(); }
 
 void AdSpin::setIndicatorWidget(QWidget* widget) {
+  const QPointer<AdSpin> guard(this);
   if (d_->indicatorWidget == widget || !canAdoptWidget(widget) || widget == d_->content) {
     return;
   }
@@ -524,6 +535,7 @@ void AdSpin::setIndicatorWidget(QWidget* widget) {
     d_->indicatorWidget = nullptr;
     disconnect(previous, &QObject::destroyed, this, nullptr);
     delete previous;
+    if (!guard) return;
   }
   d_->indicatorWidget = widget;
   if (widget) {
@@ -699,11 +711,11 @@ void AdSpin::changeEvent(QEvent* event) {
 }
 
 void AdSpin::setActive(bool value) {
+  const QPointer<AdSpin> guard(this);
   if (d_->active == value) {
     return;
   }
   d_->active = value;
-  const qreal previousDisplayedPercent = displayedPercent();
   if (value && d_->progressMode == ProgressMode::Automatic) {
     d_->autoPercent = 0.0;
     if (hasVisibleSurface()) {
@@ -713,16 +725,59 @@ void AdSpin::setActive(bool value) {
     cancelAutoProgressStep();
   }
   setProperty("busy", value);
+  if (!guard) return;
   refreshSurfaces();
-  emit activeChanged(value);
+  if (!guard) return;
   QAccessible::State changedState;
   changedState.busy = true;
   changedState.invisible = true;
   QAccessibleStateChangeEvent accessibilityEvent(this, changedState);
   QAccessible::updateAccessibility(&accessibilityEvent);
-  if (!qFuzzyCompare(previousDisplayedPercent + 1.0, displayedPercent() + 1.0)) {
-    emit displayedPercentChanged(displayedPercent());
+  if (!guard) return;
+  if (!qFuzzyCompare(d_->lastNotifiedDisplayedPercent + 1.0, displayedPercent() + 1.0)) {
     notifyAccessibleValueChange();
+    if (!guard) return;
+  }
+  publishStateChanges();
+}
+
+bool AdSpin::publishStateChanges() {
+  if (d_->publishingState) return true;
+  const QPointer<AdSpin> guard(this);
+  d_->publishingState = true;
+  const auto restorePublishing = qScopeGuard([guard] {
+    if (guard) guard->d_->publishingState = false;
+  });
+  // Each delivered property has its own ledger. Nested setters coalesce pending
+  // notifications to the latest state without dropping other changed properties.
+  while (true) {
+    if (d_->lastNotifiedActive != d_->active) {
+      const bool value = d_->active;
+      d_->lastNotifiedActive = value;
+      emit activeChanged(value);
+    } else if (d_->lastNotifiedSpinning != d_->spinning) {
+      const bool value = d_->spinning;
+      d_->lastNotifiedSpinning = value;
+      emit spinningChanged(value);
+    } else if (d_->lastNotifiedDelayMs != d_->delayMs) {
+      const int value = d_->delayMs;
+      d_->lastNotifiedDelayMs = value;
+      emit delayMsChanged(value);
+    } else if (d_->lastNotifiedProgressMode != d_->progressMode) {
+      const ProgressMode value = d_->progressMode;
+      d_->lastNotifiedProgressMode = value;
+      emit progressModeChanged(value);
+    } else if (d_->percentNotificationPending) {
+      const qreal value = d_->percent;
+      d_->percentNotificationPending = false;
+      emit percentChanged(value);
+    } else {
+      const qreal value = displayedPercent();
+      if (qFuzzyCompare(d_->lastNotifiedDisplayedPercent + 1.0, value + 1.0)) return true;
+      d_->lastNotifiedDisplayedPercent = value;
+      emit displayedPercentChanged(value);
+    }
+    if (!guard) return false;
   }
 }
 
@@ -828,6 +883,7 @@ void AdSpin::scheduleAutoProgressStep() {
   detail::scheduleTimingTask(
       this, QString::fromLatin1(kAutoProgressTaskKey), d_->appearance.autoProgressIntervalMs,
       [this]() {
+        const QPointer<AdSpin> guard(this);
         d_->autoProgressScheduled = false;
         if (!d_->active || d_->progressMode != ProgressMode::Automatic || !hasVisibleSurface()) {
           return;
@@ -843,12 +899,14 @@ void AdSpin::scheduleAutoProgressStep() {
         } else {
           d_->autoPercent = 99.0;
         }
-        if (!qFuzzyCompare(previousPercent + 1.0, d_->autoPercent + 1.0)) {
+        const bool displayChanged = !qFuzzyCompare(previousPercent + 1.0, d_->autoPercent + 1.0);
+        if (displayChanged) {
           if (d_->indicatorWidget) {
             d_->indicatorWidget->setProperty("percent", d_->autoPercent);
+            if (!guard) return;
           }
-          emit displayedPercentChanged(d_->autoPercent);
           notifyAccessibleValueChange();
+          if (!guard) return;
           if (d_->localSurface) {
             d_->localSurface->update();
           }
@@ -858,6 +916,9 @@ void AdSpin::scheduleAutoProgressStep() {
         }
         if (d_->autoPercent < 99.0) {
           scheduleAutoProgressStep();
+        }
+        if (displayChanged) {
+          publishStateChanges();
         }
       });
 }

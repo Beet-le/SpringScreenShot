@@ -21,6 +21,7 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QContextMenuEvent>
+#include <QCursor>
 #include <QDragEnterEvent>
 #include <QDragLeaveEvent>
 #include <QDragMoveEvent>
@@ -634,34 +635,27 @@ void nativeProbe() {
     const auto style = GetWindowLongPtrW(reinterpret_cast<HWND>(iconWindow->winId()), GWL_EXSTYLE);
     require((style & WS_EX_TOOLWINDOW) && (style & WS_EX_TOPMOST) && !(style & WS_EX_APPWINDOW),
             "native toolbar stays above ordinary windows without a taskbar entry");
+    RECT frame{};
+    MONITORINFOEXW monitor{};
+    monitor.cbSize = sizeof(monitor);
+    require(SUCCEEDED(DwmGetWindowAttribute(backdropHandle, DWMWA_EXTENDED_FRAME_BOUNDS, &frame,
+                                            sizeof(frame))) &&
+                GetMonitorInfoW(MonitorFromWindow(backdropHandle, MONITOR_DEFAULTTONULL),
+                                reinterpret_cast<MONITORINFO*>(&monitor)) != 0 &&
+                qAbs(frame.left - monitor.rcMonitor.left) <= 1 &&
+                qAbs(frame.top - monitor.rcMonitor.top) <= 1 &&
+                qAbs(frame.right - monitor.rcMonitor.right) <= 1 &&
+                qAbs(frame.bottom - monitor.rcMonitor.bottom) <= 1,
+            "own native fullscreen fixture fills the entire monitor");
 #endif
-    if (!snow_shot::platform::focusedFullscreenWindowOnScreen(screen)) {
-#ifdef Q_OS_WIN
-        const auto foreground = GetForegroundWindow();
-        RECT rect{};
-        DwmGetWindowAttribute(foreground, DWMWA_EXTENDED_FRAME_BOUNDS, &rect, sizeof(rect));
-        MONITORINFOEXW monitor{};
-        monitor.cbSize = sizeof(monitor);
-        GetMonitorInfoW(MonitorFromWindow(foreground, MONITOR_DEFAULTTONEAREST),
-                        reinterpret_cast<MONITORINFO*>(&monitor));
-        std::cerr << "Fullscreen probe: foreground backdrop="
-                  << (foreground == reinterpret_cast<HWND>(backdrop.winId()))
-                  << " frame=" << rect.left << ',' << rect.top << ',' << rect.right << ','
-                  << rect.bottom << " monitor=" << monitor.rcMonitor.left << ','
-                  << monitor.rcMonitor.top << ',' << monitor.rcMonitor.right << ','
-                  << monitor.rcMonitor.bottom << " qt=" << screen->name().toStdString()
-                  << " win=" << QString::fromWCharArray(monitor.szDevice).toStdString() << '\n';
-#endif
-    }
-    require(snow_shot::platform::focusedFullscreenWindowOnScreen(screen),
-            "native detector recognizes fullscreen on the toolbar monitor");
+    require(!snow_shot::platform::focusedFullscreenWindowExists(),
+            "native detector ignores own focused fullscreen windows");
     for (auto* other : QGuiApplication::screens())
-        if (other != screen)
-            require(!snow_shot::platform::focusedFullscreenWindowOnScreen(other),
-                    "native fullscreen does not suppress another monitor");
+        require(!snow_shot::platform::focusedFullscreenWindowOnScreen(other),
+                "own native fullscreen does not suppress any monitor");
     stored.setHideInFullscreen(true);
     pump();
-    require(!iconWindow->isVisible(), "fullscreen preference hides the native surface");
+    require(iconWindow->isVisible(), "own fullscreen does not hide the native toolbar surface");
     std::cout << "Native floating toolbar probe passed on " << QGuiApplication::screens().size()
               << " monitor(s).\n";
     stored.setEnabled(false);
@@ -1406,6 +1400,61 @@ void verifyWindows(const QString& visualDirectory) {
     stored.setEnabled(false);
     pump();
 }
+void verifyMemoryIdleSafety() {
+    const storage::FloatingToolbarSettings stored;
+    stored.setToolbarMode(true);
+    stored.setHideInFullscreen(false);
+    FloatingToolbarController controller(nullptr, [](QScreen*) { return false; });
+    stored.setEnabled(true);
+    pump();
+    auto* toolbar = window("floatingToolbarWindow");
+    auto* icon = window("floatingToolbarIconWindow");
+    require(toolbar && icon && toolbar->isVisible(), "memory safety fixture creates both surfaces");
+    require(controller.ownsIdleSurface(toolbar) && controller.ownsIdleSurface(icon),
+            "only controller-owned toolbar surfaces belong to its idle allowlist");
+    QWidget unrelated;
+    require(!controller.ownsIdleSurface(&unrelated), "an unrelated window is not an idle toolbar");
+
+    // Keep the real cursor outside both windows so host input cannot alter the idle assertion.
+    const QPoint previousCursor = QCursor::pos();
+    QCursor::setPos(toolbar->geometry().bottomRight() + QPoint(80, 80));
+    QEvent leave(QEvent::Leave);
+    QApplication::sendEvent(toolbar, &leave);
+    QApplication::sendEvent(icon, &leave);
+    pump();
+    require(!controller.blocksMemoryTrimming(), "a static unattended toolbar permits trimming");
+
+    auto* handle = toolbar->findChild<QAbstractButton*>(QStringLiteral("floatingToolbarSnowflake"));
+    require(handle, "memory safety fixture has its drag handle");
+    const QPoint press = handle->mapToGlobal(handle->rect().center());
+    mouse(handle, QEvent::MouseButtonPress, press, Qt::LeftButton, Qt::LeftButton);
+    require(controller.blocksMemoryTrimming(), "a pressed toolbar handle blocks memory trimming");
+    QEvent ungrab(QEvent::UngrabMouse);
+    QApplication::sendEvent(handle, &ungrab);
+    require(!controller.blocksMemoryTrimming(),
+            "cancelled toolbar press restores trim eligibility");
+
+    auto* menu = context(toolbar);
+    require(menu && menu->isPopupVisible() && controller.blocksMemoryTrimming(),
+            "an open toolbar menu blocks memory trimming");
+    menu->dismissPopup();
+    pump();
+    require(!controller.blocksMemoryTrimming(),
+            "closing the toolbar menu restores trim eligibility");
+    const auto popovers = toolbar->findChildren<adqt::widgets::AdPopover*>();
+    require(!popovers.isEmpty(), "memory safety fixture contains a grouped tool popover");
+    popovers.front()->show();
+    pump();
+    require(controller.blocksMemoryTrimming(), "an open tool group blocks memory trimming");
+    popovers.front()->hide();
+    pump();
+    require(!controller.blocksMemoryTrimming(),
+            "a settled toolbar permits trimming after its group");
+    stored.setEnabled(false);
+    pump();
+    QCursor::setPos(previousCursor);
+}
+
 void benchmark() {
     const storage::FloatingToolbarSettings stored;
     stored.setToolbarMode(false);
@@ -1487,7 +1536,9 @@ int main(int argc, char** argv) {
         storage.initialize({directory.filePath(QStringLiteral("bin")), directory.path()}).success,
         "temporary storage initializes");
     styles::ThemeManager::instance().initialize(app);
-    if (app.arguments().contains(QStringLiteral("--benchmark"))) {
+    if (app.arguments().contains(QStringLiteral("--memory-idle-only"))) {
+        verifyMemoryIdleSafety();
+    } else if (app.arguments().contains(QStringLiteral("--benchmark"))) {
         benchmark();
     } else if (app.arguments().contains(QStringLiteral("--menu-lifecycle-only"))) {
         verifyMenuLifecycle();

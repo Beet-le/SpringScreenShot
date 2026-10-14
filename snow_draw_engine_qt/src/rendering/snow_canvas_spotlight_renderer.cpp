@@ -1,6 +1,7 @@
 #include "snow_canvas_spotlight_renderer.h"
 
 #include "snow_canvas_render_diagnostics.h"
+#include "snow_canvas_render_geometry.h"
 #include "snow_canvas_renderer.h"
 
 #include <QColor>
@@ -44,13 +45,11 @@ QPainterPath transformedCutoutPath(const SnowSpotlightCutout& cutout,
     if (cutout.shape == SNOW_DISPLAY_RECT_SHAPE_ELLIPSE) {
         path.addEllipse(bounds);
     } else if (cutout.shape == SNOW_DISPLAY_RECT_SHAPE_DIAMOND) {
-        path.moveTo(0.0, bounds.top());
-        path.lineTo(bounds.right(), 0.0);
-        path.lineTo(0.0, bounds.bottom());
-        path.lineTo(bounds.left(), 0.0);
-        path.closeSubpath();
+        path = snow_canvas_render_geometry::roundedDiamondPath(bounds, cutout.corner_radii);
     } else {
-        path.addRect(bounds);
+        path = snow_canvas_render_geometry::roundedRectPath(
+            bounds,
+            snow_canvas_render_geometry::toViewCornerRadii(cutout.corner_radii, 1.0, bounds));
     }
     QTransform element;
     element.translate(cutout.center_x, cutout.center_y);

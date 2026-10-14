@@ -1015,7 +1015,7 @@ struct CleanCanvas {
     pixels: RasterBuffer,
     rgba: RasterBuffer,
     scaled: RasterBuffer,
-    resize: Option<snow_recording_export::resize::NearestResizePlan>,
+    resize: Option<snow_recording_export::resize::RecordingResizePlan>,
 }
 #[cfg(not(target_os = "macos"))]
 impl CleanCanvas {
@@ -1049,7 +1049,7 @@ impl CleanCanvas {
             .as_ref()
             .is_none_or(|p| !p.matches(size, (destination.width, destination.height)))
         {
-            self.resize = Some(snow_recording_export::resize::NearestResizePlan::new(
+            self.resize = Some(snow_recording_export::resize::RecordingResizePlan::new(
                 size.0,
                 size.1,
                 destination.width,
@@ -1821,6 +1821,54 @@ mod tests {
         assert!(!path.exists());
         clone.discard().unwrap();
     }
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn deferred_source_downscale_keeps_thin_strokes_before_encoding_and_padding() {
+        for phase in [0, 1] {
+            let pixels = (0..24)
+                .flat_map(|i| {
+                    let value = if (i % 6) % 2 == phase { 0 } else { 255 };
+                    [value, value, value, 255]
+                })
+                .collect();
+            let frame = snow_capture::frame::Frame::from_rgba8(6, 4, pixels)
+                .unwrap()
+                .into();
+            let mut canvas = CleanCanvas::new((3, 2), (4, 2));
+            let output = canvas.compose(&frame).unwrap();
+            assert_eq!(&*output, &[128, 128, 128, 255].repeat(8));
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn deferred_source_fractional_downscale_keeps_edge_detail_inside_the_fitted_canvas() {
+        let pixels = (0..35)
+            .flat_map(|i| {
+                let value = if i % 7 == 6 { 0 } else { 255 };
+                [value, value, value, 255]
+            })
+            .collect();
+        let frame = snow_capture::frame::Frame::from_rgba8(7, 5, pixels)
+            .unwrap()
+            .into();
+        let mut canvas = CleanCanvas::new((3, 3), (4, 4));
+        let output = canvas.compose(&frame).unwrap();
+        // Fit produces a 3x2 picture. The last one-pixel source stroke covers
+        // 3/7 of the final pixel and must survive; point sampling omitted it.
+        for row in output.chunks_exact(16).take(2) {
+            assert_eq!(
+                row,
+                &[
+                    255, 255, 255, 255, 255, 255, 255, 255, 146, 146, 146, 255, 146, 146, 146, 255
+                ]
+            );
+        }
+        for row in output.chunks_exact(16).skip(2) {
+            assert_eq!(row, &[0, 0, 0, 255].repeat(4));
+        }
+    }
+
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn odd_source_canvas_pads_edges_without_stretching_logical_pixels() {

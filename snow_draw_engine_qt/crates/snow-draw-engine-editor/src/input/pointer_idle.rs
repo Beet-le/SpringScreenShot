@@ -54,11 +54,23 @@ impl Editor {
 
     pub(crate) fn begin_selection_interaction(
         &mut self,
+        document: &DocumentModel,
         request: BeginSelectionInteractionRequest,
     ) -> InteractionOutput {
+        let original_magnifiers = request
+            .original_elements
+            .iter()
+            .filter_map(|value| {
+                document
+                    .magnifier(value.id)
+                    .ok()
+                    .map(|magnifier| (value.id, *magnifier))
+            })
+            .collect();
         self.state.interaction = match request.target {
             SelectionHitTarget::Move => {
                 InteractionState::PendingSelectionMove(PendingSelectionMoveState {
+                    original_magnifiers,
                     duplicate: false,
                     pointer_id: request.pointer_id,
                     button: request.button,
@@ -71,6 +83,7 @@ impl Editor {
             }
             _ => InteractionState::EditingSelection(self.begin_selection_edit_state(
                 BeginSelectionEditRequest {
+                    original_magnifiers,
                     pointer_id: request.pointer_id,
                     button: request.button,
                     original_elements: request.original_elements,
@@ -115,6 +128,16 @@ impl Editor {
                     start_view_position: event.position,
                 })
             }
+            ArrowHitTarget::AngleArc => InteractionState::EditingArrow(EditArrowState {
+                pointer_id: event.pointer_id,
+                arrow_id,
+                preview_arrow: original_arrow.clone(),
+                original_arrow,
+                mode: ArrowEditMode::AngleArc,
+                start_canvas_position: canvas_point,
+                drag_offset: Point::new(0.0, 0.0),
+                suggested_binding: None,
+            }),
             ArrowHitTarget::Endpoint(edge) => InteractionState::EditingArrow(EditArrowState {
                 pointer_id: event.pointer_id,
                 arrow_id,
@@ -184,17 +207,20 @@ impl Editor {
             &original_elements,
             &original_arrows,
         );
-        self.begin_selection_interaction(BeginSelectionInteractionRequest {
-            pointer_id: event.pointer_id,
-            button: event.button.unwrap_or(PointerButton::Primary),
-            start_view_position: event.position,
-            original_elements,
-            original_arrows,
-            original_bounds: bounds,
-            target,
-            canvas_point,
-            frame_padding,
-        })
+        self.begin_selection_interaction(
+            document,
+            BeginSelectionInteractionRequest {
+                pointer_id: event.pointer_id,
+                button: event.button.unwrap_or(PointerButton::Primary),
+                start_view_position: event.position,
+                original_elements,
+                original_arrows,
+                original_bounds: bounds,
+                target,
+                canvas_point,
+                frame_padding,
+            },
+        )
     }
 
     fn begin_element_selection_move(
@@ -219,17 +245,20 @@ impl Editor {
             &original_elements,
             &original_arrows,
         );
-        self.begin_selection_interaction(BeginSelectionInteractionRequest {
-            pointer_id: event.pointer_id,
-            button: event.button.unwrap_or(PointerButton::Primary),
-            start_view_position: event.position,
-            original_elements,
-            original_arrows,
-            original_bounds: bounds,
-            target: SelectionHitTarget::Move,
-            canvas_point,
-            frame_padding,
-        })
+        self.begin_selection_interaction(
+            document,
+            BeginSelectionInteractionRequest {
+                pointer_id: event.pointer_id,
+                button: event.button.unwrap_or(PointerButton::Primary),
+                start_view_position: event.position,
+                original_elements,
+                original_arrows,
+                original_bounds: bounds,
+                target: SelectionHitTarget::Move,
+                canvas_point,
+                frame_padding,
+            },
+        )
     }
 
     fn begin_selected_arrow_interaction(
@@ -259,7 +288,9 @@ impl Editor {
         let Some(arrow) = self.arrow_snapshot(document, id) else {
             return InteractionOutput::default();
         };
-        let target = if !arrow.is_distance() && self.arrow_label_hit(document, id, canvas_point) {
+        let target = if !arrow.is_generated_annotation()
+            && self.arrow_label_hit(document, id, canvas_point)
+        {
             ArrowHitTarget::Label
         } else {
             ArrowHitTarget::Move
@@ -403,7 +434,7 @@ impl Editor {
                     canvas_point,
                     event.modifiers,
                 );
-                let preview = self.serial_number_creation_preview(document, center)?;
+                let preview = self.serial_number_creation_preview(center)?;
                 let serial_id = self.queue_serial_number_creation(document, preview)?;
                 self.state.interaction =
                     InteractionState::CreatingSerialNumber(CreateSerialNumberState {
@@ -496,6 +527,25 @@ impl Editor {
             return Ok(output);
         }
         match intent {
+            PrimaryPointerIntent::BeginMagnifierLens { id } => {
+                let original = *document.magnifier(id)?;
+                if !self.state.selection.contains(id) {
+                    self.set_selection_state_with_document(Some(document), vec![id], Some(id));
+                }
+                self.state.interaction = InteractionState::EditingMagnifier(EditMagnifierState {
+                    pointer_id: event.pointer_id,
+                    button: event.button.unwrap_or(PointerButton::Primary),
+                    id,
+                    original,
+                    preview: original,
+                    start: canvas_point,
+                });
+                Ok(InteractionOutput {
+                    consumed: true,
+                    capture: self.capture_command_for_start(event.pointer_id),
+                    cursor: CursorCommand::Set(CursorStyle::Move),
+                })
+            }
             PrimaryPointerIntent::ToggleSelection { id } => {
                 self.toggle_selection(document, id);
                 Ok(InteractionOutput {

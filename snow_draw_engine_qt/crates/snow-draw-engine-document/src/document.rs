@@ -756,7 +756,6 @@ impl RectangleData {
         self.fill = ColorRgba8::default();
         self.stroke = ColorRgba8::default();
         self.stroke_width = 0.0;
-        self.corner_radii = CornerRadii::default();
         self.fill_style = FillStyle::Solid;
         self.stroke_style = StrokeStyle::Solid;
         self.opacity = 1.0;
@@ -768,8 +767,7 @@ impl RectangleData {
     }
 
     pub fn supports_corner_radius(&self) -> bool {
-        self.rectangle_kind == RectangleElementKind::Rectangle
-            && self.highlight_shape == HighlightShape::Rectangle
+        !self.is_highlight() && self.highlight_shape != HighlightShape::Ellipse
     }
 
     pub fn element_kind(&self) -> ElementKind {
@@ -845,8 +843,14 @@ pub struct TextData {
     pub layout: TextLayoutSize,
     pub rotation: f64,
     pub text: String,
+    /// Extra local padding measured by the host for glyph overhangs.
+    pub text_ink_reserve: f64,
     pub color: ColorRgba8,
     pub font_size: f64,
+    #[serde(default)]
+    pub bold: bool,
+    #[serde(default)]
+    pub italic: bool,
     pub font_family: Option<String>,
     pub fill: ColorRgba8,
     pub fill_style: FillStyle,
@@ -893,6 +897,8 @@ pub struct SerialNumberData {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ElementData {
     Rectangle(RectangleData),
+    SpeechBubble(crate::SpeechBubbleData),
+    Magnifier(crate::MagnifierData),
     Filter(FilterData),
     PenFilter(PenFilterData),
     Arrow(ArrowData),
@@ -902,9 +908,21 @@ pub enum ElementData {
 }
 
 impl ElementData {
+    /// Normalize legacy angles at import boundaries, before strict validation.
+    pub fn normalize_angle_invariant(&mut self) -> Result<(), ErrorCode> {
+        if let Self::Arrow(arrow) = self
+            && arrow.is_angle()
+        {
+            crate::normalize_angle_in_place(arrow)?;
+        }
+        Ok(())
+    }
+
     pub fn kind(&self) -> ElementKind {
         match self {
             Self::Rectangle(rect) => rect.element_kind(),
+            Self::SpeechBubble(_) => ElementKind::SpeechBubble,
+            Self::Magnifier(_) => ElementKind::Magnifier,
             Self::Filter(filter) => {
                 if filter.auto_region_id.is_some() {
                     ElementKind::AutoFilter
@@ -924,9 +942,26 @@ impl ElementData {
         self.kind().is_filter()
     }
 
+    /// Tests geometry only; callers choose visibility, locking, and filter eligibility.
+    pub fn hit_test(&self, point: Point<f64>, hit_tolerance: f64) -> bool {
+        match self {
+            Self::Rectangle(rect) => rectangle_hit_test(rect, point, hit_tolerance),
+            Self::SpeechBubble(value) => crate::speech_bubble_hit_test(value, point, hit_tolerance),
+            Self::Magnifier(value) => crate::magnifier_hit_test(value, point, hit_tolerance),
+            Self::Filter(filter) => crate::filter_hit_test(filter, point, hit_tolerance),
+            Self::PenFilter(filter) => crate::pen_filter_hit_test(filter, point, hit_tolerance),
+            Self::Arrow(arrow) => arrow_hit_test(arrow, point, hit_tolerance),
+            Self::FreeDraw(free_draw) => free_draw_hit_test(free_draw, point, hit_tolerance),
+            Self::Text(text) => text_hit_test(text, point, hit_tolerance),
+            Self::SerialNumber(serial) => serial_number_hit_test(serial, point, hit_tolerance),
+        }
+    }
+
     pub(crate) fn bounds(&self) -> DrawRect {
         match self {
             Self::Rectangle(rect) => rect_bounds(rect),
+            Self::SpeechBubble(value) => crate::speech_bubble_bounds(value),
+            Self::Magnifier(value) => crate::magnifier_interaction_bounds(value),
             Self::Filter(filter) => filter_bounds(filter),
             Self::PenFilter(filter) => pen_filter_bounds(filter),
             Self::Arrow(arrow) => arrow_bounds(arrow),
@@ -941,6 +976,10 @@ impl ElementData {
     pub fn state_rect(&self) -> DrawRect {
         match self {
             Self::Rectangle(rect) => centered_rect(rect.center, rect.width, rect.height),
+            Self::SpeechBubble(value) => {
+                centered_rect(value.body.center, value.body.width, value.body.height)
+            }
+            Self::Magnifier(value) => centered_rect(value.source_center, value.width, value.height),
             Self::Filter(filter) => centered_rect(filter.center, filter.width, filter.height),
             Self::PenFilter(filter) => DrawRect::new(
                 filter.x,
@@ -948,6 +987,16 @@ impl ElementData {
                 filter.x + filter.width,
                 filter.y + filter.height,
             ),
+            Self::Arrow(arrow) if arrow.is_angle() => {
+                let bounds = arrow_bounds(arrow);
+                let half_stroke = arrow.stroke_width.max(0.0) / 2.0;
+                DrawRect::new(
+                    bounds.min_x + half_stroke,
+                    bounds.min_y + half_stroke,
+                    bounds.max_x - half_stroke,
+                    bounds.max_y - half_stroke,
+                )
+            }
             Self::Arrow(arrow) => DrawRect::new(
                 arrow.x,
                 arrow.y,
@@ -970,6 +1019,8 @@ impl ElementData {
     pub fn rotation(&self) -> f64 {
         match self {
             Self::Rectangle(rect) => rect.rotation,
+            Self::SpeechBubble(value) => value.body.rotation,
+            Self::Magnifier(value) => value.rotation,
             Self::Filter(filter) => filter.rotation,
             Self::PenFilter(filter) => filter.rotation,
             Self::Arrow(arrow) => arrow.rotation,
@@ -982,6 +1033,8 @@ impl ElementData {
     pub fn opacity(&self) -> f64 {
         match self {
             Self::Rectangle(rect) => rect.opacity,
+            Self::SpeechBubble(value) => value.body.opacity,
+            Self::Magnifier(value) => value.opacity,
             Self::Filter(filter) => filter.opacity,
             Self::PenFilter(filter) => filter.opacity,
             Self::Arrow(arrow) => arrow.opacity,
@@ -1004,6 +1057,7 @@ fn centered_rect(center: Point<f64>, width: f64, height: f64) -> DrawRect {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ElementKind {
     Rectangle,
+    Magnifier,
     Arrow,
     Line,
     FreeDraw,
@@ -1016,6 +1070,8 @@ pub enum ElementKind {
     Spotlight,
     AutoFilter,
     Distance,
+    Angle,
+    SpeechBubble,
 }
 
 impl ElementKind {
@@ -1024,6 +1080,7 @@ impl ElementKind {
         match self {
             Self::Filter | Self::AutoFilter | Self::PenFilter => true,
             Self::Rectangle
+            | Self::Magnifier
             | Self::Arrow
             | Self::Line
             | Self::FreeDraw
@@ -1032,7 +1089,9 @@ impl ElementKind {
             | Self::Text
             | Self::SerialNumber
             | Self::Spotlight
-            | Self::Distance => false,
+            | Self::Distance
+            | Self::Angle => false,
+            Self::SpeechBubble => false,
         }
     }
 }
@@ -1060,7 +1119,7 @@ pub struct ElementState<'a> {
     pub data: &'a ElementData,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Document {
     pub(crate) slots: Vec<Option<ElementRecord>>,
     pub(crate) paint_order: Vec<ElementId>,
@@ -1070,6 +1129,22 @@ pub struct Document {
     spotlight: SpotlightConfig,
     #[serde(default)]
     pub(crate) auto_filter_regions: Option<crate::AutoFilterRegionRecord>,
+    /// Full synchronization certifies ownership, generated labels, and canonical
+    /// paint order. Deserialized documents must establish these invariants again.
+    #[serde(skip)]
+    annotation_sync_certified: bool,
+}
+
+impl PartialEq for Document {
+    fn eq(&self, other: &Self) -> bool {
+        self.slots == other.slots
+            && self.paint_order == other.paint_order
+            && self.revision == other.revision
+            && self.next_index == other.next_index
+            && self.watermark == other.watermark
+            && self.spotlight == other.spotlight
+            && self.auto_filter_regions == other.auto_filter_regions
+    }
 }
 
 impl ElementData {
@@ -1100,6 +1175,13 @@ impl ElementData {
 }
 
 impl Document {
+    pub fn normalize_angle_invariants(&mut self) -> Result<(), ErrorCode> {
+        for element in self.slots.iter_mut().flatten() {
+            element.data.normalize_angle_invariant()?;
+        }
+        Ok(())
+    }
+
     pub fn normalize_filter_invariants(&mut self) {
         for element in self.slots.iter_mut().flatten() {
             element.data.normalize_smart_erase();
@@ -1162,16 +1244,20 @@ impl Document {
         self.validate_arrow_text_bindings()
     }
 
-    /// Recompute owned distance labels before replaying saved history, which
+    /// Recompute owned annotation labels before replaying saved history, which
     /// may contain font sizes generated by an older sizing rule.
     pub fn normalize_distance_label_invariants(&mut self) -> Result<(), ErrorCode> {
+        self.normalize_generated_annotation_label_invariants()
+    }
+
+    pub fn normalize_generated_annotation_label_invariants(&mut self) -> Result<(), ErrorCode> {
         for (arrow_id, text_id) in self.arrow_text_bindings() {
             let arrow = self.arrow(arrow_id)?;
-            if !arrow.is_distance() {
+            if !arrow.is_generated_annotation() {
                 continue;
             }
             let text = self.text(text_id)?;
-            let derived = crate::distance_label(arrow, Some(text.layout))
+            let derived = crate::generated_annotation_label(arrow, Some(text.layout))
                 .ok_or(ErrorCode::InvalidArgument)?;
             self.lookup_mut(text_id)?.data = ElementData::Text(derived);
         }
@@ -1203,13 +1289,28 @@ impl Document {
 
     fn validate_arrow_text_bindings(&self) -> Result<(), ErrorCode> {
         let mut owned = HashSet::new();
+        let serial_labels: HashSet<_> = self
+            .serial_number_text_bindings()
+            .into_iter()
+            .map(|binding| binding.text_id)
+            .collect();
         for (arrow_id, text_id) in self.arrow_text_bindings() {
             if !matches!(
                 self.arrow(arrow_id)?.linear_kind,
-                crate::LinearElementKind::Arrow | crate::LinearElementKind::Distance
+                crate::LinearElementKind::Arrow
+                    | crate::LinearElementKind::Distance
+                    | crate::LinearElementKind::Angle
             ) || self.text(text_id).is_err()
                 || !owned.insert(text_id)
-                || self.is_text_bound_to_serial_number(text_id)
+                || serial_labels.contains(&text_id)
+            {
+                return Err(ErrorCode::InvalidArgument);
+            }
+        }
+        for (_, text_id) in self.speech_bubble_text_bindings() {
+            if self.text(text_id).is_err()
+                || !owned.insert(text_id)
+                || serial_labels.contains(&text_id)
             {
                 return Err(ErrorCode::InvalidArgument);
             }
@@ -1224,22 +1325,14 @@ impl Document {
     ) -> Result<(), ErrorCode> {
         self.validate_arrow_text_bindings()?;
         let bindings = self.arrow_text_bindings();
-        for (arrow_id, text_id) in &bindings {
-            let arrow = self.arrow(*arrow_id)?;
+        self.synchronize_arrow_text_pairs(&bindings, inverse, changes)?;
+        let bubble_bindings = self.speech_bubble_text_bindings();
+        for (bubble_id, text_id) in &bubble_bindings {
+            let bubble = self.speech_bubble(*bubble_id)?;
             let mut text = self.text(*text_id)?.clone();
-            if let Some(derived) = crate::distance_label(arrow, Some(text.layout)) {
-                text = derived;
-            }
-            text.center = crate::arrow_text_anchor(arrow);
-            text.rotation = 0.0;
-            text.auto_resize = true;
-            let meta = self.element(*arrow_id)?.meta;
-            if self.element(*text_id)?.meta != meta {
-                inverse.push(self.apply_operation(
-                    &Operation::UpdateElementMeta { id: *text_id, meta },
-                    changes,
-                )?);
-            }
+            text.center = bubble.body.center;
+            text.rotation = bubble.body.rotation;
+            let meta = self.element(*bubble_id)?.meta;
             if self.text(*text_id)? != &text {
                 inverse.push(self.apply_operation(
                     &Operation::UpdateElementData {
@@ -1249,7 +1342,14 @@ impl Document {
                     changes,
                 )?);
             }
+            if self.element(*text_id)?.meta != meta {
+                inverse.push(self.apply_operation(
+                    &Operation::UpdateElementMeta { id: *text_id, meta },
+                    changes,
+                )?);
+            }
         }
+        let bindings: Vec<_> = bindings.into_iter().chain(bubble_bindings).collect();
         if !bindings.is_empty() {
             let labels: HashSet<_> = bindings.iter().map(|(_, text)| *text).collect();
             let owners: HashMap<_, _> = bindings.into_iter().collect();
@@ -1274,6 +1374,112 @@ impl Document {
             }
         }
         Ok(())
+    }
+
+    fn synchronize_arrow_text_pairs(
+        &mut self,
+        bindings: &[(ElementId, ElementId)],
+        inverse: &mut Vec<Operation>,
+        changes: &mut DocumentDelta,
+    ) -> Result<(), ErrorCode> {
+        for (arrow_id, text_id) in bindings {
+            let arrow = self.arrow(*arrow_id)?;
+            let mut text = self.text(*text_id)?.clone();
+            if let Some(derived) = crate::generated_annotation_label(arrow, Some(text.layout)) {
+                text = derived;
+            } else {
+                text.center = crate::arrow_text_anchor(arrow);
+            }
+            text.rotation = 0.0;
+            text.auto_resize = true;
+            let meta = self.element(*arrow_id)?.meta;
+            if self.element(*text_id)?.meta != meta {
+                inverse.push(self.apply_operation(
+                    &Operation::UpdateElementMeta { id: *text_id, meta },
+                    changes,
+                )?);
+            }
+            if self.text(*text_id)? != &text {
+                inverse.push(self.apply_operation(
+                    &Operation::UpdateElementData {
+                        id: *text_id,
+                        data: ElementData::Text(text),
+                    },
+                    changes,
+                )?);
+            }
+        }
+        Ok(())
+    }
+
+    /// Only owner/style/measurement updates can retain the full synchronization
+    /// certificate. Resolve owners from the transaction rather than scanning all
+    /// labels; Text-only or structural commands use the general synchronization.
+    fn annotation_sync_pairs_for_transaction(
+        &self,
+        transaction: &Transaction,
+    ) -> Option<Vec<(ElementId, ElementId)>> {
+        if !self.annotation_sync_certified {
+            return None;
+        }
+        let mut owners = HashMap::new();
+        for operation in transaction.operations() {
+            let id = match operation {
+                Operation::UpdateElementData {
+                    id,
+                    data: ElementData::Arrow(next),
+                } => {
+                    let previous = self.arrow(*id).ok()?;
+                    if !previous.is_generated_annotation()
+                        || previous.linear_kind != next.linear_kind
+                        || previous.text_element_id != next.text_element_id
+                        || previous.start_binding != next.start_binding
+                        || previous.end_binding != next.end_binding
+                    {
+                        return None;
+                    }
+                    Some(*id)
+                }
+                Operation::UpdateElementMeta { id, .. } => self
+                    .arrow(*id)
+                    .ok()
+                    .filter(|arrow| arrow.is_generated_annotation())
+                    .map(|_| *id),
+                Operation::UpdateElementData {
+                    data: ElementData::Text(_),
+                    ..
+                } => None,
+                _ => return None,
+            };
+            if let Some(id) = id {
+                owners.insert(id, self.arrow(id).ok()?.text_element_id);
+            }
+        }
+        if owners.is_empty() {
+            return None;
+        }
+        let labels: HashSet<_> = owners.values().copied().flatten().collect();
+        for operation in transaction.operations() {
+            match operation {
+                Operation::UpdateElementData {
+                    id,
+                    data: ElementData::Arrow(_),
+                } if owners.contains_key(id) => {}
+                Operation::UpdateElementData {
+                    id,
+                    data: ElementData::Text(_),
+                } if labels.contains(id) => {}
+                Operation::UpdateElementMeta { id, .. }
+                    if owners.contains_key(id) || labels.contains(id) => {}
+                _ => return None,
+            }
+        }
+        let mut bindings: Vec<_> = owners
+            .into_iter()
+            .filter_map(|(owner, text)| text.map(|text| (owner, text)))
+            .collect();
+        bindings.sort_unstable_by_key(|(owner, _)| *owner);
+        Some(bindings)
     }
 
     pub fn has_same_session_content(&self, other: &Self) -> bool {
@@ -1380,6 +1586,13 @@ impl Document {
         }
     }
 
+    pub fn magnifier(&self, id: ElementId) -> Result<&crate::MagnifierData, ErrorCode> {
+        match &self.element(id)?.data {
+            ElementData::Magnifier(value) => Ok(value),
+            _ => Err(ErrorCode::InvalidArgument),
+        }
+    }
+
     pub fn filter(&self, id: ElementId) -> Result<&FilterData, ErrorCode> {
         match &self.element(id)?.data {
             ElementData::Filter(filter) => Ok(filter),
@@ -1422,13 +1635,54 @@ impl Document {
         }
     }
 
+    pub fn speech_bubble(&self, id: ElementId) -> Result<&crate::SpeechBubbleData, ErrorCode> {
+        match &self.element(id)?.data {
+            ElementData::SpeechBubble(value) => Ok(value),
+            _ => Err(ErrorCode::InvalidArgument),
+        }
+    }
+
+    pub fn speech_bubble_text_bindings(&self) -> Vec<(ElementId, ElementId)> {
+        self.paint_order
+            .iter()
+            .filter_map(|id| {
+                self.speech_bubble(*id)
+                    .ok()?
+                    .text_element_id
+                    .map(|text| (*id, text))
+            })
+            .collect()
+    }
+
+    pub fn bound_text_id_for_speech_bubble(&self, id: ElementId) -> Option<ElementId> {
+        self.speech_bubble(id).ok()?.text_element_id
+    }
+
+    pub fn speech_bubble_id_for_text(&self, text_id: ElementId) -> Option<ElementId> {
+        self.paint_order
+            .iter()
+            .copied()
+            .find(|id| self.bound_text_id_for_speech_bubble(*id) == Some(text_id))
+    }
+
+    pub fn text_owner_id(&self, text_id: ElementId) -> Option<ElementId> {
+        self.arrow_id_for_text(text_id)
+            .or_else(|| self.speech_bubble_id_for_text(text_id))
+    }
+
     pub fn element_kind(&self, id: ElementId) -> Result<ElementKind, ErrorCode> {
         Ok(self.element(id)?.data.kind())
     }
 
     pub fn element_rect_proxy(&self, id: ElementId) -> Option<RectangleData> {
+        if let Ok(value) = self.speech_bubble(id) {
+            return Some(crate::speech_bubble_body_proxy(value));
+        }
         if let Ok(rect) = self.rectangle(id) {
             return Some(*rect);
+        }
+        if let Ok(value) = self.magnifier(id) {
+            return Some(value.source_rect());
         }
         if let Ok(filter) = self.filter(id) {
             return Some(filter_rect_proxy(filter));
@@ -1485,6 +1739,9 @@ impl Document {
         }
 
         let mut inverse = Vec::with_capacity(transaction.operations.len());
+        let annotation_sync_pairs = self.annotation_sync_pairs_for_transaction(transaction);
+        let local_annotation_sync = annotation_sync_pairs.is_some();
+        let start_annotation_sync_certified = self.annotation_sync_certified;
         // Type conversion changes fixed-layer membership. Its inverse must restore
         // the previous ordinary layer position as well as the previous type.
         let previous_order = transaction
@@ -1515,15 +1772,19 @@ impl Document {
                     self.revision = start_revision;
                     self.next_index = start_next_index;
                     self.slots.truncate(start_slots_len);
+                    self.annotation_sync_certified = start_annotation_sync_certified;
                     return Err(error);
                 }
             }
         }
 
-        if let Err(error) = self
-            .validate_auto_filters()
-            .and_then(|()| self.synchronize_arrow_text(&mut inverse, &mut changes))
-        {
+        let synchronized = if let Some(bindings) = annotation_sync_pairs {
+            self.synchronize_arrow_text_pairs(&bindings, &mut inverse, &mut changes)
+        } else {
+            self.validate_auto_filters()
+                .and_then(|()| self.synchronize_arrow_text(&mut inverse, &mut changes))
+        };
+        if let Err(error) = synchronized {
             for operation in inverse.iter().rev() {
                 self.apply_operation(operation, &mut DocumentDelta::default())
                     .expect("document rollback must succeed");
@@ -1531,9 +1792,13 @@ impl Document {
             self.revision = start_revision;
             self.next_index = start_next_index;
             self.slots.truncate(start_slots_len);
+            self.annotation_sync_certified = start_annotation_sync_certified;
             return Err(error);
         }
-        self.normalize_auto_filter_order(&mut changes);
+        if !local_annotation_sync {
+            self.normalize_auto_filter_order(&mut changes);
+        }
+        self.annotation_sync_certified = true;
         inverse.reverse();
         if let Some(ids) = previous_order.filter(|ids| !ids.is_empty()) {
             inverse.push(Operation::ReorderElements {
@@ -1576,31 +1841,17 @@ impl Document {
     ) -> Option<(ElementId, ElementKind)> {
         self.paint_order.iter().rev().find_map(|id| {
             let element = self.element(*id).ok()?;
-            if !element.meta.visible {
+            if !element.meta.visible || element.data.is_filter() {
                 return None;
             }
-            match &element.data {
-                ElementData::Rectangle(rect) if rectangle_hit_test(rect, point, hit_tolerance) => {
-                    Some((*id, ElementKind::Rectangle))
-                }
-                ElementData::Arrow(arrow) if arrow_hit_test(arrow, point, hit_tolerance) => {
-                    Some((*id, arrow.element_kind()))
-                }
-                ElementData::FreeDraw(free_draw)
-                    if free_draw_hit_test(free_draw, point, hit_tolerance) =>
-                {
-                    Some((*id, ElementKind::FreeDraw))
-                }
-                ElementData::Text(text) if text_hit_test(text, point, hit_tolerance) => {
-                    Some((*id, ElementKind::Text))
-                }
-                ElementData::SerialNumber(serial)
-                    if serial_number_hit_test(serial, point, hit_tolerance) =>
-                {
-                    Some((*id, ElementKind::SerialNumber))
-                }
-                _ => None,
-            }
+            let kind = match &element.data {
+                ElementData::Rectangle(_) => ElementKind::Rectangle,
+                data => data.kind(),
+            };
+            element
+                .data
+                .hit_test(point, hit_tolerance)
+                .then_some((*id, kind))
         })
     }
 
@@ -2005,11 +2256,16 @@ fn element_data_has_relations(data: &ElementData) -> bool {
             arrow.text_element_id.is_some() || !arrow.bound_element_ids().is_empty()
         }
         ElementData::SerialNumber(serial) => serial.text_element_id.is_some(),
+        ElementData::SpeechBubble(value) => value.text_element_id.is_some(),
         _ => false,
     }
 }
 
 fn element_data_relation_targets_changed(previous: &ElementData, next: &ElementData) -> bool {
+    if let (ElementData::SpeechBubble(previous), ElementData::SpeechBubble(next)) = (previous, next)
+    {
+        return previous.text_element_id != next.text_element_id;
+    }
     if let (ElementData::SerialNumber(previous), ElementData::SerialNumber(next)) = (previous, next)
     {
         return previous.text_element_id != next.text_element_id;
@@ -2022,6 +2278,254 @@ fn element_data_relation_targets_changed(previous: &ElementData, next: &ElementD
     previous.text_element_id != next.text_element_id
         || previous_ids.len() != next_ids.len()
         || previous_ids.iter().any(|id| !next_ids.contains(id))
+}
+
+#[cfg(test)]
+mod annotation_sync_tests {
+    use super::*;
+    use crate::{
+        AngleAnnotation, DistanceAnnotation, LinearElementKind, generated_annotation_label,
+    };
+    use snow_draw_engine_core::arrow::ArrowType;
+
+    fn fixture() -> (Document, [(ElementId, ElementId); 2]) {
+        let mut document = Document::new();
+        let mut transaction = Transaction::new("create annotations");
+        let mut pairs = [(ElementId::default(), ElementId::default()); 2];
+        for (index, pair) in pairs.iter_mut().enumerate() {
+            let owner = document.allocate_element_id();
+            let label = document.allocate_element_id();
+            let points = if index == 0 {
+                vec![
+                    Point::new(100.0, 0.0),
+                    Point::new(0.0, 0.0),
+                    Point::new(0.0, -100.0),
+                ]
+            } else {
+                vec![Point::new(200.0, 0.0), Point::new(300.0, 0.0)]
+            };
+            let mut arrow = ArrowData::from_global_points(
+                &points,
+                ColorRgba8 {
+                    r: 20,
+                    g: 80,
+                    b: 200,
+                    a: 255,
+                },
+                2.0,
+                StrokeStyle::Solid,
+                ArrowType::Straight,
+                None,
+                None,
+            )
+            .unwrap();
+            if index == 0 {
+                arrow.linear_kind = LinearElementKind::Angle;
+                arrow.angle = Some(AngleAnnotation::default());
+            } else {
+                arrow.linear_kind = LinearElementKind::Distance;
+                arrow.distance = Some(DistanceAnnotation::default());
+            }
+            arrow.text_element_id = Some(label);
+            let text =
+                generated_annotation_label(&arrow, Some(TextLayoutSize::new(72.0, 24.0))).unwrap();
+            transaction.insert_arrow(owner, ElementMeta::default(), arrow);
+            transaction.insert_text(label, ElementMeta::default(), text);
+            *pair = (owner, label);
+        }
+        document.apply(&transaction).unwrap();
+        assert!(document.annotation_sync_certified);
+        (document, pairs)
+    }
+
+    fn owner_update(document: &Document, owner: ElementId) -> Transaction {
+        let mut arrow = document.arrow(owner).unwrap().clone();
+        arrow.stroke_width = 4.0;
+        let mut transaction = Transaction::new("update annotation");
+        transaction.update_arrow(owner, arrow);
+        transaction
+    }
+
+    fn assert_derived_labels(document: &Document, pairs: &[(ElementId, ElementId)]) {
+        for (owner, label) in pairs {
+            let arrow = document.arrow(*owner).unwrap();
+            let text = document.text(*label).unwrap();
+            assert_eq!(
+                text,
+                &generated_annotation_label(arrow, Some(text.layout)).unwrap()
+            );
+            assert_eq!(
+                document.element(*owner).unwrap().meta,
+                document.element(*label).unwrap().meta
+            );
+        }
+    }
+
+    #[test]
+    fn angle_annotation_sync_deserialization_repairs_order_and_unrelated_stale_labels_once() {
+        let (document, pairs) = fixture();
+        let mut saved = serde_json::to_value(&document).unwrap();
+        assert!(saved.get("annotation_sync_certified").is_none());
+        saved["paint_order"] =
+            serde_json::to_value([pairs[0].0, pairs[1].0, pairs[1].1, pairs[0].1]).unwrap();
+        saved["slots"][pairs[1].1.index as usize]["data"]["Text"]["text"] = "stale".into();
+        let mut restored: Document = serde_json::from_value(saved).unwrap();
+        assert!(!restored.annotation_sync_certified);
+        let update = owner_update(&restored, pairs[0].0);
+        assert!(
+            restored
+                .annotation_sync_pairs_for_transaction(&update)
+                .is_none()
+        );
+        let repaired = restored.apply(&update).unwrap();
+        assert!(restored.annotation_sync_certified);
+        assert!(repaired.changes.z_order_changed);
+        assert!(repaired.changes.touched.contains(&pairs[1].1));
+        assert_eq!(restored.paint_order(), document.paint_order());
+        assert_derived_labels(&restored, &pairs);
+
+        let unrelated_label = restored.text(pairs[1].1).unwrap().clone();
+        let mut local = owner_update(&restored, pairs[0].0);
+        let mut arrow = restored.arrow(pairs[0].0).unwrap().clone();
+        arrow.stroke_width = 6.0;
+        local.update_arrow(pairs[0].0, arrow);
+        assert_eq!(
+            restored.annotation_sync_pairs_for_transaction(&local),
+            Some(vec![pairs[0]])
+        );
+        let updated = restored.apply(&local).unwrap();
+        assert!(!updated.changes.z_order_changed);
+        assert!(!updated.changes.touched.contains(&pairs[1].1));
+        assert_eq!(restored.text(pairs[1].1).unwrap(), &unrelated_label);
+        assert_derived_labels(&restored, &pairs);
+        assert!(restored.clone().annotation_sync_certified);
+    }
+
+    #[test]
+    fn angle_annotation_sync_duplicate_ownership_and_failed_local_updates_restore_certificates() {
+        let (mut document, pairs) = fixture();
+        let original = document.clone();
+        let mut duplicate = document.arrow(pairs[1].0).unwrap().clone();
+        duplicate.text_element_id = Some(pairs[0].1);
+        let mut invalid = Transaction::new("duplicate owner");
+        invalid.update_arrow(pairs[1].0, duplicate);
+        assert!(
+            document
+                .annotation_sync_pairs_for_transaction(&invalid)
+                .is_none()
+        );
+        assert_eq!(document.apply(&invalid), Err(ErrorCode::InvalidArgument));
+        assert_eq!(document, original);
+        assert!(document.annotation_sync_certified);
+
+        let mut saved = serde_json::to_value(&document).unwrap();
+        saved["slots"][pairs[1].0.index as usize]["data"]["Arrow"]["text_element_id"] =
+            serde_json::to_value(pairs[0].1).unwrap();
+        let mut raw: Document = serde_json::from_value(saved).unwrap();
+        let raw_original = raw.clone();
+        assert_eq!(
+            raw.apply(&owner_update(&raw, pairs[0].0)),
+            Err(ErrorCode::InvalidArgument)
+        );
+        assert_eq!(raw, raw_original);
+        assert!(!raw.annotation_sync_certified);
+
+        let mut invalid_local = owner_update(&document, pairs[0].0);
+        let mut text = document.text(pairs[0].1).unwrap().clone();
+        text.font_size = 0.0;
+        invalid_local.update_text(pairs[0].1, text);
+        assert_eq!(
+            document.annotation_sync_pairs_for_transaction(&invalid_local),
+            Some(vec![pairs[0]])
+        );
+        assert_eq!(
+            document.apply(&invalid_local),
+            Err(ErrorCode::InvalidArgument)
+        );
+        assert_eq!(document, original);
+        assert!(document.annotation_sync_certified);
+    }
+
+    #[test]
+    fn angle_annotation_sync_multi_owner_transform_measurement_and_undo_remain_local() {
+        let (mut document, pairs) = fixture();
+        let original = document.clone();
+        let mut update = Transaction::new("transform annotations");
+        for (owner, label) in pairs {
+            let mut arrow = document.arrow(owner).unwrap().clone();
+            arrow.x += 20.0;
+            arrow.y -= 30.0;
+            arrow.stroke_width = 8.0;
+            update.update_arrow(owner, arrow);
+            let mut text = document.text(label).unwrap().clone();
+            text.layout = TextLayoutSize::new(96.0, 30.0);
+            update.update_text(label, text);
+        }
+        assert_eq!(
+            document.annotation_sync_pairs_for_transaction(&update),
+            Some(pairs.to_vec())
+        );
+        let applied = document.apply(&update).unwrap();
+        assert!(!applied.changes.z_order_changed);
+        assert_derived_labels(&document, &pairs);
+        assert_eq!(
+            document.annotation_sync_pairs_for_transaction(&applied.inverse),
+            Some(pairs.to_vec())
+        );
+        document.apply(&applied.inverse).unwrap();
+        assert!(document.has_same_session_content(&original));
+        assert!(document.annotation_sync_certified);
+
+        let mut meta = Transaction::new("hide annotation");
+        meta.update_element_meta(
+            pairs[0].0,
+            ElementMeta {
+                visible: false,
+                locked: false,
+            },
+        );
+        assert_eq!(
+            document.annotation_sync_pairs_for_transaction(&meta),
+            Some(vec![pairs[0]])
+        );
+        document.apply(&meta).unwrap();
+        assert_derived_labels(&document, &pairs);
+    }
+
+    #[test]
+    fn angle_annotation_sync_structural_and_unrelated_text_commands_use_full_path() {
+        let (mut document, pairs) = fixture();
+        let original = document.clone();
+        let mut text_only = Transaction::new("modify label");
+        let mut text = document.text(pairs[0].1).unwrap().clone();
+        text.text = "stale".to_owned();
+        text_only.update_text(pairs[0].1, text);
+        assert!(
+            document
+                .annotation_sync_pairs_for_transaction(&text_only)
+                .is_none()
+        );
+        document.apply(&text_only).unwrap();
+        assert_derived_labels(&document, &pairs);
+
+        let mut deletion = Transaction::new("delete annotation");
+        deletion.remove_element(pairs[0].0);
+        deletion.remove_element(pairs[0].1);
+        assert!(
+            document
+                .annotation_sync_pairs_for_transaction(&deletion)
+                .is_none()
+        );
+        let removed = document.apply(&deletion).unwrap();
+        assert!(
+            document
+                .annotation_sync_pairs_for_transaction(&removed.inverse)
+                .is_none()
+        );
+        document.apply(&removed.inverse).unwrap();
+        assert!(document.has_same_session_content(&original));
+        assert_derived_labels(&document, &pairs);
+    }
 }
 
 #[cfg(test)]

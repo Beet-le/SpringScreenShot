@@ -147,6 +147,11 @@ impl Default for CaptureSampleMetadata {
 
 pub(crate) trait MonitorCapturer: Send {
     fn set_cancellation(&mut self, _token: snow_core::cancellation::CancellationToken) {}
+    /// Match a native producer's rate to the stream's effective acquisition rate.
+    /// Zero leaves the producer uncapped within its supported native limits.
+    fn set_target_fps(&mut self, _fps: u32) -> CaptureResult<()> {
+        Ok(())
+    }
     fn set_cursor_visible(&mut self, _visible: bool) -> CaptureResult<()> {
         Ok(())
     }

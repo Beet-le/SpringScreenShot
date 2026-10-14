@@ -2,6 +2,26 @@ use crate::abi::convert::*;
 use crate::abi::handles::*;
 use crate::abi::types::*;
 
+/// Reports whether the runtime still owns a pointer capture, including after document mutations.
+///
+/// # Safety
+/// `runtime` must be a live handle and `out_active` must be writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn snow_runtime_has_pointer_capture(
+    runtime: SnowRuntime,
+    out_active: *mut u8,
+) -> SnowError {
+    ffi_error(|| {
+        if out_active.is_null() {
+            return SnowError::InvalidArgument;
+        }
+        ffi_status(with_runtime_ref(runtime, |runtime| {
+            write_out(out_active, u8::from(runtime.has_pointer_capture()));
+            Ok(())
+        }))
+    })
+}
+
 /// Returns the topmost element eligible for body selection with the given button.
 /// Coordinates are in canvas space; tolerance comes from the queried viewport.
 ///
@@ -136,6 +156,74 @@ mod tests {
         ActiveTool, InputEvent, Modifiers, Point, PointerButton, PointerButtons, PointerDevice,
         PointerEvent, PointerEventType, Runtime, ViewportConfig,
     };
+
+    #[test]
+    fn pointer_capture_query_tracks_input_and_mutation_cancellation() {
+        let mut state = SnowRuntimeImpl {
+            runtime: Runtime::default(),
+        };
+        let viewport = state
+            .runtime
+            .create_viewport(ViewportConfig::default())
+            .unwrap();
+        state
+            .runtime
+            .set_viewport_surface_size(viewport, 800, 600)
+            .unwrap();
+        state
+            .runtime
+            .set_viewport_active_tool(viewport, ActiveTool::Magnifier)
+            .unwrap();
+        let mut active = 99;
+        unsafe {
+            assert_eq!(
+                snow_runtime_has_pointer_capture(&mut state, &mut active),
+                SnowError::Ok
+            );
+            assert_eq!(active, 0);
+            assert_eq!(
+                snow_runtime_has_pointer_capture(&mut state, std::ptr::null_mut()),
+                SnowError::InvalidArgument
+            );
+            assert_eq!(
+                snow_runtime_has_pointer_capture(std::ptr::null_mut(), &mut active),
+                SnowError::InvalidArgument
+            );
+        }
+        state
+            .runtime
+            .process_input(
+                viewport,
+                InputEvent::Pointer(PointerEvent {
+                    pointer_id: 7,
+                    event_type: PointerEventType::Down,
+                    device: PointerDevice::Mouse,
+                    position: Point::new(350.0, 260.0),
+                    button: Some(PointerButton::Primary),
+                    buttons: PointerButtons(PointerButtons::PRIMARY),
+                    modifiers: Modifiers::default(),
+                }),
+            )
+            .unwrap();
+        unsafe {
+            assert_eq!(
+                snow_runtime_has_pointer_capture(&mut state, &mut active),
+                SnowError::Ok
+            );
+            assert_eq!(active, 1);
+        }
+        state
+            .runtime
+            .reset_editing_state_with_viewport_changes(viewport)
+            .unwrap();
+        unsafe {
+            assert_eq!(
+                snow_runtime_has_pointer_capture(&mut state, &mut active),
+                SnowError::Ok
+            );
+            assert_eq!(active, 0);
+        }
+    }
 
     #[test]
     fn right_quick_selection_query_reports_hits_misses_and_invalid_arguments() {

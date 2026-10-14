@@ -25,6 +25,7 @@ macro_rules! identity {
 identity!(PRODUCT, "snow-shot", "snow-shot-mini");
 identity!(PRODUCT_NAME, "Snow Shot", "Snow Shot Mini");
 identity!(REGISTRY_NAME, "SnowShot", "SnowShotMini");
+identity!(SHELL_VERB, "SnowShot.Edit", "SnowShotMini.Edit");
 identity!(APP_PATH, "bin/snow_shot.exe", "bin/snow_shot_mini.exe");
 identity!(
     UPDATER_PATH,

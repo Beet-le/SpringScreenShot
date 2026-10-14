@@ -18,7 +18,7 @@ use snow_capture::{
 };
 use snow_core::recording_clock::RecordingClock;
 use snow_cursor::{AttachedCursorSample, CursorCompositionMode, CursorShape, CursorShapeState};
-use snow_recording_export::resize::NearestResizePlan;
+use snow_recording_export::resize::RecordingResizePlan;
 use snow_recording_export::{
     ExportExecutionMode, ExportFormat, SoftwareH264Priority, StreamingAudioConfig,
     StreamingEncoder, StreamingEncoderBuilder, StreamingEncoderConfig, StreamingEncoderReport,
@@ -665,9 +665,9 @@ impl DirectRecordingSession {
         Ok(())
     }
 
-    /// Bench-only (`bench-synthetic-input` builds): drive the overlay inputs
-    /// with synthetic observations instead of OS input injection. The hooks
-    /// stay installed; only the event source changes.
+    /// The historical half-resize flag is retained for benchmark compatibility.
+    /// Filtered recording always uses its pixel-equivalent 2:1 specialization;
+    /// the optional direct-output experiment bypasses overlay restoration.
     #[cfg(feature = "bench-synthetic-input")]
     pub fn set_bench_pixel_paths(&mut self, half_resize: bool, direct_output: bool) -> Result<()> {
         if self.state() != RecordingState::Created {
@@ -2621,7 +2621,7 @@ struct VisualCompositor {
     output_size: (u32, u32),
     background: RasterBuffer,
     rgba: RasterBuffer,
-    resize_plan: Option<NearestResizePlan>,
+    resize_plan: Option<RecordingResizePlan>,
     resize_pool: Option<rayon::ThreadPool>,
     resize_domain: Option<ResizeFrameDomain>,
     effective_resize_threads: usize,
@@ -2734,18 +2734,13 @@ impl VisualCompositor {
             .as_ref()
             .is_none_or(|plan| !plan.matches(source_size, self.output_size));
         if geometry_changed {
-            self.resize_plan = Some(NearestResizePlan::new(
+            self.resize_plan = Some(RecordingResizePlan::new(
                 source_size.0,
                 source_size.1,
                 self.output_size.0,
                 self.output_size.1,
             ));
         }
-        #[cfg(any(test, feature = "bench-synthetic-input"))]
-        self.resize_plan
-            .as_mut()
-            .unwrap()
-            .set_bench_half_specialization(self.half_resize);
         let bytes = self.output_size.0 as usize * self.output_size.1 as usize * 4;
         #[cfg(any(test, feature = "bench-synthetic-input"))]
         if self.direct_output
@@ -3060,30 +3055,6 @@ impl VisualCompositor {
         self.input_effects
             .has_active_animation(effects, timestamp_ms)
     }
-}
-
-#[cfg(test)]
-fn resize_rgba(source: &[u8], source_size: (u32, u32), output_size: (u32, u32)) -> RasterBuffer {
-    let (source_width, source_height) = source_size;
-    let (output_width, output_height) = output_size;
-    if source_size == output_size {
-        return RasterBuffer::from(source);
-    }
-    let mut output = RasterBuffer::zeroed(output_width as usize * output_height as usize * 4);
-    for y in 0..output_height {
-        let source_y = (u64::from(y) * u64::from(source_height) / u64::from(output_height)) as u32;
-        for x in 0..output_width {
-            let source_x =
-                (u64::from(x) * u64::from(source_width) / u64::from(output_width)) as u32;
-            let source_index = (source_y as usize * source_width as usize + source_x as usize) * 4;
-            let output_index = (y as usize * output_width as usize + x as usize) * 4;
-            if source_index + 4 <= source.len() {
-                output[output_index..output_index + 4]
-                    .copy_from_slice(&source[source_index..source_index + 4]);
-            }
-        }
-    }
-    output
 }
 
 fn mark_cursor_rows(
@@ -3988,7 +3959,7 @@ mod tests {
         let frame = CapturedFrame::from(frame);
         let mut compositor = VisualCompositor::new((2, 2));
         let first = compositor.compose(&config(), &frame, 0).unwrap();
-        assert_eq!(first, resize_rgba(frame.as_rgba_bytes(), (4, 4), (2, 2)));
+        assert_eq!(first, vec![90; 16]);
         compositor.rgba = first;
         compositor.rgba.fill(255);
         assert_eq!(
@@ -4041,8 +4012,56 @@ mod tests {
     #[test]
     fn source_coordinates_scale_into_output_space() {
         assert_eq!(scale_point(100, 50, (200, 100), (100, 50)), (50, 25));
-        let source = vec![255u8; 4 * 4 * 4];
-        assert_eq!(resize_rgba(&source, (4, 4), (2, 2)).len(), 16);
+    }
+
+    #[test]
+    fn downscaled_recording_preserves_thin_detail_at_both_pixel_phases() {
+        let mut config = config();
+        config.show_cursor = false;
+        for horizontal in [false, true] {
+            for phase in [0, 1] {
+                let pixels = (0..16)
+                    .flat_map(|i| {
+                        let coordinate = if horizontal { i / 4 } else { i % 4 };
+                        let value = if coordinate % 2 == phase { 0 } else { 255 };
+                        [value, value, value, 255]
+                    })
+                    .collect();
+                let frame: CapturedFrame = snow_capture::frame::Frame::from_rgba8(4, 4, pixels)
+                    .unwrap()
+                    .into();
+                let mut compositor = VisualCompositor::new((2, 2));
+                let output = compositor.compose(&config, &frame, 0).unwrap();
+                // Point sampling made one phase disappear and the other fill
+                // the frame. Each output pixel covers both source phases.
+                assert_eq!(&*output, &[128, 128, 128, 255].repeat(4));
+            }
+        }
+    }
+
+    #[test]
+    fn fractional_recording_downscale_retains_a_one_pixel_stroke_and_native_pixels() {
+        let pixels: Vec<_> = (0..35)
+            .flat_map(|i| {
+                let value = if i % 7 == 1 { 0 } else { 255 };
+                [value, value, value, 255]
+            })
+            .collect();
+        let frame: CapturedFrame = snow_capture::frame::Frame::from_rgba8(7, 5, pixels.clone())
+            .unwrap()
+            .into();
+        let mut config = config();
+        config.show_cursor = false;
+        let mut compositor = VisualCompositor::new((3, 2));
+        let output = compositor.compose(&config, &frame, 0).unwrap();
+        for row in output.chunks_exact(12) {
+            assert_eq!(
+                row,
+                &[146, 146, 146, 255, 255, 255, 255, 255, 255, 255, 255, 255]
+            );
+        }
+        let mut native = VisualCompositor::new((7, 5));
+        assert_eq!(&*native.compose(&config, &frame, 0).unwrap(), &pixels);
     }
 
     #[test]

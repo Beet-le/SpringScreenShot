@@ -1,9 +1,11 @@
 use rayon::prelude::*;
 use snow_memory::RasterBuffer;
+use std::ops::Range;
 
-use crate::{Geometry, StitchAxis, orb::Image};
+use crate::{Frame, Geometry, StitchAxis, orb, orb::Image};
 
 const FULL_RESOLUTION_EXTENT: u32 = 512;
+const ROWS_PER_CHUNK: usize = 16;
 
 fn retained_extent(extent: u32) -> u32 {
     if extent <= FULL_RESOLUTION_EXTENT {
@@ -17,7 +19,7 @@ fn retained_extent(extent: u32) -> u32 {
 #[derive(Debug)]
 struct AreaBin {
     first: usize,
-    weights: Vec<u64>,
+    weights: Range<usize>,
 }
 
 #[derive(Debug)]
@@ -26,6 +28,7 @@ pub(crate) struct SamplingPlan {
     source: u32,
     target: u32,
     bins: Vec<AreaBin>,
+    weights: Vec<u64>,
 }
 
 impl SamplingPlan {
@@ -40,6 +43,7 @@ impl SamplingPlan {
             source,
             target: source,
             bins: Vec::new(),
+            weights: Vec::new(),
         }
     }
 
@@ -50,6 +54,7 @@ impl SamplingPlan {
         };
         let target = retained_extent(source);
         let mut bins = Vec::new();
+        let mut weights = Vec::new();
         if target < source {
             // Integer overlap lengths share a denominator, avoiding floating-point
             // boundary errors and giving every output pixel exactly source weight.
@@ -59,12 +64,14 @@ impl SamplingPlan {
                 let start = index * source;
                 let end = start + source;
                 let first = start / target;
-                let weights = (first..end.div_ceil(target))
-                    .map(|pixel| end.min((pixel + 1) * target) - start.max(pixel * target))
-                    .collect();
+                let weight_start = weights.len();
+                weights.extend(
+                    (first..end.div_ceil(target))
+                        .map(|pixel| end.min((pixel + 1) * target) - start.max(pixel * target)),
+                );
                 bins.push(AreaBin {
                     first: first as usize,
-                    weights,
+                    weights: weight_start..weights.len(),
                 });
             }
         }
@@ -73,6 +80,7 @@ impl SamplingPlan {
             source,
             target,
             bins,
+            weights,
         }
     }
 
@@ -98,6 +106,103 @@ impl SamplingPlan {
         }
     }
 
+    // Convert before averaging: ORB rounds each source luminance to u8, so
+    // averaging RGB values first would change pixels and feature decisions.
+    // Only row-sized scratch is retained instead of a full-resolution raster.
+    pub(crate) fn apply_frame(&self, frame: &Frame) -> Image {
+        if !self.reduced() {
+            return orb::grayscale(frame);
+        }
+        let source_width = frame.width() as usize;
+        let source_stride = source_width * frame.pixel_format().channels() as usize;
+        let channels = frame.pixel_format().channels() as usize;
+        let (width, height) = self.dimensions(frame.geometry());
+        let source = frame.pixels();
+        let mut pixels = RasterBuffer::zeroed(width * height);
+        match self.axis {
+            StitchAxis::Vertical => {
+                pixels
+                    .par_chunks_mut(width * ROWS_PER_CHUNK)
+                    .enumerate()
+                    .for_each_init(
+                        || vec![0_u8; if channels == 1 { 0 } else { source_width }],
+                        |gray, (chunk_index, output)| {
+                            for (row_index, row) in output.chunks_mut(width).enumerate() {
+                                let source_start =
+                                    (chunk_index * ROWS_PER_CHUNK + row_index) * source_stride;
+                                let source_row =
+                                    &source[source_start..source_start + source_stride];
+                                let values = if channels == 1 {
+                                    source_row
+                                } else {
+                                    orb::grayscale_chunk(source_row, gray, channels);
+                                    gray.as_slice()
+                                };
+                                for (value, bin) in row.iter_mut().zip(&self.bins) {
+                                    let sum: u64 = self.weights[bin.weights.clone()]
+                                        .iter()
+                                        .zip(&values[bin.first..])
+                                        .map(|(weight, pixel)| weight * u64::from(*pixel))
+                                        .sum();
+                                    *value = self.round_average(sum);
+                                }
+                            }
+                        },
+                    );
+            }
+            StitchAxis::Horizontal => {
+                pixels
+                    .par_chunks_mut(width * ROWS_PER_CHUNK)
+                    .enumerate()
+                    .for_each_init(
+                        || {
+                            (
+                                vec![0_u8; if channels == 1 { 0 } else { source_width }],
+                                vec![0_u64; source_width],
+                            )
+                        },
+                        |(gray, sums), (chunk_index, output)| {
+                            let mut cached_row = usize::MAX;
+                            for (row_index, row) in output.chunks_mut(width).enumerate() {
+                                sums.fill(0);
+                                let bin = &self.bins[chunk_index * ROWS_PER_CHUNK + row_index];
+                                for (index, weight) in
+                                    self.weights[bin.weights.clone()].iter().enumerate()
+                                {
+                                    let source_y = bin.first + index;
+                                    let source_start = source_y * source_stride;
+                                    let source_row =
+                                        &source[source_start..source_start + source_stride];
+                                    let values = if channels == 1 {
+                                        source_row
+                                    } else {
+                                        // Adjacent bins may share their boundary source row.
+                                        if cached_row != source_y {
+                                            orb::grayscale_chunk(source_row, gray, channels);
+                                            cached_row = source_y;
+                                        }
+                                        gray.as_slice()
+                                    };
+                                    for (sum, pixel) in sums.iter_mut().zip(values) {
+                                        *sum += weight * u64::from(*pixel);
+                                    }
+                                }
+                                for (value, sum) in row.iter_mut().zip(sums.iter()) {
+                                    *value = self.round_average(*sum);
+                                }
+                            }
+                        },
+                    );
+            }
+        }
+        Image::from_buffer(width, height, pixels)
+    }
+
+    fn round_average(&self, sum: u64) -> u8 {
+        ((sum + u64::from(self.source) / 2) / u64::from(self.source)) as u8
+    }
+
+    #[cfg(test)]
     pub(crate) fn apply(&self, image: Image) -> Image {
         if !self.reduced() {
             return image;
@@ -117,15 +222,14 @@ impl SamplingPlan {
                         StitchAxis::Vertical => (&self.bins[x], y * image.width, 1),
                         StitchAxis::Horizontal => (&self.bins[y], x, image.width),
                     };
-                    let sum: u64 = bin
-                        .weights
+                    let sum: u64 = self.weights[bin.weights.clone()]
                         .iter()
                         .enumerate()
                         .map(|(index, weight)| {
                             u64::from(source_pixels[base + (bin.first + index) * stride]) * weight
                         })
                         .sum();
-                    *value = ((sum + u64::from(self.source) / 2) / u64::from(self.source)) as u8;
+                    *value = self.round_average(sum);
                 }
             });
         Image::from_buffer(width, height, pixels)
@@ -225,8 +329,9 @@ mod tests {
         let plan = SamplingPlan::new(geometry(1024, 1), StitchAxis::Vertical);
         let mut coverage = vec![0_u64; 1024];
         for bin in &plan.bins {
-            assert_eq!(bin.weights.iter().sum::<u64>(), 1024);
-            for (index, weight) in bin.weights.iter().enumerate() {
+            let weights = &plan.weights[bin.weights.clone()];
+            assert_eq!(weights.iter().sum::<u64>(), 1024);
+            for (index, weight) in weights.iter().enumerate() {
                 coverage[bin.first + index] += weight;
             }
         }
@@ -261,10 +366,58 @@ mod tests {
                     .collect();
                 let frame = Frame::new(width, 3, format, pixels).unwrap();
                 assert_eq!(plan.apply(orb::grayscale(&frame)), expected);
+                assert_eq!(plan.apply_frame(&frame), expected);
             }
             if width <= 512 {
                 assert_eq!(expected.pixels, gray);
                 assert_eq!(plan.source_coordinates(1.25, 2.5), (1.25, 2.5));
+            }
+        }
+    }
+
+    fn varied_frame(width: u32, height: u32, format: PixelFormat) -> Frame {
+        let mut state = 0x5a17_d8e3_u32;
+        let pixels = (0..width as usize * height as usize * format.channels() as usize)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                state as u8
+            })
+            .collect();
+        Frame::new(width, height, format, pixels).unwrap()
+    }
+
+    #[test]
+    fn fused_grayscale_sampling_matches_two_pass_for_formats_axes_bins_and_chunk_boundaries() {
+        for axis in [StitchAxis::Vertical, StitchAxis::Horizontal] {
+            for cross in [127, 512, 513, 514, 1024, 1537, 3840] {
+                for primary in [1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 65] {
+                    let (width, height) = match axis {
+                        StitchAxis::Vertical => (cross, primary),
+                        StitchAxis::Horizontal => (primary, cross),
+                    };
+                    for format in [PixelFormat::Gray8, PixelFormat::Rgb8, PixelFormat::Rgba8] {
+                        let frame = varied_frame(width, height, format);
+                        let plan = SamplingPlan::new(frame.geometry(), axis);
+                        assert_eq!(
+                            plan.apply_frame(&frame),
+                            plan.apply(orb::grayscale(&frame)),
+                            "{width}x{height} {format} {axis:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fused_full_resolution_plan_preserves_large_color_frames() {
+        for axis in [StitchAxis::Vertical, StitchAxis::Horizontal] {
+            for format in [PixelFormat::Gray8, PixelFormat::Rgb8, PixelFormat::Rgba8] {
+                let frame = varied_frame(1024, 33, format);
+                let plan = SamplingPlan::full_resolution(frame.geometry(), axis);
+                assert_eq!(plan.apply_frame(&frame), orb::grayscale(&frame));
             }
         }
     }

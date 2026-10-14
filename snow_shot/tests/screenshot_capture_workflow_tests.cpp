@@ -121,7 +121,18 @@ class CaptureRuntime final : public ScreenshotCaptureRuntimePort {
     void resetForNewCapture(ScreenshotDisplaySession&) override {
         ++resetForNewCaptureCalls;
     }
-    void prepareDisplayModels(ScreenshotDisplaySession&) override {}
+    void prepareDisplayModels(ScreenshotDisplaySession&) override {
+        operations.push_back(QStringLiteral("prepare-models"));
+    }
+    void prepareOverlayBackingStores(const ScreenshotDisplaySession& displaySession) override {
+        ++prepareOverlayBackingStoreCalls;
+        operations.push_back(QStringLiteral("prepare-backing-store"));
+        backingStoreSawResolvedLayout =
+            displaySession.startup && displaySession.startup->displays != nullptr;
+        displaySession.forEachActiveDisplay([&](qsizetype, const CapturedDisplayModel& display) {
+            backingStoreSawResolvedLayout &= display.geometryResolved && display.image.isNull();
+        });
+    }
     void applyDisplayModels(ScreenshotDisplaySession&) override {
         ++applyDisplayModelsCalls;
     }
@@ -214,6 +225,8 @@ class CaptureRuntime final : public ScreenshotCaptureRuntimePort {
     QVector<ScreenshotOverlayShowMode> showOverlayModes;
     int applyDisplayModelsCalls = 0;
     int preparePreCaptureOverlayCalls = 0;
+    int prepareOverlayBackingStoreCalls = 0;
+    bool backingStoreSawResolvedLayout = false;
     int hideOverlayCalls = 0;
     int hideOverlayImmediatelyCalls = 0;
     int releaseSelectionPreviewCacheCalls = 0;
@@ -440,6 +453,7 @@ void captureRestoresSelectionPreferencesAfterReset() {
             state, runtime, geometry, displays, interaction, selection, intelligentSelection, {}};
         int radius = 24;
         int shadowWidth = 12;
+        QColor shadowColor(12, 34, 56);
         bool aspectRatioLocked = true;
         auto aspectRatioPreset = ScreenshotSelectionAspectRatioPreset::Landscape16x9;
         auto regionType = ScreenshotRegionType::Polyline;
@@ -447,6 +461,7 @@ void captureRestoresSelectionPreferencesAfterReset() {
             selection.setRegionType(regionType);
             static_cast<void>(selection.setCornerRadius(radius));
             static_cast<void>(selection.setShadowWidth(shadowWidth));
+            selection.setShadowColor(shadowColor);
             static_cast<void>(selection.setAspectRatioPreset(aspectRatioPreset, {}, 5.0));
             static_cast<void>(selection.setAspectRatioLockEnabled(aspectRatioLocked, 5.0));
         };
@@ -459,6 +474,8 @@ void captureRestoresSelectionPreferencesAfterReset() {
                 "cold and prewarmed captures restore the saved region type");
         require(selection.cornerRadius() == 24 && selection.shadowWidth() == 12,
                 "cold and prewarmed captures must restore effects after resetting the model");
+        require(selection.shadowColor() == shadowColor,
+                "cold and prewarmed captures must retain the restored shadow color");
         require(!selection.hasPixelSelection() && selection.aspectRatioLocked(),
                 "capture startup must restore the lock preference without restoring geometry");
         require(selection.aspectRatioPreset() == aspectRatioPreset,
@@ -472,6 +489,7 @@ void captureRestoresSelectionPreferencesAfterReset() {
         workflow.cancelCapture();
         radius = 32;
         shadowWidth = 16;
+        shadowColor = QColor(90, 120, 150);
         aspectRatioPreset = ScreenshotSelectionAspectRatioPreset::Portrait3x4;
         regionType = ScreenshotRegionType::Curve;
         workflow.startCapture();
@@ -479,6 +497,8 @@ void captureRestoresSelectionPreferencesAfterReset() {
                 "captures after cancellation reload the latest region type");
         require(selection.cornerRadius() == 32 && selection.shadowWidth() == 16,
                 "captures after cancellation must reload the latest saved effects");
+        require(selection.shadowColor() == shadowColor,
+                "captures after cancellation must reload the latest shadow color");
         require(selection.aspectRatioPreset() == aspectRatioPreset,
                 "captures after cancellation reload the latest ratio preference");
         radius = 0;
@@ -492,6 +512,8 @@ void captureRestoresSelectionPreferencesAfterReset() {
         require(selection.cornerRadius() == 0 && selection.shadowWidth() == 0 &&
                     !selection.aspectRatioLocked(),
                 "restarting an active capture must restore disabled selection preferences");
+        require(selection.shadowColor() == shadowColor,
+                "restarting an active capture with shadows disabled must retain their color");
     }
 }
 
@@ -820,6 +842,55 @@ void restartingCaptureReleasesPreviousSelectorCache() {
             "restarting a capture must stop features owned by the previous capture");
 }
 
+void captureEndResetsPresentationBeforeDeferredCleanup() {
+    enum class Ending { Cancel, Export, Restart };
+    for (const auto ending : {Ending::Cancel, Ending::Export, Ending::Restart}) {
+        ScreenshotCaptureState state;
+        state.sessionId = 41;
+        state.sessionState = ScreenshotSessionState::Editing;
+        ScreenshotDisplaySession displays;
+        ScreenshotGeometryMapper geometry;
+        ScreenshotInteractionState interaction;
+        interaction.enterOverlayVisible(false);
+        ScreenshotSelectionModel selection;
+        selection.setSelectionRect(QRectF(10, 20, 100, 80));
+        ScreenshotIntelligentSelectionModel intelligent;
+        CaptureRuntime runtime;
+        int resets = 0;
+        ScreenshotCaptureWorkflowContext context{state,       runtime,   geometry,    displays,
+                                                 interaction, selection, intelligent, {}};
+        context.presentation.resetPresentation = [&]() {
+            ++resets;
+            require(state.sessionId != 41 && interaction.inactive() &&
+                        !selection.hasPixelSelection(),
+                    "presentation retirement must observe the ended epoch and cleared models");
+            require(runtime.releaseColorPickerCalls == 0,
+                    "presentation snapshots must be retired before session resource cleanup");
+        };
+        ScreenshotCaptureWorkflow workflow(std::move(context));
+        switch (ending) {
+        case Ending::Cancel:
+            workflow.cancelCapture();
+            break;
+        case Ending::Export:
+            workflow.cancelCaptureForExport();
+            break;
+        case Ending::Restart:
+            workflow.startCapture();
+            break;
+        }
+        require(resets == 1,
+                "cancel, export and active restart must each retire presentation immediately");
+        if (ending == Ending::Export) {
+            require(runtime.resetForNewCaptureCalls == 0,
+                    "export presentation retirement must not force deferred native cleanup");
+            workflow.completeDeferredExportCleanup();
+            require(resets == 1,
+                    "completing deferred exports must not retire the same presentation twice");
+        }
+    }
+}
+
 void capturePresentedRunsAfterCapturedOverlayIsShown() {
     ScreenshotCaptureState state;
     state.sessionState = ScreenshotSessionState::IdlePrepared;
@@ -949,7 +1020,7 @@ void overlayCapturePrewarmsToolbarSurfaceAfterCaptureDispatch() {
             "session retired it");
 }
 
-void overlayCaptureDoesNotWarmNativeSurfaceAfterCaptureDispatch() {
+void overlayCaptureDoesNotShowWarmSurfaceAfterCaptureDispatch() {
     ScreenshotCaptureState state;
     state.sessionState = ScreenshotSessionState::IdlePrepared;
     ScreenshotDisplaySession displaySession;
@@ -979,7 +1050,7 @@ void overlayCaptureDoesNotWarmNativeSurfaceAfterCaptureDispatch() {
     workflow.startCapture();
     require(runtime.captureAllAsyncCalls == 1 && runtime.showOverlayCalls == 0 &&
                 runtime.showOverlayModes.isEmpty(),
-            "an overlay capture must not warm the native surface after capture is dispatched");
+            "an overlay capture must not show a warmup surface after capture is dispatched");
     require(runtime.prewarmToolbarSawDispatchedCapture,
             "hidden toolbar preparation must still overlap the dispatched capture");
 
@@ -998,7 +1069,57 @@ void overlayCaptureDoesNotWarmNativeSurfaceAfterCaptureDispatch() {
                 runtime.showOverlayCalls == 1 && capturePresentedCalls == 1 &&
                 runtime.showOverlayModes.size() == 1 &&
                 runtime.showOverlayModes.constLast() == ScreenshotOverlayShowMode::CapturedImage,
-            "reveal must present the captured overlay once without an earlier surface warmup");
+            "reveal must present the captured overlay once without an earlier warmup show");
+}
+
+void backingStorePreparationRequiresValidatedVisibleCapture() {
+    using Workflow = ScreenshotCaptureWorkflow;
+    for (const auto mode : {Workflow::StartMode::Normal, Workflow::StartMode::ExternalDrag}) {
+        for (const auto presentation :
+             {Workflow::PresentationMode::Visible, Workflow::PresentationMode::Silent}) {
+            ScreenshotCaptureState state;
+            ScreenshotDisplaySession displays;
+            ScreenshotGeometryMapper geometry;
+            ScreenshotInteractionState interaction;
+            ScreenshotSelectionModel selection;
+            ScreenshotIntelligentSelectionModel intelligent;
+            CaptureRuntime runtime;
+            runtime.seedActiveDisplayOnPrepare = false;
+            auto workflow = makeWorkflow(state, displays, geometry, interaction, selection,
+                                         intelligent, runtime);
+            workflow.prewarmResources();
+            workflow.startCapture(mode, Workflow::ToolbarPreparation::OnDemand,
+                                  Workflow::ToolbarVisibility::ShowAfterSelection, presentation);
+            require(runtime.captureAllAsyncCalls == 1 &&
+                        runtime.prepareOverlayBackingStoreCalls == 0,
+                    "idle preparation and capture dispatch must not allocate backing pixels "
+                    "before layout validation");
+            const quint64 session = state.sessionId;
+            runtime.eventSink->handleLayoutReady({session - 1, session - 1, {}});
+            require(runtime.prepareOverlayBackingStoreCalls == 0,
+                    "stale layouts must not start backing-store preparation");
+            runtime.deliverLayout();
+            const int expectedPreparations = presentation == Workflow::PresentationMode::Visible;
+            require(runtime.prepareOverlayBackingStoreCalls == expectedPreparations &&
+                        runtime.showOverlayCalls == 0 && state.captureInProgress,
+                    "only a visible capture with a validated layout may prepare hidden pixels");
+            if (expectedPreparations != 0) {
+                require(runtime.backingStoreSawResolvedLayout &&
+                            runtime.operations.indexOf(QStringLiteral("capture-dispatched")) <
+                                runtime.operations.indexOf(QStringLiteral("prepare-models")) &&
+                            runtime.operations.indexOf(QStringLiteral("prepare-models")) <
+                                runtime.operations.indexOf(QStringLiteral("prepare-backing-store")),
+                        "backing pixels must prepare during acquisition after final geometry");
+            }
+            runtime.deliverLayout();
+            require(runtime.prepareOverlayBackingStoreCalls == expectedPreparations,
+                    "duplicate layouts must not restart preparation");
+            workflow.cancelCapture();
+            runtime.eventSink->handleLayoutReady({session, session, {}});
+            require(runtime.prepareOverlayBackingStoreCalls == expectedPreparations,
+                    "canceled startup must not prepare pixels for a retired session");
+        }
+    }
 }
 
 void displayChangesRefreshWithoutCancelingIdleOrActiveCapture() {
@@ -1134,6 +1255,17 @@ void phasedWorkflowOnlySignalsInitialReadinessOnce() {
     workflow.handleInitialResult(true, {physical(bounds)}, 1);
     require(intelligent.currentSelection() == bounds,
             "permission fallback must apply the window on the queried display");
+    workflow.handleInitialResult(true, {physical(bounds)}, 1);
+    workflow.handleInitialResult(false, {}, 1);
+    require(readyCount == 1 && updates == 1 && selection.normalizedSelection() == bounds,
+            "identical and failed initial results must preserve selection without preparing "
+            "another frame");
+    intelligent.beginCaptureSession(true, ScreenshotIntelligentSelectionTarget::Window);
+    workflow.handleInitialResult(true, {physical(child), physical(parent), physical(bounds)}, 1);
+    require(updates == 1 && intelligent.toggleSelectionTarget() &&
+                intelligent.currentSelection() == child,
+            "an unchanged window marquee must still retain the newly returned child hierarchy");
+    intelligent.beginCaptureSession(true);
     // The first result arrives while the image is still being acquired and the
     // pointer remains stationary. Image arrival must preserve that selection.
     display.image = QImage(200, 200, QImage::Format_RGBA8888);
@@ -1145,6 +1277,11 @@ void phasedWorkflowOnlySignalsInitialReadinessOnce() {
     workflow.handleRefinement({physical(child), physical(parent), physical(bounds)}, 1);
     require(readyCount == 1 && updates == 3 && intelligent.currentSelection() == child,
             "refinement must update presentation without repeating initial readiness");
+    require(intelligent.selectIndex(0), "explicit child selection failed");
+    workflow.handleRefinement({physical(leaf), physical(child), physical(parent), physical(bounds)},
+                              1);
+    require(updates == 3 && intelligent.currentSelection() == child && intelligent.index() == 1,
+            "refinement must retain new levels without preparing an unchanged explicit selection");
     intelligent.beginPress(QPointF(5, 5), child);
     workflow.handleRefinement(
         {physical(leaf), physical(child), physical(parent), physical(bounds)});
@@ -1169,6 +1306,20 @@ void phasedWorkflowOnlySignalsInitialReadinessOnce() {
             "failed selector refresh must switch to manual selection and unblock initial reveal");
     workflow.handleRefreshFinished(false);
     require(readyCount == 3, "failed refresh must resolve initial readiness only once");
+
+    ++state.sessionId;
+    interaction.returnToSelectionMode(true);
+    const int updatesBeforeUnchangedSession = updates;
+    workflow.handleInitialResult(true, {physical(bounds)}, 1);
+    require(readyCount == 4 && updates == updatesBeforeUnchangedSession,
+            "an unchanged selection must still resolve the new capture's first result");
+    workflow.handleInitialResult(true, {QRectF(500, 500, 20, 20)}, 1);
+    require(selection.normalizedSelection().isEmpty() && !intelligent.hasCurrentSelection() &&
+                updates == updatesBeforeUnchangedSession + 1,
+            "an invalid path must clear the displayed selection and hierarchy once");
+    workflow.handleInitialResult(true, {}, 1);
+    require(updates == updatesBeforeUnchangedSession + 1 && readyCount == 4,
+            "repeated empty paths must not prepare another frame");
 }
 
 void phasedSelectionPreservesUserIntent() {
@@ -2185,10 +2336,12 @@ int main() {
     captureOverlapsSelectorInitialization();
     synchronousCaptureFailureDoesNotRestartSelectorRefresh();
     restartingCaptureReleasesPreviousSelectorCache();
+    captureEndResetsPresentationBeforeDeferredCleanup();
     capturePresentedRunsAfterCapturedOverlayIsShown();
     capturedOverlayWaitsForImageAndSelectionInEitherOrder();
     overlayCapturePrewarmsToolbarSurfaceAfterCaptureDispatch();
-    overlayCaptureDoesNotWarmNativeSurfaceAfterCaptureDispatch();
+    overlayCaptureDoesNotShowWarmSurfaceAfterCaptureDispatch();
+    backingStorePreparationRequiresValidatedVisibleCapture();
     displayChangesRefreshWithoutCancelingIdleOrActiveCapture();
     capturedImagePlacementFollowsNormalizedCanvasGeometry();
     intelligentSelectionTargetsPreserveElementPathBehavior();

@@ -150,6 +150,7 @@ pub(crate) fn snow_spotlight_cutout_from_rust(
     value: snow_draw_engine::DisplaySpotlightCutout,
 ) -> SnowSpotlightCutout {
     SnowSpotlightCutout {
+        corner_radii: value.corner_radii.into(),
         center_x: value.center_x,
         center_y: value.center_y,
         width: value.width,
@@ -177,9 +178,67 @@ pub(crate) fn snow_scene_display_item_from_rust(
     omit_arrow_points: bool,
     omit_path_commands: bool,
 ) -> SnowScenePatchItem {
+    if let SceneDisplayItem::SpeechBubble(item) = value {
+        let mut converted = snow_scene_display_item_from_rust(
+            &SceneDisplayItem::Rectangle(item.body),
+            false,
+            false,
+        );
+        converted.view.kind = SnowSceneDisplayItemKind::SpeechBubble;
+        converted.view.arrow_type = snow_arrow_type_from_rust(item.path.arrow_type);
+        converted.view.arrow_stroke_style = snow_stroke_style_from_rust(item.path.stroke_style);
+        encode_bound_text_id(&mut converted.view, item.path.bound_text_id);
+        if !omit_path_commands {
+            converted.arrow_path_commands =
+                snow_arrow_path_commands_from_rust(&item.path.path_commands).into_boxed_slice();
+            converted.view.arrow_path_command_count = converted.arrow_path_commands.len() as u32;
+        }
+        converted.refresh_pointers();
+        return converted;
+    }
+    if let SceneDisplayItem::Magnifier(item) = value {
+        let mut converted = snow_scene_display_item_from_rust(
+            &SceneDisplayItem::Rectangle(item.lens),
+            false,
+            false,
+        );
+        converted.view.kind = SnowSceneDisplayItemKind::Magnifier;
+        converted.view.magnifier = SnowMagnifierGeometry {
+            source_center_x: item.source_center.x,
+            source_center_y: item.source_center.y,
+            source_width: item.source_width,
+            source_height: item.source_height,
+            magnification_factor: item.factor,
+            connection_type: item.connection_type.into(),
+            source_outline: u8::from(item.source_outline),
+            reserved: [0; 3],
+        };
+        if let Some(leader) = &item.leader {
+            let arrow = snow_scene_display_item_from_rust(
+                &SceneDisplayItem::Arrow(leader.clone()),
+                false,
+                false,
+            );
+            converted.view.arrow_point_count = arrow.view.arrow_point_count;
+            converted.view.arrow_path_command_count = arrow.view.arrow_path_command_count;
+            converted.view.arrowhead_primitive_count = arrow.view.arrowhead_primitive_count;
+            converted.view.arrow_type = arrow.view.arrow_type;
+            converted.view.arrow_shaft_type = arrow.view.arrow_shaft_type;
+            converted.view.arrow_ratio = arrow.view.arrow_ratio;
+            converted.view.arrow_start_head = arrow.view.arrow_start_head;
+            converted.view.arrow_end_head = arrow.view.arrow_end_head;
+            converted.view.arrow_stroke_style = arrow.view.arrow_stroke_style;
+            converted.arrow_points = arrow.arrow_points;
+            converted.arrow_path_commands = arrow.arrow_path_commands;
+            converted.arrowhead_primitives = arrow.arrowhead_primitives;
+        }
+        converted.refresh_pointers();
+        return converted;
+    }
     let mut converted = SnowScenePatchItem::default();
     let out = &mut converted.view;
     match value {
+        SceneDisplayItem::Magnifier(_) | SceneDisplayItem::SpeechBubble(_) => unreachable!(),
         SceneDisplayItem::Rectangle(item) => {
             out.kind = SnowSceneDisplayItemKind::DrawRect;
             out.element_id = SnowElementId {
@@ -252,6 +311,7 @@ pub(crate) fn snow_scene_display_item_from_rust(
             }
         }
         SceneDisplayItem::Arrow(item) => {
+            out.arrow_text_overlay = u8::from(item.bound_text_overlay);
             if let Some(bounds) = item.label_bounds {
                 out.arrow_text_bounds = [bounds.min_x, bounds.min_y, bounds.max_x, bounds.max_y];
             }
@@ -299,6 +359,7 @@ pub(crate) fn snow_scene_display_item_from_rust(
             out.arrowhead_primitive_count = converted.arrowhead_primitives.len() as u32;
         }
         SceneDisplayItem::Text(item) => {
+            out.text_ink_reserve = item.text_ink_reserve;
             out.kind = SnowSceneDisplayItemKind::Text;
             out.element_id = SnowElementId {
                 index: item.id.index,
@@ -315,6 +376,8 @@ pub(crate) fn snow_scene_display_item_from_rust(
             out.stroke_width = item.stroke_width;
             out.corner_radii = item.corner_radii.into();
             out.font_size = item.font_size;
+            out.text_bold = u8::from(item.bold);
+            out.text_italic = u8::from(item.italic);
             out.opacity = item.opacity;
             out.content_width = item.content_width;
             out.content_height = item.content_height;
@@ -496,6 +559,11 @@ fn snow_overlay_rect_kind_from_rust(value: UiRectKind) -> SnowOverlayRectKind {
         UiRectKind::ArrowSegmentHandle => SnowOverlayRectKind::ArrowSegmentHandle,
         UiRectKind::EraserCursor => SnowOverlayRectKind::EraserCursor,
         UiRectKind::BindingHighlight => SnowOverlayRectKind::BindingHighlight,
+        UiRectKind::MagnifierMoveHandle => SnowOverlayRectKind::MagnifierMoveHandle,
+        UiRectKind::MagnifierSelectionFrame => SnowOverlayRectKind::MagnifierSelectionFrame,
+        UiRectKind::SpeechBubbleAddTailHandle => SnowOverlayRectKind::SpeechBubbleAddTailHandle,
+        UiRectKind::SpeechBubbleTailBaseHandle => SnowOverlayRectKind::SpeechBubbleTailBaseHandle,
+        UiRectKind::SpeechBubbleTailTipHandle => SnowOverlayRectKind::SpeechBubbleTailTipHandle,
     }
 }
 
@@ -519,6 +587,21 @@ mod tests {
         RectangleDisplayItem, ReplaceRangeOp, SerialNumberDisplayItem, StrokeStyle,
         TextDisplayItem, UiFocusConnectionDisplayItem, UiRectangleDisplayItem, ViewportPatch,
     };
+
+    #[test]
+    fn angle_label_overlay_flag_survives_the_display_bridge() {
+        for overlay in [false, true] {
+            let item = snow_scene_display_item_from_rust(
+                &SceneDisplayItem::Arrow(snow_draw_engine::ArrowDisplayItem {
+                    bound_text_overlay: overlay,
+                    ..Default::default()
+                }),
+                false,
+                false,
+            );
+            assert_eq!(item.view.arrow_text_overlay, u8::from(overlay));
+        }
+    }
 
     #[test]
     fn patch_protocol_layout_and_decoration_payload_are_stable() {
@@ -568,6 +651,7 @@ mod tests {
                     start: 2,
                     delete_count: 1,
                     insert_items: vec![DisplaySpotlightCutout {
+                        corner_radii: snow_draw_engine::CornerRadii::splat(5.0),
                         shape: snow_draw_engine::DisplayRectangleShape::Diamond,
                         center_x: 10.0,
                         center_y: 20.0,
@@ -610,6 +694,7 @@ mod tests {
         assert_eq!(payload.spotlight_cutouts.len(), 1);
         assert_eq!(payload.spotlight_cutouts[0].center_x, 10.0);
         assert_eq!(payload.spotlight_cutouts[0].rotation, 0.5);
+        assert_eq!(payload.spotlight_cutouts[0].corner_radii.top_left, 5.0);
         assert_eq!(
             payload.spotlight_cutouts[0].shape,
             SnowDisplayRectShape::Diamond as u8
@@ -632,7 +717,7 @@ mod tests {
 
     #[test]
     fn compact_display_views_stay_below_the_abi_size_budget() {
-        assert_eq!(std::mem::size_of::<SnowSceneDisplayItem>(), 344);
+        assert_eq!(std::mem::size_of::<SnowSceneDisplayItem>(), 408);
         assert!(std::mem::size_of::<SnowOverlayDisplayItem>() <= 384);
     }
 

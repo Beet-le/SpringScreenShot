@@ -25,6 +25,7 @@
     "snow-shot": {
       "description": "Build the minimal native dependency set required by Snow Shot on the selected architecture.",
       "dependencies": [
+        "giflib",
         { "name": "crashpad", "platform": "windows | osx" },
         {
           "name": "ffmpeg",
@@ -41,6 +42,7 @@
           "platform": "osx"
         },
         { "name": "libpng", "features": ["apng"] },
+        "tinyxml2",
         {
           "name": "libwebp",
           "default-features": false,

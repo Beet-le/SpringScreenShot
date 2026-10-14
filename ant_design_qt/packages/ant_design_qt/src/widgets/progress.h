@@ -199,10 +199,10 @@ class AdProgress final : public QWidget {
 
  private:
   struct Private;
-  void refreshAppearance(bool resolveTheme = false);
+  bool refreshAppearance(bool resolveTheme = false);
   void refreshContent();
-  void refreshValue();
-  void refreshAnimation();
+  bool refreshValue();
+  bool refreshAnimation();
   void animationFrame(qint64 nowMs);
   void notifyAccessibleValueChange();
   void invalidatePainting();

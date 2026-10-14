@@ -1,6 +1,15 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MagnifierConnectionType {
+    None = 0,
+    LeaderLine = 1,
+    #[default]
+    Gradient = 2,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ColorRgba8 {
     pub r: u8,
     pub g: u8,

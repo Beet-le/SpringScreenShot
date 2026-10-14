@@ -20,8 +20,14 @@ impl Engine {
         let Some(history_result) = self.history.undo(&mut self.model)? else {
             return Ok(MutationResult::default());
         };
-        self.editor
-            .sync_serial_number_types_after_document_change(&self.model, &following_numeric_types);
+        self.speech_bubble_layout_origin = None;
+        self.editor.reset_magnifier_wheel_input();
+        if serial_number_population_changed(&self.model, &history_result.apply_result) {
+            self.editor.sync_serial_number_types_after_document_change(
+                &self.model,
+                &following_numeric_types,
+            );
+        }
         if history_result.restore_selection {
             self.editor
                 .restore_history_selection(&self.model, &history_result.snapshot);
@@ -44,8 +50,14 @@ impl Engine {
         let Some(history_result) = self.history.redo(&mut self.model)? else {
             return Ok(MutationResult::default());
         };
-        self.editor
-            .sync_serial_number_types_after_document_change(&self.model, &following_numeric_types);
+        self.speech_bubble_layout_origin = None;
+        self.editor.reset_magnifier_wheel_input();
+        if serial_number_population_changed(&self.model, &history_result.apply_result) {
+            self.editor.sync_serial_number_types_after_document_change(
+                &self.model,
+                &following_numeric_types,
+            );
+        }
         if history_result.restore_selection {
             self.editor
                 .restore_history_selection(&self.model, &history_result.snapshot);
@@ -82,8 +94,16 @@ impl Engine {
         if transaction.is_empty() {
             return Ok(MutationResult::default());
         }
+        let restored_labels = self
+            .history
+            .canonicalize_angle_wheel_transaction(&mut transaction);
+        self.editor.append_arrow_text_layouts_preserving_labels(
+            &self.model,
+            &mut transaction,
+            &restored_labels,
+        );
         self.editor
-            .append_arrow_text_layouts(&self.model, &mut transaction);
+            .append_speech_bubble_text_layouts(&self.model, &mut transaction);
         let redo_snapshot = self.capture_session_snapshot();
         let undo_snapshot = history_undo_snapshot.unwrap_or_else(|| redo_snapshot.clone());
         let label = transaction.label().to_owned();
@@ -101,6 +121,11 @@ impl Engine {
             Vec::new()
         };
         let apply_result = self.model.apply_transaction(transaction)?;
+        self.speech_bubble_layout_origin = None;
+        self.editor.advance_serial_number_counters_for_insertions(
+            &self.model,
+            &apply_result.changes.created,
+        );
         // Deletion (including canvas reset) must update the creation value before
         // refreshing viewports, just as undo and redo do. Keep explicit defaults.
         if !apply_result.changes.removed.is_empty() {
@@ -110,6 +135,32 @@ impl Engine {
             );
         }
         let mutation_result = self.finish_document_change(&redo_snapshot, &apply_result.changes);
+        let mut owners = HashMap::new();
+        for operation in redo.operations() {
+            use snow_draw_engine_document::{ElementData, Operation};
+            let (id, data) = match operation {
+                Operation::InsertElement { id, data, .. }
+                | Operation::UpdateElementData { id, data } => (*id, data),
+                Operation::RestoreElement { element, .. } => (element.id, &element.data),
+                _ => continue,
+            };
+            if !matches!(data, ElementData::SpeechBubble(_) | ElementData::Text(_)) {
+                continue;
+            }
+            let owner = if self.model.speech_bubble(id).is_ok() {
+                Some(id)
+            } else {
+                self.model.speech_bubble_id_for_text(id)
+            };
+            if let Some(owner) = owner
+                && !owners.contains_key(&owner)
+                && let Some(layout_key) = self
+                    .editor
+                    .speech_bubble_document_layout_key(&self.model, owner)
+            {
+                owners.insert(owner, layout_key);
+            }
+        }
         self.history.push_committed(
             label,
             redo,
@@ -117,6 +168,17 @@ impl Engine {
             undo_snapshot,
             redo_snapshot,
         );
+        if !owners.is_empty()
+            && self
+                .history
+                .can_amend_latest(self.history.mutation_generation())
+        {
+            self.speech_bubble_layout_origin = Some(SpeechBubbleLayoutOrigin {
+                revision: self.model.document_revision(),
+                history_generation: self.history.mutation_generation(),
+                owners,
+            });
+        }
         Ok(mutation_result)
     }
 
@@ -131,9 +193,33 @@ impl Engine {
     ) -> MutationResult {
         self.scene_cache.sync(&self.model, Some(changes));
         self.editor
+            .sync_arrow_text_cache_after_document_change(&self.model, changes);
+        self.editor
             .sync_after_document_change(&self.model, snapshot);
         self.refresh_all_viewports().unwrap_or_default()
     }
+}
+
+fn serial_number_population_changed(
+    model: &DocumentModel,
+    result: &snow_draw_engine_model::ApplyResult,
+) -> bool {
+    use snow_draw_engine_document::{ElementData, Operation};
+
+    // History of edits to existing badges must not turn their values into
+    // creation counters. The inverse retains removed data and identifies
+    // inserted/restored badges even when the transaction also updates them.
+    result
+        .inverse
+        .operations()
+        .iter()
+        .any(|operation| match operation {
+            Operation::RestoreElement { element, .. } => {
+                matches!(element.data, ElementData::SerialNumber(_))
+            }
+            Operation::RemoveElement { id } => model.serial_number(*id).is_ok(),
+            _ => false,
+        })
 }
 
 #[cfg(test)]
@@ -323,6 +409,20 @@ mod tests {
             (vec![3, 3], 4),
         ] {
             let mut engine = engine_with_serial_numbers(&numbers, next);
+            // Imports advance automatic counters. A custom start below those
+            // values must be requested explicitly, as it is in the UI.
+            let mut style = engine.editor.serial_number_style(&engine.model);
+            if style.number != next {
+                style.number = next;
+                engine
+                    .editor
+                    .set_serial_number_style_patch(
+                        &engine.model,
+                        style,
+                        snow_draw_engine_editor::SERIAL_NUMBER_STYLE_MIXED_NUMBER,
+                    )
+                    .unwrap();
+            }
             engine.undo().unwrap();
             assert_eq!(
                 engine.editor.serial_number_style(&engine.model).number,

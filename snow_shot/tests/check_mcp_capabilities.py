@@ -91,13 +91,166 @@ def check_surface_contracts(matrix):
     assert qt_actions == rust_actions == reviewed, f"Recognition actions: Qt={qt_actions}, Rust={rust_actions}, reviewed={reviewed}"
 
 
+def check_angle_contracts(matrix):
+    """Check angle coverage without accepting or changing other catalog snapshots."""
+    coverage = matrix["surface_contracts"]
+    qt_types = read("../snow_draw_engine_qt/include/snow_draw_engine_qt/snow_canvas_types.h")
+    schemas = read("rust/snow-shot-mcp/src/schemas.rs")
+    domains = read("rust/snow-shot-mcp/src/domain_schemas.rs")
+    assert "Angle" in enum_members(qt_types, "SnowCanvasTool"), "Qt has no Angle tool"
+    assert "Angle" in enum_members(schemas, "CanvasTool"), "Screenshot schema has no Angle tool"
+    document_tools = block(domains, r"choices!\(DocumentCanvasTool\s*\{(.*?)\}\);")
+    assert re.search(r"\bAngle\s*,", document_tools), "Document schema has no Angle tool"
+    assert coverage["canvas_tools"]["members"].get("Angle") == "Angle", "Review the Angle tool mapping"
+    qt_sources = enum_members(qt_types, "SnowCanvasStyleToolbarSource")
+    reviewed_sources = coverage["canvas_style_sources"]["members"]
+    for source in ("DefaultAngle", "SelectedAngle"):
+        assert source in qt_sources, f"Qt has no {source} style source"
+        assert reviewed_sources.count(source) == 1, f"Review exactly one {source} style source"
+
+    for path in ("include/snow_shot/app/mcp/mcpstylepatch.h", "src/app/mcp/mcpdocumentservice.cpp"):
+        assert re.search(r'\{QStringLiteral\("angle"\),\s*SnowCanvasTool::Angle\}', read(path)), \
+            f"{path} has no Angle dispatch mapping"
+    assert enum_members(qt_types, "SnowCanvasAngleType") == {"Directed", "Interior"}
+    assert enum_members(schemas, "AngleType") == {"Directed", "Interior"}
+    assert enum_members(qt_types, "SnowCanvasAngleUnit") == {"Degrees", "Radians"}
+    assert enum_members(schemas, "AngleUnit") == {"Degrees", "Radians"}
+    assert re.search(r'#\[serde\(rename_all = "snake_case"\)\]\s*enum AngleUnit', schemas), \
+        "Angle unit protocol values must remain degrees and radians"
+
+    style = block(schemas, r"struct AngleAnnotationStyle\s*\{(.*?)\}")
+    fields = {name: re.sub(r"\s", "", kind) for name, kind in
+              re.findall(r"^\s*([a-z_]+)\s*:\s*([^\n,]+),", style, re.M)}
+    expected = {"stroke": "Option<[u8;4]>", "stroke_width": "Option<AngleStrokeWidth>",
+                "unit": "Option<AngleUnit>", "decimal_places": "Option<AngleDecimals>",
+                "angle_type": "Option<AngleType>"}
+    assert fields == expected, f"Angle style fields changed: {fields}"
+    assert re.search(r'#\[serde\(default, deny_unknown_fields\)\]\s*struct AngleAnnotationStyle', schemas), \
+        "Angle style must default missing fields and reject unrelated fields"
+    for declaration in (r'AngleDecimals,\s*u8,\s*"integer",\s*0,\s*3',
+                        r'AngleStrokeWidth,\s*f64,\s*"number",\s*1\.0,\s*72\.0'):
+        assert re.search(rf"bounded_style_number!\({declaration}\);", schemas), \
+            f"Angle style bounds changed: {declaration}"
+    qt_patch = read("include/snow_shot/app/mcp/mcpstylepatch.h")
+    allowed = block(qt_patch, r'else if \(target == QStringLiteral\("angle"\)\)\s*allowed = \{(.*?)\};')
+    assert set(re.findall(r'QStringLiteral\("([a-z_]+)"\)', allowed)) == set(expected), \
+        "Qt and Rust Angle style fields differ"
+    units = block(qt_patch, r'target == QStringLiteral\("angle"\)\s*\? QStringList\{(.*?)\}')
+    assert re.findall(r'QStringLiteral\("([a-z_]+)"\)', units) == ["degrees", "radians"], \
+        "Qt and Rust Angle units differ"
+
+    annotation = block(schemas, r"enum Annotation\s*\{(.*?)\n\}")
+    angle = block(annotation, r"\bAngle\s*\{(.*?)\n\s*\},")
+    assert re.search(r"points:\s*\[\[f64;\s*2\];\s*3\]", angle), "Angle creation needs three points"
+    for name, kind in (("style", "AngleAnnotationStyle"), ("full_turn", "bool")):
+        assert re.search(rf"#\[serde\(default\)\]\s*{name}:\s*{kind}", angle), \
+            f"Angle creation must allow an omitted {name}"
+    assert enum_members(schemas, "AngleTarget") == {"Angle"}, "Angle style target must be specific"
+    for source, name, kind in ((schemas, "ToolStyle", "AngleToolStyle"),
+                               (schemas, "ScreenshotToolStyleMutation", "Mutation<AngleToolStyle>"),
+                               (domains, "DocumentToolStyleMutation", "DocumentMutation<AngleToolStyle>")):
+        union = block(source, rf"enum {name}\s*\{{(.*?)\}}")
+        assert re.search(rf"\bAngle\({re.escape(kind)}\)", union), f"{name} has no typed Angle style branch"
+
+
+def check_magnifier_contracts(matrix):
+    qt_types = read("../snow_draw_engine_qt/include/snow_draw_engine_qt/snow_canvas_types.h")
+    schemas = read("rust/snow-shot-mcp/src/schemas.rs")
+    domains = read("rust/snow-shot-mcp/src/domain_schemas.rs")
+    assert "Magnifier" in enum_members(qt_types, "SnowCanvasTool")
+    assert "Magnifier" in enum_members(schemas, "CanvasTool")
+    assert re.search(r"\bMagnifier\s*,", block(domains, r"choices!\(DocumentCanvasTool\s*\{(.*?)\}\);"))
+    reviewed = matrix["surface_contracts"]
+    assert reviewed["canvas_tools"]["members"].get("Magnifier") == "Magnifier"
+    for source in ("DefaultMagnifier", "SelectedMagnifier"):
+        assert source in enum_members(qt_types, "SnowCanvasStyleToolbarSource")
+        assert reviewed["canvas_style_sources"]["members"].count(source) == 1
+    for path in ("include/snow_shot/app/mcp/mcpstylepatch.h", "src/app/mcp/mcpdocumentservice.cpp"):
+        assert re.search(r'\{QStringLiteral\("magnifier"\),\s*SnowCanvasTool::Magnifier\}', read(path))
+    style = block(schemas, r"struct MagnifierStylePatch\s*\{(.*?)\}")
+    fields = {name: re.sub(r"\s", "", kind) for name, kind in
+              re.findall(r"^\s*([a-z_]+)\s*:\s*([^\n,]+),", style, re.M)}
+    expected = {"shape": "Option<ShapeVariant>", "stroke": "Option<[u8;4]>",
+                "stroke_width": "Option<MagnifierStrokeWidth>", "factor": "Option<MagnifierFactor>",
+                "connection_type": "Option<MagnifierConnectionType>", "source_outline": "Option<bool>",
+                "leader_arrowhead": "Option<Arrowhead>",
+                "arrow_ratio": "Option<ArrowRatio>", "corner_radius": "Option<CornerRadius>",
+                "corner_radii": "Option<[CornerRadius;4]>"}
+    assert fields == expected, f"Magnifier style fields changed: {fields}"
+    allowed = block(read("include/snow_shot/app/mcp/mcpstylepatch.h"),
+        r'else if \(target == QStringLiteral\("magnifier"\)\)\s*allowed = \{(.*?)\};')
+    assert set(re.findall(r'QStringLiteral\("([a-z_]+)"\)', allowed)) == set(expected)
+    assert re.search(r'bounded_style_number!\(MagnifierFactor,\s*f64,\s*"number",\s*1\.0,\s*10\.0\)', schemas)
+    assert re.search(r'bounded_style_number!\(MagnifierStrokeWidth,\s*f64,\s*"number",\s*0\.0,\s*72\.0\)', schemas)
+    assert re.search(r'bounded_style_number!\(ArrowRatio,\s*f64,\s*"number",\s*0\.5,\s*3\.0\)', schemas)
+    assert enum_members(schemas, "MagnifierTarget") == {"Magnifier"}
+    assert enum_members(schemas, "MagnifierConnectionType") == {"None", "LeaderLine", "Gradient"}
+    for source, name, kind in ((schemas, "ToolStyle", "MagnifierToolStyle"),
+                               (schemas, "ScreenshotToolStyleMutation", "Mutation<MagnifierToolStyle>"),
+                               (domains, "DocumentToolStyleMutation", "DocumentMutation<MagnifierToolStyle>")):
+        assert re.search(rf"\bMagnifier\({re.escape(kind)}\)", block(source, rf"enum {name}\s*\{{(.*?)\}}"))
+
+
+def check_speech_bubble_contracts(matrix):
+    qt_types = read("../snow_draw_engine_qt/include/snow_draw_engine_qt/snow_canvas_types.h")
+    schemas = read("rust/snow-shot-mcp/src/schemas.rs")
+    domains = read("rust/snow-shot-mcp/src/domain_schemas.rs")
+    assert "SpeechBubble" in enum_members(qt_types, "SnowCanvasTool")
+    assert "SpeechBubble" in enum_members(schemas, "CanvasTool")
+    assert "SpeechBubble" in enum_members(schemas, "StyleTarget")
+    assert re.search(r"\bSpeechBubble\s*,", block(domains, r"choices!\(DocumentCanvasTool\s*\{(.*?)\}\);"))
+    reviewed = matrix["surface_contracts"]
+    assert reviewed["canvas_tools"]["members"].get("SpeechBubble") == "SpeechBubble"
+    for source in ("DefaultSpeechBubble", "SelectedSpeechBubble"):
+        assert source in enum_members(qt_types, "SnowCanvasStyleToolbarSource")
+        assert reviewed["canvas_style_sources"]["members"].count(source) == 1
+    for path in ("include/snow_shot/app/mcp/mcpstylepatch.h", "src/app/mcp/mcpdocumentservice.cpp"):
+        assert re.search(r'\{QStringLiteral\("speech_bubble"\),\s*SnowCanvasTool::SpeechBubble\}', read(path))
+    patch = read("include/snow_shot/app/mcp/mcpstylepatch.h")
+    assert re.search(r'\{QStringLiteral\("speech_bubble"\),\s*SnowCanvasShapeKind::SpeechBubble\}', patch)
+    assert 'target == QStringLiteral("speech_bubble")' in patch
+    # Body creation is a UI gesture; existing annotation batch operations remain unchanged.
+    annotation = block(schemas, r"enum Annotation\s*\{(.*?)\n\}")
+    assert not re.search(r"\bSpeechBubble\s*\{", annotation)
+
+
 def main():
     global MINI
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mini", action="store_true", help="Check the compiled Mini contract")
+    parser.add_argument("--angle-only", action="store_true",
+                        help="Check only Angle entries and schemas in both full and Mini contracts")
+    parser.add_argument("--speech-bubble-only", action="store_true",
+                        help="Check only Speech Bubble entries and routing in full and Mini contracts")
+    parser.add_argument("--magnifier-only", action="store_true",
+                        help="Check only Magnifier tool and style contracts in full and Mini variants")
     parser.add_argument("--execution-reports", nargs="+", type=Path,
                         help="Require every tool and resource to appear in passing real-IPC driver reports")
     args = parser.parse_args()
+    if args.magnifier_only:
+        if args.mini or args.angle_only or args.execution_reports:
+            parser.error("--magnifier-only checks both variants and cannot be combined with other modes")
+        for MINI in (False, True):
+            matrix = json.loads(read("mcp-capabilities-mini.json" if MINI else "mcp-capabilities.json"))
+            check_magnifier_contracts(matrix)
+        print("MCP Magnifier capability agreement passed for full and Mini tool and style contracts.")
+        return
+    if args.speech_bubble_only:
+        if args.mini or args.execution_reports or args.angle_only or args.magnifier_only:
+            parser.error("--speech-bubble-only checks both variants and cannot be combined with other modes")
+        for MINI in (False, True):
+            matrix = json.loads(read("mcp-capabilities-mini.json" if MINI else "mcp-capabilities.json"))
+            check_speech_bubble_contracts(matrix)
+        print("MCP Speech Bubble capability agreement passed for full and Mini tools and styles.")
+        return
+    if args.angle_only:
+        if args.mini or args.execution_reports:
+            parser.error("--angle-only checks both variants and cannot be combined with other modes")
+        for MINI in (False, True):
+            matrix = json.loads(read("mcp-capabilities-mini.json" if MINI else "mcp-capabilities.json"))
+            check_angle_contracts(matrix)
+        print("MCP Angle capability agreement passed for full and Mini catalogs, styles and creation schemas.")
+        return
     MINI = args.mini
     declarations = {
         "screenshot": ("src/app/mcp/screenshotmcpsession.cpp", r"const QStringList tools\s*=\s*\{(.*?)\};"),

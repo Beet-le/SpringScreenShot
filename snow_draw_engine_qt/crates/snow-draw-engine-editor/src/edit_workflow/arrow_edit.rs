@@ -92,6 +92,17 @@ impl Editor {
             canvas_point.y + state.drag_offset.y,
         );
         match state.mode {
+            ArrowEditMode::AngleArc => ArrowEditPreview {
+                arrow: crate::angle::angle_with_dragged_arc(
+                    &state.original_arrow,
+                    state.start_canvas_position,
+                    canvas_point,
+                )
+                .unwrap_or_else(|| state.preview_arrow.clone()),
+                reorder_targets: Vec::new(),
+                next_mode: None,
+                suggested_binding: None,
+            },
             ArrowEditMode::Move => ArrowEditPreview {
                 arrow: translated_arrow_for_move(
                     &state.original_arrow,
@@ -121,7 +132,10 @@ impl Editor {
             }
             ArrowEditMode::Endpoint(edge) => {
                 let mut drag_target = self.snap_linear_arrow_control_point(drag_target, modifiers);
-                if modifiers.shift && !state.original_arrow.is_elbow() {
+                if modifiers.shift
+                    && !state.original_arrow.is_elbow()
+                    && !state.original_arrow.is_angle()
+                {
                     let points = state.original_arrow.global_points();
                     let reference_index = match edge {
                         ArrowEndpointEdge::Start => 1,
@@ -130,6 +144,22 @@ impl Editor {
                     if let Some(reference) = points.get(reference_index).copied() {
                         drag_target = lock_linear_point_to_discrete_angle(reference, drag_target);
                     }
+                }
+                if state.original_arrow.is_angle() {
+                    let index =
+                        crate::arrow_endpoint_index(state.original_arrow.points.len(), edge);
+                    return ArrowEditPreview {
+                        arrow: snow_draw_engine_document::angle_with_moved_point(
+                            &state.original_arrow,
+                            index,
+                            drag_target,
+                            modifiers.shift,
+                        )
+                        .unwrap_or_else(|| state.preview_arrow.clone()),
+                        reorder_targets: Vec::new(),
+                        next_mode: None,
+                        suggested_binding: None,
+                    };
                 }
                 let bindables = self.bindable_elements(document, &[]);
                 let context = self.arrow_engine_context(modifiers);
@@ -190,6 +220,7 @@ impl Editor {
                 let mut snapped_point =
                     self.snap_linear_arrow_control_point(drag_target, modifiers);
                 if modifiers.shift
+                    && !state.original_arrow.is_angle()
                     && let Some(reference) = state
                         .original_arrow
                         .global_points()
@@ -197,6 +228,20 @@ impl Editor {
                         .copied()
                 {
                     snapped_point = lock_linear_point_to_discrete_angle(reference, snapped_point);
+                }
+                if state.original_arrow.is_angle() {
+                    return ArrowEditPreview {
+                        arrow: snow_draw_engine_document::angle_with_moved_point(
+                            &state.original_arrow,
+                            index,
+                            snapped_point,
+                            modifiers.shift,
+                        )
+                        .unwrap_or_else(|| state.preview_arrow.clone()),
+                        reorder_targets: Vec::new(),
+                        next_mode: None,
+                        suggested_binding: None,
+                    };
                 }
                 let arrow = move_linear_arrow_point(&state.original_arrow, index, snapped_point)
                     .unwrap_or_else(|| state.original_arrow.clone());

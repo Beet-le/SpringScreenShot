@@ -76,6 +76,8 @@ class ScreenshotToolPaletteTextStyleModel final {
     [[nodiscard]] bool stepFontSize(int direction);
     [[nodiscard]] bool cycleFontSize();
     [[nodiscard]] bool setFontFamily(const QString& fontFamily);
+    [[nodiscard]] bool setBold(bool bold);
+    [[nodiscard]] bool setItalic(bool italic);
     [[nodiscard]] bool setStrokeColor(const QColor& color);
     [[nodiscard]] bool setStrokeWidth(double strokeWidth);
     [[nodiscard]] bool stepStrokeWidth(int direction);
@@ -103,6 +105,8 @@ struct ScreenshotToolPaletteStyleState {
 
     ScreenshotToolPaletteRectangleStyleModel m_creationRectangleStyle;
     ScreenshotToolPaletteRectangleStyleModel m_rectangleStyle;
+    ScreenshotToolPaletteRectangleStyleModel m_creationSpeechBubbleStyle;
+    ScreenshotToolPaletteRectangleStyleModel m_speechBubbleStyle;
     ScreenshotToolPaletteRectangleStyleModel m_creationLineStyle;
     ScreenshotToolPaletteRectangleStyleModel m_lineStyle;
     ScreenshotToolPaletteRectangleStyleModel m_creationFreeDrawStyle;
@@ -119,6 +123,15 @@ struct ScreenshotToolPaletteStyleState {
     double distanceMeasuredLength = 0.0;
     bool showingSelectedDistance = false;
     bool distanceControlsActive = false;
+    SnowCanvasAngleStyle creationAngleStyle;
+    SnowCanvasAngleStyle angleStyle;
+    quint32 angleStyleMixed = 0;
+    bool showingSelectedAngle = false;
+    SnowCanvasMagnifierStyle creationMagnifierStyle;
+    SnowCanvasMagnifierStyle magnifierStyle;
+    quint32 magnifierStyleMixed = 0;
+    bool showingSelectedMagnifier = false;
+    bool angleControlsActive = false;
     ScreenshotToolPaletteTextStyleModel m_creationTextStyle;
     ScreenshotToolPaletteTextStyleModel m_textStyle;
     SnowCanvasSerialNumberStyle m_creationSerialNumberStyle;
@@ -135,10 +148,13 @@ struct ScreenshotToolPaletteStyleState {
     SnowCanvasSpotlightConfig spotlightConfig;
     SnowCanvasRectangleShape creationSpotlightShape = SnowCanvasRectangleShape::Rectangle;
     SnowCanvasRectangleShape spotlightShape = SnowCanvasRectangleShape::Rectangle;
+    SnowCanvasCornerRadii creationSpotlightCornerRadii;
+    SnowCanvasCornerRadii spotlightCornerRadii;
     bool showingSelectedSpotlight = false;
     quint32 spotlightShapeMixed = 0;
     bool m_arrowControlsActive = false;
     bool m_lineControlsActive = false;
+    bool m_speechBubbleControlsActive = false;
     bool m_freeDrawControlsActive = false;
     bool m_highlightControlsActive = false;
     bool m_penHighlightControlsActive = false;

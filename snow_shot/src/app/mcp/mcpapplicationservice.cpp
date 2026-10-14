@@ -233,8 +233,8 @@ struct McpApplicationService::Impl {
             details.insert(QStringLiteral("pending_fields"),
                            QJsonArray::fromStringList(pending.keys()));
             auto* observation = new QObject(&q);
-            const auto observe = [this, observation, settingsJob, owner = request.connectionId,
-                                  pending, applied] {
+            const auto observe = [this, observation = QPointer<QObject>(observation), settingsJob,
+                                  owner = request.connectionId, pending, applied] {
                 const auto job = ports.jobs->get(owner, settingsJob);
                 if (!job || job->value(QStringLiteral("status")) != QStringLiteral("running")) {
                     observation->deleteLater();
@@ -247,7 +247,8 @@ struct McpApplicationService::Impl {
                         state.phase == settings::SettingsWritePhase::Failed ||
                         state.phase == settings::SettingsWritePhase::Rejected) {
                         ports.jobs->fail(settingsJob, QStringLiteral("settings_failed"));
-                        observation->deleteLater();
+                        if (observation)
+                            observation->deleteLater();
                         return;
                     }
                     if (state.busy || state.phase == settings::SettingsWritePhase::Pending)
@@ -258,7 +259,8 @@ struct McpApplicationService::Impl {
                     settingsJob,
                     {{QStringLiteral("revision"), static_cast<qint64>(configuration().revision())},
                      {QStringLiteral("applied_fields"), QJsonArray::fromStringList(completed)}});
-                observation->deleteLater();
+                if (observation)
+                    observation->deleteLater();
             };
             QObject::connect(ports.settings, &settings::SettingsRuntimeSession::fieldChanged,
                              observation, [observe](const auto&, const auto&) { observe(); });
@@ -314,6 +316,7 @@ struct McpApplicationService::Impl {
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
     void translate(const QString& id, const QStringList& texts,
                    const translation::TranslationPreferences& preferences) {
+        const QPointer<McpApplicationService> lifetime(&q);
         if (!ports.jobs->retainInput(
                 id,
                 {{QStringLiteral("texts"), QJsonArray::fromStringList(texts)},
@@ -325,12 +328,16 @@ struct McpApplicationService::Impl {
             return;
         }
         auto* job = ports.translation->createJob(texts, preferences, &q);
-        if (!ports.jobs->setCancellation(id, [guard = QPointer<translation::TranslationJob>(job)] {
+        const bool cancellationSet =
+            ports.jobs->setCancellation(id, [guard = QPointer<translation::TranslationJob>(job)] {
                 if (guard) {
                     guard->cancel();
                     guard->deleteLater();
                 }
-            })) {
+            });
+        if (!lifetime)
+            return;
+        if (!cancellationSet) {
             delete job;
             return;
         }
@@ -355,14 +362,15 @@ struct McpApplicationService::Impl {
                                           {QStringLiteral("state"), static_cast<int>(unit.state)},
                                           {QStringLiteral("text"), unit.text.left(2048)}});
             });
-        auto done = [this, id, job, snapshot] {
+        auto done = [this, id, job = QPointer<translation::TranslationJob>(job), snapshot] {
             if (!translations.remove(id))
                 return;
             if (job->state() == translation::TranslationJob::State::Completed)
                 ports.jobs->complete(id, snapshot());
             else
                 ports.jobs->fail(id, QStringLiteral("translation_failed"));
-            job->deleteLater();
+            if (job)
+                job->deleteLater();
         };
         QObject::connect(job, &translation::TranslationJob::finished, &q, done);
         QObject::connect(job, &translation::TranslationJob::invalidated, &q, done);
@@ -378,13 +386,20 @@ struct McpApplicationService::Impl {
             completion(failure(request, QStringLiteral("queue_full")));
             return;
         }
+        const QPointer<McpApplicationService> lifetime(&q);
         const auto id = ports.jobs->start(request.connectionId, request.method);
+        if (!lifetime)
+            return;
         if (id.isEmpty()) {
             completion(failure(request, QStringLiteral("queue_full")));
             return;
         }
         const auto future = start();
+        if (!lifetime)
+            return;
         completion(reply(request, {{QStringLiteral("job_id"), id}}));
+        if (!lifetime)
+            return;
         background(
             request,
             [future, request] {
@@ -408,6 +423,10 @@ McpApplicationService::McpApplicationService(Ports ports, QObject* parent)
     : QObject(parent), m_impl(std::make_unique<Impl>(*this, std::move(ports))) {}
 McpApplicationService::~McpApplicationService() {
     shutdown();
+    // Child destruction callbacks use Impl. QObject's base destructor runs only
+    // after m_impl is gone, so retire the owned callback tree while state is valid.
+    while (!children().isEmpty())
+        delete children().constLast();
 }
 
 QStringList McpApplicationService::methods() {
@@ -550,6 +569,7 @@ void McpApplicationService::shutdown() {
 
 void McpApplicationService::Impl::handle(const ScreenshotMcpRequest& request,
                                          ScreenshotMcpServer::Completion completion) {
+    const QPointer<McpApplicationService> lifetime(&q);
     const auto& method = request.method;
     const auto& params = request.params;
     const auto expected = request.expectedRevision;
@@ -658,6 +678,8 @@ void McpApplicationService::Impl::handle(const ScreenshotMcpRequest& request,
         // Reserve observation capacity before accepting any runtime mutation. Synchronous
         // patches release the unpublished slot; asynchronous commits retain an owned job.
         const auto settingsJob = ports.jobs->start(request.connectionId, method);
+        if (!lifetime)
+            return;
         if (settingsJob.isEmpty()) {
             error(QStringLiteral("queue_full"));
             return;
@@ -710,6 +732,8 @@ void McpApplicationService::Impl::handle(const ScreenshotMcpRequest& request,
             response.errorDetails.insert(QStringLiteral("applied_fields"),
                                          QJsonArray::fromStringList(applied));
         observeSettings(request, settingsJob, pending, applied, response);
+        if (!lifetime)
+            return;
         completion(std::move(response));
     } else if (method == u"snow_shot_settings_reset") {
         const auto* section = ports.settings->registry().catalog().section(
@@ -724,6 +748,8 @@ void McpApplicationService::Impl::handle(const ScreenshotMcpRequest& request,
             return;
         }
         const auto job = ports.jobs->start(request.connectionId, method);
+        if (!lifetime)
+            return;
         if (job.isEmpty()) {
             error(QStringLiteral("queue_full"));
             return;
@@ -749,6 +775,8 @@ void McpApplicationService::Impl::handle(const ScreenshotMcpRequest& request,
                                                              : QStringLiteral("operation_failed"));
         response.revision = configuration().revision();
         observeSettings(request, job, pending, applied, response);
+        if (!lifetime)
+            return;
         completion(std::move(response));
 #if SNOW_SHOT_ENABLE_API_CONFIGURATION
     } else if (method == u"snow_shot_models_list") {
@@ -845,6 +873,8 @@ void McpApplicationService::Impl::handle(const ScreenshotMcpRequest& request,
                 return;
             }
             const auto id = ports.jobs->start(request.connectionId, method);
+            if (!lifetime)
+                return;
             if (id.isEmpty()) {
                 error(QStringLiteral("queue_full"));
                 return;
@@ -861,27 +891,32 @@ void McpApplicationService::Impl::handle(const ScreenshotMcpRequest& request,
                 if (observation)
                     observation->deleteLater();
             });
+            if (!lifetime)
+                return;
             QObject::connect(ports.updates, &update::UpdateService::statusChanged, observation,
                              [this, id] {
                                  if (activeUpdateJob != id)
                                      return;
                                  ports.jobs->progress(id, updateJson(ports.updates));
                              });
-            QObject::connect(
-                ports.updates, &update::UpdateService::operationFinished, observation,
-                [this, observation, id, action](const QString& operation, const QString& outcome) {
-                    if (activeUpdateJob != id || operation != action)
-                        return;
-                    activeUpdateJob.clear();
-                    if (outcome == u"success")
-                        ports.jobs->complete(id, updateJson(ports.updates));
-                    else if (outcome == u"cancelled")
-                        ports.jobs->cancel(activeUpdateOwner, id);
-                    else
-                        ports.jobs->fail(id, QStringLiteral("update_failed"));
-                    observation->deleteLater();
-                });
+            QObject::connect(ports.updates, &update::UpdateService::operationFinished, observation,
+                             [this, observation = QPointer<QObject>(observation), id,
+                              action](const QString& operation, const QString& outcome) {
+                                 if (activeUpdateJob != id || operation != action)
+                                     return;
+                                 activeUpdateJob.clear();
+                                 if (outcome == u"success")
+                                     ports.jobs->complete(id, updateJson(ports.updates));
+                                 else if (outcome == u"cancelled")
+                                     ports.jobs->cancel(activeUpdateOwner, id);
+                                 else
+                                     ports.jobs->fail(id, QStringLiteral("update_failed"));
+                                 if (observation)
+                                     observation->deleteLater();
+                             });
             finish({{QStringLiteral("job_id"), id}});
+            if (!lifetime)
+                return;
             if (action == u"check")
                 ports.updates->check();
             else
@@ -892,10 +927,14 @@ void McpApplicationService::Impl::handle(const ScreenshotMcpRequest& request,
                 error(QStringLiteral("job_not_found"));
                 return;
             }
-            if (!activeUpdateJob.isEmpty())
-                ports.jobs->cancel(activeUpdateOwner, activeUpdateJob);
-            else
+            if (!activeUpdateJob.isEmpty()) {
+                const auto id = activeUpdateJob;
+                const auto owner = activeUpdateOwner;
+                ports.jobs->cancel(owner, id);
+            } else
                 ports.updates->cancel();
+            if (!lifetime)
+                return;
         } else if (action == u"apply") {
             if (ports.updates->status().state != update::UpdateState::Ready) {
                 error(QStringLiteral("invalid_state"));
@@ -1015,13 +1054,16 @@ void McpApplicationService::Impl::handle(const ScreenshotMcpRequest& request,
                 response.attachmentMime = QStringLiteral("image/png");
                 return response;
             },
-            [this, request, completion = std::move(completion)](auto response) mutable {
+            [this, guard = QPointer<McpApplicationService>(&q), request,
+             completion = std::move(completion)](auto response) mutable {
                 if (response.ok && !response.attachment.isEmpty()) {
-                    const auto artifact = ports.artifactWriter
-                                              ? ports.artifactWriter(request.connectionId,
-                                                                     std::move(response.attachment),
-                                                                     response.attachmentMime)
-                                              : QJsonObject();
+                    const auto writer = ports.artifactWriter;
+                    const auto artifact =
+                        writer ? writer(request.connectionId, std::move(response.attachment),
+                                        response.attachmentMime)
+                               : QJsonObject();
+                    if (!guard)
+                        return;
                     if (artifact.isEmpty())
                         response = failure(request, QStringLiteral("capacity_exceeded"));
                     else {
@@ -1077,6 +1119,8 @@ void McpApplicationService::Impl::handle(const ScreenshotMcpRequest& request,
         auto cancel = std::make_shared<std::atomic_bool>(false);
         const auto id =
             ports.jobs->start(request.connectionId, method, [cancel] { cancel->store(true); });
+        if (!lifetime)
+            return;
         if (id.isEmpty()) {
             error(QStringLiteral("queue_full"));
             return;
@@ -1085,7 +1129,8 @@ void McpApplicationService::Impl::handle(const ScreenshotMcpRequest& request,
         auto* watcher = new QFutureWatcher<storage::ConfigurationArchiveReadResult>(&q);
         QObject::connect(
             watcher, &QFutureWatcher<storage::ConfigurationArchiveReadResult>::finished, &q,
-            [this, watcher, cancel, id, revision = *expected] {
+            [this, guard = QPointer<McpApplicationService>(&q), watcher, cancel, id,
+             revision = *expected] {
                 auto read = watcher->result();
                 watcher->deleteLater();
                 --admittedWork;
@@ -1097,6 +1142,8 @@ void McpApplicationService::Impl::handle(const ScreenshotMcpRequest& request,
                 }
                 if (!ports.jobs->setCancellation(id, {}))
                     return;
+                if (!guard)
+                    return;
                 bool conflict = false;
                 std::shared_future<storage::StorageResult> runtimeCompletion;
                 const bool ok = configuration().mutateIfRevision(
@@ -1107,6 +1154,8 @@ void McpApplicationService::Impl::handle(const ScreenshotMcpRequest& request,
                             read.values, read.schemaVersion, &runtimeCompletion);
                     },
                     &conflict);
+                if (!guard)
+                    return;
                 if (runtimeCompletion.valid()) {
                     ++admittedWork;
                     auto* runtimeWatcher = new QFutureWatcher<storage::StorageResult>(&q);
@@ -1210,6 +1259,8 @@ void McpApplicationService::Impl::handle(const ScreenshotMcpRequest& request,
             return;
         }
         const auto id = ports.jobs->start(request.connectionId, method);
+        if (!lifetime)
+            return;
         if (id.isEmpty()) {
             error(QStringLiteral("queue_full"));
             return;
@@ -1217,7 +1268,7 @@ void McpApplicationService::Impl::handle(const ScreenshotMcpRequest& request,
         auto* observation = new QObject(&q);
         const bool cache = binding == settings::SettingsActionBinding::ClearThumbnailCache ||
                            binding == settings::SettingsActionBinding::ClearRecordingTemp;
-        const auto observe = [this, observation, id, binding] {
+        const auto observe = [this, observation = QPointer<QObject>(observation), id, binding] {
             if (ports.settings->actionState(binding).busy)
                 return;
             const auto status = ports.storage->status();
@@ -1230,30 +1281,34 @@ void McpApplicationService::Impl::handle(const ScreenshotMcpRequest& request,
                 ports.jobs->fail(id, QStringLiteral("storage_failed"));
             else
                 ports.jobs->complete(id, {{QStringLiteral("completed"), true}});
-            observation->deleteLater();
+            if (observation)
+                observation->deleteLater();
         };
         if (binding == settings::SettingsActionBinding::CopyTodayLog) {
             QObject::connect(
                 ports.settings, &settings::SettingsRuntimeSession::actionFinished, observation,
-                [this, observation, id, binding](auto action, bool success, const QString&) {
+                [this, observation = QPointer<QObject>(observation), id,
+                 binding](auto action, bool success, const QString&) {
                     if (action != binding)
                         return;
                     if (success)
                         ports.jobs->complete(id, {{QStringLiteral("completed"), true}});
                     else
                         ports.jobs->fail(id, QStringLiteral("output_failed"));
-                    observation->deleteLater();
+                    if (observation)
+                        observation->deleteLater();
                 });
         } else if (cache) {
-            QObject::connect(ports.storage, &storage::ApplicationStorage::cacheClearFinished,
-                             observation, [this, observation, id](auto, bool success) {
-                                 if (success)
-                                     ports.jobs->complete(id,
-                                                          {{QStringLiteral("completed"), true}});
-                                 else
-                                     ports.jobs->fail(id, QStringLiteral("storage_failed"));
-                                 observation->deleteLater();
-                             });
+            QObject::connect(
+                ports.storage, &storage::ApplicationStorage::cacheClearFinished, observation,
+                [this, observation = QPointer<QObject>(observation), id](auto, bool success) {
+                    if (success)
+                        ports.jobs->complete(id, {{QStringLiteral("completed"), true}});
+                    else
+                        ports.jobs->fail(id, QStringLiteral("storage_failed"));
+                    if (observation)
+                        observation->deleteLater();
+                });
         } else {
             QObject::connect(ports.storage, &storage::ApplicationStorage::storageStatusChanged,
                              observation, [observe](const auto&) { observe(); });
@@ -1266,15 +1321,21 @@ void McpApplicationService::Impl::handle(const ScreenshotMcpRequest& request,
                     binding, params.value(QStringLiteral("path")).toString());
             },
             &conflict);
+        if (!lifetime)
+            return;
         if (!accepted) {
             delete observation;
             ports.jobs->fail(id, conflict ? QStringLiteral("stale_revision")
                                           : QStringLiteral("operation_failed"));
+            if (!lifetime)
+                return;
             error(conflict ? QStringLiteral("stale_revision") : QStringLiteral("operation_failed"));
             return;
         }
         finish({{QStringLiteral("job_id"), id},
                 {QStringLiteral("revision"), static_cast<qint64>(configuration().revision())}});
+        if (!lifetime)
+            return;
         if (binding != settings::SettingsActionBinding::CopyTodayLog && !cache)
             observe();
     } else if (method == u"snow_shot_templates_list") {
@@ -1420,26 +1481,30 @@ void McpApplicationService::Impl::handle(const ScreenshotMcpRequest& request,
                 if (*captureCancellation)
                     (*captureCancellation)();
             });
+        if (!lifetime)
+            return;
         if (id.isEmpty()) {
             error(QStringLiteral("queue_full"));
             return;
         }
         finish({{QStringLiteral("job_id"), id}});
+        if (!lifetime)
+            return;
         if (selected) {
-            *captureCancellation =
-                ports.selectedText([guard = QPointer<McpApplicationService>(&q), id, canceled,
-                                    preferences](QString text, QString captureError) {
-                    if (!guard || *canceled)
-                        return;
-                    auto& self = *guard->m_impl;
-                    if (!captureError.isEmpty() || text.isEmpty()) {
-                        self.ports.jobs->fail(id, captureError.isEmpty()
-                                                      ? QStringLiteral("no_selection")
-                                                      : captureError);
-                        return;
-                    }
-                    self.translate(id, {text}, preferences);
-                });
+            const auto selectedText = ports.selectedText;
+            *captureCancellation = selectedText([guard = QPointer<McpApplicationService>(&q), id,
+                                                 canceled,
+                                                 preferences](QString text, QString captureError) {
+                if (!guard || *canceled)
+                    return;
+                auto& self = *guard->m_impl;
+                if (!captureError.isEmpty() || text.isEmpty()) {
+                    self.ports.jobs->fail(
+                        id, captureError.isEmpty() ? QStringLiteral("no_selection") : captureError);
+                    return;
+                }
+                self.translate(id, {text}, preferences);
+            });
         } else
             translate(id, texts, preferences);
 #endif

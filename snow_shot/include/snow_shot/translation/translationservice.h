@@ -7,7 +7,10 @@
 #include "snow_shot/network/snowshotapiclient.h"
 
 #include <QLocale>
+#include <QJsonValue>
+#include <QMap>
 #include <QStringList>
+#include <optional>
 #endif
 
 #include <QString>
@@ -67,6 +70,9 @@ class TranslationService final : public QObject {
     friend class TranslationJob;
     TranslationService(SnowShotApiClient& client, storage::ConfigurationStore& settings,
                        QLocale locale);
+    // No outcome means a nested preference write or destruction retired this transaction.
+    std::optional<bool> writePreferences(const QMap<QString, QJsonValue>& values,
+                                         ChangeReason reason);
     void syncPreferences(ChangeReason reason);
     void publishModels(bool resolveSelection);
     QPointer<SnowShotApiClient> m_client;
@@ -81,6 +87,7 @@ class TranslationService final : public QObject {
     bool m_storageError = false;
     bool m_modelInvalidationPending = false;
     bool m_saving = false;
+    quint64 m_preferencesGeneration = 0;
 };
 
 class TranslationJob final : public QObject {

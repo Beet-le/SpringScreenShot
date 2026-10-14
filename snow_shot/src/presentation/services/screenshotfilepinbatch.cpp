@@ -3,6 +3,7 @@
 #include "snow_shot/platform/selectedfiles.h"
 
 #include <QPointer>
+#include <QTimer>
 
 namespace {
 // The export coordinator's pool runs two worker threads, so two concurrent
@@ -28,6 +29,8 @@ void ScreenshotFilePinBatch::cancel() {
     m_files.clear();
     m_ready.clear();
     m_present = {};
+    m_completion = {};
+    m_succeeded = false;
     m_duplicateFilter = {};
     m_skippedDuplicates.clear();
     m_nextSubmit = 0;
@@ -36,12 +39,58 @@ void ScreenshotFilePinBatch::cancel() {
     m_redispatch = false;
 }
 
-void ScreenshotFilePinBatch::start(QStringList paths, Present present, DuplicateFilter filter) {
+void ScreenshotFilePinBatch::finish(bool succeeded) {
+    auto completion = std::move(m_completion);
+    cancel();
+    if (completion) {
+        const quint64 generation = m_generation;
+        QTimer::singleShot(0, this,
+                           [this, generation, succeeded, completion = std::move(completion)] {
+                               if (generation == m_generation)
+                                   completion(succeeded);
+                           });
+    }
+}
+
+ScreenshotFilePinQueue::ScreenshotFilePinQueue(QObject* parent) : QObject(parent) {}
+
+void ScreenshotFilePinQueue::enqueue(QStringList paths, Prepare prepare, Failure failure) {
+    for (QString& path : paths)
+        m_requests.enqueue({std::move(path), prepare, failure});
+    startNext();
+}
+
+void ScreenshotFilePinQueue::cancel() {
+    m_batch.cancel();
+    m_requests.clear();
+    m_running = false;
+}
+
+void ScreenshotFilePinQueue::startNext() {
+    if (m_running || m_requests.isEmpty())
+        return;
+    m_running = true;
+    auto request = m_requests.dequeue();
+    auto options = request.prepare ? request.prepare() : Options{};
+    const QString path = request.path;
+    m_batch.start({path}, std::move(options.present), std::move(options.duplicateFilter),
+                  [this, request = std::move(request)](bool succeeded) {
+                      m_running = false;
+                      const QPointer<ScreenshotFilePinQueue> guard(this);
+                      if (!succeeded && request.failure)
+                          request.failure(request.path);
+                      if (guard)
+                          startNext();
+                  });
+}
+
+void ScreenshotFilePinBatch::start(QStringList paths, Present present, DuplicateFilter filter,
+                                   Completion completion) {
     startSource(
         [paths = std::move(paths)](const ScreenshotExportCancellation&) {
             return snow_shot::platform::SelectedFileResult{paths};
         },
-        std::move(present), {}, std::move(filter));
+        std::move(present), {}, std::move(filter), std::move(completion));
 }
 
 void ScreenshotFilePinBatch::startSelection(
@@ -57,10 +106,11 @@ void ScreenshotFilePinBatch::startSelection(
 }
 
 void ScreenshotFilePinBatch::startSource(Source source, Present present, Failure failure,
-                                         DuplicateFilter filter) {
+                                         DuplicateFilter filter, Completion completion) {
     cancel();
     m_active = true;
     m_present = std::move(present);
+    m_completion = std::move(completion);
     m_duplicateFilter = std::move(filter);
     const quint64 generation = m_generation;
     auto files = std::make_shared<QList<ScreenshotClipboardLocalImage>>();
@@ -92,7 +142,7 @@ void ScreenshotFilePinBatch::startSource(Source source, Present present, Failure
                 return;
             }
             if (!result.succeeded()) {
-                cancel();
+                finish(false);
                 return;
             }
             if (selection->error != snow_shot::platform::SelectedFileError::None) {
@@ -113,7 +163,7 @@ void ScreenshotFilePinBatch::startSource(Source source, Present present, Failure
             dispatch(generation);
         });
     if (!m_snapshotJob.isValid()) {
-        cancel();
+        finish(false);
     }
 }
 
@@ -135,14 +185,14 @@ void ScreenshotFilePinBatch::submitDecode(quint64 generation, qsizetype index) {
             }
             m_decodeJobs.remove(index);
             if (!result.succeeded()) {
-                cancel();
+                finish(false);
                 return;
             }
             m_ready.insert(index, std::move(*content));
             dispatch(generation);
         });
     if (!job.isValid()) {
-        cancel();
+        finish(false);
         return;
     }
     m_decodeJobs.insert(index, job);
@@ -175,7 +225,10 @@ void ScreenshotFilePinBatch::dispatch(quint64 generation) {
     m_dispatching = true;
     while (true) {
         if (m_nextPresent >= m_files.size()) {
-            cancel();
+            const QPointer<ScreenshotFilePinBatch> guard(this);
+            finish(m_succeeded);
+            if (!guard)
+                return;
             break;
         }
         const auto ready = m_ready.find(m_nextPresent);
@@ -196,6 +249,7 @@ void ScreenshotFilePinBatch::dispatch(quint64 generation) {
                 submitDecode(generation, m_nextPresent);
                 break;
             }
+            m_succeeded = true;
         }
         std::optional<ScreenshotClipboardContent> content = m_ready.take(m_nextPresent);
         ++m_nextPresent;
@@ -216,9 +270,12 @@ void ScreenshotFilePinBatch::dispatch(quint64 generation) {
             break;
         }
         if (!proceed) {
-            cancel();
+            finish(false);
+            if (!guard)
+                return;
             break;
         }
+        m_succeeded = true;
     }
     m_dispatching = false;
     if (m_redispatch) {

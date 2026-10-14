@@ -32,10 +32,17 @@ pub struct PersistedEditorSession {
     config: EngineConfig,
     #[serde(default)]
     spotlight_shape: snow_draw_engine_document::HighlightShape,
+    #[serde(default)]
+    spotlight_corner_radii: snow_draw_engine_core::CornerRadii,
     rectangle: RectangleShapeStyle,
+    speech_bubble: RectangleShapeStyle,
     arrow: ArrowStyle,
     #[serde(default)]
     distance: crate::DistanceStyle,
+    #[serde(default)]
+    angle: crate::AngleStyle,
+    #[serde(default)]
+    magnifier: crate::MagnifierStyle,
     line: super::ShapeStyle,
     free_draw: super::ShapeStyle,
     rectangle_highlight: super::ShapeStyle,
@@ -55,6 +62,116 @@ pub struct PersistedEditorSession {
 }
 
 impl EditorSession {
+    pub fn speech_bubble_document_layout_key(
+        &self,
+        document: &DocumentModel,
+        owner: ElementId,
+    ) -> Option<(ElementId, u64)> {
+        self.editor
+            .speech_bubble_document_layout_key(document, owner)
+    }
+
+    pub fn speech_bubble_measured_document_values(
+        &self,
+        document: &DocumentModel,
+        owner: ElementId,
+    ) -> Option<(
+        snow_draw_engine_document::SpeechBubbleData,
+        snow_draw_engine_document::TextData,
+    )> {
+        self.editor
+            .speech_bubble_measured_document_values(document, owner)
+    }
+
+    pub fn speech_bubble_control_at(&self, document: &DocumentModel, point: Point<f64>) -> bool {
+        self.editor.speech_bubble_control_at(document, point)
+    }
+    pub fn speech_bubble_text_request_build_count(&self) -> u64 {
+        self.editor.speech_bubble_text_request_build_count()
+    }
+    pub fn speech_bubble_draft_body(
+        &self,
+        document: &DocumentModel,
+        id: ElementId,
+    ) -> Option<snow_draw_engine_document::RectangleData> {
+        self.editor
+            .speech_bubble_snapshot(document, id)
+            .map(|v| v.body)
+    }
+    pub fn speech_bubble_display_snapshot(
+        &self,
+        document: &DocumentModel,
+        id: ElementId,
+    ) -> Option<snow_draw_engine_document::SpeechBubbleData> {
+        self.editor.speech_bubble_display_snapshot(document, id)
+    }
+    pub fn speech_bubble_text_display_snapshot(
+        &self,
+        document: &DocumentModel,
+        id: ElementId,
+    ) -> Option<snow_draw_engine_document::TextData> {
+        self.editor
+            .speech_bubble_text_display_snapshot(document, id)
+    }
+    pub fn take_speech_bubble_text_edit_request(&mut self) -> Option<ElementId> {
+        self.editor.take_speech_bubble_text_edit_request()
+    }
+    pub fn speech_bubble_text_layout_requests(
+        &self,
+        document: &DocumentModel,
+    ) -> Vec<crate::SpeechBubbleTextLayoutRequest> {
+        self.editor.speech_bubble_text_layout_requests(document)
+    }
+    pub fn apply_speech_bubble_text_layouts(
+        &mut self,
+        document: &DocumentModel,
+        layouts: &[(ElementId, crate::SpeechBubbleTextMeasurement)],
+    ) -> Result<bool, ErrorCode> {
+        self.editor
+            .apply_speech_bubble_text_layouts(document, layouts)
+    }
+    pub fn append_speech_bubble_text_layouts(
+        &self,
+        document: &DocumentModel,
+        tx: &mut snow_draw_engine_document::Transaction,
+    ) {
+        self.editor.append_speech_bubble_text_layouts(document, tx)
+    }
+    pub fn set_speech_bubble_draft_minimum(
+        &mut self,
+        document: &DocumentModel,
+        draft: &mut ActiveTextDraftPresentation,
+        minimum: f64,
+    ) -> Result<(), ErrorCode> {
+        snow_draw_engine_document::validate_text(&draft.text)?;
+        let owner = match draft.target {
+            crate::ActiveTextDraftTarget::NewSpeechBubble(id) => Some(id),
+            crate::ActiveTextDraftTarget::Existing(id) => document.speech_bubble_id_for_text(id),
+            _ => None,
+        };
+        if let Some(owner) = owner {
+            let meta = document.element(owner)?.meta;
+            let bubble = document.speech_bubble(owner)?;
+            if meta.locked
+                || !meta.visible
+                || (matches!(
+                    draft.target,
+                    crate::ActiveTextDraftTarget::NewSpeechBubble(_)
+                ) && bubble.text_element_id.is_some())
+            {
+                return Err(ErrorCode::InvalidState);
+            }
+            let reserve = draft.text.text_ink_reserve;
+            self.editor.fit_speech_bubble_draft(
+                document,
+                owner,
+                &mut draft.text,
+                minimum,
+                reserve,
+            )?;
+        }
+        Ok(())
+    }
     pub fn take_text_edit_request(&mut self) -> Option<ElementId> {
         self.editor.state.pending_text_edit.take()
     }
@@ -86,6 +203,24 @@ impl EditorSession {
     ) -> Vec<crate::ArrowTextLayoutRequest> {
         self.editor.arrow_text_layout_requests(document)
     }
+    pub fn arrow_text_request_build_count(&self) -> u64 {
+        self.editor.arrow_text_request_build_count()
+    }
+    pub fn arrow_text_cached_owner_count(&self) -> usize {
+        self.editor.arrow_text_cached_owner_count()
+    }
+    pub fn arrow_text_preview_candidate_count(&self) -> usize {
+        self.editor.arrow_text_preview_candidate_count()
+    }
+    pub fn sync_arrow_text_cache_after_document_change(
+        &mut self,
+        document: &DocumentModel,
+        delta: &snow_draw_engine_document::DocumentDelta,
+    ) {
+        self.editor
+            .sync_arrow_text_cache_after_document_change(document, delta);
+        self.editor.sync_speech_bubble_text_cache(document, delta);
+    }
     pub fn invalidate_arrow_text_measurements(&mut self) {
         self.editor.invalidate_arrow_text_measurements();
     }
@@ -116,11 +251,25 @@ impl EditorSession {
         self.editor.append_arrow_text_layouts(document, transaction);
     }
 
+    pub fn append_arrow_text_layouts_preserving_labels(
+        &self,
+        document: &DocumentModel,
+        transaction: &mut snow_draw_engine_document::Transaction,
+        preserved_labels: &std::collections::HashSet<ElementId>,
+    ) {
+        self.editor.append_arrow_text_layouts_preserving_labels(
+            document,
+            transaction,
+            preserved_labels,
+        );
+    }
+
     pub fn can_begin_arrow_text(&self) -> bool {
-        matches!(
-            self.editor.state.interaction,
-            crate::state::InteractionState::Idle
-        )
+        self.editor.speech_bubble_tail_drag.is_none()
+            && matches!(
+                self.editor.state.interaction,
+                crate::state::InteractionState::Idle
+            )
     }
 
     pub fn new(config: EngineConfig) -> Result<Self, ErrorCode> {
@@ -150,9 +299,13 @@ impl EditorSession {
         PersistedEditorSession {
             config: self.editor.config,
             spotlight_shape: state.default_spotlight_shape,
+            spotlight_corner_radii: state.default_spotlight_corner_radii,
             rectangle: state.default_rectangle_shape_style,
+            speech_bubble: state.default_speech_bubble_style,
             arrow: state.default_arrow_style,
             distance: state.default_distance_style,
+            angle: state.default_angle_style,
+            magnifier: state.default_magnifier_style,
             line: state.default_line_style,
             free_draw: state.default_free_draw_style,
             rectangle_highlight: state.default_rectangle_highlight_style,
@@ -185,9 +338,14 @@ impl EditorSession {
         let mut session = Self::new(persisted.config)?;
         let state = &mut session.editor.state;
         state.default_rectangle_shape_style = persisted.rectangle;
+        state.default_speech_bubble_style = persisted.speech_bubble;
         state.default_spotlight_shape = persisted.spotlight_shape;
+        state.default_spotlight_corner_radii = persisted.spotlight_corner_radii;
         state.default_arrow_style = persisted.arrow;
         state.default_distance_style = persisted.distance;
+        state.default_angle_style = persisted.angle;
+        state.default_magnifier_style = persisted.magnifier;
+        crate::validate_angle_style(persisted.angle)?;
         state.default_line_style = ShapeStyle {
             arrow_type: crate::style::normalized_line_arrow_type(persisted.line.arrow_type),
             arrow_shaft_type: Default::default(),
@@ -218,6 +376,18 @@ impl EditorSession {
             persisted.serial_number_values.unwrap_or([1; 5]);
         state.serial_number_sequence_overridden = persisted.serial_number_sequence_overridden;
         session.reset_editing_state();
+        Ok(session)
+    }
+
+    pub fn from_persisted_with_document(
+        persisted: PersistedEditorSession,
+        document: &DocumentModel,
+    ) -> Result<Self, ErrorCode> {
+        let has_creation_counters = persisted.serial_number_values.is_some();
+        let mut session = Self::from_persisted(persisted)?;
+        if !has_creation_counters {
+            session.advance_serial_number_counters_for_insertions(document, document.paint_order());
+        }
         Ok(session)
     }
 
@@ -267,11 +437,31 @@ impl EditorSession {
         self.editor.reset_editing_state();
     }
 
+    /// Discard fractional input at history replay or document-session transfer boundaries.
+    pub fn reset_magnifier_wheel_input(&mut self) {
+        self.editor.magnifier_wheel = None;
+    }
+
+    /// Native pointer capture belongs to the current runtime, not its persisted document.
+    pub fn has_pointer_capture(&self) -> bool {
+        self.editor.captured_pointer.is_some()
+    }
+
+    /// A cloned document session does not inherit native pointer ownership or queued releases.
+    pub fn reset_pointer_capture_state(&mut self) {
+        self.editor.captured_pointer = None;
+        self.editor.speech_bubble_tail_drag = None;
+        self.editor.pending_capture_release = false;
+    }
+
     /// Discards measurements, numbering sequences, and transient storage from the old document.
     pub fn reset_document_retained_state(&mut self, initial_serial_number: &SerialNumberStyle) {
         self.editor.reset_editing_state();
         self.editor.invalidate_arrow_text_measurements();
         self.editor.state.arrow_text_measurements = std::collections::HashMap::new();
+        self.editor.speech_bubble_layouts = Default::default();
+        self.editor.speech_bubble_text_cache = Default::default();
+        self.editor.speech_bubble_draft_geometry = None;
         self.editor.state.selection = Default::default();
         self.editor.state.ui = Default::default();
         // Counters and explicit starts belong to a document, unlike creation appearance.
@@ -292,6 +482,23 @@ impl EditorSession {
         self.editor.selected_element_count(document)
     }
 
+    pub fn magnifier_style(&self, document: &DocumentModel) -> crate::MagnifierStyle {
+        self.editor.magnifier_style(document)
+    }
+    pub fn magnifier_style_mixed(&self, document: &DocumentModel) -> u32 {
+        self.editor.magnifier_style_mixed(document)
+    }
+    pub fn set_magnifier_style_patch(
+        &mut self,
+        document: &DocumentModel,
+        style: crate::MagnifierStyle,
+        properties: u32,
+        creation_defaults: bool,
+    ) -> Result<Option<EditorCommand>, ErrorCode> {
+        self.editor
+            .set_magnifier_style_patch(document, style, properties, creation_defaults)
+    }
+
     pub fn shape_style(&self, document: &DocumentModel) -> ShapeStyle {
         self.editor.shape_style(document)
     }
@@ -302,6 +509,29 @@ impl EditorSession {
 
     pub fn rectangle_shape_style(&self, document: &DocumentModel) -> RectangleShapeStyle {
         self.editor.rectangle_shape_style(document)
+    }
+
+    pub fn angle_style(&self, document: &DocumentModel) -> crate::AngleStyle {
+        self.editor.angle_style(document)
+    }
+    pub fn angle_style_mixed(&self, document: &DocumentModel) -> u32 {
+        self.editor.angle_style_mixed(document)
+    }
+    pub fn set_angle_style_patch(
+        &mut self,
+        document: &DocumentModel,
+        style: crate::AngleStyle,
+        properties: u32,
+    ) -> Result<Option<EditorCommand>, ErrorCode> {
+        self.editor
+            .set_angle_style_patch(document, style, properties)
+    }
+    pub fn adjust_angle_value(
+        &mut self,
+        document: &DocumentModel,
+        delta_radians: f64,
+    ) -> Result<Option<EditorCommand>, ErrorCode> {
+        self.editor.adjust_angle_value(document, delta_radians)
     }
 
     pub fn distance_style(&self, document: &DocumentModel) -> crate::DistanceStyle {
@@ -348,13 +578,16 @@ impl EditorSession {
         document: &DocumentModel,
         view: &EditorViewportState,
     ) -> SerialNumberToolbarState {
-        let mut editor = self.editor.clone();
-        editor.view = *view;
-        editor.serial_number_toolbar_state(document)
+        self.editor
+            .with_view(view, |editor| editor.serial_number_toolbar_state(document))
     }
 
     pub fn capture_document_sync_snapshot(&self, document: &DocumentModel) -> DocumentSyncSnapshot {
         self.editor.capture_document_sync_snapshot(document)
+    }
+
+    pub fn smart_erase_presentation(&self, document: &DocumentModel) -> EditorPresentationState {
+        self.editor.smart_erase_presentation(document)
     }
 
     pub fn serial_number_types_following_document(
@@ -376,6 +609,29 @@ impl EditorSession {
                     == crate::document_ops::next_serial_number(document, *numeric_type)
         })
         .collect()
+    }
+
+    pub fn advance_serial_number_counters_for_insertions(
+        &mut self,
+        document: &DocumentModel,
+        ids: &[ElementId],
+    ) {
+        let state = &mut self.editor.state;
+        for id in ids {
+            let Ok(serial) = document.serial_number(*id) else {
+                continue;
+            };
+            if !serial.serial_number_type.supports_number()
+                || state.serial_number_sequence_overridden[serial.numeric_type as usize]
+            {
+                continue;
+            }
+            let next = serial
+                .number
+                .saturating_add(1)
+                .max(state.serial_number_values()[serial.numeric_type as usize]);
+            state.set_serial_number_value(serial.numeric_type, next);
+        }
     }
 
     pub fn sync_serial_number_types_after_document_change(
@@ -476,9 +732,9 @@ impl EditorSession {
         point: Point<f64>,
         button: snow_draw_engine_interaction::PointerButton,
     ) -> Option<ElementId> {
-        let mut editor = self.editor.clone();
-        editor.view = *view;
-        editor.hit_quick_selection_at(document, point, button)
+        self.editor.with_view(view, |editor| {
+            editor.hit_quick_selection_at(document, point, button)
+        })
     }
 
     pub fn selected_ids(&self) -> Vec<ElementId> {
@@ -687,9 +943,9 @@ impl EditorSession {
         view: &mut EditorViewportState,
         event: InputEvent,
     ) -> Result<EditorUpdate, ErrorCode> {
-        self.editor.view = *view;
+        self.editor.view.set(*view);
         let update = self.editor.process_input(document, event)?;
-        *view = self.editor.view;
+        *view = self.editor.view.get();
         Ok(update)
     }
 
@@ -713,6 +969,10 @@ impl EditorSession {
         self.editor.scene_input_revision()
     }
 
+    pub fn angle_adjustment_target_revision(&self, document: &DocumentModel) -> u64 {
+        self.editor.angle_adjustment_target_revision(document)
+    }
+
     pub fn overlay_input_revision(&self) -> u64 {
         self.editor.overlay_input_revision()
     }
@@ -730,9 +990,8 @@ impl EditorSession {
         document: &DocumentModel,
         view: &EditorViewportState,
     ) -> EditorPresentationState {
-        let mut editor = self.editor.clone();
-        editor.view = *view;
-        editor.presentation_state(document)
+        self.editor
+            .with_view(view, |editor| editor.presentation_state(document))
     }
 
     pub fn presentation_state_for_refresh(
@@ -740,10 +999,8 @@ impl EditorSession {
         document: &DocumentModel,
         view: &EditorViewportState,
     ) -> EditorPresentationState {
-        let previous_view = std::mem::replace(&mut self.editor.view, *view);
-        let presentation = self.editor.presentation_state(document);
-        self.editor.view = previous_view;
-        presentation
+        self.editor
+            .with_view(view, |editor| editor.presentation_state(document))
     }
 }
 
@@ -751,10 +1008,148 @@ const fn default_rectangle_filter_stroke_width() -> f64 {
     2.0
 }
 
+#[cfg(test)]
+mod borrowed_view_query_tests {
+    use super::*;
+    use snow_draw_engine_core::{
+        Camera, ColorRgba8, SurfaceSize,
+        arrow::{ArrowType, StrokeStyle},
+    };
+    use snow_draw_engine_document::{ArrowData, ElementMeta, SerialNumberData, Transaction};
+    use snow_draw_engine_interaction::PointerButton;
+
+    #[test]
+    fn serial_number_and_presentation_queries_borrow_the_view_and_reuse_label_cache() {
+        let mut document = DocumentModel::new();
+        let serial = document.allocate_element_id();
+        let owner = document.allocate_element_id();
+        let text = document.allocate_element_id();
+        let mut arrow = ArrowData::from_global_points(
+            &[
+                Point::new(10_100.0, 10_000.0),
+                Point::new(10_000.0, 10_000.0),
+                Point::new(10_000.0, 9_900.0),
+            ],
+            ColorRgba8::default(),
+            2.0,
+            StrokeStyle::Solid,
+            ArrowType::Straight,
+            None,
+            None,
+        )
+        .unwrap();
+        crate::AngleStyle::default().apply_to_arrow(&mut arrow);
+        arrow.text_element_id = Some(text);
+        let mut tx = Transaction::new("borrowed view fixture");
+        tx.insert_serial_number(serial, ElementMeta::default(), SerialNumberData::default());
+        let label = snow_draw_engine_document::generated_annotation_label(&arrow, None).unwrap();
+        tx.insert_arrow(owner, ElementMeta::default(), arrow);
+        tx.insert_text(text, ElementMeta::default(), label);
+        document.apply_transaction(tx).unwrap();
+        let mut session = EditorSession::new(Default::default()).unwrap();
+        session.set_active_tool(ActiveTool::Select).unwrap();
+        session.select_element(&document, serial).unwrap();
+        session
+            .editor
+            .set_camera(Camera {
+                center: Point::new(77.0, -88.0),
+                zoom: 3.0,
+            })
+            .unwrap();
+        let original = session.editor.view.get();
+        let snapshot = session.snapshot();
+        let first = EditorViewportState {
+            surface: SurfaceSize {
+                width: 800,
+                height: 600,
+            },
+            ..Default::default()
+        };
+        let second = EditorViewportState {
+            camera: Camera {
+                center: Point::new(10_000.0, 10_000.0),
+                zoom: 2.0,
+            },
+            ..first
+        };
+        assert!(
+            session
+                .serial_number_toolbar_state(&document, &first)
+                .visible
+        );
+        assert!(
+            !session
+                .serial_number_toolbar_state(&document, &second)
+                .visible
+        );
+        assert!(
+            session
+                .presentation_state(&document, &first)
+                .arrow_text_previews
+                .is_empty()
+        );
+        let builds = session.arrow_text_request_build_count();
+        session.presentation_state(&document, &second);
+        assert_eq!(session.arrow_text_request_build_count(), builds);
+        assert_eq!(
+            session.hit_quick_selection_at(
+                &document,
+                &first,
+                Point::new(0.0, 0.0),
+                PointerButton::Primary
+            ),
+            Some(serial)
+        );
+        assert_eq!(session.editor.view.get(), original);
+        assert_eq!(
+            session.snapshot(),
+            snapshot,
+            "read-only viewport queries preserve retained editor state"
+        );
+    }
+
+    #[test]
+    fn borrowed_view_scopes_restore_after_nested_queries_and_unwind() {
+        let editor = Editor::new(Default::default()).unwrap();
+        let original = editor.view.get();
+        let first = EditorViewportState {
+            camera: Camera {
+                center: Point::new(1.0, 2.0),
+                zoom: 2.0,
+            },
+            ..original
+        };
+        let second = EditorViewportState {
+            camera: Camera {
+                center: Point::new(3.0, 4.0),
+                zoom: 4.0,
+            },
+            ..original
+        };
+        editor.with_view(&first, |editor| {
+            assert_eq!(editor.camera(), first.camera);
+            editor.with_view(&second, |editor| assert_eq!(editor.camera(), second.camera));
+            assert_eq!(editor.camera(), first.camera);
+        });
+        let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            editor.with_view(&second, |_| panic!("test view restoration"));
+        }));
+        assert!(unwind.is_err());
+        assert_eq!(editor.view.get(), original);
+    }
+}
+
 pub fn validate_editor_style_defaults(defaults: &EditorStyleDefaults) -> Result<(), ErrorCode> {
+    crate::validate_magnifier_style(defaults.magnifier)?;
     super::style::validate_rectangle_shape_style(defaults.rectangle)?;
+    super::style::validate_rectangle_shape_style(defaults.speech_bubble)?;
+    super::style::validate_rectangle_shape_style(RectangleShapeStyle {
+        corner_radii: defaults.spotlight_corner_radii,
+        ..defaults.rectangle
+    })?;
     super::style::validate_arrow_style(defaults.arrow)?;
     crate::validate_distance_style(defaults.distance)?;
+    crate::validate_angle_style(defaults.angle)?;
     for style in [
         defaults.line,
         defaults.free_draw,
@@ -792,7 +1187,10 @@ pub fn validate_editor_style_defaults(defaults: &EditorStyleDefaults) -> Result<
 }
 
 fn validate_persisted_editor_styles(persisted: &PersistedEditorSession) -> Result<(), ErrorCode> {
+    crate::validate_magnifier_style(persisted.magnifier)?;
+    super::style::validate_rectangle_shape_style(persisted.speech_bubble)?;
     crate::validate_distance_style(persisted.distance)?;
+    crate::validate_angle_style(persisted.angle)?;
     fn finite_non_negative(value: f64) -> bool {
         value.is_finite() && value >= 0.0
     }
@@ -821,6 +1219,7 @@ fn validate_persisted_editor_styles(persisted: &PersistedEditorSession) -> Resul
             == snow_draw_engine_document::CanvasFilterType::RestoreBackground
         || !finite_non_negative(persisted.rectangle.stroke_width)
         || !valid_corner_radii(persisted.rectangle.corner_radii)
+        || !valid_corner_radii(persisted.spotlight_corner_radii)
         || !finite_non_negative(persisted.arrow.stroke_width)
         || !valid_shape(persisted.line)
         || !valid_shape(persisted.free_draw)

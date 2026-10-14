@@ -10,6 +10,7 @@ use snow_draw_engine_core::{
 
 pub const MIN_TEXT_FONT_SIZE: f64 = 6.0;
 pub const MIN_SERIAL_NUMBER_FONT_SIZE: f64 = MIN_TEXT_FONT_SIZE;
+pub(crate) const SHAPE_CONNECTOR_GAP: f64 = 8.0;
 const MIN_SERIAL_NUMBER_BOUND_TEXT_GAP: f64 = 18.0;
 const SERIAL_NUMBER_BOUND_TEXT_GAP_PER_FONT_SIZE: f64 = MIN_SERIAL_NUMBER_BOUND_TEXT_GAP / 21.0;
 const SERIAL_NUMBER_CANONICAL_FONT_SIZE: f64 = 16.0;
@@ -52,8 +53,7 @@ pub fn validate_rectangle(rect: &RectangleData) -> Result<(), ErrorCode> {
         && (rect.opacity != 1.0
             || rect.fill.a != 0
             || rect.stroke.a != 0
-            || rect.stroke_width != 0.0
-            || rect.corner_radii != CornerRadii::default())
+            || rect.stroke_width != 0.0)
     {
         return Err(ErrorCode::InvalidArgument);
     }
@@ -66,6 +66,8 @@ pub fn validate_rectangle(rect: &RectangleData) -> Result<(), ErrorCode> {
 pub fn validate_element_data(data: &ElementData) -> Result<(), ErrorCode> {
     match data {
         ElementData::Rectangle(rect) => validate_rectangle(rect),
+        ElementData::SpeechBubble(value) => crate::validate_speech_bubble(value),
+        ElementData::Magnifier(value) => crate::validate_magnifier(value),
         ElementData::Filter(filter) => validate_filter(filter),
         ElementData::PenFilter(filter) => validate_pen_filter(filter),
         ElementData::Arrow(arrow) => validate_arrow(arrow),
@@ -124,6 +126,7 @@ impl Default for TextData {
             layout: TextLayoutSize::new(1.0, 36.0),
             rotation: 0.0,
             text: String::new(),
+            text_ink_reserve: 0.0,
             color: ColorRgba8 {
                 r: 0xf4,
                 g: 0x21,
@@ -132,6 +135,8 @@ impl Default for TextData {
             },
             font_size: 30.0,
             font_family: None,
+            bold: false,
+            italic: false,
             fill: ColorRgba8::default(),
             fill_style: FillStyle::Solid,
             stroke: ColorRgba8 {
@@ -369,6 +374,7 @@ pub struct TextPaintGeometry {
     pub fill: ColorRgba8,
     pub stroke: ColorRgba8,
     pub stroke_width: f64,
+    pub text_ink_reserve: f64,
 }
 
 impl TextPaintGeometry {
@@ -388,6 +394,7 @@ impl TextPaintGeometry {
             fill: text.fill,
             stroke: text.stroke,
             stroke_width: text.stroke_width,
+            text_ink_reserve: text.text_ink_reserve,
         }
     }
 }
@@ -485,7 +492,7 @@ pub fn resolve_serial_paint_text_connection(
     let ux = dx / distance;
     let uy = dy / distance;
     let shape_edge_offset = serial_paint_ray_edge_distance(serial, ux, uy);
-    let start_offset = shape_edge_offset + 8.0;
+    let start_offset = shape_edge_offset + SHAPE_CONNECTOR_GAP;
     if distance <= start_offset + half_line_width {
         return None;
     }
@@ -626,8 +633,8 @@ pub fn text_paint_outset(text: &TextPaintGeometry) -> (f64, f64) {
     };
     let (fill_outset_x, fill_outset_y) = text_fill_outset(text);
     (
-        stroke_outset.max(fill_outset_x),
-        stroke_outset.max(fill_outset_y),
+        stroke_outset.max(fill_outset_x) + text.text_ink_reserve.max(0.0),
+        stroke_outset.max(fill_outset_y) + text.text_ink_reserve.max(0.0),
     )
 }
 
@@ -801,7 +808,7 @@ pub fn text_hit_test(text: &TextData, point: Point<f64>, hit_tolerance: f64) -> 
     if width <= 0.0 || height <= 0.0 {
         return false;
     }
-    let tolerance = hit_tolerance.max(0.0);
+    let tolerance = hit_tolerance.max(0.0) + text.text_ink_reserve.max(0.0);
     let local = canvas_to_rect_local(text.center, text.rotation, point);
     local.x >= -width / 2.0 - tolerance
         && local.x <= width / 2.0 + tolerance
@@ -859,6 +866,7 @@ pub fn validate_text(text: &TextData) -> Result<(), ErrorCode> {
         text.corner_radii.bottom_right,
         text.corner_radii.bottom_left,
         text.opacity,
+        text.text_ink_reserve,
     ];
     if scalar_fields.iter().any(|value| !value.is_finite()) {
         return Err(ErrorCode::InvalidArgument);
@@ -873,6 +881,7 @@ pub fn validate_text(text: &TextData) -> Result<(), ErrorCode> {
         || text.corner_radii.bottom_left < 0.0
         || text.opacity < 0.0
         || text.opacity > 1.0
+        || text.text_ink_reserve < 0.0
     {
         return Err(ErrorCode::InvalidArgument);
     }
@@ -927,6 +936,28 @@ fn sanitize_positive(value: f64, fallback: f64) -> f64 {
 }
 
 pub fn rectangle_hit_test(rect: &RectangleData, point: Point<f64>, hit_tolerance: f64) -> bool {
+    if rect.highlight_shape == crate::HighlightShape::Diamond
+        && !rect.is_highlight()
+        && [
+            rect.corner_radii.top_left,
+            rect.corner_radii.top_right,
+            rect.corner_radii.bottom_right,
+            rect.corner_radii.bottom_left,
+        ]
+        .iter()
+        .any(|radius| *radius > 0.0)
+    {
+        let local = canvas_to_rect_local(rect.center, rect.rotation, point);
+        let contour = crate::RoundedDiamond::new(rect.width, rect.height, rect.corner_radii);
+        if rect.is_spotlight() {
+            return contour.exterior_distance(local) <= hit_tolerance.max(0.0);
+        }
+        return (rect.fill.a != 0 && contour.contains(local))
+            || (rect.stroke.a != 0
+                && rect.stroke_width > 0.0
+                && contour.outline_distance(local)
+                    <= rect.stroke_width / 2.0 + hit_tolerance.max(0.0));
+    }
     if rect.is_spotlight() {
         let local = canvas_to_rect_local(rect.center, rect.rotation, point);
         let half_width = rect.width / 2.0 + hit_tolerance.max(0.0);
@@ -936,7 +967,19 @@ pub fn rectangle_hit_test(rect: &RectangleData, point: Point<f64>, hit_tolerance
         }
         return match rect.highlight_shape {
             crate::HighlightShape::Rectangle => {
-                local.x.abs() <= half_width && local.y.abs() <= half_height
+                let outset = hit_tolerance.max(0.0);
+                let radii = CornerRadii {
+                    top_left: rect.corner_radii.top_left + outset,
+                    top_right: rect.corner_radii.top_right + outset,
+                    bottom_right: rect.corner_radii.bottom_right + outset,
+                    bottom_left: rect.corner_radii.bottom_left + outset,
+                };
+                rounded_rect_contains_local_point(
+                    half_width * 2.0,
+                    half_height * 2.0,
+                    normalize_corner_radii(half_width * 2.0, half_height * 2.0, radii),
+                    local,
+                )
             }
             crate::HighlightShape::Ellipse => {
                 (local.x / half_width).powi(2) + (local.y / half_height).powi(2) <= 1.0
@@ -1295,6 +1338,7 @@ pub(crate) fn element_visible_bounds(element: &ElementRecord) -> Option<DrawRect
         ElementData::Rectangle(rect) if rect.width > 0.0 && rect.height > 0.0 => {
             Some(rect_bounds(rect))
         }
+        ElementData::Magnifier(value) => Some(crate::magnifier_bounds(value)),
         ElementData::Arrow(arrow) if !arrow_is_degenerate(arrow) => Some(arrow_bounds(arrow)),
         ElementData::FreeDraw(free_draw) => Some(crate::free_draw_bounds(free_draw)),
         ElementData::Text(text) if text.width() > 0.0 && text.height() > 0.0 => {
@@ -1327,6 +1371,7 @@ mod tests {
             rotation: 0.0,
             content_width: width,
             content_height: height,
+            text_ink_reserve: 0.0,
             horizontal_align: TextHorizontalAlign::Center,
             vertical_align: TextVerticalAlign::Center,
             has_text: true,
@@ -2218,6 +2263,47 @@ mod tests {
         assert!(filter_hit_test(&filter, filter.center, 0.0));
         assert!(!filter_hit_test(&filter, Point::new(60.0, 20.0), 0.0));
         assert!(filter_hit_test(&filter, Point::new(60.0, 20.0), 30.0));
+    }
+
+    #[test]
+    fn spotlight_rounded_corners_hit_test_and_validate_like_shapes() {
+        let rect = RectangleData {
+            rectangle_kind: crate::RectangleElementKind::Rectangle,
+            highlight_shape: crate::HighlightShape::Rectangle,
+            center: Point::new(50.0, 50.0),
+            width: 40.0,
+            height: 40.0,
+            rotation: 0.0,
+            corner_radii: CornerRadii {
+                top_left: 16.0,
+                top_right: 0.0,
+                bottom_right: 0.0,
+                bottom_left: 0.0,
+            },
+            fill: ColorRgba8::default(),
+            fill_style: FillStyle::Solid,
+            stroke: ColorRgba8::default(),
+            stroke_width: 0.0,
+            stroke_style: StrokeStyle::Solid,
+            opacity: 1.0,
+        }
+        .into_spotlight();
+        assert!(validate_rectangle(&rect).is_ok());
+        assert!(!rectangle_hit_test(&rect, Point::new(31.0, 31.0), 0.0));
+        assert!(rectangle_hit_test(&rect, Point::new(36.0, 36.0), 0.0));
+        assert!(rectangle_hit_test(&rect, Point::new(69.0, 31.0), 0.0));
+        assert!(!rectangle_hit_test(&rect, Point::new(29.0, 50.0), 0.0));
+        assert!(rectangle_hit_test(&rect, Point::new(29.0, 50.0), 2.0));
+        for radius in [-1.0, f64::NAN, f64::INFINITY, 41.0] {
+            let invalid = RectangleData {
+                corner_radii: CornerRadii::splat(radius),
+                ..rect
+            };
+            assert_eq!(
+                validate_rectangle(&invalid),
+                Err(ErrorCode::InvalidArgument)
+            );
+        }
     }
 
     #[test]

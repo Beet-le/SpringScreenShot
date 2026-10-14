@@ -51,6 +51,8 @@ ScreenshotToolPalette::Tool paletteTool(ScreenshotActiveTool tool) {
         return ScreenshotToolPalette::Tool::Arrow;
     case ScreenshotActiveTool::Distance:
         return ScreenshotToolPalette::Tool::Distance;
+    case ScreenshotActiveTool::Angle:
+        return ScreenshotToolPalette::Tool::Angle;
     case ScreenshotActiveTool::Line:
         return ScreenshotToolPalette::Tool::Line;
     case ScreenshotActiveTool::FreeDraw:
@@ -271,6 +273,22 @@ ScreenshotOcrController::ScreenshotOcrController(ScreenshotOcrControllerContext 
                 if (auto* toolbar = m_context.overlayCoordinator.toolbar())
                     toolbar->setTextTargetLanguage(language);
             },
+            [this](bool available, bool canUndo, bool canRedo) {
+                if (auto* toolbar = m_context.overlayCoordinator.toolbar()) {
+                    if (auto* palette = toolbar->palette())
+                        palette->setLatexEditingState(available, canUndo, canRedo);
+                }
+            },
+            [this](int mode, const ScreenshotRecognitionModelState& state) {
+                if (auto* toolbar = m_context.overlayCoordinator.toolbar()) {
+                    toolbar->setRecognitionModelState(
+                        mode == static_cast<int>(
+                                    ScreenshotRecognitionSessionController::Mode::Table)
+                            ? ScreenshotToolPalette::Tool::Table
+                            : ScreenshotToolPalette::Tool::Latex,
+                        state);
+                }
+            },
         },
         this);
     connect(m_session.get(), &ScreenshotRecognitionSessionController::textEditingChanged, this,
@@ -340,6 +358,10 @@ void ScreenshotOcrController::activateQr() {
 
 void ScreenshotOcrController::activateLatex() {
     activateMode(Mode::Latex);
+}
+
+void ScreenshotOcrController::setRecognitionModel(const QString& selection) {
+    m_session->setRecognitionModel(selection);
 }
 
 void ScreenshotOcrController::activateImageConversion(SnowShotImageConversionFormat format) {

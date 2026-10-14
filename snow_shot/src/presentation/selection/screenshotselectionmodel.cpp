@@ -12,6 +12,7 @@ constexpr qreal kNewMarqueeAspectRatio = 1.0;
 
 void ScreenshotSelectionModel::reset() {
     m_cachedSelectionRegion.reset();
+    m_cachedMarqueeRegion.reset();
     m_draftVertices.clear();
     m_draftRegion.reset();
     m_region.reset();
@@ -46,6 +47,7 @@ bool ScreenshotSelectionModel::hasPixelSelection() const {
 
 void ScreenshotSelectionModel::clearSelection() {
     m_cachedSelectionRegion.reset();
+    m_cachedMarqueeRegion.reset();
     m_draftVertices.clear();
     m_draftRegion.reset();
     m_region.reset();
@@ -60,15 +62,27 @@ void ScreenshotSelectionModel::clearSelection() {
     }
 }
 
-void ScreenshotSelectionModel::setSelectionRect(const QRectF& selection) {
-    m_cachedSelectionRegion.reset();
+bool ScreenshotSelectionModel::setSelectionRect(const QRectF& selection) {
+    const QRectF normalized = selection.normalized();
+    m_selectionFromDrag = false;
+    if (!m_draftRegion && !m_region && m_draftVertices.isEmpty() &&
+        m_start == normalized.topLeft() && m_end == normalized.bottomRight()) {
+        return false;
+    }
+    // Subpixel detection/animation targets can change without changing their
+    // capture pixels. Only rectangle operands in the same transaction can reuse
+    // the authoritative composition; construction must retain its exact path.
+    if (m_cachedSelectionRegion &&
+        (!regionOperationActive() || constructionActive() ||
+         pixelSelection() != screenshotPixelRectForSelection(normalized))) {
+        m_cachedSelectionRegion.reset();
+    }
     m_draftVertices.clear();
     m_draftRegion.reset();
     m_region.reset();
-    const QRectF normalized = selection.normalized();
     m_start = normalized.topLeft();
     m_end = normalized.bottomRight();
-    m_selectionFromDrag = false;
+    return true;
 }
 
 void ScreenshotSelectionModel::setSelectionStartEnd(const QPointF& start, const QPointF& end) {
@@ -370,6 +384,12 @@ ScreenshotRegionGeometry ScreenshotSelectionModel::confirmedRegion() const {
 ScreenshotRegionGeometry ScreenshotSelectionModel::selectionRegion() const {
     if (m_cachedSelectionRegion)
         return *m_cachedSelectionRegion;
+    if (regionOperationActive() && !constructionActive() && m_cachedMarqueeRegion &&
+        m_cachedMarqueeRegion->pixels == pixelSelection()) {
+        // A new capture target may be the frame already on screen. Preserve its
+        // immutable operands and derived contours instead of recomposing it.
+        return *(m_cachedSelectionRegion = m_cachedMarqueeRegion->region);
+    }
     const ScreenshotRegionGeometry marquee =
         m_draftRegion.value_or(ScreenshotRegionGeometry(pixelSelection()));
     if (m_regionOperation == RegionOperation::Add)
@@ -383,11 +403,23 @@ ScreenshotRegionGeometry
 ScreenshotSelectionModel::selectionRegionForMarquee(const QRectF& marquee) const {
     if (!regionOperationActive() || constructionActive())
         return selectionRegion();
-    const ScreenshotRegionGeometry operand(screenshotPixelRectForSelection(marquee));
-    if (operand.isEmpty())
+    const QRect pixels = screenshotPixelRectForSelection(marquee);
+    if (pixels.isEmpty())
         return m_confirmedRegion;
-    return m_regionOperation == RegionOperation::Add ? m_confirmedRegion.united(operand)
-                                                     : m_confirmedRegion.subtracted(operand);
+    if (pixels == pixelSelection()) {
+        const auto region = selectionRegion();
+        // A settled animation is still the latest displayed frame. Retain it
+        // when the next target invalidates the authoritative composition.
+        m_cachedMarqueeRegion = MarqueeRegion{pixels, region};
+        return region;
+    }
+    if (m_cachedMarqueeRegion && m_cachedMarqueeRegion->pixels == pixels)
+        return m_cachedMarqueeRegion->region;
+    const ScreenshotRegionGeometry operand(pixels);
+    m_cachedMarqueeRegion = MarqueeRegion{pixels, m_regionOperation == RegionOperation::Add
+                                                      ? m_confirmedRegion.united(operand)
+                                                      : m_confirmedRegion.subtracted(operand)};
+    return m_cachedMarqueeRegion->region;
 }
 
 bool ScreenshotSelectionModel::rectangular() const {
@@ -415,6 +447,10 @@ void ScreenshotSelectionModel::beginRegionOperation(RegionOperation operation) {
 
 void ScreenshotSelectionModel::setSelectionRegion(const ScreenshotRegionGeometry& region) {
     const ScreenshotRegionGeometry snapshot = region;
+    // Replacing the operation/confirmed region changes the composed result even
+    // when its bounding rectangle is the same as the previous marquee.
+    m_cachedSelectionRegion.reset();
+    m_cachedMarqueeRegion.reset();
     setSelectionRect(QRectF(snapshot.boundingRect()));
     m_regionOperation = RegionOperation::Replace;
     m_confirmedRegion = {};
@@ -456,6 +492,7 @@ ScreenshotResultStyle ScreenshotSelectionModel::resultStyle() const {
 void ScreenshotSelectionModel::setDraftRegion(const ScreenshotRegionGeometry& region,
                                               const QVector<QPointF>& vertices) {
     m_cachedSelectionRegion.reset();
+    m_cachedMarqueeRegion.reset();
     m_draftVertices = vertices;
     m_draftRegion = region;
     const QRectF bounds(region.boundingRect());
@@ -466,6 +503,7 @@ void ScreenshotSelectionModel::setDraftRegion(const ScreenshotRegionGeometry& re
 
 void ScreenshotSelectionModel::clearDraftRegion() {
     m_cachedSelectionRegion.reset();
+    m_cachedMarqueeRegion.reset();
     m_draftVertices.clear();
     m_draftRegion.reset();
     m_start = {};

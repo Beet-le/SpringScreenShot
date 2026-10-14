@@ -33,6 +33,8 @@ void selectionEffectsPersistAcrossRestarts() {
     ScreenshotSelectionSettingsStore settings;
     require(settings.cornerRadius() == 0 && settings.shadowWidth() == 0,
             "new installations must default to disabled selection effects");
+    require(settings.shadowColor() == QColor(0x33, 0x33, 0x33),
+            "missing shadow color preferences must use the selection model default");
     require(!settings.aspectRatioLocked(),
             "new installations must default to an unlocked selection aspect ratio");
     require(settings.selectionTarget() == ScreenshotIntelligentSelectionTarget::WindowSubElement,
@@ -70,7 +72,9 @@ void selectionEffectsPersistAcrossRestarts() {
         interaction,
         selection,
         ui,
-        [&](int radius, int shadowWidth) { settings.setSelectionEffects(radius, shadowWidth); },
+        [&](int radius, int shadowWidth, const QColor& color) {
+            settings.setSelectionEffects(radius, shadowWidth, color);
+        },
         [&](ScreenshotSelectionAspectRatioPreset preset, bool locked) {
             settings.setAspectRatioPreference(preset, locked);
         },
@@ -112,14 +116,42 @@ void selectionEffectsPersistAcrossRestarts() {
     params.selection = QRect(50, 60, 320, 180);
     params.radius = 32;
     params.shadowWidth = 16;
+    params.shadowColor = QColor(12, 34, 56, 78);
     applyResize(params);
+    require(selection.shadowColor() == params.shadowColor,
+            "confirmed resize parameters must apply the shadow color to the active selection");
+    require(storage.configuration()
+                    .value(QStringLiteral("screenshot_selection/shadow_color"))
+                    .toString() == QStringLiteral("#0C22384E"),
+            "confirmed resize parameters must persist the shadow color without exporting");
     require(settings.cornerRadius() == 32 && settings.shadowWidth() == 16,
             "confirmed resize parameters must update the persistent effects");
+    require(!settings.hasPreviousSelectionParams(),
+            "persisting the shadow color must not require a previous screenshot");
+
+    storage.shutdown();
+    require(storage.initialize(options).success, "custom shadow color must reload");
+    require(settings.shadowColor() == params.shadowColor,
+            "the chosen shadow color including alpha must survive a storage restart");
+
+    workflow.openSelectionResizeModalFromToolbar();
+    applyResize = {};
+    require(settings.shadowColor() == params.shadowColor,
+            "cancelling the resize dialog must preserve the saved shadow color");
+
+    workflow.openSelectionResizeModalFromToolbar();
+    params.shadowColor = QColor(90, 120, 150);
+    applyResize(params);
+    require(settings.shadowColor() == params.shadowColor && settings.cornerRadius() == 32 &&
+                settings.shadowWidth() == 16,
+            "a color-only dialog edit must persist without changing the other effects");
 
     workflow.setSelectionCornerRadiusFromToolbar(1000);
     workflow.setSelectionShadowWidthFromToolbar(1000);
     require(settings.cornerRadius() == 256 && settings.shadowWidth() == 64,
             "toolbar edits must persist the clamped effect values");
+    require(settings.shadowColor() == params.shadowColor,
+            "radius and shadow width edits must retain the chosen shadow color");
     auto& configuration = storage.configuration();
     require(!configuration.setValue(QStringLiteral("screenshot_selection/corner_radius"),
                                     QStringLiteral("invalid")) &&
@@ -127,6 +159,11 @@ void selectionEffectsPersistAcrossRestarts() {
                 !configuration.setValue(QStringLiteral("screenshot_selection/lock_aspect_ratio"),
                                         QStringLiteral("invalid")),
             "persistent selection settings must reject values of the wrong type");
+    require(!configuration.setValue(QStringLiteral("screenshot_selection/shadow_color"), 42) &&
+                !configuration.setValue(QStringLiteral("screenshot_selection/shadow_color"),
+                                        QStringLiteral("invalid")) &&
+                settings.shadowColor() == params.shadowColor,
+            "invalid shadow color preferences must be rejected without overwriting the color");
 
     workflow.setSelectionCornerRadiusFromToolbar(-1);
     workflow.setSelectionShadowWidthFromToolbar(-1);
@@ -134,14 +171,18 @@ void selectionEffectsPersistAcrossRestarts() {
     require(storage.initialize(options).success, "disabled effects must reload");
     require(settings.cornerRadius() == 0 && settings.shadowWidth() == 0,
             "turning effects off must survive a restart");
+    require(settings.shadowColor() == params.shadowColor,
+            "disabling the shadow must retain its color for the next time it is enabled");
     require(!settings.aspectRatioLocked(),
             "turning off the aspect-ratio lock must survive a restart");
 
-    settings.setSelectionEffects(20, 10);
+    settings.setSelectionEffects(20, 10, QColor(12, 34, 56));
     settings.setAspectRatioLocked(true);
     settings.clear();
     require(settings.cornerRadius() == 0 && settings.shadowWidth() == 0,
             "clearing selection settings must reset the persistent effects");
+    require(settings.shadowColor() == QColor(0x33, 0x33, 0x33),
+            "clearing selection settings must reset the shadow color");
     require(!settings.aspectRatioLocked(),
             "clearing selection settings must reset the aspect-ratio lock preference");
     require(settings.selectionTarget() == ScreenshotIntelligentSelectionTarget::WindowSubElement,
@@ -200,7 +241,9 @@ void selectionAspectRatioWorkflowPersistsOnlyUserPreferences() {
         interaction,
         selection,
         ui,
-        [&](int radius, int shadowWidth) { settings.setSelectionEffects(radius, shadowWidth); },
+        [&](int radius, int shadowWidth, const QColor& color) {
+            settings.setSelectionEffects(radius, shadowWidth, color);
+        },
         [&](Preset preset, bool locked) {
             ++preferenceWrites;
             settings.setAspectRatioPreference(preset, locked);

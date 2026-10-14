@@ -289,6 +289,21 @@ pub(crate) fn corner_radius_handle_local_point(
     zoom: f64,
     corner: Corner,
 ) -> Point<f64> {
+    if rect.highlight_shape == snow_draw_engine_document::HighlightShape::Diamond {
+        let index = match corner {
+            Corner::TopLeft => 0,
+            Corner::TopRight => 1,
+            Corner::BottomRight => 2,
+            Corner::BottomLeft => 3,
+        };
+        return snow_draw_engine_document::diamond_corner_handle_local_point(
+            rect.width,
+            rect.height,
+            rect.corner_radii,
+            zoom,
+            index,
+        );
+    }
     let radius = corner_radius(rect.corner_radii, corner);
     let max_radius = max_corner_radius_for(rect, corner);
     let inset = corner_radius_handle_inset(rect, zoom, radius, max_radius);

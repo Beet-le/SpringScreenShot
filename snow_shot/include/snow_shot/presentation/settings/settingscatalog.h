@@ -69,6 +69,8 @@ enum class SettingsSelectBinding {
     AppFont,
     ApplicationPriority,
     ApplicationQoS,
+    MemoryOptimizationPolicy,
+    ContextMenuMode,
     Proxy,
     UpdateMode,
     OcrModelType,
@@ -137,7 +139,6 @@ enum class SettingsSwitchBinding {
     ShowEditSelectionToolbar,
     TrayEnabled,
     FloatingToolbarEnabled,
-    ScreenshotAutoSaveAfterCopy,
     ScreenshotQuickSelectionModification,
     ScreenshotShowCursor,
     ScreenshotCaptureUiInScrollingScreenshot,
@@ -149,9 +150,12 @@ enum class SettingsSwitchBinding {
     ScreenshotCopyImageFileToClipboard,
     SaveRecognitionResultAsImage,
     ShowOriginalImagePreview,
+    ShowTextHighlighting,
     PinAutomaticTextRecognition,
     PinAutoResizeWindow,
     PinShowWindowButtons,
+    PinShowBorderByDefault,
+    PinShowShadowByDefault,
     PinConfirmBeforeClosingWindow,
     PinConfirmBeforeDestroyingWindow,
     OriginalImageTranslation,
@@ -163,6 +167,7 @@ enum class SettingsSwitchBinding {
     ScreenRecordingCaptureToolbar,
     ScreenRecordingAutoExitAfterRecordingEnds,
     ScreenRecordingNotifyAfterExportCompletes,
+    ScreenRecordingDeleteFilesOnRecordingClose,
     DisableHotkeysOnFocusedFullscreen,
     McpEnabled,
     AutoStartAtBoot,
@@ -188,12 +193,14 @@ enum class SettingsIntegerBinding {
 enum class SettingsMultiSelectBinding {
     DrawingQuickSelectionDisabledTools,
     TrayMenuOptions,
+    ScreenshotAutoSaveAfterExecution,
 };
 
 struct SettingsMultiSelectDefinition {
     SettingsMultiSelectBinding binding =
         SettingsMultiSelectBinding::DrawingQuickSelectionDisabledTools;
     QVector<SettingsOptionDefinition> options;
+    TranslatableText placeholder = {};
 };
 
 struct SettingsIntegerDefinition {
@@ -228,6 +235,9 @@ enum class SettingsColorBinding {
     PinBorderColor,
     PinBorderActiveColor,
     PinLockedBorderColor,
+    PinShadowColor,
+    PinShadowActiveColor,
+    PinLockedShadowColor,
 };
 
 struct SettingsColorDefinition {

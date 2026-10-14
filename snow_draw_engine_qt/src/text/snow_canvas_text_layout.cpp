@@ -9,11 +9,13 @@
 #include <QPainter>
 #include <QRawFont>
 #include <QScreen>
+#include <QSet>
 #include <QStringList>
 #include <QTextBlock>
 #include <QTextLayout>
 #include <QTextLine>
 #include <QTextOption>
+#include <QTextBoundaryFinder>
 
 #include <cmath>
 #include <limits>
@@ -81,6 +83,16 @@ double logicalDpiYForFontSizing() {
 }
 
 void applyFontFamily(QFont& font, const SnowSceneDisplayItem& item) {
+    if (item.kind == SNOW_SCENE_DISPLAY_ITEM_TEXT) {
+        font.setBold(item.text_bold != 0);
+        font.setItalic(item.text_italic != 0);
+    } else if (item.kind == SNOW_SCENE_DISPLAY_ITEM_SERIAL_NUMBER) {
+        // Serial labels center and fit glyph ink. Ambient text decorations have
+        // no serial style property and would paint beyond those measured bounds.
+        font.setUnderline(false);
+        font.setOverline(false);
+        font.setStrikeOut(false);
+    }
     const QString family = snow_canvas_text::fontFamilyFromSceneItem(item);
     if (!family.isEmpty()) {
         font.setFamily(family);
@@ -335,6 +347,49 @@ double measureMinimumWrappedWidth(const QFont& baseFont, const SnowSceneDisplayI
     return qMax(1.0, viewWidth / safeZoom);
 }
 
+GraphemeMetrics measureGraphemeMetrics(const QString& text, const QFont& baseFont,
+                                       const SnowSceneDisplayItem& item) {
+    const FontResolution resolution = resolveFont(baseFont, item, 1.0);
+    const QFontMetricsF fontMetrics(resolution.font);
+    GraphemeMetrics result;
+    result.minimumWidth = text.isEmpty() ? fontMetrics.horizontalAdvance(QStringLiteral("M"))
+                                         : fontMetrics.horizontalAdvance(QStringLiteral(" "));
+    QTextBoundaryFinder finder(QTextBoundaryFinder::Grapheme, text);
+    QSet<QString> measuredClusters;
+    qsizetype start = 0;
+    while (true) {
+        const qsizetype end = finder.toNextBoundary();
+        if (end < 0) {
+            break;
+        }
+        const QString cluster = text.mid(start, end - start);
+        start = end;
+        if (cluster == QStringLiteral("\n") || cluster == QStringLiteral("\r\n") ||
+            cluster == QStringLiteral("\r")) {
+            continue;
+        }
+        if (measuredClusters.contains(cluster)) {
+            continue;
+        }
+        measuredClusters.insert(cluster);
+        QTextLayout layout(cluster, resolution.font);
+        layout.setTextOption(singleLineTextOption());
+        const QRectF logical = layoutSingleLineText(layout);
+        const QRectF ink = layoutInkBounds(layout);
+        const double advance = logical.width();
+        result.minimumWidth = qMax(result.minimumWidth, qMax(advance, ink.width()));
+        result.inkReserve =
+            qMax(result.inkReserve, qMax(qMax(0.0, -ink.left()), qMax(0.0, ink.right() - advance)));
+        result.inkReserve =
+            qMax(result.inkReserve, qMax(qMax(0.0, logical.top() - ink.top()),
+                                         qMax(0.0, ink.bottom() - logical.bottom())));
+    }
+    result.minimumWidth = qMax(
+        1.0, (result.minimumWidth + autoResizeTextWidthSafety(resolution.font)) * resolution.scale);
+    result.inkReserve = result.inkReserve * resolution.scale + 1.2;
+    return result;
+}
+
 DocumentLayout createDocumentLayout(const SnowSceneDisplayItem& item, const QFont& baseFont,
                                     double zoom, const QString& text, bool substituteEmptyText) {
     DocumentLayout layout;
@@ -361,21 +416,16 @@ QTransform documentToViewTransform(const SnowSceneDisplayItem& item, const QPoin
     return transform;
 }
 
-QRectF documentContentsRect(const DocumentLayout& layout) {
-    return QRectF(0.0, 0.0, layout.itemWidth / layout.resolution.scale,
-                  layout.textDocument().size().height());
-}
-
 void drawDocument(QPainter& painter, const DocumentLayout& layout, const QColor& textColor) {
-    // QTextDocument::drawContents(rect) replaces the painter clip. Preserve both
-    // the exposed repaint region and any editor selection clip in document space.
+    // The layout rectangle controls wrapping, not paint coverage: glyph overhang,
+    // outlines, and antialiasing may extend beyond it. Draw directly so Qt preserves
+    // the painter's exposed repaint region and editor selection clips, without
+    // imposing a second document-frame clip inside the engine's paint bounds.
     QAbstractTextDocumentLayout::PaintContext context;
     if (textColor.isValid()) {
         context.palette.setColor(QPalette::Text, textColor);
     }
-    context.clip = documentContentsRect(layout);
     painter.save();
-    painter.setClipRect(context.clip, Qt::IntersectClip);
     layout.textDocument().documentLayout()->draw(&painter, context);
     painter.restore();
 }

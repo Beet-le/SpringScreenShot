@@ -12,11 +12,53 @@
 #include <snow/image/format.h>
 
 #include <optional>
+#include <functional>
+#include <memory>
+
+struct ScreenshotAnimationSource;
 
 class QIODevice;
 class QImageReader;
 
 namespace snow_shot::image_codec {
+
+using AnimationCancellationCheck = std::function<bool()>;
+using AnimationAllocationCheck = std::function<bool(qint64)>;
+
+class AnimationDecoder final {
+  public:
+    ~AnimationDecoder();
+    AnimationDecoder(AnimationDecoder&&) noexcept;
+    AnimationDecoder& operator=(AnimationDecoder&&) noexcept;
+    AnimationDecoder(const AnimationDecoder&) = delete;
+    AnimationDecoder& operator=(const AnimationDecoder&) = delete;
+    [[nodiscard]] bool advance(QString* error = nullptr, AnimationCancellationCheck cancelled = {});
+    [[nodiscard]] QImage snapshot(QString* error = nullptr);
+    [[nodiscard]] bool reset(QString* error = nullptr);
+    [[nodiscard]] int frameIndex() const noexcept;
+
+  private:
+    class Impl;
+    explicit AnimationDecoder(std::unique_ptr<Impl> impl);
+    std::unique_ptr<Impl> impl_;
+    friend std::unique_ptr<AnimationDecoder>
+    openAnimationDecoder(std::shared_ptr<const ScreenshotAnimationSource>, QString*,
+                         AnimationAllocationCheck, AnimationCancellationCheck);
+    friend std::shared_ptr<const ScreenshotAnimationSource>
+    decodeAnimationSource(const QByteArray&, QString*, AnimationCancellationCheck,
+                          AnimationAllocationCheck);
+};
+
+// A null result and empty error means an ordinary static image. Recognized
+// malformed animations return an error so callers do not silently flatten them.
+[[nodiscard]] std::shared_ptr<const ScreenshotAnimationSource>
+decodeAnimationSource(const QByteArray& encoded, QString* error = nullptr,
+                      AnimationCancellationCheck cancelled = {},
+                      AnimationAllocationCheck allocationCheck = {});
+[[nodiscard]] std::unique_ptr<AnimationDecoder>
+openAnimationDecoder(std::shared_ptr<const ScreenshotAnimationSource> source,
+                     QString* error = nullptr, AnimationAllocationCheck allocationCheck = {},
+                     AnimationCancellationCheck cancelled = {});
 
 enum class SkinDecodeError {
     None,

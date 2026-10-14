@@ -1,3 +1,4 @@
+#include "snow_shot/runtime/runtimeactivitytracker.h"
 #include "snow_draw_engine_qt/snow_canvas_image.h"
 #include "snow_shot/platform/applicationqos.h"
 #include "snow_shot/presentation/directcapturecontroller.h"
@@ -61,8 +62,8 @@ class DirectCaptureController::Impl {
               },
               [this](const auto& request, const auto&, auto done) {
                   return artifact &&
-                         artifact->requestAutomaticSave(
-                             &owner, request.directories,
+                         artifact->requestAutomaticSaveToConfiguredDirectory(
+                             &owner, request.configuredSaveDirectory,
                              ScreenshotImageFileService::formatForKey(request.imageFormat),
                              request.filenameFormat, request.encoding,
                              [done = std::move(done)](ScreenshotExportTaskResult result) {
@@ -127,37 +128,35 @@ class DirectCaptureController::Impl {
         thread.start();
     }
 
-    ~Impl() {
-        shutdown();
-    }
-
     template <typename Result>
     bool submit(std::function<Result()> work, std::function<void(Result)> done) {
         if (stopped.load())
             return false;
         return QMetaObject::invokeMethod(
             worker,
-            [this, work = std::move(work), done = std::move(done)]() mutable {
-                if (stopped.load())
-                    return;
-                Result result;
-                try {
-                    result = work();
-                } catch (const std::exception& error) {
-                    result.error = QString::fromUtf8(error.what());
-                } catch (...) {
-                    result.error = DirectCaptureController::tr("The capture operation failed");
-                }
-                if (stopped.load())
-                    return;
-                QMetaObject::invokeMethod(
-                    &owner,
-                    [this, result = std::move(result), done = std::move(done)]() mutable {
-                        if (!stopped.load())
-                            done(std::move(result));
-                    },
-                    Qt::QueuedConnection);
-            },
+            snow_shot::runtime::trackRuntimeWork(
+                [this, work = std::move(work), done = std::move(done)]() mutable {
+                    if (stopped.load())
+                        return;
+                    Result result;
+                    try {
+                        result = work();
+                    } catch (const std::exception& error) {
+                        result.error = QString::fromUtf8(error.what());
+                    } catch (...) {
+                        result.error = DirectCaptureController::tr("The capture operation failed");
+                    }
+                    if (stopped.load())
+                        return;
+                    QMetaObject::invokeMethod(
+                        &owner,
+                        snow_shot::runtime::trackRuntimeWork(
+                            [this, result = std::move(result), done = std::move(done)]() mutable {
+                                if (!stopped.load())
+                                    done(std::move(result));
+                            }),
+                        Qt::QueuedConnection);
+                }),
             Qt::QueuedConnection);
     }
 
@@ -209,12 +208,12 @@ class DirectCaptureController::Impl {
         result.shutterSoundNotification = settings.shutterSoundNotification();
         result.restoreOriginalScreenColors = settings.restoreOriginalScreenColors();
         result.requestedAt = QDateTime::currentDateTime();
-        result.autoSave = settings.autoSaveAfterCopy();
+        result.autoSave =
+            directCaptureAutoSaveEnabled(target, settings.autoSaveAfterExecutionActions());
         result.copyFile = settings.copyImageFileToClipboard();
         result.historyEnabled =
             storage::ApplicationStorage::instance().captureHistory().policy().enabled;
-        result.directories =
-            ScreenshotImageFileService::automaticDirectories(settings.imageSaveDirectory());
+        result.configuredSaveDirectory = settings.imageSaveDirectory();
         result.imageFormat = settings.imageFormat();
         result.encoding = screenshotEncodingOptions(settings);
         result.historyDisplayCompressionLevel = ScreenshotImageFileService::compressionLevelForKey(
@@ -255,7 +254,10 @@ class DirectCaptureController::Impl {
 
 DirectCaptureController::DirectCaptureController(QObject* parent)
     : QObject(parent), m_impl(std::make_unique<Impl>(*this)) {}
-DirectCaptureController::~DirectCaptureController() = default;
+DirectCaptureController::~DirectCaptureController() {
+    // Final capture-activity observers need the implementation until shutdown returns.
+    m_impl->shutdown();
+}
 void DirectCaptureController::shutdown() {
     m_impl->shutdown();
 }

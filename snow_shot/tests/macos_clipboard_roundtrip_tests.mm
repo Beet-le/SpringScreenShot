@@ -1,5 +1,6 @@
 #include "snow_shot/presentation/screenshotclipboardservice.h"
 #include "snow_shot/presentation/screenshotclipboardcontent.h"
+#include "snow_shot/presentation/screenshotimageconversionclipboard.h"
 
 #include <QApplication>
 #include <QBuffer>
@@ -10,6 +11,7 @@
 #include <QColorSpace>
 #include <QPointer>
 #include <QProcess>
+#include <QTextDocument>
 
 #import <AppKit/AppKit.h>
 #include <ImageIO/ImageIO.h>
@@ -74,6 +76,42 @@ QImage imageFixture() {
     source.setPixelColor(0, 0, QColor(0, 0, 0, 0));
     source.setPixelColor(8, 5, QColor(40, 80, 120, 128));
     return source;
+}
+
+void nativeHtmlFormatsRoundTrip() {
+    using Format = SnowShotImageConversionFormat;
+    const QString html = QStringLiteral("<p><b>Snow \u96ea \u03a9</b> &amp; HTML</p>");
+    auto* clipboard = QApplication::clipboard();
+    auto source = snow_shot::presentation::imageConversionClipboardMimeData(Format::Html, html);
+    clipboard->setMimeData(source.release());
+    NSPasteboard* board = NSPasteboard.generalPasteboard;
+    require([board.types containsObject:NSPasteboardTypeHTML] &&
+                QString::fromNSString([board stringForType:NSPasteboardTypeHTML]) == html &&
+                QString::fromNSString([board stringForType:NSPasteboardTypeString]) == html,
+            "HTML source Copy must publish native HTML and the source text fallback");
+
+    QTextDocument document;
+    document.setHtml(html);
+    const QTextCursor cursor = document.find(QStringLiteral("Snow \u96ea \u03a9"));
+    auto selected =
+        snow_shot::presentation::imageConversionClipboardMimeData(Format::Html, html, cursor);
+    clipboard->setMimeData(selected.release());
+    QTextDocument copied;
+    copied.setHtml(QString::fromNSString([board stringForType:NSPasteboardTypeHTML]));
+    require([board.types containsObject:NSPasteboardTypeHTML] &&
+                copied.toPlainText() == cursor.selectedText() &&
+                copied.find(cursor.selectedText()).charFormat().fontWeight() > QFont::Normal &&
+                QString::fromNSString([board stringForType:NSPasteboardTypeString]) ==
+                    cursor.selectedText(),
+            "selected HTML must retain native Unicode text and bold formatting");
+
+    const QString markdown = QStringLiteral("# Markdown");
+    auto plain =
+        snow_shot::presentation::imageConversionClipboardMimeData(Format::Markdown, markdown);
+    clipboard->setMimeData(plain.release());
+    require(![board.types containsObject:NSPasteboardTypeHTML] &&
+                QString::fromNSString([board stringForType:NSPasteboardTypeString]) == markdown,
+            "Markdown Copy must replace native HTML with plain source text");
 }
 
 void readForeignPngInFreshProcess() {
@@ -314,6 +352,11 @@ int main(int argc, char** argv) {
             return app.exec();
         }
         PasteboardRestore restore;
+        if (app.arguments().contains(QStringLiteral("--html-only"))) {
+            nativeHtmlFormatsRoundTrip();
+            return EXIT_SUCCESS;
+        }
+        nativeHtmlFormatsRoundTrip();
         readForeignPngInFreshProcess();
         snapshotSkipsDerivedBitmapAndRetainsForeignFallback();
         publicationReleasesEncodedInputs();

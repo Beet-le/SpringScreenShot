@@ -187,6 +187,10 @@
             <translation>群組：%1</translation>
         </message>
         <message>
+            <source>Hidden</source>
+            <translation>已隱藏</translation>
+        </message>
+        <message>
             <source>No matching pinned windows</source>
             <translation>沒有符合條件的固定到螢幕視窗</translation>
         </message>
@@ -481,6 +485,10 @@
             <translation>減少 10%</translation>
         </message>
         <message>
+            <source>Decrease speed</source>
+            <translation>降低速度</translation>
+        </message>
+        <message>
             <source>Default</source>
             <translation>預設</translation>
         </message>
@@ -557,16 +565,16 @@
             <translation>增加 10%</translation>
         </message>
         <message>
+            <source>Increase speed</source>
+            <translation>提高速度</translation>
+        </message>
+        <message>
             <source>Load new content</source>
             <translation>載入新內容</translation>
         </message>
         <message>
             <source>Lock mode</source>
             <translation>鎖定模式</translation>
-        </message>
-        <message>
-            <source>Locked</source>
-            <translation>已鎖定</translation>
         </message>
         <message>
             <source>Move window</source>
@@ -577,16 +585,32 @@
             <translation>新增群組</translation>
         </message>
         <message>
+            <source>Next frame</source>
+            <translation>下一影格</translation>
+        </message>
+        <message>
             <source>Opacity</source>
             <translation>不透明度</translation>
         </message>
         <message>
-            <source>Opacity: %1%</source>
-            <translation>不透明度：%1%</translation>
+            <source>Pause</source>
+            <translation>暫停</translation>
+        </message>
+        <message>
+            <source>Play</source>
+            <translation>播放</translation>
+        </message>
+        <message>
+            <source>Playback speed: %1%</source>
+            <translation>播放速度：%1%</translation>
         </message>
         <message>
             <source>Preparing cloud upload...</source>
             <translation>正在準備雲端上傳…</translation>
+        </message>
+        <message>
+            <source>Previous frame</source>
+            <translation>上一影格</translation>
         </message>
         <message>
             <source>Process image</source>
@@ -595,6 +619,10 @@
         <message>
             <source>Recognizing text</source>
             <translation>正在辨識文字</translation>
+        </message>
+        <message>
+            <source>Reset speed</source>
+            <translation>重設速度</translation>
         </message>
         <message>
             <source>Reset transform</source>
@@ -617,10 +645,6 @@
             <translation>縮放</translation>
         </message>
         <message>
-            <source>Scale: %1%</source>
-            <translation>縮放：%1%</translation>
-        </message>
-        <message>
             <source>Show all windows</source>
             <translation>顯示所有視窗</translation>
         </message>
@@ -633,8 +657,16 @@
             <translation>顯示主介面</translation>
         </message>
         <message>
+            <source>Show shadow</source>
+            <translation>顯示陰影</translation>
+        </message>
+        <message>
             <source>Supported files (%1)</source>
             <translation>支援的檔案 (%1)</translation>
+        </message>
+        <message>
+            <source>The animation could not be played</source>
+            <translation>無法播放動畫</translation>
         </message>
         <message>
             <source>The image could not be saved automatically: %1</source>

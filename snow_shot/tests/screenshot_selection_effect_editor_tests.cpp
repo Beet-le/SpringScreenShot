@@ -80,11 +80,12 @@ struct Fixture {
         ScreenshotSelectionEditUiActions ui;
         ui.updateOverlayState = [this] { refresh(); };
         workflow = std::make_unique<ScreenshotSelectionEditWorkflow>(
-            ScreenshotSelectionEditWorkflowContext{parent, capture, displays, geometry, interaction,
-                                                   selection, ui, [this](int radius, int shadow) {
-                                                       ++writes;
-                                                       settings.setSelectionEffects(radius, shadow);
-                                                   }});
+            ScreenshotSelectionEditWorkflowContext{
+                parent, capture, displays, geometry, interaction, selection, ui,
+                [this](int radius, int shadow, const QColor& color) {
+                    ++writes;
+                    settings.setSelectionEffects(radius, shadow, color);
+                }});
         ScreenshotOverlayInputActions actions;
         actions.updateOverlayState = [this] { refresh(); };
         actions.setEffectCursor = ScreenshotOverlayCanvasPresenter::setOverlayEffectCursor;
@@ -503,8 +504,8 @@ void aspectRatioSnappingAndEffectEditingPreserveEachOther() {
             "snapping must retain its anchor and persist the ratio independently of effects");
 
     const int ratioWrites = f.aspectRatioWrites;
-    require(!f.input->activateSelectionAspectRatioSnapShortcut(),
-            "Q snapping must not arm while the selection is idle");
+    require(f.input->canActivateSelectionAspectRatioSnapShortcut(),
+            "an idle snapped selection must allow Q to cancel its lock");
     const auto shadow = f.layout().shadow;
     f.input->handleMousePress(&f.overlay, shadow);
     f.input->handleMouseMove(&f.overlay, shadow + QPointF(20, 0));
@@ -523,6 +524,14 @@ void aspectRatioSnappingAndEffectEditingPreserveEachOther() {
                 f.settings.aspectRatioPreset() == preset && f.settings.aspectRatioLocked() &&
                 f.aspectRatioWrites == ratioWrites,
             "effect commit must preserve the snapped ratio and persist only its own settings");
+    require(
+        f.input->activateSelectionAspectRatioSnapShortcut() && !f.selection.aspectRatioLocked() &&
+            f.selection.aspectRatioPreset() == ScreenshotSelectionAspectRatioPreset::Free &&
+            !f.settings.aspectRatioLocked() &&
+            f.settings.aspectRatioPreset() == ScreenshotSelectionAspectRatioPreset::Free &&
+            f.selection.normalizedSelection() == bounds && f.selection.shadowWidth() == 20 &&
+            f.writes == 1 && f.aspectRatioWrites == ratioWrites + 1,
+        "Q after effect editing must unlock the selection while preserving geometry and effects");
 }
 
 QImage render(SnowCanvasWidget& canvas, qreal dpr) {

@@ -189,6 +189,10 @@
             <translation>Group: %1</translation>
         </message>
         <message>
+            <source>Hidden</source>
+            <translation>Hidden</translation>
+        </message>
+        <message>
             <source>No matching pinned windows</source>
             <translation>No matching pinned windows</translation>
         </message>
@@ -487,6 +491,10 @@
             <translation>Decrease 10%</translation>
         </message>
         <message>
+            <source>Decrease speed</source>
+            <translation>Decrease speed</translation>
+        </message>
+        <message>
             <source>Default</source>
             <translation>Default</translation>
         </message>
@@ -563,16 +571,16 @@
             <translation>Increase 10%</translation>
         </message>
         <message>
+            <source>Increase speed</source>
+            <translation>Increase speed</translation>
+        </message>
+        <message>
             <source>Load new content</source>
             <translation>Load new content</translation>
         </message>
         <message>
             <source>Lock mode</source>
             <translation>Lock mode</translation>
-        </message>
-        <message>
-            <source>Locked</source>
-            <translation>Locked</translation>
         </message>
         <message>
             <source>Move window</source>
@@ -583,16 +591,32 @@
             <translation>New Group</translation>
         </message>
         <message>
+            <source>Next frame</source>
+            <translation>Next frame</translation>
+        </message>
+        <message>
             <source>Opacity</source>
             <translation>Opacity</translation>
         </message>
         <message>
-            <source>Opacity: %1%</source>
-            <translation>Opacity: %1%</translation>
+            <source>Pause</source>
+            <translation>Pause</translation>
+        </message>
+        <message>
+            <source>Play</source>
+            <translation>Play</translation>
+        </message>
+        <message>
+            <source>Playback speed: %1%</source>
+            <translation>Playback speed: %1%</translation>
         </message>
         <message>
             <source>Preparing cloud upload...</source>
             <translation>Preparing cloud upload...</translation>
+        </message>
+        <message>
+            <source>Previous frame</source>
+            <translation>Previous frame</translation>
         </message>
         <message>
             <source>Process image</source>
@@ -601,6 +625,10 @@
         <message>
             <source>Recognizing text</source>
             <translation>Recognizing text</translation>
+        </message>
+        <message>
+            <source>Reset speed</source>
+            <translation>Reset speed</translation>
         </message>
         <message>
             <source>Reset transform</source>
@@ -623,10 +651,6 @@
             <translation>Scale</translation>
         </message>
         <message>
-            <source>Scale: %1%</source>
-            <translation>Scale: %1%</translation>
-        </message>
-        <message>
             <source>Show all windows</source>
             <translation>Show all windows</translation>
         </message>
@@ -639,8 +663,16 @@
             <translation>Show main interface</translation>
         </message>
         <message>
+            <source>Show shadow</source>
+            <translation>Show shadow</translation>
+        </message>
+        <message>
             <source>Supported files (%1)</source>
             <translation>Supported files (%1)</translation>
+        </message>
+        <message>
+            <source>The animation could not be played</source>
+            <translation>The animation could not be played</translation>
         </message>
         <message>
             <source>The image could not be saved automatically: %1</source>

@@ -17,6 +17,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPalette>
+#include <QPointer>
 #include <QStyle>
 
 #include <algorithm>
@@ -600,25 +601,33 @@ void AdTag::mouseReleaseEvent(QMouseEvent* event) {
   }
 
   if (closePressed_) {
+    event->accept();
     const bool triggerClose =
         event->button() == Qt::LeftButton && closeButtonHit(mouseEventPos(event));
     closePressed_ = false;
     updateHoverState(mouseEventPos(event));
     update();
     if (triggerClose) {
+      const QPointer<AdTag> guard(this);
       emit closeRequested();
+      if (guard == nullptr) {
+        return;
+      }
       if (autoHideOnClose_) {
         pendingClosedEmission_ = true;
         hide();
       }
     }
-    event->accept();
     return;
   }
 
   const bool shouldUpdate = pressed_;
   pressed_ = false;
+  const QPointer<AdTag> guard(this);
   QAbstractButton::mouseReleaseEvent(event);
+  if (guard == nullptr) {
+    return;
+  }
   updateHoverState(mouseEventPos(event));
   if (shouldUpdate) {
     update();
@@ -650,8 +659,9 @@ void AdTag::keyPressEvent(QKeyEvent* event) {
 void AdTag::keyReleaseEvent(QKeyEvent* event) {
   const bool hadPressed = pressed_;
   pressed_ = false;
+  const QPointer<AdTag> guard(this);
   QAbstractButton::keyReleaseEvent(event);
-  if (hadPressed) {
+  if (guard != nullptr && hadPressed) {
     update();
   }
 }

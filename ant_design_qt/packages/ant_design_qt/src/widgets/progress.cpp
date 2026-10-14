@@ -9,6 +9,7 @@
 #include <QImage>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPointer>
 #include <QVariant>
 #include <algorithm>
 #include <cmath>
@@ -215,20 +216,21 @@ void AdProgress::setType(Type value) {
       value == Type::Line ? QSizePolicy::Fixed : QSizePolicy::Preferred);
   policy.setHeightForWidth(value != Type::Line);
   setSizePolicy(policy);
-  refreshAppearance();
+  if (!refreshAppearance()) return;
   emit typeChanged(value);
 }
 AdProgress::Status AdProgress::status() const { return d_->status; }
 void AdProgress::setStatus(Status value) {
   if (d_->status == value) return;
   d_->status = value;
-  refreshAppearance();
+  if (!refreshAppearance()) return;
   emit statusChanged(value);
 }
 AdProgress::Status AdProgress::effectiveStatus() const { return d_->effectiveStatus; }
 qreal AdProgress::percent() const { return d_->percent; }
 qreal AdProgress::displayedPercent() const { return d_->displayed; }
 void AdProgress::setPercent(qreal value) {
+  const QPointer<AdProgress> guard(this);
   if (!std::isfinite(value)) return;
   value = boundedPercent(value);
   if (d_->percent == value) return;
@@ -237,13 +239,17 @@ void AdProgress::setPercent(qreal value) {
   d_->transition =
       d_->style.motion && isVisible() && d_->style.animationDurationMs > 0 && d_->steps == 0;
   if (d_->transition) d_->transitionStart = detail::timingNowMs();
-  if (!d_->transition) {
+  const bool displayChanged = !d_->transition;
+  if (displayChanged) {
     d_->displayed = value;
-    emit displayedPercentChanged(value);
   }
-  refreshValue();
-  emit percentChanged(value);
+  if (!refreshValue()) return;
   notifyAccessibleValueChange();
+  if (displayChanged) {
+    emit displayedPercentChanged(value);
+    if (!guard) return;
+  }
+  emit percentChanged(value);
 }
 qreal AdProgress::successPercent() const { return d_->successPercent; }
 void AdProgress::setSuccessPercent(qreal value) {
@@ -251,7 +257,7 @@ void AdProgress::setSuccessPercent(qreal value) {
   value = value < 0 ? -1 : boundedPercent(value);
   if (d_->successPercent == value) return;
   d_->successPercent = value;
-  refreshValue();
+  if (!refreshValue()) return;
   emit successPercentChanged(value);
 }
 void AdProgress::clearSuccess() { setSuccessPercent(-1); }
@@ -261,7 +267,7 @@ void AdProgress::clearSuccess() { setSuccessPercent(-1); }
   void AdProgress::Setter(TypeName value) {                            \
     if (d_->Member == value) return;                                   \
     d_->Member = value;                                                \
-    refreshAppearance();                                               \
+    if (!refreshAppearance()) return;                                  \
     emit Signal(value);                                                \
   }
 ADQT_PROGRESS_SETTER(bool, showInfo, setShowInfo, showInfo, showInfoChanged)
@@ -283,7 +289,7 @@ void AdProgress::setProgressSize(const QSize& value) {
   const QSize normalized(std::max(0, value.width()), std::max(0, value.height()));
   if (normalized == d_->sizeOverride) return;
   d_->sizeOverride = normalized;
-  refreshAppearance();
+  if (!refreshAppearance()) return;
   emit progressSizeChanged(normalized);
 }
 qreal AdProgress::strokeWidth() const { return d_->strokeWidth; }
@@ -292,7 +298,7 @@ void AdProgress::setStrokeWidth(qreal value) {
   value = std::clamp(value, 0.0, 10000.0);
   if (d_->strokeWidth == value) return;
   d_->strokeWidth = value;
-  refreshAppearance();
+  if (!refreshAppearance()) return;
   emit strokeWidthChanged(value);
 }
 #define ADQT_PROGRESS_COLOR(Getter, Setter, Member, Signal) \
@@ -300,7 +306,7 @@ void AdProgress::setStrokeWidth(qreal value) {
   void AdProgress::Setter(const QColor& value) {            \
     if (d_->Member == value) return;                        \
     d_->Member = value;                                     \
-    refreshAppearance();                                    \
+    if (!refreshAppearance()) return;                       \
     emit Signal(value);                                     \
   }
 ADQT_PROGRESS_COLOR(strokeColor, setStrokeColor, fill, strokeColorChanged)
@@ -327,14 +333,14 @@ void AdProgress::setStrokeGradient(const QGradientStops& stops) {
   }
   if (d_->gradient == unique) return;
   d_->gradient = unique;
-  refreshAppearance();
+  if (!refreshAppearance()) return;
   emit strokeGradientChanged();
 }
 bool AdProgress::gradientReversed() const { return d_->reversedGradient; }
 void AdProgress::setGradientReversed(bool value) {
   if (d_->reversedGradient == value) return;
   d_->reversedGradient = value;
-  refreshAppearance();
+  if (!refreshAppearance()) return;
   emit strokeGradientChanged();
 }
 int AdProgress::steps() const { return d_->steps; }
@@ -347,7 +353,7 @@ void AdProgress::setSteps(int value) {
       d_->type == Type::Line ? QSizePolicy::Fixed : QSizePolicy::Preferred);
   policy.setHeightForWidth(d_->type != Type::Line);
   setSizePolicy(policy);
-  refreshAppearance();
+  if (!refreshAppearance()) return;
   emit stepsChanged(value);
 }
 qreal AdProgress::stepGap() const { return d_->stepGap; }
@@ -393,37 +399,38 @@ QString AdProgress::formattedText() const { return d_->text; }
 AdProgress::ComponentTokens AdProgress::componentTokens() const { return d_->tokens; }
 void AdProgress::setComponentTokens(const ComponentTokens& value) {
   d_->tokens = value;
-  refreshAppearance();
+  if (!refreshAppearance()) return;
   emit componentTokensChanged();
 }
 void AdProgress::resetComponentTokens() { setComponentTokens({}); }
 AdProgress::SemanticStyles AdProgress::semanticStyles() const { return d_->semantic; }
 void AdProgress::setSemanticStyles(const SemanticStyles& value) {
   d_->semantic = value;
-  refreshAppearance();
+  if (!refreshAppearance()) return;
   emit semanticStylesChanged();
 }
 void AdProgress::resetSemanticStyles() { setSemanticStyles({}); }
 
-void AdProgress::refreshValue() {
+bool AdProgress::refreshValue() {
   const Status effective =
       d_->status == Status::Automatic
           ? ((d_->successPercent >= 0 ? d_->successPercent : d_->percent) >= 100 ? Status::Success
                                                                                  : Status::Normal)
           : d_->status;
   if (effective != d_->effectiveStatus) {
-    refreshAppearance();
-    return;
+    return refreshAppearance();
   }
   const qreal oldWidth = d_->textWidth;
   const qreal oldHeight = d_->textHeight;
   refreshContent();
-  refreshAnimation();
+  if (!refreshAnimation()) return false;
   if (oldWidth != d_->textWidth || oldHeight != d_->textHeight) updateGeometry();
   invalidatePainting();
+  return true;
 }
 
-void AdProgress::refreshAppearance(bool resolveTheme) {
+bool AdProgress::refreshAppearance(bool resolveTheme) {
+  const QPointer<AdProgress> guard(this);
   const Status effective =
       d_->status == Status::Automatic
           ? ((d_->successPercent >= 0 ? d_->successPercent : d_->percent) >= 100 ? Status::Success
@@ -445,14 +452,15 @@ void AdProgress::refreshAppearance(bool resolveTheme) {
     d_->lineBrush = QBrush(gradient);
   }
   refreshContent();
-  refreshAnimation();
+  if (!refreshAnimation()) return false;
   updateGeometry();
   invalidatePainting();
   if (statusChanged) {
-    emit effectiveStatusChanged(effective);
     QAccessibleEvent event(this, QAccessible::DescriptionChanged);
     QAccessible::updateAccessibility(&event);
+    emit effectiveStatusChanged(effective);
   }
+  return !guard.isNull();
 }
 
 void AdProgress::refreshContent() {
@@ -495,26 +503,34 @@ void AdProgress::refreshContent() {
   }
 }
 
-void AdProgress::refreshAnimation() {
+bool AdProgress::refreshAnimation() {
+  const QPointer<AdProgress> guard(this);
+  bool displayChanged = false;
   const bool visibleMotion = d_->style.motion && isVisible();
   if ((!visibleMotion || d_->steps > 0 || d_->style.animationDurationMs == 0) && d_->transition) {
     d_->transition = false;
     if (d_->displayed != d_->percent) {
       d_->displayed = d_->percent;
-      emit displayedPercentChanged(d_->displayed);
+      displayChanged = true;
     }
   }
   const bool shine = visibleMotion && d_->effectiveStatus == Status::Active &&
                      d_->type == Type::Line && d_->steps == 0 && d_->percent > 0 &&
                      d_->percent < 100;
   const bool subscribed = shine || d_->transition;
-  if (d_->subscribed == subscribed) return;
-  d_->subscribed = subscribed;
-  detail::setFrameSubscription(this, QString::fromLatin1(kFrameKey), subscribed,
-                               [this](qint64 nowMs, qint64) { animationFrame(nowMs); });
+  if (d_->subscribed != subscribed) {
+    d_->subscribed = subscribed;
+    detail::setFrameSubscription(this, QString::fromLatin1(kFrameKey), subscribed,
+                                 [this](qint64 nowMs, qint64) { animationFrame(nowMs); });
+  }
+  if (displayChanged) {
+    emit displayedPercentChanged(d_->displayed);
+  }
+  return !guard.isNull();
 }
 
 void AdProgress::animationFrame(qint64 nowMs) {
+  bool displayChanged = false;
   if (d_->transition) {
     const qreal fraction = std::clamp(static_cast<qreal>(nowMs - d_->transitionStart) /
                                           std::max(1, d_->style.animationDurationMs),
@@ -524,12 +540,15 @@ void AdProgress::animationFrame(qint64 nowMs) {
     if (fraction >= 1) {
       d_->displayed = d_->percent;
       d_->transition = false;
-      refreshAnimation();
+      if (!refreshAnimation()) return;
     }
-    emit displayedPercentChanged(d_->displayed);
+    displayChanged = true;
   }
   d_->shine = static_cast<qreal>((nowMs - d_->shineStart) % 2400) / 2400;
   invalidatePainting();
+  if (displayChanged) {
+    emit displayedPercentChanged(d_->displayed);
+  }
 }
 
 void AdProgress::notifyAccessibleValueChange() {
@@ -853,7 +872,7 @@ bool AdProgress::event(QEvent* event) {
     refreshAnimation();
   }
   if (event->type() == QEvent::Hide) {
-    refreshAnimation();
+    if (!refreshAnimation()) return result;
     d_->raster = QImage();
   }
   if (event->type() == QEvent::Resize) {

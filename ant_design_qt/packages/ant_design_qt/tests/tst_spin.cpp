@@ -1,5 +1,6 @@
 #include <QAccessible>
 #include <QApplication>
+#include <QEvent>
 #include <QHBoxLayout>
 #include <QImage>
 #include <QLabel>
@@ -11,6 +12,7 @@
 #include <QTest>
 #include <QVBoxLayout>
 #include <cstdlib>
+#include <functional>
 #include <limits>
 
 #include "theme/theme_manager.h"
@@ -18,6 +20,28 @@
 #include "widgets/spin_style.h"
 
 using adqt::widgets::AdSpin;
+
+namespace {
+
+class PercentEventFilter final : public QObject {
+ public:
+  qreal trigger = 50;
+  std::function<void()> callback;
+
+ protected:
+  bool eventFilter(QObject* watched, QEvent* event) override {
+    if (event->type() == QEvent::DynamicPropertyChange &&
+        static_cast<QDynamicPropertyChangeEvent*>(event)->propertyName() == "percent" &&
+        watched->property("percent").toReal() == trigger) {
+      const QPointer<QObject> receiver(watched);
+      callback();
+      return !receiver;
+    }
+    return false;
+  }
+};
+
+}  // namespace
 
 class SpinTest final : public QObject {
   Q_OBJECT
@@ -34,6 +58,14 @@ class SpinTest final : public QObject {
   void customIndicatorIsOwnedAndCentered();
   void replacementAndTakeFollowQtOwnershipRules();
   void determinateAndAutomaticProgressModes();
+  void notificationsSurviveOwnerDeletion();
+  void progressCallbacksSeeCommittedState();
+  void progressNotificationsTrackNestedChanges();
+  void activeNotificationsTrackNestedChanges();
+  void nestedNotificationsSurviveOwnerDeletion();
+  void indicatorEventsTrackNestedChanges();
+  void indicatorEventsSurviveOwnerDeletion();
+  void indicatorEventsPreserveAutomaticProgress();
   void automaticProgressPausesWhileHidden();
   void disabledAnimationIsVisuallyStable();
   void fullscreenSurfaceCoversAndTracksWindow();
@@ -67,6 +99,249 @@ void SpinTest::defaultsAndPropertyMetadata() {
   QVERIFY(!meta->property(meta->indexOfProperty("displayedPercent")).isWritable());
   QVERIFY(meta->property(meta->indexOfProperty("contentWidget")).isWritable());
   QVERIFY(meta->property(meta->indexOfProperty("indicatorWidget")).isWritable());
+}
+
+void SpinTest::notificationsSurviveOwnerDeletion() {
+  for (const int signal : {0, 1, 2, 3, 4}) {
+    QPointer<AdSpin> spin = new AdSpin;
+    const auto deleteOwner = [&] { delete spin.data(); };
+    if (signal == 0) {
+      connect(spin, &AdSpin::spinningChanged, this, deleteOwner);
+      spin->setSpinning(false);
+    } else if (signal == 1) {
+      connect(spin, &AdSpin::activeChanged, this, deleteOwner);
+      spin->setSpinning(false);
+    } else if (signal == 2) {
+      connect(spin, &AdSpin::progressModeChanged, this, deleteOwner);
+      spin->setPercent(50);
+    } else if (signal == 3) {
+      connect(spin, &AdSpin::percentChanged, this, deleteOwner);
+      spin->setPercent(50);
+    } else {
+      connect(spin, &AdSpin::displayedPercentChanged, this, deleteOwner);
+      spin->setPercent(50);
+    }
+    QVERIFY(spin.isNull());
+  }
+}
+
+void SpinTest::progressCallbacksSeeCommittedState() {
+  AdSpin spin;
+  bool observed = false;
+  connect(&spin, &AdSpin::percentChanged, this, [&](qreal percent) {
+    if (percent != 50) return;
+    observed = true;
+    QCOMPARE(spin.progressMode(), AdSpin::ProgressMode::Determinate);
+    QCOMPARE(spin.displayedPercent(), 50.0);
+    spin.setPercent(80);
+  });
+  spin.setPercent(50);
+  QVERIFY(observed);
+  QCOMPARE(spin.percent(), 80.0);
+  QCOMPARE(spin.displayedPercent(), 80.0);
+}
+
+void SpinTest::progressNotificationsTrackNestedChanges() {
+  {
+    AdSpin spin;
+    QList<qreal> percents;
+    QList<qreal> displayed;
+    connect(&spin, &AdSpin::percentChanged, this, [&](qreal value) {
+      QCOMPARE(value, spin.percent());
+      percents.append(value);
+      if (value == 50) spin.setPercent(80);
+      if (value == 80) spin.setPercent(90);
+    });
+    connect(&spin, &AdSpin::displayedPercentChanged, this, [&](qreal value) {
+      QCOMPARE(value, spin.displayedPercent());
+      displayed.append(value);
+    });
+    spin.setPercent(50);
+    QCOMPARE(percents, QList<qreal>({50, 80, 90}));
+    QCOMPARE(displayed, QList<qreal>({90}));
+  }
+  {
+    AdSpin spin;
+    QList<qreal> percents;
+    QList<qreal> displayed;
+    connect(&spin, &AdSpin::progressModeChanged, this, [&](AdSpin::ProgressMode mode) {
+      QCOMPARE(mode, spin.progressMode());
+      if (mode == AdSpin::ProgressMode::Determinate) spin.setPercent(80);
+    });
+    connect(&spin, &AdSpin::percentChanged, this, [&](qreal value) {
+      QCOMPARE(value, spin.percent());
+      percents.append(value);
+    });
+    connect(&spin, &AdSpin::displayedPercentChanged, this, [&](qreal value) {
+      QCOMPARE(value, spin.displayedPercent());
+      displayed.append(value);
+    });
+    spin.setPercent(50);
+    QCOMPARE(percents, QList<qreal>({80}));
+    QCOMPARE(displayed, QList<qreal>({80}));
+  }
+  {
+    AdSpin spin;
+    spin.setPercent(50);
+    QList<AdSpin::ProgressMode> modes;
+    QList<qreal> displayed;
+    connect(&spin, &AdSpin::progressModeChanged, this, [&](AdSpin::ProgressMode mode) {
+      QCOMPARE(mode, spin.progressMode());
+      modes.append(mode);
+      if (mode == AdSpin::ProgressMode::Automatic) spin.clearProgress();
+      if (mode == AdSpin::ProgressMode::None) spin.setPercent(80);
+    });
+    connect(&spin, &AdSpin::displayedPercentChanged, this, [&](qreal value) {
+      QCOMPARE(value, spin.displayedPercent());
+      displayed.append(value);
+    });
+    spin.setAutoProgress();
+    QCOMPARE(modes, QList<AdSpin::ProgressMode>({AdSpin::ProgressMode::Automatic,
+                                                 AdSpin::ProgressMode::None,
+                                                 AdSpin::ProgressMode::Determinate}));
+    QCOMPARE(displayed, QList<qreal>({80}));
+  }
+}
+
+void SpinTest::activeNotificationsTrackNestedChanges() {
+  AdSpin spin;
+  QList<bool> active;
+  QList<bool> spinning;
+  connect(&spin, &AdSpin::activeChanged, this, [&](bool value) {
+    QCOMPARE(value, spin.isActive());
+    active.append(value);
+    if (!value) spin.setSpinning(true);
+  });
+  connect(&spin, &AdSpin::spinningChanged, this, [&](bool value) {
+    QCOMPARE(value, spin.spinning());
+    spinning.append(value);
+  });
+  spin.setSpinning(false);
+  QCOMPARE(active, QList<bool>({false, true}));
+  QVERIFY(spinning.isEmpty());
+  QVERIFY(spin.spinning());
+  QVERIFY(spin.isActive());
+
+  AdSpin delayed;
+  QList<int> delays;
+  connect(&delayed, &AdSpin::activeChanged, this, [&](bool value) {
+    QCOMPARE(value, delayed.isActive());
+    if (!value) delayed.setDelayMs(25);
+  });
+  connect(&delayed, &AdSpin::delayMsChanged, this, [&](int value) {
+    QCOMPARE(value, delayed.delayMs());
+    delays.append(value);
+  });
+  delayed.setDelayMs(10);
+  QCOMPARE(delays, QList<int>({25}));
+  QCOMPARE(delayed.delayMs(), 25);
+}
+
+void SpinTest::nestedNotificationsSurviveOwnerDeletion() {
+  for (const bool progress : {false, true}) {
+    QPointer<AdSpin> spin = new AdSpin;
+    int trailingNotifications = 0;
+    if (progress) {
+      connect(spin, &AdSpin::progressModeChanged, this, [&] { spin->setPercent(80); });
+      connect(spin, &AdSpin::percentChanged, this, [&] { delete spin.data(); });
+      connect(spin, &AdSpin::displayedPercentChanged, this, [&] { ++trailingNotifications; });
+      spin->setPercent(50);
+    } else {
+      connect(spin, &AdSpin::activeChanged, this, [&](bool value) {
+        if (value) {
+          delete spin.data();
+        } else {
+          spin->setSpinning(true);
+        }
+      });
+      connect(spin, &AdSpin::spinningChanged, this, [&] { ++trailingNotifications; });
+      spin->setSpinning(false);
+    }
+    QVERIFY(spin.isNull());
+    QCOMPARE(trailingNotifications, 0);
+  }
+}
+
+void SpinTest::indicatorEventsTrackNestedChanges() {
+  for (const bool changeMode : {false, true}) {
+    AdSpin spin;
+    auto* indicator = new QWidget;
+    spin.setIndicatorWidget(indicator);
+    if (changeMode) spin.setPercent(50);
+    QList<qreal> percents;
+    QList<qreal> displayed;
+    QList<AdSpin::ProgressMode> modes;
+    connect(&spin, &AdSpin::percentChanged, this, [&](qreal value) {
+      QCOMPARE(value, spin.percent());
+      percents.append(value);
+    });
+    connect(&spin, &AdSpin::displayedPercentChanged, this, [&](qreal value) {
+      QCOMPARE(value, spin.displayedPercent());
+      displayed.append(value);
+    });
+    connect(&spin, &AdSpin::progressModeChanged, this, [&](AdSpin::ProgressMode mode) {
+      QCOMPARE(mode, spin.progressMode());
+      modes.append(mode);
+    });
+    PercentEventFilter filter;
+    filter.trigger = changeMode ? 0 : 50;
+    filter.callback = [&] { spin.setPercent(80); };
+    indicator->installEventFilter(&filter);
+    if (changeMode) {
+      spin.clearProgress();
+    } else {
+      spin.setPercent(50);
+    }
+    QCOMPARE(percents, QList<qreal>({80}));
+    QCOMPARE(displayed, QList<qreal>({80}));
+    QCOMPARE(modes.size(), changeMode ? 0 : 1);
+    QCOMPARE(spin.percent(), 80.0);
+  }
+}
+
+void SpinTest::indicatorEventsSurviveOwnerDeletion() {
+  for (const bool changeMode : {false, true}) {
+    QPointer<AdSpin> spin = new AdSpin;
+    spin->setPercent(80);
+    QPointer<QWidget> indicator = new QWidget;
+    spin->setIndicatorWidget(indicator);
+    int notifications = 0;
+    connect(spin, &AdSpin::progressModeChanged, this, [&] { ++notifications; });
+    connect(spin, &AdSpin::percentChanged, this, [&] { ++notifications; });
+    connect(spin, &AdSpin::displayedPercentChanged, this, [&] { ++notifications; });
+    PercentEventFilter filter;
+    filter.trigger = changeMode ? 0 : 50;
+    filter.callback = [&] { delete spin.data(); };
+    indicator->installEventFilter(&filter);
+    if (changeMode) {
+      spin->clearProgress();
+    } else {
+      spin->setPercent(50);
+    }
+    QVERIFY(spin.isNull());
+    QVERIFY(indicator.isNull());
+    QCOMPARE(notifications, 0);
+  }
+}
+
+void SpinTest::indicatorEventsPreserveAutomaticProgress() {
+  AdSpin spin;
+  spin.resize(80, 80);
+  AdSpin::ComponentTokens tokens;
+  tokens.metrics.autoProgressIntervalMs = 20;
+  spin.setComponentTokens(tokens);
+  spin.setPercent(50);
+  auto* indicator = new QWidget;
+  spin.setIndicatorWidget(indicator);
+  spin.show();
+  QCoreApplication::processEvents();
+  PercentEventFilter filter;
+  filter.trigger = 0;
+  filter.callback = [&] { spin.setAutoProgress(); };
+  indicator->installEventFilter(&filter);
+  spin.clearProgress();
+  QCOMPARE(spin.progressMode(), AdSpin::ProgressMode::Automatic);
+  QTRY_VERIFY_WITH_TIMEOUT(spin.displayedPercent() > 0.0, 300);
 }
 
 void SpinTest::accessibleProgressContract() {

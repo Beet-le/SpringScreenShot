@@ -20,9 +20,30 @@ bundle preserves the source archive version and digest, license texts, and
 upstream licensing metadata for Qt Base, Qt SVG, Qt Tools, and Qt Translations.
 Qt Translations uses `licenseRule.json`; the other modules use REUSE metadata.
 
+Formula previews use MicroTeX (MIT), pinned to NanoMichael/MicroTeX revision
+`0e3707f6dafebb121d98b53c64364d16fefe481d`. Its private Qt renderer excludes
+sample applications, other graphics backends, logging, and graphics-debug code.
+The original mathematical fonts retain their Knuth, dsrom, and SIL OFL 1.1
+notices; the Greek and Cyrillic font/XML packages retain their GNU GPL version 3
+notices. The font bytes are unchanged. `licenses/microtex/` preserves every
+upstream notice, the resource inventory, and source provenance; the release
+collector includes these files with tinyxml2's resolved vcpkg copyright notice.
+
 Screen color restoration uses nalgebra (Apache-2.0) for fixed-size matrix
 inversion and validation. Its license and resolved dependencies are included
 in the generated Rust dependency notice bundle.
+
+Recording crop speed control uses FFmpeg's libavfilter audio buffer and tempo
+filters for streaming pitch-preserving audio. These components are covered by
+the existing FFmpeg license notices in the generated vcpkg dependency bundle.
+
+Parallel screenshot stitching uses Rayon (Apache-2.0 OR MIT). Its license
+texts and resolved dependencies are included in the generated Rust dependency
+notice bundle.
+
+Animated pinned images use giflib (MIT) for GIF decoding, libwebp (BSD-3-Clause)
+for WebP decoding, and libpng (Libpng) with zlib-ng (Zlib) for PNG/APNG frames.
+Their resolved copyright notices are included in the generated vcpkg license bundle.
 
 The OCR worker uses `ort` and `ort-sys` 2.0.0-rc.13 (MIT OR Apache-2.0), pinned to
 revision `90018ee581fb1bb1baf8e82eba8e679728ff27dc` of

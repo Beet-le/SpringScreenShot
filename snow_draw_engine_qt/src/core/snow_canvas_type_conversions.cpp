@@ -106,6 +106,12 @@ SnowCanvasTool toCanvasTool(SnowActiveTool tool) {
         return SnowCanvasTool::BrushEraser;
     case SNOW_ACTIVE_TOOL_DISTANCE:
         return SnowCanvasTool::Distance;
+    case SNOW_ACTIVE_TOOL_ANGLE:
+        return SnowCanvasTool::Angle;
+    case SNOW_ACTIVE_TOOL_MAGNIFIER:
+        return SnowCanvasTool::Magnifier;
+    case SNOW_ACTIVE_TOOL_SPEECH_BUBBLE:
+        return SnowCanvasTool::SpeechBubble;
     }
     return SnowCanvasTool::Select;
 }
@@ -148,6 +154,12 @@ SnowActiveTool toEngineTool(SnowCanvasTool tool) {
         return SNOW_ACTIVE_TOOL_BRUSH_ERASER;
     case SnowCanvasTool::Distance:
         return SNOW_ACTIVE_TOOL_DISTANCE;
+    case SnowCanvasTool::Angle:
+        return SNOW_ACTIVE_TOOL_ANGLE;
+    case SnowCanvasTool::Magnifier:
+        return SNOW_ACTIVE_TOOL_MAGNIFIER;
+    case SnowCanvasTool::SpeechBubble:
+        return SNOW_ACTIVE_TOOL_SPEECH_BUBBLE;
     }
     return SNOW_ACTIVE_TOOL_SELECT;
 }
@@ -210,6 +222,18 @@ SnowCanvasStyleToolbarSource toCanvasStyleToolbarSource(SnowStyleToolbarSource s
         return SnowCanvasStyleToolbarSource::DefaultDistance;
     case SNOW_STYLE_TOOLBAR_SOURCE_SELECTED_DISTANCE:
         return SnowCanvasStyleToolbarSource::SelectedDistance;
+    case SNOW_STYLE_TOOLBAR_SOURCE_DEFAULT_ANGLE:
+        return SnowCanvasStyleToolbarSource::DefaultAngle;
+    case SNOW_STYLE_TOOLBAR_SOURCE_SELECTED_ANGLE:
+        return SnowCanvasStyleToolbarSource::SelectedAngle;
+    case SNOW_STYLE_TOOLBAR_SOURCE_DEFAULT_MAGNIFIER:
+        return SnowCanvasStyleToolbarSource::DefaultMagnifier;
+    case SNOW_STYLE_TOOLBAR_SOURCE_SELECTED_MAGNIFIER:
+        return SnowCanvasStyleToolbarSource::SelectedMagnifier;
+    case SNOW_STYLE_TOOLBAR_SOURCE_DEFAULT_SPEECH_BUBBLE:
+        return SnowCanvasStyleToolbarSource::DefaultSpeechBubble;
+    case SNOW_STYLE_TOOLBAR_SOURCE_SELECTED_SPEECH_BUBBLE:
+        return SnowCanvasStyleToolbarSource::SelectedSpeechBubble;
     }
     return SnowCanvasStyleToolbarSource::DefaultRectangle;
 }
@@ -230,6 +254,8 @@ SnowShapeKind toEngineShapeKind(SnowCanvasShapeKind kind) {
         return SNOW_SHAPE_KIND_PEN_HIGHLIGHT;
     case SnowCanvasShapeKind::Spotlight:
         return SNOW_SHAPE_KIND_SPOTLIGHT;
+    case SnowCanvasShapeKind::SpeechBubble:
+        return SNOW_SHAPE_KIND_SPEECH_BUBBLE;
     }
     return SNOW_SHAPE_KIND_RECTANGLE;
 }
@@ -488,6 +514,75 @@ SnowShapeStyle toEngineShapeStyle(const SnowCanvasShapeStyle& style) {
     return engineStyle;
 }
 
+bool validAngleStyle(const SnowCanvasAngleStyle& style) {
+    return style.stroke.isValid() && std::isfinite(style.strokeWidth) && style.strokeWidth >= 1.0 &&
+           style.strokeWidth <= 72.0 &&
+           enumInRange(style.unit, SnowCanvasAngleUnit::Degrees, SnowCanvasAngleUnit::Radians) &&
+           style.decimalPlaces <= 3 &&
+           enumInRange(style.angleType, SnowCanvasAngleType::Directed,
+                       SnowCanvasAngleType::Interior);
+}
+
+bool validMagnifierStyle(const SnowCanvasMagnifierStyle& style) {
+    for (double radius : {style.cornerRadii.topLeft, style.cornerRadii.topRight,
+                          style.cornerRadii.bottomRight, style.cornerRadii.bottomLeft}) {
+        if (!std::isfinite(radius) || radius < 0.0)
+            return false;
+    }
+    return style.stroke.isValid() && std::isfinite(style.strokeWidth) && style.strokeWidth >= 0.0 &&
+           style.strokeWidth <= 72.0 && std::isfinite(style.factor) && style.factor >= 1.0 &&
+           style.factor <= 10.0 && std::isfinite(style.arrowRatio) && style.arrowRatio >= 0.5 &&
+           style.arrowRatio <= 3.0 &&
+           enumInRange(style.shape, SnowCanvasRectangleShape::Rectangle,
+                       SnowCanvasRectangleShape::Diamond) &&
+           enumInRange(style.connectionType, SnowCanvasMagnifierConnectionType::None,
+                       SnowCanvasMagnifierConnectionType::Gradient) &&
+           enumInRange(style.leaderArrowhead, SnowCanvasArrowhead::None,
+                       SnowCanvasArrowhead::IndentedTriangle);
+}
+
+SnowCanvasMagnifierStyle toCanvasMagnifierStyle(const SnowMagnifierStyle& style) {
+    return {static_cast<SnowCanvasRectangleShape>(style.shape),
+            toQColor(style.stroke),
+            style.stroke_width,
+            style.factor,
+            static_cast<SnowCanvasMagnifierConnectionType>(style.connection_type),
+            style.source_outline != 0,
+            toCanvasArrowhead(style.leader_arrowhead),
+            toCanvasCornerRadii(style.corner_radii),
+            style.arrow_ratio};
+}
+
+SnowMagnifierStyle toEngineMagnifierStyle(const SnowCanvasMagnifierStyle& style) {
+    SnowMagnifierStyle result{};
+    result.shape = static_cast<SnowRectangleShape>(style.shape);
+    result.stroke = toEngineColor(style.stroke);
+    result.stroke_width = style.strokeWidth;
+    result.factor = style.factor;
+    result.connection_type = static_cast<SnowMagnifierConnectionType>(style.connectionType);
+    result.source_outline = style.sourceOutline ? 1 : 0;
+    result.leader_arrowhead = toEngineArrowhead(style.leaderArrowhead);
+    result.arrow_ratio = style.arrowRatio;
+    result.corner_radii = toEngineCornerRadii(style.cornerRadii);
+    return result;
+}
+
+SnowCanvasAngleStyle toCanvasAngleStyle(const SnowAngleStyle& style) {
+    return {toQColor(style.stroke), style.stroke_width,
+            static_cast<SnowCanvasAngleUnit>(style.unit), style.decimal_places,
+            static_cast<SnowCanvasAngleType>(style.angle_type)};
+}
+
+SnowAngleStyle toEngineAngleStyle(const SnowCanvasAngleStyle& style) {
+    SnowAngleStyle result{};
+    result.stroke = toEngineColor(style.stroke);
+    result.stroke_width = style.strokeWidth;
+    result.angle_type = static_cast<SnowAngleType>(style.angleType);
+    result.unit = static_cast<SnowAngleUnit>(style.unit);
+    result.decimal_places = style.decimalPlaces;
+    return result;
+}
+
 bool validDistanceStyle(const SnowCanvasDistanceStyle& style) {
     return style.stroke.isValid() && std::isfinite(style.strokeWidth) && style.strokeWidth >= 1.0 &&
            style.strokeWidth <= 72.0 && std::isfinite(style.factor) && style.factor >= 0.01 &&
@@ -536,6 +631,8 @@ SnowCanvasTextStyle toCanvasTextStyle(const SnowTextStyle& style) {
         toCanvasTextHorizontalAlign(style.horizontal_align),
         toCanvasTextVerticalAlign(style.vertical_align),
         style.opacity,
+        style.bold != 0,
+        style.italic != 0,
     };
 }
 
@@ -543,6 +640,8 @@ SnowTextStyle toEngineTextStyle(const SnowCanvasTextStyle& style) {
     SnowTextStyle engineStyle{};
     engineStyle.color = toEngineColor(style.color);
     engineStyle.font_size = style.fontSize;
+    engineStyle.bold = style.bold ? 1 : 0;
+    engineStyle.italic = style.italic ? 1 : 0;
     copyFontFamilyToEngine(style.fontFamily, engineStyle.font_family_utf8,
                            engineStyle.font_family_utf8_len, engineStyle.font_family_truncated,
                            SNOW_FONT_FAMILY_UTF8_CAPACITY);
@@ -613,7 +712,11 @@ SnowCanvasStyleToolbarState toCanvasStyleToolbarState(const SnowStyleToolbarStat
         SnowCanvasBrushEraserStyle{state.brush_eraser_style.stroke_width},
         toCanvasDistanceStyle(state.distance_style),
         state.distance_style_mixed,
+        toCanvasAngleStyle(state.angle_style),
+        state.angle_style_mixed,
         state.distance_measured_length,
+        toCanvasMagnifierStyle(state.magnifier_style),
+        state.magnifier_style_mixed,
     };
 }
 
@@ -738,8 +841,13 @@ SnowWatermarkConfig toEngineWatermarkConfig(const SnowCanvasWatermarkConfig& con
 bool toEngineStyleDefaults(const SnowCanvasStyleDefaults& defaults,
                            SnowStyleDefaults& engineDefaults) {
     const SnowCanvasShapeStyle* shapes[] = {
-        &defaults.rectangle,          &defaults.arrow,        &defaults.line, &defaults.freeDraw,
-        &defaults.rectangleHighlight, &defaults.penHighlight,
+        &defaults.rectangle,
+        &defaults.arrow,
+        &defaults.line,
+        &defaults.freeDraw,
+        &defaults.rectangleHighlight,
+        &defaults.penHighlight,
+        &defaults.speechBubble,
     };
     if (std::any_of(
             std::begin(shapes), std::end(shapes),
@@ -787,6 +895,8 @@ bool toEngineStyleDefaults(const SnowCanvasStyleDefaults& defaults,
         defaults.serialNumber.fill,
         defaults.watermark.color,
         defaults.spotlight.color,
+        defaults.speechBubble.fill,
+        defaults.speechBubble.stroke,
     };
     for (const QColor& color : colors) {
         if (!color.isValid()) {
@@ -794,10 +904,12 @@ bool toEngineStyleDefaults(const SnowCanvasStyleDefaults& defaults,
         }
     }
 
-    if (!validDistanceStyle(defaults.distance))
+    if (!validDistanceStyle(defaults.distance) || !validAngleStyle(defaults.angle) ||
+        !validMagnifierStyle(defaults.magnifier))
         return false;
     engineDefaults = SnowStyleDefaults{};
     engineDefaults.rectangle = toEngineShapeStyle(defaults.rectangle);
+    engineDefaults.speech_bubble = toEngineShapeStyle(defaults.speechBubble);
     engineDefaults.arrow = toEngineShapeStyle(defaults.arrow);
     engineDefaults.line = toEngineShapeStyle(defaults.line);
     engineDefaults.free_draw = toEngineShapeStyle(defaults.freeDraw);
@@ -821,7 +933,10 @@ bool toEngineStyleDefaults(const SnowCanvasStyleDefaults& defaults,
     engineDefaults.spotlight = toEngineSpotlightConfig(defaults.spotlight);
     engineDefaults.brush_eraser = SnowBrushEraserStyle{defaults.brushEraser.strokeWidth};
     engineDefaults.spotlight_shape = static_cast<SnowRectangleShape>(defaults.spotlightShape);
+    engineDefaults.spotlight_corner_radii = toEngineCornerRadii(defaults.spotlightCornerRadii);
     engineDefaults.distance = toEngineDistanceStyle(defaults.distance);
+    engineDefaults.angle = toEngineAngleStyle(defaults.angle);
+    engineDefaults.magnifier = toEngineMagnifierStyle(defaults.magnifier);
     return true;
 }
 

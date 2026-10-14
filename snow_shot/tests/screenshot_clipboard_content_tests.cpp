@@ -2,7 +2,10 @@
 #include "../src/presentation/services/screenshotclipboardcontentsnapshot.h"
 #include "snowimageqtcodec.h"
 #include "snowimagecodecbridge.h"
+#include "pinned_animation_fixtures.h"
+#include "pinned_animation_native_fixtures.h"
 #include "snow_draw_engine_qt/snow_canvas_image.h"
+#include "snow_shot/image/supportedimagefiles.h"
 #include "../../test-support/virtualmemory.h"
 
 #include <QAbstractTextDocumentLayout>
@@ -29,6 +32,7 @@
 #include <cstring>
 #include <future>
 #include <iostream>
+#include <limits>
 
 #if defined(Q_OS_WIN) || defined(_WIN32)
 #include <windows.h>
@@ -39,6 +43,277 @@ void require(bool condition, const char* message) {
     if (!condition) {
         std::cerr << message << '\n';
         std::exit(EXIT_FAILURE);
+    }
+}
+
+void imageFileExtensionsMatchShellRegistration() {
+    const auto images = snow_shot::image::supportedImageFileExtensions();
+    require(ScreenshotClipboardContentReader::supportedImageFileExtensions() == images,
+            "image reader and shell registration share the authoritative image suffixes");
+    auto allFiles = images;
+    allFiles.append({QStringLiteral("txt"), QStringLiteral("html"), QStringLiteral("htm")});
+    require(ScreenshotClipboardContentReader::supportedFileExtensions() == allFiles,
+            "existing file pinning retains its additional formatted-text formats");
+}
+
+void animatedSourcesSurviveImport() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "animated image fixture directory must exist");
+    for (const auto& fixture : pinned_animation_fixtures::images()) {
+        QMimeData mime;
+        mime.setData(fixture.mimeType, fixture.bytes);
+        const auto content = ScreenshotClipboardContentReader::readMimeData(&mime, 1.0);
+        require(content && content->animationSource && content->animationSource->isAnimated() &&
+                    content->animationSource->encoded == fixture.bytes &&
+                    content->image == content->animationSource->firstFrame &&
+                    content->preparedDisplayImage.constBits() ==
+                        content->animationSource->firstDisplayFrame.constBits() &&
+                    content->preparedImageTransform.isIdentity() &&
+                    content->image.size() == QSize(2, 2),
+                "encoded animation import must retain exact bytes and its initial frame");
+
+        const auto path = directory.filePath(QStringLiteral("source.") + fixture.suffix);
+        QFile file(path);
+        require(file.open(QIODevice::WriteOnly) &&
+                    file.write(fixture.bytes) == fixture.bytes.size(),
+                "animated file fixture must be written");
+        file.close();
+        const auto files = ScreenshotClipboardContentReader::snapshotLocalFiles({path});
+        require(files.size() == 1, "GIF, WebP and APNG extensions must be admitted");
+        ScreenshotClipboardContentSnapshot snapshot;
+        snapshot.localImage = files.first();
+        const auto decoded = ScreenshotClipboardContentReader::decode(snapshot);
+        require(decoded && decoded->animationSource &&
+                    decoded->animationSource->encoded == fixture.bytes &&
+                    decoded->originalContent.localFilePath == path &&
+                    decoded->sourceIdentity == files.first().sourceIdentity,
+                "file animation import must retain source bytes and original file identity");
+        require(file.open(QIODevice::Append) && file.write("changed") == 7,
+                "an admitted animation's original file may change afterward");
+        file.close();
+        require(decoded->animationSource->encoded == fixture.bytes &&
+                    !ScreenshotClipboardContentReader::decode(snapshot),
+                "source changes preserve imported bytes but invalidate an older file snapshot");
+        require(file.remove() && decoded->animationSource->encoded == fixture.bytes,
+                "removing an imported file must not invalidate retained animation bytes");
+        require(!ScreenshotClipboardContentReader::decode(snapshot),
+                "deleting an unsnapshotted file source must reject its later decode");
+        ScreenshotClipboardContentSnapshot encodedSnapshot;
+        encodedSnapshot.encodedImages.append({fixture.bytes, fixture.mimeType});
+        require(!ScreenshotClipboardContentReader::decode(encodedSnapshot, [] { return true; }),
+                "animated image import must honor cancellation");
+        require(!ScreenshotClipboardContentReader::decode(encodedSnapshot, {},
+                                                          [](qint64) { return false; }),
+                "animated image import must honor allocation admission");
+    }
+}
+
+QByteArray profiledApng(const QColorSpace& profile) {
+    QImage image(1, 1, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::red);
+    image.setColorSpace(profile);
+    QByteArray png;
+    QBuffer buffer(&png);
+    require(buffer.open(QIODevice::WriteOnly) && image.save(&buffer, "PNG"),
+            "encode replacement profile fixture");
+    QByteArray metadata;
+    for (qsizetype position = 8; position <= png.size() - 12;) {
+        const auto length =
+            static_cast<qsizetype>(qFromBigEndian<quint32>(png.constData() + position));
+        require(length <= png.size() - position - 12, "complete profile metadata chunk");
+        const auto type = png.mid(position + 4, 4);
+        if (type == "iCCP" || type == "sRGB" || type == "gAMA" || type == "cHRM" || type == "cICP")
+            metadata.append(png.mid(position, length + 12));
+        position += length + 12;
+    }
+    require(!metadata.isEmpty(), "replacement fixture carries an encoded color profile");
+    auto result = pinned_animation_fixtures::images().back().bytes;
+    result.insert(33, metadata);
+    return result;
+}
+
+void animationReplacementPreparationIsAtomicAndWorkerSafe() {
+    auto fixtures = pinned_animation_fixtures::images();
+    for (const auto& profile :
+         {QColorSpace(QColorSpace::SRgb), QColorSpace(QColorSpace::DisplayP3)})
+        fixtures.append(
+            {QStringLiteral("apng"), QStringLiteral("image/apng"), profiledApng(profile)});
+    for (const auto& fixture : fixtures) {
+        ScreenshotClipboardContentSnapshot snapshot;
+        snapshot.encodedImages.append({fixture.bytes, fixture.mimeType});
+        auto content = ScreenshotClipboardContentReader::decode(std::move(snapshot));
+        require(content && content->animationSource, "decode preparation fixture");
+        const auto rawOwner = content->image.constBits();
+        const auto rawProfile = content->image.colorSpace();
+        const auto& display = content->animationSource->firstDisplayFrame;
+        const qint64 retainedBytes = fixture.bytes.size() + content->image.sizeInBytes() +
+                                     (display.constBits() == rawOwner ? 0 : display.sizeInBytes());
+        qint64 admitted = 0;
+        require(ScreenshotClipboardContentReader::prepareAnimationDisplay(*content, {}, {},
+                                                                          [&](qint64 bytes) {
+                                                                              admitted = bytes;
+                                                                              return true;
+                                                                          }) &&
+                    content->preparedDisplayImage.constBits() ==
+                        content->animationSource->firstDisplayFrame.constBits() &&
+                    admitted == retainedBytes,
+                "identity preparation shares its display owner and admits each distinct raster "
+                "once");
+        QTransform requested;
+        requested.translate(123, -77);
+        requested.rotate(90);
+        requested.scale(-1, 1);
+        const QRectF bounds = requested.mapRect(QRectF(QPointF(), QSizeF(content->image.size())));
+        QTransform normalized;
+        normalized.setMatrix(requested.m11(), requested.m12(), requested.m13(), requested.m21(),
+                             requested.m22(), requested.m23(), requested.dx() - bounds.left(),
+                             requested.dy() - bounds.top(), requested.m33());
+        const QImage expected = snowCanvasTransformImage(
+            content->animationSource->firstDisplayFrame, normalized, Qt::SmoothTransformation);
+        auto worker = std::async(std::launch::async, [content = *content, requested]() mutable {
+            require(ScreenshotClipboardContentReader::prepareAnimationDisplay(content, requested),
+                    "replacement transformation must prepare on an import worker");
+            return content;
+        });
+        *content = worker.get();
+        require(
+            content->preparedDisplayImage == expected &&
+                content->preparedImageTransform == normalized &&
+                content->image.constBits() == rawOwner &&
+                content->image.colorSpace() == rawProfile &&
+                content->animationSource->encoded == fixture.bytes,
+            "prepared replacement preserves raw profile and bytes with a normalized fingerprint");
+        const auto preparedOwner = content->preparedDisplayImage.constBits();
+        const auto preparedTransform = content->preparedImageTransform;
+        require(!ScreenshotClipboardContentReader::prepareAnimationDisplay(
+                    *content, {}, {}, [](qint64) { return false; }) &&
+                    content->preparedDisplayImage.constBits() == preparedOwner &&
+                    content->preparedImageTransform == preparedTransform,
+                "denied preparation leaves the committed replacement pixels unchanged");
+        bool cancelled = false;
+        require(!ScreenshotClipboardContentReader::prepareAnimationDisplay(
+                    *content, {}, [&] { return cancelled; },
+                    [&](qint64) {
+                        cancelled = true;
+                        return true;
+                    }) &&
+                    content->preparedDisplayImage.constBits() == preparedOwner &&
+                    content->preparedImageTransform == preparedTransform,
+                "cancellation after admission cannot publish an incomplete replacement");
+        QTransform oversized;
+        oversized.scale(100000, 100000);
+        require(!ScreenshotClipboardContentReader::prepareAnimationDisplay(*content, oversized),
+                "transformed animation admission rejects oversized rasters before allocation");
+    }
+    ScreenshotClipboardContent nativeContent;
+    nativeContent.animationSource = snow_shot::image_codec::decodeAnimationSource(
+        pinned_animation_native_fixtures::images().first().bytes);
+    require(nativeContent.animationSource &&
+                nativeContent.animationSource->canvasSize == QSize(320, 180),
+            "native-sized overflow fixture must decode");
+    nativeContent.image = nativeContent.animationSource->firstFrame;
+    nativeContent.preparedDisplayImage = nativeContent.animationSource->firstDisplayFrame;
+    const auto nativeDisplayOwner = nativeContent.preparedDisplayImage.constBits();
+    QTransform overflowing;
+    overflowing.scale(1e9, 1e9);
+    int allocationAttempts = 0;
+    require(!ScreenshotClipboardContentReader::prepareAnimationDisplay(nativeContent, overflowing,
+                                                                       {},
+                                                                       [&](qint64) {
+                                                                           ++allocationAttempts;
+                                                                           return true;
+                                                                       }) &&
+                allocationAttempts == 0 &&
+                nativeContent.preparedDisplayImage.constBits() == nativeDisplayOwner &&
+                nativeContent.preparedImageTransform.isIdentity(),
+            "native-sized transforms exceeding Qt integer bounds must reject before raster "
+            "preparation");
+    QTransform largeTranslation;
+    largeTranslation.translate(static_cast<qreal>(std::numeric_limits<int>::min()),
+                               static_cast<qreal>(std::numeric_limits<int>::max()));
+    require(ScreenshotClipboardContentReader::prepareAnimationDisplay(nativeContent,
+                                                                      largeTranslation) &&
+                nativeContent.preparedDisplayImage.constBits() == nativeDisplayOwner &&
+                nativeContent.preparedImageTransform.isIdentity(),
+            "preparation normalizes large translations before Qt integer raster bounds are used");
+    ScreenshotClipboardContent staticContent;
+    staticContent.image = QImage(QSize(2, 3), QImage::Format_ARGB32_Premultiplied);
+    staticContent.image.fill(Qt::blue);
+    const auto staticOwner = staticContent.image.constBits();
+    require(ScreenshotClipboardContentReader::prepareAnimationDisplay(
+                staticContent, QTransform(-1, 0, 0, 1, 0, 0)) &&
+                staticContent.image.constBits() == staticOwner &&
+                staticContent.preparedDisplayImage.isNull(),
+            "static replacements retain their existing preparation path");
+}
+
+void animationOffersPrecedeStaticThumbnails() {
+    QImage thumbnail(3, 3, QImage::Format_ARGB32);
+    thumbnail.fill(Qt::blue);
+    QByteArray png;
+    QBuffer buffer(&png);
+    require(buffer.open(QIODevice::WriteOnly) && thumbnail.save(&buffer, "PNG"),
+            "static clipboard thumbnail must encode");
+    QByteArray jpeg;
+    QBuffer jpegBuffer(&jpeg);
+    require(jpegBuffer.open(QIODevice::WriteOnly) && thumbnail.save(&jpegBuffer, "JPEG"),
+            "a higher-priority static JPEG clipboard offer must encode");
+    for (const auto& fixture : pinned_animation_fixtures::images()) {
+        QMimeData mime;
+        mime.setData(QStringLiteral("image/png"), png);
+        mime.setData(fixture.mimeType, fixture.bytes);
+        mime.setData(QStringLiteral("image/jpeg"), jpeg);
+        mime.setImageData(thumbnail);
+        const auto content = ScreenshotClipboardContentReader::readMimeData(&mime, 1.0);
+        require(content && content->animationSource &&
+                    content->animationSource->encoded == fixture.bytes &&
+                    content->image.size() == QSize(2, 2),
+                "an original animation must precede a provider's static thumbnail");
+        for (bool animatedFirst : {false, true}) {
+            ScreenshotClipboardContentSnapshot snapshot;
+            const ScreenshotClipboardEncodedImage staticOffer{png, QStringLiteral("image/png")};
+            const ScreenshotClipboardEncodedImage animatedOffer{fixture.bytes, fixture.mimeType};
+            snapshot.encodedImages = animatedFirst ? QList{animatedOffer, staticOffer}
+                                                   : QList{staticOffer, animatedOffer};
+            const auto decoded = ScreenshotClipboardContentReader::decode(std::move(snapshot));
+            require(decoded && decoded->animationSource &&
+                        decoded->animationSource->encoded == fixture.bytes,
+                    "mixed encoded snapshot order cannot flatten an offered animation");
+        }
+    }
+    QMimeData mime;
+    mime.setData(QStringLiteral("image/png"), png);
+    const auto content = ScreenshotClipboardContentReader::readMimeData(&mime, 1.0);
+    require(content && !content->animationSource && content->image.size() == thumbnail.size(),
+            "static PNGs must keep normal static-image capabilities");
+}
+
+void singleFrameAnimationContainersStayStatic() {
+    QTemporaryDir directory;
+    require(directory.isValid(), "single-frame image fixture directory must exist");
+    for (const auto& fixture : pinned_animation_fixtures::singleFrameImages()) {
+        const auto verify = [&](const std::optional<ScreenshotClipboardContent>& content) {
+            require(content && !content->animationSource && content->image.size() == QSize(2, 2) &&
+                        content->image.pixelColor(0, 0) == QColor(Qt::red),
+                    "one-frame GIF and APNG remain static pins using their actual frame");
+            if (fixture.suffix == QStringLiteral("apng"))
+                require(content->image.pixelColor(1, 1).alpha() == 0,
+                        "single-frame APNG import excludes its separate blue poster");
+        };
+        QMimeData mime;
+        mime.setData(fixture.mimeType, fixture.bytes);
+        verify(ScreenshotClipboardContentReader::readMimeData(&mime, 1.0));
+        const auto path = directory.filePath(QStringLiteral("single.") + fixture.suffix);
+        QFile file(path);
+        require(file.open(QIODevice::WriteOnly) &&
+                    file.write(fixture.bytes) == fixture.bytes.size(),
+                "single-frame image file fixture must be written");
+        file.close();
+        const auto files = ScreenshotClipboardContentReader::snapshotLocalFiles({path});
+        require(files.size() == 1, "single-frame GIF and APNG file containers must be admitted");
+        ScreenshotClipboardContentSnapshot snapshot;
+        snapshot.localImage = files.first();
+        verify(ScreenshotClipboardContentReader::decode(std::move(snapshot)));
     }
 }
 
@@ -1036,6 +1311,7 @@ void nativeDibMaskColoredPixelsRemainPixels() {
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     QApplication::setQuitOnLastWindowClosed(false);
+    imageFileExtensionsMatchShellRegistration();
     embeddedImagesUseManagedCachedPixels();
     if (application.arguments().contains(QStringLiteral("--embedded-images-only"))) {
         return EXIT_SUCCESS;
@@ -1044,6 +1320,10 @@ int main(int argc, char** argv) {
         liveSnapshotRetainsBitmapFallback();
     }
     localTextFilesAreSupported();
+    animatedSourcesSurviveImport();
+    animationReplacementPreparationIsAtomicAndWorkerSafe();
+    animationOffersPrecedeStaticThumbnails();
+    singleFrameAnimationContainersStayStatic();
     imageSourceDensitySurvivesDecode();
     directImageWinsOverRichText();
     directImageSharesImmutableOwner();

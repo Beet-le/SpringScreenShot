@@ -282,6 +282,33 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         </message>
     </context>
     <context>
+        <name>CanvasStatusReadout</name>
+        <message>
+            <source>Locked</source>
+            <translation>已锁定</translation>
+        </message>
+        <message>
+            <source>Motion Preview in Progress</source>
+            <translation>动效预览中</translation>
+        </message>
+        <message>
+            <source>Opacity: %1%</source>
+            <translation>不透明度：%1%</translation>
+        </message>
+        <message>
+            <source>Rendering preview</source>
+            <translation>正在渲染预览</translation>
+        </message>
+        <message>
+            <source>Result Preview in Progress</source>
+            <translation>正在预览结果</translation>
+        </message>
+        <message>
+            <source>Scale: %1%</source>
+            <translation>缩放：%1%</translation>
+        </message>
+    </context>
+    <context>
         <name>ConfirmationSkipButton</name>
         <message>
             <source>Don't ask again</source>
@@ -618,6 +645,22 @@ so every moment on screen can be expressed clearly and shared easily.</source>
             <translation>图像转换超时，请尝试较小的区域。</translation>
         </message>
         <message>
+            <source>Image recognition failed</source>
+            <translation>图像识别失败</translation>
+        </message>
+        <message>
+            <source>Image recognition is incomplete. Try a smaller area.</source>
+            <translation>图像识别不完整，请尝试较小的区域。</translation>
+        </message>
+        <message>
+            <source>Image recognition stream ended unexpectedly</source>
+            <translation>图像识别流意外中断</translation>
+        </message>
+        <message>
+            <source>Image recognition timed out. Try a smaller area.</source>
+            <translation>图像识别超时，请尝试较小的区域。</translation>
+        </message>
+        <message>
             <source>Invalid LaTeX recognition response</source>
             <translation>无效的 LaTeX 识别响应</translation>
         </message>
@@ -678,8 +721,16 @@ so every moment on screen can be expressed clearly and shared easily.</source>
             <translation>无法准备待转换的图像</translation>
         </message>
         <message>
+            <source>The image could not be prepared for recognition</source>
+            <translation>无法准备待识别的图像</translation>
+        </message>
+        <message>
             <source>The image is too large to convert. Select a smaller area.</source>
             <translation>图像过大，无法转换。请选择较小的区域。</translation>
+        </message>
+        <message>
+            <source>The image is too large to recognize. Select a smaller area.</source>
+            <translation>图像过大，无法识别。请选择较小的区域。</translation>
         </message>
         <message>
             <source>The model response is too large</source>
@@ -688,6 +739,18 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         <message>
             <source>The model returned no content</source>
             <translation>模型未返回内容</translation>
+        </message>
+        <message>
+            <source>The model returned no usable formula</source>
+            <translation>模型未返回可用的公式</translation>
+        </message>
+        <message>
+            <source>The model returned no usable table</source>
+            <translation>模型未返回可用的表格</translation>
+        </message>
+        <message>
+            <source>The model service changed. Retry to load its models.</source>
+            <translation>模型服务已更改。请重试以加载其模型。</translation>
         </message>
         <message>
             <source>The text is too large to translate.</source>
@@ -783,6 +846,10 @@ so every moment on screen can be expressed clearly and shared easily.</source>
             <translation>取消</translation>
         </message>
         <message>
+            <source>Could not open the selected image file: %1</source>
+            <translation>无法打开所选图像文件：%1</translation>
+        </message>
+        <message>
             <source>Could not pin selected files</source>
             <translation>无法将选中的文件固定到屏幕</translation>
         </message>
@@ -813,6 +880,10 @@ so every moment on screen can be expressed clearly and shared easily.</source>
         <message>
             <source>Snow Shot will close and restart to install the update. Continue?</source>
             <translation>Snow Shot 将关闭并重启以安装更新。是否继续？</translation>
+        </message>
+        <message>
+            <source>The selected image file path is invalid</source>
+            <translation>所选图像文件的路径无效</translation>
         </message>
         <message>
             <source>Your settings could not be saved. Please retry before updating.</source>

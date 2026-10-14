@@ -1,4 +1,5 @@
 #include "snow_shot/update/startupupdate.h"
+#include "snow_shot/app/shellimagelaunch.h"
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -35,15 +36,22 @@ QStringList normalStartupArguments(QStringList arguments) {
     return arguments;
 }
 
-QStringList startupUpdateRelaunchArguments(bool foregroundRequested) {
-    return {foregroundRequested ? QStringLiteral("--show-main-window")
-                                : QStringLiteral("--autostart"),
-            QString::fromLatin1(kSkipStartupUpdate)};
+QStringList startupUpdateRelaunchArguments(bool foregroundRequested,
+                                           const QStringList& imagePaths) {
+    QStringList arguments;
+    if (foregroundRequested)
+        arguments.append(QStringLiteral("--show-main-window"));
+    else if (imagePaths.isEmpty())
+        arguments.append(QStringLiteral("--autostart"));
+    arguments.append(app::shellImageLaunchArguments(imagePaths));
+    arguments.append(QString::fromLatin1(kSkipStartupUpdate));
+    return arguments;
 }
 
 StartupUpdateResult runStartupUpdate(UpdateService& service, const std::function<bool()>& flush,
                                      const std::function<bool()>& foregroundRequested,
-                                     std::chrono::milliseconds timeout) {
+                                     std::chrono::milliseconds timeout,
+                                     const std::function<QStringList()>& relaunchArguments) {
     QEventLoop loop;
     QTimer deadline;
     deadline.setSingleShot(true);
@@ -64,7 +72,9 @@ StartupUpdateResult runStartupUpdate(UpdateService& service, const std::function
             return;
         }
         service.setRelaunchArguments(
-            startupUpdateRelaunchArguments(foregroundRequested && foregroundRequested()));
+            relaunchArguments
+                ? relaunchArguments()
+                : startupUpdateRelaunchArguments(foregroundRequested && foregroundRequested()));
     });
     QObject::connect(&service, &UpdateService::handoffCommitted, &loop, [&] {
         result = StartupUpdateResult::ExitForUpdate;

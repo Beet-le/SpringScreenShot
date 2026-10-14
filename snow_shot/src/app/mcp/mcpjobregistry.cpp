@@ -1,6 +1,7 @@
 #include "snow_shot/app/mcp/mcpjobregistry.h"
 #include <QDateTime>
 #include <QJsonDocument>
+#include <QPointer>
 #include <QThread>
 #include <QTimer>
 #include <QUuid>
@@ -26,7 +27,10 @@ bool McpJobRegistry::hasRunningJobs() const {
 QString McpJobRegistry::start(quint64 owner, const QString& kind, std::function<void()> cancel,
                               QJsonObject metadata) {
     Q_ASSERT(QThread::currentThread() == thread());
+    const QPointer<McpJobRegistry> guard(this);
     trim();
+    if (!guard)
+        return {};
     int running = 0;
     int owned = 0;
     for (const auto& job : std::as_const(m_jobs)) {
@@ -80,6 +84,7 @@ bool McpJobRegistry::finish(const QString& id, const QString& status, QJsonObjec
                         found->value.value(QStringLiteral("finished_at")));
     found->value.remove(QStringLiteral("progress"));
     found->cancellation = {};
+    const auto activity = std::move(found->activity);
     m_bytes -= found->bytes;
     found->bytes =
         QJsonDocument(found->value).toJson(QJsonDocument::Compact).size() + found->inputBytes;
@@ -95,8 +100,11 @@ bool McpJobRegistry::complete(const QString& id, QJsonObject result) {
         if (job == m_jobs.cend() || job->expires <= m_clock() ||
             job->value.value(QStringLiteral("status")) != QStringLiteral("running"))
             return false;
-        const auto artifact =
-            m_artifactPublisher(job->owner, bytes, QStringLiteral("application/json"));
+        const QPointer<McpJobRegistry> guard(this);
+        const auto publisher = m_artifactPublisher;
+        const auto artifact = publisher(job->owner, bytes, QStringLiteral("application/json"));
+        if (!guard)
+            return false;
         if (artifact.isEmpty())
             return fail(id, QStringLiteral("resource_limit"));
         result = {{QStringLiteral("artifact"), artifact},
@@ -221,10 +229,14 @@ void McpJobRegistry::trim() {
         removed.append({it->owner, it.key()});
         it = m_jobs.erase(it);
     }
+    const QPointer<McpJobRegistry> guard(this);
     for (const auto& callback : callbacks)
         callback();
-    for (const auto& item : removed)
+    for (const auto& item : removed) {
+        if (!guard)
+            return;
         emit changed(item.first, item.second);
+    }
 }
 bool McpJobRegistry::discard(quint64 owner, const QString& id) {
     Q_ASSERT(QThread::currentThread() == thread());
@@ -251,14 +263,22 @@ void McpJobRegistry::disconnected(quint64 owner) {
         removed.append(it.key());
         it = m_jobs.erase(it);
     }
+    const QPointer<McpJobRegistry> guard(this);
     for (const auto& callback : callbacks)
         callback();
-    for (const auto& id : removed)
+    for (const auto& id : removed) {
+        if (!guard)
+            return;
         emit changed(owner, id);
+    }
 }
 void McpJobRegistry::shutdown() {
     Q_ASSERT(QThread::currentThread() == thread());
-    while (!m_jobs.isEmpty())
+    const QPointer<McpJobRegistry> guard(this);
+    while (!m_jobs.isEmpty()) {
         disconnected(m_jobs.cbegin()->owner);
+        if (!guard)
+            return;
+    }
 }
 } // namespace snow_shot::app::mcp

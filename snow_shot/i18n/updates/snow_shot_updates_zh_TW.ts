@@ -208,6 +208,10 @@
             <translation>無法暫存已驗證的更新軟體套件</translation>
         </message>
         <message>
+            <source>Could not update Snow Shot context menu registration</source>
+            <translation>無法更新 Snow Shot 右鍵選單註冊資訊</translation>
+        </message>
+        <message>
             <source>Could not update the registered application version</source>
             <translation>無法更新已註冊的應用程式版本</translation>
         </message>

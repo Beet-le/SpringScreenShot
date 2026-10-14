@@ -22,6 +22,8 @@ inline SnowCanvasStyleDefaults screenshotCanvasStyleDefaults() {
     defaults.rectangle.strokeStyle = SnowCanvasStrokeStyle::Solid;
     defaults.rectangle.cornerRadii = {6.0, 6.0, 6.0, 6.0};
 
+    defaults.speechBubble = defaults.rectangle;
+
     defaults.arrow = defaults.rectangle;
     defaults.arrow.startArrowhead = SnowCanvasArrowhead::None;
     defaults.arrow.endArrowhead = SnowCanvasArrowhead::Arrow;
@@ -29,6 +31,10 @@ inline SnowCanvasStyleDefaults screenshotCanvasStyleDefaults() {
 
     defaults.distance.stroke = red;
     defaults.distance.strokeWidth = 2.0;
+    defaults.angle.stroke = red;
+    defaults.angle.strokeWidth = 2.0;
+    defaults.magnifier.stroke = red;
+    defaults.magnifier.strokeWidth = 2.0;
 
     defaults.line.fill = transparent;
     defaults.line.fillStyle = SnowCanvasFillStyle::Solid;
@@ -101,6 +107,7 @@ inline SnowCanvasStyleDefaults screenshotCanvasStyleDefaults() {
 
     defaults.spotlight.color = QColor(0, 0, 0, 255);
     defaults.spotlight.opacity = 0.64;
+    defaults.spotlightCornerRadii = {6.0, 6.0, 6.0, 6.0};
     return defaults;
 }
 
@@ -108,13 +115,16 @@ inline QSet<SnowCanvasTool> screenshotQuickSelectionDisabledTools(const QStringL
     QSet<SnowCanvasTool> tools;
     const QHash<QString, SnowCanvasTool> toolsById{
         {QStringLiteral("shape"), SnowCanvasTool::Shape},
+        {QStringLiteral("speech-bubble"), SnowCanvasTool::SpeechBubble},
         {QStringLiteral("arrow"), SnowCanvasTool::Arrow},
         {QStringLiteral("distance"), SnowCanvasTool::Distance},
+        {QStringLiteral("angle"), SnowCanvasTool::Angle},
         {QStringLiteral("line"), SnowCanvasTool::Line},
         {QStringLiteral("free-draw"), SnowCanvasTool::FreeDraw},
         {QStringLiteral("rectangle-highlight"), SnowCanvasTool::RectangleHighlight},
         {QStringLiteral("pen-highlight"), SnowCanvasTool::PenHighlight},
         {QStringLiteral("spotlight"), SnowCanvasTool::Spotlight},
+        {QStringLiteral("magnifier"), SnowCanvasTool::Magnifier},
         {QStringLiteral("rectangle-filter"), SnowCanvasTool::RectangleFilter},
         {QStringLiteral("pen-filter"), SnowCanvasTool::PenFilter},
         {QStringLiteral("text"), SnowCanvasTool::Text},

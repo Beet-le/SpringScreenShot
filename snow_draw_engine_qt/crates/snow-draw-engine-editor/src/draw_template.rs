@@ -9,7 +9,7 @@ use snow_draw_engine_model::DocumentModel;
 
 use crate::{ApplyTransactionCommand, Editor, EditorCommand, expanded_duplicate_ids};
 
-pub const DRAW_TEMPLATE_SCHEMA_VERSION: u32 = 1;
+pub const DRAW_TEMPLATE_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -66,7 +66,7 @@ impl Editor {
         template: &DrawTemplate,
         center: Point<f64>,
     ) -> Result<EditorCommand, ErrorCode> {
-        if template.schema_version != DRAW_TEMPLATE_SCHEMA_VERSION {
+        if !(1..=DRAW_TEMPLATE_SCHEMA_VERSION).contains(&template.schema_version) {
             return Err(ErrorCode::Unsupported);
         }
         if template.elements.is_empty()
@@ -92,7 +92,10 @@ impl Editor {
             if element.data.is_background_restore() || !old_ids.insert(element.id) {
                 return Err(ErrorCode::InvalidArgument);
             }
-            validate_element_data(&element.data)?;
+            // Legacy angle geometry is validated after in-place normalization below.
+            if !matches!(&element.data, ElementData::Arrow(arrow) if arrow.is_angle()) {
+                validate_element_data(&element.data)?;
+            }
             let index = u32::try_from(index).map_err(|_| ErrorCode::InvalidArgument)?;
             let new_index = first_id
                 .index
@@ -130,6 +133,19 @@ impl Editor {
                     validate_element_data(&ElementData::Rectangle(data))?;
                     transaction.insert_rectangle(new_id, element.meta, data);
                 }
+                ElementData::SpeechBubble(data) => {
+                    let mut bubble = data.clone();
+                    bubble.body.center.x += offset.x;
+                    bubble.body.center.y += offset.y;
+                    bubble.text_element_id =
+                        data.text_element_id.and_then(|id| id_map.get(&id).copied());
+                    transaction.insert_speech_bubble(new_id, element.meta, bubble);
+                }
+                ElementData::Magnifier(data) => {
+                    let next = data.translated(offset);
+                    validate_element_data(&ElementData::Magnifier(next))?;
+                    transaction.insert_magnifier(new_id, element.meta, next);
+                }
                 ElementData::Filter(data) => {
                     let mut data = *data;
                     data.center.x += offset.x;
@@ -147,6 +163,9 @@ impl Editor {
                 }
                 ElementData::Arrow(data) => {
                     let mut data = data.clone();
+                    if data.is_angle() {
+                        snow_draw_engine_document::normalize_angle_in_place(&mut data)?;
+                    }
                     data.x += offset.x;
                     data.y += offset.y;
                     data.text_element_id =

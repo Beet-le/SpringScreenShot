@@ -1,4 +1,7 @@
 #include "snow_shot/storage/pinnedwindowrepository.h"
+#include "snow_shot/runtime/runtimeactivitytracker.h"
+#include "snowimageqtcodec.h"
+#include "pinned_animation_fixtures.h"
 
 #include <QCoreApplication>
 #include <QBuffer>
@@ -105,6 +108,274 @@ QByteArray readBytes(const QString& path) {
     QFile file(path);
     require(file.open(QIODevice::ReadOnly), "failed to read committed payload");
     return file.readAll();
+}
+
+void animatedSourcesRoundTripWithoutRewritingFrames() {
+    for (const auto& fixture : pinned_animation_fixtures::images()) {
+        for (bool fileSource : {false, true}) {
+            QTemporaryDir directory;
+            require(directory.isValid(), "animation storage fixture must exist");
+            const auto source = snow_shot::image_codec::decodeAnimationSource(fixture.bytes);
+            require(source && source->isAnimated(), "animation fixture must decode");
+            const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+            auto record = recordWithId(id, source->firstFrame);
+            record.animationSource = source;
+            record.animationSpeedPercent = 170;
+            record.animationPlaying = fileSource;
+            record.thumbnailMode = fileSource;
+            record.preThumbnailNativeGeometry = record.nativeGeometry;
+            if (fileSource) {
+                record.sourceKind = storage::PinnedWindowSourceKind::ClipboardImageFile;
+                record.originalFilePath =
+                    directory.filePath(QStringLiteral("original.") + fixture.suffix);
+                record.originalFileName = QFileInfo(record.originalFilePath).fileName();
+                record.sourceIdentity = {QStringLiteral("file:") + record.originalFilePath};
+                QFile file(record.originalFilePath);
+                require(file.open(QIODevice::WriteOnly) &&
+                            file.write(fixture.bytes) == fixture.bytes.size(),
+                        "original animation file must be written");
+                file.close();
+                require(file.remove(), "the original may disappear after immutable import");
+            }
+            const auto payloadDirectory =
+                QDir(directory.path())
+                    .filePath(QStringLiteral("pinned_windows_v2/pins/%1").arg(id));
+            const auto encodedPath =
+                QDir(payloadDirectory)
+                    .filePath(QStringLiteral("source_animation.") + source->format);
+            const auto previewPath = QDir(payloadDirectory).filePath(QStringLiteral("source.png"));
+            const auto stamp =
+                QDateTime::fromString(QStringLiteral("2001-01-01T00:00:00Z"), Qt::ISODate);
+            {
+                storage::PinnedWindowRepository repository(directory.path());
+                require(repository.create(record).success && repository.flush().success,
+                        "animation bytes must persist without the original file");
+                require(readBytes(encodedPath) == fixture.bytes,
+                        "animation storage must preserve exact encoded source bytes");
+                const auto revision = repository.previewSourceRevision(id);
+                const auto preview = repository.loadPreviewSource(id);
+                require(preview && samePixels(preview->image, source->firstFrame),
+                        "management must retain a static initial-frame preview");
+                QFile committed(encodedPath);
+                require(committed.open(QIODevice::ReadWrite) &&
+                            committed.setFileTime(stamp, QFileDevice::FileModificationTime),
+                        "committed animation payload must be timestamped");
+                committed.close();
+                QFile committedPreview(previewPath);
+                require(committedPreview.open(QIODevice::ReadWrite) &&
+                            committedPreview.setFileTime(stamp, QFileDevice::FileModificationTime),
+                        "committed first-frame preview must be timestamped");
+                committedPreview.close();
+                // A displayed frame or UI preference save cannot replace the
+                // immutable source or invalidate the management thumbnail.
+                record.image = patternedImage(QSize(2, 2), 31);
+                record.opacityPercent = 70;
+                record.animationSpeedPercent = 220;
+                record.canvasSession = QByteArrayLiteral("mutable state");
+                require(repository.updateState(record).success && repository.flush().success &&
+                            repository.previewSourceRevision(id) == revision,
+                        "animation state must save independently of immutable source identity");
+                require(QFileInfo(encodedPath).lastModified() == stamp &&
+                            QFileInfo(previewPath).lastModified() == stamp &&
+                            readBytes(encodedPath) == fixture.bytes,
+                        "state saves must not rewrite animation or preview payloads");
+                require(!repository.loadRecord(id, [](qint64) { return false; }),
+                        "animation restoration must honor read admission");
+            }
+            {
+                storage::PinnedWindowRepository repository(directory.path());
+                const auto loaded = repository.loadRecord(id);
+                require(
+                    loaded && loaded->animationSource &&
+                        loaded->animationSource->encoded == fixture.bytes &&
+                        loaded->animationSpeedPercent == 220 &&
+                        loaded->animationPlaying == record.animationPlaying &&
+                        loaded->thumbnailMode == record.thumbnailMode &&
+                        loaded->opacityPercent == 70 &&
+                        samePixels(loaded->image, source->firstFrame) &&
+                        loaded->sourceIdentity == record.sourceIdentity,
+                    "restart must retain complete animation, playback preferences and identity");
+                if (fileSource)
+                    require(loaded->originalFilePath == encodedPath,
+                            "restored original content must use the private animation source");
+                auto replacement = recordWithId(id, patternedImage(QSize(2, 2), 47));
+                require(repository.upsertExisting(replacement).success &&
+                            repository.flush().success && !QFile::exists(encodedPath),
+                        "static replacement must remove obsolete animation payloads");
+                const auto staticRecord = repository.loadRecord(id);
+                require(staticRecord && !staticRecord->animationSource &&
+                            samePixels(staticRecord->image, replacement.image),
+                        "replacing an animation must restore an ordinary static image record");
+            }
+        }
+    }
+}
+
+void animationAdmissionIncludesPreparedDisplayStorage() {
+    for (bool separateDisplay : {false, true}) {
+        QTemporaryDir directory;
+        const auto fixture = pinned_animation_fixtures::images().first();
+        auto source = snow_shot::image_codec::decodeAnimationSource(fixture.bytes);
+        require(source && !source->firstDisplayFrame.isNull(),
+                "animation fixture prepares its initial display raster");
+        if (separateDisplay) {
+            auto distinct = std::make_shared<ScreenshotAnimationSource>(*source);
+            distinct->firstDisplayFrame = source->firstDisplayFrame.copy();
+            source = std::move(distinct);
+            require(source->firstDisplayFrame.constBits() != source->firstFrame.constBits(),
+                    "admission fixture retains a separate display raster");
+        }
+        const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        auto record = recordWithId(id, source->firstFrame);
+        record.animationSource = source;
+        const bool sharedDisplay =
+            source->firstDisplayFrame.constBits() == source->firstFrame.constBits();
+        const qint64 residentBytes = source->encoded.size() + source->firstFrame.sizeInBytes() +
+                                     (sharedDisplay ? 0 : source->firstDisplayFrame.sizeInBytes());
+        const std::weak_ptr<const ScreenshotAnimationSource> owner = source;
+        storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+        require(repository.upsert(std::move(record)).success, "queue prepared animation source");
+        qint64 admittedBytes = 0;
+        auto loaded = repository.loadRecord(id, [&](qint64 bytes) {
+            admittedBytes = std::max(admittedBytes, bytes);
+            return true;
+        });
+        require(loaded && loaded->animationSource == source && admittedBytes == 2 * residentBytes,
+                "resident read admission deduplicates shared display pixels and counts separate "
+                "rasters");
+        loaded.reset();
+        source.reset();
+        require(repository.flush().success && owner.expired(),
+                "committed source demotion releases display and immutable source owners");
+    }
+}
+
+void legacyAnimatedFileSourcesAndPlaybackDefaultsRecover() {
+    auto fixtures = pinned_animation_fixtures::images();
+    fixtures.append(pinned_animation_fixtures::hiddenPosterAnimation());
+    for (const auto& fixture : fixtures) {
+        QTemporaryDir directory;
+        const auto source = snow_shot::image_codec::decodeAnimationSource(fixture.bytes);
+        const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        auto record = recordWithId(id, source->firstFrame);
+        record.animationSource = source;
+        record.sourceKind = storage::PinnedWindowSourceKind::ClipboardImageFile;
+        record.originalFilePath = directory.filePath(QStringLiteral("missing.") + fixture.suffix);
+        record.originalFileName = QFileInfo(record.originalFilePath).fileName();
+        {
+            storage::PinnedWindowRepository repository(directory.path());
+            require(repository.create(record).success && repository.flush().success,
+                    "legacy animation fixture must commit");
+        }
+        const auto manifest =
+            QDir(directory.path()).filePath(QStringLiteral("pinned_windows_v2/index.json"));
+        auto document = QJsonDocument::fromJson(readBytes(manifest)).object();
+        auto records = document.value(QStringLiteral("records")).toArray();
+        auto item = records.at(0).toObject();
+        auto payloads = item.value(QStringLiteral("payloads")).toObject();
+        payloads.insert(QStringLiteral("image"), payloads.take(QStringLiteral("animation")));
+        item.insert(QStringLiteral("payloads"), payloads);
+        item.remove(QStringLiteral("animation_speed_percent"));
+        item.remove(QStringLiteral("animation_playing"));
+        records.replace(0, item);
+        document.insert(QStringLiteral("records"), records);
+        QFile file(manifest);
+        const auto bytes = QJsonDocument(document).toJson();
+        require(file.open(QIODevice::WriteOnly | QIODevice::Truncate) &&
+                    file.write(bytes) == bytes.size(),
+                "legacy source descriptor must be written");
+        file.close();
+        storage::PinnedWindowRepository repository(directory.path());
+        const auto preview = repository.loadPreviewSource(id);
+        require(preview && samePixels(preview->image, source->firstFrame),
+                "old animated file records must still expose a static first-frame preview");
+        const auto restored = repository.loadRecord(id);
+        require(restored && restored->animationSource &&
+                    restored->animationSource->encoded == fixture.bytes &&
+                    restored->animationSpeedPercent == 100 && restored->animationPlaying &&
+                    samePixels(restored->image, source->firstFrame),
+                "old private animated files must acquire playback with compatible defaults");
+    }
+}
+
+void animationSourceIdentityIncludesEncodedBytes() {
+    QTemporaryDir directory;
+    const auto fixture = pinned_animation_fixtures::images().first();
+    const auto source = snow_shot::image_codec::decodeAnimationSource(fixture.bytes);
+    require(source && source->isAnimated(), "animation identity fixture must decode");
+    const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    auto record = recordWithId(id, source->firstFrame);
+    record.animationSource = source;
+    storage::PinnedWindowRepository repository(directory.path());
+    require(repository.create(record).success && repository.flush().success,
+            "initial animation source must commit");
+    const auto originalRevision = repository.previewSourceRevision(id);
+    auto changed = std::make_shared<ScreenshotAnimationSource>(*source);
+    const auto delay = changed->encoded.indexOf(QByteArray::fromHex("21f904000a00"));
+    require(delay >= 0, "GIF identity fixture must expose its first-frame delay");
+    changed->encoded[delay + 4] = char(11);
+    changed->frameDurationsNs[0] += 10000000;
+    record.animationSource = changed;
+    require(record.image.cacheKey() == source->firstFrame.cacheKey() &&
+                repository.upsertExisting(record).success && repository.flush().success &&
+                repository.previewSourceRevision(id) != originalRevision,
+            "changed encoded bytes must replace a source even when initial pixels share identity");
+    const auto restored = repository.loadRecord(id);
+    require(restored && restored->animationSource &&
+                restored->animationSource->encoded == changed->encoded &&
+                restored->animationSource->frameDurationsNs[0] == changed->frameDurationsNs[0],
+            "animation source replacement must retain changed timing instead of stale bytes");
+}
+
+void animationStateUpdatesDoNotInspectOrRetainImmutableSources() {
+    QTemporaryDir directory;
+    const auto fixture = pinned_animation_fixtures::images().first();
+    auto source = snow_shot::image_codec::decodeAnimationSource(fixture.bytes);
+    require(source && source->isAnimated(), "decode immutable-source activity fixture");
+    const auto id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    auto record = recordWithId(id, source->firstFrame);
+    record.animationSource = source;
+    std::atomic_int inspections{0};
+    storage::PinnedWindowRepository repository(
+        directory.path(), true, 1000, [&](storage::PinnedWindowOperation operation) {
+            if (operation == storage::PinnedWindowOperation::AnimationSourceHash)
+                ++inspections;
+        });
+    require(repository.create(record).success && repository.flush().success && inspections == 1,
+            "new animation source requires one full identity inspection");
+    const auto previewRevision = repository.previewSourceRevision(id);
+    for (int speed = 110; speed <= 220; speed += 10) {
+        record.animationSpeedPercent = speed;
+        record.animationPlaying = !record.animationPlaying;
+        require(repository.upsertExisting(record).success && repository.flush().success,
+                "save animation playback preferences after resident payload demotion");
+    }
+    record.canvasSession = QByteArrayLiteral("mutable annotation state");
+    require(repository.updateState(record).success && repository.flush().success &&
+                repository.upsertExisting(record).success && repository.flush().success &&
+                inspections == 1 && repository.previewSourceRevision(id) == previewRevision,
+            "preference and document updates never inspect unchanged encoded animation bytes");
+
+    auto changed = std::make_shared<ScreenshotAnimationSource>(*source);
+    const auto delay = changed->encoded.indexOf(QByteArray::fromHex("21f904000a00"));
+    require(delay >= 0, "activity fixture exposes its first-frame delay");
+    changed->encoded[delay + 4] = char(11);
+    changed->frameDurationsNs[0] += 10000000;
+    record.animationSource = changed;
+    require(repository.upsertExisting(record).success && repository.flush().success &&
+                inspections == 2 && repository.previewSourceRevision(id) != previewRevision,
+            "changed immutable source requires a new identity inspection and preview revision");
+    record.animationSpeedPercent = 230;
+    require(repository.upsertExisting(record).success && repository.flush().success &&
+                inspections == 2,
+            "the replacement source also avoids repeated inspection for playback changes");
+    const std::weak_ptr<const ScreenshotAnimationSource> originalOwner = source;
+    const std::weak_ptr<const ScreenshotAnimationSource> replacementOwner = changed;
+    record.animationSource.reset();
+    source.reset();
+    changed.reset();
+    require(originalOwner.expired() && replacementOwner.expired(),
+            "identity reuse must not keep encoded sources resident after live owners release them");
 }
 
 void stateUpdatesBeforeFirstFlushPreserveRestorableSources() {
@@ -289,12 +560,19 @@ void committedPayloadsAreServedFromDisk() {
     {
         // The long debounce keeps the writer from committing before flush().
         storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+        auto& activity = snow_shot::runtime::RuntimeActivityTracker::shared();
+        const auto baseline = activity.snapshot().activeCount;
+        require(baseline == 0, "an idle pinned writer must not reserve runtime activity");
         require(repository.upsert(record).success, "failed to upsert the pinned record");
+        require(activity.snapshot().activeCount == baseline + 1,
+                "a pending debounced pin write must block memory trimming");
         const auto resident = repository.loadRecord(id);
         require(resident.has_value() && resident->image.cacheKey() == image.cacheKey(),
                 "an uncommitted payload should be served from the resident record");
 
         require(repository.flush().success, "failed to flush the pinned record");
+        require(activity.snapshot().activeCount == baseline,
+                "a committed pinned write must release runtime activity before becoming idle");
         const auto lazy = repository.loadRecord(id);
         require(lazy.has_value(), "the committed record disappeared from the repository");
         require(lazy->image.cacheKey() != image.cacheKey(),
@@ -984,12 +1262,13 @@ void pinSourceIdentitySurvivesRestart() {
             "legacy records remain readable without invented identity");
 }
 
-void showBorderStateRoundTripsAndDefaultsToEnabledForLegacyRecords() {
+void borderAndShadowStatesRoundTripWithLegacyDefaults() {
     QTemporaryDir directory;
     require(directory.isValid(), "temporary show border storage is unavailable");
     const QString id = QUuid::createUuid().toString(QUuid::WithoutBraces);
     auto record = recordWithId(id, patternedImage(QSize(200, 100), 5));
     record.showBorder = false;
+    record.showShadow = true;
     record.borderAppearance =
         storage::PinnedBorderAppearance{QSize(200, 100), QRectF(8, 8, 184, 84), 16.0, true, {}};
     const QString manifest =
@@ -999,17 +1278,18 @@ void showBorderStateRoundTripsAndDefaultsToEnabledForLegacyRecords() {
         require(repository.upsert(record).success && repository.flush().success,
                 "the show border opt-out must be committed to disk");
         const auto demoted = repository.loadRecord(id);
-        require(demoted.has_value() && !demoted->showBorder &&
+        require(demoted.has_value() && !demoted->showBorder && demoted->showShadow &&
                     demoted->borderAppearance == record.borderAppearance,
                 "the show border opt-out must survive payload demotion");
         record.showBorder = true;
+        record.showShadow = false;
         require(repository.updateState(record).success && repository.flush().success,
                 "re-enabling the border must update persisted metadata");
     }
     {
         storage::PinnedWindowRepository repository(directory.path());
         const auto loaded = repository.loadRecord(id);
-        require(loaded.has_value() && loaded->showBorder &&
+        require(loaded.has_value() && loaded->showBorder && !loaded->showShadow &&
                     loaded->borderAppearance == record.borderAppearance,
                 "show border state must survive repository recreation");
     }
@@ -1020,6 +1300,7 @@ void showBorderStateRoundTripsAndDefaultsToEnabledForLegacyRecords() {
     auto records = root.value(QStringLiteral("records")).toArray();
     auto item = records.at(0).toObject();
     item.remove(QStringLiteral("show_border"));
+    item.remove(QStringLiteral("show_shadow"));
     item.remove(QStringLiteral("border_appearance"));
     records.replace(0, item);
     root.insert(QStringLiteral("records"), records);
@@ -1031,8 +1312,9 @@ void showBorderStateRoundTripsAndDefaultsToEnabledForLegacyRecords() {
     file.close();
     storage::PinnedWindowRepository repository(directory.path());
     const auto loaded = repository.loadRecord(id);
-    require(loaded.has_value() && loaded->showBorder && !loaded->borderAppearance,
-            "legacy records must restore with the border visible");
+    require(loaded.has_value() && loaded->showBorder && !loaded->showShadow &&
+                !loaded->borderAppearance,
+            "legacy records must restore with the border visible and shadow hidden");
 }
 void malformedCustomBorderRejectsRecord() {
     QTemporaryDir directory;
@@ -1987,10 +2269,330 @@ void storageExchangeDrainsReadersAndRejectsStaleAdmissions() {
     }
 }
 
+storage::StorageResult createVisibilityImage(storage::PinnedWindowRepository& repository,
+                                             const storage::PinnedWindowRecord& record,
+                                             bool reserved = false) {
+    const auto prepared =
+        storage::PreparedPngImage::fromBytes(record.image.size(), pngBytes(record.image, 6));
+    require(prepared.has_value(), "prepare visibility fixture source");
+    return reserved ? repository.createReserved(record, *prepared)
+                    : repository.create(record, *prepared);
+}
+
+void lifecycleSummariesCoverPendingAndPersistedPinsWithoutPayloadReads() {
+    QTemporaryDir directory;
+    int payloadReads = 0;
+    storage::PinnedWindowRepository repository(
+        directory.path(), true, 30000, [&](storage::PinnedWindowOperation operation) {
+            if (operation == storage::PinnedWindowOperation::PayloadRead)
+                ++payloadReads;
+        });
+    const auto created = QDateTime::currentDateTimeUtc();
+    auto pending = recordWithId(QUuid::createUuid().toString(QUuid::WithoutBraces),
+                                patternedImage({4, 4}, 21));
+    auto persisted = recordWithId(QUuid::createUuid().toString(QUuid::WithoutBraces),
+                                  patternedImage({4, 4}, 23));
+    persisted.updatedUtc = created.addSecs(1);
+    repository.reserveCreation(pending.id, created);
+    require(repository.upsert(persisted).success &&
+                repository.setRecordsHidden({pending.id, persisted.id}, true).success,
+            "seed pending and persisted lifecycle metadata");
+    const auto revision = repository.revision();
+    const auto pendingSummary = repository.summary(pending.id);
+    const auto persistedSummary = repository.summary(persisted.id);
+    require(pendingSummary && pendingSummary->pending && pendingSummary->hidden &&
+                !pendingSummary->ignored && pendingSummary->createdUtc == created &&
+                persistedSummary && !persistedSummary->pending && persistedSummary->hidden,
+            "ID lookup preserves hidden metadata across both lifecycle states");
+    const auto combined = repository.summariesIncludingPending();
+    require(repository.summaries().size() == 1 && combined.size() == 2 &&
+                combined.first().id == pending.id && combined.last().id == persisted.id &&
+                !repository.summary(QStringLiteral("../invalid")) &&
+                !repository.summary(QUuid::createUuid().toString(QUuid::WithoutBraces)) &&
+                repository.revision() == revision && payloadReads == 0,
+            "unified metadata is sorted, complete and read-only without loading payloads");
+    require(repository.markClosedDeferred(pending.id).success, "close a pending metadata pin");
+    const auto closed = repository.summary(pending.id);
+    require(closed && closed->pending && closed->ignored && !closed->hidden &&
+                closed->lastClosedUtc.isValid() &&
+                closed->activitySequence > pendingSummary->activitySequence,
+            "pending metadata gives Close precedence over Hide");
+    require(createVisibilityImage(repository, pending, true).success,
+            "transfer a pending pin into persisted storage");
+    const auto saved = repository.summary(pending.id);
+    const auto savedSummaries = repository.summariesIncludingPending();
+    require(saved && !saved->pending && saved->ignored && saved->createdUtc == closed->createdUtc &&
+                saved->activitySequence == closed->activitySequence && savedSummaries.size() == 2 &&
+                std::count_if(savedSummaries.cbegin(), savedSummaries.cend(),
+                              [&pending](const auto& item) { return item.id == pending.id; }) ==
+                    1 &&
+                repository.pendingSummaries().isEmpty() && payloadReads == 0,
+            "first save transfers metadata once without losing lifecycle state or reading pixels");
+    const auto canceled = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    repository.reserveCreation(canceled);
+    require(repository.summary(canceled)->pending, "new reservation is discoverable");
+    repository.cancelCreation(canceled);
+    require(!repository.summary(canceled) && repository.summariesIncludingPending().size() == 2,
+            "canceled reservations leave no lifecycle metadata");
+}
+
+void hiddenStatePersistsWithoutClosingOrChangingPayloads() {
+    QTemporaryDir directory;
+    auto record =
+        recordWithId(QUuid::createUuid().toString(QUuid::WithoutBraces), patternedImage({8, 8}, 3));
+    {
+        storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+        require(repository.upsert(record).success, "seed hidden metadata fixture");
+        const auto membership = repository.membershipRevision();
+        const auto preview = repository.previewSourceRevision(record.id);
+        const auto visibility = repository.visibilityRevision();
+        int notifications = 0;
+        repository.setChangedCallback([&notifications] { ++notifications; });
+        require(
+            !repository.setRecordsHidden({record.id, QStringLiteral("../invalid")}, true).success &&
+                !repository.loadRecord(record.id)->hidden && notifications == 0,
+            "invalid hide batches must leave all records unchanged");
+        require(repository.setRecordsHidden({record.id, record.id}, true).success &&
+                    repository.visibilityRevision() == visibility + 1 && notifications == 1 &&
+                    repository.membershipRevision() == membership &&
+                    repository.previewSourceRevision(record.id) == preview,
+                "hiding changes visibility once without changing membership or image previews");
+        require(repository.setRecordsHidden({record.id}, true).success && notifications == 1,
+                "repeated hiding must not publish another change");
+        repository.setChangedCallback({});
+        record.opacityPercent = 77;
+        require(repository.updateState(record).success &&
+                    repository.upsertExisting(record).success &&
+                    repository.loadRecord(record.id)->hidden &&
+                    !repository.loadRecord(record.id)->ignored &&
+                    !repository.loadRecord(record.id)->lastClosedUtc.isValid(),
+                "late snapshots must retain hidden state separately from close history");
+        repository.suspendWrites(true);
+        const bool changedWhileSuspended = repository.setRecordsHidden({record.id}, false).success;
+        repository.suspendWrites(false);
+        require(!changedWhileSuspended && repository.loadRecord(record.id)->hidden &&
+                    repository.flush().success,
+                "migration rejection must preserve durable hidden state");
+    }
+    {
+        storage::PinnedWindowRepository reloaded(directory.path(), false, 30000);
+        const auto restored = reloaded.loadRecord(record.id);
+        require(restored && restored->hidden && !restored->ignored &&
+                    reloaded.summaries().front().hidden &&
+                    !reloaded.setRecordsHidden({record.id}, false).success,
+                "hidden records survive reload and read-only restoration rejection");
+    }
+    const QString index = QDir(directory.path()).filePath("pinned_windows_v2/index.json");
+    auto manifest = QJsonDocument::fromJson(readBytes(index)).object();
+    auto records = manifest.value(QStringLiteral("records")).toArray();
+    auto legacy = records.at(0).toObject();
+    legacy.remove(QStringLiteral("hidden"));
+    records[0] = legacy;
+    manifest.insert(QStringLiteral("records"), records);
+    QFile file(index);
+    require(file.open(QIODevice::WriteOnly | QIODevice::Truncate) &&
+                file.write(QJsonDocument(manifest).toJson()) > 0,
+            "write legacy hidden-state fixture");
+    file.close();
+    storage::PinnedWindowRepository legacyRepository(directory.path(), false, 30000);
+    require(!legacyRepository.loadRecord(record.id)->hidden,
+            "legacy records default to visible without a schema migration");
+}
+
+void membershipChangesRevealOnlyAffectedGroups() {
+    QTemporaryDir directory;
+    storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+    const QString target = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString unrelated = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    require(repository
+                .setGroups({{"default", "Default", true},
+                            {target, "Target", false},
+                            {unrelated, "Unrelated", false}},
+                           "default")
+                .success,
+            "seed visibility groups");
+    const auto make = [](const QString& group) {
+        auto record = recordWithId(QUuid::createUuid().toString(QUuid::WithoutBraces),
+                                   patternedImage({4, 4}, 5));
+        record.groupId = group;
+        return record;
+    };
+    auto moving = make("default");
+    auto sourcePeer = make("default");
+    auto targetPeer = make(target);
+    auto unrelatedPeer = make(unrelated);
+    require(repository.upsert(moving).success && repository.upsert(sourcePeer).success &&
+                repository.upsert(targetPeer).success && repository.upsert(unrelatedPeer).success &&
+                repository.setRecordsHidden({sourcePeer.id, targetPeer.id, unrelatedPeer.id}, true)
+                    .success,
+            "seed hidden group members");
+    require(repository.setRecordsGroup({moving.id}, "default").success &&
+                repository.loadRecord(sourcePeer.id)->hidden,
+            "same-group assignment must preserve hidden siblings");
+    require(repository.setRecordsGroup({moving.id}, target).success &&
+                !repository.loadRecord(sourcePeer.id)->hidden &&
+                !repository.loadRecord(targetPeer.id)->hidden &&
+                repository.loadRecord(unrelatedPeer.id)->hidden,
+            "transfer reveals every source and destination sibling, preserving unrelated groups");
+    require(repository.updateState(moving).success && repository.upsertExisting(moving).success &&
+                repository.loadRecord(moving.id)->groupId == target,
+            "late snapshots must not undo authoritative group assignment");
+    require(repository.setRecordsHidden({targetPeer.id}, true).success &&
+                repository.remove(moving.id).success &&
+                !repository.loadRecord(targetPeer.id)->hidden,
+            "permanent removal reveals surviving hidden group members");
+    require(repository.setRecordsHidden({sourcePeer.id}, true).success &&
+                createVisibilityImage(repository, make("default")).success &&
+                !repository.loadRecord(sourcePeer.id)->hidden,
+            "a successful new record reveals existing hidden members");
+    auto pending = make("default");
+    repository.reserveCreation(pending.id);
+    require(repository.setRecordsHidden({sourcePeer.id, targetPeer.id}, true).success &&
+                repository.setRecordsGroup({pending.id}, target).success &&
+                repository.pendingSummaries().front().groupId == target &&
+                !repository.loadRecord(sourcePeer.id)->hidden &&
+                !repository.loadRecord(targetPeer.id)->hidden &&
+                repository.setRecordsHidden({pending.id}, true).success &&
+                createVisibilityImage(repository, pending, true).success &&
+                repository.loadRecord(pending.id)->groupId == target &&
+                repository.loadRecord(pending.id)->hidden,
+            "pending transfers reveal both groups and preserve ownership through a stale save");
+    require(repository.setRecordsHidden({targetPeer.id}, true).success &&
+                repository.removeMany({pending.id}).success &&
+                !repository.loadRecord(targetPeer.id)->hidden,
+            "removing a formerly pending pin reveals its current group");
+    require(repository.flush().success, "commit membership visibility");
+    storage::PinnedWindowRepository reloaded(directory.path(), false, 30000);
+    require(!reloaded.loadRecord(sourcePeer.id)->hidden &&
+                !reloaded.loadRecord(targetPeer.id)->hidden &&
+                reloaded.loadRecord(unrelatedPeer.id)->hidden,
+            "affected-group visibility must remain cleared after restart");
+}
+
+void pendingVisibilityDoesNotReplayAfterSourcePersistence() {
+    QTemporaryDir directory;
+    storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+    auto sibling =
+        recordWithId(QUuid::createUuid().toString(QUuid::WithoutBraces), patternedImage({4, 4}, 7));
+    auto pending =
+        recordWithId(QUuid::createUuid().toString(QUuid::WithoutBraces), patternedImage({4, 4}, 9));
+    require(repository.upsert(sibling).success &&
+                repository.setRecordsHidden({sibling.id}, true).success,
+            "seed a hidden peer before pending creation");
+    repository.reserveCreation(pending.id);
+    require(repository.markCreationPresented(pending.id).success &&
+                !repository.loadRecord(sibling.id)->hidden,
+            "successful first presentation reveals hidden siblings");
+    require(repository.setRecordsHidden({sibling.id, pending.id}, true).success &&
+                repository.markCreationPresented(pending.id).success &&
+                repository.pendingSummaries().front().hidden &&
+                createVisibilityImage(repository, pending, true).success &&
+                repository.loadRecord(pending.id)->hidden &&
+                repository.loadRecord(sibling.id)->hidden,
+            "late source insertion preserves a newer Hide without replaying addition reveal");
+    require(repository.markClosedDeferred(pending.id).success &&
+                repository.loadRecord(pending.id)->ignored &&
+                !repository.loadRecord(pending.id)->hidden &&
+                !repository.loadRecord(sibling.id)->hidden,
+            "ordinary Close of a hidden pin closes it before revealing surviving siblings");
+    auto neverPresented = recordWithId(QUuid::createUuid().toString(QUuid::WithoutBraces),
+                                       patternedImage({4, 4}, 11));
+    repository.reserveCreation(neverPresented.id);
+    require(repository.setRecordsHidden({sibling.id, neverPresented.id}, true).success &&
+                repository.markCreationPresented(neverPresented.id).success &&
+                createVisibilityImage(repository, neverPresented, true).success &&
+                repository.loadRecord(sibling.id)->hidden &&
+                repository.loadRecord(neverPresented.id)->hidden,
+            "Hide before first frame remains hidden after its source arrives");
+    auto pendingPeer = recordWithId(QUuid::createUuid().toString(QUuid::WithoutBraces),
+                                    patternedImage({4, 4}, 13));
+    repository.reserveCreation(pendingPeer.id);
+    require(repository.setRecordsHidden({pendingPeer.id}, true).success &&
+                repository.remove(neverPresented.id).success &&
+                !repository.pendingSummaries().front().hidden,
+            "membership reveal clears pending hidden peers before they have persisted sources");
+    require(repository.markClosedDeferred(pendingPeer.id).success &&
+                repository.setRecordsHidden({sibling.id}, true).success &&
+                repository.markClosedDeferred(pendingPeer.id).success &&
+                repository.loadRecord(sibling.id)->hidden,
+            "repeated Close is not a second membership removal");
+    require(repository.clearClosed().success && repository.pendingSummaries().isEmpty() &&
+                !repository.loadRecord(sibling.id)->hidden,
+            "clearing closed pending reservations reveals remaining siblings");
+    const QString destroyedPending = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    repository.reserveCreation(destroyedPending);
+    require(repository.setRecordsHidden({sibling.id}, true).success &&
+                repository.remove(destroyedPending).success &&
+                !repository.loadRecord(sibling.id)->hidden &&
+                repository.pendingSummaries().isEmpty(),
+            "removing a pending pin reveals siblings without waiting for image persistence");
+}
+
+void closeRestoreAndRetentionRevealHiddenSiblings() {
+    for (int operation = 0; operation < 4; ++operation) {
+        QTemporaryDir directory;
+        storage::PinnedWindowRepository repository(directory.path(), true, 30000);
+        auto peer = recordWithId(QUuid::createUuid().toString(QUuid::WithoutBraces),
+                                 patternedImage({4, 4}, 15));
+        auto closed = recordWithId(QUuid::createUuid().toString(QUuid::WithoutBraces),
+                                   patternedImage({4, 4}, 17));
+        auto otherClosed = recordWithId(QUuid::createUuid().toString(QUuid::WithoutBraces),
+                                        patternedImage({4, 4}, 19));
+        require(repository.upsert(peer).success && repository.upsert(closed).success &&
+                    repository.upsert(otherClosed).success &&
+                    repository.markClosedDeferred(closed.id).success &&
+                    repository.markClosedDeferred(otherClosed.id).success &&
+                    repository.setRecordsHidden({peer.id}, true).success,
+                "seed close and retention visibility fixture");
+        if (operation == 0) {
+            require(repository.markRestored(closed.id).success,
+                    "closed-to-active restoration succeeds");
+        } else if (operation == 1) {
+            require(repository.clearClosed().success, "clear closed visibility fixture");
+        } else if (operation == 2) {
+            auto policy = repository.policy();
+            policy.maxEntries = 1;
+            require(repository.setPolicy(policy).success,
+                    "retention removes a closed member of the hidden group");
+        } else {
+            auto policy = repository.policy();
+            policy.enabled = false;
+            require(repository.setPolicy(policy, false).success &&
+                        repository.markClosedDeferred(closed.id).success &&
+                        !repository.loadRecord(closed.id),
+                    "disabled-history Close removes the record");
+        }
+        require(!repository.loadRecord(peer.id)->hidden && !repository.loadRecord(peer.id)->ignored,
+                "Close, Restore, cleanup and retention reveal active peers without closing them");
+    }
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
     QCoreApplication application(argc, argv);
+    if (application.arguments().contains(QStringLiteral("--animation-only"))) {
+        animatedSourcesRoundTripWithoutRewritingFrames();
+        animationAdmissionIncludesPreparedDisplayStorage();
+        legacyAnimatedFileSourcesAndPlaybackDefaultsRecover();
+        animationSourceIdentityIncludesEncodedBytes();
+        animationStateUpdatesDoNotInspectOrRetainImmutableSources();
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--memory-activity-only"))) {
+        committedPayloadsAreServedFromDisk();
+        require(snow_shot::runtime::RuntimeActivityTracker::shared().snapshot().activeCount == 0,
+                "idle pinned repositories must not retain runtime activity");
+        return 0;
+    }
+    if (application.arguments().contains(QStringLiteral("--visibility-only"))) {
+        lifecycleSummariesCoverPendingAndPersistedPinsWithoutPayloadReads();
+        hiddenStatePersistsWithoutClosingOrChangingPayloads();
+        membershipChangesRevealOnlyAffectedGroups();
+        pendingVisibilityDoesNotReplayAfterSourcePersistence();
+        closeRestoreAndRetentionRevealHiddenSiblings();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--batch-group-only"))) {
         batchGroupAssignmentPreflightsAndNotifiesOnce();
         return 0;
@@ -2005,6 +2607,11 @@ int main(int argc, char* argv[]) {
     previewsReadOnlySourcePayloadAndKeepStableRevision();
     bulkRemovalIsAtomicAndNotifiesOnce();
     batchGroupAssignmentPreflightsAndNotifiesOnce();
+    lifecycleSummariesCoverPendingAndPersistedPinsWithoutPayloadReads();
+    hiddenStatePersistsWithoutClosingOrChangingPayloads();
+    membershipChangesRevealOnlyAffectedGroups();
+    pendingVisibilityDoesNotReplayAfterSourcePersistence();
+    closeRestoreAndRetentionRevealHiddenSiblings();
     canceledCreationReleasesLifecycleState();
     managementDiskQuotaAndRestorationProtection();
     membershipAndPreviewRevisionsTrackOnlyTheirSources();
@@ -2015,6 +2622,11 @@ int main(int argc, char* argv[]) {
     managementCreationOrderSurvivesOutOfOrderEncoding();
     precisePlacementAndPreviousVersionIsolation();
     stateUpdatesBeforeFirstFlushPreserveRestorableSources();
+    animatedSourcesRoundTripWithoutRewritingFrames();
+    animationAdmissionIncludesPreparedDisplayStorage();
+    legacyAnimatedFileSourcesAndPlaybackDefaultsRecover();
+    animationSourceIdentityIncludesEncodedBytes();
+    animationStateUpdatesDoNotInspectOrRetainImmutableSources();
     committedPayloadsAreServedFromDisk();
     manifestFailuresReleaseWrittenPayloadsAndRetryMetadata();
     partialPayloadFailuresDemoteOnlyCompleteRevisions();
@@ -2032,7 +2644,7 @@ int main(int argc, char* argv[]) {
     clickThroughStateRoundTripsAndRecoversLegacyOrConflictingMetadata();
     alwaysOnTopStateRoundTripsAndDefaultsToEnabledForLegacyRecords();
     pinSourceIdentitySurvivesRestart();
-    showBorderStateRoundTripsAndDefaultsToEnabledForLegacyRecords();
+    borderAndShadowStatesRoundTripWithLegacyDefaults();
     malformedCustomBorderRejectsRecord();
     thumbnailStateSurvivesRestartAndExit();
     hideToTopRoundTripsAndRecoversLegacyMetadata();

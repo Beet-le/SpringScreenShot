@@ -52,6 +52,9 @@ pub unsafe extern "C" fn snow_viewport_get_arrow_text_layout_requests(
                         let info = snow_draw_engine::TextElementInfo {
                             id: request.text_id,
                             arrow_id: Some(request.arrow_id),
+                            bubble_id: None,
+                            bubble_body: None,
+                            text_ink_reserve: request.text.text_ink_reserve,
                             arrow_width: request.arrow_width,
                             center: request.text.center,
                             width: request.text.width(),
@@ -65,6 +68,8 @@ pub unsafe extern "C" fn snow_viewport_get_arrow_text_layout_requests(
                             rotation: request.text.rotation,
                             text: request.text.text.clone(),
                             font_size: request.text.font_size,
+                            bold: request.text.bold,
+                            italic: request.text.italic,
                             font_family: request.text.font_family.clone(),
                             horizontal_align: request.text.horizontal_align,
                             vertical_align: request.text.vertical_align,
@@ -74,6 +79,8 @@ pub unsafe extern "C" fn snow_viewport_get_arrow_text_layout_requests(
                         let style = snow_draw_engine::TextStyle {
                             color: request.text.color,
                             font_size: request.text.font_size,
+                            bold: request.text.bold,
+                            italic: request.text.italic,
                             font_family: request.text.font_family,
                             fill: request.text.fill,
                             fill_style: request.text.fill_style,
@@ -498,6 +505,7 @@ pub unsafe extern "C" fn snow_viewport_set_active_text_draft_presentation_ex(
             return SnowError::InvalidArgument;
         }
 
+        let minimum_grapheme_width = unsafe { (*draft).minimum_grapheme_width };
         let draft = match active_text_draft_from_c(unsafe { &*draft }) {
             Ok(draft) => draft,
             Err(error) => return error,
@@ -506,7 +514,7 @@ pub unsafe extern "C" fn snow_viewport_set_active_text_draft_presentation_ex(
             let id = viewport_id(viewport)?;
             let result = state
                 .runtime
-                .set_active_text_draft_presentation_with_viewport_changes(id, draft)
+                .set_speech_bubble_aware_text_draft(id, draft, minimum_grapheme_width)
                 .map_err(SnowError::from)?;
             write_changed_viewports(out_changed_viewports, result.changed_viewports);
             Ok(())
@@ -856,6 +864,7 @@ fn text_paint_geometry_from_c(item: &SnowSceneDisplayItem) -> TextPaintGeometry 
     )
     .ink_or_wrap();
     TextPaintGeometry {
+        text_ink_reserve: item.text_ink_reserve,
         center: Point::new(item.center_x, item.center_y),
         width: item.width,
         height: item.height,

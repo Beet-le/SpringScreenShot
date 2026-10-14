@@ -6,7 +6,13 @@ mod auto_filter_workflow;
 pub use arrow_text::ArrowTextLayoutRequest;
 mod creation_workflow;
 pub use creation_workflow::SerialNumberLabelLayoutRequest;
+mod speech_bubble;
+pub use speech_bubble::*;
+mod magnifier;
+pub use magnifier::*;
+mod angle;
 mod defaults;
+pub use angle::*;
 mod distance;
 pub use distance::*;
 mod document_ops;
@@ -30,8 +36,8 @@ pub use api::{
     ActiveTextDraftPresentation, ActiveTextDraftTarget, ActiveTool, ArrowHandleKind,
     ArrowHandleState, ArrowStyle, BRUSH_ERASER_STYLE_PROPERTY_STROKE_WIDTH,
     BindingHighlightPresentation, BrushEraserStyle, EditorPresentationState, EditorViewState,
-    EditorViewportState, ElementCreationPreview, FILTER_STYLE_PROPERTY_ALL,
-    FILTER_STYLE_PROPERTY_OPACITY, FILTER_STYLE_PROPERTY_STRENGTH,
+    EditorViewportState, ElementCreationPreview, FILTER_STYLE_MIXED_CONTAINS_BOTH_FILTERS,
+    FILTER_STYLE_PROPERTY_ALL, FILTER_STYLE_PROPERTY_OPACITY, FILTER_STYLE_PROPERTY_STRENGTH,
     FILTER_STYLE_PROPERTY_STROKE_WIDTH, FILTER_STYLE_PROPERTY_TYPE, FilterStyle, FreeDrawPreview,
     HistoryState, MIN_BINDING_HIGHLIGHT_ZOOM, PenFilterPreview, RectangleShapeStyle,
     SERIAL_NUMBER_STYLE_MIXED_COLOR, SERIAL_NUMBER_STYLE_MIXED_FILL,
@@ -55,10 +61,11 @@ pub use api::{
     SHAPE_STYLE_PROPERTY_STROKE_STYLE, SHAPE_STYLE_PROPERTY_STROKE_WIDTH, SelectionArrowState,
     SelectionBounds, SelectionRectState, SerialNumberToolbarState, ShapeKind, ShapeStyle,
     ShapeStylePatch, SnapGuideTargets, StyleToolbarSource, StyleToolbarState,
-    TEXT_STYLE_ALL_PROPERTIES, TEXT_STYLE_MIXED_COLOR, TEXT_STYLE_MIXED_CORNER_RADII,
-    TEXT_STYLE_MIXED_FILL, TEXT_STYLE_MIXED_FILL_STYLE, TEXT_STYLE_MIXED_FONT_FAMILY,
-    TEXT_STYLE_MIXED_FONT_SIZE, TEXT_STYLE_MIXED_HORIZONTAL_ALIGN, TEXT_STYLE_MIXED_OPACITY,
-    TEXT_STYLE_MIXED_STROKE, TEXT_STYLE_MIXED_STROKE_WIDTH, TEXT_STYLE_MIXED_VERTICAL_ALIGN,
+    TEXT_STYLE_ALL_PROPERTIES, TEXT_STYLE_MIXED_BOLD, TEXT_STYLE_MIXED_COLOR,
+    TEXT_STYLE_MIXED_CORNER_RADII, TEXT_STYLE_MIXED_FILL, TEXT_STYLE_MIXED_FILL_STYLE,
+    TEXT_STYLE_MIXED_FONT_FAMILY, TEXT_STYLE_MIXED_FONT_SIZE, TEXT_STYLE_MIXED_HORIZONTAL_ALIGN,
+    TEXT_STYLE_MIXED_ITALIC, TEXT_STYLE_MIXED_OPACITY, TEXT_STYLE_MIXED_STROKE,
+    TEXT_STYLE_MIXED_STROKE_WIDTH, TEXT_STYLE_MIXED_VERTICAL_ALIGN,
     selection_box_visible_for_members,
 };
 pub use defaults::{EditorStyleDefaults, editor_style_defaults};
@@ -84,8 +91,8 @@ use snow_draw_engine_core::{
 use snow_draw_engine_document::{
     ArrowData, DEFAULT_ARROW_MAX_COORDINATE, ElementId, ElementKind, PenFilterData, RectangleData,
     RectangleElementKind, SerialNumberData, TextData, Transaction, arrow_bounds,
-    arrow_length as document_arrow_length, normalize_corner_radii, validate_arrow, validate_filter,
-    validate_rectangle, validate_serial_number, validate_text, validate_text_layout_size,
+    arrow_length as document_arrow_length, validate_arrow, validate_filter, validate_rectangle,
+    validate_serial_number, validate_text, validate_text_layout_size,
 };
 use snow_draw_engine_interaction::{
     CursorCommand, CursorStyle, InputEvent, InteractionOutput, KeyCode, KeyEvent, KeyEventType,
@@ -141,29 +148,46 @@ pub struct EditorUpdate {
 
 #[derive(Clone, Debug)]
 pub struct Editor {
+    arrow_text_cache: std::cell::RefCell<arrow_text::ArrowTextCache>,
     state: EditorState,
-    view: EditorViewportState,
+    view: std::cell::Cell<EditorViewportState>,
     config: EngineConfig,
     quick_selection_disabled_tools: u64,
     scene_state_revision: u64,
     overlay_state_revision: u64,
     pending_command: Option<EditorCommand>,
+    magnifier_wheel: Option<magnifier::MagnifierWheelAccumulator>,
+    speech_bubble_tail_drag: Option<speech_bubble::SpeechBubbleTailDrag>,
+    speech_bubble_text_cache: std::cell::RefCell<speech_bubble::SpeechBubbleTextCache>,
+    speech_bubble_layouts:
+        std::collections::HashMap<ElementId, speech_bubble::SpeechBubbleTextMeasurement>,
+    speech_bubble_draft_geometry: Option<(ElementId, snow_draw_engine_document::SpeechBubbleData)>,
+    captured_pointer: Option<u32>,
+    pending_capture_release: bool,
 }
 
 impl Editor {
     pub fn new(config: EngineConfig) -> Result<Self, ErrorCode> {
         validate_config(&config)?;
         Ok(Self {
+            arrow_text_cache: Default::default(),
             state: EditorState {
                 active_tool: ActiveTool::Shape,
                 ..EditorState::default()
             },
-            view: EditorViewportState::default(),
+            view: Default::default(),
             config,
             quick_selection_disabled_tools: 0,
             scene_state_revision: 0,
             overlay_state_revision: 0,
             pending_command: None,
+            magnifier_wheel: None,
+            speech_bubble_tail_drag: None,
+            speech_bubble_text_cache: Default::default(),
+            speech_bubble_layouts: Default::default(),
+            speech_bubble_draft_geometry: None,
+            captured_pointer: None,
+            pending_capture_release: false,
         })
     }
 
@@ -209,11 +233,28 @@ impl Editor {
     }
 
     pub fn surface_size(&self) -> SurfaceSize {
-        self.view.surface
+        self.view.get().surface
     }
 
     pub fn camera(&self) -> Camera {
-        self.view.camera
+        self.view.get().camera
+    }
+
+    fn with_view<T>(&self, view: &EditorViewportState, query: impl FnOnce(&Self) -> T) -> T {
+        struct RestoreView<'a> {
+            cell: &'a std::cell::Cell<EditorViewportState>,
+            previous: EditorViewportState,
+        }
+        impl Drop for RestoreView<'_> {
+            fn drop(&mut self) {
+                self.cell.set(self.previous);
+            }
+        }
+        let _restore = RestoreView {
+            cell: &self.view,
+            previous: self.view.replace(*view),
+        };
+        query(self)
     }
 
     pub fn active_tool(&self) -> ActiveTool {
@@ -276,14 +317,15 @@ impl Editor {
     ) {
         self.invalidate_auto_filter_gesture(document);
         self.sync_selection_after_document_change(document, &snapshot.selection);
+        self.sync_magnifier_interaction_styles(document);
         self.bump_scene_state_revision();
         self.bump_overlay_state_revision();
     }
 
     pub fn set_surface_size(&mut self, width: u32, height: u32) -> Result<(), ErrorCode> {
         let next = SurfaceSize { width, height };
-        if self.view.surface != next {
-            self.view.surface = next;
+        if self.view.get().surface != next {
+            self.view.get_mut().surface = next;
             self.bump_scene_state_revision();
             self.bump_overlay_state_revision();
         }
@@ -292,8 +334,8 @@ impl Editor {
 
     pub fn set_camera(&mut self, camera: Camera) -> Result<(), ErrorCode> {
         validate_camera(&camera)?;
-        if self.view.camera != camera {
-            self.view.camera = camera;
+        if self.view.get().camera != camera {
+            self.view.get_mut().camera = camera;
             self.bump_scene_state_revision();
             self.bump_overlay_state_revision();
         }
@@ -301,6 +343,13 @@ impl Editor {
     }
 
     fn cancel_interaction(&mut self) {
+        // Direct document mutations cannot return an input output. Drop ownership for native
+        // reconciliation immediately, and retain a release command for the next input output.
+        self.pending_capture_release |= self.captured_pointer.take().is_some();
+        self.magnifier_wheel = None;
+        if self.speech_bubble_tail_drag.take().is_some() {
+            self.bump_scene_state_revision();
+        }
         self.state.ui.free_draw_hover_position = None;
         self.state.pending_text_edit = None;
         self.state.pending_new_text_draft = false;
@@ -311,6 +360,7 @@ impl Editor {
             InteractionState::PendingSelectionMove(_)
                 | InteractionState::EditingSelection(_)
                 | InteractionState::EditingArrow(_)
+                | InteractionState::EditingMagnifier(_)
                 | InteractionState::CreatingSerialNumber(_)
                 | InteractionState::CreatingFreeDraw(_)
         );

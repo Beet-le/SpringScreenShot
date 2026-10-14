@@ -2,6 +2,7 @@
 #include "snow_shot/presentation/screenrecordingshortcutcontroller.h"
 #include "recordingaudiogainpopover.h"
 #include "widgets/popover.h"
+#include "widgets/select.h"
 
 #include <QKeyEvent>
 
@@ -26,8 +27,9 @@ ScreenRecordingShortcutController::ScreenRecordingShortcutController(
         ShortcutManager::Binding binding;
         binding.id = QStringLiteral("recording.drawing.") + tool.key();
         binding.priority = ShortcutManager::StandardPriority::DrawingShortcut;
-        binding.canActivate = [this](const auto& context) {
-            return canActivate(context) && !m_area->drawingBlocked();
+        binding.canActivate = [this, toolId = tool.key()](const auto& context) {
+            return canActivate(context) && !m_area->drawingBlocked() &&
+                   m_toolbar->palette()->canActivateDrawingShortcut(toolId);
         };
         binding.activate = [this, toolId = tool.key()](const auto&) {
             return m_toolbar->palette()->activateDrawingShortcut(toolId);
@@ -75,6 +77,34 @@ bool ScreenRecordingShortcutController::canActivate(
     const ShortcutManager::ActivationContext& context) const {
     const auto* receiver = qobject_cast<QWidget*>(context.receiver);
     if (m_toolbar && receiver) {
+        auto* trim = m_toolbar->palette()->recordingTrimPanel();
+        if (auto* speed = trim ? trim->findChild<adqt::widgets::AdSelect*>(
+                                     QStringLiteral("screenRecordingTrimSpeed"))
+                               : nullptr;
+            speed) {
+            if (speed->popupVisible())
+                return false;
+            const bool speedFocused =
+                context.focusWidget == speed ||
+                (context.focusWidget && speed->isAncestorOf(context.focusWidget));
+            if (speedFocused && context.event) {
+                switch (context.event->key()) {
+                case Qt::Key_Up:
+                case Qt::Key_Down:
+                case Qt::Key_Home:
+                case Qt::Key_End:
+                case Qt::Key_PageUp:
+                case Qt::Key_PageDown:
+                case Qt::Key_Enter:
+                case Qt::Key_Return:
+                case Qt::Key_Space:
+                case Qt::Key_F4:
+                    return false;
+                default:
+                    break;
+                }
+            }
+        }
         for (bool microphone : {false, true}) {
             auto* popup = m_toolbar->palette()->recordingAudioGainPopover(microphone);
             if (!popup || !popup->popover()->isVisible())

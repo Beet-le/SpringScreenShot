@@ -12,6 +12,8 @@ pub enum SnowSceneDisplayItemKind {
     SerialNumber = 6,
     SerialNumberConnector = 7,
     Filter = 8,
+    Magnifier = 9,
+    SpeechBubble = 10,
 }
 
 snow_c_enum! {
@@ -98,6 +100,16 @@ pub struct SnowTextPaintBounds {
     pub max_y: f64,
 }
 
+/// Conservative document-space bounds of the magnifier bodies and Gradient bridge.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SnowMagnifierPaintBounds {
+    pub min_x: f64,
+    pub min_y: f64,
+    pub max_x: f64,
+    pub max_y: f64,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SnowSerialTextConnection {
@@ -111,6 +123,19 @@ pub struct SnowSerialTextConnection {
     pub baseline_end_y: f64,
     pub has_baseline: u8,
     pub reserved: [u8; 7],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SnowMagnifierGeometry {
+    pub source_center_x: f64,
+    pub source_center_y: f64,
+    pub source_width: f64,
+    pub source_height: f64,
+    pub magnification_factor: f64,
+    pub connection_type: SnowMagnifierConnectionType,
+    pub source_outline: u8,
+    pub reserved: [u8; 3],
 }
 
 #[repr(C)]
@@ -134,7 +159,8 @@ pub struct SnowSceneDisplayItem {
     pub arrow_shaft_type: SnowArrowShaftType,
     pub arrow_ratio: f64,
     pub is_free_draw: u8,
-    pub reserved1: [u8; 2],
+    pub text_bold: u8,
+    pub text_italic: u8,
     pub arrow_start_head: SnowArrowhead,
     pub arrow_end_head: SnowArrowhead,
     pub arrow_stroke_style: SnowStrokeStyle,
@@ -160,13 +186,15 @@ pub struct SnowSceneDisplayItem {
     pub has_bound_text_element: u8,
     pub rect_shape: u8,
     pub serial_number_type: u8,
-    pub reserved2: [u8; 1],
+    pub arrow_text_overlay: u8,
     pub bound_text_element_generation: u32,
     pub arrow_text_bounds: [f64; 4],
     pub filter: SnowFilterRenderSpec,
     pub text_utf8: *const std::ffi::c_char,
     pub font_family_utf8_len: u32,
     pub font_family_utf8: *const std::ffi::c_char,
+    pub magnifier: SnowMagnifierGeometry,
+    pub text_ink_reserve: f64,
 }
 
 #[repr(C)]
@@ -196,6 +224,11 @@ pub enum SnowOverlayRectKind {
     TextHoverUnderline = 12,
     EraserCursor = 13,
     BindingHighlight = 14,
+    MagnifierMoveHandle = 15,
+    MagnifierSelectionFrame = 16,
+    SpeechBubbleAddTailHandle = 17,
+    SpeechBubbleTailBaseHandle = 18,
+    SpeechBubbleTailTipHandle = 19,
 }
 
 #[repr(C)]
@@ -295,7 +328,8 @@ impl Default for SnowSceneDisplayItem {
             arrow_shaft_type: SnowArrowShaftType::Plain,
             arrow_ratio: 1.0,
             is_free_draw: 0,
-            reserved1: [0; 2],
+            text_bold: 0,
+            text_italic: 0,
             arrow_start_head: SnowArrowhead::None,
             arrow_end_head: SnowArrowhead::None,
             arrow_stroke_style: SnowStrokeStyle::Solid,
@@ -318,13 +352,15 @@ impl Default for SnowSceneDisplayItem {
             has_bound_text_element: 0,
             rect_shape: SnowDisplayRectShape::Rectangle as u8,
             serial_number_type: SnowSerialNumberType::OutlinedCircle as u8,
-            reserved2: [0; 1],
+            arrow_text_overlay: 0,
             bound_text_element_generation: 0,
             arrow_text_bounds: [0.0; 4],
             filter: SnowFilterRenderSpec::default(),
             text_utf8: std::ptr::null(),
             font_family_utf8_len: 0,
             font_family_utf8: std::ptr::null(),
+            magnifier: SnowMagnifierGeometry::default(),
+            text_ink_reserve: 0.0,
         }
     }
 }
@@ -389,7 +425,7 @@ mod tests {
         let scene_size = std::mem::size_of::<SnowSceneDisplayItem>();
         let overlay_size = std::mem::size_of::<SnowOverlayDisplayItem>();
         assert_eq!(
-            scene_size, 344,
+            scene_size, 408,
             "scene display ABI layout must remain stable"
         );
         assert_eq!(

@@ -7,7 +7,7 @@ if(SNOW_SHOT_RELEASE_STATIC)
     set(PKG_CONFIG_ARGN --static)
 endif()
 pkg_check_modules(SNOW_SHOT_FFMPEG REQUIRED IMPORTED_TARGET GLOBAL
-    libavformat libavcodec libswresample libswscale libavutil)
+    libavfilter libavformat libavcodec libswresample libswscale libavutil)
 set(PKG_CONFIG_ARGN "${_snow_saved_pkg_config_argn}")
 set(ENV{PKG_CONFIG_PATH} "${_snow_saved_pkg_config_path}")
 

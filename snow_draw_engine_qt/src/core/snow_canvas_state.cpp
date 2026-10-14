@@ -38,9 +38,10 @@ bool fontFamiliesEqual(const char* lhs, std::uint32_t lhsLength, const char* rhs
 }
 
 bool textStylesEqual(const SnowTextStyle& lhs, const SnowTextStyle& rhs) {
-    return colorsEqual(lhs.color, rhs.color) && lhs.font_size == rhs.font_size &&
-           colorsEqual(lhs.fill, rhs.fill) && lhs.fill_style == rhs.fill_style &&
-           colorsEqual(lhs.stroke, rhs.stroke) && lhs.stroke_width == rhs.stroke_width &&
+    return lhs.bold == rhs.bold && lhs.italic == rhs.italic && colorsEqual(lhs.color, rhs.color) &&
+           lhs.font_size == rhs.font_size && colorsEqual(lhs.fill, rhs.fill) &&
+           lhs.fill_style == rhs.fill_style && colorsEqual(lhs.stroke, rhs.stroke) &&
+           lhs.stroke_width == rhs.stroke_width &&
            cornerRadiiEqual(lhs.corner_radii, rhs.corner_radii) &&
            lhs.horizontal_align == rhs.horizontal_align &&
            lhs.vertical_align == rhs.vertical_align && lhs.opacity == rhs.opacity &&
@@ -84,7 +85,23 @@ bool styleToolbarStatesEqual(const SnowStyleToolbarState& lhs, const SnowStyleTo
            lhs.distance_style.endpoint_scale == rhs.distance_style.endpoint_scale &&
            lhs.distance_style.endpoint_style == rhs.distance_style.endpoint_style &&
            lhs.distance_style_mixed == rhs.distance_style_mixed &&
-           lhs.distance_measured_length == rhs.distance_measured_length;
+           colorsEqual(lhs.angle_style.stroke, rhs.angle_style.stroke) &&
+           lhs.angle_style.stroke_width == rhs.angle_style.stroke_width &&
+           lhs.angle_style.unit == rhs.angle_style.unit &&
+           lhs.angle_style.angle_type == rhs.angle_style.angle_type &&
+           lhs.angle_style.decimal_places == rhs.angle_style.decimal_places &&
+           lhs.angle_style_mixed == rhs.angle_style_mixed &&
+           lhs.distance_measured_length == rhs.distance_measured_length &&
+           lhs.magnifier_style.shape == rhs.magnifier_style.shape &&
+           colorsEqual(lhs.magnifier_style.stroke, rhs.magnifier_style.stroke) &&
+           lhs.magnifier_style.stroke_width == rhs.magnifier_style.stroke_width &&
+           lhs.magnifier_style.factor == rhs.magnifier_style.factor &&
+           lhs.magnifier_style.connection_type == rhs.magnifier_style.connection_type &&
+           lhs.magnifier_style.source_outline == rhs.magnifier_style.source_outline &&
+           lhs.magnifier_style.leader_arrowhead == rhs.magnifier_style.leader_arrowhead &&
+           lhs.magnifier_style.arrow_ratio == rhs.magnifier_style.arrow_ratio &&
+           cornerRadiiEqual(lhs.magnifier_style.corner_radii, rhs.magnifier_style.corner_radii) &&
+           lhs.magnifier_style_mixed == rhs.magnifier_style_mixed;
 }
 
 bool watermarkConfigsEqual(const SnowWatermarkConfig& lhs, const SnowWatermarkConfig& rhs) {

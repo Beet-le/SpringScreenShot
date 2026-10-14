@@ -123,7 +123,8 @@ void prepare(SnowCanvasRuntime& runtime, SnowCanvasWidget& canvas, const Scenari
 
 double percentile(std::vector<double> values, double fraction) {
     std::sort(values.begin(), values.end());
-    const auto index = static_cast<std::size_t>(std::ceil(values.size() * fraction) - 1);
+    const auto index =
+        static_cast<std::size_t>(std::ceil(static_cast<double>(values.size()) * fraction) - 1);
     return values[std::min(index, values.size() - 1)];
 }
 

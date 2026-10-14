@@ -26,6 +26,7 @@
 #include <QPainterPath>
 #include <QPalette>
 #include <QPen>
+#include <QPointer>
 #include <QResizeEvent>
 #include <QShowEvent>
 #include <QSizePolicy>
@@ -772,6 +773,7 @@ QSize AdSwitch::sizeHint() const { return d_->sizeHintFor(*this, resolvedAppeara
 QSize AdSwitch::minimumSizeHint() const { return sizeHint(); }
 
 bool AdSwitch::event(QEvent* event) {
+  const QPointer<AdSwitch> lifetime(this);
   detail::resetWidgetHoverOnLifecycle(this, event);
   if (event->type() == QEvent::Hide || event->type() == QEvent::ParentAboutToChange) {
     invalidateResolvedTokensCache();
@@ -788,7 +790,7 @@ bool AdSwitch::event(QEvent* event) {
   }
 
   const bool handled = QAbstractButton::event(event);
-  if (!event) {
+  if (!lifetime || !event) {
     return handled;
   }
 
@@ -1067,6 +1069,7 @@ void AdSwitch::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void AdSwitch::mouseReleaseEvent(QMouseEvent* event) {
+  const QPointer<AdSwitch> lifetime(this);
   if (interactionBlocked()) {
     resetDragState();
     setPressedState(false);
@@ -1085,28 +1088,32 @@ void AdSwitch::mouseReleaseEvent(QMouseEvent* event) {
   setPressedState(false);
 
   if (wasDragActive) {
+    if (event) {
+      event->accept();
+    }
     resetDragState();
     const bool nextChecked = releaseThumbPosition >= 0.5;
     const bool stateChanged = nextChecked != isChecked();
     setDown(false);
     emit released();
+    if (!lifetime) return;
     if (stateChanged) {
       QAbstractButton::setChecked(nextChecked);
+      if (!lifetime) return;
       emit clicked(isChecked());
+      if (!lifetime) return;
     }
     if (triggerWave) {
       triggerWaveOverlay();
     }
     refreshAccessibleState();
     update();
-    if (event) {
-      event->accept();
-    }
     return;
   }
 
   resetDragState();
   QAbstractButton::mouseReleaseEvent(event);
+  if (!lifetime) return;
   if (triggerWave) {
     triggerWaveOverlay();
   }
@@ -1145,6 +1152,7 @@ void AdSwitch::keyPressEvent(QKeyEvent* event) {
 }
 
 void AdSwitch::keyReleaseEvent(QKeyEvent* event) {
+  const QPointer<AdSwitch> lifetime(this);
   if (!event) {
     return;
   }
@@ -1162,19 +1170,21 @@ void AdSwitch::keyReleaseEvent(QKeyEvent* event) {
   }
 
   if (enterKey) {
+    event->accept();
     const bool triggerClick = d_->enterPressed && !event->isAutoRepeat();
     d_->enterPressed = false;
     setDown(false);
     if (triggerClick) {
       click();
+      if (!lifetime) return;
       triggerWaveOverlay();
     }
-    event->accept();
     update();
     return;
   }
 
   QAbstractButton::keyReleaseEvent(event);
+  if (!lifetime) return;
   if (triggerWave) {
     triggerWaveOverlay();
   }

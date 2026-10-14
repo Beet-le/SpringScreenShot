@@ -302,18 +302,46 @@ void selectedTextShortcutSettings() {
                 "re-enable restores native registration");
         id = input->registrations.key(keys.first());
         manager.setGlobalHotkeysEnabled(false);
+        require(
+            !input->registrations.values().contains(keys.first()) &&
+                !input->registrations.values().contains(keys.last()) &&
+                persisted.translateSelectedText() == keys,
+            "manual hotkey disablement releases both selected text bindings and preserves keys");
         input->handler(id);
         require(activations == 1, "disabled global hotkeys suppress selected text translation");
         manager.setGlobalHotkeysEnabled(true);
+        const int restoredId = input->registrations.key(keys.first());
+        require(restoredId != 0 && restoredId != id &&
+                    input->registrations.values().contains(keys.last()),
+                "manual re-enablement restores both selected text bindings with fresh IDs");
+        input->handler(id);
+        require(activations == 1, "manual re-enablement must keep the released ID inactive");
+        id = restoredId;
+        input->handler(id);
+        require(activations == 2, "manual re-enablement restores selected text translation");
         auto& store = storage::ApplicationStorage::instance().configuration();
         const QString fullscreenKey =
             QStringLiteral("global_shortcuts/disable_on_focused_fullscreen_window");
         const auto previousFullscreen = store.value(fullscreenKey);
         require(store.setValue(fullscreenKey, true), "enable fullscreen suppression");
         fullscreen = true;
+        manager.refreshFocusedFullscreenState();
+        require(!input->registrations.values().contains(keys.first()) &&
+                    !input->registrations.values().contains(keys.last()) &&
+                    persisted.translateSelectedText() == keys,
+                "focused fullscreen releases both selected text bindings and preserves keys");
         input->handler(id);
-        require(activations == 1, "fullscreen suppression applies to selected text translation");
+        require(activations == 2, "fullscreen suppression ignores released translation IDs");
         fullscreen = false;
+        manager.refreshFocusedFullscreenState();
+        const int fullscreenRestoredId = input->registrations.key(keys.first());
+        require(fullscreenRestoredId != 0 && fullscreenRestoredId != id &&
+                    input->registrations.values().contains(keys.last()),
+                "leaving fullscreen restores both selected text bindings with fresh IDs");
+        input->handler(id);
+        require(activations == 2, "leaving fullscreen must keep the released ID inactive");
+        input->handler(fullscreenRestoredId);
+        require(activations == 3, "leaving fullscreen restores selected text translation");
         require(store.setValue(fullscreenKey, previousFullscreen), "restore fullscreen preference");
         const auto conflict = persisted.pinClipboardContent();
         require(!conflict.isEmpty(), "pin clipboard default provides a conflict fixture");
@@ -338,6 +366,77 @@ void selectedTextShortcutSettings() {
         reloaded.setShortcuts(action, {});
     }
 }
+void ocrHighlightingDefaultsPersistsAndResets() {
+    namespace storage = snow_shot::storage;
+    namespace settings = snow_shot::presentation::settings;
+    auto& applicationStorage = storage::ApplicationStorage::instance();
+    auto& configuration = applicationStorage.configuration();
+    snow_shot::presentation::GlobalShortcutManager shortcuts(
+        std::make_unique<FakeTranslationHotkeyBackend>());
+    settings::BuiltInSettingsBackend backend(shortcuts);
+    const storage::TextRecognitionSettings recognition;
+    constexpr auto binding = settings::SettingsSwitchBinding::ShowTextHighlighting;
+    const QString key = QStringLiteral("text_recognition/show_text_highlighting");
+    const QString itemId = QStringLiteral("interface.text-recognition.show-text-highlighting");
+    const QString fillKey = QStringLiteral("text_recognition/fill_style");
+    require(backend.switchEnabled(binding) && !backend.switchValue(binding) &&
+                !recognition.showTextHighlighting(),
+            "OCR highlighting must default off through the backend and typed settings");
+    settings::SettingsRuntimeSession session(settings::builtInSettingsRegistry(), backend);
+    SettingsPageWidget page(settings::builtInSettingsRegistry(),
+                            QStringLiteral("text-recognition-translation"), session);
+    page.resize(880, 760);
+    page.show();
+    page.reveal({page.pageId(), QStringLiteral("interface-text-recognition"), itemId});
+    QCoreApplication::processEvents();
+    auto* toggle = page.findChild<adqt::widgets::AdSwitch*>(
+        QStringLiteral("settings-control-interface-text-recognition-show-text-highlighting"));
+    require(toggle != nullptr,
+            "revealing Text background must materialize its highlighting switch");
+    require(!toggle->isChecked() && toggle->isEnabled() &&
+                !session.state(itemId).acceptedValue.toBool() && session.state(itemId).enabled,
+            "OCR highlighting must appear as an enabled, default-off settings switch");
+    require(session.submitDraft(itemId, true) && backend.switchValue(binding) &&
+                recognition.showTextHighlighting() && configuration.flushNow().success,
+            "the highlighting switch must persist enabled through the runtime session");
+    QCoreApplication::processEvents();
+    require(toggle->isChecked(), "runtime highlighting changes must update the generated switch");
+    storage::ConfigurationStore reloaded(
+        QDir(applicationStorage.configurationDirectory()).filePath(QStringLiteral("config.json")),
+        true, false, 60000);
+    require(reloaded.value(key) == QJsonValue(true),
+            "enabled OCR highlighting must survive configuration reload");
+    toggle->click();
+    QCoreApplication::processEvents();
+    require(!recognition.showTextHighlighting() && !session.state(itemId).acceptedValue.toBool() &&
+                !toggle->isChecked(),
+            "clicking the highlighting switch must disable its runtime and stored values");
+    require(recognition.setShowTextHighlighting(true),
+            "enable highlighting outside the settings UI");
+    QCoreApplication::processEvents();
+    require(session.state(itemId).acceptedValue.toBool() && toggle->isChecked(),
+            "external highlighting changes must update the runtime session and switch live");
+    require(!configuration.setValue(key, 1) && recognition.showTextHighlighting(),
+            "nonboolean configuration writes must not replace enabled highlighting");
+    require(configuration.setValue(fillKey, QStringLiteral("blur")) &&
+                session.reset(settings::SettingsSectionReset::TextRecognitionBehavior),
+            "reset recognition behavior while custom appearance is enabled");
+    QCoreApplication::processEvents();
+    require(recognition.showTextHighlighting() && toggle->isChecked() &&
+                configuration.value(fillKey) == QJsonValue(QStringLiteral("blur")),
+            "recognition behavior reset must preserve OCR highlighting and fill style");
+    require(session.reset(settings::SettingsSectionReset::TextRecognitionInterfaceSettings),
+            "reset Text background appearance");
+    QCoreApplication::processEvents();
+    require(!backend.switchValue(binding) && !recognition.showTextHighlighting() &&
+                !session.state(itemId).acceptedValue.toBool() && !toggle->isChecked() &&
+                configuration.value(fillKey) == QJsonValue(QStringLiteral("background_fill")),
+            "appearance reset must restore disabled highlighting and Background Fill live");
+    require(backend.applySwitchValue(binding, true) && backend.switchValue(binding) &&
+                backend.applySwitchValue(binding, false) && !backend.switchValue(binding),
+            "direct backend writes must support both highlighting states");
+}
+
 void originalImagePreviewDefaultsPersistsAndResets() {
     namespace storage = snow_shot::storage;
     namespace settings = snow_shot::presentation::settings;
@@ -460,6 +559,11 @@ int main(int argc, char** argv) {
     auto& applicationStorage = storage::ApplicationStorage::instance();
     require(applicationStorage.initialize({executable, temporary.path(), 60000}).success,
             "initialize translation settings storage");
+    if (application.arguments().contains(QStringLiteral("--ocr-highlighting-only"))) {
+        ocrHighlightingDefaultsPersistsAndResets();
+        applicationStorage.shutdown();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--original-image-preview-only"))) {
         originalImagePreviewDefaultsPersistsAndResets();
         applicationStorage.shutdown();
@@ -470,6 +574,7 @@ int main(int argc, char** argv) {
         applicationStorage.shutdown();
         return 0;
     }
+    ocrHighlightingDefaultsPersistsAndResets();
     originalImagePreviewDefaultsPersistsAndResets();
     textDetectionProcessingDefaultsPersistsAndResets();
     selectedTextShortcutSettings();

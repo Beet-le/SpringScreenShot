@@ -3,7 +3,7 @@ use snow_draw_engine_core::{
 };
 use snow_draw_engine_document::{
     ArrowData, ArrowSuggestedBinding, ElementId, MIN_TEXT_FONT_SIZE, RectangleData, TextData,
-    TextLayoutSize, normalize_corner_radii, text_line_height,
+    TextLayoutSize, text_line_height,
 };
 use snow_draw_engine_interaction::{CursorStyle, Modifiers};
 

@@ -77,8 +77,9 @@ struct Fixture {
     storage::PinnedWindowRepository repository{dir.path()};
     PinnedWindowGroupManager groups{&repository};
     Input* input = new Input;
+    bool focusedFullscreen = false;
     GlobalShortcutManager shortcuts{std::unique_ptr<GlobalShortcutBackend>(input), nullptr,
-                                    [] { return false; }};
+                                    [this] { return focusedFullscreen; }};
     WindowGroupSwitcherController picker{shortcuts, groups};
     QString alpha;
     QString beta;
@@ -205,6 +206,24 @@ void mouseModeAndActualClick() {
             "shortcut converts mouse picker to release confirmation");
 }
 void invalidation() {
+    {
+        Fixture f;
+        auto& store = storage::ApplicationStorage::instance().configuration();
+        const QString key = QStringLiteral("global_shortcuts/disable_on_focused_fullscreen_window");
+        const auto previous = store.value(key);
+        require(store.setValue(key, true), "enable fullscreen shortcut suppression");
+        f.press(f.first);
+        f.focusedFullscreen = true;
+        f.shortcuts.refreshFocusedFullscreenState();
+        require(!f.picker.isVisible() && !f.picker.isTrackingInput() && f.commits == 0,
+                "fullscreen registration release cancels the held shortcut without committing");
+        f.focusedFullscreen = false;
+        f.shortcuts.refreshFocusedFullscreenState();
+        const int restoredId = f.input->id(QStringLiteral("Ctrl+Alt+F8"));
+        require(restoredId != 0 && restoredId != f.first && f.commits == 0,
+                "restored fullscreen bindings do not revive the previous picker session");
+        require(store.setValue(key, previous), "restore fullscreen shortcut suppression");
+    }
     {
         Fixture f;
         f.press(f.first);

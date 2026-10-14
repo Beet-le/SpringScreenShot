@@ -18,6 +18,10 @@
 #include <algorithm>
 #include <utility>
 
+#ifdef Q_OS_MACOS
+#include "../../platform/macos/windowshortcutinput_p.h"
+#endif
+
 namespace snow_shot::presentation {
 namespace {
 
@@ -111,7 +115,14 @@ struct WindowShortcutManager::Impl {
 
     explicit Impl(WindowShortcutManager& manager)
         : q(manager), m_unreleasedKeys(applicationKeyState().keys),
-          m_keyStateRevisions(applicationKeyState().revisions) {}
+          m_keyStateRevisions(applicationKeyState().revisions) {
+#ifdef Q_OS_MACOS
+        m_nativeInput = platform::macos::makeWindowShortcutInputFilter(
+            [this](QWidget* receiver, QKeyEvent& event) {
+                return q.eventFilter(receiver, &event);
+            });
+#endif
+    }
 
     // Physical keys whose press was observed through this filter without a
     // matching release, and keys that were still held when keyboard input last
@@ -406,6 +417,9 @@ struct WindowShortcutManager::Impl {
     quint64 m_nextOrder = 1;
     InputSuspensionHandle m_nextSuspensionHandle = 1;
     QSet<InputSuspensionHandle> m_inputSuspensions;
+#ifdef Q_OS_MACOS
+    std::unique_ptr<QAbstractNativeEventFilter> m_nativeInput;
+#endif
 };
 
 WindowShortcutManager::WindowShortcutManager(QObject* parent)
@@ -705,8 +719,9 @@ bool WindowShortcutManager::eventFilter(QObject* watched, QEvent* event) {
     } else if (event->type() == QEvent::KeyPress && !keyEvent->isAutoRepeat()) {
         m_impl->noteKeyPress(*keyEvent);
     }
-    const QVector<Impl::Candidate> candidates =
+    QVector<Impl::Candidate> candidates =
         keyRelease ? m_impl->releaseCandidates(*keyEvent) : m_impl->candidates(*keyEvent);
+    bool heldRepeat = false;
     if (!keyRelease || keyEvent->isAutoRepeat()) {
         for (const auto& registered : m_impl->m_bindings) {
             if (std::any_of(registered.activeReleaseBindings.cbegin(),
@@ -714,6 +729,16 @@ bool WindowShortcutManager::eventFilter(QObject* watched, QEvent* event) {
                             [keyEvent](const auto& binding) {
                                 return shortcuts::shortcutReleaseMatchesEvent(binding, *keyEvent);
                             })) {
+                const auto repeat = std::find_if(
+                    candidates.cbegin(), candidates.cend(),
+                    [&](const auto& candidate) { return candidate.handle == registered.handle; });
+                if (registered.binding.autoRepeat && repeat != candidates.cend()) {
+                    // A repeating held action keeps ownership of the sequence. Only
+                    // its original binding may receive repeats, until physical release.
+                    candidates = {*repeat};
+                    heldRepeat = true;
+                    break;
+                }
                 event->accept();
                 return true;
             }
@@ -754,6 +779,10 @@ bool WindowShortcutManager::eventFilter(QObject* watched, QEvent* event) {
                 event->accept();
                 return true;
             }
+        }
+        if (heldRepeat) {
+            event->accept();
+            return true;
         }
         return QObject::eventFilter(watched, event);
     }
@@ -866,6 +895,10 @@ bool WindowShortcutManager::eventFilter(QObject* watched, QEvent* event) {
             event->accept();
             return true;
         }
+    }
+    if (heldRepeat) {
+        event->accept();
+        return true;
     }
     return QObject::eventFilter(watched, event);
 }

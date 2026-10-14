@@ -14,6 +14,16 @@ QString queueError() {
 }
 } // namespace
 
+bool directCaptureAutoSaveEnabled(DirectCaptureTarget target, const QStringList& actions) {
+    switch (target) {
+    case DirectCaptureTarget::FocusedWindow:
+        return actions.contains(QStringLiteral("capture_focused_window"));
+    case DirectCaptureTarget::CurrentMonitor:
+        return actions.contains(QStringLiteral("capture_current_monitor"));
+    }
+    return false;
+}
+
 DirectCaptureWorkflow::DirectCaptureWorkflow(DirectCapturePorts ports, QObject* parent)
     : QObject(parent), m_ports(std::move(ports)) {}
 

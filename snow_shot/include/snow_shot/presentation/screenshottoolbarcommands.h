@@ -3,12 +3,16 @@
 
 #include "snow_shot/presentation/screenshotselectiondisplayunit.h"
 #include "snow_shot/presentation/screenshotselectionaspectratio.h"
+#include "snow_shot/presentation/screenshotselectionparams.h"
 #include "snow_draw_engine_qt/snow_canvas_style_edit.h"
 #include "snow_shot/presentation/screenshotscrollingtypes.h"
 
 #include <QString>
 #include <QByteArray>
 #include <QPoint>
+#include <QVector>
+
+#include <optional>
 
 namespace adqt::widgets {
 class AdColorPicker;
@@ -41,13 +45,16 @@ class ScreenshotToolbarCommandSink {
     virtual void setMoveTool() = 0;
     virtual void setSelectTool() = 0;
     virtual void setShapeTool() = 0;
+    virtual void setSpeechBubbleTool() {}
     virtual void setArrowTool() = 0;
     virtual void setLineTool() = 0;
     virtual void setDistanceTool() {}
+    virtual void setAngleTool() {}
     virtual void setFreeDrawTool() = 0;
     virtual void setHighlightTool() = 0;
     virtual void setPenHighlightTool() = 0;
     virtual void setSpotlightTool() {}
+    virtual void setMagnifierTool() {}
     virtual void setEraserTool() = 0;
     virtual void setRectangleEraserTool() {}
     virtual void setBrushEraserTool() {}
@@ -74,6 +81,7 @@ class ScreenshotToolbarCommandSink {
     virtual void setTableTool() {}
     virtual void setQrTool() {}
     virtual void setLatexTool() {}
+    virtual void setRecognitionModel(const QString&) {}
     virtual void setMarkdownTool() {}
     virtual void setHtmlTool() {}
     virtual void openImageConversionSettings() {}
@@ -138,6 +146,11 @@ class ScreenshotToolbarCommandSink {
     virtual void beginCanvasColorSampling(adqt::widgets::AdColorPicker*) {}
 };
 
+struct ScreenshotSelectionToolbarQuickSets {
+    std::optional<ScreenshotSelectionParams> previous;
+    QVector<ScreenshotSelectionPreset> presets;
+};
+
 class ScreenshotSelectionToolbarCommandSink {
   public:
     virtual ~ScreenshotSelectionToolbarCommandSink() = default;
@@ -145,6 +158,10 @@ class ScreenshotSelectionToolbarCommandSink {
     virtual void toggleSelectionAspectRatioLockFromToolbar() = 0;
     virtual void
     setSelectionAspectRatioPresetFromToolbar(ScreenshotSelectionAspectRatioPreset preset) = 0;
+    virtual ScreenshotSelectionToolbarQuickSets selectionQuickSetsForToolbar() const {
+        return {};
+    }
+    virtual void applySelectionParamsFromToolbar(const ScreenshotSelectionParams&) {}
     virtual void openSelectionResizeModalFromToolbar() = 0;
     virtual void hideColorPickersForScreenshotUi() = 0;
     virtual void adjustSelectionFromToolbar(int minDx, int minDy, int maxDx, int maxDy) = 0;

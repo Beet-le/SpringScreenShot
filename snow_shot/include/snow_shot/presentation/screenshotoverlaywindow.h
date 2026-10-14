@@ -7,8 +7,8 @@
 
 #include <QColor>
 #include <QJsonObject>
+#include <QPointer>
 #include <QRectF>
-#include <QRegion>
 #include "snow_shot/image/screenshotregiongeometry.h"
 #include <QWidget>
 
@@ -23,6 +23,7 @@ class QMouseEvent;
 class QPaintEvent;
 class QRectF;
 class QResizeEvent;
+class QScreen;
 class QWheelEvent;
 class SnowCanvasWidget;
 class ScreenshotCanvasRenderer;
@@ -34,6 +35,20 @@ class ScreenshotRegionTypeControl;
 struct ScreenshotSelectionVisualState;
 
 struct ScreenshotImageSource;
+
+#if defined(SNOW_SHOT_BENCH_INTERNALS)
+enum class ScreenshotBackingStorePreparationMode { Disabled, AllocationOnly, PageTouch };
+
+struct ScreenshotBackingStorePreparationCounters {
+    quint64 allocationRequests = 0;
+    quint64 pageTouchSlices = 0;
+    quint64 touchedBytes = 0;
+    quint64 pageWrites = 0;
+    quint64 maximumSliceBytes = 0;
+    quint64 completedPreparations = 0;
+    quint64 canceledPreparations = 0;
+};
+#endif
 
 class ScreenshotOverlayWindow final : public QWidget {
     Q_OBJECT
@@ -52,6 +67,8 @@ class ScreenshotOverlayWindow final : public QWidget {
     [[nodiscard]] QPoint canvasLocalPosition(const QPoint& globalPosition) const;
     void setScreenshotImage(QImage image, const QRectF& canvasRect);
     void setScreenshotImageSource(ScreenshotImageSource source, const QRectF& damage = {});
+    void setScreenshotImageSource(ScreenshotImageSource source, const QRectF& damage,
+                                  const ScreenshotImageSource& samplingSource);
     void setScreenshotMaskVisible(bool visible);
     void setScreenshotSelectionBorderColor(const QColor& color);
     void setScreenshotMaskColor(const QColor& color);
@@ -87,8 +104,6 @@ class ScreenshotOverlayWindow final : public QWidget {
     void commitInitialSelectionCursor();
     void setCanvasClearBackgroundEnabled(bool enabled);
     [[nodiscard]] QJsonObject scrollingDiagnostics() const;
-    void setScrollingVisualHole(const QRect& localRect);
-    void clearScrollingVisualHole();
     void setScrollingCaptureMode(bool enabled);
     void beginScrollingThumbnail(
         const QRect& localSelection,
@@ -108,12 +123,27 @@ class ScreenshotOverlayWindow final : public QWidget {
     // Repaint the cleared surface before the controller resumes capture.
     void clearScrollingResultPreview();
 #if defined(SNOW_SHOT_BENCH_INTERNALS)
-    [[nodiscard]] quint64 windowMaskApplicationCountForTesting() const;
     [[nodiscard]] quint64 transparentClearCountForTesting() const;
     [[nodiscard]] ScreenshotCanvasRenderer* screenshotRendererForTesting() const;
+    void setBackingStorePreparationModeForTesting(ScreenshotBackingStorePreparationMode mode);
+    void resetBackingStorePreparationCountersForTesting();
+    [[nodiscard]] ScreenshotBackingStorePreparationCounters
+    backingStorePreparationCountersForTesting() const;
+    [[nodiscard]] bool isBackingStorePreparationPendingForTesting() const;
 #endif
+    // Allocate hidden raster pixels and fault in their pages in bounded event-loop slices.
+    // Preparation never paints the screenshot, shows the window, or flushes its store.
+    void prepareBackingStore();
+    void cancelBackingStorePreparation();
     void warmPresentationSurface();
     void showPreparedFrame(bool deferFirstPaint = false);
+    // Deferred reveal/focus work belongs to a presentation, not the pooled widget lifetime.
+    [[nodiscard]] quint64 beginPresentation();
+    [[nodiscard]] quint64 presentationGeneration() const;
+    [[nodiscard]] bool isPresentationCurrent(quint64 generation) const;
+    [[nodiscard]] bool showPreparedFrameForPresentation(quint64 generation,
+                                                        bool deferFirstPaint = false);
+    void setVisible(bool visible) override;
     // Release the native window and backing store while retaining the QObject,
     // canvas, renderer, and signal wiring for the next capture.
     void releaseNativeSurface();
@@ -140,9 +170,11 @@ class ScreenshotOverlayWindow final : public QWidget {
     void initializeScreenshotSurface();
     void layoutRegionTypeControl();
     void layoutScrollingThumbnail();
-    void updateWindowMask();
     void updateScrollingInputTransparency();
     void updateScrollingResultPreviewReadout();
+    void retirePresentation();
+    void continueBackingStorePreparation(quint64 generation);
+    void postBackingStorePreparation();
 
     ScreenshotOverlayEventSink& m_eventSink;
     QMargins m_captureFrameMargins;
@@ -153,8 +185,6 @@ class ScreenshotOverlayWindow final : public QWidget {
     CanvasStatusReadout* m_scrollingResultPreviewReadout = nullptr;
     std::unique_ptr<ScreenshotOverlayFramePresenter> m_framePresenter;
     std::unique_ptr<ScreenshotCanvasRenderer> m_screenshotRenderer;
-    QRect m_scrollingVisualHole;
-    QRegion m_appliedWindowMask;
     QRect m_scrollingThumbnailAnchor;
     QRectF m_scrollingResultPreviewCanvasRect;
     bool m_scrollingResultPreviewStatusVisible = false;
@@ -164,10 +194,23 @@ class ScreenshotOverlayWindow final : public QWidget {
     bool m_canvasContentWasVisible = true;
     bool m_canvasClearBackgroundWasEnabled = true;
     bool m_canvasInteractionWasEnabled = true;
-    bool m_windowMaskInitialized = false;
+    quint64 m_presentationGeneration = 0;
+    bool m_presentationActive = false;
+    bool m_showingPreparedFrame = false;
+    quint64 m_backingStorePreparationGeneration = 0;
+    QSize m_backingStorePreparationSize;
+    QPointer<QScreen> m_backingStorePreparationScreen;
+    qreal m_backingStorePreparationDevicePixelRatio = 0.0;
+    WId m_backingStorePreparationNativeId = 0;
+    qsizetype m_backingStorePreparationNextByte = 0;
+    bool m_backingStorePreparationActive = false;
+    bool m_backingStorePreparationAllocated = false;
+    bool m_backingStorePreparationComplete = false;
 #if defined(SNOW_SHOT_BENCH_INTERNALS)
-    quint64 m_windowMaskApplicationCount = 0;
     quint64 m_transparentClearCount = 0;
+    ScreenshotBackingStorePreparationMode m_backingStorePreparationMode =
+        ScreenshotBackingStorePreparationMode::PageTouch;
+    ScreenshotBackingStorePreparationCounters m_backingStorePreparationCounters;
 #endif
 };
 

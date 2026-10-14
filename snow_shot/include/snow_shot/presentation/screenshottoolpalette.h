@@ -2,6 +2,7 @@
 #define SNOW_SHOT_PRESENTATION_SCREENSHOTTOOLPALETTE_H
 
 #include "snow_shot/presentation/screenshotselectiondisplayunit.h"
+#include "snow_shot/presentation/screenshotrecognitionmodel.h"
 #include "icon_core.h"
 #include "widgets/control_scale.h"
 #include "snow_draw_engine_qt/snow_canvas_style_edit.h"
@@ -9,6 +10,7 @@
 #include "snow_shot/image/screenshotregiongeometry.h"
 #include "snow_shot/presentation/screenshotgeometry.h"
 #include "snow_shot/presentation/screenshotscrollingtypes.h"
+#include "snow_shot/presentation/screenshotwheelinput.h"
 #include "snow_shot/storage/settingsadapters.h"
 
 #include <QColor>
@@ -97,6 +99,9 @@ class ScreenshotToolPalette final : public QWidget,
         RectangleEraser,
         BrushEraser,
         Distance,
+        Angle,
+        Magnifier,
+        SpeechBubble,
     };
 
     enum class MoveToolPresentation {
@@ -228,14 +233,17 @@ class ScreenshotToolPalette final : public QWidget,
         MoveToolPresentation moveToolPresentation = MoveToolPresentation::EditSelection;
         bool showSelectTool = true;
         bool showShapeTool = true;
+        bool showSpeechBubbleTool = true;
         bool showArrowTool = true;
         bool showDistanceTool = true;
+        bool showAngleTool = true;
         bool showLineTool = false;
         bool showFreeDrawTool = false;
         bool showHighlightTool = false;
         bool showRectangleHighlightTool = false;
         bool showPenHighlightTool = false;
         bool showSpotlightTool = false;
+        bool showMagnifierTool = false;
         bool showEraserTool = false;
         bool showFilterTool = false;
         bool showWatermarkTool = false;
@@ -308,6 +316,7 @@ class ScreenshotToolPalette final : public QWidget,
     bool stepStrokeWidth(int direction);
     bool stepSelectionOpacity(int direction);
     bool stepSpotlightOpacity(int direction);
+    bool stepMagnifierFactor(int direction);
     bool stepFilterIntensity(int direction);
     void setAutoFilterAvailable(bool available);
     bool stepPenFilterStrokeWidth(int direction);
@@ -355,6 +364,7 @@ class ScreenshotToolPalette final : public QWidget,
     void setRectangleStyle(const SnowCanvasShapeStyle& style);
     void setStyleToolbarState(const SnowCanvasStyleToolbarState& state);
     void setWatermarkConfig(const SnowCanvasWatermarkConfig& config);
+    void restoreWatermarkContentForActivation(const SnowCanvasWatermarkConfig& current);
     void setWatermarkTemplateModalOwnerWindow(QWidget* owner);
     void setDrawTemplateCallbacks(std::function<QByteArray()> selectedPayload,
                                   std::function<void(const QByteArray&)> insertPayload);
@@ -362,6 +372,7 @@ class ScreenshotToolPalette final : public QWidget,
     void setSelectionOpacity(qreal opacity, bool mixed = false);
     void installWheelFilters(QObject* receiver, QWidget* scope = nullptr);
     bool handleToolbarWheel(QWheelEvent* event);
+    void resetAngleWheelInput();
     [[nodiscard]] bool canActivateRecordingShortcut(const QString& actionId) const;
     bool activateRecordingShortcut(const QString& actionId);
     void setRecordingState(RecordingState state);
@@ -418,6 +429,8 @@ class ScreenshotToolPalette final : public QWidget,
     void setQrBusy(bool busy);
     void setImageConversionEnabled(bool enabled);
     void setLatexState(bool enabled, bool busy);
+    void setRecognitionModelState(Tool tool, const ScreenshotRecognitionModelState& state);
+    void setLatexEditingState(bool available, bool canUndo, bool canRedo);
     void setImageConversionBusy(bool markdownBusy, bool htmlBusy);
     void setTableEditingState(bool available, bool canUndo, bool canRedo, bool canMerge,
                               bool canSplit, bool canReset);
@@ -471,13 +484,17 @@ class ScreenshotToolPalette final : public QWidget,
     void selectRequested();
     void recordingExportSettingsVisibleChanged(bool visible);
     void shapeRequested();
+    void speechBubbleRequested();
     void arrowRequested();
     void distanceToolRequested();
+    void angleToolRequested();
+    void angleValueAdjustmentRequested(int steps, bool fine);
     void lineRequested();
     void freeDrawRequested();
     void highlightRequested();
     void penHighlightRequested();
     void spotlightRequested();
+    void magnifierRequested();
     void eraserRequested();
     void rectangleEraserRequested();
     void brushEraserRequested();
@@ -487,6 +504,7 @@ class ScreenshotToolPalette final : public QWidget,
     void autoFilterCategoryRequested(const QString& category);
     void penFilterRequested();
     void watermarkRequested();
+    void watermarkActivated();
     void textRequested();
     void serialNumberRequested();
     void ocrRequested();
@@ -494,6 +512,7 @@ class ScreenshotToolPalette final : public QWidget,
     void tableRequested();
     void qrRequested();
     void latexRequested();
+    void recognitionModelChanged(const QString& selection);
     void markdownRequested();
     void htmlRequested();
     void imageConversionSettingsRequested();
@@ -623,6 +642,7 @@ class ScreenshotToolPalette final : public QWidget,
 #if SNOW_SHOT_ENABLE_TABLE_RECOGNITION
     void createTableRecognitionActionFamily();
 #endif
+    void refreshRecognitionModelSelect();
 #if SNOW_SHOT_ENABLE_IMAGE_CONVERSION
     void createImageConversionActionFamily();
 #endif
@@ -701,7 +721,8 @@ class ScreenshotToolPalette final : public QWidget,
     bool applyActiveToolSecondaryToolbarVisibility();
     [[nodiscard]] bool activeToolUsesStyleToolbar() const;
     bool setSecondaryToolbarVisibility(bool actionToolbarVisible, bool styleToolbarVisible);
-    void updateSelectionActionAvailability(bool hasSelection, quint32 selectedElementCount);
+    void updateSelectionActionAvailability(bool hasSelection, quint32 selectedElementCount,
+                                           bool opacityAvailable);
     void updateHistoryActionAvailability();
     void updateTextRecognitionBusy();
     void updateScrollingRecognitionButtons();
@@ -851,12 +872,15 @@ class ScreenshotToolPalette final : public QWidget,
     QBoxLayout* m_recordExportSettingsLayout = nullptr;
     QVector<QBoxLayout*> m_styleControlLayouts;
     QWidget* m_rectangleStyleControlsWidget = nullptr;
+    QWidget* m_speechBubbleStyleControlsWidget = nullptr;
     QWidget* m_moveActionControls = nullptr;
     QPointer<adqt::widgets::AdRadioButtonGroup> m_selectionDisplayUnitGroup;
     QWidget* m_lineStyleControlsWidget = nullptr;
     QWidget* m_freeDrawStyleControlsWidget = nullptr;
     QWidget* m_arrowStyleControlsWidget = nullptr;
     QWidget* m_distanceStyleControlsWidget = nullptr;
+    QWidget* m_angleStyleControlsWidget = nullptr;
+    QWidget* m_magnifierStyleControlsWidget = nullptr;
     QWidget* m_highlightStyleControlsWidget = nullptr;
     QWidget* m_penHighlightStyleControlsWidget = nullptr;
     QWidget* m_spotlightStyleControlsWidget = nullptr;
@@ -884,12 +908,15 @@ class ScreenshotToolPalette final : public QWidget,
     adqt::widgets::AdButton* m_redoButton = nullptr;
     adqt::widgets::AdButton* m_selectButton = nullptr;
     adqt::widgets::AdButton* m_shapeButton = nullptr;
+    adqt::widgets::AdButton* m_speechBubbleButton = nullptr;
     adqt::widgets::AdButton* m_arrowButton = nullptr;
     adqt::widgets::AdButton* m_distanceButton = nullptr;
+    adqt::widgets::AdButton* m_angleButton = nullptr;
     adqt::widgets::AdButton* m_lineButton = nullptr;
     adqt::widgets::AdButton* m_freeDrawButton = nullptr;
     adqt::widgets::AdButton* m_highlighterButton = nullptr;
     adqt::widgets::AdButton* m_spotlightButton = nullptr;
+    adqt::widgets::AdButton* m_magnifierButton = nullptr;
     QVector<adqt::widgets::AdRadioButtonGroup*> m_highlightModeGroups;
     QVector<adqt::widgets::AdRadioButtonGroup*> m_filterModeGroups;
     QVector<adqt::widgets::AdRadioButtonGroup*> m_eraserModeGroups;
@@ -923,6 +950,10 @@ class ScreenshotToolPalette final : public QWidget,
     adqt::widgets::AdButton* m_tableMergeButton = nullptr;
     adqt::widgets::AdButton* m_tableSplitButton = nullptr;
     adqt::widgets::AdButton* m_tableResetButton = nullptr;
+    adqt::widgets::AdSelect* m_recognitionModelSelect = nullptr;
+    QSpacerItem* m_recognitionModelSpacer = nullptr;
+    ScreenshotRecognitionModelState m_tableRecognitionModelState;
+    ScreenshotRecognitionModelState m_latexRecognitionModelState;
     adqt::widgets::AdSelect* m_textFormattingSelect = nullptr;
     adqt::widgets::AdSelect* m_textPunctuationSelect = nullptr;
     adqt::widgets::AdSelect* m_textTargetLanguageSelect = nullptr;
@@ -1038,6 +1069,7 @@ class ScreenshotToolPalette final : public QWidget,
     QVector<StyleLayoutProfile> m_styleLayoutProfiles;
     std::unique_ptr<ScreenshotToolPaletteStyleControls> m_styleControls;
     QPointer<QWidget> m_watermarkTemplateModalOwnerWindow;
+    bool m_watermarkContentRestorePending = true;
     QMargins m_baseShadowMargins;
     QMargins m_shadowMargins;
     QHash<QWidget*, quint64> m_styleMetricRevisions;
@@ -1107,6 +1139,9 @@ class ScreenshotToolPalette final : public QWidget,
     bool m_jumpToTranslationPageVisible = false;
     bool m_textCanUndo = false;
     bool m_textCanRedo = false;
+    bool m_latexEditingAvailable = false;
+    bool m_latexCanUndo = false;
+    bool m_latexCanRedo = false;
     bool m_textCanReset = false;
     bool m_tableCanMerge = false;
     bool m_tableCanSplit = false;
@@ -1123,6 +1158,7 @@ class ScreenshotToolPalette final : public QWidget,
     QHash<int, MaterializationState> m_actionFamilyStates;
     QHash<int, MaterializationState> m_styleFamilyStates;
     SnowCanvasHistoryState m_canvasHistoryState;
+    snow_shot::presentation::WheelStepAccumulator m_angleWheelSteps;
     const SnowCanvasStyleDefaults m_styleDefaults;
     const Options m_options;
     bool m_moveOptionsToolbarVisible = false;

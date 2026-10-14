@@ -4,7 +4,7 @@ use crate::query::QueryStore;
 use snow_draw_engine_core::{ErrorCode, Point, SnapQuery, SnapResult, ViewportQuery};
 use snow_draw_engine_document::{
     ApplyResult, BindableElementState, Document, DocumentRevision, ElementId, ElementKind,
-    RectangleData, Transaction,
+    ElementState, RectangleData, Transaction,
 };
 
 #[derive(Debug)]
@@ -50,6 +50,7 @@ impl DocumentModel {
 
     pub fn from_document(mut document: Document) -> Result<Self, ErrorCode> {
         document.normalize_filter_invariants();
+        document.normalize_angle_invariants()?;
         document.validate_session()?;
         document.normalize_distance_label_invariants()?;
         let queries = QueryStore::new(&document);
@@ -72,6 +73,21 @@ impl DocumentModel {
     }
     pub fn arrow_label_owner(&self, text: ElementId) -> Option<ElementId> {
         self.queries.relations().arrow_label_owner(text)
+    }
+    pub fn arrow_id_for_text(&self, text: ElementId) -> Option<ElementId> {
+        self.arrow_label_owner(text)
+    }
+    pub fn speech_bubble_text_bindings(&self) -> &[(ElementId, ElementId)] {
+        self.queries.relations().speech_bubble_text_bindings()
+    }
+    pub fn speech_bubble_id_for_text(&self, text: ElementId) -> Option<ElementId> {
+        self.queries.relations().speech_bubble_id_for_text(text)
+    }
+    pub fn text_owner_id(&self, text: ElementId) -> Option<ElementId> {
+        self.queries.relations().text_owner_id(text)
+    }
+    pub fn is_text_bound_to_serial_number(&self, text: ElementId) -> bool {
+        !self.serials_for_text(text).is_empty()
     }
     pub fn serials_for_text(&self, text: ElementId) -> &[ElementId] {
         self.queries.relations().serials_for_text(text)
@@ -134,6 +150,23 @@ impl DocumentModel {
 
     pub fn paint_rank(&self, id: ElementId) -> Option<u32> {
         self.queries.paint_rank(id)
+    }
+
+    /// Use the maintained paint ranks instead of searching the document order
+    /// each time a scene cache refreshes an individual element.
+    pub fn element_state(&self, id: ElementId) -> Result<ElementState<'_>, ErrorCode> {
+        let element = self.document.element(id)?;
+        let z_index = self.queries.paint_rank(id).ok_or(ErrorCode::NotFound)? as usize;
+        Ok(ElementState {
+            id,
+            rect: element.data.state_rect(),
+            rotation: element.data.rotation(),
+            opacity: element.data.opacity(),
+            z_index,
+            visible: element.meta.visible,
+            locked: element.meta.locked,
+            data: &element.data,
+        })
     }
 
     pub fn for_each_visible_scene_rect(
@@ -199,7 +232,7 @@ impl DocumentModel {
             .filter_map(|state| {
                 if !state.visible
                     || state.data.is_background_restore()
-                    || self.document.arrow_id_for_text(state.id).is_some()
+                    || self.text_owner_id(state.id).is_some()
                 {
                     return None;
                 }
@@ -309,5 +342,132 @@ mod tests {
             model.visible_element_ids(viewport_query()),
             vec![second, first]
         );
+    }
+
+    #[test]
+    fn element_state_uses_cached_paint_ranks_after_reorder_delete_restore_and_generation_changes() {
+        let mut model = DocumentModel::new();
+        let ids = [
+            model.allocate_element_id(),
+            model.allocate_element_id(),
+            model.allocate_element_id(),
+        ];
+        let mut insert = Transaction::new("insert state fixtures");
+        for (index, id) in ids.into_iter().enumerate() {
+            let mut rectangle = rect(index as f64 * 100.0);
+            rectangle.rotation = index as f64 * 0.25;
+            rectangle.opacity = 0.25 + index as f64 * 0.25;
+            insert.insert_rectangle(
+                id,
+                ElementMeta {
+                    visible: index != 1,
+                    locked: index == 1,
+                },
+                rectangle,
+            );
+        }
+        model.apply_transaction(insert).unwrap();
+        let assert_states_match = |model: &DocumentModel| {
+            for id in model.paint_order() {
+                assert_eq!(
+                    model.element_state(*id),
+                    model.document().element_state(*id)
+                );
+            }
+        };
+        assert_states_match(&model);
+
+        let mut reorder = Transaction::new("reorder state fixtures");
+        reorder.reorder_elements(vec![ids[2], ids[0]], 0);
+        model.apply_transaction(reorder).unwrap();
+        assert_states_match(&model);
+        assert_eq!(model.element_state(ids[2]).unwrap().z_index, 0);
+        assert_eq!(model.element_state(ids[1]).unwrap().z_index, 2);
+
+        let mut remove = Transaction::new("remove state fixture");
+        remove.remove_element(ids[0]);
+        let removed = model.apply_transaction(remove).unwrap();
+        assert_eq!(model.element_state(ids[0]), Err(ErrorCode::NotFound));
+        assert_states_match(&model);
+        model.apply_history_transaction(&removed.inverse).unwrap();
+        assert_states_match(&model);
+
+        let stale = ElementId {
+            generation: ids[0].generation + 1,
+            ..ids[0]
+        };
+        assert_eq!(model.element_state(stale), Err(ErrorCode::NotFound));
+        assert_eq!(model.paint_rank(stale), None);
+        let mut remove = Transaction::new("replace state fixture generation");
+        remove.remove_element(ids[0]);
+        model.apply_transaction(remove).unwrap();
+        let mut replace = Transaction::new("insert next generation");
+        replace.insert_rectangle(stale, ElementMeta::default(), rect(300.0));
+        model.apply_transaction(replace).unwrap();
+        assert_eq!(model.element_state(ids[0]), Err(ErrorCode::NotFound));
+        assert_eq!(model.paint_rank(ids[0]), None);
+        assert_states_match(&model);
+        assert_states_match(&model.clone());
+    }
+
+    #[test]
+    fn speech_bubble_relations_and_tail_spatial_bounds_refresh_locally() {
+        use snow_draw_engine_document::{SpeechBubbleData, TextData, speech_bubble_default_tail};
+        let mut model = DocumentModel::new();
+        let owner = model.allocate_element_id();
+        let label = model.allocate_element_id();
+        let mut body = rect(500.0);
+        body.fill.a = 255;
+        let mut bubble = SpeechBubbleData::new(body);
+        bubble.text_element_id = Some(label);
+        bubble.tails.push(speech_bubble_default_tail(
+            &bubble,
+            Point::new(-450.0, 0.0),
+            1.0,
+        ));
+        let mut insert = Transaction::new("bubble fixture");
+        insert.insert_speech_bubble(owner, ElementMeta::default(), bubble.clone());
+        insert.insert_text(label, ElementMeta::default(), TextData::default());
+        model.apply_transaction(insert).unwrap();
+        assert_eq!(model.speech_bubble_text_bindings(), &[(owner, label)]);
+        assert_eq!(model.text_owner_id(label), Some(owner));
+        assert_eq!(model.speech_bubble_id_for_text(label), Some(owner));
+        assert!(model.visible_element_ids(viewport_query()).contains(&owner));
+        assert_eq!(
+            model.topmost_element_at_with_tolerance(Point::new(50.0, 0.0), 1.0),
+            Some((owner, ElementKind::SpeechBubble))
+        );
+        assert!(
+            !model
+                .bindable_element_states_with_overrides(&[])
+                .iter()
+                .any(|state| state.id() == label)
+        );
+        let snapped = model.snap_point(&SnapQuery {
+            point: Point::new(519.5, 19.5),
+            threshold: 1.0,
+            include_grid: false,
+            grid_size: 10.0,
+        });
+        assert_eq!(snapped.point, Point::new(520.0, 20.0));
+        let builds = model.relation_index_build_count();
+        bubble.body.fill.a = 130;
+        let mut style = Transaction::new("bubble appearance");
+        style.update_speech_bubble(owner, bubble.clone());
+        model.apply_transaction(style).unwrap();
+        assert_eq!(model.relation_index_build_count(), builds);
+        bubble.tails.clear();
+        let mut remove_tail = Transaction::new("remove tail");
+        remove_tail.update_speech_bubble(owner, bubble);
+        model.apply_transaction(remove_tail).unwrap();
+        assert!(!model.visible_element_ids(viewport_query()).contains(&owner));
+        assert_eq!(model.relation_index_build_count(), builds);
+        let mut remove = Transaction::new("remove bubble and label");
+        remove.remove_element(owner);
+        remove.remove_element(label);
+        let removed = model.apply_transaction(remove).unwrap();
+        assert_eq!(model.text_owner_id(label), None);
+        model.apply_history_transaction(&removed.inverse).unwrap();
+        assert_eq!(model.text_owner_id(label), Some(owner));
     }
 }

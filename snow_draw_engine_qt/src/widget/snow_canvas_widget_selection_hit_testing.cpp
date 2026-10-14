@@ -17,6 +17,10 @@ bool isSelectionInteractionRectKind(SnowOverlayRectKind kind) {
     case SNOW_OVERLAY_RECT_ARROW_ENDPOINT_HANDLE:
     case SNOW_OVERLAY_RECT_ARROW_FOCUS_HANDLE:
     case SNOW_OVERLAY_RECT_ARROW_SEGMENT_HANDLE:
+    case SNOW_OVERLAY_RECT_MAGNIFIER_MOVE_HANDLE:
+    case SNOW_OVERLAY_RECT_SPEECH_BUBBLE_ADD_TAIL_HANDLE:
+    case SNOW_OVERLAY_RECT_SPEECH_BUBBLE_TAIL_BASE_HANDLE:
+    case SNOW_OVERLAY_RECT_SPEECH_BUBBLE_TAIL_TIP_HANDLE:
         return true;
     default:
         return false;
@@ -25,7 +29,8 @@ bool isSelectionInteractionRectKind(SnowOverlayRectKind kind) {
 
 bool isSelectionFrameRectKind(SnowOverlayRectKind kind) {
     return kind == SNOW_OVERLAY_RECT_SELECTION_FRAME ||
-           kind == SNOW_OVERLAY_RECT_SELECTION_MULTI_FRAME;
+           kind == SNOW_OVERLAY_RECT_SELECTION_MULTI_FRAME ||
+           kind == SNOW_OVERLAY_RECT_MAGNIFIER_SELECTION_FRAME;
 }
 
 QPointF overlayRectLocalViewPoint(const snow_canvas_render_geometry::ViewProjection& projection,

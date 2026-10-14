@@ -1,0 +1,786 @@
+use std::f64::consts::{FRAC_PI_2, PI, TAU};
+
+use snow_draw_engine_core::{
+    ColorRgba8, Point,
+    arrow::{ArrowPathCommand, ArrowShaftType, ArrowType, Arrowhead, StrokeStyle},
+};
+use snow_draw_engine_document::{
+    AngleAnnotation, AngleUnit, ArrowData, Document, ElementData, ElementKind, ElementMeta,
+    LinearElementKind, Operation, TextLayoutSize, Transaction, angle_geometry, angle_label,
+    angle_label_text, angle_value, arrow_bounds, arrow_hit_test, arrow_segment_midpoints,
+    generated_annotation_label, validate_angle_annotation, validate_arrow,
+};
+
+fn angle(degrees: f64) -> ArrowData {
+    let radians = degrees.to_radians();
+    let mut arrow = ArrowData::from_global_points(
+        &[
+            Point::new(100.0, 0.0),
+            Point::new(0.0, 0.0),
+            Point::new(100.0 * radians.cos(), -100.0 * radians.sin()),
+        ],
+        ColorRgba8 {
+            r: 31,
+            g: 122,
+            b: 204,
+            a: 255,
+        },
+        2.0,
+        StrokeStyle::Solid,
+        ArrowType::Straight,
+        None,
+        None,
+    )
+    .unwrap();
+    arrow.linear_kind = LinearElementKind::Angle;
+    arrow.angle = Some(AngleAnnotation {
+        full_turn: degrees == 360.0,
+        ..AngleAnnotation::default()
+    });
+    arrow
+}
+
+fn close(actual: f64, expected: f64) {
+    assert!((actual - expected).abs() <= 1e-9, "{actual} != {expected}");
+}
+
+#[test]
+fn interior_angle_uses_the_smaller_arc_in_both_directions_and_survives_serialization() {
+    use snow_draw_engine_document::{AngleType, angle_arc_control_point, angle_with_sweep};
+    for (degrees, expected) in [(0.0, 0.0), (90.0, 90.0), (180.0, 180.0), (270.0, 90.0)] {
+        let mut arrow = angle(degrees);
+        arrow.angle.as_mut().unwrap().angle_type = AngleType::Interior;
+        let original_points = arrow.points.clone();
+        close(angle_value(&arrow).unwrap().to_degrees(), expected);
+        assert!(validate_arrow(&arrow).is_ok());
+        assert!(angle_geometry(&arrow).unwrap().sweep <= PI);
+        assert_eq!(arrow.points, original_points);
+        let saved = serde_json::to_string(&arrow).unwrap();
+        let restored: ArrowData = serde_json::from_str(&saved).unwrap();
+        assert_eq!(restored.angle.unwrap().angle_type, AngleType::Interior);
+        close(angle_value(&restored).unwrap().to_degrees(), expected);
+        assert!(angle_with_sweep(&arrow, PI + 0.01).is_none());
+        if degrees == 270.0 {
+            let handle = angle_arc_control_point(&arrow).unwrap();
+            assert!(handle.x > 0.0 && handle.y > 0.0);
+            assert!(arrow_hit_test(&arrow, handle, 1.0));
+            let adjusted = angle_with_sweep(&arrow, PI / 3.0).unwrap();
+            assert!(adjusted.global_points()[2].y > 0.0);
+            close(angle_value(&adjusted).unwrap(), PI / 3.0);
+            let moved = snow_draw_engine_document::angle_with_moved_point(
+                &arrow,
+                2,
+                Point::new(-100.0, 100.0),
+                true,
+            )
+            .unwrap();
+            close(angle_value(&moved).unwrap().to_degrees(), 135.0);
+        }
+    }
+    let legacy: AngleAnnotation =
+        serde_json::from_str(r#"{"unit":"degrees","decimal_places":0}"#).unwrap();
+    assert_eq!(legacy.angle_type, AngleType::Directed);
+    assert!(
+        validate_angle_annotation(AngleAnnotation {
+            angle_type: AngleType::Interior,
+            full_turn: true,
+            ..Default::default()
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn angle_measures_visual_counterclockwise_sweeps_and_preserves_zero_full_turn_identity() {
+    for (degrees, expected) in [
+        (0.0, 0.0),
+        (90.0, FRAC_PI_2),
+        (180.0, PI),
+        (270.0, PI * 1.5),
+        (360.0, TAU),
+    ] {
+        let arrow = angle(degrees);
+        close(angle_value(&arrow).unwrap(), expected);
+        assert_eq!(arrow.element_kind(), ElementKind::Angle);
+        assert!(validate_arrow(&arrow).is_ok());
+    }
+    let mut invalid = angle(90.0);
+    invalid.angle.as_mut().unwrap().full_turn = true;
+    assert!(angle_value(&invalid).is_none());
+    assert!(validate_arrow(&invalid).is_err());
+    // Legacy unequal full turns normalize without losing their full-turn identity.
+    let mut full_turn = angle(360.0);
+    // The points are relative to A; rebuild to keep the two directions aligned.
+    full_turn.points[2] = [-50.0, 0.0];
+    assert!(validate_arrow(&full_turn).is_err());
+    let full_turn = snow_draw_engine_document::normalize_angle(&full_turn).unwrap();
+    close(angle_value(&full_turn).unwrap(), TAU);
+}
+
+#[test]
+fn angle_formats_degrees_and_radians_at_every_supported_precision() {
+    let mut arrow = angle(90.0);
+    for (precision, degrees, radians) in [
+        (0, "90°", "2 rad"),
+        (1, "90.0°", "1.6 rad"),
+        (2, "90.00°", "1.57 rad"),
+        (3, "90.000°", "1.571 rad"),
+    ] {
+        arrow.angle.as_mut().unwrap().decimal_places = precision;
+        arrow.angle.as_mut().unwrap().unit = AngleUnit::Degrees;
+        assert_eq!(angle_label_text(&arrow).as_deref(), Some(degrees));
+        arrow.angle.as_mut().unwrap().unit = AngleUnit::Radians;
+        assert_eq!(angle_label_text(&arrow).as_deref(), Some(radians));
+    }
+    assert_eq!(angle_label_text(&angle(0.0)).as_deref(), Some("0°"));
+    assert_eq!(angle_label_text(&angle(360.0)).as_deref(), Some("360°"));
+    assert!(
+        validate_angle_annotation(AngleAnnotation {
+            decimal_places: 4,
+            ..AngleAnnotation::default()
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn angle_requires_exactly_three_finite_points_and_two_nonzero_rays() {
+    let arrow = angle(90.0);
+    for points in [
+        vec![[0.0, 0.0], [-100.0, 0.0]],
+        vec![[0.0, 0.0], [-100.0, 0.0], [-100.0, -100.0], [5.0, 5.0]],
+        vec![[0.0, 0.0], [0.0, 0.0], [-100.0, -100.0]],
+        vec![[0.0, 0.0], [-100.0, 0.0], [-100.0, 0.0]],
+        vec![[0.0, 0.0], [-100.0, f64::NAN], [-100.0, -100.0]],
+    ] {
+        let mut invalid = arrow.clone();
+        invalid.points = points;
+        assert!(validate_arrow(&invalid).is_err());
+        assert!(angle_geometry(&invalid).is_none());
+    }
+    let mut ordinary = arrow.clone();
+    ordinary.linear_kind = LinearElementKind::Arrow;
+    assert!(validate_arrow(&ordinary).is_err());
+    let mut missing = arrow;
+    missing.angle = None;
+    assert!(validate_arrow(&missing).is_err());
+}
+
+#[test]
+fn angle_only_accepts_solid_supported_strokes_without_heads_fill_or_taper() {
+    let arrow = angle(45.0);
+    for width in [1.0, 2.0, 72.0] {
+        let mut changed = arrow.clone();
+        changed.stroke_width = width;
+        assert!(validate_arrow(&changed).is_ok());
+    }
+    for width in [0.0, 0.5, 72.1, f64::INFINITY, f64::NAN] {
+        let mut changed = arrow.clone();
+        changed.stroke_width = width;
+        assert!(validate_arrow(&changed).is_err());
+    }
+    for field in 0..4 {
+        let mut changed = arrow.clone();
+        match field {
+            0 => changed.start_arrowhead = Some(Arrowhead::Arrow),
+            1 => changed.stroke_style = StrokeStyle::Dashed,
+            2 => changed.fill.a = 255,
+            _ => changed.arrow_shaft_type = ArrowShaftType::Tapered,
+        }
+        assert!(validate_arrow(&changed).is_err());
+    }
+    assert!(arrow_segment_midpoints(&arrow).is_empty());
+    assert!(
+        !arrow
+            .clone()
+            .into_line(Default::default(), Default::default())
+            .is_angle()
+    );
+    assert!(
+        arrow
+            .clone()
+            .into_line(Default::default(), Default::default())
+            .angle
+            .is_none()
+    );
+    assert!(arrow.into_pen_highlight().angle.is_none());
+}
+
+#[test]
+fn angle_renders_separate_counterclockwise_inner_arc_with_bounded_command_count() {
+    for (degrees, count) in [
+        (0.0, 0),
+        (45.0, 1),
+        (90.0, 1),
+        (180.0, 2),
+        (270.0, 3),
+        (360.0, 4),
+    ] {
+        let arrow = angle(degrees);
+        let commands = arrow.path_commands();
+        assert_eq!(commands.len(), 3 + if count == 0 { 0 } else { 1 + count });
+        assert!(matches!(commands[0], ArrowPathCommand::MoveTo { .. }));
+        assert!(matches!(commands[1], ArrowPathCommand::LineTo { .. }));
+        assert!(matches!(commands[2], ArrowPathCommand::LineTo { .. }));
+        if count > 0 {
+            assert!(matches!(commands[3], ArrowPathCommand::MoveTo { .. }));
+            let ArrowPathCommand::CubicTo { control_1, .. } = commands[4] else {
+                panic!("arc must be cubic")
+            };
+            assert!(
+                control_1[1] < 0.0,
+                "initial tangent must point visually counterclockwise"
+            );
+            let ArrowPathCommand::CubicTo { end, .. } = commands.last().unwrap() else {
+                panic!("arc must end with a cubic")
+            };
+            let geometry = angle_geometry(&arrow).unwrap();
+            close(
+                end[0],
+                geometry.vertex.x + geometry.radius * geometry.end_direction.x,
+            );
+            close(
+                end[1],
+                geometry.vertex.y + geometry.radius * geometry.end_direction.y,
+            );
+        }
+    }
+}
+
+#[test]
+fn angle_arc_extrema_extend_spatial_and_selection_bounds_and_support_precise_picking() {
+    let reflex = angle(270.0);
+    let radius = angle_geometry(&reflex).unwrap().radius;
+    let bounds = arrow_bounds(&reflex);
+    assert!(bounds.min_x < -radius);
+    assert!(bounds.min_y < -radius);
+    let selection_bounds = ElementData::Arrow(reflex.clone()).state_rect();
+    assert!(selection_bounds.min_x <= -radius);
+    assert!(selection_bounds.min_y <= -radius);
+    let arc_middle = Point::new(-radius / 2.0_f64.sqrt(), -radius / 2.0_f64.sqrt());
+    assert!(arrow_hit_test(&reflex, arc_middle, 0.0));
+    assert!(!arrow_hit_test(
+        &reflex,
+        Point::new(0.0, 0.0 - radius * 0.5),
+        0.0
+    ));
+    let acute = angle(45.0);
+    assert!(!arrow_hit_test(&acute, Point::new(-radius, 0.0), 0.0));
+    let full_turn = angle(360.0);
+    assert!(arrow_hit_test(&full_turn, Point::new(-radius, 0.0), 0.0));
+    assert!(!arrow_hit_test(&angle(0.0), Point::new(-radius, 0.0), 0.0));
+}
+
+#[test]
+fn angle_measured_labels_clear_the_arc_and_remain_horizontal_on_the_sweep_bisector() {
+    let mut arrow = angle(90.0);
+    for width in [1.0, 2.0, 18.0, 72.0] {
+        arrow.stroke_width = width;
+        let layout = TextLayoutSize::new(80.0, 24.0);
+        let label = angle_label(&arrow, Some(layout)).unwrap();
+        close(label.font_size, 20.0 * (width / 2.0).sqrt());
+        close(label.center.x, -label.center.y);
+        let geometry = angle_geometry(&arrow).unwrap();
+        let offset = label.center.x.hypot(label.center.y);
+        close(
+            offset,
+            geometry.radius + 80.0_f64.hypot(24.0) / 2.0 + 6.0 + width / 2.0,
+        );
+        assert_eq!(label.layout, layout);
+        assert_eq!(label.rotation, 0.0);
+        assert_eq!(label.color, arrow.stroke);
+        assert_eq!(
+            generated_annotation_label(&arrow, Some(layout)),
+            Some(label)
+        );
+    }
+    let short = ArrowData::from_global_points(
+        &[
+            Point::new(1.0, 0.0),
+            Point::new(0.0, 0.0),
+            Point::new(0.0, -1.0),
+        ],
+        arrow.stroke,
+        2.0,
+        StrokeStyle::Solid,
+        ArrowType::Straight,
+        None,
+        None,
+    )
+    .map(|mut short| {
+        short.inherit_linear_metadata_from(&arrow);
+        short.stroke_width = 2.0;
+        short
+    })
+    .unwrap();
+    close(angle_geometry(&short).unwrap().radius, 0.45);
+    assert!(
+        angle_label(&short, Some(TextLayoutSize::new(200.0, 24.0)))
+            .unwrap()
+            .center
+            .x
+            > 50.0
+    );
+}
+
+#[test]
+fn angle_transforms_measure_rendered_rays_and_preserve_metadata() {
+    let original = angle(60.0);
+    for (sx, sy, expected) in [
+        (1.0, 1.0, 60.0),
+        (-1.0, 1.0, 300.0),
+        (1.0, -1.0, 300.0),
+        (-1.0, -1.0, 60.0),
+    ] {
+        let points: Vec<_> = original
+            .global_points()
+            .into_iter()
+            .map(|p| Point::new(p.x * sx + 42.0, p.y * sy - 36.0))
+            .collect();
+        let mut transformed = ArrowData::from_global_points(
+            &points,
+            original.stroke,
+            2.0,
+            StrokeStyle::Solid,
+            ArrowType::Straight,
+            None,
+            None,
+        )
+        .unwrap();
+        transformed.inherit_linear_metadata_from(&original);
+        close(angle_value(&transformed).unwrap().to_degrees(), expected);
+        assert_eq!(transformed.angle, original.angle);
+        assert!(validate_arrow(&transformed).is_ok());
+    }
+    let full_turn = angle(360.0);
+    let mut transformed = ArrowData::from_global_points(
+        &full_turn
+            .global_points()
+            .into_iter()
+            .map(|p| Point::new(-p.x * 2.0, p.y * 3.0))
+            .collect::<Vec<_>>(),
+        full_turn.stroke,
+        2.0,
+        StrokeStyle::Solid,
+        ArrowType::Straight,
+        None,
+        None,
+    )
+    .unwrap();
+    transformed.inherit_linear_metadata_from(&full_turn);
+    close(angle_value(&transformed).unwrap(), TAU);
+}
+
+#[test]
+fn angle_document_synchronizes_owned_label_layout_style_content_and_history() {
+    let mut document = Document::new();
+    let owner_id = document.allocate_element_id();
+    let text_id = document.allocate_element_id();
+    let mut owner = angle(270.0);
+    owner.text_element_id = Some(text_id);
+    let measured = TextLayoutSize::new(72.0, 26.0);
+    let mut text = angle_label(&owner, Some(measured)).unwrap();
+    text.center = Point::new(999.0, 999.0);
+    text.text = "stale".to_owned();
+    let mut creation = Transaction::new("create angle");
+    creation.insert_arrow(owner_id, ElementMeta::default(), owner.clone());
+    creation.insert_text(text_id, ElementMeta::default(), text);
+    let created = document.apply(&creation).unwrap();
+    assert_eq!(
+        document.text(text_id).unwrap(),
+        &angle_label(&owner, Some(measured)).unwrap()
+    );
+    assert!(document.validate_session().is_ok());
+    let saved = serde_json::to_string(&document).unwrap();
+    let restored: Document = serde_json::from_str(&saved).unwrap();
+    assert!(restored.validate_session().is_ok());
+    let restored_owner = restored.arrow(owner_id).unwrap();
+    assert_eq!(restored_owner.angle, owner.angle);
+    close(
+        angle_value(restored_owner).unwrap(),
+        angle_value(&owner).unwrap(),
+    );
+    let original_text = document.text(text_id).unwrap();
+    let mut restored_text = restored.text(text_id).unwrap().clone();
+    close(restored_text.center.x, original_text.center.x);
+    close(restored_text.center.y, original_text.center.y);
+    restored_text.center = original_text.center;
+    assert_eq!(&restored_text, original_text);
+    let mut update = Transaction::new("style angle");
+    owner.angle.as_mut().unwrap().unit = AngleUnit::Radians;
+    owner.angle.as_mut().unwrap().decimal_places = 3;
+    owner.stroke_width = 18.0;
+    update.push(Operation::UpdateElementData {
+        id: owner_id,
+        data: ElementData::Arrow(owner.clone()),
+    });
+    let updated = document.apply(&update).unwrap();
+    assert_eq!(
+        document.text(text_id).unwrap(),
+        &angle_label(&owner, Some(measured)).unwrap()
+    );
+    document.apply(&updated.inverse).unwrap();
+    assert_eq!(document.text(text_id).unwrap().text, "270°");
+    document.apply(&created.inverse).unwrap();
+    assert!(document.element(owner_id).is_err());
+    assert!(document.element(text_id).is_err());
+}
+
+#[test]
+fn angle_automatic_arc_radius_scales_for_short_rays_and_stroke_based_caps() {
+    use snow_draw_engine_document::{AngleType, angle_with_moved_point};
+    for (side_length, stroke_width, expected) in [
+        (1.0, 2.0, 0.45),
+        (50.0, 2.0, 22.5),
+        (100.0, 2.0, 40.5),
+        (1000.0, 1.0, 36.0),
+        (1000.0, 2.0, 40.5),
+        (1000.0, 18.0, 139.5),
+        (1000.0, 72.0, 333.0),
+    ] {
+        let mut arrow =
+            angle_with_moved_point(&angle(90.0), 0, Point::new(side_length, 0.0), false).unwrap();
+        arrow.stroke_width = stroke_width;
+        for angle_type in [AngleType::Directed, AngleType::Interior] {
+            arrow.angle.as_mut().unwrap().angle_type = angle_type;
+            let geometry = angle_geometry(&arrow).unwrap();
+            close(geometry.automatic_radius, expected);
+            close(geometry.radius, expected);
+            close(geometry.maximum_radius, side_length);
+        }
+    }
+}
+
+#[test]
+fn angle_arc_radius_validates_and_legacy_annotations_keep_automatic_geometry() {
+    let legacy: AngleAnnotation =
+        serde_json::from_str(r#"{"unit":"degrees","decimal_places":0,"full_turn":false}"#).unwrap();
+    assert_eq!(legacy.arc_radius, None);
+    for radius in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        assert!(
+            validate_angle_annotation(AngleAnnotation {
+                arc_radius: Some(radius),
+                ..legacy
+            })
+            .is_err()
+        );
+        let mut invalid = angle(90.0);
+        invalid.angle = Some(AngleAnnotation {
+            arc_radius: Some(radius),
+            ..legacy
+        });
+        assert!(angle_geometry(&invalid).is_none());
+        assert!(validate_arrow(&invalid).is_err());
+    }
+    let mut arrow = angle(90.0);
+    close(angle_geometry(&arrow).unwrap().radius, 40.5);
+    for (requested, expected) in [(10.0, 10.0), (80.0, 80.0), (200.0, 100.0)] {
+        arrow.angle.as_mut().unwrap().arc_radius = Some(requested);
+        close(angle_geometry(&arrow).unwrap().radius, expected);
+        assert!(validate_arrow(&arrow).is_ok());
+        let encoded = serde_json::to_string(&arrow).unwrap();
+        let restored: ArrowData = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(restored, arrow);
+    }
+}
+
+#[test]
+fn angle_custom_arc_updates_paths_bounds_picking_and_label_anchor_together() {
+    for degrees in [45.0, 90.0, 180.0, 270.0, 360.0] {
+        let mut arrow = angle(degrees);
+        let layout = TextLayoutSize::new(80.0, 24.0);
+        let old = angle_label(&arrow, Some(layout)).unwrap();
+        arrow.angle.as_mut().unwrap().arc_radius = Some(75.0);
+        let geometry = angle_geometry(&arrow).unwrap();
+        let control = snow_draw_engine_document::angle_arc_control_point(&arrow).unwrap();
+        close(control.x, geometry.vertex.x + 75.0 * geometry.bisector.x);
+        close(control.y, geometry.vertex.y + 75.0 * geometry.bisector.y);
+        assert!(snow_draw_engine_document::angle_arc_hit_test(
+            &arrow, control, 0.1
+        ));
+        assert!(arrow_hit_test(&arrow, control, 0.1));
+        let bounds = arrow_bounds(&arrow);
+        assert!(control.x >= bounds.min_x && control.x <= bounds.max_x);
+        assert!(control.y >= bounds.min_y && control.y <= bounds.max_y);
+        let moved = angle_label(&arrow, Some(layout)).unwrap();
+        close(moved.center.x - old.center.x, 34.5 * geometry.bisector.x);
+        close(moved.center.y - old.center.y, 34.5 * geometry.bisector.y);
+        assert_eq!(moved.layout, old.layout);
+        assert_eq!(moved.text, old.text);
+        assert_eq!(moved.rotation, 0.0);
+        let arc_start = arrow.path_commands()[3];
+        assert!(matches!(arc_start, ArrowPathCommand::MoveTo { point }
+            if (point[0] - 75.0).abs() < 1e-9 && point[1].abs() < 1e-9));
+    }
+    assert!(snow_draw_engine_document::angle_arc_control_point(&angle(0.0)).is_none());
+}
+
+fn assert_equal_sides(arrow: &ArrowData, length: f64) {
+    let points = arrow.global_points();
+    for endpoint in [points[0], points[2]] {
+        close(
+            (endpoint.x - points[1].x).hypot(endpoint.y - points[1].y),
+            length,
+        );
+    }
+    assert!(validate_arrow(arrow).is_ok());
+}
+
+#[test]
+fn angle_shape_discards_second_point_distance_and_snaps_relative_sweep() {
+    use snow_draw_engine_document::AngleShape;
+    let bearing = 23.0_f64.to_radians();
+    let first = Point::new(100.0 * bearing.cos(), 100.0 * bearing.sin());
+    let second_bearing = bearing - 83.0_f64.to_radians();
+    for distance in [0.01, 50.0, 1000.0] {
+        let shape = AngleShape::from_points(
+            [
+                first,
+                Point::new(0.0, 0.0),
+                Point::new(
+                    distance * second_bearing.cos(),
+                    distance * second_bearing.sin(),
+                ),
+            ],
+            false,
+        )
+        .unwrap()
+        .snapped();
+        close(shape.side_length, 100.0);
+        close(shape.sweep.to_degrees(), 90.0);
+        let points = shape.points();
+        close(points[2].x.hypot(points[2].y), 100.0);
+        close(points[0].x, first.x);
+        close(points[0].y, first.y);
+    }
+}
+
+#[test]
+fn angle_point_edits_share_length_preserve_opposite_direction_and_vertex_anchor() {
+    use snow_draw_engine_document::angle_with_moved_point;
+    let original = angle(90.0);
+    for (index, target) in [(0, Point::new(180.0, 20.0)), (2, Point::new(20.0, -180.0))] {
+        let edited = angle_with_moved_point(&original, index, target, false).unwrap();
+        assert_equal_sides(&edited, target.x.hypot(target.y));
+        let points = edited.global_points();
+        close(points[index].x, target.x);
+        close(points[index].y, target.y);
+        assert_eq!(points[1], original.global_points()[1]);
+        let other = points[2 - index];
+        let previous = original.global_points()[2 - index];
+        close(other.x * previous.y - other.y * previous.x, 0.0);
+    }
+    let target = Point::new(-50.0, 20.0);
+    let moved = angle_with_moved_point(&original, 1, target, false).unwrap();
+    let points = moved.global_points();
+    assert_eq!(points[0], original.global_points()[0]);
+    assert_eq!(points[1], target);
+    assert_equal_sides(&moved, 150.0_f64.hypot(20.0));
+    let old_direction = Point::new(50.0, -120.0);
+    let new_direction = Point::new(points[2].x - target.x, points[2].y - target.y);
+    close(
+        new_direction.x * old_direction.y - new_direction.y * old_direction.x,
+        0.0,
+    );
+    for index in 0..3 {
+        assert_eq!(
+            angle_with_moved_point(&original, index, original.global_points()[index], false),
+            Some(original.clone())
+        );
+        assert!(
+            angle_with_moved_point(&original, index, Point::new(f64::NAN, 0.0), false).is_none()
+        );
+    }
+    assert!(angle_with_moved_point(&original, 3, target, false).is_none());
+}
+
+#[test]
+fn angle_document_endpoint_api_snaps_measured_angle_without_projecting_length() {
+    use snow_draw_engine_core::arrow::{ArrowEndpointEdge, EngineContext};
+    use snow_draw_engine_document::{
+        AngleShape, ArrowEndpointDragOptions, ElementId, compute_arrow_endpoint_drag,
+    };
+    let bearing = 23.0_f64.to_radians();
+    let shape = AngleShape {
+        vertex: Point::new(0.0, 0.0),
+        side_length: 100.0,
+        first_bearing: bearing,
+        sweep: FRAC_PI_2,
+    };
+    let mut original = ArrowData::from_global_points(
+        &shape.points(),
+        angle(90.0).stroke,
+        2.0,
+        StrokeStyle::Solid,
+        ArrowType::Straight,
+        None,
+        None,
+    )
+    .unwrap();
+    original.inherit_linear_metadata_from(&angle(90.0));
+    for index in 0..3 {
+        assert_eq!(
+            snow_draw_engine_document::angle_with_moved_point(
+                &original,
+                index,
+                original.global_points()[index],
+                true,
+            ),
+            Some(original.clone()),
+            "Shift-clicking an already snapped handle must keep the exact record",
+        );
+    }
+    for (edge, target_bearing, expected) in [
+        (
+            ArrowEndpointEdge::End,
+            bearing - 83.0_f64.to_radians(),
+            90.0,
+        ),
+        (
+            ArrowEndpointEdge::Start,
+            bearing + 10.0_f64.to_radians(),
+            105.0,
+        ),
+    ] {
+        let target = Point::new(150.0 * target_bearing.cos(), 150.0 * target_bearing.sin());
+        let edited = compute_arrow_endpoint_drag(
+            ElementId::default(),
+            &original,
+            edge,
+            target,
+            &[],
+            EngineContext {
+                zoom: 1.0,
+                is_binding_enabled: false,
+                bind_mode: snow_draw_engine_core::arrow::BindMode::Skip,
+                max_coordinate: 1e6,
+            },
+            ArrowEndpointDragOptions {
+                angle_locked: true,
+                ..Default::default()
+            },
+        )
+        .arrow;
+        assert_equal_sides(&edited, 150.0);
+        close(angle_value(&edited).unwrap().to_degrees(), expected);
+        let points = edited.global_points();
+        let opposite = if edge == ArrowEndpointEdge::Start {
+            2
+        } else {
+            0
+        };
+        let old = original.global_points()[opposite];
+        close(points[opposite].x * old.y - points[opposite].y * old.x, 0.0);
+    }
+    let invalid = compute_arrow_endpoint_drag(
+        ElementId::default(),
+        &original,
+        ArrowEndpointEdge::End,
+        Point::new(0.0, 0.0),
+        &[],
+        EngineContext {
+            zoom: 1.0,
+            is_binding_enabled: false,
+            bind_mode: snow_draw_engine_core::arrow::BindMode::Skip,
+            max_coordinate: 1e6,
+        },
+        Default::default(),
+    );
+    assert_eq!(invalid.arrow, original);
+}
+
+#[test]
+fn angle_normalization_is_idempotent_and_rejects_invalid_legacy_geometry() {
+    use snow_draw_engine_document::normalize_angle;
+    for length in [0.01, 100.0, 100000.0] {
+        let mut legacy = angle(90.0);
+        legacy.points[1] = [-length, 0.0];
+        legacy.points[2] = [-length, -length * 2.0];
+        assert!(validate_arrow(&legacy).is_err());
+        let normalized = normalize_angle(&legacy).unwrap();
+        assert_equal_sides(&normalized, length);
+        assert_eq!(
+            &normalized.global_points()[..2],
+            &legacy.global_points()[..2]
+        );
+        close(angle_value(&normalized).unwrap(), FRAC_PI_2);
+        assert_eq!(normalize_angle(&normalized), Some(normalized));
+    }
+    let mut invalid = angle(90.0);
+    invalid.angle.as_mut().unwrap().full_turn = true;
+    assert!(normalize_angle(&invalid).is_none());
+    invalid.angle.as_mut().unwrap().full_turn = false;
+    invalid.points[2] = invalid.points[1];
+    assert!(normalize_angle(&invalid).is_none());
+}
+
+#[test]
+fn angle_legacy_normalization_preserves_translated_origins_and_is_atomic() {
+    use snow_draw_engine_document::{ElementData, normalize_angle};
+    let mut legacy = angle(90.0);
+    legacy.points[2] = [-100.0, -200.0];
+    // Moving an angle changes its origin without rebuilding or clamping its points.
+    legacy.x += 2_000_000.0;
+    legacy.y -= 2_000_000.0;
+    let normalized = normalize_angle(&legacy).unwrap();
+    assert_eq!((normalized.x, normalized.y), (legacy.x, legacy.y));
+    assert_eq!(&normalized.points[..2], &legacy.points[..2]);
+    assert_equal_sides(&normalized, 100.0);
+    close(angle_value(&normalized).unwrap(), FRAC_PI_2);
+    assert_eq!(normalize_angle(&normalized), Some(normalized));
+
+    legacy.stroke_style = StrokeStyle::Dashed;
+    let mut invalid = ElementData::Arrow(legacy);
+    let original = invalid.clone();
+    assert!(invalid.normalize_angle_invariant().is_err());
+    assert_eq!(
+        invalid, original,
+        "failed normalization must preserve the record"
+    );
+}
+
+#[test]
+fn angle_geometry_keeps_directions_and_bisectors_across_bearing_wrap() {
+    use snow_draw_engine_document::AngleShape;
+    for bearing in [-179.0_f64, -23.0, 23.0, 179.0] {
+        for degrees in [0.0_f64, 0.01, 15.0, 90.0, 180.0, 270.0, 359.99, 360.0] {
+            let shape = AngleShape {
+                vertex: Point::new(20.0, -30.0),
+                side_length: 100.0,
+                first_bearing: bearing.to_radians(),
+                sweep: degrees.to_radians(),
+            };
+            let mut arrow = ArrowData::from_global_points(
+                &shape.points(),
+                angle(90.0).stroke,
+                2.0,
+                StrokeStyle::Solid,
+                ArrowType::Straight,
+                None,
+                None,
+            )
+            .unwrap();
+            arrow.inherit_linear_metadata_from(&angle(degrees));
+            let geometry = angle_geometry(&arrow).unwrap();
+            close(geometry.sweep, shape.sweep);
+            close(geometry.maximum_radius, shape.side_length);
+            let points = arrow.global_points();
+            for (endpoint, direction) in [
+                (points[0], geometry.start_direction),
+                (points[2], geometry.end_direction),
+            ] {
+                close(
+                    geometry.vertex.x + shape.side_length * direction.x,
+                    endpoint.x,
+                );
+                close(
+                    geometry.vertex.y + shape.side_length * direction.y,
+                    endpoint.y,
+                );
+            }
+            let bisector_bearing = shape.first_bearing - shape.sweep / 2.0;
+            close(geometry.bisector.x, bisector_bearing.cos());
+            close(geometry.bisector.y, bisector_bearing.sin());
+        }
+    }
+}

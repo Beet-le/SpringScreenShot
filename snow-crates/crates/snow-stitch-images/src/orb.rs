@@ -17,13 +17,15 @@ use std::arch::x86::{
 };
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::{
-    __m128i, __m256i, _mm_cmpgt_epi16, _mm_loadl_epi64, _mm_loadu_si128, _mm_movemask_epi8,
-    _mm_packs_epi16, _mm_set1_epi16, _mm256_add_epi32, _mm256_add_ps, _mm256_and_si256,
-    _mm256_cmpgt_epi16, _mm256_cvtepi32_ps, _mm256_cvtepu8_epi16, _mm256_cvtepu8_epi32,
-    _mm256_cvtps_epi32, _mm256_cvttps_epi32, _mm256_i32gather_epi32, _mm256_loadu_ps,
-    _mm256_loadu_si256, _mm256_movemask_epi8, _mm256_mul_ps, _mm256_mullo_epi32, _mm256_or_si256,
-    _mm256_set1_epi16, _mm256_set1_epi32, _mm256_set1_ps, _mm256_setr_epi32, _mm256_setzero_si256,
-    _mm256_srli_epi32, _mm256_storeu_ps, _mm256_storeu_si256, _mm256_sub_epi16, _mm256_sub_ps,
+    __m128i, __m256i, _mm_cmpgt_epi16, _mm_cvtsi128_si32, _mm_loadl_epi64, _mm_loadu_si128,
+    _mm_max_epi16, _mm_min_epi16, _mm_movemask_epi8, _mm_or_si128, _mm_packs_epi16, _mm_set1_epi16,
+    _mm_setzero_si128, _mm_slli_si128, _mm_srli_si128, _mm_sub_epi16, _mm256_add_epi32,
+    _mm256_add_ps, _mm256_and_si256, _mm256_cmpgt_epi16, _mm256_cvtepi32_ps, _mm256_cvtepu8_epi16,
+    _mm256_cvtepu8_epi32, _mm256_cvtps_epi32, _mm256_cvttps_epi32, _mm256_i32gather_epi32,
+    _mm256_loadu_ps, _mm256_loadu_si256, _mm256_movemask_epi8, _mm256_mul_ps, _mm256_mullo_epi32,
+    _mm256_or_si256, _mm256_set1_epi16, _mm256_set1_epi32, _mm256_set1_ps, _mm256_setr_epi32,
+    _mm256_setzero_si256, _mm256_srli_epi32, _mm256_storeu_ps, _mm256_storeu_si256,
+    _mm256_sub_epi16, _mm256_sub_ps,
 };
 
 const SCALE_FACTOR: f32 = 1.2;
@@ -243,6 +245,23 @@ pub(crate) fn grayscale(frame: &Frame) -> Image {
     grayscale_scalar(frame)
 }
 
+pub(crate) fn grayscale_chunk(source: &[u8], output: &mut [u8], channels: usize) {
+    debug_assert_eq!(source.len(), output.len() * channels);
+    debug_assert!(matches!(channels, 1 | 3 | 4));
+    if channels == 1 {
+        output.copy_from_slice(source);
+        return;
+    }
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    if std::arch::is_x86_feature_detected!("avx2") {
+        unsafe { grayscale_chunk_avx2(source, output, channels) };
+        return;
+    }
+    for (target, pixel) in output.iter_mut().zip(source.chunks_exact(channels)) {
+        *target = grayscale_pixel(pixel);
+    }
+}
+
 fn circle_values(width: u32, pixels: &[u8], x: u32, y: u32) -> [i16; 16] {
     let center = i16::from(pixels[(y * width + x) as usize]);
     CIRCLE.map(|(offset_x, offset_y)| {
@@ -275,6 +294,90 @@ fn fast_polarity_masks(differences: &[i16; 16], threshold: i16) -> (u32, u32) {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
+#[inline]
+fn strongest_fast_arc(differences: &[i16; 16]) -> i16 {
+    // Each lane is the first pixel of a circular arc. Reduce runs of two,
+    // four and eight pixels, then include the ninth original pixel. SSE2 is
+    // part of the x86_64 baseline; signed min/max preserves the scalar score.
+    unsafe {
+        let first = _mm_loadu_si128(differences.as_ptr().cast::<__m128i>());
+        let second = _mm_loadu_si128(differences.as_ptr().add(8).cast::<__m128i>());
+        let mut minima = [first, second];
+        let mut maxima = [first, second];
+        macro_rules! reduce_arcs {
+            ($shift:literal, $carry:literal) => {{
+                let [left, right] = minima;
+                minima = [
+                    _mm_min_epi16(
+                        left,
+                        _mm_or_si128(
+                            _mm_srli_si128::<$shift>(left),
+                            _mm_slli_si128::<$carry>(right),
+                        ),
+                    ),
+                    _mm_min_epi16(
+                        right,
+                        _mm_or_si128(
+                            _mm_srli_si128::<$shift>(right),
+                            _mm_slli_si128::<$carry>(left),
+                        ),
+                    ),
+                ];
+                let [left, right] = maxima;
+                maxima = [
+                    _mm_max_epi16(
+                        left,
+                        _mm_or_si128(
+                            _mm_srli_si128::<$shift>(left),
+                            _mm_slli_si128::<$carry>(right),
+                        ),
+                    ),
+                    _mm_max_epi16(
+                        right,
+                        _mm_or_si128(
+                            _mm_srli_si128::<$shift>(right),
+                            _mm_slli_si128::<$carry>(left),
+                        ),
+                    ),
+                ];
+            }};
+        }
+        reduce_arcs!(2, 14);
+        reduce_arcs!(4, 12);
+        reduce_arcs!(8, 8);
+        let dark = _mm_max_epi16(
+            _mm_min_epi16(minima[0], second),
+            _mm_min_epi16(minima[1], first),
+        );
+        let bright = _mm_min_epi16(
+            _mm_max_epi16(maxima[0], second),
+            _mm_max_epi16(maxima[1], first),
+        );
+        let strongest = _mm_max_epi16(dark, _mm_sub_epi16(_mm_setzero_si128(), bright));
+        let strongest = _mm_max_epi16(strongest, _mm_srli_si128::<8>(strongest));
+        let strongest = _mm_max_epi16(strongest, _mm_srli_si128::<4>(strongest));
+        let strongest = _mm_max_epi16(strongest, _mm_srli_si128::<2>(strongest));
+        _mm_cvtsi128_si32(strongest) as i16
+    }
+}
+
+#[cfg(any(test, not(target_arch = "x86_64")))]
+fn strongest_fast_arc_scalar(differences: &[i16; 16]) -> i16 {
+    let mut strongest = i16::MIN;
+    for start in 0..16 {
+        let mut dark = i16::MAX;
+        let mut bright = i16::MIN;
+        for offset in 0..9 {
+            let difference = differences[(start + offset) % 16];
+            dark = dark.min(difference);
+            bright = bright.max(difference);
+        }
+        strongest = strongest.max(dark).max(-bright);
+    }
+    strongest
+}
+
 fn score(differences: [i16; 16], threshold: i16) -> Option<u8> {
     #[cfg(target_arch = "x86_64")]
     let (dark, bright) = fast_polarity_masks(&differences, threshold);
@@ -289,27 +392,20 @@ fn score(differences: [i16; 16], threshold: i16) -> Option<u8> {
     }
     let has_nine_pixel_run = |mask: u32| {
         let doubled = mask | (mask << 16);
-        let mut runs = doubled;
-        for shift in 1..9 {
-            runs &= doubled >> shift;
-        }
+        let mut runs = doubled & (doubled >> 1);
+        runs &= runs >> 2;
+        runs &= runs >> 4;
+        runs &= doubled >> 8;
         runs & 0xffff != 0
     };
     if !has_nine_pixel_run(dark) && !has_nine_pixel_run(bright) {
         return None;
     }
 
-    let mut strongest = threshold;
-    for start in 0..16 {
-        let mut dark = i16::MAX;
-        let mut bright = i16::MIN;
-        for offset in 0..9 {
-            let difference = differences[(start + offset) % 16];
-            dark = dark.min(difference);
-            bright = bright.max(difference);
-        }
-        strongest = strongest.max(dark).max(-bright);
-    }
+    #[cfg(target_arch = "x86_64")]
+    let strongest = strongest_fast_arc(&differences);
+    #[cfg(not(target_arch = "x86_64"))]
+    let strongest = strongest_fast_arc_scalar(&differences);
     (strongest > threshold).then(|| (strongest - 1).min(i16::from(u8::MAX)) as u8)
 }
 
@@ -330,23 +426,36 @@ fn may_pass_fast_9_16(width: u32, pixels: &[u8], x: u32, y: u32, threshold: i16)
     dark >= 2 || bright >= 2
 }
 
-fn score_fast_row_scalar(width: u32, pixels: &[u8], row: &mut [u8], y: u32, threshold: i16) {
-    for x in 3..width - 3 {
+fn score_fast_row_scalar(
+    width: u32,
+    pixels: &[u8],
+    row: &mut [u8],
+    y: u32,
+    threshold: i16,
+    border: u32,
+) {
+    for x in border..width - border {
         if may_pass_fast_9_16(width, pixels, x, y, threshold) {
             row[x as usize] = score(circle_values(width, pixels, x, y), threshold).unwrap_or(0);
         }
     }
 }
 
-fn fast_scores_scalar(width: u32, height: u32, pixels: &[u8], threshold: i16) -> RasterBuffer {
+fn fast_scores_scalar(
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+    threshold: i16,
+    border: u32,
+) -> RasterBuffer {
     let mut scores = RasterBuffer::zeroed(pixels.len());
     scores
         .par_chunks_mut(width as usize)
         .enumerate()
         .for_each(|(y, row)| {
             let y = y as u32;
-            if (3..height - 3).contains(&y) {
-                score_fast_row_scalar(width, pixels, row, y, threshold);
+            if (border..height - border).contains(&y) {
+                score_fast_row_scalar(width, pixels, row, y, threshold, border);
             }
         });
     scores
@@ -354,12 +463,19 @@ fn fast_scores_scalar(width: u32, height: u32, pixels: &[u8], threshold: i16) ->
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[target_feature(enable = "avx2")]
-unsafe fn score_fast_row_avx2(width: u32, pixels: &[u8], row: &mut [u8], y: u32, threshold: i16) {
+unsafe fn score_fast_row_avx2(
+    width: u32,
+    pixels: &[u8],
+    row: &mut [u8],
+    y: u32,
+    threshold: i16,
+    border: u32,
+) {
     let width_usize = width as usize;
     let threshold_vector = _mm256_set1_epi16(threshold);
     let one = _mm256_set1_epi16(1);
-    let mut x = 3_usize;
-    while x + 16 <= width_usize - 3 {
+    let mut x = border as usize;
+    while x + 16 <= width_usize - border as usize {
         let center_index = y as usize * width_usize + x;
         let center = unsafe {
             _mm256_cvtepu8_epi16(_mm_loadu_si128(
@@ -403,7 +519,7 @@ unsafe fn score_fast_row_avx2(width: u32, pixels: &[u8], row: &mut [u8], y: u32,
         }
         x += 16;
     }
-    for target_x in x as u32..width - 3 {
+    for target_x in x as u32..width - border {
         if may_pass_fast_9_16(width, pixels, target_x, y, threshold) {
             row[target_x as usize] =
                 score(circle_values(width, pixels, target_x, y), threshold).unwrap_or(0);
@@ -412,48 +528,73 @@ unsafe fn score_fast_row_avx2(width: u32, pixels: &[u8], row: &mut [u8], y: u32,
 }
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-unsafe fn fast_scores_avx2(width: u32, height: u32, pixels: &[u8], threshold: i16) -> RasterBuffer {
+unsafe fn fast_scores_avx2(
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+    threshold: i16,
+    border: u32,
+) -> RasterBuffer {
     let mut scores = RasterBuffer::zeroed(pixels.len());
     scores
         .par_chunks_mut(width as usize)
         .enumerate()
         .for_each(|(y, row)| {
             let y = y as u32;
-            if (3..height - 3).contains(&y) {
-                unsafe { score_fast_row_avx2(width, pixels, row, y, threshold) };
+            if (border..height - border).contains(&y) {
+                unsafe { score_fast_row_avx2(width, pixels, row, y, threshold, border) };
             }
         });
     scores
 }
 
+#[cfg(test)]
 pub(crate) fn fast_9_16(
     width: u32,
     height: u32,
     pixels: &[u8],
     threshold: u8,
 ) -> Vec<FastKeypoint> {
-    if width < 7 || height < 7 || pixels.len() != (width as usize).saturating_mul(height as usize) {
+    fast_9_16_with_border(width, height, pixels, threshold, 3)
+}
+
+fn fast_9_16_with_border(
+    width: u32,
+    height: u32,
+    pixels: &[u8],
+    threshold: u8,
+    border: u32,
+) -> Vec<FastKeypoint> {
+    debug_assert!(border >= 3);
+    if width <= border * 2
+        || height <= border * 2
+        || pixels.len() != (width as usize).saturating_mul(height as usize)
+    {
         return Vec::new();
     }
 
+    // Border-discarded points can still suppress an adjacent retained point.
+    // Score a one-pixel halo so strict nonmaximum suppression is unchanged.
+    let score_border = border.saturating_sub(1).max(3);
+
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     let scores = if std::arch::is_x86_feature_detected!("avx2") {
-        unsafe { fast_scores_avx2(width, height, pixels, i16::from(threshold)) }
+        unsafe { fast_scores_avx2(width, height, pixels, i16::from(threshold), score_border) }
     } else {
-        fast_scores_scalar(width, height, pixels, i16::from(threshold))
+        fast_scores_scalar(width, height, pixels, i16::from(threshold), score_border)
     };
     #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
-    let scores = fast_scores_scalar(width, height, pixels, i16::from(threshold));
+    let scores = fast_scores_scalar(width, height, pixels, i16::from(threshold), score_border);
     let scores = scores.as_slice();
     const ROWS_PER_TASK: u32 = 16;
-    (0..(height - 6).div_ceil(ROWS_PER_TASK))
+    (0..(height - border * 2).div_ceil(ROWS_PER_TASK))
         .into_par_iter()
         .map(|task| {
-            let first_y = 3 + task * ROWS_PER_TASK;
-            let last_y = (first_y + ROWS_PER_TASK).min(height - 3);
+            let first_y = border + task * ROWS_PER_TASK;
+            let last_y = (first_y + ROWS_PER_TASK).min(height - border);
             let mut keypoints = Vec::new();
             for y in first_y..last_y {
-                for x in 3..width - 3 {
+                for x in border..width - border {
                     let response = scores[(y * width + x) as usize];
                     if response == 0 {
                         continue;
@@ -1200,11 +1341,15 @@ pub(crate) fn detect(
         .par_iter()
         .enumerate()
         .map(|(level, level_image)| {
-            let mut keypoints = fast_9_16(
+            if quotas[level] == 0 {
+                return Vec::new();
+            }
+            let mut keypoints = fast_9_16_with_border(
                 level_image.width as u32,
                 level_image.height as u32,
                 &level_image.pixels,
                 FAST_THRESHOLD,
+                EDGE_THRESHOLD as u32,
             )
             .into_iter()
             .map(|keypoint| Keypoint {
@@ -1293,7 +1438,7 @@ mod tests {
         source.fill(90);
         let frame = Frame::from_buffer(1024, 1024, PixelFormat::Rgba8, source).unwrap();
         let gray = grayscale(&frame);
-        let scores = fast_scores_scalar(1024, 1024, &gray.pixels, 20);
+        let scores = fast_scores_scalar(1024, 1024, &gray.pixels, 20, 3);
         let blurred = blur(&gray);
         assert!(gray.pixels.iter().all(|&pixel| pixel == 90));
         assert!(scores.iter().all(|&score| score == 0));
@@ -1307,6 +1452,217 @@ mod tests {
     }
 
     use super::*;
+
+    fn reference_score(differences: [i16; 16], threshold: i16) -> Option<u8> {
+        let strongest = strongest_fast_arc_scalar(&differences).max(threshold);
+        (strongest > threshold).then(|| (strongest - 1).min(i16::from(u8::MAX)) as u8)
+    }
+
+    fn reference_fast_keypoints(
+        width: u32,
+        height: u32,
+        pixels: &[u8],
+        threshold: u8,
+    ) -> Vec<FastKeypoint> {
+        if width < 7 || height < 7 {
+            return Vec::new();
+        }
+        let mut scores = vec![0_u8; pixels.len()];
+        for y in 3..height - 3 {
+            for x in 3..width - 3 {
+                scores[(y * width + x) as usize] =
+                    reference_score(circle_values(width, pixels, x, y), i16::from(threshold))
+                        .unwrap_or(0);
+            }
+        }
+        let mut keypoints = Vec::new();
+        for y in 3..height - 3 {
+            for x in 3..width - 3 {
+                let response = scores[(y * width + x) as usize];
+                let is_best = response > 0
+                    && (-1_i32..=1).all(|offset_y| {
+                        (-1_i32..=1).all(|offset_x| {
+                            (offset_x == 0 && offset_y == 0)
+                                || response
+                                    > scores[((y as i32 + offset_y) as u32 * width
+                                        + (x as i32 + offset_x) as u32)
+                                        as usize]
+                        })
+                    });
+                if is_best {
+                    keypoints.push(FastKeypoint { x, y, response });
+                }
+            }
+        }
+        keypoints
+    }
+
+    fn random_pixels(length: usize, seed: u32) -> Vec<u8> {
+        let mut state = seed;
+        (0..length)
+            .map(|_| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (state >> 24) as u8
+            })
+            .collect()
+    }
+
+    #[test]
+    fn circular_fast_score_matches_scalar_for_random_arcs_and_threshold_ties() {
+        for seed in 0..4096 {
+            let samples = random_pixels(17, seed);
+            let differences =
+                std::array::from_fn(|index| i16::from(samples[0]) - i16::from(samples[index + 1]));
+            #[cfg(target_arch = "x86_64")]
+            assert_eq!(
+                strongest_fast_arc(&differences),
+                strongest_fast_arc_scalar(&differences)
+            );
+            for threshold in [0, 1, 20, 63, 127, 254, 255] {
+                assert_eq!(
+                    score(differences, threshold),
+                    reference_score(differences, threshold)
+                );
+            }
+        }
+        for start in 0..16 {
+            for length in [8, 9, 10, 15, 16] {
+                for polarity in [-1_i16, 1] {
+                    for threshold in [0, 1, 20, 127, 254] {
+                        for strength in [threshold, threshold + 1, 255] {
+                            let mut differences = [0_i16; 16];
+                            for offset in 0..length {
+                                differences[(start + offset) % 16] = polarity * strength;
+                            }
+                            assert_eq!(
+                                score(differences, threshold),
+                                reference_score(differences, threshold),
+                                "start {start}, length {length}, polarity {polarity}, threshold {threshold}, strength {strength}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fast_border_scan_matches_full_detection_with_strict_suppression_halo() {
+        for (width, height) in [
+            (7_u32, 7_u32),
+            (61, 80),
+            (62, 62),
+            (63, 63),
+            (79, 97),
+            (128, 112),
+        ] {
+            for seed in 0..8 {
+                let pixels = random_pixels(width as usize * height as usize, seed);
+                for threshold in [0_u8, 20, 254, 255] {
+                    let expected = reference_fast_keypoints(width, height, &pixels, threshold);
+                    assert_eq!(fast_9_16(width, height, &pixels, threshold), expected);
+                    let expected = expected
+                        .into_iter()
+                        .filter(|keypoint| {
+                            keypoint.x >= EDGE_THRESHOLD as u32
+                                && keypoint.y >= EDGE_THRESHOLD as u32
+                                && keypoint.x < width.saturating_sub(EDGE_THRESHOLD as u32)
+                                && keypoint.y < height.saturating_sub(EDGE_THRESHOLD as u32)
+                        })
+                        .collect::<Vec<_>>();
+                    assert_eq!(
+                        fast_9_16_with_border(
+                            width,
+                            height,
+                            &pixels,
+                            threshold,
+                            EDGE_THRESHOLD as u32
+                        ),
+                        expected,
+                        "{width}x{height}, seed {seed}, threshold {threshold}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn border_scoped_orb_matches_full_fast_keypoints_and_descriptors() {
+        for (width, height) in [(63, 63), (103, 89), (192, 160)] {
+            let image = Image::new(width, height, random_pixels(width * height, 91));
+            let plan = PyramidPlan::new(width, height);
+            for max_features in [0, 1, 64, 2500] {
+                let levels = reference_pyramid(&image);
+                let quotas = feature_quota(max_features);
+                let maximum_x = umax();
+                let mut expected = Vec::new();
+                for (level, level_image) in levels.iter().enumerate() {
+                    let mut keypoints = reference_fast_keypoints(
+                        level_image.width as u32,
+                        level_image.height as u32,
+                        &level_image.pixels,
+                        FAST_THRESHOLD,
+                    )
+                    .into_iter()
+                    .map(|keypoint| Keypoint {
+                        x: keypoint.x as f32,
+                        y: keypoint.y as f32,
+                        response: keypoint.response as f32,
+                        angle: -1.0,
+                        octave: level,
+                    })
+                    .collect::<Vec<_>>();
+                    filter_border(&mut keypoints, level_image);
+                    retain_best(&mut keypoints, quotas[level].saturating_mul(2));
+                    for keypoint in &mut keypoints {
+                        harris_response(level_image, keypoint);
+                    }
+                    retain_best(&mut keypoints, quotas[level]);
+                    for keypoint in &mut keypoints {
+                        orient(level_image, keypoint, &maximum_x);
+                        let scale = scale_for_level(level);
+                        keypoint.x *= scale;
+                        keypoint.y *= scale;
+                    }
+                    expected.extend(keypoints);
+                }
+                let detection = detect(image.clone(), max_features, &plan);
+                assert_eq!(detection.keypoints(), expected);
+                let expected_features = OrbDetection {
+                    levels,
+                    keypoints: Vec::new(),
+                }
+                .compute(expected.clone());
+                assert_eq!(detection.compute(expected), expected_features);
+            }
+        }
+    }
+
+    #[test]
+    fn row_grayscale_matches_full_frame_for_formats_and_vector_tails() {
+        for pixel_format in [PixelFormat::Gray8, PixelFormat::Rgb8, PixelFormat::Rgba8] {
+            for width in [1, 7, 8, 9, 16, 17, 67] {
+                let channels = pixel_format.channels() as usize;
+                let frame = Frame::new(
+                    width,
+                    3,
+                    pixel_format,
+                    random_pixels(width as usize * 3 * channels, 13),
+                )
+                .unwrap();
+                let expected = grayscale_scalar(&frame);
+                let mut actual = vec![0_u8; width as usize * 3];
+                for (source, output) in frame
+                    .pixels()
+                    .chunks_exact(width as usize * channels)
+                    .zip(actual.chunks_exact_mut(width as usize))
+                {
+                    grayscale_chunk(source, output, channels);
+                }
+                assert_eq!(actual, expected.pixels.as_slice());
+            }
+        }
+    }
 
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     #[test]
@@ -1710,8 +2066,10 @@ mod tests {
                     .map(|index| ((index * 73 + index / 7 * 19 + seed * 31 + 11) % 256) as u8)
                     .collect::<Vec<_>>();
                 assert_eq!(
-                    unsafe { fast_scores_avx2(width, height, &pixels, i16::from(FAST_THRESHOLD)) },
-                    fast_scores_scalar(width, height, &pixels, i16::from(FAST_THRESHOLD)),
+                    unsafe {
+                        fast_scores_avx2(width, height, &pixels, i16::from(FAST_THRESHOLD), 3)
+                    },
+                    fast_scores_scalar(width, height, &pixels, i16::from(FAST_THRESHOLD), 3),
                     "{width}x{height}, seed {seed}"
                 );
             }

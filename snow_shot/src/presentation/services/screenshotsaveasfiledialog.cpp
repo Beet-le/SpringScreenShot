@@ -442,6 +442,12 @@ class SaveContent final : public QWidget {
                              !QDir::isAbsolutePath(m_state.directory.trimmed());
         setError(QStringLiteral("directory"), badPath ? error : QString());
         setError(QStringLiteral("filename"), !badPath && error != imageError ? error : QString());
+        const bool existingFile =
+            !badPath && error == imageError && QFileInfo::exists(m_state.outputPath());
+        m_form->itemForName(QStringLiteral("filename"))
+            ->setWarningMessages(existingFile
+                                     ? QStringList{tr("A file with this name already exists")}
+                                     : QStringList{});
         m_width->setStatus(imageError.isEmpty() ? AdInputNumber::Status::None
                                                 : AdInputNumber::Status::Error);
         m_height->setStatus(imageError.isEmpty() ? AdInputNumber::Status::None
