@@ -47,6 +47,7 @@
 #include <QUrl>
 
 #include <cstdlib>
+#include <array>
 #include <atomic>
 #include <iostream>
 #include <limits>
@@ -100,7 +101,8 @@ QImage image(QSize size = {3, 2}, QColor color = Qt::red) {
 void resetSettings() {
     const CollageSettingsStore settings(storage::ApplicationStorage::instance().configuration());
     for (const auto* field :
-         {"direction", "sizing_mode", "border_px", "spacing_px", "background_color"})
+         {"direction", "sizing_mode", "rows", "columns", "custom_grid_initialized", "border_px",
+          "spacing_px", "background_color"})
         require(settings.write(QString::fromLatin1(field), {}), "reset isolated collage settings");
 }
 
@@ -1581,7 +1583,18 @@ void localizedLayoutControlsUpdateAndRememberSettings() {
             QStringLiteral("collageSizing"));
         auto* dimensions = window.editor()->outputDescriptionWidget()->findChild<QLabel*>(
             QStringLiteral("collageOutputDimensions"));
-        require(direction && sizing && dimensions, "window exposes its layout controls and size");
+        auto* grid = window.editor()->findChild<QWidget*>(QStringLiteral("collageCustomGrid"));
+        auto* rows = window.editor()->findChild<adqt::widgets::AdInputNumber*>(
+            QStringLiteral("collageGridRows"));
+        auto* columns = window.editor()->findChild<adqt::widgets::AdInputNumber*>(
+            QStringLiteral("collageGridColumns"));
+        require(direction && sizing && dimensions && grid && rows && columns,
+                "window exposes its layout controls, custom grid and output size");
+        require(!grid->isVisible() && !rows->isVisible() && !columns->isVisible() &&
+                    direction->option(2).value == QStringLiteral("custom") &&
+                    direction->optionLabel(2) ==
+                        QCoreApplication::translate("CollageEditorWidget", "Custom"),
+                "Custom has a stable translated option and hides its grid in vertical layout");
         const auto select = [&](adqt::widgets::AdSegmented* control, int index) {
             auto* option = control->childAt(control->optionRect(index).center());
             require(option && option->isEnabled(), "layout option must be interactive");
@@ -1612,6 +1625,7 @@ void localizedLayoutControlsUpdateAndRememberSettings() {
         verify(CollageDirection::Vertical, CollageSizing::Uniform, {120, 300});
         select(direction, 1);
         verify(CollageDirection::Horizontal, CollageSizing::Uniform, {150, 60});
+        require(!grid->isVisible(), "horizontal layout must hide custom grid fields");
         select(sizing, 1);
         verify(CollageDirection::Horizontal, CollageSizing::Original, {180, 120});
         CollageWindow reopened;
@@ -1626,7 +1640,135 @@ void localizedLayoutControlsUpdateAndRememberSettings() {
         verify(CollageDirection::Vertical, CollageSizing::Uniform, {120, 300});
         require(reopened.document()->settings() == remembered,
                 "later layout edits must preserve the independent reopened window");
+        select(direction, 2);
+        verify(CollageDirection::Custom, CollageSizing::Uniform, {240, 60});
+        require(grid->isVisible() && rows->isVisible() && columns->isVisible() &&
+                    rows->value() == 1 && columns->value() == 2 && rows->minimum() == 1 &&
+                    columns->minimum() == 1 && rows->decimals() == 0 && columns->decimals() == 0 &&
+                    rows->accessibleName() ==
+                        QCoreApplication::translate("CollageEditorWidget", "Rows") &&
+                    columns->accessibleName() ==
+                        QCoreApplication::translate("CollageEditorWidget", "Columns"),
+                "Custom reveals positive integer inputs with localized accessible names");
+        const auto rowRect = QRect(rows->mapTo(window.editor(), QPoint{}), rows->size());
+        const auto columnRect = QRect(columns->mapTo(window.editor(), QPoint{}), columns->size());
+        const auto directionRect =
+            QRect(direction->mapTo(window.editor(), QPoint{}), direction->size());
+        require(rowRect.right() < columnRect.left() && rowRect.top() == columnRect.top() &&
+                    rowRect.top() > directionRect.bottom(),
+                "custom grid inputs must be side by side below layout direction");
+        for (const auto* source : {"Rows", "Columns"}) {
+            const auto label = QCoreApplication::translate("CollageEditorWidget", source);
+            bool found = false;
+            for (auto* candidate : grid->findChildren<QLabel*>())
+                found = found || candidate->text() == label;
+            require(found, "custom grid must display localized Rows and Columns labels");
+        }
+        select(sizing, 1);
+        verify(CollageDirection::Custom, CollageSizing::Original, {240, 120});
+        select(sizing, 0);
+        for (int index = 0; index < 3; ++index)
+            window.document()->append(image({120, 60}), QStringLiteral("extra-%1").arg(index));
+        require(rows->value() == 1 && columns->value() == 5,
+                "new images must expand columns while retaining custom rows");
+        rows->setValue(2);
+        columns->setValue(2);
+        verify(CollageDirection::Custom, CollageSizing::Uniform, {360, 120});
+        require(rows->value() == 2 && columns->value() == 3,
+                "a grid edit below capacity must expand columns and keep the requested rows");
+        const auto expanded = window.document()->settings();
+        int changes = 0;
+        QObject::connect(window.document(), &CollageDocument::changed, &window, [&] { ++changes; });
+        columns->setValue(1);
+        require(columns->value() == 3 && window.document()->settings() == expanded && changes == 0,
+                "too-small column edits must rebound even when normalized settings are unchanged");
+        const auto removed = window.document()->items().last().id;
+        require(window.document()->remove(removed) && rows->value() == 2 && columns->value() == 3,
+                "removing images must retain previously expanded grid dimensions");
+        select(direction, 0);
+        require(!grid->isVisible(), "switching away from Custom must hide its form field");
+        select(direction, 2);
+        require(rows->value() == 2 && columns->value() == 3 &&
+                    window.document()->settings().customGridInitialized,
+                "returning to Custom must retain the initialized grid");
+        CollageWindow customReopened;
+        customReopened.present();
+        require(customReopened.document()->settings() == expanded &&
+                    reopened.document()->settings() == remembered,
+                "new windows remember expanded custom settings without changing older windows");
+        window.editor()->setExportBusy(true);
+        require(!rows->isEnabled() && !columns->isEnabled(),
+                "exporting must disable custom dimensions with the settings form");
+        window.editor()->setExportBusy(false);
     }
+    resetSettings();
+}
+
+void customGridInitializesNearSquareAndPersists(const QString& configurationFile) {
+    const std::array<int, 5> counts{0, 1, 2, 5, 10};
+    const std::array<QSize, 5> grids{QSize(1, 1), QSize(1, 1), QSize(2, 1), QSize(3, 2),
+                                     QSize(4, 3)};
+    for (std::size_t caseIndex = 0; caseIndex < counts.size(); ++caseIndex) {
+        // Every case starts from the uninitialized settings used by an existing installation.
+        resetSettings();
+        CollageWindow window;
+        window.present();
+        for (int index = 0; index < counts[caseIndex]; ++index)
+            window.document()->append(image(), QString::number(index));
+        auto* direction = window.editor()->findChild<adqt::widgets::AdSegmented*>(
+            QStringLiteral("collageDirection"));
+        require(direction != nullptr, "first-use Custom exposes its direction control");
+        direction->setCurrentValue(QStringLiteral("custom"));
+        const auto settings = window.document()->settings();
+        require(settings.customGridInitialized && settings.rows == grids[caseIndex].height() &&
+                    settings.columns == grids[caseIndex].width(),
+                "first Custom selection initializes a near-square grid, including empty collages");
+        require(
+            CollageSettingsStore(storage::ApplicationStorage::instance().configuration()).read() ==
+                settings,
+            "first-use grid initialization must persist direction, dimensions and status together");
+    }
+    resetSettings();
+    CollageWindow first, second;
+    first.present();
+    second.present();
+    require(first.document()->settings() == CollageSettings{} &&
+                second.document()->settings() == CollageSettings{},
+            "legacy collage defaults must remain Vertical with an uninitialized custom grid");
+    auto* firstDirection =
+        first.editor()->findChild<adqt::widgets::AdSegmented*>(QStringLiteral("collageDirection"));
+    auto* secondDirection =
+        second.editor()->findChild<adqt::widgets::AdSegmented*>(QStringLiteral("collageDirection"));
+    require(firstDirection && secondDirection, "independent windows expose their layout controls");
+    firstDirection->setCurrentValue(QStringLiteral("custom"));
+    secondDirection->setCurrentValue(QStringLiteral("custom"));
+    auto* rows =
+        first.editor()->findChild<adqt::widgets::AdInputNumber*>(QStringLiteral("collageGridRows"));
+    auto* columns = second.editor()->findChild<adqt::widgets::AdInputNumber*>(
+        QStringLiteral("collageGridColumns"));
+    require(rows && columns, "independent windows expose custom dimensions");
+    rows->setValue(4);
+    columns->setValue(5);
+    require(first.document()->settings().rows == 4 && first.document()->settings().columns == 1 &&
+                second.document()->settings().rows == 1 &&
+                second.document()->settings().columns == 5,
+            "editing custom dimensions must preserve each open window's independent settings");
+    CollageWindow reopened;
+    reopened.present();
+    const auto remembered = reopened.document()->settings();
+    require(remembered.direction == CollageDirection::Custom && remembered.rows == 4 &&
+                remembered.columns == 5 && remembered.customGridInitialized,
+            "custom dimensions merge per field for subsequently opened windows");
+    auto& configuration = storage::ApplicationStorage::instance().configuration();
+    require(configuration.flushNow().success, "flush remembered custom grid settings");
+    storage::ConfigurationStore reloaded(configurationFile, true, true, 60000);
+    require(CollageSettingsStore(reloaded).read() == remembered,
+            "Custom direction, dimensions and initialization survive a fresh disk-backed read");
+    require(!configuration.setValue(QStringLiteral("collage/rows"), 0) &&
+                !configuration.setValue(QStringLiteral("collage/columns"), -1) &&
+                CollageSettingsStore(configuration).read() == remembered,
+            "configuration validation must reject nonpositive grid dimensions without changing "
+            "settings");
     resetSettings();
 }
 
@@ -2143,6 +2285,10 @@ int main(int argc, char* argv[]) {
     }
     if (arguments.contains(QStringLiteral("--layout-controls-only"))) {
         timed("Localized layout controls", localizedLayoutControlsUpdateAndRememberSettings);
+        timed("Custom grid initialization and persistence", [&] {
+            customGridInitializesNearSquareAndPersists(
+                QDir(storage.configurationDirectory()).filePath(QStringLiteral("config.json")));
+        });
         ScreenshotExportCoordinator::shared().shutdown();
         storage.shutdown();
         std::cout << "Collage layout control tests passed\n";
@@ -2184,6 +2330,10 @@ int main(int argc, char* argv[]) {
             QDir(storage.configurationDirectory()).filePath(QStringLiteral("config.json")));
     });
     timed("Localized layout controls", localizedLayoutControlsUpdateAndRememberSettings);
+    timed("Custom grid initialization and persistence", [&] {
+        customGridInitializesNearSquareAndPersists(
+            QDir(storage.configurationDirectory()).filePath(QStringLiteral("config.json")));
+    });
     timed("Export completion and history isolation",
           [&] { exportCompletionFailureCancellationAndHistoryIsolation(directory.path()); });
 #ifdef Q_OS_WIN

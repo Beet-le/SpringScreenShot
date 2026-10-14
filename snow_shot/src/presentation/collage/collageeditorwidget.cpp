@@ -96,6 +96,9 @@ constexpr std::array<const char*, 8> kColorValues{"#FFFFFF", "#000000", "#8C8C8C
     QT_TRANSLATE_NOOP("CollageEditorWidget", "Total: %1 images"),
     QT_TRANSLATE_NOOP("CollageEditorWidget", "Vertical"),
     QT_TRANSLATE_NOOP("CollageEditorWidget", "Horizontal"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Custom"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Rows"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Columns"),
     QT_TRANSLATE_NOOP("CollageEditorWidget", "Uniform size"),
     QT_TRANSLATE_NOOP("CollageEditorWidget", "Original size"),
     QT_TRANSLATE_NOOP("CollageEditorWidget", "Layout direction"),
@@ -113,6 +116,7 @@ constexpr std::array<const char*, 8> kColorValues{"#FFFFFF", "#000000", "#8C8C8C
     QT_TRANSLATE_NOOP("CollageEditorWidget", "Percentage"),
     QT_TRANSLATE_NOOP("CollageEditorWidget", "Percentage of the widest image after sizing"),
     QT_TRANSLATE_NOOP("CollageEditorWidget", "Percentage of the tallest image after sizing"),
+    QT_TRANSLATE_NOOP("CollageEditorWidget", "Percentage of the grid cell width"),
     QT_TRANSLATE_NOOP("CollageEditorWidget", "Choose a background color, including transparency"),
     QT_TRANSLATE_NOOP("CollageEditorWidget", "White"),
     QT_TRANSLATE_NOOP("CollageEditorWidget", "Black"),
@@ -1179,6 +1183,11 @@ struct CollageEditorWidget::Impl {
     QHash<quint64, CollageThumbnail*> thumbnailById;
     AdForm* form = nullptr;
     AdSegmented* direction = nullptr;
+    AdFormItem* gridField = nullptr;
+    QLabel* rowsLabel = nullptr;
+    QLabel* columnsLabel = nullptr;
+    AdInputNumber* rows = nullptr;
+    AdInputNumber* columns = nullptr;
     AdSegmented* sizing = nullptr;
     LengthEditor border;
     LengthEditor spacing;
@@ -1204,7 +1213,7 @@ struct CollageEditorWidget::Impl {
         int reference = 0;
         for (const auto& item : document->items()) {
             const auto size = transformedSize(item);
-            reference = std::max(reference, settings.direction == CollageDirection::Vertical
+            reference = std::max(reference, settings.direction != CollageDirection::Horizontal
                                                 ? size.width()
                                                 : size.height());
             if (settings.sizing == CollageSizing::Uniform)
@@ -1215,7 +1224,9 @@ struct CollageEditorWidget::Impl {
     void syncLengthInputs() {
         const auto settings = document->settings();
         const int reference = lengthReference();
-        const auto description = text(settings.direction == CollageDirection::Vertical
+        const auto description = text(settings.direction == CollageDirection::Custom
+                                          ? "Percentage of the grid cell width"
+                                      : settings.direction == CollageDirection::Vertical
                                           ? "Percentage of the widest image after sizing"
                                           : "Percentage of the tallest image after sizing");
         const auto sync = [reference, &description](LengthEditor& editor, int pixels,
@@ -1272,19 +1283,29 @@ struct CollageEditorWidget::Impl {
             return;
         canvas->preserveViewport();
         auto settings = document->settings();
-        const auto previousDirection = settings.direction;
+        const auto previousSettings = settings;
         edit(settings);
         document->setSettings(settings);
-        if (document->settings().direction != previousDirection)
+        const auto current = document->settings();
+        // A too-small column count may normalize back to the existing settings without a signal.
+        if (current == previousSettings)
+            refresh();
+        if (current.direction != previousSettings.direction ||
+            (current.direction == CollageDirection::Custom &&
+             (field == QStringLiteral("rows") || field == QStringLiteral("columns"))))
             canvas->fitToCanvas();
         emit owner->settingsEdited(field);
     }
     void refresh() {
         syncing = true;
         const auto settings = document->settings();
-        direction->setCurrentValue(settings.direction == CollageDirection::Vertical
-                                       ? QStringLiteral("vertical")
-                                       : QStringLiteral("horizontal"));
+        direction->setCurrentValue(
+            settings.direction == CollageDirection::Vertical     ? QStringLiteral("vertical")
+            : settings.direction == CollageDirection::Horizontal ? QStringLiteral("horizontal")
+                                                                 : QStringLiteral("custom"));
+        gridField->setVisible(settings.direction == CollageDirection::Custom);
+        rows->setValue(settings.rows);
+        columns->setValue(settings.columns);
         sizing->setCurrentValue(settings.sizing == CollageSizing::Uniform
                                     ? QStringLiteral("uniform")
                                     : QStringLiteral("original"));
@@ -1341,7 +1362,7 @@ struct CollageEditorWidget::Impl {
         auto labelFont = form->font();
         labelFont.setPixelSize(qMax(12, qRound(theme.fontSize)));
         labelFont.setWeight(QFont::Normal);
-        for (auto* label : {border.label, spacing.label}) {
+        for (auto* label : {border.label, spacing.label, rowsLabel, columnsLabel}) {
             label->setFont(labelFont);
             auto palette = label->palette();
             palette.setColor(QPalette::WindowText, theme.colorText);
@@ -1455,6 +1476,39 @@ CollageEditorWidget::CollageEditorWidget(CollageDocument* document, QWidget* par
         return control;
     };
     d.direction = segmented("collageDirection", "vertical", "horizontal", 0);
+    d.direction->addOption({}, QStringLiteral("custom"));
+    auto* grid = new QWidget(d.form);
+    grid->setObjectName(QStringLiteral("collageCustomGrid"));
+    grid->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    auto* gridLayout = new QHBoxLayout(grid);
+    gridLayout->setContentsMargins(0, 0, 0, 0);
+    gridLayout->setSpacing(theme.marginSM);
+    const auto gridNumber = [grid, gridLayout](QLabel*& label, const char* name) {
+        auto* field = new QWidget(grid);
+        auto* layout = new QVBoxLayout(field);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(8);
+        label = new QLabel(field);
+        label->setObjectName(QString::fromLatin1(name) + QStringLiteral("Label"));
+        label->setWordWrap(true);
+        layout->addWidget(label);
+        auto* input = new AdInputNumber(field);
+        input->setObjectName(QString::fromLatin1(name));
+        input->setDecimals(0);
+        input->setRange(1, std::numeric_limits<int>::max());
+        input->setSingleStep(1);
+        input->setStepButtonLayout(AdInputNumber::StepButtonLayout::Compact);
+        input->setKeyboardTracking(false);
+        input->setWheelStepEnabled(false);
+        input->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        label->setBuddy(input);
+        layout->addWidget(input);
+        gridLayout->addWidget(field, 1);
+        return input;
+    };
+    d.rows = gridNumber(d.rowsLabel, "collageGridRows");
+    d.columns = gridNumber(d.columnsLabel, "collageGridColumns");
+    d.gridField = d.form->addField({}, grid, QStringLiteral("collageCustomGrid"));
     d.sizing = segmented("collageSizing", "uniform", "original", 1);
     const auto number = [&d](Impl::LengthEditor& editor, const char* name, std::size_t index) {
         auto* field = new QWidget(d.form);
@@ -1584,9 +1638,20 @@ CollageEditorWidget::CollageEditorWidget(CollageDocument* document, QWidget* par
     connect(d.clear, &QAbstractButton::clicked, this, &CollageEditorWidget::clearRequested);
     connect(d.direction, &AdSegmented::currentValueChanged, this, [this](const QVariant& value) {
         m_impl->settingsChanged(QStringLiteral("direction"), [&value](CollageSettings& settings) {
-            settings.direction = value.toString() == QStringLiteral("horizontal")
-                                     ? CollageDirection::Horizontal
-                                     : CollageDirection::Vertical;
+            settings.direction =
+                value.toString() == QStringLiteral("horizontal") ? CollageDirection::Horizontal
+                : value.toString() == QStringLiteral("custom")   ? CollageDirection::Custom
+                                                                 : CollageDirection::Vertical;
+        });
+    });
+    connect(d.rows, &AdInputNumber::valueChanged, this, [this](double value) {
+        m_impl->settingsChanged(QStringLiteral("rows"), [value](CollageSettings& settings) {
+            settings.rows = qRound(value);
+        });
+    });
+    connect(d.columns, &AdInputNumber::valueChanged, this, [this](double value) {
+        m_impl->settingsChanged(QStringLiteral("columns"), [value](CollageSettings& settings) {
+            settings.columns = qRound(value);
         });
     });
     connect(d.sizing, &AdSegmented::currentValueChanged, this, [this](const QVariant& value) {
@@ -1627,8 +1692,8 @@ CollageEditorWidget::CollageEditorWidget(CollageDocument* document, QWidget* par
     connect(&adqt::theme::ThemeManager::instance(), &adqt::theme::ThemeManager::themeChanged, this,
             [this] { m_impl->theme(); });
     connect(&styles::ThemeManager::instance(), &styles::ThemeManager::themeChanged, this,
-            [this, outer, body, previewColumn, colorLayout, presetLayout, stripRow,
-             imageActions](const styles::ThemeColorScheme& scheme) {
+            [this, outer, body, previewColumn, colorLayout, presetLayout, stripRow, imageActions,
+             gridLayout](const styles::ThemeColorScheme& scheme) {
                 const auto& metric = scheme.metricAlias;
                 outer->setSpacing(metric.marginSM);
                 body->setSpacing(metric.marginMD);
@@ -1637,6 +1702,7 @@ CollageEditorWidget::CollageEditorWidget(CollageDocument* document, QWidget* par
                 presetLayout->setSpacing(metric.marginXXS);
                 stripRow->setSpacing(metric.marginSM);
                 imageActions->setSpacing(metric.marginXS);
+                gridLayout->setSpacing(metric.marginSM);
                 m_impl->thumbnailLayout->setSpacing(metric.marginXS);
                 m_impl->theme();
             });
@@ -1664,7 +1730,12 @@ void CollageEditorWidget::retranslateUi() {
     d.syncing = true;
     d.direction->setOptionLabel(0, text("Vertical"));
     d.direction->setOptionLabel(1, text("Horizontal"));
+    d.direction->setOptionLabel(2, text("Custom"));
     d.direction->setAccessibleName(text("Layout direction"));
+    d.rowsLabel->setText(text("Rows"));
+    d.columnsLabel->setText(text("Columns"));
+    d.rows->setAccessibleName(text("Rows"));
+    d.columns->setAccessibleName(text("Columns"));
     d.sizing->setOptionLabel(0, text("Uniform size"));
     d.sizing->setOptionLabel(1, text("Original size"));
     d.sizing->setAccessibleName(text("Image sizing"));

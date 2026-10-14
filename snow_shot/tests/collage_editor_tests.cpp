@@ -1303,6 +1303,111 @@ void spacingPercentagesFollowImageReference() {
             "unit choices and values must remain independent between editors");
 }
 
+void customGridPercentagesFollowCellWidth() {
+    CollageDocument document;
+    const auto first = document.append(image({200, 80}), QStringLiteral("first"));
+    const auto second = document.append(image({400, 100}), QStringLiteral("second"));
+    auto settings = document.settings();
+    settings.direction = CollageDirection::Custom;
+    settings.rows = 1;
+    settings.columns = 2;
+    settings.customGridInitialized = true;
+    settings.border = 20;
+    settings.spacing = 10;
+    document.setSettings(settings);
+    CollageEditorWidget editor(&document);
+    auto* border =
+        editor.findChild<adqt::widgets::AdInputNumber*>(QStringLiteral("collageOuterBorder"));
+    auto* spacing =
+        editor.findChild<adqt::widgets::AdInputNumber*>(QStringLiteral("collageImageSpacing"));
+    auto* borderUnit = editor.findChild<adqt::widgets::AdSegmented*>(
+        QStringLiteral("collageOuterBorderUnitSegmented"));
+    auto* spacingUnit = editor.findChild<adqt::widgets::AdSegmented*>(
+        QStringLiteral("collageImageSpacingUnitSegmented"));
+    require(border && spacing && borderUnit && spacingUnit,
+            "custom layout exposes border and spacing unit controls");
+    borderUnit->setCurrentValue(QStringLiteral("percentage"));
+    spacingUnit->setCurrentValue(QStringLiteral("percentage"));
+    require(border->value() == 10 && spacing->value() == 5 &&
+                border->toolTip() == QStringLiteral("Percentage of the grid cell width") &&
+                spacing->toolTip() == border->toolTip(),
+            "uniform Custom percentages must use the first transformed image's cell width");
+    settings.sizing = CollageSizing::Original;
+    document.setSettings(settings);
+    require(border->value() == 5 && spacing->value() == 3,
+            "original Custom percentages must use the widest transformed image's cell width");
+    border->setValue(12);
+    spacing->setValue(7);
+    require(document.settings().border == 48 && document.settings().spacing == 28,
+            "Custom percentage edits must convert against the grid cell width");
+    document.rotate(first, true);
+    document.remove(second);
+    require(border->value() == 60 && spacing->value() == 35 && document.settings().border == 48 &&
+                document.settings().spacing == 28,
+            "changing Custom cell dimensions must refresh percentages and preserve saved pixels");
+    document.clear();
+    require(!border->isEnabled() && !spacing->isEnabled(),
+            "empty Custom layouts must suspend percentage editing");
+    document.append(image({100, 500}), QStringLiteral("replacement"));
+    require(border->isEnabled() && spacing->isEnabled() && border->value() == 48 &&
+                spacing->value() == 28,
+            "Custom percentages must resume from the new cell width");
+}
+
+void customGridDimensionChangesFitToCanvas() {
+    CollageDocument document;
+    document.append(image({800, 400}), QStringLiteral("first"));
+    const auto selected = document.append(image({400, 800}), QStringLiteral("second"));
+    document.append(image({200, 200}), QStringLiteral("third"));
+    CollageEditorWidget editor(&document);
+    editor.resize(1000, 700);
+    editor.show();
+    pump();
+    auto* direction =
+        editor.findChild<adqt::widgets::AdSegmented*>(QStringLiteral("collageDirection"));
+    auto* rows = editor.findChild<adqt::widgets::AdInputNumber*>(QStringLiteral("collageGridRows"));
+    auto* columns =
+        editor.findChild<adqt::widgets::AdInputNumber*>(QStringLiteral("collageGridColumns"));
+    require(direction && rows && columns, "Custom exposes its dimension editors");
+    direction->setCurrentValue(QStringLiteral("custom"));
+    document.select(selected);
+    QStringList edits;
+    QObject::connect(&editor, &CollageEditorWidget::settingsEdited, &editor,
+                     [&](const QString& field) { edits.append(field); });
+    const auto editAndVerifyFit = [&](adqt::widgets::AdInputNumber* input, double value) {
+        wheel(editor.canvas(), {120, 100}, 480);
+        mouse(editor.canvas(), QEvent::MouseButtonPress, {50, 50}, Qt::MiddleButton,
+              Qt::MiddleButton);
+        mouse(editor.canvas(), QEvent::MouseMove, {140, 125}, Qt::NoButton, Qt::MiddleButton);
+        mouse(editor.canvas(), QEvent::MouseButtonRelease, {140, 125}, Qt::MiddleButton,
+              Qt::NoButton);
+        input->setValue(value);
+        pump();
+        const auto zoom = editor.canvas()->zoom();
+        const auto offset = editor.canvas()->offset();
+        require(document.selectedId() == selected,
+                "editing custom dimensions must retain the selected image");
+        for (const auto& item : document.items())
+            require(QRectF(editor.canvas()->rect())
+                        .contains(editor.canvas()->imageViewportRect(item.id)),
+                    "editing custom dimensions must fit every image to the canvas");
+        editor.canvas()->fitToCanvas();
+        require(qFuzzyCompare(editor.canvas()->zoom(), zoom) &&
+                    (editor.canvas()->offset() - offset).manhattanLength() < .001,
+                "automatic grid fitting must match the Fit to canvas action");
+    };
+    const auto initial = document.settings();
+    require(initial.rows == 2 && initial.columns == 2,
+            "three images initialize a two-by-two custom grid");
+    editAndVerifyFit(columns, 1);
+    require(columns->value() == 2 && document.settings() == initial,
+            "a normalized no-op column edit must rebound and refit the unchanged grid");
+    for (auto* input : {rows, columns})
+        editAndVerifyFit(input, 3);
+    require(edits.contains(QStringLiteral("rows")) && edits.contains(QStringLiteral("columns")),
+            "custom dimension edits must publish their persistence fields");
+}
+
 void detailTilesRemainBoundedAndOriginalsUnchanged() {
     CollageDocument document;
     const auto source = image({3840, 2160}, QColor(20, 40, 60, 110));
@@ -1354,6 +1459,12 @@ void languageChangesPreserveSettingsAndRefreshLabels() {
         QStringLiteral("collageOuterBorderUnitSegmented"));
     borderUnit->setCurrentValue(QStringLiteral("percentage"));
     border->setValue(12.5);
+    auto customSettings = document.settings();
+    customSettings.direction = CollageDirection::Custom;
+    customSettings.rows = 2;
+    customSettings.columns = 3;
+    customSettings.customGridInitialized = true;
+    document.setSettings(customSettings);
     const auto settings = document.settings();
     QTranslator translator;
     require(translator.load(QStringLiteral(":/i18n/snow_shot_zh_CN.qm")),
@@ -1380,9 +1491,20 @@ void languageChangesPreserveSettingsAndRefreshLabels() {
     require(direction && sizing &&
                 direction->optionLabel(1) ==
                     QCoreApplication::translate("CollageEditorWidget", "Horizontal") &&
+                direction->optionLabel(2) ==
+                    QCoreApplication::translate("CollageEditorWidget", "Custom") &&
                 sizing->optionLabel(1) ==
                     QCoreApplication::translate("CollageEditorWidget", "Original size"),
             "language change must refresh segmented choices");
+    for (const auto* source : {"Rows", "Columns"}) {
+        const auto name = QStringLiteral("collageGrid%1").arg(QString::fromLatin1(source));
+        auto* input = editor.findChild<adqt::widgets::AdInputNumber*>(name);
+        auto* label = editor.findChild<QLabel*>(name + QStringLiteral("Label"));
+        const auto localizedName = QCoreApplication::translate("CollageEditorWidget", source);
+        require(input && label && localizedName != QString::fromLatin1(source) &&
+                    input->accessibleName() == localizedName && label->text() == localizedName,
+                "language change must refresh custom grid labels and accessible names");
+    }
     for (const auto* name :
          {"collageOuterBorderUnitSegmented", "collageImageSpacingUnitSegmented"}) {
         auto* unit = editor.findChild<adqt::widgets::AdSegmented*>(QString::fromLatin1(name));
@@ -1398,9 +1520,8 @@ void languageChangesPreserveSettingsAndRefreshLabels() {
             border->decimals() == 0 && border->suffixText() == QStringLiteral("%") &&
             border->accessibleName() ==
                 QCoreApplication::translate("CollageEditorWidget", "Outer border in percentage") &&
-            border->toolTip() ==
-                QCoreApplication::translate("CollageEditorWidget",
-                                            "Percentage of the widest image after sizing"),
+            border->toolTip() == QCoreApplication::translate("CollageEditorWidget",
+                                                             "Percentage of the grid cell width"),
         "language changes must preserve active units and refresh their accessibility and help");
     auto* fit = button(editor.canvas(), "collageFitToCanvas");
     require(fit->text().isEmpty() &&
@@ -1487,6 +1608,8 @@ int renderPreview(const QString& path, bool dark, bool percentage, bool empty) {
     settings.border = 16;
     settings.spacing = 16;
     settings.background = QColor(255, 255, 255, 90);
+    if (QApplication::arguments().contains(QStringLiteral("--custom")))
+        settings.direction = CollageDirection::Custom;
     document.setSettings(settings);
     if (empty)
         document.clear();
@@ -1561,6 +1684,8 @@ int main(int argc, char** argv) {
             controlsEmptyBusyAndPresets();
             spacingUnitsPreservePixelsAndConvertEdits();
             spacingPercentagesFollowImageReference();
+            customGridPercentagesFollowCellWidth();
+            customGridDimensionChangesFitToCanvas();
             languageChangesPreserveSettingsAndRefreshLabels();
             ScreenshotExportCoordinator::shared().shutdown();
             std::cout << "Collage form control tests passed\n";
@@ -1569,6 +1694,7 @@ int main(int argc, char** argv) {
         if (arguments.contains(QStringLiteral("--spacing-units-only"))) {
             spacingUnitsPreservePixelsAndConvertEdits();
             spacingPercentagesFollowImageReference();
+            customGridPercentagesFollowCellWidth();
             languageChangesPreserveSettingsAndRefreshLabels();
             ScreenshotExportCoordinator::shared().shutdown();
             std::cout << "Collage spacing unit tests passed\n";
@@ -1589,6 +1715,7 @@ int main(int argc, char** argv) {
         if (arguments.contains(QStringLiteral("--fit-control-only"))) {
             floatingFitToCanvasFollowsViewport();
             arrangementChangesFitToCanvas();
+            customGridDimensionChangesFitToCanvas();
             invalidLayoutKeepsSelectionAndTransformsUsable();
             languageChangesPreserveSettingsAndRefreshLabels();
             ScreenshotExportCoordinator::shared().shutdown();
@@ -1609,6 +1736,8 @@ int main(int argc, char** argv) {
         controlsEmptyBusyAndPresets();
         spacingUnitsPreservePixelsAndConvertEdits();
         spacingPercentagesFollowImageReference();
+        customGridPercentagesFollowCellWidth();
+        customGridDimensionChangesFitToCanvas();
         detailTilesRemainBoundedAndOriginalsUnchanged();
         languageChangesPreserveSettingsAndRefreshLabels();
         ScreenshotExportCoordinator::shared().shutdown();

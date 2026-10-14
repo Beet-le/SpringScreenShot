@@ -79,6 +79,14 @@
             <translation>拼图预览</translation>
         </message>
         <message>
+            <source>Columns</source>
+            <translation>列</translation>
+        </message>
+        <message>
+            <source>Custom</source>
+            <translation>自定义</translation>
+        </message>
+        <message>
             <source>Delete image</source>
             <translation>删除图像</translation>
         </message>
@@ -171,6 +179,10 @@
             <translation>百分比</translation>
         </message>
         <message>
+            <source>Percentage of the grid cell width</source>
+            <translation>网格单元宽度的百分比</translation>
+        </message>
+        <message>
             <source>Percentage of the tallest image after sizing</source>
             <translation>调整尺寸后最高图像高度的百分比</translation>
         </message>
@@ -205,6 +217,10 @@
         <message>
             <source>Rotate counterclockwise by 90°</source>
             <translation>逆时针旋转 90°</translation>
+        </message>
+        <message>
+            <source>Rows</source>
+            <translation>行</translation>
         </message>
         <message>
             <source>Select to center this image; drag onto another image to swap</source>

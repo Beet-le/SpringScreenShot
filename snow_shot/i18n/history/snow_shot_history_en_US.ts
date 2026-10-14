@@ -79,6 +79,14 @@
             <translation>Collage preview</translation>
         </message>
         <message>
+            <source>Columns</source>
+            <translation>Columns</translation>
+        </message>
+        <message>
+            <source>Custom</source>
+            <translation>Custom</translation>
+        </message>
+        <message>
             <source>Delete image</source>
             <translation>Delete image</translation>
         </message>
@@ -171,6 +179,10 @@
             <translation>Percentage</translation>
         </message>
         <message>
+            <source>Percentage of the grid cell width</source>
+            <translation>Percentage of the grid cell width</translation>
+        </message>
+        <message>
             <source>Percentage of the tallest image after sizing</source>
             <translation>Percentage of the tallest image after sizing</translation>
         </message>
@@ -205,6 +217,10 @@
         <message>
             <source>Rotate counterclockwise by 90°</source>
             <translation>Rotate counterclockwise by 90°</translation>
+        </message>
+        <message>
+            <source>Rows</source>
+            <translation>Rows</translation>
         </message>
         <message>
             <source>Select to center this image; drag onto another image to swap</source>

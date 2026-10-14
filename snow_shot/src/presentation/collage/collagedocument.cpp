@@ -68,10 +68,41 @@ std::shared_ptr<void> sourceLifetime(const QImage& image, const QImage& preview,
 
 bool settingsValid(const CollageSettings& settings) {
     return settings.border >= 0 && settings.spacing >= 0 && settings.background.isValid() &&
+           settings.rows >= 1 && settings.columns >= 1 &&
            (settings.direction == CollageDirection::Vertical ||
-            settings.direction == CollageDirection::Horizontal) &&
+            settings.direction == CollageDirection::Horizontal ||
+            settings.direction == CollageDirection::Custom) &&
            (settings.sizing == CollageSizing::Original ||
             settings.sizing == CollageSizing::Uniform);
+}
+
+qint64 columnsForImages(qsizetype imageCount, int rows) {
+    return imageCount / rows + (imageCount % rows != 0 ? 1 : 0);
+}
+
+QStringList normalizeCustomGrid(CollageSettings& settings, qsizetype imageCount) {
+    QStringList fields;
+    if (settings.direction != CollageDirection::Custom)
+        return fields;
+    if (!settings.customGridInitialized) {
+        const auto columns = std::max<qint64>(
+            1, static_cast<qint64>(std::ceil(std::sqrt(static_cast<double>(imageCount)))));
+        settings.columns =
+            static_cast<int>(std::min<qint64>(columns, std::numeric_limits<int>::max()));
+        settings.rows = static_cast<int>(std::clamp<qint64>(
+            columnsForImages(imageCount, settings.columns), 1, std::numeric_limits<int>::max()));
+        settings.customGridInitialized = true;
+        fields = {QStringLiteral("rows"), QStringLiteral("columns"),
+                  QStringLiteral("custom_grid_initialized")};
+    }
+    const auto columns = std::min<qint64>(columnsForImages(imageCount, settings.rows),
+                                          std::numeric_limits<int>::max());
+    if (columns > settings.columns) {
+        settings.columns = static_cast<int>(columns);
+        if (!fields.contains(QStringLiteral("columns")))
+            fields.append(QStringLiteral("columns"));
+    }
+    return fields;
 }
 
 int itemIndex(const QVector<CollageItem>& items, quint64 id) {
@@ -115,6 +146,72 @@ bool outputBytes(QSize size, qint64* bytes) {
         return false;
     *bytes = pixels * 4;
     return true;
+}
+
+CollageLayout calculateCustomGridLayout(const QVector<CollageItem>& items,
+                                        const CollageSettings& settings, QSize reference) {
+    CollageLayout result;
+    QVector<QSize> sizes;
+    sizes.reserve(items.size());
+    QSize cell = reference;
+    for (const auto& item : items) {
+        const QSize size = transformedSize(item);
+        if (size.isEmpty()) {
+            result.error = preparationError();
+            return result;
+        }
+        sizes.append(size);
+        if (settings.sizing == CollageSizing::Original) {
+            cell.setWidth(std::max(cell.width(), size.width()));
+            cell.setHeight(std::max(cell.height(), size.height()));
+        }
+    }
+    const qint64 columns =
+        std::max<qint64>(settings.columns, columnsForImages(items.size(), settings.rows));
+    if (columns > std::numeric_limits<int>::max()) {
+        result.error = resourceError();
+        return result;
+    }
+    const qint64 width =
+        columns * cell.width() + (columns - 1) * settings.spacing + qint64(settings.border) * 2;
+    const qint64 height = qint64(settings.rows) * cell.height() +
+                          qint64(settings.rows - 1) * settings.spacing +
+                          qint64(settings.border) * 2;
+    if (width > std::numeric_limits<int>::max() || height > std::numeric_limits<int>::max()) {
+        result.error = resourceError();
+        return result;
+    }
+    result.size = QSize(static_cast<int>(width), static_cast<int>(height));
+    qint64 bytes = 0;
+    if (!outputBytes(result.size, &bytes)) {
+        result.error = resourceError();
+        result.size = {};
+        return result;
+    }
+    result.rects.reserve(items.size());
+    for (qsizetype index = 0; index < sizes.size(); ++index) {
+        QSize size = sizes[index];
+        if (settings.sizing == CollageSizing::Uniform) {
+            if (qint64(size.width()) * cell.height() >= qint64(size.height()) * cell.width()) {
+                const qint64 numerator = qint64(size.height()) * cell.width();
+                size = QSize(cell.width(), static_cast<int>(std::max<qint64>(
+                                               1, (numerator + size.width() / 2) / size.width())));
+            } else {
+                const qint64 numerator = qint64(size.width()) * cell.height();
+                size = QSize(static_cast<int>(std::max<qint64>(1, (numerator + size.height() / 2) /
+                                                                      size.height())),
+                             cell.height());
+            }
+        }
+        const qint64 x = settings.border +
+                         (index % columns) * (qint64(cell.width()) + settings.spacing) +
+                         (cell.width() - size.width()) / 2;
+        const qint64 y = settings.border +
+                         (index / columns) * (qint64(cell.height()) + settings.spacing) +
+                         (cell.height() - size.height()) / 2;
+        result.rects.append(QRect(QPoint(static_cast<int>(x), static_cast<int>(y)), size));
+    }
+    return result;
 }
 
 bool imageIsOpaque(const QImage& image, const std::function<bool()>& cancelled) {
@@ -287,6 +384,8 @@ CollageLayout calculateCollageLayout(const QVector<CollageItem>& items,
         result.error = preparationError();
         return result;
     }
+    if (settings.direction == CollageDirection::Custom)
+        return calculateCustomGridLayout(items, settings, reference);
     QVector<QSize> sizes;
     sizes.reserve(items.size());
     qint64 axis = 0;
@@ -380,10 +479,16 @@ CollageSettings CollageDocument::settings() const {
 }
 
 void CollageDocument::setSettings(const CollageSettings& settings) {
-    if (!settingsValid(settings) || settings == m_impl->settings)
+    if (!settingsValid(settings))
         return;
-    m_impl->settings = settings;
+    auto normalized = settings;
+    const QStringList adjustedFields = normalizeCustomGrid(normalized, m_impl->items.size());
+    if (normalized == m_impl->settings)
+        return;
+    m_impl->settings = normalized;
     emit changed();
+    if (!adjustedFields.isEmpty())
+        emit customGridAdjusted(adjustedFields);
 }
 
 CollageLayout CollageDocument::layout() const {
@@ -419,10 +524,13 @@ quint64 CollageDocument::append(QImage image, QString label, QImage preview) {
     const quint64 id = m_impl->nextId++;
     m_impl->items.append(
         {id, 1, std::move(image), std::move(preview), {}, std::move(label), std::move(owner)});
+    const QStringList adjustedFields = normalizeCustomGrid(m_impl->settings, m_impl->items.size());
     const bool selectFirst = m_impl->selected == 0;
     if (selectFirst)
         m_impl->selected = id;
     emit changed();
+    if (!adjustedFields.isEmpty())
+        emit customGridAdjusted(adjustedFields);
     if (selectFirst)
         emit selectionChanged();
     return id;

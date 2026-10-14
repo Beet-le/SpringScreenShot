@@ -9,6 +9,7 @@
 #include <QObject>
 #include <QRect>
 #include <QString>
+#include <QStringList>
 #include <QTransform>
 #include <QVector>
 
@@ -17,7 +18,7 @@
 
 namespace snow_shot::presentation {
 
-enum class CollageDirection { Vertical, Horizontal };
+enum class CollageDirection { Vertical, Horizontal, Custom };
 enum class CollageSizing { Original, Uniform };
 
 struct CollageSettings final {
@@ -26,6 +27,9 @@ struct CollageSettings final {
     int border = 0;
     int spacing = 0;
     QColor background = Qt::white;
+    int rows = 1;
+    int columns = 1;
+    bool customGridInitialized = false;
 
     friend bool operator==(const CollageSettings&, const CollageSettings&) = default;
 };
@@ -82,6 +86,7 @@ class CollageDocument final : public QObject {
   signals:
     void changed();
     void selectionChanged();
+    void customGridAdjusted(const QStringList& fields);
 
   private:
     struct Impl;

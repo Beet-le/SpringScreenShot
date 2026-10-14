@@ -5,8 +5,10 @@
 #include <QColorSpace>
 #include <QPainter>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstring>
 #include <iostream>
 #include <limits>
@@ -35,6 +37,15 @@ QImage asymmetricFixture() {
         for (int x = 0; x < 3; ++x)
             image.setPixelColor(x, y, colors[size_t(y) * 3 + size_t(x)]);
     return image;
+}
+
+CollageSettings customSettings(int rows, int columns) {
+    CollageSettings settings;
+    settings.direction = CollageDirection::Custom;
+    settings.rows = rows;
+    settings.columns = columns;
+    settings.customGridInitialized = true;
+    return settings;
 }
 
 void geometry() {
@@ -94,6 +105,220 @@ void geometry() {
                 materializeCollageRows(prepareCollageRows(single.items(), singleSettings)).size() ==
                     QSize(4, 2),
             "output pixels are DPI independent and single-image spacing cannot overflow");
+}
+
+void customGridGeometry() {
+    CollageDocument document;
+    const auto first = document.append(fixture({4, 2}), QStringLiteral("first"));
+    document.append(fixture({2, 4}, Qt::blue), QStringLiteral("second"));
+    document.append(fixture({3, 3}, Qt::green), QStringLiteral("third"));
+    auto settings = customSettings(2, 2);
+    settings.border = 2;
+    settings.spacing = 3;
+    document.setSettings(settings);
+    auto layout = document.layout();
+    require(
+        layout.size == QSize(15, 11) &&
+            layout.rects ==
+                QVector<QRect>{QRect(2, 2, 4, 2), QRect(10, 2, 1, 2), QRect(3, 7, 2, 2)},
+        "uniform custom cells use the first image dimensions and center aspect-preserving fits");
+
+    settings.sizing = CollageSizing::Original;
+    document.setSettings(settings);
+    layout = document.layout();
+    require(layout.size == QSize(15, 15) &&
+                layout.rects ==
+                    QVector<QRect>{QRect(2, 3, 4, 2), QRect(10, 2, 2, 4), QRect(2, 9, 3, 3)},
+            "original custom cells use global maximum dimensions without resizing their images");
+
+    settings.sizing = CollageSizing::Uniform;
+    settings.border = 0;
+    settings.spacing = 0;
+    document.setSettings(settings);
+    require(document.rotate(first, true) && document.layout().size == QSize(4, 8) &&
+                document.layout().rects[2] == QRect(0, 5, 2, 2),
+            "rotating the uniform reference immediately updates custom cell dimensions");
+    require(document.swapItems(first, document.items()[2].id) &&
+                document.layout().size == QSize(6, 6),
+            "custom uniform cells follow the first image after reordering");
+
+    CollageDocument single;
+    single.append(fixture({4, 2}), QStringLiteral("single"));
+    single.setSettings(customSettings(3, 4));
+    require(single.layout().size == QSize(16, 6) &&
+                single.layout().rects == QVector<QRect>{QRect(0, 0, 4, 2)},
+            "requested rows and columns retain background cells even with only one image");
+
+    settings = customSettings(1, 1);
+    settings.spacing = std::numeric_limits<int>::max();
+    single.setSettings(settings);
+    require(single.layout().size == QSize(4, 2),
+            "single-cell custom layouts do not include unused spacing");
+
+    const QVector<CollageItem> items = document.items();
+    const auto requested = customSettings(2, 1);
+    const auto expanded = calculateCollageLayout(items, requested);
+    require(expanded.size == QSize(6, 6) && requested.rows == 2 && requested.columns == 1 &&
+                expanded.rects[2].top() == 3,
+            "pure custom layout calculation expands effective columns without altering settings");
+}
+
+void customGridInitializationAndGrowth() {
+    for (const auto count : {0, 1, 2, 3, 4, 5, 10, 17}) {
+        CollageDocument document;
+        for (int index = 0; index < count; ++index)
+            document.append(fixture({1, 1}), QString::number(index));
+        QVector<QStringList> adjusted;
+        QObject::connect(&document, &CollageDocument::customGridAdjusted,
+                         [&adjusted](const QStringList& fields) { adjusted.append(fields); });
+        auto settings = document.settings();
+        settings.direction = CollageDirection::Custom;
+        document.setSettings(settings);
+        const auto initialized = document.settings();
+        const int columns = std::max(1, static_cast<int>(std::ceil(std::sqrt(double(count)))));
+        const int rows = std::max(1, count / columns + (count % columns != 0 ? 1 : 0));
+        require(initialized.customGridInitialized && initialized.rows == rows &&
+                    initialized.columns == columns && adjusted.size() == 1 &&
+                    adjusted[0] == QStringList{QStringLiteral("rows"), QStringLiteral("columns"),
+                                               QStringLiteral("custom_grid_initialized")},
+                "first custom selection initializes a near-square grid and announces its snapshot");
+        document.setSettings(initialized);
+        settings = initialized;
+        settings.direction = CollageDirection::Horizontal;
+        document.setSettings(settings);
+        settings.direction = CollageDirection::Custom;
+        document.setSettings(settings);
+        require(document.settings() == initialized && adjusted.size() == 1,
+                "an initialized custom grid survives switching layout direction without "
+                "reinitializing");
+    }
+
+    CollageDocument document;
+    QVector<QStringList> adjusted;
+    QObject::connect(&document, &CollageDocument::customGridAdjusted,
+                     [&adjusted](const QStringList& fields) { adjusted.append(fields); });
+    document.setSettings(customSettings(2, 2));
+    for (int index = 0; index < 4; ++index)
+        document.append(fixture({2, 2}), QString::number(index));
+    require(document.settings().rows == 2 && document.settings().columns == 2 && adjusted.isEmpty(),
+            "images fitting an initialized custom grid leave dimensions unchanged");
+    document.append(fixture({2, 2}), QStringLiteral("overflow"));
+    require(document.settings().rows == 2 && document.settings().columns == 3 &&
+                adjusted == QVector<QStringList>{QStringList{QStringLiteral("columns")}},
+            "import overflow increases only columns and announces only that persisted field");
+    document.append(fixture({2, 2}), QStringLiteral("capacity"));
+    require(document.settings().columns == 3 && adjusted.size() == 1,
+            "importing an image at exact expanded capacity does not grow the grid again");
+    document.append(fixture({2, 2}), QStringLiteral("second overflow"));
+    require(document.settings().rows == 2 && document.settings().columns == 4 &&
+                adjusted.size() == 2,
+            "repeated import overflow preserves rows and expands columns as needed");
+
+    auto settings = document.settings();
+    settings.rows = 1;
+    document.setSettings(settings);
+    require(document.settings().rows == 1 && document.settings().columns == 7 &&
+                adjusted.size() == 3,
+            "reducing rows expands columns enough to retain all images");
+    settings = document.settings();
+    settings.columns = 1;
+    document.setSettings(settings);
+    require(document.settings().columns == 7 && adjusted.size() == 3,
+            "a normalized no-op column edit retains actual settings without redundant adjustment "
+            "events");
+
+    settings = document.settings();
+    settings.rows = 0;
+    document.setSettings(settings);
+    require(document.settings().rows == 1, "zero rows do not replace valid custom settings");
+    settings.rows = 1;
+    settings.columns = -1;
+    document.setSettings(settings);
+    require(document.settings().columns == 7,
+            "negative columns do not replace valid custom settings");
+    require(document.remove(document.items().front().id) && document.settings().columns == 7 &&
+                document.replace(document.items().front().id, fixture({3, 4}),
+                                 QStringLiteral("replacement")) &&
+                document.settings().columns == 7 && adjusted.size() == 3,
+            "removing and replacing images do not shrink or grow the remembered grid");
+    document.clear();
+    require(document.settings().rows == 1 && document.settings().columns == 7 &&
+                adjusted.size() == 3,
+            "clearing images keeps the initialized grid and its expanded columns");
+
+    require(!document.append({}, QStringLiteral("failed")) && adjusted.size() == 3,
+            "failed imports do not modify custom dimensions or announce persistence changes");
+}
+
+void customGridPixelsAndLimits() {
+    CollageDocument document;
+    document.append(fixture({2, 2}), QStringLiteral("red"));
+    document.append(fixture({2, 2}, Qt::blue), QStringLiteral("blue"));
+    document.append(fixture({2, 2}, Qt::green), QStringLiteral("green"));
+    auto settings = customSettings(2, 2);
+    settings.border = 1;
+    settings.spacing = 1;
+    settings.background = QColor(20, 40, 60, 80);
+    document.setSettings(settings);
+    auto output = materializeCollageRows(prepareCollageRows(document.items(), document.settings()));
+    require(output.size() == QSize(7, 7) && output.pixelColor(1, 1) == Qt::red &&
+                output.pixelColor(4, 1) == Qt::blue && output.pixelColor(1, 4) == Qt::green &&
+                output.pixelColor(4, 4) == settings.background &&
+                output.pixelColor(0, 0) == settings.background &&
+                output.pixelColor(3, 2) == settings.background,
+            "custom export fills cells row-major and preserves background in empty cells, borders "
+            "and gaps");
+    document.append(fixture({2, 2}, Qt::yellow), QStringLiteral("yellow"));
+    document.append(fixture({2, 2}, Qt::cyan), QStringLiteral("cyan"));
+    const auto rows = prepareCollageRows(document.items(), document.settings());
+    output = materializeCollageRows(rows);
+    require(output.size() == QSize(10, 7) && output.pixelColor(7, 1) == Qt::green &&
+                output.pixelColor(1, 4) == Qt::yellow && output.pixelColor(4, 4) == Qt::cyan &&
+                output.pixelColor(7, 4) == settings.background,
+            "column growth reflows row-major pixels while preserving the specified row count");
+    const qsizetype stride = qsizetype(output.width()) * 4 + 5;
+    QByteArray buffer(stride * 2, '\x5a');
+    require(rows.readRows(3, 2, stride, reinterpret_cast<uchar*>(buffer.data()), buffer.size()) &&
+                std::memcmp(buffer.constData(), output.constScanLine(3),
+                            size_t(output.width()) * 4) == 0 &&
+                std::memcmp(buffer.constData() + stride, output.constScanLine(4),
+                            size_t(output.width()) * 4) == 0 &&
+                buffer[output.width() * 4] == '\x5a',
+            "partial grid row reads cross gaps and images correctly with padded strides");
+
+    CollageDocument fitted;
+    fitted.append(fixture({4, 2}, Qt::green), QStringLiteral("reference"));
+    QImage portrait = fixture({2, 4}, QColor(255, 0, 0, 128));
+    portrait.setPixelColor(0, 0, QColor(0, 0, 255, 128));
+    fitted.append(portrait, QStringLiteral("portrait"));
+    settings = customSettings(1, 2);
+    settings.background = Qt::transparent;
+    fitted.setSettings(settings);
+    output = materializeCollageRows(prepareCollageRows(fitted.items(), fitted.settings()));
+    require(output.size() == QSize(8, 2) && output.pixelColor(4, 0).alpha() == 0 &&
+                output.pixelColor(6, 0).alpha() == 0 && output.pixelColor(5, 1).red() >= 254 &&
+                output.pixelColor(5, 1).alpha() == 128,
+            "fitting portrait images centers letterboxing and preserves their scaled alpha");
+
+    CollageDocument small;
+    small.append(fixture({1, 1}), QStringLiteral("small"));
+    const auto rejects = [&small](CollageSettings candidate) {
+        const auto layout = calculateCollageLayout(small.items(), candidate);
+        return !layout.isValid() && !layout.error.isEmpty();
+    };
+    settings = customSettings(std::numeric_limits<int>::max(), std::numeric_limits<int>::max());
+    settings.border = std::numeric_limits<int>::max();
+    settings.spacing = std::numeric_limits<int>::max();
+    require(rejects(settings),
+            "maximum grid dimensions reject arithmetic and output overflow safely");
+    settings = customSettings(1, std::numeric_limits<int>::max());
+    require(rejects(settings), "custom output scanline overflow fails before raster allocation");
+    settings = customSettings(5, std::numeric_limits<int>::max() / 4);
+    require(rejects(settings), "empty grid capacity still obeys the 8 GiB output raster limit");
+    settings = customSettings(1, 1);
+    settings.rows = 0;
+    require(rejects(settings),
+            "pure custom layout calculation rejects nonpositive grid dimensions");
 }
 
 void referenceAndManagement() {
@@ -422,6 +647,9 @@ int main(int argc, char** argv) {
     QCoreApplication application(argc, argv);
     try {
         geometry();
+        customGridGeometry();
+        customGridInitializationAndGrowth();
+        customGridPixelsAndLimits();
         referenceAndManagement();
         transformations();
         alphaAndRowReads();

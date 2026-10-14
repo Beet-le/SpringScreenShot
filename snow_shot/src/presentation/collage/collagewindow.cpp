@@ -234,19 +234,22 @@ struct CollageWindow::Impl {
                          [this](quint64 id) { chooseFiles(id); });
         QObject::connect(editor, &components::CollageEditorWidget::clearRequested, &q,
                          &CollageWindow::requestClear);
-        QObject::connect(
-            editor, &components::CollageEditorWidget::settingsEdited, &q,
-            [this](const QString& field) {
-                auto& configuration = storage::ApplicationStorage::instance().configuration();
-                if (!CollageSettingsStore(configuration).write(field, document->settings()))
-                    externalStatus(collageText("The layout settings could not be remembered: %1")
-                                       .arg(configuration.lastError()));
-            });
+        QObject::connect(editor, &components::CollageEditorWidget::settingsEdited, &q,
+                         [this](const QString& field) { persistSettings({field}); });
+        QObject::connect(document, &CollageDocument::customGridAdjusted, &q,
+                         [this](const QStringList& fields) { persistSettings(fields); });
         QObject::connect(&LanguageManager::instance(), &LanguageManager::languageChanged, &q,
                          [this] { retranslate(); });
         QObject::connect(qApp, &QCoreApplication::aboutToQuit, &q, &CollageWindow::shutdown);
         retranslate();
         updateActions();
+    }
+
+    void persistSettings(const QStringList& fields) {
+        auto& configuration = storage::ApplicationStorage::instance().configuration();
+        if (!CollageSettingsStore(configuration).write(fields, document->settings()))
+            externalStatus(collageText("The layout settings could not be remembered: %1")
+                               .arg(configuration.lastError()));
     }
 
     void retranslate() {
