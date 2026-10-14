@@ -4,6 +4,7 @@
 
 #include "snowimageqtcodec.h"
 #include "snow_shot/storage/settingsadapters.h"
+#include "snow_shot/storage/clipboardfilecache.h"
 #include "snow_shot/diagnostics/diagnostics.h"
 
 #include <QBuffer>
@@ -19,6 +20,7 @@
 #include <QTemporaryDir>
 #include <QThread>
 #include <QUuid>
+#include <QUrl>
 
 #include <snow/image/codec.h>
 #include <snow/image/format.h>
@@ -1474,27 +1476,15 @@ bool ScreenshotExportArtifact::requestClipboardFile(
     ScreenshotPdfOptions pdf, QDateTime requestedAt) {
     if (receiver == nullptr || !callback || isCancelled())
         return false;
-    auto directory = std::make_shared<QTemporaryDir>(
-        QDir::temp().filePath(QStringLiteral("snow-shot-clipboard-XXXXXX")));
-    if (!directory->isValid()) {
-        std::function<void(QString)> completion = [callback =
-                                                       std::move(callback)](QString error) mutable {
-            callback({}, std::move(error));
-        };
-        dispatchResult(receiver, std::move(completion), directory->errorString());
-        return true;
-    }
-    const QString path = directory->path();
     return requestFileSave(
-        receiver, QStringList{path}, format, std::move(filenameFormat), encoding,
-        [this, directory = std::move(directory),
-         callback = std::move(callback)](ScreenshotExportTaskResult result) mutable {
+        receiver, ClipboardFileDestination{}, format, std::move(filenameFormat), encoding,
+        [this, callback = std::move(callback)](ScreenshotExportTaskResult result) mutable {
             if (!result.succeeded()) {
                 callback({}, std::move(result.error));
                 return;
             }
-            auto mime = ScreenshotClipboardService::temporaryFileMimeData(result.savedPath,
-                                                                          std::move(directory));
+            auto mime = std::make_unique<QMimeData>();
+            mime->setUrls({QUrl::fromLocalFile(result.savedPath)});
             setClipboardFileMetadata(*mime, result.savedPath);
             callback(std::move(mime), {});
         },
@@ -1557,11 +1547,23 @@ bool ScreenshotExportArtifact::requestFileSave(QObject* receiver, FileSaveDestin
                         ScreenshotExportFailureStage::Cancelled,
                         QStringLiteral("The screenshot save was cancelled"));
                 }
-                const auto* configuredDirectory = std::get_if<QString>(&destination);
-                const QStringList directories =
-                    configuredDirectory != nullptr
-                        ? ScreenshotImageFileService::automaticDirectories(*configuredDirectory)
-                        : std::get<QStringList>(destination);
+                std::unique_ptr<snow_shot::storage::ClipboardFileCache::ExportDirectory>
+                    clipboardDirectory;
+                QStringList directories;
+                if (std::holds_alternative<ClipboardFileDestination>(destination)) {
+                    QString error;
+                    clipboardDirectory =
+                        snow_shot::storage::ClipboardFileCache::shared().createDirectory(&error);
+                    if (!clipboardDirectory)
+                        return ScreenshotExportTaskResult::failure(
+                            ScreenshotExportFailureStage::File, std::move(error));
+                    directories = {clipboardDirectory->path()};
+                } else if (const auto* configuredDirectory = std::get_if<QString>(&destination)) {
+                    directories =
+                        ScreenshotImageFileService::automaticDirectories(*configuredDirectory);
+                } else {
+                    directories = std::get<QStringList>(destination);
+                }
                 ScreenshotImageFileSaveResult saved;
                 const auto cancelled = [&cancellation] {
                     return cancellation.isCancellationRequested();
@@ -1587,6 +1589,13 @@ bool ScreenshotExportArtifact::requestFileSave(QObject* receiver, FileSaveDestin
                 if (!saved.succeeded()) {
                     return ScreenshotExportTaskResult::failure(ScreenshotExportFailureStage::File,
                                                                saved.error);
+                }
+                if (clipboardDirectory) {
+                    if (cancellation.isCancellationRequested())
+                        return ScreenshotExportTaskResult::failure(
+                            ScreenshotExportFailureStage::Cancelled,
+                            QStringLiteral("The screenshot save was cancelled"));
+                    clipboardDirectory->retain();
                 }
                 ScreenshotExportTaskResult result;
                 result.savedPath = saved.path;

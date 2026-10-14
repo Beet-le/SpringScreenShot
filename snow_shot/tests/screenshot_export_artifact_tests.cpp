@@ -734,8 +734,10 @@ void clipboardFilesUseTemporaryStorageAndKeepExportOptions() {
                 require(QFile::remove(reference), "reference file cleanup failed");
             }
             mime.reset();
-            require(!QFileInfo::exists(path) && !QFileInfo::exists(QFileInfo(path).path()),
-                    "discarded clipboard payloads must remove their temporary directory");
+            require(QFileInfo::exists(path),
+                    "discarding a clipboard payload must preserve the exported file");
+            require(QDir(QFileInfo(path).path()).removeRecursively(),
+                    "clipboard file fixture cleanup failed");
         }
     }
 }
@@ -2506,6 +2508,10 @@ int main(int argc, char** argv) {
             clipboardSharesPendingConfiguredEncoding();
             clipboardReusesConfiguredPng();
             cancellationSuppressesPendingCallbacks();
+            return EXIT_SUCCESS;
+        }
+        if (application.arguments().contains(QStringLiteral("--clipboard-files-only"))) {
+            clipboardFilesUseTemporaryStorageAndKeepExportOptions();
             return EXIT_SUCCESS;
         }
         quickSaveUsesOnlyConfiguredOutput();

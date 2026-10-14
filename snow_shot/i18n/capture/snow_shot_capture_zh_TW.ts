@@ -114,6 +114,10 @@
             <translation>剪貼簿中沒有可固定到螢幕的內容</translation>
         </message>
         <message>
+            <source>The clipboard export directory could not be locked</source>
+            <translation>無法鎖定剪貼簿匯出目錄</translation>
+        </message>
+        <message>
             <source>The clipboard pin could not be presented</source>
             <translation>無法顯示已固定到螢幕的剪貼簿內容</translation>
         </message>

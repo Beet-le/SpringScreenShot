@@ -114,6 +114,10 @@
             <translation>The clipboard does not contain content that can be pinned</translation>
         </message>
         <message>
+            <source>The clipboard export directory could not be locked</source>
+            <translation>The clipboard export directory could not be locked</translation>
+        </message>
+        <message>
             <source>The clipboard pin could not be presented</source>
             <translation>The clipboard pin could not be presented</translation>
         </message>

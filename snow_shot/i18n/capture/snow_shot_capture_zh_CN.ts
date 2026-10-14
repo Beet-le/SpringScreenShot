@@ -114,6 +114,10 @@
             <translation>剪贴板中没有可固定到屏幕的内容</translation>
         </message>
         <message>
+            <source>The clipboard export directory could not be locked</source>
+            <translation>无法锁定剪贴板导出目录</translation>
+        </message>
+        <message>
             <source>The clipboard pin could not be presented</source>
             <translation>无法显示已固定到屏幕的剪贴板内容</translation>
         </message>

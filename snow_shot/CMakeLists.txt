@@ -811,6 +811,12 @@ if(APPLE)
     )
 endif()
 
+add_library(snow_shot_clipboard_files STATIC
+    include/snow_shot/storage/clipboardfilecache.h
+    src/storage/clipboardfilecache.cpp)
+target_include_directories(snow_shot_clipboard_files PUBLIC include)
+target_link_libraries(snow_shot_clipboard_files PUBLIC Qt6::Core)
+
 add_library(snow_shot_storage STATIC ${SNOW_SHOT_STORAGE_SOURCES})
 snow_enable_unity_build(snow_shot_storage)
 # Repository implementations have independent anonymous-namespace helpers.
@@ -5695,6 +5701,11 @@ if(SNOW_SHOT_BUILD_TESTS)
         target_link_libraries(snow-shot-export-artifact-tests PRIVATE user32)
     endif()
     add_test(NAME snow-shot-export-artifact-tests COMMAND snow-shot-export-artifact-tests)
+    add_test(NAME snow-shot-clipboard-file-export-tests
+        COMMAND snow-shot-export-artifact-tests --clipboard-files-only)
+    set_tests_properties(snow-shot-clipboard-file-export-tests PROPERTIES
+        LABELS "unit" TIMEOUT 30
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-configured-save-directory-tests
         COMMAND snow-shot-export-artifact-tests --configured-directory-only)
     set_tests_properties(snow-shot-configured-save-directory-tests PROPERTIES
@@ -10926,7 +10937,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         src/presentation/services/screenshotclipboardservice.cpp)
     target_include_directories(snow-shot-clipboard-lifecycle-tests PRIVATE include)
     target_link_libraries(snow-shot-clipboard-lifecycle-tests PRIVATE
-        snow_shot_image_codec snow_shot_diagnostics Qt6::Widgets)
+        snow_shot_image_codec snow_shot_diagnostics snow_shot_clipboard_files Qt6::Widgets)
     if(WIN32)
         target_link_libraries(snow-shot-clipboard-lifecycle-tests PRIVATE user32)
     endif()
@@ -10992,6 +11003,14 @@ elseif(WIN32)
     target_link_libraries(snow_shot_history_pin PRIVATE user32)
 endif()
 target_link_libraries(snow_shot_settings PRIVATE snow_shot_history_pin snow_shot_clipboard_placement)
+
+if(SNOW_SHOT_BUILD_TESTS)
+    add_executable(snow-shot-clipboard-file-cache-tests tests/clipboard_file_cache_tests.cpp)
+    target_link_libraries(snow-shot-clipboard-file-cache-tests PRIVATE snow_shot_clipboard_files)
+    add_test(NAME snow-shot-clipboard-file-cache-tests COMMAND snow-shot-clipboard-file-cache-tests)
+    set_tests_properties(snow-shot-clipboard-file-cache-tests PROPERTIES LABELS "unit"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+endif()
 
 # Shared clipboard metadata must have one native MIME converter per process.
 add_library(snow_shot_clipboard_placement STATIC
@@ -11410,6 +11429,9 @@ foreach(_snow_target IN LISTS _snow_clipboard_consumers)
     get_target_property(_snow_sources ${_snow_target} SOURCES)
     if("${_snow_sources}" MATCHES "screenshotclipboard(service|content)\\.cpp")
         target_link_libraries(${_snow_target} PRIVATE snow_shot_clipboard_placement)
+    endif()
+    if("${_snow_sources}" MATCHES "screenshotexportartifact\\.cpp")
+        target_link_libraries(${_snow_target} PRIVATE snow_shot_clipboard_files)
     endif()
     if(APPLE AND "${_snow_sources}" MATCHES "screenshotclipboard(service|content)\\.cpp")
         target_link_libraries(${_snow_target} PRIVATE snow_shot_macos_clipboard)

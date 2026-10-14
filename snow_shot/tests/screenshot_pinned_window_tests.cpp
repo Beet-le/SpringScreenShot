@@ -16182,8 +16182,10 @@ void pinnedSharedImageExportOffscreen() {
                             normalized(QImage(temporaryPath)) == normalized(rendered),
                         "file copy retains the rendered viewport in a temporary directory");
                 QApplication::clipboard()->clear();
-                wait([&] { return !QFileInfo::exists(temporaryPath); },
-                     "replacing the clipboard cleans up its temporary image file");
+                require(QFileInfo::exists(temporaryPath),
+                        "replacing the clipboard must preserve the exported image file");
+                require(QDir(QFileInfo(temporaryPath).path()).removeRecursively(),
+                        "clipboard file fixture cleanup failed");
                 require(QFileInfo::exists(path) == autoSave,
                         "clipboard cleanup must preserve any automatic save");
             } else {

@@ -185,7 +185,8 @@ class ScreenshotExportArtifact final : public QObject {
                                          FileSourceCallback callback);
     void requestPreparedFile(ScreenshotImageRowSource rows, ScreenshotImageFileFormat format,
                              ScreenshotImageEncodingOptions encoding, FileSourceCallback callback);
-    using FileSaveDestination = std::variant<QStringList, QString>;
+    struct ClipboardFileDestination {};
+    using FileSaveDestination = std::variant<QStringList, QString, ClipboardFileDestination>;
     [[nodiscard]] bool requestFileSave(QObject* receiver, FileSaveDestination destination,
                                        ScreenshotImageFileFormat format, QString filenameFormat,
                                        ScreenshotImageEncodingOptions encoding,
