@@ -7,6 +7,7 @@ set(SNOW_CANVAS_QT_PRIVATE_SOURCE_DIRS
 )
 
 set(SNOW_CANVAS_QT_SOURCES
+    include/snow_draw_engine_qt/snow_canvas_overlay_style.h
     src/rendering/snow_canvas_path_geometry.cpp
     include/snow_draw_engine_qt/snow_canvas_path_geometry.h
     src/core/snow_canvas_changed_viewports.cpp

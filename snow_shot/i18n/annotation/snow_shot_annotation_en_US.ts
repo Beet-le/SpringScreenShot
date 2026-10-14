@@ -644,6 +644,10 @@
             <translation>Image</translation>
         </message>
         <message>
+            <source>Image Splitting</source>
+            <translation>Image Splitting</translation>
+        </message>
+        <message>
             <source>Integers</source>
             <translation>Integers</translation>
         </message>

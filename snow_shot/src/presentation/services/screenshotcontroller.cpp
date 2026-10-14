@@ -462,6 +462,7 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     void applyTextTargetLanguage(const QString& language) override;
     void startScrollingScreenshot() override;
     void restartScrollingScreenshot() override;
+    void splitScrollingScreenshot() override;
     void setScrollingScreenshotRecognitionMode(ScreenshotScrollingRecognitionMode mode) override;
     void setScrollingScreenshotAutoScroll(bool enabled) override;
     void setScrollingScreenshotAutoScrollIntervalMs(int milliseconds) override;
@@ -1548,6 +1549,11 @@ bool ScreenshotController::Impl::ensureExportFeature() {
             const QVector<ScreenshotPinnedImageSnapshot>& snapshots) {
             if (controller)
                 emit controller->imageStitchingRequested(snapshots);
+        },
+        [controller = QPointer<ScreenshotController>(&owner)](
+            const ScreenshotPinnedImageSnapshot& snapshot) {
+            if (controller)
+                emit controller->imageSplittingRequested(snapshot);
         });
     m_exportService = std::move(exportService);
     exportUiServices->setRestoreFailureHandler([this]() {
@@ -3166,6 +3172,58 @@ void ScreenshotController::Impl::restartScrollingScreenshot() {
     if (m_scrollingCaptureController != nullptr) {
         static_cast<void>(m_scrollingCaptureController->restart());
     }
+}
+
+void ScreenshotController::Impl::splitScrollingScreenshot() {
+    if (m_scrollingCaptureController == nullptr || !m_scrollingCaptureController->active()) {
+        return;
+    }
+    const QSize sourceSize = m_scrollingCaptureController->trimmedSize();
+    if (sourceSize.isEmpty()) {
+        return;
+    }
+    const std::optional<quint64> exportGeneration = beginImageExport();
+    if (!exportGeneration.has_value()) {
+        return;
+    }
+    const QPointer<ScreenshotController> receiver(&owner);
+    const QDateTime createdUtc = QDateTime::currentDateTimeUtc();
+    const bool scheduled = m_scrollingCaptureController->requestTrimmedSnapshot(
+        [receiver, sourceSize, createdUtc,
+         generation = *exportGeneration](ScreenshotScrollingSnapshot snapshot) {
+            if (receiver.isNull() || receiver->m_impl == nullptr ||
+                !receiver->m_impl->imageExportCurrent(generation)) {
+                return;
+            }
+            const bool notify = receiver->m_impl->imageExportNotificationCurrent(generation);
+            static_cast<void>(receiver->m_impl->finishImageExport(generation));
+            if (!snapshot.isValid()) {
+                if (notify) {
+                    receiver->m_impl->m_messages->error(
+                        QStringLiteral("scrolling-image-splitting"),
+                        QCoreApplication::translate(
+                            "ScreenshotController",
+                            "The scrolling screenshot could not be prepared"));
+                }
+                return;
+            }
+            emit receiver->imageSplittingRequested(
+                {ScreenshotExportSource::fromScrollingSnapshot(std::move(snapshot)),
+                 sourceSize,
+                 {},
+                 {},
+                 {},
+                 createdUtc});
+        });
+    if (!scheduled) {
+        static_cast<void>(finishImageExport(*exportGeneration));
+        m_messages->error(
+            QStringLiteral("scrolling-image-splitting"),
+            QCoreApplication::translate("ScreenshotController",
+                                        "The scrolling screenshot could not be prepared"));
+        return;
+    }
+    detachCaptureForExport(ExportDetachMode::Immediate);
 }
 
 void ScreenshotController::Impl::pinSelectionToScreen() {

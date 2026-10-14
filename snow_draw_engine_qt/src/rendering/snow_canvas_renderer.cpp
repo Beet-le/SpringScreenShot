@@ -1,4 +1,5 @@
 #include "snow_draw_engine_qt/snow_canvas_image.h"
+#include "snow_draw_engine_qt/snow_canvas_overlay_style.h"
 #include "snow_canvas_smart_erase.h"
 #include "snow_canvas_renderer.h"
 #include "snow_canvas_background_restore.h"
@@ -193,12 +194,6 @@ filterDependencyFingerprintsForRegion(const SnowCanvasSceneItem* items,
         fingerprints.push_back(hash);
     }
     return fingerprints;
-}
-
-void applyMultiSelectionDashStyle(QPen& pen) {
-    pen.setStyle(Qt::CustomDashLine);
-    pen.setCapStyle(Qt::FlatCap);
-    pen.setDashPattern({5.0, 3.0});
 }
 
 bool isDashedSelectionFrame(SnowOverlayRectKind kind) {
@@ -1268,7 +1263,7 @@ void drawOverlayRectItem(QPainter& painter, const OverlayDisplayInfo& displayInf
     } else {
         pen = QPen(toQColor(item.stroke), strokeWidth);
         if (isDashedSelectionFrame(item.rect_kind)) {
-            applyMultiSelectionDashStyle(pen);
+            snowCanvasApplySelectionDashStyle(pen);
         }
         pen.setJoinStyle(Qt::MiterJoin);
     }
@@ -1351,7 +1346,7 @@ void drawOverlayRectItem(QPainter& painter, const OverlayDisplayInfo& displayInf
         } else {
             QPen viewPen(toQColor(item.stroke), item.stroke_width * zoom);
             if (isDashedSelectionFrame(item.rect_kind)) {
-                applyMultiSelectionDashStyle(viewPen);
+                snowCanvasApplySelectionDashStyle(viewPen);
             }
             viewPen.setJoinStyle(Qt::MiterJoin);
             painter.setPen(viewPen);
@@ -1371,7 +1366,7 @@ void drawOverlayRectItem(QPainter& painter, const OverlayDisplayInfo& displayInf
     if (hasStroke) {
         pen = QPen(toQColor(item.stroke), item.stroke_width);
         if (isDashedSelectionFrame(item.rect_kind)) {
-            applyMultiSelectionDashStyle(pen);
+            snowCanvasApplySelectionDashStyle(pen);
         }
         pen.setJoinStyle(Qt::MiterJoin);
     } else {

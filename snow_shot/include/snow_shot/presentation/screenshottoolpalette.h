@@ -531,6 +531,7 @@ class ScreenshotToolPalette final : public QWidget,
     void textPunctuationRequested(const QString& value);
     void textTargetLanguageRequested(const QString& language);
     void scrollingScreenshotRequested();
+    void scrollingImageSplittingRequested();
     void printRequested();
     void saveRequested();
     void cloudUploadRequested();

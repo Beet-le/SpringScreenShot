@@ -739,11 +739,13 @@ class HistoryEntryWidget final : public QFrame {
                        std::function<void(bool)> selectionChanged,
                        std::function<void()> editRequested, std::function<void()> copyRequested,
                        std::function<void()> pinRequested, std::function<void()> stitchRequested,
-                       std::function<void()> deleteRequested, QWidget* parent = nullptr)
+                       std::function<void()> splitRequested, std::function<void()> deleteRequested,
+                       QWidget* parent = nullptr)
         : QFrame(parent), m_record(record), m_assets(assets),
           m_selectionChanged(std::move(selectionChanged)),
           m_editRequested(std::move(editRequested)), m_copyRequested(std::move(copyRequested)),
           m_pinRequested(std::move(pinRequested)), m_stitchRequested(std::move(stitchRequested)),
+          m_splitRequested(std::move(splitRequested)),
           m_deleteRequested(std::move(deleteRequested)) {
         setObjectName(QStringLiteral("screenshotHistoryEntry-%1").arg(record.id));
         setFrameShape(QFrame::NoFrame);
@@ -1095,6 +1097,12 @@ class HistoryEntryWidget final : public QFrame {
             m_stitchAction->setText(HistoryEntryWidget::tr("Stitch Image"));
             m_stitchAction->setToolTip(HistoryEntryWidget::tr("Stitch Image"));
         }
+        if (m_splitAction != nullptr) {
+            const QString label = QCoreApplication::translate(
+                "ImageSplitWindow", QT_TRANSLATE_NOOP("ImageSplitWindow", "Image Splitting"));
+            m_splitAction->setText(label);
+            m_splitAction->setToolTip(label);
+        }
         if (m_deleteAction != nullptr) {
             m_deleteAction->setText(HistoryEntryWidget::tr("Delete"));
             m_deleteAction->setToolTip(HistoryEntryWidget::tr("Delete history entry"));
@@ -1113,6 +1121,10 @@ class HistoryEntryWidget final : public QFrame {
         stitch->setObjectName(QStringLiteral("screenshotHistoryEntryStitch"));
         stitch->setEnabled(m_record.result.has_value());
         m_stitchAction = stitch;
+        auto* split = menu->addItem(QString(), custom_outlined_icons::ImageSplitting());
+        split->setObjectName(QStringLiteral("screenshotHistoryEntrySplit"));
+        split->setEnabled(m_record.result.has_value());
+        m_splitAction = split;
         auto* remove = menu->addItem(QString(), outlined_icons::IconDelete());
         remove->setObjectName(QStringLiteral("screenshotHistoryEntryDelete"));
         m_deleteAction = remove;
@@ -1126,6 +1138,11 @@ class HistoryEntryWidget final : public QFrame {
         connect(stitch, &QAction::triggered, this, [this]() {
             if (m_stitchRequested) {
                 m_stitchRequested();
+            }
+        });
+        connect(split, &QAction::triggered, this, [this]() {
+            if (m_splitRequested) {
+                m_splitRequested();
             }
         });
         connect(remove, &QAction::triggered, this, [this]() {
@@ -1153,6 +1170,7 @@ class HistoryEntryWidget final : public QFrame {
     std::function<void()> m_copyRequested;
     std::function<void()> m_pinRequested;
     std::function<void()> m_stitchRequested;
+    std::function<void()> m_splitRequested;
     std::function<void()> m_deleteRequested;
     QBoxLayout* m_layout = nullptr;
     adqt::widgets::AdCheckbox* m_selectionCheckbox = nullptr;
@@ -1165,6 +1183,7 @@ class HistoryEntryWidget final : public QFrame {
     QPointer<adqt::widgets::AdContextMenu> m_moreMenu;
     QPointer<QAction> m_pinAction;
     QPointer<QAction> m_stitchAction;
+    QPointer<QAction> m_splitAction;
     QPointer<QAction> m_deleteAction;
     adqt::widgets::AdPopconfirm* m_deleteConfirmation = nullptr;
     adqt::widgets::AdCarousel* m_carousel = nullptr;
@@ -1670,6 +1689,7 @@ void ScreenshotHistoryPageWidget::rebuildEntries() {
                 [this, record]() { copyEntry(record); },
                 [this, id = record.id]() { emit pinRequested(id); },
                 [this, record]() { emit collageRequested({record}); },
+                [this, record]() { emit splitRequested(record); },
                 [this, id = record.id]() { removeEntry(id); }, m_entriesHost);
             entry->applyTheme(m_colorScheme);
             m_entryWidgetsById.insert(record.id, entry);

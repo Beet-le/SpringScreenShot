@@ -4,6 +4,7 @@
 #include "snow_shot/presentation/components/pinnedwindowmanagementpagewidget.h"
 
 #include "snow_shot/presentation/components/historyselectionbar.h"
+#include "snow_shot/presentation/components/actionpopupmenu.h"
 #include "snow_shot/presentation/components/historypagecommon.h"
 #include "snow_shot/presentation/components/icons/snowshoticons.h"
 #include "snow_shot/presentation/components/thumbnailcache.h"
@@ -864,18 +865,41 @@ void PinnedWindowManagementPageWidget::rebuildEntries() {
             show->setAccentRole(adqt::widgets::AdButton::AccentRole::Primary);
             show->setText(record.ignored ? tr("Restore") : tr("Show"));
             actions->addWidget(show);
-            auto* stitch = new adqt::widgets::AdButton(details);
-            stitch->setObjectName(QStringLiteral("pinnedManagementEntryStitch"));
-            stitch->setButtonStyle(adqt::widgets::AdButton::ButtonStyle::Text);
-            stitch->setAccentRole(adqt::widgets::AdButton::AccentRole::Primary);
-            stitch->setIconRef(snow_shot::presentation::icons::custom::outlined::ImageStitching());
-            actions->addWidget(stitch);
             auto* remove = new adqt::widgets::AdButton(details);
             remove->setObjectName(QStringLiteral("pinnedManagementEntryDelete"));
             remove->setButtonStyle(adqt::widgets::AdButton::ButtonStyle::Text);
             remove->setAccentRole(adqt::widgets::AdButton::AccentRole::Danger);
             remove->setText(tr("Delete"));
             actions->addWidget(remove);
+            auto* more = new adqt::widgets::AdButton(details);
+            more->setObjectName(QStringLiteral("pinnedManagementEntryMore"));
+            more->setButtonStyle(adqt::widgets::AdButton::ButtonStyle::Text);
+            more->setAccentRole(adqt::widgets::AdButton::AccentRole::Primary);
+            more->setIconRef(outlined_icons::Ellipsis());
+            actions->addWidget(more);
+            new presentation::ActionPopupMenu(
+                more,
+                [this, row, id = record.id] {
+                    auto* menu = new adqt::widgets::AdContextMenu(row);
+                    menu->setObjectName(QStringLiteral("pinnedManagementEntryMoreMenu"));
+                    auto* stitch =
+                        menu->addItem(tr("Stitch Image"),
+                                      presentation::icons::custom::outlined::ImageStitching());
+                    stitch->setObjectName(QStringLiteral("pinnedManagementEntryStitch"));
+                    stitch->setToolTip(tr("Stitch Image"));
+                    const QString splitLabel = tr("Image Splitting");
+                    auto* split = menu->addItem(
+                        splitLabel, presentation::icons::custom::outlined::ImageSplitting());
+                    split->setObjectName(QStringLiteral("pinnedManagementEntrySplit"));
+                    split->setToolTip(splitLabel);
+                    connect(stitch, &QAction::triggered, row,
+                            [this, id] { emit collageRequested({id}); });
+                    connect(split, &QAction::triggered, row,
+                            [this, id] { emit splitRequested(id); });
+                    return menu;
+                },
+                presentation::ActionPopupMenu::Placement::BottomLeft,
+                presentation::ActionPopupMenu::Surface::Widget);
             actions->addStretch(1);
             detailsLayout->addLayout(actions);
             rowLayout->addWidget(details, 1);
@@ -908,8 +932,6 @@ void PinnedWindowManagementPageWidget::rebuildEntries() {
                 if (m_source)
                     m_source->showRecord(id);
             });
-            connect(stitch, &QAbstractButton::clicked, this,
-                    [this, id = record.id]() { emit collageRequested({id}); });
             connect(checkbox, &QAbstractButton::toggled, this,
                     [this, id = record.id](bool selected) {
                         if (selected)
@@ -941,11 +963,22 @@ void PinnedWindowManagementPageWidget::rebuildEntries() {
                                       : tr("Not Closed"));
         row->findChild<adqt::widgets::AdButton*>(QStringLiteral("pinnedManagementEntryShow"))
             ->setText(record.ignored ? tr("Restore") : tr("Show"));
-        auto* stitch =
-            row->findChild<adqt::widgets::AdButton*>(QStringLiteral("pinnedManagementEntryStitch"));
-        stitch->setText(tr("Stitch Image"));
-        stitch->setToolTip(tr("Stitch Image"));
-        stitch->setAccessibleName(tr("Stitch Image"));
+        auto* more =
+            row->findChild<adqt::widgets::AdButton*>(QStringLiteral("pinnedManagementEntryMore"));
+        more->setText(tr("More"));
+        more->setToolTip(tr("More actions"));
+        more->setAccessibleName(tr("More actions"));
+        for (auto* stitch :
+             row->findChildren<QAction*>(QStringLiteral("pinnedManagementEntryStitch"))) {
+            stitch->setText(tr("Stitch Image"));
+            stitch->setToolTip(tr("Stitch Image"));
+        }
+        for (auto* split :
+             row->findChildren<QAction*>(QStringLiteral("pinnedManagementEntrySplit"))) {
+            const QString label = tr("Image Splitting");
+            split->setText(label);
+            split->setToolTip(label);
+        }
         row->findChild<adqt::widgets::AdButton*>(QStringLiteral("pinnedManagementEntryDelete"))
             ->setText(tr("Delete"));
         const QString altText = tr("Pinned window image");

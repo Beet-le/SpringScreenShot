@@ -101,6 +101,7 @@ class ScreenshotHistoryPageWidget final : public QWidget {
     void editRequested(const QString& recordId);
     void pinRequested(const QString& recordId);
     void collageRequested(const QVector<snow_shot::storage::CaptureHistoryRecord>& records);
+    void splitRequested(const snow_shot::storage::CaptureHistoryRecord& record);
 
   protected:
     void changeEvent(QEvent* event) override;

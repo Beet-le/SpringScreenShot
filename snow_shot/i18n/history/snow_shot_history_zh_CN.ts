@@ -5,31 +5,31 @@
         <name>CollageDocument</name>
         <message>
             <source>The collage exceeds the 8 GiB image limit. Try fewer images or smaller layout settings.</source>
-            <translation>拼图超过了 8 GiB 图像限制。请减少图像数量或调小布局设置。</translation>
+            <translation>图片拼接超过了 8 GiB 图像限制。请减少图像数量或调小布局设置。</translation>
         </message>
         <message>
             <source>The collage export was cancelled.</source>
-            <translation>拼图导出已取消。</translation>
+            <translation>图片拼接导出已取消。</translation>
         </message>
         <message>
             <source>The collage images could not be prepared for export.</source>
-            <translation>无法准备拼图图像以供导出。</translation>
+            <translation>无法准备图片拼接图像以供导出。</translation>
         </message>
         <message>
             <source>The collage is too large for the clipboard. Save it to a file instead.</source>
-            <translation>拼图过大，无法复制到剪贴板。请保存为文件。</translation>
+            <translation>图片拼接过大，无法复制到剪贴板。请保存为文件。</translation>
         </message>
         <message>
             <source>The collage layout settings are invalid.</source>
-            <translation>拼图布局设置无效。</translation>
+            <translation>图片拼接布局设置无效。</translation>
         </message>
         <message>
             <source>There is not enough available memory for this collage operation. Try fewer images or close other collage windows.</source>
-            <translation>可用内存不足，无法执行此拼图操作。请减少图像数量或关闭其他拼图窗口。</translation>
+            <translation>可用内存不足，无法执行此图片拼接操作。请减少图像数量或关闭其他图片拼接窗口。</translation>
         </message>
         <message>
             <source>This collage requires too much temporary memory. Try fewer images or smaller image sizes.</source>
-            <translation>此拼图需要过多临时内存。请减少图像数量或使用较小的图像。</translation>
+            <translation>此图片拼接需要过多临时内存。请减少图像数量或使用较小的图像。</translation>
         </message>
     </context>
     <context>
@@ -48,7 +48,7 @@
         </message>
         <message>
             <source>Add images to create a collage</source>
-            <translation>添加图像以创建拼图</translation>
+            <translation>添加图像以创建图片拼接</translation>
         </message>
         <message>
             <source>Add multiple image files at once</source>
@@ -76,7 +76,7 @@
         </message>
         <message>
             <source>Collage preview</source>
-            <translation>拼图预览</translation>
+            <translation>图片拼接预览</translation>
         </message>
         <message>
             <source>Columns</source>
@@ -100,7 +100,7 @@
         </message>
         <message>
             <source>Drop images to add to collage</source>
-            <translation>松开鼠标，将图片添加到拼图</translation>
+            <translation>松开鼠标，将图片添加到图片拼接</translation>
         </message>
         <message>
             <source>Fit to canvas</source>
@@ -259,7 +259,7 @@
         </message>
         <message>
             <source>All images will be removed from this collage.</source>
-            <translation>将从此拼图中移除全部图像。</translation>
+            <translation>将从此图片拼接中移除全部图像。</translation>
         </message>
         <message>
             <source>Allow Snow Shot to access Finder in System Settings &gt; Privacy &amp; Security &gt; Automation, then try again.</source>
@@ -279,7 +279,7 @@
         </message>
         <message>
             <source>Collage</source>
-            <translation>拼图</translation>
+            <translation>图片拼接</translation>
         </message>
         <message>
             <source>Copy</source>
@@ -287,7 +287,7 @@
         </message>
         <message>
             <source>Copying collage…</source>
-            <translation>正在复制拼图…</translation>
+            <translation>正在复制图片拼接…</translation>
         </message>
         <message>
             <source>Copying could not be started. Try again.</source>
@@ -303,7 +303,7 @@
         </message>
         <message>
             <source>Discard this collage?</source>
-            <translation>放弃此拼图？</translation>
+            <translation>放弃此图片拼接？</translation>
         </message>
         <message>
             <source>Export could not be started. Try again.</source>
@@ -327,7 +327,7 @@
         </message>
         <message>
             <source>Preparing collage…</source>
-            <translation>正在准备拼图…</translation>
+            <translation>正在准备图片拼接…</translation>
         </message>
         <message>
             <source>Reading selected image files…</source>
@@ -347,7 +347,7 @@
         </message>
         <message>
             <source>Saving collage…</source>
-            <translation>正在保存拼图…</translation>
+            <translation>正在保存图片拼接…</translation>
         </message>
         <message>
             <source>Saving could not be started. Try again.</source>
@@ -381,7 +381,7 @@
         </message>
         <message>
             <source>The images and edits in this collage will be discarded.</source>
-            <translation>将放弃此拼图中的图像和编辑。</translation>
+            <translation>将放弃此图片拼接中的图像和编辑。</translation>
         </message>
         <message>
             <source>The layout settings could not be remembered: %1</source>
@@ -480,7 +480,7 @@
         </message>
         <message>
             <source>Stitch Image</source>
-            <translation>拼接图片</translation>
+            <translation>图片拼接</translation>
         </message>
         <message>
             <source>This action cannot be undone</source>
@@ -489,6 +489,289 @@
         <message>
             <source>This screenshot cannot be pinned</source>
             <translation>此截图无法固定到屏幕</translation>
+        </message>
+    </context>
+    <context>
+        <name>ImageSplitDocument</name>
+        <message>
+            <source>Choose a split direction.</source>
+            <translation>请选择分割方向。</translation>
+        </message>
+        <message>
+            <source>Choose a split type.</source>
+            <translation>请选择分割类型。</translation>
+        </message>
+        <message>
+            <source>Choose pixels or percentage.</source>
+            <translation>请选择像素或百分比。</translation>
+        </message>
+        <message>
+            <source>Each image must be at least one pixel wide or high.</source>
+            <translation>每张图像的宽度和高度必须至少为 1 像素。</translation>
+        </message>
+        <message>
+            <source>Enter a percentage from 5% to 100%.</source>
+            <translation>请输入 5% 到 100% 的百分比。</translation>
+        </message>
+        <message>
+            <source>Enter a positive whole number.</source>
+            <translation>请输入正整数。</translation>
+        </message>
+        <message>
+            <source>Enter at least 16 pixels.</source>
+            <translation>请输入至少 16 像素。</translation>
+        </message>
+        <message>
+            <source>The image is unavailable.</source>
+            <translation>图像不可用。</translation>
+        </message>
+        <message>
+            <source>The split lines require too much memory.</source>
+            <translation>分割线所需的内存过多。</translation>
+        </message>
+    </context>
+    <context>
+        <name>ImageSplitEditorWidget</name>
+        <message>
+            <source> px</source>
+            <translation> 像素</translation>
+        </message>
+        <message>
+            <source>%1 × %2 px</source>
+            <translation>%1 × %2 像素</translation>
+        </message>
+        <message>
+            <source>Columns</source>
+            <translation>列数</translation>
+        </message>
+        <message>
+            <source>Drop one image file at a time.</source>
+            <translation>请一次拖入一个图像文件。</translation>
+        </message>
+        <message>
+            <source>Drop one image to replace the current image</source>
+            <translation>拖入一张图像以替换当前图像</translation>
+        </message>
+        <message>
+            <source>Enter a positive integer.</source>
+            <translation>请输入正整数。</translation>
+        </message>
+        <message>
+            <source>Enter an integer of at least 16 pixels.</source>
+            <translation>请输入至少为 16 像素的整数。</translation>
+        </message>
+        <message>
+            <source>Equal Split</source>
+            <translation>均等分割</translation>
+        </message>
+        <message>
+            <source>Fit to Canvas</source>
+            <translation>适应画布</translation>
+        </message>
+        <message>
+            <source>Grid</source>
+            <translation>网格</translation>
+        </message>
+        <message>
+            <source>Height per Image</source>
+            <translation>每张图像的高度</translation>
+        </message>
+        <message>
+            <source>Horizontal</source>
+            <translation>水平</translation>
+        </message>
+        <message>
+            <source>Number of Images</source>
+            <translation>图像数量</translation>
+        </message>
+        <message>
+            <source>Percentage</source>
+            <translation>百分比</translation>
+        </message>
+        <message>
+            <source>Pixels</source>
+            <translation>像素</translation>
+        </message>
+        <message>
+            <source>Precise Split</source>
+            <translation>精确分割</translation>
+        </message>
+        <message>
+            <source>Redo</source>
+            <translation>重做</translation>
+        </message>
+        <message>
+            <source>Reload</source>
+            <translation>重新加载</translation>
+        </message>
+        <message>
+            <source>Rows</source>
+            <translation>行数</translation>
+        </message>
+        <message>
+            <source>Split direction</source>
+            <translation>分割方向</translation>
+        </message>
+        <message>
+            <source>Split size unit</source>
+            <translation>分割尺寸单位</translation>
+        </message>
+        <message>
+            <source>Split type</source>
+            <translation>分割类型</translation>
+        </message>
+        <message>
+            <source>Total: %1 images</source>
+            <translation>共 %1 张图像</translation>
+        </message>
+        <message>
+            <source>Undo</source>
+            <translation>撤销</translation>
+        </message>
+        <message>
+            <source>Vertical</source>
+            <translation>垂直</translation>
+        </message>
+        <message>
+            <source>Width per Image</source>
+            <translation>每张图像的宽度</translation>
+        </message>
+    </context>
+    <context>
+        <name>ImageSplitExport</name>
+        <message>
+            <source>Export was canceled.</source>
+            <translation>导出已取消。</translation>
+        </message>
+        <message>
+            <source>Image %1 could not be saved: %2</source>
+            <translation>无法保存第 %1 张图像：%2</translation>
+        </message>
+        <message>
+            <source>The image could not be prepared for export.</source>
+            <translation>无法准备要导出的图像。</translation>
+        </message>
+        <message>
+            <source>The image or split configuration is invalid.</source>
+            <translation>图像或分割配置无效。</translation>
+        </message>
+        <message>
+            <source>The output folder could not be created.</source>
+            <translation>无法创建输出文件夹。</translation>
+        </message>
+        <message>
+            <source>There is not enough memory to export the image.</source>
+            <translation>内存不足，无法导出图像。</translation>
+        </message>
+    </context>
+    <context>
+        <name>ImageSplitPreviewCanvas</name>
+        <message>
+            <source>Click a ruler to add a split line; drag a line to move it. Select a line and press Delete to remove it. Drag with the middle mouse button to pan; scroll to zoom.</source>
+            <translation>点击标尺添加分割线，拖动分割线可移动位置。选中分割线后按 Delete 删除。按住鼠标中键拖动可平移，滚动滚轮可缩放。</translation>
+        </message>
+        <message>
+            <source>Image splitting preview</source>
+            <translation>图片分割预览</translation>
+        </message>
+        <message>
+            <source>X: %1 px</source>
+            <translation>X：%1 像素</translation>
+        </message>
+        <message>
+            <source>Y: %1 px</source>
+            <translation>Y：%1 像素</translation>
+        </message>
+    </context>
+    <context>
+        <name>ImageSplitWindow</name>
+        <message>
+            <source>Cancel</source>
+            <translation>取消</translation>
+        </message>
+        <message>
+            <source>Discard</source>
+            <translation>放弃</translation>
+        </message>
+        <message>
+            <source>Discard these image splits?</source>
+            <translation>放弃当前图片分割？</translation>
+        </message>
+        <message>
+            <source>Drop one image file at a time.</source>
+            <translation>请一次拖入一个图像文件。</translation>
+        </message>
+        <message>
+            <source>Export could not be started. Try again.</source>
+            <translation>无法开始导出，请重试。</translation>
+        </message>
+        <message>
+            <source>Image Splitting</source>
+            <translation>图片分割</translation>
+        </message>
+        <message>
+            <source>Image loading could not be started. Try again.</source>
+            <translation>无法开始加载图像，请重试。</translation>
+        </message>
+        <message>
+            <source>Image processing failed. Try again.</source>
+            <translation>图像处理失败，请重试。</translation>
+        </message>
+        <message>
+            <source>Images</source>
+            <translation>图像</translation>
+        </message>
+        <message>
+            <source>Loading image…</source>
+            <translation>正在加载图像…</translation>
+        </message>
+        <message>
+            <source>Replace Image</source>
+            <translation>替换图像</translation>
+        </message>
+        <message>
+            <source>Replacing the image will discard the current edits</source>
+            <translation>替换图像将丢弃当前编辑</translation>
+        </message>
+        <message>
+            <source>Save All</source>
+            <translation>全部保存</translation>
+        </message>
+        <message>
+            <source>Saved %1 images to %2</source>
+            <translation>已将 %1 张图像保存到 %2</translation>
+        </message>
+        <message>
+            <source>Saved %1 of %2 images to %3. %4</source>
+            <translation>已将 %2 张图像中的 %1 张保存到 %3。%4</translation>
+        </message>
+        <message>
+            <source>Saving images: %1 of %2</source>
+            <translation>正在保存图像：%1 / %2</translation>
+        </message>
+        <message>
+            <source>Select Destination Folder</source>
+            <translation>选择目标文件夹</translation>
+        </message>
+        <message>
+            <source>Select Image</source>
+            <translation>选择图像</translation>
+        </message>
+        <message>
+            <source>The image and current split edits will be discarded.</source>
+            <translation>图像和当前分割编辑将被丢弃。</translation>
+        </message>
+        <message>
+            <source>The image could not be read or is no longer available.</source>
+            <translation>无法读取图像，或图像已不可用。</translation>
+        </message>
+        <message>
+            <source>The image is too large or there is not enough memory to load it.</source>
+            <translation>图像过大，或内存不足，无法加载。</translation>
+        </message>
+        <message>
+            <source>The images could not be exported. Try again.</source>
+            <translation>无法导出图像，请重试。</translation>
         </message>
     </context>
     <context>
@@ -529,11 +812,11 @@
         </message>
         <message>
             <source>Collage</source>
-            <translation>拼图</translation>
+            <translation>图片拼接</translation>
         </message>
         <message>
             <source>Create a collage from selected pinned windows</source>
-            <translation>使用选中的固定到屏幕窗口创建拼图</translation>
+            <translation>使用选中的固定到屏幕窗口创建图片拼接</translation>
         </message>
         <message>
             <source>Date</source>
@@ -588,6 +871,18 @@
         <message>
             <source>Hidden</source>
             <translation>已隐藏</translation>
+        </message>
+        <message>
+            <source>Image Splitting</source>
+            <translation>图片分割</translation>
+        </message>
+        <message>
+            <source>More</source>
+            <translation>更多</translation>
+        </message>
+        <message>
+            <source>More actions</source>
+            <translation>更多操作</translation>
         </message>
         <message>
             <source>No matching pinned windows</source>
@@ -673,7 +968,7 @@
         </message>
         <message>
             <source>Stitch Image</source>
-            <translation>拼接图片</translation>
+            <translation>图片拼接</translation>
         </message>
         <message>
             <source>The saved record and its open window will be removed</source>
@@ -722,7 +1017,7 @@
         </message>
         <message>
             <source>Collage</source>
-            <translation>拼图</translation>
+            <translation>图片拼接</translation>
         </message>
         <message>
             <source>Copied and pinned screenshots will appear here</source>
@@ -734,7 +1029,7 @@
         </message>
         <message>
             <source>Create a collage from selected screenshots</source>
-            <translation>使用选中的截图创建拼图</translation>
+            <translation>使用选中的截图创建图片拼接</translation>
         </message>
         <message>
             <source>Current monitor</source>

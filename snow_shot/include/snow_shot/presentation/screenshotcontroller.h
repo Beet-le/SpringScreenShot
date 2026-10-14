@@ -135,6 +135,7 @@ class ScreenshotController : public QObject {
 
   signals:
     void imageStitchingRequested(const QVector<ScreenshotPinnedImageSnapshot>& snapshots);
+    void imageSplittingRequested(const ScreenshotPinnedImageSnapshot& snapshot);
     void recordingExportNotificationRequested(const QString& path);
     void captureActivityChanged(const QString& source, bool active);
     void selectedFilePinFailed(const QString& message);

@@ -870,6 +870,84 @@ void entryStitchActionUsesOnlyItsRecord() {
     QCoreApplication::removeTranslator(&translator);
 }
 
+void entrySplitActionUsesOnlyItsRecord() {
+    MutableHistoryDataSource dataSource;
+    auto records = historyRecords(3);
+    storage::CaptureHistoryResultRecord result;
+    result.imageSize = QSize(32, 18);
+    records[0].result = result;
+    records[2].result = result;
+    dataSource.setRecords(records);
+    ScreenshotHistoryPageWidget page(&dataSource, nullptr);
+    page.resize(900, 720);
+    page.show();
+    page.setActive(true);
+    flushEvents();
+    int requests = 0;
+    storage::CaptureHistoryRecord requested;
+    QObject::connect(&page, &ScreenshotHistoryPageWidget::splitRequested, &page,
+                     [&](const auto& record) {
+                         requested = record;
+                         ++requests;
+                     });
+    auto* entry = page.findChild<QWidget*>(QStringLiteral("screenshotHistoryEntry-record-0"));
+    auto* other = page.findChild<QWidget*>(QStringLiteral("screenshotHistoryEntry-record-2"));
+    require(entry && other, "split fixtures retain their record identities");
+    auto* selection = other->findChild<adqt::widgets::AdCheckbox*>();
+    selection->setChecked(true);
+    auto* more =
+        entry->findChild<adqt::widgets::AdButton*>(QStringLiteral("screenshotHistoryEntryMore"));
+    more->click();
+    flushEvents();
+    QPointer<adqt::widgets::AdContextMenu> menu = entry->findChild<adqt::widgets::AdContextMenu*>(
+        QStringLiteral("screenshotHistoryEntryMoreMenu"));
+    require(menu && menu->isPopupVisible(), "More opens the history split menu");
+    auto* split = menu->findChild<QAction*>(QStringLiteral("screenshotHistoryEntrySplit"));
+    auto* stitch = menu->findChild<QAction*>(QStringLiteral("screenshotHistoryEntryStitch"));
+    require(split && stitch && split->isEnabled() &&
+                split->text() == QStringLiteral("Image Splitting") && !split->icon().isNull() &&
+                menu->actions().indexOf(split) == menu->actions().indexOf(stitch) + 1,
+            "Image Splitting follows Stitch Image with a themed icon");
+    class SplitTranslator final : public QTranslator {
+      public:
+        QString translate(const char* context, const char* source, const char*,
+                          int) const override {
+            return QByteArray(context) == "ImageSplitWindow" &&
+                           QByteArray(source) == "Image Splitting"
+                       ? QStringLiteral("Translated Image Splitting")
+                       : QString();
+        }
+    } translator;
+    QCoreApplication::installTranslator(&translator);
+    const auto removeTranslator =
+        qScopeGuard([&] { QCoreApplication::removeTranslator(&translator); });
+    QEvent language(QEvent::LanguageChange);
+    QApplication::sendEvent(entry, &language);
+    require(split->text() == QStringLiteral("Translated Image Splitting") &&
+                split->toolTip() == split->text(),
+            "open history Image Splitting action uses the shared translation context");
+    activateMenuAction(menu, split);
+    flushEvents();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    require(requests == 1 && requested == records[0] && selection->isChecked() &&
+                dataSource.removedIds.isEmpty() && !menu,
+            "splitting dispatches only its source record and preserves history selection");
+    auto* unavailableEntry =
+        page.findChild<QWidget*>(QStringLiteral("screenshotHistoryEntry-record-1"));
+    unavailableEntry
+        ->findChild<adqt::widgets::AdButton*>(QStringLiteral("screenshotHistoryEntryMore"))
+        ->click();
+    flushEvents();
+    auto* unavailableMenu = unavailableEntry->findChild<adqt::widgets::AdContextMenu*>(
+        QStringLiteral("screenshotHistoryEntryMoreMenu"));
+    require(unavailableMenu, "record without a result retains its More menu");
+    auto* unavailable =
+        unavailableMenu->findChild<QAction*>(QStringLiteral("screenshotHistoryEntrySplit"));
+    require(unavailable && !unavailable->isEnabled(), "missing history result disables splitting");
+    activateMenuAction(unavailableMenu, unavailable);
+    require(requests == 1, "disabled split entry cannot dispatch");
+}
+
 void moreMenuOffersPinStitchAndDelete() {
     MutableHistoryDataSource dataSource;
     QVector<storage::CaptureHistoryRecord> records = historyRecords(2);
@@ -932,16 +1010,18 @@ void moreMenuOffersPinStitchAndDelete() {
     hover(more);
     flushEvents();
     QPointer<adqt::widgets::AdContextMenu> menu = visibleMenu(pinnableEntry);
-    require(menu != nullptr && menu->actions().size() == 3 && !menu->nativeMenuEnabled(),
+    require(menu != nullptr && menu->actions().size() == 4 && !menu->nativeMenuEnabled(),
             "hovering More must show the shared widget action menu");
     QAction* pin = menu->actions().at(0);
     QAction* stitch = menu->actions().at(1);
-    QAction* remove = menu->actions().at(2);
+    QAction* split = menu->actions().at(2);
+    QAction* remove = menu->actions().at(3);
     require(pin->text() == QStringLiteral("Pin to screen") && pin->isEnabled() &&
                 stitch->text() == QStringLiteral("Stitch Image") && stitch->isEnabled() &&
+                split->text() == QStringLiteral("Image Splitting") && split->isEnabled() &&
                 remove->text() == QStringLiteral("Delete") && menu->actionDanger(remove) &&
                 menu->actionGeometry(pin).isValid(),
-            "the More menu must offer Pin to screen, Stitch Image, and a danger Delete action");
+            "the More menu offers Pin to screen, Stitch Image, Image Splitting, and danger Delete");
     QEvent languageChange(QEvent::LanguageChange);
     QApplication::sendEvent(pinnableEntry, &languageChange);
     flushEvents();
@@ -1292,6 +1372,7 @@ int main(int argc, char** argv) {
                 .success,
             "isolated application storage must initialize");
     entryStitchActionUsesOnlyItsRecord();
+    entrySplitActionUsesOnlyItsRecord();
     if (application.arguments().contains(QStringLiteral("--collage-only"))) {
         entriesUseBordersAndSupportCrossPageSelection();
         storage::ApplicationStorage::instance().shutdown();

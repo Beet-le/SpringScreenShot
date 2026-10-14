@@ -644,6 +644,10 @@
             <translation>影像</translation>
         </message>
         <message>
+            <source>Image Splitting</source>
+            <translation>圖片分割</translation>
+        </message>
+        <message>
             <source>Integers</source>
             <translation>整數</translation>
         </message>

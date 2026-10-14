@@ -6481,12 +6481,15 @@ void scrollingSettingsUseCenteredFormAndPersistOnAccept() {
         palette.findChild<QFrame*>(QStringLiteral("screenshotScrollingSettingsSeparator"));
     auto* movement =
         palette.findChild<AdButton*>(QStringLiteral("screenshotScrollingMoveVerticalButton"));
-    require(button && separator && movement && button->text().isEmpty() &&
+    auto* splitButton =
+        palette.findChild<AdButton*>(QStringLiteral("screenshotScrollingImageSplittingButton"));
+    require(button && separator && movement && splitButton && button->text().isEmpty() &&
                 button->accessibleName() == QStringLiteral("Settings") &&
                 controls->layout()->itemAt(controls->layout()->count() - 1)->widget() == button &&
                 separator->x() - (movement->x() + movement->width()) == 16 &&
-                button->x() - (separator->x() + separator->width()) == 16,
-            "scrolling settings must follow a spaced separator at the far right");
+                splitButton->x() - (separator->x() + separator->width()) == 16 &&
+                button->x() - (splitButton->x() + splitButton->width()) == 4,
+            "scrolling settings must follow Image Splitting at the far right");
     const auto findModal = [&] {
         return palette.findChild<AdModal*>(QStringLiteral("screenshotScrollingSettingsModal"));
     };
@@ -6668,8 +6671,21 @@ void scrollingScreenshotExposesAxisRecognitionModes() {
                                  : nullptr;
     require(controls != nullptr &&
                 controls->findChild<adqt::widgets::AdRadioButtonGroup*>() == nullptr &&
-                modeButtons.size() == 7 && verticalButton != nullptr && horizontalButton != nullptr,
+                modeButtons.size() == 8 && verticalButton != nullptr && horizontalButton != nullptr,
             "scrolling screenshot should expose two independent mode buttons");
+    auto* splitButton = controls->findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotScrollingImageSplittingButton"));
+    auto* settingsButton = controls->findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotScrollingSettingsButton"));
+    require(splitButton && settingsButton && splitButton->isVisible() &&
+                splitButton->toolTip() == QStringLiteral("Image Splitting") &&
+                settingsButton->x() - (splitButton->x() + splitButton->width()) == 4,
+            "Image Splitting must appear immediately to the left of Settings");
+    int splitRequests = 0;
+    QObject::connect(&palette, &ScreenshotToolPalette::scrollingImageSplittingRequested,
+                     [&] { ++splitRequests; });
+    splitButton->click();
+    require(splitRequests == 1, "Image Splitting must emit one request per click");
     auto* autoScroll = controls->findChild<adqt::widgets::AdButton*>(
         QStringLiteral("screenshotScrollingAutoScrollButton"));
     auto* separator =
@@ -6802,6 +6818,8 @@ void scrollingScreenshotExposesAxisRecognitionModes() {
     require(palette.setPhysicalScale(1.5),
             "scrolling screenshot toolbar should accept a physical scale change");
     requireSeparatorSpacing(24, 6);
+    require(settingsButton->x() - (splitButton->x() + splitButton->width()) == 6,
+            "Image Splitting spacing must scale with the scrolling toolbar");
     for (adqt::widgets::AdButton* button : modeButtons) {
         require(button->size() == QSize(button == interval ? 144 : 48, 48) &&
                     button->iconSize() == QSize(36, 36),
@@ -6856,10 +6874,18 @@ void scrollingScreenshotExposesAxisRecognitionModes() {
                 horizontalButton->buttonStyle() == adqt::widgets::AdButton::ButtonStyle::Text,
             "each new scrolling screenshot session should reset to vertical recognition");
     auto& languages = snow_shot::presentation::LanguageManager::instance();
+    splitButton = palette.findChild<adqt::widgets::AdButton*>(
+        QStringLiteral("screenshotScrollingImageSplittingButton"));
+    require(splitButton != nullptr, "Image Splitting must survive toolbar recreation");
     const QString englishTooltip = interval->toolTip();
     for (const auto& locale : {QStringLiteral("zh_CN"), QStringLiteral("zh_TW")}) {
         require(languages.setLanguage(locale), "load interval translations");
         QCoreApplication::processEvents();
+        const QString splitLabel =
+            QString::fromUtf8(locale == QStringLiteral("zh_CN") ? "图片分割" : "圖片分割");
+        require(splitButton->toolTip() == splitLabel &&
+                    splitButton->accessibleName() == splitButton->toolTip(),
+                "Image Splitting must retranslate its tooltip and accessible name");
         require(interval->toolTip() != englishTooltip &&
                     interval->accessibleName() == interval->toolTip() &&
                     interval->valueText() == QStringLiteral("350ms"),
@@ -6874,6 +6900,8 @@ void scrollingScreenshotExposesAxisRecognitionModes() {
     QCoreApplication::processEvents();
     require(interval->toolTip() == englishTooltip,
             "scaling a translated interval editor must preserve its translation source");
+    require(splitButton->toolTip() == QStringLiteral("Image Splitting"),
+            "Image Splitting must restore its English caption after language changes");
 }
 
 void originalImageToggleLeadsRecognitionActions() {

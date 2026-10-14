@@ -492,6 +492,289 @@
         </message>
     </context>
     <context>
+        <name>ImageSplitDocument</name>
+        <message>
+            <source>Choose a split direction.</source>
+            <translation>Choose a split direction.</translation>
+        </message>
+        <message>
+            <source>Choose a split type.</source>
+            <translation>Choose a split type.</translation>
+        </message>
+        <message>
+            <source>Choose pixels or percentage.</source>
+            <translation>Choose pixels or percentage.</translation>
+        </message>
+        <message>
+            <source>Each image must be at least one pixel wide or high.</source>
+            <translation>Each image must be at least one pixel wide or high.</translation>
+        </message>
+        <message>
+            <source>Enter a percentage from 5% to 100%.</source>
+            <translation>Enter a percentage from 5% to 100%.</translation>
+        </message>
+        <message>
+            <source>Enter a positive whole number.</source>
+            <translation>Enter a positive whole number.</translation>
+        </message>
+        <message>
+            <source>Enter at least 16 pixels.</source>
+            <translation>Enter at least 16 pixels.</translation>
+        </message>
+        <message>
+            <source>The image is unavailable.</source>
+            <translation>The image is unavailable.</translation>
+        </message>
+        <message>
+            <source>The split lines require too much memory.</source>
+            <translation>The split lines require too much memory.</translation>
+        </message>
+    </context>
+    <context>
+        <name>ImageSplitEditorWidget</name>
+        <message>
+            <source> px</source>
+            <translation> px</translation>
+        </message>
+        <message>
+            <source>%1 × %2 px</source>
+            <translation>%1 × %2 px</translation>
+        </message>
+        <message>
+            <source>Columns</source>
+            <translation>Columns</translation>
+        </message>
+        <message>
+            <source>Drop one image file at a time.</source>
+            <translation>Drop one image file at a time.</translation>
+        </message>
+        <message>
+            <source>Drop one image to replace the current image</source>
+            <translation>Drop one image to replace the current image</translation>
+        </message>
+        <message>
+            <source>Enter a positive integer.</source>
+            <translation>Enter a positive integer.</translation>
+        </message>
+        <message>
+            <source>Enter an integer of at least 16 pixels.</source>
+            <translation>Enter an integer of at least 16 pixels.</translation>
+        </message>
+        <message>
+            <source>Equal Split</source>
+            <translation>Equal Split</translation>
+        </message>
+        <message>
+            <source>Fit to Canvas</source>
+            <translation>Fit to Canvas</translation>
+        </message>
+        <message>
+            <source>Grid</source>
+            <translation>Grid</translation>
+        </message>
+        <message>
+            <source>Height per Image</source>
+            <translation>Height per Image</translation>
+        </message>
+        <message>
+            <source>Horizontal</source>
+            <translation>Horizontal</translation>
+        </message>
+        <message>
+            <source>Number of Images</source>
+            <translation>Number of Images</translation>
+        </message>
+        <message>
+            <source>Percentage</source>
+            <translation>Percentage</translation>
+        </message>
+        <message>
+            <source>Pixels</source>
+            <translation>Pixels</translation>
+        </message>
+        <message>
+            <source>Precise Split</source>
+            <translation>Precise Split</translation>
+        </message>
+        <message>
+            <source>Redo</source>
+            <translation>Redo</translation>
+        </message>
+        <message>
+            <source>Reload</source>
+            <translation>Reload</translation>
+        </message>
+        <message>
+            <source>Rows</source>
+            <translation>Rows</translation>
+        </message>
+        <message>
+            <source>Split direction</source>
+            <translation>Split direction</translation>
+        </message>
+        <message>
+            <source>Split size unit</source>
+            <translation>Split size unit</translation>
+        </message>
+        <message>
+            <source>Split type</source>
+            <translation>Split type</translation>
+        </message>
+        <message>
+            <source>Total: %1 images</source>
+            <translation>Total: %1 images</translation>
+        </message>
+        <message>
+            <source>Undo</source>
+            <translation>Undo</translation>
+        </message>
+        <message>
+            <source>Vertical</source>
+            <translation>Vertical</translation>
+        </message>
+        <message>
+            <source>Width per Image</source>
+            <translation>Width per Image</translation>
+        </message>
+    </context>
+    <context>
+        <name>ImageSplitExport</name>
+        <message>
+            <source>Export was canceled.</source>
+            <translation>Export was canceled.</translation>
+        </message>
+        <message>
+            <source>Image %1 could not be saved: %2</source>
+            <translation>Image %1 could not be saved: %2</translation>
+        </message>
+        <message>
+            <source>The image could not be prepared for export.</source>
+            <translation>The image could not be prepared for export.</translation>
+        </message>
+        <message>
+            <source>The image or split configuration is invalid.</source>
+            <translation>The image or split configuration is invalid.</translation>
+        </message>
+        <message>
+            <source>The output folder could not be created.</source>
+            <translation>The output folder could not be created.</translation>
+        </message>
+        <message>
+            <source>There is not enough memory to export the image.</source>
+            <translation>There is not enough memory to export the image.</translation>
+        </message>
+    </context>
+    <context>
+        <name>ImageSplitPreviewCanvas</name>
+        <message>
+            <source>Click a ruler to add a split line; drag a line to move it. Select a line and press Delete to remove it. Drag with the middle mouse button to pan; scroll to zoom.</source>
+            <translation>Click a ruler to add a split line; drag a line to move it. Select a line and press Delete to remove it. Drag with the middle mouse button to pan; scroll to zoom.</translation>
+        </message>
+        <message>
+            <source>Image splitting preview</source>
+            <translation>Image splitting preview</translation>
+        </message>
+        <message>
+            <source>X: %1 px</source>
+            <translation>X: %1 px</translation>
+        </message>
+        <message>
+            <source>Y: %1 px</source>
+            <translation>Y: %1 px</translation>
+        </message>
+    </context>
+    <context>
+        <name>ImageSplitWindow</name>
+        <message>
+            <source>Cancel</source>
+            <translation>Cancel</translation>
+        </message>
+        <message>
+            <source>Discard</source>
+            <translation>Discard</translation>
+        </message>
+        <message>
+            <source>Discard these image splits?</source>
+            <translation>Discard these image splits?</translation>
+        </message>
+        <message>
+            <source>Drop one image file at a time.</source>
+            <translation>Drop one image file at a time.</translation>
+        </message>
+        <message>
+            <source>Export could not be started. Try again.</source>
+            <translation>Export could not be started. Try again.</translation>
+        </message>
+        <message>
+            <source>Image Splitting</source>
+            <translation>Image Splitting</translation>
+        </message>
+        <message>
+            <source>Image loading could not be started. Try again.</source>
+            <translation>Image loading could not be started. Try again.</translation>
+        </message>
+        <message>
+            <source>Image processing failed. Try again.</source>
+            <translation>Image processing failed. Try again.</translation>
+        </message>
+        <message>
+            <source>Images</source>
+            <translation>Images</translation>
+        </message>
+        <message>
+            <source>Loading image…</source>
+            <translation>Loading image…</translation>
+        </message>
+        <message>
+            <source>Replace Image</source>
+            <translation>Replace Image</translation>
+        </message>
+        <message>
+            <source>Replacing the image will discard the current edits</source>
+            <translation>Replacing the image will discard the current edits</translation>
+        </message>
+        <message>
+            <source>Save All</source>
+            <translation>Save All</translation>
+        </message>
+        <message>
+            <source>Saved %1 images to %2</source>
+            <translation>Saved %1 images to %2</translation>
+        </message>
+        <message>
+            <source>Saved %1 of %2 images to %3. %4</source>
+            <translation>Saved %1 of %2 images to %3. %4</translation>
+        </message>
+        <message>
+            <source>Saving images: %1 of %2</source>
+            <translation>Saving images: %1 of %2</translation>
+        </message>
+        <message>
+            <source>Select Destination Folder</source>
+            <translation>Select Destination Folder</translation>
+        </message>
+        <message>
+            <source>Select Image</source>
+            <translation>Select Image</translation>
+        </message>
+        <message>
+            <source>The image and current split edits will be discarded.</source>
+            <translation>The image and current split edits will be discarded.</translation>
+        </message>
+        <message>
+            <source>The image could not be read or is no longer available.</source>
+            <translation>The image could not be read or is no longer available.</translation>
+        </message>
+        <message>
+            <source>The image is too large or there is not enough memory to load it.</source>
+            <translation>The image is too large or there is not enough memory to load it.</translation>
+        </message>
+        <message>
+            <source>The images could not be exported. Try again.</source>
+            <translation>The images could not be exported. Try again.</translation>
+        </message>
+    </context>
+    <context>
         <name>PinnedWindowManagementPageWidget</name>
         <message>
             <source>%1-%2 of %3</source>
@@ -590,6 +873,18 @@
         <message>
             <source>Hidden</source>
             <translation>Hidden</translation>
+        </message>
+        <message>
+            <source>Image Splitting</source>
+            <translation>Image Splitting</translation>
+        </message>
+        <message>
+            <source>More</source>
+            <translation>More</translation>
+        </message>
+        <message>
+            <source>More actions</source>
+            <translation>More actions</translation>
         </message>
         <message>
             <source>No matching pinned windows</source>

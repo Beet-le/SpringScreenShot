@@ -3808,6 +3808,18 @@ void ScreenshotPinnedWindow::createContextMenu() {
             resetTransform->setObjectName(QStringLiteral("screenshotPinnedResetTransformAction"));
             connect(resetTransform, &QAction::triggered, this,
                     &ScreenshotPinnedWindow::resetImageTransform);
+            processMenu->addSeparator();
+            m_splitImageAction = processMenu->addItem(
+                QCoreApplication::translate(
+                    "ImageSplitWindow", QT_TRANSLATE_NOOP("ImageSplitWindow", "Image Splitting")),
+                custom_outlined_icons::ImageSplitting());
+            m_splitImageAction->setObjectName(QStringLiteral("screenshotPinnedSplitImageAction"));
+            connect(m_splitImageAction, &QAction::triggered, this, [this] {
+                if (m_closing || !m_firstContentFramePublished || m_transformedImage.isNull())
+                    return;
+                emit splitRequested(splittingSnapshot());
+            });
+            refreshContextMenu();
             refreshMenuShortcutDisplays();
         },
         outlined_icons::Picture());
@@ -4011,6 +4023,13 @@ void ScreenshotPinnedWindow::refreshContextMenu() {
                                        .arg(m_groupManager != nullptr
                                                 ? m_groupManager->displayName(m_groupId)
                                                 : tr("Default")));
+    }
+    if (m_splitImageAction != nullptr) {
+        const QString label = QCoreApplication::translate("ImageSplitWindow", "Image Splitting");
+        m_splitImageAction->setText(label);
+        m_splitImageAction->setToolTip(label);
+        m_splitImageAction->setEnabled(m_firstContentFramePublished &&
+                                       !m_transformedImage.isNull() && !m_closing);
     }
     if (m_loadContentAction != nullptr) {
         m_loadContentAction->setEnabled(m_firstContentFramePublished && !m_originalImage.isNull() &&
@@ -6344,14 +6363,31 @@ void ScreenshotPinnedWindow::copyOriginalContent() {
 }
 
 ScreenshotPinnedImageSnapshot ScreenshotPinnedWindow::stitchingSnapshot() {
+    return processedImageSnapshot(true);
+}
+
+ScreenshotPinnedImageSnapshot ScreenshotPinnedWindow::splittingSnapshot() {
+    auto snapshot = processedImageSnapshot(false);
+    if (!snapshot.error.isEmpty())
+        snapshot.error = QCoreApplication::translate(
+            "ImageSplitWindow",
+            QT_TRANSLATE_NOOP("ImageSplitWindow",
+                              "The image is too large or there is not enough memory to load it."));
+    return snapshot;
+}
+
+ScreenshotPinnedImageSnapshot ScreenshotPinnedWindow::processedImageSnapshot(bool finishEditing) {
     ScreenshotPinnedImageSnapshot snapshot;
     snapshot.label = m_persistenceId;
+    snapshot.originalFileName = QFileInfo(m_originalClipboardContent.localFilePath).fileName();
+    snapshot.createdUtc = m_createdUtc;
     const QRectF backgroundRect = m_animationTransformSnapshot
                                       ? m_animationTransformSnapshot->backgroundRect
                                       : m_backgroundCanvasRect;
     if (m_closing || !m_firstContentFramePublished || m_transformedImage.isNull() ||
         backgroundRect.isEmpty() ||
-        (!animatedImage() && m_canvas && !m_canvas->resetEditingStatePreservingTool()))
+        (finishEditing && !animatedImage() && m_canvas &&
+         !m_canvas->resetEditingStatePreservingTool()))
         return snapshot;
 
     const qreal renderScale = m_transformedImage.width() / backgroundRect.width();

@@ -4,12 +4,16 @@
 
 #include "snow_shot/presentation/screenshotexportartifact.h"
 
+#include <QDateTime>
+
 // Owned image-export state captured on the GUI thread; rendering never reads a live pin.
 struct ScreenshotPinnedImageSnapshot final {
     ScreenshotExportSource source;
     QSize outputSize;
     QString label;
     QString error = {};
+    QString originalFileName;
+    QDateTime createdUtc;
 };
 
 #endif

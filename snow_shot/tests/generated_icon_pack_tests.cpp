@@ -97,8 +97,8 @@ void everySnowShotEntryRenders() {
     const auto registered = icons::registerWith(renderer);
     require(registered.ok(), "Snow Shot pack registration should succeed");
     const adqt::icons::IconPack* staticPack = icons::pack().staticPack();
-    require(staticPack != nullptr && staticPack->entryCount == 184,
-            "Snow Shot pack should contain all 184 project-owned assets");
+    require(staticPack != nullptr && staticPack->entryCount == 185,
+            "Snow Shot pack should contain all 185 project-owned assets");
 
     adqt::icons::IconRenderRequest request;
     request.logicalSize = QSize(32, 32);
@@ -492,6 +492,67 @@ void imageStitchingIconFollowsAntDesign() {
         require(preview.save(path), "save stitching icon light/dark inspection sheet");
 }
 
+void imageSplittingIconFollowsAntDesign() {
+    namespace icons = snow_shot::presentation::icons::custom;
+    const auto ref = icons::outlined::ImageSplitting();
+    const auto* descriptor = ref.descriptor();
+    require(descriptor && descriptor->colorModel == adqt::icons::IconColorModel::Monochrome,
+            "splitting icon uses the shared monochrome theme pipeline");
+    const QByteArray svg(descriptor->svg.data(), static_cast<qsizetype>(descriptor->svg.size()));
+    require(svg.contains("viewBox=\"0 0 1024 1024\"") && svg.contains("stroke-width=\"72\"") &&
+                svg.contains("__ADQT_SLOT_PRIMARY__") && !svg.contains("<text") &&
+                !svg.contains("<image"),
+            "splitting uses the Ant Design canvas, outline weight and themed vector geometry");
+    const QImage geometry = render(ref, QSize(1024, 1024)).toImage();
+    require(alphaBounds(geometry) == QRect(64, 176, 896, 672),
+            "splitting respects the 64-unit bleed and horizontal image proportions");
+    require(opaquePixelCount(geometry, QRect(448, 0, 128, 1024)) == 0,
+            "a clear central cut separates the two image panels");
+    QImage preview(384, 192, QImage::Format_ARGB32_Premultiplied);
+    preview.fill(Qt::transparent);
+    QPainter painter(&preview);
+    for (int row = 0; row < 3; ++row) {
+        const QColor color = row == 0   ? QColor("#262626")
+                             : row == 1 ? QColor("#f0f0f0")
+                                        : QColor("#bfbfbf");
+        painter.fillRect(QRect(0, row * 64, 384, 64), row == 1 ? QColor("#141414") : Qt::white);
+        int column = 0;
+        for (int size : {16, 20, 32}) {
+            for (qreal dpr : {1.0, 1.25, 2.0}) {
+                const auto colors = adqt::icons::IconColors::primary(color);
+                const QImage pixels =
+                    render(icons::outlined::ImageSplitting(colors), QSize(size, size), dpr)
+                        .toImage();
+                const QRect bounds = alphaBounds(pixels);
+                require(!pixels.isNull() && !bounds.isEmpty() && bounds.left() > 0 &&
+                            bounds.right() < pixels.width() - 1 &&
+                            containsOpaqueColor(pixels, color),
+                        "splitting stays padded and themed at menu sizes and fractional DPI");
+                require(
+                    opaquePixelCount(pixels, QRect(pixels.width() / 2, 0, 1, pixels.height())) == 0,
+                    "the split remains visible at menu sizes and fractional DPI");
+            }
+            painter.drawPixmap(
+                column++ * 128 + 24, row * 64 + (64 - size) / 2,
+                render(icons::outlined::ImageSplitting(adqt::icons::IconColors::primary(color)),
+                       QSize(size, size)));
+        }
+    }
+    painter.end();
+    adqt::icons::IconRenderRequest disabled;
+    disabled.logicalSize = QSize(20, 20);
+    disabled.mode = QIcon::Disabled;
+    const QColor disabledColor(QStringLiteral("#bfbfbf"));
+    adqt::icons::IconStatePalette palette;
+    palette.set(QIcon::Disabled, QIcon::Off, adqt::icons::IconColors::primary(disabledColor));
+    const QImage disabledPixels = adqt::icons::renderIconPixmap(ref, disabled, palette).toImage();
+    require(!disabledPixels.isNull() && containsOpaqueColor(disabledPixels, disabledColor),
+            "splitting icon supports the supplied disabled-state palette");
+    if (const auto path = qEnvironmentVariable("SNOW_SPLITTING_ICON_PREVIEW"); !path.isEmpty())
+        require(preview.save(path),
+                "save splitting icon light, dark and disabled inspection sheet");
+}
+
 void brushModeIconsRenderWithDistinctPressureAndThemeColors() {
     namespace icons = snow_shot::presentation::icons::custom;
     const QList<adqt::icons::IconRef> refs{icons::outlined::BrushRegular(),
@@ -655,6 +716,11 @@ void numericFormatIconsRenderAtToolbarSizes() {
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     try {
+        imageSplittingIconFollowsAntDesign();
+        if (application.arguments().contains(QStringLiteral("--image-splitting-only"))) {
+            everySnowShotEntryRenders();
+            return 0;
+        }
         brushModeIconsRenderWithDistinctPressureAndThemeColors();
         if (application.arguments().contains(QStringLiteral("--brush-icons-only"))) {
             everySnowShotEntryRenders();

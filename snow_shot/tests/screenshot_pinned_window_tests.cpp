@@ -413,6 +413,30 @@ class ScreenshotPinnedWindowTestAccess {
     static bool acceptExportDrop(const ScreenshotPinnedWindow& window, const QDropEvent& event) {
         return window.acceptsDrop(event);
     }
+    static QJsonArray selectedAnnotationIds(const ScreenshotPinnedWindow& window) {
+        return window.m_runtime.selectedElementIds();
+    }
+    static bool selectFirstAnnotation(ScreenshotPinnedWindow& window) {
+        const auto annotationSlots =
+            QJsonDocument::fromJson(window.m_runtime.serializeDocumentSession())
+                .object()
+                .value(QStringLiteral("document"))
+                .toObject()
+                .value(QStringLiteral("slots"))
+                .toArray();
+        for (const auto& slot : annotationSlots) {
+            const auto id = slot.toObject().value(QStringLiteral("id")).toObject();
+            if (!id.isEmpty()) {
+                SnowCanvasRuntimeEditor editor(window.m_runtime);
+                return editor.select(id.value(QStringLiteral("index")).toVariant().toUInt(),
+                                     id.value(QStringLiteral("generation")).toVariant().toUInt());
+            }
+        }
+        return false;
+    }
+    static void setSplitSourceFilename(ScreenshotPinnedWindow& window, const QString& path) {
+        window.m_originalClipboardContent.localFilePath = path;
+    }
     static QByteArray dragDocument(ScreenshotPinnedWindow& window) {
         return window.m_runtime.serializeDocumentSession();
     }
@@ -3800,7 +3824,7 @@ void pinnedTransformResetPersistsWithoutResize() {
         window->findChild<QAction*>(QStringLiteral("screenshotPinnedResetTransformAction"));
     require(menu != nullptr && flipHorizontal != nullptr && flipVertical != nullptr &&
                 rotateClockwise != nullptr && resetTransform != nullptr &&
-                menu->actions().size() == 8 &&
+                menu->actions().size() == 10 &&
                 menu->actions().indexOf(resetTransform) ==
                     menu->actions().indexOf(flipVertical) + 1,
             "the transform reset fixture should expose Reset transform directly below Flip "
@@ -20713,6 +20737,95 @@ QImage pinnedStitchingPixels(const ScreenshotPinnedImageSnapshot& snapshot, QObj
     return image;
 }
 
+void pinnedImageSplittingSnapshots() {
+    using Access = ScreenshotPinnedWindowTestAccess;
+    PinnedSelectionFixture fixture;
+    auto& window = fixture.add({40, 60});
+    require(
+        !Access::applyAnnotationTransaction(
+             window,
+             R"({"version":1,"operations":[{"type":"rectangle","bounds":[20,20,40,30],"style":{"stroke":[255,0,255,255],"fill":[255,0,255,255]}}]})")
+             .isEmpty(),
+        "split fixture contains an annotation");
+    Access::transformReplacement(window);
+    Access::setFractionalScale(window, 50);
+    require(Access::selectFirstAnnotation(window), "split fixture selects an existing annotation");
+    const auto selected = Access::selectedAnnotationIds(window);
+    require(!selected.isEmpty(), "split source keeps an active annotation selection");
+    const QByteArray session = Access::dragDocument(window);
+    const QByteArray history = Access::drawingHistory(window);
+    const auto before = window.persistenceSnapshot();
+    const QImage original = Access::originalImage(window);
+    const QRect geometry = window.currentNativeGeometry();
+    Access::setSplitSourceFilename(window, QStringLiteral("C:/images/section.reference.png"));
+    int requests = 0;
+    ScreenshotPinnedImageSnapshot snapshot;
+    QObject::connect(&window, &ScreenshotPinnedWindow::splitRequested, &window,
+                     [&](const auto& source) {
+                         snapshot = source;
+                         ++requests;
+                     });
+    materializePinnedMenuTree(window);
+    auto* menu = window.findChild<adqt::widgets::AdContextMenu*>(
+        QStringLiteral("screenshotPinnedProcessImageMenu"));
+    auto* split = window.findChild<QAction*>(QStringLiteral("screenshotPinnedSplitImageAction"));
+    auto* reset =
+        window.findChild<QAction*>(QStringLiteral("screenshotPinnedResetTransformAction"));
+    require(menu && split && reset && menu->actions().last() == split &&
+                menu->actions().at(menu->actions().size() - 2)->isSeparator() &&
+                menu->actions().indexOf(reset) == menu->actions().size() - 3 &&
+                split->isEnabled() && split->text() == QStringLiteral("Image Splitting") &&
+                !split->icon().isNull(),
+            "Process image ends with a separator and the themed Image Splitting entry");
+    class SplitTranslator final : public QTranslator {
+      public:
+        QString translate(const char* context, const char* source, const char*,
+                          int) const override {
+            return QByteArray(context) == "ImageSplitWindow" &&
+                           QByteArray(source) == "Image Splitting"
+                       ? QStringLiteral("Translated Image Splitting")
+                       : QString();
+        }
+    } translator;
+    QCoreApplication::installTranslator(&translator);
+    const auto removeTranslator =
+        qScopeGuard([&] { QCoreApplication::removeTranslator(&translator); });
+    QEvent language(QEvent::LanguageChange);
+    QCoreApplication::sendEvent(&window, &language);
+    require(split->text() == QStringLiteral("Translated Image Splitting") &&
+                split->toolTip() == split->text(),
+            "pinned Image Splitting action uses the shared translation context at runtime");
+    split->trigger();
+    require(requests == 1 && snapshot.source.isValid() && snapshot.outputSize == QSize(80, 120) &&
+                snapshot.originalFileName == QStringLiteral("section.reference.png") &&
+                snapshot.createdUtc == window.sourceCreatedUtc(),
+            "splitting dispatches the current processed source with original naming metadata");
+    const auto after = window.persistenceSnapshot();
+    require(Access::dragDocument(window) == session && Access::drawingHistory(window) == history &&
+                Access::selectedAnnotationIds(window) == selected &&
+                Access::originalImage(window) == original &&
+                window.currentNativeGeometry() == geometry &&
+                after.imageTransform == before.imageTransform &&
+                after.quarterTurns == before.quarterTurns &&
+                after.canvasSession == before.canvasSession,
+            "splitting preserves source pixels, transforms, annotations, selection and history");
+    fixture.windows.clear();
+    const QImage processed = pinnedStitchingPixels(snapshot, fixture.selection);
+    bool magenta = false;
+    for (int y = 0; y < processed.height(); ++y)
+        for (int x = 0; x < processed.width(); ++x)
+            magenta |= processed.pixelColor(x, y) == QColor(Qt::magenta);
+    require(magenta && processed.size() == QSize(80, 120),
+            "owned split snapshot includes rotated and flipped annotations at full resolution");
+    ScreenshotPinnedWindow unavailable;
+    materializePinnedMenuTree(unavailable);
+    auto* unavailableSplit =
+        unavailable.findChild<QAction*>(QStringLiteral("screenshotPinnedSplitImageAction"));
+    require(unavailableSplit && !unavailableSplit->isEnabled() &&
+                !unavailable.splittingSnapshot().source.isValid(),
+            "a pin without loaded content cannot split placeholder pixels");
+}
+
 void pinnedImageStitchingSnapshots() {
     using Access = ScreenshotPinnedWindowTestAccess;
     PinnedSelectionFixture fixture;
@@ -24110,6 +24223,10 @@ int main(int argc, char* argv[]) {
         if (app.arguments().contains(
                 QStringLiteral("--multi-selection-deferred-persistence-only"))) {
             pinnedMultiSelectionDeferredPersistence();
+            return 0;
+        }
+        if (app.arguments().contains(QStringLiteral("--splitting-snapshot-only"))) {
+            pinnedImageSplittingSnapshots();
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--stitching-snapshot-only"))) {

@@ -57,7 +57,9 @@ class MainWindow : public QMainWindow {
     void screenshotHistoryPinRequested(const QString& recordId);
     void screenshotHistoryCollageRequested(
         const QVector<snow_shot::storage::CaptureHistoryRecord>& records);
+    void screenshotHistorySplitRequested(const snow_shot::storage::CaptureHistoryRecord& record);
     void pinnedWindowCollageRequested(const QStringList& recordIds);
+    void pinnedWindowSplitRequested(const QString& recordId);
 
   protected:
     bool event(QEvent* event) override;

@@ -25,6 +25,7 @@
 #include "snow_shot/update/startupupdate.h"
 #include "snow_shot/presentation/screenshotexportcoordinator.h"
 #include "snow_shot/presentation/collagewindowcoordinator.h"
+#include "snow_shot/presentation/imagesplitwindow.h"
 #include "snow_shot/presentation/screenshotexportartifact.h"
 
 #include "snow_shot/presentation/globalshortcutmanager.h"
@@ -1496,6 +1497,13 @@ class ApplicationController::Impl {
                              [this](const QVector<ScreenshotPinnedImageSnapshot>& snapshots) {
                                  ensureCollageWindowCoordinator().presentPinnedWindows(snapshots);
                              });
+            QObject::connect(screenshotController.get(),
+                             &ScreenshotController::imageSplittingRequested, &q,
+                             [this](const ScreenshotPinnedImageSnapshot& snapshot) {
+                                 ensureImageSplitWindowCoordinator().presentSource(
+                                     {snapshot.source, snapshot.originalFileName,
+                                      snapshot.createdUtc, snapshot.error, snapshot.outputSize});
+                             });
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
             QObject::connect(screenshotController.get(),
                              &ScreenshotController::translationPageRequested, &q,
@@ -1640,9 +1648,17 @@ class ApplicationController::Impl {
                              [this](const QVector<storage::CaptureHistoryRecord>& records) {
                                  ensureCollageWindowCoordinator().present(records);
                              });
+            QObject::connect(mainWindow, &MainWindow::screenshotHistorySplitRequested, &q,
+                             [this](const storage::CaptureHistoryRecord& record) {
+                                 ensureImageSplitWindowCoordinator().presentHistory(record);
+                             });
             QObject::connect(mainWindow, &MainWindow::pinnedWindowCollageRequested, &q,
                              [this](const QStringList& recordIds) {
                                  ensureCollageWindowCoordinator().presentPinnedRecords(recordIds);
+                             });
+            QObject::connect(mainWindow, &MainWindow::pinnedWindowSplitRequested, &q,
+                             [this](const QString& recordId) {
+                                 ensureImageSplitWindowCoordinator().presentPinnedRecord(recordId);
                              });
         }
         return *mainWindow;
@@ -1888,6 +1904,17 @@ class ApplicationController::Impl {
         }
     }
 
+    presentation::ImageSplitWindowCoordinator& ensureImageSplitWindowCoordinator() {
+        if (!imageSplitWindowCoordinator) {
+            imageSplitWindowCoordinator =
+                std::make_unique<presentation::ImageSplitWindowCoordinator>(&q);
+            QObject::connect(&app, &QCoreApplication::aboutToQuit,
+                             imageSplitWindowCoordinator.get(),
+                             &presentation::ImageSplitWindowCoordinator::shutdown);
+        }
+        return *imageSplitWindowCoordinator;
+    }
+
     presentation::CollageWindowCoordinator& ensureCollageWindowCoordinator() {
         if (!collageWindowCoordinator) {
             collageWindowCoordinator = std::make_unique<presentation::CollageWindowCoordinator>(&q);
@@ -2061,6 +2088,7 @@ class ApplicationController::Impl {
     int mcpSourceWork = 0;
     std::unique_ptr<presentation::DirectCaptureController> directCaptureController;
     std::unique_ptr<presentation::CollageWindowCoordinator> collageWindowCoordinator;
+    std::unique_ptr<presentation::ImageSplitWindowCoordinator> imageSplitWindowCoordinator;
 #if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
     std::unique_ptr<presentation::SelectedTextTranslationCoordinator>
         selectedTextTranslationCoordinator;

@@ -286,8 +286,12 @@ void MainWindow::buildUi() {
             &MainWindow::screenshotHistoryPinRequested);
     connect(m_contentCard, &ContentCardWidget::screenshotHistoryCollageRequested, this,
             &MainWindow::screenshotHistoryCollageRequested);
+    connect(m_contentCard, &ContentCardWidget::screenshotHistorySplitRequested, this,
+            &MainWindow::screenshotHistorySplitRequested);
     connect(m_contentCard, &ContentCardWidget::pinnedWindowCollageRequested, this,
             &MainWindow::pinnedWindowCollageRequested);
+    connect(m_contentCard, &ContentCardWidget::pinnedWindowSplitRequested, this,
+            &MainWindow::pinnedWindowSplitRequested);
     m_contentCard->setCurrentRoute(m_sidebar->currentRoute());
     m_contentHeader->setSections(m_contentCard->currentSections());
     m_contentHeader->setCurrentSection(m_contentCard->currentLocation().sectionId);

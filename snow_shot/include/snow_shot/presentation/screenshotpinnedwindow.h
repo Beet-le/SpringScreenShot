@@ -223,6 +223,7 @@ class ScreenshotPinnedWindow final : public QWidget {
     QRect currentNativeGeometry() const;
     [[nodiscard]] snow_shot::storage::PinnedWindowRecord persistenceSnapshot() const;
     [[nodiscard]] ScreenshotPinnedImageSnapshot stitchingSnapshot();
+    [[nodiscard]] ScreenshotPinnedImageSnapshot splittingSnapshot();
     void suspendStorageWrites();
     void resumeStorageWrites(const QString& oldRoot, const QString& newRoot);
     [[nodiscard]] QString persistenceId() const {
@@ -271,6 +272,7 @@ class ScreenshotPinnedWindow final : public QWidget {
 
   signals:
     void showMainWindowRequested();
+    void splitRequested(const ScreenshotPinnedImageSnapshot& snapshot);
     void closingForPersistence(const snow_shot::storage::PinnedWindowRecord& snapshot,
                                snow_shot::storage::PinnedWindowCloseIntent intent);
 
@@ -330,6 +332,7 @@ class ScreenshotPinnedWindow final : public QWidget {
     void applyRuntimeBorderColor();
     void updateShowMainInterfaceAction();
     void retranslateUi();
+    [[nodiscard]] ScreenshotPinnedImageSnapshot processedImageSnapshot(bool finishEditing);
     void refreshContextMenu();
     void configureAnimationPlayback(int speedPercent = 100, bool playing = true);
     void updateAnimationSuspension();
@@ -623,6 +626,7 @@ class ScreenshotPinnedWindow final : public QWidget {
     QPointer<QAction> m_showMainInterfaceAction;
     QPointer<QAction> m_closeAction;
     QPointer<QAction> m_loadContentAction;
+    QPointer<QAction> m_splitImageAction;
     QPointer<QActionGroup> m_opacityActions;
     QPointer<QActionGroup> m_scaleActions;
     QPointer<QAction> m_scaleMenuAction;

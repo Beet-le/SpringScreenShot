@@ -679,6 +679,14 @@
     },
     {
       "variant": "outlined",
+      "symbol": "ImageSplitting",
+      "name": "image-splitting",
+      "source": "../src/presentation/components/icons/resources/image-splitting.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "ImageStitching",
       "name": "image-stitching",
       "source": "../src/presentation/components/icons/resources/image-stitching.svg",

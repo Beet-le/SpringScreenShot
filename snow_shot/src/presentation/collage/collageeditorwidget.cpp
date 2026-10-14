@@ -5,6 +5,8 @@
 #include "snow_shot/presentation/screenshotexportcoordinator.h"
 #include "snow_shot/presentation/screenshotclipboardcontent.h"
 #include "snow_shot/presentation/components/overlaycontrolbutton.h"
+#include "snow_shot/presentation/components/canvasactiontoolbar.h"
+#include "snow_shot/presentation/components/imagedropsurface.h"
 #include "snow_shot/presentation/components/icons/snowshoticons.h"
 #include "snow_shot/presentation/styles/thememanager.h"
 #include "antd_icons.h"
@@ -160,86 +162,6 @@ QStringList droppedImageFiles(const QMimeData* mime) {
     return paths;
 }
 
-class CollageDropIcon final : public QWidget {
-  public:
-    explicit CollageDropIcon(QWidget* parent) : QWidget(parent) {
-        setFixedSize(48, 48);
-        setAttribute(Qt::WA_TransparentForMouseEvents);
-    }
-
-  protected:
-    void paintEvent(QPaintEvent*) override {
-        const auto theme = adqt::theme::ThemeManager::instance().resolveTheme(this);
-        QPainter painter(this);
-        adqt::icons::IconStatePalette palette;
-        palette.set(QIcon::Normal, QIcon::Off,
-                    adqt::icons::IconColors::primary(theme.colorPrimary));
-        adqt::icons::paintIcon(&painter, icons::Inbox(), rect(), {}, palette);
-    }
-};
-
-// Ant Design Upload's drag surface, using the same tokens in light and dark themes.
-class CollageDropSurface final : public QWidget {
-  public:
-    explicit CollageDropSurface(bool active, QWidget* parent) : QWidget(parent), m_active(active) {
-        auto* column = new QVBoxLayout(this);
-        column->setContentsMargins(32, 32, 32, 32);
-        column->setSpacing(8);
-        column->addStretch();
-        m_icon = new CollageDropIcon(this);
-        column->addWidget(m_icon, 0, Qt::AlignHCenter);
-        column->addSpacing(8);
-        title = new QLabel(this);
-        description = new QLabel(this);
-        for (auto* label : {title, description}) {
-            label->setAlignment(Qt::AlignCenter);
-            label->setWordWrap(true);
-            column->addWidget(label);
-        }
-        column->addStretch();
-        if (active)
-            setAttribute(Qt::WA_TransparentForMouseEvents);
-        refreshTheme();
-    }
-
-    void refreshTheme() {
-        const auto theme = adqt::theme::ThemeManager::instance().resolveTheme(this);
-        auto titleFont = font();
-        titleFont.setPixelSize(qRound(theme.fontSizeLG));
-        title->setFont(titleFont);
-        auto descriptionFont = font();
-        descriptionFont.setPixelSize(qRound(theme.fontSize));
-        description->setFont(descriptionFont);
-        auto palette = this->palette();
-        palette.setColor(QPalette::WindowText, theme.colorText);
-        title->setPalette(palette);
-        palette.setColor(QPalette::WindowText, theme.colorTextSecondary);
-        description->setPalette(palette);
-        m_icon->update();
-        update();
-    }
-
-    QLabel* title;
-    QLabel* description;
-
-  protected:
-    void paintEvent(QPaintEvent*) override {
-        const auto theme = adqt::theme::ThemeManager::instance().resolveTheme(this);
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing);
-        if (m_active)
-            painter.fillRect(rect(), theme.colorBgContainer);
-        painter.setPen(QPen(m_active ? theme.colorPrimary : theme.colorBorder, 1, Qt::DashLine));
-        painter.setBrush(m_active ? theme.colorPrimaryBg : theme.colorFillAlter);
-        painter.drawRoundedRect(QRectF(rect()).adjusted(.5, .5, -.5, -.5), theme.borderRadiusLG,
-                                theme.borderRadiusLG);
-    }
-
-  private:
-    bool m_active;
-    CollageDropIcon* m_icon;
-};
-
 QPixmap checkerboard(const QWidget* widget) {
     const auto theme = adqt::theme::ThemeManager::instance().resolveTheme(widget);
     QPixmap tile(20, 20);
@@ -248,15 +170,6 @@ QPixmap checkerboard(const QWidget* widget) {
     painter.fillRect(0, 0, 10, 10, theme.colorFillSecondary);
     painter.fillRect(10, 10, 10, 10, theme.colorFillSecondary);
     return tile;
-}
-
-void iconButton(AdButton* button, const adqt::icons::IconRef& icon, const char* name) {
-    button->setObjectName(QString::fromLatin1(name));
-    button->setIconRef(icon);
-    button->setSizeClass(AdButton::SizeClass::Small);
-    button->setButtonStyle(AdButton::ButtonStyle::Text);
-    button->setFixedSize(32, 32);
-    button->setFocusPolicy(Qt::StrongFocus);
 }
 
 void drawTransformedPreview(QPainter& painter, const QRectF& target, const QImage& image,
@@ -272,22 +185,6 @@ void drawTransformedPreview(QPainter& painter, const QRectF& target, const QImag
     painter.drawImage(QPointF{}, image);
     painter.restore();
 }
-
-class TokenSurface final : public QWidget {
-  public:
-    explicit TokenSurface(QWidget* parent = nullptr) : QWidget(parent) {}
-
-  protected:
-    void paintEvent(QPaintEvent*) override {
-        const auto theme = adqt::theme::ThemeManager::instance().resolveTheme(this);
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing);
-        painter.setPen(theme.colorBorderSecondary);
-        painter.setBrush(theme.colorBgContainer);
-        painter.drawRoundedRect(QRectF(rect()).adjusted(.5, .5, -.5, -.5), theme.borderRadiusSM,
-                                theme.borderRadiusSM);
-    }
-};
 
 class CollageColorPresetButton final : public AdButton {
   public:
@@ -575,7 +472,7 @@ struct CollagePreviewCanvas::Impl {
     bool dragging = false;
     bool automaticFit = true;
     bool editing = true;
-    QWidget* toolbar = nullptr;
+    CanvasActionToolbar* toolbar = nullptr;
     std::array<AdButton*, 6> actions{};
     OverlayControlButton* fit = nullptr;
 
@@ -859,11 +756,8 @@ CollagePreviewCanvas::CollagePreviewCanvas(CollageDocument* document, QWidget* p
     d.detailTimer->setSingleShot(true);
     d.detailTimer->setInterval(70);
     connect(d.detailTimer, &QTimer::timeout, this, [this] { m_impl->requestDetails(); });
-    d.toolbar = new TokenSurface(this);
+    d.toolbar = new CanvasActionToolbar(this);
     d.toolbar->setObjectName(QStringLiteral("collageImageToolbar"));
-    auto* tools = new QHBoxLayout(d.toolbar);
-    tools->setContentsMargins(3, 2, 3, 2);
-    tools->setSpacing(0);
     const std::array<adqt::icons::IconRef, 6> refs{
         icons::RotateRight(), icons::RotateLeft(),
         icons::Swap(),        snow_shot::presentation::icons::custom::outlined::FlipVertical(),
@@ -872,17 +766,9 @@ CollagePreviewCanvas::CollagePreviewCanvas(CollageDocument* document, QWidget* p
         "collageRotateClockwise", "collageRotateCounterclockwise", "collageFlipHorizontal",
         "collageFlipVertical",    "collageResetTransform",         "collageDeleteSelected"};
     for (std::size_t i = 0; i < d.actions.size(); ++i) {
-        if (i == 5) {
-            auto* divider = new AdDivider(d.toolbar);
-            divider->setOrientation(AdDivider::Orientation::Vertical);
-            divider->setFixedSize(7, 14);
-            tools->addWidget(divider, 0, Qt::AlignVCenter);
-        }
-        d.actions[i] = new AdButton(d.toolbar);
-        iconButton(d.actions[i], refs[i], names[i]);
-        d.actions[i]->setFixedSize(26, 26);
-        d.actions[i]->setReferenceIconSize({14, 14});
-        tools->addWidget(d.actions[i]);
+        if (i == 5)
+            d.toolbar->addSeparator();
+        d.actions[i] = d.toolbar->addAction(refs[i], names[i]);
         connect(d.actions[i], &QAbstractButton::pressed, this, [this] { preserveViewport(); });
     }
     d.actions.back()->setAccentRole(AdButton::AccentRole::Danger);
@@ -909,7 +795,6 @@ CollagePreviewCanvas::CollagePreviewCanvas(CollageDocument* document, QWidget* p
     connect(&adqt::theme::ThemeManager::instance(), &adqt::theme::ThemeManager::themeChanged, this,
             [this] {
                 m_impl->checker = checkerboard(this);
-                m_impl->toolbar->update();
                 update();
             });
     retranslateUi();
@@ -1167,10 +1052,10 @@ struct CollageEditorWidget::Impl {
     CollageEditorWidget* owner = nullptr;
     CollageDocument* document = nullptr;
     CollagePreviewCanvas* canvas = nullptr;
-    CollageDropSurface* emptyState = nullptr;
+    ImageDropSurface* emptyState = nullptr;
     QLabel* emptyPrompt = nullptr;
     AdButton* emptyAdd = nullptr;
-    CollageDropSurface* dropHint = nullptr;
+    ImageDropSurface* dropHint = nullptr;
     QWidget* thumbnailRow = nullptr;
     QWidget* outputDescription = nullptr;
     QLabel* dimensions = nullptr;
@@ -1422,7 +1307,7 @@ CollageEditorWidget::CollageEditorWidget(CollageDocument* document, QWidget* par
     previewColumn->setSpacing(theme.marginXS);
     d.canvas = new CollagePreviewCanvas(document, this);
     previewColumn->addWidget(d.canvas, 1);
-    d.emptyState = new CollageDropSurface(false, this);
+    d.emptyState = new ImageDropSurface(false, this);
     d.emptyState->setObjectName(QStringLiteral("collageEmptyState"));
     auto* emptyLayout = static_cast<QVBoxLayout*>(d.emptyState->layout());
     d.emptyPrompt = d.emptyState->title;
@@ -1439,7 +1324,7 @@ CollageEditorWidget::CollageEditorWidget(CollageDocument* document, QWidget* par
     previewColumn->addWidget(d.emptyState, 1);
     body->addLayout(previewColumn, 1);
 
-    d.dropHint = new CollageDropSurface(true, this);
+    d.dropHint = new ImageDropSurface(true, this);
     d.dropHint->setObjectName(QStringLiteral("collageDropHint"));
     d.dropHint->title->setObjectName(QStringLiteral("collageDropTitle"));
     d.dropHint->description->setObjectName(QStringLiteral("collageDropDescription"));
