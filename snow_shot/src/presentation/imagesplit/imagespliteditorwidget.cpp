@@ -55,6 +55,8 @@ using adqt::widgets::AdScrollArea;
 using adqt::widgets::AdSegmented;
 constexpr qreal kRulerHeight = 28;
 constexpr qreal kRulerWidth = 38;
+constexpr qreal kPositionBadgeHeight = 22;
+constexpr qreal kPositionBadgeSpacing = (kRulerHeight - kPositionBadgeHeight) / 2;
 constexpr qreal kLineHitDistance = 6;
 constexpr qreal kGuideSpacing = 2;
 // Match snow-draw-engine-editor's selection color in geometry/handles.rs.
@@ -120,6 +122,17 @@ int roundedCoordinate(qreal coordinate) {
     return static_cast<int>(
         std::clamp(std::floor(coordinate + .5), 0.0, qreal(std::numeric_limits<int>::max())));
 }
+
+QFont positionFont(const QWidget* canvas) {
+    auto font = canvas->font();
+    font.setPixelSize(12);
+    return font;
+}
+
+QSizeF positionBadgeSize(const QWidget* canvas, const QString& label) {
+    return {qreal(QFontMetrics(positionFont(canvas)).horizontalAdvance(label) + 12),
+            kPositionBadgeHeight};
+}
 } // namespace
 
 struct ImageSplitPreviewCanvas::Impl {
@@ -163,7 +176,13 @@ struct ImageSplitPreviewCanvas::Impl {
     void paint(QPainter& painter, const QRegion& damage, qreal ratio) const;
 
     QRectF viewport() const {
-        return QRectF(kRulerWidth, kRulerHeight, std::max(1.0, owner->width() - kRulerWidth),
+        // Reserve room for the complete Y hint even when the image is panned past the left edge.
+        const qreal gutter = std::max(
+            kRulerWidth,
+            positionBadgeSize(owner, canvasText("Y: %1 px").arg(document->image().height()))
+                    .width() +
+                kPositionBadgeSpacing);
+        return QRectF(gutter, kRulerHeight, std::max(1.0, owner->width() - gutter),
                       std::max(1.0, owner->height() - kRulerHeight));
     }
     QRectF imageRect() const {
@@ -332,6 +351,8 @@ void ImageSplitPreviewCanvas::retranslateUi() {
     setAccessibleDescription(canvasText(
         "Click a ruler to add a split line; drag a line to move it. Select a line and press Delete "
         "to remove it. Drag with the middle mouse button to pan; scroll to zoom."));
+    if (m_impl->automaticFit)
+        fitToCanvas();
     update();
 }
 
@@ -572,19 +593,18 @@ void ImageSplitPreviewCanvas::paintEvent(QPaintEvent*) {
                                           : QPointF(ruler.center().x(), point.y());
         if (!ruler.contains(center))
             return;
-        QFont positionFont = font();
-        positionFont.setPixelSize(12);
-        painter.setFont(positionFont);
+        painter.setFont(positionFont(this));
         const auto label =
             (labelVertical ? canvasText("X: %1 px") : canvasText("Y: %1 px")).arg(coordinate);
-        const QSizeF badge(QFontMetrics(positionFont).horizontalAdvance(label) + 12, 22);
-        // Keep both axes readable horizontally. The Y badge extends across the image edge
-        // because the narrow ruler cannot contain its text; clamp to the canvas, not the ruler.
-        const qreal left = labelVertical ? center.x() - badge.width() / 2 : ruler.left();
+        const auto badge = positionBadgeSize(this, label);
+        // Keep both hints horizontal, with the same spacing outside the visible image.
+        const qreal left = labelVertical ? center.x() - badge.width() / 2
+                                         : ruler.right() - kPositionBadgeSpacing - badge.width();
+        const qreal top = labelVertical ? ruler.bottom() - kPositionBadgeSpacing - badge.height()
+                                        : center.y() - badge.height() / 2;
         const QRectF badgeRect(
             QPointF(std::clamp(left, 0.0, std::max(0.0, width() - badge.width())),
-                    std::clamp(center.y() - badge.height() / 2, 0.0,
-                               std::max(0.0, height() - badge.height()))),
+                    std::clamp(top, 0.0, std::max(0.0, height() - badge.height()))),
             badge);
         painter.save();
         painter.setPen(Qt::NoPen);
@@ -727,6 +747,8 @@ void ImageSplitPreviewCanvas::leaveEvent(QEvent*) {
 void ImageSplitPreviewCanvas::changeEvent(QEvent* event) {
     if (event->type() == QEvent::LanguageChange)
         retranslateUi();
+    else if (event->type() == QEvent::FontChange && m_impl->automaticFit)
+        fitToCanvas();
     QWidget::changeEvent(event);
 }
 
