@@ -90,7 +90,8 @@
     "RecordingTrimSession",
     "RecordingTrimToolbar",
     "ScreenRecordingController",
-    "ScreenRecordingSettingsDialog"
+    "ScreenRecordingSettingsDialog",
+    "ScreenRecordingToolbarWindow"
   ],
   "recognition": [
     "OcrTextOptions",

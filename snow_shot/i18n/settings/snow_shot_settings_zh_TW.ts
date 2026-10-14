@@ -1361,6 +1361,10 @@
             <translation>開機時自動啟動</translation>
         </message>
         <message>
+            <source>Auto-hide toolbar</source>
+            <translation>自動隱藏工具列</translation>
+        </message>
+        <message>
             <source>Auto-recognize QR Code</source>
             <translation>自動辨識 QR Code</translation>
         </message>
@@ -2463,6 +2467,10 @@
         <message>
             <source>Hide or show all windows in the current group</source>
             <translation>隱藏或顯示目前群組中的所有視窗</translation>
+        </message>
+        <message>
+            <source>Hide the toolbar near the left or right screen edge. Hover over the edge control to show it again.</source>
+            <translation>工具列靠近螢幕左邊緣或右邊緣時自動隱藏。將滑鼠停留在邊緣控制項上可再次顯示工具列。</translation>
         </message>
         <message>
             <source>Hide to Top</source>

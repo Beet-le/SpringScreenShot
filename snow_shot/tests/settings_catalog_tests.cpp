@@ -597,9 +597,9 @@ void builtInCatalogIsCompleteAndValid() {
                 itemIds.contains(QStringLiteral("screenshot-shortcut.upload_to_cloud")) &&
                 itemIds.contains(QStringLiteral("pin-to-screen-shortcut.upload_to_cloud")),
             "cloud upload must expose its configuration and shortcuts in both local scopes");
-    require(itemIds.size() == 278,
+    require(itemIds.size() == 279,
             qPrintable(QStringLiteral(
-                           "catalog must contain 278 shared settings on every platform; found %1")
+                           "catalog must contain 279 shared settings on every platform; found %1")
                            .arg(itemIds.size())));
     require(itemIds.contains(QStringLiteral("pin-to-screen.confirm-before-closing-window")) &&
                 itemIds.contains(QStringLiteral("pin-to-screen.confirm-before-destroying-window")),
@@ -1893,6 +1893,9 @@ void builtInCatalogIsCompleteAndValid() {
 
     const auto* recordingInteraction = catalog.section(
         QStringLiteral("screen-recording"), QStringLiteral("screen-recording-interaction"));
+    const auto* recordingAutoHide = catalog.item(
+        {QStringLiteral("screen-recording"), QStringLiteral("screen-recording-interaction"),
+         QStringLiteral("screen-recording.auto-hide-toolbar")});
     const auto* recordingAutoExit = catalog.item(
         {QStringLiteral("screen-recording"), QStringLiteral("screen-recording-interaction"),
          QStringLiteral("screen-recording.auto-exit-after-recording-ends")});
@@ -1905,7 +1908,7 @@ void builtInCatalogIsCompleteAndValid() {
     require(recordingInteraction != nullptr && recordingAutoExit != nullptr &&
                 recordingPage->sections.constLast().id == recordingInteraction->id &&
                 recordingInteraction->title.translated() == QStringLiteral("Interaction") &&
-                recordingInteraction->items.size() == 3 &&
+                recordingInteraction->items.size() == 4 &&
                 recordingInteraction->reset ==
                     settings::SettingsSectionReset::ScreenRecordingInteraction &&
                 recordingAutoExit->title.translated() ==
@@ -1916,8 +1919,30 @@ void builtInCatalogIsCompleteAndValid() {
                     settings::SettingsSwitchBinding::ScreenRecordingAutoExitAfterRecordingEnds &&
                 settings::builtInSettingsRegistry()
                         .fieldsForReset(settings::SettingsSectionReset::ScreenRecordingInteraction)
-                        .size() == 3,
+                        .size() == 4,
             "recording Interaction must follow Action Toolbar with its own auto-exit reset scope");
+    require(recordingAutoHide != nullptr &&
+                recordingInteraction->items.constFirst().id == recordingAutoHide->id &&
+                recordingInteraction->items.at(1).id == recordingAutoExit->id &&
+                recordingAutoHide->title.translated() == QStringLiteral("Auto-hide toolbar") &&
+                recordingAutoHide->description.translated() ==
+                    QStringLiteral("Hide the toolbar near the left or right screen edge. Hover "
+                                   "over the edge control to show it again.") &&
+                recordingAutoHide->configurationKey ==
+                    QStringLiteral("screen_recording/auto_hide_toolbar") &&
+                std::get<settings::SettingsSwitchDefinition>(recordingAutoHide->payload).binding ==
+                    settings::SettingsSwitchBinding::ScreenRecordingAutoHideToolbar &&
+                !storage::ConfigurationSchema::defaultValue(recordingAutoHide->configurationKey)
+                     .toBool(),
+            "toolbar auto-hide must be an opt-in Interaction setting with edge-reveal guidance");
+    const auto* recordingAutoHideField =
+        settings::builtInSettingsRegistry().field(recordingAutoHide->id);
+    require(recordingAutoHideField != nullptr &&
+                recordingAutoHideField->kind == settings::SettingsFieldKind::Switch &&
+                recordingAutoHideField->reset ==
+                    settings::SettingsSectionReset::ScreenRecordingInteraction &&
+                !recordingAutoHideField->defaultValue.toBool(),
+            "toolbar auto-hide must share the Interaction reset and boolean settings interface");
     require(recordingNotify != nullptr &&
                 recordingNotify->title.translated() ==
                     QStringLiteral("Notify after export completes") &&
@@ -1933,8 +1958,8 @@ void builtInCatalogIsCompleteAndValid() {
                     QStringLiteral("screen_recording/delete_files_on_recording_close") &&
                 std::get<settings::SettingsSwitchDefinition>(recordingDelete->payload).binding ==
                     settings::SettingsSwitchBinding::ScreenRecordingDeleteFilesOnRecordingClose &&
-                recordingInteraction->items.at(1).id == recordingNotify->id &&
-                recordingInteraction->items.at(2).id == recordingDelete->id,
+                recordingInteraction->items.at(2).id == recordingNotify->id &&
+                recordingInteraction->items.at(3).id == recordingDelete->id,
             "delete files on close must follow export notifications in Interaction");
 
     const auto* selectionBorderColor =
@@ -2998,6 +3023,17 @@ void searchIndexIsGeneratedAndRanked() {
                 recordingToolbar.constFirst().location.itemId ==
                     QStringLiteral("interface.screen-recording.recording-toolbar-editor"),
             "recording toolbar customization must find its dedicated category");
+    for (const auto& query :
+         {QStringLiteral("auto-hide toolbar"), QStringLiteral("hover edge control")}) {
+        const auto autoHide = index.search(query);
+        require(!autoHide.isEmpty() &&
+                    autoHide.constFirst().location.pageId == QStringLiteral("screen-recording") &&
+                    autoHide.constFirst().location.sectionId ==
+                        QStringLiteral("screen-recording-interaction") &&
+                    autoHide.constFirst().location.itemId ==
+                        QStringLiteral("screen-recording.auto-hide-toolbar"),
+                "toolbar auto-hide and hover-reveal guidance must be searchable");
+    }
 
     index.setRuntimeValues({7});
     const auto delayedScreenshot = index.search(QStringLiteral("delay 7s"));

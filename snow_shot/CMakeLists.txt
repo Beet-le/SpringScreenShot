@@ -6550,6 +6550,10 @@ if(SNOW_SHOT_BUILD_TESTS)
     endif()
     add_test(NAME snow-shot-screen-recording-shortcut-tests
         COMMAND snow-shot-screen-recording-shortcut-tests)
+    add_test(NAME snow-shot-recording-auto-hide-shortcut-tests
+        COMMAND snow-shot-screen-recording-shortcut-tests --auto-hide-shortcuts-only -platform offscreen)
+    set_tests_properties(snow-shot-recording-auto-hide-shortcut-tests PROPERTIES
+        LABELS "unit" RUN_SERIAL TRUE TIMEOUT 60 SNOW_TEST_CROSS_PLATFORM TRUE)
     if(WIN32)
         foreach(_close_release_pair IN ITEMS
                 "overlay|snow-shot-screenshot-canvas-renderer-tests"
@@ -7691,6 +7695,7 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_executable(snow-shot-screen-recording-controller-tests
         ${_recording_test_sources}
         tests/screen_recording_controller_tests.cpp
+        tests/screen_recording_toolbar_auto_hide_tests.cpp
         tests/recording_color_sampler_tests.cpp
         tests/recording_popup_exclusion_tests.cpp
         include/snow_shot/presentation/screenrecordingcontroller.h
@@ -7835,6 +7840,16 @@ if(SNOW_SHOT_BUILD_TESTS)
     set_tests_properties(snow-shot-recording-settings-dialog-tests PROPERTIES
         LABELS "unit" TIMEOUT 60
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    add_test(NAME snow-shot-screen-recording-toolbar-auto-hide-tests
+        COMMAND snow-shot-screen-recording-controller-tests --toolbar-auto-hide-only -platform offscreen)
+    set_tests_properties(snow-shot-screen-recording-toolbar-auto-hide-tests PROPERTIES
+        LABELS "unit" RUN_SERIAL TRUE TIMEOUT 60 SNOW_TEST_CROSS_PLATFORM TRUE)
+    if(APPLE)
+        add_test(NAME snow-shot-macos-recording-toolbar-auto-hide-tests
+            COMMAND snow-shot-screen-recording-controller-tests --toolbar-auto-hide-only -platform cocoa)
+        set_tests_properties(snow-shot-macos-recording-toolbar-auto-hide-tests PROPERTIES
+            LABELS "interactive;macos" RUN_SERIAL TRUE TIMEOUT 60 SNOW_TEST_CROSS_PLATFORM TRUE)
+    endif()
     add_test(NAME snow-shot-recording-api-mode-tests
         COMMAND snow-shot-screen-recording-controller-tests --api-mode-only -platform offscreen)
     set_tests_properties(snow-shot-recording-api-mode-tests PROPERTIES
@@ -8390,6 +8405,10 @@ if(SNOW_SHOT_BUILD_TESTS)
     set_tests_properties(snow-shot-mcp-eraser-tests PROPERTIES LABELS "unit" TIMEOUT 60)
     add_test(NAME snow-shot-mcp-application-tests
         COMMAND snow-shot-mcp-document-tests --application-only -platform offscreen)
+    add_test(NAME snow-shot-recording-auto-hide-mcp-settings-tests
+        COMMAND snow-shot-mcp-document-tests --application-only --auto-hide-settings-only -platform offscreen)
+    set_tests_properties(snow-shot-recording-auto-hide-mcp-settings-tests PROPERTIES
+        LABELS "unit" TIMEOUT 60 SNOW_TEST_CROSS_PLATFORM TRUE)
     add_test(NAME snow-shot-mcp-translation-tests
         COMMAND snow-shot-mcp-document-tests --translation-only -platform offscreen)
     set_tests_properties(snow-shot-mcp-translation-tests PROPERTIES LABELS "unit" TIMEOUT 30

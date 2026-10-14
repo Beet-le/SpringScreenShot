@@ -952,6 +952,8 @@ bool BuiltInSettingsBackend::switchValue(SettingsSwitchBinding binding) const {
         return storage::RecordingSettings().loopAnimatedImages();
     case SettingsSwitchBinding::ScreenRecordingCaptureToolbar:
         return storage::RecordingSettings().captureToolbarInRecording();
+    case SettingsSwitchBinding::ScreenRecordingAutoHideToolbar:
+        return storage::RecordingSettings().autoHideToolbar();
     case SettingsSwitchBinding::ScreenRecordingAutoExitAfterRecordingEnds:
         return storage::RecordingSettings().autoExitAfterRecordingEnds();
     case SettingsSwitchBinding::ScreenRecordingNotifyAfterExportCompletes:
@@ -1209,6 +1211,9 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     if (binding == SettingsSwitchBinding::ScreenRecordingCaptureToolbar) {
         return storage::RecordingSettings().setCaptureToolbarInRecording(value);
     }
+    if (binding == SettingsSwitchBinding::ScreenRecordingAutoHideToolbar) {
+        return storage::RecordingSettings().setAutoHideToolbar(value);
+    }
     if (binding == SettingsSwitchBinding::ScreenRecordingAutoExitAfterRecordingEnds) {
         return storage::RecordingSettings().setAutoExitAfterRecordingEnds(value);
     }
@@ -1302,6 +1307,7 @@ bool BuiltInSettingsBackend::applySwitchValue(SettingsSwitchBinding binding, boo
     case SettingsSwitchBinding::SeparateRecordingAudioTracks:
     case SettingsSwitchBinding::LoopAnimatedImages:
     case SettingsSwitchBinding::ScreenRecordingCaptureToolbar:
+    case SettingsSwitchBinding::ScreenRecordingAutoHideToolbar:
     case SettingsSwitchBinding::ScreenRecordingAutoExitAfterRecordingEnds:
     case SettingsSwitchBinding::ScreenRecordingNotifyAfterExportCompletes:
     case SettingsSwitchBinding::ScreenRecordingDeleteFilesOnRecordingClose:
@@ -2823,6 +2829,9 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
         });
     case SettingsSectionReset::ScreenRecordingInteraction:
         return storage::ApplicationStorage::instance().configuration().setValues({
+            {QStringLiteral("screen_recording/auto_hide_toolbar"),
+             storage::ConfigurationSchema::defaultValue(
+                 QStringLiteral("screen_recording/auto_hide_toolbar"))},
             {QStringLiteral("screen_recording/auto_exit_after_recording_ends"),
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("screen_recording/auto_exit_after_recording_ends"))},

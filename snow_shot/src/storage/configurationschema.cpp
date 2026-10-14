@@ -712,6 +712,7 @@ const QVector<ConfigurationSchemaEntry> kRawEntries = {
      {QStringLiteral("dxgi"), QStringLiteral("wgc"), QStringLiteral("gdi")}},
     {QStringLiteral("screen_recording/capture_toolbar_in_recording"), true,
      ConfigurationValueKind::Boolean},
+    {QStringLiteral("screen_recording/auto_hide_toolbar"), false, ConfigurationValueKind::Boolean},
     {QStringLiteral("screen_recording/auto_exit_after_recording_ends"), false,
      ConfigurationValueKind::Boolean},
     {QStringLiteral("screen_recording/notify_after_export_completes"), false,

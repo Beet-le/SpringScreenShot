@@ -494,6 +494,12 @@ struct ScreenRecordingController::Impl {
         toolbarWindow = uiSession->toolbar.get();
         // Keep the toolbar above the area even when drawing or resizing activates the area.
         toolbarWindow->setTransientOwnerWindow(areaWindow);
+        toolbarWindow->setAutoHideControlOwner(areaWindow);
+        toolbarWindow->setAutoHideControlShowGuard(
+            [this](QWidget* surface) { return guardToolbarSurface(surface); });
+        QObject::connect(toolbarWindow, &ScreenRecordingToolbarWindow::autoHideControlRequested,
+                         uiSession->connections.get(),
+                         [this](QWidget*) { toolbarExclusions.retry(); });
         areaWindow->setAttribute(Qt::WA_DeleteOnClose, false);
         toolbarWindow->setAttribute(Qt::WA_DeleteOnClose, false);
         areaWindow->setRecordingRegion(region);
@@ -527,7 +533,7 @@ struct ScreenRecordingController::Impl {
 
     bool isOpen() const {
         return areaWindow != nullptr && toolbarWindow != nullptr &&
-               (areaWindow->isVisible() || toolbarWindow->isVisible());
+               (areaWindow->isVisible() || toolbarWindow->recordingUiPresented());
     }
 
     template <typename T> void setOption(T& option, const T& value) {
@@ -556,8 +562,10 @@ struct ScreenRecordingController::Impl {
                     auto* modal = snow_shot::presentation::createScreenRecordingSettingsDialog(
                         areaWindow, uiSession);
                     uiSession->settingsModal = modal;
+                    toolbarWindow->setAutoHideBlocked(modal, true);
                     QObject::connect(modal, &adqt::widgets::AdModal::finished,
-                                     uiSession->connections.get(), [this] {
+                                     uiSession->connections.get(), [this, modal] {
+                                         toolbarWindow->setAutoHideBlocked(modal, false);
                                          uiSession->settingsModal = nullptr;
                                          syncPreview();
                                      });
@@ -1261,6 +1269,8 @@ struct ScreenRecordingController::Impl {
         durationTimer.start();
         if (toolbarSurfaceGuard)
             toolbarSurfaceGuard->refresh();
+        if (toolbarWindow)
+            toolbarWindow->refreshAutoHideControl();
         report(QStringLiteral("recording.started"));
     }
 
@@ -1576,8 +1586,11 @@ struct ScreenRecordingController::Impl {
             trimSession = nullptr;
         }
         stopAudioMeter();
-        if (toolbarWindow)
+        if (toolbarWindow) {
+            toolbarWindow->dismissAutoHide();
+            toolbarWindow->setAutoHideControlShowGuard({});
             toolbarWindow->palette()->closeRecordingAudioGainPopovers();
+        }
         cancelPendingStart();
         if (uiSession == nullptr) {
             restoreToolbarCaptureVisibility();
@@ -1608,10 +1621,19 @@ struct ScreenRecordingController::Impl {
     }
 
     bool excludeToolbarFromCapture() {
+        // Reveal an already-collapsed control before changing capture policy.
+        // Restoration also refreshes pending transitions, so inhibit auto-hide
+        // until both retained windows have their new exclusion policy applied.
+        QObject policyTransition;
+        if (toolbarWindow)
+            toolbarWindow->setAutoHideBlocked(&policyTransition, true);
         restoreToolbarCaptureVisibility();
         toolbarPopupsExcluded = true;
         const bool excluded = captureExclusion.exclude(toolbarWindow);
         if (toolbarWindow) {
+            // Create the retained native surface before collecting the capture
+            // configuration, even when auto-hide is currently disabled.
+            static_cast<void>(captureExclusion.exclude(toolbarWindow->autoHideControlWindow()));
             toolbarSurfaceGuard = std::make_unique<adqt::widgets::AdPopupSurfaceGuard>(
                 toolbarWindow, [this](QWidget* surface) { return guardToolbarSurface(surface); });
             QObject::connect(toolbarSurfaceGuard.get(),
@@ -1630,6 +1652,8 @@ struct ScreenRecordingController::Impl {
         toolbarExclusions = {};
         captureExclusion.restore();
         toolbarSurfaceGuard.reset();
+        if (toolbarWindow)
+            toolbarWindow->refreshAutoHideControl();
     }
 
     QJsonObject currentAutomationOptions() const {
@@ -1891,6 +1915,8 @@ struct ScreenRecordingController::Impl {
         // failed request was in flight. Unchanged failed snapshots stay blocked.
         if (toolbarSurfaceGuard)
             toolbarSurfaceGuard->refresh();
+        if (toolbarWindow)
+            toolbarWindow->refreshAutoHideControl();
 #endif
     }
 

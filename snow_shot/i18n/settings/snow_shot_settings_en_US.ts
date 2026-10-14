@@ -1361,6 +1361,10 @@
             <translation>Auto start at boot</translation>
         </message>
         <message>
+            <source>Auto-hide toolbar</source>
+            <translation>Auto-hide toolbar</translation>
+        </message>
+        <message>
             <source>Auto-recognize QR Code</source>
             <translation>Auto-recognize QR Code</translation>
         </message>
@@ -2463,6 +2467,10 @@
         <message>
             <source>Hide or show all windows in the current group</source>
             <translation>Hide or show all windows in the current group</translation>
+        </message>
+        <message>
+            <source>Hide the toolbar near the left or right screen edge. Hover over the edge control to show it again.</source>
+            <translation>Hide the toolbar near the left or right screen edge. Hover over the edge control to show it again.</translation>
         </message>
         <message>
             <source>Hide to Top</source>

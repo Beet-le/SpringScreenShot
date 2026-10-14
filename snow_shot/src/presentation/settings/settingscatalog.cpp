@@ -2110,6 +2110,17 @@ SettingsItemDefinition screenRecordingAutoExitAfterRecordingEndsItem() {
         SettingsSwitchBinding::ScreenRecordingAutoExitAfterRecordingEnds);
 }
 
+SettingsItemDefinition screenRecordingAutoHideToolbarItem() {
+    return switchItem(
+        QStringLiteral("screen-recording.auto-hide-toolbar"),
+        QT_TRANSLATE_NOOP("SettingsCatalog", "Auto-hide toolbar"),
+        QT_TRANSLATE_NOOP("SettingsCatalog",
+                          "Hide the toolbar near the left or right screen edge. Hover over the "
+                          "edge control to show it again."),
+        QStringLiteral("screen_recording/auto_hide_toolbar"),
+        SettingsSwitchBinding::ScreenRecordingAutoHideToolbar);
+}
+
 SettingsItemDefinition screenRecordingNotifyAfterExportCompletesItem() {
     return switchItem(QStringLiteral("screen-recording.notify-after-export-completes"),
                       QT_TRANSLATE_NOOP("SettingsCatalog", "Notify after export completes"),
@@ -3411,7 +3422,8 @@ QVector<SettingsPageDefinition> builtInPages() {
                  settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Interaction")),
                  settingsText(QT_TRANSLATE_NOOP("SettingsCatalog", "Screen recording behavior")),
                  SettingsSectionReset::ScreenRecordingInteraction,
-                 {screenRecordingAutoExitAfterRecordingEndsItem(),
+                 {screenRecordingAutoHideToolbarItem(),
+                  screenRecordingAutoExitAfterRecordingEndsItem(),
                   screenRecordingNotifyAfterExportCompletesItem(),
                   screenRecordingDeleteFilesOnRecordingCloseItem()},
              },
@@ -4990,6 +5002,9 @@ QStringList SettingsCatalog::validationErrors() const {
                     case SettingsSwitchBinding::ScreenRecordingCaptureToolbar:
                         expectedKey =
                             QStringLiteral("screen_recording/capture_toolbar_in_recording");
+                        break;
+                    case SettingsSwitchBinding::ScreenRecordingAutoHideToolbar:
+                        expectedKey = QStringLiteral("screen_recording/auto_hide_toolbar");
                         break;
                     case SettingsSwitchBinding::ScreenRecordingAutoExitAfterRecordingEnds:
                         expectedKey =

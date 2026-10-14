@@ -1361,6 +1361,10 @@
             <translation>开机时自动启动</translation>
         </message>
         <message>
+            <source>Auto-hide toolbar</source>
+            <translation>自动隐藏工具栏</translation>
+        </message>
+        <message>
             <source>Auto-recognize QR Code</source>
             <translation>自动识别二维码</translation>
         </message>
@@ -2463,6 +2467,10 @@
         <message>
             <source>Hide or show all windows in the current group</source>
             <translation>隐藏或显示当前分组中的所有窗口</translation>
+        </message>
+        <message>
+            <source>Hide the toolbar near the left or right screen edge. Hover over the edge control to show it again.</source>
+            <translation>工具栏靠近屏幕左边缘或右边缘时自动隐藏。将鼠标悬停在边缘控件上可再次显示工具栏。</translation>
         </message>
         <message>
             <source>Hide to Top</source>

@@ -1947,6 +1947,14 @@ bool RecordingSettings::setCaptureToolbarInRecording(bool capture) const {
                             capture);
 }
 
+bool RecordingSettings::autoHideToolbar() const {
+    return cache().value(QStringLiteral("screen_recording/auto_hide_toolbar")).toBool();
+}
+
+bool RecordingSettings::setAutoHideToolbar(bool enabled) const {
+    return cache().setValue(QStringLiteral("screen_recording/auto_hide_toolbar"), enabled);
+}
+
 bool RecordingSettings::autoExitAfterRecordingEnds() const {
     return cache()
         .value(QStringLiteral("screen_recording/auto_exit_after_recording_ends"))

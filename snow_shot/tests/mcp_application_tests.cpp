@@ -3,6 +3,7 @@
 #include "snow_shot/presentation/globalshortcutmanager.h"
 #include "snow_shot/presentation/settings/settingsruntimesession.h"
 #include "snow_shot/storage/applicationstorage.h"
+#include "snow_shot/storage/settingsadapters.h"
 #include "snow_shot/storage/capturehistoryrepository.h"
 #include "snow_shot/storage/storageusagetracker.h"
 #include "snowimageqtcodec.h"
@@ -345,6 +346,42 @@ void runMcpApplicationTests() {
             "reused token with different arguments rejected");
     require(jobs.list(71).isEmpty(), "synchronous settings patches release reserved job capacity");
 
+    const auto* autoHideField =
+        registry.field(QStringLiteral("screen-recording.auto-hide-toolbar"));
+    require(autoHideField != nullptr && autoHideField->kind == settings::SettingsFieldKind::Switch,
+            "recording toolbar auto-hide is discoverable as a boolean MCP setting");
+    const auto publicAutoHide = [&](const ScreenshotMcpResponse& response) {
+        for (const auto& value : response.result.value(QStringLiteral("fields")).toArray()) {
+            const auto object = value.toObject();
+            if (object.value(QStringLiteral("id")) == autoHideField->id)
+                return object;
+        }
+        return QJsonObject();
+    };
+    const auto autoHideSnapshot = publicAutoHide(snapshot);
+    require(autoHideSnapshot.value(QStringLiteral("value")).isBool() &&
+                autoHideSnapshot.value(QStringLiteral("page_id")) == autoHideField->pageId &&
+                autoHideSnapshot.value(QStringLiteral("section_id")) == autoHideField->sectionId,
+            "MCP discovery exposes toolbar auto-hide in the screen recording Interaction section");
+    const auto autoHideWrite =
+        call(QStringLiteral("settings_update"),
+             {{QStringLiteral("values"), QJsonObject{{autoHideField->id, true}}}},
+             configuration.revision());
+    require(
+        autoHideWrite.ok && storage::RecordingSettings().autoHideToolbar() &&
+            publicAutoHide(call(QStringLiteral("settings_get"))).value(QStringLiteral("value")) ==
+                true,
+        "MCP toolbar auto-hide updates persist and publish the same boolean as the UI");
+    const auto autoHideRevision = configuration.revision();
+    require(
+        call(QStringLiteral("settings_update"),
+             {{QStringLiteral("values"), QJsonObject{{autoHideField->id, QStringLiteral("true")}}}},
+             autoHideRevision)
+                    .errorCode == QStringLiteral("invalid_parameters") &&
+            configuration.revision() == autoHideRevision &&
+            storage::RecordingSettings().autoHideToolbar(),
+        "MCP toolbar auto-hide rejects string booleans without changing the preference");
+
     const auto* recordingToolbarField =
         registry.field(QStringLiteral("interface.screen-recording.recording-toolbar-editor"));
     require(recordingToolbarField != nullptr, "recording toolbar layout is discoverable over MCP");
@@ -440,12 +477,30 @@ void runMcpApplicationTests() {
     require(toolbarReset.ok && session.toolbarLayout(recordingKind) == defaultRecordingLayout &&
                 session.toolbarLayout(storage::ScreenshotToolbarLayoutKind::ActionTools) ==
                     screenshotLayout &&
-                session.integerValue(auxiliary->binding) == delay,
+                session.integerValue(auxiliary->binding) == delay &&
+                storage::RecordingSettings().autoHideToolbar(),
             "MCP recording toolbar category reset restores only its own layout");
     require(
         session.selectValue(settings::SettingsSelectBinding::ScreenRecordingFrameRate).toInt() ==
             60,
         "recording toolbar reset preserves video preferences on the same settings page");
+    const auto autoHideReset = call(QStringLiteral("settings_reset"),
+                                    {{QStringLiteral("page_id"), autoHideField->pageId},
+                                     {QStringLiteral("section_id"), autoHideField->sectionId}},
+                                    configuration.revision());
+    require(
+        autoHideReset.ok && !storage::RecordingSettings().autoHideToolbar() &&
+            publicAutoHide(call(QStringLiteral("settings_get"))).value(QStringLiteral("value")) ==
+                false &&
+            session.toolbarLayout(recordingKind) == defaultRecordingLayout &&
+            session.selectValue(settings::SettingsSelectBinding::ScreenRecordingFrameRate)
+                    .toInt() == 60,
+        "MCP Interaction reset disables toolbar auto-hide and preserves layout and video "
+        "preferences");
+    if (QCoreApplication::arguments().contains(QStringLiteral("--auto-hide-settings-only"))) {
+        service.shutdown();
+        return;
+    }
     const auto historyField =
         std::find_if(registry.fields().cbegin(), registry.fields().cend(), [](const auto& item) {
             return item.configurationKey == u"capture_history/enabled";
