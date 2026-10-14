@@ -82,8 +82,8 @@
             <translation>Preparing cloud upload...</translation>
         </message>
         <message>
-            <source>Save recognition text</source>
-            <translation>Save recognition text</translation>
+            <source>Save recognition result</source>
+            <translation>Save recognition result</translation>
         </message>
         <message>
             <source>Save screenshot</source>
@@ -142,8 +142,8 @@
             <translation>The pinned windows could not be hidden</translation>
         </message>
         <message>
-            <source>The recognition text could not be saved: %1</source>
-            <translation>The recognition text could not be saved: %1</translation>
+            <source>The recognition result could not be saved: %1</source>
+            <translation>The recognition result could not be saved: %1</translation>
         </message>
         <message>
             <source>The screenshot clipboard operation could not be started</source>

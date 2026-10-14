@@ -765,9 +765,15 @@ void McpMediaService::request(const ScreenshotMcpRequest& r,
             }
         }
 #if SNOW_SHOT_ENABLE_IMAGE_CONVERSION || SNOW_SHOT_ENABLE_LATEX_RECOGNITION ||                     \
-    SNOW_SHOT_ENABLE_QR_RECOGNITION
+    SNOW_SHOT_ENABLE_QR_RECOGNITION || SNOW_SHOT_ENABLE_TABLE_RECOGNITION
         else if (!original) {
-            if (const auto snapshot = window->automationFileSnapshot()) {
+            const QPointer<ScreenshotPinnedWindow> snapshotLifetime(window);
+            const auto snapshot = window->automationFileSnapshot();
+            if (!snapshotLifetime) {
+                reply({}, QStringLiteral("pinned_not_found"));
+                return;
+            }
+            if (snapshot) {
                 const auto path = p.value(QStringLiteral("path")).toString();
                 if (!QFileInfo(path).isAbsolute() ||
                     !QFileInfo(QFileInfo(path).absolutePath()).isDir()) {

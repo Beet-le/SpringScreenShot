@@ -82,8 +82,8 @@
             <translation>正在准备云上传…</translation>
         </message>
         <message>
-            <source>Save recognition text</source>
-            <translation>保存识别文本</translation>
+            <source>Save recognition result</source>
+            <translation>保存识别结果</translation>
         </message>
         <message>
             <source>Save screenshot</source>
@@ -142,8 +142,8 @@
             <translation>无法隐藏固定到屏幕窗口</translation>
         </message>
         <message>
-            <source>The recognition text could not be saved: %1</source>
-            <translation>无法保存识别文本：%1</translation>
+            <source>The recognition result could not be saved: %1</source>
+            <translation>无法保存识别结果：%1</translation>
         </message>
         <message>
             <source>The screenshot clipboard operation could not be started</source>

@@ -4834,6 +4834,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         SNOW_SHOT_TEST_PINNED_TRANSLATION=1
     )
     target_link_libraries(snow-shot-pinned-window-tests PRIVATE
+        MINIZIP::minizip-ng
         snow_shot_animation_playback
         snow_shot_translation
         adqt_icon_core
@@ -5115,10 +5116,11 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_executable(snow-shot-recognition-file-export-tests
         tests/screenshot_recognition_file_export_tests.cpp
         src/presentation/services/screenshotrecognitionfileexport.cpp
+        src/presentation/ocr/screenshottabledocument.cpp
     )
     target_include_directories(snow-shot-recognition-file-export-tests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/include")
-    target_link_libraries(snow-shot-recognition-file-export-tests PRIVATE Qt6::Widgets)
+    target_link_libraries(snow-shot-recognition-file-export-tests PRIVATE Qt6::Widgets MINIZIP::minizip-ng)
     snow_shot_add_translations(snow-shot-recognition-file-export-tests)
     snow_shot_import_offscreen_platform(snow-shot-recognition-file-export-tests)
     add_test(NAME snow-shot-recognition-file-export-tests
@@ -9356,6 +9358,7 @@ if(WIN32 AND SNOW_SHOT_BUILD_BENCHMARKS)
         "${CMAKE_CURRENT_SOURCE_DIR}/../snow_draw_engine_qt/crates/snow-draw-engine-c/include"
     )
     target_link_libraries(snow-shot-file-pin-batch-performance-benchmark PRIVATE
+        MINIZIP::minizip-ng
         snow_shot_animation_playback
         ${SNOW_SELECTED_FILES_LIBRARIES}
         snow_shot_translation

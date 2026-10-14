@@ -486,7 +486,7 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     void printSelection() override;
     void saveSelectionToFile() override;
     void saveSelectionWithSnowDialog();
-    void saveRecognitionTextWithSystemDialog(const ScreenshotRecognitionFileSnapshot& snapshot);
+    void saveRecognitionResultWithSystemDialog(const ScreenshotRecognitionFileSnapshot& snapshot);
     [[nodiscard]] std::shared_ptr<ScreenshotExportArtifact> recognitionFileSaveArtifact() const;
     void quickSaveSelection() override;
     void uploadSelectionToCloud() override;
@@ -4324,22 +4324,25 @@ void ScreenshotController::Impl::uploadSelectionToCloud() {
 
 void ScreenshotController::Impl::quickSaveSelection() {
 #if SNOW_SHOT_ENABLE_IMAGE_CONVERSION || SNOW_SHOT_ENABLE_LATEX_RECOGNITION ||                     \
-    SNOW_SHOT_ENABLE_QR_RECOGNITION
-    const auto textSnapshot =
+    SNOW_SHOT_ENABLE_QR_RECOGNITION || SNOW_SHOT_ENABLE_TABLE_RECOGNITION
+    const QPointer<ScreenshotController> snapshotLifetime(&owner);
+    const auto fileSnapshot =
         m_ocrController != nullptr ? m_ocrController->fileExportSnapshot() : std::nullopt;
-    if (textSnapshot) {
+    if (!snapshotLifetime)
+        return;
+    if (fileSnapshot) {
         if (!m_selection.hasPixelSelection() || !ensureExportFeature() ||
             !resetCanvasEditingState())
             return;
         const snow_shot::storage::ScreenshotSettings settings;
         const auto result = ScreenshotRecognitionFileExport::quickSave(
-            *textSnapshot, settings.imageSaveDirectory(),
+            *fileSnapshot, settings.imageSaveDirectory(),
             ScreenshotImageFileService::suggestedBaseName(settings.autoSaveFilenameFormat()));
         if (!result.succeeded()) {
             m_messages->error(
                 QString::fromLatin1(kSaveMessageKey),
                 QCoreApplication::translate("ScreenshotController",
-                                            "The recognition text could not be saved: %1")
+                                            "The recognition result could not be saved: %1")
                     .arg(result.error));
             return;
         }
@@ -4530,11 +4533,14 @@ void ScreenshotController::setPrintService(ScreenshotPrintService* service) {
 
 void ScreenshotController::Impl::saveSelectionToFile() {
 #if SNOW_SHOT_ENABLE_IMAGE_CONVERSION || SNOW_SHOT_ENABLE_LATEX_RECOGNITION ||                     \
-    SNOW_SHOT_ENABLE_QR_RECOGNITION
-    const auto textSnapshot =
+    SNOW_SHOT_ENABLE_QR_RECOGNITION || SNOW_SHOT_ENABLE_TABLE_RECOGNITION
+    const QPointer<ScreenshotController> snapshotLifetime(&owner);
+    const auto fileSnapshot =
         m_ocrController != nullptr ? m_ocrController->fileExportSnapshot() : std::nullopt;
-    if (textSnapshot) {
-        saveRecognitionTextWithSystemDialog(*textSnapshot);
+    if (!snapshotLifetime)
+        return;
+    if (fileSnapshot) {
+        saveRecognitionResultWithSystemDialog(*fileSnapshot);
         return;
     }
 #endif
@@ -4636,17 +4642,18 @@ void ScreenshotController::Impl::saveSelectionToFile() {
     detachCaptureForExport();
 }
 
-void ScreenshotController::Impl::saveRecognitionTextWithSystemDialog(
+void ScreenshotController::Impl::saveRecognitionResultWithSystemDialog(
     const ScreenshotRecognitionFileSnapshot& snapshot) {
 #if SNOW_SHOT_ENABLE_IMAGE_CONVERSION || SNOW_SHOT_ENABLE_LATEX_RECOGNITION ||                     \
-    SNOW_SHOT_ENABLE_QR_RECOGNITION
+    SNOW_SHOT_ENABLE_QR_RECOGNITION || SNOW_SHOT_ENABLE_TABLE_RECOGNITION
     if (owner.property("saveDialogOpen").toBool() || !m_selection.hasPixelSelection() ||
         !ensureExportFeature() || !resetCanvasEditingState())
         return;
-    if (snapshot.source.isEmpty()) {
-        m_messages->error(QString::fromLatin1(kSaveMessageKey),
-                          QCoreApplication::translate("ScreenshotRecognitionFileExport",
-                                                      "No recognition text is available to save"));
+    if (!snapshot.hasContent()) {
+        m_messages->error(
+            QString::fromLatin1(kSaveMessageKey),
+            QCoreApplication::translate("ScreenshotRecognitionFileExport",
+                                        "No recognition result is available to save"));
         return;
     }
     rememberKeyboardOwner(QApplication::focusWidget());
@@ -4668,7 +4675,7 @@ void ScreenshotController::Impl::saveRecognitionTextWithSystemDialog(
         QLatin1Char('.') + ScreenshotRecognitionFileExport::extension(snapshot.kind));
     const QString selectedPath = QFileDialog::getSaveFileName(
         dialogOwner.data(),
-        QCoreApplication::translate("ScreenshotController", "Save recognition text"), initialPath,
+        QCoreApplication::translate("ScreenshotController", "Save recognition result"), initialPath,
         ScreenshotRecognitionFileExport::dialogFilter(snapshot.kind), nullptr,
         QFileDialog::DontConfirmOverwrite);
     if (selectedPath.isEmpty())
@@ -4681,10 +4688,11 @@ void ScreenshotController::Impl::saveRecognitionTextWithSystemDialog(
         return;
     const auto result = ScreenshotRecognitionFileExport::saveToPath(snapshot, primaryPath, true);
     if (!result.succeeded()) {
-        m_messages->error(QString::fromLatin1(kSaveMessageKey),
-                          QCoreApplication::translate("ScreenshotController",
-                                                      "The recognition text could not be saved: %1")
-                              .arg(result.error));
+        m_messages->error(
+            QString::fromLatin1(kSaveMessageKey),
+            QCoreApplication::translate("ScreenshotController",
+                                        "The recognition result could not be saved: %1")
+                .arg(result.error));
         return;
     }
     static_cast<void>(settings.setLastManualSaveDirectory(QFileInfo(result.path).absolutePath()));
