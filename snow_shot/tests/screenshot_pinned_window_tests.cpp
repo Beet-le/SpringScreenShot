@@ -4,6 +4,7 @@
 #include "print_diagnostics_test_support.h"
 #include "../../test-support/canvas_quick_selection_test_support.h"
 #include "snow_shot/presentation/screenshotcanvastoolstyles.h"
+#include "snow_shot/presentation/crosshaircursor.h"
 #include "eraser_toolbar_test_support.h"
 #include "physical_key_test_support.h"
 #include "window_close_shortcut_test_support.h"
@@ -15651,7 +15652,8 @@ void pinnedOcrBoxSelectionOffscreen() {
     require(content->lineBoxSelectionActive() && !Access::interactionActive(window) &&
                 Access::displayedRecognition(window).lineSelectionPreview(2) ==
                     ScreenshotOcrLineSelectionPreview::Select &&
-                content->cursor().shape() == Qt::CrossCursor,
+                content->cursor() ==
+                    snow_shot::presentation::crosshairCursor(content->devicePixelRatioF()),
             "controlled OCR boxes reach resize edges and retain ownership after modifier changes");
     pointer(QEvent::MouseButtonRelease, boxEdge, Qt::ControlModifier | Qt::AltModifier);
     require(!content->lineBoxSelectionActive() && !Access::interactionActive(window) &&
@@ -18398,6 +18400,9 @@ void pinnedControlledResizeCursorReturnsToDrawingTool() {
     const QPoint center = window.rect().center();
     move(center);
     const Qt::CursorShape drawingCursor = canvas->cursor().shape();
+    require(canvas->cursor() ==
+                snow_shot::presentation::crosshairCursor(canvas->devicePixelRatioF()),
+            "pinned annotation tools must use Snow Shot's crosshair");
     require(drawingCursor != Qt::SizeHorCursor && drawingCursor != Qt::SizeVerCursor &&
                 drawingCursor != Qt::SizeFDiagCursor && drawingCursor != Qt::SizeBDiagCursor,
             "drawing tool must start with its own cursor");
@@ -24329,6 +24334,10 @@ int main(int argc, char* argv[]) {
             }
             pinnedOriginalImagePreviewFollowsViewAndAuxiliaryLifecycle();
             pinnedOriginalImagePreviewSupportsTranslationModes();
+            return 0;
+        }
+        if (app.arguments().contains(QStringLiteral("--crosshair-only"))) {
+            pinnedControlledResizeCursorReturnsToDrawingTool();
             return 0;
         }
         if (app.arguments().contains(QStringLiteral("--eraser-only"))) {

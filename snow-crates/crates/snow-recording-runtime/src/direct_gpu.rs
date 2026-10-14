@@ -2193,11 +2193,12 @@ mod tests {
         }
         .map_err(gpu_error)?;
         let staging = staging.ok_or_else(|| gpu_error("staging texture"))?;
-        for mode in [
+        let mut shapes = [
             CursorCompositionMode::AlphaBlend,
             CursorCompositionMode::MaskedColor,
-        ] {
-            let shape = CursorShape::from_rgba(
+        ]
+        .map(|mode| {
+            CursorShape::from_rgba(
                 2,
                 1,
                 4,
@@ -2207,7 +2208,11 @@ mod tests {
                     255, 0, 0, 0, 0, 255, 0, 255, 19, 81, 243, 128, 255, 255, 255, 255,
                 ]
                 .repeat(3),
-            );
+            )
+        })
+        .to_vec();
+        shapes.push(snow_cursor::crosshair_cursor_shape(32, 32).unwrap());
+        for shape in shapes {
             for source in [(64, 48), (128, 96), (45, 37)] {
                 for (x, y) in [(-1, -1), (23, 17), (63, 47)] {
                     let sample = AttachedCursorSample {
@@ -2248,7 +2253,8 @@ mod tests {
                     }
                     assert_eq!(
                         actual, expected,
-                        "cursor {mode:?} at {x},{y}, source {source:?}"
+                        "cursor {:?} at {x},{y}, source {source:?}",
+                        shape.composition_mode
                     );
                 }
             }

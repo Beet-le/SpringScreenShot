@@ -1,4 +1,5 @@
 #include "snow_shot/presentation/screenshotoverlaywindow.h"
+#include "snow_shot/presentation/crosshaircursor.h"
 
 #include "../capture/screenshotcaptureperfinstrumentation.h"
 #include "screenshotoverlayframepresenter.h"
@@ -98,6 +99,7 @@ ScreenshotOverlayWindow::ScreenshotOverlayWindow(ScreenshotOverlayEventSink& eve
     m_framePresenter = std::make_unique<ScreenshotOverlayFramePresenter>(*this);
 
     if (m_canvas != nullptr) {
+        snow_shot::presentation::configureCanvasCrosshairCursor(*m_canvas);
         m_screenshotRenderer = std::make_unique<ScreenshotCanvasRenderer>(*m_canvas);
         m_canvas->setCustomRenderer(m_screenshotRenderer.get());
         m_canvas->setWatermarkRenderArea(QRectF());
@@ -345,10 +347,8 @@ void ScreenshotOverlayWindow::resetScreenshotRendering() {
 
 void ScreenshotOverlayWindow::commitInitialSelectionCursor() {
 #if defined(Q_OS_WIN) || defined(_WIN32)
-    const HCURSOR crossCursor = LoadCursorW(nullptr, IDC_CROSS);
-    if (crossCursor != nullptr) {
-        SetCursor(crossCursor);
-    }
+    static_cast<void>(snow_shot::presentation::applyNativeCrosshairCursor(
+        m_canvas ? m_canvas->devicePixelRatioF() : devicePixelRatioF()));
 #endif
 }
 

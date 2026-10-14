@@ -56,6 +56,11 @@ class SnowCanvasWidget : public QWidget {
     void setCursorForLayer(SnowCanvasCursorLayer layer, const QCursor& cursor);
     void clearCursorForLayer(SnowCanvasCursorLayer layer);
 
+    // Customize semantic crosshair cursors without changing the cursor layers.
+    // An empty factory preserves the platform crosshair; the result is cached per display scale.
+    using CrosshairCursorFactory = std::function<QCursor(qreal devicePixelRatio)>;
+    void setCrosshairCursorFactory(CrosshairCursorFactory factory);
+
     // Apply a property patch without recording a user preference (restoration/replication).
     bool applyStyleEdit(const SnowCanvasStyleEdit& edit);
     // Apply explicit user intent and publish it only on success.

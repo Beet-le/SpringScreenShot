@@ -7,6 +7,7 @@
 #include "close_release_native_test_support.h"
 #include "screenshot_guide_targets_test_support.h"
 #include "snow_shot/presentation/screenshotcanvasrenderer.h"
+#include "snow_shot/presentation/crosshaircursor.h"
 #include "snow_shot/presentation/screenshotcursorimagesource.h"
 #include "snow_shot/presentation/directcapturehistory.h"
 #include "snow_shot/presentation/screenshothistoryservice.h"
@@ -8065,11 +8066,13 @@ void canvasCursorLayersKeepToolCursorAfterScreenshotSelection() {
             "the canvas tool cursor should be applied to the widget");
 
     presenter.updateOverlayCursors(displays, true, false);
-    require(canvas->cursor().shape() == Qt::CrossCursor,
+    require(canvas->cursor() ==
+                snow_shot::presentation::crosshairCursor(canvas->devicePixelRatioF()),
             "the screenshot selection cursor should override the canvas tool cursor");
 
     canvas->setCursorForLayer(SnowCanvasCursorLayer::CanvasTool, QCursor(Qt::ArrowCursor));
-    require(canvas->cursor().shape() == Qt::CrossCursor,
+    require(canvas->cursor() ==
+                snow_shot::presentation::crosshairCursor(canvas->devicePixelRatioF()),
             "canvas tool updates must not contend with an active screenshot cursor");
 
     presenter.updateOverlayCursors(displays, false, false);
@@ -8093,7 +8096,8 @@ void overlaySelectionCursorUpdatesAreIdempotentWhileSelecting() {
     ScreenshotOverlayCanvasPresenter presenter({});
 
     presenter.updateOverlayCursors(displays, true, false);
-    require(canvas->cursor().shape() == Qt::CrossCursor,
+    require(canvas->cursor() ==
+                snow_shot::presentation::crosshairCursor(canvas->devicePixelRatioF()),
             "the selection crosshair should be applied when selecting begins");
     require(inactiveCanvas->cursor().shape() == Qt::ArrowCursor,
             "inactive displays must not receive the selection crosshair");
@@ -8111,7 +8115,8 @@ void overlaySelectionCursorUpdatesAreIdempotentWhileSelecting() {
     require(inactiveChanges.count == 0,
             "overlays without a selection cursor must not receive cursor transitions while "
             "selecting");
-    require(canvas->cursor().shape() == Qt::CrossCursor,
+    require(canvas->cursor() ==
+                snow_shot::presentation::crosshairCursor(canvas->devicePixelRatioF()),
             "the selection crosshair must survive streamed selection updates");
 
     presenter.updateOverlayCursors(displays, false, false);

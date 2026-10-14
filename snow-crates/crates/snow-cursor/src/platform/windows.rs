@@ -2,13 +2,15 @@ use std::ffi::c_void;
 use std::mem::size_of;
 use std::ptr;
 
+use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, CreateDIBSection,
     DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDIBits, GetObjectW, HBITMAP, HDC, HGDIOBJ,
     SelectObject,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CURSOR_SHOWING, CURSORINFO, DI_NORMAL, DrawIconEx, GetCursorInfo, GetIconInfo, HCURSOR, HICON,
+    CURSOR_SHOWING, CURSORINFO, CopyImage, DI_NORMAL, DestroyCursor, DrawIconEx, GetCursorInfo,
+    GetIconInfo, HCURSOR, HICON, IDC_CROSS, IMAGE_CURSOR, LR_COPYFROMRESOURCE, LoadCursorW,
 };
 
 use crate::CursorCaptureError;
@@ -22,11 +24,15 @@ use crate::sampler::CursorProbe;
 /// not erase a still-valid shape.
 pub(crate) struct WindowsCursorSampler {
     last_shape: Option<CursorShape>,
+    crosshair_normalizer: crate::WindowsCrosshairNormalizer,
 }
 
 impl WindowsCursorSampler {
     pub(crate) fn new() -> Result<Self, CursorCaptureError> {
-        Ok(Self { last_shape: None })
+        Ok(Self {
+            last_shape: None,
+            crosshair_normalizer: crate::WindowsCrosshairNormalizer::new(),
+        })
     }
 
     pub(crate) fn sample_cursor(&mut self) -> Result<CursorProbe, CursorCaptureError> {
@@ -58,7 +64,18 @@ impl WindowsCursorSampler {
         // GetIconInfo accepts an HCURSOR directly. Do not CopyIcon first:
         // application-created cursors need not be copyable, even though the
         // original handle is valid for GetIconInfo and DrawIconEx.
-        if let Some(shape) = extract_shape(cursor) {
+        if let Some(mut shape) = extract_shape(cursor) {
+            // The shared IDC_CROSS handle can contain inverse monochrome pixels.
+            // Replace only this stock resource, preserving application-owned cursors.
+            if unsafe { LoadCursorW(None, IDC_CROSS) }.is_ok_and(|stock| stock == cursor)
+                && let Some(crosshair) = crate::crosshair_cursor_shape(shape.width, shape.height)
+            {
+                shape = crosshair;
+            } else {
+                // Copied or explicitly sized stock cursors have their own handles.
+                // Match their decoded pixels without replacing other custom cursors.
+                shape = self.crosshair_normalizer.normalize_shape(&shape);
+            }
             self.last_shape = Some(shape.clone());
             return CursorShapeCapture::Captured(shape);
         }
@@ -71,6 +88,31 @@ impl WindowsCursorSampler {
             .map(CursorShapeCapture::Captured)
             .unwrap_or(CursorShapeCapture::Unavailable)
     }
+}
+
+/// Load the raw stock resource at a backend's physical pointer dimensions.
+/// LoadCursorW does not follow the caller's DPI, so one default-size bitmap is
+/// insufficient for matching Desktop Duplication shapes on scaled displays.
+pub(crate) fn system_crosshair_shape(width: u32, height: u32) -> Option<CursorShape> {
+    if width == 0 || height == 0 || width > 2048 || height > 2048 {
+        return None;
+    }
+    let stock = unsafe { LoadCursorW(None, IDC_CROSS) }.ok()?;
+    let handle = unsafe {
+        CopyImage(
+            HANDLE(stock.0),
+            IMAGE_CURSOR,
+            width as i32,
+            height as i32,
+            LR_COPYFROMRESOURCE,
+        )
+    }
+    .ok()?;
+    let cursor = HCURSOR(handle.0);
+    let result = extract_shape(cursor);
+    // No LR_COPYRETURNORG: this explicitly sized copy is owned by this call.
+    let _ = unsafe { DestroyCursor(cursor) };
+    result
 }
 
 struct BitmapGuard(HBITMAP);
@@ -388,9 +430,7 @@ fn has_visible_pixel(rgba: &[u8]) -> bool {
 mod tests {
     use super::*;
     use windows::Win32::Graphics::Gdi::GdiFlush;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        CreateCursor, DestroyCursor, IDC_CROSS, LoadCursorW,
-    };
+    use windows::Win32::UI::WindowsAndMessaging::CreateCursor;
 
     struct CursorGuard(HCURSOR);
 
@@ -484,11 +524,66 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires the standard Windows inverse IDC_CROSS resource"]
-    fn system_crosshair_masks_match_windows_drawiconex_across_gray_ramp() {
+    fn system_crosshair_is_replaced_with_alpha_crosshair_without_showing_it() {
         // Shared system handle: do not destroy it. Loading does not display it.
         let cursor = unsafe { LoadCursorW(None, IDC_CROSS) }.expect("system crosshair");
-        assert_masked_cursor_matches_windows(cursor);
+        let raw = extract_shape(cursor).expect("stock crosshair dimensions");
+        let mut sampler = WindowsCursorSampler::new().unwrap();
+        let captured = sampler.shape_for_cursor(cursor).into_shape().unwrap();
+        assert_eq!(
+            captured,
+            crate::crosshair_cursor_shape(raw.width, raw.height).unwrap()
+        );
+        assert_eq!(captured.composition_mode, CursorCompositionMode::AlphaBlend);
+        assert!(
+            captured
+                .shape_rgba
+                .chunks_exact(4)
+                .any(|pixel| pixel == [255; 4])
+        );
+        assert!(
+            captured
+                .shape_rgba
+                .chunks_exact(4)
+                .any(|pixel| pixel == [0, 0, 0, 255])
+        );
+    }
+
+    #[test]
+    fn native_matcher_replaces_sized_stock_resources() {
+        let mut matcher = crate::WindowsCrosshairNormalizer::new();
+        for size in [32, 48, 64] {
+            let stock = system_crosshair_shape(size, size).expect("sized system crosshair");
+            assert_eq!(
+                matcher.normalize_shape(&stock),
+                crate::crosshair_cursor_shape(size, size).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn native_sampler_replaces_copied_and_resized_stock_crosshairs() {
+        let stock = unsafe { LoadCursorW(None, IDC_CROSS) }.expect("system crosshair");
+        let mut sampler = WindowsCursorSampler::new().unwrap();
+        for size in [32, 48] {
+            let handle = unsafe {
+                CopyImage(
+                    HANDLE(stock.0),
+                    IMAGE_CURSOR,
+                    size,
+                    size,
+                    LR_COPYFROMRESOURCE,
+                )
+            }
+            .expect("owned crosshair copy");
+            let cursor = CursorGuard(HCURSOR(handle.0));
+            assert_ne!(cursor.0, stock);
+            let captured = sampler.shape_for_cursor(cursor.0).into_shape().unwrap();
+            assert_eq!(
+                captured,
+                crate::crosshair_cursor_shape(size as u32, size as u32).unwrap()
+            );
+        }
     }
 
     #[test]
@@ -539,6 +634,11 @@ mod tests {
         );
 
         let shape = extract_shape(cursor.0).expect("original HCURSOR should be extractable");
+        let mut sampler = WindowsCursorSampler::new().unwrap();
+        assert_eq!(
+            sampler.shape_for_cursor(cursor.0).into_shape(),
+            Some(shape.clone())
+        );
 
         assert_eq!((shape.hotspot_x, shape.hotspot_y), (1, 1));
         assert_eq!((shape.width, shape.height), (2, 2));

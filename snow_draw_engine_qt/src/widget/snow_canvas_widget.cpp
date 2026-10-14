@@ -423,8 +423,9 @@ struct SnowCanvasWidget::Impl : public snow_canvas_runtime::Client {
     bool setCanvasTool(SnowCanvasTool tool);
     void setCursorForLayer(SnowCanvasCursorLayer layer, const QCursor& cursor);
     void clearCursorForLayer(SnowCanvasCursorLayer layer);
+    void setCrosshairCursorFactory(CrosshairCursorFactory factory);
     void refreshCursorDevicePixelRatio() {
-        cursorController.refreshDevicePixelRatio();
+        cursorController.refreshDevicePixelRatio(widget.devicePixelRatioF());
     }
     SnowCanvasStyleToolbarState canvasStyleToolbarState() const;
     bool setCanvasDistanceStyle(const SnowCanvasDistanceStyle& style, quint32 properties);
@@ -1059,6 +1060,14 @@ void SnowCanvasWidget::Impl::clearCursorForLayer(SnowCanvasCursorLayer layer) {
 
 void SnowCanvasWidget::clearCursorForLayer(SnowCanvasCursorLayer layer) {
     m_impl->clearCursorForLayer(layer);
+}
+
+void SnowCanvasWidget::Impl::setCrosshairCursorFactory(CrosshairCursorFactory factory) {
+    cursorController.setCrosshairCursorFactory(std::move(factory));
+}
+
+void SnowCanvasWidget::setCrosshairCursorFactory(CrosshairCursorFactory factory) {
+    m_impl->setCrosshairCursorFactory(std::move(factory));
 }
 
 SnowCanvasStyleToolbarState SnowCanvasWidget::Impl::canvasStyleToolbarState() const {

@@ -1,4 +1,5 @@
 #include "snow_shot/presentation/screenshotrecognitionwindow.h"
+#include "snow_shot/presentation/crosshaircursor.h"
 #include "snow_shot/presentation/screenshotocrtextlayout.h"
 #include <QAbstractTextDocumentLayout>
 #include <QAbstractItemDelegate>
@@ -2498,7 +2499,7 @@ void ScreenshotRecognitionWindow::mouseMoveEvent(QMouseEvent* event) {
             cancelLineBoxSelection();
         } else {
             updateLineBoxSelection(event->position());
-            setCursor(Qt::CrossCursor);
+            setCursor(snow_shot::presentation::crosshairCursor(devicePixelRatioF()));
             event->accept();
             return;
         }

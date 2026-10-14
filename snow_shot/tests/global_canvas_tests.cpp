@@ -1,6 +1,7 @@
 #include "angle_wheel_host_test_support.h"
 #include "../../test-support/canvas_quick_selection_test_support.h"
 #include "snow_shot/presentation/globalcanvascontroller.h"
+#include "snow_shot/presentation/crosshaircursor.h"
 #include "snow_shot/presentation/screenshotcanvastoolstyles.h"
 #include "eraser_toolbar_test_support.h"
 #include "../src/presentation/globalcanvas/globalcanvasplatform.h"
@@ -1321,6 +1322,19 @@ int main(int argc, char** argv) {
         return 0;
     }
 #endif
+    if (app.arguments().contains(QStringLiteral("--crosshair-only"))) {
+        presentation::GlobalCanvasController controller(
+            nullptr, {[&]() { return app.primaryScreen(); }, [](QWidget*, bool) { return true; }});
+        controller.activate();
+        require(controller.active(), "global crosshair fixture must create its canvas");
+        auto* canvas = controller.canvas();
+        require(canvas->setCanvasTool(SnowCanvasTool::Shape), "activate a global crosshair tool");
+        require(canvas->cursor() == presentation::crosshairCursor(canvas->devicePixelRatioF()),
+                "global annotation tools must use Snow Shot's crosshair");
+        controller.shutdown();
+        storage.shutdown();
+        return 0;
+    }
     if (app.arguments().contains(QStringLiteral("--click-through-style-only"))) {
         canvasClickThroughButtonStyle(app);
         storage.shutdown();

@@ -1,4 +1,5 @@
 #include "snow_shot/presentation/screenshotmanualsave.h"
+#include "snow_shot/presentation/crosshaircursor.h"
 #include "snow_shot/presentation/collagedocument.h"
 #include "snow_shot/presentation/screenshotmessageservice.h"
 #include "snow_shot/presentation/components/confirmationskipbutton.h"
@@ -3310,6 +3311,7 @@ void ScreenshotPinnedWindow::createUi() {
             painter.restore();
             return true;
         });
+    snow_shot::presentation::configureCanvasCrosshairCursor(*m_canvas);
     m_canvas->setAttribute(Qt::WA_NativeWindow, false);
     m_canvas->setAttribute(Qt::WA_OpaquePaintEvent, false);
     m_canvas->setMinimumSize(1, 1);

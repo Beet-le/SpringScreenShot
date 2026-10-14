@@ -307,6 +307,19 @@ endif()
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/SnowSelectedText.cmake")
 
+add_library(snow_shot_crosshair_cursor STATIC
+    src/presentation/core/crosshaircursor.cpp
+    include/snow_shot/presentation/crosshaircursor.h)
+target_include_directories(snow_shot_crosshair_cursor PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(snow_shot_crosshair_cursor PUBLIC Qt6::Widgets
+    PRIVATE snow_draw_engine_qt_canvas)
+if(WIN32)
+    target_include_directories(snow_shot_crosshair_cursor PRIVATE
+        "${SNOW_SHOT_CAPTURE_CRATES_DIR}/crates/snow-capture-c/include")
+    target_link_libraries(snow_shot_crosshair_cursor PRIVATE snow_capture_c user32 gdi32)
+endif()
+
 # OpenCV's contrib wechat_qrcode module backs in-process QR recognition and
 # objdetect's cv::barcode detector covers EAN/UPC 1-D symbologies; text
 # recognition lives in the standalone OCR process. Pin the config package to
@@ -3759,6 +3772,8 @@ if(SNOW_SHOT_BUILD_TESTS)
                  COMMAND snow-shot-recapture-cursor-native-e2e-test --run-native --change-after-ready)
         add_test(NAME snow-shot-recapture-class-cursor-native-e2e-test
                  COMMAND snow-shot-recapture-cursor-native-e2e-test --run-native --native-target)
+        add_test(NAME snow-shot-recapture-stock-crosshair-native-e2e-test
+                 COMMAND snow-shot-recapture-cursor-native-e2e-test --run-native --native-target --stock-crosshair)
         add_test(NAME snow-shot-recapture-cursor-handover-movement-native-e2e-test
                  COMMAND snow-shot-recapture-cursor-native-e2e-test --run-native --native-target --move-after-handover)
         add_test(NAME snow-shot-recapture-cursor-hidden-native-e2e-test
@@ -3775,6 +3790,7 @@ if(SNOW_SHOT_BUILD_TESTS)
             snow-shot-recapture-cursor-movement-native-e2e-test
             snow-shot-recapture-cursor-snapshot-native-e2e-test
             snow-shot-recapture-class-cursor-native-e2e-test
+            snow-shot-recapture-stock-crosshair-native-e2e-test
             snow-shot-recapture-cursor-handover-movement-native-e2e-test
             snow-shot-recapture-cursor-hidden-native-e2e-test
             snow-shot-recapture-cursor-own-window-native-e2e-test
@@ -11737,9 +11753,40 @@ foreach(_snow_target IN LISTS _snow_readout_consumers)
     if("${_snow_sources}" MATCHES "(screenshot(pinnedwindow|savepreviewcanvas|overlaywindow|originalimagepreviewwindow)|recordingeffectpreview)\\.cpp")
         target_link_libraries(${_snow_target} PRIVATE snow_shot_canvas_status_readout)
     endif()
+    if("${_snow_sources}" MATCHES "(screenshot(pinnedwindow|overlaywindow|recognitionwindow|canvascolorsamplerwindow)|globalcanvascontroller|screenrecordingareawindow)\\.cpp")
+        target_link_libraries(${_snow_target} PRIVATE snow_shot_crosshair_cursor)
+    endif()
 endforeach()
 
 if(SNOW_SHOT_BUILD_TESTS)
+    add_executable(snow-shot-crosshair-cursor-tests tests/crosshair_cursor_tests.cpp)
+    target_link_libraries(snow-shot-crosshair-cursor-tests PRIVATE
+        snow_shot_crosshair_cursor snow_draw_engine_qt_canvas)
+    if(WIN32)
+        target_include_directories(snow-shot-crosshair-cursor-tests PRIVATE
+            "${SNOW_SHOT_CAPTURE_CRATES_DIR}/crates/snow-capture-c/include")
+    endif()
+    snow_shot_import_offscreen_platform(snow-shot-crosshair-cursor-tests)
+    add_test(NAME snow-shot-crosshair-cursor-tests
+        COMMAND snow-shot-crosshair-cursor-tests -platform offscreen)
+    set_tests_properties(snow-shot-crosshair-cursor-tests PROPERTIES LABELS unit TIMEOUT 30
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    if(WIN32)
+        add_test(NAME snow-shot-crosshair-cursor-native-tests
+            COMMAND snow-shot-crosshair-cursor-tests --native-only -platform windows)
+        set_tests_properties(snow-shot-crosshair-cursor-native-tests PROPERTIES
+            LABELS "interactive;windows" RUN_SERIAL TRUE TIMEOUT 30
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endif()
+
+    foreach(_crosshair_host IN ITEMS global-canvas screen-recording-area-window pinned-window)
+        add_test(NAME snow-shot-${_crosshair_host}-crosshair-tests
+            COMMAND snow-shot-${_crosshair_host}-tests --crosshair-only -platform offscreen)
+        set_tests_properties(snow-shot-${_crosshair_host}-crosshair-tests PROPERTIES
+            LABELS unit TIMEOUT 60
+            ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
+    endforeach()
+
     add_executable(snow-shot-canvas-status-readout-tests tests/canvas_status_readout_tests.cpp)
     target_link_libraries(snow-shot-canvas-status-readout-tests PRIVATE snow_shot_canvas_status_readout)
     snow_shot_import_offscreen_platform(snow-shot-canvas-status-readout-tests)

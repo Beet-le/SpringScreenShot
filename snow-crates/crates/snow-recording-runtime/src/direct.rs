@@ -3239,6 +3239,136 @@ mod tests {
     use snow_cursor::CursorShapeId;
 
     #[test]
+    fn custom_crosshair_keeps_opaque_colors_when_scaled_clipped_cached_and_hidden() {
+        use snow_recording_effects::{
+            EffectsConfig, PlaybackOverlay, RecordedEffects, RenderConfig, RenderFrame,
+        };
+        use snow_recording_model::{
+            CursorFrameRecord, CursorShapeCompositionMode, CursorShapeRecord, RecordedInput,
+            RecordedInputEvent,
+        };
+
+        let shape = snow_cursor::crosshair_cursor_shape(32, 32).unwrap();
+        assert_eq!(shape.composition_mode, CursorCompositionMode::AlphaBlend);
+        for background in [
+            [0, 0, 0, 255],
+            [255; 4],
+            [127, 127, 127, 255],
+            [37, 91, 163, 255],
+        ] {
+            for scale in [1, 2] {
+                let output = (64 * scale, 48 * scale);
+                for (x, y) in [(0, 0), (32, 24), (63, 47)] {
+                    let mut retained = None;
+                    for state in [
+                        CursorShapeState::Embedded(shape.clone()),
+                        CursorShapeState::Cached(shape.shape_id),
+                    ] {
+                        let cursor = AttachedCursorSample {
+                            x,
+                            y,
+                            visible: true,
+                            shape: state,
+                        };
+                        let mut rgba = background.repeat((output.0 * output.1) as usize);
+                        draw_cursor(&mut rgba, output, (64, 48), &cursor, &mut retained);
+                        let mut replay = RecordedEffects::new(
+                            RenderConfig {
+                                output_width: output.0,
+                                output_height: output.1,
+                                output_fps: 30,
+                                effects: EffectsConfig::default(),
+                                playback_overlay: PlaybackOverlay::None,
+                            },
+                            (64, 48),
+                            None,
+                        )
+                        .unwrap();
+                        replay
+                            .observe(&RecordedInputEvent {
+                                timestamp_ms: 0,
+                                sequence: 0,
+                                event: RecordedInput::CursorShape(CursorShapeRecord {
+                                    shape_id: shape.shape_id.get(),
+                                    hotspot_x: shape.hotspot_x,
+                                    hotspot_y: shape.hotspot_y,
+                                    width: shape.width,
+                                    height: shape.height,
+                                    mode: CursorShapeCompositionMode::AlphaBlend,
+                                    shape_rgba: shape.shape_rgba.to_vec(),
+                                }),
+                            })
+                            .unwrap();
+                        replay
+                            .observe(&RecordedInputEvent {
+                                timestamp_ms: 0,
+                                sequence: 1,
+                                event: RecordedInput::Cursor(CursorFrameRecord {
+                                    timestamp_ms: 0,
+                                    x,
+                                    y,
+                                    visible: true,
+                                    shape_id: Some(shape.shape_id.get()),
+                                }),
+                            })
+                            .unwrap();
+                        let mut replay_pixels = background.repeat((output.0 * output.1) as usize);
+                        replay
+                            .apply_rgba(
+                                &mut replay_pixels,
+                                RenderFrame {
+                                    index: 0,
+                                    pts: 0,
+                                    timestamp_ms: 0,
+                                    progress: 0.0,
+                                },
+                            )
+                            .unwrap();
+                        assert_eq!(replay_pixels, rgba, "direct and export replay must agree");
+                        let left = (x - shape.hotspot_x as i32) * scale as i32;
+                        let top = (y - shape.hotspot_y as i32) * scale as i32;
+                        let mut black = 0;
+                        let mut white = 0;
+                        for py in 0..output.1 as i32 {
+                            for px in 0..output.0 as i32 {
+                                let local_x = px - left;
+                                let local_y = py - top;
+                                let expected = if (0..32 * scale as i32).contains(&local_x)
+                                    && (0..32 * scale as i32).contains(&local_y)
+                                {
+                                    let sx = local_x as u32 / scale;
+                                    let sy = local_y as u32 / scale;
+                                    let offset = ((sy * 32 + sx) * 4) as usize;
+                                    let pixel = &shape.shape_rgba[offset..offset + 4];
+                                    if pixel[3] == 255 {
+                                        black += usize::from(pixel[0] == 0);
+                                        white += usize::from(pixel[0] == 255);
+                                        [pixel[0], pixel[1], pixel[2], pixel[3]]
+                                    } else {
+                                        background
+                                    }
+                                } else {
+                                    background
+                                };
+                                let offset = ((py as u32 * output.0 + px as u32) * 4) as usize;
+                                assert_eq!(&rgba[offset..offset + 4], &expected);
+                            }
+                        }
+                        assert!(black > 0 && white > 0);
+                        let hidden = AttachedCursorSample {
+                            visible: false,
+                            ..cursor
+                        };
+                        let mut rgba = background.repeat((output.0 * output.1) as usize);
+                        draw_cursor(&mut rgba, output, (64, 48), &hidden, &mut retained);
+                        assert_eq!(rgba, background.repeat((output.0 * output.1) as usize));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn hidden_cursor_retains_shape_without_drawing_it() {
         let shape =
             CursorShape::from_rgba(0, 0, 1, 1, CursorCompositionMode::AlphaBlend, vec![255; 4]);

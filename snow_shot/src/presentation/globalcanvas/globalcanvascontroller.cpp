@@ -1,5 +1,6 @@
 #include "snow_shot/presentation/canvashistoryshortcuts.h"
 #include "snow_shot/presentation/globalcanvascontroller.h"
+#include "snow_shot/presentation/crosshaircursor.h"
 #include "globalcanvasplatform.h"
 #include "snow_shot/platform/screenshotnative.h"
 #include "snow_shot/platform/physicalcursor.h"
@@ -80,6 +81,7 @@ class GlobalCanvasController::Session final : public QWidget, public SnowCanvasC
           drawing(std::make_unique<SnowCanvasWidget>(runtime, this)),
           tools(std::make_unique<ScreenshotFloatingToolPaletteWindow>(canvasOptions())),
           shortcuts(this) {
+        configureCanvasCrosshairCursor(*drawing);
 #ifdef Q_OS_MACOS
         setWindowFlag(Qt::NoDropShadowWindowHint);
 #endif
