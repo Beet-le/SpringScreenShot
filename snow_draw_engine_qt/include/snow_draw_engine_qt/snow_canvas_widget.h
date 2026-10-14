@@ -24,6 +24,7 @@ class QFocusEvent;
 class QInputMethodEvent;
 class QKeyEvent;
 class QMouseEvent;
+class QTabletEvent;
 class QPaintEvent;
 class QPointF;
 class QResizeEvent;
@@ -229,6 +230,7 @@ class SnowCanvasWidget : public QWidget {
     void mouseDoubleClickEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void tabletEvent(QTabletEvent* event) override;
     void enterEvent(QEnterEvent* event) override;
     void leaveEvent(QEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;

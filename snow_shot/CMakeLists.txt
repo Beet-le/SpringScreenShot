@@ -5847,6 +5847,10 @@ if(SNOW_SHOT_BUILD_TESTS)
         NAME snow-shot-toolbar-shared-controls-tests
         COMMAND snow-shot-screenshot-tool-palette-tests --color-control-styles-only
     )
+    add_test(NAME snow-shot-pressure-brush-toolbar-tests
+        COMMAND snow-shot-screenshot-tool-palette-tests --pressure-brush-only -platform offscreen)
+    set_tests_properties(snow-shot-pressure-brush-toolbar-tests PROPERTIES
+        LABELS "unit" TIMEOUT 60 SNOW_TEST_CROSS_PLATFORM TRUE)
     set_tests_properties(snow-shot-toolbar-shared-controls-tests PROPERTIES TIMEOUT 180)
     add_test(
         NAME snow-shot-screenshot-toolbar-i18n-tests
@@ -5862,6 +5866,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         snow-shot-screenshot-selection-reset-tests
         snow-shot-screen-recording-toolbar-tests
         snow-shot-toolbar-shared-controls-tests
+        snow-shot-pressure-brush-toolbar-tests
         snow-shot-screenshot-toolbar-i18n-tests
         PROPERTIES
         ENVIRONMENT

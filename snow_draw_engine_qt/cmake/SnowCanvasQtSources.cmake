@@ -65,6 +65,8 @@ set(SNOW_CANVAS_QT_SOURCES
     src/rendering/snow_canvas_region_filter.cpp
     src/rendering/snow_canvas_pen_mask_atlas.cpp
     src/rendering/snow_canvas_pen_mask_atlas.h
+    src/rendering/snow_canvas_pressure_mask_atlas.cpp
+    src/rendering/snow_canvas_pressure_mask_atlas.h
     src/rendering/snow_canvas_pen_mask_avx2.cpp
     src/rendering/snow_canvas_pen_mask_avx2.h
     src/rendering/snow_canvas_filter_avx2.cpp

@@ -333,6 +333,7 @@ pub(crate) fn snow_scene_display_item_from_rust(
             out.arrow_shaft_type = super::snow_arrow_shaft_type_from_rust(item.arrow_shaft_type);
             out.arrow_ratio = item.arrow_ratio;
             out.is_free_draw = u8::from(item.is_free_draw);
+            out.brush_mode = item.brush_mode as u8;
             out.arrow_start_head = snow_arrowhead_from_rust(item.start_arrowhead);
             out.arrow_end_head = snow_arrowhead_from_rust(item.end_arrowhead);
             out.arrow_stroke_style = snow_stroke_style_from_rust(item.stroke_style);

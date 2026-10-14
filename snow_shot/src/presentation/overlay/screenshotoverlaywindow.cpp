@@ -21,6 +21,7 @@
 #include "../capture/screenshotscrollingdiagnostics.h"
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QTabletEvent>
 #include <QPainter>
 #include <QPaintEvent>
 #include <QRegion>
@@ -1096,12 +1097,40 @@ bool ScreenshotOverlayWindow::handleCanvasEvent(QEvent* event) {
         return false;
     }
 
-    if ((event->type() == QEvent::KeyPress || event->type() == QEvent::MouseButtonPress ||
+    const bool tablet = event->type() == QEvent::TabletPress ||
+                        event->type() == QEvent::TabletMove ||
+                        event->type() == QEvent::TabletRelease;
+    if ((tablet || event->type() == QEvent::KeyPress || event->type() == QEvent::MouseButtonPress ||
          event->type() == QEvent::MouseMove || event->type() == QEvent::MouseButtonRelease ||
          event->type() == QEvent::MouseButtonDblClick || event->type() == QEvent::Wheel) &&
         !m_eventSink.acceptOverlayInput(event->spontaneous())) {
         event->accept();
         return true;
+    }
+    if (tablet) {
+        auto* tabletEvent = static_cast<QTabletEvent*>(event);
+        if (event->type() == QEvent::TabletMove && m_screenshotRenderer) {
+            if (!m_eventSink.presentOverlayPointer(this, tabletEvent->position())) {
+                m_screenshotRenderer->setGuideCursorPosition(tabletEvent->position());
+            }
+        }
+        const bool barrelButtonChange =
+            m_canvas != nullptr && m_canvas->canvasTool() == SnowCanvasTool::FreeDraw &&
+            QWidget::mouseGrabber() == m_canvas && tabletEvent->button() != Qt::LeftButton &&
+            tabletEvent->buttons().testFlag(Qt::LeftButton) && event->type() != QEvent::TabletMove;
+        const auto type = barrelButtonChange                       ? QEvent::MouseMove
+                          : event->type() == QEvent::TabletPress   ? QEvent::MouseButtonPress
+                          : event->type() == QEvent::TabletRelease ? QEvent::MouseButtonRelease
+                                                                   : QEvent::MouseMove;
+        QMouseEvent pointer(type, tabletEvent->position(), tabletEvent->globalPosition(),
+                            barrelButtonChange ? Qt::NoButton : tabletEvent->button(),
+                            tabletEvent->buttons(), tabletEvent->modifiers(),
+                            tabletEvent->pointingDevice());
+        if (handleCanvasMouseEvent(&pointer)) {
+            event->accept();
+            return true;
+        }
+        return false;
     }
     if (event->type() == QEvent::MouseMove && m_screenshotRenderer) {
         const QPointF position = static_cast<QMouseEvent*>(event)->position();

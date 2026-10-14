@@ -97,8 +97,8 @@ void everySnowShotEntryRenders() {
     const auto registered = icons::registerWith(renderer);
     require(registered.ok(), "Snow Shot pack registration should succeed");
     const adqt::icons::IconPack* staticPack = icons::pack().staticPack();
-    require(staticPack != nullptr && staticPack->entryCount == 182,
-            "Snow Shot pack should contain all 182 project-owned assets");
+    require(staticPack != nullptr && staticPack->entryCount == 184,
+            "Snow Shot pack should contain all 184 project-owned assets");
 
     adqt::icons::IconRenderRequest request;
     request.logicalSize = QSize(32, 32);
@@ -492,6 +492,123 @@ void imageStitchingIconFollowsAntDesign() {
         require(preview.save(path), "save stitching icon light/dark inspection sheet");
 }
 
+void brushModeIconsRenderWithDistinctPressureAndThemeColors() {
+    namespace icons = snow_shot::presentation::icons::custom;
+    const QList<adqt::icons::IconRef> refs{icons::outlined::BrushRegular(),
+                                           icons::outlined::BrushPressureSensitive()};
+    for (const auto& ref : refs) {
+        require(adqt::icons::describeIcon(ref).colorModel ==
+                    adqt::icons::IconColorModel::Monochrome,
+                "brush mode icons use the shared monochrome theme-color pipeline");
+        const QRect bounds = alphaBounds(render(ref, QSize(1024, 1024)).toImage());
+        require(bounds.left() >= 64 && bounds.top() >= 64 && bounds.right() < 960 &&
+                    bounds.bottom() < 960,
+                "brush mode artwork preserves the Ant Design 64-unit safe margin");
+    }
+    const QImage regular = render(refs[0], QSize(1024, 1024)).toImage();
+    const QImage pressure = render(refs[1], QSize(1024, 1024)).toImage();
+    // At each wave extremum the tangent is horizontal, so a vertical sample
+    // measures brush width without including the stroke's diagonal projection.
+    const auto widthAt = [](const QImage& image, int x) {
+        int width = 0;
+        for (int y = 0; y < image.height(); ++y)
+            if (image.pixelColor(x, y).alpha() >= 128)
+                ++width;
+        return width;
+    };
+    const int regularFirst = widthAt(regular, 320);
+    require(std::abs(widthAt(regular, 704) - regularFirst) <= 2,
+            "the regular brush keeps a constant width across the wave");
+    require(widthAt(pressure, 320) < regularFirst,
+            "the pressure-sensitive brush starts lighter than the regular brush");
+    require(widthAt(pressure, 704) > regularFirst * 1.5,
+            "the pressure-sensitive brush ends with a visibly heavier stroke");
+    for (const QColor color :
+         {QColor("#262626"), QColor("#f0f0f0"), QColor("#1677ff"), QColor("#bfbfbf")}) {
+        for (int size : {16, 20, 24, 32}) {
+            for (qreal dpr : {1.0, 1.25, 1.5, 2.0}) {
+                QList<QImage> images;
+                for (const auto& ref : refs) {
+                    const QImage image =
+                        render(ref.withColors(adqt::icons::IconColors::primary(color)),
+                               QSize(size, size), dpr)
+                            .toImage();
+                    const QRect bounds = alphaBounds(image);
+                    require(!bounds.isEmpty() && bounds.left() > 0 &&
+                                bounds.right() < image.width() - 1,
+                            "both brush modes stay visible and unclipped at toolbar sizes");
+                    for (int y = 0; y < image.height(); ++y)
+                        for (int x = 0; x < image.width(); ++x) {
+                            const QColor pixel = image.pixelColor(x, y);
+                            if (pixel.alpha() >= 128)
+                                require(
+                                    std::abs(pixel.red() - color.red()) <= 2 &&
+                                        std::abs(pixel.green() - color.green()) <= 2 &&
+                                        std::abs(pixel.blue() - color.blue()) <= 2,
+                                    "brush icons respect light, dark, active and disabled tints");
+                        }
+                    images.append(image);
+                }
+                require(images[0] != images[1],
+                        "regular and pressure-sensitive modes remain distinct at every scale");
+            }
+        }
+    }
+    if (const auto path = qEnvironmentVariable("SNOW_BRUSH_ICON_PREVIEW"); !path.isEmpty()) {
+        QImage preview(960, 520, QImage::Format_ARGB32_Premultiplied);
+        preview.fill(QColor("#ffffff"));
+        QPainter painter(&preview);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(QColor("#595959"));
+        painter.setFont(QFont(QStringLiteral("Segoe UI"), 11));
+        painter.drawText(QPoint(40, 36), QStringLiteral("SNOW SHOT  /  BRUSH MODES"));
+        painter.setPen(QColor("#f0f0f0"));
+        painter.drawLine(480, 68, 480, 360);
+        for (int mode = 0; mode < 2; ++mode) {
+            const int x = mode * 480;
+            painter.drawPixmap(
+                x + 128, 72,
+                render(refs[mode].withColors(adqt::icons::IconColors::primary(QColor("#262626"))),
+                       QSize(224, 224)));
+            painter.setPen(QColor("#262626"));
+            painter.setFont(QFont(QStringLiteral("Segoe UI"), 16, QFont::DemiBold));
+            painter.drawText(QRect(x, 276, 480, 36), Qt::AlignCenter,
+                             mode ? QStringLiteral("Pressure-sensitive brush")
+                                  : QStringLiteral("Regular brush"));
+            painter.setPen(QColor("#8c8c8c"));
+            painter.setFont(QFont(QStringLiteral("Segoe UI"), 10));
+            painter.drawText(QRect(x, 316, 480, 24), Qt::AlignCenter,
+                             mode ? QStringLiteral("Smoothly increasing stroke width")
+                                  : QStringLiteral("Consistent 72-unit stroke width"));
+        }
+        for (int row = 0; row < 2; ++row) {
+            const int y = 376 + row * 72;
+            const QColor background = row ? QColor("#141414") : QColor("#f5f5f5");
+            const QColor foreground = row ? QColor("#f0f0f0") : QColor("#262626");
+            painter.fillRect(QRect(0, y, 960, 72), background);
+            painter.setPen(QColor("#8c8c8c"));
+            painter.setFont(QFont(QStringLiteral("Segoe UI"), 9));
+            painter.drawText(QPoint(40, y + 41),
+                             row ? QStringLiteral("DARK") : QStringLiteral("LIGHT"));
+            for (int mode = 0; mode < 2; ++mode) {
+                int column = 0;
+                for (int size : {16, 20, 24, 32}) {
+                    painter.drawPixmap(
+                        mode * 480 + 140 + column++ * 56, y + (72 - size) / 2,
+                        render(refs[mode].withColors(adqt::icons::IconColors::primary(foreground)),
+                               QSize(size, size)));
+                }
+                painter.drawPixmap(mode * 480 + 390, y + 24,
+                                   render(refs[mode].withColors(
+                                              adqt::icons::IconColors::primary(QColor("#1677ff"))),
+                                          QSize(24, 24)));
+            }
+        }
+        painter.end();
+        require(preview.save(path), "save the brush icon light/dark inspection sheet");
+    }
+}
+
 void numericFormatIconsRenderAtToolbarSizes() {
     namespace icons = snow_shot::presentation::icons::custom;
     QImage preview(600, 240, QImage::Format_ARGB32_Premultiplied);
@@ -538,6 +655,11 @@ void numericFormatIconsRenderAtToolbarSizes() {
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     try {
+        brushModeIconsRenderWithDistinctPressureAndThemeColors();
+        if (application.arguments().contains(QStringLiteral("--brush-icons-only"))) {
+            everySnowShotEntryRenders();
+            return 0;
+        }
         imageStitchingIconFollowsAntDesign();
         if (application.arguments().contains(QStringLiteral("--image-stitching-only"))) {
             everySnowShotEntryRenders();

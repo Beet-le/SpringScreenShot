@@ -8,6 +8,7 @@
 #include "snow_canvas_fill_render.h"
 #include "snow_canvas_magnifier_renderer.h"
 #include "snow_canvas_pen_mask_atlas.h"
+#include "snow_canvas_pressure_mask_atlas.h"
 #include "snow_canvas_render_diagnostics.h"
 #include "snow_canvas_render_geometry.h"
 #include "snow_canvas_text.h"
@@ -103,6 +104,8 @@ std::uint64_t filterDependencyFingerprint(const SnowCanvasSceneItem* items, std:
         hash = filterTileHashDouble(hash, item.opacity);
         hash = filterTileHashAppend(hash, item.penFilterGeometryRevision());
         hash = filterTileHashAppend(hash, item.pathGeometryRevision());
+        hash = filterTileHashAppend(hash, item.pressureGeometryRevision());
+        hash = filterTileHashAppend(hash, item.brush_mode);
         hash = filterTileHashAppend(hash, item.filter.filter_type);
         hash = filterTileHashAppend(hash, item.filter.render_phase);
         hash = filterTileHashDouble(hash, item.filter.strength);
@@ -169,6 +172,8 @@ filterDependencyFingerprintsForRegion(const SnowCanvasSceneItem* items,
             hash = filterTileHashDouble(hash, item.opacity);
             hash = filterTileHashAppend(hash, item.penFilterGeometryRevision());
             hash = filterTileHashAppend(hash, item.pathGeometryRevision());
+            hash = filterTileHashAppend(hash, item.pressureGeometryRevision());
+            hash = filterTileHashAppend(hash, item.brush_mode);
             hash = filterTileHashAppend(hash, item.filter.filter_type);
             hash = filterTileHashAppend(hash, item.filter.render_phase);
             hash = filterTileHashDouble(hash, item.filter.strength);
@@ -857,7 +862,7 @@ QRectF viewRectToCanvas(const snow_canvas_render_geometry::ViewProjection& view,
 }
 
 void drawOwnedPathChunks(QPainter& painter, const ArrowRenderProjection& projection,
-                         const SnowCanvasSceneItem& item) {
+                         const SnowCanvasSceneItem& item, const void* cacheNamespace) {
     const double strokeWidth = item.stroke_width;
     const QColor stroke = toQColor(item.stroke);
     if (item.pathChunks().empty()) {
@@ -865,6 +870,12 @@ void drawOwnedPathChunks(QPainter& painter, const ArrowRenderProjection& project
     }
     painter.save();
     const bool hasExplicitClip = painter.hasClipping();
+    const bool pressureStroke =
+        item.is_free_draw != 0 && item.brush_mode == SNOW_BRUSH_MODE_PRESSURE_SENSITIVE;
+    // Capture in view coordinates before camera inversion rounds the logical clip to integers.
+    const QRegion pressurePhysicalClip = pressureStroke && hasExplicitClip
+                                             ? painter.deviceTransform().map(painter.clipRegion())
+                                             : QRegion();
     const QRectF canvasVisible =
         hasExplicitClip ? viewRectToCanvas(projection.view, painter.clipBoundingRect())
                               .adjusted(-strokeWidth, -strokeWidth, strokeWidth, strokeWidth)
@@ -874,6 +885,17 @@ void drawOwnedPathChunks(QPainter& painter, const ArrowRenderProjection& project
     if (item.pathIsClosed() && item.fill.a != 0 && !item.aggregateClosedPath().isEmpty()) {
         snow_canvas_fill_render::drawStyledFill(painter, item.aggregateClosedPath(), item.fill,
                                                 item.fill_style, item.stroke_width);
+    }
+
+    if (pressureStroke) {
+        if (stroke.alpha() != 0 && strokeWidth > 0.0) {
+            snow_canvas_pressure_mask::DrawOptions options;
+            options.cacheNamespace = cacheNamespace;
+            options.physicalClip = hasExplicitClip ? &pressurePhysicalClip : nullptr;
+            snow_canvas_pressure_mask::draw(painter, item, stroke, options);
+        }
+        painter.restore();
+        return;
     }
 
     if (stroke.alpha() != 0 && strokeWidth > 0.0) {
@@ -922,7 +944,8 @@ void drawOwnedPathChunks(QPainter& painter, const ArrowRenderProjection& project
 }
 
 void drawArrowItem(QPainter& painter, const SceneDisplayInfo& displayInfo,
-                   const SnowCanvasSceneItem& item, double inheritedOpacity = 1.0) {
+                   const SnowCanvasSceneItem& item, double inheritedOpacity = 1.0,
+                   const void* cacheNamespace = nullptr) {
     painter.save();
     if (item.blend_mode == SNOW_BLEND_MODE_MULTIPLY) {
         painter.setCompositionMode(QPainter::CompositionMode_Multiply);
@@ -950,7 +973,7 @@ void drawArrowItem(QPainter& painter, const SceneDisplayInfo& displayInfo,
         painter.setClipPath(clip, Qt::IntersectClip);
     }
     if (!item.pathChunks().empty() && item.arrow_shaft_type != SNOW_ARROW_SHAFT_TYPE_TAPERED) {
-        drawOwnedPathChunks(painter, projection, item);
+        drawOwnedPathChunks(painter, projection, item, cacheNamespace);
         const double viewStrokeWidth = item.stroke_width * projection.view.cameraZoom;
         if (item.arrowhead_primitive_count > 0) {
             drawArrowheadPrimitives(painter, projection, item.arrowhead_primitives,
@@ -1123,7 +1146,8 @@ void drawSerialNumberConnectorItem(QPainter& painter, const SceneDisplayInfo& di
 
 void drawSceneItem(QPainter& painter, const SceneDisplayInfo& displayInfo,
                    const SnowCanvasSceneItem& item, const SnowCanvasSmartEraseSnapshot& smartErase,
-                   const QList<SnowCanvasBaseImageSource>* baseImageSources) {
+                   const QList<SnowCanvasBaseImageSource>* baseImageSources,
+                   const void* cacheNamespace) {
     switch (item.kind) {
     case SNOW_SCENE_DISPLAY_ITEM_DRAW_RECT:
         drawRectItem(painter, displayInfo, item);
@@ -1132,7 +1156,7 @@ void drawSceneItem(QPainter& painter, const SceneDisplayInfo& displayInfo,
         drawSpeechBubbleItem(painter, displayInfo, item);
         break;
     case SNOW_SCENE_DISPLAY_ITEM_ARROW:
-        drawArrowItem(painter, displayInfo, item);
+        drawArrowItem(painter, displayInfo, item, 1.0, cacheNamespace);
         break;
     case SNOW_SCENE_DISPLAY_ITEM_TEXT:
         drawTextItem(painter, displayInfo, item);
@@ -1150,7 +1174,7 @@ void drawSceneItem(QPainter& painter, const SceneDisplayInfo& displayInfo,
     case SNOW_SCENE_DISPLAY_ITEM_MAGNIFIER:
         if (item.magnifier.connection_type == SNOW_MAGNIFIER_CONNECTION_LEADER_LINE &&
             item.arrow_point_count >= 2)
-            drawArrowItem(painter, displayInfo, item, painter.opacity());
+            drawArrowItem(painter, displayInfo, item, painter.opacity(), cacheNamespace);
         snow_canvas_magnifier_renderer::render(painter, displayInfo, item, baseImageSources);
         break;
     default:
@@ -2500,6 +2524,8 @@ void renderSceneItemsTiled(const SceneRenderRequest& request) {
 
 namespace {
 void renderSceneItemsImpl(const SceneRenderRequest& request) {
+    const void* cacheNamespace =
+        request.cacheNamespace != nullptr ? request.cacheNamespace : request.displayCache;
     QPainter& painter = *request.painter;
     const SceneDisplayInfo& displayInfo = *request.displayInfo;
     const SnowCanvasSceneItem* sceneItems = request.sceneItems;
@@ -2892,7 +2918,7 @@ void renderSceneItemsImpl(const SceneRenderRequest& request) {
                 if (!ordinaryFilter(item)) {
                     const StageTimer replayTimer{g_filterDiagnostics.sceneReplayNanoseconds};
                     drawSceneItem(scenePainter, displayInfo, item, request.smartErase,
-                                  request.baseImageSources);
+                                  request.baseImageSources, cacheNamespace);
                     ++g_filterDiagnostics.replayedItemCount;
                     renderedContent = true;
                     ++position;
@@ -3265,7 +3291,7 @@ void renderSceneItemsImpl(const SceneRenderRequest& request) {
             const std::uint32_t index = candidateIndices[candidate];
             if (index < sceneItemCount) {
                 drawSceneItem(painter, displayInfo, sceneItems[index], request.smartErase,
-                              request.baseImageSources);
+                              request.baseImageSources, cacheNamespace);
             }
         }
         return;
@@ -3275,7 +3301,8 @@ void renderSceneItemsImpl(const SceneRenderRequest& request) {
         if (!exposedRegion.intersects(alignedRectForBounds(sceneItemBounds(displayInfo, item)))) {
             continue;
         }
-        drawSceneItem(painter, displayInfo, item, request.smartErase, request.baseImageSources);
+        drawSceneItem(painter, displayInfo, item, request.smartErase, request.baseImageSources,
+                      cacheNamespace);
     }
 }
 } // namespace

@@ -17,6 +17,7 @@
 #include "../src/presentation/pinned/pinnedwindowplatform.h"
 #include "../src/presentation/pinned/screenshotclipboardplacementgeometry.h"
 #include <QNativeGestureEvent>
+#include <QTabletEvent>
 #ifdef Q_OS_MACOS
 #include <CoreGraphics/CoreGraphics.h>
 #endif
@@ -15905,7 +15906,9 @@ void pinnedExecutionAutomaticSaveOffscreen() {
                 };
                 return rows;
             }),
-        ScreenshotCompressionLevel::Medium, ScreenshotExportArtifact::PngCachePolicy{1, {}});
+        ScreenshotCompressionLevel::Medium,
+        ScreenshotExportArtifact::PngCachePolicy{
+            1, {}, ScreenshotExportArtifact::PngCachePolicy{}.maximumFileBytes, {}});
     std::optional<ScreenshotExportTaskResult> rowSaved;
     ScreenshotAutomaticSaveRequest automatic;
     automatic.receiver = &receiver;
@@ -21630,6 +21633,21 @@ void pinnedMarginProtectsContentGestures() {
     require(Access::dragDocument(window) == document && !Access::exportGesture(window),
             "a margin press and release must not create annotations or export gestures");
 
+    QPointingDevice pen(QStringLiteral("pinned tablet"), 92, QInputDevice::DeviceType::Stylus,
+                        QPointingDevice::PointerType::Pen,
+                        QInputDevice::Capability::Position | QInputDevice::Capability::Pressure, 1,
+                        3);
+    const auto tablet = [&](QEvent::Type type, QPointF point, Qt::MouseButtons buttons) {
+        const auto button = type == QEvent::TabletMove ? Qt::NoButton : Qt::LeftButton;
+        QTabletEvent event(type, &pen, point, canvas->mapToGlobal(point), 0.5, 0, 0, 0, 0, 0,
+                           Qt::NoModifier, button, buttons);
+        QApplication::sendEvent(canvas, &event);
+    };
+    tablet(QEvent::TabletPress, marginPoint, Qt::LeftButton);
+    tablet(QEvent::TabletRelease, marginPoint, Qt::NoButton);
+    require(Access::dragDocument(window) == document && !Access::exportGesture(window),
+            "native tablet input cannot start an annotation in the reserved pin margin");
+
     adqt::widgets::AdColorPicker picker;
     picker.setValue(adqt::widgets::AdColorValue::solid(QColor(190, 37, 81)));
     const auto originalColor = picker.value();
@@ -21640,9 +21658,20 @@ void pinnedMarginProtectsContentGestures() {
                      [&](const auto&) { ++colorChanges; });
     pressMargin();
     releaseMargin();
+    tablet(QEvent::TabletPress, marginPoint, Qt::LeftButton);
+    tablet(QEvent::TabletRelease, marginPoint, Qt::NoButton);
     require(colorChanges == 0 && picker.value() == originalColor &&
                 Access::dragDocument(window) == document && !Access::exportGesture(window),
             "a margin press must not commit a sampled color or alter the annotation document");
+    editor->toolbarWindow()->palette()->canvasColorSamplingRequested(&picker);
+    require(editor->canvasColorSamplingActive(), "rearm the native tablet sampling fixture");
+    const QPointF samplePoint = canvas->rect().center();
+    tablet(QEvent::TabletMove, samplePoint, Qt::NoButton);
+    tablet(QEvent::TabletPress, samplePoint, Qt::LeftButton);
+    tablet(QEvent::TabletRelease, samplePoint, Qt::NoButton);
+    require(colorChanges == 1 && !editor->canvasColorSamplingActive() &&
+                Access::dragDocument(window) == document,
+            "pinned native tablet sampling commits once and consumes its release without drawing");
     using canvas_quick_selection_test::mouse;
     require(editor->automationSetTool(SnowCanvasTool::FreeDraw),
             "captured annotation fixture must restore its drawing tool");
@@ -21657,6 +21686,16 @@ void pinnedMarginProtectsContentGestures() {
                 window.currentNativeGeometry() == originalGeometry &&
                 !Access::interactionActive(window),
             "a captured annotation must receive its margin movement and commit on release");
+    require(canvas->undo() && editor->automationSetTool(SnowCanvasTool::FreeDraw),
+            "restore the native tablet margin crossing fixture");
+    tablet(QEvent::TabletPress, strokeStart, Qt::LeftButton);
+    tablet(QEvent::TabletMove, marginPoint, Qt::LeftButton);
+    tablet(QEvent::TabletRelease, strokeEnd, Qt::NoButton);
+    require(canvas->canvasHistoryState().canUndo &&
+                canvas->hasQuickSelectionTargetAt(marginPoint, Qt::RightButton) &&
+                window.currentNativeGeometry() == originalGeometry &&
+                !Access::interactionActive(window),
+            "an owned native tablet stroke can cross the margin and release without resizing");
     editor->setEditMode(false);
 
     ScreenshotPinnedWindow ocrWindow;
@@ -23645,7 +23684,7 @@ void pinnedAnimatedImages(bool transformsOnly = false) {
         QStringList names;
         for (auto* action : actions)
             names.append(action->objectName());
-        const int process = names.indexOf(QStringLiteral("screenshotPinnedProcessImageMenu"));
+        const qsizetype process = names.indexOf(QStringLiteral("screenshotPinnedProcessImageMenu"));
         require(process >= 4 &&
                     names.mid(process - 4, 4) ==
                         QStringList{QStringLiteral("screenshotPinnedTogglePlaybackAction"),

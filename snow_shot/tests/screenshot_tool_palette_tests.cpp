@@ -2093,8 +2093,8 @@ void styleToolSwitchesReconcileCompatibleEditorRoots() {
                 styleEditorRoot(freeDrawRow, "shape-fill") == lineFillRoot,
             "Line to Free Draw should preserve all style editor subtrees");
     require(lineToFreeDraw.retained == 3 && lineToFreeDraw.destroyed == 1 &&
-                lineToFreeDraw.created == 0,
-            "Line to Free Draw should remove only the Line type editor");
+                lineToFreeDraw.created == 1,
+            "Line to Free Draw should replace the Line type editor with Brush mode");
 }
 
 void styleToolReuseMapPreservesEveryCompatibleRole() {
@@ -8562,6 +8562,169 @@ void lineToolIsDiscoverableSelectableAndUsesLinearStyleControls() {
             "the canvas should accept the distinct Line tool identity");
     require(canvas.canvasTool() == SnowCanvasTool::Line,
             "the canvas should retain Line while using shared linear geometry");
+}
+
+void pressureBrushToolbarPreservesStylesAndMixedSelection() {
+    using Tool = ScreenshotToolPalette::Tool;
+    ScreenshotToolPalette::Options options;
+    options.showLineTool = true;
+    options.showFreeDrawTool = true;
+    options.styleDefaults.freeDraw.brushMode = SnowCanvasBrushMode::PressureSensitive;
+    ScreenshotToolPalette palette(options);
+    palette.setActiveTool(Tool::FreeDraw);
+    const auto group = [&palette]() {
+        auto* root = palette.findChild<QWidget*>(QStringLiteral("screenshotBrushModeButtonGroup"));
+        return root == nullptr ? nullptr : root->findChild<adqt::widgets::AdRadioButtonGroup*>();
+    };
+    auto* brushGroup = group();
+    require(brushGroup != nullptr && brushGroup->checkedId() == 1 &&
+                brushGroup->buttons().size() == 2 && !brushGroup->button(0)->icon().isNull() &&
+                !brushGroup->button(1)->icon().isNull(),
+            "the brush toolbar must restore its mode and display both dedicated icons");
+    auto* row = palette.findChild<QWidget*>(QStringLiteral("screenshotFreeDrawStyleControls"));
+    require(row != nullptr &&
+                row->layout()->indexOf(styleEditorRoot(row, "brush-mode")) >
+                    row->layout()->indexOf(styleEditorRoot(row, "outline-width")) &&
+                row->layout()->indexOf(styleEditorRoot(row, "brush-mode")) <
+                    row->layout()->indexOf(styleEditorRoot(row, "shape-fill")),
+            "Brush mode must follow stroke width and precede the existing fill editor");
+
+    auto expected = palette.creationStyleDefaults();
+    int edits = 0;
+    SnowCanvasShapeStyle emitted;
+    QObject::connect(&palette, &ScreenshotToolPalette::shapeStyleChanged,
+                     [&edits, &emitted](const SnowCanvasShapeStyle& style, quint32 properties,
+                                        SnowCanvasShapeKind kind) {
+                         require(properties == SnowCanvasShapeStylePropertyBrushMode &&
+                                     kind == SnowCanvasShapeKind::FreeDraw,
+                                 "Brush mode edits must affect only the Free Draw mode property");
+                         emitted = style;
+                         ++edits;
+                     });
+    brushGroup->button(0)->click();
+    expected.freeDraw.brushMode = SnowCanvasBrushMode::Regular;
+    require(edits == 1 && emitted.brushMode == SnowCanvasBrushMode::Regular &&
+                palette.creationStyleDefaults() == expected,
+            "Regular brush must update independent creation defaults without altering appearance");
+    palette.setActiveTool(Tool::Line);
+    require(group() == nullptr, "Line must not expose brush-specific options");
+    palette.setActiveTool(Tool::FreeDraw);
+    brushGroup = group();
+    require(brushGroup != nullptr && brushGroup->checkedId() == 0,
+            "Brush mode must survive style editor recreation");
+    brushGroup->button(1)->click();
+    expected.freeDraw.brushMode = SnowCanvasBrushMode::PressureSensitive;
+    require(edits == 2 && palette.creationStyleDefaults() == expected,
+            "recreated brush controls must retain one active edit callback");
+
+    SnowCanvasStyleToolbarState selected;
+    selected.source = SnowCanvasStyleToolbarSource::SelectedFreeDraw;
+    selected.shapeStyle = expected.freeDraw;
+    selected.shapeStyle.brushMode = SnowCanvasBrushMode::Regular;
+    palette.setStyleToolbarState(selected);
+    require(brushGroup->checkedId() == 0 && edits == 2,
+            "selected brush synchronization must update the control without creating an edit");
+    selected.shapeStyleMixed = SnowCanvasShapeStyleMixedBrushMode;
+    palette.setStyleToolbarState(selected);
+    require(brushGroup->checkedId() == -1,
+            "mixed selected brush modes must leave both options unchecked");
+    brushGroup->button(0)->click();
+    require(edits == 3 && brushGroup->checkedId() == 0 &&
+                emitted.brushMode == SnowCanvasBrushMode::Regular,
+            "an explicit choice must resolve mixed Brush mode even if its representative matches");
+
+    auto& language = snow_shot::presentation::LanguageManager::instance();
+    const struct {
+        const char* locale;
+        const char* regular;
+        const char* pressure;
+    } translations[] = {{"en_US", "Regular brush", "Pressure-sensitive brush"},
+                        {"zh_CN", "普通画笔", "压感画笔"},
+                        {"zh_TW", "一般筆刷", "壓感筆刷"}};
+    for (const auto& translation : translations) {
+        require(language.setLanguage(QString::fromLatin1(translation.locale)),
+                "brush translation catalog must load");
+        QCoreApplication::processEvents();
+        require(group() == brushGroup &&
+                    brushGroup->button(0)->toolTip() == QString::fromUtf8(translation.regular) &&
+                    brushGroup->button(1)->toolTip() == QString::fromUtf8(translation.pressure) &&
+                    brushGroup->button(0)->accessibleName() ==
+                        QString::fromUtf8(translation.regular) &&
+                    brushGroup->button(1)->accessibleName() ==
+                        QString::fromUtf8(translation.pressure) &&
+                    edits == 3,
+                "brush tooltips and accessible names must retranslate without rebuilding or edits");
+    }
+    require(language.setLanguage(QStringLiteral("en_US")), "restore English brush labels");
+}
+
+void pressureBrushPreferencePersistsAndRejectsUnknownValues() {
+    using namespace snow_shot::presentation;
+    const auto original = screenshotCanvasToolStyleDefaults();
+    const auto restore =
+        qScopeGuard([&] { static_cast<void>(persistScreenshotCanvasToolStyles(original)); });
+    auto defaults = screenshotCanvasStyleDefaults();
+    require(defaults.freeDraw.brushMode == SnowCanvasBrushMode::Regular,
+            "new brush preferences must default to Regular");
+    require(persistScreenshotCanvasToolStyles(defaults), "prepare brush style preferences");
+    ScreenshotToolPalette::Options options;
+    options.styleDefaults = defaults;
+    ScreenshotToolPalette palette(options);
+    SnowCanvasWidget canvas;
+    ScreenshotStyleBinding binding(palette, canvas, &palette);
+    applyScreenshotCanvasToolStyles(canvas, defaults);
+    QObject::connect(&canvas, &SnowCanvasWidget::styleToolbarStateChanged, &palette,
+                     [&] { palette.setStyleToolbarState(canvas.canvasStyleToolbarState()); });
+    require(canvas.setCanvasTool(SnowCanvasTool::FreeDraw), "activate brush creation preferences");
+    palette.setActiveTool(ScreenshotToolPalette::Tool::FreeDraw);
+    auto* root = palette.findChild<QWidget*>(QStringLiteral("screenshotBrushModeButtonGroup"));
+    auto* brushGroup =
+        root == nullptr ? nullptr : root->findChild<adqt::widgets::AdRadioButtonGroup*>();
+    require(brushGroup != nullptr, "bound brush controls must materialize");
+    brushGroup->button(1)->click();
+    defaults.freeDraw.brushMode = SnowCanvasBrushMode::PressureSensitive;
+    require(binding.lastSaveSucceeded() == true &&
+                screenshotCanvasToolStyleDefaults() == defaults &&
+                canvas.canvasStyleToolbarState().shapeStyle.brushMode ==
+                    SnowCanvasBrushMode::PressureSensitive,
+            "brush edits must save through the binding and synchronize canvas creation style");
+    clickStyleControl(palette, "Stroke width 4");
+    defaults.freeDraw.strokeWidth = 4.0;
+    require(screenshotCanvasToolStyleDefaults() == defaults,
+            "stroke width edits must preserve saved Brush mode");
+    auto& storage = snow_shot::storage::ApplicationStorage::instance();
+    auto& configuration = storage.configuration();
+    const QString key = QStringLiteral("drawing/free_draw_style");
+    const QJsonObject saved = configuration.value(key).toObject();
+    require(saved.value(QStringLiteral("brush_mode")) == QStringLiteral("pressure-sensitive") &&
+                !configuration.value(QStringLiteral("drawing/line_style"))
+                     .toObject()
+                     .contains(QStringLiteral("brush_mode")),
+            "brush preferences must use their own stable string field");
+    require(configuration.flushNow().success, "flush brush preferences to disk");
+    snow_shot::storage::ConfigurationStore reopened(
+        QDir(storage.configurationDirectory()).filePath(QStringLiteral("config.json")), true,
+        false);
+    require(reopened.value(key) == saved, "brush preferences must survive configuration reopening");
+
+    for (const QJsonValue& invalid :
+         {QJsonValue(), QJsonValue(-1), QJsonValue(1), QJsonValue(true),
+          QJsonValue(QStringLiteral("unknown")), QJsonValue(QStringLiteral("PressureSensitive"))}) {
+        QJsonObject legacy = saved;
+        legacy.insert(QStringLiteral("brush_mode"), invalid);
+        require(configuration.setValue(key, legacy), "write legacy or invalid brush preference");
+        auto expected = defaults;
+        expected.freeDraw.brushMode = SnowCanvasBrushMode::Regular;
+        require(
+            screenshotCanvasToolStyleDefaults() == expected,
+            "missing and invalid Brush modes must fall back to Regular preserving other styles");
+    }
+    QJsonObject legacy = saved;
+    legacy.remove(QStringLiteral("brush_mode"));
+    require(configuration.setValue(key, legacy) &&
+                screenshotCanvasToolStyleDefaults().freeDraw.brushMode ==
+                    SnowCanvasBrushMode::Regular,
+            "older preferences without Brush mode must retain Regular behavior");
 }
 
 void freeDrawToolIsDistinctAndUsesIndependentPathStyleControls() {
@@ -18443,6 +18606,13 @@ int main(int argc, char** argv) {
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
+    if (application.arguments().contains(QStringLiteral("--pressure-brush-only"))) {
+        pressureBrushToolbarPreservesStylesAndMixedSelection();
+        pressureBrushPreferencePersistsAndRejectsUnknownValues();
+        freeDrawToolIsDistinctAndUsesIndependentPathStyleControls();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--eraser-only"))) {
         eraserResetRemainsAvailableWithoutSelection();
         eraserStyleToolbarHeightMatchesOtherTools();
@@ -18945,6 +19115,8 @@ int main(int argc, char** argv) {
     repeatedToolsAndDifferentialStyleSynchronizationAreNoOps();
     editorlessToolsRejectStaleStyleToolbarState();
     lineToolIsDiscoverableSelectableAndUsesLinearStyleControls();
+    pressureBrushToolbarPreservesStylesAndMixedSelection();
+    pressureBrushPreferencePersistsAndRejectsUnknownValues();
     freeDrawToolIsDistinctAndUsesIndependentPathStyleControls();
     highlightVariantsUseConfiguredPopoverGroup();
     drawingToolbarGroupsUseToolbarPopoverMetrics();

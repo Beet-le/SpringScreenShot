@@ -439,6 +439,22 @@
     },
     {
       "variant": "outlined",
+      "symbol": "BrushPressureSensitive",
+      "name": "brush-pressure-sensitive",
+      "source": "../src/presentation/components/icons/resources/brush-pressure-sensitive.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
+      "symbol": "BrushRegular",
+      "name": "brush-regular",
+      "source": "../src/presentation/components/icons/resources/brush-regular.svg",
+      "colorModel": "monochrome",
+      "fit": "contain"
+    },
+    {
+      "variant": "outlined",
       "symbol": "ColorPicker",
       "name": "color-picker",
       "source": "../src/presentation/components/icons/resources/color-picker.svg",

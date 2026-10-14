@@ -904,6 +904,10 @@
             <translation>Post-processing effects</translation>
         </message>
         <message>
+            <source>Pressure-sensitive brush</source>
+            <translation>Pressure-sensitive brush</translation>
+        </message>
+        <message>
             <source>Print</source>
             <translation>Print</translation>
         </message>
@@ -986,6 +990,10 @@
         <message>
             <source>Redo</source>
             <translation>Redo</translation>
+        </message>
+        <message>
+            <source>Regular brush</source>
+            <translation>Regular brush</translation>
         </message>
         <message>
             <source>Reset</source>

@@ -24,6 +24,7 @@
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QMouseEvent>
+#include <QTabletEvent>
 #include <QPainter>
 #include <QPointer>
 #include <QResizeEvent>
@@ -291,6 +292,22 @@ class GlobalCanvasController::Session final : public QWidget, public SnowCanvasC
         return result;
     }
     bool eventFilter(QObject* watched, QEvent* event) override {
+        if (watched == drawing.get() &&
+            (event->type() == QEvent::TabletPress || event->type() == QEvent::TabletMove ||
+             event->type() == QEvent::TabletRelease)) {
+            auto* tablet = static_cast<QTabletEvent*>(event);
+            const auto type = event->type() == QEvent::TabletPress     ? QEvent::MouseButtonPress
+                              : event->type() == QEvent::TabletRelease ? QEvent::MouseButtonRelease
+                                                                       : QEvent::MouseMove;
+            QMouseEvent pointer(type, tablet->position(), tablet->globalPosition(),
+                                tablet->button(), tablet->buttons(), tablet->modifiers(),
+                                tablet->pointingDevice());
+            if (eventFilter(watched, &pointer)) {
+                event->accept();
+                return true;
+            }
+            return false;
+        }
         if (watched == drawing.get() && samplingMouseReleasePending &&
             event->type() == QEvent::MouseButtonRelease) {
             samplingMouseReleasePending = false;

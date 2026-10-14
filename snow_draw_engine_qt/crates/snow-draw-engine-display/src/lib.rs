@@ -368,11 +368,15 @@ pub struct ArrowheadDisplayPrimitive {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ArrowDisplayItem {
+    pub brush_mode: snow_draw_engine_core::BrushMode,
+    pub pressure_geometry: Option<Arc<PathGeometry>>,
     pub id: DisplayItemId,
     pub bound_text_id: Option<DisplayItemId>,
     pub label_bounds: Option<snow_draw_engine_core::DrawRect>,
     pub bound_text_overlay: bool,
     pub points: Vec<[f64; 2]>,
+    // Legacy fallback commands. Chunked free-draw previews keep only `geometry`
+    // rather than copying the complete stroke for every input batch.
     pub path_commands: Vec<ArrowPathCommand>,
     pub geometry: Arc<PathGeometry>,
     pub arrow_type: ArrowType,
@@ -497,6 +501,8 @@ pub struct SerialNumberConnectorDisplayItem {
 impl Default for ArrowDisplayItem {
     fn default() -> Self {
         Self {
+            brush_mode: Default::default(),
+            pressure_geometry: None,
             bound_text_id: None,
             label_bounds: None,
             bound_text_overlay: false,
@@ -843,6 +849,7 @@ pub struct PathChunkReplacement {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PathGeometryPatch {
+    pub role: PathGeometryRole,
     pub id: DisplayItemId,
     pub expected_geometry_revision: u64,
     pub resulting_geometry_revision: u64,
@@ -852,6 +859,13 @@ pub struct PathGeometryPatch {
     pub closed: bool,
     pub full_reset: bool,
     pub element_removed: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PathGeometryRole {
+    #[default]
+    Centerline,
+    PressureOutline,
 }
 
 #[derive(Clone, Debug, PartialEq)]
