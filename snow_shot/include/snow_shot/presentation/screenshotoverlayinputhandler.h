@@ -254,6 +254,7 @@ class ScreenshotOverlayInputHandler final {
     // Restore persisted geometry through the same confirmation lifecycle as a mouse selection.
     [[nodiscard]] bool restorePreviousSelection(const ScreenshotSelectionParams& params);
     [[nodiscard]] bool canSelectCurrentScreen() const;
+    // Select the current display, expanding an already confirmed whole display to all displays.
     [[nodiscard]] bool selectCurrentScreen();
     [[nodiscard]] bool canPrepareSelectionForToolbarShortcut() const;
     // Commit the region, activate the command, then present its resulting tool.

@@ -2942,7 +2942,7 @@ void sharedShiftShortcutChoosesResizeOrColorFormat() {
             "failed to restore the aspect shortcut after contextual input test");
 }
 
-void selectAllShortcutSelectsCurrentScreen() {
+void selectAllShortcutSelectsCurrentScreenThenDesktop() {
     for (int stage = 0; stage < 4; ++stage) {
         ScreenshotCaptureState capture;
         capture.sessionState = ScreenshotSessionState::OverlayVisible;
@@ -2959,6 +2959,10 @@ void selectAllShortcutSelectsCurrentScreen() {
         right.geometryResolved = true;
         displays.appendDisplay(left);
         displays.appendDisplay(right);
+        auto inactive = display(QStringLiteral("inactive"), QStringLiteral("Inactive"),
+                                QRect(-2000, -1000, 400, 300), {});
+        inactive.active = false;
+        displays.appendDisplay(inactive);
         ScreenshotGeometryMapper geometry;
         geometry.rebuild(displays);
         ScreenshotSelectionModel selection;
@@ -2966,7 +2970,7 @@ void selectAllShortcutSelectsCurrentScreen() {
             selection.setAspectRatioPreset(ScreenshotSelectionAspectRatioPreset::Square, {}, 1.0),
             "arm a remembered aspect ratio for full-screen selection");
         if (stage == 0)
-            selection.setSelectionRect(QRectF(820, 20, 100, 60));
+            selection.setSelectionRect(displays.displayAt(1).canvasRect);
         if (stage == 2)
             selection.setSelectionRegion(
                 QRegion(QRect(40, 20, 60, 40)).united(QRect(820, 20, 100, 60)));
@@ -3039,10 +3043,44 @@ void selectAllShortcutSelectsCurrentScreen() {
             static_cast<void>(dispatchShortcutRelease(receiver, Qt::Key_A, Qt::ControlModifier));
         }
 
+        const QRect desktop(0, 0, 2000, 800);
+        const auto selectAndExpect = [&](const QRect& expected) {
+            const int count = confirmations + 1;
+            require(dispatchShortcut(receiver, Qt::Key_A, Qt::ControlModifier),
+                    "a fresh Ctrl+A press must select a screen or expand to the desktop");
+            require(selection.pixelSelection() == expected && selection.rectangular() &&
+                        preparations == count && confirmations == count && presentations == count,
+                    "Ctrl+A must confirm the exact target once, excluding inactive displays");
+            static_cast<void>(dispatchShortcut(receiver, Qt::Key_A, Qt::ControlModifier, true));
+            require(selection.pixelSelection() == expected && confirmations == count,
+                    "holding Ctrl+A must not expand or reconfirm the selection");
+            static_cast<void>(dispatchShortcutRelease(receiver, Qt::Key_A, Qt::ControlModifier));
+        };
+        selectAndExpect(desktop);
+        cursor = right.logicalRect.center();
+        selectAndExpect(desktop);
+
+        // A custom region with screen-sized bounds has not selected the whole screen.
+        const QRect screen = displays.displayAt(1).canvasRect;
+        QPainterPath triangle;
+        triangle.moveTo(screen.x(), screen.y());
+        triangle.lineTo(screen.x() + screen.width(), screen.y());
+        triangle.lineTo(screen.center().x(), screen.y() + screen.height());
+        triangle.closeSubpath();
+        selection.setSelectionRegion(
+            ScreenshotRegionGeometry::fromPath(triangle, ScreenshotRegionType::Polyline));
+        require(selection.pixelSelection() == screen, "custom region must span the current screen");
+        selectAndExpect(screen);
+        selectAndExpect(desktop);
+
+        selection.setSelectionRegion(QRegion(desktop).subtracted(QRect(100, 100, 100, 100)));
+        selectAndExpect(screen);
+
         const QRect confirmed = selection.pixelSelection();
+        const int confirmedCount = confirmations;
         const auto rejectShortcut = [&] {
             static_cast<void>(dispatchShortcut(receiver, Qt::Key_A, Qt::ControlModifier));
-            require(selection.pixelSelection() == confirmed && confirmations == 2,
+            require(selection.pixelSelection() == confirmed && confirmations == confirmedCount,
                     "ineligible Ctrl+A must leave the current selection untouched");
         };
         interaction.enterScrollingCapture();
@@ -3062,7 +3100,8 @@ void selectAllShortcutSelectsCurrentScreen() {
         selection.setDraftRegion(ScreenshotRegionGeometry(QRect(10, 10, 40, 40)));
         static_cast<void>(dispatchShortcut(receiver, Qt::Key_A, Qt::ControlModifier));
         require(selection.constructionActive() &&
-                    selection.pixelSelection() == QRect(10, 10, 40, 40) && confirmations == 2,
+                    selection.pixelSelection() == QRect(10, 10, 40, 40) &&
+                    confirmations == confirmedCount,
                 "Ctrl+A must leave an unfinished region draft untouched");
         selection.clearDraftRegion();
         selection.setSelectionRect(confirmed);
@@ -3070,7 +3109,7 @@ void selectAllShortcutSelectsCurrentScreen() {
         const QRect pending = selection.pixelSelection();
         static_cast<void>(dispatchShortcut(receiver, Qt::Key_A, Qt::ControlModifier));
         require(selection.regionOperationActive() && selection.pixelSelection() == pending &&
-                    confirmations == 2,
+                    confirmations == confirmedCount,
                 "Ctrl+A must not interrupt an active region operation");
         selection.cancelRegionOperation();
         displays.startup = std::make_shared<ScreenshotStartupContext>();
@@ -3082,6 +3121,46 @@ void selectAllShortcutSelectsCurrentScreen() {
         displays.displayAt(0).active = false;
         cursor = left.logicalRect.center();
         rejectShortcut();
+    }
+}
+
+void selectAllShortcutWithSingleScreen() {
+    for (const bool canvasUsesPoints : {false, true}) {
+        ScreenshotCaptureState capture;
+        ScreenshotDisplaySession displays;
+        auto screen = display(QStringLiteral("only"), QStringLiteral("Only"),
+                              QRect(-1200, -400, 1200, 800), {});
+        screen.logicalRect = QRect(-800, -200, 800, 400);
+        screen.logicalToPhysicalScale = 1.5;
+        screen.canvasUsesPoints = canvasUsesPoints;
+        screen.geometryResolved = true;
+        displays.appendDisplay(screen);
+        ScreenshotGeometryMapper geometry;
+        geometry.rebuild(displays);
+        ScreenshotSelectionModel selection;
+        ScreenshotIntelligentSelectionModel intelligent;
+        ScreenshotInteractionState interaction;
+        interaction.enterOverlayVisible(false);
+        QWidget receiver;
+        snow_shot::presentation::WindowShortcutManager manager;
+        manager.addScopeWindow(&receiver);
+        int confirmations = 0;
+        ScreenshotOverlayInputActions actions;
+        actions.currentLogicalCursorPosition = [&] { return screen.logicalRect.center(); };
+        actions.selectionConfirmed = [&] { ++confirmations; };
+        ScreenshotOverlayInputHandler handler(
+            {capture, interaction, selection, intelligent, geometry, displays, actions});
+        ScreenshotOverlayShortcutController shortcuts(manager, handler, interaction, intelligent,
+                                                      actions);
+        for (int count = 1; count <= 3; ++count) {
+            require(dispatchShortcut(receiver, Qt::Key_A, Qt::ControlModifier),
+                    "Ctrl+A must remain available with one screen");
+            require(selection.pixelSelection() == displays.displayAt(0).canvasRect &&
+                        selection.rectangular() && interaction.movingSelection() &&
+                        confirmations == count,
+                    "repeated Ctrl+A must retain the single display's exact canvas extent");
+            static_cast<void>(dispatchShortcutRelease(receiver, Qt::Key_A, Qt::ControlModifier));
+        }
     }
 }
 
@@ -7324,6 +7403,12 @@ int main(int argc, char** argv) {
         storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
+    if (QCoreApplication::arguments().contains(QStringLiteral("--select-all-screens-only"))) {
+        selectAllShortcutSelectsCurrentScreenThenDesktop();
+        selectAllShortcutWithSingleScreen();
+        storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     regionOperationsUseMarqueeAndRestoreOnCancel();
     if (QCoreApplication::arguments().contains(QStringLiteral("--completion-gestures-only"))) {
         completionGesturesUseSharedEligibilityAcrossTools();
@@ -7358,7 +7443,8 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (QCoreApplication::arguments().contains(QStringLiteral("--shortcut-input-only"))) {
-        selectAllShortcutSelectsCurrentScreen();
+        selectAllShortcutSelectsCurrentScreenThenDesktop();
+        selectAllShortcutWithSingleScreen();
         previousSelectionShortcutUsesSharedConfirmation();
         selectionHistoryShortcutsKeepShiftContextAndConfiguration(
             QDir(temporary.path()).filePath(QStringLiteral("selection-history-shortcuts")));
@@ -7388,7 +7474,8 @@ int main(int argc, char** argv) {
         storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
-    selectAllShortcutSelectsCurrentScreen();
+    selectAllShortcutSelectsCurrentScreenThenDesktop();
+    selectAllShortcutWithSingleScreen();
     previousSelectionShortcutUsesSharedConfirmation();
     selectionHistoryShortcutsKeepShiftContextAndConfiguration(
         QDir(temporary.path()).filePath(QStringLiteral("selection-history-shortcuts")));

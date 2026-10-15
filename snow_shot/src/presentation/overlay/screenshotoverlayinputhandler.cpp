@@ -1202,10 +1202,18 @@ bool ScreenshotOverlayInputHandler::selectCurrentScreen() {
     if (screen.isEmpty())
         return false;
 
+    const QRectF allScreens = m_context.geometry.canvasBounds();
+    const QRectF selected(m_context.selection.pixelSelection());
+    // Smart-selection previews still select their current display on the first press.
+    // Once confirmed, expand a whole display to the desktop and keep it selected.
+    const bool expandToAllScreens = m_context.interaction.movingSelection() &&
+                                    m_context.selection.rectangular() &&
+                                    (selected == screen || selected == allScreens);
+
     resetTransientShortcuts();
     m_context.actions.prepareExplicitSelectionCommand();
-    m_context.selection.setSelectionRect(screen);
-    // A full-screen replacement must retain the display's exact extent, even
+    m_context.selection.setSelectionRect(expandToAllScreens ? allScreens : screen);
+    // A full-screen replacement must retain the target's exact extent, even
     // when the preceding selection used a remembered aspect ratio preset.
     m_context.selection.clearAspectRatioPresetForReplacement();
     m_context.intelligentSelection.clearTransientState();

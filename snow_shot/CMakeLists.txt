@@ -4358,6 +4358,12 @@ if(SNOW_SHOT_BUILD_TESTS)
     set_tests_properties(snow-shot-smart-selection-wheel-tests PROPERTIES LABELS "unit" TIMEOUT 60
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     snow_shot_import_offscreen_platform(snow-shot-screenshot-history-tests)
+    add_test(NAME snow-shot-select-all-screens-shortcut-tests
+        COMMAND snow-shot-screenshot-history-tests --select-all-screens-only -platform offscreen)
+    set_tests_properties(snow-shot-select-all-screens-shortcut-tests PROPERTIES
+        LABELS "unit" TIMEOUT 60 SNOW_TEST_CROSS_PLATFORM TRUE
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-previous-selection-shortcut-tests
         COMMAND snow-shot-screenshot-history-tests --previous-selection-only -platform offscreen)
     set_tests_properties(snow-shot-previous-selection-shortcut-tests PROPERTIES
