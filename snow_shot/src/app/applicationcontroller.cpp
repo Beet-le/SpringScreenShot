@@ -88,6 +88,7 @@
 #include <utility>
 #include <atomic>
 #include <cmath>
+#include <mutex>
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
 #endif
@@ -1069,17 +1070,24 @@ class ApplicationController::Impl {
         const auto key = QString::number(request.connectionId) + u':' + request.requestId;
         const auto canceled = std::make_shared<std::atomic_bool>(false);
         const auto rejected = std::make_shared<std::atomic_bool>(false);
-        const auto peak = std::make_shared<std::atomic<qint64>>(0);
+        struct BudgetState {
+            std::mutex mutex;
+            qint64 peak = 0;
+        };
+        const auto budgetState = std::make_shared<BudgetState>();
         const auto budget = [sourceBudget = std::move(sourceBudget), canceled, rejected,
-                             peak](qint64 bytes) {
+                             budgetState](qint64 bytes) {
+            // Native fallback and resize checks can overlap. Keep the shared
+            // document reservation monotonic across every admission callback.
+            const std::lock_guard lock(budgetState->mutex);
             if (canceled->load())
                 return false;
-            const qint64 total = std::max(peak->load(), bytes);
+            const qint64 total = std::max(budgetState->peak, bytes);
             if (bytes < 0 || !sourceBudget || !sourceBudget(total)) {
                 rejected->store(true);
                 return false;
             }
-            peak->store(total);
+            budgetState->peak = total;
             return true;
         };
         const auto rasterBytes = [](QSize size) -> qint64 {
@@ -1115,8 +1123,7 @@ class ApplicationController::Impl {
             QObject::connect(
                 delayed, &QTimer::timeout, mcpDocuments.get(),
                 [this, guard, delayed, key, params, owner = request.connectionId,
-                 id = request.requestId, canceled, budget, rasterBytes,
-                 done = std::move(done)]() mutable {
+                 id = request.requestId, canceled, budget, done = std::move(done)]() mutable {
                     mcpSourceDelays.remove(key);
                     delayed->deleteLater();
                     if (!guard || canceled->load())
@@ -1133,70 +1140,24 @@ class ApplicationController::Impl {
                         done({}, {}, QStringLiteral("busy"));
                         return;
                     }
-                    // Direct capture acquires every display before selecting its result.
-                    // Reserve all native frames and the possible scaled output first.
-                    qint64 captureBytes = 0;
-                    QSize largest;
-#ifdef Q_OS_MACOS
-                    qreal maximumDpr = 1.0;
-#endif
-                    for (const auto* screen : QGuiApplication::screens()) {
-#ifdef Q_OS_MACOS
-                        maximumDpr = std::max(maximumDpr, screen->devicePixelRatio());
-#endif
-                        const QSize pixels(
-                            qCeil(screen->size().width() * screen->devicePixelRatio()),
-                            qCeil(screen->size().height() * screen->devicePixelRatio()));
-                        const auto bytes = rasterBytes(pixels);
-                        if (bytes < 0 || !budget(captureBytes + bytes)) {
-                            done({}, {}, QStringLiteral("resource_limit"));
-                            return;
-                        }
-                        captureBytes += bytes;
-                        largest = largest.expandedTo(pixels);
-                    }
-                    if (params.value(QStringLiteral("target")).toString() == u"focused_window") {
-                        QSize pixels;
-#ifdef Q_OS_WIN
-                        RECT bounds{};
-                        if (const auto window = GetForegroundWindow();
-                            window && GetWindowRect(GetAncestor(window, GA_ROOT), &bounds))
-                            pixels = QSize(bounds.right - bounds.left, bounds.bottom - bounds.top);
-#elif defined(Q_OS_MACOS)
-                        const auto bounds = platform::screenshotFocusedWindowBounds();
-                        pixels = QSize(qCeil(bounds.width() * maximumDpr),
-                                       qCeil(bounds.height() * maximumDpr));
-#endif
-                        if (!pixels.isEmpty()) {
-                            const auto bytes = rasterBytes(pixels);
-                            if (bytes < 0 || !budget(captureBytes + bytes)) {
-                                done({}, {}, QStringLiteral("resource_limit"));
-                                return;
-                            }
-                            captureBytes += bytes;
-                            largest = largest.expandedTo(pixels);
-                        }
-                    }
                     const auto scale = params.value(QStringLiteral("scale")).toDouble(1.0);
                     if (!std::isfinite(scale) || scale < 0.1 || scale > 4.0) {
                         done({}, {}, QStringLiteral("invalid_parameters"));
                         return;
                     }
-                    const auto outputBytes = rasterBytes(
-                        QSize(qCeil(largest.width() * scale), qCeil(largest.height() * scale)));
-                    if (outputBytes < 0 || !budget(captureBytes + outputBytes)) {
-                        done({}, {}, QStringLiteral("resource_limit"));
-                        return;
-                    }
+                    // Target identity is resolved once by mcpCapture. Native preparation
+                    // admits that target's geometry before allocating its raster.
                     mcpSourceCaptureOwner = owner;
                     mcpSourceCaptureRequest = id;
                     if (!directCaptureController->mcpCapture(
-                            params, [this, done](QImage image, QJsonObject metadata,
-                                                 QString error) mutable {
+                            params,
+                            [this, done](QImage image, QJsonObject metadata,
+                                         QString error) mutable {
                                 mcpSourceCaptureOwner = 0;
                                 mcpSourceCaptureRequest.clear();
                                 done(std::move(image), std::move(metadata), std::move(error));
-                            })) {
+                            },
+                            budget)) {
                         mcpSourceCaptureOwner = 0;
                         mcpSourceCaptureRequest.clear();
                         done({}, {}, QStringLiteral("busy"));

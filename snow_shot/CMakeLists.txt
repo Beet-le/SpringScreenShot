@@ -268,6 +268,7 @@ if(NOT TARGET snow_capture_c)
     endif()
     snow_add_rust_static_libraries(snow_shot_rust_ffi
         MANIFEST_DIR "${SNOW_SHOT_CAPTURE_CRATES_DIR}"
+        NO_DEFAULT_FEATURES
         FEATURES ${_snow_scrolling_perf_features}
         TARGETS
             snow_capture_c
@@ -293,12 +294,8 @@ endif()
 
 if(NOT TARGET snow_recording_c)
     snow_add_rust_static_library(snow_recording_c PACKAGE snow-recording-c
-        MANIFEST_DIR "${SNOW_SHOT_CAPTURE_CRATES_DIR}" OUTPUT_NAME snow_recording_c)
-endif()
-
-if(NOT TARGET snow_recording_c)
-    snow_add_rust_static_library(snow_recording_c PACKAGE snow-recording-c
-        MANIFEST_DIR "${SNOW_SHOT_CAPTURE_CRATES_DIR}" OUTPUT_NAME snow_recording_c)
+        MANIFEST_DIR "${SNOW_SHOT_CAPTURE_CRATES_DIR}" OUTPUT_NAME snow_recording_c
+        NO_DEFAULT_FEATURES)
 endif()
 
 if(NOT TARGET snow_visual_region_detector_c)
@@ -753,6 +750,7 @@ set(SNOW_SHOT_STORAGE_SOURCES
     include/snow_shot/storage/configurationarchive.h
     include/snow_shot/storage/configurationstore.h
     include/snow_shot/storage/configurationschema.h
+    include/snow_shot/storage/exportfilename.h
     include/snow_shot/storage/persistedselectioncodec.h
     include/snow_shot/storage/persistedwindowgeometry.h
     include/snow_shot/storage/pinnedwindowrepository.h
@@ -768,6 +766,7 @@ set(SNOW_SHOT_STORAGE_SOURCES
     src/storage/configurationarchive.cpp
     src/storage/configurationstore.cpp
     src/storage/configurationschema.cpp
+    src/storage/exportfilename.cpp
     src/storage/persistedselectioncodec.cpp
     src/storage/persistedwindowgeometry.cpp
     src/storage/pinnedwindowrepository.cpp
@@ -1324,7 +1323,8 @@ if(SNOW_SHOT_BUILD_TESTS)
         src/presentation/services/screenshotpdfexport.cpp)
     target_include_directories(snow-shot-collage-pdf-export-tests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src/image")
-    target_link_libraries(snow-shot-collage-pdf-export-tests PRIVATE snow_shot_collage_core)
+    target_link_libraries(snow-shot-collage-pdf-export-tests PRIVATE
+        snow_shot_collage_core snow_shot_storage)
     add_test(NAME snow-shot-collage-pdf-export-tests COMMAND snow-shot-collage-pdf-export-tests)
     set_tests_properties(snow-shot-collage-pdf-export-tests PROPERTIES LABELS unit)
     add_executable(snow-shot-collage-document-tests tests/collage_document_tests.cpp)
@@ -2196,6 +2196,12 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_test(NAME snow-shot-translation-catalog-tests
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/translation_catalog_tests.py")
     set_tests_properties(snow-shot-translation-catalog-tests PROPERTIES LABELS "unit")
+
+    add_test(NAME snow-shot-recording-build-profiles-tests
+        COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/test-recording-build-profiles.py")
+    set_tests_properties(snow-shot-recording-build-profiles-tests PROPERTIES
+        LABELS "unit" TIMEOUT 180)
 
     if(WIN32)
         add_test(NAME snow-shot-windows-architecture-tests
@@ -3150,8 +3156,11 @@ if(SNOW_SHOT_BUILD_TESTS)
         COMMAND snow-shot-settings-page-loading-tests --layout-stability-only)
     add_test(NAME snow-shot-tray-selection-settings-tests
         COMMAND snow-shot-settings-page-loading-tests --tray-selection-only)
+    add_test(NAME snow-shot-settings-catalog-reset-tests
+        COMMAND snow-shot-settings-page-loading-tests --catalog-resets-only)
     set_tests_properties(snow-shot-settings-navigation-tests snow-shot-action-toolbar-settings-tests
-        snow-shot-settings-layout-stability-tests snow-shot-tray-selection-settings-tests PROPERTIES
+        snow-shot-settings-layout-stability-tests snow-shot-tray-selection-settings-tests
+        snow-shot-settings-catalog-reset-tests PROPERTIES
         LABELS "unit" TIMEOUT 60
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
@@ -3893,6 +3902,7 @@ if(SNOW_SHOT_BUILD_TESTS)
 
     add_executable(snow-shot-direct-capture-frame-tests tests/direct_capture_frame_tests.cpp)
     target_include_directories(snow-shot-direct-capture-frame-tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
         "${CMAKE_CURRENT_SOURCE_DIR}/src/presentation/capture"
         "${SNOW_SHOT_CAPTURE_CRATES_DIR}/crates/snow-capture-c/include"
         "${SNOW_SHOT_CAPTURE_CRATES_DIR}/crates/snow-recording-c/include")
@@ -3905,6 +3915,7 @@ if(SNOW_SHOT_BUILD_TESTS)
         src/presentation/services/screenshotpdfexport.cpp
         src/presentation/capture/directcapturenative.cpp)
     snow_shot_alias_test_rust_ffi(snow-shot-direct-capture-native-tests
+        snow_capture_target_screenshot
         snow_capture_desktop_session_capture
         snow_capture_desktop_session_create
         snow_capture_desktop_session_destroy
@@ -6051,6 +6062,8 @@ if(SNOW_SHOT_BUILD_TESTS)
         Qt6::Widgets
         snow_draw_engine_qt_canvas
     )
+    target_sources(snow-shot-screenshot-tool-palette-tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/../test-support/fonts/recording_test_fonts.qrc")
     snow_shot_add_translations(snow-shot-screenshot-tool-palette-tests)
     add_test(NAME snow-shot-custom-color-presets-toolbar-tests
         COMMAND snow-shot-screenshot-tool-palette-tests --custom-color-presets-only -platform offscreen)
@@ -6117,6 +6130,10 @@ if(SNOW_SHOT_BUILD_TESTS)
     add_test(NAME snow-shot-style-commit-tests
         COMMAND snow-shot-screenshot-tool-palette-tests --style-commit-only -platform offscreen)
     set_tests_properties(snow-shot-style-commit-tests PROPERTIES LABELS "unit" TIMEOUT 60)
+    add_test(NAME snow-shot-canvas-tool-bindings-tests
+        COMMAND snow-shot-screenshot-tool-palette-tests --canvas-tool-bindings-only
+            -platform offscreen)
+    set_tests_properties(snow-shot-canvas-tool-bindings-tests PROPERTIES LABELS "unit" TIMEOUT 60)
     add_test(NAME snow-shot-watermark-persistence-tests
         COMMAND snow-shot-screenshot-tool-palette-tests --watermark-persistence-only
             -platform offscreen)
@@ -6904,6 +6921,11 @@ if(SNOW_SHOT_BUILD_TESTS)
             LABELS "interactive;macos" RUN_SERIAL TRUE TIMEOUT 60)
     endif()
     snow_shot_import_offscreen_platform(snow-shot-color-picker-lifecycle-tests)
+    add_test(NAME snow-shot-canvas-sampling-session-tests
+        COMMAND snow-shot-color-picker-lifecycle-tests --canvas-sampler-only -platform offscreen)
+    set_tests_properties(snow-shot-canvas-sampling-session-tests PROPERTIES LABELS "unit" TIMEOUT 60
+        ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
+        ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
     add_test(NAME snow-shot-overlay-reveal-tests
         COMMAND snow-shot-color-picker-lifecycle-tests --overlay-reveal-only -platform offscreen)
     set_tests_properties(snow-shot-overlay-reveal-tests PROPERTIES

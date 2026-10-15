@@ -5982,7 +5982,7 @@ fn export_video_generated_from_source_with_overlay(
                     &mut overlay_state,
                     decision,
                 );
-                copy_rgba_into_frame(&mut rgba_frame, width, &generated_rgba);
+                copy_rgba_into_frame(&mut rgba_frame, &generated_rgba)?;
             }
 
             ensure_video_frame_writable(&mut encode_frame)?;
@@ -7031,16 +7031,16 @@ mod tests {
             muxer_names.push(name.to_string_lossy().into_owned());
         }
         muxer_names.sort_unstable();
+        let mut expected_muxers = vec!["apng", "gif", "mov", "mp4", "webp"];
+        if cfg!(target_os = "macos") {
+            expected_muxers.extend(["avi", "matroska", "wav"]);
+        } else if crate::has_avi_compatibility() {
+            expected_muxers.extend(["avi", "matroska"]);
+        }
+        expected_muxers.sort_unstable();
         assert_eq!(
-            muxer_names,
-            if cfg!(target_os = "macos") {
-                vec![
-                    "apng", "avi", "gif", "matroska", "mov", "mp4", "wav", "webp",
-                ]
-            } else {
-                vec!["apng", "avi", "gif", "matroska", "mov", "mp4", "webp"]
-            },
-            "FFmpeg muxer registry does not match the production profile"
+            muxer_names, expected_muxers,
+            "FFmpeg muxer registry does not match the application or compatibility profile"
         );
 
         let cases = [
@@ -7053,6 +7053,9 @@ mod tests {
         ];
 
         for (format, codec, label, expected_encoder) in cases {
+            if format == ExportFormat::Avi && !crate::has_avi_compatibility() {
+                continue;
+            }
             let output_path = directory
                 .path()
                 .join(format!("{label}-test.{}", format.file_extension()));

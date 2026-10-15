@@ -237,6 +237,7 @@ snow_resolve_rust_libclang_directory(selected)
 cmake_minimum_required(VERSION 3.30)
 project(CargoLibclangContract LANGUAGES NONE)
 {fixture}
+set(APPLE FALSE)
 set(MSVC TRUE)
 set(CMAKE_CXX_COMPILER_ARCHITECTURE_ID ARM64)
 set(CMAKE_SYSTEM_PROCESSOR AMD64)
@@ -246,8 +247,13 @@ set(CMAKE_AR "C:/VS/bin/Hostx64/arm64/lib.exe")
 set(CARGO_EXECUTABLE "{cargo.as_posix()}")
 set(SNOW_LIBCLANG_BIN_DIR "{(root / 'x64').as_posix()}")
 include("{ROOT.as_posix()}/cmake/RustStaticLibrary.cmake")
-snow_add_rust_static_library(fixture PACKAGE fixture MANIFEST_DIR "{root.as_posix()}")
+snow_add_rust_static_library(fixture PACKAGE fixture MANIFEST_DIR "{root.as_posix()}"
+    NO_DEFAULT_FEATURES FEATURES fixture-feature)
 snow_add_rust_executable(fixture_executable PACKAGE fixture MANIFEST_DIR "{root.as_posix()}")
+get_target_property(no_defaults fixture SNOW_RUST_NO_DEFAULT_FEATURES)
+if(NOT no_defaults)
+    message(FATAL_ERROR "Static library lost its Cargo feature contract for license collection")
+endif()
 ''', encoding='utf-8')
             build = root / 'build'
             result = subprocess.run([CMAKE, '-G', 'Ninja', '-S', str(root), '-B', str(build)],
@@ -256,6 +262,8 @@ snow_add_rust_executable(fixture_executable PACKAGE fixture MANIFEST_DIR "{root.
             commands = (build / 'build.ninja').read_text(encoding='utf-8')
             self.assertEqual(commands.count(f'LIBCLANG_PATH={(root / "x64").as_posix()}'), 2)
             self.assertIn('--target aarch64-pc-windows-msvc', commands)
+            self.assertEqual(commands.count('--no-default-features'), 1)
+            self.assertIn('--features fixture-feature', commands)
 
     def test_ffmpeg_arm_profile_retains_supported_encoders(self):
         port = ROOT / 'cmake/vcpkg-overlay-ports/ffmpeg'
@@ -307,6 +315,42 @@ message(STATUS "OPTIONS=${{OPTIONS}}")
 ''')
                 filters = re.findall(r'--enable-filter=([^\s]+)', output)
                 self.assertEqual(filters, ['abuffer,abuffersink,atempo'])
+
+    def test_recording_profile_separates_application_outputs_from_compatibility(self):
+        port = ROOT / 'cmake/vcpkg-overlay-ports/ffmpeg'
+        manifest = json.loads((port / 'vcpkg.json').read_text(encoding='utf-8'))
+        compatibility = manifest['features']['snow-recording-compat']['dependencies']
+        self.assertTrue(any(dependency.get('features') == ['snow-shot-minimal']
+                            for dependency in compatibility))
+        text = (port / 'portfile.cmake').read_text(encoding='utf-8')
+        start = text.index('if("snow-shot-minimal" IN_LIST FEATURES)',
+                           text.index('if("rubberband" IN_LIST FEATURES)'))
+        fragment = text[start:text.index('if("snow-macos-media" IN_LIST FEATURES)', start)]
+        for compatibility in (False, True):
+            with self.subTest(compatibility=compatibility):
+                features = 'snow-shot-minimal'
+                if compatibility:
+                    features += ';snow-recording-compat'
+                output = self.run_cmake(f'''
+set(VCPKG_TARGET_IS_WINDOWS TRUE)
+set(FEATURES {features})
+{fragment}
+message(STATUS "OPTIONS=${{OPTIONS}}")
+''')
+                enabled = {}
+                for kind, names in re.findall(r'--enable-(encoder|decoder|muxer|demuxer|parser)=([^\s]+)', output):
+                    enabled.setdefault(kind, set()).update(names.split(','))
+                self.assertTrue({'mp4', 'gif', 'apng', 'webp'} <= enabled['muxer'])
+                self.assertTrue({'libx264', 'libx265', 'gif', 'apng', 'libwebp_anim', 'aac'}
+                                <= enabled['encoder'])
+                # Older .snowrec sources are still readable in the application profile.
+                self.assertIn('matroska', enabled['demuxer'])
+                self.assertIn('h264', enabled['decoder'])
+                for kind, components in [('encoder', {'mpeg4', 'mp3_mf'}),
+                                         ('muxer', {'avi', 'matroska'}),
+                                         ('decoder', {'mp3'}),
+                                         ('parser', {'mpegaudio'})]:
+                    self.assertEqual(components <= enabled[kind], compatibility)
 
     def test_crashpad_uses_runnable_host_compilers_and_pinned_toolset(self):
         overlay = (ROOT / 'cmake/vcpkg-overlay-ports/crashpad/portfile.cmake').read_text(

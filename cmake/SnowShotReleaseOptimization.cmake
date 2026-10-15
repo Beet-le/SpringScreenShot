@@ -19,6 +19,7 @@ set(SNOW_SHOT_RELEASE_SIZE_STORAGE_SOURCES
     src/storage/configurationarchive.cpp
     src/storage/configurationstore.cpp
     src/storage/configurationschema.cpp
+    src/storage/exportfilename.cpp
     src/storage/persistedselectioncodec.cpp
     src/storage/persistedwindowgeometry.cpp
     src/storage/settingsadapters.cpp

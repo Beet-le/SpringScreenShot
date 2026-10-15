@@ -2987,7 +2987,7 @@ mod tests {
                 convert_owned_rgba(&mut scaler, black_box(&pixels), black_box(&mut output))
                     .unwrap();
             } else {
-                copy_rgba_into_frame(&mut rgba_frame, width, black_box(&pixels[..visible]));
+                copy_rgba_into_frame(&mut rgba_frame, black_box(&pixels[..visible])).unwrap();
                 scaler.run(&rgba_frame, black_box(&mut output)).unwrap();
             }
             black_box(&output);
@@ -3028,7 +3028,7 @@ mod tests {
                 .map(|index| (index % 251) as u8)
                 .collect();
             let mut source = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::RGBA, width, height);
-            copy_rgba_into_frame(&mut source, width, &pixels);
+            copy_rgba_into_frame(&mut source, &pixels).unwrap();
             let mut padded: RasterBuffer = pixels.clone().into();
             pad_owned_rgba(&mut padded);
             for format in [

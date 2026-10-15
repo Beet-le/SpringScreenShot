@@ -198,6 +198,8 @@ are supported. Prompts provide screenshot, background-image, and recording
 workflows, with completion for background-image output formats.
 
 The stdio bridge supports MCP 2026-07-28 per-request discovery.
+It also retains MCP 2025-11-25 for clients using the stdio `initialize` handshake;
+older handshake requests receive that supported version for fallback negotiation.
 `subscriptions/listen` receives coalesced URI invalidations for subscribed
 resources; notifications do not contain image pixels, recognition text, or
 credentials. Subscribe to a job URI to reduce polling, then read it for state.

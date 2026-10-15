@@ -5,12 +5,12 @@
 #include "collagetransformedrows_p.h"
 #include "snow_shot/presentation/screenshotpdfexport.h"
 #include "snowimageqtcodec.h"
+#include "snow_shot/storage/exportfilename.h"
 
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
-#include <QRegularExpression>
 #include <QSaveFile>
 #include <QTemporaryDir>
 
@@ -58,25 +58,8 @@ QString preparationError() {
 QString safeImageName(QString label) {
     // Labels can be display names or absolute paths from either supported platform.
     label = label.mid(std::max(label.lastIndexOf(u'/'), label.lastIndexOf(u'\\')) + 1);
-    QString name = QFileInfo(label).completeBaseName();
-    name.replace(QRegularExpression(QStringLiteral("[<>:\"/\\\\|?*\\x00-\\x1f\\x7f-\\x9f]")),
-                 QStringLiteral("_"));
-    name = name.trimmed();
-    // Leave ample room for the numeric prefix, conflict suffix and extension on both NTFS
-    // and UTF-8 filesystems. Never split a UTF-16 surrogate pair while shortening a name.
-    if (name.size() > 120) {
-        name.truncate(120);
-        if (name.back().isHighSurrogate())
-            name.chop(1);
-    }
-    while (name.toUtf8().size() > 120) {
-        name.chop(1);
-        if (!name.isEmpty() && name.back().isHighSurrogate())
-            name.chop(1);
-    }
-    while (name.endsWith(u'.') || name.endsWith(u' '))
-        name.chop(1);
-    return name.isEmpty() ? QStringLiteral("Image") : name;
+    return storage::sanitizeExportFileName(QFileInfo(label).completeBaseName(), u"Image",
+                                           {storage::ExportFileNameControls::C0AndC1, 120});
 }
 
 struct RowLifetime final {

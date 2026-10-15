@@ -1,3 +1,4 @@
+#include "snow_shot/presentation/screenshotcanvastools.h"
 #include "snow_shot/presentation/screenshotmanualsave.h"
 #include "snow_shot/runtime/runtimeactivitytracker.h"
 #include "snow_draw_engine_qt/snow_canvas_image.h"
@@ -214,43 +215,11 @@ QString resolvedOcrProxyUrl(const QString& proxyMode) {
 }
 
 ScreenshotToolPalette::Tool paletteToolForActiveTool(ScreenshotActiveTool tool) {
+    for (const auto& descriptor : snow_shot::presentation::screenshotCanvasTools) {
+        if (descriptor.activeTool == tool)
+            return descriptor.paletteTool;
+    }
     switch (tool) {
-    case ScreenshotActiveTool::Select:
-        return ScreenshotToolPalette::Tool::Select;
-    case ScreenshotActiveTool::SpeechBubble:
-        return ScreenshotToolPalette::Tool::SpeechBubble;
-    case ScreenshotActiveTool::Shape:
-        return ScreenshotToolPalette::Tool::Shape;
-    case ScreenshotActiveTool::Arrow:
-        return ScreenshotToolPalette::Tool::Arrow;
-    case ScreenshotActiveTool::Distance:
-        return ScreenshotToolPalette::Tool::Distance;
-    case ScreenshotActiveTool::Angle:
-        return ScreenshotToolPalette::Tool::Angle;
-    case ScreenshotActiveTool::Line:
-        return ScreenshotToolPalette::Tool::Line;
-    case ScreenshotActiveTool::FreeDraw:
-        return ScreenshotToolPalette::Tool::FreeDraw;
-    case ScreenshotActiveTool::RectangleHighlight:
-        return ScreenshotToolPalette::Tool::RectangleHighlight;
-    case ScreenshotActiveTool::PenHighlight:
-        return ScreenshotToolPalette::Tool::PenHighlight;
-    case ScreenshotActiveTool::Eraser:
-        return ScreenshotToolPalette::Tool::Eraser;
-    case ScreenshotActiveTool::RectangleEraser:
-        return ScreenshotToolPalette::Tool::RectangleEraser;
-    case ScreenshotActiveTool::BrushEraser:
-        return ScreenshotToolPalette::Tool::BrushEraser;
-    case ScreenshotActiveTool::AutoFilter:
-        return ScreenshotToolPalette::Tool::AutoFilter;
-    case ScreenshotActiveTool::RectangleFilter:
-        return ScreenshotToolPalette::Tool::RectangleFilter;
-    case ScreenshotActiveTool::Watermark:
-        return ScreenshotToolPalette::Tool::Watermark;
-    case ScreenshotActiveTool::Text:
-        return ScreenshotToolPalette::Tool::Text;
-    case ScreenshotActiveTool::SerialNumber:
-        return ScreenshotToolPalette::Tool::SerialNumber;
     case ScreenshotActiveTool::Ocr:
         return ScreenshotToolPalette::Tool::Ocr;
     case ScreenshotActiveTool::TextTranslation:
@@ -265,13 +234,6 @@ ScreenshotToolPalette::Tool paletteToolForActiveTool(ScreenshotActiveTool tool) 
         return ScreenshotToolPalette::Tool::Markdown;
     case ScreenshotActiveTool::Html:
         return ScreenshotToolPalette::Tool::Html;
-    case ScreenshotActiveTool::PenFilter:
-        return ScreenshotToolPalette::Tool::PenFilter;
-    case ScreenshotActiveTool::Magnifier:
-        return ScreenshotToolPalette::Tool::Magnifier;
-    case ScreenshotActiveTool::Spotlight:
-        return ScreenshotToolPalette::Tool::Spotlight;
-    case ScreenshotActiveTool::Move:
     default:
         return ScreenshotToolPalette::Tool::Move;
     }
@@ -606,7 +568,7 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     std::unique_ptr<ScreenshotSelectionEditWorkflow> m_selectionEditWorkflow;
     std::unique_ptr<snow_shot::platform::PhysicalCursor> m_physicalCursor;
     std::unique_ptr<ScreenshotColorPickerController> m_colorPickerController;
-    std::unique_ptr<ScreenshotCanvasColorSamplerWindow> m_canvasColorSamplerWindow;
+    std::unique_ptr<ScreenshotCanvasColorSamplingSession> m_canvasColorSampling;
     ScreenshotCanvasColorSampler m_canvasColorSampler;
     std::unique_ptr<ScreenshotToolbarPresenter> m_toolbarPresenter;
     std::unique_ptr<ScreenshotToolCommandWorkflow> m_toolCommandWorkflow;
@@ -634,8 +596,6 @@ struct ScreenshotController::Impl final : public ScreenshotToolbarCommandSink,
     std::unique_ptr<ScreenshotSelectorWorkflow> m_selectorWorkflow;
     QPointer<ScreenshotOverlayWindow> m_historyLoadingMessageOwner;
     QPointer<ScreenshotOverlayWindow> m_keyboardOwnerOverlay;
-    QPointer<adqt::widgets::AdColorPicker> m_canvasColorSamplingTarget;
-    QMetaObject::Connection m_canvasColorSamplingDestroyedConnection;
     bool m_canvasColorSamplingCursorOverridden = false;
     std::unique_ptr<snow_shot::presentation::WindowCaptureExclusion> m_recaptureExclusion;
     std::unique_ptr<snow_shot::presentation::WindowInputTransparency> m_recaptureInputTransparency;
@@ -1417,15 +1377,15 @@ bool ScreenshotController::Impl::ensureRecordingFeature() {
 }
 
 bool ScreenshotController::Impl::ensureCanvasSamplingUi() {
-    if (m_canvasColorSamplerWindow != nullptr) {
+    if (m_canvasColorSampling != nullptr) {
         return true;
     }
     if (m_constructingCanvasSamplingUi) {
         return false;
     }
     const QScopedValueRollback<bool> constructingGuard(m_constructingCanvasSamplingUi, true);
-    m_canvasColorSamplerWindow = std::make_unique<ScreenshotCanvasColorSamplerWindow>();
-    return m_canvasColorSamplerWindow != nullptr;
+    m_canvasColorSampling = std::make_unique<ScreenshotCanvasColorSamplingSession>(owner);
+    return m_canvasColorSampling != nullptr;
 }
 
 void ScreenshotController::Impl::deactivateRecognition() {
@@ -2002,43 +1962,20 @@ void ScreenshotController::Impl::createOverlayInputPipeline() {
         [this]() { return selectPreviousSelection(); },
         [this](ScreenshotActiveTool tool) { return activateToolForSelectionResize(tool); },
         [this]() {
-            m_canvasColorSamplingTarget.clear();
-            disconnect(m_canvasColorSamplingDestroyedConnection);
-            m_canvasColorSamplingDestroyedConnection = {};
+            if (m_canvasColorSampling)
+                m_canvasColorSampling->end();
             m_canvasColorSampler.reset();
             setCanvasColorSamplingShortcutScope(false);
-            if (m_canvasColorSamplerWindow != nullptr) {
-                m_canvasColorSamplerWindow->endSampling();
-            }
             setCanvasColorSamplingCursor(false);
         },
         [this](ScreenshotOverlayWindow* overlay, const QPointF& localPosition) {
-            QPointer<adqt::widgets::AdColorPicker> picker = m_canvasColorSamplingTarget;
-            const QImage preview =
-                picker.isNull()
-                    ? QImage()
-                    : canvasColorPreviewAtPhysicalPoint(
-                          overlay, canvasColorPhysicalPositionAt(overlay, localPosition));
-            m_canvasColorSamplingTarget.clear();
-            disconnect(m_canvasColorSamplingDestroyedConnection);
-            m_canvasColorSamplingDestroyedConnection = {};
-            m_canvasColorSampler.reset();
-            setCanvasColorSamplingShortcutScope(false);
-            if (m_canvasColorSamplerWindow != nullptr) {
-                m_canvasColorSamplerWindow->endSampling();
-            }
-            setCanvasColorSamplingCursor(false);
-            if (picker.isNull()) {
-                return false;
-            }
-            const QColor sampled =
-                preview.isNull() ? QColor()
-                                 : preview.pixelColor(preview.width() / 2, preview.height() / 2);
-            if (!sampled.isValid()) {
-                return false;
-            }
-            picker->commitValue(adqt::widgets::AdColorValue::solid(sampled));
-            return true;
+            const QImage preview = canvasColorPreviewAtPhysicalPoint(
+                overlay, canvasColorPhysicalPositionAt(overlay, localPosition));
+            return m_canvasColorSampling && m_canvasColorSampling->commit(preview, [this]() {
+                m_canvasColorSampler.reset();
+                setCanvasColorSamplingShortcutScope(false);
+                setCanvasColorSamplingCursor(false);
+            });
         },
         [this]() { pauseScrollingCaptureForSelectionResize(); },
         [this]() { resumeScrollingCaptureAfterSelectionResize(); },
@@ -4504,7 +4441,7 @@ void ScreenshotController::Impl::printSelection() {
                 {{QStringLiteral("request_kind"), QStringLiteral("capture")},
                  {QStringLiteral("operation"), QString::number(epoch)},
                  {QStringLiteral("stage"), !snapshotSucceeded ? QStringLiteral("export_image")
-                                           : !printer         ? QStringLiteral("service_destroyed")
+                                           : !printer ? QStringLiteral("service_destroyed")
                                                       : QStringLiteral("service_rejected")}},
                 QtWarningMsg);
             finished({ScreenshotPrintService::Status::Failed,
@@ -5633,7 +5570,7 @@ void ScreenshotController::Impl::updateCanvasColorSamplingPreview(ScreenshotOver
 
 void ScreenshotController::Impl::updateCanvasColorSamplingPreviewAtPhysicalPoint(
     ScreenshotOverlayWindow* overlay, const QPoint& physicalPosition) {
-    if (m_canvasColorSamplerWindow == nullptr || m_canvasColorSamplingTarget.isNull()) {
+    if (m_canvasColorSampling == nullptr || !m_canvasColorSampling->active()) {
         return;
     }
     const CapturedDisplayModel* display = m_geometry.displayForOverlay(m_displaySession, overlay);
@@ -5645,7 +5582,7 @@ void ScreenshotController::Impl::updateCanvasColorSamplingPreviewAtPhysicalPoint
         display != nullptr
             ? m_geometry.logicalPositionForPhysicalPoint(*display, physicalPosition).toPoint()
             : QCursor::pos();
-    m_canvasColorSamplerWindow->updateSample(preview, globalLogicalPosition);
+    m_canvasColorSampling->updatePreview(preview, globalLogicalPosition);
 }
 
 void ScreenshotController::Impl::setCanvasColorSamplingCursor(bool enabled) {
@@ -5679,15 +5616,12 @@ void ScreenshotController::Impl::setCanvasColorSamplingShortcutScope(bool enable
 }
 
 void ScreenshotController::Impl::clearCanvasColorSampling() {
-    m_canvasColorSamplingTarget.clear();
-    disconnect(m_canvasColorSamplingDestroyedConnection);
-    m_canvasColorSamplingDestroyedConnection = {};
     m_canvasColorSampler.reset();
     if (m_overlayInputHandler != nullptr) {
         m_overlayInputHandler->cancelCanvasColorSampling();
     }
-    if (m_canvasColorSamplerWindow != nullptr) {
-        m_canvasColorSamplerWindow->endSampling();
+    if (m_canvasColorSampling != nullptr) {
+        m_canvasColorSampling->end();
     }
     setCanvasColorSamplingShortcutScope(false);
     setCanvasColorSamplingCursor(false);
@@ -5702,12 +5636,7 @@ void ScreenshotController::Impl::beginCanvasColorSampling(adqt::widgets::AdColor
     }
 
     clearCanvasColorSampling();
-    m_canvasColorSamplingTarget = picker;
-    m_canvasColorSamplingDestroyedConnection = QObject::connect(
-        picker, &QObject::destroyed, &owner, [this]() { clearCanvasColorSampling(); });
-    if (m_canvasColorSamplerWindow != nullptr) {
-        m_canvasColorSamplerWindow->beginSampling(picker);
-    }
+    m_canvasColorSampling->begin(picker, [this]() { clearCanvasColorSampling(); });
     m_canvasColorSampler.reset();
     setCanvasColorSamplingShortcutScope(true);
     setCanvasColorSamplingCursor(true);

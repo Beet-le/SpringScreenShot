@@ -1676,6 +1676,37 @@ void featureLinksAdvancedControlsAndResets(const settings::SettingsRegistry& reg
             "advanced capture reset preserves cursor visibility");
 #endif
 }
+void catalogResetsPreserveOtherSections(settings::SettingsRuntimeSession& session) {
+    using Reset = settings::SettingsSectionReset;
+    using Schema = snow_shot::storage::ConfigurationSchema;
+    auto& configuration = snow_shot::storage::ApplicationStorage::instance().configuration();
+    const QVector<QPair<Reset, QString>> cases{
+        {Reset::ScreenshotOutput, QStringLiteral("screenshot/image_quality")},
+        {Reset::Tray, QStringLiteral("tray/enabled")},
+        {Reset::ScreenRecordingInteraction,
+         QStringLiteral("screen_recording/notify_after_export_completes")},
+        {Reset::ScreenRecordingOutput, QStringLiteral("screen_recording/video_filename_format")},
+        {Reset::Translation, QStringLiteral("screenshot_translation/original_image_translation")},
+    };
+    const QMap<QString, QJsonValue> customized{
+        {cases[0].second, 37},
+        {cases[1].second, !Schema::defaultValue(cases[1].second).toBool()},
+        {cases[2].second, !Schema::defaultValue(cases[2].second).toBool()},
+        {cases[3].second, QStringLiteral("CustomVideo_{YYYY}")},
+        {cases[4].second, !Schema::defaultValue(cases[4].second).toBool()},
+    };
+    for (const auto& [reset, key] : cases) {
+        require(configuration.setValues(customized), "customize independent settings sections");
+        require(configuration.value(key) != Schema::defaultValue(key),
+                "reset fixture must start with a nondefault setting");
+        require(session.reset(reset), "catalog-backed section reset must succeed");
+        for (const auto& [otherReset, otherKey] : cases)
+            require(configuration.value(otherKey) == (otherReset == reset
+                                                          ? Schema::defaultValue(otherKey)
+                                                          : customized.value(otherKey)),
+                    "a section reset restores its defaults and preserves neighboring sections");
+    }
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -1700,6 +1731,11 @@ int main(int argc, char** argv) {
     settings::BuiltInSettingsBackend backend(shortcuts);
     const auto registry = settings::buildBuiltInSettingsRegistry();
     settings::SettingsRuntimeSession session(registry, backend);
+    if (application.arguments().contains(QStringLiteral("--catalog-resets-only"))) {
+        catalogResetsPreserveOtherSections(session);
+        storage.shutdown();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--pinned-text-colors-only"))) {
         pinnedTextColorsFollowApplicationPalette(registry, session);
         storage.shutdown();

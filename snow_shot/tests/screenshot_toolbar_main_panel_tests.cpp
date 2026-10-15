@@ -1,3 +1,4 @@
+#include "palette_style_edit_test_support.h"
 #include "snow_shot/presentation/screenshottoolbarmainpanel.h"
 #include "snow_shot/presentation/screenshottoolpalette.h"
 #include "snow_shot/presentation/screenshottoolbarlayoutmodel.h"
@@ -1970,11 +1971,11 @@ void speechBubbleReusesShapeControlsWithIndependentStyles() {
     int edits = 0;
     SnowCanvasShapeKind editedKind = SnowCanvasShapeKind::Rectangle;
     QObject::connect(&palette, &ScreenshotToolPalette::speechBubbleRequested, [&] { ++requests; });
-    QObject::connect(&palette, &ScreenshotToolPalette::shapeStyleChanged,
-                     [&](const SnowCanvasShapeStyle&, quint32, SnowCanvasShapeKind kind) {
-                         ++edits;
-                         editedKind = kind;
-                     });
+    observePaletteStyleEdit<SnowCanvasShapeEdit>(
+        palette, [&](const SnowCanvasShapeStyle&, quint32, SnowCanvasShapeKind kind) {
+            ++edits;
+            editedKind = kind;
+        });
     require(palette.activateDrawingShortcut(QStringLiteral("speech_bubble")) && requests == 1 &&
                 palette.activeTool() == Tool::SpeechBubble,
             "Speech Bubble can be activated through configured shortcut routing");

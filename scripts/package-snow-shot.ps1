@@ -233,13 +233,13 @@ function Get-ValidatedStaticQtStamp {
 function Get-SnowShotExpectedFfmpegComponents {
     param([ValidateSet('x64', 'arm64')][string]$Architecture = 'x64')
     $expectedFfmpegComponents = [ordered]@{
-        BSF = @("AAC_ADTSTOASC", "H264_MP4TOANNEXB", "PGS_FRAME_MERGE", "VP9_SUPERFRAME")
-        DECODER = @("AAC", "APNG", "GIF", "H264", "HEVC", "MP3", "PCM_F32LE", "PCM_S16LE", "PNG", "VP8", "WEBP", "WEBP_ANIM")
-        ENCODER = @("AAC", "APNG", "GIF", "H263", "H264_MF", "H264_AMF", "H264_NVENC", "H264_QSV", "LIBWEBP_ANIM", "LIBX264", "LIBX265", "MP3_MF", "MPEG4")
+        BSF = @("AAC_ADTSTOASC", "H264_MP4TOANNEXB", "VP9_SUPERFRAME")
+        DECODER = @("AAC", "APNG", "GIF", "H264", "HEVC", "PCM_F32LE", "PCM_S16LE", "PNG", "VP8", "WEBP", "WEBP_ANIM")
+        ENCODER = @("AAC", "APNG", "GIF", "H264_MF", "H264_AMF", "H264_NVENC", "H264_QSV", "LIBWEBP_ANIM", "LIBX264", "LIBX265")
         HWACCEL = @("H264_D3D11VA", "H264_D3D11VA2", "H264_DXVA2", "HEVC_D3D11VA", "HEVC_D3D11VA2", "HEVC_DXVA2")
-        PARSER = @("AAC", "AC3", "GIF", "H264", "HEVC", "MPEGAUDIO")
+        PARSER = @("AAC", "AC3", "GIF", "H264", "HEVC")
         DEMUXER = @("APNG", "GIF", "MATROSKA", "MOV", "WEBP_ANIM")
-        MUXER = @("APNG", "AVI", "GIF", "MATROSKA", "MOV", "MP4", "WEBP")
+        MUXER = @("APNG", "GIF", "MOV", "MP4", "WEBP")
         PROTOCOL = @("FILE")
         # Buffer sources/sinks are intrinsic libavfilter API, absent from config_components.h.
         FILTER = @("ATEMPO")

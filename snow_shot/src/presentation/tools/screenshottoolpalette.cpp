@@ -1009,9 +1009,8 @@ ScreenshotToolPalette::ScreenshotToolPalette(const Options& options, QWidget* pa
             ScreenshotToolPaletteStyleControlCallbacks{
                 [this](const SnowCanvasShapeStyle& style, quint32 properties,
                        SnowCanvasShapeKind kind) {
-                    if (!submitStyleEdit(SnowCanvasShapeEdit{style, properties, kind}))
-                        return;
-                    emit shapeStyleChanged(style, properties, kind);
+                    static_cast<void>(
+                        submitStyleEdit(SnowCanvasShapeEdit{style, properties, kind}));
                 },
                 [this](const SnowCanvasDistanceStyle& style, quint32 properties) {
                     static_cast<void>(submitStyleEdit(SnowCanvasDistanceEdit{style, properties}));
@@ -1024,24 +1023,19 @@ ScreenshotToolPalette::ScreenshotToolPalette(const Options& options, QWidget* pa
                         submitStyleEdit(SnowCanvasAngleStyleEdit{style, properties, target}));
                 },
                 [this](const SnowCanvasTextStyle& style, quint32 properties) {
-                    if (!submitStyleEdit(SnowCanvasTextEdit{style, properties}))
-                        return;
-                    emit textStyleChanged(style, properties);
+                    static_cast<void>(submitStyleEdit(SnowCanvasTextEdit{style, properties}));
                 },
                 [this]() { emit textStylePopupInteractionBegan(); },
                 [this]() { emit textStylePopupInteractionEnded(); },
                 [this](const SnowCanvasSerialNumberStyle& style, quint32 properties) {
-                    if (!submitStyleEdit(SnowCanvasSerialNumberEdit{style, properties}))
-                        return;
-                    emit serialNumberStyleChanged(style);
+                    static_cast<void>(
+                        submitStyleEdit(SnowCanvasSerialNumberEdit{style, properties}));
                 },
                 [this]() { emit serialNumberDecrementRequested(); },
                 [this]() { emit serialNumberIncrementRequested(); },
                 [this]() { emit serialNumberCreateTextRequested(); },
                 [this](const SnowCanvasWatermarkConfig& config, quint32 properties) {
-                    if (!submitStyleEdit(SnowCanvasWatermarkEdit{config, properties}))
-                        return;
-                    emit watermarkConfigChanged(config);
+                    static_cast<void>(submitStyleEdit(SnowCanvasWatermarkEdit{config, properties}));
                 },
                 [this](const SnowCanvasWatermarkConfig& config) {
                     emit watermarkPreviewChanged(config);
@@ -1393,7 +1387,6 @@ void ScreenshotToolPalette::notifyFilterStyleChanged(const SnowCanvasFilterStyle
                                SnowCanvasFilterStyleMixedContainsBothFamilies) != 0;
     if (!submitStyleEdit(SnowCanvasFilterEdit{style, properties, pen, bothFamilies}))
         return;
-    emit filterStyleChanged(style, properties);
 }
 
 SnowCanvasStyleDefaults ScreenshotToolPalette::creationStyleDefaults() const {
@@ -3295,7 +3288,6 @@ void ScreenshotToolPalette::restoreWatermarkContentForActivation(
     }
     m_watermarkContentRestorePending = false;
     m_styleControls->setWatermarkConfig(restored, true);
-    emit watermarkConfigChanged(restored);
 }
 
 void ScreenshotToolPalette::setWatermarkTemplateModalOwnerWindow(QWidget* owner) {
@@ -9473,7 +9465,6 @@ void ScreenshotToolPalette::createStyleFamily(Tool tool) {
                 if (!submitStyleEdit(SnowCanvasSpotlightEdit{
                         m_styleControls->styleState().spotlightConfig, SnowCanvasSpotlightColor}))
                     return;
-                emit spotlightConfigChanged(m_styleControls->styleState().spotlightConfig);
             }
         };
         spotlightCallbacks.previewColor = [this](const QColor& color) {
@@ -9488,7 +9479,6 @@ void ScreenshotToolPalette::createStyleFamily(Tool tool) {
                 if (!submitStyleEdit(SnowCanvasSpotlightEdit{
                         m_styleControls->styleState().spotlightConfig, SnowCanvasSpotlightOpacity}))
                     return;
-                emit spotlightConfigChanged(m_styleControls->styleState().spotlightConfig);
             }
         };
         m_spotlightStyleControlsWidget = m_styleControls->buildSpotlightFamily(

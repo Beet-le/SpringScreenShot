@@ -2401,6 +2401,15 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
         return applyContextMenuSettings(
             storage::ApplicationStorage::instance().configuration().value(kContextMenuModeKey),
             storage::ConfigurationSchema::defaultValue(kContextMenuShortcutKey));
+    case SettingsSectionReset::ScreenshotOutput:
+    case SettingsSectionReset::Translation:
+    case SettingsSectionReset::Tray:
+    case SettingsSectionReset::ScreenRecordingInteraction:
+    case SettingsSectionReset::ScreenRecordingOutput:
+    case SettingsSectionReset::Server:
+    case SettingsSectionReset::TextTranslationConfigurations:
+    case SettingsSectionReset::CustomAiModels:
+    case SettingsSectionReset::ExtendedTranslation:
     case SettingsSectionReset::ScreenshotCaptureBehavior:
     case SettingsSectionReset::ScreenshotCaptureCompatibility:
     case SettingsSectionReset::ScreenRecordingVideo:
@@ -2596,41 +2605,6 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
                     storage::ConfigurationSchema::defaultValue(
                         QStringLiteral("screenshot/selection_resize_mode"))},
                });
-    case SettingsSectionReset::ScreenshotOutput:
-        return storage::ApplicationStorage::instance().configuration().setValues({
-            {QStringLiteral("cloud_upload/configuration"),
-             storage::ConfigurationSchema::defaultValue(
-                 QStringLiteral("cloud_upload/configuration"))},
-            {QStringLiteral("screenshot/auto_save_after_execution_actions"),
-             storage::ConfigurationSchema::defaultValue(
-                 QStringLiteral("screenshot/auto_save_after_execution_actions"))},
-            {QStringLiteral("screenshot/copy_image_file_to_clipboard"),
-             storage::ConfigurationSchema::defaultValue(
-                 QStringLiteral("screenshot/copy_image_file_to_clipboard"))},
-            {QStringLiteral("screenshot/save_as_file_dialog"),
-             storage::ConfigurationSchema::defaultValue(
-                 QStringLiteral("screenshot/save_as_file_dialog"))},
-            {QStringLiteral("screenshot/image_save_directory"),
-             storage::ConfigurationSchema::defaultValue(
-                 QStringLiteral("screenshot/image_save_directory"))},
-            {QStringLiteral("screenshot/pdf_page_size"),
-             storage::ConfigurationSchema::defaultValue(
-                 QStringLiteral("screenshot/pdf_page_size"))},
-            {QStringLiteral("screenshot/image_format"),
-             storage::ConfigurationSchema::defaultValue(QStringLiteral("screenshot/image_format"))},
-            {QStringLiteral("screenshot/compression_level"),
-             storage::ConfigurationSchema::defaultValue(
-                 QStringLiteral("screenshot/compression_level"))},
-            {QStringLiteral("screenshot/image_quality"),
-             storage::ConfigurationSchema::defaultValue(
-                 QStringLiteral("screenshot/image_quality"))},
-            {QStringLiteral("screenshot/manual_save_filename_format"),
-             storage::ConfigurationSchema::defaultValue(
-                 QStringLiteral("screenshot/manual_save_filename_format"))},
-            {QStringLiteral("screenshot/auto_save_filename_format"),
-             storage::ConfigurationSchema::defaultValue(
-                 QStringLiteral("screenshot/auto_save_filename_format"))},
-        });
     case SettingsSectionReset::ScreenshotInterfaceSettings:
         return storage::ApplicationStorage::instance().configuration().setValues({
             {QStringLiteral("screenshot_ui/selection_transition_animation"),
@@ -2783,69 +2757,6 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("pin_to_screen/auto_resize_window"))},
         });
-    case SettingsSectionReset::Translation:
-#if SNOW_SHOT_ENABLE_TEXT_TRANSLATION
-        return storage::ApplicationStorage::instance().configuration().setValues({
-            {QStringLiteral("screenshot_translation/source_language"),
-             storage::ConfigurationSchema::defaultValue(
-                 QStringLiteral("screenshot_translation/source_language"))},
-            {QStringLiteral("screenshot_translation/target_language"),
-             storage::ConfigurationSchema::defaultValue(
-                 QStringLiteral("screenshot_translation/target_language"))},
-            {QStringLiteral("screenshot_translation/secondary_target_language"),
-             storage::ConfigurationSchema::defaultValue(
-                 QStringLiteral("screenshot_translation/secondary_target_language"))},
-            {QStringLiteral("screenshot_translation/language_detection_confidence_threshold"),
-             storage::ConfigurationSchema::defaultValue(
-                 QStringLiteral("screenshot_translation/language_detection_confidence_threshold"))},
-            {QStringLiteral("screenshot_translation/model"),
-             storage::ConfigurationSchema::defaultValue(
-                 QStringLiteral("screenshot_translation/model"))},
-            {QStringLiteral("screenshot_translation/original_image_translation"),
-             storage::ConfigurationSchema::defaultValue(
-                 QStringLiteral("screenshot_translation/original_image_translation"))},
-            {QStringLiteral("screenshot_translation/layout_processing"),
-             storage::ConfigurationSchema::defaultValue(
-                 QStringLiteral("screenshot_translation/layout_processing"))},
-        });
-#else
-        return false;
-#endif
-    case SettingsSectionReset::Server:
-    case SettingsSectionReset::TextTranslationConfigurations:
-    case SettingsSectionReset::CustomAiModels:
-    case SettingsSectionReset::ExtendedTranslation: {
-        // These categories contain configuration-backed fields only. The compiled
-        // registry owns their membership and schema defaults, just as it owns the
-        // generated controls and runtime refresh scope.
-        const auto& registry = builtInSettingsRegistry();
-        QMap<QString, QJsonValue> defaults;
-        for (const int index : registry.fieldsForReset(reset)) {
-            const auto& field = registry.fields().at(index);
-            defaults.insert(field.configurationKey, field.defaultValue);
-        }
-        return storage::ApplicationStorage::instance().configuration().setValues(defaults);
-    }
-    case SettingsSectionReset::Tray:
-        return storage::ApplicationStorage::instance().configuration().setValues({
-            {QStringLiteral("tray/enabled"),
-             storage::ConfigurationSchema::defaultValue(QStringLiteral("tray/enabled"))},
-            {QStringLiteral("tray/icon"),
-             storage::ConfigurationSchema::defaultValue(QStringLiteral("tray/icon"))},
-            {QStringLiteral("tray/custom_icon"),
-             storage::ConfigurationSchema::defaultValue(QStringLiteral("tray/custom_icon"))},
-            {QStringLiteral("tray/dark_icon"),
-             storage::ConfigurationSchema::defaultValue(QStringLiteral("tray/dark_icon"))},
-            {QStringLiteral("tray/dark_custom_icon"),
-             storage::ConfigurationSchema::defaultValue(QStringLiteral("tray/dark_custom_icon"))},
-            {QStringLiteral("tray/left_click_action"),
-             storage::ConfigurationSchema::defaultValue(QStringLiteral("tray/left_click_action"))},
-            {QStringLiteral("tray/middle_click_action"),
-             storage::ConfigurationSchema::defaultValue(
-                 QStringLiteral("tray/middle_click_action"))},
-            {QStringLiteral("tray/menu_options"),
-             storage::ConfigurationSchema::defaultValue(QStringLiteral("tray/menu_options"))},
-        });
     case SettingsSectionReset::FloatingToolbar:
         return storage::ApplicationStorage::instance().configuration().setValues({
             {QStringLiteral("floating_toolbar/enabled"), false},
@@ -2945,30 +2856,6 @@ bool BuiltInSettingsBackend::resetSection(SettingsSectionReset reset) {
             {QStringLiteral("screen_recording/capture_toolbar_in_recording"),
              storage::ConfigurationSchema::defaultValue(
                  QStringLiteral("screen_recording/capture_toolbar_in_recording"))},
-        });
-    case SettingsSectionReset::ScreenRecordingInteraction:
-        return storage::ApplicationStorage::instance().configuration().setValues({
-            {QStringLiteral("screen_recording/auto_hide_toolbar"),
-             storage::ConfigurationSchema::defaultValue(
-                 QStringLiteral("screen_recording/auto_hide_toolbar"))},
-            {QStringLiteral("screen_recording/auto_exit_after_recording_ends"),
-             storage::ConfigurationSchema::defaultValue(
-                 QStringLiteral("screen_recording/auto_exit_after_recording_ends"))},
-            {QStringLiteral("screen_recording/notify_after_export_completes"),
-             storage::ConfigurationSchema::defaultValue(
-                 QStringLiteral("screen_recording/notify_after_export_completes"))},
-            {QStringLiteral("screen_recording/delete_files_on_recording_close"),
-             storage::ConfigurationSchema::defaultValue(
-                 QStringLiteral("screen_recording/delete_files_on_recording_close"))},
-        });
-    case SettingsSectionReset::ScreenRecordingOutput:
-        return storage::ApplicationStorage::instance().configuration().setValues({
-            {QStringLiteral("screen_recording/video_save_directory"),
-             storage::ConfigurationSchema::defaultValue(
-                 QStringLiteral("screen_recording/video_save_directory"))},
-            {QStringLiteral("screen_recording/video_filename_format"),
-             storage::ConfigurationSchema::defaultValue(
-                 QStringLiteral("screen_recording/video_filename_format"))},
         });
     case SettingsSectionReset::GlobalHotkeys:
         return storage::GlobalShortcutSettings().setDisableOnFocusedFullscreenWindow(

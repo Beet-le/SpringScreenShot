@@ -130,7 +130,7 @@ function(snow_detect_rust_target out_var)
 endfunction()
 
 function(snow_add_rust_static_libraries batch_name)
-    set(options STRIP_MSVC_DIRECTIVES)
+    set(options STRIP_MSVC_DIRECTIVES NO_DEFAULT_FEATURES)
     set(oneValueArgs MANIFEST_DIR)
     set(multiValueArgs TARGETS PACKAGES OUTPUT_NAMES FEATURES)
     cmake_parse_arguments(SNOW_RUST "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
@@ -292,6 +292,9 @@ function(snow_add_rust_static_libraries batch_name)
     endif()
 
     set(_cargo_feature_args)
+    if(SNOW_RUST_NO_DEFAULT_FEATURES)
+        list(APPEND _cargo_feature_args --no-default-features)
+    endif()
     if(SNOW_RUST_FEATURES)
         list(JOIN SNOW_RUST_FEATURES "," _cargo_features)
         list(APPEND _cargo_feature_args --features "${_cargo_features}")
@@ -333,6 +336,7 @@ function(snow_add_rust_static_libraries batch_name)
             SNOW_RUST_MANIFEST_DIR "${SNOW_RUST_MANIFEST_DIR}"
             SNOW_RUST_PACKAGE "${_package}"
             SNOW_RUST_FEATURES "${SNOW_RUST_FEATURES}"
+            SNOW_RUST_NO_DEFAULT_FEATURES "${SNOW_RUST_NO_DEFAULT_FEATURES}"
             SNOW_RUST_TARGET "${SNOW_RUST_TARGET}")
         if(CMAKE_CONFIGURATION_TYPES)
             set_target_properties("${_target_name}" PROPERTIES
@@ -351,7 +355,7 @@ function(snow_add_rust_static_libraries batch_name)
 endfunction()
 
 function(snow_add_rust_static_library target_name)
-    set(options STRIP_MSVC_DIRECTIVES)
+    set(options STRIP_MSVC_DIRECTIVES NO_DEFAULT_FEATURES)
     set(oneValueArgs PACKAGE MANIFEST_DIR OUTPUT_NAME)
     cmake_parse_arguments(SNOW_RUST "${options}" "${oneValueArgs}" "FEATURES" ${ARGN})
 
@@ -363,9 +367,12 @@ function(snow_add_rust_static_library target_name)
     if(NOT SNOW_RUST_OUTPUT_NAME)
         set(SNOW_RUST_OUTPUT_NAME "${SNOW_RUST_PACKAGE}")
     endif()
-    set(_strip_option)
+    set(_options)
     if(SNOW_RUST_STRIP_MSVC_DIRECTIVES)
-        set(_strip_option STRIP_MSVC_DIRECTIVES)
+        list(APPEND _options STRIP_MSVC_DIRECTIVES)
+    endif()
+    if(SNOW_RUST_NO_DEFAULT_FEATURES)
+        list(APPEND _options NO_DEFAULT_FEATURES)
     endif()
     snow_add_rust_static_libraries("${target_name}_rust"
         MANIFEST_DIR "${SNOW_RUST_MANIFEST_DIR}"
@@ -373,7 +380,7 @@ function(snow_add_rust_static_library target_name)
         PACKAGES "${SNOW_RUST_PACKAGE}"
         OUTPUT_NAMES "${SNOW_RUST_OUTPUT_NAME}"
         FEATURES ${SNOW_RUST_FEATURES}
-        ${_strip_option}
+        ${_options}
     )
 endfunction()
 

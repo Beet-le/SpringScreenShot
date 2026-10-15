@@ -552,17 +552,10 @@ class ScreenshotToolPalette final : public QWidget,
     void cancelRequested();
     void copyRequested();
     void confirmRequested();
-    void shapeStyleChanged(const SnowCanvasShapeStyle& style, quint32 properties,
-                           SnowCanvasShapeKind kind);
-    void filterStyleChanged(const SnowCanvasFilterStyle& style, quint32 properties);
-    void watermarkConfigChanged(const SnowCanvasWatermarkConfig& config);
     void watermarkPreviewChanged(const SnowCanvasWatermarkConfig& config);
-    void spotlightConfigChanged(const SnowCanvasSpotlightConfig& config);
     void spotlightPreviewChanged(const SnowCanvasSpotlightConfig& config);
-    void textStyleChanged(const SnowCanvasTextStyle& style, quint32 properties);
     void textStylePopupInteractionBegan();
     void textStylePopupInteractionEnded();
-    void serialNumberStyleChanged(const SnowCanvasSerialNumberStyle& style);
     void canvasColorSamplingRequested(adqt::widgets::AdColorPicker* picker);
     void sendSelectionToBackRequested();
     void sendSelectionBackwardRequested();

@@ -1,3 +1,5 @@
+#include "snow_shot/presentation/screenshotcanvastools.h"
+#include "palette_style_edit_test_support.h"
 #include "physical_key_test_support.h"
 #include "cloud_upload_test_support.h"
 #include "snow_shot/presentation/screenshotregiontypecontrol.h"
@@ -110,6 +112,48 @@ void require(bool condition, const char* message) {
     if (!condition) {
         std::cerr << message << '\n';
         std::exit(1);
+    }
+}
+
+void canvasToolBindingsRespectCapabilitiesAndLifetime() {
+    using namespace snow_shot::presentation;
+    ScreenshotToolPalette palette(ScreenshotToolPalette::Options{});
+    std::optional<SnowCanvasTool> requested;
+    int requests = 0;
+    {
+        QObject owner;
+        bindScreenshotCanvasToolRequests(palette, owner, [&](SnowCanvasTool tool) {
+            requested = tool;
+            ++requests;
+        });
+        for (const auto& descriptor : screenshotCanvasTools) {
+            require(paletteToolForCanvasTool(descriptor.canvasTool) == descriptor.paletteTool &&
+                        activeToolForCanvasTool(descriptor.canvasTool) == descriptor.activeTool,
+                    "drawing commands share one round-trip tool mapping");
+        }
+        for (const auto& descriptor : screenshotCanvasToolRequests) {
+            const int before = requests;
+            (palette.*descriptor.requested)();
+            require(requested == descriptor.canvasTool && requests == before + 1,
+                    "each palette request dispatches exactly one matching canvas tool");
+        }
+    }
+    const int afterOwnerDestroyed = requests;
+    for (const auto& descriptor : screenshotCanvasToolRequests)
+        (palette.*descriptor.requested)();
+    require(requests == afterOwnerDestroyed, "destroyed hosts disconnect all drawing commands");
+    QObject globalOwner;
+    bindScreenshotCanvasToolRequests(
+        palette, globalOwner, [&](SnowCanvasTool) { ++requests; },
+        [](SnowCanvasTool tool) {
+            return tool != SnowCanvasTool::AutoFilter && tool != SnowCanvasTool::Magnifier;
+        });
+    for (const auto& descriptor : screenshotCanvasToolRequests) {
+        const int before = requests;
+        (palette.*descriptor.requested)();
+        const bool enabled = descriptor.canvasTool != SnowCanvasTool::AutoFilter &&
+                             descriptor.canvasTool != SnowCanvasTool::Magnifier;
+        require(requests == before + int(enabled), "host capabilities exclude unsupported tools");
     }
 }
 
@@ -2204,15 +2248,15 @@ void retainedOutlineEditorsRebindStateLabelsAndCommands() {
 
     int shapeCommands = 0;
     int arrowCommands = 0;
-    QObject::connect(&palette, &ScreenshotToolPalette::shapeStyleChanged,
-                     [&shapeCommands, &arrowCommands](const SnowCanvasShapeStyle&, quint32,
-                                                      SnowCanvasShapeKind kind) {
-                         if (kind == SnowCanvasShapeKind::Arrow) {
-                             ++arrowCommands;
-                         } else {
-                             ++shapeCommands;
-                         }
-                     });
+    observePaletteStyleEdit<SnowCanvasShapeEdit>(
+        palette, [&shapeCommands, &arrowCommands](const SnowCanvasShapeStyle&, quint32,
+                                                  SnowCanvasShapeKind kind) {
+            if (kind == SnowCanvasShapeKind::Arrow) {
+                ++arrowCommands;
+            } else {
+                ++shapeCommands;
+            }
+        });
 
     palette.setActiveTool(ScreenshotToolPalette::Tool::Arrow);
     QWidget* arrowRow = palette.findChild<QWidget*>(QStringLiteral("screenshotArrowStyleControls"));
@@ -3023,7 +3067,8 @@ void screenshotToolbarUsesCanonicalOrderAndSectionSeparators() {
         shortcutTooltip(QStringLiteral("Text recognition"), {QStringLiteral("Ctrl+D")}),
         shortcutTooltip(QStringLiteral("Scrolling screenshot"), {QStringLiteral("L")}),
         shortcutTooltip(QStringLiteral("Cancel screenshot"), {QStringLiteral("Esc")}),
-        shortcutTooltip(QStringLiteral("Copy to clipboard"), {QStringLiteral("Ctrl+C")}),
+        shortcutTooltip(QStringLiteral("Copy to clipboard"),
+                        {QStringLiteral("Ctrl+C"), QStringLiteral("Return")}),
     };
     require(buttons.size() == expected.size(),
             "canonical screenshot toolbar should expose one entry per main group");
@@ -3337,8 +3382,8 @@ void screenshotActionTooltipsUseConfiguredShortcuts() {
                     tooltip(QStringLiteral("Pin to screen"), {QStringLiteral("Ctrl+F")}) &&
                 cancel->toolTip() ==
                     tooltip(QStringLiteral("Cancel screenshot"), {QStringLiteral("Esc")}) &&
-                copy->toolTip() ==
-                    tooltip(QStringLiteral("Copy to clipboard"), {QStringLiteral("Ctrl+C")}) &&
+                copy->toolTip() == tooltip(QStringLiteral("Copy to clipboard"),
+                                           {QStringLiteral("Ctrl+C"), QStringLiteral("Return")}) &&
                 undo->toolTip() == tooltip(QStringLiteral("Undo"), {QStringLiteral("Ctrl+Z")}) &&
                 redo->toolTip() == tooltip(QStringLiteral("Redo"), {QStringLiteral("Ctrl+Y")}),
             "screenshot toolbar actions must show their configured shortcuts");
@@ -5308,6 +5353,7 @@ void screenshotResultActionsFollowCustomLayout() {
     ScreenshotToolPalette::Options options;
     options.showSelectTool = options.showShapeTool = options.showArrowTool =
         options.showDistanceTool = false;
+    options.showSpeechBubbleTool = false;
     options.showAngleTool = false;
     options.showScreenRecordButton = true;
     options.enableStyleToolbar = false;
@@ -5336,8 +5382,9 @@ void screenshotResultActionsFollowCustomLayout() {
                 dividerCount() == 1 &&
                 hasSeparatorBetween(palette.mainPanel()->layout(), buttons.at(0), buttons.at(1)),
             "Copy, Cancel, and the separator must follow their configured positions exactly");
-    require(buttons.at(0)->toolTip() == shortcutTooltip(QStringLiteral("Copy to clipboard"),
-                                                        {QStringLiteral("Ctrl+C")}) &&
+    require(buttons.at(0)->toolTip() ==
+                    shortcutTooltip(QStringLiteral("Copy to clipboard"),
+                                    {QStringLiteral("Ctrl+C"), QStringLiteral("Return")}) &&
                 buttons.at(2)->toolTip() ==
                     shortcutTooltip(QStringLiteral("Cancel screenshot"), {QStringLiteral("Esc")}),
             "relocated result buttons must retain shortcut tooltips");
@@ -8465,16 +8512,16 @@ void selectedStyleEditsAreReflectedInTheCreationStyleContext() {
     SnowCanvasShapeStyle emittedStyle;
     quint32 emittedProperties = 0;
     int styleChangeCount = 0;
-    QObject::connect(&palette, &ScreenshotToolPalette::shapeStyleChanged,
-                     [&emittedStyle, &emittedProperties,
-                      &styleChangeCount](const SnowCanvasShapeStyle& style, quint32 properties,
-                                         SnowCanvasShapeKind kind) {
-                         require(kind == SnowCanvasShapeKind::Rectangle,
-                                 "rectangle controls should emit rectangle patches");
-                         emittedStyle = style;
-                         emittedProperties = properties;
-                         ++styleChangeCount;
-                     });
+    observePaletteStyleEdit<SnowCanvasShapeEdit>(
+        palette,
+        [&emittedStyle, &emittedProperties, &styleChangeCount](
+            const SnowCanvasShapeStyle& style, quint32 properties, SnowCanvasShapeKind kind) {
+            require(kind == SnowCanvasShapeKind::Rectangle,
+                    "rectangle controls should emit rectangle patches");
+            emittedStyle = style;
+            emittedProperties = properties;
+            ++styleChangeCount;
+        });
     require(palette.stepStrokeWidth(1),
             "a mixed stroke width should be resolved at its upper limit");
     require(styleChangeCount == 1, "style edit should emit once");
@@ -8594,14 +8641,14 @@ void lineToolIsDiscoverableSelectableAndUsesLinearStyleControls() {
             "Line should not materialize Rectangle-only corner radius");
 
     int lineStyleChangeCount = 0;
-    QObject::connect(&palette, &ScreenshotToolPalette::shapeStyleChanged,
-                     [&lineStyleChangeCount](const SnowCanvasShapeStyle&, quint32 properties,
-                                             SnowCanvasShapeKind kind) {
-                         if (kind == SnowCanvasShapeKind::Line &&
-                             properties == SnowCanvasShapeStylePropertyStrokeWidth) {
-                             ++lineStyleChangeCount;
-                         }
-                     });
+    observePaletteStyleEdit<SnowCanvasShapeEdit>(
+        palette, [&lineStyleChangeCount](const SnowCanvasShapeStyle&, quint32 properties,
+                                         SnowCanvasShapeKind kind) {
+            if (kind == SnowCanvasShapeKind::Line &&
+                properties == SnowCanvasShapeStylePropertyStrokeWidth) {
+                ++lineStyleChangeCount;
+            }
+        });
     clickStyleControl(palette, "Stroke width 4");
     require(lineStyleChangeCount == 1, "Line stroke edits should emit a Line-specific style patch");
     SnowCanvasWidget canvas;
@@ -8639,15 +8686,15 @@ void pressureBrushToolbarPreservesStylesAndMixedSelection() {
     auto expected = palette.creationStyleDefaults();
     int edits = 0;
     SnowCanvasShapeStyle emitted;
-    QObject::connect(&palette, &ScreenshotToolPalette::shapeStyleChanged,
-                     [&edits, &emitted](const SnowCanvasShapeStyle& style, quint32 properties,
-                                        SnowCanvasShapeKind kind) {
-                         require(properties == SnowCanvasShapeStylePropertyBrushMode &&
-                                     kind == SnowCanvasShapeKind::FreeDraw,
-                                 "Brush mode edits must affect only the Free Draw mode property");
-                         emitted = style;
-                         ++edits;
-                     });
+    observePaletteStyleEdit<SnowCanvasShapeEdit>(
+        palette, [&edits, &emitted](const SnowCanvasShapeStyle& style, quint32 properties,
+                                    SnowCanvasShapeKind kind) {
+            require(properties == SnowCanvasShapeStylePropertyBrushMode &&
+                        kind == SnowCanvasShapeKind::FreeDraw,
+                    "Brush mode edits must affect only the Free Draw mode property");
+            emitted = style;
+            ++edits;
+        });
     brushGroup->button(0)->click();
     expected.freeDraw.brushMode = SnowCanvasBrushMode::Regular;
     require(edits == 1 && emitted.brushMode == SnowCanvasBrushMode::Regular &&
@@ -8802,14 +8849,14 @@ void freeDrawToolIsDistinctAndUsesIndependentPathStyleControls() {
             "Free Draw should not materialize Rectangle-only corner radius");
 
     int freeDrawPatchCount = 0;
-    QObject::connect(&palette, &ScreenshotToolPalette::shapeStyleChanged,
-                     [&freeDrawPatchCount](const SnowCanvasShapeStyle&, quint32 properties,
-                                           SnowCanvasShapeKind kind) {
-                         if (kind == SnowCanvasShapeKind::FreeDraw &&
-                             properties == SnowCanvasShapeStylePropertyStrokeWidth) {
-                             ++freeDrawPatchCount;
-                         }
-                     });
+    observePaletteStyleEdit<SnowCanvasShapeEdit>(
+        palette, [&freeDrawPatchCount](const SnowCanvasShapeStyle&, quint32 properties,
+                                       SnowCanvasShapeKind kind) {
+            if (kind == SnowCanvasShapeKind::FreeDraw &&
+                properties == SnowCanvasShapeStylePropertyStrokeWidth) {
+                ++freeDrawPatchCount;
+            }
+        });
     clickStyleControl(palette, "Stroke width 4");
     require(freeDrawPatchCount == 1, "Free Draw style edits should use its own shape kind");
 
@@ -9493,8 +9540,8 @@ void filterToolExposesTypeAndIntensityControls() {
 
     int styleChangeCount = 0;
     quint32 lastProperties = 0;
-    QObject::connect(
-        &palette, &ScreenshotToolPalette::filterStyleChanged,
+    observePaletteStyleEdit<SnowCanvasFilterEdit>(
+        palette,
         [&styleChangeCount, &lastProperties](const SnowCanvasFilterStyle&, quint32 properties) {
             ++styleChangeCount;
             lastProperties = properties;
@@ -9585,9 +9632,8 @@ void filterToolExposesTypeAndIntensityControls() {
             "Pen Filter should use the same numeric stroke-width presets as Pen Highlight");
 
     SnowCanvasFilterStyle lastStyle;
-    QObject::connect(
-        &palette, &ScreenshotToolPalette::filterStyleChanged,
-        [&lastStyle](const SnowCanvasFilterStyle& style, quint32) { lastStyle = style; });
+    observePaletteStyleEdit<SnowCanvasFilterEdit>(
+        palette, [&lastStyle](const SnowCanvasFilterStyle& style, quint32) { lastStyle = style; });
     width54->click();
     require(lastProperties == SnowCanvasFilterStylePropertyStrokeWidth &&
                 lastStyle.strokeWidth == 54.0,
@@ -9855,11 +9901,11 @@ void spotlightControlsMatchMaskConfigurationBehavior() {
                      [&requests]() { ++requests; });
     QObject::connect(&palette, &ScreenshotToolPalette::spotlightPreviewChanged,
                      [&previews](const SnowCanvasSpotlightConfig&) { ++previews; });
-    QObject::connect(&palette, &ScreenshotToolPalette::spotlightConfigChanged,
-                     [&commits, &lastConfig](const SnowCanvasSpotlightConfig& config) {
-                         ++commits;
-                         lastConfig = config;
-                     });
+    observePaletteStyleEdit<SnowCanvasSpotlightEdit>(
+        palette, [&commits, &lastConfig](const SnowCanvasSpotlightConfig& config) {
+            ++commits;
+            lastConfig = config;
+        });
     spotlightButton->click();
     require(requests == 1, "Spotlight mode must request the Spotlight canvas tool");
 
@@ -10273,11 +10319,11 @@ void watermarkEditsCommitCompleteConfigsAndClampWheel() {
     SnowCanvasWatermarkConfig lastPreview;
     int committed = 0;
     int previews = 0;
-    QObject::connect(&palette, &ScreenshotToolPalette::watermarkConfigChanged,
-                     [&lastCommitted, &committed](const SnowCanvasWatermarkConfig& config) {
-                         lastCommitted = config;
-                         ++committed;
-                     });
+    observePaletteStyleEdit<SnowCanvasWatermarkEdit>(
+        palette, [&lastCommitted, &committed](const SnowCanvasWatermarkConfig& config) {
+            lastCommitted = config;
+            ++committed;
+        });
     QObject::connect(&palette, &ScreenshotToolPalette::watermarkPreviewChanged,
                      [&lastPreview, &previews](const SnowCanvasWatermarkConfig& config) {
                          lastPreview = config;
@@ -10472,11 +10518,11 @@ void watermarkTemplateLibraryAndEditorApplySnapshotsDeterministically() {
 
     int commits = 0;
     SnowCanvasWatermarkConfig applied;
-    QObject::connect(&palette, &ScreenshotToolPalette::watermarkConfigChanged, &palette,
-                     [&commits, &applied](const SnowCanvasWatermarkConfig& config) {
-                         ++commits;
-                         applied = config;
-                     });
+    observePaletteStyleEdit<SnowCanvasWatermarkEdit>(
+        palette, [&commits, &applied](const SnowCanvasWatermarkConfig& config) {
+            ++commits;
+            applied = config;
+        });
     const auto expectedTime = [](int second) {
         return std::optional<SnowCanvasWatermarkTemplateApplicationTime>{
             SnowCanvasWatermarkTemplateApplicationTime{2026, 9, 15, 12, 34, second}};
@@ -11086,15 +11132,14 @@ void shapeSelectorIsTheLeftmostStyleGroup() {
 
     SnowCanvasShapeStyle emittedStyle;
     quint32 emittedProperties = 0;
-    QObject::connect(&palette, &ScreenshotToolPalette::shapeStyleChanged,
-                     [&emittedStyle, &emittedProperties](const SnowCanvasShapeStyle& style,
-                                                         quint32 properties,
-                                                         SnowCanvasShapeKind kind) {
-                         require(kind == SnowCanvasShapeKind::Rectangle,
-                                 "shape selector should patch the shape tool");
-                         emittedStyle = style;
-                         emittedProperties = properties;
-                     });
+    observePaletteStyleEdit<SnowCanvasShapeEdit>(
+        palette, [&emittedStyle, &emittedProperties](const SnowCanvasShapeStyle& style,
+                                                     quint32 properties, SnowCanvasShapeKind kind) {
+            require(kind == SnowCanvasShapeKind::Rectangle,
+                    "shape selector should patch the shape tool");
+            emittedStyle = style;
+            emittedProperties = properties;
+        });
     auto* diamond = qobject_cast<QAbstractButton*>(controlWithTooltip(palette, "Diamond"));
     require(diamond != nullptr, "diamond shape control should be present");
     for (const char* name : {"Rectangle", "Ellipse", "Diamond"}) {
@@ -11127,8 +11172,8 @@ void spotlightShapeSelectorMatchesShapeAndRebindsEdits() {
     int edits = 0;
     SnowCanvasShapeKind lastKind = SnowCanvasShapeKind::Rectangle;
     SnowCanvasRectangleShape lastShape = SnowCanvasRectangleShape::Rectangle;
-    QObject::connect(
-        &palette, &ScreenshotToolPalette::shapeStyleChanged,
+    observePaletteStyleEdit<SnowCanvasShapeEdit>(
+        palette,
         [&](const SnowCanvasShapeStyle& style, quint32 properties, SnowCanvasShapeKind kind) {
             require(properties == SnowCanvasShapeStylePropertyShape,
                     "shape selectors must emit only the shape property");
@@ -11267,8 +11312,8 @@ void spotlightCornerRadiusEditorReusesShapeBehavior() {
     const int shapeRadius = qRound(editor->value());
     int edits = 0;
     SnowCanvasShapeStyle lastStyle;
-    QObject::connect(
-        &palette, &ScreenshotToolPalette::shapeStyleChanged,
+    observePaletteStyleEdit<SnowCanvasShapeEdit>(
+        palette,
         [&](const SnowCanvasShapeStyle& style, quint32 properties, SnowCanvasShapeKind kind) {
             require(properties == SnowCanvasShapeStylePropertyCornerRadius &&
                         kind == SnowCanvasShapeKind::Spotlight,
@@ -11510,14 +11555,14 @@ void arrowStyleControlsExposeAndEmitAllStyleProperties() {
 
     SnowCanvasShapeStyle emittedStyle;
     int styleChangeCount = 0;
-    QObject::connect(&palette, &ScreenshotToolPalette::shapeStyleChanged,
-                     [&emittedStyle, &styleChangeCount](const SnowCanvasShapeStyle& style, quint32,
-                                                        SnowCanvasShapeKind kind) {
-                         if (kind == SnowCanvasShapeKind::Arrow) {
-                             emittedStyle = style;
-                             ++styleChangeCount;
-                         }
-                     });
+    observePaletteStyleEdit<SnowCanvasShapeEdit>(
+        palette, [&emittedStyle, &styleChangeCount](const SnowCanvasShapeStyle& style, quint32,
+                                                    SnowCanvasShapeKind kind) {
+            if (kind == SnowCanvasShapeKind::Arrow) {
+                emittedStyle = style;
+                ++styleChangeCount;
+            }
+        });
 
     clickStyleControl(palette, "Arrow stroke width 4");
     require(styleChangeCount == 1, "arrow stroke width should emit once");
@@ -11649,15 +11694,15 @@ void lineStyleControlsExposeStraightAndCurveTypes() {
     quint32 emittedProperties = 0;
     SnowCanvasShapeKind emittedKind = SnowCanvasShapeKind::Rectangle;
     int styleChangeCount = 0;
-    QObject::connect(&palette, &ScreenshotToolPalette::shapeStyleChanged,
-                     [&emittedStyle, &emittedProperties, &emittedKind,
-                      &styleChangeCount](const SnowCanvasShapeStyle& style, quint32 properties,
-                                         SnowCanvasShapeKind kind) {
-                         emittedStyle = style;
-                         emittedProperties = properties;
-                         emittedKind = kind;
-                         ++styleChangeCount;
-                     });
+    observePaletteStyleEdit<SnowCanvasShapeEdit>(
+        palette,
+        [&emittedStyle, &emittedProperties, &emittedKind, &styleChangeCount](
+            const SnowCanvasShapeStyle& style, quint32 properties, SnowCanvasShapeKind kind) {
+            emittedStyle = style;
+            emittedProperties = properties;
+            emittedKind = kind;
+            ++styleChangeCount;
+        });
 
     straightLine->click();
     require(styleChangeCount == 1 && emittedKind == SnowCanvasShapeKind::Line &&
@@ -13332,9 +13377,8 @@ void arrowRatioEditorAdjustsAndResets() {
     SnowCanvasShapeStyle emitted;
     quint32 properties = 0;
     int changes = 0;
-    QObject::connect(
-        &palette, &ScreenshotToolPalette::shapeStyleChanged, &palette,
-        [&](const SnowCanvasShapeStyle& style, quint32 changed, SnowCanvasShapeKind kind) {
+    observePaletteStyleEdit<SnowCanvasShapeEdit>(
+        palette, [&](const SnowCanvasShapeStyle& style, quint32 changed, SnowCanvasShapeKind kind) {
             require(kind == SnowCanvasShapeKind::Arrow, "ratio edits target arrows");
             emitted = style;
             properties = changed;
@@ -13534,14 +13578,13 @@ void selectedArrowMixedPropertiesResolveIndependently() {
     quint32 emittedProperties = 0;
     SnowCanvasShapeKind emittedKind = SnowCanvasShapeKind::Rectangle;
     int styleChangeCount = 0;
-    QObject::connect(&palette, &ScreenshotToolPalette::shapeStyleChanged,
-                     [&emittedProperties, &emittedKind,
-                      &styleChangeCount](const SnowCanvasShapeStyle&, quint32 properties,
-                                         SnowCanvasShapeKind kind) {
-                         emittedProperties = properties;
-                         emittedKind = kind;
-                         ++styleChangeCount;
-                     });
+    observePaletteStyleEdit<SnowCanvasShapeEdit>(
+        palette, [&emittedProperties, &emittedKind, &styleChangeCount](
+                     const SnowCanvasShapeStyle&, quint32 properties, SnowCanvasShapeKind kind) {
+            emittedProperties = properties;
+            emittedKind = kind;
+            ++styleChangeCount;
+        });
 
     elbowArrowType->click();
     require(styleChangeCount == 1, "one arrow mixed-value edit should emit once");
@@ -13667,12 +13710,12 @@ void textEmphasisButtonsToggleMixedStylesAndSurviveReuse() {
     int edits = 0;
     SnowCanvasTextStyle changed;
     quint32 properties = 0;
-    QObject::connect(&palette, &ScreenshotToolPalette::textStyleChanged, &palette,
-                     [&](const SnowCanvasTextStyle& style, quint32 flags) {
-                         ++edits;
-                         changed = style;
-                         properties = flags;
-                     });
+    observePaletteStyleEdit<SnowCanvasTextEdit>(
+        palette, [&](const SnowCanvasTextStyle& style, quint32 flags) {
+            ++edits;
+            changed = style;
+            properties = flags;
+        });
     SnowCanvasStyleToolbarState state;
     state.source = SnowCanvasStyleToolbarSource::DefaultText;
     palette.setStyleToolbarState(state);
@@ -13798,8 +13841,8 @@ void retiredStyleEditorsIgnorePendingCommands() {
         controlWithTooltip(palette, "Current text font size")));
     require(fontSummary != nullptr, "Text must expose a font size command before retirement");
     int textEdits = 0;
-    QObject::connect(&palette, &ScreenshotToolPalette::textStyleChanged, &palette,
-                     [&](const SnowCanvasTextStyle&, quint32) { ++textEdits; });
+    observePaletteStyleEdit<SnowCanvasTextEdit>(
+        palette, [&](const SnowCanvasTextStyle&, quint32) { ++textEdits; });
     require(QMetaObject::invokeMethod(fontSummary, "click", Qt::QueuedConnection),
             "queue a font command before capture cancellation");
     palette.clearActiveTool();
@@ -13816,9 +13859,8 @@ void retiredStyleEditorsIgnorePendingCommands() {
     require(strokePicker != nullptr && strokePicker->popupContent() == nullptr,
             "Shape must expose its unmaterialized stroke editor before retirement");
     int shapeEdits = 0;
-    QObject::connect(
-        &palette, &ScreenshotToolPalette::shapeStyleChanged, &palette,
-        [&](const SnowCanvasShapeStyle&, quint32, SnowCanvasShapeKind) { ++shapeEdits; });
+    observePaletteStyleEdit<SnowCanvasShapeEdit>(
+        palette, [&](const SnowCanvasShapeStyle&, quint32, SnowCanvasShapeKind) { ++shapeEdits; });
     const auto defaults = palette.creationStyleDefaults();
     QMetaObject::invokeMethod(
         strokePicker,
@@ -13920,13 +13962,13 @@ void watermarkTemplateDialogBindingsRetireWithTheirEditor() {
     name->setText(QStringLiteral("Retirement test"));
     value->setText(QStringLiteral("{text} retirement"));
     int commits = 0;
-    QObject::connect(&palette, &ScreenshotToolPalette::watermarkConfigChanged, &palette,
-                     [&](const SnowCanvasWatermarkConfig& config) {
-                         if (config.templateValue == QStringLiteral("{text} retirement")) {
-                             ++commits;
-                             palette.setActiveTool(ScreenshotToolPalette::Tool::Shape);
-                         }
-                     });
+    observePaletteStyleEdit<SnowCanvasWatermarkEdit>(
+        palette, [&](const SnowCanvasWatermarkConfig& config) {
+            if (config.templateValue == QStringLiteral("{text} retirement")) {
+                ++commits;
+                palette.setActiveTool(ScreenshotToolPalette::Tool::Shape);
+            }
+        });
     committingModal->closeRequested(adqt::widgets::AdModal::CloseReason::OkAction);
     require(commits == 1 && committingModal == nullptr &&
                 palette.activeToolForTests() == ScreenshotToolPalette::Tool::Shape,
@@ -14144,13 +14186,13 @@ void textStyleControlsExposeAndEmitAllRequestedProperties() {
     SnowCanvasTextStyle emittedStyle;
     quint32 emittedProperties = 0;
     int changeCount = 0;
-    QObject::connect(&palette, &ScreenshotToolPalette::textStyleChanged,
-                     [&emittedStyle, &emittedProperties,
-                      &changeCount](const SnowCanvasTextStyle& style, quint32 properties) {
-                         emittedStyle = style;
-                         emittedProperties = properties;
-                         ++changeCount;
-                     });
+    observePaletteStyleEdit<SnowCanvasTextEdit>(
+        palette, [&emittedStyle, &emittedProperties, &changeCount](const SnowCanvasTextStyle& style,
+                                                                   quint32 properties) {
+            emittedStyle = style;
+            emittedProperties = properties;
+            ++changeCount;
+        });
     clickStyleControl(palette, "Text font size XL (54px)");
     require(changeCount == 1 && qFuzzyCompare(emittedStyle.fontSize + 1.0, 55.0) &&
                 emittedProperties == SnowCanvasTextStyleMixedFontSize,
@@ -14577,6 +14619,7 @@ void serialNumberStyleControlsExposeAndEmitRequestedProperties() {
             "sequence-number fill presets should match the text fill preset row");
     require(serialFillPresets->layout()->count() == textFillPresetsCount,
             "sequence-number fill popup should expose every text fill color preset");
+    QWidget* borderFill = controlWithTooltip(palette, "Border");
     QWidget* solidFill = controlWithTooltip(palette, "Solid sequence number fill");
     QWidget* crossLineFill = controlWithTooltip(palette, "Cross-line sequence number fill");
     QWidget* lineFill = controlWithTooltip(palette, "Line sequence number fill");
@@ -14650,23 +14693,25 @@ void serialNumberStyleControlsExposeAndEmitRequestedProperties() {
             serialNumberLayout->indexOf(fontRoot) < serialNumberLayout->indexOf(separators.at(3)) &&
             serialNumberLayout->indexOf(separators.at(3)) < serialNumberLayout->indexOf(fillRoot) &&
             fillRoot != nullptr && fillLayout != nullptr &&
-            fillRoot->isAncestorOf(fillColorPicker) && solidFill != nullptr &&
-            crossLineFill != nullptr && lineFill != nullptr &&
-            layoutWidgetIndex(fillLayout, solidFill) ==
+            fillRoot->isAncestorOf(fillColorPicker) && borderFill != nullptr &&
+            solidFill != nullptr && crossLineFill != nullptr && lineFill != nullptr &&
+            layoutWidgetIndex(fillLayout, borderFill) ==
                 layoutWidgetIndex(fillLayout, fillColorPicker) + 1 &&
-            layoutWidgetIndex(fillLayout, crossLineFill) ==
+            layoutWidgetIndex(fillLayout, solidFill) ==
                 layoutWidgetIndex(fillLayout, fillColorPicker) + 2 &&
+            layoutWidgetIndex(fillLayout, crossLineFill) ==
+                layoutWidgetIndex(fillLayout, fillColorPicker) + 3 &&
             layoutWidgetIndex(fillLayout, lineFill) ==
-                layoutWidgetIndex(fillLayout, fillColorPicker) + 3,
+                layoutWidgetIndex(fillLayout, fillColorPicker) + 4,
         "sequence-number color, type, content, and fill groups should use separators");
 
     SnowCanvasSerialNumberStyle emittedStyle;
     int changeCount = 0;
-    QObject::connect(&palette, &ScreenshotToolPalette::serialNumberStyleChanged,
-                     [&emittedStyle, &changeCount](const SnowCanvasSerialNumberStyle& style) {
-                         emittedStyle = style;
-                         ++changeCount;
-                     });
+    observePaletteStyleEdit<SnowCanvasSerialNumberEdit>(
+        palette, [&emittedStyle, &changeCount](const SnowCanvasSerialNumberStyle& style) {
+            emittedStyle = style;
+            ++changeCount;
+        });
     clickStyleControl(palette, "Sequence number font size 54px");
     require(changeCount == 1 && qFuzzyCompare(emittedStyle.fontSize + 1.0, 55.0) &&
                 emittedStyle.number == 12 && emittedStyle.color == state.serialNumberStyle.color &&
@@ -14768,11 +14813,11 @@ void serialNumberInputCommitsEditsAndSupportsWheel() {
 
     int changes = 0;
     qint64 number = 12;
-    QObject::connect(&palette, &ScreenshotToolPalette::serialNumberStyleChanged,
-                     [&changes, &number](const SnowCanvasSerialNumberStyle& style) {
-                         ++changes;
-                         number = style.number;
-                     });
+    observePaletteStyleEdit<SnowCanvasSerialNumberEdit>(
+        palette, [&changes, &number](const SnowCanvasSerialNumberStyle& style) {
+            ++changes;
+            number = style.number;
+        });
     const auto typeText = [input](const QString& text) {
         input->selectAll();
         PhysicalKeyEvent key(QEvent::KeyPress, Qt::Key_unknown, Qt::NoModifier, text);
@@ -14983,14 +15028,14 @@ void cornerRadiusButtonsRestoreTheDefaultValue() {
     palette.setActiveTool(ScreenshotToolPalette::Tool::Shape);
 
     SnowCanvasShapeStyle emittedRectangleStyle;
-    QObject::connect(&palette, &ScreenshotToolPalette::shapeStyleChanged,
-                     [&emittedRectangleStyle](const SnowCanvasShapeStyle& style, quint32 properties,
-                                              SnowCanvasShapeKind kind) {
-                         if (kind == SnowCanvasShapeKind::Rectangle &&
-                             properties == SnowCanvasShapeStylePropertyCornerRadius) {
-                             emittedRectangleStyle = style;
-                         }
-                     });
+    observePaletteStyleEdit<SnowCanvasShapeEdit>(
+        palette, [&emittedRectangleStyle](const SnowCanvasShapeStyle& style, quint32 properties,
+                                          SnowCanvasShapeKind kind) {
+            if (kind == SnowCanvasShapeKind::Rectangle &&
+                properties == SnowCanvasShapeStylePropertyCornerRadius) {
+                emittedRectangleStyle = style;
+            }
+        });
     clickStyleControl(palette, "Corner radius (scroll to adjust)");
     require(qFuzzyCompare(emittedRectangleStyle.cornerRadii.topLeft + 1.0, 7.0),
             "clicking the rectangle corner-radius button should restore 6px");
@@ -15002,8 +15047,8 @@ void cornerRadiusButtonsRestoreTheDefaultValue() {
     palette.setActiveTool(ScreenshotToolPalette::Tool::Text);
 
     SnowCanvasTextStyle emittedTextStyle;
-    QObject::connect(
-        &palette, &ScreenshotToolPalette::textStyleChanged,
+    observePaletteStyleEdit<SnowCanvasTextEdit>(
+        palette,
         [&emittedTextStyle](const SnowCanvasTextStyle& style) { emittedTextStyle = style; });
     clickStyleControl(palette, "Text fill corner radius (scroll to adjust)");
     require(qFuzzyCompare(emittedTextStyle.cornerRadii.topLeft + 1.0, 7.0),
@@ -15059,8 +15104,8 @@ void selectedStrokeColorDragKeepsPickerIndicatorInSync() {
     }
     require(strokePicker != nullptr, "stroke color picker should be present");
 
-    QObject::connect(
-        palette, &ScreenshotToolPalette::shapeStyleChanged,
+    observePaletteStyleEdit<SnowCanvasShapeEdit>(
+        *palette,
         [&canvas](const SnowCanvasShapeStyle& style, quint32 properties, SnowCanvasShapeKind kind) {
             static_cast<void>(canvas.setCanvasShapeStylePatch(style, properties, kind));
         });
@@ -16727,13 +16772,13 @@ void activeFilterAndWatermarkToolsExposeCanvasWheelSteps() {
     int filterChanges = 0;
     quint32 filterProperties = 0;
     SnowCanvasFilterStyle changedFilter;
-    QObject::connect(&palette, &ScreenshotToolPalette::filterStyleChanged,
-                     [&filterChanges, &filterProperties,
-                      &changedFilter](const SnowCanvasFilterStyle& style, quint32 properties) {
-                         ++filterChanges;
-                         filterProperties = properties;
-                         changedFilter = style;
-                     });
+    observePaletteStyleEdit<SnowCanvasFilterEdit>(
+        palette, [&filterChanges, &filterProperties,
+                  &changedFilter](const SnowCanvasFilterStyle& style, quint32 properties) {
+            ++filterChanges;
+            filterProperties = properties;
+            changedFilter = style;
+        });
 
     SnowCanvasStyleToolbarState rectangleState;
     rectangleState.source = SnowCanvasStyleToolbarSource::DefaultRectangleFilter;
@@ -16787,9 +16832,8 @@ void activeFilterAndWatermarkToolsExposeCanvasWheelSteps() {
     palette.setActiveTool(ScreenshotToolPalette::Tool::Watermark);
     int watermarkChanges = 0;
     SnowCanvasWatermarkConfig changedWatermark;
-    QObject::connect(
-        &palette, &ScreenshotToolPalette::watermarkConfigChanged,
-        [&watermarkChanges, &changedWatermark](const SnowCanvasWatermarkConfig& config) {
+    observePaletteStyleEdit<SnowCanvasWatermarkEdit>(
+        palette, [&watermarkChanges, &changedWatermark](const SnowCanvasWatermarkConfig& config) {
             ++watermarkChanges;
             changedWatermark = config;
         });
@@ -16923,20 +16967,20 @@ void resetStyleStateRestoresTheCompleteInjectedProfileWithoutCommands() {
     ScreenshotToolPalette palette(options);
 
     int editCommands = 0;
-    QObject::connect(&palette, &ScreenshotToolPalette::shapeStyleChanged,
-                     [&editCommands](const SnowCanvasShapeStyle&, quint32, SnowCanvasShapeKind) {
-                         ++editCommands;
-                     });
-    QObject::connect(&palette, &ScreenshotToolPalette::filterStyleChanged,
-                     [&editCommands](const SnowCanvasFilterStyle&, quint32) { ++editCommands; });
-    QObject::connect(&palette, &ScreenshotToolPalette::textStyleChanged,
-                     [&editCommands](const SnowCanvasTextStyle&) { ++editCommands; });
-    QObject::connect(&palette, &ScreenshotToolPalette::serialNumberStyleChanged,
-                     [&editCommands](const SnowCanvasSerialNumberStyle&) { ++editCommands; });
-    QObject::connect(&palette, &ScreenshotToolPalette::watermarkConfigChanged,
-                     [&editCommands](const SnowCanvasWatermarkConfig&) { ++editCommands; });
-    QObject::connect(&palette, &ScreenshotToolPalette::spotlightConfigChanged,
-                     [&editCommands](const SnowCanvasSpotlightConfig&) { ++editCommands; });
+    observePaletteStyleEdit<SnowCanvasShapeEdit>(
+        palette, [&editCommands](const SnowCanvasShapeStyle&, quint32, SnowCanvasShapeKind) {
+            ++editCommands;
+        });
+    observePaletteStyleEdit<SnowCanvasFilterEdit>(
+        palette, [&editCommands](const SnowCanvasFilterStyle&, quint32) { ++editCommands; });
+    observePaletteStyleEdit<SnowCanvasTextEdit>(
+        palette, [&editCommands](const SnowCanvasTextStyle&) { ++editCommands; });
+    observePaletteStyleEdit<SnowCanvasSerialNumberEdit>(
+        palette, [&editCommands](const SnowCanvasSerialNumberStyle&) { ++editCommands; });
+    observePaletteStyleEdit<SnowCanvasWatermarkEdit>(
+        palette, [&editCommands](const SnowCanvasWatermarkConfig&) { ++editCommands; });
+    observePaletteStyleEdit<SnowCanvasSpotlightEdit>(
+        palette, [&editCommands](const SnowCanvasSpotlightConfig&) { ++editCommands; });
 
     struct ShapeMutation {
         SnowCanvasStyleToolbarSource source;
@@ -17622,11 +17666,11 @@ void customColorPresetsRefreshCurrentAndLazyDrawingEditors() {
     requireColors(fillButtons, defaultFill);
     int shapeCommands = 0;
     SnowCanvasShapeStyle changedShape;
-    QObject::connect(&palette, &ScreenshotToolPalette::shapeStyleChanged, &palette,
-                     [&](const SnowCanvasShapeStyle& style, quint32, SnowCanvasShapeKind) {
-                         changedShape = style;
-                         ++shapeCommands;
-                     });
+    observePaletteStyleEdit<SnowCanvasShapeEdit>(
+        palette, [&](const SnowCanvasShapeStyle& style, quint32, SnowCanvasShapeKind) {
+            changedShape = style;
+            ++shapeCommands;
+        });
     const auto originalStyle = palette.creationStyleDefaults().rectangle;
     auto stroke = defaultStroke;
     auto fill = defaultFill;
@@ -17708,11 +17752,11 @@ void customColorPresetsRefreshCurrentAndLazyDrawingEditors() {
     requireColors(textStrokeButtons, fill);
     int textCommands = 0;
     SnowCanvasTextStyle changedText;
-    QObject::connect(&palette, &ScreenshotToolPalette::textStyleChanged, &palette,
-                     [&](const SnowCanvasTextStyle& style, quint32) {
-                         changedText = style;
-                         ++textCommands;
-                     });
+    observePaletteStyleEdit<SnowCanvasTextEdit>(palette,
+                                                [&](const SnowCanvasTextStyle& style, quint32) {
+                                                    changedText = style;
+                                                    ++textCommands;
+                                                });
     fill[2] = QColor(21, 43, 65, 87);
     require(settings.setFillColors(fill), "custom fill colors must be editable repeatedly");
     requireColors(textStrokeButtons, fill);
@@ -17864,7 +17908,7 @@ void fontFamilyListIsCachedForEditorBuilds() {
     const QStringList& first = snow_shot::presentation::screenshotToolPaletteFontFamilies();
     const QStringList& second = snow_shot::presentation::screenshotToolPaletteFontFamilies();
     require(&first == &second, "font family enumeration should be cached across editor builds");
-    require(first.contains(QStringLiteral("Segoe UI")),
+    require(first.contains(QStringLiteral("Snow Recording Test Sans")),
             "font family cache should expose the registered application font");
 
     QStringList expected;
@@ -17919,7 +17963,7 @@ void filterEditorsRestoreValuesAfterToolSwitch() {
                            ? SnowCanvasStyleToolbarSource::DefaultPenFilter
                            : SnowCanvasStyleToolbarSource::DefaultRectangleFilter;
         int edits = 0;
-        QObject::connect(&palette, &ScreenshotToolPalette::filterStyleChanged, [&]() { ++edits; });
+        observePaletteStyleEdit<SnowCanvasFilterEdit>(palette, [&]() { ++edits; });
         for (const auto type : {SnowCanvasFilterType::Mosaic, SnowCanvasFilterType::GaussianBlur,
                                 SnowCanvasFilterType::Grayscale, SnowCanvasFilterType::Inversion,
                                 SnowCanvasFilterType::Emboss, SnowCanvasFilterType::Brightness}) {
@@ -18033,10 +18077,10 @@ void autoFilterControlsShareStylesAndKeepCategoryUnselected() {
     SnowCanvasWidget canvas;
     QObject::connect(&palette, &ScreenshotToolPalette::autoFilterRequested, &canvas,
                      [&]() { canvas.setCanvasTool(SnowCanvasTool::AutoFilter); });
-    QObject::connect(&palette, &ScreenshotToolPalette::filterStyleChanged, &canvas,
-                     [&](const SnowCanvasFilterStyle& style, quint32 properties) {
-                         canvas.setCanvasFilterStyle(style, properties);
-                     });
+    observePaletteStyleEdit<SnowCanvasFilterEdit>(
+        palette, [&](const SnowCanvasFilterStyle& style, quint32 properties) {
+            canvas.setCanvasFilterStyle(style, properties);
+        });
     QObject::connect(&canvas, &SnowCanvasWidget::styleToolbarStateChanged, &palette,
                      [&]() { palette.setStyleToolbarState(canvas.canvasStyleToolbarState()); });
     for (const Tool tool :
@@ -18714,6 +18758,12 @@ void runWatermarkPersistenceTests();
 
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
+    const int fixtureFont = QFontDatabase::addApplicationFont(
+        QStringLiteral(":/recording-test-fonts/SnowRecordingTestSans-Regular.ttf"));
+    require(fixtureFont >= 0 && QFontDatabase::applicationFontFamilies(fixtureFont)
+                                    .contains(QStringLiteral("Snow Recording Test Sans")),
+            "toolbar tests require the repository's registered font fixture");
+
     QTemporaryDir storageDirectory;
     require(storageDirectory.isValid(), "failed to create toolbar test storage directory");
     const QString executableDirectory =
@@ -18879,7 +18929,13 @@ int main(int argc, char** argv) {
         snow_shot::storage::ApplicationStorage::instance().shutdown();
         return 0;
     }
+    if (application.arguments().contains(QStringLiteral("--canvas-tool-bindings-only"))) {
+        canvasToolBindingsRespectCapabilitiesAndLifetime();
+        snow_shot::storage::ApplicationStorage::instance().shutdown();
+        return 0;
+    }
     if (application.arguments().contains(QStringLiteral("--tool-shortcuts-only"))) {
+        canvasToolBindingsRespectCapabilitiesAndLifetime();
         screenshotShortcutsShareButtonCommandsAndAvailability();
         clickingActiveToolbarToolReturnsToSelect();
         repeatingDrawingShortcutsReturnsToSelect();

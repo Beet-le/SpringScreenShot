@@ -7,6 +7,7 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QTemporaryDir>
+#include <QTranslator>
 
 #include <cstdlib>
 #include <iostream>
@@ -56,6 +57,22 @@ int main(int argc, char** argv) {
             "the English catalog should be active after canonicalizing the locale");
     require(adqt::locale::LocaleManager::instance().locale().name() == QStringLiteral("en_US"),
             "Ant Design Qt should follow the English application locale");
+    QTranslator sourceCatalog;
+    require(sourceCatalog.load(QStringLiteral(":/i18n/snow_shot_en_US.qm")),
+            "the compact source-language catalog must remain loadable");
+    require(sourceCatalog.translate("CanvasStatusReadout", "Locked").isEmpty() &&
+                QCoreApplication::translate("CanvasStatusReadout", "Locked") ==
+                    QStringLiteral("Locked"),
+            "identity messages must use English fallback instead of occupying the catalog");
+    require(sourceCatalog.translate("LanguageCatalog", "Language name") ==
+                QStringLiteral("English"),
+            "source-language catalog compaction must retain language-name metadata");
+    require(QCoreApplication::translate("PinnedWindowManagementPageWidget", "%n pinned window(s)",
+                                        nullptr, 1) == QStringLiteral("1 pinned window") &&
+                QCoreApplication::translate("PinnedWindowManagementPageWidget",
+                                            "%n pinned window(s)", nullptr,
+                                            2) == QStringLiteral("2 pinned windows"),
+            "source-language catalog compaction must preserve singular and plural forms");
 
     require(manager.setLanguage(QStringLiteral("zh_CN")), "Simplified Chinese should load");
     require(QCoreApplication::translate("CanvasStatusReadout", "Scale: %1%") ==
@@ -125,6 +142,11 @@ int main(int argc, char** argv) {
     require(QCoreApplication::translate("PinnedWindowManagementPageWidget", "No pinned windows") ==
                 QString::fromUtf8("尚無固定到螢幕視窗"),
             "Traditional Chinese management should use the same window terminology");
+
+    require(manager.setLanguage(QStringLiteral("en_US")) &&
+                QCoreApplication::translate("CanvasStatusReadout", "Locked") ==
+                    QStringLiteral("Locked"),
+            "switching back to compact English must remove previous localized translations");
 
     require(manager.setLanguage(QStringLiteral("system")),
             "Follow system should be a persistent preference");

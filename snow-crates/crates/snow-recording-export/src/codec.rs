@@ -534,14 +534,12 @@ where
 }
 
 pub(crate) fn ensure_video_frame_writable(frame: &mut ffmpeg::frame::Video) -> Result<()> {
-    let status = unsafe { ffmpeg::ffi::av_frame_make_writable(frame.as_mut_ptr()) };
-    if status < 0 {
-        return Err(ScreenRecorderError::Export(format!(
-            "failed to make video frame writable: {}",
-            ffmpeg::Error::from(status)
-        )));
-    }
-    Ok(())
+    // SAFETY: Codec callers use FFmpeg-allocated frames whose format, dimensions, and
+    // plane layout remain consistent with their allocation or scaler output.
+    unsafe { crate::ffmpeg_util::ensure_video_frame_writable(frame) }.map_err(|error| match error {
+        ScreenRecorderError::Encode(message) => ScreenRecorderError::Export(message),
+        other => other,
+    })
 }
 
 #[inline]

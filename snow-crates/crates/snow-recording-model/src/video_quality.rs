@@ -1,14 +1,14 @@
-use crate::config::VideoEncodeConfig;
+use crate::VideoEncodeConfig;
 
 /// Convert a user-facing quality slider (0..=100) into an H.264 CRF target.
 /// Higher quality means lower CRF and larger output bitrate.
-pub(crate) fn quality_to_h264_crf(quality: u8) -> u8 {
+pub fn quality_to_h264_crf(quality: u8) -> u8 {
     let q = quality.min(100) as f64 / 100.0;
     let curved = q.powf(1.20);
     (35.0 - 22.0 * curved).round().clamp(10.0, 35.0) as u8
 }
 
-pub(crate) fn smart_quality_bitrate_kbps(
+pub fn smart_quality_bitrate_kbps(
     width: u32,
     height: u32,
     fps: u32,
@@ -43,7 +43,7 @@ pub(crate) fn smart_quality_bitrate_kbps(
     kbps.round().clamp(600.0, 240_000.0) as u32
 }
 
-pub(crate) fn smart_quality_bitrate_bps(
+pub fn smart_quality_bitrate_bps(
     width: u32,
     height: u32,
     fps: u32,

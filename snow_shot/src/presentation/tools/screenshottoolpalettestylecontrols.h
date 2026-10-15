@@ -155,7 +155,7 @@ struct ScreenshotToolPaletteFilterFamilyResult {
 };
 
 // Behavior hooks for a filter row; the palette owns filter state mutations,
-// intensity availability and the filterStyleChanged signal.
+// intensity availability and submission through the style-edit handler.
 struct ScreenshotToolPaletteFilterCallbacks {
     std::function<void(int typeValue)> setType;
     std::function<void(double strength)> setStrength;

@@ -400,6 +400,34 @@ void namesAndConflicts(const QString& directory) {
         structure(read(path), 1);
 }
 
+void exportNamesPreserveCollagePolicy(const QString& directory) {
+    const QDir output(QDir(directory).filePath(QStringLiteral("sanitized-pages")));
+    require(QDir().mkpath(output.path()), "filename fixture directory exists");
+    const QString emoji = QString::fromUcs4(U"\U0001f4f7");
+    const QString exactLimit = QString(116, u'a') + emoji;
+    const QString overLimit = QString(118, u'b') + emoji;
+    const QString controls = QStringLiteral("name") + QChar(1) + QChar(0x7f) + QChar(0x81);
+    const QStringList labels = {QStringLiteral("C:\\folder\\") + controls + QStringLiteral(".png"),
+                                QStringLiteral("  ...  .png"), exactLimit + QStringLiteral("x.png"),
+                                overLimit + QStringLiteral(".png")};
+    CollageDocument document;
+    for (const auto& label : labels)
+        require(document.append(fixture(), label), "filename originals must import");
+    CollagePdfSettings settings;
+    settings.exportMode = CollagePdfExportMode::PerPage;
+    const auto result = exportCollagePdf(document.items(), settings, {output.path()});
+    require(result.succeeded() && result.paths.size() == 4,
+            "filename originals must export independently");
+    const QStringList expected = {QStringLiteral("001_name___.pdf"),
+                                  QStringLiteral("002_Image.pdf"),
+                                  QStringLiteral("003_%1.pdf").arg(exactLimit),
+                                  QStringLiteral("004_%1.pdf").arg(QString(118, u'b'))};
+    for (qsizetype index = 0; index < expected.size(); ++index)
+        require(QFileInfo(result.paths[index]).fileName() == expected[index],
+                "collage exports remove paths and extensions, replace C1 controls, and cap UTF-8 "
+                "safely");
+}
+
 void cancellationAndPartialFailure(const QString& directory) {
     CollageDocument document;
     require(document.append(fixture({2051, 2063}), QStringLiteral("first.png")) &&
@@ -584,6 +612,7 @@ int main(int argc, char** argv) {
         combinedOrderAndGeometry(temporary.path());
         imageSizedPages(temporary.path());
         namesAndConflicts(temporary.path());
+        exportNamesPreserveCollagePolicy(temporary.path());
         cancellationAndPartialFailure(temporary.path());
         invalidInput(temporary.path());
         admittedLongImage(temporary.path());

@@ -1336,6 +1336,7 @@ impl GdiResources {
     }
 
     fn create_dib_bitmap(&self, width: i32, height: i32) -> CaptureResult<(HBITMAP, *mut u8)> {
+        crate::admit_raster(width as u32, height as u32)?;
         let mut info = BITMAPINFO::default();
         info.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
         info.bmiHeader.biWidth = width;

@@ -495,6 +495,8 @@ enum RecognitionKind {
     Markdown,
     #[cfg(not(feature = "mini"))]
     Html,
+    #[cfg(not(feature = "mini"))]
+    Latex,
 }
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -1270,6 +1272,39 @@ mod tests {
                 };
                 arguments[field] = value;
                 assert_eq!(schema(name, Some(arguments)).is_ok(), !crate::edition::MINI);
+            }
+        }
+    }
+    #[test]
+    fn recognition_modes_share_the_screenshot_and_document_contract() {
+        for name in [
+            "snow_shot_screenshot_recognize",
+            "snow_shot_document_recognize",
+        ] {
+            let published = Value::Object(schema(name, None).unwrap());
+            let property = &published["properties"]["kind"];
+            let definition = property["$ref"].as_str().map_or(property, |reference| {
+                published
+                    .pointer(reference.trim_start_matches('#'))
+                    .unwrap()
+            });
+            let choices = definition["enum"]
+                .as_array()
+                .cloned()
+                .unwrap_or_else(|| vec![definition["const"].clone()]);
+            for kind in ["text", "table", "qr", "markdown", "html", "latex"] {
+                let enabled = kind == "text" || !crate::edition::MINI;
+                assert_eq!(choices.contains(&json!(kind)), enabled, "{name}: {kind}");
+                let arguments = if name.contains("screenshot") {
+                    json!({"session_id":"s","expected_revision":1,"kind":kind})
+                } else {
+                    json!({"document_id":"d","expected_revision":1,"kind":kind})
+                };
+                assert_eq!(
+                    schema(name, Some(arguments)).is_ok(),
+                    enabled,
+                    "{name}: {kind}"
+                );
             }
         }
     }

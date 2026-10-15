@@ -9,6 +9,7 @@
 #include <QEventLoop>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QFileInfo>
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -41,6 +42,10 @@ class SnowShotApiClientTestAccess {
     static void timeout(SnowShotApiClient& client, int milliseconds) {
         client.m_tableTimeoutMs = milliseconds;
         client.m_latexTimeoutMs = milliseconds;
+    }
+    static void extractionTimeouts(SnowShotApiClient& client, int table, int latex) {
+        client.m_tableTimeoutMs = table;
+        client.m_latexTimeoutMs = latex;
     }
     static qsizetype customQueued(const SnowShotApiClient& client) {
         return client.m_customChatQueue.size();
@@ -438,11 +443,53 @@ void latexPreparationIsAsynchronousAndLifetimeSafe() {
             "table preserves multipart WebP contract and completes once");
 }
 
+void dedicatedExtractionDeadlinesStayIndependent() {
+    SnowShotApiClient client(QStringLiteral("http://127.0.0.1:1"));
+    QSemaphore entered, release;
+    SnowShotApiClientTestAccess::prepare(client, [&](const QImage&) {
+        entered.release();
+        release.acquire();
+        return QByteArray{};
+    });
+    SnowShotApiClientTestAccess::extractionTimeouts(client, 1, 65000);
+    QImage image(16, 16, QImage::Format_RGBA8888);
+    image.fill(Qt::white);
+    int tables = 0, formulas = 0;
+    QString tableError, formulaError;
+    require(client.extractTable(image, &client,
+                                [&](SnowShotTableResult result) {
+                                    ++tables;
+                                    tableError = result.error;
+                                }) != 0,
+            "independent table deadline fixture starts");
+    require(client.extractLatex(image, &client,
+                                [&](SnowShotLatexResult result) {
+                                    ++formulas;
+                                    formulaError = result.error;
+                                }) != 0,
+            "independent formula deadline fixture starts");
+    require(entered.tryAcquire(1, 5000), "extraction preparation enters the blocked fixture");
+    translation_tests::waitUntil([&] { return tables == 1; }, "the short table deadline expires");
+    require(formulas == 0 && tableError == QStringLiteral("Table recognition request timed out"),
+            "one extraction timeout preserves the other request and its feature-specific error");
+    release.release(2);
+    require(QThreadPool::globalInstance()->waitForDone(5000), "both extraction encoders settle");
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    require(tables == 1 && formulas == 1 &&
+                formulaError == QStringLiteral("LaTeX recognition failed") &&
+                SnowShotApiClientTestAccess::requests(client) == 0,
+            "late table preparation is discarded while the formula retains its own completion");
+}
+
 void failedRequestsIdentifyTheirKindWithoutContent() {
     QTemporaryDir temporary;
     require(temporary.isValid(), "network diagnostics need isolated storage");
     snow_shot::diagnostics::DiagnosticsOptions options;
-    options.directories = {temporary.path()};
+    // macOS exposes its temporary directory through /var -> /private/var. Diagnostics
+    // deliberately rejects symbolic-link ancestors, so supply the real isolated path.
+    const QString diagnosticsRoot = QFileInfo(temporary.path()).canonicalFilePath();
+    require(!diagnosticsRoot.isEmpty(), "network diagnostics need a canonical isolated directory");
+    options.directories = {diagnosticsRoot};
     options.enableCrashCapture = false;
     options.mirrorToConsole = false;
     options.installMessageHandler = false;
@@ -2583,6 +2630,7 @@ int main(int argc, char** argv) {
     visionLatexResponsesMustContainCompleteSource();
     tablePreparationIsAsynchronousAndLifetimeSafe();
     latexPreparationIsAsynchronousAndLifetimeSafe();
+    dedicatedExtractionDeadlinesStayIndependent();
     latexUploadDimensions();
     latexResponseContracts();
     customModelConcurrency();
