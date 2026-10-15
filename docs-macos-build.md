@@ -460,6 +460,48 @@ The native deployment fixture tests the packaging rules with a small Qt executab
 and a simulated versioned OCR library; it does not validate the full app.
 It requires CMake, Ninja, pkg-config and CPack on PATH.
 
+The x264 overlay fixes pointer aliasing in the shared frame/macroblock preallocator.
+Optimized Apple Silicon builds could retain a buffer offset after allocation and
+crash in `memset` while opening the software H.264 encoder. The patch keeps offsets
+separate and writes final pointers with `memcpy`, preserving LTO and assembly.
+Reprovision the codec dependencies and rebuild the app after updating the overlay;
+an existing binary still contains the old allocator.
+
+Verify the production x264 archive without Qt or screen permissions using the
+standalone fixture below. It encodes and drains 8-bit and 10-bit frames with normal
+and zero-latency presets and multiple thread counts. Static app builds with the
+general tests enabled also register these tests.
+
+```sh
+cmake --fresh -S test-support/x264 -B build/x264-preallocation-arm64 -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+  -DSNOW_X264_ROOT="$PWD/.tools/macos/installed/static/arm64-osx-snow-shot-static"
+cmake --build build/x264-preallocation-arm64 --target snow-x264-preallocation-tests
+ctest --test-dir build/x264-preallocation-arm64 --output-on-failure \
+  -R '^snow-x264-preallocation-'
+```
+
+For Intel, use a separate build directory, `CMAKE_OSX_ARCHITECTURES=x86_64`, and the
+`x64-osx-snow-shot-static` prefix. Run the resulting fixture on native Intel hardware
+as part of release validation; Rosetta is also useful for local regression checks.
+
+The clipboard DIB byte-access fixture also runs without Qt or screen permissions.
+It checks unaligned source addresses, pixel counts around SIMD boundaries, and
+output bounds. With Clang or GCC, enable UBSan to catch alignment regressions:
+
+```sh
+cmake -S test-support/clipboard-dib -B build/clipboard-dib-ubsan -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release -DSNOW_DIB_ENABLE_UBSAN=ON
+cmake --build build/clipboard-dib-ubsan --target snow-shot-clipboard-dib-decoder-tests
+ctest --test-dir build/clipboard-dib-ubsan --output-on-failure \
+  -R '^snow-shot-clipboard-dib-decoder-tests$'
+```
+
+The fixture always checks scalar decoding and runs AVX2 kernels when the CPU
+supports them. Windows clipboard-content tests additionally cover borrowed DIB
+headers and mask tables; macOS does not exercise the Windows clipboard API.
+
 To validate a production static kit without QtTest or unrelated UI tests, use a
 separate tree with only the shared OCR and crash diagnostics tests enabled:
 

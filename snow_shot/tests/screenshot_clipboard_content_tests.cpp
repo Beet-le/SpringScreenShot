@@ -1383,6 +1383,44 @@ void standardRgbDibOrientationAndAlphaAreHandled() {
             "BI_RGB DIB pixels should be treated as opaque");
 }
 
+void unalignedDibStorageAndPixelOffsetsDecodeCorrectly() {
+    const QSize size(17, 2);
+    for (const bool bitfields : {false, true}) {
+        QByteArray bytes = makeRgbDib(size.width(), size.height(), true);
+        if (bitfields) {
+            BITMAPINFOHEADER header{};
+            std::memcpy(&header, bytes.constData(), sizeof(header));
+            header.biCompression = BI_BITFIELDS;
+            std::memcpy(bytes.data(), &header, sizeof(header));
+            const DWORD masks[]{0x000000ff, 0x0000ff00, 0x00ff0000};
+            bytes.insert(sizeof(header), reinterpret_cast<const char*>(masks), sizeof(masks));
+        }
+        const auto expected =
+            ScreenshotClipboardContentReader::decode(nativeDibSnapshot(bytes, size));
+        require(expected.has_value(), "the aligned DIB reference decodes");
+        for (int offset = 1; offset < 4; ++offset) {
+            const QByteArray backing = QByteArray(offset, 0) + bytes;
+            const QByteArray borrowed =
+                QByteArray::fromRawData(backing.constData() + offset, bytes.size());
+            const auto decoded =
+                ScreenshotClipboardContentReader::decode(nativeDibSnapshot(borrowed, size));
+            require(decoded.has_value() && decoded->image == expected->image,
+                    "borrowed DIB headers, masks and pixel rows need no alignment");
+        }
+        if (!bitfields) {
+            // The decoder accepts extended header sizes. Their pixel arrays need
+            // not begin on the same alignment as the owning QByteArray.
+            bytes.insert(sizeof(BITMAPINFOHEADER), 1, '\0');
+            const DWORD headerSize = sizeof(BITMAPINFOHEADER) + 1;
+            std::memcpy(bytes.data(), &headerSize, sizeof(headerSize));
+            const auto decoded =
+                ScreenshotClipboardContentReader::decode(nativeDibSnapshot(bytes, size));
+            require(decoded.has_value() && decoded->image == expected->image,
+                    "unaligned pixel offsets preserve the DIB image");
+        }
+    }
+}
+
 void malformedAndLargeDibsAreHandled() {
     QByteArray malformed(static_cast<int>(sizeof(BITMAPINFOHEADER)), 0);
     auto* malformedHeader = reinterpret_cast<BITMAPINFOHEADER*>(malformed.data());
@@ -1544,6 +1582,7 @@ int main(int argc, char** argv) {
     formattedTextUsesOwningDisplayDevicePixelRatio();
 #if defined(Q_OS_WIN) || defined(_WIN32)
     standardRgbDibOrientationAndAlphaAreHandled();
+    unalignedDibStorageAndPixelOffsetsDecodeCorrectly();
     malformedAndLargeDibsAreHandled();
     nativeDibSnapshotDecodesOffClipboard();
     nativeDibMaskColoredPixelsRemainPixels();

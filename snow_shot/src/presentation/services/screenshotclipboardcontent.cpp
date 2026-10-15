@@ -3,6 +3,7 @@
 #include "snow_shot/presentation/screenshotclipboardcontent.h"
 #include "snow_shot/image/supportedimagefiles.h"
 #include "screenshotclipboardcontentsnapshot.h"
+#include "screenshotclipboarddibdecoder_p.h"
 
 #include "../../image/snowimageqtcodec.h"
 #include "../pinned/screenshotpintoperfinstrumentation.h"
@@ -41,16 +42,11 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <iterator>
 #include <limits>
 #include <thread>
 #include <vector>
-
-#if defined(Q_OS_WIN) || defined(_WIN32)
-bool screenshotClipboardDibAvx2Available();
-bool screenshotClipboardDibDecodeBgrxAvx2(const std::uint32_t* source, std::uint32_t* destination,
-                                          int pixels);
-#endif
 
 #if defined(Q_OS_WIN) || defined(_WIN32)
 #include <qt_windows.h>
@@ -768,11 +764,12 @@ qint64 nativeDibPixelOffset(const QByteArray& bytes, const BITMAPINFOHEADER& hea
     }
     qint64 payloadEnd = bytes.size();
     if (headerSize >= static_cast<qint64>(sizeof(BITMAPV5HEADER))) {
-        const auto* v5 = reinterpret_cast<const BITMAPV5HEADER*>(bytes.constData());
-        if (v5->bV5ProfileSize != 0) {
-            const qint64 profileStart = v5->bV5ProfileData;
+        BITMAPV5HEADER v5{};
+        std::memcpy(&v5, bytes.constData(), sizeof(v5));
+        if (v5.bV5ProfileSize != 0) {
+            const qint64 profileStart = v5.bV5ProfileData;
             if (profileStart < tableEnd ||
-                profileStart + static_cast<qint64>(v5->bV5ProfileSize) > bytes.size()) {
+                profileStart + static_cast<qint64>(v5.bV5ProfileSize) > bytes.size()) {
                 return -1;
             }
             payloadEnd = profileStart;
@@ -816,33 +813,34 @@ std::optional<ScreenshotClipboardNativeDib> captureNativeDib(const AllocationChe
             GlobalUnlock(handle);
         return std::nullopt;
     }
-    const auto* rawHeader = static_cast<const BITMAPINFOHEADER*>(locked);
-    const auto rawHeight = rawHeader->biHeight < 0 ? -static_cast<qint64>(rawHeader->biHeight)
-                                                   : static_cast<qint64>(rawHeader->biHeight);
-    if (rawHeader->biWidth <= 0 || rawHeight <= 0 ||
-        static_cast<qint64>(rawHeader->biWidth) * rawHeight > kMaximumClipboardImagePixels ||
+    BITMAPINFOHEADER rawHeader{};
+    std::memcpy(&rawHeader, locked, sizeof(rawHeader));
+    const auto rawHeight = rawHeader.biHeight < 0 ? -static_cast<qint64>(rawHeader.biHeight)
+                                                  : static_cast<qint64>(rawHeader.biHeight);
+    if (rawHeader.biWidth <= 0 || rawHeight <= 0 ||
+        static_cast<qint64>(rawHeader.biWidth) * rawHeight > kMaximumClipboardImagePixels ||
         (allocate && !allocate(retained + static_cast<qint64>(size) +
-                               static_cast<qint64>(rawHeader->biWidth) * rawHeight * 4))) {
+                               static_cast<qint64>(rawHeader.biWidth) * rawHeight * 4))) {
         GlobalUnlock(handle);
         return std::nullopt;
     }
     QByteArray bytes(static_cast<const char*>(locked), static_cast<int>(size));
     GlobalUnlock(handle);
 
-    const auto* header = reinterpret_cast<const BITMAPINFOHEADER*>(bytes.constData());
-    if (header->biSize < sizeof(BITMAPINFOHEADER) ||
-        header->biSize > static_cast<DWORD>(bytes.size()) || header->biWidth <= 0 ||
-        header->biHeight == 0 || header->biPlanes != 1 || header->biBitCount != 32 ||
-        (header->biCompression != BI_RGB && header->biCompression != BI_BITFIELDS)) {
+    const auto& header = rawHeader;
+    if (header.biSize < sizeof(BITMAPINFOHEADER) ||
+        header.biSize > static_cast<DWORD>(bytes.size()) || header.biWidth <= 0 ||
+        header.biHeight == 0 || header.biPlanes != 1 || header.biBitCount != 32 ||
+        (header.biCompression != BI_RGB && header.biCompression != BI_BITFIELDS)) {
         return std::nullopt;
     }
-    const qint64 height = header->biHeight < 0 ? -static_cast<qint64>(header->biHeight)
-                                               : static_cast<qint64>(header->biHeight);
-    const qint64 width = header->biWidth;
+    const qint64 height = header.biHeight < 0 ? -static_cast<qint64>(header.biHeight)
+                                              : static_cast<qint64>(header.biHeight);
+    const qint64 width = header.biWidth;
     const qint64 stride = ((width * 4) + 3) & ~qint64(3);
     if (width * height > kMaximumClipboardImagePixels)
         return std::nullopt;
-    const qint64 pixelOffset = nativeDibPixelOffset(bytes, *header, stride * height);
+    const qint64 pixelOffset = nativeDibPixelOffset(bytes, header, stride * height);
     if (width <= 0 || height <= 0 || width * height > kMaximumClipboardImagePixels || stride <= 0 ||
         pixelOffset < 0 || pixelOffset + stride * height > bytes.size()) {
         return std::nullopt;
@@ -907,20 +905,20 @@ unsigned char dibChannel(std::uint32_t value, const DibChannelMetadata& metadata
 }
 
 QImage decodeNativeDib(const ScreenshotClipboardNativeDib& native) {
-    if (!native.isValid())
+    if (!native.isValid() || native.bytes.size() < static_cast<int>(sizeof(BITMAPINFOHEADER)))
         return {};
-    const auto* header = reinterpret_cast<const BITMAPINFOHEADER*>(native.bytes.constData());
-    if (native.bytes.size() < static_cast<int>(sizeof(BITMAPINFOHEADER)) ||
-        header->biSize < sizeof(BITMAPINFOHEADER) ||
-        header->biSize > static_cast<DWORD>(native.bytes.size()) || header->biWidth <= 0 ||
-        header->biHeight == 0 || header->biPlanes != 1 || header->biBitCount != 32 ||
-        (header->biCompression != BI_RGB && header->biCompression != BI_BITFIELDS)) {
+    BITMAPINFOHEADER header{};
+    std::memcpy(&header, native.bytes.constData(), sizeof(header));
+    if (header.biSize < sizeof(BITMAPINFOHEADER) ||
+        header.biSize > static_cast<DWORD>(native.bytes.size()) || header.biWidth <= 0 ||
+        header.biHeight == 0 || header.biPlanes != 1 || header.biBitCount != 32 ||
+        (header.biCompression != BI_RGB && header.biCompression != BI_BITFIELDS)) {
         return {};
     }
-    const qint64 width = header->biWidth;
-    const qint64 height = header->biHeight < 0 ? -static_cast<qint64>(header->biHeight)
-                                               : static_cast<qint64>(header->biHeight);
-    const bool topDown = header->biHeight < 0;
+    const qint64 width = header.biWidth;
+    const qint64 height = header.biHeight < 0 ? -static_cast<qint64>(header.biHeight)
+                                              : static_cast<qint64>(header.biHeight);
+    const bool topDown = header.biHeight < 0;
     if (height <= 0 || width > std::numeric_limits<qint64>::max() / 4 ||
         width * height > kMaximumClipboardImagePixels || width > std::numeric_limits<int>::max() ||
         height > std::numeric_limits<int>::max()) {
@@ -930,7 +928,7 @@ QImage decodeNativeDib(const ScreenshotClipboardNativeDib& native) {
     if (rowBytes > std::numeric_limits<qint64>::max() - 3)
         return {};
     const qint64 stride = (rowBytes + 3) & ~qint64(3);
-    const qint64 pixelOffset = nativeDibPixelOffset(native.bytes, *header, stride * height);
+    const qint64 pixelOffset = nativeDibPixelOffset(native.bytes, header, stride * height);
     if (pixelOffset < 0 || pixelOffset > native.bytes.size() ||
         height > (native.bytes.size() - pixelOffset) / stride ||
         native.size != QSize(static_cast<int>(width), static_cast<int>(height))) {
@@ -941,18 +939,19 @@ QImage decodeNativeDib(const ScreenshotClipboardNativeDib& native) {
     std::uint32_t greenMask = 0x0000ff00u;
     std::uint32_t blueMask = 0x000000ffu;
     std::uint32_t alphaMask = 0;
-    if (header->biCompression == BI_BITFIELDS) {
+    if (header.biCompression == BI_BITFIELDS) {
         if (native.bytes.size() < static_cast<int>(sizeof(BITMAPINFOHEADER) + 12))
             return {};
-        const auto* masks = reinterpret_cast<const std::uint32_t*>(native.bytes.constData() +
-                                                                   sizeof(BITMAPINFOHEADER));
+        std::uint32_t masks[3]{};
+        std::memcpy(masks, native.bytes.constData() + sizeof(BITMAPINFOHEADER), sizeof(masks));
         redMask = masks[0];
         greenMask = masks[1];
         blueMask = masks[2];
         alphaMask = 0;
-        if (header->biSize >= sizeof(BITMAPV4HEADER)) {
-            const auto* v4 = reinterpret_cast<const BITMAPV4HEADER*>(native.bytes.constData());
-            alphaMask = v4->bV4AlphaMask;
+        if (header.biSize >= sizeof(BITMAPV4HEADER)) {
+            BITMAPV4HEADER v4{};
+            std::memcpy(&v4, native.bytes.constData(), sizeof(v4));
+            alphaMask = v4.bV4AlphaMask;
         }
     }
     const DibChannelMetadata red = makeDibChannelMetadata(redMask);
@@ -972,7 +971,7 @@ QImage decodeNativeDib(const ScreenshotClipboardNativeDib& native) {
     const auto decodeRows = [&](int firstRow, int lastRow) {
         for (int y = firstRow; y < lastRow; ++y) {
             const int sourceY = topDown ? y : image.height() - 1 - y;
-            const auto* source = reinterpret_cast<const std::uint32_t*>(
+            const auto* source = reinterpret_cast<const std::uint8_t*>(
                 native.bytes.constData() + pixelOffset + static_cast<qint64>(sourceY) * stride);
             auto* destination = reinterpret_cast<std::uint32_t*>(image.scanLine(y));
             if (standardOpaque) {
@@ -983,12 +982,11 @@ QImage decodeNativeDib(const ScreenshotClipboardNativeDib& native) {
                     continue;
                 }
 #endif
-                for (int x = 0; x < image.width(); ++x)
-                    destination[x] = source[x] | 0xff000000u;
+                screenshotClipboardDibDecodeBgrx(source, destination, image.width());
                 continue;
             }
             for (int x = 0; x < image.width(); ++x) {
-                const std::uint32_t value = source[x];
+                const std::uint32_t value = screenshotClipboardDibReadPixel(source + x * 4);
                 const unsigned char a = alphaMask == 0 ? 255 : dibChannel(value, alpha, 255);
                 destination[x] =
                     qPremultiply(qRgba(dibChannel(value, red, 0), dibChannel(value, green, 0),

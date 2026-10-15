@@ -21,7 +21,9 @@ use crate::config::{ExportExecutionMode, ExportFormat, SoftwareH264Priority};
 use crate::error::{RecordingExportError, Result};
 #[cfg(test)]
 use crate::ffmpeg_util::copy_rgba_into_frame;
-use crate::ffmpeg_util::{VideoPacketDurations, ensure_ffmpeg_initialized};
+use crate::ffmpeg_util::{
+    VideoPacketDurations, ensure_ffmpeg_initialized, validate_cpu_video_frame,
+};
 #[cfg(test)]
 use crate::output_scaler::convert_owned_rgba;
 use crate::video_quality::smart_quality_bitrate_bps;
@@ -1495,6 +1497,8 @@ impl StreamingEncoder {
 
     /// Admit a converted CPU frame without a second color conversion or pixel copy.
     /// The caller transfers immutable storage; FFmpeg retains it until packet drain.
+    /// Every plane must be contained in a reference-counted allocation; invalid
+    /// dimensions, strides or missing storage return an error before admission.
     pub fn push_prepared_video_frame_at_pts(
         &mut self,
         pts: u64,
@@ -1510,6 +1514,7 @@ impl StreamingEncoder {
                 "prepared frame does not match encoder".into(),
             ));
         }
+        validate_cpu_video_frame(&frame)?;
         crate::hdr::frame(&mut frame, self.cpu_hdr_input);
         self.admit_prepared_frame(pts, frame)
     }
@@ -1520,6 +1525,9 @@ impl StreamingEncoder {
         pts: u64,
         frame: &ffmpeg::frame::Video,
     ) -> Result<()> {
+        // av_frame_ref copies pixels when input storage is not reference-counted.
+        // Validate before that call can read an unchecked plane layout.
+        validate_cpu_video_frame(frame)?;
         let mut retained = ffmpeg::frame::Video::empty();
         let status = unsafe { ffmpeg::ffi::av_frame_ref(retained.as_mut_ptr(), frame.as_ptr()) };
         if status < 0 {
@@ -3770,6 +3778,75 @@ mod tests {
             .collect();
         pts.sort_unstable();
         assert_eq!(pts, [0, 7, 15]);
+    }
+
+    #[test]
+    fn prepared_frame_submission_rejects_missing_or_undersized_storage() {
+        let directory = tempfile::tempdir().unwrap();
+        for borrowed in [false, true] {
+            for allocated in [false, true] {
+                let mut config = encoder_config(
+                    directory
+                        .path()
+                        .join(format!("invalid-{borrowed}-{allocated}.avi")),
+                    ExportFormat::Avi,
+                );
+                config.height = 128;
+                let mut encoder = StreamingEncoder::create(config).unwrap();
+                let format = encoder.input_pixel_format();
+                let mut frame = if allocated {
+                    ffmpeg::frame::Video::new(format, 1, 1)
+                } else {
+                    ffmpeg::frame::Video::empty()
+                };
+                frame.set_format(format);
+                frame.set_width(16);
+                frame.set_height(128);
+                let result = if borrowed {
+                    encoder.push_prepared_video_frame_ref_at_pts(0, &frame)
+                } else {
+                    encoder.push_prepared_video_frame_at_pts(0, frame)
+                };
+                assert!(
+                    result.is_err(),
+                    "borrowed={borrowed}, allocated={allocated}"
+                );
+                assert_eq!(encoder.admitted_frames, 0);
+                assert!(encoder.pending.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn prepared_frame_submission_round_trips_packed_planar_and_palette_formats() {
+        let directory = tempfile::tempdir().unwrap();
+        for (format, extension) in [
+            (ExportFormat::Mp4, "mp4"),
+            (ExportFormat::Avi, "avi"),
+            (ExportFormat::Gif, "gif"),
+            (ExportFormat::Apng, "apng"),
+        ] {
+            let path = directory.path().join(format!("prepared.{extension}"));
+            let mut encoder =
+                StreamingEncoder::create(encoder_config(path.clone(), format)).unwrap();
+            let mut rgba = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::RGBA, 16, 16);
+            for pts in 0..3 {
+                let pixels = [pts as u8 * 80; 16 * 16 * 4];
+                copy_rgba_into_frame(&mut rgba, &pixels).unwrap();
+                let prepared = encoder.prepare_rgba_video_frame(&rgba).unwrap();
+                if pts % 2 == 0 {
+                    encoder
+                        .push_prepared_video_frame_ref_at_pts(pts, &prepared)
+                        .unwrap();
+                } else {
+                    encoder
+                        .push_prepared_video_frame_at_pts(pts, prepared)
+                        .unwrap();
+                }
+            }
+            assert_eq!(encoder.finish().unwrap().encoded_frames, 3);
+            assert_eq!(decoded_video_frame_count(&path), (3, 16, 16));
+        }
     }
 
     #[test]

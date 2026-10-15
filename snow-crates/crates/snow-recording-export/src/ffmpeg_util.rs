@@ -45,6 +45,88 @@ pub unsafe fn ensure_video_frame_writable(frame: &mut ffmpeg::frame::Video) -> R
     Ok(())
 }
 
+/// Validate reference-counted CPU planes before native code can retain or read them.
+/// Safe Video metadata setters can enlarge an image without enlarging its buffers.
+pub(crate) fn validate_cpu_video_frame(frame: &ffmpeg::frame::Video) -> Result<()> {
+    let invalid = || ScreenRecorderError::InvalidConfig("invalid CPU video frame storage".into());
+    // SAFETY: Video owns a live AVFrame. Inspect metadata without making any plane slices.
+    let raw = unsafe { &*frame.as_ptr() };
+    if raw.width <= 0 || raw.height <= 0 || raw.nb_samples != 0 {
+        return Err(invalid());
+    }
+    let format = frame.format().into();
+    let mut row_bytes = [0; 4];
+    let mut packed_sizes = [0; 4];
+    // SAFETY: Both arrays have the four entries required by the image-layout API.
+    // FFmpeg rejects unknown and hardware-only formats without reading frame pixels.
+    unsafe {
+        if ffmpeg::ffi::av_image_fill_linesizes(row_bytes.as_mut_ptr(), format, raw.width) < 0 {
+            return Err(invalid());
+        }
+        let strides = row_bytes.map(|bytes| bytes as isize);
+        if ffmpeg::ffi::av_image_fill_plane_sizes(
+            packed_sizes.as_mut_ptr(),
+            format,
+            raw.height,
+            strides.as_ptr(),
+        ) < 0
+        {
+            return Err(invalid());
+        }
+    }
+    for (plane, packed_size) in packed_sizes.into_iter().enumerate() {
+        if packed_size == 0 {
+            continue;
+        }
+        let image_row_bytes = usize::try_from(row_bytes[plane]).map_err(|_| invalid())?;
+        // PAL8's second plane is a 1024-byte palette with no row stride.
+        let (rows, row_bytes) = match packed_size.checked_div(image_row_bytes) {
+            Some(rows) => (rows, image_row_bytes),
+            None => (1, packed_size),
+        };
+        let stride = raw.linesize[plane].unsigned_abs() as usize;
+        if rows == 0 || (image_row_bytes != 0 && stride < row_bytes) || raw.data[plane].is_null() {
+            return Err(invalid());
+        }
+        let displacement = stride
+            .checked_mul(rows - 1)
+            .filter(|&bytes| bytes <= isize::MAX as usize)
+            .ok_or_else(invalid)?;
+        // SAFETY: This only locates the AVBufferRef that owns the plane address.
+        let buffer =
+            unsafe { ffmpeg::ffi::av_frame_get_plane_buffer(frame.as_ptr(), plane as i32) };
+        if buffer.is_null() {
+            return Err(invalid());
+        }
+        // SAFETY: The frame retains this AVBufferRef throughout the validation.
+        let buffer = unsafe { &*buffer };
+        if buffer.data.is_null() || buffer.size > isize::MAX as usize {
+            return Err(invalid());
+        }
+        let offset = raw.data[plane]
+            .addr()
+            .checked_sub(buffer.data.addr())
+            .ok_or_else(invalid)?;
+        let (start, end) = if raw.linesize[plane] < 0 {
+            (
+                offset.checked_sub(displacement),
+                offset.checked_add(row_bytes),
+            )
+        } else {
+            (
+                Some(offset),
+                offset
+                    .checked_add(displacement)
+                    .and_then(|end| end.checked_add(row_bytes)),
+            )
+        };
+        if start.is_none() || end.is_none_or(|end| end > buffer.size) {
+            return Err(invalid());
+        }
+    }
+    Ok(())
+}
+
 struct RgbaFrameLayout {
     row_bytes: usize,
     packed_len: usize,
@@ -196,6 +278,70 @@ impl VideoPacketDurations {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cpu_video_storage_accepts_padded_planar_packed_palette_and_bottom_up_frames() {
+        for format in [
+            ffmpeg::format::Pixel::RGBA,
+            ffmpeg::format::Pixel::RGB24,
+            ffmpeg::format::Pixel::YUV420P,
+            ffmpeg::format::Pixel::NV12,
+            ffmpeg::format::Pixel::YUV420P10LE,
+            ffmpeg::format::Pixel::P010LE,
+            ffmpeg::format::Pixel::PAL8,
+        ] {
+            for (width, height) in [(1, 1), (17, 13)] {
+                let mut frame = ffmpeg::frame::Video::new(format, width, height);
+                validate_cpu_video_frame(&frame).unwrap();
+                for plane in 0..frame.planes() {
+                    let rows = frame.plane_height(plane) as usize;
+                    let stride = frame.stride(plane);
+                    // SAFETY: Move each plane to its last visible row and reverse its
+                    // stride, preserving the complete owning allocation and pixels.
+                    unsafe {
+                        let raw = &mut *frame.as_mut_ptr();
+                        raw.data[plane] = raw.data[plane].add((rows - 1) * stride);
+                        raw.linesize[plane] = -raw.linesize[plane];
+                    }
+                }
+                validate_cpu_video_frame(&frame).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn cpu_video_storage_rejects_missing_planes_short_strides_and_enlarged_metadata() {
+        let mut empty = ffmpeg::frame::Video::empty();
+        empty.set_format(ffmpeg::format::Pixel::YUV420P);
+        empty.set_width(16);
+        empty.set_height(128);
+        assert!(validate_cpu_video_frame(&empty).is_err());
+        let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::YUV420P, 1, 1);
+        frame.set_height(10_000);
+        assert!(validate_cpu_video_frame(&frame).is_err());
+        for plane in 0..3 {
+            let mut frame = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::YUV420P, 16, 16);
+            let stride = frame.stride(plane) as i32;
+            // SAFETY: Deliberately invalidate one metadata field without freeing or
+            // accessing pixels. Validation must reject it before native pixel reads.
+            unsafe {
+                (*frame.as_mut_ptr()).linesize[plane] = 1;
+            }
+            assert!(validate_cpu_video_frame(&frame).is_err());
+            // SAFETY: Restore the valid stride so this case isolates a missing plane.
+            unsafe {
+                (*frame.as_mut_ptr()).linesize[plane] = stride;
+                (*frame.as_mut_ptr()).data[plane] = std::ptr::null_mut();
+            }
+            assert!(validate_cpu_video_frame(&frame).is_err());
+        }
+        let mut palette = ffmpeg::frame::Video::new(ffmpeg::format::Pixel::PAL8, 16, 16);
+        // SAFETY: A palette is required even though PAL8 reports one strided plane.
+        unsafe {
+            (*palette.as_mut_ptr()).data[1] = std::ptr::null_mut();
+        }
+        assert!(validate_cpu_video_frame(&palette).is_err());
+    }
 
     #[test]
     fn rgba_copy_handles_packed_and_padded_rows_without_changing_padding() {

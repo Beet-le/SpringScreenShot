@@ -1,4 +1,4 @@
-#include <cstdint>
+#include "screenshotclipboarddibdecoder_p.h"
 
 #if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
 #include <intrin.h>
@@ -46,7 +46,7 @@ bool screenshotClipboardDibAvx2Available() {
 #endif
 }
 
-bool screenshotClipboardDibDecodeBgrxAvx2(const std::uint32_t* source, std::uint32_t* destination,
+bool screenshotClipboardDibDecodeBgrxAvx2(const std::uint8_t* source, std::uint32_t* destination,
                                           int pixels) {
 #if defined(__AVX2__) || defined(_M_AVX2)
     if (!screenshotClipboardDibAvx2Available() || source == nullptr || destination == nullptr ||
@@ -56,12 +56,11 @@ bool screenshotClipboardDibDecodeBgrxAvx2(const std::uint32_t* source, std::uint
     const __m256i alpha = _mm256_set1_epi32(static_cast<int>(0xff000000u));
     int x = 0;
     for (; x + 8 <= pixels; x += 8) {
-        const __m256i values = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(source + x));
+        const __m256i values = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(source + x * 4));
         _mm256_storeu_si256(reinterpret_cast<__m256i*>(destination + x),
                             _mm256_or_si256(values, alpha));
     }
-    for (; x < pixels; ++x)
-        destination[x] = source[x] | 0xff000000u;
+    screenshotClipboardDibDecodeBgrx(source + x * 4, destination + x, pixels - x);
     return true;
 #else
     (void)source;

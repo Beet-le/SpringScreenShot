@@ -5432,6 +5432,8 @@ if(SNOW_SHOT_BUILD_TESTS)
         ENVIRONMENT "${_SNOW_SHOT_OFFSCREEN_QPA_ENVIRONMENT}"
         ENVIRONMENT_MODIFICATION "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
 
+    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../test-support/clipboard-dib"
+        "${CMAKE_CURRENT_BINARY_DIR}/clipboard-dib-tests")
     add_executable(snow-shot-clipboard-content-tests
         tests/screenshot_clipboard_content_tests.cpp
         include/snow_shot/presentation/screenshotclipboardcontent.h
@@ -10605,6 +10607,11 @@ endif()
 
 if(APPLE)
     include(SnowShotMacOS)
+    if(SNOW_SHOT_BUILD_TESTS AND SNOW_SHOT_RELEASE_STATIC)
+        set(SNOW_X264_ROOT "${SNOW_FFMPEG_ROOT}")
+        add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../test-support/x264"
+            "${CMAKE_CURRENT_BINARY_DIR}/x264-tests")
+    endif()
 endif()
 
 if(SNOW_SHOT_BUILD_TESTS)
